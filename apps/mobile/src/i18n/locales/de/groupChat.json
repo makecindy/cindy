@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.",
-        "advice": "Bitte den Besitzer des Teammitglieds, zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
+        "advice": "Bitte den Besitzer des Freundes, zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
         "details": "Sobald Cindy und das Netzwerk wieder funktionieren, sende die Nachricht erneut."
       }
     },
@@ -584,9 +584,9 @@
     "removeTitle": "{{name}} aus dieser Gruppe entfernen?",
     "removeHint": "Diese Person verliert den Zugriff auf Nachrichten. Ihre Freunde verlassen die Gruppe ebenfalls.",
     "removeOwn": "Aus Gruppe entfernen",
-    "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Partner bleibt in deinem Konto.",
+    "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Freund bleibt in deinem Konto.",
     "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
-    "removeOwnActiveHint": "Aktive Anfragen dieses Partners in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
+    "removeOwnActiveHint": "Aktive Anfragen dieses Freundes in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
     "stopAndRemove": "Stoppen und entfernen",
     "confirm": "Bestätigen",
     "inviteTitle": "Zur Gruppe einladen",

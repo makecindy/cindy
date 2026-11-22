@@ -153,6 +153,7 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  inputNotice?: 'oversized-input-skipped';
   pluginUi: PluginUiMessageCandidates;
   /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
   pendingActions?: ReactNode;
@@ -870,6 +871,7 @@ export function UserMessage({
   sourcePlugin,
   goalBadge,
   blockedByGhost,
+  inputNotice,
 }: UserMessageProps) {
   const { t } = useTranslation();
   // Capability gate: 没传 agentKind (调用方未升级) → 默认两者都允许 (兼容旧路径)
@@ -1382,6 +1384,12 @@ export function UserMessage({
       </div>
     ) : null;
 
+  const historyNotice = inputNotice === 'oversized-input-skipped' ? (
+    <p className="text-12 leading-[1.667] text-[var(--text-secondary)]" data-input-notice="">
+      {t('chat.userMessage.oversizedInputSkipped')}
+    </p>
+  ) : null;
+
   // If there are images, use vertical layout: images on top, text bubble below, right-aligned
   // If no images, render the text bubble alone, right-aligned (existing behavior)
   return (
@@ -1478,6 +1486,7 @@ export function UserMessage({
                 </div>
               )}
             </div>
+            {historyNotice}
           </>
         ) : botLetter ? (
           <>
@@ -1502,6 +1511,7 @@ export function UserMessage({
             )}
             {imageAttachmentNodes}
             {fileAttachmentNodes}
+            {historyNotice}
             {/* 伙伴对话的操作栏常显；来信收起时只占一行，展开后操作在悬停或聚焦时出现。 */}
             {letterExpanded && (
               <div className="opacity-0 transition-opacity group-hover/letter:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
@@ -1532,6 +1542,7 @@ export function UserMessage({
               groupMessageCount={hookSource.contextSnapshot?.groupMessageCount}
               replyMessageCount={hookSource.contextSnapshot?.replyMessageCount}
             />
+            {historyNotice}
             {!hasEmbeddedImPrompt(hookSource) && messageActions}
           </>
         ) : (
@@ -1854,6 +1865,7 @@ export function UserMessage({
                     />
                   </div>
                 )}
+                {historyNotice}
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
                 right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}

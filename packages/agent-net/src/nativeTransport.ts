@@ -11,6 +11,15 @@ export interface NativeEnginePort {
    * Meanwhile the engine receives, acknowledges and runs its timers by itself (see `NativeTransport.rest`).
    */
   wait?(maxMs: number): Promise<boolean>;
+  /**
+   * `binary-io` binaries (engine.rs `io`): relayed datagrams, stream writes and a poll in one call, the bytes raw beside a
+   * small JSON header (`encodeNativeIo`). With `waitMs` the call first waits as `wait` does and reads only once the engine
+   * has something for JS (an empty result otherwise), so an answer comes back in the call that waited for it. `kick`: once
+   * this call is done, wake a waiting call if the engine now has something for JS.
+   */
+  io?(input: Uint8Array, waitMs?: number, kick?: boolean): Promise<Uint8Array>;
+  /** `binary-io` binaries: a waiting `io` call returns now. */
+  kick?(): void;
   destroy(): Promise<void>;
   assertCurrent?(): void;
 }
@@ -19,12 +28,57 @@ interface NativeState {
   id: number; established: boolean; dead: boolean; closedByPeer: boolean; unacked: boolean; remoteKey: string;
   path?: Address | { link: number };
   events: { kind: 'open' | 'finish'; stream: number }[];
-  data: { stream: number; data: string }[];
+  data: { stream: number; data: Uint8Array }[];
   rttUs: number; sent: number; received: number; rotations: number;
   /** [stream, bytes still in the core's send buffer] for the streams this side opened (`stream-buffered` builds). */
   buffered?: [number, number][];
 }
-interface Poll { packets: { link: number; data: string }[]; connections: NativeState[]; mapped?: Address[]; relayUdp?: boolean; }
+interface Poll { packets: { link: number; data: Uint8Array }[]; connections: NativeState[]; mapped?: Address[]; relayUdp?: boolean; }
+/** A poll as the engine reports it: bytes as base64 `data` (`poll`), or as the `len` of the next bytes after the header (`io`). */
+type WireBytes = { data?: string; len?: number };
+type WirePoll = Omit<Poll, 'packets' | 'connections'> & {
+  packets: ({ link: number } & WireBytes)[];
+  connections: (Omit<NativeState, 'data'> & { data: ({ stream: number } & WireBytes)[] })[];
+};
+interface IoResult { written: number[]; poll: WirePoll | null; }
+interface PlannedWrite { channel: NativeChannel; outgoing: Outgoing; bytes: Uint8Array; }
+
+/** `binary-io` frame (lib.rs `cindy_agent_net_io`): a little-endian u32 header length, the JSON header, then the bytes it lists. */
+export function encodeNativeIo(header: object, parts: readonly Uint8Array[] = []): Uint8Array {
+  const json = utf8(JSON.stringify(header));
+  let size = 4 + json.length;
+  for (const part of parts) size += part.length;
+  const frame = new Uint8Array(size);
+  new DataView(frame.buffer).setUint32(0, json.length, true);
+  frame.set(json, 4);
+  let offset = 4 + json.length;
+  for (const part of parts) { frame.set(part, offset); offset += part.length; }
+  return frame;
+}
+/** Reads an `io` result frame: the engine's answer, or its error code thrown as the command path throws it. */
+export function decodeNativeIo<T>(frame: Uint8Array): { value: T; payload: Uint8Array } {
+  if (frame.length < 4) throw new Error('INVALID_NATIVE_IO');
+  const length = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(0, true);
+  if (4 + length > frame.length) throw new Error('INVALID_NATIVE_IO');
+  const response = JSON.parse(decodeUtf8(frame.subarray(4, 4 + length))) as { ok: boolean; value?: T; code?: string };
+  if (!response.ok) throw new Error(response.code || 'AGENT_NET_NATIVE_COMMAND_FAILED');
+  return { value: response.value as T, payload: frame.subarray(4 + length) };
+}
+/** A poll with its bytes in hand: base64 from `poll`, or slices of an `io` result in the order the engine wrote them. */
+function readPoll(wire: WirePoll, payload: Uint8Array | null): Poll {
+  let cursor = 0;
+  const bytes = (item: WireBytes): Uint8Array => {
+    if (!payload) return fromBase64Url(item.data ?? '');
+    const length = item.len;
+    if (typeof length !== 'number' || !Number.isInteger(length) || length < 0 || cursor + length > payload.length) throw new Error('INVALID_NATIVE_IO');
+    cursor += length;
+    return payload.subarray(cursor - length, cursor);
+  };
+  const packets = wire.packets.map(packet => ({ link: packet.link, data: bytes(packet) }));
+  const connections = wire.connections.map(state => ({ ...state, data: state.data.map(chunk => ({ stream: chunk.stream, data: bytes(chunk) })) }));
+  if (payload && cursor !== payload.length) throw new Error('INVALID_NATIVE_IO');
+  return { ...wire, packets, connections };
+}
 interface NativeIdentity { deviceId: string; transportKey: string; udpPort: number | null; features?: string[]; }
 interface Waiting { resolve(channel: PeerChannel): void; reject(error: Error): void; deadline: number; }
 /** This side's local addresses for its candidates: a fixed list, or read again on every network change. */
@@ -57,6 +111,16 @@ const ACTIVE_WINDOW_MS = 1_000;
 const IDLE_WAIT_MS = 250;
 const IDLE_FULL_POLL_MS = 1_000;
 const ADMISSION_RECHECK_MS = 1_000;
+/** `binary-io`: per `io` call at most this many bytes of writes, and as many of relayed datagrams (lib.rs MAX_IO is 4 MiB). */
+const MAX_IO_BYTES = 1024 * 1024;
+/**
+ * `binary-io`: per `io` call at most this many writes (engine.rs refuses a call with more than MAX_IO_WRITES, 1024). Small messages
+ * queued on many connections reach it long before the byte budget: 129 connections with 8 each are 1032 writes of a few bytes, and a
+ * refused call closed the whole transport (PR #12036 review). The rest goes next turn.
+ */
+const MAX_IO_WRITES = 512;
+/** `binary-io`: relayed datagrams waiting here for the next `io` call; beyond this the oldest go (the core resends). */
+const MAX_RELAYED = 512;
 /**
  * A dial over the relay made while the relay's UDP path is still coming up waits for it, at most this long after the path
  * was last set up. A handshake sent over the relay WebSocket in that window got no answer and went again at the core's
@@ -80,6 +144,10 @@ const now = () => performance.now();
  *   read. Without it JS polls on timers: React Native runs timers on the display's frames, so every step of a request (hand
  *   it to the engine, pick up the answer) waited for the next frame; requests took 30–60 ms longer than over Device Link and
  *   an idle app kept the JS thread 9–22% busy (2026-11-20, docs/agent-net-session-plan.md 10.2 v2-4).
+ * - `binary-io`: stream bytes and relayed datagrams cross the bridge raw, and a turn's writes and its poll are one call
+ *   (`exchange`); with `native-wait` the call that waits also brings back what the engine then has (`restBinary`). On a
+ *   phone whose cores had clocked down every async bridge call cost 3–4 ms and a 2 KB answer took 3.8 ms to decode from
+ *   base64; an answer took three crossings (the wait returning, then the poll there and back) (2026-11-21).
  * Session lanes need only streams, so they work on every native build.
  */
 export class NativeTransport implements Transport {
@@ -93,6 +161,16 @@ export class NativeTransport implements Transport {
   private activeUntil = now() + ACTIVE_WINDOW_MS;
   /** `native-wait`: the engine wakes JS; no timers. Turned off if a wait ever fails (the timers take over). */
   private waits = false;
+  /** `binary-io`: writes, relayed datagrams and polls go through `io` (`exchange`). */
+  private readonly binary: boolean;
+  /** `binary-io` with `native-wait`: a waiting `io` call is out (`restBinary`); it reads for JS, a drive meanwhile does not. */
+  private resting = false;
+  /** Polls a waiting `io` call brought back while a drive ran: the drive applies them before anything it reads itself. */
+  private parked: { poll: Poll; waitingAtPoll: Map<number, Waiting> }[] = [];
+  /** `binary-io`: datagrams from the relay WebSocket for the next `io` call. */
+  private relayed: { link: number; bytes: Uint8Array }[] = [];
+  /** `binary-io`: the next drive reads even with nothing to write (the first one, a dial's deadline, the periodic full poll). */
+  private mustRead = true;
   /** A poll is running; `again`: something happened meanwhile, so one more follows it. */
   private polling = false;
   private again = false;
@@ -141,6 +219,7 @@ export class NativeTransport implements Transport {
     this.dial = identity.udpPort ? { udp: { address: '0.0.0.0', port: identity.udpPort } } : {};
     this.features = new Set(Array.isArray(identity.features) ? identity.features : []);
     this.waits = enhanced && this.features.has('native-wait') && typeof engine.wait === 'function';
+    this.binary = enhanced && this.features.has('binary-io') && typeof engine.io === 'function';
     this.relayUdpServer = options.relayUdpServer;
     this.localAddresses = addresses;
     this.candidateList = this.computeCandidates();
@@ -148,7 +227,10 @@ export class NativeTransport implements Transport {
       if (this.closed) return;
       const link = this.links.get(deviceId);
       if (!link) return;
-      void this.call({ op: 'datagram', from: { link }, data: toBase64Url(bytes) }).catch(() => undefined);
+      if (this.binary) {
+        if (this.relayed.length >= MAX_RELAYED) this.relayed.shift();
+        this.relayed.push({ link, bytes });
+      } else void this.call({ op: 'datagram', from: { link }, data: toBase64Url(bytes) }).catch(() => undefined);
       this.wake();
     });
   }
@@ -333,21 +415,121 @@ export class NativeTransport implements Transport {
    * Poll now. During a poll a wake is noted and one more poll follows it; after that the engine is left waiting (`rest`), or on
    * timers the next poll is scheduled.
    */
-  private drive(): void {
+  private drive(read = false): void {
+    if (read) this.mustRead = true;
     if (this.closed) return;
     if (this.polling) { this.again = true; return; }
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     this.polling = true;
     void (async () => {
       try {
-        await this.writeFirst();
-        await this.poll();
-        if (this.again && !this.closed) { this.again = false; await this.writeFirst(); await this.poll(); }
+        if (this.binary) {
+          await this.exchange();
+          if (this.again && !this.closed) { this.again = false; await this.exchange(); }
+        } else {
+          await this.writeFirst();
+          await this.poll();
+          if (this.again && !this.closed) { this.again = false; await this.writeFirst(); await this.poll(); }
+        }
       } catch { this.polling = false; await this.close(); return; }
       this.polling = false;
       this.again = false;
-      if (this.waits) this.rest(); else this.schedule();
+      if (this.closed) return;
+      // A waiting call came back during the last turn, after that turn applied what was parked.
+      if (this.parked.length) { this.drive(); return; }
+      if (!this.waits) this.schedule();
+      else if (!this.binary) this.rest();
+      else if (!this.resting) this.restBinary();
+      // The waiting call may be on IDLE_WAIT_MS while a dial or unwritten bytes need JS back within FAST_POLL_MS.
+      else if (this.busy()) this.kickRest();
     })();
+  }
+  private busy(): boolean { return this.waiting.size > 0 || [...this.channels.values()].some(channel => channel.moving); }
+  private async io(input: Uint8Array, waitMs: number, kick: boolean): Promise<Uint8Array> {
+    if (this.closed) throw new Error('NATIVE_TRANSPORT_CLOSED');
+    this.engine.assertCurrent?.();
+    const output: Uint8Array | ArrayBuffer = await this.engine.io!(input, waitMs, kick);
+    this.engine.assertCurrent?.();
+    if (this.closed) throw new Error('NATIVE_TRANSPORT_CLOSED');
+    return output instanceof Uint8Array ? output : new Uint8Array(output);
+  }
+  /**
+   * `binary-io`: one turn. What a waiting call read meanwhile goes first; then the admitted peers and the relay's credentials
+   * go to the engine if they changed (before any write, as in `writeFirst`); then one `io` call hands the engine this turn's
+   * relayed datagrams and writes and reads, unless a waiting call is out: that call reads, and this one wakes it if the engine
+   * has something for JS afterwards (a datagram for the relay WebSocket, an answer).
+   */
+  private async exchange(): Promise<void> {
+    await this.applyParked();
+    if (this.closed) return;
+    const version = this.options.admissionVersion?.();
+    const changed = version === undefined || version !== this.mirroredVersion;
+    if (changed) await this.synchronizeAdmission();
+    await this.synchronizeRelayUdp();
+    const datagrams: [number, number][] = [], parts: Uint8Array[] = [];
+    for (let bytes = 0; this.relayed.length && bytes + this.relayed[0].bytes.length <= MAX_IO_BYTES;) {
+      const { link, bytes: data } = this.relayed.shift()!;
+      datagrams.push([link, data.length]); parts.push(data); bytes += data.length;
+    }
+    const writes: PlannedWrite[] = [], planned: NativeChannel[] = [], budget = { bytes: MAX_IO_BYTES, writes: MAX_IO_WRITES };
+    for (const channel of [...this.channels.values()]) {
+      if (!channel.moving || !this.options.admit(channel.remoteId)) continue;
+      planned.push(channel);
+      try { writes.push(...await channel.plan(budget)); }
+      catch { channel.close({ drain: false }); this.engine.assertCurrent?.(); }
+    }
+    for (const write of writes) parts.push(write.bytes);
+    const read = !this.resting && (!this.waits || this.mustRead || parts.length > 0 || this.waiting.size > 0);
+    if (read || parts.length) {
+      if (read) { this.mustRead = false; this.polledAt = now(); }
+      const waitingAtPoll = new Map(this.waiting);
+      const header = { datagrams, writes: writes.map(write => [write.channel.connectionId, write.outgoing.stream, write.bytes.length]), poll: read };
+      const { value, payload } = decodeNativeIo<IoResult>(await this.io(encodeNativeIo(header, parts), 0, this.resting));
+      if (!Array.isArray(value.written) || value.written.length !== writes.length) throw new Error('INVALID_NATIVE_IO');
+      writes.forEach((write, index) => write.channel.consume(write.outgoing, value.written[index], write.bytes.length));
+      await this.applyParked();
+      if (value.poll) await this.applyPoll(readPoll(value.poll, payload), waitingAtPoll, false);
+    }
+    for (const channel of planned) await channel.afterWrites();
+    // The once-a-second look for admission that lapsed with time does not hold this turn's writes back (see `writeFirst`).
+    if (!changed && now() - this.admissionAt >= ADMISSION_RECHECK_MS) await this.synchronizeAdmission();
+  }
+  private async applyParked(): Promise<void> {
+    while (this.parked.length && !this.closed) {
+      const { poll, waitingAtPoll } = this.parked.shift()!;
+      await this.applyPoll(poll, waitingAtPoll, false);
+    }
+  }
+  /**
+   * `binary-io` with `native-wait`: one `io` call waits in the engine until it has something for JS and brings it back in
+   * the same call. Writes meanwhile go in their own `io` calls that do not read (`exchange`), so only one call reads at a
+   * time and what is read reaches JS in order.
+   */
+  private restBinary(): void {
+    if (this.closed || this.resting) return;
+    this.resting = true;
+    const waitingAtPoll = new Map(this.waiting);
+    void this.io(encodeNativeIo({ poll: true }), this.busy() ? FAST_POLL_MS : IDLE_WAIT_MS, false).then((output) => {
+      this.resting = false;
+      if (this.closed) return;
+      if (output.length) {
+        const { value, payload } = decodeNativeIo<IoResult>(output);
+        if (value.poll) { this.polledAt = now(); this.parked.push({ poll: readPoll(value.poll, payload), waitingAtPoll }); }
+      }
+      // A running drive applies it after its own call, which did not read.
+      if (this.polling) { this.again = true; return; }
+      if (this.parked.length) this.drive();
+      else if (this.busy() || this.mirrorChanged() || now() - this.polledAt >= IDLE_FULL_POLL_MS) this.drive(true);
+      else this.restBinary();
+    }).catch(() => {
+      // What a failed call read is lost to JS: start over on a new connection rather than go on with a gap.
+      this.resting = false;
+      if (!this.closed) void this.close();
+    });
+  }
+  private kickRest(): void {
+    if (this.engine.kick) { try { this.engine.kick(); return; } catch { /* The timer below brings JS back. */ } }
+    if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.drive(true); }, FAST_POLL_MS);
   }
   /**
    * Bytes waiting here go to the engine before the poll, not after it. The engine sends on the write itself; a poll is a
@@ -415,10 +597,16 @@ export class NativeTransport implements Transport {
     // initializing/flushing another channel. Its snapshot cannot establish that
     // a dial registered after it started has disappeared.
     const waitingAtPoll = new Map(this.waiting);
-    const result = await this.call<Poll>({ op: 'poll' });
+    await this.applyPoll(readPoll(await this.call<WirePoll>({ op: 'poll' }), null), waitingAtPoll, true);
+  }
+  /**
+   * What a poll read, applied in the order the engine read it. `flush`: hand each connection's queued bytes to the engine as
+   * it goes (the command path); `binary-io` writes them in the next `io` call instead.
+   */
+  private async applyPoll(result: Poll, waitingAtPoll: Map<number, Waiting>, flush: boolean): Promise<void> {
     for (const packet of result.packets) {
       const deviceId = this.deviceForLink.get(packet.link);
-      if (deviceId) this.options.relay?.uplink.send(deviceId, fromBase64Url(packet.data));
+      if (deviceId) this.options.relay?.uplink.send(deviceId, packet.data);
     }
     // What the engine reports is about the credentials it was given; newer ones seen meanwhile are not up yet.
     this.relayUdpUp = result.relayUdp === true && this.relayUdpFor === this.relayCredentials;
@@ -455,7 +643,7 @@ export class NativeTransport implements Transport {
         }
         // A connection with nothing to hand to the engine is done here: `flush` would find nothing, at the price of a
         // dozen promise turns, for every connection on every poll.
-        if (channel) { channel.receive(state); if (channel.moving) await channel.flush(); }
+        if (channel) { channel.receive(state); if (flush && channel.moving) await channel.flush(); }
       } catch (error) {
         channel?.close({ drain: false });
         this.waiting.get(state.id)?.reject(error instanceof Error ? error : new Error('NATIVE_CONNECTION_CLOSED'));
@@ -484,6 +672,7 @@ export class NativeTransport implements Transport {
     const ids = [...this.channels.keys(), ...this.waiting.keys()];
     for (const pending of this.waiting.values()) pending.reject(new Error('NATIVE_TRANSPORT_CLOSED'));
     this.waiting.clear();
+    this.parked = []; this.relayed = [];
     for (const done of [...this.relayUdpWaiters]) done();
     for (const channel of [...this.channels.values()]) channel.close({ drain: false });
     this.channels.clear();
@@ -507,6 +696,11 @@ class Outgoing {
   queued = 0;
   /** Bytes in the core's send buffer for this stream at the last poll (0 on builds without `stream-buffered`). */
   core = 0;
+  /**
+   * `binary-io`: the stream took less than it was given last time (its send buffer is full). It gets one chunk per turn until
+   * it takes a whole one, so a full stream does not carry half a megabyte across the bridge every turn only to refuse it.
+   */
+  short = false;
   constructor(readonly priority: 'interactive' | 'normal' | 'background', readonly reserved: boolean) {}
   push(bytes: Uint8Array): void { this.items.push({ bytes, offset: 0 }); this.queued += bytes.length; }
 }
@@ -605,19 +799,73 @@ class NativeChannel implements PeerChannel {
     this.earlySession.push([lane, bytes.slice()]);
   }
 
-  /** Hands queued bytes to the engine: control first, then the interactive lane, normal traffic, and the background lane last. */
+  /** Control first, then the interactive lane, normal traffic, and the background lane last. */
+  private order(): Outgoing[] {
+    return this.owner.enhanced ? [this.control, ...(this.lanes ? [this.lanes.control, this.lanes.normal] : []), this.data, ...(this.lanes ? [this.lanes.background] : [])] : [this.data];
+  }
+  get connectionId(): number { return this.id; }
+  /** Hands queued bytes to the engine in `order`. */
   async flush(): Promise<void> {
     if (this.disposed) return;
     if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return; }
     const before = this.bufferedAmount;
-    const order = this.owner.enhanced ? [this.control, ...(this.lanes ? [this.lanes.control, this.lanes.normal] : []), this.data, ...(this.lanes ? [this.lanes.background] : [])] : [this.data];
-    for (const outgoing of order) { if (this.disposed) return; if (outgoing.items.length) await this.flushStream(outgoing); }
+    for (const outgoing of this.order()) { if (this.disposed) return; if (outgoing.items.length) await this.flushStream(outgoing); }
+    await this.drained(before);
+  }
+  private async drained(before: number): Promise<void> {
+    if (this.disposed) return;
     if (this.owner.enhanced && before > DRAIN_LOW_WATER_BYTES && this.bufferedAmount <= DRAIN_LOW_WATER_BYTES) for (const handler of this.drainHandlers) handler();
+    const order = this.order();
     if (this.closeDeadline && !this.finished && order.every(outgoing => !outgoing.items.length)) {
       this.finished = true;
       // As CoreChannel.close: every stream this side opened ends, so the peer sees this side leave.
       for (const outgoing of order) if (outgoing.stream !== null) await this.owner.call({ op: 'finish', id: this.id, stream: outgoing.stream });
     }
+  }
+  /** `bufferedAmount` when the turn's writes were planned, for `afterWrites`. */
+  private plannedFrom = 0;
+  /**
+   * `binary-io`: this turn's writes, in `order` and as `flushStream` would make them, at most `budget.bytes` and `budget.writes` in
+   * all. Nothing is taken from the queues here: `consume` takes what the engine answers it took, and the rest goes next turn.
+   */
+  async plan(budget: { bytes: number; writes: number }): Promise<PlannedWrite[]> {
+    if (this.disposed) return [];
+    if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return []; }
+    this.plannedFrom = this.bufferedAmount;
+    const writes: PlannedWrite[] = [];
+    for (const outgoing of this.order()) {
+      while (outgoing.items.length && outgoing.items[0].offset >= outgoing.items[0].bytes.length) outgoing.items.shift();
+      if (!outgoing.items.length || budget.bytes <= 0 || budget.writes <= 0) continue;
+      if (outgoing.stream === null) outgoing.stream = await this.owner.call<number>({ op: 'openStream', id: this.id, priority: outgoing.priority });
+      if (this.disposed) return [];
+      let index = 0, offset = outgoing.items[0].offset;
+      for (let turn = 0; turn < (outgoing.short ? 1 : WRITES_PER_STREAM) && index < outgoing.items.length && budget.bytes > 0 && budget.writes > 0; turn++) {
+        const item = outgoing.items[index];
+        const bytes = item.bytes.subarray(offset, offset + Math.min(WRITE_CHUNK, budget.bytes));
+        if (bytes.length) { writes.push({ channel: this, outgoing, bytes }); budget.bytes -= bytes.length; budget.writes -= 1; }
+        offset += bytes.length;
+        if (offset >= item.bytes.length) { index++; offset = 0; }
+      }
+    }
+    return writes;
+  }
+  /** `binary-io`: the engine took `written` of a planned write of `planned` bytes (-1: the connection is gone). */
+  consume(outgoing: Outgoing, written: number, planned: number): void {
+    if (this.disposed) return;
+    if (!Number.isInteger(written) || written < 0 || written > planned) { this.close({ drain: false }); return; }
+    outgoing.short = written < planned;
+    for (let left = written; outgoing.items.length;) {
+      const item = outgoing.items[0], taken = Math.min(left, item.bytes.length - item.offset);
+      item.offset += taken; left -= taken; outgoing.queued -= taken;
+      if (outgoing.reserved) this.owner.release(taken);
+      if (item.offset < item.bytes.length) break;
+      outgoing.items.shift();
+    }
+  }
+  /** `binary-io`: after the turn's `io` call, what `flush` does once its writes are done. */
+  async afterWrites(): Promise<void> {
+    if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return; }
+    await this.drained(this.plannedFrom);
   }
   private async flushStream(outgoing: Outgoing): Promise<void> {
     if (!outgoing.items.length) return;
@@ -660,7 +908,7 @@ class NativeChannel implements PeerChannel {
     for (const chunk of state.data) {
       const stream = this.streams.get(chunk.stream);
       if (!stream) { this.close({ drain: false }); return; }
-      let data = fromBase64Url(chunk.data);
+      let data = chunk.data;
       if (stream.kind === null && data.length) { stream.kind = data[0]; data = data.subarray(1); }
       if (stream.kind === DATA) { if (data.length) this.events.data(data); continue; }
       const lane = !this.owner.enhanced || stream.kind === null ? undefined : LANE_BY_KIND.get(stream.kind);

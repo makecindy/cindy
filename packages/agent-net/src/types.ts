@@ -64,6 +64,8 @@ export const DRAIN_LOW_WATER_BYTES = 128 * 1024;
 export interface RelayRoute {
   via: 'udp' | 'websocket';
   rttMs: number | null;
+  /** On the WebSocket because the relay UDP carried registrations but no data (relayUdp.ts); retried after `cooldownMs`. */
+  udpSuspension?: { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends'; cooldownMs: number };
 }
 export interface Transport {
   readonly id: string;
@@ -72,6 +74,8 @@ export interface Transport {
   close(): Promise<void>;
   /** This computer changed networks: connections send from the new address now (the peer follows) and candidates are gathered again. */
   networkChanged?(): void;
+  /** Session requests to a relayed peer timed out; relay UDP may carry registrations but no data (relayUdp.ts noteStall). */
+  relayStalled?(): void;
   /** The roster or the peer rule changed: a transport that mirrors the admitted peers elsewhere (the phone's engine) does it now. */
   admissionChanged?(): void;
   /**
