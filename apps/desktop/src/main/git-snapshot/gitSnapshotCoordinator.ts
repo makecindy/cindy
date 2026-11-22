@@ -102,6 +102,11 @@ interface TurnStartRecord extends Partial<TurnStartState> {
   operation: OperationBudget;
   /** Baseline failure is fenced before dispatch, including turns later aborted. */
   rewindGapRecorded?: boolean;
+  /**
+   * 本会话的文件回退是否走保存点链(codex/pi)。turn end 失败时要用它判断还值不值得
+   * 补记缺口标记 —— 其它 agent 根本不用这条链,补记只会产生无意义的引用。
+   */
+  savepointRewind?: boolean;
   autoSnapshotEnabled: boolean;
   autoInitProjectGit: boolean;
   promise: Promise<void>;
@@ -191,6 +196,7 @@ export class GitSnapshotCoordinator {
 
       operationCheckpoint();
       record.repoRoot = resolved.repoRoot;
+      record.savepointRewind = resolved.savepointRewind;
       this.registerActiveTurn(resolved.repoRoot, record);
       const metadataPromise = record.metadata ? Promise.resolve(record.metadata) : this.resolveTurnStartMetadata(sessionId);
       // A metadata failure must be observed even when queue waiting expires.
@@ -263,6 +269,41 @@ export class GitSnapshotCoordinator {
       this.deps.logger.warn('[git-snapshot] onTurnEnd failed (swallowed)', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
+      });
+      await this.recordTurnEndFailureGap(sessionId, turnStart);
+    }
+  }
+
+  /**
+   * Turn-end 失败时补记缺口。
+   *
+   * 预算耗尽会同时取消 `snapshotAfterEdit` 与它在内层 catch 里尝试写入的 gap marker
+   * (两者共用同一份已中止的预算),结果是这一轮的改后保存点凭空消失:用户回退时既没有
+   * 回退点,也看不到任何缺口记录。这里用一份**独立**预算重试,把“静默少一个保存点”
+   * 变成可观测的降级。只在确实会用到这条链(codex/pi)且已有基线时做。
+   */
+  private async recordTurnEndFailureGap(
+    sessionId: string,
+    turnStart: TurnStartRecord | undefined,
+  ): Promise<void> {
+    const repoRoot = turnStart?.repoRoot;
+    if (!turnStart || !repoRoot || !turnStart.savepointRewind || turnStart.rewindGapRecorded) return;
+    const recovery = new OperationBudget(this.deps.snapshotTimeoutMs ?? TURN_SNAPSHOT_BUDGET_MS);
+    try {
+      await recovery.run(async () => {
+        turnStart.rewindGapRecorded = await this.createRewindBlockedMarker(
+          sessionId,
+          repoRoot,
+          'File rewind gap: turn-end savepoint not recorded',
+          '[git-snapshot] rewind gap marker created after a failed turn end',
+          turnStart.metadata ?? {},
+        );
+      });
+    } catch (markerError) {
+      this.deps.logger.warn('[git-snapshot] rewind gap marker failed after a failed turn end', {
+        sessionId,
+        repoRoot,
+        error: markerError instanceof Error ? markerError.message : String(markerError),
       });
     }
   }
