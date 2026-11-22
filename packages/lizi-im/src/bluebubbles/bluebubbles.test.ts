@@ -1098,6 +1098,14 @@ describe('BlueBubbles local ingress', () => {
       expect(result.path.startsWith(root)).toBe(true);
       await expect(f.im.fetchAttachment(chat, 'clip', 'other-attachment', root)).rejects.toThrow('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
       expect(toFile).toHaveBeenCalledTimes(1);
+      // Review (#12146): a legal 255-byte name still fits with the guid prefix and the download suffix.
+      const real = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response('hello')));
+      toFile.mockImplementation((guid, dest) => real.downloadToFile(guid, dest));
+      f.message('long', { attachments: [{ guid: 'mov-2', transferName: `${'a'.repeat(251)}.mov`, totalBytes: 5 }] });
+      const long = await f.im.fetchAttachment(chat, 'long', 'mov-2', root);
+      expect(long).toMatchObject({ bytes: 5, complete: true });
+      expect(long.name.endsWith('.mov')).toBe(true);
+      expect(await fs.readFile(long.path, 'utf8')).toBe('hello');
     } finally { await fs.rm(root, { recursive: true, force: true }); await f.im.dispose(); }
   });
 

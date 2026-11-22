@@ -11,6 +11,26 @@ import { AUTOMATION_DENIED, BlueBubblesApi, BlueBubblesApiError, blueBubblesOrig
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 
 /** BlueBubbles can answer before Messages has the full file; its record states the real size. */
+/**
+ * The on-disk name of a fetched original, kept within one 255-byte file name together with the
+ * `<guid8>-` prefix and the `.<uuid>.partial` download suffix (54 bytes). Keeps the extension.
+ */
+function attachmentFileName(raw: string): string {
+  const cleaned = path.basename(raw.replace(/\\/g, '/')).replace(/[\u0000-\u001f]/g, '').replace(/^\.+/, '');
+  const limit = 200;
+  if (Buffer.byteLength(cleaned, 'utf8') <= limit) return cleaned;
+  const rawExt = path.extname(cleaned);
+  const ext = Buffer.byteLength(rawExt, 'utf8') <= 16 ? rawExt : '';
+  let stem = '';
+  let bytes = Buffer.byteLength(ext, 'utf8');
+  for (const ch of cleaned.slice(0, cleaned.length - rawExt.length)) {
+    bytes += Buffer.byteLength(ch, 'utf8');
+    if (bytes > limit) break;
+    stem += ch;
+  }
+  return stem + ext;
+}
+
 function isShortCopy(attachment: BlueBubblesAttachment, bytes: Uint8Array): boolean {
   return (attachment.totalBytes ?? 0) > 0 && bytes.byteLength < attachment.totalBytes!;
 }
@@ -1042,7 +1062,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const attachment = message?.guid === messageId && message.chats?.some(chat => chat.guid === chatId)
       ? message.attachments?.find(item => item.guid === attachmentGuid) : undefined;
     if (!attachment) throw new Error('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
-    const name = path.basename(attachment.transferName || attachment.guid).replace(/[\u0000-\u001f]/g, '') || attachment.guid;
+    const name = attachmentFileName(attachment.transferName || attachment.guid) || attachment.guid.slice(0, 8);
     await fs.mkdir(destDir, { recursive: true });
     const dest = path.join(destDir, `${attachment.guid.slice(0, 8)}-${name}`);
     const bytes = await api.downloadToFile(attachment.guid, dest);

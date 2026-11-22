@@ -69,7 +69,13 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
     ({ message_id, attachment_guid }) => scoped(undefined, async (scope, target) => {
       const workingDir = deps.getSessionContext().workingDir;
       if (!workingDir) throw new Error('WORKING_DIR_REQUIRED');
-      return scope.im.fetchAttachment(target, message_id, attachment_guid, path.join(workingDir, 'imessage-attachments'));
+      // The output directory must really be inside the task directory, not a link out of it.
+      const realWork = await fs.realpath(workingDir);
+      const dir = path.join(realWork, 'imessage-attachments');
+      await fs.mkdir(dir, { recursive: true });
+      if (!(await fs.lstat(dir)).isDirectory() || path.relative(realWork, await fs.realpath(dir)) !== 'imessage-attachments')
+        throw new Error('PERMISSION_DENIED');
+      return scope.im.fetchAttachment(target, message_id, attachment_guid, dir);
     }, 'IMESSAGE_ATTACHMENT_UNAVAILABLE'));
   server.tool('history', 'Read one page of iMessage history from a connected conversation. Returns at most 100 messages; advance offset for the next page.',
     { chat_id: chat, after: z.number().int().min(0).default(0), before: z.number().int().min(0).optional(), offset: z.number().int().min(0).default(0) },

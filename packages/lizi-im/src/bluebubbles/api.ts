@@ -163,7 +163,7 @@ export class BlueBubblesApi {
         size += chunk.byteLength;
         if (size > limit) counted.destroy(new BlueBubblesApiError('BLUEBUBBLES_RESPONSE_TOO_LARGE'));
       });
-      await pipeline(counted, createWriteStream(partial, { mode: 0o600 }));
+      await pipeline(counted, createWriteStream(partial, { mode: 0o600, flags: 'wx' }));
       await rename(partial, dest);
       return size;
     } catch (error) {
