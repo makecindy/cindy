@@ -10,7 +10,7 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
-import { and, asc, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, like, or, sql } from 'drizzle-orm';
 
 import { getDbClient, getCurrentDbClientUserId } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
@@ -40,6 +40,21 @@ export interface SessionPrRef extends PrRef {
 
 /** 只有这两类角色的文本参与提取——tool_result 里的 PR 列表是噪音(详见 prRefExtractor)。 */
 const SCANNED_ROLES = new Set(['user', 'assistant']);
+
+/**
+ * Reorder writes small positive ordinals; older add paths wrote Unix milliseconds.
+ * Those automatic timestamps must not outrank later message mentions. Interpret
+ * them as the default priority on read so existing records recover without a
+ * data migration. A trillion entries is outside any supported reorder group.
+ */
+function manualPrPriority() {
+  return sql<number>`case when ${sessionPrRefs.priority} >= 1000000000000 then 0 else ${sessionPrRefs.priority} end`;
+}
+
+/** Export the same effective priority used by SQL ordering for clients that re-sort. */
+function prRefColumns() {
+  return { ...getTableColumns(sessionPrRefs), priority: manualPrPriority().as('priority') };
+}
 
 /** PR 引用有变化时广播 renderer 的回调,由 ipc.ts 注入(解耦 Electron)。 */
 let onRefsChanged: ((sessionId: string) => void) | null = null;
@@ -173,7 +188,8 @@ async function upsertPrRefsWithinWrite(
 }
 
 /** 回填完成标记(migrationMeta kv,先例:codex_history_has_product_prompt_initialized_v1)。 */
-const BACKFILL_META_KEY = 'git_context_pr_refs_backfill_v3';
+// Re-run after versions that disabled message indexing, even if v3 already completed.
+const BACKFILL_META_KEY = 'git_context_pr_refs_backfill_v4';
 
 /**
  * 进程内防重入,按 DbClient 实例记账:同进程登出再登入另一账号时
@@ -315,6 +331,9 @@ async function reconcilePrRefsForSession(
     // 时间戳,升序处理保证 lastSeenAt 终值正确),最后再删不在存活集里的旧行:
     // 任何中断点都只会"多"不会"少",下次重算自然收敛,无需事务。
     if (scope && !scope.isCurrent()) return;
+    const readRefs = () => db.select(prRefColumns()).from(sessionPrRefs)
+      .where(eq(sessionPrRefs.sessionId, sessionId)).orderBy(asc(sessionPrRefs.id));
+    const before = await readRefs();
     const keep = new Set<string>();
     for (const row of rows) {
       if (scope && !scope.isCurrent()) return;
@@ -337,31 +356,22 @@ async function reconcilePrRefsForSession(
     }
 
     if (scope && !scope.isCurrent()) return;
-    if (!prune) {
-      if (!scope || scope.isCurrent()) onRefsChanged?.(sessionId);
-      return;
+    if (prune) {
+      const staleIds = before
+        .filter((r) => !r.manuallyAdded && r.removedAt === null && !keep.has(prStatusKey(r)))
+        .map((r) => r.id);
+      if (staleIds.length > 0) {
+        await db.delete(sessionPrRefs).where(inArray(sessionPrRefs.id, staleIds));
+      }
     }
-    const existing = await db
-      .select({
-        id: sessionPrRefs.id,
-        provider: sessionPrRefs.provider,
-        host: sessionPrRefs.host,
-        owner: sessionPrRefs.owner,
-        repo: sessionPrRefs.repo,
-        prNumber: sessionPrRefs.prNumber,
-        manuallyAdded: sessionPrRefs.manuallyAdded,
-        removedAt: sessionPrRefs.removedAt,
-      })
-      .from(sessionPrRefs)
-      .where(eq(sessionPrRefs.sessionId, sessionId));
+    // Compare final records under the write queue: repeated mentions can change
+    // timestamps transiently during recomputation without changing the result.
+    // Include ordering/provenance fields so meaningful updates still refresh.
     if (scope && !scope.isCurrent()) return;
-    const staleIds = existing
-      .filter((r) => !r.manuallyAdded && r.removedAt === null && !keep.has(prStatusKey(r)))
-      .map((r) => r.id);
-    if (staleIds.length > 0) {
-      await db.delete(sessionPrRefs).where(inArray(sessionPrRefs.id, staleIds));
+    const after = await readRefs();
+    if ((!scope || scope.isCurrent()) && JSON.stringify(before) !== JSON.stringify(after)) {
+      onRefsChanged?.(sessionId);
     }
-    if (!scope || scope.isCurrent()) onRefsChanged?.(sessionId);
   } finally {
     release?.();
   }
@@ -376,12 +386,12 @@ async function reconcilePrRefsForSession(
 export async function listAllPrRefs(): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(and(isNull(sessionPrRefs.removedAt), eq(sessionPrRefs.associationSource, 'explicit')))
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     )
     .limit(2000);
@@ -392,7 +402,7 @@ export async function listAllPrRefs(): Promise<SessionPrRef[]> {
 export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(
       and(
@@ -403,7 +413,7 @@ export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
     )
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     );
   return rows.map(rowToSessionPrRef);
@@ -484,7 +494,6 @@ async function managePrRefsWithinWrite(
     .select()
     .from(sessionPrRefs)
     .where(eq(sessionPrRefs.sessionId, sessionId));
-  const nextPriority = rows.reduce((value, row) => Math.max(value, row.priority + 1), Date.now());
   if (action.action === 'add') {
     if (action.url.length > 2048) throwIpcError('INVALID_PARAMS', 'PR URL too long');
     let url: URL;
@@ -532,7 +541,7 @@ async function managePrRefsWithinWrite(
           manuallyAdded: true,
           associationSource: 'explicit',
           associationOrigin: origin,
-          priority: nextPriority,
+          priority: 0,
         });
     }
   } else if (action.action === 'reorder') {
@@ -603,12 +612,12 @@ async function managePrRefsWithinWrite(
     await db.update(sessionPrRefs).set(patch).where(eq(sessionPrRefs.id, row.id));
   }
   const result = await db
-    .select()
+    .select(prRefColumns())
     .from(sessionPrRefs)
     .where(eq(sessionPrRefs.sessionId, sessionId))
     .orderBy(
       desc(sessionPrRefs.pinned),
-      desc(sessionPrRefs.priority),
+      desc(manualPrPriority()),
       desc(sessionPrRefs.lastSeenAt),
     );
   if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');

@@ -54,31 +54,66 @@ private struct AgentActivityMascot: View {
   }
 }
 
-/// Same counts as the desktop task capsule: waiting + unread results · running.
+/// Same counts as the desktop Live Activity: waiting + unread results · running.
+/// Only for content that is still confirmed; expired content shows no numbers.
 private struct AgentActivityCounts: View {
   let state: CindyAgentActivityAttributes.ContentState
   let size: CGFloat
-  var stale = false
+  var showLabels = false
 
   var body: some View {
-    HStack(spacing: size * 0.25) {
+    HStack(alignment: .top, spacing: size * 0.25) {
       if state.noticeCount > 0 {
-        Text(state.noticeCount, format: .number)
-          .foregroundStyle(stale ? .secondary : (state.attentionCount > 0 ? AgentActivityPalette.attention : AgentActivityPalette.completed))
+        VStack(spacing: 2) {
+          Text(state.noticeCount, format: .number)
+            .foregroundStyle(state.attentionCount > 0 ? AgentActivityPalette.attention : AgentActivityPalette.completed)
+          if showLabels {
+            Text("activity.toReview").font(.caption2).foregroundStyle(AgentActivityPalette.islandSecondary)
+          }
+        }
       }
       if state.noticeCount > 0 && state.runningCount > 0 {
         Text("·").foregroundStyle(.secondary)
       }
       if state.runningCount > 0 {
-        Text(state.runningCount, format: .number).foregroundStyle(stale ? .secondary : AgentActivityPalette.running)
+        VStack(spacing: 2) {
+          Text(state.runningCount, format: .number).foregroundStyle(AgentActivityPalette.running)
+          if showLabels {
+            Text("activity.inProgress").font(.caption2).foregroundStyle(AgentActivityPalette.islandSecondary)
+          }
+        }
       }
     }
     .font(.system(size: size, weight: .semibold, design: .rounded)).monospacedDigit()
   }
 }
 
+/// Explain the left-hand total without changing the compact counts or APNs schema.
+/// Pending includes both questions and approvals; unread can include error results.
+private struct AgentActivityAttentionBreakdown: View {
+  let state: CindyAgentActivityAttributes.ContentState
+
+  private var pending: Int { min(state.noticeCount, max(0, state.attentionCount)) }
+  private var unread: Int { state.noticeCount - pending }
+
+  private var summary: Text {
+    let pendingText = Text("activity.pendingCount \(pending)").foregroundColor(AgentActivityPalette.attention)
+    let unreadText = Text("activity.unreadCount \(unread)").foregroundColor(AgentActivityPalette.completed)
+    if pending == 0 { return unreadText }
+    if unread == 0 { return pendingText }
+    return pendingText + Text(" · ").foregroundColor(AgentActivityPalette.islandSecondary) + unreadText
+  }
+
+  var body: some View {
+    summary.font(.footnote).lineLimit(2)
+  }
+}
+
+/// All that expired content shows. The task title, status and counts it carried
+/// can no longer be confirmed, so none of them stay on screen.
 private struct AgentActivityFreshness: View {
   let state: CindyAgentActivityAttributes.ContentState
+  var font: Font = .caption
 
   var body: some View {
     HStack(spacing: 4) {
@@ -89,7 +124,7 @@ private struct AgentActivityFreshness: View {
         Text("activity.waitingForUpdate")
       }
     }
-    .font(.caption)
+    .font(font)
     .lineLimit(1)
   }
 }
@@ -101,17 +136,18 @@ private struct AgentActivityBanner: View {
   var body: some View {
     HStack(spacing: 12) {
       AgentActivityMascot(state: context.state, size: 38, stale: context.isStale, showBadge: true)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
-        Text(context.state.detail)
-          .font(.subheadline)
-          .foregroundStyle(context.isStale ? WidgetPalette.ink2 : context.state.tint).lineLimit(2)
-        if context.isStale {
-          AgentActivityFreshness(state: context.state).foregroundStyle(WidgetPalette.ink2)
+      if context.isStale {
+        AgentActivityFreshness(state: context.state, font: .subheadline).foregroundStyle(WidgetPalette.ink2)
+        Spacer(minLength: 0)
+      } else {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
+          Text(context.state.detail)
+            .font(.subheadline).foregroundStyle(context.state.tint).lineLimit(2)
         }
+        Spacer(minLength: 0)
+        AgentActivityCounts(state: context.state, size: 18)
       }
-      Spacer(minLength: 0)
-      AgentActivityCounts(state: context.state, size: 18, stale: context.isStale)
     }
     .padding(16)
     .activityBackgroundTint(WidgetPalette.background)
@@ -121,9 +157,9 @@ private struct AgentActivityBanner: View {
 }
 
 /// The small family: Apple Watch's Smart Stack, and wherever else the system
-/// asks for it. Two lines only, so a stale activity shows when it was last
-/// confirmed instead of the old status line. The system supplies the
-/// background there, so text uses system styles rather than the phone palette.
+/// asks for it. Two lines only; a stale activity shows just when it was last
+/// confirmed. The system supplies the background there, so text uses system
+/// styles rather than the phone palette.
 @available(iOS 18.0, *)
 private struct AgentActivityGlance: View {
   let context: ActivityViewContext<CindyAgentActivityAttributes>
@@ -131,16 +167,17 @@ private struct AgentActivityGlance: View {
   var body: some View {
     HStack(spacing: 8) {
       AgentActivityMascot(state: context.state, size: 30, stale: context.isStale, showBadge: true)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
-        if context.isStale {
-          AgentActivityFreshness(state: context.state).foregroundStyle(.secondary)
-        } else {
+      if context.isStale {
+        AgentActivityFreshness(state: context.state).foregroundStyle(.secondary)
+        Spacer(minLength: 0)
+      } else {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
           Text(context.state.detail).font(.subheadline).foregroundStyle(context.state.tint).lineLimit(1)
         }
+        Spacer(minLength: 0)
+        AgentActivityCounts(state: context.state, size: 16)
       }
-      Spacer(minLength: 0)
-      AgentActivityCounts(state: context.state, size: 16, stale: context.isStale)
     }
     .foregroundStyle(.primary)
   }
@@ -174,13 +211,17 @@ private enum AgentActivityPresentation {
 
   private static func expandedTask(_ context: ActivityViewContext<CindyAgentActivityAttributes>) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(context.state.title).font(.headline).foregroundStyle(AgentActivityPalette.islandText)
-        .lineLimit(1).privacySensitive()
-      Text(context.state.detail)
-        .font(.subheadline)
-        .foregroundStyle(context.isStale ? AgentActivityPalette.islandSecondary : context.state.tint).lineLimit(2)
       if context.isStale {
-        AgentActivityFreshness(state: context.state).foregroundStyle(AgentActivityPalette.islandSecondary)
+        AgentActivityFreshness(state: context.state, font: .subheadline)
+          .foregroundStyle(AgentActivityPalette.islandSecondary)
+      } else {
+        Text(context.state.title).font(.headline).foregroundStyle(AgentActivityPalette.islandText)
+          .lineLimit(1).privacySensitive()
+        Text(context.state.detail)
+          .font(.subheadline).foregroundStyle(context.state.tint).lineLimit(2)
+        if context.state.noticeCount > 0 {
+          AgentActivityAttentionBreakdown(state: context.state)
+        }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -207,19 +248,27 @@ private enum AgentActivityPresentation {
             .padding(.leading, 4)
         }
         DynamicIslandExpandedRegion(.trailing) {
-          AgentActivityCounts(state: context.state, size: 20, stale: context.isStale).padding(.trailing, 4)
+          if !context.isStale {
+            AgentActivityCounts(state: context.state, size: 20, showLabels: true)
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: 160)
+              .padding(.trailing, 4)
+          }
         }
         DynamicIslandExpandedRegion(.bottom) {
           expandedTask(context)
         }
       } compactLeading: {
-        AgentActivityMascot(state: context.state, size: 20, stale: context.isStale)
+        AgentActivityMascot(state: context.state, size: 27, stale: context.isStale)
       } compactTrailing: {
-        AgentActivityCounts(state: context.state, size: 13, stale: context.isStale)
+        if !context.isStale {
+          AgentActivityCounts(state: context.state, size: 13)
+        }
       } minimal: {
-        AgentActivityMascot(state: context.state, size: 20, stale: context.isStale, showBadge: true)
+        AgentActivityMascot(state: context.state, size: 27, stale: context.isStale, showBadge: true)
       }
-      .keylineTint(context.state.tint)
+      .keylineTint(context.isStale ? AgentActivityPalette.islandSecondary : context.state.tint)
       // No URL or Link: let iOS foreground the app without changing its route.
     }
   }

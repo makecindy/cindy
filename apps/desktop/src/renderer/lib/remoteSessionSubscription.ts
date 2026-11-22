@@ -7,6 +7,20 @@ interface Subscription {
 }
 const subscriptions = new Map<string, Subscription>();
 
+/** Use the visible task's ACK only while it is still held on the same link. */
+export async function hasAcknowledgedRemoteSessionSubscription(deviceId: string, sessionId: string): Promise<boolean> {
+  const key = JSON.stringify([deviceId, sessionId]);
+  const entry = subscriptions.get(key);
+  const ack = entry?.ack;
+  if (!entry || !ack || !entry.owners.size) return false;
+  try {
+    await ack;
+    return subscriptions.get(key) === entry && entry.ack === ack && entry.owners.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function createRemoteSessionSubscription(deviceId: string, sessionId: string) {
   const key = JSON.stringify([deviceId, sessionId]);
   const topics = [`session:${sessionId}`];

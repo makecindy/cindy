@@ -25,3 +25,22 @@ export async function resolveRemotePluginTaskRoute(route: PluginTaskRoute, deps:
   }
   return selection;
 }
+
+/**
+ * The plugin's saved "Model & tasks" choice with a run location, as the same complete
+ * route an explicit request carries. null = no saved location (the local resolver applies).
+ * Empty effort leaves the remote catalog default, exactly like an explicit route with ''.
+ */
+export function savedPluginTaskRemoteRoute(config: {
+  agentKind?: PluginTaskRoute['agentKind'] | 'claude-code';
+  providerId?: string | null;
+  model?: string;
+  effort?: string | null;
+  fastMode?: PluginTaskRoute['fastMode'];
+  agentDeviceId?: string | null;
+}): PluginTaskRoute | null {
+  const { agentDeviceId, providerId, model } = config;
+  const agentKind = config.agentKind === 'claude-code' ? 'cc' : config.agentKind;
+  if (!agentDeviceId || !agentKind || !providerId || !model) return null;
+  return { agentDeviceId, agentKind, providerId, model, effort: config.effort ?? '', fastMode: config.fastMode ?? false };
+}

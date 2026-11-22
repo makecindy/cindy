@@ -79,7 +79,7 @@ function installApi(macos = false) {
     updateDriver: vi.fn().mockResolvedValue(installed(macos)),
     onPermissionGuideStatusChanged: vi.fn(() => () => {}),
     onPermissionGuideCancelled: vi.fn(() => () => {}),
-    onUpdateProgress: vi.fn(() => () => {}),
+    onUpdateProgress: vi.fn((_callback: (progress: unknown) => void) => () => {}),
     cancelPermissionGrant: vi.fn(async () => {}),
   };
   const setEnabled = vi.fn(async () => ({ codexMcpRefreshed: true }));
@@ -115,6 +115,65 @@ afterEach(() => {
 });
 
 describe('ComputerUseSection driver update completion', () => {
+  // Only an active full setup may move on to the second pane after the
+  // driver reports that control was granted. A delayed grant can outlive Settings.
+  it.each([false, true])('advances from control to recording only while setup is active (closed=%s)', async (closed) => {
+    const { computer, getState } = installApi(true);
+    getState.mockResolvedValue({ effectiveEnabled: false });
+    const status = driverStatus(oldVersion, true);
+    const missing: ComputerDriverPermissionState = {
+      ...status.permissionState!,
+      status: 'missing', accessibility: 'missing', screenRecording: 'missing', screenRecordingCapturable: 'missing',
+    };
+    computer.status.mockResolvedValue({ ...status, permissionState: missing });
+    const granting = deferred<ComputerDriverPermissionGrantResult>();
+    const grantPermissions = vi.fn(() => granting.promise);
+    const openExternal = vi.fn(async () => ({ success: true }));
+    Object.assign(computer, { grantPermissions });
+    Object.assign(window.electronAPI, { openExternal });
+    const view = render(<ComputerUseSection />);
+    await screen.findByText(`${updateKey}.available: ${newVersion}`);
+    fireEvent.click(screen.getByRole('switch', { name: 'settings.computerUse.directControl.toggleAria' }));
+    await waitFor(() => expect(grantPermissions).toHaveBeenCalledOnce());
+    expect(openExternal).not.toHaveBeenCalled();
+    if (closed) view.unmount();
+    const partial = { ...status, permissionState: { ...missing, accessibility: 'granted' as const } };
+    computer.status.mockResolvedValue(partial);
+    await act(async () => granting.resolve({
+      ok: false, stdout: '', stderr: '', status: partial, continueToScreenRecording: true,
+    }));
+    expect(openExternal.mock.calls).toEqual(closed ? [] : [[
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    ]]);
+  });
+
+  // The picker may still be waiting for one grant when the user wants to open
+  // the second pane. Previously the rows silently swallowed this click.
+  it('opens another permission pane during a pending grant without starting a second driver request', async () => {
+    const { computer } = installApi(true);
+    const status = driverStatus(oldVersion, true);
+    status.permissionState = {
+      ...status.permissionState!,
+      status: 'missing', accessibility: 'missing', screenRecording: 'missing', screenRecordingCapturable: 'missing',
+    };
+    computer.status.mockResolvedValue(status);
+    const granting = deferred<ComputerDriverPermissionGrantResult>();
+    const grantPermissions = vi.fn(() => granting.promise);
+    const openExternal = vi.fn(async () => ({ success: true }));
+    Object.assign(computer, { grantPermissions });
+    Object.assign(window.electronAPI, { openExternal });
+
+    render(<ComputerUseSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /permissions.accessibilityLabel/ }));
+    await waitFor(() => expect(grantPermissions).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: /permissions.screenRecordingLabel/ }));
+    await waitFor(() => expect(openExternal).toHaveBeenLastCalledWith(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    ));
+    expect(grantPermissions).toHaveBeenCalledOnce();
+    await act(async () => granting.resolve({ ok: false, stdout: '', stderr: '', status }));
+  });
+
   // Unit: replace the brittle JSX text scan with actual platform visibility.
   // The settings-definition migration changes t() syntax, not the permission UI.
   it.each([false, true])('shows macOS permission guidance only on macOS (%s)', async (macos) => {
@@ -303,6 +362,41 @@ describe('ComputerUseSection driver update completion', () => {
     await screen.findByText(`${versionKey}: ${newVersion}`);
     expect(computer.updateDriver).toHaveBeenCalledExactlyOnceWith({ joinOnly: true });
     expect(screen.queryByRole('button', { name: `${updateKey}.action` })).toBeNull();
+  });
+
+  // Shared download progress replaced the bare 2px edge bar: speed and time left are visible.
+  it('shows the shared download meter while the update downloads', async () => {
+    const { computer } = installApi(true);
+    const install = deferred<ComputerDriverInstallResult>();
+    computer.updateDriver.mockReturnValue(install.promise);
+    let push: (progress: unknown) => void = () => {};
+    computer.onUpdateProgress.mockImplementation((callback: typeof push) => {
+      push = callback;
+      return () => {};
+    });
+    render(<ComputerUseSection />);
+    await clickUpdate();
+    await waitFor(() => expect(computer.onUpdateProgress).toHaveBeenCalled());
+    act(() =>
+      push({
+        phase: 'downloading',
+        downloadedBytes: 4 * 1024 * 1024,
+        totalBytes: 10 * 1024 * 1024,
+        download: {
+          phase: 'downloading',
+          loaded: 4 * 1024 * 1024,
+          total: 10 * 1024 * 1024,
+          percent: 40,
+          speedBps: 1024 * 1024,
+          etaSeconds: 6,
+        },
+      }),
+    );
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('40');
+    expect(screen.getByText(/1\.0 MB\/s/)).toBeTruthy();
+    act(() => push({ phase: 'done', downloadedBytes: null, totalBytes: null }));
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    await act(async () => install.resolve(installed(true)));
   });
 
   it('shows the installed version and clears the offer on success', async () => {

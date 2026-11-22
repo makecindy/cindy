@@ -828,7 +828,7 @@ export function translateSdkMessage(
       for (const pair of fullPairs) {
         queue.push({
           type: 'tool_result_full',
-          data: { toolUseId: pair.toolUseId, fullText: pair.fullText, ...(pair.processMedia.length ? { processMedia: pair.processMedia } : {}) },
+          data: { toolUseId: pair.toolUseId, fullText: pair.fullText, isError: pair.isError, ...(pair.processMedia.length ? { processMedia: pair.processMedia } : {}) },
           source: 'claude-code',
           ...(parentToolUseId ? { agentMeta: { parentUuid: parentToolUseId } } : {}),
         });
@@ -1150,32 +1150,28 @@ function handleSystem(
     // 第 1 次不透出：单次抖动 SDK 一次重试就过，提示只会闪一下徒增噪音（与
     // codex translator 持续重试透出的防噪口径一致）。
     //
-    // **只透出过载类**：这条 message 是内部英文 SDK 字符串，renderer 的 ErrorBanner
-    // 只对过载与网络形态做本地化替换。若把 429、500 这类也透出来，各语言用户会直接
-    // 看到裸英文，而它们在本改动之前是静默的——那是实打实的回归。其它重试类别保持
-    // 原样静默，需要时另行补本地化再放开。
-    //
-    // 判据是 parseOverloadError 的**两种**形态都算（`overloaded`：529 /
-    // overloaded_error；`capacity`：`at capacity`），不只 529：renderer 侧的镜像
-    // (renderer/utils/overloadError.ts) 对两种形态都有本地化文案，所以放开 capacity
-    // 不会产生裸英文；反过来只认 529 会把一条措辞为 `at capacity` 的过载错误静默掉，
-    // 用户看到的是"什么都没发生"。
-    const overloadRetry =
-      typeof msg.attempt === 'number' &&
-      typeof msg.max_retries === 'number' &&
-      msg.attempt >= 2 &&
-      parseOverloadError(`${sdkError} ${statusLabel}`, msg.error_status ?? undefined) !== null;
-    if (overloadRetry) {
+    // Reuse the existing network reconnect marker for gateway failures. Both
+    // Desktop and Mobile localize it as network retry progress; auto-retry is
+    // reserved for overload (Mobile otherwise labels a 5xx as capacity failure).
+    // Keep unclassified/statusless and rate-limit retries silent.
+    const overloadRetry = parseOverloadError(
+      `${sdkError} ${statusLabel}`,
+      msg.error_status ?? undefined,
+    ) !== null;
+    const networkRetry = [500, 502, 503, 504].includes(msg.error_status ?? 0);
+    const hasRetryProgress =
+      Number.isSafeInteger(msg.attempt) &&
+      Number.isSafeInteger(msg.max_retries) &&
+      (msg.attempt as number) >= 2 &&
+      (msg.max_retries as number) >= (msg.attempt as number);
+    if (hasRetryProgress && (overloadRetry || networkRetry)) {
+      const detail = `SDK API request failed: ${sdkError} (${statusLabel})`;
       queue.push({
         type: 'error',
         data: {
-          // 进度用 `(auto-retry N/M)` 后缀编码，与 Codex 侧同一套跨 agent 协议，
-          // renderer 只需一份解析。原始状态留在正文里供分类与折叠查看。
-          message: formatOverloadRetryMessage(
-            `SDK API request failed: ${sdkError} (${statusLabel})`,
-            msg.attempt as number,
-            msg.max_retries as number,
-          ),
+          message: overloadRetry
+            ? formatOverloadRetryMessage(detail, msg.attempt as number, msg.max_retries as number)
+            : `Reconnecting... ${msg.attempt}/${msg.max_retries} (${detail})`,
           isTerminal: false,
           willRetry: true,
           ...(msg.error_status != null ? { errorStatus: msg.error_status } : {}),
@@ -2271,6 +2267,8 @@ function handleResult(
   // Snap to this turn's streamed main-thread usage: the result aggregate can be
   // a session total turned into a wrong delta, and a bad snap is worse than the estimate.
   liveGeneration.tokenSpeed.stop(mainTurnOutputTokens(ctx.tracker));
+  // Display only: lets the finished message show the chart the turn ran with.
+  const generationTrace = liveGeneration.reliable ? liveGeneration.tokenSpeed.trace() : undefined;
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {
@@ -2580,6 +2578,7 @@ function handleResult(
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
     modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,
+    ...(generationTrace ? { generationTrace } : {}),
   };
   const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
     ? { ...resultWithUsageSegments, assistant_message_id: ctx.turn.lastAssistantRequestId }

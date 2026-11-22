@@ -20,6 +20,9 @@ import {
   setRemoteSessionBootstrapRetryImpl,
   subscribeRemoteSessionRemoval,
 } from '@/features/device-link/remoteProjectsStore';
+import { commitRemoteSessionHandoff, previewRemoteCreation } from '@/features/cc-agent/remoteSessionHandoff';
+import * as remoteRefresh from '@/features/device-link/refreshRemoteSessions';
+import { clearSessionStarting } from '@/lib/sessionStartingStore';
 import type { Session } from '@/lib/ccAgent.types';
 
 /** 造一个最小可用 Session(store 只存/透传,不校验字段)。 */
@@ -54,6 +57,35 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
 }
 
 describe('remoteProjectsStore', () => {
+  // Unit: a delayed create can overlap both a stale listing and its first real row.
+  it('keeps a single visible task across snapshots without putting the pending task in the host mirror', () => {
+    const id = 'creating';
+    const createdAt = '2026-11-18T00:00:00.000Z';
+    const message = { clientId: 'first', role: 'user' as const, content: 'First message', createdAt };
+    const creation = {
+      deviceId: 'host', deviceName: 'Host', remoteSessionId: id, nowIso: createdAt, logTag: 'test',
+      createArgs: { id, agentKind: 'codex', workspaceKind: 'project', model: 'fixture',
+        effort: 'medium', permissionMode: 'default', fastMode: false, workingDir: '/repo' },
+    } as const;
+    const refresh = vi.spyOn(remoteRefresh, 'refreshRemoteDeviceSessions').mockResolvedValue('ok');
+    try {
+      previewRemoteCreation(creation, message.content, message);
+      remoteProjectsStore.setDeviceSessions('host', 'Host', []);
+      expect(remoteProjectsStore.getDeviceSessions('host')).toEqual([]);
+      expect(remoteProjectsStore.getVisibleMergedRemoteSessions())
+        .toMatchObject([{ id, title: message.content, userSendAt: createdAt, projectDir: '/repo' }]);
+      remoteProjectsStore.setDeviceSessions('host', 'Host', [mk(id, { title: 'Host title' })]);
+      commitRemoteSessionHandoff({ ...creation, workDir: '/repo' });
+      expect(refresh).not.toHaveBeenCalled();
+      expect(remoteProjectsStore.getCreationPreview(id)?.message.clientId).toBe(message.clientId);
+      remoteProjectsStore.clearCreationPreview(id);
+      expect(remoteProjectsStore.getVisibleMergedRemoteSessions().map(s => [s.id, s.title])).toEqual([[id, 'Host title']]);
+    } finally {
+      refresh.mockRestore();
+      clearSessionStarting(id);
+    }
+  });
+
   // Unit, #7469: a two-row snapshot changing one task must not invalidate the
   // other sidebar row's memo. Existing tests cover whole-snapshot no-ops, not
   // per-row UI identity or its separation from in-flight detail-read fences.
@@ -187,6 +219,22 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.applyTagCatalog('dev-A', []);
     expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', epoch, 'archived')).toBe(false);
     expect(reseed.mock.calls).toEqual([['dev-A', 'active'], ['dev-A', 'archived']]);
+  });
+
+  // Unit: the controller may never have opened the hidden follow-up. Its
+  // first-worker patch must make the existing task visible on the right device.
+  it('loads a newly linked side chat missing from the controller task list', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('parent')]);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('unrelated')]);
+    const reseed = vi.fn((deviceId: string) => {
+      remoteProjectsStore.setDeviceSessions(deviceId, 'A', [mk('parent'), mk('child', { source: 'desktop', parentSessionId: 'parent' })]);
+    });
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.applyPatch('dev-A', 'child', { source: 'desktop', sideChatPromoted: true });
+    expect(reseed).toHaveBeenCalledExactlyOnceWith('dev-A', 'active');
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toContainEqual(expect.objectContaining({
+      id: 'child', parentSessionId: 'parent', deviceLinkDeviceId: 'dev-A',
+    }));
   });
 
   it('requeues both loaded buckets after invalidating a refresh that may contain new tasks', () => {
@@ -1075,9 +1123,10 @@ describe('remoteProjectsStore pending first send', () => {
     remoteProjectsStore.applyPatch('dev-B', 's1', { userSendAt: hostSentAt });
     expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBe(hostSentAt);
 
-    // 已回收:之后即使有一份陈旧快照把它报回空,也不会再被叠加层补上。
+    // 首条受理前就发出的列表读取晚于 patch 落地:叠加层已回收,但 userSendAt 只会前进,
+    // 陈旧快照不能把它退回空(否则任务掉出项目、等下一次回流才回来)。
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [unsent('s1')]);
-    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBeNull();
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBe(hostSentAt);
   });
 
   it('lets an undelivered first message fall back to the honest empty state', () => {

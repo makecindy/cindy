@@ -75,6 +75,80 @@ describe('translateResponsesRequest', () => {
     expect(keep.messages[1]).toEqual({ role: 'developer', content: 'mid-conversation dev note' });
   });
 
+  it('accepts a single structured content part in a partner bootstrap message (#10605)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'additional_tools', role: 'developer', tools: [] },
+        { type: 'message', role: 'user', content: { type: 'input_text', text: 'welcome' } },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'welcome' },
+      { role: 'user', content: 'hello' },
+    ]);
+  });
+
+  it('accepts a single structured content part in a collaboration message (#10605)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'agent_message', author: 'researcher', content: { type: 'output_text', text: 'ready' } },
+        { type: 'message', role: 'user', content: 'continue' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'assistant', content: '[collab researcher]\nready' },
+      { role: 'user', content: 'continue' },
+    ]);
+  });
+
+  // #10844 / #11080：会话里换到 Chat Completions 兼容模型后，Codex 重放历史。工具容器声明
+  // 占据 input[0]，指令消息落到 input[1]，且带 internal_chat_message_metadata_passthrough。
+  // 修复前（#10607 之前）单段 content 对象整条被判成 unsupported_feature，报 input[1].content，
+  // 切换后的第一轮消息全部失败。现有 #10605 用例只覆盖 user / agent_message 角色，没覆盖
+  // 换模型后重放的 developer 消息形状。
+  it.each([
+    {
+      label: 'a single structured content part',
+      content: { type: 'input_text', text: 'team note' },
+      expected: 'team note',
+    },
+    {
+      label: 'two input_text parts',
+      content: [
+        { type: 'input_text', text: 'team note ' },
+        { type: 'input_text', text: 'continued' },
+      ],
+      expected: 'team note continued',
+    },
+  ])('translates the developer message a model switch replays at input[1] with $label', ({ content, expected }) => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'additional_tools', role: 'developer', tools: [] },
+        {
+          type: 'message',
+          role: 'developer',
+          content,
+          internal_chat_message_metadata_passthrough: { turn_id: 'turn-1' },
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'system', content: expected },
+      { role: 'user', content: 'hello' },
+    ]);
+  });
+
+  it('still rejects a content object without a recognized part type', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [{ type: 'message', role: 'user', content: { text: 'malformed' } }],
+    }))).toThrow('input[0].content');
+  });
+
   it('coalesces mid-conversation system/developer into one leading system when asked', () => {
     const source = base({
       instructions: 'top-level',

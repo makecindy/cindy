@@ -12,7 +12,10 @@ use alloc::vec::Vec;
 use crate::congestion::{Bbr, RECOVERY_TIMEOUTS, RateSample};
 use crate::parity::{self, MAX_UNKNOWNS};
 use crate::rtt::RttEstimator;
-use crate::stream::{DEFAULT_STREAM, HEADED_LENGTH_BIT, Priority, RecvStream, STREAM_HEADER_LEN, Scheduler, SendStream, StreamEvent, StreamHeader};
+use crate::stream::{
+    DEFAULT_STREAM, HEADED_LENGTH_BIT, PRIORITY_LEVELS, Priority, RecvStream, STREAM_HEADER_LEN, Scheduler, SendProgress, SendStream, StreamEvent,
+    StreamHeader, StreamProgress,
+};
 use crate::wire::{self, Frame};
 
 const MAX_SEGMENTS_PER_PACKET: usize = 16;
@@ -98,6 +101,9 @@ const JITTER_PARITY_MIN_RTT_US: u64 = 10_000;
 const JITTER_CEILING_RELAX_PPM: u32 = 2_000;
 /// 收到的包平均间隔短于这个值（每秒两万个包以上）时，每个包都马上确认。
 const FAST_ARRIVAL_GAP_US: u64 = 50;
+/// 驱动的计时器粗时（见 [`Connection::needs_fine_timer`]），晚醒一个周期攒下的包超过这么多字节就不能晚：
+/// 快线路上一阵发出去会自己把队列堵起来。每秒 4 MB 时 Windows 的一个计时器周期（15.6 毫秒）约攒 64 KB。
+const FINE_TIMER_BURST_BYTES: u64 = 64 << 10;
 /// 晚到的包超过这个比例、平均比后发的包晚到这么久以上时逐包确认。
 const JITTERY_LATE_PPM: u32 = 100_000;
 const JITTERY_LATE_US: u64 = 4000;
@@ -109,8 +115,22 @@ const LIMITER_EXCESS_LOSS_PPM: u64 = 30_000;
 const SPARSE_BACKLOG_SEGMENTS: u64 = 64;
 /// 所有流加起来没读走的分片上限，是接收窗口的这么多倍。一条流最多占一个窗口，读得慢的流拖不住别的流。
 const MAX_UNREAD_WINDOWS: usize = 4;
-/// 所有流加起来的发送缓冲上限，是 `send_buffer_bytes` 的这么多倍。一条流写满缓冲时别的流还能写。
+/// 所有流加起来的发送缓冲上限，是每条流上限的这么多倍。一条流写满缓冲时别的流还能写。
 const MAX_SEND_BUFFERS: usize = 2;
+/// 共用发送缓冲里给高一档的流留出的份额，是每条流上限的这么多分之一：比这条流优先级低的流占着的字节，最多算到
+/// 「共用上限减去这一份」，这条流至少总有这一份能写。
+/// 没有它时两条大流（比如普通和后台各一条）就能写满共用上限，交互流一个字节都写不进去，要等大流被确认才轮到，慢线路上是好几秒；
+/// 大流在窗口大时写进来的字节在窗口变小以后还超出新的上限，一条大流也能挡住（2026-11-19）。
+/// 低档的流没把共用上限占到只剩这一份时一切照旧；每高一档最多多占这一份，三档加起来最多多出一条流的上限。
+const PRIORITY_BUFFER_RESERVE_DIVISOR: usize = 2;
+/// 每条流的发送缓冲跟着拥塞窗口走：在途的要留着等确认，后面还要排着一个窗口才不断流，所以是窗口的这么多倍。
+const SEND_BUFFER_CWNDS: usize = 2;
+/// 跟着拥塞窗口走时最少给这么多，和 `Config::default()` 的 `send_buffer_bytes` 一样：配置不超过它的，行为不变。
+const SEND_BUFFER_FLOOR: usize = 1 << 20;
+/// 对端还没在确认里说出接收窗口时，按这么多个分片算（这一端的 `recv_window` 更小时按它）：最早的版本只有
+/// `Config::default()` 的 128，接收端只收 `rcv_next` 之后这么多个分片以内的，超出的丢掉、也不确认。
+/// 新流的初始额度两端也都按它算（见 [`Connection::initial_window`]）：一端放大了窗口，另一端还是旧版时照样对得上。
+const LEGACY_WINDOW: u32 = 128;
 /// 读走窗口的这么多分之一就更新额度。
 const GRANT_FRACTION: u64 = 8;
 /// 新的流量额度跟着这么多个确认发出去，确认丢了也不用等超时。
@@ -121,7 +141,7 @@ const STREAM_ACTIVE_US: u64 = 1_000_000;
 const INTERACTIVE_WINDOW_RESERVE: u64 = 16;
 /// 每个往返最多这么多个分片的交互流数据不用等节奏和拥塞窗口。
 const INTERACTIVE_ROUND_SEGMENTS: usize = 8;
-/// 一个确认包最多带这么多条流的额度。
+/// 一个确认包最多带这么多条流的额度；回探测的确认不受它限制（见 [`Connection::write_grants`]）。
 const MAX_GRANTS_PER_PACKET: usize = 2;
 
 /// 传输策略；只影响发送节奏和冗余，不改变线格式。
@@ -150,15 +170,23 @@ pub enum BandwidthShare {
 pub struct Config {
     pub recovery_policy: RecoveryPolicy,
     pub bandwidth_share: BandwidthShare,
-    /// 单个 UDP 载荷的上限，含包头。
+    /// 收到的单个 UDP 载荷的上限，含包头。比它长的包、比按它算出的分片长的分片都当坏包丢掉，所以两端必须一致。
     pub max_packet_size: usize,
-    /// 同时在途的分片上限。
+    /// 这一端发出的单个 UDP 载荷的上限，含包头；不超过 `max_packet_size`（超过时按 `max_packet_size`）。
+    /// 对端按 `max_packet_size` 收，这一端发得短一些不影响互通。VPN、PPPoE、运营商隧道会在包外再套一层，
+    /// 整包超过路径 MTU 时被拆成两片，高速时丢包和排队陡增（2026-11-16 两台电脑之间的 VPN：每秒 12 MB 时 1400 字节的 UDP 丢 32%、
+    /// 往返从 10 毫秒涨到 184 毫秒，1372 字节以下不丢）。外层在包外再加字节（经中转）时，调用方按外层开销调小。默认同 `max_packet_size`。
+    pub send_packet_size: usize,
+    /// 同时在途的分片上限。实际在途量由拥塞控制按实测的带宽和往返决定（约两倍「带宽 × 往返」），这里只是按内存定的天花板；
+    /// 也不超过对端在确认里说出的接收窗口（说出来之前按 128，对着旧版对端一直是 128）。
     pub send_window: u32,
-    /// 接收窗口，单位是分片。每条流各有这么大的窗口。
+    /// 接收窗口，单位是分片。每条流各有这么大的窗口（新流的额度两端都先按 128 记，收到新流时马上放宽到这里）。
+    /// 只在数据乱序到达或应用没读走时占内存。
     pub recv_window: u32,
     /// 每个方向同时存在的流数上限，含默认流。
     pub max_streams: u32,
-    /// 每条流的发送缓冲字节上限。写满后 `send` 只接受部分数据。
+    /// 每条流的发送缓冲字节上限。写满后 `send` 只接受部分数据。超过 1 MiB 时，实际可写的量跟着拥塞窗口放大
+    /// （两倍窗口，至少 1 MiB），慢线路上不白占内存，快而远的线路才用到上限。
     pub send_buffer_bytes: usize,
     pub initial_rto_us: u64,
     pub min_rto_us: u64,
@@ -186,6 +214,7 @@ impl Default for Config {
             recovery_policy: RecoveryPolicy::Auto,
             bandwidth_share: BandwidthShare::Full,
             max_packet_size: 1400,
+            send_packet_size: 1400,
             send_window: 128,
             recv_window: 128,
             max_streams: 64,
@@ -209,6 +238,11 @@ impl Default for Config {
 
 impl Config {
     /// 先取得所选策略的默认值，再通过字段覆写定制；不改调用方显式给出的字段。
+    /// 这一端实际发出的 UDP 载荷上限。
+    pub fn send_limit(&self) -> usize {
+        self.send_packet_size.min(self.max_packet_size)
+    }
+
     pub fn for_policy(recovery_policy: RecoveryPolicy) -> Self {
         Self {
             recovery_policy,
@@ -312,11 +346,15 @@ struct SentPacket {
     /// 发送时是第几个探测周期。
     cycle: u32,
     app_idle: bool,
+    /// 应用没数据了、在途却还超过一个初始窗口：这是一阵数据的尾巴，不是零星消息。见发包处的说明。
+    tail: bool,
     // 发送时的送达进度，确认到达时用来计算实际送达速率。
     delivered: u64,
     delivered_at: u64,
     first_sent_at: u64,
     app_limited: bool,
+    /// 没测过路径时一阵数据开头快发的那一串里的包。
+    train: bool,
 }
 
 impl SentPacket {
@@ -361,7 +399,10 @@ pub struct Connection {
     config: Config,
     /// 外层（加密）给每个包追加的字节数。只影响分片大小和流量计量，明文连接是 0。
     overhead: usize,
+    /// 发出的分片的上限（按 [`Config::send_limit`] 算）。
     max_segment: usize,
+    /// 收到的分片的上限（按 `max_packet_size` 算）：对端可能发得比这一端长。
+    max_recv_segment: usize,
     rtt: RttEstimator,
     congestion: Bbr,
     stats: Stats,
@@ -377,6 +418,8 @@ pub struct Connection {
     send_streams: BTreeMap<u32, SendStream>,
     scheduler: Scheduler,
     next_stream_id: u32,
+    /// 上一次有数据被确认的时刻；之前没有数据在等时，是数据开始等的时刻（`send_progress`）。
+    progress_at: u64,
     /// 交互流和其他流都在发：其他流要给它让路，也要少占网络里的队列。
     mixed_traffic: bool,
     last_interactive_at: Option<u64>,
@@ -438,7 +481,15 @@ pub struct Connection {
     lost_run_ppm: u32,
     last_lost_packet: u64,
     peer_una: u64,
+    /// 对端最近一次确认里的窗口，只管默认流（见 [`Self::advertised_window`]）。
     peer_window: u32,
+    /// 对端确认里说过的最大窗口，就是它的 `recv_window`：它只收 `peer_una` 之后这么多个分片以内的，所有流的新分片都不越过它。
+    /// 只增不减；说出来之前按 [`Self::initial_window`] 算。
+    peer_window_max: u32,
+    /// 收到过对端的确认，`peer_window_max` 是对端说的，不再是猜的。
+    peer_window_known: bool,
+    /// 收到了探测：下一个确认带上放得下的所有额度（见 [`Self::write_grants`]）。
+    grant_all: bool,
     probe_at: Option<u64>,
     probe_interval_us: u64,
     probe_due: bool,
@@ -494,15 +545,20 @@ impl Connection {
 
     /// `overhead` 是外层追加在每个包后面的字节数。`max_packet_size` 仍是整个 UDP 载荷的上限。
     pub(crate) fn with_overhead(config: Config, now_us: u64, overhead: usize) -> Self {
-        assert!(config.max_packet_size > overhead + wire::PACKET_HEADER_LEN + wire::PARITY_HEADER_LEN, "max_packet_size too small");
+        assert!(config.send_limit() > overhead + wire::PACKET_HEADER_LEN + wire::PARITY_HEADER_LEN, "max_packet_size too small");
         assert!(config.max_packet_size <= u16::MAX as usize, "max_packet_size too large");
         assert!(config.send_window > 0 && config.recv_window > 0, "windows must be positive");
         assert!(config.recv_window < 1 << (wire::PARITY_FIRST_BITS - 1), "recv_window exceeds the wire format");
         assert!(config.reorder_threshold > 0, "reorder_threshold must be positive");
         // 按校验帧的头算，这样满长度分片的校验内容也能放进一个包。
-        let max_segment = config.max_packet_size - overhead - wire::PACKET_HEADER_LEN - wire::PARITY_HEADER_LEN;
+        let max_segment = config.send_limit() - overhead - wire::PACKET_HEADER_LEN - wire::PARITY_HEADER_LEN;
+        let max_recv_segment = config.max_packet_size - overhead - wire::PACKET_HEADER_LEN - wire::PARITY_HEADER_LEN;
         let rtt = RttEstimator::new(config.initial_rto_us, config.min_rto_us, config.max_rto_us, config.ack_delay_us);
-        let packet_size = config.max_packet_size as u64;
+        let packet_size = config.send_limit() as u64;
+        // 拥塞窗口的上限先按这一端的窗口，第一个确认说出对端的接收窗口后改成实际能用的（`apply_ack`）：
+        // 对着旧版对端时和两端都是旧版一样，按 128 个分片的窗口判断校验、启动和窗口受限。开头这一个往返里新分片照样不越过
+        // `initial_window`（`next_stream`）。一开始就按 128 算的话，两端都放大了窗口时启动阶段跟着变：`sim/tests/sharing.rs`
+        // 四条连接挤 100 Mbit/s、往返 100 毫秒丢包 6.7%（门槛 5%），随机丢 10% 的线路利用率 0.79（门槛 0.85）。
         let max_cwnd = config.send_window as u64 * packet_size;
         let fast = config.recovery_policy == RecoveryPolicy::Fast;
         let initial_segments = if fast { 128 } else { INITIAL_CWND_SEGMENTS };
@@ -514,12 +570,13 @@ impl Connection {
             config.recovery_policy != RecoveryPolicy::Lean,
         );
         if config.bandwidth_share == BandwidthShare::Fair {
-            congestion.set_fair_share(config.max_packet_size as u64);
+            congestion.set_fair_share(config.send_limit() as u64);
         }
         let (sequence, packet) = (config.initial_sequence, config.initial_packet_number);
         let mut connection = Self {
             overhead,
             max_segment,
+            max_recv_segment,
             rtt,
             congestion,
             stats: Stats::default(),
@@ -532,6 +589,7 @@ impl Connection {
             send_buffered: 0,
             send_streams: BTreeMap::from([(DEFAULT_STREAM, SendStream::new(Priority::Normal, 0))]),
             scheduler: Scheduler::default(),
+            progress_at: 0,
             next_stream_id: DEFAULT_STREAM + 1,
             mixed_traffic: false,
             last_interactive_at: None,
@@ -575,7 +633,10 @@ impl Connection {
             lost_run_ppm: 0,
             last_lost_packet: 0,
             peer_una: sequence,
-            peer_window: config.recv_window,
+            peer_window: Self::initial_window(&config),
+            peer_window_max: Self::initial_window(&config),
+            peer_window_known: false,
+            grant_all: false,
             probe_at: None,
             probe_interval_us: config.probe_initial_us,
             probe_due: false,
@@ -646,6 +707,8 @@ impl Connection {
         for (&id, stream) in &self.send_streams {
             let unacked: usize = self.segments.iter().filter(|segment| segment.stream == id).map(|segment| segment.data.len()).sum();
             assert_eq!(stream.unacked, unacked, "stream {id} send accounting");
+            let outstanding: usize = self.segments.iter().filter(|segment| segment.stream == id && !segment.acked).map(|segment| segment.data.len()).sum();
+            assert_eq!(stream.outstanding, outstanding, "stream {id} unacknowledged accounting");
         }
         assert_eq!(self.segments.len() as u64, self.snd_sent - self.snd_una, "segment queue length");
         assert!(self.snd_una <= self.snd_sent, "send sequence order");
@@ -698,13 +761,35 @@ impl Connection {
         }
         let id = self.next_stream_id;
         self.next_stream_id = id.checked_add(1)?;
-        self.send_streams.insert(id, SendStream::new(priority, self.config.recv_window as u64));
+        // 对端开流时按约定的初始额度记（`initial_window`），它的窗口更大时会马上放宽（见 `resolve_places`）。
+        self.send_streams.insert(id, SendStream::new(priority, Self::initial_window(&self.config) as u64));
         Some(id)
     }
 
     /// 调整流的优先级，下一个分片起生效。流不存在时返回 false。
     pub fn set_priority(&mut self, stream: u32, priority: Priority) -> bool {
         self.send_streams.get_mut(&stream).map(|state| state.priority = priority).is_some()
+    }
+
+    /// 每条流现在能缓冲多少：两倍拥塞窗口，至少 1 MiB，最多 `send_buffer_bytes`。拥塞窗口按实测的带宽和往返算，
+    /// 所以缓冲跟着线路放大或缩小；已经写进来的不会因为窗口变小被丢掉，只是暂时不再收新的。
+    fn stream_send_buffer(&self) -> usize {
+        let cap = self.config.send_buffer_bytes;
+        (self.congestion.cwnd() as usize).saturating_mul(SEND_BUFFER_CWNDS).clamp(cap.min(SEND_BUFFER_FLOOR), cap)
+    }
+
+    /// 这个优先级的流写入时，共用发送缓冲算作已经用掉多少：同档和更高档的流占着的全算，比它低档的流占着的最多算到
+    /// 共用上限减去 [`PRIORITY_BUFFER_RESERVE_DIVISOR`] 留出的那一份。
+    fn shared_buffer_used(&self, priority: Priority, per_stream: usize) -> usize {
+        if priority.is_lowest() {
+            return self.send_buffered;
+        }
+        let lower: usize = self.send_streams.values()
+            .filter(|state| state.priority.is_lower_than(priority))
+            .map(|state| state.pending.len() + state.unacked)
+            .sum();
+        let lower_limit = per_stream.saturating_mul(MAX_SEND_BUFFERS).saturating_sub(per_stream / PRIORITY_BUFFER_RESERVE_DIVISOR);
+        self.send_buffered.saturating_sub(lower) + lower.min(lower_limit)
     }
 
     /// 写入一条流，返回接受的字节数。流不存在或已经结束时返回 0。
@@ -715,14 +800,74 @@ impl Connection {
         if !self.has_unacked_data() {
             self.last_heard = now_us;
         }
-        let per_stream = self.config.send_buffer_bytes;
-        let total_room = per_stream.saturating_mul(MAX_SEND_BUFFERS).saturating_sub(self.send_buffered);
-        let Some(state) = self.send_streams.get_mut(&stream).filter(|state| !state.finishing) else { return 0 };
-        let room = per_stream.saturating_sub(state.pending.len() + state.unacked).min(total_room);
+        if !self.bytes_waiting() {
+            self.progress_at = now_us;
+        }
+        let per_stream = self.stream_send_buffer();
+        let Some(priority) = self.send_streams.get(&stream).filter(|state| !state.finishing).map(|state| state.priority) else { return 0 };
+        let total_room = per_stream.saturating_mul(MAX_SEND_BUFFERS).saturating_sub(self.shared_buffer_used(priority, per_stream));
+        let max_segment = self.max_segment;
+        let Some(state) = self.send_streams.get_mut(&stream) else { return 0 };
+        let own = state.pending.len() + state.unacked;
+        // 自己一个字节都没缓冲的流总能写进一个分片：高档的流一直写满共用缓冲时，调度器给低档留的那一份才有东西可发，
+        // 不会被饿死。多占的最多是每条流一个分片。
+        let total_room = if own == 0 { total_room.max(max_segment) } else { total_room };
+        let room = per_stream.saturating_sub(own).min(total_room);
         let accepted = data.len().min(room);
+        if !state.waiting() && accepted > 0 {
+            state.progress_at = now_us;
+        }
         state.pending.extend(&data[..accepted]);
         self.send_buffered += accepted;
         accepted
+    }
+
+    /// 这条流还在发送缓冲里的字节：写进来还没发出的，加上发出了还没确认的。流不存在时为 0。上层据此判断这条流排了多少
+    /// （Agent-Net 会话的积压，慢线路上不再往里灌推送，交互回复不排在大批推送后面）。
+    pub fn stream_buffered(&self, stream: u32) -> usize {
+        self.send_streams.get(&stream).map_or(0, |state| state.pending.len() + state.unacked)
+    }
+
+    /// 一条流的进展。流不存在时是 `None`：没开过，或者已经写完、全部被确认（结束标记也确认了）。
+    /// 上层据此按进展判超时：字节一直在被确认的流再慢也不算卡住，有字节在等却很久没有一个被确认才算。
+    /// 停顿只算还没被确认的字节：别的流丢了包时，这条流被确认了的字节还要等缺口补齐才从缓冲里放掉，它们算在 `buffered`
+    /// 里，不算停顿。只等着切出结束标记的流也不算，结束标记切出以后才开始算。
+    pub fn stream_progress(&self, now_us: u64, stream: u32) -> Option<StreamProgress> {
+        let state = self.send_streams.get(&stream)?;
+        let buffered = state.pending.len() + state.unacked;
+        Some(StreamProgress { acked_bytes: state.acked, buffered, stalled_us: if state.waiting() { now_us.saturating_sub(state.progress_at) } else { 0 } })
+    }
+
+    /// 某条流有字节在等（见 [`SendStream::waiting`]）：发送方向的停顿从这时算起。
+    fn bytes_waiting(&self) -> bool {
+        self.send_streams.values().any(SendStream::waiting)
+    }
+
+    /// 发送方向的进展：每一档还在发送缓冲里的字节（写进来还没发的，加发了还没确认的），以及有数据没被确认时距上一次有数据被确认
+    /// 过了多久。上层据此看线路是不是变慢、推送是不是积压，不用自己数。
+    pub fn send_progress(&self, now_us: u64) -> SendProgress {
+        let mut queued = [0usize; PRIORITY_LEVELS];
+        for state in self.send_streams.values() {
+            queued[state.priority.value() as usize] += state.pending.len() + state.unacked;
+        }
+        let stalled_us = if self.bytes_waiting() { now_us.saturating_sub(self.progress_at) } else { 0 };
+        SendProgress { queued, stalled_us }
+    }
+
+    /// 放弃一条流：写进来还没切成分片的字节不再发，流随即结束，对端收到已经发出的那部分和结束标记。已经发出、还没被确认的
+    /// 分片照常重传：全连接共用分片序号，对端要收齐才能往后交付，这部分最多是在途的那一窗。线上格式不变，旧版对端看到的是一条
+    /// 提前结束的流，所以上层要自己看出内容不全（比如按头里写的长度）。返回丢掉的字节数；默认流、不存在或已经发出结束标记的流
+    /// 返回 `None`。
+    pub fn abandon_stream(&mut self, stream: u32) -> Option<usize> {
+        if stream == DEFAULT_STREAM {
+            return None;
+        }
+        let state = self.send_streams.get_mut(&stream).filter(|state| !state.fin_sent)?;
+        let dropped = state.pending.len();
+        state.pending.clear();
+        state.finishing = true;
+        self.send_buffered -= dropped;
+        Some(dropped)
     }
 
     /// 这条流不再写了。之前写入的数据发完后，对端会收到 [`StreamEvent::Finished`]。默认流不能结束。
@@ -927,7 +1072,7 @@ impl Connection {
             let length = (length & !HEADED_LENGTH_BIT) as usize;
             let sn = holes[column];
             // 校验内容来自已认证的对端，长度不对只可能是实现有错；丢掉即可，重传会补上。
-            let sized = length > 0 && length <= restored.len() && length <= self.max_segment && (!headed || length >= STREAM_HEADER_LEN);
+            let sized = length > 0 && length <= restored.len() && length <= self.max_recv_segment && (!headed || length >= STREAM_HEADER_LEN);
             if complete && sized && self.accept_segment(sn, &restored[..length], headed) {
                 self.stats.recovered_segments += 1;
             }
@@ -974,6 +1119,18 @@ impl Connection {
         data.extend_from_slice(payload);
         self.pending_parity.push_back(PendingParity { first, count, symbol, length, data });
         self.parity_dirty = true;
+    }
+
+    /// 对端说出接收窗口之前按多少个分片算，新流的初始额度也是它。两端都按同一个规则算才对得上：
+    /// 旧版两端都是 128，新版放大了窗口也先按 128，对端说出更大的窗口、或这一端收到流就放宽的额度后再放开。
+    fn initial_window(config: &Config) -> u32 {
+        config.recv_window.min(LEGACY_WINDOW)
+    }
+
+    /// 现在实际的发送窗口（分片）：这一端的上限和对端的接收窗口里小的那个。
+    /// 对端是窗口只有 128 的旧版时，越过它的分片会被丢掉、也不确认，只能等超时重传。
+    fn send_window_now(&self) -> u32 {
+        self.config.send_window.min(self.peer_window_max)
     }
 
     /// 确认帧里的窗口只管默认流，别的流各有额度，一条流不读不会卡住别的流。
@@ -1157,7 +1314,7 @@ impl Connection {
         while pos < packet.len() {
             match wire::parse_frame(packet, &mut pos).ok_or(PacketError::Malformed)? {
                 Frame::Ack(ack) => self.validate_ack(&ack)?,
-                Frame::Data { payload, .. } | Frame::Parity { payload, .. } if payload.len() > self.max_segment => {
+                Frame::Data { payload, .. } | Frame::Parity { payload, .. } if payload.len() > self.max_recv_segment => {
                     return Err(PacketError::Malformed);
                 }
                 _ => {}
@@ -1193,10 +1350,11 @@ impl Connection {
                 Frame::Ping => {
                     ack_eliciting = true;
                     urgent = true;
-                    // 对端可能是等额度等到了探测：额度帧丢光时靠这里补。
+                    // 对端可能是等额度等到了探测：额度帧丢光时靠这里补。它等的是哪条流不知道，回它的确认把每条流的都带上。
                     for state in self.recv_streams.values_mut() {
                         state.grant_repeats = state.grant_repeats.max(1);
                     }
+                    self.grant_all = true;
                 }
                 Frame::Credit { stream, end } => {
                     if let Some(state) = self.send_streams.get_mut(&stream) {
@@ -1292,6 +1450,12 @@ impl Connection {
     }
 
     fn apply_ack(&mut self, now_us: u64, ack: &wire::AckFrame<'_>) {
+        // 先定窗口再算这个确认：拥塞控制按实际能用的窗口判断这一轮是不是被窗口限住。
+        if !self.peer_window_known || ack.window > self.peer_window_max {
+            self.peer_window_known = true;
+            self.peer_window_max = self.peer_window_max.max(ack.window);
+            self.congestion.set_max_cwnd(self.send_window_now() as u64 * self.config.send_limit() as u64);
+        }
         let largest = wire::expand(ack.largest, self.next_packet.saturating_sub(1), wire::ACK_NUMBER_BITS);
         // 这个确认里最新的包早被超时判丢了：往返突然变长（换了网络、路由变了），超时比往返还短，在途的包都先被判丢、再被确认。
         // 每次发送都用新包号，它的往返照样准；不采样的话超时永远追不上，每个确认还会把退避清零，连接卡在误判里出不来。
@@ -1331,8 +1495,9 @@ impl Connection {
                 rtt_us,
                 prior_delivered: packet.delivered,
                 app_limited: packet.app_limited,
-                app_idle: packet.app_idle,
+                app_idle: packet.app_idle && !packet.tail,
                 send_span_us: send_elapsed,
+                train: packet.train,
             };
             self.congestion.on_ack(now_us, &sample, self.delivered, self.bytes_in_flight);
             self.adjust_jitter_parity();
@@ -1435,7 +1600,7 @@ impl Connection {
             }
             let late = now_us.saturating_sub(lost.declared_at);
             self.reorder_delay_us = self.reorder_delay_us.max(late + late / 4).min(self.rtt.srtt_us());
-            let limit = (self.config.send_window as u64 / 2).max(self.config.reorder_threshold);
+            let limit = (self.send_window_now() as u64 / 2).max(self.config.reorder_threshold);
             self.packet_threshold = self.packet_threshold.max(lost.distance + 1).min(limit);
             self.reorder_decay_at = now_us + REORDER_DECAY_RTTS * self.rtt.srtt_us();
             self.mark_packet_acked(&lost.packet);
@@ -1512,8 +1677,16 @@ impl Connection {
         }
         segment.acked = true;
         let was_in_flight = core::mem::replace(&mut segment.in_flight, false);
+        let (stream, bytes) = (segment.stream, segment.data.len());
         if was_in_flight {
             self.in_flight -= 1;
+        }
+        // 确认都在收到包时处理，`last_heard` 就是此刻。
+        self.progress_at = self.last_heard;
+        if let Some(state) = self.send_streams.get_mut(&stream) {
+            state.acked += bytes as u64;
+            state.outstanding -= bytes;
+            state.progress_at = self.last_heard;
         }
     }
 
@@ -1687,7 +1860,14 @@ impl Connection {
             let (stream, seq, fin) = if entry.headed {
                 let Some(header) = StreamHeader::parse(&entry.body) else { return };
                 if !self.recv_streams.contains_key(&header.stream) {
-                    self.recv_streams.insert(header.stream, RecvStream::new(self.config.recv_window as u64));
+                    // 对端按约定的初始额度开的流；这一端的窗口更大时马上放宽，额度跟着下一个确认出去。
+                    // 等应用读走八分之一个窗口才放的话，按 128 开流的旧版对端要等探测（250 毫秒）才拿到额度。
+                    let mut state = RecvStream::new(Self::initial_window(&self.config) as u64);
+                    if self.config.recv_window as u64 > state.granted_end {
+                        state.granted_end = self.config.recv_window as u64;
+                        state.grant_repeats = GRANT_REPEATS;
+                    }
+                    self.recv_streams.insert(header.stream, state);
                     self.push_event(StreamEvent::Opened(header.stream));
                 }
                 let next = self.recv_streams.get(&header.stream).map_or(0, |state| state.next_seq);
@@ -1744,12 +1924,18 @@ impl Connection {
     }
 
     /// 下一个新分片该给哪条流，现在没有能发的就是 `None`。
+    ///
+    /// 所有流的新分片都不越过对端的接收窗口（`send_window_now`）：对端只收 `rcv_next` 之后这么多个分片以内的，
+    /// 而 `snd_una` 之前的分片对端都收到了，它的 `rcv_next` 不会比 `snd_una` 小。只按流的额度限的话，对着窗口只有 128 的
+    /// 旧版对端，一丢包后面的分片就越过它的窗口被丢掉（2026-11-17 复核：8 MiB、100 Mbit/s、20 毫秒、1% 丢包，
+    /// 重传从 2 个涨到 8312 个，用时从 1.09 秒涨到 1.76 秒）。
     fn next_stream(&self) -> Option<u32> {
-        let room = (self.snd_una + self.config.send_window as u64).saturating_sub(self.snd_sent);
+        let window = self.send_window_now() as u64;
+        let room = (self.snd_una + window).saturating_sub(self.snd_sent);
         // 给交互流留一点窗口：窗口被丢包卡住时，新消息不用等大量数据。
-        let reserve = if self.mixed_traffic { (self.config.send_window as u64 / INTERACTIVE_WINDOW_RESERVE).max(1) } else { 0 };
+        let reserve = if self.mixed_traffic { (window / INTERACTIVE_WINDOW_RESERVE).max(1) } else { 0 };
         self.scheduler.pick(&self.send_streams, |id, stream| {
-            let allowed = if stream.priority == Priority::Interactive { room > 0 } else { room > reserve };
+            let allowed = if stream.priority.is_urgent() { room > 0 } else { room > reserve };
             allowed && stream.has_data() && self.peer_allows(id, stream)
         })
     }
@@ -1774,21 +1960,28 @@ impl Connection {
         if size > room {
             return None;
         }
+        // 空闲的流只切出结束标记：从这时起它（和整个发送方向，之前什么都没在等的话）在等确认。
+        if count == 0 && !self.bytes_waiting() {
+            self.progress_at = now_us;
+        }
         let mut data = self.take_buffer();
         let state = self.send_streams.get_mut(&id)?;
         if headed {
             StreamHeader { stream: id, seq: state.next_seq as u32, fin }.write(&mut data);
         }
+        if count == 0 && !state.waiting() {
+            state.progress_at = now_us;
+        }
         state.take_pending(count, &mut data);
         state.unacked += size;
+        state.outstanding += size;
         state.next_seq += 1;
         state.fin_sent |= fin;
         let (next_seq, priority) = (state.next_seq, state.priority);
         self.send_buffered += size - count;
         self.tail_stream = (id, next_seq);
-        let lower_waiting = self.send_streams.values().any(|stream| stream.has_data() && stream.priority.is_lower_than(priority));
-        self.scheduler.record(id, priority, lower_waiting);
-        let urgent = priority == Priority::Interactive;
+        self.scheduler.record(id, priority, &self.send_streams);
+        let urgent = priority.is_urgent();
         *(if urgent { &mut self.last_interactive_at } else { &mut self.last_other_at }) = Some(now_us);
         self.update_mixed_traffic(now_us);
         self.segments.push_back(Segment { data, stream: id, headed, urgent, acked: false, in_flight: false, sent_before: false });
@@ -1934,6 +2127,16 @@ impl Connection {
         wake
     }
 
+    /// 驱动只能按 `granularity_us` 醒时（Windows 上 Node 的计时器约 15.6 毫秒），这条连接的计时器能不能等到下一个周期：
+    /// 有数据等着发、按发送速率一个周期要攒下 [`FINE_TIMER_BURST_BYTES`] 以上时不能等，醒来一阵发出去会自己把队列堵起来。
+    /// 慢的时候等一个周期没关系，醒来补发攒下的包。传输一开始发送速率就是起步速率，不用先量出快慢。
+    /// 收方向不用：数据连续到达时每两个包就马上确认，确认晚一个周期的只有一阵末尾那一个（`sim/tests/bursts.rs`）。
+    pub fn needs_fine_timer(&self, granularity_us: u64) -> bool {
+        !self.dead
+            && self.has_data_to_send()
+            && self.congestion.pacing_rate_estimate().saturating_mul(granularity_us) / 1_000_000 >= FINE_TIMER_BURST_BYTES
+    }
+
     fn has_data_to_send(&self) -> bool {
         !self.retransmit.is_empty() || !self.duplicates.is_empty() || self.next_stream().is_some()
     }
@@ -1966,7 +2169,7 @@ impl Connection {
         let fast = self.config.recovery_policy == RecoveryPolicy::Fast;
         // 开头见过丢包、窗口又装不满路径时，校验按速度优先的余量给：这时还不知道路径有没有余量，但等测出来，
         // 第二轮里丢的包要等一个往返的重传，窗口白白卡住。没见过丢包时不发，干净路径不多花字节。
-        let coverable = self.config.send_window as u64 <= parity::MAX_COVERED * HEAVY_PARITY_COVERAGE_FACTOR;
+        let coverable = self.send_window_now() as u64 <= parity::MAX_COVERED * HEAVY_PARITY_COVERAGE_FACTOR;
         let early = !fast
             && coverable
             && self.congestion.is_starting()
@@ -2091,7 +2294,7 @@ impl Connection {
         // 校验包不占发送窗口，但算在途字节。要留出它的位置，否则校验越多能发的数据越少。
         let cwnd = self.congestion.cwnd();
         let parity_room = self.parity_interval().map_or(0, |interval| cwnd / interval as u64);
-        self.in_flight < self.config.send_window && self.bytes_in_flight < cwnd + parity_room
+        self.in_flight < self.send_window_now() && self.bytes_in_flight < cwnd + parity_room
     }
 
     fn may_send(&mut self, now_us: u64) -> bool {
@@ -2106,8 +2309,8 @@ impl Connection {
             self.urgent_round_at = now_us;
             self.urgent_round_bytes = 0;
         }
-        self.urgent_round_bytes < INTERACTIVE_ROUND_SEGMENTS * self.config.max_packet_size
-            && self.in_flight < self.config.send_window
+        self.urgent_round_bytes < INTERACTIVE_ROUND_SEGMENTS * self.config.send_limit()
+            && self.in_flight < self.send_window_now()
             && self.next_is_urgent()
     }
 
@@ -2133,7 +2336,7 @@ impl Connection {
 
     /// 下一个新分片是不是交互流的。
     fn next_interactive_stream(&self) -> Option<u32> {
-        self.next_stream().filter(|id| self.send_streams.get(id).is_some_and(|stream| stream.priority == Priority::Interactive))
+        self.next_stream().filter(|id| self.send_streams.get(id).is_some_and(|stream| stream.priority.is_urgent()))
     }
 
     /// 接下来要发的是交互流的数据。
@@ -2175,7 +2378,7 @@ impl Connection {
         if !self.has_data_to_send() {
             self.congestion.stop_pacing_catch_up();
         }
-        let out = &mut out[..self.config.max_packet_size - self.overhead];
+        let out = &mut out[..self.config.send_limit() - self.overhead];
         let mut bundled = [0u64; MAX_BUNDLED_SEGMENTS];
         let mut bundled_count = 0;
         let can_send_data =
@@ -2309,9 +2512,19 @@ impl Connection {
                 self.delivered_at = now_us;
             }
             // 对端窗口卡住时测到的速率同样不代表路径能力，要和“应用没东西发”一样对待。
-            let app_limited = !self.has_data_to_send();
+            // 小消息的副本是冗余，不是排着的数据：只剩副本要发时照样算应用没数据。否则丢过包以后，停下来时每条零星消息
+            // 都算满负荷的一轮，十条以后之前测到的带宽就被挤掉了，下一阵要从小消息的速度重新爬（sim/tests/bursts.rs）。
+            let app_limited = self.retransmit.is_empty() && self.next_stream().is_none();
             let app_idle = self.retransmit.is_empty() && !self.send_streams.values().any(SendStream::has_data);
             let below_capacity = app_idle || self.congestion.sends_below_capacity();
+            // 拥塞控制按「应用空闲」把一段的送达速率当成应用的速度：判限速的那一段整段作废，带宽和排队统计也跳过。
+            // 这只该是零星消息，在途不超过一个初始窗口。一阵数据的尾巴和紧跟着的重传发完也是「没数据了」，但那时在途还有
+            // 一整个窗口、按带宽估计的速率在发，送达速率就是路径的速率。令牌桶放行的突发把带宽估计抬高以后，小文件几乎全程
+            // 都是这样的尾巴，算成空闲的话限速一直认不出来，一直按估计超发（2026-11-19 xdt-server：往返 10 毫秒、出口约
+            // 0.7 MB/s；模拟器里往返 90 毫秒、64 KB 令牌的限速器上 1 MiB 在线路上发了 11 倍）。
+            // 尾巴照样当随机丢包样本：长往返有随机丢包的线路上，尾巴的重传是测随机丢包率的好样本，
+            // 不算的话「高延迟 300ms 丢包 5%」大窗口慢 16%。被限速器挡下的尾巴见 `Bbr::update_random_loss` 的封顶。
+            let tail = app_idle && self.bytes_in_flight > self.congestion.initial_window_bytes();
             self.sent.push_back(SentPacket {
                 number,
                 sent_at: now_us,
@@ -2328,22 +2541,34 @@ impl Connection {
                 cruising: self.congestion.is_cruising(),
                 cycle: self.congestion.phase_cycle(),
                 app_idle,
+                tail,
                 delivered: self.delivered,
                 delivered_at: self.delivered_at,
                 first_sent_at: self.first_sent_at,
                 app_limited,
+                train: false,
             });
             self.bytes_in_flight += wire_bytes as u64;
-            self.congestion.on_sent(now_us, wire_bytes as u64);
+            let backlog = if app_limited { 0 } else { self.send_streams.values().map(|stream| stream.pending.len() as u64).sum() };
+            let train = self.congestion.on_sent(now_us, wire_bytes as u64, backlog);
+            if let Some(packet) = self.sent.back_mut() {
+                packet.train = train;
+            }
         }
         Some(used)
     }
 
     /// 把还没告诉对端的流量额度写进这个包，放不下的留给后面的确认。
+    ///
+    /// 平时一个确认最多带 [`MAX_GRANTS_PER_PACKET`] 条；回探测的确认带上放得下的所有额度。探测会把每条流都标成要重发，
+    /// 原来回它的确认也只带得下编号最小的两条：编号靠后的流最初那几份额度一旦没送到，之后每个探测换来的都还是前两条，
+    /// 那条流就一直停在初始的 128 个分片上（2026-11-22：会话 v2 的正文流是一条连接的第 6 条流，手机轮询慢一点、探测和
+    /// 整批数据一起到，就停在 160 KB）。
     fn write_grants(&mut self, out: &mut [u8], mut used: usize) -> usize {
+        let limit = if core::mem::take(&mut self.grant_all) { usize::MAX } else { MAX_GRANTS_PER_PACKET };
         let mut written = 0;
         for (&id, state) in self.recv_streams.iter_mut() {
-            if written == MAX_GRANTS_PER_PACKET || used + wire::CREDIT_FRAME_LEN > out.len() {
+            if written == limit || used + wire::CREDIT_FRAME_LEN > out.len() {
                 break;
             }
             if state.grant_repeats > 0 && id != DEFAULT_STREAM {
@@ -2359,7 +2584,7 @@ impl Connection {
     /// 副本预算沿用原来的捎带份数；已经复制的原件平时不再捎带旧数据，避免叠加两套冗余，成片丢包时例外。
     fn queue_small_message_copies(&mut self, now_us: u64, sn: u64) -> bool {
         if self.config.recovery_policy == RecoveryPolicy::Lean
-            || self.segments[(sn - self.snd_una) as usize].data.len() > self.config.max_packet_size / 4
+            || self.segments[(sn - self.snd_una) as usize].data.len() > self.config.send_limit() / 4
             || (self.loss_ppm < BUNDLE_LOSS_PPM && now_us >= self.bundle_until)
             || self.congestion.is_rate_limited()
             || self.rtt.srtt_us() == 0

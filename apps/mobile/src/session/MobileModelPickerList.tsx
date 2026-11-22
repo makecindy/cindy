@@ -329,6 +329,7 @@ export function MobileModelPickerList({
                     providerId={row.provider.id}
                     routing={row.provider.routing}
                     logoKind={row.provider.logoKind}
+                    customIcon={row.provider.customIcon}
                   />
                   <View style={styles.optionMain}>
                     <Text numberOfLines={1} style={styles.optionText}>{row.model.displayName}</Text>

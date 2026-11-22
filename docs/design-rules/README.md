@@ -14,6 +14,7 @@
 | 登录域现行规则与色值；Token／尺寸决策记录 | [登录链路](login-flow.md)、[Token 决策表](token-decision-table.md) |
 | 聊天正文的链接与可点性 | [可点性信号](message-link-clickability.md) |
 | 输入框工具栏的容器形变 | [容器形变](container-transform.md) |
+| 功能介绍：第一次用到某个功能时带小动画的一页引导 | [功能介绍](feature-introduction.md) |
 | 应用壁纸 | [壁纸](wallpaper.md) |
 | macOS 菜单栏额度面板 | [菜单栏额度面板](macos-menu-bar-quota.md) |
 | 设计文档导航、迁移与历史裁决 | [设计系统索引](cindy-design-system.md) |

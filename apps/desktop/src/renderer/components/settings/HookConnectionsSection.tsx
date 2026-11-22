@@ -72,6 +72,7 @@ type NeutralCardProvider = 'telegram' | 'x' | 'feishu';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { HOOK_DEFAULT_PERMISSION_MODE } from './hookWorkspacePrefsLogic';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { useImEntrancePlugins } from './ImPluginEntrances';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import {
   TelegramBehaviorSettings,
@@ -209,8 +210,13 @@ function DefaultWorkspaceRadio({
   );
 }
 
-export function HookConnectionsSection({ companion }: { companion?: { id: string; name: string } } = {}) {
+export function HookConnectionsSection({ companion, projectsOnly = false }: {
+  companion?: { id: string; name: string };
+  /** Only the shared 「项目与模型」 block, for IM plugins where the Cindy group is not shown. */
+  projectsOnly?: boolean;
+} = {}) {
   const { t } = useTranslation();
+  const imPlugins = useImEntrancePlugins();
   const { entry, activation } = useSettingsSearchNavigation();
   /** 飞书不可用时的去向因身份而异: 组织成员找管理员, 个人账号没有管理员可找。 */
   const personalAccount = useOptionalAuthUser()?.membershipKind === 'personal';
@@ -926,7 +932,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   // 默认项目只对没有「先选项目」这一步的渠道有意义(Slack 在每个频道里各自选)。
   const projectsDefaultApplies =
     hook.telegram.enabled || hook.feishu.enabled || (hook.x.enabled && !hook.x.companionBotId);
-  const projectsSectionVisible = hook.enabled || projectsDefaultApplies;
+  // IM 插件(声明 imEntrance)读的也是这一份: 只装了插件、没开官方机器人时也要能改。
+  const pluginsShareProjects = !companion && imPlugins.length > 0;
+  const projectsSectionVisible = hook.enabled || projectsDefaultApplies || pluginsShareProjects;
   // 默认项目所有官方机器人共用一个(main 侧读写时已对齐), 任取一处的值即可。
   const sharedDefaultWorkspace =
     hook.feishu.defaultWorkspace ?? hook.telegram.defaultWorkspace ?? hook.x.defaultWorkspace;
@@ -1007,7 +1015,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       <section
         ref={projectsSectionRef}
         aria-labelledby="cindy-im-projects-heading"
-        className="mt-3 flex scroll-mt-4 flex-col gap-[14px]"
+        className="mt-3 flex scroll-mt-4 flex-col gap-3.5"
       >
         <div className="flex flex-col gap-1">
           <h4
@@ -1020,7 +1028,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           </h4>
           <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-            {t('settings.remoteControl.hook.form.workspacesCardDescription')}
+            {t(pluginsShareProjects
+              ? 'settings.remoteControl.hook.form.workspacesCardDescriptionWithPlugins'
+              : 'settings.remoteControl.hook.form.workspacesCardDescription')}
           </p>
         </div>
         {projectPrefsState.hint !== null && (
@@ -1485,6 +1495,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       </ImChannelSettingsCard>
     );
   };
+
+  // 本地模式没有「官方」分栏: IM 插件仍读这一份, 由 ImBotSection 把只有这一块的视图放进「插件」分栏。
+  if (projectsOnly) return projectsSectionVisible ? <div className="flex flex-col gap-3">{renderProjectsSection()}</div> : null;
 
   return (
     <div className="flex flex-col gap-3">

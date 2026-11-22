@@ -2,8 +2,7 @@
  * Where 分工 steps run and which files a step produced
  * (docs/product-rules/bot-group-chat.md §7.4–7.5).
  *
- * - No 项目文件夹: the group's own folder under the owner's userData, created on the
- *   first 开始 and moved to the system trash when the group is deleted.
+ * - No selected project: a regular dialogue workspace for this plan.
  * - A git project: one worktree per plan, from the same preparation as other Cindy
  *   worktree tasks (`.cindy-worktrees/<name>`, branch `cindy/<name>`).
  * - Any other folder: used directly.
@@ -112,8 +111,9 @@ export function createBotGroupWorkDir(deps: BotGroupWorkDirDeps) {
 
   const prepare = async (input: { groupId: string; projectDir: string | null }): Promise<PreparedWorkDir> => {
     if (!input.projectDir) {
-      if (!deps.defaultFolder) return { ok: false, message: '群文件夹尚未配置' };
-      return prepare({ ...input, projectDir: await deps.defaultFolder(input.groupId) });
+      const workDir = await deps.defaultFolder?.(input.groupId);
+      if (!workDir || !await isDirectory(workDir)) return { ok: false, message: '未能分配对话工作目录' };
+      return { ok: true, workDir, branch: null, ownerSessionId: null };
     }
     if (!(await isDirectory(input.projectDir))) return { ok: false, message: '项目文件夹不存在' };
     // A git project must never be edited in place; when its state is unknown, fail closed.

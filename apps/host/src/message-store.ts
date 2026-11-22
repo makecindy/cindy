@@ -1,7 +1,9 @@
 import { createMessageClearRecovery } from '../../desktop/src/main/localDb/messageClearRecovery.js';
+import { supersedeRetriedUserTurnWithPorts } from '../../desktop/src/main/localDb/retriedUserTurnSupersede.js';
 import { readVisiblePiUserEntry, patchMessageAgentMetaWithResultRow } from '../../desktop/src/main/localDb/messageMutations.js';
 import { removeRefs as removeMediaRefs, removeSessionAttachmentRefIfUnreferencedByLiveMessage } from '../../desktop/src/main/cindy-media/ledger.js';
 import { recomputePrRefsForSession } from '../../desktop/src/main/git-context/prRefsStore.js';
+import { trackMessagePrRefs } from '../../desktop/src/main/localDb/messagePrRefs.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { messageToCamel } from "../../desktop/src/main/localDb/mapper.js";
 import {
@@ -27,6 +29,9 @@ export function createHostMessageStore(deps: {
     input: Record<string, unknown>,
     options?: MessageWriteOptions & {
       shouldBroadcast?: () => boolean;
+      /** As the desktop's createMessage: generated-image delivery commits its own media reference
+       * after its guarded content update (generatedImageDelivery.ts). */
+      deferMediaRefs?: boolean;
     },
   ) => {
     const owner = deps.getOwner();
@@ -78,13 +83,16 @@ export function createHostMessageStore(deps: {
     if (!pending) pendingPublication.set(owner.client, (pending = new Set()));
     if (created) pending.add(row.id);
     if (deps.getOwner() !== owner) throw new Error("message owner changed");
-    await (deps.commitMediaRefs ?? hostChatAttachments.commitMessageMediaRefs)(
-      { sessionId, role: row.role, content: row.content },
-      owner.client.drizzle,
-    );
-    if (deps.getOwner() !== owner) throw new Error("message owner changed");
+    if (!options?.deferMediaRefs) {
+      await (deps.commitMediaRefs ?? hostChatAttachments.commitMessageMediaRefs)(
+        { sessionId, role: row.role, content: row.content },
+        owner.client.drizzle,
+      );
+      if (deps.getOwner() !== owner) throw new Error("message owner changed");
+    }
     const message = messageToCamel(row);
-    if (pending.has(row.id) && options?.shouldBroadcast?.() !== false) {
+    const publishing = pending.has(row.id);
+    if (publishing && options?.shouldBroadcast?.() !== false) {
       deps.publish({
         type: "message_created",
         sessionId,
@@ -92,6 +100,9 @@ export function createHostMessageStore(deps: {
         message,
       });
     }
+    // The desktop createMessage hook (localDb/ipc/messages.ts): every published row records its PR
+    // references, broadcast or not, without waiting; corrections settle it first (messagePrRefs.ts).
+    if (publishing) trackMessagePrRefs(owner.client, message);
     pending.delete(row.id);
     return message;
   };
@@ -128,6 +139,16 @@ export function createHostMessageRecovery(deps: {
   });
   return {
     rewindPersistedUserMessageAfterClear,
+    /** A zero-output retry replaced its failed turn: hide the old user row and its error row, as the
+     * desktop does (localDb/retriedUserTurnSupersede.ts), and tell clients they were deleted. */
+    supersedeRetriedUserTurn: (sessionId: string, args: { supersededUserClientId: string; retryUserClientId: string }) =>
+      supersedeRetriedUserTurnWithPorts(sessionId, args, {
+        captureOwnerBroadcastScope: capture,
+        isOwnerBroadcastScopeCurrent: owner => !!owner && isCurrent(owner),
+        broadcastMessageDeleted: (payload, owner) => {
+          if (owner && isCurrent(owner)) deps.publish({ type: 'message_deleted', ...payload });
+        },
+      }),
     async readPiUserEntry(sessionId: string, clientId: string) {
       const owner = capture();
       const id = await readVisiblePiUserEntry(owner.client, sessionId, clientId);

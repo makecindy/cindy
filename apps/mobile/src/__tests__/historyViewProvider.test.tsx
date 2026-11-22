@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  SESSION_ACTIVITY_CHANNEL,
   SHARED_TASK_CAPABILITY,
+  isScopedPeer,
   sharedTaskHostPeer,
   type DeviceLinkClient,
   type DeviceLinkStatus,
@@ -13,29 +19,52 @@ import {
   type LinkAcceptPayload,
   type PresenceSnapshot,
 } from '@cindy/device-link';
-import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { HISTORY_VIEW_VERSION, isHistoryViewUnavailable, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
-import { waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
+import { setMobileAgentNetPreferences, waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
 const directTransport = vi.hoisted(() => ({ enabled: false, owner: '' }));
 vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: (props: typeof directTransport) => {
   Object.assign(directTransport, props); return null;
 } }));
+const peerSession = vi.hoisted(() => ({ current: null as null | {
+  closedReason: null; open: ReturnType<typeof vi.fn>; request: ReturnType<typeof vi.fn>;
+} }));
+// A native Agent-Net socket for the Provider's main connection (the network-change case below); null keeps the real runtime.
+const agentNetPrimary = vi.hoisted(() => ({ socket: null as null | object }));
+const agentNetNetworkChanged = vi.hoisted(() => vi.fn());
+vi.mock('../device-link/agentNetRuntime', async original => {
+  const actual = await original<typeof import('../device-link/agentNetRuntime')>();
+  return {
+    ...actual,
+    mobileAgentNetSession: (peer: string) => peer === 'host' ? peerSession.current : null,
+    notifyMobileAgentNetNetworkChanged: agentNetNetworkChanged,
+    isMobileAgentNetActive: () => agentNetPrimary.socket !== null || actual.isMobileAgentNetActive(),
+    openMobileAgentNetSocket: (...args: Parameters<typeof actual.openMobileAgentNetSocket>) =>
+      agentNetPrimary.socket ? Promise.resolve(agentNetPrimary.socket) : actual.openMobileAgentNetSocket(...args),
+  };
+});
 // The existing V1 provider path has no Agent-Net binary or OS notification bridge.
 vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
 vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
 vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: async () => undefined }));
 import { useMobileMakerTransport } from '../device-link/useMobileMakerTransport';
-import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
+import { createMobileMakerTransport, type MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
 import { revokedDevicesStore } from '../device-link/revokedDevicesStore';
 import { localNetworkStore, type NetworkState } from '../device-link/localNetworkStatus';
-import { remoteSessionStore } from '../session/remoteSessionStore';
+import { remoteSessionStore, sessionPendingWrites } from '../session/remoteSessionStore';
+import { getRemoteHistoryView, mountRemoteHistoryView } from '../session/remoteHistoryViews';
+import { normalizeRemoteMessages } from '../session/messageNormalize';
+import type { RemoteMessage, RemoteSession } from '../session/types';
 import { getDeviceFetchEpoch, subscribeDeviceProvidersGen } from '../device-link/deviceProvidersCache';
 import { useRemoteAgentCatalogs } from '../session/useRemoteAgentCatalogs';
+import { subscribeCredentialSwitchOutcome, subscribeSessionCredentialSwitchNotices } from '../session/credentialSwitchOutcome';
+import { resolveSessionLinkDeviceId } from '../session/sessionLinks';
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
+  deviceId: undefined as string | undefined,
   accountGeneration: 1,
   user: { id: 'test-account' },
   getAccessToken: vi.fn(async () => 'test-token'),
@@ -107,6 +136,12 @@ const transport = vi.hoisted(() => {
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
     getConnectionIssue = () => null;
+    getConnectionEpoch = () => 1;
+    needsLinkRecovery = (_deviceId: string) => false;
+    getReliableSendQueueDepth = () => 0;
+    onPeerRouteStateChanged = () => () => {};
+    onPeerStreamAccepted = () => () => {};
+    onInboundPeerReleased = () => () => {};
     hasOnlineConnection = () => this.status === 'online' || this.separate?.status === 'online';
     separate: Client | null = null;
     scopedPeers = new Set<string>();
@@ -115,6 +150,7 @@ const transport = vi.hoisted(() => {
     serverCapabilities: string[] = [];
     hasServerCapability = (capability: string) => this.serverCapabilities.includes(capability);
     isOutboundExplicitlyClosed = vi.fn((_deviceId: string) => false);
+    closeLink = vi.fn();
     // No background recovery owner; each test explicitly starts the fresh read.
     hasPendingRequestsTo = vi.fn((_deviceId: string) => false);
     onStatusChange(listener: Client['statusChanged']) { this.statusChanged = listener; return () => {}; }
@@ -134,14 +170,17 @@ const transport = vi.hoisted(() => {
     peekOfflineDirectPath = (deviceId: string) => this.retainedPeers.has(deviceId);
     crossAccountConnection() { return this.separate ?? this; }
     connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
-    restartConnections(...args: unknown[]) { (this.restartConnection as (...input: unknown[]) => void)(...args); }
+    // Records what the Provider asked for; what `keepPrimary` keeps is RoutedDeviceLinkClient's (routedClient.test.ts).
+    restartConnections = vi.fn((reason?: string, _options?: { keepPrimary?: boolean }) => { this.restartConnection(reason); });
+    /** The Provider's main-connection options (its socket factory opens the Agent-Net socket). */
+    options: unknown;
   }
   return { Client, clients: [] as Client[] };
 });
 vi.mock('@cindy/device-link', async (importOriginal) => ({
   ...await importOriginal<typeof import('@cindy/device-link')>(),
   RoutedDeviceLinkClient: class extends transport.Client {
-    constructor() { super(); transport.clients.push(this); }
+    constructor(options?: unknown) { super(); this.options = options; transport.clients.push(this); }
   },
 }));
 
@@ -201,7 +240,288 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
+// Unit/jsdom. The real Provider delivers Device Link pushes to the route's scoped alert subscription.
+it('keeps the legacy mobile credential alert unless the host confirms the previous settings', async () => {
+  let focused = true;
+  const show = vi.fn();
+  const off = subscribeSessionCredentialSwitchNotices('controlled', 'task', () => focused, show);
+  const client = transport.clients[0];
+  const push = (reason: string, fields: Record<string, unknown> = {}, src = 'controlled', sessionId = 'task') => act(async () => {
+    client.frame({ v: 1, kind: 'push', src, dst: 'mobile', payload: {
+      channel: 'maker:session-credential-switch-failed', payload: { sessionId, reason, ...fields },
+    } } as Parameters<typeof client.frame>[0]);
+  });
+  try {
+    const retained = { previousSettingsRetained: true };
+    await push('apply-failed', retained, 'other-device');
+    await push('apply-failed', retained, 'controlled', 'other-task');
+    focused = false;
+    await push('apply-failed', retained);
+    expect(show).not.toHaveBeenCalled();
+    focused = true;
+    await push('apply-failed', retained);
+    await push('apply-failed');
+    await push('apply-failed', { previousSettingsRetained: false });
+    await push('apply-failed', { previousSettingsRetained: 'true' });
+    await push('rollback-failed', retained);
+    expect(show.mock.calls).toEqual([
+      ['models.switchOutcome.previousSettingsRetained'],
+      ...Array.from({ length: 4 }, () => ['models.switchOutcome.failed']),
+    ]);
+  } finally {
+    off();
+  }
+});
+
+// Unit/jsdom, #12020: the task page may call the current canonical ID while the
+// Provider delivers a frame under that device's Link ID. Exercise the page's
+// real route and effect to catch a zero-notice loss and preserve the explicit peer boundary.
+// Page initialization needs native navigation. Execute its route expressions and effect with
+// the real Provider and transport below, with only the native and client boundaries stubbed.
+function sourceFunction(path: string, name: string) {
+  const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(node) && node.name?.text === name);
+  if (!declaration?.body) throw new Error('missing production function ' + name);
+  return { source, statements: declaration.body.statements };
+}
+
+function productionBindings(path: string, name: string, names: string[]): string {
+  const { source, statements } = sourceFunction(path, name);
+  return names.map(binding => {
+    for (const statement of statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.name.text === binding) return 'const ' + declaration.getText(source) + ';';
+      }
+    }
+    throw new Error('missing production binding ' + name + '.' + binding);
+  }).join('\n');
+}
+
+const pagePath = 'app/sessions/[sessionId].tsx';
+const screen = sourceFunction(pagePath, 'SessionScreenContent');
+const effectStatement = screen.statements.find(statement => ts.isExpressionStatement(statement)
+  && ts.isCallExpression(statement.expression) && statement.expression.expression.getText(screen.source) === 'useEffect'
+  && /subscribe(?:Session)?CredentialSwitch(?:Outcome|Notices)/.test(statement.getText(screen.source))) as ts.ExpressionStatement | undefined;
+if (!effectStatement || !ts.isCallExpression(effectStatement.expression)) throw new Error('missing production credential effect');
+const callback = effectStatement.expression.arguments[0].getText(screen.source);
+
+const wirePage = new Function(
+  'params', 'sessionId', 'remoteSessionStore', 'readRouteParam',
+  'resolveSessionLinkDeviceId', 'useMobileMakerTransport', 'isScopedPeer',
+  productionBindings(pagePath, 'SessionScreenContent', [
+    'linkedDeviceId', 'listedSession', 'deviceId', 'maker', 'credentialNoticeAlias',
+  ]) + '\nreturn { deviceId, maker, credentialNoticeAlias };',
+);
+const wireLayout = new Function(
+  'params', 'sessionId', 'remoteSessionStore', 'readRouteParam',
+  'resolveSessionLinkDeviceId', 'useRemoteSessionLinkTarget', 'useRemoteSessionDetail',
+  productionBindings('src/session/SessionTaskLayout.tsx', 'SessionTaskLayout', [
+    'linkedDeviceId', 'listedSession', 'deviceId', 'session',
+  ]) + '\nreturn { deviceId, session };',
+);
+const subscribePage = new Function(
+  'deviceId', 'credentialNoticeAlias', 'sessionId', 'navigation', 't', 'Alert',
+  'subscribeSessionCredentialSwitchNotices', 'return (' + callback + ')();',
+);
+
+const shared = sharedTaskHostPeer('semantic-shared', 'physical-b');
+const scenarios = [
+  {
+    name: 'old link A prefers listed owner B',
+    linked: 'old-a', canonical: 'owner-b', display: 'owner-b', frame: 'owner-b', expected: 'owner-b',
+  },
+  {
+    name: 'explicit shared peer keeps the scoped device identity',
+    linked: shared, canonical: 'physical-b', display: 'physical-b', frame: shared, expected: shared,
+  },
+  {
+    name: 'same machine uses canonical ID but its authorized frame has the distinct Device Link alias',
+    linked: 'old-a', canonical: 'canonical-b', display: 'device-link-b', frame: 'device-link-b', expected: 'canonical-b',
+  },
+  {
+    name: 'the same device also accepts a frame with its canonical ID',
+    linked: 'old-a', canonical: 'canonical-b', display: 'device-link-b', frame: 'canonical-b', expected: 'canonical-b',
+  },
+] as const;
+
+it.each(scenarios)('$name', async info => {
+  const taskId = 'credential-notice-task';
+  const params = { deviceId: info.linked };
+  const row = { id: taskId, canonicalDeviceId: info.canonical, deviceLinkDeviceId: info.display };
+  const fixtureStore = { getSessions: () => [row], getSessionDeviceId: () => info.display };
+  const show = vi.fn();
+  const showOnA = vi.fn();
+  let stopWatchingA: (() => void) | undefined;
+  let focused = true;
+  const doSelect = (deviceId: string) => createMobileMakerTransport({ deviceId, invoke: context.invoke });
+
+  const readRouteParam = (value: string) => value;
+  const routed = wirePage(params, taskId, fixtureStore, readRouteParam, resolveSessionLinkDeviceId, doSelect, isScopedPeer);
+  const layout = wireLayout(params, taskId, fixtureStore, readRouteParam, resolveSessionLinkDeviceId,
+    () => row, (device: string, id: string) => [device, id]);
+  expect(layout).toEqual({ deviceId: info.expected, session: [info.expected, taskId] });
+  expect(routed.deviceId).toBe(info.expected);
+  const client = transport.clients[0];
+  client.readyPeers.add(info.expected);
+  client.openLink.mockResolvedValue(accepted(info.linked === shared ? [SHARED_TASK_CAPABILITY] : undefined));
+  const received: Array<{ deviceId: string; sessionId: string }> = [];
+  const unsubscribeRecord = subscribeCredentialSwitchOutcome(outcome => { received.push(outcome); });
+  const unsubscribe = subscribePage(
+    routed.deviceId, routed.credentialNoticeAlias, taskId, { isFocused: () => focused },
+    (key: string) => key, { alert: show }, subscribeSessionCredentialSwitchNotices,
+  );
+  const push = (src: string, id = taskId) => act(async () => {
+    client.frame({ v: 1, kind: 'push', src, dst: 'mobile', payload: {
+      channel: 'maker:session-credential-switch-applied', payload: { sessionId: id },
+    }} as Parameters<typeof client.frame>[0]);
+  });
+  try {
+    await act(async () => { await routed.maker.setModel(taskId, 'fixture-model'); });
+    expect(client.invoke.mock.calls.map(call => [call[0], call[1].channel, call[1].args])).toEqual([
+      [info.expected, 'maker:set-model', [taskId, 'fixture-model']],
+    ]);
+    await push('old-a');
+    await push('unrelated-device');
+    if (info.linked === shared) await push('physical-b');
+    await push(info.frame, 'other-task');
+    focused = false;
+    await push(info.frame);
+    expect(show).not.toHaveBeenCalled();
+    focused = true;
+    stopWatchingA = subscribePage(
+      'old-a', undefined, taskId, { isFocused: () => true },
+      (key: string) => key, { alert: showOnA }, subscribeSessionCredentialSwitchNotices,
+    );
+    await push(info.frame);
+    expect(showOnA).not.toHaveBeenCalled();
+    expect(received.filter(outcome => outcome.deviceId === info.frame && outcome.sessionId === taskId)).toHaveLength(2);
+    expect(show.mock.calls).toEqual([['models.switchOutcome.applied']]);
+  } finally {
+    unsubscribe();
+    unsubscribeRecord();
+    stopWatchingA?.();
+  }
+});
+
+// L342, unit/jsdom. The real push receiver must reconcile all optimistic route
+// fields after the first SET_MODEL finishes, and preserve a later in-flight pick.
+it.each(['after the first selection', 'during a newer selection'])(
+  'routes an authoritative credential-failure patch %s',
+  async (when) => {
+    const prior = { model: 'original', providerId: 'source-a', effort: 'low', fastMode: true } as const;
+    const picked = { model: 'selected', providerId: 'source-b', effort: 'high', fastMode: false } as const;
+    const newer = { model: 'newer', providerId: 'source-c', effort: 'medium', fastMode: false } as const;
+    const id = 'credential-settings-task';
+    const deviceId = 'controlled';
+    const row: RemoteSession = {
+      id, userId: 'test-account', title: 'Credential settings task', status: 'active', agentKind: 'cc',
+      workingDir: '/fixture', workspaceKind: 'project', permissionMode: 'default', userSendAt: null,
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', ...prior,
+    };
+    remoteSessionStore.upsertDeviceSession(deviceId, 'Fixture computer', row);
+    const read = () => remoteSessionStore.getSessions().find(session => session.id === id);
+    const firstWrite = sessionPendingWrites.track(id, Object.keys(picked));
+    remoteSessionStore.applySessionPatch(deviceId, id, picked);
+    expect(read()).toMatchObject(picked);
+    firstWrite(); // The initial SET_MODEL already acknowledged the pending selection.
+    const inFlight = when === 'during a newer selection';
+    const finishNewer = inFlight ? sessionPendingWrites.track(id, Object.keys(newer)) : undefined;
+    if (inFlight) remoteSessionStore.applySessionPatch(deviceId, id, newer);
+    try {
+      const client = transport.clients[0];
+      await act(async () => client.frame({
+        v: 1, kind: 'push', src: deviceId, dst: 'mobile', payload: {
+          channel: 'local-db:sessions:patched', payload: { sessionId: id, patch: { ...prior, agentSwitchIntent: null } },
+        },
+      } as Parameters<typeof client.frame>[0]));
+      expect(read()).toMatchObject(inFlight ? newer : { ...prior, agentSwitchIntent: null });
+    } finally {
+      finishNewer?.();
+      remoteSessionStore.clear();
+    }
+  },
+);
+
+function noticeSession(id: string, createdAt: string, userSendAt: string): RemoteSession {
+  return {
+    id, userId: 'fixture', title: 'fixture', status: 'active', createdAt, userSendAt, updatedAt: userSendAt,
+    workingDir: null, workspaceKind: 'dialogue', agentKind: 'cc', source: 'desktop',
+    model: 'fixture', effort: 'medium', permissionMode: 'default', fastMode: false,
+  };
+}
+
 describe('Provider device roster reads', () => {
+  // L343 / unit: with a ready history page and a newer reply already visible,
+  // the mounted routing callback tolerates repeat delivery of one older user row.
+  // The reconnect reply-anchoring defect is outside this fixture. See
+  // docs/host/personal-migration-release-table.md, “第 7 条的队列放行和历史提示”.
+  it('tolerates repeat delivery of one older Host row after the newer reply is visible', async () => {
+    const sessionId = 'l343-notice-row';
+    const device = 'l343-host';
+    const client = transport.clients[0];
+    const oldTime = '2026-08-03T00:00:00.000Z';
+    const newTime = '2026-08-03T00:01:00.000Z';
+    const original: RemoteMessage = {
+      id: 'db-old', clientId: 'old', sessionId, role: 'user', content: 'first prompt',
+      createdAt: oldTime, agentMeta: null, toolUseId: null,
+    };
+    const next: RemoteMessage = { ...original, id: 'db-next', clientId: 'next', content: 'second', createdAt: newTime };
+    const refreshed: RemoteMessage = { ...original, agentMeta: { inputNotice: 'oversized-input-skipped' } };
+    const push = (channel: string, payload: object, src = device) => {
+      client.frame({ v: 1, kind: 'push', src, dst: 'mobile', payload: { channel, payload } } as Parameters<typeof client.frame>[0]);
+    };
+    const page = (rows: RemoteMessage[]): HistoryViewPage<RemoteMessage> => ({
+      version: HISTORY_VIEW_VERSION, nextCursor: null, hasMore: false,
+      items: [{ type: 'messages', key: original.id, messages: rows }],
+    });
+    const reader = {
+      readHistoryView: vi.fn().mockResolvedValueOnce(page([original, next])).mockResolvedValue(page([refreshed, next])),
+      readWorkDetails: vi.fn(),
+      setHistoryExpanded: vi.fn(),
+    };
+    remoteSessionStore.upsertDeviceSession(device, 'Fixture', noticeSession(sessionId, oldTime, newTime));
+    push('local-db:messages:created', { sessionId, message: original });
+    push('local-db:messages:created', { sessionId, message: next });
+    vi.useFakeTimers();
+    const entry = getRemoteHistoryView(device, sessionId, reader);
+    const unmount = mountRemoteHistoryView(entry, reader, true);
+    try {
+      await entry.view.refresh();
+      expect(entry.view.getSnapshot().ready).toBe(true);
+      push(SESSION_ACTIVITY_CHANNEL, { sessionId, phase: 'running', attention: false });
+      push('maker:event', { sessionId, persistId: 'live-next', event: {
+        type: 'text', data: { text: 'live next reply', isFinal: false },
+      } });
+      await vi.advanceTimersByTimeAsync(100);
+      const reply = remoteSessionStore.getMessages(sessionId).find(row => row.clientId === 'live-next');
+      expect(reply?.content).toBe('live next reply');
+      const attention = remoteSessionStore.getSessionLiveActivity(sessionId, device);
+      expect(attention).toMatchObject({ phase: 'running', attention: false });
+      const visible = (rows: readonly RemoteMessage[]) => normalizeRemoteMessages(rows).map(({ source, ...message }) => message);
+      const before = visible(remoteSessionStore.getMessages(sessionId));
+      // A list echo from a different device cannot update the selected task.
+      push('local-db:messages:created', { sessionId, message: refreshed, listMessage: true }, 'unrelated-host');
+      expect(remoteSessionStore.getMessages(sessionId).find(row => row.id === original.id)?.agentMeta).toBeNull();
+
+      push('local-db:messages:created', { sessionId, message: refreshed });
+      push('local-db:messages:created', { sessionId, message: refreshed });
+      const raw = remoteSessionStore.getMessages(sessionId);
+      expect(raw.filter(row => row.role === 'user')).toEqual([refreshed, next]);
+      expect(raw.find(row => row.clientId === 'live-next')).toEqual(reply);
+      expect(remoteSessionStore.getSessionLiveActivity(sessionId, device)).toEqual(attention);
+      // The existing Mobile projection ignores this optional history metadata.
+      expect(visible(raw)).toEqual(before);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reader.readHistoryView).toHaveBeenCalledTimes(2);
+      expect(entry.view.getSnapshot().items).toEqual(page([refreshed, next]).items);
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
+  });
+
   /** 测试价值：render/read getter 用 peek 证明 direct path，不调用可能 detach/emit 的
    * hasOfflineDirectPath；I/O 门禁仍由 canUsePeerData/ensureOnlineForRequest 保留。 */
   it('uses the pure direct-path query for render/read readiness', async () => {
@@ -535,6 +855,30 @@ describe('Provider retained foreground direct paths', () => {
     expect(client.restartConnection).not.toHaveBeenCalled();
   });
 
+  /** 测试价值：手机自己的中继断线后直连也断开，不是电脑离线的证据。
+   * 生产入口：Provider 的 onPeerPathChanged → getPresenceAvailability / invoke。
+   * Bug 依据：2026-11-16 回到 App 或网络抖动时电脑被标成离线、请求按 DEVICE_OFFLINE 失败，
+   * 稍后才恢复。覆盖缺口：上一条只覆盖中继已明确通知离线的情况。
+   * 最小失败输入：中继 connecting、未收到离线 presence、直连回落 relay。tier：unit。 */
+  it('does not declare the computer offline when the phone loses its relay and then the direct path', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    scopedPeer = 'host';
+    await act(async () => { render(); await context.invoke('host', historyChannel); });
+    await act(async () => {
+      client.retainedPeers.add('host');
+      client.status = 'connecting'; client.statusChanged('connecting');
+    });
+    expect(scopedContext.status).toBe('online');
+    await act(async () => { client.retainedPeers.clear(); client.peerPath({ deviceId: 'host', path: 'relay' }); });
+    expect(scopedContext.status).toBe('connecting');
+    expect(context.getPresenceAvailability('host')).not.toBe(false);
+    expect(directTransport.enabled).toBe(false);
+    // The request waits for the phone's own reconnect instead of blaming the computer.
+    const { result } = await readHistory();
+    expect(await result).toMatchObject({ code: 'NOT_CONNECTED' });
+  });
+
   it('keeps a disabled verdict across relay restart and masked offline presence until online enabled', async () => {
     const client = transport.clients[0];
     client.openLink.mockResolvedValue(accepted(supported));
@@ -847,6 +1191,267 @@ describe('Provider queued send guards', () => {
   });
 });
 
+// Unit/jsdom through the real Provider invoke and subscribe send paths (remote-and-mobile-adaptation.md
+// 「共享恢复与请求策略」). A host whose reliable link lost its send path after a relay close must be
+// reopened through the peer's handshake single flight before new work is written; another host and the
+// shared relay connection stay untouched. Minimal failure: needsLinkRecovery('host') is true and the
+// request reaches client.invoke without a link-open, or is still written after the user closed the link.
+describe('Provider pre-send link recovery', () => {
+  it.each(['invoke', 'subscribe'] as const)('reopens a previously reliable link before a new %s without touching another host', async kind => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    client.openLink.mockImplementation(async () => { recovering = false; return accepted(supported); });
+    await act(async () => {
+      if (kind === 'invoke') await context.invoke('host', 'maker:send', []);
+      else await context.subscribe('home', 'host', ['sessions']);
+      await context.invoke('other-host', 'maker:send', []);
+    });
+    const firstHostSend = client.invoke.mock.calls.findIndex(([deviceId]) => deviceId === 'host');
+    expect(client.openLink.mock.calls.map(([deviceId]) => deviceId)).toEqual(['host']);
+    expect(client.openLink.mock.invocationCallOrder[0]).toBeLessThan(client.invoke.mock.invocationCallOrder[firstHostSend]);
+    expect(client.invoke.mock.calls.filter(([deviceId]) => deviceId === 'other-host')).toHaveLength(1);
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.stop).not.toHaveBeenCalled();
+  });
+
+  it('does not write the request when the user closes the link during recovery', async () => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = deviceId => deviceId === 'host';
+    const open = deferredAccept();
+    client.openLink.mockReturnValue(open.promise);
+    let result!: Promise<unknown>;
+    await act(async () => { result = context.invoke('host', 'maker:send', []).catch(error => error); });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      context.closeLink('host');
+      client.isOutboundExplicitlyClosed.mockImplementation(deviceId => deviceId === 'host');
+      open.resolve(accepted(supported));
+    });
+    expect(await result).toMatchObject({ code: 'LINK_NOT_OPEN' });
+    expect(client.invoke).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen the link when the user closes it while the relay is still reconnecting', async () => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = deviceId => deviceId === 'host';
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let result!: Promise<unknown>;
+    await act(async () => { result = context.invoke('host', 'maker:send', []).catch(error => error); });
+    expect(client.waitUntilOnline).toHaveBeenCalledTimes(1);
+    expect(client.openLink).not.toHaveBeenCalled();
+    await act(async () => {
+      context.closeLink('host');
+      client.isOutboundExplicitlyClosed.mockImplementation(deviceId => deviceId === 'host');
+      client.status = 'online';
+      online();
+    });
+    expect(await result).toMatchObject({ code: 'LINK_NOT_OPEN' });
+    // openLink would clear the user's close and send a fresh link-open.
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(client.invoke).not.toHaveBeenCalled();
+  });
+
+  const hostOnline = {
+    deviceId: 'host', deviceName: 'Host', platform: 'darwin', appVersion: 'test',
+    online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 1,
+  } as const;
+  const sentOn = (client: (typeof transport.clients)[number], channel: string) =>
+    client.invoke.mock.calls.filter(([deviceId, payload]) => deviceId === 'host' && payload.channel === channel);
+
+  it('sends the request when a presence update lands between link-open and link-accept', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    const open = deferredAccept();
+    client.openLink.mockReturnValue(open.promise);
+    let result!: Promise<unknown>;
+    await act(async () => { result = context.invoke('host', 'maker:send', []).catch(error => error); });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      // A self-hosted relay replays presence right after hello-ack, ahead of link-accept.
+      client.presenceChanged(hostOnline);
+      recovering = false;
+      open.resolve(accepted(supported));
+    });
+    expect(await result).toBe('history page');
+    expect(sentOn(client, 'maker:send')).toHaveLength(1);
+  });
+
+  it('still sends the recovery handshake when presence arrives while waiting for the relay', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    client.openLink.mockImplementation(async () => { recovering = false; return accepted(supported); });
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let result!: Promise<unknown>;
+    await act(async () => { result = context.invoke('host', 'maker:send', []).catch(error => error); });
+    expect(client.openLink).not.toHaveBeenCalled();
+    await act(async () => {
+      client.presenceChanged(hostOnline);
+      client.status = 'online';
+      online();
+    });
+    expect(await result).toBe('history page');
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    expect(sentOn(client, 'maker:send')).toHaveLength(1);
+  });
+
+  it('keeps subscribing the topics still held when another one is released during recovery', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    const open = deferredAccept();
+    client.openLink.mockReturnValue(open.promise);
+    let home!: Promise<unknown>;
+    let page!: Promise<unknown>;
+    await act(async () => {
+      home = context.subscribe('home', 'host', ['sessions']).catch(error => error);
+      page = context.subscribe('session:abc', 'host', ['sessions', 'session:abc']).catch(error => error);
+    });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      // The task page goes away mid-handshake; Home still holds `sessions`.
+      await context.unsubscribe('session:abc', 'host', ['sessions', 'session:abc']);
+      recovering = false;
+      open.resolve(accepted(supported));
+    });
+    expect(await home).toBeUndefined();
+    expect(await page).toBeUndefined();
+    const subscriptions = sentOn(client, 'device-link:subscribe')
+      .map(([, payload]) => payload.args[0] as { topics: string[]; capabilities: string[] });
+    expect(subscriptions).toContainEqual(expect.objectContaining({
+      topics: ['sessions'], capabilities: expect.arrayContaining([CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2]),
+    }));
+    expect(subscriptions.flatMap(s => s.topics)).not.toContain('session:abc');
+  });
+
+  it('does not send the recovery handshake once no waiting request still needs it', async () => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = deviceId => deviceId === 'host';
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let page!: Promise<unknown>;
+    await act(async () => { page = context.subscribe('session:abc', 'host', ['session:abc']).catch(error => error); });
+    expect(client.openLink).not.toHaveBeenCalled();
+    let left!: Promise<unknown>;
+    await act(async () => {
+      // The last owner leaves while recovery is still waiting for the relay.
+      left = context.unsubscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+      client.status = 'online';
+      online();
+    });
+    await act(async () => { await left; });
+    expect(await page).toBeUndefined();
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(sentOn(client, 'device-link:subscribe')).toHaveLength(0);
+  });
+
+  it('still sends the shared recovery handshake when an explicit openLink joined it', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    client.openLink.mockImplementation(async () => { recovering = false; return accepted(supported); });
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let page!: Promise<unknown>;
+    let opened!: Promise<unknown>;
+    await act(async () => {
+      page = context.subscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+    });
+    await act(async () => {
+      // Joins the pending recovery handshake instead of starting another one.
+      opened = context.openLink('host').catch(error => error);
+    });
+    let left!: Promise<unknown>;
+    await act(async () => {
+      left = context.unsubscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+      client.status = 'online';
+      online();
+    });
+    await act(async () => { await left; });
+    expect(await page).toBeUndefined();
+    expect(await opened).toMatchObject({ capabilities: supported });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('still sends the shared recovery handshake while another request waits for it', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    client.openLink.mockImplementation(async () => { recovering = false; return accepted(supported); });
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let page!: Promise<unknown>;
+    let send!: Promise<unknown>;
+    await act(async () => {
+      page = context.subscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+      send = context.invoke('host', 'maker:send', []).catch(error => error);
+    });
+    let left!: Promise<unknown>;
+    await act(async () => {
+      left = context.unsubscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+      client.status = 'online';
+      online();
+    });
+    await act(async () => { await left; });
+    expect(await page).toBeUndefined();
+    expect(await send).toBe('history page');
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps file cleanup on the existing link instead of reopening it', async () => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = deviceId => deviceId === 'host';
+    const cleanup = [{ action: 'close', connection: 'remote-1' }];
+    let result!: unknown;
+    await act(async () => {
+      result = await context.invoke('host', 'device-link:file-peer', cleanup).catch(error => error);
+    });
+    expect(result).toMatchObject({ code: 'LINK_NOT_OPEN' });
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(sentOn(client, 'device-link:file-peer')).toHaveLength(0);
+    // A ready link still carries the cleanup as before.
+    client.needsLinkRecovery = () => false;
+    await act(async () => { await context.invoke('host', 'device-link:file-peer', cleanup); });
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(sentOn(client, 'device-link:file-peer')).toHaveLength(1);
+  });
+
+  it('lets a history read finish when a refresh replaces the settled handshake it is using', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    await act(async () => { await context.openLink('host'); });
+    const fresh = deferredAccept();
+    client.openLink.mockReturnValue(fresh.promise);
+    let history!: Promise<unknown>;
+    await act(async () => {
+      history = context.invoke('host', historyChannel).catch(error => error);
+      // Replaces the settled entry the history read is still awaiting.
+      void context.reopenLink('host').catch(() => undefined);
+    });
+    expect(await history).toBe('history page');
+    await act(async () => fresh.resolve(accepted(supported)));
+  });
+});
+
 describe('pending catalog recovery', () => {
   it.each(['foreground', 'peer response'] as const)('wakes a blocked invalidation on %s before its long retry timer expires', async (recovery) => {
     vi.useFakeTimers();
@@ -868,7 +1473,11 @@ describe('pending catalog recovery', () => {
         } else unresponsiveDevicesStore.clearUnresponsive('host');
         await vi.advanceTimersByTimeAsync(50);
       });
-      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:provider:list' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
+      // A refresh must request the same filtered catalog and full provider logos as the picker.
+      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({
+        channel: 'maker:provider:list',
+        args: [{ capabilities: expect.arrayContaining([CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1]) }],
+      }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
       expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:get-capabilities' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
     } finally { unresponsiveDevicesStore.clearAll(); vi.useRealTimers(); }
   });
@@ -1196,6 +1805,33 @@ describe('Provider network recovery priority', () => {
     ]);
   });
 
+  // 2026-11-20 on a phone: the Agent-Net main connection was rebuilt on Wi-Fi/5G switches too, closing every session; they
+  // came back after about 12 s (Device Link 1.8 s). Failure: the route change asks to rebuild the main connection as well.
+  it.each([true, false])('keeps an Agent-Net main connection on a physical route change (Agent-Net=%s)', async (agentNet) => {
+    auth.deviceId = 'phone';
+    agentNetPrimary.socket = agentNet ? {} : null;
+    agentNetNetworkChanged.mockClear();
+    try {
+      await act(async () => { await setMobileAgentNetPreferences({ enabled: agentNet }); });
+      const client = transport.clients.at(-1)!;
+      const { createWebSocket } = client.options as { createWebSocket: (url: string, headers: Record<string, string>) => Promise<unknown> };
+      if (agentNet) await expect(createWebSocket('wss://relay.example/ws', {})).resolves.toBe(agentNetPrimary.socket);
+      await act(async () => {
+        networkEvents.network(wifi);
+        networkEvents.network({ type: 'NONE', isConnected: false, isInternetReachable: false });
+        networkEvents.network(wifi);
+      });
+      expect(client.restartConnections).toHaveBeenCalledExactlyOnceWith('network-path-changed', { keepPrimary: agentNet });
+      // Its relay connection, which may sit half-open on the old route, is replaced instead (portableSocket.test.ts).
+      if (agentNet) expect(agentNetNetworkChanged).toHaveBeenLastCalledWith({ routeChanged: true });
+      else expect(agentNetNetworkChanged).not.toHaveBeenCalled();
+    } finally {
+      agentNetPrimary.socket = null;
+      auth.deviceId = undefined;
+      await act(async () => { await setMobileAgentNetPreferences({ enabled: false }); });
+    }
+  });
+
   it('does not replace a slow socket for reachability changes or repeated network capabilities', async () => {
     const client = transport.clients[0];
     await act(async () => {
@@ -1308,6 +1944,35 @@ describe('Provider network recovery priority', () => {
     else expect(client.notifyNetworkChanged).not.toHaveBeenCalled();
     expect(client.stop).not.toHaveBeenCalled();
   });
+});
+
+// Production Provider, real session router and a fake peer. A background stay
+// longer than the grace period used to disable session routing until remount.
+// Unit tier. Existing Provider lifecycle cases exercise the legacy route only.
+it('uses the new session after a background suspension with Agent-Net enabled', async () => {
+  vi.useFakeTimers();
+  try {
+    await act(async () => { await setMobileAgentNetPreferences({ enabled: true }); });
+    const client = transport.clients.at(-1)!;
+    client.openLink.mockResolvedValue(accepted(supported));
+    await act(async () => {
+      networkEvents.state = 'background';
+      networkEvents.app('background');
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(client.stop).toHaveBeenCalled();
+    const session = { closedReason: null, open: vi.fn(async () => accepted(supported)),
+      request: vi.fn(async () => ({ ok: true, result: { ok: true, result: 'after foreground' } })) };
+    peerSession.current = session;
+    await act(async () => { networkEvents.state = 'active'; networkEvents.app('active'); });
+    await expect((await readHistory()).result).resolves.toBe('after foreground');
+    expect(session.request).toHaveBeenCalled();
+    expect(client.invoke).not.toHaveBeenCalled();
+  } finally {
+    peerSession.current = null;
+    await act(async () => { await setMobileAgentNetPreferences({ enabled: false }); });
+    vi.useRealTimers();
+  }
 });
 
 describe('Provider history handshake lifetime', () => {

@@ -100,6 +100,8 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   current.current = binding;
   useEffect(() => () => { current.current = ''; }, []);
   const panel = page === 'editor' ? editor?.panels.find(item => item.id === editorPanel) : data?.panels.find(item => item.id === page);
+  // The host computer's model groups, from its models form (model-groups.md §6.2).
+  const hostModelGroups = data?.panels.find(item => item.id === 'models')?.modelGroups;
   const dirty = editing && (modelSelection || profileFormDirty(panel ? { ...panel, values: draftBase.current } : undefined, values));
   // Legacy hosts can save a changed route but cannot acknowledge same-value fallback recovery.
   // Task-only edits do not turn an unchanged primary selection into a supported request.
@@ -329,7 +331,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const models = <View style={{ gap: spacing.lg }}>
     {unsupportedModelSelection ? note('hostUpgrade') : null}
     <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={next => { setModelSelection(true); changeValues(next); }}
-      onPick={pickModel} />
+      onPick={pickModel} modelGroups={hostModelGroups} />
     {/* An older host still lists the retired task model fields; they are not shown and go back unchanged. */}
   </View>;
   const afterClosed = () => {
@@ -347,10 +349,12 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const selectEditorPanel = (item: ProfilePanel) => { setEditorPanel(item.id); setValues(item.values); setEditing(false); };
   const retry = () => { if (page === 'editor') void retryEditor(); else void refresh(); };
   const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelValues.modelChain)[modelIndex]}
+    modelGroups={hostModelGroups}
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('profile')}
     onSelect={route => {
       const chain = readCompanionModelChain(modelValues.modelChain);
-      if (chain.some((item, index) => index !== modelIndex && item.harness === route.harness && item.model === route.model && item.providerId === route.providerId && (item.agentDeviceId ?? null) === (route.agentDeviceId ?? null))) return false;
+      if (chain.some((item, index) => index !== modelIndex && item.harness === route.harness && item.model === route.model && item.providerId === route.providerId && (item.agentDeviceId ?? null) === (route.agentDeviceId ?? null)
+        && (item.modelGroup ?? null) === (route.modelGroup ?? null))) return false;
       chain[modelIndex] = route; setModelSelection(true); changeValues({ ...modelValues, modelChain: serializeModelRoutes(chain), followsDefault: false }); return true; }} />;
 
   if (Platform.OS === 'ios') return <>{modelPicker}<CompanionProfileNativeView models={models}
@@ -578,8 +582,9 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   };
   const models = supportsModel ? <CompanionModelChain single deviceId={deviceId} values={modelValues}
     disabled={busy || !online || unconfirmed} onChange={next => { if (!unconfirmed) setModelValues(next); }}
-    onPick={() => setModelStage('closing-form')} /> : null;
+    onPick={() => setModelStage('closing-form')} modelGroups={data?.panels[0]?.modelGroups} /> : null;
   const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={modelChain[0]}
+    modelGroups={data?.panels[0]?.modelGroups}
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('form')}
     onSelect={route => { setModelValues({ followsDefault: false, modelChain: serializeModelRoutes([route]) }); return true; }} />;
   if (importing) return <CompanionImportSheet visible={visible} onClose={onClose} onClosed={onClosed} deviceId={deviceId} deviceName={deviceName} online={online} onCreated={onCreated} />;

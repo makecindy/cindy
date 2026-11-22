@@ -17,12 +17,14 @@ import { withoutProviderHeaderCredentials } from '../../../desktop/src/main/make
 import { loadCatalogWithSource, storedCustomProviderId, type CatalogSourceConfig } from '@cindy/model-providers';
 import { createGenericOAuthService, type GenericOAuthStorage } from '../../../desktop/src/main/maker-host/generic-oauth.js';
 import { createGrokOAuthService } from '../../../desktop/src/main/maker-host/grok-oauth-login.js';
+import { holdGrokLoginWrites } from './xai-held-login.js';
+import { holdCredentialFetch, holdRecipeSecrets } from './held-credentials.js';
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
 import { createClaudeNativeCli } from '../../../desktop/src/main/maker-host/claude-native-cli.js';
 import { readClaudeCliLoginStatusBySpawn } from '@cindy/maker-core/claude-cli-login-status';
 import { setActiveCatalog, setCustomProviders, setCustomProviderConfigs, setSubscriptionPoolProviders, setLocalCatalogOverrides, getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { publishSubscriptionPoolProviders } from '../../../desktop/src/main/maker-host/subscriptionPoolCatalog.js';
-import { readCreatedSubscriptionProviders } from '../../../desktop/src/main/subscription-accounts/placement.js';
+import { readCreatedSubscriptionProvidersIfReadable } from '../../../desktop/src/main/subscription-accounts/placement.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import { createCatalogCache } from '../../../desktop/src/main/maker-host/catalogCache.js';
 import { readModelCatalogOverrides } from '../../../desktop/src/main/maker-host/model-catalog-override-store.js';
@@ -59,7 +61,9 @@ export function createHostCodexAccounts(
 
 /** Owner-bound configuration and the existing encrypted header migration. */
 export function createHostProviderConfig(options: { profileDir: string; ownerId: string; openExternal(url: string): Promise<void>;
-  gatewayConnected?(): boolean; getCodexBinary?(): string | null; getClaudeBinary?(): string | null; publish?(channel: string, payload: unknown): void; credentials: {
+  gatewayConnected?(): boolean; getCodexBinary?(): string | null; getClaudeBinary?(): string | null; publish?(channel: string, payload: unknown): void;
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile (xai-held-login.ts). */
+  isProfileHeld?(): boolean; credentials: {
   decrypt(value: string): string; read(key: string): string | null;
   write(key: string, value: string): void; remove(key: string): void;
 } }) {
@@ -90,10 +94,18 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     set: (id, value) => { options.credentials.write(key(providerSecretStorageKey(id)), value); return true; },
     remove: id => { options.credentials.remove(key(providerSecretStorageKey(id))); return { success: true }; },
   };
-  const oauth = createGenericOAuthService({ fetchImpl: hostOutbound.outboundFetch });
+  // Custom provider OAuth renews through this fetch; while a desktop uses the profile it sends
+  // nothing, so no refresh token is spent and nothing is written back (held-credentials.ts).
+  const oauth = createGenericOAuthService({ fetchImpl: holdCredentialFetch(hostOutbound.outboundFetch,
+    () => options.isProfileHeld?.() === true, 'this provider sign-in is not renewed') });
   oauth.configureGenericOAuth({ storage: oauthStorage, openExternal: options.openExternal });
-  const grok = createGrokOAuthService({ outboundFetch: hostOutbound.outboundFetch, openExternal: options.openExternal,
-    genericOAuthSecretIo: oauthStorage, getProviderSecretStore: () => builtinStore });
+  // Every Host consumer of the xAI login reads it through this one service; while a desktop uses
+  // the profile it neither renews nor signs out (xai-held-login.ts).
+  const grok = holdGrokLoginWrites(createGrokOAuthService({ outboundFetch: hostOutbound.outboundFetch, openExternal: options.openExternal,
+    genericOAuthSecretIo: oauthStorage, getProviderSecretStore: () => builtinStore }), {
+    isProfileHeld: () => options.isProfileHeld?.() === true,
+    readStoredLogin: id => (id === 'xai' ? builtinStore.get('xai') : oauthStorage.read(id)),
+  });
   const claudeNative = createClaudeNativeCli({
     binaryPath: () => { check(); return options.getClaudeBinary?.() ?? null; },
     resolveOutboundProxy: resolveHostOutboundProxy,
@@ -129,7 +141,7 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
       const configs = await headers.listCustomProvidersWithSecureHeaders(); check();
       if (generation !== listGeneration) return configs;
       setCustomProviderConfigs(configs);
-      publishSubscriptionPoolProviders({ readCreatedSubscriptionProviders, setSubscriptionPoolProviders, log });
+      publishSubscriptionPoolProviders({ readCreatedSubscriptionProvidersIfReadable, setSubscriptionPoolProviders, log });
       setLocalCatalogOverrides(readModelCatalogOverrides());
       return configs;
     } catch (err) {
@@ -150,7 +162,9 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     await codexAccounts.close();
   };
   const api = {
-    list, readKey, oauth, grok, builtinStore, recipeSecretIo: oauthStorage, codexAccounts, claudeNative, cancelLogins,
+    list, readKey, oauth, grok, builtinStore,
+    // Browser recipes whose renewal rotates the refresh token are not read while held (held-credentials.ts).
+    recipeSecretIo: holdRecipeSecrets(oauthStorage, () => options.isProfileHeld?.() === true), codexAccounts, claudeNative, cancelLogins,
     async close() {
       closed = true;
       await cancelLogins();

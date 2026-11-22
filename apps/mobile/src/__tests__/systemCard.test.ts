@@ -198,6 +198,17 @@ describe('formatMobileSystemCard — 中断自动重连状态', () => {
 });
 
 describe('formatMobileSystemCard — Agent 切换', () => {
+  // Unit, 2026-11-18 decision. A newer host can report coverage alongside
+  // nativeHistory=fallback. A location-only fixture cannot catch stale copy.
+  it.each([
+    ['complete', 'Full chat history carried over'],
+    ['condensed', 'Earlier messages were condensed. The full chat history is still available.'],
+    [undefined, 'Continued from summary'],
+  ] as const)('prefers reported coverage to the legacy fallback (%s)', (handoffCoverage, value) => {
+    const card = formatMobileSystemCard('agent-switch', { nativeHistory: 'fallback', handoffCoverage });
+    expect(card.rows).toHaveLength(1);
+    expect(card.rows[0].value).toBe(value);
+  });
   it('keeps Pi distinct from Claude Code in persisted switch cards', () => {
     expect(formatMobileSystemCard('agent-switch', {
       fromAgentKind: 'pi',

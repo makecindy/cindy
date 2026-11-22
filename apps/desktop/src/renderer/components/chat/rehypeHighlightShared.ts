@@ -6,6 +6,7 @@ import protobuf from 'highlight.js/lib/languages/protobuf';
 import powershell from 'highlight.js/lib/languages/powershell';
 import fsharp from 'highlight.js/lib/languages/fsharp';
 import http from 'highlight.js/lib/languages/http';
+import solidity from 'highlightjs-solidity/src/languages/solidity.js';
 
 type HighlightTransformer = ReturnType<typeof rehypeHighlight>;
 interface HighlightEntry {
@@ -46,7 +47,7 @@ function remember(key: string, node: Element): void {
  */
 export function rehypeHighlightShared(): HighlightTransformer {
   if (sharedTransformer) return sharedTransformer;
-  const highlight = rehypeHighlight({ languages: { ...common, protobuf, powershell, fsharp, http } });
+  const highlight = rehypeHighlight({ languages: { ...common, protobuf, powershell, fsharp, http, solidity } });
   sharedTransformer = (tree, file) => {
     const misses: Array<{ key: string; node: Element }> = [];
     const hits: Array<{ node: Element; entry: HighlightEntry }> = [];

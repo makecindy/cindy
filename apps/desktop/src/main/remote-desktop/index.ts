@@ -12,7 +12,10 @@ import {
   type WebContents,
   type DesktopCapturerSource,
 } from 'electron';
+import { macPermissionAppPath } from '../../shared/macControlPermission.js';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readdirSync } from 'node:fs';
 import { release as osRelease } from 'node:os';
 import { createLogger } from '../logger';
@@ -79,8 +82,25 @@ import {
 import { readLinuxCursorSupport } from './linuxCapture';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
+import {
+  coverDesktopLockFailure,
+  coverRemoteDesktopExit,
+  displayNeededForWork,
+  hostAwayAfterMs,
+  isAwayCoverUp,
+  privacyScreenAvailable,
+  privacyScreenEnabled,
+  setLinuxPrivacyAvailable,
+  supportsRemoteExitPrivacy,
+  WINDOWS_PRIVACY_SCREEN_ENABLED,
+} from './awayGuardService';
 import { ControlledOverlay } from './controlledOverlay';
-import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
+import {
+  LinuxPrivacyScreen,
+  prepareLinuxPrivacy,
+  readLinuxPhysicalIdleMs,
+  supportsLinuxPrivacy,
+} from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
 import {
@@ -91,6 +111,7 @@ import {
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
+  isEditableDesktopPoint,
   setDesktopDisplayMode,
   readDesktopInputPermission,
   resolveDesktopInputBinary,
@@ -106,31 +127,38 @@ import {
   MAC_SCREEN_RECORDING_SETTINGS_URL,
 } from '../computer-permission-guide/request';
 
+const log = createLogger('remote-desktop');
+const runMacOpen = promisify(execFile);
+
 const permissions = new RemoteDesktopPermissionsService({
   required: process.platform === 'darwin',
   screen: () => {
     const status = systemPreferences.getMediaAccessStatus('screen');
     return status === 'granted' ? 'granted' : status === 'unknown' ? 'unknown' : 'missing';
   },
-  accessibility: readDesktopInputPermission,
+  accessibility: () => readDesktopInputPermission('postEvents'),
   request: async (permission, isCurrent, signal) => {
-    if (permission === 'accessibility') await requestDesktopInputPermission(isCurrent, signal);
-    else
-      await enumerateDesktopSources(
-        () =>
-          desktopCapturer.getSources({
-            types: ['screen'],
-            thumbnailSize: { width: 0, height: 0 },
-          }),
-        REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
-      );
+    if (permission === 'accessibility') return requestDesktopInputPermission(isCurrent, signal, 'postEvents');
+    await enumerateDesktopSources(
+      () =>
+        desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: 0, height: 0 },
+        }),
+      REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
+    );
+    return systemPreferences.getMediaAccessStatus('screen') === 'granted';
   },
-  openSettings: (permission) =>
-    shell.openExternal(
-      permission === 'screenRecording'
-        ? MAC_SCREEN_RECORDING_SETTINGS_URL
-        : MAC_ACCESSIBILITY_SETTINGS_URL,
-    ),
+  openSettings: async (permission, separateWindow) => {
+    const url = permission === 'screenRecording' ? MAC_SCREEN_RECORDING_SETTINGS_URL : MAC_ACCESSIBILITY_SETTINGS_URL;
+    if (separateWindow) {
+      // Open a separate system-owned settings window without interacting with
+      // another pane's pending edits. Fixed app and URL, no shell interpolation.
+      await runMacOpen('/usr/bin/open', ['-n', '-b', 'com.apple.systempreferences', url], { timeout: 5000 });
+      return;
+    }
+    await shell.openExternal(url);
+  },
   showGuide: () => {
     const window = getDeepLinkMainWindow();
     if (window && !window.isDestroyed()) {
@@ -210,8 +238,13 @@ function warnIfXWaylandCapture(): void {
 // Privacy masks and the controlled-desktop overlay share one capture filter.
 let privacyExcluded: number[] = [];
 let overlayExcluded: number[] = [];
+let awayExcluded: number[] = [];
 const applyExcludedWindows = () =>
-  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded]);
+  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded, ...awayExcluded]);
+export function setAwayCaptureExcludedWindows(ids: number[]): void {
+  awayExcluded = ids;
+  applyExcludedWindows();
+}
 // While the phone shows picture-in-picture the input helper is stopped on purpose;
 // the local exit confirmation then has nothing to pause, and cancelling it must not
 // bring remote control back.
@@ -229,10 +262,26 @@ const privacyScreen = new PrivacyScreen(
   },
   pauseInputForPrivacy,
 );
+let linuxAwayAwake: number | null = null;
+const setLinuxAwayAwake = (awake: boolean) => {
+  if (awake && linuxAwayAwake === null)
+    linuxAwayAwake = powerSaveBlocker.start('prevent-display-sleep');
+  else if (!awake && linuxAwayAwake !== null) {
+    powerSaveBlocker.stop(linuxAwayAwake);
+    linuxAwayAwake = null;
+  }
+};
 const linuxPrivacy = new LinuxPrivacyScreen(
   () => remoteDesktop.stopPrivacyByUser(),
   pauseInputForPrivacy,
+  undefined,
+  setLinuxAwayAwake,
+  displayNeededForWork,
 );
+export function isLinuxAwayCoverUp(): boolean {
+  return linuxPrivacy.inputShielded;
+}
+
 const supportsPrivacyScreen =
   (process.platform === 'darwin' &&
     typeof process.getSystemVersion === 'function' &&
@@ -744,7 +793,11 @@ async function ice(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceRe
   return parseDesktopIceReply(result);
 }
 
-export async function requestRemoteDesktop(peer: string, value: unknown): Promise<unknown> {
+export async function requestRemoteDesktop(
+  peer: string,
+  value: unknown,
+  source: 'relay' | 'media' = 'relay',
+): Promise<unknown> {
   const settings = readDeviceLinkSettings();
   if (
     !settings.remoteControlEnabled ||
@@ -780,8 +833,8 @@ export async function requestRemoteDesktop(peer: string, value: unknown): Promis
     typeof value === 'object' &&
     'op' in value &&
     value.op === 'credential'
-    ? remoteCredentialHost.request(peer, value, (body) => remoteDesktop.request(peer, body))
-    : remoteDesktop.request(peer, value);
+    ? remoteCredentialHost.request(peer, value, (body) => remoteDesktop.request(peer, body, source))
+    : remoteDesktop.request(peer, value, source);
 }
 
 /**
@@ -879,7 +932,10 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
         process.platform === 'darwin' ||
         (process.platform === 'win32' && windowsAvailable) ||
         Boolean(enabled && nativeWayland() && (await readLinuxCursorSupport())),
-      lockOnExit: process.platform === 'darwin' || supportsLinuxLock(),
+      lockOnExit:
+        process.platform === 'darwin' ||
+        (process.platform === 'win32' && WINDOWS_PRIVACY_SCREEN_ENABLED) ||
+        supportsLinuxLock(),
       clipboardContent:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
@@ -907,6 +963,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       viewerDisplay,
       viewerDisplayRestore: viewerDisplay,
       channelRequests: true,
+      signalingContinuity: true,
       viewerHidden: true,
       // Native canvas capture can follow a display change without a new offer.
       liveDisplaySwitch:
@@ -964,7 +1021,9 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       await ensurePortalCapture(lease);
       if (pending || preparingOffer) return null;
       const result = await requestHost({ id: randomUUID(), op: 'frame', lease }, 2000);
-      return typeof result === 'string' ? result : null;
+      return encodeNativeRelayFrame(typeof result === 'string' ? result : null, (jpeg) =>
+        nativeImage.createFromBuffer(jpeg),
+      );
     }
     // offer() cancels the previous read before acquiring the capture owner.
     // Leave its required first frame uncontested; relay polling resumes afterwards.
@@ -1028,7 +1087,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   },
   stopPrivacyScreen: () => {
     privacyScreen.stop();
-    linuxPrivacy.stop();
+    linuxPrivacy.stopSession();
     privacyRequested = false;
     // Called from inside lease teardown; read controller state afterwards.
     queueMicrotask(syncControlledOverlay);
@@ -1049,6 +1108,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       : systemAudioMuteGuard.restore('remote-desktop'),
   viewerHidden: setViewerHidden,
   videoBackground: setVideoBackground,
+  editableAt: process.platform === 'darwin' ? isEditableDesktopPoint : undefined,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
     if (nativeWayland()) {
@@ -1095,7 +1155,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       return;
     }
     try {
-      input.input(events);
+      return input.input(events);
     } catch (error) {
       // The input host refused before injecting anything (helper gone, or this
       // lease's display is unavailable). Release control so the host and the
@@ -1112,11 +1172,47 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   releaseInput: () => input.release(),
   pauseVideo,
   resumeVideo,
-  ...(process.platform === 'darwin' || supportsLinuxLock()
+  // Windows locking is implemented but off until verified on Windows hardware.
+  ...(process.platform === 'darwin' ||
+  (process.platform === 'win32' && WINDOWS_PRIVACY_SCREEN_ENABLED) ||
+  supportsLinuxLock()
     ? {
         lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
           await input.release();
           await lockDesktopScreen(isCurrent, signal);
+        },
+      }
+    : {}),
+  ...(supportsRemoteExitPrivacy() ? { coverLockFailure: coverDesktopLockFailure } : {}),
+  // Idle viewers follow this computer's own away time (docs/product-rules/privacy-screen.md).
+  ...(supportsRemoteExitPrivacy() || nativeWayland()
+    ? {
+        // Checked per call: Hyprland's backend becomes available asynchronously.
+        hostIdle: () => (!privacyScreenAvailable() ? null : {
+            // Before the away guard reads the system times, use its own fallback.
+            awayAfterMs: hostAwayAfterMs() ?? 10 * 60_000,
+            keepWhileWorking: privacyScreenEnabled() && displayNeededForWork(),
+          }),
+        exitCoverUp: () => isAwayCoverUp() || linuxPrivacy.inputShielded,
+        exitProtection: (): 'privacy-screen' | 'lock' | undefined =>
+          !privacyScreenAvailable() ? undefined : privacyScreenEnabled() ? 'privacy-screen' : 'lock',
+      }
+    : {}),
+  ...(supportsRemoteExitPrivacy() || nativeWayland()
+    ? {
+        protectOnExit: async (isCurrent: () => boolean, signal: AbortSignal) => {
+          await input.release();
+          if (!isCurrent() || signal.aborted) throw new Error('DESKTOP_LEASE_EXPIRED');
+          try {
+            // 「用隐私屏代替锁屏」 off on this computer: a protected exit is a real lock.
+            if (!privacyScreenEnabled()) return await lockDesktopScreen(isCurrent, signal);
+            if (process.platform === 'linux') await linuxPrivacy.coverOnExit(isCurrent);
+            else await coverRemoteDesktopExit();
+            return 'covered';
+          } catch (error) {
+            log.warn('Exit privacy cover unavailable; falling back to screen lock', error);
+            await lockDesktopScreen(isCurrent, signal);
+          }
         },
       }
     : {}),
@@ -1156,6 +1252,7 @@ export function registerRemoteDesktopIpc(
     permissions.dismiss();
     remoteDesktop.stop(undefined, undefined, 'shutdown');
   });
+  onQuit('linux-privacy-lock', () => linuxPrivacy.lockOnExit(), 'async');
   onQuit('remote-desktop-restore', () => remoteDesktop.stopAndRestore(), 'async');
   const linuxLayoutChanged = () => {
     if (remoteDesktop.changingDisplay || !remoteDesktop.displayId || liveSession) return;
@@ -1354,14 +1451,15 @@ export function registerRemoteDesktopIpc(
     assertTrustedAppRendererEvent(event);
     if (checkWindowsSupport !== undefined && typeof checkWindowsSupport !== 'boolean')
       throwIpcError('INVALID_PARAMS', 'Invalid Windows support status request');
+    const enabled = readDeviceLinkSettings().remoteDesktopEnabled;
     const active = remoteDesktop.state;
     return {
-      enabled: readDeviceLinkSettings().remoteDesktopEnabled,
+      enabled,
       // Like the desktop overlay, the fallback notice excludes plugin-only screens.
       active: liveSession ? null : active,
       overlay: controlledOverlay.visible,
       permissionGuide: permissions.guideOpen,
-      ...(checkWindowsSupport === true
+      ...(enabled && checkWindowsSupport === true
         ? { windowsSupport: await readWindowsDesktopSupport() }
         : {}),
     };
@@ -1398,9 +1496,17 @@ export function registerRemoteDesktopIpc(
       await permissions.showIfNeeded(() => readDeviceLinkSettings().remoteDesktopEnabled);
     }
   });
-  ipcMain.handle(DESKTOP_LOCAL.PERMISSIONS, (event) => {
+  ipcMain.handle(DESKTOP_LOCAL.PERMISSIONS, async (event) => {
     assertTrustedAppRendererEvent(event);
-    return permissions.read();
+    const status = await permissions.read();
+    // Finder can distinguish identically named official and personal installs.
+    // Never attach this local path to device-link permission replies.
+    const bundle = macPermissionAppPath(process.platform, process.execPath);
+    return {
+      ...status,
+      ...(bundle ? { appBundlePath: bundle } : {}),
+      separateWindowRetries: permissions.separateWindowRetries,
+    };
   });
   ipcMain.handle(DESKTOP_LOCAL.OPEN_PERMISSION, (event, permission: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -1582,7 +1688,7 @@ export function registerRemoteDesktopIpc(
           throw new Error('INVALID_REQUEST');
         const owner = remoteDesktop.state;
         if (!owner || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
-        return { ok: true, result: await requestRemoteDesktop(owner.peer, request) };
+        return { ok: true, result: await requestRemoteDesktop(owner.peer, request, 'media') };
       } catch (error) {
         // Business refusals are replies, not IPC failures: no error log per tap.
         return { ok: false, error: desktopErrorCode(error) };
@@ -1599,4 +1705,47 @@ function desktopErrorCode(error: unknown): string {
     message.match(/\b(?:DESKTOP|CREDENTIAL|REMOTE|ACCESS)_[A-Z_]{1,56}\b/)?.[0] ??
     'DESKTOP_REQUEST_FAILED'
   );
+}
+
+/**
+ * Hyprland's automatic privacy screen (docs/product-rules/privacy-screen.md): with
+ * 「用隐私屏代替锁屏」 on and work needing the screen, keep it awake and, once nobody has
+ * touched this computer for its away time (the compositor's idle time), adopt the same
+ * persistent compositor cover a remote exit uses. Touching it locks through the
+ * compositor. Without work, nothing is held and the system idles and locks by itself.
+ * Not verified on a real Hyprland session yet.
+ */
+export function startLinuxAwayCover(): void {
+  if (process.platform !== 'linux' || !nativeWayland()) return;
+  let loaded = false;
+  let busy = false;
+  const tick = async () => {
+    // A live session owns the compositor masks; its end decides the protection.
+    if (busy || linuxPrivacy.active || remoteDesktop.state) return;
+    const working = privacyScreenEnabled() && displayNeededForWork();
+    setLinuxAwayAwake(working);
+    if (!working) return;
+    busy = true;
+    try {
+      if (!loaded) {
+        await prepareLinuxPrivacy(() => true, true);
+        loaded = true;
+      }
+      const idle = await readLinuxPhysicalIdleMs();
+      if (idle === null || idle < (hostAwayAfterMs() ?? 10 * 60_000)) return;
+      await linuxPrivacy.coverOnExit(() => true);
+    } catch (error) {
+      log.warn('Hyprland away cover unavailable', error);
+      loaded = false;
+    } finally {
+      busy = false;
+    }
+  };
+  void supportsLinuxPrivacy().then((available) => {
+    setLinuxPrivacyAvailable(available);
+    if (!available) return;
+    const timer = setInterval(() => void tick(), 2000);
+    timer.unref();
+    onQuit('linux-away-cover', () => clearInterval(timer));
+  });
 }

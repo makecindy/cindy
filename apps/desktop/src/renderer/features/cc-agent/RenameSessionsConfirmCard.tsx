@@ -49,7 +49,7 @@ export function RenameSessionsConfirmCard({
   return (
     <div
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border p-4',
+        'w-full max-w-[914px] rounded-xl border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
@@ -62,12 +62,12 @@ export function RenameSessionsConfirmCard({
             {t('renameSessions.confirm.description', { count: pending.changes.length })}
           </p>
         </div>
-        <span className="shrink-0 rounded-[6px] border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
+        <span className="shrink-0 rounded-full border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
           {t('renameSessions.confirm.count', { count: pending.changes.length })}
         </span>
       </div>
 
-      <div className="mt-3 max-h-[280px] overflow-y-auto rounded-[8px] border border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]">
+      <div className="mt-3 max-h-[280px] overflow-y-auto rounded-lg border border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]">
         {pending.changes.map((change) => (
           <div
             key={change.sessionId}
@@ -110,7 +110,7 @@ export function RenameSessionsConfirmCard({
           palette="permission" size="md" compact type="button" onClick={handleSubmit}>
           <Check className="size-4" />
           <span>{t('renameSessions.confirm.apply')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-px text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
           </kbd>
         </Button>

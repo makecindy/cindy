@@ -4,21 +4,28 @@ import type { StartSchedulerDeps } from '../index.desktop';
 import type { SchedulerOptions } from '@cindy/maker-scheduler';
 
 const mocks = vi.hoisted(() => ({
+  pendingInput: vi.fn<(sessionId: string) => boolean>(),
   restore: vi.fn<(sessionId: string) => Promise<boolean>>(),
   quotaWait: vi.fn<(scheduleId: string) => Promise<string | null>>(),
   lastUserActionAt: vi.fn<(sessionId: string) => number | null>(),
   runnerDeps: null as MakerScheduleRunnerDeps | null,
   schedulerOptions: null as SchedulerOptions | null,
   runnerFire: vi.fn(),
+  accountRun: vi.fn(),
   captureGuard: vi.fn<() => () => void>(),
 }));
 
 // 保留真正的 startScheduler 装配，只隔离 Electron、持久化和后台服务。
+vi.mock('../../device-link/pluginAutomationHost.desktop.js', () => ({
+  pluginAutomationAccount: () => ({ run: mocks.accountRun }),
+}));
 vi.mock('electron', () => ({ app: { isPackaged: true } }));
 vi.mock('@cindy/maker-scheduler', () => ({ Scheduler: class {
   constructor(options: SchedulerOptions) { mocks.schedulerOptions = options; }
   async start() {}
   async stop() {}
+  // A quiet round re-archives its task (quietRunArchive); these runs are never silenced.
+  isRunSilenced() { return false; }
 } }));
 vi.mock('../../localDb/dialogueWorkspace', () => ({ dialogueWorkspaceRoots: () => [] }));
 vi.mock('../../localDb/schema.js', () => ({ sessions: {} }));
@@ -34,13 +41,14 @@ vi.mock('../../maker-ipc/scheduledSessionBootstrap.js', () => ({ captureSchedule
 vi.mock('../../maker-ipc/register.js', () => ({
   bootstrapScheduledSession: vi.fn(),
   ensureSchedulerQueueRestored: mocks.restore,
+  hasPendingSchedulerTargetInput: mocks.pendingInput,
   findSchedulerUsageLimitWait: mocks.quotaWait,
   getSessionLastUserActionAt: mocks.lastUserActionAt,
   applyPiImModelSelectionUnderLock: vi.fn(), acquirePendingAgentSwitchForDirectSend: vi.fn(),
   prepareScheduledModelPreferencesUnderLock: vi.fn(), recordDispatchedModel: vi.fn(),
   broadcastSessionCreated: vi.fn(), cancelSchedulerAutoResume: vi.fn(),
   enqueueSchedulerPrompt: vi.fn(), hasQueuedSchedulerPrompt: vi.fn(),
-  isSchedulerAutoResumePending: vi.fn(), isSchedulerPromptTracked: vi.fn(),
+  isSchedulerAutoResumePending: vi.fn(), isSchedulerSharedReconnectPending: vi.fn(), isSchedulerPromptTracked: vi.fn(), releaseQueuedSchedulerPrompt: vi.fn(),
   isSchedulerTargetSessionBusy: vi.fn(), onSchedulerAutoResumeFailed: vi.fn(),
   removeQueuedSchedulerPrompt: vi.fn(),
 }));
@@ -68,15 +76,32 @@ import { resetScheduler, startScheduler } from '../index.desktop';
 afterEach(async () => {
   await resetScheduler();
   mocks.restore.mockReset();
+  mocks.pendingInput.mockReset();
   mocks.quotaWait.mockReset();
   mocks.lastUserActionAt.mockReset();
   mocks.runnerDeps = null;
   mocks.schedulerOptions = null;
   mocks.runnerFire.mockReset();
+  mocks.accountRun.mockReset();
   mocks.captureGuard.mockReset();
 });
 
 describe('scheduler queue wiring', () => {
+  it('checks the primary account before any pre-run plugin or model on a follower', async () => {
+    const screenControlPoint = vi.fn();
+    mocks.accountRun.mockResolvedValue({ granted: false });
+    await startScheduler({
+      maker: {} as StartSchedulerDeps['maker'], getDb: vi.fn(), getMainWindow: () => null,
+      feishuIm: {} as StartSchedulerDeps['feishuIm'], logger: {}, screenControlPoint,
+    });
+    const result = await mocks.schedulerOptions!.runner.fire({
+      id: 'contacts-tidy', primaryHostKey: 'public/cindy-contacts', preRunPlugin: { pluginId: 'plugin' },
+    } as never, { runId: 'test', firedAt: 0, signal: new AbortController().signal });
+    expect(result.skipped).toBe(true);
+    expect(mocks.accountRun).toHaveBeenCalledTimes(1);
+    expect(screenControlPoint).not.toHaveBeenCalled();
+    expect(mocks.runnerFire).not.toHaveBeenCalled();
+  });
   it.each([true, false])('checks the captured owner after its plugin check (changed=%s)', async (changed) => {
     let owner = 'a';
     mocks.captureGuard.mockImplementation(() => {
@@ -117,6 +142,9 @@ describe('scheduler queue wiring', () => {
       feishuIm: {} as StartSchedulerDeps['feishuIm'], logger: {},
     });
 
+    mocks.pendingInput.mockReturnValue(restored);
+    expect(mocks.runnerDeps?.schedulerQueue?.hasPendingInput?.('restored-session')).toBe(restored);
+    expect(mocks.pendingInput).toHaveBeenCalledExactlyOnceWith('restored-session');
     const restore = mocks.runnerDeps?.schedulerQueue?.ensureQueueRestored;
     expect(restore).toBe(mocks.restore);
     await expect(restore!('restored-session')).resolves.toBe(restored);

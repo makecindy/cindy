@@ -354,6 +354,7 @@ interface CachedVector {
 }
 
 export class EmbeddingClient {
+  private readonly createUsageRecorder: EmbeddingClientOptions['createUsageRecorder'];
   private readonly resolveBaseUrl: () => string;
   private readonly embeddingsPath: string;
   private readonly getApiKey: () => string | undefined | null;
@@ -362,6 +363,7 @@ export class EmbeddingClient {
   private readonly log: EmbeddingLogger;
 
   constructor(opts: EmbeddingClientOptions) {
+    this.createUsageRecorder = opts.createUsageRecorder;
     // baseUrl 支持函数形态:宿主的网关 endpoint 可能在运行期变化(如登录后由
     // 服务端下发),每次请求现取,避免构造期快照钉死旧地址。
     const normalize = (raw: string): string => {
@@ -657,6 +659,12 @@ export class EmbeddingClient {
     let lastErr: EmbeddingError | null = null;
     const deadline = opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : null;
 
+    const recorder = this.createUsageRecorder?.({ model, inputType: opts.inputType });
+    const observe = async (body: unknown) => {
+      try { await recorder?.observe(body); }
+      catch { this.log.warn?.('[embedding-client] usage accounting failed'); }
+    };
+    try {
     while (attempt < maxAttempts) {
       // Consumer cancellation is not a transport failure and must bypass retry classification.
       opts.assertActive?.();
@@ -671,7 +679,7 @@ export class EmbeddingClient {
             );
           }
         }
-        return await this.callOnce(apiKey, model, inputs, opts, remaining);
+        return await this.callOnce(apiKey, model, inputs, opts, remaining, observe);
       } catch (err) {
         opts.assertActive?.();
         if (!(err instanceof EmbeddingError)) {
@@ -708,6 +716,7 @@ export class EmbeddingClient {
     }
     // unreachable; throw 早已发生
     throw lastErr ?? new EmbeddingError('embed: exhausted retries', 'SERVER_ERROR');
+    } finally { recorder?.close(); }
   }
 
   /**
@@ -725,6 +734,7 @@ export class EmbeddingClient {
     inputs: string[] | string[][],
     opts: Pick<EmbedRequest, 'inputType' | 'dimensions'>,
     budgetMs?: number,
+    observe: (body: unknown) => Promise<void> = async () => {},
   ): Promise<OpenAiEmbeddingsResponse> {
     const url = `${this.resolveBaseUrl()}${this.embeddingsPath}`;
     // inputType 按 provider 翻成该家的 wire 值(不支持的家不发这个字段);
@@ -791,6 +801,7 @@ export class EmbeddingClient {
         let parsedMsg = '';
         try {
           const parsed = JSON.parse(text) as OpenAiErrorResponse;
+          await observe(parsed);
           parsedMsg = parsed.error?.message ?? '';
         } catch {
           /* not JSON */
@@ -807,7 +818,9 @@ export class EmbeddingClient {
       // body 读到一半被 abort → json() 抛错, 由下面的 catch 归成 TIMEOUT。
       // 抢在定时器前读完就照常返回:手里已经是一份合法响应, 不为了"时间刚好到了"
       // 把它丢掉再让调方失败。
-      return (await res.json()) as OpenAiEmbeddingsResponse;
+      const body = (await res.json()) as OpenAiEmbeddingsResponse;
+      await observe(body);
+      return body;
     } catch (err) {
       // json() / text() 在 abort 后抛的也要归到 TIMEOUT,别伪装成解析失败。
       if (timedOut() && !(err instanceof EmbeddingError)) {

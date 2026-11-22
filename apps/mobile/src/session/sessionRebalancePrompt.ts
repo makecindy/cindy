@@ -65,7 +65,7 @@ export function parseMobileRebalanceSuggestion(raw: unknown): MobileRebalanceSug
   };
 }
 
-/** 弹窗正文：换到哪台、那台的配额还剩多少、多久重置，以及换过去会丢一部分上下文。 */
+/** 弹窗正文：换到哪台、那台的配额还剩多少、多久重置，以及对话在换过去后怎样接续。 */
 export function describeMobileRebalance(suggestion: MobileRebalanceSuggestion, nowMs = Date.now()): string {
   const left = Math.max(0, Math.round(100 - suggestion.quota.usedPercent));
   const remainingMs = suggestion.quota.resetAtMs === null ? null : suggestion.quota.resetAtMs - nowMs;

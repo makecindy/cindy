@@ -127,7 +127,7 @@ export function BotGroupThreadHint({ threads, members, openRootId, onOpen, menti
   return (
     <Popover open={listOpen && !suppressed} onOpenChange={setListOpen}>
       <PopoverAnchor asChild>
-        <div data-thread-hint="" className="pointer-events-auto absolute bottom-2 right-2 z-10 flex max-w-[calc(100%-16px)] items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-13 text-[var(--text-primary)]">
+        <div data-thread-hint="" className="pointer-events-auto absolute bottom-2 right-2 z-raised flex max-w-[calc(100%-16px)] items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-13 text-[var(--text-primary)]">
           <button type="button" data-testid="group-attention-hint" data-count={mentions.length}
             aria-haspopup={showList ? 'dialog' : undefined} aria-expanded={showList ? listOpen : undefined}
             onClick={() => (showList ? setListOpen(value => !value) : open(hinted[0]!.rootId))}

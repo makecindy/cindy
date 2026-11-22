@@ -28,7 +28,12 @@ export const providersSettings = defineSettings({
     fallbackTargetId: 'settings-panel-providers',
     titleKey: 'subscriptionAccounts.title',
     sectionKey: 'settings.tabs.providers',
-    keywordKeys: ['subscriptionAccounts.add', 'subscriptionAccounts.strategy'],
+    keywordKeys: [
+      'subscriptionAccounts.add',
+      'subscriptionAccounts.strategy',
+      'settings.providers.detail.sameAccountConnections',
+      'settings.providers.detail.sameAccountConnectionsHint',
+    ],
     aliases: [
       '多账号',
       '订阅账号',
@@ -92,6 +97,15 @@ export const providersSettings = defineSettings({
     titleKey: TAB_LABEL_KEY['providers'],
     sectionKey: 'settings.sections.providers',
     keywordKeys: ['settings.providers.remote.modelsTitle'],
+  },
+  pluginProviders: {
+    id: 'providers.pluginProviders',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.plugin.title',
+    descriptionKey: 'settings.providers.plugin.note',
+    sectionKey: 'settings.tabs.providers',
+    aliases: ['插件供应商', '插件引擎', 'plugin provider', 'plugin engine'],
   },
   videoApi: {
     id: 'providers.videoApi',

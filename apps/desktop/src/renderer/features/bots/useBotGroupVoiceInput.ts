@@ -1,3 +1,4 @@
+import { botGroupInputElement, type BotGroupTextInput } from './botGroupTextInput';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -17,7 +18,7 @@ export function useBotGroupVoiceInput({
   draftKey, textareaRef, text, onChange, disabled, maxLength = -1, onTooLong, onStart,
 }: {
   draftKey: string;
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  textareaRef: RefObject<BotGroupTextInput | null>;
   text: string;
   onChange: (text: string, edit: { start: number; end: number; caret: number }) => void;
   disabled: boolean;
@@ -78,7 +79,7 @@ export function useBotGroupVoiceInput({
       if (!canApply()) return;
       const input = textareaRef.current;
       // Finishing a main-group recording must not steal the thread's focus.
-      if (!input || document.activeElement !== input) return;
+      if (!input || document.activeElement !== botGroupInputElement(input)) return;
       if (caret.current !== null) input.setSelectionRange(caret.current, caret.current);
     },
   }), [canApply, textareaRef]);
@@ -136,7 +137,7 @@ export function useBotGroupVoiceInput({
     };
     const canHandle = () => !current.current.disabled
       && (activeComposer === null || activeComposer === identity)
-      && (isVoiceInputEventScopeActive(latest.current.voice.getState()) || document.activeElement === textareaRef.current);
+      && (isVoiceInputEventScopeActive(latest.current.voice.getState()) || document.activeElement === botGroupInputElement(textareaRef.current));
     const finishPress = () => {
       const held = press?.long;
       clearPress();
@@ -180,7 +181,7 @@ export function useBotGroupVoiceInput({
     const unsubscribe = window.electronAPI?.voiceInput?.onGlobalShortcutTrigger((payload) => {
       if (current.current.disabled || (activeComposer !== null && activeComposer !== identity)) return;
       const state = latest.current.voice.getState();
-      if (!isVoiceInputEventScopeActive(state) && document.activeElement !== textareaRef.current) return;
+      if (!isVoiceInputEventScopeActive(state) && document.activeElement !== botGroupInputElement(textareaRef.current)) return;
       if (payload?.id) window.electronAPI.voiceInput.claimGlobalShortcutTrigger(payload.id);
       const phase = payload?.phase;
       if (!phase) {

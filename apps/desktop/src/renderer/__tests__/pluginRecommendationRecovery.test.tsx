@@ -6,7 +6,11 @@ import { act, renderHook } from '@testing-library/react';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pluginSuggestionComposerText } from '../features/cc-agent/pluginHomeSuggestions';
-import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../shared/pluginIdentity';
+import {
+  findInstalledGhostByInstanceId,
+  installedGhostLogicalIdentity,
+  installedGhostStoragePart,
+} from '../../shared/pluginIdentity';
 
 // Execute the production callbacks without mounting the unrelated full desktop shell.
 function compile(source: string, bindings: Record<string, unknown>) {
@@ -52,6 +56,8 @@ describe('plugin recommendation recovery', () => {
         fillComposerWithSuggestion,
         pluginSuggestionComposerText,
         installedGhostStoragePart,
+        installedGhostLogicalIdentity,
+        runPluginInPlace: vi.fn(),
         i18n: { language: 'en' },
         t: () => 'Use plugin mail via ghost_info and ghost_call',
         isRemoteProjectDraft: false,
@@ -78,6 +84,52 @@ describe('plugin recommendation recovery', () => {
     },
   );
 
+  // 2026-11-17: a suggestion for a plugin that is not installed installs it right here and
+  // then fills the composer, instead of opening the plugin page.
+  it('installs a missing plugin in place, then fills the composer', async () => {
+    const source = readFileSync(resolve(__dirname, '../features/cc-agent/NewMakerDraftRoute.tsx'), 'utf8');
+    const block = source.slice(source.indexOf('  const runPluginSuggestion ='), source.indexOf('  const handlePluginSuggestion ='));
+    const suggestion = { id: 'one', pluginId: 'mail', prompt: 'Review my mail' };
+    const ghost = { manifest: { id: 'mail', name: 'Mail', command: 'mail' }, dir: '/ghosts/mail', namespace: null, enabled: true };
+    let ghosts: unknown[] = [];
+    const fillComposerWithSuggestion = vi.fn(() => true);
+    const markUsed = vi.fn(async () => ({ ids: ['mail'] }));
+    const navigate = vi.fn();
+    Object.assign(window, { electronAPI: { ghosts: { listSync: () => ({ ghosts }), markUsed } } });
+    const runPluginInPlace = vi.fn(async (_target: unknown, options: { onReady: () => void; isCurrent: () => boolean }) => {
+      expect(options.isCurrent()).toBe(true);
+      ghosts = [ghost];
+      options.onReady();
+    });
+    const run = compile(block + String.fromCharCode(10) + 'return runPluginSuggestion;', {
+      useCallback: (callback: unknown) => callback,
+      sendInFlightRef: { current: false },
+      pluginSuggestionFlight: { current: false },
+      pluginSuggestionMounted: { current: true },
+      currentPluginSuggestionContext: { current: { generation: 1, dataOwnerId: 'owner', targetKey: 'local' } },
+      readPluginRecommendationSnapshot: () => ({ ownerId: 'owner' }),
+      buildHomeTaskCatalog: () => [suggestion],
+      filterGhostsForWorkdir: (list: unknown[]) => list,
+      fillComposerWithSuggestion,
+      pluginSuggestionComposerText,
+      installedGhostStoragePart,
+      installedGhostLogicalIdentity,
+      runPluginInPlace,
+      startPendingPluginSuggestion: vi.fn(() => 'nonce'),
+      i18n: { language: 'en' },
+      t: () => 'Use Mail',
+      isRemoteProjectDraft: false,
+      isDeviceLinkDraft: false,
+      navigate,
+      toast: { error: vi.fn() },
+    });
+    await run({ suggestion, ownerId: 'owner', targetKey: 'local', workingDir: '/project' });
+    expect(runPluginInPlace).toHaveBeenCalledWith({ ghostId: 'mail', workingDir: '/project' }, expect.anything());
+    expect(fillComposerWithSuggestion).toHaveBeenCalledWith('$mail Review my mail');
+    expect(markUsed).toHaveBeenCalledWith('mail');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('fills the selected organization recommendation rather than the same-name root plugin', async () => {
     const source = readFileSync(resolve(__dirname, '../features/cc-agent/NewMakerDraftRoute.tsx'), 'utf8');
     const block = source.slice(source.indexOf('  const runPluginSuggestion ='), source.indexOf('  const handlePluginSuggestion ='));
@@ -99,6 +151,8 @@ describe('plugin recommendation recovery', () => {
       fillComposerWithSuggestion,
       pluginSuggestionComposerText,
       installedGhostStoragePart,
+      installedGhostLogicalIdentity,
+      runPluginInPlace: vi.fn(),
       i18n: { language: 'en' },
       t: () => 'Use Org',
       isRemoteProjectDraft: false,
@@ -133,6 +187,8 @@ describe('plugin recommendation recovery', () => {
       fillComposerWithSuggestion,
       pluginSuggestionComposerText,
       installedGhostStoragePart,
+      installedGhostLogicalIdentity,
+      runPluginInPlace: vi.fn(),
       i18n: { language: 'en' },
       t: () => 'Use Org',
       isRemoteProjectDraft: false,

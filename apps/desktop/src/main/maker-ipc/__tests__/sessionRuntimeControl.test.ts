@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { clearAllSessionRuntimeAxes, getSessionEffort, setSessionEffort } from '../../maker-host/session-effort-store.js';
 import { buildDeferredRuntimeSelectionProfile } from '../../../shared/runtimeModelSwitchGate';
+import { getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store.js';
 
 import {
   acceptSessionRuntimeAxisMutation,
@@ -9,6 +10,7 @@ import {
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   clearAllSessionRuntimeControlStates,
+  clearOwnerScopedSessionRuntimeSelection,
   clearSessionRuntimeControlState,
   deferSessionRuntimeAxisMutation,
   getSessionRuntimeControlSnapshot,
@@ -42,6 +44,25 @@ const current: SessionRuntimeProfile = {
   effort: 'high',
   fastMode: true,
 };
+
+// Rule: a committed account change drops every task's owner-scoped runtime selection (the desktop's
+// app session commit boundary; the Node Host's boundary hook calls the same step). Gap: the three
+// clears were inline in bootstrap-electron.ts and the Host had none, so an override survived a
+// sign-out. Minimal failing input: a provider, an effort and an accepted override, then the clear.
+describe('clearOwnerScopedSessionRuntimeSelection', () => {
+  it('drops the task provider, its runtime axes and its runtime control, and moves the owner epoch', () => {
+    const epoch = captureSessionRuntimeControlOwnerEpoch();
+    setSessionProvider('owner-task', 'prov-a');
+    setSessionEffort('owner-task', 'high');
+    acceptSessionRuntimeMutation({ sessionId: 'owner-task', source: 'fallback', profile: { ...current, providerId: 'prov-b' }, deferred: false });
+    expect(getSessionRuntimeControlSnapshot('owner-task').effectiveOverride).not.toBeNull();
+    clearOwnerScopedSessionRuntimeSelection();
+    expect(getSessionProvider('owner-task')).toBeNull();
+    expect(getSessionEffort('owner-task')).toBeNull();
+    expect(getSessionRuntimeControlSnapshot('owner-task').effectiveOverride).toBeNull();
+    expect(sessionRuntimeControlOwnerEpochMatches(epoch)).toBe(false);
+  });
+});
 
 function provider(
   id: string,
@@ -714,6 +735,18 @@ describe('session runtime fallback selection', () => {
     ).toEqual({ effort: null, fastMode: false });
   });
 
+  it('tracks the route already tried when a companion falls back onto a plugin engine', () => {
+    const sessionId = 'companion';
+    const engine = { ...current, agentKind: 'acp' as const, providerId: 'acp-plugin:sample:engine', model: 'default', fastMode: false };
+    const generation = acceptSessionRuntimeMutation({
+      sessionId, source: 'fallback', previousProfile: current, profile: engine, deferred: false,
+    });
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation, effectiveOverride: null, pending: null, fallbackHop: 1,
+      visitedRoutes: ['codex\u0000openai\u0000gpt-main', 'acp\u0000acp-plugin:sample:engine\u0000default'],
+    });
+    expect(recordFailedSessionRuntimeFallbackCandidate(sessionId, generation - 1, current)).toBe(false);
+  });
   it('skips a failed candidate without consuming a fallback hop or generation', () => {
     const sessionId = 'runtime-failed-candidate';
     const candidate = { ...current, providerId: 'xd' };

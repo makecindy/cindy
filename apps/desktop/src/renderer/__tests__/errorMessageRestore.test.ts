@@ -12,6 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 
+import { i18n } from '@/i18n';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
@@ -31,6 +32,27 @@ function errorRow(clientId: string, content: unknown): Message {
 }
 
 describe('mapServerMessages — persisted terminal error rows', () => {
+  it('restores unexecuted tool markup as a localized failure after reopening', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('markup', { message: 'fallback', reason: 'unexecuted-tool-markup' }),
+    ]);
+    expect(mapped[0]).toMatchObject({ role: 'error', errorReason: 'unexecuted-tool-markup', isStreaming: false });
+    expect(ERROR_REASON_I18N_KEYS[mapped[0]!.errorReason!]).toBe('logic.errors.unexecutedToolMarkup');
+  });
+
+  it('shows the text-only tool failure in the live banner', () => {
+    try {
+      makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+        sessionId: SESSION_ID, type: 'error', data: {
+          message: 'fallback', reason: 'unexecuted-tool-markup', isTerminal: true,
+        },
+      });
+      expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+        errorReason: 'unexecuted-tool-markup', error: i18n.t('logic.errors.unexecutedToolMarkup'),
+      });
+    } finally { makerChatStore.purgeSession(SESSION_ID); }
+  });
+
   it('maps Codex Auto reviewer failures to the stable localized reason key', () => {
     expect(ERROR_REASON_I18N_KEYS['codex-auto-review-unavailable']).toBe(
       'logic.errors.codexAutoReviewUnavailable',
@@ -53,6 +75,7 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     // 本表注释的一致性诉求: 同一条过载错误不能出现「尾部红条本地化、历史静态卡
     // 英文原文」的分裂。复用 banner 那条 key(不新增文案), 且 codex 改措辞也不影响
     // —— 判定走的是稳定 reason key, 不是原文。
+    expect(ERROR_REASON_I18N_KEYS['UPSTREAM_OVERLOADED']).toBe('chat.errorBanner.overloadBusyNoRetry');
     expect(ERROR_REASON_I18N_KEYS[UPSTREAM_OVERLOAD_REASON]).toBe(
       'chat.errorBanner.overloadBusyNoRetry',
     );

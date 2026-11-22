@@ -102,6 +102,8 @@ interface UseCCAgentChatReturn {
   pendingQueue: QueuedMessage[];
   /** 正在尝试插话投递的队列项 clientId。 */
   steeringQueueClientIds: string[];
+  /** 当前引擎不能同轮插话：不提供插话入口，消息等这一轮结束再发。 */
+  steerUnsupported: boolean;
   /** Queue was paused by Stop and resumes only after the user clicks Continue. */
   queuePaused: boolean;
   queueEditLocks: string[];
@@ -138,6 +140,7 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+      firstMessageIdentity?: { clientId: string; createdAt: string };
       beforeEnqueue?: () => Promise<boolean>;
       onInputCreated?: (clientId: string) => void;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -442,6 +445,7 @@ export function useCCAgentChat(
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
         replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+        firstMessageIdentity?: { clientId: string; createdAt: string };
         beforeEnqueue?: () => Promise<boolean>;
         onInputCreated?: (clientId: string) => void;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -873,6 +877,7 @@ export function useCCAgentChat(
     pendingQueueLength,
     pendingQueue: lightState.pendingQueue,
     steeringQueueClientIds: lightState.steeringQueueClientIds,
+    steerUnsupported: lightState.steerUnsupported,
     queuePaused: lightState.queuePaused,
     queueEditLocks: lightState.queueEditLocks,
     queueInteractionLocks: lightState.queueInteractionLocks,

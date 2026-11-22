@@ -19,7 +19,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import { VendorIcon, engineIconKindOf } from '@/components/sidebar/VendorIcon';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -273,7 +273,7 @@ export function InterruptedTasksResumeDialog({ suspended = false, onPendingChang
                   onChange={(next) => toggle(session.id, next)}
                 />
                 <VendorIcon
-                  vendor={agentKindToVendor(session.agentKind)}
+                  vendor={engineIconKindOf(session.agentKind)}
                   size={14}
                   colorClassName="text-[var(--confirm-desc)]"
                 />

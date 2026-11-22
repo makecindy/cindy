@@ -24,7 +24,7 @@ function fakeClient(t, captured) {
     pollDesktopAuthorization: async () => ({ status: 'ok', code: 'auth-code' }),
     exchangeAuthorizationCode: async (code, verifier) => {
       captured.exchange = { code, verifier };
-      return { [ACCESS]: 'bearer', [REFRESH]: 'rotated' };
+      return { status: 'ok', [ACCESS]: 'bearer', [REFRESH]: 'rotated' };
     },
   };
 }
@@ -66,17 +66,53 @@ test('reports unknown login methods instead of guessing', async () => {
   );
 });
 
-test('fails when the exchange yields no refresh token', async () => {
-  const client = fakeClient(null, {});
-  client.exchangeAuthorizationCode = async () => ({ [ACCESS]: 'only-access' });
-  await assert.rejects(
-    () => runHostLogin({
+test('reports a login outcome that needs another step instead of a missing token', async () => {
+  const outcomes = [
+    [{ status: 'binding_required', bindType: 'phone', bindTicket: 'bind-ticket' }, /must bind a phone number first/],
+    [{ status: 'select_account', loginTicket: 'login-ticket', accounts: [{}] }, /matches several Cindy accounts/],
+    [{ status: 'sso_verification_required', verificationTicket: 'sso-ticket', channel: 'sms', targetMasked: '138****0000' }, /extra verification code/],
+  ];
+  for (const [outcome, message] of outcomes) {
+    const client = fakeClient(null, {});
+    client.exchangeAuthorizationCode = async () => outcome;
+    const store = memoryStore();
+    const error = await runHostLogin({
       client,
-      store: memoryStore(),
+      store,
       region: 'cn',
       hostedCallbackUrl: 'https://auth.example/desktop/callback',
       openBrowser: async () => {},
-    }),
-    /no refresh token/,
-  );
+    }).then(() => null, (reason) => reason);
+    assert.match(error?.message ?? '', message);
+    assert.doesNotMatch(error.message, /ticket|0000/);
+    assert.equal(store.records.size, 0);
+  }
+});
+
+
+test('enterprise login uses the discovered SSO connection and persists only an organization session', async () => {
+  const store = memoryStore();
+  const captured = {};
+  const client = fakeClient(null, captured);
+  client.discoverSsoOrg = async org => {
+    assert.equal(org, 'example.test');
+    return { connections: [{ connectionId: 'work', connectionName: 'Company' }] };
+  };
+  client.getProviders = async () => { throw new Error('Personal discovery was unexpected'); };
+  const basic = client.exchangeAuthorizationCode;
+  let kind = 'personal';
+  client.exchangeAuthorizationCode = async (...args) => ({
+    ...await basic(...args), membership: { id: 'account', kind },
+  });
+  client.logout = async () => {};
+  const deps = { client, store, region: 'cn', organization: 'example.test',
+    hostedCallbackUrl: 'https://auth.example/desktop/callback', openBrowser: async () => {} };
+  await assert.rejects(runHostLogin({ ...deps, method: 'other' }), /enterprise connection/);
+  await assert.rejects(runHostLogin(deps), /organization membership/);
+  assert.equal(store.records.size, 0);
+  kind = 'org';
+  assert.equal((await runHostLogin(deps)).authenticated, true);
+  assert.equal(captured.url.input.kind, 'sso');
+  assert.equal(captured.url.input.providerOrConnectionId, 'work');
+  assert.ok(store.records.has(AUTH_SESSION_KEY));
 });

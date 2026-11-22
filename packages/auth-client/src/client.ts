@@ -37,6 +37,8 @@ export interface AuthFetchResponse {
   status: number;
   headers?: { get(name: string): string | null };
   json(): Promise<unknown>;
+  /** Optional raw reader for host-side diagnostics of public endpoint errors. */
+  text?(): Promise<string>;
 }
 
 export type AuthFetch = (
@@ -612,7 +614,7 @@ export class CindyAuthClient {
       }
 
       const retryAt =
-        response.status === 429 ? retryAfterDeadline(response) : undefined;
+        (response.status === 429 || response.status === 503) ? retryAfterDeadline(response) : undefined;
       const requestId = authRequestId(response);
       let data: unknown;
       try {
@@ -637,7 +639,7 @@ export class CindyAuthClient {
           "INVALID_RESPONSE",
           response.status,
           "Authentication server returned invalid JSON",
-          undefined,
+          retryAt,
           undefined,
           requestId,
         );

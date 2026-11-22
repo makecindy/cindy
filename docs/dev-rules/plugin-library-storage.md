@@ -4,6 +4,13 @@
 > **读取时机**：新增或修改 library 能力（持久作品库）、binding / 目录选择、迁移、
 > 回收站删除、SQLite 语句门、面板 `/library/` 投影、会话级只读 extraDirs 注入，
 > 或任何触碰 `libraries/` / `libraries-binding.json` / `libraries-trash/` 落盘布局的改动之前
+> **适用路径**：`apps/desktop/src/main/cindy-brain/**/{library,ghostLibrary}*`、
+> `apps/desktop/src/main/maker-ipc/**/libraryExtraDir*`、
+> `apps/desktop/src/renderer/features/plugin/GhostLibrarySection.tsx`、
+> `packages/maker-core/src/agents/shared/**/library-native-read*`、
+> `apps/desktop/vite.library-db-worker.config.ts`、
+> `apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md`、
+> `apps/desktop/src/main/cindy-brain/**/{fsSlot,pickSlot,storageService}*`
 
 `library: true` 给插件一个**用户作品级**的持久存储区，与 `fs: true` 私有储物柜
 （256MiB/2000 文件配额、卸载即回收）是两个语义：不受配额约束（只受磁盘保留
@@ -95,6 +102,23 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
    `validateLibraryRelPath` → `isInsideDir` → realpath 祖先收敛），目标 lstat
    不穿透 symlink。写入 = staging + fsync + rename + dev/ino identity 复验
    （对齐 `dirDeposit.writeNewSaveFile` 范式）。
+   用量在同一串行队列内增量计算，每 32 次变更原子更新 `usage.json`，不强制落盘。
+   老账本无 `checkpoint` 字段：合法时照旧复用，现存的大库不会因为升级而被强制重扫。
+   新账本将计数和 `checkpoint: "clean" | "dirty"` 原子写在一起。打开已有库只读；
+   有可信账本时第一次变更前须持久写入 `dirty`，已无可信账本时不额外同步。
+   切换账号、停用、迁库及 Desktop 的异步退出收尾等待在途变更，最终写入并同步
+   `clean` 账本。SQLite 会绕过文件层，宿主只记录已访问数据库及其 WAL、SHM 和 journal
+   的变化，关闭 SQLite 后按这些路径补齐用量，不因正常关闭对超限旧库做全量重扫。
+   无法可靠核算的变更才用原有的有界扫描，扫描不完整时不写 `clean`。
+   缺失、损坏或 `dirty` 的账本重扫，`clean` 账本免扫。超过原扫描上限或子目录无法核算时，
+   文件写入被拒，文件读取仍可用；SQLite 沿用独立的语句和磁盘水位检查。宿主不持久化部分计数，
+   此时返回的用量只是上次账本值（无账本则为 0）。
+   清理超限条目或恢复读取权限后，显式重新打开会重试扫描；扫描完成即可恢复文件写入，
+   正常会话重复打开不重扫。
+   Windows 同步账本文件体，但没有目录 fsync，断电不保证目录项的落盘顺序。
+   设置页优先读已有会话的有效用量，否则只读最近磁盘快照，不开库、不触发扫描。
+   新版异常退出后降级，旧版可能沿用陈旧快照；旧版不识别 `checkpoint`，再次写入会按旧格式保存，
+   这一降级链路可能留下用量偏差。作品文件的原子写、强制落盘和成功回执不变。
 5. **SQL 白名单**：better-sqlite3 无 set_authorizer，唯一可靠防线是首词允许
    清单（deny-by-default）+ prepare 单语句 + 事务/迁移/备份全宿主管理。
    ATTACH/VACUUM INTO/PRAGMA/事务语句一律 `DB_STATEMENT_REJECTED`。改白名单
@@ -192,10 +216,10 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 
 `storageService.ts` 的 `HostStorageProvider` 统一路由已有 KV、fs:data、Library、handoff 和媒体，
 `storageProviders.ts` 只做适配；Library 的 binding、SQL、原子写、迁移和卸载不删语义保持。
-插件经独立批准的 `storage` 组调用 helper `storage_request`，不能代报调用方或直接读另一个实例。
-分享原子内容快照时，宿主确认双方与实际大小，复核源摘要后调用原 handoff.import；
+整体安装批准有效且启用的插件声明 `storage` 后调用 helper `storage_request`，不追加组批准，不能代报调用方或直接读另一个实例。
+分享原子内容快照时，不再弹调用确认；宿主核对双方与实际大小，复核源摘要后调用原 handoff.import；
 目标必须同账号本机、namespace 已确认且同组织范围。个人 root/local 属个人范围。
-接收方拿到自己的 handoff 引用，不获得源 Library 根或后续读取权。确认期间不持安装迁移锁，
+接收方拿到自己的 handoff 引用，不获得源 Library 根或后续读取权。准备快照期间不持安装迁移锁，
 最终写入短暂复用 handoff hold，IO 失败保留结果未知语义及原 owner 根补偿。作者参数见 §4.10.4。
 
 ## Review 清单

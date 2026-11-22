@@ -27,12 +27,28 @@ it('holds the old chat layout until both the IPC reply and renderer resize arriv
   rerender({ collapsed: false });
   expect(result.current).toEqual({ collapsed: true, instant: true, frozenWidth: 800 });
   await act(async () => { resolve(800); });
-  frame();
+  act(() => { window.dispatchEvent(new Event('resize')); });
   expect(result.current.collapsed).toBe(true);
   expect(result.current.frozenWidth).toBe(800);
   window.innerWidth = 1800;
-  frame();
+  act(() => { window.dispatchEvent(new Event('resize')); });
   expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1600 });
+});
+
+// #11560: when the viewport arrives first, neither direction needs a frame after the reply.
+it('applies both open and close replies immediately at the target viewport', async () => {
+  let reply!: (delta: number) => void;
+  window.electronAPI = { windowSidebarExpansion: () => new Promise<number>((done) => { reply = done; }) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  window.innerWidth = 1800;
+  await act(async () => { reply(800); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1600 });
+  rerender({ collapsed: true });
+  window.innerWidth = 1000;
+  await act(async () => { reply(-800); });
+  expect(result.current).toEqual({ collapsed: true, instant: true });
 });
 
 it('keeps the ordinary animation when native expansion has no room', async () => {

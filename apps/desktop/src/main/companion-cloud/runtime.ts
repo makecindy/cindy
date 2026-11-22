@@ -3,6 +3,7 @@
  * endpoint). Started only when the server announces companion homes; background
  * transient failures are retried; rejected profile sources are surfaced without replaying writes.
  */
+import type { DeliverToCanonical } from './directRoom.js';
 import { randomUUID } from 'node:crypto';
 import { correctedProfile, profileRepairFields, profileRepairVersion, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import type {
@@ -36,6 +37,8 @@ import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_VALUE_TOO_L
 
 /** Electron/database side of the feature, wired in register.ts. */
 export interface CompanionCloudHost {
+  /** Archive only a confirmed retired copy while retaining local history. */
+  retireLocalCopy?: (botId: string, current: () => boolean) => Promise<void>;
   homes: CompanionHomeRegistry;
   openState: (endpoint: string, humanActorId: string, current: () => boolean) => CompanionCloudState;
   readValues: (botId: string) => Promise<CompanionPreferenceValue[]>;
@@ -49,7 +52,7 @@ export interface CompanionCloudHost {
   rowsAfter: (sessionId: string, cursor: CompanionMirrorCursor, limit: number) => Promise<CompanionMirrorRow[]>;
   latestRows: (sessionId: string, limit: number, options?: { excludeClientIdPrefix?: string }) => Promise<CompanionMirrorRow[]>;
   /** Hand a room message to the companion's canonical Session as an ordinary user message. */
-  deliverToCanonical: (botId: string, text: string, clientId: string) => Promise<{ ok: true } | { ok: false; errorCode: string }>;
+  deliverToCanonical: DeliverToCanonical;
   /** Local profile, memory, skill or canonical message change of a companion. */
   onLocalChange?: (listener: (botId: string) => void) => () => void;
   /** Local side of taking a companion over; absent disables take-over and auto-materialize. */
@@ -107,7 +110,7 @@ export interface CompanionCloudRuntime {
   /** One full upload + mirror pass (tests and explicit refresh). */
   syncNow: () => Promise<void>;
   /** Demote local copies homed elsewhere and materialize companions handed to this computer. */
-  reconcile: (localProfiles: Array<{ id: string; status: string }>) => void;
+  reconcile: (localProfiles: Array<{ id: string; status: string }>) => Promise<void>;
   takeOver: (botId: string, correction?: ProfileCorrection & { actorId: string; home: string | null }) => Promise<CompanionCloudActionResult>;
   repairProfile: (botId: string, request: CompanionProfileRepairRequest) => Promise<CompanionProfileRepairResult>;
   transfer: (botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
@@ -262,10 +265,12 @@ export function startCompanionCloud(input: {
         if (!block?.mediaId) throw new Error('ATTACHMENT_UNAVAILABLE');
         return block.mediaId;
       } } : {}),
-      retain: (media, gaps) => {
+      retain: (media, gaps, preserveExisting) => {
         const known = state.bot(botId);
-        if (canonicalJson([media, gaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
-        state.update(botId, actorId, entry => { entry.skillFileMedia = media; entry.skillFileGaps = gaps; });
+        const nextMedia = preserveExisting ? { ...known?.skillFileMedia, ...media } : media;
+        const nextGaps = preserveExisting ? known?.skillFileGaps ?? {} : gaps;
+        if (canonicalJson([nextMedia, nextGaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
+        state.update(botId, actorId, entry => { entry.skillFileMedia = nextMedia; entry.skillFileGaps = nextGaps; });
       },
       ...(input.log ? { log: input.log } : {}),
     }),
@@ -509,27 +514,61 @@ export function startCompanionCloud(input: {
     publish(); mirrors.kick(botId); uploads.kick(botId);
     return { ok: true } as const;
   }
+  let actorRosterFlight: Promise<CompanionRuntimeActor[]> | undefined;
+  let queuedActorRoster: Promise<CompanionRuntimeActor[]> | undefined;
+  function readMaterializeActors(): Promise<CompanionRuntimeActor[]> {
+    if (queuedActorRoster) return queuedActorRoster;
+    // Join callers until this read starts. A home confirmed during an in-flight
+    // read needs its successor, never that older snapshot. Only one read runs.
+    const read: Promise<CompanionRuntimeActor[]> = (actorRosterFlight ?? Promise.resolve()).then(() => {
+      if (queuedActorRoster === read) queuedActorRoster = undefined;
+      fence.assertCurrent();
+      return input.api<CompanionRuntimeActor[]>('/actors');
+    });
+    queuedActorRoster = read;
+    actorRosterFlight = read;
+    const clear = () => {
+      if (actorRosterFlight === read) actorRosterFlight = undefined;
+      if (queuedActorRoster === read) queuedActorRoster = undefined;
+    };
+    // A failed read also rejects its queued batch; retry stays with the caller.
+    void read.then(clear, clear);
+    return read;
+  }
+
   function materialize(actor: CompanionRuntimeActor, correction?: ProfileCorrection): Promise<CompanionMaterializeResult> {
     const materializer = input.host.materializer;
     if (!materializer) return Promise.reject(new Error('MATERIALIZE_UNAVAILABLE'));
     const botId = actor.externalId;
+    const actorId = actor.id;
     const pending = materializing.get(botId);
     if (pending) return pending;
-    const run = materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction, onDemoted: publish, host: {
-      ...materializer, latestRows: input.host.latestRows,
-      ...(correction && materializer.backupProfileSource ? { backupProfileSource: async (id: string, value: unknown, writeFence: CompanionWriteFence) => {
-        const pending = state.bot(id)?.profileCorrection;
-        if (pending?.version === correction.version && pending.backedUp) return;
-        await materializer.backupProfileSource!(id, value, writeFence);
-        writeFence.assertCurrent();
-        state.update(id, actor.id, entry => { if (entry.profileCorrection?.version === correction.version) entry.profileCorrection.backedUp = true; });
-      } } : {}),
-    },
-      ...(input.media ? { download: input.media.download } : {}),
-      actor: { id: actor.id, externalId: botId, name: actor.name, avatar: actor.avatar ?? null },
-      roomId: () => mirror.ensureRoom(botId, actor.id, actor.name) })
+    const run = (async () => {
+      // Home CAS confirms ownership, but does not refresh the cached avatar. Read the
+      // current actor before restoring; once materialized, reconcile will not replay it.
+      fence.assertCurrent();
+      const actors = await readMaterializeActors();
+      fence.assertCurrent();
+      const current = actorOf(botId);
+      const fresh = actors.find(value => value.id === actorId && value.externalId === botId && value.kind === 'bot' && !value.disabled);
+      if (current?.id !== actorId || current.homeDeviceId !== input.selfDeviceId
+        || !fresh || fresh.homeDeviceId !== input.selfDeviceId) throw new Error('COMPANION_CHANGED');
+      return materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction, onDemoted: publish, host: {
+        ...materializer, latestRows: input.host.latestRows,
+        ...(correction && materializer.backupProfileSource ? { backupProfileSource: async (id: string, value: unknown, writeFence: CompanionWriteFence) => {
+          const pending = state.bot(id)?.profileCorrection;
+          if (pending?.version === correction.version && pending.backedUp) return;
+          await materializer.backupProfileSource!(id, value, writeFence);
+          writeFence.assertCurrent();
+          state.update(id, actorId, entry => { if (entry.profileCorrection?.version === correction.version) entry.profileCorrection.backedUp = true; });
+        } } : {}),
+      },
+        ...(input.media ? { download: input.media.download } : {}),
+        actor: { id: actorId, externalId: botId, name: actor.name, avatar: fresh.avatar ?? null },
+        roomId: () => mirror.ensureRoom(botId, actorId, actor.name) });
+    })()
       .then(result => {
-        if (correction) state.update(botId, actor.id, entry => {
+        if (correction) state.update(botId, actorId, entry => {
           if (entry.profileCorrection?.version === correction.version) entry.profileCorrection.restored = {
             preference: entry.prefs[COMPANION_PROFILE_KEY]?.revision ?? 0, store: entry.stored?.[COMPANION_PROFILE_KEY]?.revision ?? 0,
           };
@@ -538,7 +577,7 @@ export function startCompanionCloud(input: {
         // becomes a project now, not only at the next start. Never holds up the arrival.
         if (live() && input.host.upgradeArrived) {
           void input.host.upgradeArrived(botId).catch(error => {
-            input.log?.warn('Teammate upgrade after arrival will retry', { actorId: actor.id, code: errorCode(error) });
+            input.log?.warn('Teammate upgrade after arrival will retry', { actorId: actorId, code: errorCode(error) });
           });
         }
         return result;
@@ -845,7 +884,7 @@ export function startCompanionCloud(input: {
     isDirectRoom: roomId => state.botForRoom(roomId) !== null,
     syncNow: async () => { await uploads.run(); await mirrors.run(); },
 
-    reconcile(localProfiles) {
+    async reconcile(localProfiles) {
       const self = input.selfDeviceId;
       if (!self || !live()) return;
       for (const actor of input.actors?.() ?? []) {
@@ -872,6 +911,13 @@ export function startCompanionCloud(input: {
           if (local && local.status !== 'deleting' && !entry?.demoted) {
             state.update(botId, actor.id, next => { next.demoted = true; });
             input.log?.info?.('Companion was deleted on its main computer; local copy demoted', { actorId: actor.id });
+          }
+          // Also handle already-demoted copies from older clients. A live remote home alone
+          // is never evidence of deletion. Failed writes are retried on the next reconcile.
+          if (local && local.status !== 'deleting' && local.status !== 'archived' && input.host.retireLocalCopy) {
+            try { await input.host.retireLocalCopy(botId, live); }
+            catch (error) { input.log?.warn('Retired companion copy will retry', { code: errorCode(error) }); }
+            if (!live()) return;
           }
           continue;
         }

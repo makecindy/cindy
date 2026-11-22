@@ -9,6 +9,7 @@ export default {
     'Real IPC, browser discovery and device permissions; timeout and stale response behavior is covered by ComputerUseSection.browserHealth.test.tsx',
   cases: {
     default: { about: 'All settings loaded' },
+    'mac-control-permission': { about: 'macOS 27.3 opens the missing control permission for CuaDriver.' },
     'driver-rate-limited': {
       about:
         'cua-driver installed, update check rate-limited by GitHub: the row names the rate limit instead of a generic failure',
@@ -25,6 +26,7 @@ export default {
     'browser-selection': { about: 'A changed extension source requires selection, not a plugin update' },
     'my-browser-disconnected': { about: 'Disconnected extension is not presented as missing or requiring reinstall' },
     'my-browser-probe-failed': { about: 'Probe failure does not show the extension store instruction' },
+    'my-browser-no-chrome': { about: 'Without Chrome or Edge, My browser asks for Chrome before the plugin and extension steps' },
     'my-browser': {
       about: 'My browser selected while login copying is on; the login copy switch stays hidden',
     },
@@ -47,6 +49,14 @@ export default {
       name: await ui.t('settings.computerUse.realProfile.toggleAria'),
     });
     if (ui.case === 'default') await loginCopy.waitFor();
+    if (ui.case === 'mac-control-permission') {
+      const pane = page.getByText(await ui.t('macControlPermission.pane'), { exact: true });
+      await pane.scrollIntoViewIfNeeded();
+      assert.ok(await page.getByText(await ui.t('macControlPermission.review', { app: 'CuaDriver' })).isVisible());
+      await ui.capture('driver-permission');
+      await page.getByRole('switch', { name: await ui.t('settings.computerUse.directControl.toggleAria') }).click();
+      await page.waitForFunction(() => document.documentElement.dataset.openedSettings?.endsWith('?Privacy_Accessibility'));
+    }
     if ((ui.case.startsWith('my-browser') || ['browser-updating', 'browser-selection'].includes(ui.case))) {
       await page
         .getByRole('radio', {
@@ -65,6 +75,11 @@ export default {
     if (ui.case === 'my-browser-disconnected') {
       await page.getByText(await ui.t('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle'), { exact: true }).waitFor();
       assert.ok(await page.getByRole('button', { name: await ui.t('settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore') }).isVisible());
+    }
+    if (ui.case === 'my-browser-no-chrome') {
+      await page.getByText(await ui.t('settings.computerUse.browserBackend.userBrowserSetup.installBrowserTitle'), { exact: true }).waitFor();
+      assert.ok(await page.getByRole('button', { name: await ui.t('settings.computerUse.browser.download') }).isVisible());
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore') }).count(), 0);
     }
     if (ui.case === 'my-browser-probe-failed') {
       await page.getByRole('alert').waitFor();

@@ -17,7 +17,9 @@ import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
 import { configureUserDataDir, configureAppDataDir } from './userDataPath.js';
+import { configureProjectionBoundaryPassive } from './authBoundaryQuarantine.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
+import { desktopRuntimeKind } from './hostDelegationEnv.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
 import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
@@ -287,6 +289,7 @@ const desktopDevInstanceOptions = (() => {
     try {
       commit = execFileSync('git', ['rev-parse', 'HEAD'], {
         cwd: rootDir,
+        windowsHide: true,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       }).trim() || null;
@@ -309,6 +312,8 @@ const desktopDevInstanceOptions = (() => {
     isolated: devFlags.profileKind === 'isolated-sandbox',
     isolationIntent: devFlags.isolated,
     profileKind: devFlags.profileKind,
+    // A Node Host on this profile reads it to tell its clients from desktops that open the database.
+    runtime: desktopRuntimeKind(process.env),
   };
 })();
 
@@ -316,6 +321,9 @@ const desktopDevInstanceOptions = (() => {
 // regional default above would make an isolated runtime write into that profile.
 configureUserDataDir(app.getPath('userData'));
 configureAppDataDir(app.getPath('appData'));
+// Before bootstrap-electron (dynamic import below) loads any reader of the Skill projection
+// boundary. Read on every call, as the inline check this replaces was; the env is set above.
+configureProjectionBoundaryPassive(() => !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1');
 configureWindowsAtomicRename({
   packagedBinary: app.isPackaged ? path.join(process.resourcesPath, 'tools', 'windows-atomic-rename', 'cindy-windows-atomic-rename.exe') : undefined,
   sourceFile: app.isPackaged ? undefined : path.join(app.getAppPath(), 'native', 'windows-atomic-rename', 'main.rs'),

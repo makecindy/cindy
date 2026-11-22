@@ -27,6 +27,7 @@ import {
   validateWorktreeName,
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
+import { refreshSelectedDefaultSource } from './freshBase';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import {
   gitExec,
@@ -36,9 +37,15 @@ import {
 } from './gitExec';
 import { gitPathOutput } from './gitPathOutput';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
+import {
+  buildMultiboxAddArgs,
+  buildMultiboxRemoveArgs,
+  logMultiboxAddResult,
+  shouldUseMultibox,
+} from './multibox';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
-import { hasKeepSentinel, isManagedWorktreePath } from './safety';
+import { hasKeepSentinel } from './safety';
 import {
   isWorktreeDirty,
   listNonReproducibleIgnoredFiles,
@@ -575,12 +582,16 @@ async function stageCheckout(
     );
   }
 
+  // 新 worktree 还没有子模块的 gitdir。两个阶段都只检出父仓库，避免继承的
+  // submodule.recurse 在 Git 写完索引前中断 checkout。
   // 2. 选择性 checkout 白名单文件(同步, 用户可见)
   if (existingPaths.length > 0) {
     try {
-      await gitExec(['checkout', 'HEAD', '--', ...existingPaths], worktreePath, {
-        onSpawn: onCheckoutChildSpawn,
-      });
+      await gitExec(
+        ['checkout', '--no-recurse-submodules', 'HEAD', '--', ...existingPaths],
+        worktreePath,
+        { onSpawn: onCheckoutChildSpawn },
+      );
       log.info(
         `[stageCheckout] selective checkout done in ${Date.now() - t0}ms (${existingPaths.length} paths)`,
       );
@@ -597,7 +608,10 @@ async function stageCheckout(
   //    LC_ALL=C 让 git 报错文案一致, 便于解析。
   const bgT0 = Date.now();
   const fullCheckoutPromise = gitExec(
-    ['checkout', 'HEAD', '--', '.', ':(exclude).claude', ':(exclude).sivi'],
+    [
+      'checkout', '--no-recurse-submodules', 'HEAD', '--', '.',
+      ':(exclude).claude', ':(exclude).sivi',
+    ],
     worktreePath,
     { extraEnv: { LC_ALL: 'C' }, onSpawn: onCheckoutChildSpawn },
   )
@@ -624,18 +638,22 @@ interface CreatedSnapshot {
   /** 已 mkdirp 的父目录(dirname). 若 worktree add 失败需要清理。 */
   parentEnsured?: string;
   /** git worktree add 已成功执行(此时 worktree path 真实存在)。 */
-  worktreeAdded?: { path: string; baseRepo: string };
+  worktreeAdded?: { path: string; baseRepo: string; multibox?: boolean };
 }
 
 async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
   // A failed create may already have launched checkout or acquired a task reference.
   if (snap.worktreeAdded) {
-    const { path: wp, baseRepo } = snap.worktreeAdded;
+    const { path: wp, baseRepo, multibox } = snap.worktreeAdded;
     try {
       await withWorktreeResourceLock(wp, async () => {
         if (hasKeepSentinel(wp) || hasLiveSessionReference({ path: wp }, await loadLiveSessionPathKeys())) return;
-        if ((await listNonReproducibleIgnoredFiles(baseRepo, wp)).length > 0) return;
-        await gitExec(['worktree', 'remove', wp], baseRepo);
+        // A Multibox worktree's ignored files were all cloned from the base checkout earlier in
+        // this same, never-published create (engine caches: often 100k+ files, tens of GB), so
+        // the byte-by-byte comparison would only hold this repository's create queue for hours.
+        if (!multibox && (await listNonReproducibleIgnoredFiles(baseRepo, wp)).length > 0) return;
+        // Both forms refuse dirty worktrees without force.
+        await gitExec(multibox ? buildMultiboxRemoveArgs(wp) : ['worktree', 'remove', wp], baseRepo);
       });
     } catch (err) {
       log.warn(
@@ -646,13 +664,6 @@ async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
     }
   }
   // parentEnsured 不清理 — 托管 worktree 根目录本身留着没坏处, 下次复用
-}
-
-async function configureHooksPath(worktreePath: string, baseRepo: string): Promise<void> {
-  // 让 worktree 的 hooks 仍指向源 repo 的 .git/hooks(共享 husky / pre-commit 等)
-  // git config 的路径以正斜杠书写最稳妥(Windows 下反斜杠会被转义), 这里统一标准化
-  const hooksPath = path.join(baseRepo, '.git', 'hooks').replace(/\\/g, '/');
-  await gitExec(['-C', worktreePath, 'config', 'core.hooksPath', hooksPath]);
 }
 
 const CLAUDE_COPY_EXCLUDED_TOP_LEVEL_DIRS = new Set(['worktrees']);
@@ -810,10 +821,9 @@ export async function copyClaudeSiviDirs(
  *   4. mkdirp parent
  *   5. git worktree add -b cindy/<name> <path> <sourceBranch>
  *      失败时若 stderr 含 core.longpaths → 自动 git config --global core.longpaths true 重试一次
- *   6. configureHooksPath
- *   7. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
- *   8. applyWorktreeIncludeFile
- *   9. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   6. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
+ *   7. applyWorktreeIncludeFile
+ *   8. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
  *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
  *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
@@ -824,6 +834,8 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
 }
 
 export interface CreateWorktreeOptions {
+  /** Desktop new-task entry only; internal option, never taken from IPC request fields. */
+  refreshDefaultSource?: boolean;
   /** Keep a handle on the background checkout so failure compensation can wait for it. */
   trackBackgroundCheckout?: boolean;
   /**
@@ -920,6 +932,11 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       }
     }
 
+    // Refresh before add/checkout. Other creation paths preserve their existing behavior.
+    if (options?.refreshDefaultSource) {
+      await refreshSelectedDefaultSource(baseRepo, req.sourceBranch);
+    }
+
     // 3. 路径冲突避让
     const taken = await timed('collect taken names', () => getTakenNames(baseRepo));
     const requestedName = shouldGenerateName ? generateUniqueName(taken) : req.name;
@@ -956,65 +973,74 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // 5. git worktree add(--no-checkout 跳过文件解压, 加速主流程; longpaths 自动重试)
       //    对齐 CC Desktop: 大型仓库的全 checkout 可能耗时数十秒, 改成只建 worktree 元数据,
       //    后续 stageCheckout 同步拉关键文件, 全 checkout 后台跑。
+      //    仓库使用 Multibox 时改走 git multibox add(见 ./multibox): 一次给出带引擎缓存的
+      //    完整目录, 不带 --no-checkout(带上会退回普通 worktree), 失败原样返回不改用 git 重试。
       const branch = getBranchName(name);
-      const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
-      try {
-        await timed('git worktree add', () => gitExec(addArgs, baseRepo));
-      } catch (err) {
-        if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
-          // 启用 core.longpaths 后重试一次
-          try {
-            await gitExec(['config', '--global', 'core.longpaths', 'true']);
-            await timed('git worktree add retry', () => gitExec(addArgs, baseRepo));
-          } catch (retryErr) {
-            return { ok: false, error: classifyError(classifyAny(retryErr)) };
-          }
-        } else {
+      const useMultibox = await timed('detect multibox', () => shouldUseMultibox(baseRepo));
+      if (useMultibox) {
+        try {
+          const added = await timed('git multibox add', () =>
+            gitExec(buildMultiboxAddArgs(branch, worktreePath, req.sourceBranch), baseRepo));
+          logMultiboxAddResult(worktreePath, added.stdout);
+        } catch (err) {
           return { ok: false, error: classifyError(classifyAny(err)) };
         }
+      } else {
+        const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
+        try {
+          await timed('git worktree add', () => gitExec(addArgs, baseRepo));
+        } catch (err) {
+          if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
+            // 启用 core.longpaths 后重试一次
+            try {
+              await gitExec(['config', '--global', 'core.longpaths', 'true']);
+              await timed('git worktree add retry', () => gitExec(addArgs, baseRepo));
+            } catch (retryErr) {
+              return { ok: false, error: classifyError(classifyAny(retryErr)) };
+            }
+          } else {
+            return { ok: false, error: classifyError(classifyAny(err)) };
+          }
+        }
       }
-      snap.worktreeAdded = { path: worktreePath, baseRepo };
+      snap.worktreeAdded = { path: worktreePath, baseRepo, multibox: useMultibox };
 
       // 5b. stageCheckout: 同步拉 agent 启动必读文件(.claude/.sivi/CLAUDE.md/...),
       //     后台跑全 checkout。fullCheckoutPromise 故意 fire-and-forget,
-      //     失败仅日志, 不阻塞 IPC 返回。
+      //     失败仅日志, 不阻塞 IPC 返回。Multibox 返回时目录已完整, 没有后台 checkout。
       let bgPromise: Promise<void> | undefined;
-      const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
-      if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
-      try {
-        const stageRes = await timed('stage checkout', () => stageCheckout(
-          worktreePath,
-          (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
-        ));
-        bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
-        if (options?.trackBackgroundCheckout) {
-          const settled = bgPromise.catch(() => undefined);
-          backgroundCheckouts.set(req.sessionId, settled);
-          void settled.finally(() => {
-            if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
-          });
+      if (!useMultibox) {
+        const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
+        if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
+        try {
+          const stageRes = await timed('stage checkout', () => stageCheckout(
+            worktreePath,
+            (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+          ));
+          bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
+          if (options?.trackBackgroundCheckout) {
+            const settled = bgPromise.catch(() => undefined);
+            backgroundCheckouts.set(req.sessionId, settled);
+            void settled.finally(() => {
+              if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
+            });
+          }
+        } catch (err) {
+          await releaseWorktreeRuntimeLease(checkoutLease);
+          // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
+          log.warn(
+            `[worktree] stageCheckout failed for ${worktreePath}:`,
+            err instanceof Error ? err.message : String(err),
+          );
         }
-      } catch (err) {
-        await releaseWorktreeRuntimeLease(checkoutLease);
-        // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
-        log.warn(
-          `[worktree] stageCheckout failed for ${worktreePath}:`,
-          err instanceof Error ? err.message : String(err),
-        );
       }
       // 防止 unhandled rejection(stageCheckout 已设 .catch 但再保险一次)
       bgPromise?.catch(() => {});
 
-      // 6. hooks
-      try {
-        await timed('configure hooks', () => configureHooksPath(worktreePath, baseRepo));
-      } catch (err) {
-        if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
-        await rollbackPartialCreate(snap);
-        return { ok: false, error: classifyError(classifyAny(err)) };
-      }
+      // Git already shares default hooks. Preserve core.hooksPath (including
+      // inherited/relative settings); writing it here changes every checkout.
 
-      // 7. copy .claude / .sivi(目录不存在则跳过)
+      // 6. copy .claude / .sivi(目录不存在则跳过)
       try {
         await timed('copy .claude/.sivi', () => copyClaudeSiviDirs(baseRepo, worktreePath));
       } catch (err) {
@@ -1025,10 +1051,13 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         );
       }
 
-      // 8. include patterns
+      // 7. include patterns
+      //    Multibox 已按 .worktreeinclude 克隆过同一批文件(同盘为 reflink); 只补缺,
+      //    不用整份复制覆盖它们。
       try {
-        const results = await timed('apply include file', () =>
-          applyWorktreeIncludeFile(baseRepo, worktreePath),
+        const results = await timed('apply include file', () => (useMultibox
+          ? applyWorktreeIncludeFile(baseRepo, worktreePath, { overwriteExisting: false })
+          : applyWorktreeIncludeFile(baseRepo, worktreePath)),
         );
         const failed = results.filter((r) => r.status === 'failed');
         if (failed.length > 0) {
@@ -1044,7 +1073,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         );
       }
 
-      // 9. Recheck after asynchronous Git/setup work before publishing metadata.
+      // 8. Recheck after asynchronous Git/setup work before publishing metadata.
       // The profile/session lock also closes the check -> store.set window.
       try {
         assertPrecreatedSessionNotCancelled(req.sessionId);
@@ -1092,7 +1121,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
  */
 export async function getRemovalPreview(
   sessionId: string,
-): Promise<{ hasWorktree: boolean; dirty: boolean }> {
+): Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }> {
   const meta = store.get(sessionId);
   if (!meta || meta.ephemeral) return { hasWorktree: false, dirty: false };
   const worktreePath = activeWorktreePath(meta);
@@ -1101,7 +1130,11 @@ export async function getRemovalPreview(
   } catch {
     return { hasWorktree: false, dirty: false };
   }
-  return { hasWorktree: true, dirty: await isWorktreeDirty(worktreePath) };
+  return {
+    hasWorktree: true,
+    dirty: await isWorktreeDirty(worktreePath),
+    ...(meta.quarantinePath ? {} : { canDiscardChanges: true as const }),
+  };
 }
 
 // ── removeWorktreeForSession (无 IPC, 仅会话显式删除/归档路径调) ─────────────
@@ -1432,7 +1465,11 @@ async function removeWorktreeForSessionInner(
     }
 
     try {
-      await gitExec(['worktree', 'remove', removalPath], meta.baseRepo);
+      // Multibox remove keeps the same dirty check without -f; --wait makes the lstat below meaningful.
+      const removeArgs = await shouldUseMultibox(meta.baseRepo)
+        ? buildMultiboxRemoveArgs(removalPath)
+        : ['worktree', 'remove', removalPath];
+      await gitExec(removeArgs, meta.baseRepo);
     } catch (error) {
       // A precreated compensation may never bypass Git's final dirty check.
       log.warn('[worktree] pre-created removal failed; preserving', error instanceof Error ? error.message : String(error));

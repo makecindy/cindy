@@ -1,3 +1,4 @@
+import { schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
 /**
  * TaskListCell — 左侧任务列表单元格
  * ---------------------------------------------------------------------------
@@ -149,6 +150,7 @@ export function TaskListCell({
   // 而不是"上次跑完是什么时候"。长跑任务在 running 中也能立刻看到 "Last HH:mm"。
   const lastText = formatLastRun(s.lastFiredAt, Date.now(), t);
   const nextText = s.status === 'active' ? formatNextRun(s.nextFireAt, Date.now(), t) : null;
+  const prRule = schedulePrTriggers(s)[0];
   let subtitle: string | null;
   if (queuedForSession) {
     // 排在目标会话队列里等派发 —— 比"没抢到执行槽"更靠前判定:这一轮已经触发过了，
@@ -162,7 +164,7 @@ export function TaskListCell({
   } else if (s.status === 'paused') {
     subtitle = t('scheduler.cell.subtitlePaused');
   } else if (s.manual) {
-    subtitle = lastText ?? (s.webhookTrigger ? t('scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
+    subtitle = lastText ?? (prRule ? t(`scheduler.prTrigger.${prRule.change}`) : s.webhookTrigger ? t('scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
   } else if (!s.recurring) {
     subtitle = lastText ?? t('scheduler.cell.subtitleOnce');
   } else if (lastText && nextText) {
@@ -265,7 +267,7 @@ export function TaskListCell({
       onKeyDown={handleKeyDown}
       onContextMenu={handleContextMenu}
       className={cn(
-        'group relative flex cursor-pointer flex-col gap-[5px] rounded-[10px] px-[14px] py-3',
+        'group relative flex cursor-pointer flex-col gap-1 rounded-xl px-[14px] py-3',
         'outline-none transition-colors',
         'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
         selected
@@ -365,7 +367,7 @@ export function TaskListCell({
         {!isEditing && isProjectSchedule && (
           <span
             className={cn(
-              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
+              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-11 font-medium leading-none',
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
             title={t('scheduler.projectAutomation.cell.tooltip')}
@@ -374,14 +376,14 @@ export function TaskListCell({
             {t('scheduler.projectAutomation.cell.tag')}
           </span>
         )}
-        {!isEditing && (s.webhookTrigger || s.manual || !s.recurring) && (
+        {!isEditing && (prRule || s.webhookTrigger || s.manual || !s.recurring) && (
           <span
             className={cn(
-              'shrink-0 translate-x-[2px] rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
+              'shrink-0 translate-x-[2px] rounded-full border px-2 py-0.5 text-11 font-medium leading-none',
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
           >
-            {s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
+            {prRule ? t('scheduler.prTrigger.label') : s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
           </span>
         )}
       </div>

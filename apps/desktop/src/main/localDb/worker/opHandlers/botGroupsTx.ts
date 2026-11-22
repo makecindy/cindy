@@ -70,11 +70,11 @@ function archiveLanes(
   }>;
   const targets = botIds ? rows.filter((row) => botIds.includes(row.botId)) : rows;
   const archiveLink = db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?');
-  const archiveSession = db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
+  const archiveSession = db.prepare(`UPDATE sessions SET status = 'archived'
     WHERE id = ? AND status = 'active'`);
   for (const row of targets) {
     archiveLink.run(at, row.sessionId);
-    archiveSession.run(at, row.sessionId);
+    archiveSession.run(row.sessionId);
   }
   return targets.map((row) => row.sessionId);
 }

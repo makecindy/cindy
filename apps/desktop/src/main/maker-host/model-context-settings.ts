@@ -1,3 +1,5 @@
+import { getActiveCatalog } from './active-catalog.js';
+import { readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import { createModelContextProviderResolver } from './modelContextProvider.js';
 import { isCodexGatewayWireModel, type AgentKind, type Catalog, type Effort } from '@cindy/model-providers';
 
@@ -48,8 +50,42 @@ export function resolveConfiguredContextWindow(
   providerId: string | null | undefined,
   modelId: string,
   sessionBudget?: number | null,
+  verification?: 'required',
 ): number | null {
-  return desktopContextBudget.resolveConfiguredContextWindow(catalog, agent, providerId, modelId, sessionBudget);
+  return desktopContextBudget.resolveConfiguredContextWindow(catalog, agent, providerId, modelId, sessionBudget, verification);
+}
+
+/**
+ * Replay trusts only capacity verified for the execution route. A plugin engine has no catalog
+ * window, so its replay is unbounded here, like a task running on another host.
+ */
+export async function resolveDesktopHandoffWindow(
+  sessionId: string,
+  route: {
+    agentKind: AgentKind | 'acp';
+    model: string | null | undefined;
+    providerId: string | null;
+    agentDeviceId?: string | null;
+    remoteHostId?: string | null;
+    workingBudget?: number | null;
+  },
+): Promise<number | null> {
+  const { agentKind, model, providerId, agentDeviceId, remoteHostId, workingBudget } = route;
+  if (!model || remoteHostId || agentKind === 'acp') return null;
+  if (!agentDeviceId) {
+    return desktopContextBudget.resolveConfiguredContextWindow(
+      getActiveCatalog(), agentKind, providerId, model, workingBudget ?? readSessionContextWindowBudget(sessionId), 'required',
+    );
+  }
+  try {
+    const remote = await readRemoteProviderRoute({ agentDeviceId, agentKind, model, providerId });
+    const verified = remote.verifiedContextWindow;
+    return verified !== null && typeof workingBudget === 'number' && Number.isFinite(workingBudget) && workingBudget > 0
+      ? Math.min(verified, workingBudget) : verified;
+  } catch {
+    // The replay budget probe does not own route admission or retries.
+    return null;
+  }
 }
 
 /**
@@ -65,13 +101,7 @@ export function contextWindowBudgetChangesEffectiveWindow(input: {
   previous: number | null;
   next: number | null;
 }): boolean {
-  const before = resolveConfiguredContextWindow(
-    input.catalog, input.agent, input.providerId, input.modelId, input.previous,
-  );
-  const after = resolveConfiguredContextWindow(
-    input.catalog, input.agent, input.providerId, input.modelId, input.next,
-  );
-  return before !== after;
+  return desktopContextBudget.contextWindowBudgetChangesEffectiveWindow(input);
 }
 
 /**

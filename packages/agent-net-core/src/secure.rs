@@ -12,8 +12,8 @@
 //! **握手准入。** 请求末尾的 mac1 证明发起方知道响应方的公钥，mac2 证明它收得到发往来源地址的包；响应方忙时先回 cookie，
 //! 发起方带着它马上重发。在 DH 之前挡掉伪造请求，见 `admission` 模块。
 //!
-//! 附带数据加密前是 `[发送方的连接号 4][长度 2][数据][填充]`。请求填满到 `max_packet_size`，回复填到和请求一样长。
-//! 握手因此顺便确认了这条路径两个方向都能过满长度的包。
+//! 附带数据加密前是 `[发送方的连接号 4][长度 2][数据][填充]`。请求填满到这一端发包的上限（`Config::send_limit`），
+//! 回复填到和请求一样长、也不超过回复方自己的发包上限。握手因此顺便确认了这条路径两个方向都能过这么长的包。
 //!
 //! **连接号。** 每一端自己选一个号（`Config::connection_id`），握手时告诉对端，之后对端发来的每个数据包都带着它。
 //! 一个端口上有多条连接时，调用方用 [`destination_id`] 取出连接号找连接，不按来源地址找：NAT 换了端口、
@@ -49,6 +49,12 @@
 //! 这一端之后再悄悄换地址也不会失联，NAT 的映射也不会过期。知道自己换了网络时调用
 //! [`SecureConnection::on_local_address_change`]，马上就发。
 //!
+//! **空闲的连接也判死。** 探测过、到 `dead_after_us`（默认 30 秒）对端仍然没有任何回音，这条连接就算断了，
+//! 和有数据没确认时一样。2026-11-21 以前只有可靠层在有数据在途时判死：两端都没事做的时候对端没了
+//! （进程被强行结束、电脑休眠、断网），这一端探测满 30 秒就不再探测、也不判死，上层一直显示对端在线、不再重拨，
+//! 直到哪天有数据要发、又等满判死时限。对端只是没东西要发时每 15 秒有一来一回，不会被误判；
+//! 判死前那次探测丢了的话，之后每秒一次，还有十几次机会。
+//!
 //! **定期换密钥。** 包号每过 2^20 个，两个方向各自按 Noise 的 `Rekey` 推导新密钥，旧密钥随即丢弃。
 //! 这样同一个密钥加密的包数远低于 AES-GCM 的安全上限，用过的密钥也不会一直留在内存里。
 //! 换密钥只看包号，线上不需要任何额外字段，两端也不需要协调。
@@ -56,7 +62,8 @@
 //! **关闭通知。** 调用 [`SecureConnection::close`] 以后，`poll_transmit` 先发两个只含关闭帧的包（加密、认证，和数据包一样），
 //! 然后这条连接就停了。对端认证通过就马上停（[`SecureConnection::closed_by_peer`]），不用等 15–30 秒判死。
 //! 两个都丢了，对端照旧靠判死发现。关闭是立刻的：还没送到的数据不再重传，要对端收全，先结束流、等确认再关。
-//! 对端还没确认在线（响应方）或者握手还没完成时不发，只在这一端停下。进程被强行结束时发不出来，对端仍要等判死。
+//! 对端还没确认在线（响应方）或者握手还没完成时不发，只在这一端停下。进程被强行结束时发不出来，对端仍要等判死
+//! （有数据在途时由可靠层判，空闲时见上面「空闲的连接也判死」）。
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
@@ -68,7 +75,7 @@ use crate::connection::{Config, Connection, PacketError, Stats};
 use crate::crypto::{Crypto, HASH_LEN, PUBLIC_KEY_LEN, TAG_LEN};
 use crate::ids::ConnectionIds;
 use crate::noise::{FIRST_MESSAGE_FIXED_LEN, Handshake, HandshakeError, SECOND_MESSAGE_FIXED_LEN, TransportKeys};
-use crate::stream::{Priority, StreamEvent};
+use crate::stream::{Priority, SendProgress, StreamEvent, StreamProgress};
 use crate::wire;
 
 const INITIATION: u8 = 0x81;
@@ -125,6 +132,10 @@ const DEAD_QUIET_US: u64 = 100_000;
 /// 代价是对端不回话的 30 秒里最多约 30 个小包，见 `sim/results/2026-11-05-port-change/`。
 const SILENCE_PING_US: u64 = 1_000_000;
 const SILENCE_PING_RTTS: u64 = 4;
+/// 空闲的连接判死之前，至少要这样一次接一次地探测过这么多个间隔都没有回音，见模块说明「空闲的连接也判死」。
+/// 这一端自己停过（手机进程被冻结、电脑休眠）再醒来时，离上次听到对端可能早就超过判死时限，那段时间这一端并没有在听：
+/// 醒来先照常探测这么久，对端还在就会回。
+const SILENCE_PROBE_INTERVALS: u64 = 3;
 /// 防重放窗口，单位是包号。比这更旧的包直接丢弃，可靠层会重传里面的数据。
 /// 1 Gbit/s 下这是约 45 毫秒的乱序，比判丢需要的乱序容忍大得多。
 const REPLAY_WINDOW: u64 = 4096;
@@ -157,9 +168,9 @@ pub fn destination_id(packet: &[u8]) -> Option<u32> {
     }
 }
 
-/// 握手附带数据的上限：请求和回复都要放进一个包。`max_packet_size` 太小放不下握手时是 0。
+/// 握手附带数据的上限：请求和回复都要放进这一端发的一个包（[`Config::send_limit`]）。太小放不下握手时是 0。
 pub fn max_handshake_payload(config: &Config) -> usize {
-    config.max_packet_size.saturating_sub(INITIATION_OVERHEAD)
+    config.send_limit().saturating_sub(INITIATION_OVERHEAD)
 }
 
 fn read_id(bytes: &[u8], at: usize) -> Option<u32> {
@@ -443,7 +454,7 @@ struct Accepted {
 /// 写回复并导出密钥。回复和请求一样长，不会更大。
 fn respond<C: Crypto>(crypto: &C, config: &Config, incoming: Incoming<C>, payload: &[u8], now_us: u64) -> Result<(Phase<C>, Accepted), HandshakeError> {
     let Incoming { mut handshake, payload: remote_payload, initiation, remote_id } = incoming;
-    let total = config.max_packet_size.min(initiation.len());
+    let total = config.send_limit().min(initiation.len());
     if total < RESPONSE_OVERHEAD || payload.len() > total - RESPONSE_OVERHEAD {
         return Err(HandshakeError::PayloadTooLarge);
     }
@@ -801,6 +812,10 @@ pub struct SecureConnection<C: Crypto> {
     silence_heard: u64,
     /// 最近一次因为安静发出探测的时间。
     silence_sent_at: Option<u64>,
+    /// 眼下这一串一次接一次的探测是从什么时候开始的：对端回了、或者隔了很久才再探测，都重新算。
+    silence_started_at: u64,
+    /// 上一次处理计时器的时间：隔得太久说明这一端停过，见 `tick_established`。
+    ticked_at: u64,
     /// 最近一次因为这一端换了网络而从头量的时间。
     moved_at: Option<u64>,
     /// 最近一次路径验证通过、数据换到新路径的时间。
@@ -838,6 +853,8 @@ impl<C: Crypto> SecureConnection<C> {
             paths: Paths::new(now_us),
             silence_heard: 0,
             silence_sent_at: None,
+            silence_started_at: 0,
+            ticked_at: 0,
             moved_at: None,
             switched_at: None,
             last_id_challenge: None,
@@ -858,12 +875,12 @@ impl<C: Crypto> SecureConnection<C> {
         payload: &[u8],
         now_us: u64,
     ) -> Result<Self, HandshakeError> {
-        if config.max_packet_size < INITIATION_OVERHEAD || payload.len() > max_handshake_payload(&config) {
+        if config.send_limit() < INITIATION_OVERHEAD || payload.len() > max_handshake_payload(&config) {
             return Err(HandshakeError::PayloadTooLarge);
         }
         let mut handshake = Handshake::initiator(&crypto, prologue, remote_static);
         let mut message = vec![INITIATION];
-        handshake.write_first(&crypto, &padded(config.connection_id, payload, config.max_packet_size - 1 - FIRST_MESSAGE_FIXED_LEN - MACS_LEN), &mut message)?;
+        handshake.write_first(&crypto, &padded(config.connection_id, payload, config.send_limit() - 1 - FIRST_MESSAGE_FIXED_LEN - MACS_LEN), &mut message)?;
         let mac1 = admission::mac(&crypto, &admission::mac1_key(&crypto, remote_static), &message);
         message.extend_from_slice(&mac1);
         message.extend_from_slice(&[0; MAC_LEN]);
@@ -1051,6 +1068,22 @@ impl<C: Crypto> SecureConnection<C> {
 
     pub fn finish_stream(&mut self, stream: u32) -> bool {
         self.connection.finish_stream(stream)
+    }
+
+    pub fn stream_buffered(&self, stream: u32) -> usize {
+        self.connection.stream_buffered(stream)
+    }
+
+    pub fn stream_progress(&self, now_us: u64, stream: u32) -> Option<StreamProgress> {
+        self.connection.stream_progress(now_us, stream)
+    }
+
+    pub fn send_progress(&self, now_us: u64) -> SendProgress {
+        self.connection.send_progress(now_us)
+    }
+
+    pub fn abandon_stream(&mut self, stream: u32) -> Option<usize> {
+        self.connection.abandon_stream(stream)
     }
 
     pub fn poll_event(&mut self) -> Option<StreamEvent> {
@@ -1464,10 +1497,10 @@ impl<C: Crypto> SecureConnection<C> {
 
     /// 路径验证包的明文：先回对端的验证，再在没验证过的新路径上发验证。返回明文长度、包号和发往的路径。
     fn write_probe(&mut self, now_us: u64, out: &mut [u8]) -> Option<(usize, u64, u64)> {
-        let (frame, path, value, size) = match self.paths.next_response(self.config.max_packet_size) {
+        let (frame, path, value, size) = match self.paths.next_response(self.config.send_limit()) {
             Some((path, value, size)) => (wire::PathFrame::Response, path, value, size),
             None => {
-                let (path, value, size, same_route) = self.paths.next_challenge(now_us, self.config.max_packet_size)?;
+                let (path, value, size, same_route) = self.paths.next_challenge(now_us, self.config.send_limit())?;
                 (wire::PathFrame::Challenge { same_route }, path, value, size)
             }
         };
@@ -1492,13 +1525,34 @@ impl<C: Crypto> SecureConnection<C> {
             // 这一端之后再悄悄换了地址，对端就再也找不到这里，所以隔对端判死时限的一半再探测一次，顺便让 NAT 的映射不过期。
             return Some(heard + self.config.dead_after_us / 2);
         }
-        let base = SILENCE_PING_US.max(SILENCE_PING_RTTS * self.connection.srtt_us());
+        let base = self.silence_interval();
         let last = match self.silence_sent_at {
             Some(sent) if self.silence_heard == heard => sent,
             _ => heard,
         };
         let at = last + base;
-        (at - heard < self.config.dead_after_us).then_some(at)
+        // 过了判死时限也要把眼下这一串探测发够（`silent_past_deadline`）：这一端停了很久刚醒来时，这一串才刚开始。
+        (at - heard < self.config.dead_after_us || at < self.silence_started_at + SILENCE_PROBE_INTERVALS * base).then_some(at)
+    }
+
+    fn silence_interval(&self) -> u64 {
+        SILENCE_PING_US.max(SILENCE_PING_RTTS * self.connection.srtt_us())
+    }
+
+    /// 探测过、到判死时限对端仍然没有任何回音：没有数据在途的连接也算断了。可靠层只在有数据没确认时判死
+    /// （[`Connection::tick`]），两端都没事做的时候对端没了（被强行结束、休眠、断网），这一端就一直当它连着：
+    /// 上层显示对端在线，也不再重拨。2026-11-21 真机：手机被强杀以后，电脑抱着那条连接 44 秒到 15 分钟，
+    /// 直到有数据要发、又等满判死时限才发现。对端只是没东西要发时会回探测（见 `silence_ping_at`），不会走到这里。
+    fn silent_past_deadline(&self, now_us: u64) -> bool {
+        let heard = self.connection.last_heard();
+        self.silence_sent_at.is_some_and(|sent| sent >= heard)
+            && now_us.saturating_sub(heard) >= self.config.dead_after_us
+            && now_us >= self.silence_deadline(heard)
+    }
+
+    /// 探测一直没有回音时判死的时刻：离上次听到对端满了判死时限，眼下这一串探测也发够了。
+    fn silence_deadline(&self, heard: u64) -> u64 {
+        (heard + self.config.dead_after_us).max(self.silence_started_at + SILENCE_PROBE_INTERVALS * self.silence_interval())
     }
 
     /// 处理到期的计时器。握手在 `dead_after_us` 内没有完成就放弃。
@@ -1522,6 +1576,18 @@ impl<C: Crypto> SecureConnection<C> {
         self.stats.path_failures += self.paths.expire(now_us);
         self.retain_connection_id_paths();
         self.connection.tick(now_us);
+        // 这一端停过（两次处理计时器之间隔了两个探测间隔以上，探测还没有回音时本来每个间隔都要醒一次）：
+        // 停之前发的探测不算数，那段时间这一端没有在听，醒来从头探测（`SILENCE_PROBE_INTERVALS`）。
+        if now_us.saturating_sub(self.ticked_at) > 2 * self.silence_interval()
+            && self.silence_sent_at.is_some_and(|sent| sent >= self.connection.last_heard())
+        {
+            self.silence_sent_at = None;
+        }
+        self.ticked_at = now_us;
+        if self.silent_past_deadline(now_us) {
+            self.dead = true;
+            return;
+        }
         // 数据路径断了、又有代价更高的备用路径（比如中继）：去验证它，通了就换过去；数据路径在验证期间恢复了就不换。
         if Self::active_dead(&self.connection, &self.paths, now_us)
             && let Some(path) = self.paths.fallback()
@@ -1531,11 +1597,23 @@ impl<C: Crypto> SecureConnection<C> {
             self.stats.fallback_probes += 1;
         }
         if self.silence_ping_at().is_some_and(|at| at <= now_us) {
-            self.silence_heard = self.connection.last_heard();
+            let heard = self.connection.last_heard();
+            // 接着上一次探测发的才算同一串：对端回过，或者这一端隔了两个间隔以上才醒来再探测，都从这一次重新算。
+            let continues = self.silence_heard == heard
+                && self.silence_sent_at.is_some_and(|sent| now_us.saturating_sub(sent) <= 2 * self.silence_interval());
+            if !continues {
+                self.silence_started_at = now_us;
+            }
+            self.silence_heard = heard;
             self.silence_sent_at = Some(now_us);
             self.stats.silence_pings += 1;
             self.ping();
         }
+    }
+
+    /// 见 [`Connection::needs_fine_timer`]。握手阶段只有几个包，不用。
+    pub fn needs_fine_timer(&self, granularity_us: u64) -> bool {
+        matches!(self.phase, Phase::Established { confirmed: true, .. }) && self.connection.needs_fine_timer(granularity_us)
     }
 
     /// 下一次需要调用 `tick` 和 `poll_transmit` 的时间。
@@ -1568,6 +1646,10 @@ impl<C: Crypto> SecureConnection<C> {
                 }
                 if let Some(at) = self.silence_ping_at() {
                     consider(at);
+                }
+                // 探测发出去了还没有回音：到判死的时刻要醒来判一次（`silent_past_deadline`）。
+                if self.silence_sent_at.is_some_and(|sent| sent >= self.connection.last_heard()) {
+                    consider(self.silence_deadline(self.connection.last_heard()));
                 }
                 if let Some(at) = self.ids.next_wake() {
                     consider(at);

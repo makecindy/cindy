@@ -7,6 +7,8 @@ import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
+import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { useProviders } from '@/hooks/useProviders';
@@ -30,10 +32,12 @@ import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import {
   canOfferCodexHistoryRecovery,
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
   parseAgentErrorCode,
+  parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
   requiresAgentErrorConfigurationChange,
   isRemoteAgentResumeRejectedError,
@@ -65,6 +69,7 @@ import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
+import { isCodexSharedAuthLinkUnavailableError } from '../../../shared/codexAuthReason';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
@@ -279,6 +284,12 @@ export function ErrorBanner({
   const isCodexAppServerForceRetired =
     errorReason === 'app-server-force-retired' ||
     (agentKind === 'codex' && /app-server force-retired:/i.test(error));
+  // #10301: 系统里的 Codex 已经登录,Cindy 自己的 codex-home 却建不出指向那份凭证的链接
+  // (Windows 普通权限下没有 SeCreateSymbolicLink) —— 凭证是「连不上」而不是「没登录」。
+  // 主侧把这个结论留成稳定 reason(auth-adapters / host runtime),这里负责把它翻成用户
+  // 能执行的动作;落到兜底文案时用户只看到「回复未完成」,而重登解决不了链接权限。
+  const isCodexSharedAuthLinkUnavailable =
+    agentKind === 'codex' && isCodexSharedAuthLinkUnavailableError(error);
   // 仅本地 Codex 会话:远端会话 rollout 在远端机器, 本地 fork 剥离做不到, 不给入口。
   const showInvalidEncryptedContentRecovery =
     agentKind === 'codex' &&
@@ -312,7 +323,8 @@ export function ErrorBanner({
   // 时刻的快照),不用会话当前的 providerId —— 报错后切换 provider / 恢复历史错误
   // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 时不提供 Cindy
   // 充值入口；余额摘要仍可使用供应商通用提示。
-  const isQuotaExhausted = isQuotaExhaustedErrorMessage(error);
+  const geminiLimit = parseGeminiInputRateLimit(error);
+  const isQuotaExhausted = geminiLimit === null && isQuotaExhaustedErrorMessage(error);
   const isGatewayQuotaExhausted =
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
@@ -360,8 +372,12 @@ export function ErrorBanner({
     reconnectCredentialScope,
     recoveryCheck: openAiRecoveryCheck,
     refresh: refreshOpenAiAuth,
+    triggerLogin: triggerCodexLogin,
   } = useCodexAuth({
-    enabled: isOpenAiAuthFailure && !independentOpenAiAccount,
+    // #10301:共享凭证连不上时也要开着这个 observer —— 下面的「重新登录」入口要经它发起
+    // 独立登录,observer 关着时 triggerLogin 会直接返回 cancelled。原有的
+    // isOpenAiAuthFailure 路径一个都没多开,只是把这个 reason 也纳进来。
+    enabled: (isOpenAiAuthFailure || isCodexSharedAuthLinkUnavailable) && !independentOpenAiAccount,
     recoveryHint: isOpenAiAuthFailure ? { reason: error } : undefined,
   });
   const openAiConnectionRecoveredSinceError =
@@ -371,6 +387,9 @@ export function ErrorBanner({
       ? isOpenAiConnectionExpired && selectedOpenAiAccount?.connected === true
       : isChatGptConnectionConnected(openAiAuthState, false));
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
+  // #10301:横幅里的独立登录进行中。与 openAiRecoveryBusy 分开记:那条路上还有
+  // 账号池重连与「检测中」的状态机,混在一起会让这个按钮在别人的忙闲上被禁用。
+  const [sharedLinkLoginBusy, setSharedLinkLoginBusy] = useState(false);
   const openAiAuthLoading = openAiAuthState.kind === 'loading';
   const openAiLoginPending = openAiAuthState.kind === 'login-pending';
   const openAiRecoveryBusy =
@@ -404,6 +423,8 @@ export function ErrorBanner({
         : errorReasonI18nKey
           ? t(errorReasonI18nKey)
           : undefined;
+  const ipcRefusal = extractIpcError(new Error(error));
+  const preconditionMessage = ipcRefusal?.code === 'PRECONDITION_FAILED' ? ipcRefusal.message : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isRemoteResumeRejected = isRemoteAgentResumeRejectedError(error);
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
@@ -444,6 +465,7 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
+  const isAccountUsageLimitText = isAccountUsageLimitReachedText(error);
   // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
@@ -528,6 +550,8 @@ export function ErrorBanner({
     : undefined;
   if (piCloudContextRecovery) {
     displayError = piCloudContextRecovery;
+  } else if (geminiLimit !== null) {
+    displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   } else if (subscriptionGuidance) {
     displayError = subscriptionGuidance;
     hasSpecialGuidance = false;
@@ -550,6 +574,12 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexAppServerRetired');
   } else if (isCodexThreadStale) {
     displayError = t('chat.errorBanner.codexThreadStale');
+  } else if (isCodexSharedAuthLinkUnavailable) {
+    // 保留 Retry:权限补齐(管理员一次 / 开发者模式)后,下一次 reconcile 就能建出链接,
+    // 重试是这条文案承诺的动作里唯一能立刻生效的那个。
+    // 同时给「重新登录」这个入口(#10301 行动项 2):主侧的独立登录流程早就走得通
+    // —— 断的只是入口,失败表面上没有任何东西把用户带到那里,用户只能自己在设置里翻。
+    displayError = t('chat.errorBanner.codexSharedAuthLinkUnavailable');
   } else if (showInvalidEncryptedContentRecovery) {
     displayError = t('chat.errorBanner.invalidEncryptedContent');
   } else if (isOversizedHistoryError) {
@@ -599,8 +629,17 @@ export function ErrorBanner({
           : 'chat.errorBanner.codexUsageLimit',
       );
     }
+  } else if (usageLimitResumeAt) {
+    // 被控端已确认是账号用量上限并排好了自动继续：直接说发生了什么，
+    // 「将于 X 自动继续」在操作区，原始报错留在可展开的详情里。
+    displayError = t('chat.errorBanner.usageLimitReached');
   } else if (isQuotaExhausted) {
     displayError = t('providerError.QUOTA_EXCEEDED');
+  } else if (isAccountUsageLimitText) {
+    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但原文明说到了用量上限。
+    displayError = usageLimitResetAt
+      ? t('chat.errorBanner.usageLimitReachedWithReset', { resetAt: usageLimitResetAt })
+      : t('chat.errorBanner.usageLimitReachedNoReset');
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -662,11 +701,18 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = localizedReasonError ?? t('chat.errorBanner.replyFailed');
+    displayError = localizedReasonError ?? t(preconditionMessage === undefined
+      ? 'chat.errorBanner.replyFailed' : 'ipcError.PRECONDITION_FAILED');
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
-  if (sharedRecoveryReason && remoteErrorCode !== 'REMOTE_AGENT_RESUME_UNAVAILABLE') {
+  // Keep the share's route-choice action without replacing the more specific
+  // communication guidance (especially the timeout's unknown-result warning).
+  const keepRemoteGuidance = !!remoteGuidance && [
+    'REMOTE_AGENT_RESUME_UNAVAILABLE', 'REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY',
+    'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED',
+  ].includes(remoteErrorCode ?? '');
+  if (sharedRecoveryReason && !keepRemoteGuidance) {
     displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   }
   const canShowErrorDetails =
@@ -676,6 +722,8 @@ export function ErrorBanner({
     isStreamInterrupted ||
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
+    Boolean(usageLimitResumeAt) ||
+    isAccountUsageLimitText ||
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||
@@ -683,6 +731,7 @@ export function ErrorBanner({
     isPiImageInputUnsupportedError(error) ||
     isCodexAppServerForceRetired ||
     isCodexThreadStale ||
+    isCodexSharedAuthLinkUnavailable ||
     showInvalidEncryptedContentRecovery ||
     isOversizedHistoryError ||
     isCodexRemoteAuthMissing ||
@@ -701,6 +750,27 @@ export function ErrorBanner({
       toast.error(t('chat.errorBanner.claudeSubscriptionSwitchFailed', { msg }));
     } finally {
       setSwitchingClaudeSubscription(false);
+    }
+  };
+
+  // #10301 行动项 2:共享凭证连不上时的第二条恢复路线。这里直接发起**独立登录**
+  // (mode:'local')—— 与设置页「连接」同一个进程级单例 adapter、同一份本地登录逻辑,
+  // 凭证由 Codex 写进 Cindy 自己的 codex-home,正是这个任务读的目录。
+  // 之所以不改成跳转到供应商卡片(code review P1):配了 OpenAI 账号池时,那张卡是
+  // NativeSubscriptionHeader,它的登录走 mode:'browser' 写 ~/.codex,池里已有账号时甚至
+  // 只显示「断开」—— 用户照做了,旧任务读的目录里依然什么都没有。深链保留给没有本 reason 的
+  // 通用场景(见 isCodexLocalOAuthAuthMissing 分支)。
+  const handleCodexSharedAuthLinkLogin = async (): Promise<void> => {
+    if (sharedLinkLoginBusy) return;
+    setSharedLinkLoginBusy(true);
+    try {
+      const outcome = await triggerCodexLogin('local');
+      if (outcome === 'authenticated') await refreshOpenAiAuth();
+      else if (outcome !== 'cancelled') toast.error(t('chatgptAuthRecovery.verificationFailed'));
+    } catch {
+      toast.error(t('chatgptAuthRecovery.verificationFailed'));
+    } finally {
+      setSharedLinkLoginBusy(false);
     }
   };
 
@@ -802,9 +872,9 @@ export function ErrorBanner({
           ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
           : (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
             ? t('chat.errorBanner.readableHistoryRecoveryDescription')
-            : undefined
+            : renderProviderErrorExplanation(error, displayError, t)
       }
-      details={canShowErrorDetails ? error : undefined}
+      details={canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined}
       onDiagnose={
         onDiagnose
           ? () => onDiagnose({ message: displayError, details: error, reason: errorReason })
@@ -827,6 +897,7 @@ export function ErrorBanner({
       }
       actions={
         <>
+          {isLocalAuthSession && remoteErrorCode === 'AUTO_REVIEW_NO_AVAILABLE_MODEL' && <AutoReviewRecoveryActions />}
           {sharedRecoveryReason && onChooseComputer && !isRecoverable && (
             <Button size="sm" compact type="button" onClick={onChooseComputer}>
               {t('sharedTaskRecovery.choose')}
@@ -858,6 +929,22 @@ export function ErrorBanner({
           )}
           {isCodexLocalOAuthAuthMissing && !isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError && (
             <OpenAiConnectionSettingsAction providerId={authProviderId ?? 'openai'} />
+          )}
+          {/* #10301 行动项 2:共享凭证连不上时,第二条恢复路线是让 Cindy 自己登一次。
+              只给本机任务(isLocalAuthSession):远端会话的凭证在另一台电脑上,控制端的
+              「重新登录」写的是控制端自己的 codex-home,修不了被控电脑上那个失败的任务
+              (code review P1)—— 那条路上用户该去做的是在出错的那台电脑上重试或重连。 */}
+          {isCodexSharedAuthLinkUnavailable && isLocalAuthSession && (
+            <Button
+              size="sm"
+              compact
+              type="button"
+              onClick={() => void handleCodexSharedAuthLinkLogin()}
+              disabled={sharedLinkLoginBusy}
+            >
+              <Spinner icon={RefreshCw} size={12} spinning={sharedLinkLoginBusy} />
+              {t('chatgptAuthRecovery.relogin')}
+            </Button>
           )}
           {isClaudeGatewayOpusPlanMismatch && onSwitchToClaudeSubscription && (
             <Button
@@ -917,10 +1004,12 @@ export function ErrorBanner({
             // 额度重置后自动继续:只是告知,不是按钮;用户仍可重试、换模型或发新消息接手。
             <span
               className="shrink-0 flex select-none items-center gap-1 text-xs text-[var(--text-secondary)]"
-              title={t('chat.errorBanner.usageLimitAutoContinueTitle')}
+              title={geminiLimit === null ? t('chat.errorBanner.usageLimitAutoContinueTitle') : undefined}
             >
               <Timer size={12} />
-              {t('chat.errorBanner.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
+              {geminiLimit !== null && usageLimitWait
+                ? <GeminiRetryCountdown resumeAt={usageLimitWait.resumeAt} />
+                : t('chat.errorBanner.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
             </span>
           )}
           {(manualReset.canReset || manualReset.canRetry) && (
@@ -998,4 +1087,14 @@ export function ErrorBanner({
       }
     />
   );
+}
+
+function GeminiRetryCountdown({ resumeAt }: { resumeAt: number }) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [resumeAt]);
+  return <>{t('chat.geminiRateLimit.retryIn', { seconds: Math.max(0, Math.ceil((resumeAt - now) / 1000)) })}</>;
 }

@@ -76,12 +76,18 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
     subscribe: () => () => {},
     getMergedRemoteSessions: () => state.remoteSessions,
+    getVisibleMergedRemoteSessions: () => state.remoteSessions,
+    getSessionDeviceId: () => undefined,
   },
 }));
 vi.mock('@/features/cc-agent/hooks/useAutomationScheduleSessionIndex', () => ({
   usePublishedAutomationScheduleSessionIndex: () => state.empty,
 }));
-vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({}));
+vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({
+  getRemoteSessionActivity: () => undefined,
+  getRemoteSessionActivityRevision: () => 0,
+  subscribeRemoteSessionActivity: () => () => {},
+}));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => state.running },
 }));

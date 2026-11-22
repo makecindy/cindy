@@ -121,6 +121,7 @@ const mocks = vi.hoisted(() => ({
   getPrimaryDisplay: vi.fn(),
   getDisplayMatching: vi.fn(),
   getAllDisplays: vi.fn(),
+  onDisplayEvent: vi.fn<(event: string, listener: () => void) => void>(),
   getPreferredSystemLanguages: vi.fn(),
   getLocale: vi.fn(),
   ipcHandle: vi.fn(),
@@ -133,7 +134,7 @@ const mocks = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   showMessageBox: vi.fn(),
   openExternal: vi.fn(),
-  readdir: vi.fn<(...args: unknown[]) => Promise<string[]>>(() => Promise.resolve([])),
+  opendir: vi.fn<(...args: unknown[]) => Promise<{ read(): Promise<null>; close(): Promise<void> }>>(),
   assertTrustedAppRendererEvent: vi.fn(),
 }));
 
@@ -142,11 +143,11 @@ vi.mock('../../security/trustedAppRenderer.js', async (importOriginal) => ({
   assertTrustedAppRendererEvent: mocks.assertTrustedAppRendererEvent,
 }));
 
-// 受保护目录引导会由 Main 亲自 readdir 核实一次;只替换这一个 API,其余 fs/promises
+// 受保护目录引导由 Main 打开目录并读取一项。只替换 opendir，其余 fs/promises
 // 保持真实。默认让读取失败(EPERM),模拟 macOS 真的拒绝了访问。
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
-  readdir: mocks.readdir,
+  opendir: mocks.opendir,
 }));
 
 function tccDeniedError(): NodeJS.ErrnoException {
@@ -170,6 +171,7 @@ vi.mock('electron', () => {
     ipcMain: { handle: mocks.ipcHandle },
     shell: { openExternal: mocks.openExternal },
     screen: {
+      on: mocks.onDisplayEvent,
       getPrimaryDisplay: mocks.getPrimaryDisplay,
       getDisplayMatching: mocks.getDisplayMatching,
       getAllDisplays: mocks.getAllDisplays,
@@ -251,6 +253,7 @@ beforeEach(async () => {
   mocks.getPrimaryDisplay.mockReset();
   mocks.getDisplayMatching.mockReset();
   mocks.getAllDisplays.mockReset();
+  mocks.onDisplayEvent.mockClear();
   mocks.getPreferredSystemLanguages.mockReset();
   mocks.getLocale.mockReset();
   mocks.ipcHandle.mockReset();
@@ -280,8 +283,8 @@ beforeEach(async () => {
   mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
   mocks.openExternal.mockReset();
   mocks.openExternal.mockResolvedValue(undefined);
-  mocks.readdir.mockReset();
-  mocks.readdir.mockRejectedValue(tccDeniedError());
+  mocks.opendir.mockReset();
+  mocks.opendir.mockRejectedValue(tccDeniedError());
   resetEpermGuidanceForTest();
   // Card-click tests register a process-wide badge callback closing over their
   // service. Do not let later TTL tests call back into that previous service
@@ -1101,6 +1104,8 @@ describe('AgentIslandService native publishing', () => {
     mocks.isSessionNotificationsMutedSync.mockImplementation((id: string) => id === 'muted-task');
     service.handleUserPrompt({ sessionId: 'muted-task', agentKind: 'codex' }, 'run tests');
 
+    // Privacy-screen demand must include muted execution (PR #10639).
+    expect(service.getLocalRunningTaskCount()).toBe(1);
     // 岛面（含菜单栏与提示音）里没有它。
     expect(published.at(-1)?.sessions).toEqual([]);
     // 但侧栏卡片与远端活动镜像仍有实时活动：静音不是把任务藏起来。
@@ -2969,7 +2974,7 @@ describe('AgentIslandService native publishing', () => {
       );
 
       await vi.waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith(
-        'x-apple.systempreferences:com.apple.preference.security?Privacy_DocumentsFolder',
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders',
       ));
       expect(mocks.showMessageBox).toHaveBeenCalledWith(
         mainWindow,
@@ -3028,16 +3033,16 @@ describe('AgentIslandService native publishing', () => {
       };
 
       // 粗筛命中,但 Main 亲自读得动 → 那条 EPERM 与 TCC 无关,不得打扰用户。
-      mocks.readdir.mockResolvedValue([]);
+      mocks.opendir.mockResolvedValue({ read: async () => null, close: async () => {} });
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'claude-code' }, event);
-      await vi.waitFor(() => expect(mocks.readdir).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(mocks.opendir).toHaveBeenCalledTimes(1));
       expect(mocks.showMessageBox).not.toHaveBeenCalled();
 
       // 等首轮探测完整收尾并释放同目录的探测占位,否则第二条事件会被串行化挡掉。
       await new Promise((resolve) => setImmediate(resolve));
 
       // 且没有吃掉该目录的提醒名额:之后真被系统拒绝时仍然提示。
-      mocks.readdir.mockRejectedValue(tccDeniedError());
+      mocks.opendir.mockRejectedValue(tccDeniedError());
       service.handleAgentEvent({ sessionId: 's2', agentKind: 'claude-code' }, event);
       await vi.waitFor(() => expect(mocks.showMessageBox).toHaveBeenCalledTimes(1));
     } finally {
@@ -4882,6 +4887,36 @@ describe('AgentIslandService native publishing', () => {
     }
   });
 
+  // #8351: a queued silent run can finish skipped without sending a prompt.
+  // Public schedule/agent events must restore the busy session's completion
+  // attention and sound; the completed-run linger test does not cover this
+  // terminal path. Minimal in-memory unit input: silenced -> skipped -> done.
+  it('restores completion attention after a silent queued run is skipped', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: customSound('complete.wav') },
+    });
+    const meta = { sessionId: 'busy-target', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'ordinary work still running');
+    service.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule-1', runId: 'queued-run', sessionId: meta.sessionId });
+    service.handleScheduleEvent({ type: 'skipped', scheduleId: 'schedule-1', runId: 'queued-run', sessionId: meta.sessionId });
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, doneEvent());
+
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.unreadCompletedCount).toBe(1);
+    expect(publish.mock.calls.at(-1)?.[0].totalCount).toBe(1);
+  });
+
   it('does not mute a normal follow-up completion during the prior silenced linger window', async () => {
     vi.useFakeTimers();
     try {
@@ -5552,7 +5587,7 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
-  it('falls back to the best current display when the selected display is disconnected', async () => {
+  it('hides the island while its selected display is disconnected and restores it on reconnect', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
       void state;
@@ -5563,7 +5598,6 @@ describe('AgentIslandService native publishing', () => {
       getMainWindow: () => null,
       nativeHost: { failed: false, publish },
     });
-    syncEnabledForTest(service, publish);
     service.registerIpc();
 
     await registeredIpcHandler(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL)(null, {
@@ -5574,9 +5608,12 @@ describe('AgentIslandService native publishing', () => {
       displayInternal: false,
       displayBounds: { x: 1728, y: 0, width: 1512, height: 982 },
     });
+    service.setEnabled(true);
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
+
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
 
-    expect(latestNativeFrames(publish).map((frame) => frame.displayId)).toEqual([1]);
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
 
     const options = await registeredIpcHandler(AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL)(null);
     expect(options).toMatchObject({
@@ -5586,6 +5623,54 @@ describe('AgentIslandService native publishing', () => {
         displayName: 'Disconnected Display',
       },
     });
+
+    const displayEvents = new Map(mocks.onDisplayEvent.mock.calls);
+    mocks.displays.push({
+      id: 7, label: 'Disconnected Display', internal: false,
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 },
+    });
+    displayEvents.get('display-added')!();
+    expect(latestNativeFrames(publish).map((frame) => frame.displayId)).toEqual([7]);
+
+    mocks.displays.pop();
+    displayEvents.get('display-removed')!();
+    expect(publish.mock.lastCall?.[1]).toEqual([]);
+  });
+
+  // Unit: alert callers must fall back while the selected display is absent.
+  // The previous regression only checked frames and missed notification ownership.
+  it.each([false, true])('releases alert ownership while disconnected (live activity=%s)', async (liveOwnsAlerts) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, available: true, publish },
+      liveActivity: { sync: vi.fn(), ownsAlerts: () => liveOwnsAlerts } as unknown as AgentIslandLiveActivity,
+    });
+    service.registerIpc();
+    service.setEnabled(true);
+    service.setSoundSettings({ ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS, enabled: true });
+    service.setGroupChat('group', { groupId: 'group', name: 'Product', messageId: 'message',
+      mentioned: true, preview: 'hello', lastMessageAt: 1, members: [] });
+    const display = { id: 7, label: 'Studio Display', internal: false,
+      bounds: { x: 1728, y: 0, width: 1512, height: 982 } };
+    await registeredIpcHandler(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL)(null, {
+      mode: 'display', displayId: display.id, displayName: display.label,
+    });
+    const ownsTaskAlerts = () => (['done', 'needs-reply', 'error'] as const).map(kind => service.ownsTaskAlert(kind));
+    expect(ownsTaskAlerts()).toEqual([liveOwnsAlerts, liveOwnsAlerts, false]);
+    expect(service.notifyGroupChat('group')).toBe(false);
+
+    mocks.displays.push(display);
+    const displayEvents = new Map(mocks.onDisplayEvent.mock.calls);
+    displayEvents.get('display-added')!();
+    expect(ownsTaskAlerts()).toEqual([true, true, true]);
+    expect(service.notifyGroupChat('group')).toBe(true);
+
+    mocks.displays.pop();
+    displayEvents.get('display-removed')!();
+    expect(ownsTaskAlerts()).toEqual([liveOwnsAlerts, liveOwnsAlerts, false]);
+    expect(service.notifyGroupChat('group')).toBe(false);
   });
 
   it('remaps by persisted identity before trusting a reused display id', async () => {

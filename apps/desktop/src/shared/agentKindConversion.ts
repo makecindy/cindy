@@ -29,3 +29,24 @@ export function makerToDbAgentKind(maker: string | null | undefined): DbAgentKin
 export function normalizeDbAgentKind(value: string | null | undefined): DbAgentKind {
   return value === 'codex' || value === 'pi' ? value : 'cc';
 }
+
+/**
+ * 插件提供的 ACP 执行引擎(docs/plans/acp-plugin-bridge.md)。只在任务生命周期路径
+ * (建任务、恢复、落库)使用下面的 Engine 版本;跨设备、模型选择与工具参数仍只认
+ * 上面三种内置形态,上面三个函数的行为保持不变。
+ */
+export type DbEngineKind = DbAgentKind | 'acp';
+export type MakerEngineKindWire = MakerAgentKindWire | 'acp';
+
+export function dbToMakerEngineKind(db: string | null | undefined): MakerEngineKindWire {
+  return db === 'acp' ? 'acp' : dbToMakerAgentKind(db);
+}
+
+export function makerToDbEngineKind(maker: string | null | undefined): DbEngineKind {
+  return maker === 'acp' ? 'acp' : makerToDbAgentKind(maker);
+}
+
+/** sessions.agent_kind 是否为插件引擎任务(DB 与 maker 形态同值)。 */
+export function isPluginEngineKind(kind: string | null | undefined): kind is 'acp' {
+  return kind === 'acp';
+}

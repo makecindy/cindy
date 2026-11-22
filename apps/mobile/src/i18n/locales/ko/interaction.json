@@ -1,5 +1,6 @@
 {
   "permission": {
+    "install": "설치",
     "mcpComplete": "완료",
     "mcpCancel": "취소",
     "mode": {
@@ -295,7 +296,7 @@
       "expired": "대기 시간이 너무 길어 대리 입력이 종료되었습니다."
     },
     "failure": {
-      "permission": "Cindy에 이 컴퓨터 화면을 읽을 권한이 없습니다. 시스템 설정의 손쉬운 사용에서 Cindy를 허용하세요.",
+      "permission": "Cindy가 이 Mac의 화면을 읽을 수 없습니다. 실행 중인 Cindy의 제어 권한을 확인하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
       "target_gone": "대상 창이 닫혔습니다.",
       "unreadable": "이 화면을 읽을 수 없습니다. 호스트 컴퓨터에서 직접 완료한 뒤 Agent에게 넘기세요.",
       "action_failed": "방금 작업이 적용되지 않았습니다. 화면을 확인하고 다시 시도하세요.",

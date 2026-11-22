@@ -1,5 +1,5 @@
 import { normalizeWorkerCreationSelection, type WorkerCreationSelection } from '../../shared/workerCreationSelection.js';
-import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { normalizeModelRoute, type ModelRoute } from '@cindy/maker-shared/model-route';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import {
   DEFAULT_ORCA_WORKER_PERMISSION_MODE,
@@ -38,7 +38,7 @@ interface VendorPrefsSnapshot {
 export interface NewMakerDraftSnapshot {
   /** Model picker preferences captured in the same owner-fenced envelope. */
   providerModelMemory?: ProviderModelMemorySnapshot;
-  selectedRoute?: BotModelRoute;
+  selectedRoute?: ModelRoute;
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
   /** 每个 vendor 是否由用户在 New Maker picker 明确选过模型；旧 renderer 缺省不提供。 */
   modelChosenByVendor?: Partial<Record<VendorKey, boolean>>;
@@ -108,7 +108,7 @@ export function syncNewMakerDraftCache(
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (!record(p.lastByVendor) || !record(p.fastModeByModel) || !record(p.effortByModel)) return false;
   setNewMakerDraftCache({
-    selectedRoute: normalizeBotModelChain([p.selectedRoute])[0],
+    selectedRoute: normalizeModelRoute(p.selectedRoute) ?? undefined,
     ...(record(p.providerModelMemory) ? { providerModelMemory: p.providerModelMemory } : {}),
     lastByVendor: p.lastByVendor!,
     ...(record(p.modelChosenByVendor) ? { modelChosenByVendor: p.modelChosenByVendor } : {}),
@@ -305,6 +305,18 @@ export interface RemoteNewMakerDefaults {
    * 播种 worktree 开关默认态。旧版被控端不回 → undefined → 控制端按未勾选兜底。
    */
   worktreeEnabled?: boolean;
+  /**
+   * 被控端新建任务当前选中的引擎(vendor 无关根字段,取自 selectedRoute.harness)。控制端在
+   * 「到这台电脑新建任务」时据此切到同一引擎,远程草稿与被控端自己的新建任务一致,不受控制端
+   * 本机引擎影响。旧版被控端不回 → undefined → 控制端保持原引擎。
+   */
+  selectedAgentKind?: 'claude-code' | 'codex' | 'pi';
+}
+
+function selectedAgentKindFromRoute(route: ModelRoute | undefined): RemoteNewMakerDefaults['selectedAgentKind'] {
+  if (route?.harness === 'claude') return 'claude-code';
+  if (route?.harness === 'codex' || route?.harness === 'pi') return route.harness;
+  return undefined;
 }
 
 export function getRemoteNewMakerDefaults(
@@ -319,7 +331,9 @@ export function getRemoteNewMakerDefaults(
   // 否则空草稿的工作端上,手机/控制端永远读不到勾选态。
   const providerModelMemory = providerMemoryCache ?? undefined;
   const modelChosenByUser = cache?.modelChosenByVendor?.[vendor];
+  const selectedAgentKind = selectedAgentKindFromRoute(cache?.selectedRoute);
   const base: RemoteNewMakerDefaults = {
+    ...(selectedAgentKind ? { selectedAgentKind } : {}),
     ...(providerModelMemory ? { providerModelMemory } : {}),
     ...(cache ? { worktreeEnabled: cache.worktreeEnabled === true } : {}),
     ...(typeof modelChosenByUser === 'boolean' ? { modelChosenByUser } : {}),
@@ -354,7 +368,7 @@ export function getRemoteNewMakerDefaultsByVendor(): {
 }
 
 /** Read only the active owner’s current selection; never reuse another account’s mirror. */
-export function getSelectedNewMakerRoute(ownerScope: string): BotModelRoute | undefined {
+export function getSelectedNewMakerRoute(ownerScope: string): ModelRoute | undefined {
   return selectedRouteOwner === ownerScope ? cache?.selectedRoute : undefined;
 }
 

@@ -13,9 +13,10 @@ export const DEVICE_LINK_INVOKE = {
   SET_KEEP_AWAKE: 'device-link:set-keep-awake',
   /** 控制端本地偏好:切换是否主动控制某个目标设备 */
   SET_DEVICE_CONTROL_ENABLED: 'device-link:set-device-control-enabled',
+  CLOUD_COMPUTER_ENTRY: 'device-link:cloud-computer-entry',
   /** 同账号设备列表(REST 经 main 转发,带 online/busy/开关三态) */
   LIST_DEVICES: 'device-link:list-devices',
-  /** 远程连接拓扑:本机已协商可靠链路的对端 + 数据路径 + RTT 快照(纯本机读,不进隧道) */
+  /** 远程连接拓扑:本机连接路径与 RTT 快照(纯本机读,不进隧道) */
   GET_PEER_LINKS: 'device-link:get-peer-links',
   /** 重命名设备 */
   RENAME_DEVICE: 'device-link:rename-device',
@@ -38,7 +39,6 @@ export const DEVICE_LINK_INVOKE = {
   DISCONNECT_ALL: 'device-link:disconnect-all',
   /** 被控端:撤销某控制端的访问权限(逐设备黑名单,持久化) */
   REVOKE: 'device-link:revoke',
-  SET_MODEL_USE: 'device-link:set-model-use',
   /** 被控端:恢复某控制端的访问权限 */
   RESTORE: 'device-link:restore',
   // —— 控制端:远程会话镜像的本地冷缓存(见 main/device-link/mirrorCacheStore.ts)——
@@ -134,7 +134,9 @@ export type DeviceLinkConnectionIssueKind =
   | 'too-many-connections'
   | 'version-mismatch'
   /** 连续多次握手成功后仍在稳定期内断开。 */
-  | 'unstable';
+  | 'unstable'
+  /** 主连接是 Agent-Net、它和中转的连接断开超过 10 秒：直连的电脑照常，其他设备与手机推送暂时不通（只在开着 Agent-Net 时出现）。 */
+  | 'agent-net-relay-down';
 
 /** 连接问题(同 @cindy/device-link 的 DeviceLinkConnectionIssue) */
 export interface DeviceLinkConnectionIssue {
@@ -171,8 +173,6 @@ export interface DeviceLinkState {
   controlledBy: ControlledByDevice[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单,被控端 UI 渲染「已撤销」用) */
   revokedControllers: string[];
-  /** 单独关掉「用本机模型」的同账号电脑(仍可远程控制本机，但借不到本机的模型)。 */
-  modelUseRevokedControllers?: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /**
@@ -216,9 +216,34 @@ export interface DeviceLinkPeerLinkView {
   /** 距最近一次从对端收到业务消息多少毫秒;还没收到过为 null */
   receivedAgoMs: number | null;
 }
+
+/** 同账号 Agent-Net 传输路径，可在打开远程控制链路之前就绪。 */
+export interface DeviceLinkAgentNetPeerRouteView {
+  deviceId: string;
+  path: DeviceLinkPeerPath | 'connecting';
+  rttMs: number | null;
+}
+
+export interface LinkTrafficBytes {
+  sent: number;
+  received: number;
+}
+
+export type LinkTrafficTotals = Record<'agent-net' | 'device-link', LinkTrafficBytes>;
+export type LinkTrafficSnapshot = Record<'last5m' | 'lastHour' | 'lastDay', LinkTrafficTotals>;
+
 /** GET_PEER_LINKS 返回与 PEER_LINKS_CHANGED 推送的全量快照 */
 export interface DeviceLinkPeerLinksSnapshot {
+  /** Local transport counters for this account on this computer. Never sent to peers. */
+  traffic?: LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
-  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  agentNetRoutes?: DeviceLinkAgentNetPeerRouteView[];
+  relayProtocol?: 'agent-net' | 'device-link';
+  /**
+   * 经中转的数据现在走中转的 UDP 端口还是 WebSocket:Agent-Net 两种都可能(UDP 不通时退回 WebSocket),
+   * Device Link 只有 WebSocket。没有 relayProtocol、或 Agent-Net 主连接还没报上来时不给。
+   */
+  relayTransport?: 'udp' | 'websocket';
+  /** 本机到主 relay 的往返，取数据实际走的那条路:UDP 是登记到确认，WebSocket 是心跳;离线 / 未测得为 null */
   relayRttMs: number | null;
 }

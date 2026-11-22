@@ -55,11 +55,16 @@ vi.mock('../../../device-link/broadcast-tap', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => h.ownerScope?.ownerStamp),
   tapWindowBroadcast: h.broadcast,
 }));
-vi.mock('../../client/current', () => ({
+vi.mock('../../client/current', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../client/current')>()),
   getDbClient: () => h.client,
 }));
 
-import { createMessage, patchMessageAgentMetaWithResult } from '../messages';
+import { broadcastMessageRow, commitContextRebuild, createMessage, patchMessageAgentMetaWithResult } from '../messages';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../client/current';
+import { createDbClientForHandle } from '../../client/createDbClientForHandle';
+import * as schema from '../../schema';
+import { desktopContextRecoveryAbortSignal } from '../../../maker-ipc/contextRecoveryAssembly.desktop';
 import { setTaskChangeListener } from '../../taskEvents';
 import { tx } from '../../worker/opHandlers/tx';
 
@@ -123,6 +128,54 @@ describe('teammate projection owner broadcasts', () => {
     });
   });
 
+  // L343 / unit with SQLite. A refreshed existing row must reach local IPC,
+  // but the Device Link and task-event paths only see the original insertion.
+  it('publishes a context recovery notice only to the original owner’s local windows', async () => {
+    const owner = { ownerScopeKey: 'original', ownerStamp: { dataOwnerId: 'original', ownerGeneration: 1 } };
+    h.ownerScope = owner;
+    const onTaskMessage = vi.fn();
+    setTaskChangeListener(onTaskMessage);
+    const original = await createMessage('s1', { clientId: 'original', role: 'user', content: '继续' },
+      { broadcastOwnerScope: owner });
+    expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:created', { sessionId: 's1', message: original }, owner.ownerStamp);
+    expect(onTaskMessage).toHaveBeenCalledOnce();
+    h.broadcast.mockClear();
+    h.windowSend.mockClear();
+    onTaskMessage.mockClear();
+
+    const db = createDbClientForHandle({ db: h.sqlite!, drizzle: drizzle(h.sqlite!, { schema }) });
+    setCurrentDbClient(db, 'original');
+    const writes: Promise<unknown>[] = [];
+    try {
+      const signal = desktopContextRecoveryAbortSignal({
+        getCoordinator: () => ({
+          hasPendingQueuedWork: () => true,
+          skippedOversizedInputClientId: (_id, claim) => claim.inputClientId,
+          clearError: vi.fn(), getInputAbortSignal: () => new AbortController().signal,
+        }),
+        resetWireNotes: vi.fn(), isCurrentTurn: () => true, log: { warn: vi.fn() },
+        enqueueDurableWrite: (_label, write) => {
+          const pending = Promise.resolve().then(() => write(owner));
+          writes.push(pending);
+          return pending;
+        },
+        broadcastMessageRow,
+      }, 's1', { inputClientId: 'original', instanceId: 'fixture', generation: 1 });
+      expect(signal.aborted).toBe(true);
+      await Promise.all(writes);
+      expect(h.windowSend).toHaveBeenCalledExactlyOnceWith('local-db:messages:created', {
+        sessionId: 's1',
+        message: { ...original, agentMeta: { ...original.agentMeta, inputNotice: 'oversized-input-skipped' } },
+      }, owner.ownerStamp);
+      expect(h.broadcast).not.toHaveBeenCalled();
+      expect(onTaskMessage).not.toHaveBeenCalled();
+      expect(h.sqlite!.prepare("SELECT id, json_extract(agent_meta, '$.inputNotice') AS notice FROM messages").all())
+        .toEqual([{ id: original.id, notice: 'oversized-input-skipped' }]);
+    } finally {
+      clearCurrentDbClient(db);
+    }
+  });
+
   it.each([false, true])('keeps a projected reply on its original owner across message persistence (switch=%s)', async (switchOwner) => {
     const owner = { ownerScopeKey: 'original', ownerStamp: { dataOwnerId: 'original', ownerGeneration: 1 } };
     h.ownerScope = owner;
@@ -148,4 +201,30 @@ describe('teammate projection owner broadcasts', () => {
     }
   });
 
+});
+
+
+// Persistence contract: the real Desktop wrapper must construct one atomic
+// rebuild marker with null/undefined distinctions intact; tx tests cover the
+// transaction itself but not this wrapper's metadata and timestamp choices.
+describe('context rebuild marker assembly', () => {
+  it('uses one timestamp and preserves the rejected SDK and explicit null route fields', async () => {
+    const transaction = vi.fn(async () => undefined);
+    h.client = { tx: transaction } as unknown as NonNullable<typeof h.client>;
+    const result = await commitContextRebuild('s', 'handoff', {
+      reason: 'native-session-recovery', sourceUserClientId: 'u', sourceAgentKind: 'codex',
+      sourceModel: null, sourceProviderId: null, expectedSdkSessionId: 'rejected',
+      replacementRoute: { model: 'new', providerId: 'p',
+        effort: 'high', fastMode: false, expectedSdkSessionId: 'route-original' },
+    });
+    expect(transaction).toHaveBeenCalledWith('context.rebuild', expect.objectContaining({
+      sessionId: 's', markerId: expect.any(String), markerClientId: expect.stringMatching(/^context-rebuild:/),
+      markerCreatedAt: result.updatedAt, updatedAt: result.updatedAt, expectedClearedAt: null,
+      expectedSdkSessionId: 'rejected',
+    }));
+    const args = transaction.mock.calls[0] as unknown as [string, { markerContent: string }];
+    expect(JSON.parse(args[1].markerContent)).toEqual({ handoff: 'handoff', consumed: false,
+      reason: 'native-session-recovery', sourceUserClientId: 'u', sourceAgentKind: 'codex',
+      sourceModel: null, sourceProviderId: null, sourceSdkSessionId: 'route-original' });
+  });
 });

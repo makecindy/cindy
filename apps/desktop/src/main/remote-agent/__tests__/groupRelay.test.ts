@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
-import { TurnDispatchRejectedError, TurnDispatchUnconfirmedError, TurnPermissionPolicyUnsupportedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
+import { AgentStartupStoppedError, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, TurnPermissionPolicyUnsupportedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
@@ -72,6 +72,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   /** 这台的 Agent 启动失败(启动前受邀者目录已经建好)。 */
   failStart?: boolean;
   beforeStart?: (input: HostedStartInput) => Promise<void>;
+  canSwitchLocalAccount?: (input: { providerId: string; hostSessionId: string; model: string }) => Promise<boolean>;
   /** 这台的 Agent 一启动就结束。 */
   endImmediately?: boolean;
   onSend?: (record: Started) => void | Promise<void>;
@@ -82,6 +83,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
   bindGuestProviderRoute?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
+  log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
 }) {
   return createRemoteAgentHost({
     ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
@@ -146,6 +148,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
       return handle;
     },
     isControllerAuthorized: () => true,
+    ...(options.canSwitchLocalAccount ? { canSwitchLocalAccount: options.canSwitchLocalAccount } : {}),
     controllerTrust: options.trust,
     providerAccess: {
       resolve: options.resolveProvider ?? (async (_kind, _model, providerId) => providerId ?? 'shared-provider'),
@@ -159,6 +162,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
     ...(options.groupRelay ? { groupRelay: options.groupRelay } : {}),
     ...(options.directGuestExecution ? { directGuestExecution: options.directGuestExecution } : {}),
     ...(options.reshare ? { reshare: options.reshare } : {}),
+    ...(options.log ? { log: options.log } : {}),
     captureOwner: options.captureOwner ?? (() => 'owner'),
     isOwnerCurrent: () => true,
     runsRoot: path.join(root, name),
@@ -262,16 +266,20 @@ function setup(options: {
   mini?: { failStart?: boolean; endImmediately?: boolean; onSend?: (record: Started) => void | Promise<void>;
     validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+    log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    beforeStart?: (input: HostedStartInput) => Promise<void>;
+    canSwitchLocalAccount?: (input: { providerId: string; hostSessionId: string; model: string }) => Promise<boolean>;
     validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
     resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
-    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
+    log?: Parameters<typeof createRemoteAgentHost>[0]['log'] };
   /** 截住组所在电脑发给组内电脑的请求(模拟回包丢失、应答慢)。 */
   intercept?: (agentDeviceId: string, request: Record<string, unknown>, forward: () => Promise<unknown>) => Promise<unknown>;
 } = {}) {
@@ -318,6 +326,7 @@ function setup(options: {
     trust: (controller) => (controller.startsWith('share-') || isProviderSharePeer(controller) ? 'guest' : 'owner'),
     purge: async () => undefined,
     groupRelay: relay,
+    ...(options.owner?.log ? { log: options.owner.log } : {}),
     ...options.owner,
   });
   return { owner, members, memberStarted, ownerStarted, relay };
@@ -884,6 +893,15 @@ describe('provider group relay for shared users', () => {
 
     const none = setup({ plans: [{ kind: 'unavailable' }] });
     await expect(openAsGuest(none, GUEST_A, openPayload(SESSION))).rejects.toThrow(/REMOTE_AGENT_UNAVAILABLE/);
+
+    const unavailable = setup({ plans: [
+      { kind: 'unavailable', full: true },
+      { kind: 'unavailable', usageLimit: { resetAtMs: 1794978600000 } },
+    ] });
+    await expect(openAsGuest(unavailable, GUEST_A, openPayload(SESSION))).rejects.toThrow('[REMOTE_AGENT_GROUP_FULL]');
+    await expect(openAsGuest(unavailable, GUEST_B, openPayload(SESSION)))
+      .rejects.toThrow(/^\[REMOTE_AGENT_GROUP_USAGE_LIMIT\].*resets_at: 1794978600000$/);
+    expect(unavailable.ownerStarted).toHaveLength(0);
   });
 
   it('asks the computer to forget a removed shared user, and the computer clears only that user', async () => {
@@ -1739,7 +1757,7 @@ describe('provider group "switch to another computer" for shared users', () => {
   // once, with a fresh isolated native session. Empty exclusions are a valid
   // token, not a missing token; it must still retire the old durable direct pin.
   it('accepts an account-handoff token with no excluded machines once per round', async () => {
-    const switched = vi.fn(async () => {});
+    const switched = vi.fn(async () => true).mockResolvedValueOnce(false);
     const env = setup({ owner: { directGuestExecution: { switched, ownerScope: () => 'owner',
       sessionAllowed: () => true, sessionDelegated: () => false } as never } });
     const guest = providerShareGuestPeer('share', 'member', 'laptop');
@@ -1747,7 +1765,15 @@ describe('provider group "switch to another computer" for shared users', () => {
     const token = env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true);
     expect(token).toBeTruthy();
     expect(env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true)).toBeNull();
-    const opened = await openAsGuest(env, guest, openPayload(SESSION, { acceptsGroupSwitch: true, groupSwitchToken: token }));
+    const payload = (groupSwitchToken: string) => openPayload(SESSION, {
+      acceptsGroupSwitch: true, groupSwitchToken, requireGroupSwitchToken: true,
+    });
+    await expect(openAsGuest(env, guest, payload('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')))
+      .rejects.toThrow('standby task handoff has expired or is no longer authorized');
+    expect(switched).not.toHaveBeenCalled();
+    await expect(openAsGuest(env, guest, payload(token!))).rejects.toThrow('standby task handoff could not be confirmed');
+    expect(env.relay.plan).not.toHaveBeenCalled();
+    const opened = await openAsGuest(env, guest, payload(token!));
     try {
       expect(switched).toHaveBeenCalledWith(guest, SESSION, token);
       expect(env.relay.plan).toHaveBeenCalledWith(expect.objectContaining({ exclude: new Set() }));
@@ -1762,13 +1788,17 @@ describe('provider group "switch to another computer" for shared users', () => {
   // provider-groups.md §6.1, unit: exercise the real host, relay and run client.
   // Existing cases emitted a terminal event independently of send(), missing the
   // quota RPC rejection that could overtake the switch offer and lose recovery.
-  // Cover local/relayed execution and both native-event orders; one failure must
+  // Cover quota/auth, local/relayed execution and both native-event orders; one failure must
   // produce one offer/error before rejecting send, then one send on the new host.
-  it.each(['local', 'member'] as const)('settles quota replies through one switch offer on %s', async placement => {
+  it.each((['local', 'member'] as const).flatMap(placement => (['quota', 'auth'] as const).map(cause => ({ placement, cause }))))(
+    'settles $cause replies through one switch offer on $placement', async ({ placement, cause }) => {
+    const rejection = cause === 'quota' ? 'You have hit your usage limit' : '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login';
+    const terminal: AgentEvent = cause === 'quota' ? USAGE_LIMIT_ERROR
+      : { type: 'error', data: { message: rejection, sdkError: 'authentication_failed', errorStatus: 401, isTerminal: true } } as AgentEvent;
     for (const eventFirst of [true, false]) {
       const onSend = (record: Started) => {
-        if (eventFirst) record.emit(USAGE_LIMIT_ERROR);
-        throw new Error('You have hit your usage limit');
+        if (eventFirst) record.emit(terminal);
+        throw new Error(rejection);
       };
       const env = setup({
         plans: [
@@ -1782,16 +1812,17 @@ describe('provider group "switch to another computer" for shared users', () => {
       const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
       try {
         await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, { throwOnStartFailure: true }]))
-          .rejects.toThrow('usage limit');
+          .rejects.toThrow(rejection);
         const token = switchTokenIn(first.stream);
         expect(token).toBeDefined();
         const errors = () => first.stream.filter(item => item.t === 'event' && item.event.type === 'error');
         expect(errors()).toHaveLength(1);
+        if (cause === 'auth') expect((errors()[0] as { event: AgentEvent }).event.data).not.toHaveProperty('usageLimit', true);
         expect(first.stream.findIndex(item => item.t === 'state' && item.state.providerGroupSwitch === token))
           .toBeLessThan(first.stream.findIndex(item => item.t === 'event' && item.event.type === 'error'));
 
         // A late or repeated SDK terminal must not offer another switch or resume.
-        record.emit(USAGE_LIMIT_ERROR);
+        record.emit(terminal);
         record.emit({ type: 'status', source: 'claude-code', data: { status: 'quota-tail-flushed' } });
         await waitFor(() => first.stream.some(item => item.t === 'event'
           && (item.event.data as { status?: string })?.status === 'quota-tail-flushed'));
@@ -1956,12 +1987,12 @@ describe('provider group "switch to another computer" for shared users', () => {
       } finally { release(); await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
     });
 
-  it('does not turn an uncertain send timeout into a quota event or switch offer', async () => {
-    const env = setup({ mini: { onSend: () => { throw new Error('request timed out'); } } });
+  it.each(['request timed out', 'not authenticated'] as const)('does not turn an uncertain send rejection into an account event or switch offer: %s', async rejection => {
+    const env = setup({ mini: { onSend: () => { throw new Error(rejection); } } });
     const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
     try {
       await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]))
-        .rejects.toThrow('request timed out');
+        .rejects.toThrow(rejection);
       expect(switchTokenIn(first.stream)).toBeUndefined();
       expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
       expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
@@ -2144,6 +2175,42 @@ describe('provider group "switch to another computer" for shared users', () => {
     await reopened.client.close('close', 'navigation');
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Host → relay → guest 事件流；失败时日志能说明稳定错误码和凭证是否发出。
+  // - Bug／规则依据：任务 A 的远程换号诊断；现场只有 start-failed，无法判断是否收到换号凭证。
+  // - 现有覆盖缺口：相邻用例只断言事件顺序和凭证值，不检查结构化日志或敏感字段边界。
+  // - 最小失败输入：一台组内电脑产生一次 usage-limit 终态并有可用替代电脑。
+  // - tier：unit；单进程 fake transport 仍走生产 Host/relay 入口。
+  it('records a stable switch decision without token or account details', async () => {
+    const logs: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      owner: { log: {
+        debug: () => undefined,
+        info: (message, meta) => logs.push({ message, meta }),
+        warn: (message, meta) => logs.push({ message, meta }),
+      } },
+    });
+    const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      // Pi puts the upstream error text into sdkError; it must not reach the decision log.
+      env.memberStarted.mini[0].emit({ type: 'error', data: { message: 'You have hit your usage limit', isTerminal: true,
+        usageLimit: true, sdkError: 'upstream body quoting private-notes.md from the chat' } } as AgentEvent);
+      await waitFor(() => switchTokenIn(task.stream) !== undefined);
+      const decision = logs.find(item => item.message === 'remote agent group switch decision');
+      expect(decision?.meta).toMatchObject({ cause: 'usage-limit', outcome: 'issued', reason: 'replacement-available' });
+      const serialized = JSON.stringify(logs);
+      expect(serialized).not.toContain('usage limit');
+      expect(serialized).not.toContain('providerId');
+      expect(serialized).not.toContain('token');
+      expect(serialized).not.toContain('private-notes');
+    } finally {
+      await task.client.close('close', 'navigation');
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
   it.each([
     { code: 'REMOTE_AGENT_UNAVAILABLE', autoSwitch: true, offersSwitch: true },
     { code: 'INVALID_PARAMS', autoSwitch: true, offersSwitch: false },
@@ -2181,6 +2248,125 @@ describe('provider group "switch to another computer" for shared users', () => {
     expect(env.relay.plan).toHaveBeenCalledTimes(offersSwitch ? 2 : 1);
     if (offersSwitch) {
       expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
+    }
+  });
+
+  // Unit regression: A was shared before B joined its pool. Resuming A's exhausted
+  // account must offer a context handoff within A, even without a computer group.
+  // Existing startup tests only offered another computer, missing a pool on O itself.
+  it.each(['available', 'no-spare', 'revoked', 'unconfirmed'] as const)('recovers an old shared task within its local account pool: %s', async mode => {
+    let exhausted = false;
+    let allowed = true;
+    const probe = vi.fn(async () => {
+      if (mode === 'revoked') allowed = false;
+      return mode !== 'no-spare';
+    });
+    const env = setup({ owner: {
+      canSwitchLocalAccount: probe,
+      modelAccess: { isAllowed: () => allowed },
+      beforeStart: async input => {
+        if (exhausted && input.options.resumeSessionId) {
+          const error = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] quota exhausted');
+          throw mode === 'unconfirmed' ? error : new AgentStartupStoppedError(error);
+        }
+      },
+    } });
+    // No computer group: ordinary shared provider A now contains several accounts.
+    env.relay.plan.mockResolvedValue(null);
+    env.relay.noteStartFailure.mockReturnValue(false);
+    try {
+      const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      const nativeId = first.started.id as string;
+      await first.client.close('close', 'navigation');
+      exhausted = true;
+      const states: Record<string, unknown>[] = [];
+      await expect(openAsGuest(env, GUEST_A, openPayload(SESSION, {
+        acceptsGroupSwitch: true, options: { resumeSessionId: nativeId },
+      }), { onState: state => { states.push(state); } })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+      const token = states.map(state => state.providerGroupSwitch).find(Boolean);
+      expect(!!token).toBe(mode === 'available');
+      if (mode === 'unconfirmed') expect(probe).not.toHaveBeenCalled();
+      else expect(probe).toHaveBeenCalledWith({ providerId: 'shared-provider',
+        hostSessionId: hostSessionIdFor(GUEST_A, SESSION), model: 'claude-opus' });
+      if (mode === 'available') {
+        const fresh = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true, groupSwitchToken: token }));
+        expect(env.ownerStarted.at(-1)!.input.options.resumeSessionId).toBeUndefined();
+        await fresh.client.close('close', 'navigation');
+        // Do not loop on the same account pool if the replacement also fails.
+        const again: Record<string, unknown>[] = [];
+        await expect(openAsGuest(env, GUEST_A, openPayload(SESSION, {
+          acceptsGroupSwitch: true, options: { resumeSessionId: nativeId },
+        }), { onState: state => { again.push(state); } })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+        expect(again.some(state => state.providerGroupSwitch)).toBe(false);
+        expect(probe).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
+  // Self-review regression: the new asynchronous local probe can outlive an abort
+  // or replacement send. Its late result must neither issue a token nor consume
+  // the replacement turn's one local handoff. Earlier cases only revoked access.
+  it.each(['abort', 'new-send', 'model-change'] as const)('discards a stale local-pool probe after %s', async action => {
+    let entered!: () => void;
+    const probing = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const pendingProbe = new Promise<void>(resolve => { release = resolve; });
+    const probe = vi.fn(async () => true).mockImplementationOnce(async () => {
+      entered();
+      await pendingProbe;
+      return true;
+    });
+    const env = setup({ owner: {
+      canSwitchLocalAccount: probe,
+      onSend: record => { if (record.sends.length === 1) throw new Error('You have hit your usage limit'); },
+    } });
+    env.relay.plan.mockResolvedValue(null);
+    env.relay.noteRunFailure.mockReturnValue(false);
+    const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const obsolete = task.client.call('send', [{ content: 'old input', attachments: [] }, {}]).catch(error => error);
+    try {
+      await probing;
+      if (action === 'model-change') await task.client.call('setModel', ['another-model']);
+      else await task.client.call('abort', []);
+      if (action === 'new-send')
+        await task.client.call('send', [{ content: 'replacement input', attachments: [] }, { groupNewRound: true }]);
+      release();
+      await obsolete;
+      expect(switchTokenIn(task.stream)).toBeUndefined();
+      if (action === 'new-send') {
+        env.ownerStarted[0].emit({ type: 'text', source: 'claude-code', data: { text: 'replacement turn progress' } } as AgentEvent);
+        env.ownerStarted[0].emit(USAGE_LIMIT_ERROR);
+        await waitFor(() => task.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+        expect(switchTokenIn(task.stream)).toBeTruthy();
+        expect(probe).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      release();
+      await task.client.close('close', 'navigation');
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
+  it('offers the same local-pool handoff after a shared turn reaches its usage limit', async () => {
+    const env = setup({ owner: { canSwitchLocalAccount: async () => true } });
+    env.relay.plan.mockResolvedValue(null);
+    env.relay.noteRunFailure.mockReturnValue(false);
+    try {
+      const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      await task.client.call('send', [{ content: 'continue', attachments: [] }, {}]);
+      env.ownerStarted[0].emit(USAGE_LIMIT_ERROR);
+      await waitFor(() => task.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      expect(switchTokenIn(task.stream)).toBeTruthy();
+      // The other account is healthy: do not cool the entire local member.
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      await task.client.close('close', 'navigation');
+    } finally {
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
     }
   });
 

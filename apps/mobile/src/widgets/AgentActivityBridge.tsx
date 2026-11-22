@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
 import * as Linking from "expo-linking";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth/AuthContext";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
+import { startForegroundTaskActivity } from "./foregroundTaskActivity";
 import { projectAgentActivity } from "./agentActivity";
 import { createAgentActivitySync } from "./agentActivitySync";
 import {
   agentActivityNative as native,
   activityAccountScope,
   startActivityPushSync,
+  type ActivityRecoveryState,
 } from "./agentActivityPush";
 
 /** Local mirroring remains the fallback for old services and self-hosted relays. */
@@ -22,13 +24,16 @@ export function AgentActivityBridge() {
     accountGeneration,
     getAccessToken,
   } = useAuth();
+  const link = useDeviceLink();
+  const linkRef = useRef(link);
+  linkRef.current = link;
   const {
     status,
     getConnectionState,
     getPresenceAvailability,
     getSubscriptionIdentity,
     presenceVersion,
-  } = useDeviceLink();
+  } = link;
   const { t } = useTranslation();
   const accountId = user?.id;
   const scope =
@@ -40,6 +45,7 @@ export function AgentActivityBridge() {
     hasActivity: boolean;
   } | null>(null);
   const registrationKey = `${scope}:${accountGeneration}`;
+  const recovery = useMemo<ActivityRecoveryState>(() => ({}), [registrationKey]);
   // A reconnect rebuilds the syncer; it must inherit a confirmed server takeover.
   const registeredRef = useRef(registered);
   registeredRef.current = registered;
@@ -59,6 +65,7 @@ export function AgentActivityBridge() {
     if (!native?.configureAccount || !initialized || !isAuthenticated || !scope)
       return;
     const sync = startActivityPushSync({
+      recovery,
       accountScope: scope,
       getAccessToken,
       urlScheme: Linking.createURL("/").split(":")[0],
@@ -92,10 +99,49 @@ export function AgentActivityBridge() {
     isAuthenticated,
     scope,
     registrationKey,
+    recovery,
     getAccessToken,
     t,
     status,
   ]);
+  const refreshRoster = useRef<() => void>(() => {});
+  useEffect(() => {
+    const write = native?.updateForeground?.bind(native);
+    if (!write || !scope || !isAuthenticated || registered?.key !== registrationKey ||
+        !registered.hasActivity || status !== "online") return;
+    let current: ReturnType<typeof startForegroundTaskActivity> | undefined;
+    const resume = () => {
+      current?.dispose();
+      current = undefined;
+      if (AppState.currentState !== "active") return;
+      current = startForegroundTaskActivity(linkRef.current, {
+        active: () => AppState.currentState === "active" && linkRef.current.status === "online",
+        labels: {
+          attention: t("devices.companions.avatarStatus.awaiting"),
+          running: t("devices.companions.avatarStatus.running"),
+          completed: t("devices.companions.avatarStatus.done"),
+          error: t("devices.companions.avatarStatus.error"),
+        },
+        staleDetail: t("devices.liveActivity.waitingForUpdate"),
+        url: (deviceId, session) => Linking.createURL(`/sessions/${encodeURIComponent(session)}`, { queryParams: { deviceId } }),
+        write: (state, observedAt) => write(scope, state ? JSON.stringify(state) : null, observedAt),
+      });
+    };
+    resume();
+    refreshRoster.current = () => {
+      const snapshot = linkRef.current.lastPresenceSnapshot;
+      if (snapshot && current?.rosterChanged(snapshot)) resume();
+    };
+    const conflict = native?.addListener?.("foregroundActivityConflict", () => { void current?.recheck(); });
+    const listener = AppState.addEventListener("change", resume);
+    return () => {
+      conflict?.remove();
+      listener.remove();
+      current?.dispose();
+      refreshRoster.current = () => {};
+    };
+  }, [registered, scope, registrationKey, status, link.connectionEpoch, link.rosterVersion, isAuthenticated, t]);
+  useEffect(() => refreshRoster.current(), [link.lastPresenceSnapshot]);
   useEffect(() => {
     if (
       !native ||
@@ -106,6 +152,7 @@ export function AgentActivityBridge() {
         (registered?.key !== registrationKey || registered.hasActivity))
     )
       return;
+    const readRegistration = native.getPushRegistration?.bind(native);
     const controller = createAgentActivitySync(() => {
       // DeviceLinkProvider clears this store and its subscription ACKs on account
       // changes. Desktop rows carry userId: '' because their database is scoped
@@ -157,7 +204,10 @@ export function AgentActivityBridge() {
       )
         return undefined;
       return state ? JSON.stringify({ accountId: scope, state }) : null;
-    }, native, () => AppState.currentState === "active");
+    }, native, () => AppState.currentState === "active",
+    readRegistration
+      ? async () => (await readRegistration()).isStale === true
+      : undefined);
     const unsubscribe = remoteSessionStore.subscribeHomeStatus(() =>
       controller.sync(),
     );

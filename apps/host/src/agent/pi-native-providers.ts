@@ -30,26 +30,29 @@ export async function hostManagedLocalModelNotReady(input: { providerId: string;
 export function createHostPiNativeProviders(options: {
   userDataDir: string;
   piBinaryPath: string | null;
-  /** The engine endpoint Pi's runtime config uses: the loopback proxy once ready, else the upstream. */
+  /** Endpoint snapshot; the resolver checks readiness before using it for local proxy routes. */
   endpoint: () => string;
-  claudeProxy: { isReady(): boolean } | null | undefined;
+  claudeProxy: { isReady(): boolean; ready?(): Promise<void> } | null | undefined;
   providerConfig: {
     list: PiNativeProviderPorts['listCustomProvidersWithSecureHeaders'];
     readKey: PiNativeProviderPorts['readCustomProviderKey'];
     grok: { hasGrokOAuthLogin(providerId?: string): boolean };
     codexAccounts: { isOpenAiSubscriptionProviderId(providerId?: string | null): boolean };
   };
+  /** The desktop's first step before a local Pi (release table row 25); no-op when absent. */
+  ensureSharedGlobalSkills?: () => Promise<void>;
 }) {
   const config = options.providerConfig;
   return createPiNativeProviderResolver({
     getClaudeEndpoint: () => options.endpoint(),
     isAnthropicCompatProxyHandleReady: () => options.claudeProxy?.isReady() ?? false,
+    ensureAnthropicCompatProxyReady: () => options.claudeProxy?.ready?.() ?? Promise.resolve(),
     resolvePiBinaryPath: () => options.piBinaryPath,
     isOpenAiSubscriptionProviderId: id => config.codexAccounts.isOpenAiSubscriptionProviderId(id),
     hasGrokOAuthLogin: id => config.grok.hasGrokOAuthLogin(id),
     listCustomProvidersWithSecureHeaders: () => config.list(),
     readCustomProviderKey: (...args) => config.readKey(...args),
-    ensureSharedGlobalSkills: async () => {},
+    ensureSharedGlobalSkills: () => options.ensureSharedGlobalSkills?.() ?? Promise.resolve(),
     ensureManagedOllamaReadyForSession: input => hostManagedLocalModelNotReady(input),
     getUserDataDir: () => options.userDataDir,
   });

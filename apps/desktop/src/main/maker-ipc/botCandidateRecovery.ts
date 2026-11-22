@@ -1,6 +1,16 @@
 import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
+
+/** A model-specific rate limit leaves other models on the connection available. */
+export function isModelGroupConnectionOutOfCredit(signals: InterruptedTurnErrorSignals): boolean {
+  return signals.errorStatus === 402 || isBillingDepletionError(signals) ||
+    /\binsufficient_quota\b|insufficient[_ -](?:balance|credits?|funds)|credit balance (?:is )?too low|402 payment required|余额不足|欠费/i.test(signals.message ?? '');
+}
+
+/** Host-proven stopped bootstrap, distinct from a turn or opaque startup error. */
+export const BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON = 'bot-subscription-startup-admission';
 
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
@@ -10,16 +20,18 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   const reason = signals.reason ?? '';
   // Explicit product/control failures must never be reinterpreted from their text.
   if (reason && ![
-    'pi-gateway-drop', 'upstream-overload', 'empty-response', 'turn-failed',
+    'pi-gateway-drop', 'upstream-overload', 'empty-response', 'turn-failed', 'acp-request-failed',
+    'acp-agent-exited', 'acp-auth-required',
     'provider_auth_or_access', 'provider_quota_limit', 'provider_rate_limit',
     'provider_server_error', 'model_unavailable', 'user_model_access_denied', 'agent-start-failed',
+    BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON,
   ].includes(reason)) return false;
   // Exhaustion forbids retrying this account, not trying the user's configured
   // backups. The caller requires a successful route change before resuming.
   if (signals.codexErrorInfo === 'sessionBudgetExceeded') return false;
-  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
+  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded' || isBillingDepletionError(signals)
       || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return true;
-  if (reason && reason !== 'turn-failed') return true;
+  if (reason && reason !== 'turn-failed' && reason !== 'acp-request-failed') return true;
   const tag = signals.sdkError ?? '';
   if (['authentication_failed', 'authentication_error', 'rate_limit', 'server_error', 'billing_error',
     'model_not_found', 'user_model_access_denied', 'agent_start_failed'].includes(tag)) return true;

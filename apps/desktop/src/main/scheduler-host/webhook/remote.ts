@@ -1,3 +1,4 @@
+import type { GithubUserGrant } from '../../git-context/githubAppAuthorization.js';
 import { followedGithubPrs, GITHUB_WATCH_SCHEDULE, matchingGithubPrs, type GithubAppStatus, type GithubPrRefresh } from './github';
 /**
  * 自动化任务 Webhook 的服务器通道：地址和密钥走 webhook-server，事件经 Desktop 主动拨出的
@@ -66,6 +67,8 @@ export interface RemoteWebhookQuota {
 }
 
 export interface ScheduleWebhookRemoteDeps {
+  onGithubAuthorized?(grant: GithubUserGrant): Promise<void>;
+  onGithubDisconnected?(): Promise<void>;
   onGithubBatch?(batch: RemoteWebhookBatch, isCurrent: () => boolean): Promise<void>;
   onGithubPrs?(urls: string[], isCurrent: () => boolean, refresh: GithubPrRefresh): Promise<void>;
   githubPrHeads?(urls: readonly string[]): Promise<Readonly<Record<string, string>>>;
@@ -145,6 +148,7 @@ export class ScheduleWebhookRemote {
   private githubPrs: string[] = [];
   private github: GithubAppStatus = { available: false };
   private githubSynced = '';
+  private githubInstallPending = false;
   private githubError: unknown = null;
   private readonly githubVerified = new Set<string>();
   private githubBatchFailed = false;
@@ -231,6 +235,7 @@ export class ScheduleWebhookRemote {
     this.github = { available: false };
     this.githubError = null;
     this.githubSynced = '';
+    this.githubInstallPending = false;
     this.problems.clear();
     this.releases.clear();
     this.clearTimers();
@@ -299,25 +304,57 @@ export class ScheduleWebhookRemote {
     if (!this.deps.baseUrl() || !(await this.deps.getAccessToken())) return { available: false };
     if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     return this.enqueue(async () => {
-      this.loaded = false;
-      await this.reconcile();
-      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
-      if (this.githubError) throw this.githubError;
-      if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
-      // Capture this refresh's result before the next queued refresh resets loaded.
-      return this.github;
+      // Complete the explicit installation flow when its UI returns. Background
+      // refreshes must not consume this invalidation before installation finishes.
+      const installation = this.githubInstallPending;
+      this.githubInstallPending = false;
+      if (installation) this.githubSynced = '';
+      try {
+        this.loaded = false;
+        await this.reconcile();
+        if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+        if (this.githubError) throw this.githubError;
+        if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
+        // A successful read can still precede the user's GitHub grant. Keep the
+        // explicit recheck until the requested repositories are accessible.
+        if (installation && this.github.unavailable?.length) this.githubInstallPending = true;
+        // Capture this refresh's result before the next queued refresh resets loaded.
+        return this.github;
+      } catch (error) {
+        if (installation && generation === this.generation) this.githubInstallPending = true;
+        throw error;
+      }
     });
+  }
+
+  async installGithub(): Promise<string | undefined> {
+    const { installUrl } = await this.githubStatus();
+    if (installUrl) this.githubInstallPending = true;
+    return installUrl;
   }
 
   async connectGithub(): Promise<string> {
     this.closeGithubConnect?.();
     const attemptId = ++this.githubConnectAttempt;
+    const baseUrl = this.deps.baseUrl();
     const generation = this.generation;
+    const status = await this.githubStatus();
+    if (generation !== this.generation || attemptId !== this.githubConnectAttempt) throw new Error('GITHUB_CONNECT_CANCELLED');
+    const includeUserToken = Boolean(status.userAuthorization && this.deps.onGithubAuthorized);
     const attempt = await beginGithubConnect({
       start: input => this.request('POST', '/github/connect', input),
-      complete: input => this.request('POST', '/github/connect/complete', input),
-      isCurrent: () => generation === this.generation && attemptId === this.githubConnectAttempt && this.running,
-      onConnected: () => { this.githubSynced = ''; void this.refresh().catch(() => undefined); },
+      complete: input => this.request('POST', '/github/connect/complete', { ...input, ...(includeUserToken ? { includeUserToken: true } : {}) }),
+      isCurrent: () => baseUrl === this.deps.baseUrl() && generation === this.generation && attemptId === this.githubConnectAttempt && this.running,
+      onConnected: async grant => {
+        if (includeUserToken) {
+          if (!grant) throw new Error('GITHUB_USER_AUTHORIZATION_MISSING');
+          await this.deps.onGithubAuthorized!(grant);
+        }
+        // OAuth completes before the browser proceeds to repository installation.
+        this.githubInstallPending = true;
+        this.githubSynced = '';
+        void this.refresh().catch(() => undefined);
+      },
     });
     this.closeGithubConnect = attempt.close;
     return attempt.url;
@@ -328,10 +365,21 @@ export class ScheduleWebhookRemote {
     this.closeGithubConnect?.();
     this.closeGithubConnect = undefined;
     await this.request('DELETE', '/github');
-    this.github = { available: true, login: null };
+    await this.deps.onGithubDisconnected?.();
+    this.github = { available: true, login: null, userAuthorization: this.github.userAuthorization };
     this.githubSynced = '';
+    this.githubInstallPending = false;
     this.githubVerified.clear();
     this.updateConnection();
+  }
+
+  /** Returns a grant, `{recovery}` (rotated but unverified; caller must keep it), or null when expired. */
+  async refreshGithubAuthorization(credential: { refreshToken: string } | { recovery: string }): Promise<GithubUserGrant | { recovery: string } | null> {
+    try { return await this.request('POST', '/github/user-token/refresh', credential); }
+    catch (error) {
+      if (error instanceof RemoteRequestError && error.status === 400 && error.code === 'GITHUB_AUTHORIZATION_EXPIRED') return null;
+      throw new Error('GITHUB_AUTHORIZATION_REFRESH_FAILED');
+    }
   }
 
   private async syncGithub(): Promise<void> {
@@ -620,12 +668,14 @@ export class ScheduleWebhookRemote {
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const generation = this.generation;
+    const baseUrl = this.deps.baseUrl();
     const send = async (): Promise<Response> => {
       const token = await this.deps.getAccessToken();
-      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+      if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       if (!token) throw new RemoteRequestError(401, 'SIGNED_OUT');
-      return this.deps.fetch(`${this.deps.baseUrl()}/api/v1${path}`, {
+      return this.deps.fetch(`${baseUrl}/api/v1${path}`, {
         method,
+        redirect: 'error',
         signal: AbortSignal.timeout(30_000),
         headers: {
           authorization: `Bearer ${token}`,
@@ -635,16 +685,16 @@ export class ScheduleWebhookRemote {
       });
     };
     let response = await send();
-    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     if (response.status === 401 && (await this.deps.refreshAccessToken())) response = await send();
-    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     if (!response.ok) {
       const parsed = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
-      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+      if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       throw new RemoteRequestError(response.status, parsed?.error?.code);
     }
     const result = response.status === 204 ? undefined : await response.json();
-    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     return result as T;
   }
 
@@ -809,7 +859,10 @@ export class ScheduleWebhookRemote {
         if (!this.deps.onGithubPrs) throw new Error('GITHUB_RECEIVER_UNAVAILABLE');
         await this.enqueueGithub(async () => {
           if (!isCurrent()) return;
-          await this.deps.onGithubPrs!(urls, isCurrent, { reason: recover ? 'overflow' : 'event', notify });
+          const reviews = matchingGithubPrs(covered, delivery.events.filter(event => ['pull_request_review', 'pull_request_review_comment', 'pull_request_review_thread'].includes(event.event)));
+          const closed = matchingGithubPrs(covered, delivery.events.filter(event => event.event === 'pull_request' && event.action === 'closed'));
+          await this.deps.onGithubPrs!(urls, isCurrent, { reason: recover ? 'overflow' : 'event', notify,
+            ...(reviews.length ? { reviews } : {}), ...(closed.length ? { closed } : {}) });
           if (isCurrent()) this.githubBatchFailed = false;
         });
       }

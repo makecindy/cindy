@@ -7,7 +7,8 @@ const h = vi.hoisted(() => ({ read: vi.fn(), owner: 1 }));
 vi.mock('../../lib/mailPreview', () => ({ readMailPreview: h.read }));
 vi.mock('../../registry', () => ({ registerTabKind: () => {} }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => h.owner, isDataOwnerGenerationCurrent: (o: number) => o === h.owner }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, args?: { from?: string; count?: number }) => args ? key + ' ' + (args.from ?? args.count) : key }) }));
+// Plain-text mail renders UserMessageUrlLink with its real menu hook. Keep the i18n plugin.
+vi.mock('react-i18next', async (original) => ({ ...(await original<typeof import('react-i18next')>()), useTranslation: () => ({ t: (key: string, args?: { from?: string; count?: number }) => args ? key + ' ' + (args.from ?? args.count) : key }) }));
 vi.mock('@/components/chat/GhostCardForm', () => ({ GhostCardForm: ({ fields, readOnly }: { fields: GhostCardFormField[]; readOnly?: boolean }) => <div data-testid="body" data-readonly={readOnly}>{fields.find(f => f.name === 'body')?.value}</div> }));
 vi.mock('@/components/chat/GhostToolCard', () => ({ MailCardEditor: ({ html, callId }: { html: string; callId: string }) => <div data-testid="editor" data-call-id={callId}>{readMailCard(html)?.fields.find(f => f.name === 'body')?.value}</div> }));
 import { MailPreviewBody } from './index';
@@ -86,18 +87,25 @@ it('makes plain-text mail URLs clickable without interpreting other content', as
   await act(async () => { fireEvent.click(link); });
   expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://example.test/page');
 });
-// Unit regression: a remote draft binding must not replace the readable mail
-// with the local-only editor. Existing link tests only exercised local tasks.
-it('keeps remote drafts readable and preserves the mailbox link', async () => {
-  const openExternal = vi.fn(async () => ({ success: true }));
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { openExternal } });
+// Unit regression: remote drafts were readable only, because the card editor sent its actions to
+// this computer. The editor now routes them to the task's computer, so a remote draft opens it with
+// the card read through that computer, never resolved among this computer's cards.
+it('opens a remote draft in the editor with its card read through the task computer', async () => {
+  const fields = ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: name === 'body' ? 'Remote draft body' : '' }));
+  const html = renderMailCard({ accountId: 'account', draftId: 'draft', key: '12345678-1234-1234-1234-123456789abc', from: 'me', state: 'draft',
+    status: 'Ready', sendLabel: 'Send', fromLabel: 'From', attachments: [], fields });
+  const getRemoteCard = vi.fn(async () => ({ card: { ghostId: 'google-gmail', html, height: 100, revision: 'r', externalLinks: false } }));
+  const listCardsBySession = vi.fn();
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    ghosts: { getRemoteCard, listCardsBySession }, deviceLink: { onRemotePush: () => () => {} } } });
   h.read.mockResolvedValue({ message: mail('Remote draft body'), draftCallId: 'remote-draft' });
   render(<MailPreviewBody state={{ url: 'https://mail.example/draft' }} ctx={{ ...ctx, deviceLinkDeviceId: 'peer' }} />);
   await act(async () => {});
-  expect(screen.getByText('Remote draft body')).toBeTruthy();
-  expect(screen.queryByTestId('editor')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'mailReader.openMailbox' }));
-  expect(openExternal).toHaveBeenCalledWith('https://mail.example/draft');
+  await act(async () => {});
+  expect(getRemoteCard).toHaveBeenCalledWith('peer', 'a', 'remote-draft');
+  expect(listCardsBySession).not.toHaveBeenCalled();
+  expect(screen.getByTestId('editor').getAttribute('data-call-id')).toBe('remote-draft');
+  expect(screen.getByTestId('editor').textContent).toBe('Remote draft body');
 });
 it.each(['inactive', 'hidden'])('does not mark a restored %s tab read until it is visible', async kind => {
   h.read.mockResolvedValue({ message: mail('Selected') });

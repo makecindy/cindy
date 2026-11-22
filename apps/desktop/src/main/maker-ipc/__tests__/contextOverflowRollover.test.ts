@@ -1,4 +1,8 @@
+import { acceptedAttachmentReplay } from '../attachmentReplay.js';
+import { replayContextRecoveryWithPorts, type ReplayContextRecoveryPorts } from '../contextRecoveryAssembly.js';
+import { normalizeUserMessage } from '../normalizeAttachments.desktop.js';
 import { describe, expect, it, vi } from 'vitest';
+import { CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON, CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } from '@cindy/maker-core';
 
 import {
   CODEX_HISTORY_CONTINUE_MESSAGE,
@@ -7,6 +11,7 @@ import {
   effectiveContextWindow,
   effectivePiContextWindow,
   findLatestRebuildableError,
+  holdsContextRecoveryBroadcast,
   hasModelWindowContextToProtect,
   lookupVerifiedContextWindow,
   isContextOverflowErrorData,
@@ -71,6 +76,27 @@ describe('isContextOverflowErrorData', () => {
           'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
       }),
     ).toBe(false);
+  });
+});
+
+// The broadcast hold the desktop's delivery and the Node Host share: only a terminal overflow-class
+// error of a local task is held for recovery; a remote task, a retried error or another error is not.
+describe('holdsContextRecoveryBroadcast', () => {
+  const local = { remoteHostId: null };
+  const error = (data: Record<string, unknown>) => ({ type: 'error', data } as never);
+  it.each([
+    ['previous compaction model denied', { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON }],
+    ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
+    ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
+    ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'option refused' }],
+  ])('holds a terminal %s error of a local task', (_kind, data) => {
+    expect(holdsContextRecoveryBroadcast(local, error(data))).toBe(true);
+  });
+  it('does not hold a remote task, a retried error or another error', () => {
+    const overflow = { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' };
+    expect(holdsContextRecoveryBroadcast({ remoteHostId: 'ssh-host' }, error(overflow))).toBe(false);
+    expect(holdsContextRecoveryBroadcast(local, error({ ...overflow, willRetry: true }))).toBe(false);
+    expect(holdsContextRecoveryBroadcast(local, error({ message: 'boom', reason: 'sdk_crash' }))).toBe(false);
   });
 });
 
@@ -311,7 +337,7 @@ describe('shouldRebuildForModelWindowSwitch', () => {
 });
 
 describe('createContextOverflowRollover', () => {
-  function makeDeps(source: OverflowSourceMessage[]) {
+  function makeDeps(source: OverflowSourceMessage[], agentKind = 'pi') {
     return {
       getSessionRow: vi.fn(
         async (): Promise<{
@@ -330,7 +356,7 @@ describe('createContextOverflowRollover', () => {
         }> => ({
           status: 'active',
           source: 'desktop',
-          agentKind: 'pi',
+          agentKind,
           remoteHostId: null,
           clearedAt: null,
           sdkSessionId: '/tmp/dead.jsonl',
@@ -373,6 +399,45 @@ describe('createContextOverflowRollover', () => {
       log: { info: vi.fn(), warn: vi.fn() },
     };
   }
+
+  // L343 / unit. The claim/recovery entry hands the active turn to the recovery
+  // callback for a context-limit rejection. Both the current input and prior
+  // history can fill the context. Other terminal classes leave the turn unset.
+  it.each([
+    ['recoverable context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }, true],
+    ['oversized Codex history', { reason: CODEX_HISTORY_OVERSIZED_REASON }, false],
+    ['remote compact', { reason: 'remote-compact-encrypted-content', message: 'context_length_exceeded' }, false],
+    ['unavailable compact model', { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON }, false],
+    ['unsupported option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON }, false],
+    ['ordinary failure', { reason: 'provider-timeout' }, false],
+  ] as const)('classifies claimed recovery failures for notice eligibility: %s', async (_kind, errorData, shouldMark) => {
+    const deps = makeDeps([]);
+    const getRecoveryAbortSignal = vi.fn(() => AbortSignal.abort());
+    const rollover = createContextOverflowRollover({ ...deps, getRecoveryAbortSignal });
+    const turn = { instanceId: 'same-runtime', generation: 2, inputClientId: 'accepted' };
+    expect(rollover.claim('s', turn)).toBe('claimed');
+    expect(await rollover.tryRecover('s', errorData, turn)).toBe(true);
+    expect(getRecoveryAbortSignal).toHaveBeenCalledExactlyOnceWith('s', shouldMark ? turn : undefined);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Unit, PR #11352: a 200K BYOK display/default window in the row and live
+  // snapshot is not proof of route capacity. A restart must keep the 16K cap.
+  it('does not enlarge rebuild history from an unverified snapshot window', async () => {
+    const deps = makeDeps([
+      msg('user', 'Keep the long reply', 'u1'),
+      msg('assistant', 'ordinary ASCII output\n'.repeat(1_500), 'a1'),
+    ]);
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 0, contextWindow: 200_000 }),
+    });
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => true });
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    const commit = deps.commitRebuild.mock.calls[0] as unknown as [string, string, { handoffCoverage: string }];
+    expect(commit[1].length).toBeLessThanOrEqual(16_000);
+    expect(commit[2].handoffCoverage).toBe('condensed');
+  });
 
   // Unit, 2026-11-11: a paused account needs handoff even with a healthy or
   // empty context. Existing tests required overflow. Verify no replay/close while busy.
@@ -596,6 +661,17 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  // Unit: first dispatch can select another account before there is anything to hand off.
+  it('keeps a first account selection out of empty task history', async () => {
+    const deps = makeDeps([]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), sdkSessionId: null, contextTokens: 0 });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => true });
+    expect(await rollover.prepareUnhealthySession('s1')).toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
   it('can restart a Bot before a native handle was ever created', async () => {
     const deps = makeDeps([]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', sdkSessionId: null, contextTokens: 0 });
@@ -630,7 +706,11 @@ describe('createContextOverflowRollover', () => {
     }));
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('already finished'), 3);
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
-    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    // A remote budget lookup can suspend the transaction after close. Recheck
+    // the selection between close and the durable route/history write.
+    const closeAt = deps.closeSession.mock.invocationCallOrder[0]!;
+    const commitAt = deps.commitRebuild.mock.invocationCallOrder[0]!;
+    expect(assertCurrent.mock.invocationCallOrder.some(at => closeAt < at && at < commitAt)).toBe(true);
   });
 
   // Unit: disabling an account carries ordinary task context, including completed
@@ -1223,6 +1303,44 @@ describe('createContextOverflowRollover', () => {
     );
   });
 
+  function recoveryReplayPorts(engine: ReturnType<typeof vi.fn>, pi = false) {
+    const restoredIntent = { text: 'previously authored intent' };
+    const replayPorts = {
+      getDbClient: () => ({ drizzle: { select: () => ({ from: () => ({ where: () => ({
+        limit: async () => [{ workingDir: '/fixture', agentKind: pi ? 'pi' : 'cc' }],
+      }) }) }) } }),
+      sessions: {}, eq: vi.fn(), dbToMakerAgentKind: () => pi ? 'pi' : 'claude-code',
+      buildCreateOptsWithStderr: () => ({ extraDirs: [], writableDirs: [] }),
+      withCindyMakeProjectUse: (_home: string, _dir: string, run: () => Promise<unknown>) => run(),
+      app: { getPath: () => '/fixture' }, persistedUserContentToWireMessage,
+      readAutoReviewHistory: vi.fn(async () => []), restoreAutoReviewUserIntent: vi.fn(() => restoredIntent),
+      readContextRecoverySession: async () => ({ status: 'active' }), canContinueContextRecovery: () => true,
+      isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => null },
+      PI_CACHE_RECOVERY_EXPECTATION: Symbol(), INHERITED_CAPABILITY_SELECTION: Symbol(),
+      AUTO_REVIEW_SOURCE_CONTENT: Symbol(), AUTO_REVIEW_USER_INTENT: Symbol(),
+      readAutoReviewUserText: () => 'retained text',
+      sendToAgentAcceptedUnlocked: vi.fn(async (id: string, wire: Parameters<typeof normalizeUserMessage>[1], _create: unknown, opts: unknown) => {
+        engine(await normalizeUserMessage(id, wire, acceptedAttachmentReplay(opts)));
+        return { accepted: true };
+      }),
+    };
+    return { replayPorts, restoredIntent };
+  }
+
+  // L337 / unit: handoff has committed; dropping the entire accepted turn strands recovery.
+  it('replays surviving text once after a cached history image has been cleaned', async () => {
+    const url = 'cindy-media://blobs/' + 'a'.repeat(64) + '.png';
+    const deps = makeDeps([msg('user', JSON.stringify({ text: 'retained text', images: [{ url }] }), 'accepted')]);
+    const engine = vi.fn();
+    const { replayPorts } = recoveryReplayPorts(engine);
+    const rollover = createContextOverflowRollover({ ...deps, replayUserMessage: (...args) =>
+      replayContextRecoveryWithPorts(replayPorts as unknown as ReplayContextRecoveryPorts, ...args) });
+    expect(rollover.claim('s1')).toBe('claimed');
+    await expect(rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' })).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+    expect(engine).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: [{ type: 'text', text: 'retained text' }] });
+  });
+
   it('keeps coordinator recovery when replay is rejected', async () => {
     const deps = makeDeps([msg('user', '再做 B', 'u2')]);
     deps.replayUserMessage.mockResolvedValue({ accepted: false });
@@ -1258,6 +1376,26 @@ describe('createContextOverflowRollover', () => {
       });
       return deps;
     }
+
+    // L337 / unit: Pi retains its input and history permissions after cache compatibility repair.
+    it('replays accepted Pi history with a cleaned image after a provider compatibility repair', async () => {
+      const source = JSON.stringify({ text: 'retained text', images: [{ url: 'cindy-media://blobs/' + 'd'.repeat(64) + '.png' }] });
+      const deps = makePiDeps([msg('user', source, 'accepted', 1)]);
+      const engine = vi.fn();
+      const { replayPorts, restoredIntent } = recoveryReplayPorts(engine, true);
+      const rollover = createContextOverflowRollover({ ...deps, replayUserMessage: (...args) =>
+        replayContextRecoveryWithPorts(replayPorts as unknown as ReplayContextRecoveryPorts, ...args) });
+      expect(rollover.claim('s1')).toBe('claimed');
+      await expect(rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection })).resolves.toBe(true);
+      expect(engine).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: [{ type: 'text', text: 'retained text' }] });
+      expect(replayPorts.restoreAutoReviewUserIntent).toHaveBeenCalledExactlyOnceWith([], { clientId: 'accepted', content: source });
+      expect(replayPorts.sendToAgentAcceptedUnlocked.mock.calls[0][3]).toMatchObject({
+        [replayPorts.PI_CACHE_RECOVERY_EXPECTATION]: receipt.piCacheCompatibility, retryUserClientId: 'accepted',
+        [replayPorts.INHERITED_CAPABILITY_SELECTION]: 'retained text', [replayPorts.AUTO_REVIEW_USER_INTENT]: restoredIntent,
+        [replayPorts.AUTO_REVIEW_SOURCE_CONTENT]: 'retained text',
+      });
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+    });
 
     it('does not stack legacy rebuild or learning on a native cache recovery decision', async () => {
       const deps = makePiDeps([msg('user', 'Reply OK', 'u1', 1)]);
@@ -1731,15 +1869,18 @@ describe('createContextOverflowRollover', () => {
     expect(deps.onRebuilt).not.toHaveBeenCalled();
   });
 
-  it('does not replay when the failed turn already had tool side effects', async () => {
+  it.each([
+    ['pi', CONTEXT_OVERFLOW_REASON],
+    ['codex', CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON],
+  ])('does not replay %s input after tool side effects and %s', async (agentKind, reason) => {
     const deps = makeDeps([
       msg('user', '改文件', 'u1'),
       msg('tool_use', { toolName: 'Edit', input: { file_path: '/repo/a.ts' } }, 't1'),
-    ]);
+    ], agentKind);
     const rollover = createContextOverflowRollover(deps);
     rollover.claim('s1');
     await expect(
-      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+      rollover.tryRecover('s1', { reason }),
     ).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
@@ -2147,7 +2288,7 @@ describe('createContextOverflowRollover', () => {
     expect(deps.closeSession).toHaveBeenCalledWith('s1');
   });
 
-  it('rolls over a local Codex session on explicit overflow', async () => {
+  it.each([CONTEXT_OVERFLOW_REASON, CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON])('rolls over a local Codex session after %s', async reason => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
@@ -2164,9 +2305,31 @@ describe('createContextOverflowRollover', () => {
     const rollover = createContextOverflowRollover(deps);
     rollover.claim('s1');
     await expect(
-      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+      rollover.tryRecover('s1', { reason }),
     ).resolves.toBe(true);
     expect(deps.closeSession).toHaveBeenCalledWith('s1');
+  });
+
+  it('claims a rejected compaction input only once, even if saving the handoff fails', async () => {
+    const deps = makeDeps([msg('user', 'continue', 'u1')], 'codex');
+    deps.commitRebuild.mockRejectedValueOnce(new Error('save failed'));
+    const rollover = createContextOverflowRollover(deps);
+    const error = { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON };
+    rollover.claim('s1');
+    expect(await rollover.tryRecover('s1', error)).toBe(false);
+    rollover.claim('s1');
+    expect(await rollover.tryRecover('s1', error)).toBe(false);
+    expect(deps.commitRebuild).toHaveBeenCalledTimes(1);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('leaves a denied compaction with the external owner of the input', async () => {
+    const deps = makeDeps([msg('user', 'previous desktop input', 'u1')], 'codex');
+    const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => true });
+    rollover.claim('s1');
+    expect(await rollover.tryRecover('s1', { reason: CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON })).toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
   it('keeps SSH remote sessions out of automatic rollover', async () => {
@@ -2505,6 +2668,14 @@ describe('withReplaySourceNotes', () => {
     expect(withReplaySourceNotes(wire, null)).toBe(wire);
     const withNote = withReplaySourceNotes(wire, { sourcePlugin: { pluginId: 'p' } });
     expect(typeof withNote).toBe('object');
+  });
+
+  it('rebuilds the live reply hint with the same session capability on replay', () => {
+    const replayed = withReplaySourceNotes('reply body', {
+      origin: { kind: 'session', senderSessionId: 'studio::source', senderSessionTitle: 'Source' },
+    }, { agentKind: 'pi', supportsRemote: true });
+    expect(JSON.stringify(replayed)).toContain('cindy_mcp_call_tool');
+    expect(JSON.stringify(replayed)).toContain('studio::source');
   });
 
   it('adds no source note to hidden host instructions or auto-resume rows', () => {

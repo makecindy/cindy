@@ -40,10 +40,10 @@ describe('sidebar collapse reset wiring', () => {
   });
 
   it('keeps the reset delay constant in sync with the CSS animation duration', () => {
-    // Tailwind 任意值类名无法引用常量,两处 200 只能靠这条断言互锁:
-    // 谁改了动画时长却没同步另一处,这里立刻红。
+    // 动画时长走 --motion-base(默认 200ms,DESIGN.md §14.4),复位延时常量要与它的默认值互锁:
+    // 谁改了回退值却没同步常量,这里立刻红。
     expect(sectionCollapseSource).toContain('SECTION_COLLAPSE_DURATION_MS = 200');
-    expect(sectionCollapseSource).toContain('duration-[200ms]');
-    expect(sectionCollapseSource).not.toMatch(/duration-\[(?!200ms)\d+m?s\]/);
+    expect(sectionCollapseSource).toContain('duration-[var(--motion-base,200ms)]');
+    expect(sectionCollapseSource).not.toMatch(/duration-\[(?:var\(--motion-base,)?(?!200ms)\d+m?s\)?\]/);
   });
 });

@@ -21,20 +21,21 @@ import { effectiveSourceIdForModel, getModel, reconcileInvocationEffort, type Pr
 import type { Session, WorkspaceKind } from '@/lib/ccAgent.types';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineEffort } from '../../../shared/pluginEngines';
 
 export interface DeviceLinkCreateParams {
-  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi'(persistedAgentKind)。 */
-  agentKind: 'cc' | 'codex' | 'pi';
+  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi'(persistedAgentKind)，或被控电脑的插件引擎 'acp'。 */
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   /**
    * 被控端上的项目目录。缺省 / 空白 = 在该设备上建**不绑项目的 standalone dialogue**,
    * workspaceKind 随之派生为 'dialogue',运行目录由被控端分配。
    */
   workingDir?: string;
   /**
-   * 预生成的 session id(可选)。远程 worktree 流程用:控制端先经隧道调被控端
-   * worktree:create(以该 id 登记 worktreeStore 绑定),再以同一 id 建会话——两步共用
-   * 一个 id,被控端 close-session 时才能按绑定回收 worktree。非 worktree 流程不传,
-   * 由被控端自行生成。
+   * 预生成的 session id。草稿新建远程会话时控制端总会预生成(手机端同口径):标题预览要在
+   * create-session 之前按最终 id 登记。远程 worktree 流程还靠它让 worktree:create 的
+   * worktreeStore 绑定与会话同 id,被控端 close-session 时才能按绑定回收 worktree。
+   * 缺省时由被控端自行生成。
    */
   id?: string;
   model: string;
@@ -63,8 +64,8 @@ export interface DeviceLinkCreateParams {
 }
 
 export interface DeviceLinkCreateArgs {
-  agentKind: 'claude-code' | 'codex' | 'pi';
-  /** 仅远程 worktree 流程出现(与 worktree:create 登记的绑定同 id)。 */
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
+  /** 控制端预生成的会话 id(worktree 流程中与 worktree:create 登记的绑定同 id)。 */
   id?: string;
   /** 仅项目会话出现;dialogue 不带此字段(被控端自行分配运行目录)。 */
   workingDir?: string;
@@ -90,7 +91,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
   const dir = p.workingDir?.trim();
   return {
     agentKind: p.agentKind === 'cc' ? 'claude-code' : p.agentKind,
-    // 预生成 id 仅在远程 worktree 流程出现;不传时不放进 args,被控端自行生成。
+    // 没有预生成 id 时不放进 args,被控端自行生成。
     ...(p.id ? { id: p.id } : {}),
     // 有目录 → 项目会话;无目录 → standalone dialogue,不带 workingDir,由被控端分配运行目录。
     ...(dir ? { workingDir: dir } : {}),
@@ -142,6 +143,13 @@ export interface DeviceLinkSubmissionParams {
   capabilityAgentKind: AgentKind;
   /** 远程 Agent:运行 Agent 的另一台电脑;缺省 = 被控电脑本身。 */
   agentDeviceId?: string | null;
+  /** 被控电脑上的插件引擎(agentKind='acp', providerId='acp-plugin:<ghostId>:<harnessId>')。 */
+  pluginEngine?: {
+    providerId: string;
+    model: string;
+    effort: PluginEngineEffort | '';
+    permissionMode: PermissionMode;
+  };
 }
 
 /**
@@ -165,6 +173,18 @@ export interface DeviceLinkSubmissionParams {
  * 只有未指定连接时，才用 effectiveSourceIdForModel 解析默认来源。
  */
 export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): DeviceLinkCreateArgs {
+  if (p.pluginEngine) {
+    return buildDeviceLinkCreateArgs({
+      agentKind: 'acp',
+      id: p.id,
+      workingDir: p.workingDir,
+      model: p.pluginEngine.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+      effort: p.pluginEngine.effort || null,
+      permissionMode: p.pluginEngine.permissionMode,
+      fastMode: false,
+      providerId: p.pluginEngine.providerId,
+    });
+  }
   const providerId = p.candidate.providerId || effectiveSourceIdForModel(
     p.deviceProviders,
     null,
@@ -259,8 +279,8 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     // 回流都会把它冲回 null,会话就先掉进项目外的草稿区、首条落地后再跳回项目。
     userSendAt: null,
     status: 'active',
-    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
-    agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
+    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi',运行时也承载插件引擎的 'acp'),args 里是 maker-core 形态。
+    agentKind: (p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind) as Session['agentKind'],
     // 乐观行就带上 Agent 所在电脑:会话页的模型按钮与目录从一开始就按那台显示。
     ...(p.args.agentDeviceId ? { agentDeviceId: p.args.agentDeviceId } : {}),
     extraDirs: p.args.extraDirs ?? [],

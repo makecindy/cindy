@@ -1,3 +1,5 @@
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { z } from 'zod';
 import { remoteSessionCreationSchema, creationOperation, type RemoteSessionCreated } from '../../shared/remoteSessionCreation.js';
 import type { createRemoteSessionOpener } from './remoteSessionCreation.js';
@@ -56,6 +58,7 @@ function boundedString(value: unknown, name: string, max: number): string {
 export function createSessionHandoffHandler(deps: {
   send(params: SessionHandoffSendParams): Promise<SessionHandoffSendResult>;
   create?: ReturnType<typeof createRemoteSessionOpener>;
+  refineTitle?(sessionId: string, subject: string, initialTitle: string): void;
   listProjects?(options: { includeHidden: boolean; offset: number; limit: number }): Promise<unknown>;
   validate?(controllerDeviceId: string, input: { receiptId: string; sessionId?: string; pluginId?: string; targetSessionId: string; message: string; release?: boolean; operation?: string }): Promise<boolean>;
 }) {
@@ -113,9 +116,11 @@ export function createSessionHandoffHandler(deps: {
     try { await taskActionDeliveryGuard(); } catch {
       return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task action authorization expired; no message was sent.' };
     }
+    const titleOwner = deps.refineTitle && creation && !plugin && !creation.title?.trim() ? getCurrentDbClientSnapshot() : null;
     let created: RemoteSessionCreated | undefined;
     if (creation) {
-      const opened = await deps.create!(targetSessionId, creation, taskActionDeliveryGuard);
+      const initial = !plugin && !creation.title?.trim() ? { ...creation, title: normalizeAutoTitle(body) } : creation;
+      const opened = await deps.create!(targetSessionId, initial, taskActionDeliveryGuard);
       if (!opened.ok) {
         if (opened.errorCode !== 'DELIVERY_UNKNOWN') await taskActionDeliveryGuard.onSettled().catch(() => undefined);
         return opened;
@@ -143,12 +148,15 @@ export function createSessionHandoffHandler(deps: {
       return { ok: false, errorCode: created ? 'CREATED_NOT_DELIVERED' : result.errorCode,
         message: created ? `Task ${targetSessionId} was created; inspect its queue/history before sending again. ${result.message}` : result.message };
     }
+    if (titleOwner && titleOwner === getCurrentDbClientSnapshot() && created?.targetTitle) {
+      deps.refineTitle?.(targetSessionId, body, created.targetTitle);
+    }
     return {
       ...created,
       ok: true,
       agentKind: result.agentKind,
       wakeKind: created ? 'created' : result.wakeKind,
-      targetTitle: result.targetTitle,
+      targetTitle: result.targetTitle ?? created?.targetTitle ?? null,
       targetLastUserSendAt: result.targetLastUserSendAt,
     };
   };
@@ -173,8 +181,12 @@ export function registerSessionHandoffIpc(
     if (!hasRemoteBotSessionLookup())
       throwIpcError('PRECONDITION_FAILED', 'Task visibility is not ready');
     const request = requireObject(value, 'request');
-    if (request.action === 'task-action-capability') return { ...SESSION_HANDOFF_CAPABILITY,
-      ...(deps.create ? { ordinaryCreateVersion: 1 } : {}), ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}) };
+    if (request.action === 'task-action-capability') return {
+      ...SESSION_HANDOFF_CAPABILITY,
+      ...(deps.create ? { ordinaryCreateVersion: 1 } : {}),
+      ...(deps.create && deps.refineTitle ? { ordinaryCreateAutoTitle: 1 } : {}),
+      ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}),
+    };
     if (request.action === 'list-projects') {
       if (!deps.listProjects) throwIpcError('UNSUPPORTED_CAPABILITY', 'Project catalog is unavailable');
       const options = z.object({ includeHidden: z.boolean().default(true), offset: z.number().int().min(0).default(0),

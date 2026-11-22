@@ -3,15 +3,15 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { setImmediate as nextTurn } from 'node:timers/promises';
+import { setImmediate as nextTurn, setTimeout as delay } from 'node:timers/promises';
 import { _electron } from 'playwright-core';
-import { runPlan } from './run.mjs';
+import { runPlan, sweepScratch } from './run.mjs';
 import { adhocPage } from './registry.mjs';
 import { parseOptions, variantsFor } from './options.mjs';
 import { scanPage, buildPage, inputsChanged } from './build.mjs';
@@ -598,6 +598,102 @@ test(
     const summary = JSON.parse(await readFile(summaryFile, 'utf8'));
     assert.match(summary.errors.join('\n'), /用户中断/);
     assert.equal(leftoverRunners(), '');
+  },
+);
+
+// Old previews have no owner identity; age alone cannot prove that their files are unused.
+// Integration tier: sweepScratch must preserve an old legacy directory and a live runner.
+test('scratch sweep preserves legacy previews and live runners', async () => {
+  const tmp = await mkdtemp(path.join(dir, 'scratch-sweep-'));
+  const legacy = path.join(tmp, 'cindy-ui-check-AbCdEf');
+  const live = path.join(tmp, `cindy-ui-check-${process.pid}-AbCdEf`);
+  for (const folder of [legacy, live]) {
+    await mkdir(folder);
+    await writeFile(path.join(folder, 'preview.html'), 'still open');
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    await utimes(folder, old, old);
+  }
+  await sweepScratch(tmp);
+  for (const folder of [legacy, live])
+    assert.equal(await readFile(path.join(folder, 'preview.html'), 'utf8'), 'still open');
+});
+
+// A runner killed outright (stopped task, tool timeout) runs no cleanup at all. Its hidden
+// Electron window used to stay for days and its scratch folder was never removed.
+test(
+  'a runner killed outright leaves no Electron or scratch folder behind',
+  { skip: process.platform === 'win32' && 'finds the runtime with pgrep' },
+  async (t) => {
+    const file = await entry('killed', `export {};\n`);
+    const child = spawn(process.execPath, [cli, '--entry', file, '--timeout', '60000'], {
+      env: { ...process.env, NODE_DEBUG: '', CINDY_UI_PROGRESS: '1' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    const exited = new Promise((resolve) => child.on('exit', resolve));
+    const electron = new Set();
+    const ownedElectron = () => {
+      try {
+        const args = ['-P', String(child.pid), '-f', 'ui-page/electron.cjs'];
+        return execFileSync('pgrep', args, { encoding: 'utf8' })
+          .trim()
+          .split('\n')
+          .map(Number);
+      } catch (error) {
+        if (error.status === 1) return [];
+        throw error;
+      }
+    };
+    // Cleanup is independent of the watchdog and sweep under test, even on a failed assertion.
+    t.after(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        for (const pid of ownedElectron()) electron.add(pid);
+        child.kill('SIGKILL');
+      }
+      await exited;
+      for (const pid of electron) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch (error) {
+          if (error.code !== 'ESRCH') throw error;
+        }
+      }
+      // Wait for process exit before removing its profile, without the production watchdog.
+      const deadline = Date.now() + 5000;
+      while ([...electron].some(alive) && Date.now() < deadline) await delay(50);
+      for (const name of await readdir(os.tmpdir()))
+        if (name.startsWith(`cindy-ui-check-${child.pid}-`))
+          await rm(path.join(os.tmpdir(), name), { recursive: true, force: true, maxRetries: 3 });
+    });
+    const alive = (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return error.code !== 'ESRCH';
+      }
+    };
+    let stderr = '';
+    await new Promise((resolve, reject) => {
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+        if (/^UI_VARIANT /m.test(stderr)) resolve();
+      });
+      child.on('exit', () => reject(new Error(`runner ended before its variant ran:\n${stderr}`)));
+    });
+    for (const pid of ownedElectron()) electron.add(pid);
+    assert.ok(electron.size, 'the runner owns an Electron process');
+    const tmp = os.tmpdir();
+    const scratch = (await readdir(tmp))
+      .filter((name) => name.startsWith(`cindy-ui-check-${child.pid}-`))
+      .map((name) => path.join(tmp, name));
+    assert.equal(scratch.length, 1, 'the scratch folder names its runner');
+    child.kill('SIGKILL');
+    await exited;
+    const deadline = Date.now() + 10000;
+    while ([...electron].some(alive) && Date.now() < deadline) await delay(200);
+    assert.deepEqual([...electron].filter(alive), [], 'Electron quits once its runner is gone');
+    await sweepScratch();
+    assert.equal(existsSync(scratch[0]), false, "the next run removes the dead runner's scratch");
   },
 );
 

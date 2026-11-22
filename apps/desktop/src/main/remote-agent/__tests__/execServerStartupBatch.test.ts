@@ -9,7 +9,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createExecServerStartupBatch } from '../host/execServerStartupBatch';
 
@@ -56,13 +56,13 @@ describe('native startup manifest batching', () => {
     { result: { isFile: true } },
     { error: { code: -32001, message: 'denied' } },
     { error: { code: -32601, message: 'unsupported' } },
-  ])('forwards the original request for existing files and non-NotFound errors: %j', value => {
+  ])('answers held queries once for existing files and non-NotFound errors without caching: %j', value => {
     const f = fixture();
     const original = query('original');
     f.batch.request(original);
     f.reply(uri(base), value);
-    expect(f.forwarded.at(-1)).toBe(original);
-    expect(f.answered).toEqual([]);
+    expect(f.forwarded).not.toContain(original);
+    expect(f.answered.map(data => JSON.parse(data))).toEqual([{ id: 'original', ...value }]);
     expect(f.batch.request(query('again'))).toBe(false);
   });
 
@@ -72,8 +72,35 @@ describe('native startup manifest batching', () => {
     expect(f.batch.request(original)).toBe(true);
     // The tunnel permits replies larger than the 16 KiB request optimization budget.
     expect(f.reply(uri(base), { error: { code: -32001, message: 'x'.repeat(20 * 1024) } })).toBe(true);
-    expect(f.forwarded.at(-1)).toBe(original);
-    expect(f.answered).toEqual([]);
+    expect(f.forwarded).not.toContain(original);
+    expect(JSON.parse(f.answered[0])).toMatchObject({ id: 'original', error: { code: -32001 } });
+  });
+
+  // Production entry with controlled 4.4s round trips; the old path discarded a
+  // successful prefetch and made the waiting query pay a second identical RPC.
+  // Unit tier, no real waiting/socket/process; adjacent tests only covered absence.
+  it('delivers an existing manifest after one slow round trip and re-queries after startup invalidation', async () => {
+    vi.useFakeTimers();
+    try {
+      const forwarded: string[] = [];
+      const answered: string[] = [];
+      const batch = createExecServerStartupBatch({
+        shortcut: () => null,
+        forward: data => {
+          forwarded.push(data);
+          const rpc = JSON.parse(data);
+          setTimeout(() => batch.response(JSON.stringify({ id: rpc.id, result: { isFile: true } })), 4400);
+        },
+        answer: data => answered.push(data),
+      });
+      batch.request(query('slow'));
+      const count = forwarded.length;
+      await vi.advanceTimersByTimeAsync(4400);
+      expect(answered.map(data => JSON.parse(data))).toEqual([{ id: 'slow', result: { isFile: true } }]);
+      expect(forwarded).toHaveLength(count);
+      batch.finish();
+      expect(batch.request(query('fresh'))).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 
   it('uses the original sandbox and never reuses a result under different permissions or for file content', () => {

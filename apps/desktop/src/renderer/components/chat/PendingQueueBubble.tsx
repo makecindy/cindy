@@ -28,7 +28,8 @@ export interface PendingQueueBubbleProps {
   localSend?: boolean;
   simplifiedBotConversation?: boolean;
   onEdit(entry: QueuedMessage): void;
-  onSteer(clientId: string): Promise<boolean>;
+  /** Omitted when the task's engine cannot take input into its running turn: no steer item. */
+  onSteer?(clientId: string): Promise<boolean>;
   onRemove(clientId: string): void;
   onMove(clientId: string, targetIndex: number): void;
 }
@@ -87,16 +88,15 @@ export function PendingQueueBubble({
       : presentation.isPlugin
         ? t('newChat.pendingQueue.pluginSenderFallback')
         : null);
+  // Plugin attribution can also be stamped by an edit of a composer item. Its
+  // chatMessage already has the display body, including ranges for UserMessage.
   const body = presentation.isSyntheticTrigger
     ? t(
         presentation.syntheticKind === 'continue'
           ? 'newChat.pendingQueue.syntheticContinueLabel'
           : 'newChat.pendingQueue.syntheticTriggerLabel',
       )
-    : presentation.isOrca ||
-        presentation.isScheduler ||
-        presentation.isSession ||
-        presentation.isPlugin
+    : presentation.isOrca || presentation.isScheduler || presentation.isSession
       ? (presentation.rangedSourceText ?? presentation.displayText)
       : entry.chatMessage.content;
   const status = (
@@ -121,7 +121,7 @@ export function PendingQueueBubble({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {!availability.actions.steer.disabled && (
+            {onSteer && !availability.actions.steer.disabled && (
               <DropdownMenuItem
                 className="gap-2"
                 onSelect={() => {

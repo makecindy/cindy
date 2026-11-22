@@ -211,6 +211,33 @@ describe('Session close lifecycle', () => {
     expect(handle.close).toHaveBeenCalledOnce();
   });
 
+  // #11042: foreground completion is not permission to kill tracked background
+  // work. Existing close tests only cover foreground/host RPC ownership (unit).
+  it.each(['task', 'continuation', 'unavailable'] as const)(
+    'keeps an idle runtime alive while background %s remains', async (kind) => {
+      const { session, handle } = liveTurn(false);
+      let busy = true;
+      handle.hasProjectResourceDrift = () => true;
+      handle.listBackgroundTasks = () => {
+        if (busy && kind === 'unavailable') throw new Error('snapshot unavailable');
+        return busy && kind === 'task' ? [{ taskId: 'bash', taskType: 'local_bash' }] : [];
+      };
+      handle.countPendingWakeContinuations = () => busy && kind === 'continuation' ? 1 : 0;
+      try {
+        expect(session.hasRecyclableProjectResourceDrift()).toBe(false);
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.getStatus()).toBe('active');
+        expect(handle.close).not.toHaveBeenCalled();
+        busy = false;
+        expect(session.hasRecyclableProjectResourceDrift()).toBe(true);
+        await expect(session.closeIfIdle()).resolves.toBe(true);
+        expect(handle.close).toHaveBeenCalledOnce();
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   it('resource recycling shares the closeIfIdle idle predicate and never breaks manual compaction', async () => {
     const { session, handle } = liveTurn();
     let hostOperationInFlight = true;
@@ -248,6 +275,26 @@ describe('Session close lifecycle', () => {
     queue.push({ type: 'done', source: 'pi', data: { status: 'completed', result: 'delivered' } });
     await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
     expect(handle.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards continuation diagnostics and preserves handles without a reason API (#10547)', async () => {
+    const { session, handle } = liveTurn(false);
+    expect(session.getTurnContinuationCancellationReason(7)).toBeUndefined();
+    expect(session.onTurnContinuationChange(() => undefined)).toBeTypeOf('function');
+    let notify!: Parameters<NonNullable<AgentSessionHandle['onTurnContinuationChange']>>[0];
+    const unsubscribe = vi.fn();
+    handle.onTurnContinuationChange = listener => { notify = listener; return unsubscribe; };
+    handle.getTurnContinuationCancellationReason = id => id === 7 ? 'user_stop' : undefined;
+    const seen = vi.fn();
+    const off = session.onTurnContinuationChange(seen);
+    notify(7, 'cancelled', 'user_stop');
+    expect(seen).toHaveBeenCalledExactlyOnceWith(7, 'cancelled', 'user_stop');
+    expect(session.getTurnContinuationCancellationReason(7)).toBe('user_stop');
+    expect(session.getTurnContinuationCancellationReason(8)).toBeUndefined();
+    off();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    await session.close();
+    expect(session.getTurnContinuationCancellationReason(7)).toBeUndefined();
   });
 
   it('does not retire at a provider boundary with an outstanding continuation claim', async () => {
@@ -528,6 +575,92 @@ describe('Session close lifecycle', () => {
 
     expect(session.getStatus()).toBe('closed');
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：`Session.send` 的拒绝错误带稳定 `code`；宿主的派发前失败
+   *   日志与渠道文案据此归因，而不是只剩 `Error`。
+   * - Bug／规则依据：issue #9636、#8952；规则见 `docs/dev-rules/im-turn-flow.md` 不变量 6b。
+   * - 现有覆盖缺口：既有用例只断言 `is closing` / `is closed` 文案，渠道侧拿不到可分类
+   *   的标识；`SESSION_RUNNING` 早已有 code，这条路径没有。
+   * - 最小失败输入：`close()` 在飞（`closePromise` 已设）或已完成后 `send()`。
+   * - tier：unit。
+   */
+  it('codes a refused send so hosts can tell "busy" from "runtime no longer usable"', async () => {
+    const transportClose = createDeferred();
+    const close = vi.fn(() => transportClose.promise);
+    const send = vi.fn(async () => undefined);
+    const handle = {
+      id: 'thread-closing-send',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      send,
+      events: () => createAsyncQueue<AgentEvent>(),
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-closing-send',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+      permissionMode: 'bypassPermissions',
+    });
+
+    const closing = session.close();
+    // 飞书 / 调度按 `code` 分类派发前失败；之前只有一句裸 Error，宿主只能记 'Error'。
+    await expect(session.send('after close')).rejects.toMatchObject({
+      code: 'SESSION_CLOSING',
+      message: 'Session session-closing-send is closing',
+    });
+
+    transportClose.resolve();
+    await closing;
+
+    await expect(session.send('after closed')).rejects.toMatchObject({
+      code: 'SESSION_CLOSED',
+      message: 'Session session-closing-send is closed',
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('codes a send on a runtime left in the error state by a failed close', async () => {
+    const close = vi.fn(async () => {
+      throw new Error('transport close failed');
+    });
+    const send = vi.fn(async () => undefined);
+    const handle = {
+      id: 'thread-close-failed-send',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      send,
+      events: () => createAsyncQueue<AgentEvent>(),
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-close-failed-send',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+      permissionMode: 'bypassPermissions',
+    });
+
+    await expect(session.close()).rejects.toThrow('transport close failed');
+    expect(session.getStatus()).toBe('error');
+    // 拆除已经放弃（teardown started，但不会自己完成）：报 error 而不是「正在关闭」，
+    // 宿主据此直接重建，不会把它当成短瞬态去等。
+    await expect(session.send('after failed close')).rejects.toMatchObject({
+      code: 'SESSION_ERROR',
+      message: 'Session session-close-failed-send is in error state',
+    });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('rejects permission changes once transport shutdown has started', async () => {
@@ -985,5 +1118,90 @@ describe('Session shutdown-scoped terminal-error suppression', () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     queue.end();
     await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+  });
+});
+
+// #9323: explicit app-quit reservation fences events before a host reaper
+// kills the transport; async detach then cancels. The older shutdown guard is
+// deliberately idle-only; normal active crashes still need to be delivered.
+describe('Session explicit host shutdown reservation', () => {
+  function fixture() {
+    const queue = createAsyncQueue<AgentEvent>();
+    let running = false;
+    const handle = {
+      id: 'shutdown-claude', agentKind: 'claude-code', model: 'm',
+      send: vi.fn(async () => { running = true; }), isTurnRunning: () => running,
+      events: () => queue, abort: vi.fn(async () => {}),
+      close: vi.fn(async () => { queue.end(); }), setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'shutdown-task', agentKind: 'claude-code', workDir: '/repo',
+      handle, capabilities: {} as never, logger: createLogger(), turnStallMs: 0 });
+    const seen: AgentEvent[] = [];
+    session.onEvent(event => seen.push(event));
+    return { queue, handle, session, seen };
+  }
+
+  it('settles active cleanup once as cancelled without aborting before the process sweep', async () => {
+    const { queue, handle, session, seen } = fixture();
+    await session.send('work');
+    session.prepareForHostShutdown();
+    session.prepareForHostShutdown();
+    expect(handle.close).not.toHaveBeenCalled();
+    expect(handle.abort).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+    await expect(session.send('late work')).rejects.toThrow();
+    queue.push({ type: 'error', source: 'claude-code',
+      data: { message: 'SIGKILL', isTerminal: true, reason: 'sdk_stream_crashed' } });
+    queue.end();
+    await session.detach({ reason: 'app-quit' });
+    expect(handle.close).toHaveBeenCalledOnce();
+    expect(seen.map(event => [event.type, event.data])).toEqual([['done', { status: 'cancelled' }]]);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('fences pending preparation without aborting the send signal before the sweep', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const gate = createDeferred();
+    let signal: AbortSignal | undefined;
+    const handle = {
+      id: 'preparing', agentKind: 'claude-code', model: 'm',
+      send: vi.fn(async () => {}), isTurnRunning: () => false,
+      events: () => queue, abort: vi.fn(async () => {}),
+      close: vi.fn(async () => { queue.end(); }), setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'preparing-task', agentKind: 'claude-code', workDir: '/repo',
+      handle, capabilities: {} as never, logger: createLogger(), turnStallMs: 0 });
+    const accepted = vi.fn(async (value?: AbortSignal) => { signal = value; await gate.promise; });
+    const sending = session.send('not yet dispatched', { onAccepted: accepted });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    session.prepareForHostShutdown();
+    expect(signal?.aborted).toBe(false);
+    expect(handle.close).not.toHaveBeenCalled();
+    await session.detach({ reason: 'app-quit' });
+    expect(signal?.aborted).toBe(true);
+    gate.resolve();
+    await expect(sending).rejects.toThrow();
+    expect(handle.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps a real crash observed before quit and does not replace it with cancellation', async () => {
+    const { queue, session, seen } = fixture();
+    await session.send('work');
+    queue.push({ type: 'error', source: 'claude-code',
+      data: { message: 'natural crash', isTerminal: true, reason: 'sdk_stream_crashed' } });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    session.prepareForHostShutdown();
+    await session.detach({ reason: 'app-quit' });
+    expect(seen.map(event => event.type)).toEqual(['error']);
+  });
+
+  it('does not add cancellation to a completed turn', async () => {
+    const { queue, session, seen } = fixture();
+    await session.send('work');
+    queue.push({ type: 'done', source: 'claude-code', data: { status: 'completed' } });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    session.prepareForHostShutdown();
+    await session.detach({ reason: 'app-quit' });
+    expect(seen.map(event => [event.type, event.data])).toEqual([['done', { status: 'completed' }]]);
   });
 });

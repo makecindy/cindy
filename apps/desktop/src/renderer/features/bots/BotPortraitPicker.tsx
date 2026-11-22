@@ -229,7 +229,7 @@ export function BotPortraitPicker({
             align="start"
             sideOffset={12}
             collisionPadding={16}
-            className="z-[60] w-[360px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-3"
+            className="z-dropdown w-[360px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-3"
           >
             <div className="grid grid-cols-4 gap-2 min-[400px]:grid-cols-6">
               {Array.from({ length: BOT_PORTRAIT_COUNT }, (_, index) => {
@@ -329,7 +329,6 @@ export function BotPortraitPicker({
                     cropRef.current = next;
                     setCropSession(next);
                   }}
-                  tipClassName="z-[10001]"
                 />
                 {error && (
                   <p role="alert" className="mt-2 text-12 text-[var(--text-danger)]">

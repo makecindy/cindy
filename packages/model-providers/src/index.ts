@@ -13,6 +13,7 @@ export { remoteInvocationModels, withEffectiveModelContextWindows } from './remo
 export {
   BYOK_CREDENTIALS_PATH,
   BYOK_PROVIDERS_PATH,
+  BYOK_PROVIDERS_V1_PATH,
   isByokImageMode,
   isByokProviderId,
   parseByokCredentialsResponse,
@@ -60,6 +61,7 @@ export type {
 
 export { NATIVE_SUBSCRIPTION_AUTHS, NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS, PI_MODEL_APIS, PI_REASONING_EFFORTS, PROVIDER_VIDEO_APIS, isProviderVideoApi } from "./types.js";
 export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, isClaudeSubscriptionProvider, supportsSubscriptionFastPolicy, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, isCindyDistributedProvider, isCindyAutoModelId } from './provider-identity.js';
+export { acceptsWebpImageInput, type ImageRouteIdentity } from './imageInputCapability.js';
 export { sourceProviderForPreset } from './providerPresetIdentity.js';
 export { isMimoTokenPlanPreset } from './mimoPresentation.js';
 
@@ -174,9 +176,11 @@ export type {
 
 export {
   modelDisableKey,
+  remoteProviderDisableKey,
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
+  isProviderHidden,
 } from "./disableOverrides.js";
 export type { ModelDisableOverrides } from "./disableOverrides.js";
 
@@ -335,7 +339,7 @@ export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels }
 
 export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
-export { parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
+export { copilotModelsUrl, parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 
@@ -355,3 +359,6 @@ export {
   markedSelectionAliasGroups, projectSelectionAliases, inheritSelectionAliasPreferences,
   selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
 } from './selectionAliasGroups.js';
+
+export { sameSubscriptionAccounts, sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy, listedSourceFolds, effectiveRunLocation, RUN_LOCATION_LOCAL } from './subscriptionIdentity.js';
+export type { ListedSourceComputer, ListedSourceRef, ListedSourcesInput, ListedSourceFolds } from './subscriptionIdentity.js';

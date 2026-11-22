@@ -47,6 +47,7 @@ import {
   Info,
   LayoutList,
   SlidersHorizontal,
+  Timer,
   Wallet,
   Users,
   type LucideIcon,
@@ -56,6 +57,7 @@ import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import { taskCreatorFilterKey } from '@/features/bots/cindyDeviceRoster';
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useSidebarMainViewMode, type SidebarMainViewMode } from '@/hooks/useSidebarCardMode';
@@ -90,7 +92,7 @@ import type {
   FilterVendor,
   UseSidebarFilterReturn,
 } from '../hooks/useSidebarFilter';
-import { DIALOGUE_FILTER_KEY, projectFilterIncludes } from '../hooks/helpers/sidebarFilterCore';
+import { DIALOGUE_FILTER_KEY, projectFilterIncludes, sidebarContentFilterCount } from '../hooks/helpers/sidebarFilterCore';
 import { DEFAULT_TASK_INFO_FIELDS } from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
@@ -173,6 +175,9 @@ const PROJECT_ORDER_OPTIONS: ReadonlyArray<Option<FilterProjectOrder>> = [
  * token=Coins、费用=Wallet。
  */
 const TASK_INFO_OPTIONS: ReadonlyArray<Option<TaskInfoField>> = [
+  { value: 'harness', labelKey: 'ccAgent.sidebar.taskInfo.harness', Icon: SquareTerminal },
+  { value: 'project', labelKey: 'ccAgent.sidebar.taskInfo.project', Icon: Folder },
+  { value: 'teammate', labelKey: 'ccAgent.sidebar.taskInfo.teammate', Icon: Bot },
   { value: 'time', labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock },
   { value: 'pr', labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest },
   { value: 'worktree', labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders },
@@ -352,6 +357,8 @@ function CheckMenuItem({
   return (
     <Tip text={tip} side="right">
       <DropdownMenuItem
+        role="menuitemcheckbox"
+        aria-checked={checked}
         disabled={disabled}
         onSelect={(event) => {
           event.preventDefault();
@@ -381,6 +388,7 @@ export function SidebarFilterPopover({
   onOpenChange,
 }: SidebarFilterPopoverProps) {
   const { t } = useTranslation();
+  const inboxMode = useTaskListMode().mode === 'inbox';
   const localPlatform = window.electronAPI.platform;
   const selectedMachineForOrder = useEffectiveSelectedMachineId();
   const localHostProjectOrder = useLocalHostProjectOrder();
@@ -403,6 +411,7 @@ export function SidebarFilterPopover({
     lastActivity,
     groupBy,
     groupDialogue,
+    groupAutomation,
     groupDevice,
     sortBy,
     projectOrder,
@@ -415,6 +424,7 @@ export function SidebarFilterPopover({
     setLastActivity,
     setGroupBy,
     setGroupDialogue,
+    setGroupAutomation,
     setGroupDevice,
     setSortBy,
     setProjectOrder: setViewerProjectOrder,
@@ -433,6 +443,7 @@ export function SidebarFilterPopover({
     [
       groupBy === 'project' ? t('ccAgent.sidebar.groupSummary.project') : null,
       groupDialogue ? t('ccAgent.sidebar.groupSummary.dialogue') : null,
+      groupAutomation ? t('ccAgent.sidebar.groupSummary.automation') : null,
       hasRemoteDevices && groupDevice ? t('ccAgent.sidebar.groupSummary.device') : null,
     ]
       .filter(Boolean)
@@ -535,14 +546,14 @@ export function SidebarFilterPopover({
       : t('ccAgent.sidebar.filterSelectedCreators', { count: creators.length });
 
   // 一级「筛选」行摘要：偏离默认的维度数。
-  const activeFilterCount =
-    (projects !== 'all' ? 1 : 0) + (vendor !== 'all' ? 1 : 0) + (lastActivity !== 'all' ? 1 : 0) + (creators !== 'all' ? 1 : 0);
+  const activeFilterCount = sidebarContentFilterCount(filter);
   const filterSummary =
     activeFilterCount > 0
       ? t('ccAgent.sidebar.filterSummaryActive', { count: activeFilterCount })
       : t('ccAgent.sidebar.filterSummaryNone');
 
   // 「任务信息」行摘要：已选项的短标签串;全不选显示「无」。
+  const summaryFields = taskInfoFields.length > 5 ? taskInfoFields.slice(0, 4) : taskInfoFields;
   const taskInfoSummary =
     taskInfoFields.length > 0
       ? taskInfoFields
@@ -555,7 +566,7 @@ export function SidebarFilterPopover({
     taskInfoFields.length === DEFAULT_TASK_INFO_FIELDS.length &&
     DEFAULT_TASK_INFO_FIELDS.every((field, index) => taskInfoFields[index] === field);
 
-  const ariaLabel = t('ccAgent.sidebar.filterAria', {
+  const ariaLabel = inboxMode ? [t('ccAgent.sidebar.organizeSidebar'), filterSummary].join(' · ') : t('ccAgent.sidebar.filterAria', {
     status: statusValue,
     vendor: vendorValue,
     lastActivity: lastActivityValue,
@@ -600,7 +611,7 @@ export function SidebarFilterPopover({
             <button
               type="button"
               aria-label={ariaLabel}
-              aria-pressed={isFilterActive}
+              aria-pressed={inboxMode ? activeFilterCount > 0 : isFilterActive}
               className={cn(
                 // 配色与段头其余按钮统一(侧栏 token 对),不用通用 text-tertiary。
                 'relative flex h-7 w-7 items-center justify-center rounded-md',
@@ -611,7 +622,7 @@ export function SidebarFilterPopover({
               <SlidersHorizontal size={14} strokeWidth={2} />
               {/* 正在看已归档任务时标一个点,提醒列表不是平常的进行中任务;
                   段头会让这个按钮常驻显示。 */}
-              {status === 'archived' && <FilterReminderDot />}
+              {(inboxMode ? activeFilterCount > 0 : status === 'archived') && <FilterReminderDot />}
             </button>
           </Tip>
         )}
@@ -637,84 +648,94 @@ export function SidebarFilterPopover({
         <MountedMenuContent>
           {() => (
             <div className="max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-x-hidden overflow-y-auto">
-              <MenuSubRow
-                label={t('ccAgent.sidebar.filterGroupByHeading')}
-                value={groupByValue}
-                Icon={SidebarGroupsIcon}
-              >
-                <CheckMenuItem
-                  label={t('ccAgent.sidebar.filterGroupBy.project')}
-                  checked={groupBy === 'project'}
-                  onToggle={() => setGroupBy(groupBy === 'project' ? 'flat' : 'project')}
-                  Icon={Folder}
-                />
-                <CheckMenuItem
-                  label={t('ccAgent.sidebar.filterGroupBy.dialogue')}
-                  checked={groupDialogue}
-                  onToggle={() => setGroupDialogue(!groupDialogue)}
-                  Icon={MessageSquare}
-                />
-                {hasRemoteDevices && (
-                  <CheckMenuItem
-                    label={t('ccAgent.sidebar.filterGroupBy.device')}
-                    checked={groupDevice}
-                    onToggle={() => setGroupDevice(!groupDevice)}
-                    Icon={Monitor}
-                  />
-                )}
-              </MenuSubRow>
-              <MenuSubRow
-                label={t('ccAgent.sidebar.filterTaskSortHeading')}
-                value={sortByValue}
-                Icon={ArrowDownWideNarrow}
-              >
-                {SORT_BY_OPTIONS.map((option) => (
-                  <SelectMenuItem
-                    key={option.value}
-                    label={t(option.menuLabelKey ?? option.labelKey)}
-                    selected={sortBy === option.value}
-                    Icon={option.Icon}
-                    onSelect={() => setSortBy(option.value)}
-                    tip={option.tipKey ? t(option.tipKey) : undefined}
-                  />
-                ))}
-              </MenuSubRow>
-              {groupBy === 'project' && (
-                <MenuSubRow
-                  label={t('ccAgent.sidebar.filterProjectOrderHeading')}
-                  value={optionLabel(PROJECT_ORDER_OPTIONS, scopedProjectOrder, t)}
-                  Icon={ListOrdered}
-                >
-                  {PROJECT_ORDER_OPTIONS.map((option) => (
-                    <SelectMenuItem
-                      key={option.value}
-                      label={t(option.labelKey)}
-                      selected={scopedProjectOrder === option.value}
-                      Icon={option.Icon}
-                      onSelect={() => setProjectOrder(option.value)}
-                      tip={option.tipKey ? t(option.tipKey) : undefined}
+              {!inboxMode && (
+                <>
+                  <MenuSubRow
+                    label={t('ccAgent.sidebar.filterGroupByHeading')}
+                    value={groupByValue}
+                    Icon={SidebarGroupsIcon}
+                  >
+                    <CheckMenuItem
+                      label={t('ccAgent.sidebar.filterGroupBy.project')}
+                      checked={groupBy === 'project'}
+                      onToggle={() => setGroupBy(groupBy === 'project' ? 'flat' : 'project')}
+                      Icon={Folder}
                     />
-                  ))}
-                </MenuSubRow>
+                    <CheckMenuItem
+                      label={t('ccAgent.sidebar.filterGroupBy.dialogue')}
+                      checked={groupDialogue}
+                      onToggle={() => setGroupDialogue(!groupDialogue)}
+                      Icon={MessageSquare}
+                    />
+                    <CheckMenuItem
+                      label={t('ccAgent.sidebar.filterGroupBy.automation')}
+                      checked={groupAutomation}
+                      onToggle={() => setGroupAutomation(!groupAutomation)}
+                      Icon={Timer}
+                    />
+                    {hasRemoteDevices && (
+                      <CheckMenuItem
+                        label={t('ccAgent.sidebar.filterGroupBy.device')}
+                        checked={groupDevice}
+                        onToggle={() => setGroupDevice(!groupDevice)}
+                        Icon={Monitor}
+                      />
+                    )}
+                  </MenuSubRow>
+                  <MenuSubRow
+                    label={t('ccAgent.sidebar.filterTaskSortHeading')}
+                    value={sortByValue}
+                    Icon={ArrowDownWideNarrow}
+                  >
+                    {SORT_BY_OPTIONS.map((option) => (
+                      <SelectMenuItem
+                        key={option.value}
+                        label={t(option.menuLabelKey ?? option.labelKey)}
+                        selected={sortBy === option.value}
+                        Icon={option.Icon}
+                        onSelect={() => setSortBy(option.value)}
+                        tip={option.tipKey ? t(option.tipKey) : undefined}
+                      />
+                    ))}
+                  </MenuSubRow>
+                  {groupBy === 'project' && (
+                    <MenuSubRow
+                      label={t('ccAgent.sidebar.filterProjectOrderHeading')}
+                      value={optionLabel(PROJECT_ORDER_OPTIONS, scopedProjectOrder, t)}
+                      Icon={ListOrdered}
+                    >
+                      {PROJECT_ORDER_OPTIONS.map((option) => (
+                        <SelectMenuItem
+                          key={option.value}
+                          label={t(option.labelKey)}
+                          selected={scopedProjectOrder === option.value}
+                          Icon={option.Icon}
+                          onSelect={() => setProjectOrder(option.value)}
+                          tip={option.tipKey ? t(option.tipKey) : undefined}
+                        />
+                      ))}
+                    </MenuSubRow>
+                  )}
+                  <DropdownMenuSeparator />
+                  <MenuSubRow
+                    label={t('ccAgent.sidebar.taskStatusHeading')}
+                    value={statusValue}
+                    filterReminder={status === 'archived'}
+                    Icon={ListChecks}
+                  >
+                    {STATUS_OPTIONS.map((option) => (
+                      <SelectMenuItem
+                        key={option.value}
+                        label={t(option.labelKey)}
+                        selected={status === option.value}
+                        filterReminder={status === 'archived' && option.value === 'archived'}
+                        Icon={option.Icon}
+                        onSelect={() => setStatus(option.value)}
+                      />
+                    ))}
+                  </MenuSubRow>
+                </>
               )}
-              <DropdownMenuSeparator />
-              <MenuSubRow
-                label={t('ccAgent.sidebar.taskStatusHeading')}
-                value={statusValue}
-                filterReminder={status === 'archived'}
-                Icon={ListChecks}
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <SelectMenuItem
-                    key={option.value}
-                    label={t(option.labelKey)}
-                    selected={status === option.value}
-                    filterReminder={status === 'archived' && option.value === 'archived'}
-                    Icon={option.Icon}
-                    onSelect={() => setStatus(option.value)}
-                  />
-                ))}
-              </MenuSubRow>
               <MenuSubRow
                 label={t('ccAgent.sidebar.filterHeading')}
                 value={filterSummary}
@@ -873,6 +894,12 @@ export function SidebarFilterPopover({
                   ))}
                 </MenuSubRow>
 
+                <CheckMenuItem
+                  label={t('ccAgent.sidebar.filterHideAutomations')}
+                  checked={filter.hideAutomations}
+                  onToggle={() => filter.setHideAutomations(!filter.hideAutomations)}
+                  Icon={Timer}
+                />
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onSelect={(event) => {
@@ -908,6 +935,7 @@ export function SidebarFilterPopover({
               </MenuSubRow>
               <MenuSubRow
                 label={t('ccAgent.sidebar.taskInfoHeading')}
+                contentClassName="w-max min-w-[220px]"
                 value={taskInfoSummary}
                 Icon={Info}
                 valueNode={
@@ -915,7 +943,7 @@ export function SidebarFilterPopover({
                     // 已选项用图标串表示,不再罗列短词。顺序 = 用户勾选顺序(遍历
                     // taskInfoFields 而非选项表),与列表行的渲染顺序一致。
                     <span className="flex items-center justify-end gap-1">
-                      {taskInfoFields.map((field) => {
+                      {summaryFields.map((field) => {
                         const Icon = TASK_INFO_OPTIONS.find(
                           (option) => option.value === field,
                         )?.Icon;
@@ -929,6 +957,9 @@ export function SidebarFilterPopover({
                           />
                         ) : null;
                       })}
+                      {summaryFields.length < taskInfoFields.length && (
+                        <span aria-hidden>+{taskInfoFields.length - summaryFields.length}</span>
+                      )}
                     </span>
                   ) : undefined
                 }

@@ -9,7 +9,7 @@ import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { flushAssistantSamplingMetadata, getAssistantSamplingRuntimeId } from '../messagePersistBroadcaster.desktop.js';
-import { createBotProfile, getBotMemoryService, setBotProfileAvatar, updateBotProfile } from '../localDb/ipc/bots.js';
+import { broadcastBotProfileChanged, createBotProfile, getBotMemoryService, setBotProfileAvatar, updateBotProfile } from '../localDb/ipc/bots.js';
 import { decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
 import { restoreCloudAvatar } from './avatarRestore.js';
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -456,6 +456,12 @@ export function createCompanionCloudHost(input: {
   };
   return {
     homes: companionHomes,
+    retireLocalCopy: async (botId, current) => {
+      if (!current()) throw new Error('OWNER_CHANGED');
+      const client = getDbClient();
+      const { changed } = await client.tx<{ changed: boolean }>('bots.retireCloudCopy', { botId, at: Date.now() });
+      if (current() && changed) broadcastBotProfileChanged({ botId, change: 'updated' });
+    },
     openState: (endpoint, humanActorId, current) => createCompanionCloudState({
       filePath: ownerScopedUserDataPath('companion-cloud',
         `${createHash('sha256').update(`${endpoint}\n${humanActorId}`).digest('hex')}.json`),

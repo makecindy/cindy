@@ -1,3 +1,4 @@
+import type { HandoffFieldPlan } from './types.js';
 import { randomUUID } from 'node:crypto';
 import {
   parseInputHandoffDecision,
@@ -36,6 +37,7 @@ export interface InputHandoffStartRequest {
   purpose: string;
   note?: string;
   requester?: string;
+  fields?: HandoffFieldPlan[];
   target: HandoffTargetSpec;
   completeWhen?: HandoffCompletionHints;
   timeoutMinutes?: number;
@@ -163,7 +165,7 @@ export function buildInputHandoffContinuation(result: HandoffResult): string {
     : result.scanned && result.status === 'succeeded'
     ? 'The owner says they scanned the code. Check yourself whether the sign-in finished; if the code had expired, take a fresh screenshot and ask again.'
     : result.failure === 'nothing_to_fill'
-    ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner.'
+    ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner. If it waits for a passkey, Touch ID, a security key or an approval on a phone, ask the owner in the conversation to finish it on this computer.'
     : result.status === 'succeeded' && result.steps === 0 && result.reason === 'detected'
     ? 'The owner finished on the window itself: the fields you asked about are gone. Check the current screen yourself and continue; ask again only if something still needs them.'
     : result.status === 'succeeded'
@@ -201,6 +203,7 @@ export class InputHandoffService {
       ...(request.note ? { note: request.note } : {}),
       ...(request.requester ? { requester: request.requester } : {}),
       target: request.target,
+      fields: request.fields,
       ...(request.completeWhen ? { completeWhen: request.completeWhen } : {}),
       timeoutMs: timeoutMs(request.timeoutMinutes),
       hostPid: this.deps.hostPid,
