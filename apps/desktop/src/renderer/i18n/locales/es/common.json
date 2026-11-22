@@ -12918,10 +12918,10 @@
           "stopDoneDropped_one": "⏹ Detuve la ejecución actual y descarté también el mensaje en cola. La sesión sigue ahí: envía una nueva instrucción cuando quieras continuar.",
           "stopDoneDropped_other": "⏹ Detuve la ejecución actual y descarté también los {{count}} mensajes en cola. La sesión sigue ahí: envía una nueva instrucción cuando quieras continuar.",
           "stopDoneDropped_many": "⏹ Detuve la ejecución actual y descarté también los {{count}} mensajes en cola. La sesión sigue ahí: envía una nueva instrucción cuando quieras continuar.",
-          "stopDone": "⏹ Detuve la ejecución actual. La sesión sigue ahí: envía una nueva instrucción cuando quieras continuar.",
+          "stopDone": "⏹ Se detuvo la ejecución actual. La sesión sigue ahí: envía una nueva instrucción cuando quieras continuar.",
           "stopIdle": "🤷 Ahora no hay nada en marcha, así que `!stop` no tenía nada que detener. Avísame cuando haya algo que parar.",
           "scheduledTaskHeader": "🤖 Automatización",
-          "scheduledTaskHeaderNamed": "🤖 Automatización «{{name}}»",
+          "scheduledTaskHeaderNamed": "🤖 Automatización “{{name}}”",
           "unsupportedOnly": "🙏 No puedo procesar este mensaje:\n{{items}}\n\nLo que sí puedo procesar: texto, imágenes (jpg/png/gif/webp), PDF y archivos de texto como código o configuración.",
           "unsupportedNotice": "ℹ️ No puedo procesar lo siguiente, así que lo dejé de lado:\n{{items}}\n\nRecibí el resto y ya estoy en ello.",
           "authMissing": {
@@ -12931,7 +12931,7 @@
             "providerDisconnected": "⚠️ Esta conversación de Discord usa el proveedor «{{provider}}» ({{model}}), pero no está conectado o la conexión ha caducado.",
             "agentLogin": "⚠️ Esta conversación de Discord usa el proveedor «{{provider}}» ({{model}}), que requiere iniciar sesión primero con las credenciales de {{agentKind}}.",
             "fixAttached": "Corrige la autenticación en Configuración → Proveedores en el escritorio y sigue enviando mensajes.",
-            "fixDetached": "Cambia la «Configuración de nuevas conversaciones» y sigue enviando mensajes. Si elegiste un modelo específico para esta conversación, envía `/model` para volver a elegirlo."
+            "fixDetached": "Cambia la “Configuración de nuevas conversaciones” y sigue enviando mensajes. Si esta conversación tiene un modelo elegido aparte, envía `/model` para volver a elegirlo."
           }
         },
         "cards": {
@@ -12946,7 +12946,7 @@
             "resolvedDeny": "❌ Denegado"
           },
           "ask": {
-            "noOptionsHint": "_(Esta pregunta no tiene opciones predefinidas: respóndeme con un mensaje de texto.)_",
+            "noOptionsHint": "_(Esta pregunta no tiene opciones predefinidas; respóndeme con texto.)_",
             "resolved": "✅ Seleccionado: {{option}}"
           },
           "plan": {
@@ -13130,7 +13130,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automatización “{{name}}”",
           "unsupportedOnly": "🙏 No puedo procesar este mensaje:\n{{list}}\n\nLo que sí puedo procesar: texto, imágenes (jpg/png/gif/webp), PDF y archivos de texto de código o configuración.",
           "unsupportedNotice": "ℹ️ No puedo procesar lo siguiente, así que lo dejé a un lado:\n{{list}}\n\nEl resto lo recibí y ya lo estoy procesando.",
-          "companionUnavailable": "⏸ Tu amigo no puede recibir mensajes ahora: {{reason}}",
+          "companionUnavailable": "⏸ Tu amigo no puede recibir mensajes ahora mismo: {{reason}}",
           "authMissing": {
             "currentProvider": "proveedor actual",
             "reasonGatewayKey": "primero hay que configurar una Cindy AI Key",
@@ -13155,15 +13155,15 @@
             "btnAllowAlways": "✅ Permitir siempre",
             "btnDeny": "❌ Denegar",
             "resolvedAllowOnce": "✅ Permitido (solo esta vez)",
-            "resolvedAllowAlways": "✅ Permitido (esta herramienta queda permitida en adelante)",
+            "resolvedAllowAlways": "✅ Permitido (esta herramienta se permitirá siempre a partir de ahora)",
             "resolvedDeny": "❌ Denegado"
           },
           "ask": {
             "noOptionsHint": "_(Esta pregunta no tiene opciones predefinidas; respóndeme con texto.)_",
-            "resolved": "✅ Elegido: {{option}}"
+            "resolved": "✅ Seleccionado: {{option}}"
           },
           "plan": {
-            "title": "📋 Esto es lo que pienso hacer",
+            "title": "📋 Este es mi plan",
             "btnApprove": "✅ Adelante",
             "btnReject": "❌ Espera",
             "resolvedApproved": "✅ Aprobado, manos a la obra",
@@ -13187,8 +13187,8 @@
             "fullAccessConfirmTitle": "⚠️ ¿Habilitar acceso completo?",
             "fullAccessConfirmBody": "El acceso completo desactiva el entorno aislado del espacio de trabajo y omite las aprobaciones habituales. Cindy podrá modificar archivos fuera del espacio de trabajo y ejecutar comandos de red sin preguntar; las operaciones integradas de alto riesgo seguirán requiriendo confirmación.",
             "btnConfirmFullAccess": "Habilitar acceso completo",
-            "btnCancelFullAccess": "Mantener permisos",
-            "fullAccessCancelled": "Cancelado, se mantienen los permisos actuales"
+            "btnCancelFullAccess": "Mantener permisos actuales",
+            "fullAccessCancelled": "Cancelado: se mantienen los permisos actuales"
           },
           "project": {
             "title": "📂 Cambiar de carpeta de proyecto",
@@ -13475,7 +13475,7 @@
             "fullAccessConfirmTitle": "⚠️ ¿Activar el acceso completo?",
             "fullAccessConfirmBody": "El acceso completo desactiva el sandbox del espacio de trabajo y omite las aprobaciones habituales. Cindy podrá modificar archivos fuera del espacio de trabajo y ejecutar comandos con acceso a la red; las acciones integradas de alto riesgo seguirán pidiendo confirmación.",
             "btnConfirmFullAccess": "Activar acceso completo",
-            "btnCancelFullAccess": "Mantener permisos",
+            "btnCancelFullAccess": "Mantener permisos actuales",
             "fullAccessCancelled": "Cancelado. Se mantienen los permisos actuales"
           },
           "control": {
@@ -13506,7 +13506,7 @@
           "permissionFooter": "Responde “{{allow}}” para ejecutarlo una vez o “{{deny}}” para cancelarlo. WeCom no admite autorizaciones permanentes.",
           "planIntro": "El Agent presentó un plan de ejecución:",
           "planFooter": "Responde “{{approve}}” para continuar o “{{deny}}” para cancelar.",
-          "askNoQuestion": "El Agent espera tu respuesta, pero no hay ninguna pregunta que mostrar. Responde “continuar”.",
+          "askNoQuestion": "El Agent está esperando tu respuesta, pero no hay ninguna pregunta que mostrar. Responde “continuar”.",
           "askIntro": "El Agent necesita tu respuesta:",
           "askFooter": "Responde con el número de una opción o escribe tu respuesta."
         }
@@ -13657,7 +13657,7 @@
           "control": {
             "title": "🎮 Elige un proyecto",
             "emptyBody": "_Todavía no hay proyectos que controlar~ Abre o crea una sesión en la app de escritorio y vuelve_",
-            "hint": "Toca un proyecto para continuar; toca 🚪 Salir para cancelar",
+            "hint": "Toca un proyecto para seguir; toca 🚪 Salir para cancelar",
             "attachedSwitchHint": "🎮 Controlando ahora: **{{title}}**\nElige otra sesión para cambiar directamente; toca 🚪 Salir para dejarlo como está",
             "btnExit": "🚪 Salir",
             "resolvedExit": "🚪 Listo, salgo. La próxima vez que quieras control remoto, envía /ctr",
@@ -13717,7 +13717,7 @@
           "completedNoText": "✅ Listo (el Agent no dijo nada en este turno)",
           "runtimeError": "⚠️ El Agent tuvo un problema: {{error}}",
           "sendInternalError": "❌ Error interno: {{error}}",
-          "apiKeyMissing": "⚠️ Todavía no configuraste la Cindy AI Key~\nConecta Cindy AI en la app de escritorio, en Configuración → Proveedores, y vuelve a escribirme",
+          "apiKeyMissing": "⚠️ Todavía no has configurado la Cindy AI Key~\nConecta Cindy AI en la app de escritorio, en Configuración → Proveedores, y vuelve a escribirme",
           "controlInProgress": "🎮 Todavía estás eligiendo en /ctr: termina con la tarjeta de arriba (o toca 🚪 Salir) antes de enviar otra cosa~",
           "credentialBusy": "⏳ El Agent local está ocupado con otro turno, así que todavía no se puede cambiar el modo de credenciales. Vuelve a enviarlo cuando termine.",
           "queuedNext": "⏳ El turno anterior sigue en marcha, así que este mensaje queda en cola y arrancará solo cuando termine. Envía `!stop` para detenerlo ya",
@@ -13755,7 +13755,7 @@
             "btnAllowAlways": "✅ Permitir siempre",
             "btnDeny": "❌ Denegar",
             "resolvedAllowOnce": "✅ Permitido (solo esta vez)",
-            "resolvedAllowAlways": "✅ Permitido (esta herramienta queda permitida a partir de ahora)",
+            "resolvedAllowAlways": "✅ Permitido (esta herramienta se permitirá siempre a partir de ahora)",
             "resolvedDeny": "❌ Denegado"
           },
           "ask": {
@@ -13779,7 +13779,7 @@
             "failed": "❌ No se pudo cambiar de modelo: {{reason}}"
           },
           "permissionMode": {
-            "title": "🛡️ Ajustar modo de permiso",
+            "title": "🛡️ Ajustar el modo de permiso",
             "currentLine": "**Actual**: {{label}}\n_{{description}}_",
             "hint": "Toca abajo para cambiar. auto = permite lo habitual y pide confirmación con tarjeta para lo sensible; bypass = permite todo; ask/default/plan/acceptEdits = aprobación mediante tarjetas",
             "resolved": "✅ Modo de permiso cambiado a {{label}}",
@@ -13856,7 +13856,7 @@
         "cardHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar. También puedes responder a este mensaje con texto. Para varias preguntas, responde «número: respuesta» (p. ej., «2: Español») y luego envía.",
         "submitLabel": "Enviar respuestas",
         "multiSelectHint": " (puedes elegir varias)",
-        "resolved": "✅ Elegido: {{option}}",
+        "resolved": "✅ Seleccionado: {{option}}",
         "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Esta tarjeta ha caducado",
         "textHint": "Solo puede responder quien hizo la consulta. Escribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",

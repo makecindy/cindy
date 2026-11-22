@@ -12817,7 +12817,7 @@
           "queuedNoticePosition": "⏳ Die vorherige Runde läuft noch. Diese Nachricht ist Nr. {{position}} in der Warteschlange und geht der Reihe nach an den Agent. Zum sofortigen Stoppen sende `!stop`.",
           "stopDoneDropped_one": "⏹ Die aktuelle Ausführung ist gestoppt, und die wartende Nachricht wurde ebenfalls verworfen. Die Sitzung bleibt erhalten – schick einfach eine neue Anweisung, wenn du weitermachen willst.",
           "stopDoneDropped_other": "⏹ Die aktuelle Ausführung ist gestoppt, und die {{count}} Nachrichten in der Warteschlange wurden ebenfalls verworfen. Die Sitzung bleibt erhalten – schick einfach eine neue Anweisung, wenn du weitermachen willst.",
-          "stopDone": "⏹ Die aktuelle Ausführung ist gestoppt. Die Sitzung bleibt erhalten – schick einfach eine neue Anweisung, wenn du weitermachen willst.",
+          "stopDone": "⏹ Die aktuelle Ausführung wurde gestoppt. Die Sitzung bleibt bestehen — sende jederzeit eine neue Anweisung, um weiterzumachen.",
           "stopIdle": "🤷 Gerade läuft nichts, `!stop` ging also ins Leere. Sag Bescheid, wenn es etwas zu stoppen gibt.",
           "scheduledTaskHeader": "🤖 Automatisierung",
           "scheduledTaskHeaderNamed": "🤖 Automatisierung „{{name}}“",
@@ -12845,7 +12845,7 @@
             "resolvedDeny": "❌ Abgelehnt"
           },
           "ask": {
-            "noOptionsHint": "_(Für diese Frage gibt es keine vorgegebenen Optionen – antworte mir einfach per Text.)_",
+            "noOptionsHint": "_(Für diese Frage gibt es keine vorgegebenen Optionen — antworte mir einfach mit Text.)_",
             "resolved": "✅ Ausgewählt: {{option}}"
           },
           "plan": {
@@ -12860,8 +12860,8 @@
             "currentLine": "**Aktuell**: {{label}}\n_{{description}}_",
             "currentLineWithEffort": "**Aktuell**: {{label}} · Denkintensität `{{effort}}`\n_{{description}}_",
             "hint": "Wähle unten aus, um zu wechseln. Ich führe das gewählte Modell automatisch mit der höchsten Denkintensität aus.",
-            "resolved": "✅ Gewechselt zu {{label}}",
-            "resolvedWithEffort": "✅ Gewechselt zu {{label}} (Denkintensität: {{effort}})",
+            "resolved": "✅ Zu {{label}} gewechselt",
+            "resolvedWithEffort": "✅ Zu {{label}} gewechselt (Denkintensität: {{effort}})",
             "failed": "❌ Modell konnte nicht gewechselt werden: {{reason}}"
           },
           "permissionMode": {
@@ -13053,13 +13053,13 @@
           },
           "ask": {
             "noOptionsHint": "_(Für diese Frage gibt es keine vorgegebenen Optionen — antworte mir einfach mit Text.)_",
-            "resolved": "✅ Gewählt: {{option}}"
+            "resolved": "✅ Ausgewählt: {{option}}"
           },
           "plan": {
             "title": "📋 So würde ich vorgehen",
             "btnApprove": "✅ Los geht’s",
             "btnReject": "❌ Moment",
-            "resolvedApproved": "✅ Genehmigt, ich lege los",
+            "resolvedApproved": "✅ Freigegeben – los geht's",
             "resolvedRejected": "❌ Pausiert"
           },
           "model": {
@@ -13081,7 +13081,7 @@
             "fullAccessConfirmBody": "Vollzugriff deaktiviert die Arbeitsbereich-Sandbox und überspringt routinemäßige Genehmigungen. Cindy kann dann ohne Rückfrage Dateien außerhalb des Arbeitsbereichs ändern und Netzwerkbefehle ausführen; integrierte risikoreiche Vorgänge erfordern weiterhin eine Bestätigung.",
             "btnConfirmFullAccess": "Vollzugriff aktivieren",
             "btnCancelFullAccess": "Aktuelle Berechtigungen behalten",
-            "fullAccessCancelled": "Abgebrochen, aktuelle Berechtigungen bleiben bestehen"
+            "fullAccessCancelled": "Abgebrochen – aktuelle Berechtigungen bleiben"
           },
           "project": {
             "title": "📂 Projektordner wechseln",
@@ -13099,7 +13099,7 @@
           "control": {
             "title": "🎮 Projekt wählen",
             "emptyBody": "_Noch kein Projekt zum Übernehmen. Öffne oder erstelle am Desktop eine Sitzung und komm dann wieder._",
-            "hint": "Tippe auf ein Projekt, um weiterzugehen; tippe auf 🚪 Beenden, um abzubrechen",
+            "hint": "Tippe auf ein Projekt, um weiterzumachen; 🚪 Beenden bricht ab",
             "attachedSwitchHint": "🎮 Aktuell übernommen: **{{title}}**\nWähle eine andere Sitzung, um direkt umzusteigen; tippe auf 🚪 Beenden, um alles so zu lassen",
             "btnExit": "🚪 Beenden",
             "resolvedExit": "🚪 Bin raus. Wenn du wieder fernsteuern willst, sende /ctr",
@@ -13363,7 +13363,7 @@
             "fullAccessConfirmTitle": "⚠️ Vollzugriff aktivieren?",
             "fullAccessConfirmBody": "Vollzugriff schaltet die Sandbox des Arbeitsbereichs ab und überspringt die üblichen Freigaben. Cindy kann dann Dateien außerhalb des Arbeitsbereichs ändern und Befehle mit Netzwerkzugriff ausführen; eingebaute Hochrisiko-Aktionen erfordern weiterhin eine Bestätigung.",
             "btnConfirmFullAccess": "Vollzugriff aktivieren",
-            "btnCancelFullAccess": "Berechtigungen behalten",
+            "btnCancelFullAccess": "Aktuelle Berechtigungen behalten",
             "fullAccessCancelled": "Abgebrochen. Die aktuellen Berechtigungen bleiben bestehen"
           },
           "control": {
@@ -13494,8 +13494,8 @@
             }
           },
           "plan": {
-            "title": "📋 Mein Plan",
-            "btnApprove": "✅ Leg los",
+            "title": "📋 So würde ich vorgehen",
+            "btnApprove": "✅ Los geht’s",
             "btnReject": "❌ Moment",
             "resolvedApproved": "✅ Freigegeben – los geht's",
             "resolvedRejected": "❌ Pausiert"
@@ -13518,7 +13518,7 @@
             "fullAccessConfirmTitle": "⚠️ Vollzugriff aktivieren?",
             "fullAccessConfirmBody": "Vollzugriff deaktiviert die Sandbox des Arbeitsbereichs und überspringt die üblichen Freigaben. Cindy kann ohne Nachfrage Dateien außerhalb des Arbeitsbereichs ändern und Befehle mit Netzwerkzugriff ausführen; integrierte Hochrisiko-Aktionen erfordern weiterhin eine Bestätigung.",
             "btnConfirmFullAccess": "Vollzugriff aktivieren",
-            "btnCancelFullAccess": "Berechtigungen behalten",
+            "btnCancelFullAccess": "Aktuelle Berechtigungen behalten",
             "fullAccessCancelled": "Abgebrochen – aktuelle Berechtigungen bleiben"
           },
           "permissionModeFix": {
@@ -13542,7 +13542,7 @@
             "dialogueName": "Chat (verwalteter Ordner)"
           },
           "control": {
-            "title": "🎮 Wähle ein Projekt",
+            "title": "🎮 Projekt wählen",
             "emptyBody": "_Noch keine Projekte zum Steuern~ Öffne oder erstelle eine Sitzung in der Desktop-App und komm dann wieder_",
             "hint": "Tippe auf ein Projekt, um weiterzumachen; 🚪 Beenden bricht ab",
             "attachedSwitchHint": "🎮 Aktuell gesteuert: **{{title}}**\nWähle eine andere Sitzung, um direkt zu wechseln; 🚪 Beenden lässt alles, wie es ist",
@@ -13598,7 +13598,7 @@
           "unknownCommand": "Den Befehl `{{cmd}}` kenne ich nicht 🤔\nDiese Befehle verstehe ich: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Übernahme beendet – wir sind zurück in unserem WeChat-Privatchat. Wenn du die Desktop-App wieder fernsteuern willst, sende /ctr",
           "detachedByRevoke": "⚠️ Du hast die Übernahme in der Desktop-App zurückgenommen. Weitere Nachrichten landen wieder in unserem WeChat-Privatchat.",
-          "notAttached": "🤷 Du steuerst gerade keine Sitzung, /exctr hat also nichts zu tun."
+          "notAttached": "🤷 Du hast gerade keine Sitzung übernommen, /exctr hat also nichts zu tun."
         },
         "agent": {
           "completedNoText": "✅ Fertig (der Agent hat diesmal nichts gesagt)",
@@ -13650,7 +13650,7 @@
           },
           "plan": {
             "title": "📋 So würde ich vorgehen",
-            "btnApprove": "✅ Los geht's",
+            "btnApprove": "✅ Los geht’s",
             "btnReject": "❌ Warte",
             "resolvedApproved": "✅ Genehmigt, es geht los",
             "resolvedRejected": "❌ Pausiert"
@@ -13662,14 +13662,14 @@
             "hint": "Tippe unten, um zu wechseln. Ich nutze für das gewählte Modell automatisch die höchste Denkintensität",
             "resolved": "✅ Zu {{label}} gewechselt",
             "resolvedWithEffort": "✅ Zu {{label}} gewechselt (Denkintensität: {{effort}})",
-            "failed": "❌ Modell konnte nicht gewechselt werden: {{reason}}"
+            "failed": "❌ Modellwechsel fehlgeschlagen: {{reason}}"
           },
           "permissionMode": {
             "title": "🛡️ Berechtigungsmodus anpassen",
             "currentLine": "**Aktuell**: {{label}}\n_{{description}}_",
             "hint": "Tippe unten, um zu wechseln. auto = Routineaktionen erlaubt, heikle Aktionen per Karte bestätigen; bypass = alles erlauben; ask/default/plan/acceptEdits = Freigabe per Karte",
             "resolved": "✅ Berechtigungsmodus auf {{label}} umgestellt",
-            "failed": "❌ Berechtigungsmodus konnte nicht umgestellt werden: {{reason}}",
+            "failed": "❌ Berechtigungsmodus konnte nicht gewechselt werden: {{reason}}",
             "fullAccessConfirmTitle": "⚠️ Vollzugriff aktivieren?",
             "fullAccessConfirmBody": "Vollzugriff schaltet die Sandbox des Arbeitsbereichs ab und überspringt die üblichen Freigaben. Cindy kann dann Dateien außerhalb des Arbeitsbereichs ändern und Netzwerkbefehle ohne Rückfrage ausführen; integrierte Hochrisiko-Aktionen erfordern weiterhin eine Bestätigung.",
             "btnConfirmFullAccess": "Vollzugriff aktivieren",
@@ -13679,7 +13679,7 @@
           "control": {
             "title": "🎮 Projekt wählen",
             "emptyBody": "_Noch keine Projekte zum Übernehmen~ Öffne oder erstelle eine Sitzung in der Desktop-App und komm dann wieder_",
-            "hint": "Tippe auf ein Projekt, um weiterzumachen; tippe auf 🚪 Beenden, um abzubrechen",
+            "hint": "Tippe auf ein Projekt, um weiterzumachen; 🚪 Beenden bricht ab",
             "attachedSwitchHint": "🎮 Aktuell übernommen: **{{sessionTitle}}**\nWähle eine neue Sitzung, um direkt zu wechseln; tippe auf 🚪 Beenden, um alles so zu lassen",
             "btnExit": "🚪 Beenden",
             "resolvedExit": "🚪 Beendet. Sende /ctr, wenn du wieder fernsteuern willst",
@@ -13741,7 +13741,7 @@
         "cardHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden. Du kannst auch auf diese Nachricht mit Text antworten. Antworte bei mehreren Fragen mit „Fragennummer: Antwort“ (z. B. „2: Deutsch“) und sende anschließend ab.",
         "submitLabel": "Antworten senden",
         "multiSelectHint": " (Mehrfachauswahl möglich)",
-        "resolved": "✅ Gewählt: {{option}}",
+        "resolved": "✅ Ausgewählt: {{option}}",
         "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Diese Karte ist abgelaufen",
         "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",

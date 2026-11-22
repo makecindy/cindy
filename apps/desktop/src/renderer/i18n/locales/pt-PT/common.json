@@ -12918,10 +12918,10 @@
           "stopDoneDropped_one": "⏹ A execução atual foi parada e a mensagem em fila também foi descartada. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
           "stopDoneDropped_other": "⏹ A execução atual foi parada e as {{count}} mensagens em fila também foram descartadas. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
           "stopDoneDropped_many": "⏹ A execução atual foi parada e as {{count}} mensagens em fila também foram descartadas. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
-          "stopDone": "⏹ A execução atual foi parada. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
+          "stopDone": "⏹ A execução atual foi interrompida. A sessão continua disponível — envie uma nova instrução quando quiser continuar.",
           "stopIdle": "🤷 De momento não há nada em execução, por isso o `!stop` não tinha nada para parar. Chame-me quando houver algo para interromper.",
           "scheduledTaskHeader": "🤖 Automatização",
-          "scheduledTaskHeaderNamed": "🤖 Automatização «{{name}}»",
+          "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{items}}\n\nO que consigo processar: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto, como código e configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, por isso deixei-o de lado:\n{{items}}\n\nO resto foi recebido e já está a ser processado.",
           "authMissing": {
@@ -12931,7 +12931,7 @@
             "providerDisconnected": "⚠️ Esta conversa do Discord usa o fornecedor «{{provider}}» ({{model}}), mas não está ligado ou a ligação expirou.",
             "agentLogin": "⚠️ Esta conversa do Discord usa o fornecedor «{{provider}}» ({{model}}), que requer primeiro iniciar sessão com as credenciais do {{agentKind}}.",
             "fixAttached": "Corrija a autenticação em Definições → Fornecedores no computador e continue a enviar mensagens.",
-            "fixDetached": "Altere a «Configuração de novas conversas» e continue a enviar mensagens. Se esta conversa tiver um modelo escolhido à parte, envie `/model` para voltar a escolher."
+            "fixDetached": "Depois de alterar a “Configuração de novas conversas”, basta continuar a enviar mensagens. Se esta conversa tiver um modelo escolhido à parte, basta enviar `/model` para escolher novamente."
           }
         },
         "cards": {
@@ -12946,7 +12946,7 @@
             "resolvedDeny": "❌ Recusado"
           },
           "ask": {
-            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — responda simplesmente por texto.)_",
+            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — basta responder com texto.)_",
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
@@ -13114,7 +13114,7 @@
         },
         "agent": {
           "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
-          "runtimeError": "⚠️ O Agent teve um problema: {{error}}",
+          "runtimeError": "⚠️ O Agent encontrou um problema: {{error}}",
           "sendInternalError": "❌ Erro interno: {{error}}",
           "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada.\nLigue o Cindy AI no computador em Definições → Fornecedores e depois volte a chamar-me",
           "controlInProgress": "🎮 A escolha do /ctr ainda está a decorrer — termine primeiro o cartão acima (ou toque em 🚪 Sair) antes de enviar outra coisa.",
@@ -13127,10 +13127,10 @@
           "stopDoneDropped_other": "⏹ A execução atual foi interrompida e as {{count}} mensagens em fila também foram retiradas. A sessão continua disponível — envie uma nova instrução quando quiser continuar.",
           "stopIdle": "🤷 Não há nada a correr agora, por isso o `!stop` não teve nada para parar. Chame-me quando houver algo para interromper.",
           "scheduledTaskHeader": "🤖 Automatização",
-          "scheduledTaskHeaderNamed": "🤖 Automatização «{{name}}»",
+          "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{list}}\n\nO que consigo processar: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, por isso pus de lado:\n{{list}}\n\nO resto foi recebido e já está a ser processado.",
-          "companionUnavailable": "⏸ O seu amigo não pode receber mensagens agora: {{reason}}",
+          "companionUnavailable": "⏸ O amigo não pode receber mensagens neste momento: {{reason}}",
           "authMissing": {
             "currentProvider": "fornecedor atual",
             "reasonGatewayKey": "é necessário configurar primeiro uma Cindy AI Key",
@@ -13154,7 +13154,7 @@
             "btnAllowOnce": "✅ Permitir uma vez",
             "btnAllowAlways": "✅ Permitir sempre",
             "btnDeny": "❌ Recusar",
-            "resolvedAllowOnce": "✅ Permitido (só desta vez)",
+            "resolvedAllowOnce": "✅ Permitido (apenas desta vez)",
             "resolvedAllowAlways": "✅ Permitido (esta ferramenta passa a ser sempre permitida)",
             "resolvedDeny": "❌ Recusado"
           },
@@ -13163,7 +13163,7 @@
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
-            "title": "📋 Eis o que tenciono fazer",
+            "title": "📋 O plano é este",
             "btnApprove": "✅ Avançar",
             "btnReject": "❌ Esperar",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
@@ -13187,8 +13187,8 @@
             "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
             "fullAccessConfirmBody": "O acesso total desativa o ambiente isolado do espaço de trabalho e dispensa as aprovações habituais. O Cindy pode modificar ficheiros fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações integradas de alto risco continuarão a exigir confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
-            "btnCancelFullAccess": "Manter permissões",
-            "fullAccessCancelled": "Cancelado, as permissões atuais foram mantidas"
+            "btnCancelFullAccess": "Manter permissões atuais",
+            "fullAccessCancelled": "Cancelado — as permissões atuais foram mantidas"
           },
           "project": {
             "title": "📂 Mudar a pasta do projeto",
@@ -13206,7 +13206,7 @@
           "control": {
             "title": "🎮 Escolha um projeto",
             "emptyBody": "_Ainda não há projetos para assumir. Abra ou crie uma sessão no computador e depois volte._",
-            "hint": "Toque num projeto para avançar; toque em 🚪 Sair para cancelar",
+            "hint": "Tocar num projeto para continuar; 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Sob controlo agora: **{{title}}**\nEscolha outra sessão para mudar diretamente; toque em 🚪 Sair para deixar como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saí. Da próxima vez que quiser controlo remoto, envie /ctr",
@@ -13420,8 +13420,8 @@
           "stopDoneDropped_one": "⏹ A tarefa atual foi parada e {{count}} mensagem em fila foi removida.",
           "stopDoneDropped_many": "⏹ A tarefa atual foi parada e {{count}} mensagens em fila foram removidas.",
           "stopIdle": "Não há nenhuma tarefa em execução nem em fila.",
-          "scheduledTaskHeaderNamed": "🤖 Tarefa automática «{{name}}»",
-          "scheduledTaskHeader": "🤖 Tarefa automática",
+          "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
+          "scheduledTaskHeader": "🤖 Automatização",
           "unsupportedOnly": "🙏 De momento, não é possível processar esta mensagem:\n{{items}}",
           "unsupportedNotice": "ℹ️ Não foi possível processar o seguinte:\n{{items}}\n\nO restante conteúdo continuará a ser processado.",
           "authMissing": {
@@ -13475,7 +13475,7 @@
             "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
             "fullAccessConfirmBody": "O acesso total desativa a sandbox do espaço de trabalho e ignora as aprovações habituais. O Cindy poderá modificar ficheiros fora do espaço de trabalho e executar comandos com acesso à rede; as ações integradas de alto risco continuam a pedir confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
-            "btnCancelFullAccess": "Manter permissões",
+            "btnCancelFullAccess": "Manter permissões atuais",
             "fullAccessCancelled": "Cancelado. As permissões atuais foram mantidas"
           },
           "control": {
@@ -13506,7 +13506,7 @@
           "permissionFooter": "Responda «{{allow}}» para executar uma vez ou «{{deny}}» para cancelar. O WeCom não suporta autorizações permanentes.",
           "planIntro": "O Agent apresentou um plano de execução:",
           "planFooter": "Responda «{{approve}}» para continuar ou «{{deny}}» para cancelar.",
-          "askNoQuestion": "O Agent está à espera da sua resposta, mas não há nenhuma pergunta para mostrar. Responda «continuar».",
+          "askNoQuestion": "O Agent está à espera da sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
           "askIntro": "O Agent precisa da sua resposta:",
           "askFooter": "Responda com o número de uma opção ou escreva diretamente a sua resposta."
         }
@@ -13655,7 +13655,7 @@
             "dialogueName": "Conversa (pasta gerida)"
           },
           "control": {
-            "title": "🎮 Escolher um projeto",
+            "title": "🎮 Escolha um projeto",
             "emptyBody": "_Ainda não há projetos para controlar~ Basta abrir ou criar uma sessão na aplicação para computador e voltar_",
             "hint": "Tocar num projeto para continuar; 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Em controlo: **{{title}}**\nEscolher outra sessão muda diretamente; 🚪 Sair mantém tudo como está",
@@ -13711,13 +13711,13 @@
           "unknownCommand": "Não reconheço o comando `{{cmd}}` 🤔\nComandos disponíveis: /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Controlo remoto terminado — de volta à nossa conversa privada no WeChat. Para voltar a controlar remotamente a app para computador, envie /ctr",
           "detachedByRevoke": "⚠️ Retomou o controlo na app para computador. As próximas mensagens voltam para a nossa conversa privada no WeChat.",
-          "notAttached": "🤷 Não está a controlar nenhuma sessão de momento, por isso o /exctr não tem nada para fazer."
+          "notAttached": "🤷 Não está a controlar nenhuma sessão neste momento, por isso o /exctr não tem nada para fazer."
         },
         "agent": {
           "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
           "runtimeError": "⚠️ O Agent teve um problema: {{error}}",
           "sendInternalError": "❌ Erro interno: {{error}}",
-          "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada~\nLigue o Cindy AI na app para computador, em Definições → Fornecedores, e volte a falar comigo",
+          "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada~\nBasta ligar o Cindy AI na aplicação para computador, em Definições → Fornecedores, e depois enviar uma nova mensagem",
           "controlInProgress": "🎮 Ainda está a meio da seleção do /ctr — conclua primeiro o cartão acima (ou toque em 🚪 Sair) antes de enviar outra coisa~",
           "credentialBusy": "⏳ O Agent local está ocupado com outro turno, por isso ainda não é possível mudar o modo de credenciais. Envie novamente quando esse turno terminar.",
           "queuedNext": "⏳ O turno anterior ainda está a decorrer, por isso esta mensagem fica em fila e avança automaticamente quando terminar. Envie `!stop` para parar já",
@@ -13763,7 +13763,7 @@
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
-            "title": "📋 O meu plano",
+            "title": "📋 O plano é este",
             "btnApprove": "✅ Avançar",
             "btnReject": "❌ Aguardar",
             "resolvedApproved": "✅ Aprovado, a começar",
@@ -13779,7 +13779,7 @@
             "failed": "❌ Não foi possível mudar de modelo: {{reason}}"
           },
           "permissionMode": {
-            "title": "🛡️ Ajustar modo de permissões",
+            "title": "🛡️ Ajustar o modo de permissões",
             "currentLine": "**Atual**: {{label}}\n_{{description}}_",
             "hint": "Toque abaixo para mudar. auto = ações habituais permitidas, ações sensíveis pedem confirmação por cartão; bypass = permitir tudo; ask/default/plan/acceptEdits = aprovação por cartão",
             "resolved": "✅ Modo de permissões mudado para {{label}}",
@@ -13793,7 +13793,7 @@
           "control": {
             "title": "🎮 Escolha um projeto",
             "emptyBody": "_Ainda não há projetos para controlar~ Abra ou crie uma sessão na app para computador e volte depois_",
-            "hint": "Toque num projeto para continuar; toque em 🚪 Sair para cancelar",
+            "hint": "Tocar num projeto para continuar; 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 A controlar: **{{sessionTitle}}**\nEscolha uma nova sessão para mudar; toque em 🚪 Sair para manter tudo como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Terminado. Envie /ctr quando quiser voltar a controlar remotamente",
@@ -13804,7 +13804,7 @@
             "btnBack": "↩️ Voltar",
             "resolvedSessionPick": "🎯 Ligado: **{{sessionTitle}}** ({{workspaceName}})\nAs suas mensagens passam a ir diretamente para esta sessão; envie `/exctr` a qualquer momento para sair",
             "resolvedNewSession": "✨ Nova sessão criada e sob o seu controlo (em **{{workspaceName}}**)\nEnvie uma instrução para começar; `/exctr` para sair",
-            "attachFailed": "❌ Não foi possível assumir o controlo: {{reason}}",
+            "attachFailed": "❌ Não foi possível assumir: {{reason}}",
             "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está ocupada — há um novo cartão abaixo, escolha novamente",
             "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** está a meio de uma luta com o chefe~\nO Agent ainda está a pensar ou a programar; espere que este turno acabe e entre com `/ctr`",
             "sessionBusyPrompt2": "🚧 Ainda não dá para entrar — **{{sessionTitle}}** tem um turno por terminar.\nBeba um copo de água e aguarde uns segundos; o Agent avisa quando acabar",

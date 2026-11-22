@@ -12908,7 +12908,7 @@
         },
         "agent": {
           "completedNoText": "✅ Pronto (o Agent não disse nada neste turno)",
-          "runtimeError": "⚠️ O Agent deu problema: {{error}}",
+          "runtimeError": "⚠️ O Agent teve um problema: {{error}}",
           "sendInternalError": "❌ Erro interno: {{error}}",
           "apiKeyMissing": "⚠️ A Cindy AI Key ainda não foi configurada.\nConecte o Cindy AI em Configurações → Provedores no desktop e depois me chame de novo.",
           "controlInProgress": "🎮 Você ainda está escolhendo no /ctr — termine o cartão acima (ou clique em 🚪 Sair) antes de mandar outra coisa.",
@@ -12918,7 +12918,7 @@
           "stopDoneDropped_one": "⏹ Parei a execução atual e descartei também a mensagem na fila. A sessão continua aqui — mande uma nova instrução quando quiser continuar.",
           "stopDoneDropped_other": "⏹ Parei a execução atual e descartei também as {{count}} mensagens na fila. A sessão continua aqui — mande uma nova instrução quando quiser continuar.",
           "stopDoneDropped_many": "⏹ Parei a execução atual e descartei também as {{count}} mensagens na fila. A sessão continua aqui — mande uma nova instrução quando quiser continuar.",
-          "stopDone": "⏹ Parei a execução atual. A sessão continua aqui — mande uma nova instrução quando quiser continuar.",
+          "stopDone": "⏹ A execução atual foi interrompida. A sessão continua aqui — envie uma nova instrução quando quiser continuar.",
           "stopIdle": "🤷 Não tem nada rodando agora, então o `!stop` não tinha o que parar. Me chame quando tiver algo para interromper.",
           "scheduledTaskHeader": "🤖 Automação",
           "scheduledTaskHeaderNamed": "🤖 Automação “{{name}}”",
@@ -12931,7 +12931,7 @@
             "providerDisconnected": "⚠️ Esta conversa do Discord usa o provedor “{{provider}}” ({{model}}), mas ele não está conectado ou a conexão expirou.",
             "agentLogin": "⚠️ Esta conversa do Discord usa o provedor “{{provider}}” ({{model}}), que exige fazer login primeiro com as credenciais do {{agentKind}}.",
             "fixAttached": "Corrija a autenticação em Configurações → Provedores no desktop e continue enviando mensagens.",
-            "fixDetached": "Altere a “Configuração de novas conversas” e continue enviando mensagens. Se você escolheu um modelo específico para esta conversa, envie `/model` para escolher de novo."
+            "fixDetached": "Altere a “Configuração de novas conversas” e é só continuar enviando mensagens. Se esta conversa tiver um modelo escolhido separadamente, envie `/model` para escolher de novo."
           }
         },
         "cards": {
@@ -12939,20 +12939,20 @@
             "title": "🔧 Chamada de ferramenta: {{toolName}}",
             "paramsLabel": "**Prévia dos parâmetros**",
             "btnAllowOnce": "✅ Permitir uma vez",
-            "btnAllowAlways": "✅ Sempre permitir",
+            "btnAllowAlways": "✅ Permitir sempre",
             "btnDeny": "❌ Negar",
             "resolvedAllowOnce": "✅ Permitido (só desta vez)",
             "resolvedAllowAlways": "✅ Permitido (esta ferramenta será sempre permitida daqui em diante)",
             "resolvedDeny": "❌ Negado"
           },
           "ask": {
-            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — é só me responder por texto.)_",
+            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — é só me responder com texto.)_",
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
             "title": "📋 Este é o meu plano",
-            "btnApprove": "✅ Pode fazer",
-            "btnReject": "❌ Espera aí",
+            "btnApprove": "✅ Pode ir",
+            "btnReject": "❌ Espera",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
             "resolvedRejected": "❌ Pausado"
           },
@@ -13152,10 +13152,10 @@
             "title": "🔧 Chamada de ferramenta: {{tool}}",
             "paramsLabel": "**Prévia dos parâmetros**",
             "btnAllowOnce": "✅ Permitir uma vez",
-            "btnAllowAlways": "✅ Sempre permitir",
+            "btnAllowAlways": "✅ Permitir sempre",
             "btnDeny": "❌ Negar",
             "resolvedAllowOnce": "✅ Permitido (só desta vez)",
-            "resolvedAllowAlways": "✅ Permitido (esta ferramenta fica liberada daqui em diante)",
+            "resolvedAllowAlways": "✅ Permitido (esta ferramenta será sempre permitida daqui em diante)",
             "resolvedDeny": "❌ Negado"
           },
           "ask": {
@@ -13163,9 +13163,9 @@
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
-            "title": "📋 Veja o que pretendo fazer",
+            "title": "📋 Este é o meu plano",
             "btnApprove": "✅ Pode ir",
-            "btnReject": "❌ Espere",
+            "btnReject": "❌ Espera aí",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
             "resolvedRejected": "❌ Pausado"
           },
@@ -13187,8 +13187,8 @@
             "fullAccessConfirmTitle": "⚠️ Ativar acesso total?",
             "fullAccessConfirmBody": "O acesso total desativa o sandbox do espaço de trabalho e dispensa aprovações de rotina. O Cindy poderá modificar arquivos fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações integradas de alto risco ainda exigirão confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
-            "btnCancelFullAccess": "Manter permissões",
-            "fullAccessCancelled": "Cancelado, as permissões atuais foram mantidas"
+            "btnCancelFullAccess": "Manter permissões atuais",
+            "fullAccessCancelled": "Cancelado — as permissões atuais foram mantidas"
           },
           "project": {
             "title": "📂 Trocar a pasta do projeto",
@@ -13206,7 +13206,7 @@
           "control": {
             "title": "🎮 Escolha um projeto",
             "emptyBody": "_Ainda não há projetos para assumir. Abra ou crie uma sessão no desktop e depois volte._",
-            "hint": "Toque em um projeto para seguir; toque em 🚪 Sair para cancelar",
+            "hint": "Toque em um projeto para continuar; toque em 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Controlando agora: **{{title}}**\nEscolha outra sessão para trocar direto; toque em 🚪 Sair para deixar como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saí. Da próxima vez que quiser controle remoto, envie /ctr",
@@ -13420,8 +13420,8 @@
           "stopDoneDropped_one": "⏹ A tarefa atual foi interrompida e {{count}} mensagem na fila foi removida.",
           "stopDoneDropped_many": "⏹ A tarefa atual foi interrompida e {{count}} mensagens na fila foram removidas.",
           "stopIdle": "Não há nenhuma tarefa em execução nem na fila.",
-          "scheduledTaskHeaderNamed": "🤖 Tarefa automática “{{name}}”",
-          "scheduledTaskHeader": "🤖 Tarefa automática",
+          "scheduledTaskHeaderNamed": "🤖 Automação “{{name}}”",
+          "scheduledTaskHeader": "🤖 Automação",
           "unsupportedOnly": "🙏 No momento, não é possível processar esta mensagem:\n{{items}}",
           "unsupportedNotice": "ℹ️ Não foi possível processar o seguinte:\n{{items}}\n\nO restante continuará sendo processado.",
           "authMissing": {
@@ -13475,7 +13475,7 @@
             "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
             "fullAccessConfirmBody": "O acesso total desativa a sandbox do espaço de trabalho e pula as aprovações habituais. O Cindy poderá modificar arquivos fora do espaço de trabalho e executar comandos com acesso à rede; ações integradas de alto risco continuam pedindo confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
-            "btnCancelFullAccess": "Manter permissões",
+            "btnCancelFullAccess": "Manter permissões atuais",
             "fullAccessCancelled": "Cancelado. As permissões atuais foram mantidas"
           },
           "control": {
@@ -13506,7 +13506,7 @@
           "permissionFooter": "Responda “{{allow}}” para executar uma vez ou “{{deny}}” para cancelar. O WeCom não oferece suporte a autorizações permanentes.",
           "planIntro": "O Agent enviou um plano de execução:",
           "planFooter": "Responda “{{approve}}” para continuar ou “{{deny}}” para cancelar.",
-          "askNoQuestion": "O Agent está aguardando sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
+          "askNoQuestion": "O Agent está esperando sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
           "askIntro": "O Agent precisa da sua resposta:",
           "askFooter": "Responda com o número de uma opção ou digite sua resposta."
         }
@@ -13608,7 +13608,7 @@
           },
           "plan": {
             "title": "📋 Este é o meu plano",
-            "btnApprove": "✅ Pode seguir",
+            "btnApprove": "✅ Pode ir",
             "btnReject": "❌ Espera aí",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
             "resolvedRejected": "❌ Pausado"
@@ -13755,7 +13755,7 @@
             "btnAllowAlways": "✅ Permitir sempre",
             "btnDeny": "❌ Negar",
             "resolvedAllowOnce": "✅ Permitido (só desta vez)",
-            "resolvedAllowAlways": "✅ Permitido (esta ferramenta fica liberada daqui em diante)",
+            "resolvedAllowAlways": "✅ Permitido (esta ferramenta será sempre permitida daqui em diante)",
             "resolvedDeny": "❌ Negado"
           },
           "ask": {
@@ -13763,7 +13763,7 @@
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
-            "title": "📋 Meu plano",
+            "title": "📋 Este é o meu plano",
             "btnApprove": "✅ Pode ir",
             "btnReject": "❌ Espera",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
@@ -13779,7 +13779,7 @@
             "failed": "❌ Não foi possível trocar de modelo: {{reason}}"
           },
           "permissionMode": {
-            "title": "🛡️ Ajustar modo de permissão",
+            "title": "🛡️ Ajustar o modo de permissão",
             "currentLine": "**Atual**: {{label}}\n_{{description}}_",
             "hint": "Toque abaixo para trocar. auto = ações comuns liberadas, ações sensíveis pedem confirmação por cartão; bypass = libera tudo; ask/default/plan/acceptEdits = aprovação por cartão",
             "resolved": "✅ Modo de permissão trocado para {{label}}",
@@ -13804,7 +13804,7 @@
             "btnBack": "↩️ Voltar",
             "resolvedSessionPick": "🎯 Conectado: **{{sessionTitle}}** ({{workspaceName}})\nSuas mensagens agora vão direto para esta sessão; envie `/exctr` quando quiser sair",
             "resolvedNewSession": "✨ Nova sessão criada e sob seu controle (em **{{workspaceName}}**)\nMande uma instrução para começar; `/exctr` para sair",
-            "attachFailed": "❌ Não foi possível assumir o controle: {{reason}}",
+            "attachFailed": "❌ Não foi possível assumir: {{reason}}",
             "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está ocupada — mandei um cartão novo abaixo, escolha de novo",
             "sessionBusyPrompt1": "⏳ **{{sessionTitle}}** está no meio da luta contra o chefão~\nO Agent ainda está pensando ou programando; espere este turno acabar e entre com `/ctr`",
             "sessionBusyPrompt2": "🚧 Não dá para entrar ainda — **{{sessionTitle}}** tem um turno para terminar.\nTome um gole de água e espere uns segundos; o Agent chama você quando acabar",

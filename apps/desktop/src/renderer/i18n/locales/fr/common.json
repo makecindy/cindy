@@ -12918,7 +12918,7 @@
           "stopDoneDropped_one": "⏹ Exécution en cours arrêtée, et le message en attente a aussi été annulé. La session est toujours là : envoyez une nouvelle instruction quand vous voulez continuer.",
           "stopDoneDropped_other": "⏹ Exécution en cours arrêtée, et les {{count}} messages en attente ont aussi été annulés. La session est toujours là : envoyez une nouvelle instruction quand vous voulez continuer.",
           "stopDoneDropped_many": "⏹ Exécution en cours arrêtée, et les {{count}} messages en attente ont aussi été annulés. La session est toujours là : envoyez une nouvelle instruction quand vous voulez continuer.",
-          "stopDone": "⏹ Exécution en cours arrêtée. La session est toujours là : envoyez une nouvelle instruction quand vous voulez continuer.",
+          "stopDone": "⏹ L'exécution en cours a été arrêtée. La session est toujours là — envoyez une nouvelle instruction quand vous voulez continuer.",
           "stopIdle": "🤷 Rien n'est en cours pour le moment, `!stop` n'avait donc rien à arrêter. Faites-moi signe quand il y aura quelque chose à interrompre.",
           "scheduledTaskHeader": "🤖 Automatisation",
           "scheduledTaskHeaderNamed": "🤖 Automatisation « {{name}} »",
@@ -12931,7 +12931,7 @@
             "providerDisconnected": "⚠️ Cette conversation Discord utilise le fournisseur « {{provider}} » ({{model}}), mais il n'est pas connecté ou sa connexion a expiré.",
             "agentLogin": "⚠️ Cette conversation Discord utilise le fournisseur « {{provider}} » ({{model}}), qui nécessite d'abord une connexion avec les identifiants {{agentKind}}.",
             "fixAttached": "Corrigez l'authentification dans Paramètres → Fournisseurs sur le bureau, puis continuez à envoyer vos messages.",
-            "fixDetached": "Modifiez la « Configuration des nouvelles conversations », puis continuez à envoyer vos messages. Si un modèle a été choisi spécifiquement pour cette conversation, envoyez `/model` pour le choisir à nouveau."
+            "fixDetached": "Modifiez la « Configuration des nouvelles conversations », puis continuez simplement à envoyer vos messages. Si un modèle a été choisi spécifiquement pour cette conversation, envoyez `/model` pour le choisir à nouveau."
           }
         },
         "cards": {
@@ -12966,15 +12966,15 @@
             "failed": "❌ Impossible de changer de modèle : {{reason}}"
           },
           "permissionMode": {
-            "title": "🛡️ Régler le mode d'autorisation",
+            "title": "🛡️ Ajuster le mode d'autorisation",
             "currentLine": "**Actuel** : {{label}}\n_{{description}}_",
             "hint": "Choisissez ci-dessous pour changer. auto = actions courantes autorisées, actions sensibles soumises via une carte ; bypass = tout est autorisé ; ask/default/plan/acceptEdits = approbation via des cartes",
-            "resolved": "✅ Mode d'autorisation changé en {{label}}",
+            "resolved": "✅ Mode d'autorisation passé à {{label}}",
             "failed": "❌ Impossible de changer le mode d'autorisation : {{reason}}",
             "fullAccessConfirmTitle": "⚠️ Activer l'accès complet ?",
             "fullAccessConfirmBody": "L'accès complet désactive le bac à sable de l'espace de travail et ignore les approbations habituelles. Cindy pourra modifier des fichiers hors de l'espace de travail et exécuter des commandes réseau sans vous demander ; les opérations à haut risque intégrées exigeront toujours une confirmation.",
             "btnConfirmFullAccess": "Activer l'accès complet",
-            "btnCancelFullAccess": "Conserver les autorisations",
+            "btnCancelFullAccess": "Garder les autorisations",
             "fullAccessCancelled": "Annulé, les autorisations actuelles sont conservées"
           },
           "control": {
@@ -13154,19 +13154,19 @@
             "btnAllowOnce": "✅ Autoriser une fois",
             "btnAllowAlways": "✅ Toujours autoriser",
             "btnDeny": "❌ Refuser",
-            "resolvedAllowOnce": "✅ Autorisé (cette fois seulement)",
+            "resolvedAllowOnce": "✅ Autorisé (cette fois uniquement)",
             "resolvedAllowAlways": "✅ Autorisé (cet outil sera toujours autorisé désormais)",
             "resolvedDeny": "❌ Refusé"
           },
           "ask": {
             "noOptionsHint": "_(Cette question n'a pas d'options prédéfinies, répondez-moi simplement par écrit.)_",
-            "resolved": "✅ Choix : {{option}}"
+            "resolved": "✅ Sélectionné : {{option}}"
           },
           "plan": {
-            "title": "📋 Voici ce que je compte faire",
+            "title": "📋 Voici mon plan",
             "btnApprove": "✅ Allez-y",
             "btnReject": "❌ Attendez",
-            "resolvedApproved": "✅ Approuvé, je m'y mets",
+            "resolvedApproved": "✅ Approuvé, c'est parti",
             "resolvedRejected": "❌ En pause"
           },
           "model": {
@@ -13188,7 +13188,7 @@
             "fullAccessConfirmBody": "L'accès complet désactive le bac à sable de l'espace de travail et ignore les approbations courantes. Cindy pourra modifier des fichiers en dehors de l'espace de travail et exécuter des commandes réseau sans demander ; les opérations intégrées à haut risque nécessiteront toujours une confirmation.",
             "btnConfirmFullAccess": "Activer l'accès complet",
             "btnCancelFullAccess": "Garder les autorisations",
-            "fullAccessCancelled": "Annulé, les autorisations actuelles sont conservées"
+            "fullAccessCancelled": "Annulé : les autorisations actuelles sont conservées"
           },
           "project": {
             "title": "📂 Changer de dossier de projet",
@@ -13204,7 +13204,7 @@
             "dialogueName": "Conversation (dossier géré)"
           },
           "control": {
-            "title": "🎮 Choisir un projet",
+            "title": "🎮 Choisissez un projet",
             "emptyBody": "_Aucun projet à reprendre pour l'instant. Ouvrez ou créez une session sur le bureau, puis revenez._",
             "hint": "Touchez un projet pour continuer ; touchez 🚪 Quitter pour annuler",
             "attachedSwitchHint": "🎮 Session contrôlée : **{{title}}**\nChoisissez une autre session pour basculer directement ; touchez 🚪 Quitter pour ne rien changer",
@@ -13420,8 +13420,8 @@
           "stopDoneDropped_one": "⏹ Tâche en cours arrêtée et {{count}} message en attente supprimé.",
           "stopDoneDropped_many": "⏹ Tâche en cours arrêtée et {{count}} messages en attente supprimés.",
           "stopIdle": "Aucune tâche n'est en cours ni en attente.",
-          "scheduledTaskHeaderNamed": "🤖 Tâche automatique « {{name}} »",
-          "scheduledTaskHeader": "🤖 Tâche automatique",
+          "scheduledTaskHeaderNamed": "🤖 Automatisation « {{name}} »",
+          "scheduledTaskHeader": "🤖 Automatisation",
           "unsupportedOnly": "🙏 Impossible de traiter ce message pour le moment :\n{{items}}",
           "unsupportedNotice": "ℹ️ Les éléments suivants n'ont pas pu être traités :\n{{items}}\n\nLe reste sera traité normalement.",
           "authMissing": {
@@ -13593,7 +13593,7 @@
             "btnAllowAlways": "✅ Toujours autoriser",
             "btnDeny": "❌ Refuser",
             "dmRoutedNotice": "🔐 `{{tool}}` nécessite votre confirmation : la carte d'autorisation vous a été envoyée en message privé. Touchez-la là-bas pour continuer~",
-            "resolvedAllowOnce": "✅ Autorisé (cette fois seulement)",
+            "resolvedAllowOnce": "✅ Autorisé (cette fois uniquement)",
             "resolvedAllowAlways": "✅ Autorisé (cet outil sera toujours autorisé désormais)",
             "resolvedDeny": "❌ Refusé"
           },
@@ -13631,7 +13631,7 @@
             "fullAccessConfirmTitle": "⚠️ Activer l'accès complet ?",
             "fullAccessConfirmBody": "L'accès complet désactive le bac à sable de l'espace de travail et ignore les approbations habituelles. Cindy pourra modifier des fichiers hors de l'espace de travail et exécuter des commandes réseau sans vous demander ; les actions intégrées à haut risque demanderont toujours une confirmation.",
             "btnConfirmFullAccess": "Activer l'accès complet",
-            "btnCancelFullAccess": "Conserver les autorisations",
+            "btnCancelFullAccess": "Garder les autorisations",
             "fullAccessCancelled": "Annulé : les autorisations actuelles sont conservées"
           },
           "permissionModeFix": {
@@ -13711,7 +13711,7 @@
           "unknownCommand": "Je ne reconnais pas la commande `{{cmd}}` 🤔\nCommandes disponibles : /new, /model, /permission, /ctr, /exctr, /help",
           "detachedBySlash": "🚪 Prise de contrôle terminée, retour à notre conversation privée WeChat. Envoyez /ctr la prochaine fois que vous voulez piloter l'app de bureau à distance",
           "detachedByRevoke": "⚠️ Vous avez repris le contrôle depuis l'app de bureau. Les prochains messages reviennent dans notre conversation privée WeChat.",
-          "notAttached": "🤷 Vous ne contrôlez aucune session pour l'instant, /exctr n'a donc rien à faire."
+          "notAttached": "🤷 Vous ne contrôlez aucune session en ce moment, /exctr n'a donc rien à faire."
         },
         "agent": {
           "completedNoText": "✅ Terminé (l'Agent n'a rien dit cette fois)",
@@ -13784,9 +13784,9 @@
             "hint": "Touchez ci-dessous pour changer. auto = actions courantes autorisées, actions sensibles soumises par carte ; bypass = tout autoriser ; ask/default/plan/acceptEdits = approbation par carte",
             "resolved": "✅ Mode d'autorisation passé à {{label}}",
             "failed": "❌ Impossible de changer le mode d'autorisation : {{reason}}",
-            "fullAccessConfirmTitle": "⚠️ Activer l'Accès complet ?",
+            "fullAccessConfirmTitle": "⚠️ Activer l'accès complet ?",
             "fullAccessConfirmBody": "L'Accès complet désactive le bac à sable de l'espace de travail et ignore les approbations habituelles. Cindy pourra modifier des fichiers hors de l'espace de travail et exécuter des commandes réseau sans demander ; les actions intégrées à haut risque demanderont toujours une confirmation.",
-            "btnConfirmFullAccess": "Activer l'Accès complet",
+            "btnConfirmFullAccess": "Activer l'accès complet",
             "btnCancelFullAccess": "Garder les autorisations",
             "fullAccessCancelled": "Annulé, les autorisations actuelles sont conservées"
           },
@@ -13856,7 +13856,7 @@
         "cardHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection. Vous pouvez aussi répondre à ce message par écrit. Pour plusieurs questions, répondez « numéro : réponse » (ex. « 2: Français »), puis envoyez.",
         "submitLabel": "Envoyer les réponses",
         "multiSelectHint": " (plusieurs choix possibles)",
-        "resolved": "✅ Choix : {{option}}",
+        "resolved": "✅ Sélectionné : {{option}}",
         "resolvedLabeled": "✅ {{label}} : {{option}}",
         "expired": "Cette carte a expiré",
         "textHint": "Seule la personne ayant posé la question peut répondre. Écrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer.",

@@ -12770,7 +12770,7 @@
           "queuedNoticeNext": "⏳ 前のターンがまだ実行中なので、このメッセージは待機中です。終わりしだい自動で続けます。すぐに止めたいときは `!stop` を送ってください。",
           "queuedNoticePosition": "⏳ 前のターンがまだ実行中です。このメッセージは待機列の {{position}} 番目で、順番に Agent へ送られます。すぐに止めたいときは `!stop` を送ってください。",
           "stopDoneDropped_other": "⏹ 現在の実行を停止し、待機中の {{count}} 件のメッセージも取り消しました。セッションは残っているので、続けたいときはいつでも新しい指示を送ってください。",
-          "stopDone": "⏹ 現在の実行を停止しました。セッションは残っているので、続けたいときはいつでも新しい指示を送ってください。",
+          "stopDone": "⏹ 現在の実行を止めました。セッションは残っているので、続けたいときはいつでも新しい指示を送ってください。",
           "stopIdle": "🤷 いま実行中のものはないので、`!stop` は空振りでした。止めたいものがあるときに、また呼んでください。",
           "scheduledTaskHeader": "🤖 自動化",
           "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
@@ -12783,7 +12783,7 @@
             "providerDisconnected": "⚠️ この Discord の会話はプロバイダー「{{provider}}」（{{model}}）を使用していますが、未接続か、接続が無効になっています。",
             "agentLogin": "⚠️ この Discord の会話はプロバイダー「{{provider}}」（{{model}}）を使用しています。先に {{agentKind}} の認証情報でログインする必要があります。",
             "fixAttached": "デスクトップの「設定 → プロバイダー」で認証を修正してから、そのままメッセージを送信してください。",
-            "fixDetached": "「新規会話設定」を変更したら、そのままメッセージを送信してください。この会話で個別にモデルを選んでいた場合は、`/model` を送って選び直してください。"
+            "fixDetached": "「新規会話設定」を変更したら、そのままメッセージを送ってください。この会話で個別にモデルを選んでいた場合は、`/model` を送って選び直してください。"
           }
         },
         "cards": {
@@ -12794,18 +12794,18 @@
             "btnAllowAlways": "✅ 常に許可",
             "btnDeny": "❌ 拒否",
             "resolvedAllowOnce": "✅ 許可しました（今回のみ）",
-            "resolvedAllowAlways": "✅ 許可しました（今後このツールは常に許可）",
+            "resolvedAllowAlways": "✅ 許可しました（このツールは今後すべて許可）",
             "resolvedDeny": "❌ 拒否しました"
           },
           "ask": {
-            "noOptionsHint": "_（この質問には選択肢がありません。テキストで返信してください）_",
+            "noOptionsHint": "_（この質問には選択肢がありません。テキストでそのまま返信してください）_",
             "resolved": "✅ 選択済み: {{option}}"
           },
           "plan": {
             "title": "📋 こう進めるつもりです",
             "btnApprove": "✅ 進めて",
             "btnReject": "❌ 待って",
-            "resolvedApproved": "✅ 承認されました。作業を始めます",
+            "resolvedApproved": "✅ 承認しました。始めます",
             "resolvedRejected": "❌ 一時停止しました"
           },
           "model": {
@@ -12970,7 +12970,7 @@
           "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
           "unsupportedOnly": "🙏 このメッセージは受け取れませんでした:\n{{list}}\n\n対応している形式: テキスト、画像（jpg/png/gif/webp）、PDF、コードや設定などのテキストファイル。",
           "unsupportedNotice": "ℹ️ 次の内容は処理できないので、いったん除外しました:\n{{list}}\n\nほかの部分は受け取りました。処理しています…",
-          "companionUnavailable": "⏸ 仲間は今メッセージを受け付けられません: {{reason}}",
+          "companionUnavailable": "⏸ 仲間はいまメッセージを受け付けられません: {{reason}}",
           "authMissing": {
             "currentProvider": "現在のプロバイダー",
             "reasonGatewayKey": "先に Cindy AI Key を設定する必要があります",
@@ -13000,13 +13000,13 @@
           },
           "ask": {
             "noOptionsHint": "_（この質問には選択肢がありません。テキストでそのまま返信してください）_",
-            "resolved": "✅ 選択: {{option}}"
+            "resolved": "✅ 選択済み: {{option}}"
           },
           "plan": {
             "title": "📋 こう進めるつもりです",
             "btnApprove": "✅ 進めて",
             "btnReject": "❌ 待って",
-            "resolvedApproved": "✅ 承認されました。取りかかります",
+            "resolvedApproved": "✅ 承認しました。始めます",
             "resolvedRejected": "❌ 一時停止しました"
           },
           "model": {
@@ -13027,8 +13027,8 @@
             "fullAccessConfirmTitle": "⚠️ フルアクセスをオンにしますか？",
             "fullAccessConfirmBody": "フルアクセスはワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy は確認なしでワークスペース外のファイルを変更したり、ネットワークを使うコマンドを実行したりできるようになります。組み込みの高リスク操作では引き続き確認が必要です。",
             "btnConfirmFullAccess": "フルアクセスをオン",
-            "btnCancelFullAccess": "現在の権限を維持",
-            "fullAccessCancelled": "キャンセルしました。現在の権限を維持します"
+            "btnCancelFullAccess": "現在の権限のまま",
+            "fullAccessCancelled": "キャンセルしました。現在の権限のままです"
           },
           "project": {
             "title": "📂 プロジェクトフォルダを切り替え",
@@ -13046,7 +13046,7 @@
           "control": {
             "title": "🎮 プロジェクトを選択",
             "emptyBody": "_引き継げるプロジェクトがまだありません。デスクトップでセッションを開くか作成してから、もう一度どうぞ_",
-            "hint": "プロジェクトをタップして進みます。🚪 終了 をタップするとキャンセルします",
+            "hint": "プロジェクトをタップして次へ。🚪 終了 でキャンセル",
             "attachedSwitchHint": "🎮 引き継ぎ中: **{{title}}**\n別のセッションを選ぶとそのまま乗り換えます。🚪 終了 をタップすると現状のままです",
             "btnExit": "🚪 終了",
             "resolvedExit": "🚪 終了しました。またリモート操作したいときは /ctr をどうぞ",
@@ -13145,7 +13145,7 @@
         },
         "card": {
           "askContinue": "続行",
-          "truncated": "…(省略)",
+          "truncated": "…（省略）",
           "askResolvedContinue": "✅ 選択済み: 続行"
         },
         "takeover": {
@@ -13340,7 +13340,7 @@
           "permissionFooter": "1 回だけ実行するには「{{allow}}」、取り消すには「{{deny}}」と返信してください。WeCom では恒久的な許可はできません。",
           "planIntro": "Agent が実行計画を提出しました:",
           "planFooter": "続けるには「{{approve}}」、取り消すには「{{deny}}」と返信してください。",
-          "askNoQuestion": "Agent が回答を待っていますが、表示できる質問がありません。「続ける」と返信してください。",
+          "askNoQuestion": "Agent があなたの回答を待っていますが、表示できる質問がありません。「続けて」と返信してください。",
           "askIntro": "Agent があなたの回答を必要としています:",
           "askFooter": "選択肢の番号を返信するか、回答を直接入力してください。"
         }
@@ -13427,7 +13427,7 @@
             "btnDeny": "❌ 拒否",
             "dmRoutedNotice": "🔐 `{{tool}}` の操作にはあなたの確認が必要です — 承認カードを個別チャットに送ったので、そちらでタップして続けてください〜",
             "resolvedAllowOnce": "✅ 許可しました（今回のみ）",
-            "resolvedAllowAlways": "✅ 許可しました（このツールは今後も常に許可）",
+            "resolvedAllowAlways": "✅ 許可しました（このツールは今後すべて許可）",
             "resolvedDeny": "❌ 拒否しました"
           },
           "ask": {
@@ -13440,7 +13440,7 @@
             }
           },
           "plan": {
-            "title": "📋 こう進める予定です",
+            "title": "📋 こう進めるつもりです",
             "btnApprove": "✅ 進めて",
             "btnReject": "❌ 待って",
             "resolvedApproved": "✅ 承認しました。始めます",
@@ -13544,13 +13544,13 @@
           "unknownCommand": "コマンド `{{cmd}}` はわかりませんでした 🤔\n使えるコマンド: /new、/model、/permission、/ctr、/exctr、/help",
           "detachedBySlash": "🚪 引き継ぎを終了しました。WeChat の個別チャットに戻ります。またデスクトップアプリをリモート操作したいときは /ctr を送ってください",
           "detachedByRevoke": "⚠️ デスクトップアプリ側で引き継ぎが解除されました。以降のメッセージは WeChat の個別チャットに戻ります。",
-          "notAttached": "🤷 いまは何のセッションも引き継いでいないので、/exctr の出番はありません。"
+          "notAttached": "🤷 今は何も引き継いでいないので、/exctr ですることはありません。"
         },
         "agent": {
           "completedNoText": "✅ 完了しました（今回 Agent からの返答はありません）",
           "runtimeError": "⚠️ Agent でエラーが発生しました: {{error}}",
           "sendInternalError": "❌ 内部エラーが発生しました: {{error}}",
-          "apiKeyMissing": "⚠️ Cindy AI Key がまだ設定されていません〜\nデスクトップアプリの 設定 → プロバイダー で Cindy AI に接続してから、また声をかけてください",
+          "apiKeyMissing": "⚠️ Cindy AI Key がまだ設定されていません〜\nデスクトップ版の「設定 → プロバイダー」で Cindy AI を接続してから、もう一度話しかけてください",
           "controlInProgress": "🎮 /ctr の選択がまだ途中です — 上のカードの操作を終えてから（または 🚪 やめる をタップしてから）、ほかのメッセージを送ってください〜",
           "credentialBusy": "⏳ ローカルの Agent が別のターンを実行中のため、今は認証モードを切り替えられません。前のターンが終わってから、もう一度送ってください。",
           "queuedNext": "⏳ 前のターンがまだ実行中なので、このメッセージは待機列に入りました — 終わり次第、自動で続けます。すぐ止めたいときは `!stop` を送ってください",
@@ -13625,9 +13625,9 @@
           "control": {
             "title": "🎮 プロジェクトを選択",
             "emptyBody": "_引き継げるプロジェクトはまだありません〜 デスクトップアプリでセッションを開くか作成してから、また来てください_",
-            "hint": "プロジェクトをタップして進んでください。🚪 やめる で今回はキャンセルします",
+            "hint": "プロジェクトをタップして次へ。🚪 終了 でキャンセル",
             "attachedSwitchHint": "🎮 現在引き継ぎ中: **{{sessionTitle}}**\n新しいセッションを選ぶとそのまま乗り換えます。🚪 やめる で現状のままにします",
-            "btnExit": "🚪 やめる",
+            "btnExit": "🚪 終了",
             "resolvedExit": "🚪 終了しました。またリモート操作したいときは /ctr を送ってください",
             "sessionPickerTitle": "🎮 {{displayName}} のセッション",
             "sessionPickerHint": "セッションを選んで続ける · ➕ 新規 で新しく始める · ↩️ 戻る でプロジェクトを変更 · 🚪 やめる でキャンセル",
@@ -13687,7 +13687,7 @@
         "cardHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。このメッセージへの返信で補足もできます。複数の質問には「質問番号: 回答」（例「2: 日本語」）と返信し、入力後に送信してください。",
         "submitLabel": "回答を送信",
         "multiSelectHint": "（複数選択可）",
-        "resolved": "✅ 選択: {{option}}",
+        "resolved": "✅ 選択済み: {{option}}",
         "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "このカードは期限切れです",
         "textHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
