@@ -335,7 +335,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     masks.lowerForSystemPrompt(false);
   };
   const disarmOwnerPrompt = () => {
-    ownerPromptGeneration++;
+    const generation = ++ownerPromptGeneration;
     const prompt = ownerPrompt;
     const start = ownerPromptStart;
     ownerPrompt = null;
@@ -345,13 +345,28 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     // for its `ready` (the cover would otherwise stay below the Dock and menu bar).
     raiseOwnerPrompt();
     start?.abort();
-    // The panel may still be closing: its id is no longer a window Main should filter.
-    if (ownerPromptWindowId !== null) {
+    const dropPanelFromCapture = () => {
+      if (ownerPromptWindowId === null) return;
       ownerPromptWindowId = null;
       publishExcludedWindows();
+    };
+    if (!prompt) {
+      // Nothing to stop: the panel, if it ever reported one, is already gone with it.
+      dropPanelFromCapture();
+      return;
     }
-    if (!prompt) return;
-    void prompt.stop();
+    // The panel can still be on screen while the helper shuts down (`stop` waits for its
+    // `close`, with a 2s kill fallback). Dropping the id now would restart ScreenCaptureKit
+    // without it and put the visible control into a remote viewer's frames.
+    void prompt
+      .stop()
+      .catch(() => undefined)
+      .then(() => {
+        // A newer panel owns the id by now: the arm and its `panel` report bumped the
+        // generation, so its exclusion must stay.
+        if (generation !== ownerPromptGeneration) return;
+        dropPanelFromCapture();
+      });
   };
   const armOwnerPrompt = () => {
     if (

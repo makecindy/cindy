@@ -125,6 +125,8 @@ import {
   cleanupAllComputerDriverSessions,
   cleanupComputerDriverSession,
   compareSemver,
+  onComputerUseSessionsChange,
+  openComputerUseSessions,
   buildCuaInstallerProxyEnv,
   extractDriverSemver,
   getCuaDriverReleaseAssetName,
@@ -1452,6 +1454,20 @@ describe('computer mcp integration', () => {
     expect(mcpCallToolMock.mock.lastCall![0]).toEqual({ name: 'end_session', arguments: { session: driverSession } });
     await callComputerDriverTool('list_windows', { session_goal: '调整通知设置' }, { sessionId: 'goal-a' });
     expect(mcpCallToolMock.mock.lastCall![0].arguments.session).toMatch(/^调整通知设置 · \d+-cua-[a-f0-9]{12}-1$/);
+  });
+
+  it('counts a session as in use until its teardown finishes, not from the first delete', async () => {
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    await callComputerDriverTool('list_windows', { session_goal: '看屏幕' }, { sessionId: 'teardown-order' });
+    const counts: number[] = [];
+    const off = onComputerUseSessionsChange(() => counts.push(openComputerUseSessions()));
+    const cleanup = cleanupComputerDriverSession('teardown-order');
+    // The away cover reads this in the change notification: the native side still drives the
+    // desktop until the teardown settles, so the count must not drop to zero on the delete.
+    expect(counts).toEqual([1]);
+    await cleanup;
+    expect(counts).toEqual([1, 0]);
+    off();
   });
 
   it('claims the first goal before asynchronous startup and isolates identical goals', async () => {

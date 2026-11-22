@@ -283,11 +283,23 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   expect(excluded.at(-1)).toContain(4242);
 
   // A viewer that connects while the cover is up takes the prompt down on the next tick.
+  let releaseStop: (() => void) | undefined;
+  prompt.stop.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        releaseStop = resolve;
+      }),
+  );
   remoteInUse = true;
   await vi.advanceTimersByTimeAsync(2_000);
   await settle();
   expect(prompt.stop).toHaveBeenCalledTimes(3);
   expect(mask.level).toBe('screen-saver');
-  // A closed panel's id is dropped: window numbers get reused.
+  // Still closing: a restarted ScreenCaptureKit must not catch the visible control, so the
+  // id stays excluded until `stop` settles.
+  expect(excluded.at(-1)).toContain(4242);
+  releaseStop?.();
+  await settle();
+  // A closed panel's id is dropped once the helper is gone: window numbers get reused.
   expect(excluded.at(-1)).not.toContain(4242);
 });

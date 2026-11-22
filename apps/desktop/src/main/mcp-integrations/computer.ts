@@ -4093,7 +4093,6 @@ function cleanupComputerDriverSessionInternal(
     return Promise.resolve();
   }
   cuaMcpSessions.delete(sessionId);
-  notifyComputerUseSessions();
   const cleanup = cleanupComputerDriverSessionEntry(sessionId, entry)
     .finally(() => {
       if (cuaMcpSessionCleanups.get(sessionId) === cleanup) {
@@ -4102,7 +4101,11 @@ function cleanupComputerDriverSessionInternal(
         notifyComputerUseSessions();
       }
     });
+  // Register the teardown before publishing the change: a listener that reads
+  // `openComputerUseSessions() === 0` re-arms the Touch ID panel, and the native side is
+  // still driving this desktop until `cleanup` settles.
   cuaMcpSessionCleanups.set(sessionId, cleanup);
+  notifyComputerUseSessions();
   return cleanup;
 }
 
