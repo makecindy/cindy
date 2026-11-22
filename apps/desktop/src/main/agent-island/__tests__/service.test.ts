@@ -4887,6 +4887,36 @@ describe('AgentIslandService native publishing', () => {
     }
   });
 
+  // #8351: a queued silent run can finish skipped without sending a prompt.
+  // Public schedule/agent events must restore the busy session's completion
+  // attention and sound; the completed-run linger test does not cover this
+  // terminal path. Minimal in-memory unit input: silenced -> skipped -> done.
+  it('restores completion attention after a silent queued run is skipped', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: customSound('complete.wav') },
+    });
+    const meta = { sessionId: 'busy-target', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'ordinary work still running');
+    service.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule-1', runId: 'queued-run', sessionId: meta.sessionId });
+    service.handleScheduleEvent({ type: 'skipped', scheduleId: 'schedule-1', runId: 'queued-run', sessionId: meta.sessionId });
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, doneEvent());
+
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.unreadCompletedCount).toBe(1);
+    expect(publish.mock.calls.at(-1)?.[0].totalCount).toBe(1);
+  });
+
   it('does not mute a normal follow-up completion during the prior silenced linger window', async () => {
     vi.useFakeTimers();
     try {

@@ -1,3 +1,5 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
+import { useWallpaper } from '@/theme/wallpaper';
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
 import { projectAliasComparisonKey, projectDirectoryName } from '@cindy/maker-shared/project-alias-sync';
@@ -303,6 +305,12 @@ import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import type { MobileModelConfiguration } from '@/session/unifiedMobileModels';
 import { resolveAgentCapability } from '@cindy/model-providers';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
+import {
+  applyHostModelGroupResult,
+  resolveHostModelGroup,
+  useHostModelGroupPickerOptions,
+  useHostModelGroups,
+} from '@/session/hostModelGroups';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { getModel, type ProviderView } from '@cindy/model-providers/registry';
 import { shouldBlockLegacyRemoteModelWindowSwitch } from '@cindy/maker-shared/agent-capabilities';
@@ -1140,7 +1148,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const shareSelectionActive = useShareSelectionActive(sessionId);
   const shareSelectionCount = useShareSelectionCount();
   const shareSelectionRevision = useShareSelectionRevision();
-  const deviceId = readRouteParam(params.deviceId) ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
+  const linkedDeviceId = readRouteParam(params.deviceId);
+  const listedSession = remoteSessionStore.getSessions?.()?.find((item) => item.id === sessionId);
+  const deviceId = resolveSessionLinkDeviceId({
+    listedDeviceId: listedSession?.canonicalDeviceId ?? listedSession?.deviceLinkDeviceId,
+    linkedDeviceId,
+    currentDeviceId: remoteSessionStore.getSessionDeviceId(sessionId),
+  }) ?? '';
   // 回撤 preview/commit 的「请求代际」。每次发起 +1、每次切 session 也 +1(见下方 reset effect),
   // 异步返回后代际已变则丢弃。比只比较 sessionId 更严谨:仅比 sessionId 无法失效「A 发起 → 切到 B →
   // 请求返回前又切回 A」期间的 stale 请求(切回后 sessionId 再次相等会误放行,导致确认框在 A 复活或
@@ -3236,6 +3250,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return name && name !== deviceId ? name : null;
   })();
   const paneLayout = useSessionPaneLayout();
+  const { selected: wallpaper } = useWallpaper();
+  // The controls stay in the safe area. Their backdrop spans the artwork
+  // through the landscape phone's side insets.
+  const blurOutsets = !paneLayout.persistent && wallpaper !== 'none' ? insets : undefined;
   const horizontalSystemHeader = Platform.OS === 'ios' && adaptiveWindow.barEdge === 'none'
     && !paneLayout.persistent && !shareSelectionActive;
   const composerRegion = keyboardControlRegion(adaptiveWindow, keyboardState.height);
@@ -7774,6 +7792,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 providerId={composerPillSourceId}
                 routing={composerPillSourceProvider?.routing}
                 logoKind={composerPillSourceProvider?.logoKind}
+                customIcon={composerPillSourceProvider?.customIcon}
                 remote={Boolean(nextAgentDeviceId)}
               />
             ) : null}
@@ -9549,6 +9568,47 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [agentSwitchIntent, currentSession, pluginEngineSwitchEligible, pluginEngineSwitchIntent, pluginEngineTask,
     pluginEngineTargetIsRemote, pluginEngines.engines, pluginEngines.refresh, selectComposerPluginEngine]);
 
+  // 模型组(model-groups.md §6.3)：列出被控电脑的模式；选一个，就请那台按它的规则、只在任务此刻所在的位置里
+  // 挑一个来源，再走选模型的同一条路径换过去(跨引擎、换位置按既有意图登记)。不留选中态，之后不会自己再换。
+  // 分享来的任务、SSH、插件引擎任务、伙伴等非 Desktop 任务不提供；那台是旧版本时整段不出现。
+  const sessionModelGroupsEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
+    && !currentSession.remoteHostId && !pluginEngineTask
+    && (currentSession.source == null || currentSession.source === 'desktop')
+    && currentSession.status !== 'archived';
+  const sessionHostModelGroups = useHostModelGroups(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
+  const switchSessionByModelGroup = useCallback(async (id: string): Promise<boolean> => {
+    if (!currentSession || !canUseRemoteSessionControls || controlBusy) return false;
+    const group = sessionHostModelGroups?.find((item) => item.id === id);
+    const deviceAtStart = deviceId;
+    // 已挂着「下一条消息换到另一台电脑」时按那台挑：换模型会沿用它，两边必须是同一台(与电脑端一致)。
+    const result = await resolveHostModelGroup(maker, id, undefined, { agentDeviceId: nextAgentDeviceId ?? null });
+    if (deviceIdRef.current !== deviceAtStart) return false;
+    if (!result || result.outcome !== 'routed') {
+      showTransientNotice(t('models.modelGroups.picker.switchUnavailable', { name: result?.groupName || group?.name || '' }));
+      return false;
+    }
+    const { route } = result;
+    const applied = await selectUnifiedComposerModel(
+      {
+        agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+        modelId: route.model,
+        providerId: route.providerId,
+        effort: route.effort ?? '',
+        fast: false,
+      },
+      route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
+    );
+    if (!applied) return false;
+    // 记下是经哪个模式换的：那台之后撞配额时据此提议同一模式里的下一个来源。
+    applyHostModelGroupResult(maker, sessionId, id, result, null);
+    showTransientNotice(t('models.modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
+    return true;
+  }, [currentSession, canUseRemoteSessionControls, controlBusy, sessionHostModelGroups, deviceId, maker, nextAgentDeviceId,
+    selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
+  const composerModelGroupOptions = useHostModelGroupPickerOptions(
+    sessionModelGroupsEligible ? sessionHostModelGroups : null, null, switchSessionByModelGroup, t,
+  );
+
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
     if (!canUseRemoteSessionControls || modelSheetAgentKind !== sessionAgentKind) return;
@@ -10661,6 +10721,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   return (
     <GestureDetector gesture={sessionListDrawerPullGesture}>
     <View style={styles.safeArea} testID="session.screen">
+      <WallpaperBackdrop />
       <PaneViewportProvider value={detailViewport}>
       <ComposerKeyboardAvoidingView
         keyboard={keyboardState}
@@ -10676,7 +10737,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         style={[styles.keyboard, { marginLeft: paneLayout.detail.x, marginRight: Math.max(0, windowDimensions.width - paneLayout.detail.x - paneLayout.detail.width) }]}
       >
         {Platform.OS === 'ios' ? (
-          <SessionHeaderNativeBlur height={topChromeHeight}
+          <SessionHeaderNativeBlur height={topChromeHeight} horizontalOutsets={blurOutsets}
             fadeInside={companionHeaderShown ? CHAT_HEADER_BLUR_FADE_INSIDE : undefined} />
         ) : null}
         <SessionChromeLayer
@@ -11073,6 +11134,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               },
               onSelect: selectUnifiedComposerModel,
               ...(composerPluginEngineOptions ? { pluginEngines: composerPluginEngineOptions } : {}),
+              ...(composerModelGroupOptions ? { modelGroups: composerModelGroupOptions } : {}),
               // 远程 Agent:其他电脑上开放了远程调用的供应商接在后面,每个供应商一段、标题带电脑名。
               ...(agentLocationMovable || orcaRemoteAgentDeviceId
                 ? {
@@ -11410,6 +11472,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             pointerEvents="none" style={StyleSheet.absoluteFill}>
             <SessionHeaderNativeBlur
               edge="bottom"
+              horizontalOutsets={blurOutsets}
               height={Math.max(0, bottomOverlayHeight - composerBackdropTop)}
               inset={dockKeyboardFollow ? 0 : nativeShellLayout.keyboardBottomInset}
             />

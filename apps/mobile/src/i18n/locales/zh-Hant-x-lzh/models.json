@@ -118,7 +118,29 @@
       "order": "依序",
       "rotate": "輪值",
       "cheapest": "最省"
-    }
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "限額尚餘 {{left}}%，{{reset}} 重設，故先用之",
+      "expiring": "依限額居首",
+      "order": "居首之可用者",
+      "rotate": "此番輪至彼",
+      "only": "今唯彼可用",
+      "soonest": "諸源限額皆盡，彼最先復",
+      "soonestUntil": "諸源限額皆盡，彼最先復（{{reset}}）",
+      "cheapest": "標價最低",
+      "cheapestFree": "訂閱尚有限額，不另費錢",
+      "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
+      "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
+      "exceptionHours": "此時段改行「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」已將此差事易為 {{model}}",
+      "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"
+    },
+    "anotherDevice": "他機"
   },
   "pluginEngines": {
     "genericName": "法器引擎",

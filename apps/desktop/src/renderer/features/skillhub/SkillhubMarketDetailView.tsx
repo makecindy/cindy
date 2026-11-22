@@ -185,7 +185,7 @@ export function SkillhubMarketDetailView({
         badges={<>
                   <span
                     className="inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]"
-                    style={{ height: '20px', padding: '0 8px', fontSize: '11px' }}
+                    style={{ height: '20px', padding: '0 var(--space-2)', fontSize: '11px' }}
                   >
                     {t(marketVisibilityLabelKey({
                       visibility: skill.visibility,

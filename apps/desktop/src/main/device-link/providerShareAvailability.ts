@@ -16,6 +16,7 @@ import { captureProviderManagementScope } from '../provider-group/managementScop
 import { readProviderGroup } from '../provider-group/store.js';
 import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { getProviderShareUsageStore } from './providerShareUsageStore.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
@@ -42,7 +43,7 @@ export function publishShareAvailability(shares: readonly ProviderShareOwned[]):
 async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<void> {
   const assertCurrent = captureProviderManagementScope();
   for (const share of shares) {
-    if (share.hostDeviceId !== getDeviceId()) continue;
+    if (share.hostDeviceId !== getDeviceId() || pluginEngineKeyFromProviderId(share.providerId)) continue;
     const current = await shareAvailabilityRequest<{ revision: number; executors: Executor[] }>(share.shareId, 'policy');
     assertCurrent();
     const group = readProviderGroup(share.providerId);

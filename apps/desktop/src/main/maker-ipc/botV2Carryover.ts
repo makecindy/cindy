@@ -105,8 +105,9 @@ export function automationModelFields(choice: {
     modelAgentKind: choice.agentKind, modelAgentDeviceId: choice.agentDeviceId };
 }
 
-/** The teammate's model route as an automation model (null: a remote route that cannot be kept). */
+/** The teammate's model route as an automation model (null: a remote or plugin-engine route that cannot be kept). */
 export function routeModelFields(route: BotModelRoute): Partial<ProjectScheduleConfig> | null {
+  if (route.harness === 'acp') return null;
   return automationModelFields({
     agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
     model: route.model, providerId: route.providerId, effort: route.effort,

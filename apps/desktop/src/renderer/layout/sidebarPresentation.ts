@@ -136,26 +136,39 @@ export function useSidebarPresentation(
     // 收起本来就是交还宽度；只有展开才占用窗口。
     ownsWidth.current = !collapsed;
     const viewport = window.innerWidth;
+    let active = true;
+    let pollFrame: number | null = null;
+    const listener = new AbortController();
+    const stopWaiting = () => {
+      active = false;
+      listener.abort();
+      if (pollFrame !== null) cancelAnimationFrame(pollFrame);
+    };
     void resize(collapsed ? 0 : expansion.current()).then((delta) => {
-      if (id !== generation.current) return;
+      if (!active) return;
       const growth = typeof delta === 'number' ? delta : 0;
       const target = viewport + growth;
       const started = performance.now();
       const finish = () => {
-        if (id !== generation.current) return;
+        if (!active) return;
         // The invoke reply can arrive before Chromium observes the new native bounds.
         // A hidden/closing window must not retain a frozen layout indefinitely.
         if (growth !== 0 && Math.abs(window.innerWidth - target) > 1 && performance.now() - started < 1000) {
-          frame.current = requestAnimationFrame(finish);
+          if (pollFrame === null) {
+            pollFrame = requestAnimationFrame(() => {
+              pollFrame = null;
+              finish();
+            });
+          }
           return;
         }
-        frame.current = null;
+        stopWaiting();
         setPresentation({ collapsed, instant: growth !== 0,
           ...(!collapsed ? { expandedWidth: width + growth } : {}),
         });
       };
-      if (growth === 0) finish();
-      else frame.current = requestAnimationFrame(finish);
+      finish();
+      if (active) window.addEventListener('resize', finish, { signal: listener.signal });
     }).catch(() => {
       if (id !== generation.current) return;
       ownsWidth.current = false;
@@ -164,8 +177,6 @@ export function useSidebarPresentation(
   }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready]);
 
   useLayoutEffect(() => () => {
-    generation.current++;
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
     // StrictMode's second mount must establish a fresh baseline.
     previous.current = null;
     previousUserToggle.current = userToggle;

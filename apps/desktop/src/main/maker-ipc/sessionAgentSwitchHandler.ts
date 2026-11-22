@@ -307,7 +307,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     permissionMode: string;
     engineName: string;
   };
-  /** 切到自己另一台电脑开放的插件引擎时按那台目录裁决。 */
+  /** 伙伴候选链等切到另一台电脑开放远程调用的插件引擎时按那台目录裁决。 */
   admitRemotePluginEngineTarget?(
     deviceId: string,
     target: {
@@ -936,14 +936,17 @@ export async function performSessionAgentSwitch(
     && (row.providerId ?? null) === (normalizedProviderId ?? null);
   const pluginTargetDeviceId = builtinTarget ? null : requestedAgentDeviceId ?? null;
   if (!builtinTarget || sourceIsPluginEngine) {
-    if ((row.source && row.source !== 'desktop') || row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead)
+    // 从插件引擎换到内置引擎时目标位置照常：可以是另一台电脑或供应商组(下面按内置引擎换电脑裁决)。
+    if ((row.source && row.source !== 'desktop' && row.source !== 'bot') || row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead)
       || getDeviceLinkInvokeContext()?.sharedTask) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {
-      if (pluginTargetDeviceId && (isProviderShareAgentDeviceId(pluginTargetDeviceId)
-        || isSharedTaskPeer(pluginTargetDeviceId) || parseProviderSharePeer(pluginTargetDeviceId))) {
-        throwIpcError('PRECONDITION_FAILED', 'plugin engines run on your own computers only');
+      if (row.source === 'bot' && pluginTargetDeviceId) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'companions use plugin engines installed on their own computer');
+      }
+      if (pluginTargetDeviceId && (isSharedTaskPeer(pluginTargetDeviceId) || parseProviderSharePeer(pluginTargetDeviceId))) {
+        throwIpcError('PRECONDITION_FAILED', 'invalid plugin engine target device');
       }
       if (!stayingOnRemotePluginEngine && !pluginTargetDeviceId) requestedAgentDeviceId = null;
     }

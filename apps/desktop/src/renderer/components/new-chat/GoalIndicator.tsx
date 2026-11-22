@@ -130,9 +130,9 @@ function GoalEditor({
         </button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <AlertDialog.Content
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
           onOpenAutoFocus={(event) => {
             // 打开时焦点直接落在目标输入框。
             event.preventDefault();
