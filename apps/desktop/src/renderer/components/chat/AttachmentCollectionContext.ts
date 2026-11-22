@@ -11,6 +11,9 @@ export type AttachmentCollectionItem = PreviewItem & {
   >>;
 };
 
+export type PreviewLeaveOutcome = 'applied' | 'cancelled' | 'busy';
+export type PreviewLeaveGuard = (leave: () => void) => Promise<PreviewLeaveOutcome>;
+
 export const AttachmentCollectionContext = createContext<
   readonly AttachmentCollectionItem[] | null
 >(null);
@@ -18,7 +21,7 @@ export const ActivePreviewCollection = createContext<{
   items: readonly AttachmentCollectionItem[];
   index: number;
   select(index: number): void;
-  beforeLeave: { current: ((leave: () => void) => void) | null };
+  beforeLeave: { current: PreviewLeaveGuard | null };
   /** The foreground image preview registers its non-modal keyboard scope here. */
   scopeRef: { current: HTMLElement | null };
   restoreFocus?(event: Event): void;

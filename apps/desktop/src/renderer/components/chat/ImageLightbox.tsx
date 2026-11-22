@@ -144,6 +144,9 @@ import {
   ActivePreviewCollection,
   AttachmentCollectionPreview,
   useOpeningCollection,
+  type CollectionImageProps,
+  type PreviewLeaveGuard,
+  type PreviewLeaveOutcome,
 } from './AttachmentCollection';
 import {
   PREVIEW_PANEL_CLASS,
@@ -488,9 +491,7 @@ function isDirectCacheable(src: string): boolean {
   );
 }
 
-type LeaveOutcome = 'applied' | 'cancelled' | 'busy';
 /** The mounted content owns unsaved annotation state; every source switch goes through it. */
-type PreviewLeaveGuard = (leave: () => void) => Promise<LeaveOutcome>;
 type ImageLightboxContentProps = Omit<ImageLightboxProps, 'onSourceChangeCancelled'> & {
   leaveGuardRef?: { current: PreviewLeaveGuard | null };
 };
@@ -508,7 +509,12 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const [activeSource, setActiveSource] = useState(() => sourceSnapshotFromProps(props));
   const activeSourceRef = useRef(activeSource);
   const pendingSourceRef = useRef<ImageSourceSnapshot | null>(null);
-  const leaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
+  const contentLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
+  const collectionLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
+  const items = useOpeningCollection(
+    activeSource.annotationFallbackSrc ?? activeSource.src,
+  );
+  const activeLeaveGuardRef = items ? collectionLeaveGuardRef : contentLeaveGuardRef;
   const [sourceToken, setSourceToken] = useState(0);
   const onSourceChangeCancelledRef = useRef(props.onSourceChangeCancelled);
   onSourceChangeCancelledRef.current = props.onSourceChangeCancelled;
@@ -527,7 +533,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
       setActiveSource(next);
       setSourceToken((token) => token + 1);
     };
-    const guard = leaveGuardRef.current;
+    const guard = activeLeaveGuardRef.current;
     if (!guard) {
       leave();
       return;
@@ -537,11 +543,8 @@ export function ImageLightbox(props: ImageLightboxProps) {
       pendingSourceRef.current = null;
       onSourceChangeCancelledRef.current?.(activeSourceRef.current);
     });
-  }, [requestedKey]);
+  }, [requestedKey, activeLeaveGuardRef]);
 
-  const items = useOpeningCollection(
-    activeSource.annotationFallbackSrc ?? activeSource.src,
-  );
   const contentProps: ImageLightboxContentProps = {
     ...activeSource,
     onClose: props.onClose,
@@ -558,7 +561,33 @@ export function ImageLightbox(props: ImageLightboxProps) {
             activeSource.annotationEdit.onSave,
         }
       : undefined,
-    leaveGuardRef,
+  };
+  const mergeCollectionImageProps = (
+    imageProps: CollectionImageProps | undefined,
+  ): ImageLightboxContentProps => {
+    const latestCallbacks = requestedSourceRef.current.annotationEdit;
+    const baseAnnotationEdit = contentProps.annotationEdit;
+    const collectionAnnotationEdit = imageProps?.annotationEdit;
+    const annotationEdit =
+      baseAnnotationEdit || collectionAnnotationEdit
+        ? {
+            ...(baseAnnotationEdit ?? {}),
+            ...(collectionAnnotationEdit ?? {}),
+            onDraftChange:
+              collectionAnnotationEdit?.onDraftChange ??
+              latestCallbacks?.onDraftChange ??
+              baseAnnotationEdit?.onDraftChange,
+            onSave:
+              collectionAnnotationEdit?.onSave ??
+              latestCallbacks?.onSave ??
+              baseAnnotationEdit?.onSave,
+          }
+        : undefined;
+    return {
+      ...contentProps,
+      ...imageProps,
+      annotationEdit,
+    } as ImageLightboxContentProps;
   };
   const contentKey = `${sourceToken}:${imageSourceKey(activeSource)}`;
   return items ? (
@@ -567,12 +596,21 @@ export function ImageLightbox(props: ImageLightboxProps) {
       items={items}
       source={activeSource.annotationFallbackSrc ?? activeSource.src}
       onClose={props.onClose}
-      initial={
-        <ImageLightboxContent key={contentKey} {...contentProps} enableGallery={false} />
-      }
+      leaveGuardRef={collectionLeaveGuardRef}
+      initial={(imageProps) => (
+        <ImageLightboxContent
+          key={contentKey}
+          {...mergeCollectionImageProps(imageProps)}
+          enableGallery={false}
+        />
+      )}
     />
   ) : (
-    <ImageLightboxContent key={contentKey} {...contentProps} />
+    <ImageLightboxContent
+      key={contentKey}
+      {...contentProps}
+      leaveGuardRef={contentLeaveGuardRef}
+    />
   );
 }
 
@@ -868,7 +906,7 @@ function ImageLightboxContent({
   // 每次渲染的值)。
   const activeCollection = useContext(ActivePreviewCollection);
   /** Single leave guard for close, collection switch, source retarget and unmount. */
-  const requestClose = async (leave = handleClose): Promise<LeaveOutcome> => {
+  const requestClose = async (leave = handleClose): Promise<PreviewLeaveOutcome> => {
     if (confirmPendingRef.current) return 'busy';
     if (!hasUnsavedStrokeChanges()) {
       leave();
@@ -934,9 +972,7 @@ function ImageLightboxContent({
   }, [leaveGuardRef]);
   useEffect(() => {
     if (!activeCollection) return;
-    activeCollection.beforeLeave.current = (leave) => {
-      void requestCloseRef.current(leave);
-    };
+    activeCollection.beforeLeave.current = (leave) => requestCloseRef.current(leave);
     return () => {
       activeCollection.beforeLeave.current = null;
     };

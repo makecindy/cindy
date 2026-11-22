@@ -12,6 +12,7 @@
  *   当前浮窗菜单的方向键 / Enter 与缩放快捷键互不抢事件;
  *   离开确认锁在异步保存完成后才释放。
  * - 逐笔草稿回写不触发换图确认；换图只由宿主请求的不同图片上下文驱动。
+ * - 集合重新挂载图片时读取最新草稿；宿主换图经过当前集合图片的离开守卫。
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
@@ -22,6 +23,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
 import { AttachmentCollectionPreview } from '@/components/chat/AttachmentCollection';
+import {
+  AttachmentCollectionContext,
+  type AttachmentCollectionItem,
+} from '@/components/chat/AttachmentCollectionContext';
 import { galleryImagePreviewItem } from '@/components/chat/ImageGalleryContext';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -693,6 +698,146 @@ describe('ImageLightbox annotate mode', () => {
     expect(
       screen.getByRole('button', { name: label('chat.media.annotateUndo') }),
     ).toBeTruthy();
+  });
+
+  it('returns to a collection image with the latest saved draft', async () => {
+    function Host() {
+      const [strokesA, setStrokesA] = useState<Stroke[]>([]);
+      const [strokesB, setStrokesB] = useState<Stroke[]>([]);
+      const editA = {
+        initialStrokes: strokesA,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) => setStrokesA(strokes),
+        onSave: ({ strokes }: { strokes: Stroke[] }) => setStrokesA(strokes),
+      };
+      const editB = {
+        initialStrokes: strokesB,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) => setStrokesB(strokes),
+        onSave: ({ strokes }: { strokes: Stroke[] }) => setStrokesB(strokes),
+      };
+      const items: AttachmentCollectionItem[] = [
+        {
+          id: 'a',
+          name: 'a.png',
+          source: SRC,
+          kind: 'image',
+          media: true,
+          image: { annotationEdit: editA },
+        },
+        {
+          id: 'b',
+          name: 'b.png',
+          source: NEXT_SRC,
+          kind: 'image',
+          media: true,
+          image: { annotationEdit: editB },
+        },
+      ];
+      return (
+        <ConfirmDialogProvider>
+          <AttachmentCollectionContext.Provider value={items}>
+            <ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={editA} />
+          </AttachmentCollectionContext.Provider>
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    await waitFor(() => expect(committedPaths('stroke')).toHaveLength(1));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.next') }));
+    });
+    const saveDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(saveDialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+      );
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC));
+    loadImage(lightboxImage());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.previous') }));
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(SRC));
+    loadImage(lightboxImage());
+    expect(committedPaths('stroke')).toHaveLength(1);
+  });
+
+  it('routes a host source request through the active collection item guard', async () => {
+    function Host() {
+      const [hostSrc, setHostSrc] = useState(SRC);
+      const [strokesA, setStrokesA] = useState<Stroke[]>([]);
+      const [strokesB, setStrokesB] = useState<Stroke[]>([]);
+      const editA = {
+        initialStrokes: strokesA,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) => setStrokesA(strokes),
+        onSave: ({ strokes }: { strokes: Stroke[] }) => setStrokesA(strokes),
+      };
+      const editB = {
+        initialStrokes: strokesB,
+        onDraftChange: ({ strokes }: { strokes: Stroke[] }) => setStrokesB(strokes),
+        onSave: ({ strokes }: { strokes: Stroke[] }) => setStrokesB(strokes),
+      };
+      const items: AttachmentCollectionItem[] = [
+        {
+          id: 'a',
+          name: 'a.png',
+          source: SRC,
+          kind: 'image',
+          media: true,
+          image: { annotationEdit: editA },
+        },
+        {
+          id: 'b',
+          name: 'b.png',
+          source: NEXT_SRC,
+          kind: 'image',
+          media: true,
+          image: { annotationEdit: editB },
+        },
+      ];
+      return (
+        <ConfirmDialogProvider>
+          <AttachmentCollectionContext.Provider value={items}>
+            <button type="button" onClick={() => setHostSrc(THIRD_SRC)}>
+              open third
+            </button>
+            <ImageLightbox
+              src={hostSrc}
+              onClose={vi.fn()}
+              annotationEdit={editA}
+              onSourceChangeCancelled={(displayed) => setHostSrc(displayed.src)}
+            />
+          </AttachmentCollectionContext.Provider>
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('attachmentPreview.next') }));
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC));
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open third' }));
+    });
+    const guardDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(guardDialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmCancel'),
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC);
   });
 });
 
