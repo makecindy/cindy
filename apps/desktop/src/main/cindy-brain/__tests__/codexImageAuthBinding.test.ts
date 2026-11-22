@@ -44,8 +44,12 @@ describe('codexImageAuthBinding', () => {
       release: vi.fn(),
     };
     const acquireAuth = vi.fn(async () => auth);
-    const fetchImplementation = vi.fn<typeof fetch>(async () =>
-      Response.json({ data: [{ b64_json: 'fixture' }] }));
+    const fetchImplementation = vi.fn(async (
+      _url: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1], guard?: () => void,
+    ) => {
+      guard?.();
+      return Response.json({ data: [{ b64_json: 'fixture' }] });
+    });
     setCodexImageAuthBinding({ hasPoolImageAuth, acquireAuth, getAuth: readLegacyAuth, onAuthFailure: vi.fn() });
     const channel = createAccountCodexImageChannel(providerId, () => provider, { fetchImplementation });
 
@@ -60,7 +64,7 @@ describe('codexImageAuthBinding', () => {
     expect(fetchImplementation).toHaveBeenCalledWith(expect.stringContaining('/codex/images/generations'),
       expect.objectContaining({ headers: expect.objectContaining({
         Authorization: 'Bearer fake-pool-token', 'ChatGPT-Account-Id': 'fake-pool-account',
-      }) }));
+      }) }), expect.any(Function));
     expect(readLegacyAuth).not.toHaveBeenCalled();
     expect(auth.release).toHaveBeenCalledOnce();
 

@@ -1138,14 +1138,13 @@ export function hasCreatedOpenAiImageAuth(providerId: string): boolean {
   if (!state || !isCurrentRuntime(state)) return false;
   const found = poolFor(providerId);
   if (found?.kind !== 'openai' || !found.ref.created) return false;
-  const model = subscriptionImageModelId(providerId);
   return providerAccounts('openai', found.pool.accounts, providerId).some(account => {
     const cached = state.cache.get(keyOf('openai', account.id));
     const legacy = readLegacyCodexProviderId(account.id);
     return !account.paused && cached?.auth.authenticated === true && cached.codexImageAuth === true
       && !cached.unavailable && (account.id !== 'default' || defaultAccountBound('openai'))
       && ![...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === account.id)
-      && (!legacy || legacyCodexAccountCanRun(legacy, model, { remote: false, newRoute: true }));
+      && (!legacy || legacyCodexAccountCanRun(legacy, subscriptionImageModelId(legacy), { remote: false, newRoute: true }));
   });
 }
 
@@ -2648,7 +2647,7 @@ export async function acquireSubscriptionAccount(
           && !cooling))
           && (!createdImage || (info.codexImageAuth === true && !info.unavailable))
           && (!needsModelMembership || codexAccountSupportsModel(state, a.id, model))
-          && (control || !imported || legacyCodexAccountCanRun(imported, model, {
+          && (control || !imported || legacyCodexAccountCanRun(imported, createdImage ? subscriptionImageModelId(imported) : model, {
             remote: options.remote === true, ownComputer: options.ownComputer === true,
             newRoute: (!binding || rebind) && !options.resuming,
           }) === true),
@@ -2797,7 +2796,7 @@ export async function acquireSubscriptionAccount(
       throw new Error('Subscription account was disconnected');
     const imported = provider === 'openai' ? readLegacyCodexProviderId(selected) : undefined;
     if (imported && (options.remote || modelSwitch || createdImage)
-      && !legacyCodexAccountCanRun(imported, targetModel, {
+      && !legacyCodexAccountCanRun(imported, createdImage ? subscriptionImageModelId(imported) : targetModel, {
         remote: options.remote === true, ownComputer: options.ownComputer === true,
         newRoute: createdImage === true, modelSwitch,
       }))

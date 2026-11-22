@@ -92,7 +92,11 @@ export function codexImageAccountKind(provider: Provider | undefined): 'pool' | 
 export function createAccountCodexImageChannel(
   providerId: string,
   getProvider: () => Provider | undefined,
-  options: Pick<CreateCodexImageChannelOptions, 'fetchImplementation' | 'beforeDispatch'>,
+  options: Pick<CreateCodexImageChannelOptions, 'beforeDispatch'> & {
+    fetchImplementation?: (
+      input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1], beforeDispatch?: () => void,
+    ) => Promise<Response>;
+  },
 ): ImageChannel {
   const modelId = subscriptionImageModelId(providerId);
   const kind = () => codexImageAccountKind(getProvider());
@@ -118,6 +122,12 @@ export function createAccountCodexImageChannel(
     options.beforeDispatch?.(model);
     const lease = await getCodexImageAuthBinding().acquireAuth?.(providerId, model, false);
     if (!lease) throw new Error('OpenAI image account is unavailable');
+    const assertDispatchable = () => {
+      assertKind('pool');
+      options.beforeDispatch?.(model);
+      lease.assertDispatchable();
+    };
+    const fetchImplementation = options.fetchImplementation;
     try {
       return await invoke(createCodexImageChannel({
         ...options,
@@ -125,11 +135,10 @@ export function createAccountCodexImageChannel(
         hasOAuthLogin: () => true, // An exact account is already leased for this invocation.
         getAuth: lease.getAuth,
         onAuthFailure: async failure => { await lease.onAuthFailure(failure); },
-        beforeDispatch: model => {
-          assertKind('pool');
-          options.beforeDispatch?.(model);
-          lease.assertDispatchable();
-        },
+        fetchImplementation: fetchImplementation
+          ? (input, init) => fetchImplementation(input, init, assertDispatchable)
+          : undefined,
+        beforeDispatch: assertDispatchable,
       }));
     } finally {
       lease.release();

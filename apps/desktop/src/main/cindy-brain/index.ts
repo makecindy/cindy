@@ -5519,7 +5519,7 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     imageChannelRegistrySingleton.register(
       providerId,
       createAccountCodexImageChannel(providerId, () => getActiveCatalog().providers.find(p => p.id === providerId), {
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+        fetchImplementation: outboundFetch,
         beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
       }),
     );
