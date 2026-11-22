@@ -133,7 +133,7 @@ export function MessageSourcePluginBadge({
   const remote = Boolean(getStickySessionDeviceId(hostSessionId));
   const isApp = plugin.pluginId.startsWith('mcp-app:');
   const isLocalApp = plugin.pluginId.startsWith('local-app:');
-  const interactive = navigationMode !== 'sidebar-embedded' && !remote && !isApp && !isLocalApp;
+  const interactive = navigationMode !== 'sidebar-embedded' && !remote && !plugin.pluginId.includes('::') && !isApp && !isLocalApp;
   return (
     <MessageSourceLabelShell
       kind="plugin"

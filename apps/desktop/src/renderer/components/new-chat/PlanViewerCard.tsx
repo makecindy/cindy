@@ -143,7 +143,7 @@ export function PlanViewerCard({
     return (
       <div
         className={cn(
-          'w-full max-w-[914px] rounded-[12px] border',
+          'w-full max-w-[914px] rounded-xl border',
           'border-[var(--plan-card-border)] bg-[var(--plan-card-bg)]',
           // Right padding tuned so the "+" icon's right edge lines up with
           // the ↵ / pencil icons in PlanActionCard below. Action card uses
@@ -152,19 +152,19 @@ export function PlanViewerCard({
           // a 28×28 button (icon centered → 6px inner offset), so a 10px outer
           // pr puts the icon's right edge at 10+6 = 16px. Same math applies to
           // the expanded toolbar header below.
-          'flex h-[44px] items-center justify-between pl-[20px] pr-[10px]',
+          'flex h-[44px] items-center justify-between pl-5 pr-2.5',
         )}
       >
-        <span className="text-14 font-semibold text-[var(--plan-min-title)]">
+        <span className="text-14 font-medium text-[var(--plan-min-title)]">
           {t('newChat.planReview.title')}
         </span>
-        <div className="flex items-center gap-[4px]">
+        <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => onStateChange(lastExpandedState)}
             aria-label={t('newChat.planReview.restoreAria')}
             className={cn(
-              'flex h-[28px] w-[28px] items-center justify-center rounded-[6px]',
+              'flex h-[28px] w-[28px] items-center justify-center rounded-lg',
               'transition-colors hover:bg-[var(--plan-toolbar-btn-hover-bg)]',
             )}
           >
@@ -212,7 +212,7 @@ export function PlanViewerCard({
   return (
     <div
       className={cn(
-        'flex w-full max-w-[914px] flex-col overflow-hidden rounded-[12px] border',
+        'flex w-full max-w-[914px] flex-col overflow-hidden rounded-xl border',
         'border-[var(--plan-card-border)] bg-[var(--plan-card-bg)]',
         cardHeightClass,
       )}
@@ -222,12 +222,12 @@ export function PlanViewerCard({
         className={cn(
           // Right padding matches the minimized state above so toolbar icons
           // and the "+" share a vertical right baseline with PlanActionCard.
-          'flex h-[44px] shrink-0 items-center justify-between border-b pl-[20px] pr-[10px]',
+          'flex h-[44px] shrink-0 items-center justify-between border-b pl-5 pr-2.5',
           'border-[var(--plan-header-divider)]',
         )}
       >
-        <div className="flex items-center gap-[12px]">
-          <span className="text-14 font-semibold text-[var(--plan-header-title)]">
+        <div className="flex items-center gap-3">
+          <span className="text-14 font-medium text-[var(--plan-header-title)]">
             {t('newChat.planReview.title')}
           </span>
           <span className="text-12 font-normal text-[var(--plan-header-hint)]">
@@ -235,7 +235,7 @@ export function PlanViewerCard({
           </span>
         </div>
         {/* Toolbar: Edit / Minimize / Maximize */}
-        <div className="flex items-center gap-[4px]">
+        <div className="flex items-center gap-1">
           <ToolbarButton
             icon={Pencil}
             label={isEdit ? t('newChat.planReview.toolbar.exitEdit') : t('newChat.planReview.toolbar.edit')}
@@ -299,19 +299,19 @@ export function PlanViewerCard({
             spellCheck={false}
             wrap="soft"
             className={cn(
-              'flex-1 resize-none overflow-y-auto px-[28px] py-[20px]',
+              'flex-1 resize-none overflow-y-auto px-7 py-5',
               'whitespace-pre-wrap break-words bg-transparent outline-none',
               'font-mono text-13 leading-[1.7]',
-              'text-[var(--plan-edit-body)] caret-[var(--plan-edit-body)]',
+              'text-[var(--plan-edit-body)]',
             )}
             aria-label={t('newChat.planReview.toolbar.edit')}
           />
           {saveError && (
             <div
               className={cn(
-                'shrink-0 border-t px-[28px] py-[8px] text-12',
+                'shrink-0 border-t px-7 py-2 text-12',
                 'border-[var(--plan-header-divider)]',
-                'bg-[var(--plan-content-bg)] text-red-500',
+                'bg-[var(--plan-content-bg)] text-[var(--error-fg)]',
               )}
               role="status"
             >
@@ -324,17 +324,17 @@ export function PlanViewerCard({
           {/* Outline Column — 180px */}
           <div
             className={cn(
-              'flex w-[180px] shrink-0 flex-col gap-[2px] overflow-y-auto border-r px-[12px] py-[16px]',
+              'flex w-[180px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r px-3 py-4',
               'bg-[var(--plan-outline-bg)] border-[var(--plan-outline-border)]',
             )}
           >
-            <div className="pb-[4px]">
+            <div className="pb-1">
               <span className="text-12 font-semibold text-[var(--plan-outline-label)]">
                 {t('newChat.planReview.outlineLabel')}
               </span>
             </div>
             {outline.length === 0 ? (
-              <span className="px-[8px] py-[6px] text-12 text-[var(--plan-outline-item-text)]">
+              <span className="px-2 py-1.5 text-12 text-[var(--plan-outline-item-text)]">
                 {t('newChat.planReview.outlineEmpty')}
               </span>
             ) : (
@@ -346,7 +346,7 @@ export function PlanViewerCard({
                     type="button"
                     onClick={() => handleScrollToAnchor(entry.id)}
                     className={cn(
-                      'flex items-center rounded-[6px] px-[8px] py-[6px] text-left',
+                      'flex items-center rounded-lg px-[8px] py-[6px] text-left',
                       'text-12',
                       'transition-colors hover:bg-[var(--plan-outline-active-bg)]',
                       // v1: no scroll-spy. Items are neutral by default and
@@ -354,7 +354,7 @@ export function PlanViewerCard({
                       isActive
                         ? 'bg-[var(--plan-outline-active-bg)] text-[var(--plan-outline-active-text)] font-medium'
                         : 'text-[var(--plan-outline-item-text)]',
-                      entry.level >= 3 && 'pl-[16px]',
+                      entry.level >= 3 && 'pl-4',
                     )}
                   >
                     <span className="truncate">{entry.label}</span>
@@ -368,7 +368,7 @@ export function PlanViewerCard({
           <div
             ref={contentRef}
             className={cn(
-              'flex-1 overflow-y-auto px-[28px] py-[20px]',
+              'flex-1 overflow-y-auto px-7 py-5',
               'bg-[var(--plan-content-bg)]',
             )}
           >
@@ -405,7 +405,7 @@ function ToolbarButton({
         onClick={onClick}
         aria-label={label}
         className={cn(
-          'flex h-[28px] w-[28px] items-center justify-center rounded-[6px]',
+          'flex h-[28px] w-[28px] items-center justify-center rounded-lg',
           'transition-colors hover:bg-[var(--plan-toolbar-btn-hover-bg)]',
           active && 'bg-[var(--plan-toolbar-btn-hover-bg)]',
         )}

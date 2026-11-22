@@ -11,6 +11,8 @@ import {
 /** Additive, same-account business channel. Never broadcast screen data or input. */
 export const REMOTE_DESKTOP_CHANNEL = "device-link:remote-desktop:v1";
 export const REMOTE_DESKTOP_LEASE_MS = 12_000;
+/** Leave time for the next 3s renewal tick inside the unchanged lease. */
+export const REMOTE_DESKTOP_HEARTBEAT_TIMEOUT_MS = 5_000;
 /** Human inactivity, independent of transport heartbeats. Zero disables it. */
 export const REMOTE_DESKTOP_IDLE_MINUTES = [0, 1, 5, 10, 15, 30] as const;
 export const REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES = 5;
@@ -228,6 +230,14 @@ export interface RemoteDesktopCapabilities {
   lockOnExit?: boolean;
   /** Host enforces human inactivity and locks before ending the lease. */
   idleLock?: boolean;
+  /**
+   * The host applies its own away time to idle viewers and ignores `idleTimeoutMinutes`
+   * (docs/product-rules/privacy-screen.md). Viewers hide their idle setting; for hosts
+   * without it they keep sending the old default.
+   */
+  hostIdle?: boolean;
+  /** How a protected end leaves the host: its privacy screen, or a real lock. Older hosts: lock. */
+  exitProtection?: 'privacy-screen' | 'lock';
   videoSettings?: boolean;
   trickleIce?: boolean;
   systemAudio?: boolean;
@@ -243,6 +253,8 @@ export interface RemoteDesktopCapabilities {
    * send them otherwise: older hosts end the session on unknown channel data.
    */
   channelRequests?: boolean;
+  /** Accepts heartbeats over input-v1 and retains live media through signaling loss. */
+  signalingContinuity?: boolean;
   /** Display changes requested with `keepVideo` may keep the live video stream. */
   liveDisplaySwitch?: boolean;
   /**
@@ -255,6 +267,8 @@ export interface RemoteDesktopCapabilities {
   cursorOverlay?: boolean;
   clipboardText?: boolean;
   clipboardContent?: boolean;
+  /** Can identify the text field at a delivered click on the controlled display. */
+  editableClick?: boolean;
   clipboardSync?: boolean;
   /** Bounded single-message clipboard payloads, with legacy chunk fallback. */
   clipboardInline?: boolean;
@@ -294,7 +308,10 @@ export const LIVE_SCREEN_PLATFORMS: readonly LiveScreenPlatform[] = [
 ];
 /** One screen offered by an enabled plugin, as listed by `screens`. */
 export interface RemoteLiveScreen {
+  /** Physical install key: routing only, never proof of source identity. */
   plugin: string;
+  /** Host-attested logical source/id, canonical pluginStoragePart; absent on older hosts. */
+  pluginIdentity?: string;
   pluginName: string;
   id: string;
   name: string;
@@ -302,6 +319,41 @@ export interface RemoteLiveScreen {
   state: "running" | "starting" | "off";
   /** Tasks the plugin has bound this screen to. */
   taskIds: string[];
+}
+/**
+ * The running screens in a host's `screens` reply. The reply is untrusted:
+ * entries of any other shape are dropped.
+ */
+export function runningLiveScreens(value: unknown): RemoteLiveScreen[] {
+  const list = (value as { screens?: unknown } | null)?.screens;
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (item): item is RemoteLiveScreen =>
+      !!item &&
+      typeof item === "object" &&
+      typeof item.plugin === "string" &&
+      LIVE_SCREEN_PLUGIN_ID.test(item.plugin) &&
+      (item.pluginIdentity === undefined ||
+        (typeof item.pluginIdentity === "string" &&
+          LIVE_SCREEN_PLUGIN_ID.test(item.pluginIdentity))) &&
+      typeof item.id === "string" &&
+      LIVE_SCREEN_ID.test(item.id) &&
+      typeof item.name === "string" &&
+      typeof item.pluginName === "string" &&
+      LIVE_SCREEN_PLATFORMS.includes(item.platform) &&
+      item.state === "running" &&
+      Array.isArray(item.taskIds) &&
+      item.taskIds.every((id: unknown) => typeof id === "string"),
+  );
+}
+/** The running screens a host's `screens` reply binds to one task. */
+export function taskLiveScreens(
+  value: unknown,
+  taskId: string,
+): RemoteLiveScreen[] {
+  return runningLiveScreens(value).filter((item) =>
+    item.taskIds.includes(taskId),
+  );
 }
 export const LIVE_SCREEN_BUTTON_ICONS = [
   "home",
@@ -328,6 +380,7 @@ export interface LiveScreenButton {
 /** Host-verified description of the plugin screen a live screen lease shows. */
 export interface RemoteDesktopLeaseScreen {
   plugin: string;
+  pluginIdentity?: string;
   id: string;
   name: string;
   platform: LiveScreenPlatform;
@@ -392,6 +445,7 @@ export type RemoteDesktopRequest =
   | { op: "viewerHidden"; lease: string; hidden: boolean }
   | { op: "clipboardSync"; lease: string; enabled: boolean }
   | { op: "clipboardVersion"; lease: string }
+  | { op: "editableClick"; lease: string; sequence: number }
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
@@ -409,7 +463,7 @@ export type RemoteDesktopRequest =
       /** 代输入 request id; only to hosts advertising `handoffWindow`. */
       handoff?: string;
       /** A listed plugin screen; only to hosts advertising `liveScreens`. */
-      screen?: { plugin: string; id: string };
+      screen?: { plugin: string; id: string; pluginIdentity?: string };
     }
   | {
       op: "heartbeat";
@@ -517,6 +571,9 @@ export function parseRemoteDesktopRequest(
         typeof screen !== "object" ||
         typeof screen.plugin !== "string" ||
         !LIVE_SCREEN_PLUGIN_ID.test(screen.plugin) ||
+        (screen.pluginIdentity !== undefined &&
+          (typeof screen.pluginIdentity !== "string" ||
+            !LIVE_SCREEN_PLUGIN_ID.test(screen.pluginIdentity))) ||
         typeof screen.id !== "string" ||
         !LIVE_SCREEN_ID.test(screen.id) ||
         v.handoff !== undefined)
@@ -531,6 +588,9 @@ export function parseRemoteDesktopRequest(
             screen: {
               plugin: screen.plugin as string,
               id: screen.id as string,
+              ...(screen.pluginIdentity === undefined
+                ? {}
+                : { pluginIdentity: screen.pluginIdentity as string }),
             },
           }
         : {}),
@@ -580,6 +640,8 @@ export function parseRemoteDesktopRequest(
     typeof v.enabled === "boolean"
   )
     return { op: v.op, lease, enabled: v.enabled };
+  if (v.op === "editableClick" && Number.isSafeInteger(v.sequence) && (v.sequence as number) >= 0)
+    return { op: v.op, lease, sequence: v.sequence as number };
   if (v.op === "clipboardVersion") return { op: v.op, lease };
   if (v.op === "viewerHidden" && typeof v.hidden === "boolean")
     return { op: v.op, lease, hidden: v.hidden };
@@ -760,6 +822,7 @@ export function parseRemoteDesktopRequest(
  */
 export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "control",
+  "heartbeat",
   "presentation",
   "hostMute",
   "privacyScreen",
@@ -767,12 +830,21 @@ export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "displayModes",
   "clipboardSync",
   "clipboardVersion",
+  "editableClick",
   "screenShape",
 ]);
 export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
 /** Fits one SCTP message on every shipped receiver. */
 export const REMOTE_DESKTOP_CHANNEL_MAX_BYTES = 32_768;
 export const REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS = 8_000;
+
+export function remoteDesktopChannelTimeoutMs(
+  request: RemoteDesktopRequest,
+): number {
+  return request.op === "heartbeat"
+    ? REMOTE_DESKTOP_HEARTBEAT_TIMEOUT_MS
+    : REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS;
+}
 
 export function isRemoteDesktopChannelRequest(
   request: RemoteDesktopRequest,

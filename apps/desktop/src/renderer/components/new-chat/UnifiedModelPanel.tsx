@@ -19,7 +19,7 @@ import { toast } from '@/lib/toast';
 import { matchesModelName } from '@/lib/modelDisplayNames';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { favoritesSyncFailureI18nKey } from './favoritesSyncFailure';
-import { Check, Loader2, TriangleAlert } from 'lucide-react';
+import { Check, ChevronRight, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -65,6 +65,7 @@ import {
   withMenuLabels,
 } from '@/components/ui/menu-row';
 import { ModelSourceUsageProvider } from './ModelSourceDetails';
+import { ModelPoolQuotaSummary } from './ModelPoolQuota';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import {
   anchorKey,
@@ -83,10 +84,14 @@ import {
   resolveStoredModelEntry,
   sameAnchor,
   unavailableFavoriteEntry,
+  withRemoteModelGroupRailItems,
+  withRemotePluginEngineRailItems,
+  type DeviceModelGroupsRailTab,
   type ForeignFavoriteRow,
   type UnifiedAnchor,
   type UnifiedListRow,
   type UnifiedEngine,
+  type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
   type UnifiedRowConfig,
@@ -127,6 +132,25 @@ export interface UnifiedModelPanelProps {
   pinnedTop?: ReactNode;
   /** pinnedTop 当前有内容：搜索只命中它时不显示空结果。 */
   pinnedTopHasRows?: boolean;
+  /** 左侧栏「模型组」一格及其内容；不传就没有这一格。 */
+  modelGroupsView?: ReactNode;
+  /**
+   * 另一台电脑自己的模式(model-groups.md §6.3)：每台一格，排进那台电脑那一段；选中时列表区显示
+   * `renderDeviceModelGroups(deviceId)`。不传 / 空数组就没有这些格。
+   */
+  deviceModelGroupTabs?: readonly DeviceModelGroupsRailTab[];
+  renderDeviceModelGroups?: (deviceId: string) => ReactNode;
+  /**
+   * 插件提供的执行引擎：每个引擎在左侧栏单独一格(名字 + 插件图标)，选中时列表区显示
+   * `renderPluginEngine(providerId, deviceId)`。不传 / 空数组就没有这些格(没装任何引擎时)。
+   * 带 `deviceId` 的是自己另一台电脑上的引擎，格位排进那台电脑那一段。
+   */
+  pluginEngineTabs?: readonly PluginEngineRailTab[];
+  renderPluginEngine?: (providerId: string, deviceId?: string) => ReactNode;
+  /** 「收藏」视图且没有搜索词时，列表最上方额外渲染的内容(收藏的模式)。 */
+  favoritesPinned?: ReactNode;
+  /** favoritesPinned 当前有内容：只有它时「收藏」不显示空态引导。 */
+  favoritesPinnedHasRows?: boolean;
   providers: readonly ProviderView[];
   /**
    * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
@@ -141,6 +165,8 @@ export interface UnifiedModelPanelProps {
   isVisible: (providerId: string, model: CatalogModel, agent: AgentKind) => boolean;
   /** 整供应商排除(SSH 远程排除 chat-bridged Codex 源等)。 */
   excludeProvider?: (provider: ProviderView, agent: AgentKind) => boolean;
+  /** 从来源栏与模型分组里收起、收藏与最近照常解析的供应商(见 buildUnifiedListSections)。 */
+  listHiddenProviderIds?: ReadonlySet<string>;
   /** 单模型排除(SSH 远程排除订阅直连前缀等)。 */
   excludeModel?: (model: CatalogModel, provider: ProviderView, agent: AgentKind) => boolean;
   /**
@@ -160,6 +186,8 @@ export interface UnifiedModelPanelProps {
   fastMode?: boolean | 'ultrafast';
   /** live 选中行的深度实时值(同上)。 */
   selectedEffort?: Effort;
+  thinkingEnabled?: boolean;
+  onThinkingChangeLive?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   modelMemory?: ModelMemoryAccessors;
   preferenceStore?: ModelPickerPreferenceStore;
   /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode)。 */
@@ -305,6 +333,8 @@ export interface UnifiedModelPanelProps {
   overlayClassName?: string;
   /** deviceId 目录读取中/失败时取代「没有匹配的模型」。 */
   catalogNotice?: ReactNode;
+  /** Local catalog pending replaces only the empty state, preserving ready cross-source rows. */
+  emptyCatalogNotice?: ReactNode;
   /**
    * 远程 Agent：左侧栏在任务所在电脑的供应商之后列出其他电脑上的供应商。选中那台
    * 电脑上的模型 = Agent 在那台电脑运行，任务和文件仍在原电脑。
@@ -352,12 +382,14 @@ export interface UnifiedModelPanelProps {
       config: UnifiedSelectedRow;
     }) => void | boolean | Promise<void | boolean>;
     labelOf: (deviceId: string, providerId: string) => string;
+    homeUnavailableReasonOf?: (deviceId: string, providerId: string) => string | undefined;
     /** 正在浏览的远程供应商;null = 正在浏览本机目录。 */
     active: { deviceId: string; providerId: string } | null;
     /** 列表数据是否已经是 `active` 那台电脑的目录。 */
     ready: boolean;
     /** `active` 那台的目录读取失败时,列表区显示的提示(含重试)。 */
     failure?: ReactNode;
+    status?: ReactNode;
     onActivate: (target: { deviceId: string; providerId: string } | null) => void;
   };
   /**
@@ -366,6 +398,7 @@ export interface UnifiedModelPanelProps {
    * (见 widthSizerSections)。composer 的 `w-max` 面板不传 = 开启。
    */
   panelWidthFluid?: boolean;
+  readableRows?: boolean;
 }
 
 /**
@@ -384,12 +417,20 @@ export interface UnifiedModelPanelProps {
 export function UnifiedModelPanel({
   pinnedTop,
   pinnedTopHasRows = false,
+  modelGroupsView,
+  deviceModelGroupTabs,
+  renderDeviceModelGroups,
+  pluginEngineTabs,
+  renderPluginEngine,
+  favoritesPinned,
+  favoritesPinnedHasRows = false,
   providers,
   providerOrder,
   agents,
   scope,
   isVisible,
   excludeProvider,
+  listHiddenProviderIds,
   excludeModel,
   sourceVersion,
   query,
@@ -398,6 +439,8 @@ export function UnifiedModelPanel({
   liveAgentKind,
   fastMode = false,
   selectedEffort,
+  thinkingEnabled = true,
+  onThinkingChangeLive,
   modelMemory,
   preferenceStore,
   agentFastModeCapable,
@@ -428,10 +471,13 @@ export function UnifiedModelPanel({
   panelElement,
   overlayClassName,
   panelWidthFluid = false,
+  readableRows = false,
   catalogNotice,
+  emptyCatalogNotice,
   remoteSources,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
+  const [thinkingMemoryVersion, refreshThinkingMemory] = useState(0);
   const storedFavorites = useModelFavorites();
   const isSharedProvider = isProviderShareAgentDeviceId(deviceId);
   // 远程 Agent:收藏一律读写任务所在电脑那一份(§1.5),浏览其他电脑的目录时也不读那台自己的收藏;
@@ -545,9 +591,8 @@ export function UnifiedModelPanel({
   const keepModelKey = keepModel
     ? `${keepModel.providerId ?? ''}::${keepModel.modelId}::${keepModel.agent}`
     : '';
-  const entries = useMemo(
-    () =>
-      unifiedModelEntries({
+  /** 联合列表的派生入参。「已隐藏」区复用同一份,只换掉可见性谓词(见 hiddenEntries)。 */
+  const entryOptions = (): Parameters<typeof unifiedModelEntries>[0] => ({
         providers,
         ...(!preferenceStore && (modelMemory?.editMany || configurationEnabled === false) ? { aliasPreferences: (providerId: string, agent: AgentKind, modelId: string) => ({
           engine: selectionPolicy === 'personalized' ? getEngineOverride(providerId, modelId) : undefined,
@@ -565,23 +610,80 @@ export function UnifiedModelPanel({
         excludeModel: (model, provider, agent) =>
           predicatesRef.current.excludeModel?.(model, provider, agent) ?? false,
         includePaymentRequired,
+        // 用户整家隐藏的供应商不从数据里剔掉:收藏 / 最近要继续解析到它们,面板自己把
+        // 它们从左栏与常规分组收进底部的「已隐藏」区(见 foldedProviderIds / hiddenEntries)。
+        includeHiddenProviders: true,
         scope,
         // 选中行豁免:会话正在用的那一条即便被停用或服务端下架,也必须留在列表里 ——
         // 否则选择器一打开就是空选态,用户看不出自己在跑什么、也换不回来。豁免按 agent
         // 收窄(见上面 keepModel 的推导注释与该选项头注)。
         ...(keepModel ? { keepModel } : {}),
-      }),
+  });
+  const entries = useMemo(
+    () => unifiedModelEntries(entryOptions()),
     // biome-ignore lint/correctness/useExhaustiveDependencies: 谓词经 ref 读取,刷新信号是 sourceVersion(见其注释);agents 以 agentsKey 表达身份;keepModel 以 keepModelKey 表达身份。
     [providers, agentsKey, scope, sourceVersion, keepModelKey, includePaymentRequired, enginePrefsVersion, memoryVersion, modelMemory, selectionPolicy, configurationEnabled, priceOf, preferenceStore, getEngineOverride],
   );
 
+  // ── 已隐藏区 ──────────────────────────────────────────────────────────────
+  // 两种来源并成一个可展开的区:整家隐藏的供应商(ProviderView.hidden)与逐个关掉显示
+  // 开关的模型。隐藏只是从常规列表收起,模型照常可选 —— 所以这里不做任何准入判断,
+  // 与常规行走同一条 unifiedModelEntries(只是不套可见性谓词)。
+  const userHiddenProviderIds = useMemo(
+    () => new Set(providers.filter((provider) => provider.hidden === true).map((provider) => provider.id)),
+    [providers],
+  );
+  const foldedProviderIds = useMemo<ReadonlySet<string> | undefined>(() => {
+    if (userHiddenProviderIds.size === 0) return listHiddenProviderIds;
+    return new Set([...(listHiddenProviderIds ?? []), ...userHiddenProviderIds]);
+  }, [listHiddenProviderIds, userHiddenProviderIds]);
+  const hiddenEntries = useMemo(
+    () => {
+      // 逐个成员比对:别名合并行(同一逻辑模型的新旧 id)在两次派生里可能选出不同的代表 id,
+      // 只比行 id 会把已经列出的模型当成「被隐藏」再列一遍。
+      const listed = new Set(entries.flatMap((entry) =>
+        entryModelIds(entry).map((modelId) => `${entry.providerId} ${modelId}`)));
+      // 整家隐藏的供应商里显示开关开着的模型,两次派生各出一个对象:统一用 entries 里的那个,
+      // 收藏 / 最近解析出的行与隐藏区里的行才是同一个对象(行身份按引用比较)。
+      const listedByKey = new Map(entries.map((entry) => [`${entry.providerId} ${entry.modelId}`, entry]));
+      return unifiedModelEntries({
+        ...entryOptions(),
+        // 与常规清单唯一的差别:不套逐模型可见性。
+        isVisible: () => true,
+      }).filter(
+        (entry) =>
+          // 「运行于」收起的那一份是重复项,不是用户隐藏的,不进这个区。
+          !listHiddenProviderIds?.has(entry.providerId) &&
+          (userHiddenProviderIds.has(entry.providerId) ||
+            !entryModelIds(entry).some((modelId) => listed.has(`${entry.providerId} ${modelId}`))),
+      ).map((entry) => listedByKey.get(`${entry.providerId} ${entry.modelId}`) ?? entry);
+    },
+    // biome-ignore lint/correctness/useExhaustiveDependencies: 与 entries 同一组派生入参(entryOptions 经 ref / key 表达身份),entries 变即重算。
+    [entries, listHiddenProviderIds, userHiddenProviderIds],
+  );
+  /**
+   * 收藏与最近的解析目录 = 常规清单 ∪ 被隐藏的模型。隐藏只决定常规分组里列不列,
+   * 模型照常可调用,用户存过的收藏和最近不能因此解析不回来(包括在「已隐藏」区里刚点的星)。
+   */
+  const resolvableEntries = useMemo(() => {
+    const known = new Set(entries);
+    const extra = hiddenEntries.filter((entry) => !known.has(entry));
+    return extra.length > 0 ? [...entries, ...extra] : entries;
+  }, [entries, hiddenEntries]);
+  const [hiddenExpanded, setHiddenExpanded] = useState(false);
+
   const localRailItems = remoteSources?.localRailItems;
   const remoteGroups = remoteSources?.groups;
+  const hasModelGroupsView = modelGroupsView !== undefined;
+  // 本机的引擎格与另一台电脑上的引擎格分开排：一个字符串键表达两组的身份，目录没变就不重排。
+  const pluginEngineTabsKey = JSON.stringify((pluginEngineTabs ?? []).map((tab) => [tab.providerId, tab.deviceId ?? '']));
+  const deviceModelGroupTabsKey = (deviceModelGroupTabs ?? []).map((tab) => tab.deviceId).join('\n');
   const railItems = useMemo<UnifiedRailItem[]>(() => {
-    if (!localRailItems) return buildUnifiedRail(entries, undefined, providerOrder);
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
-    return [
+    const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(
+      entries.filter(entry => !foldedProviderIds?.has(entry.providerId)), undefined, providerOrder,
+    ) : [
       ...localRailItems,
       ...(remoteGroups ?? []).flatMap((group) =>
         group.providerIds.map((providerId) => ({
@@ -591,7 +693,21 @@ export function UnifiedModelPanel({
         })),
       ),
     ];
-  }, [entries, providerOrder, localRailItems, remoteGroups]);
+    const engineTabs = (JSON.parse(pluginEngineTabsKey) as Array<[string, string]>)
+      .map(([providerId, deviceId]) => ({ providerId, ...(deviceId ? { deviceId } : {}) }));
+    const groupTabs = deviceModelGroupTabsKey ? deviceModelGroupTabsKey.split('\n').map((deviceId) => ({ deviceId })) : [];
+    if (!hasModelGroupsView && engineTabs.length === 0) return withRemoteModelGroupRailItems(items, groupTabs);
+    // 「模型组」紧跟「全部」(和「全部」一样跨供应商)；本机的插件引擎各占一格排在它后面、各供应商格之前。
+    const all = items.findIndex((item) => item.kind === 'all');
+    const inserted: UnifiedRailItem[] = [
+      ...(hasModelGroupsView ? [{ kind: 'model-groups' as const }] : []),
+      ...engineTabs.filter((tab) => !tab.deviceId).map((tab) => ({ kind: 'plugin-engine' as const, providerId: tab.providerId })),
+    ];
+    // 另一台电脑上的引擎排进那台电脑那一段(它的供应商格之后)。
+    // 另一台电脑的「模型组」格排在那台电脑那一段最前面。
+    return withRemoteModelGroupRailItems(withRemotePluginEngineRailItems(
+      [...items.slice(0, all + 1), ...inserted, ...items.slice(all + 1)], engineTabs), groupTabs);
+  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, pluginEngineTabsKey, deviceModelGroupTabsKey, foldedProviderIds]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
@@ -645,7 +761,7 @@ export function UnifiedModelPanel({
   const activeFavoriteUid = useMemo(() => {
     const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
     if (!item) return null;
-    const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
+    const entry = resolveStoredModelEntry(resolvableEntries, item.providerId, item.modelId);
     return entry &&
       favoriteMatchesSelection({
         entry,
@@ -659,7 +775,7 @@ export function UnifiedModelPanel({
       ? item.uid
       : null;
   }, [
-    entries,
+    resolvableEntries,
     favorites,
     selectedFavoriteUid,
     selected.providerId,
@@ -696,7 +812,7 @@ export function UnifiedModelPanel({
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === entry.providerId);
       const personalized = selectionPolicy === 'personalized';
-      const base = resolveUnifiedRowConfig({
+      const resolved = resolveUnifiedRowConfig({
         entry,
         ...(personalized
           ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
@@ -729,7 +845,13 @@ export function UnifiedModelPanel({
       // **选中行读 live 值**,不读全局记忆:已建会话的深度 / Fast 由 DB / runtime 权威,
       // 其它对话改同一个模型的全局预设不该改写正在跑的这一条(与旧版 rowEffortOf /
       // fastOnOf 的选中行分支同语义)。
-      if (!isLiveRow(entry, base)) return base;
+      const live = isLiveRow(entry, resolved);
+      const thinkingCustomized = resolved.agent === 'pi' && resolved.capability?.thinkingToggle === true &&
+        (live ? !thinkingEnabled : modelMemory?.getThinking?.(
+          resolved.agent, entry.providerId, resolved.wireModelId ?? entry.modelId,
+        ) === false);
+      const base = thinkingCustomized ? { ...resolved, customized: true } : resolved;
+      if (!live) return base;
       const efforts: readonly string[] = base.efforts;
       const liveEffort =
         selectedEffort && efforts.includes(selectedEffort) ? selectedEffort : base.effort;
@@ -757,6 +879,8 @@ export function UnifiedModelPanel({
       isLiveRow,
       liveEngineAgent,
       memoryVersion,
+      thinkingMemoryVersion,
+      thinkingEnabled,
       modelMemory,
       selected.modelId,
       selected.providerId,
@@ -852,7 +976,7 @@ export function UnifiedModelPanel({
     };
   }, [deviceFavoritesEnabled, favoritesHomeDeviceId, deviceFavoriteGroups, unavailableDeviceIds, sharedFavoriteSources]);
 
-  const sections = useMemo(
+  const listedSections = useMemo(
     () =>
       buildUnifiedListSections({
         entries,
@@ -866,11 +990,42 @@ export function UnifiedModelPanel({
         rail: effectiveRail,
         effectiveEngineOf,
         providerOrder,
+        ...(foldedProviderIds?.size ? { listHiddenProviderIds: foldedProviderIds } : {}),
+        ...(resolvableEntries !== entries ? { resolveEntries: resolvableEntries } : {}),
         ...(scope === 'session' && liveEngineAgent
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId],
+    [entries, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
+  );
+  // 已隐藏区只跟「全部」与某个供应商的视图走(收藏 / 最近 / 模型组是另一种清单);
+  // 搜索时 effectiveRail 已回到「全部」,所以搜索天然覆盖所有被隐藏的模型。
+  const hiddenSections = useMemo(
+    () =>
+      effectiveRail.kind !== 'all' && effectiveRail.kind !== 'provider'
+        ? []
+        : buildUnifiedListSections({
+            entries: hiddenEntries,
+            favorites: [],
+            query,
+            matchesQuery: (entry, q) => matchesModelName({
+              id: entry.modelId, displayName: entry.displayName, description: entry.description,
+            }, q, t),
+            rail: effectiveRail,
+            effectiveEngineOf,
+            providerOrder,
+          }).map((section) => ({ ...section, key: `hidden:${section.key}`, hidden: true as const })),
+    [hiddenEntries, query, effectiveRail, effectiveEngineOf, providerOrder, t],
+  );
+  const hiddenRowCount = hiddenSections.reduce((count, section) => count + section.rows.length, 0);
+  // 当前选中的模型就在隐藏区里时直接展开:打开面板必须看得见自己正在用什么。
+  const selectedIsHidden = hiddenSections.some((section) =>
+    section.rows.some((row) =>
+      row.entry.providerId === selected.providerId && entryMatchesModelId(row.entry, selected.modelId)));
+  const hiddenShown = hiddenRowCount > 0 && (hiddenExpanded || selectedIsHidden || query.trim() !== '');
+  const sections = useMemo(
+    () => (hiddenShown ? [...listedSections, ...hiddenSections] : listedSections),
+    [hiddenShown, listedSections, hiddenSections],
   );
 
   // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
@@ -893,6 +1048,7 @@ export function UnifiedModelPanel({
     if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
     const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
     if (!row) {
+      el.scrollTop = 0;
       needsEnsureVisibleRef.current = false; // 本视图没有选中行,无事可做。
       return;
     }
@@ -1076,9 +1232,11 @@ export function UnifiedModelPanel({
     // 要比的实时深度 / Fast —— 与 configOf 里「选中行读 live 值」取的是同一个格子。
     liveEffort: selectedEffort,
     liveFast: fastMode,
+    liveThinking: thinkingEnabled,
     modelMemory,
     onEffortChangeLive,
     onFastModeChangeLive,
+    onThinkingChangeLive,
     onSelect,
     onConfigure,
     onSelectedFavoriteAnchorClear,
@@ -1176,8 +1334,43 @@ export function UnifiedModelPanel({
         ? providerHeading(section.group.providerId)
         : '';
 
+  const quotaProviderOf = (section: (typeof sections)[number]): string | null => {
+    if (section.group?.type === 'provider') return section.group.providerId;
+    const first = section.rows[0];
+    if (!first || section.rows.some(row => row.agentDeviceId || row.entry.providerId !== first.entry.providerId)) return null;
+    if (sections.some(other => other.group?.type === 'provider' && other.group.providerId === first.entry.providerId)) return null;
+    const firstSourceSection = sections.find(other => other.rows.length > 0 && other.rows.every(row =>
+      !row.agentDeviceId && row.entry.providerId === first.entry.providerId));
+    return firstSourceSection === section ? first.entry.providerId : null;
+  };
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
+  /**
+   * 「已隐藏」区的入口:折叠时排在列表末尾,展开后变成该区的标题。搜索词或当前选中项
+   * 把它强制展开时仍可点,只是收不起来(aria-expanded 如实反映)。
+   */
+  const hiddenDisclosure = hiddenRowCount > 0 ? (
+    <button
+      type="button"
+      data-hidden-models-toggle
+      aria-expanded={hiddenShown}
+      title={t('newChat.modelSelector.unified.hiddenGroupHint')}
+      onClick={() => setHiddenExpanded((open) => !open)}
+      className={cn(
+        'mt-1 flex w-full items-center gap-1 rounded-[8px] px-2.5 py-1.5 text-left text-12 font-medium leading-[1.33]',
+        'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-[var(--surface-hover)]',
+      )}
+    >
+      <ChevronRight
+        size={12}
+        aria-hidden
+        className={cn('shrink-0 transition-transform motion-reduce:transition-none', hiddenShown && 'rotate-90')}
+      />
+      <span className="truncate">
+        {t('newChat.modelSelector.unified.hiddenGroup', { count: hiddenRowCount })}
+      </span>
+    </button>
+  ) : null;
 
   /**
    * 行 L2 显示 provider 来源而不是模型描述(2026-09-16 实测裁决)。
@@ -1269,6 +1462,7 @@ export function UnifiedModelPanel({
     const rowElement = (
       <UnifiedModelRow
         key={key}
+        readable={readableRows}
         measurementOnly={sizer}
         entry={row.entry}
         anchor={row.anchor}
@@ -1278,6 +1472,7 @@ export function UnifiedModelPanel({
             ? t('newChat.modelSelector.unified.remoteFavoriteUnavailable', { source: label })
             : label
         }
+        sourceNotice={remoteSources?.homeUnavailableReasonOf?.(rowDeviceId, row.entry.providerId)}
         selected={false}
         active={false}
         isFavoriteRow
@@ -1327,7 +1522,7 @@ export function UnifiedModelPanel({
         key={key}
         isolated
         providers={provider ? [provider] : NO_PROVIDERS}
-        scope={{ deviceId: rowDeviceId }}
+        scope={{ deviceId: rowDeviceId, taskId: rowDeviceId === providerUsage?.deviceId ? providerUsage.taskId : undefined }}
         {...(providerGroupUsage
           ? { groupUsageOf: (providerId: string) => providerGroupUsage(rowDeviceId, providerId) }
           : {})}
@@ -1384,6 +1579,8 @@ export function UnifiedModelPanel({
         providers={providers}
         providerLabel={providerHeading}
         interactionDisabled={interactionDisabled || actionPending}
+        {...(pluginEngineTabs?.length ? { pluginEngineTabs } : {})}
+        {...(deviceModelGroupTabs?.length ? { modelGroupDeviceTabs: deviceModelGroupTabs } : {})}
         {...(remoteSources
           ? {
               remoteSources: {
@@ -1410,6 +1607,7 @@ export function UnifiedModelPanel({
             // 底部加宽到 12px:滚到底时最后一行不贴着面板底边/footer(Chris 2026-08-13:
             // 「最底部稍微放宽一点高度」)。
             'morph-panel-list-scroll flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 pb-3 [scrollbar-gutter:stable]',
+            readableRows && 'overflow-x-hidden',
             // min-h-0 是能不能滚到底的关键:flex item 的默认 min-height:auto 会让它按内容
             // 撑开、拒绝收缩,于是超出面板的部分被外层裁掉且**滚不到**(2026-08-13 实测:
             // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,
@@ -1460,7 +1658,7 @@ export function UnifiedModelPanel({
               <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
             </>
           )}
-          {/* 只在已登记跨 Harness 切换时提示有损;浏览「全部」或同 Harness 换模型不提示。 */}
+          {/* 只在已登记跨 Harness 切换时提示如何接续;浏览「全部」或同 Harness 换模型不提示。 */}
           {sessionEngineFilter?.pendingTarget && (
             <div
               role="note"
@@ -1477,14 +1675,20 @@ export function UnifiedModelPanel({
               )}
             >
               <TriangleAlert size={12} className="shrink-0" />
-              <span className="truncate">
+              <span className="min-w-0 break-words">
                 {t('newChat.modelSelector.unified.crossEngineWarning')}
               </span>
             </div>
           )}
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
           {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
-          {remoteListPending ? (
+          {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
+          {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
+          {effectiveRail.kind === 'model-groups' ? (
+            (effectiveRail.deviceId ? renderDeviceModelGroups?.(effectiveRail.deviceId) : modelGroupsView) ?? null
+          ) : effectiveRail.kind === 'plugin-engine' ? (
+            renderPluginEngine?.(effectiveRail.providerId, effectiveRail.deviceId) ?? null
+          ) : remoteListPending ? (
             remoteSources?.failure ?? (
               <div
                 role="status"
@@ -1496,19 +1700,24 @@ export function UnifiedModelPanel({
             )
           ) : catalogNotice ? (
             catalogNotice
-          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all') ? (
-            // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
-            <div className="w-0 min-w-full px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
-              {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
-              {!query.trim() && effectiveRail.kind === 'favorites'
-                ? t('newChat.modelSelector.unified.favoritesEmpty')
-                : !query.trim() && effectiveRail.kind === 'recent'
-                  ? t('newChat.modelSelector.unified.recentEmpty')
-                  : t('newChat.modelSelector.search.noResults')}
-            </div>
+          ) : !hasRows && hiddenRowCount === 0 && !(pinnedTopHasRows && effectiveRail.kind === 'all')
+            && !(favoritesPinnedHasRows && effectiveRail.kind === 'favorites' && !query.trim()) ? (
+            emptyCatalogNotice ?? (
+              // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
+              <div className="w-0 min-w-full px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
+                {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
+                {!query.trim() && effectiveRail.kind === 'favorites'
+                  ? t('newChat.modelSelector.unified.favoritesEmpty')
+                  : !query.trim() && effectiveRail.kind === 'recent'
+                    ? t('newChat.modelSelector.unified.recentEmpty')
+                    : t('newChat.modelSelector.search.noResults')}
+              </div>
+            )
           ) : (
-            sections.map((section) => (
+            <>
+            {sections.map((section, sectionIndex) => (
               <div key={section.key} role="group" aria-label={sectionLabel(section)}>
+                {section.hidden && !sections[sectionIndex - 1]?.hidden ? hiddenDisclosure : null}
                 <div
                   data-group-label={sectionLabel(section)}
                   {...(section.group?.type === 'provider'
@@ -1516,11 +1725,13 @@ export function UnifiedModelPanel({
                     : {})}
                   // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
                   className={cn(
-                    'flex items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
+                    'flex flex-wrap items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
                     'pb-1 pt-2',
                   )}
                 >
                   <span className="truncate">{sectionLabel(section)}</span>
+                  {quotaProviderOf(section) && <ModelPoolQuotaSummary providerId={quotaProviderOf(section)!}/>}
+
                 </div>
                 {section.rows.map((row) => {
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false);
@@ -1543,7 +1754,7 @@ export function UnifiedModelPanel({
                   const matchingFavorite = row.recent
                     ? favorites.find((favorite) => {
                         if (favorite.providerId !== row.entry.providerId) return false;
-                        if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
+                        if (resolveStoredModelEntry(resolvableEntries, favorite.providerId, favorite.modelId) !== row.entry) return false;
                         const favoriteConfig = resolveFavoriteRowConfig({
                           entry: row.entry,
                           item: favorite,
@@ -1563,12 +1774,16 @@ export function UnifiedModelPanel({
                   return (
                     <UnifiedModelRow
                       key={key}
+                      readable={readableRows}
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
                       {...(showsSourceRow
                         ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
                         : {})}
+                      sourceNotice={remoteActiveDeviceId
+                        ? remoteSources?.homeUnavailableReasonOf?.(remoteActiveDeviceId, row.entry.providerId)
+                        : undefined}
                       selected={isSelectedRow(row.anchor, row.entry)}
                       active={sameAnchor(flyAnchor, row.anchor)}
                       isFavoriteRow={!!starredFavorite}
@@ -1627,7 +1842,9 @@ export function UnifiedModelPanel({
                   );
                 })}
               </div>
-            ))
+            ))}
+            {hiddenShown ? null : hiddenDisclosure}
+            </>
           )}
         </div>
         {/* 定宽 sizer(见 widthSizerSections 的说明):不可见、零高度、不进 listbox,
@@ -1747,7 +1964,29 @@ export function UnifiedModelPanel({
                   applyEffort(target.anchor, target.entry, config, effort)
                 }
                 onFastChange={(enabled) => applyFast(target.anchor, target.entry, config, enabled)}
-                onResetToRecommended={() => resetToRecommended(target.anchor, target.entry, config)}
+                // Favorites/recents are configuration copies whose existing
+                // schema does not contain thinking. Do not edit live state or
+                // global model memory while inspecting one of those copies.
+                thinking={target.favorite || target.recent ? undefined : {
+                  enabled: isLiveRow(target.entry, config) ? thinkingEnabled
+                    : modelMemory?.getThinking?.(config.agent, target.entry.providerId,
+                        config.wireModelId ?? target.entry.modelId) ?? true,
+                  disabled: isLiveRow(target.entry, config) ? !onThinkingChangeLive : !modelMemory?.setThinking,
+                  onChange: enabled => {
+                    // Use the panel's write lock and the caller's existing owner-aware
+                    // route. A rejected live write must not prewrite model memory.
+                    void runExternal(async () => {
+                      if (isLiveRow(target.entry, config)) return onThinkingChangeLive?.(enabled);
+                      modelMemory?.setThinking?.(config.agent, target.entry.providerId,
+                        config.wireModelId ?? target.entry.modelId, enabled);
+                      refreshThinkingMemory(value => value + 1);
+                    });
+                  },
+                }}
+                onResetToRecommended={() => {
+                  void Promise.resolve(resetToRecommended(target.anchor, target.entry, config))
+                    .finally(() => refreshThinkingMemory(value => value + 1));
+                }}
                 onAddFavorite={() => addFavorite(target.anchor, config)}
                 onRemoveFavorite={() => removeFavorite(target.anchor, target.entry)}
               />

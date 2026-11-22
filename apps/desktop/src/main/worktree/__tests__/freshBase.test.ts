@@ -28,7 +28,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { resolveFreshSourceBranch } from '../freshBase';
+import { resolveFreshSourceBranch, refreshSelectedDefaultSource } from '../freshBase';
 
 const REPO = '/repo';
 
@@ -270,4 +270,29 @@ describe('resolveFreshSourceBranch', () => {
     expect(res).toEqual({ sourceBranch: 'feature-x', fetched: false, reason: 'no-default-branch' });
     expect(call('fetch')).toBeUndefined();
   });
+});
+
+// Desktop selection is fixed, unlike automatic worktree defaults. A timeout is
+// fail-open and shares the existing bounded fetch implementation; no real wait.
+it('keeps the selected origin default after a fetch timeout, without probing upstream', async () => {
+  mocks.impl = (args) => {
+    const key = args.join(' ');
+    if (key === 'symbolic-ref refs/remotes/origin/HEAD') return 'refs/remotes/origin/trunk';
+    if (key === 'rev-parse --verify refs/remotes/origin/trunk^{commit}') return 'old';
+    if (args[0] === 'fetch') throw new Error('timed out');
+    return undefined;
+  };
+  await expect(
+    refreshSelectedDefaultSource(REPO, 'refs/remotes/origin/trunk', 5000),
+  ).resolves.toBeUndefined();
+  expect(call('fetch')?.args).toEqual([
+    'fetch',
+    '--quiet',
+    'origin',
+    '+refs/heads/trunk:refs/remotes/origin/trunk',
+  ]);
+  expect(call('fetch')?.opts?.timeoutMs).toBeGreaterThan(0);
+  expect(call('fetch')?.opts?.timeoutMs).toBeLessThanOrEqual(2000);
+  expect(call('ls-remote')).toBeUndefined();
+  expect(call('remote get-url upstream')).toBeUndefined();
 });

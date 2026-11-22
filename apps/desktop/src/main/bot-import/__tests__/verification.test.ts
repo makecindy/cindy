@@ -344,9 +344,9 @@ it.each(['unavailable', 'omitted', 'bad-evidence', 'complete'] as const)('requir
       { requestId: 'all-evidence-fixture', previewId: 'preview', name: 'Ada', entryIds: [...selected, item].map(entry => entry.view.id), takeover: true }, {
         assertOwner() {}, readReceipt: async () => receipt, saveReceipt: async value => { receipt = structuredClone(value); },
         createCompanion: async () => {}, importItem: async () => {}, saveEnvironment: async () => {}, saveCheckpoint: async () => {},
-        createConversation: async () => 'chat', createRoutine: async () => 'routine',
+        createConversation: async () => 'chat', createAutomation: async () => 'routine',
         verifyAutomation: (botId, task) => verifyImportedAutomation('/fixture', botId, task, () => {}, selected),
-        pauseSource: pause, resumeSource: async () => {}, enableRoutine: enable,
+        pauseSource: pause, resumeSource: async () => {}, enableAutomation: enable,
       });
     expect(result.status).toBe(mode === 'complete' ? 'complete' : 'needs-attention');
     expect(pause).toHaveBeenCalledTimes(mode === 'complete' ? 1 : 0);

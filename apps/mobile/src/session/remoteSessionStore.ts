@@ -1,6 +1,6 @@
 import { isTeammateTask } from './teammateTaskSource';
 import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
-import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
@@ -46,7 +46,7 @@ import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { EMPTY_INPUT_PROJECTION, normalizeInputProjection } from '@/session/inputProjection';
 import { sortPendingInteractions } from '@/session/interactionModel';
-import { clearAskUserDraft } from '@/session/interactionDraftStore';
+import { clearAskUserDraft, clearIssueConfirmDraft, clearAllInteractionDrafts } from '@/session/interactionDraftStore';
 import { applySessionModelPrefPush } from '@/session/sessionModelMirror';
 import {
   createLatestWriteGuard,
@@ -77,6 +77,7 @@ import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { sessionAgentSwitchIntentPatch } from '@/session/sessionAgentSwitch';
 import { clampLiveRowCreatedAt, compareMessageOrder, MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
@@ -736,9 +737,9 @@ const sessionGoalStatus = new Map<string, MobileGoalStatusPayload | null>();
 // 这份边界,构成闭环:孤儿只在 maker turn 运行中渲染,而 maker turn start 必然先清 stale。
 const sessionMakerTurnRunning = new Map<string, boolean>();
 const sessionDeviceIndex = new Map<string, string>();
-// 已收到 error-persisted 脏信号且缓存消息仍在的会话集合。session 页面监听此 Set,
+// 已收到历史脏信号且缓存消息仍在的会话。token 让多个历史读取者各自观察每次失效,
 // 检测到自身 sessionId 被加入时调 load() 触发整窗刷新(含 error 行),避免先清空导致空白帧。
-const pendingRefreshSessions = new Set<string>();
+const pendingRefreshSessions = new Map<string, object>();
 const reseedHandlers = new Map<string, Set<() => void>>();
 // A whole-list read after app start or a reconnect reseed may follow a gap in live pushes.
 // Listeners read changed tasks ahead; ordinary list refreshes while pushes flow do not fire.
@@ -1191,7 +1192,7 @@ function invalidateSessionMessageWindowState(
   changed = sessionLiveStreamAcked.delete(sessionId) || changed;
   sessionLastAccessOrder.delete(sessionId);
   if (requestRefresh && !pendingRefreshSessions.has(sessionId)) {
-    pendingRefreshSessions.add(sessionId);
+    pendingRefreshSessions.set(sessionId, {});
     changed = true;
   } else if (!requestRefresh) {
     changed = pendingRefreshSessions.delete(sessionId) || changed;
@@ -1440,7 +1441,7 @@ const mergedSessionById = new Map<string, RemoteSession>();
 // List-only projection. Detail consumers keep reading mergedSessions, including
 // live usage. Usage pushes must not rebuild Home's grouping/localization tree.
 let homeSessions: RemoteSession[] = [];
-const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalTokenUsage']);
+const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalCostUsdIsApproximate', 'totalTokenUsage']);
 // These fields cannot change shard ownership, visibility or retention. Timestamps
 // still update this task's live-row anchor; titles still reconcile local previews.
 const SESSION_METADATA_FIELDS = new Set([...SESSION_USAGE_FIELDS, 'title', 'updatedAt', 'userSendAt']);
@@ -1459,6 +1460,7 @@ function reconcileHomeSessions(): void {
     const projected = { ...session };
     delete projected.totalMoney;
     delete projected.totalCostUsd;
+    delete projected.totalCostUsdIsApproximate;
     delete projected.totalTokenUsage;
     const stableProjected = cached && remoteSessionEqual(cached.projected, projected)
       ? cached.projected
@@ -1841,6 +1843,7 @@ function preserveSessionRuntimeFields(
     'companion',
     'taskTeammate',
     'agentSwitchIntent',
+    'pluginEngineSwitchIntent',
     'runtimeGeneration',
     'runtimeBaseline',
     'runtimeEffective',
@@ -4102,6 +4105,11 @@ export const remoteSessionStore = {
     return pendingRefreshSessions.has(sessionId);
   },
 
+  /** Non-consuming signal: group histories must not steal the task page's repair. */
+  getHistoryInvalidationToken(sessionId: string): object | undefined {
+    return pendingRefreshSessions.get(sessionId);
+  },
+
   /** 消费 pending refresh 标记,返回 true 表示确实有待刷新,由调用方触发 load()。 */
   consumePendingRefresh(sessionId: string): boolean {
     if (!pendingRefreshSessions.has(sessionId)) return false;
@@ -4747,7 +4755,7 @@ export const remoteSessionStore = {
         invalidateHistory: (sessionId) => {
           sessionMessageSyncMarkers.delete(sessionId);
           narrowWindowCoverageToStart(sessionId);
-          pendingRefreshSessions.add(sessionId);
+          pendingRefreshSessions.set(sessionId, {});
           bumpMessageVersion(sessionId);
           emit();
         },
@@ -4808,7 +4816,12 @@ export const remoteSessionStore = {
           localRow as unknown as Record<string, unknown> | undefined,
         );
         if (Object.keys(filtered).length > 0) {
-          this.applySessionPatch(deviceId, sessionId, filtered as Partial<RemoteSession>);
+          // 意图投影拆成内置 / 插件引擎两个字段(sessionAgentSwitchIntentPatch)，既有内置链路
+          // 永远看不到 targetAgentKind = 'acp'。
+          const split = Object.prototype.hasOwnProperty.call(filtered, 'agentSwitchIntent')
+            ? { ...filtered, ...sessionAgentSwitchIntentPatch(filtered.agentSwitchIntent) }
+            : filtered;
+          this.applySessionPatch(deviceId, sessionId, split as Partial<RemoteSession>);
         }
       }
       return;
@@ -4851,7 +4864,7 @@ export const remoteSessionStore = {
           // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
           // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
           forgetWindowCoverage(sessionId);
-          pendingRefreshSessions.add(sessionId);
+          pendingRefreshSessions.set(sessionId, {});
         } else {
           // 未缓存:清 sync marker + 标记待刷新。
           // 若 session 页面正在首次 listMessages(messages 尚未填充),需要 pendingRefreshSessions
@@ -4864,7 +4877,7 @@ export const remoteSessionStore = {
           // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
           // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
           forgetWindowCoverage(sessionId);
-          pendingRefreshSessions.add(sessionId);
+          pendingRefreshSessions.set(sessionId, {});
         }
         bumpMessageVersion(sessionId);
         emit();
@@ -4954,7 +4967,11 @@ export const remoteSessionStore = {
         bumpDeviceSessionListMutationEpoch(deviceId);
         this.applySessionPatch(deviceId, sessionId, {
           totalMoney,
-          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
+          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount }
+            : totalCostUsd !== null && totalCostUsd >= 0 ? { totalCostUsd } : {}),
+          ...(typeof payload.totalCostUsdIsApproximate === 'boolean' && {
+            totalCostUsdIsApproximate: payload.totalCostUsdIsApproximate,
+          }),
         });
       } else if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
         bumpDeviceSessionListMutationEpoch(deviceId);
@@ -5016,6 +5033,7 @@ export const remoteSessionStore = {
           this.confirmProtectedQuestion(sessionId, requestId);
           clearAskUserDraft(requestId);
         }
+        clearIssueConfirmDraft(requestId);
         // 注意:这里**不**提前回收延长抑制条目——push 到达只说明被控端已确认,
         // 不排除仍有「决定提交前发出、此刻还在途」的旧 getPendingInteractions
         // 快照晚于本 push 返回(弱网高发);提前回收会让那份旧快照把已解决的卡
@@ -5396,7 +5414,7 @@ export const remoteSessionStore = {
         : (isTurnStart ? true : current.generationReliable);
       // 速度属于产生它的那一轮：新一轮清掉，没带字段的帧沿用最近一次（含收尾平均）。
       // 标记不可靠又不带速度的帧，表示电脑端撤回了速度（休眠／时钟异常）。
-      const tokenSpeed = readTokenSpeedSnapshot(data?.tokenSpeed)
+      const tokenSpeed = receiveTokenSpeedSnapshot(data?.tokenSpeed, isTurnStart ? undefined : current.tokenSpeed)
         ?? (isTurnStart || data?.generationReliable === false ? undefined : current.tokenSpeed);
       // maker turn 边界 false→true 时清掉上一轮残留的 live task updates:它们是 turn 级
       // live 状态,残留到下一轮会被渲染层的孤儿兜底当作"仍在运行的子 agent"追加到消息流
@@ -5543,6 +5561,7 @@ export const remoteSessionStore = {
   },
 
   clear(): void {
+    clearAllInteractionDrafts();
     clearRemoteHistoryViews();
     deviceSessionListMutationEpochFloor = ++nextDeviceSessionListMutationEpoch;
     deviceSessionListMutationEpochs.clear();
@@ -5582,6 +5601,7 @@ export const remoteSessionStore = {
     sessionMakerActivityEpochs.clear();
     makerActivityEpoch = 0;
     sessionMessageSyncMarkers.clear();
+    pendingRefreshSessions.clear();
     sessionWindowCoverage.clear();
     sessionLiveStreamAcked.clear();
     sessionTaskUpdates.clear();
@@ -6350,6 +6370,14 @@ export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getVisibleSessions);
 }
 
+/** Native deep links must resolve hidden/detail-only sessions after the mirror hydrates. */
+export function useRemoteSessionLinkTarget(sessionId: string): RemoteSession | null {
+  const read = useCallback(() => remoteSessionStore.getSessions().find(session =>
+    session.id === sessionId,
+  ) ?? null, [sessionId]);
+  return usePausableRemoteSessionStoreSnapshot(read, read);
+}
+
 /** Link chips observe only their visible targets, not every task's activity. */
 export function useRemoteSessionTitles(ids: readonly string[]): Record<string, string> | undefined {
   const read = useCallback(() => {
@@ -6385,12 +6413,13 @@ export function useRemoteHomeSessions(): RemoteSession[] {
   );
 }
 
-export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalTokenUsage'>;
+export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalCostUsdIsApproximate' | 'totalTokenUsage'>;
 const EMPTY_SESSION_USAGE: RemoteSessionUsage = {};
 
 function sessionUsageEqual(a: RemoteSessionUsage, b: RemoteSessionUsage): boolean {
   return a.totalTokenUsage === b.totalTokenUsage
     && a.totalCostUsd === b.totalCostUsd
+    && a.totalCostUsdIsApproximate === b.totalCostUsdIsApproximate
     && a.totalMoney?.amount === b.totalMoney?.amount
     && a.totalMoney?.currency === b.totalMoney?.currency
     && a.totalMoney?.kind === b.totalMoney?.kind
@@ -6407,7 +6436,7 @@ export function useRemoteSessionUsage(sessionId: string, enabled = true): Remote
   const readUsage = useCallback(() => {
     const session = enabled ? sessionById(sessionId) : undefined;
     const next: RemoteSessionUsage = session
-      ? { totalCostUsd: session.totalCostUsd, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
+      ? { totalCostUsd: session.totalCostUsd, totalCostUsdIsApproximate: session.totalCostUsdIsApproximate, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
       : EMPTY_SESSION_USAGE;
     if (sessionUsageEqual(previousRef.current, next)) return previousRef.current;
     previousRef.current = next;

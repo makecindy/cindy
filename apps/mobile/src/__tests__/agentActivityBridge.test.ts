@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
+import { receiveHostTaskActivity } from '@/widgets/foregroundTaskActivity';
 import { AgentActivityBridge } from '@/widgets/AgentActivityBridge';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { RemoteSession } from '@/session/types';
@@ -18,11 +19,18 @@ const mock = vi.hoisted(() => ({
     getPresenceAvailability: vi.fn((_deviceId: string) => true),
     getSubscriptionIdentity: vi.fn((_deviceId: string): string | null => 'acknowledged'),
   },
+  appState: { currentState: "active" },
+  appStateListeners: new Set<(state: string) => void>(),
   t: (key: string) => key,
 }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
-  AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+  AppState: Object.assign(mock.appState, {
+    addEventListener: (_event: string, listener: (state: string) => void) => {
+      mock.appStateListeners.add(listener);
+      return { remove: () => mock.appStateListeners.delete(listener) };
+    },
+  }),
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: (name: string) => name === 'ExpoApplication'
   ? { getPushNotificationServiceEnvironmentAsync: async () => 'development' } : mock.native }));
@@ -44,8 +52,12 @@ let container: HTMLDivElement;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  mock.appState.currentState = "active";
+  mock.appStateListeners.clear();
   remoteSessionStore.clear();
   mock.auth = { initialized: true, isAuthenticated: true, user: { id: 'account-a' }, accountGeneration: 1, getAccessToken: async () => 'test-token' };
+  delete mock.native.addListener;
+  delete mock.native.updateForeground;
   delete mock.native.configureAccount; delete mock.native.getPushRegistration;
   mock.link.presenceVersion = 0;
   mock.link.getConnectionState.mockImplementation(() => ({ status: 'online' }));
@@ -200,3 +212,187 @@ it.each(['connection', 'presence', 'subscription'] as const)(
     expect(mock.native.setState).toHaveBeenLastCalledWith(null);
   },
 );
+
+// Unit: lock-screen disconnects previously expired or ended the last confirmed
+// activity immediately. Mount the production bridge: a queued write, background
+// store events and foreground resume must all respect the same lifecycle gate.
+it('retains the last confirmed activity through background disconnects and verifies it on resume', async () => {
+  const row: RemoteSession = {
+    id: 'background-task', userId: '', title: 'Long task', workingDir: '/example', workspaceKind: 'project',
+    model: 'claude', effort: 'medium', permissionMode: 'default', fastMode: false,
+    status: 'active', agentKind: 'cc', userSendAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  remoteSessionStore.setDeviceSessions('desktop', 'Example Mac', [row]);
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'running', attention: false,
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(JSON.parse(mock.native.setState.mock.calls.at(-1)![0]).state.status).toBe('running');
+  mock.native.setState.mockClear();
+  // Queue an update immediately before locking; it must not later renew stale data.
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'needs-interaction', attention: true,
+  });
+  await act(() => {
+    mock.appState.currentState = 'background';
+    for (const listener of mock.appStateListeners) listener('background');
+    vi.advanceTimersByTime(1_000);
+  });
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  mock.link.getConnectionState.mockImplementation(() => ({ status: 'offline' }));
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'completed', attention: false,
+  });
+  await act(() => vi.advanceTimersByTime(60_000));
+  expect(mock.native.markStale).not.toHaveBeenCalled();
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  await act(() => {
+    mock.appState.currentState = 'active';
+    for (const listener of mock.appStateListeners) listener('active');
+  });
+  expect(mock.native.markStale).toHaveBeenCalledTimes(1);
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  // Once the foreground connection attests that the task is read, end it.
+  mock.link.getConnectionState.mockImplementation(() => ({ status: 'online' }));
+  mock.link.presenceVersion++;
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(mock.native.setState).toHaveBeenLastCalledWith(null);
+});
+
+// Unit: the real bridge previously discarded the recovery budget on each
+// Device Link status change. One stale activity + offline/online is sufficient.
+it('keeps stale recovery bounded across connection changes in the mounted bridge', async () => {
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('__DEV__', true);
+  const send = vi.fn<typeof fetch>(async () => ({ ok: true, status: 200 } as Response));
+  vi.stubGlobal('fetch', send);
+  mock.native.configureAccount = vi.fn(async () => {});
+  mock.native.getPushRegistration = vi.fn(async () => ({
+    accountScope: JSON.stringify(['https://example.test', 'account-a']),
+    enabled: true, startToken: 'start', updateToken: 'update', activityId: 'active',
+    dismissed: false, supportsInputPushToken: true, isStale: true,
+  }));
+  mock.link.status = 'online';
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  for (const status of ['offline', 'online']) {
+    mock.link.status = status;
+    await act(() => root.render(createElement(AgentActivityBridge)));
+  }
+  const recoveries = () => send.mock.calls.filter(call => JSON.parse(call[1]!.body as string).refreshStale);
+  expect(recoveries()).toHaveLength(1);
+  await act(() => {
+    vi.advanceTimersByTime(30_000);
+    for (const listener of mock.appStateListeners) listener('active');
+  });
+  expect(recoveries()).toHaveLength(2);
+  // The service owns this activity: the partial Home projection is never written.
+  expect(mock.native.setState.mock.calls.every(([json]) => json === null)).toBe(true);
+});
+
+// Unit: with no service to renew it (self-hosted relay, failed registration) an
+// activity whose computer went away was greyed out at once and then stayed for
+// hours. The cases above use a native build without expiry reporting. Mount the
+// real bridge: unconfirmed content stays as it is until its stale date, then ends.
+it('keeps unconfirmed content until it expires, then ends it instead of leaving it greyed out', async () => {
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('__DEV__', true);
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503 } as Response)));
+  const registration = (isStale: boolean): ActivityPushRegistration => ({
+    accountScope: JSON.stringify(['https://example.test', 'account-a']),
+    enabled: true, startToken: 'start', updateToken: 'local', activityId: 'active',
+    dismissed: false, supportsInputPushToken: true, isStale,
+  });
+  mock.native.configureAccount = vi.fn(async () => {});
+  let expired = false;
+  mock.native.getPushRegistration = vi.fn(async () => registration(expired));
+  const row: RemoteSession = {
+    id: 'host-task', userId: '', title: 'Host task', workingDir: '/example', workspaceKind: 'project',
+    model: 'claude', effort: 'medium', permissionMode: 'default', fastMode: false,
+    status: 'active', agentKind: 'cc', userSendAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  remoteSessionStore.setDeviceSessions('desktop', 'Example Mac', [row]);
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'running', attention: false,
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(JSON.parse(mock.native.setState.mock.calls.at(-1)![0]).state.status).toBe('running');
+  mock.native.setState.mockClear();
+  mock.link.getConnectionState.mockImplementation(() => ({ status: 'offline' }));
+  mock.link.presenceVersion++;
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  expect(mock.native.markStale).not.toHaveBeenCalled();
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  expired = true;
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  expect(mock.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+});
+
+// Unit (real bridge): a registered APNs activity used to ignore the host transition after
+// a reply. Keep a second computer outside Home, race its initial read against a push,
+// then background the app before another report arrives.
+it('updates the registered island from complete foreground host reports and releases it in background', async () => {
+  const scope = JSON.stringify(['https://example.test', 'account-a']);
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+  mock.native.configureAccount = vi.fn(async () => {});
+  mock.native.getPushRegistration = vi.fn(async () => ({
+    accountScope: scope, enabled: true, startToken: 'start', updateToken: 'update',
+    activityId: 'active', dismissed: false, supportsInputPushToken: true,
+  }));
+  let conflict: (() => void) | undefined;
+  mock.native.addListener = (event, listener) => {
+    if (event === 'foregroundActivityConflict') conflict = listener;
+    return { remove() {} };
+  };
+  const write = mock.native.updateForeground = vi.fn();
+  const report = (device: string, status: 'running' | 'attention', revision: number) => ({
+    schemaVersion: 1, revision, runningCount: Number(status === 'running'),
+    waitingCount: Number(status === 'attention'), unreadCount: 0,
+    selected: { sessionId: device, title: device, status },
+  });
+  let finish!: (report: unknown) => void;
+  const online = ['a', 'b'].map(deviceId => ({ deviceId, online: true, platform: 'darwin', remoteControlEnabled: true }));
+  const reads = vi.fn((id: string) => id === 'a' ? Promise.resolve(report('a', 'attention', 1))
+    : new Promise(resolve => { finish = resolve; }));
+  const untrack = vi.fn(async () => {});
+  Object.assign(mock.link, {
+    readDeviceList: async () => ({ devices: online }), invoke: reads, subscribe: async () => {}, unsubscribe: untrack,
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect(write).not.toHaveBeenCalled();
+  receiveHostTaskActivity('b', report('b', 'running', 2));
+  expect(JSON.parse(write.mock.calls.at(-1)![1])).toMatchObject({ title: 'a', attentionCount: 1, runningCount: 1 });
+  await act(async () => finish(report('b', 'attention', 1)));
+  expect(write).toHaveBeenCalledTimes(1);
+  receiveHostTaskActivity('a', report('a', 'running', 2));
+  expect(JSON.parse(write.mock.calls.at(-1)![1])).toMatchObject({ status: 'running', count: 2, attentionCount: 0, runningCount: 2 });
+  // A later APNs send may still carry the old task. Re-confirm the two hosts in place.
+  reads.mockImplementation(async id => report(id, 'running', 3));
+  await act(async () => conflict!());
+  expect(reads).toHaveBeenCalledTimes(4);
+  expect(untrack).not.toHaveBeenCalled();
+  expect(JSON.parse(write.mock.calls.at(-1)![1])).toMatchObject({ status: 'running', count: 2 });
+
+  await act(() => {
+    mock.appState.currentState = 'background';
+    for (const listener of mock.appStateListeners) listener('background');
+  });
+  receiveHostTaskActivity('a', report('a', 'attention', 4));
+  expect(write).toHaveBeenCalledTimes(3);
+  expect(untrack).toHaveBeenCalledTimes(2);
+
+  // The known-offline computer may still own the last task. An empty online
+  // report on resume cannot end the activity on that computer's behalf.
+  online[1].online = false;
+  reads.mockResolvedValue({ schemaVersion: 1, revision: 4, waitingCount: 0, unreadCount: 0, runningCount: 0, selected: null });
+  await act(async () => {
+    mock.appState.currentState = 'active';
+    for (const listener of mock.appStateListeners) listener('active');
+  });
+  expect(reads).toHaveBeenCalledTimes(5);
+  expect(write).toHaveBeenCalledTimes(3);
+});

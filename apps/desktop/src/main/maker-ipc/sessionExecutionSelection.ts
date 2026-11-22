@@ -3,7 +3,7 @@ import { resolveSendToSessionExecutionConfig, type SendToSessionExecutionConfig 
 
 export type SessionExecutionSelection = SendToSessionExecutionConfig;
 export interface SessionModelSelection {
-  agentKind?: 'cc' | AgentKind;
+  agentKind?: 'cc' | AgentKind | 'acp';
   model?: string;
   providerId?: string | null;
   effort?: string;
@@ -20,8 +20,10 @@ export function resolveSessionExecutionSelection(params: {
   availableModels: Admission['availableModels'];
   providerRouting: Admission['providerRouting'];
   hasCindyAiApiKey: boolean;
+  locationChanged?: boolean;
 }): SessionExecutionSelection {
   const { selection, source, providerRouting } = params;
+  if (selection.agentKind === 'acp') throw new Error('插件引擎任务不经内置模型目录选路');
   const agentKind = selection.agentKind === 'cc' ? 'claude-code' : selection.agentKind ?? source?.agentKind;
   const model = selection.model ?? source?.model;
   const recover = '请在任务中重新选择模型，或在「设置 → 模型供应商」修复连接后重试。';
@@ -44,8 +46,9 @@ export function resolveSessionExecutionSelection(params: {
   const result = resolveSendToSessionExecutionConfig({
     source: candidate, overrides: { effort: candidate.effort, fastMode: candidate.fastMode },
     availableModels: params.availableModels, providerRouting, hasCindyAiApiKey: params.hasCindyAiApiKey,
+    locationChanged: params.locationChanged,
   });
-  if (!result.ok) throw new Error(`${result.message} ${recover}不会自动更换模型或供应商。`);
+  if (!result.ok) throw Object.assign(new Error(`${result.message} ${recover}不会自动更换模型或供应商。`), { code: result.errorCode });
   return result.config;
 }
 
@@ -66,6 +69,7 @@ export function createSessionExecutionResolver(deps: SessionExecutionResolverDep
   ): Promise<SessionExecutionSelection> => {
     const assertOwner = deps.captureOwner();
     assertOwner();
+    if (selection.agentKind === 'acp') throw new Error('插件引擎任务不经内置模型目录选路');
     let source: SessionExecutionSelection | undefined;
     if (existing) {
       if (!['cc', 'claude-code', 'codex', 'pi'].includes(existing.agentKind)) throw new Error('任务 Agent 不可用，请重新选择模型');

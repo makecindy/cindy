@@ -4,10 +4,11 @@ import { CINDY_ACRYLIC_WINDOW_BACKING } from '../../../shared/windowBackdrop';
 import { filledButtonHover, filledButtonPressed } from '../filledButtonStates';
 
 /*
- * CINDY Light — 品牌红 CTA + 暖象牙底(#F2F2ED)+ AA 正文。
- * 值的唯一权威: token-decision-table.md §3(2026-07-17 U8 批准) + §9(2026-08 色阶改版,用户批准)。
- * §9 要点: 面/边框全暖(B=R-5)、文字渐进暖、二级抬到 >=3.0(取代 U2 light 原值)、
- * 交互态分页面/卡片双锚定。每个 override 注释来源;零自由裁量。
+ * CINDY Light — 暖象牙底(#F2F2ED)+ 墨水文字档位;普通主按钮为反相中性,不用品牌红。
+ * 数值源: packages/design-tokens(DTCG,生成下方 GENERATED 区,不要手改);规则: DESIGN.md §15
+ * (§15.16 色阶与墨水、§15.10 红色边界)。token-decision-table.md 只是决策记录,不是数值源。
+ * 要点: 面全暖(B=R-5);文字、悬停/标签底、选中/按下与边框都是黑色墨水加透明度
+ * (2026-10-22 用户裁决),一档透明叠在任何平面上都成立。每个 override 注释来源;零自由裁量。
  */
 
 // 既有分组/对比度/否决依据：docs/design-rules/design-decision-log.md
@@ -65,7 +66,6 @@ const GENERATED_OVERRIDES = {
   "chat-input-border-focus": "rgba(107, 107, 103, 0.30)", // 聚焦描边: 三级色 30% 派生
   "chat-input-chip-border": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)
   "chat-input-text": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
-  "chat-input-placeholder-subtle": "var(--text-placeholder)", // 聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)
   "thinking-body-text": "var(--text-secondary)", // 思考过程正文用次要档(2026-10-23 用户裁决:三级在墨水阶梯里过淡,浅色 3.2、深色 3.8;次要浅色与改前持平 4.8、深色 6.1)
   "color-primary": "rgba(0, 0, 0, 0.88)", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
   "caret-accent": "#417CDD", // 用户改稿 2026-07-18:光标撤红改回蓝(对齐 focus 蓝 #417CDD)

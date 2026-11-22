@@ -1,3 +1,4 @@
+import { githubAppAuthorization, configureGithubAppRefresh } from '../../git-context/githubAppAuthorization.desktop.js';
 /** 进程级入口：把账号、端点清单和代理接到 ScheduleWebhookHost。 */
 import { app, BrowserWindow, Notification } from 'electron';
 import type { Scheduler } from '@cindy/maker-scheduler';
@@ -66,6 +67,16 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
       });
     },
     remote: {
+      onGithubAuthorized: grant => githubAppAuthorization.save(grant),
+      onGithubDisconnected: () => githubAppAuthorization.clear(),
+      githubPrHeads: async urls => {
+        const { githubPrHeads } = await import('../../git-context/ipc.js');
+        return githubPrHeads(urls);
+      },
+      onGithubPrs: async (urls, isCurrent, refresh) => {
+        const { notifyGithubPrEvents } = await import('../../git-context/ipc.js');
+        await notifyGithubPrEvents(urls, isCurrent, refresh);
+      },
       deviceName,
       isSignedIn,
       baseUrl: () => getClientEndpoint('webhookApiBaseUrl'),
@@ -83,6 +94,7 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
     },
   });
   host = next;
+  configureGithubAppRefresh(credential => next.refreshGithubAuthorization(credential));
   let ownerGeneration = authManager.getAuthState().ownerGeneration;
   stopWatchingAuth = authManager.onAuthStateChange((state) => {
     const changed = ownerGeneration !== state.ownerGeneration || !state.isAuthenticated;

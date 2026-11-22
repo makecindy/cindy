@@ -7,6 +7,7 @@ import {
   isAutomationGeneratedSession,
 } from './scheduledSessionGrouping';
 import { normalizeWorkingDir } from './projectGrouping';
+import { sessionRowKey } from '../sidebar/sessionRowKey';
 import { isTeammateTaskSession } from '../../../../shared/sessionSource';
 import { sessionActivityMs } from './dateSessionGrouping';
 import {
@@ -62,8 +63,8 @@ export interface AutomationSessionGroup {
   /** 远程设备上的自动化分组（组键已按设备作用域隔离，组内会话同属这台设备）。 */
   deviceLinkDeviceId?: string;
   /**
-   * 伙伴例行任务分组（同一伙伴同一条规则）。规则由伙伴例行任务引擎管理，不是 schedule：
-   * 组头只提供标为已读，运行与编辑去伙伴设置的「例行任务」页。
+   * 旧伙伴例行任务分组（同一伙伴同一条规则）。不是 schedule，规则引擎已移除：
+   * 已有运行照旧成组可读，组头只提供标为已读。
    */
   teammateRoutine?: { botId: string; routineId: string };
   title: string;
@@ -201,14 +202,15 @@ export function groupAutomationSidebarEntries(
         attentionSessionIds: options.notifications.has(session.id) ? [session.id] : [],
       });
     }
-    sessionGroupKey.set(session.id, groupInfo.key);
+    // 不同电脑上可能有同 id 的运行(恢复 / 复制的数据库),按设备 + id 记,与 sessionRowKey 同口径。
+    sessionGroupKey.set(sessionRowKey(session), groupInfo.key);
   }
 
   const emittedGroups = new Set<string>();
   const entries: SidebarSessionEntry[] = [];
 
   for (const session of sessions) {
-    const groupKey = sessionGroupKey.get(session.id);
+    const groupKey = sessionGroupKey.get(sessionRowKey(session));
     const group = groupKey ? groups.get(groupKey) : undefined;
     if (!group || group.sessions.length <= 1) {
       entries.push({ kind: 'session', session });

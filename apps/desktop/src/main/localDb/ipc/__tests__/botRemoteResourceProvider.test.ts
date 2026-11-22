@@ -26,7 +26,6 @@ vi.mock('../bots.js', () => ({
 
 import { remoteResourceRegistry } from '../../../device-link/remoteResourceRegistry.js';
 import { createIpcError } from '../../../../shared/ipc-errors.js';
-import { setBotRemoteMessageService } from '../../../maker-ipc/botRemoteMessageReceiver.js';
 import { registerBotRemoteResourceProvider } from '../botRemoteResourceProvider.js';
 
 const sqlite = new Database(':memory:');
@@ -80,52 +79,19 @@ it('rejects a previously discovered hidden companion and allows it again after r
 
   await expect(get()).resolves.toMatchObject({
     display: { title: 'Sora' },
-    links: expect.arrayContaining([{ rel: 'conversation', target: { kind: 'session', sessionId: 'session-1' } },expect.objectContaining({rel:'todos',target:{kind:'resource',ref:{collectionId:'teammates',kind:'bot',id:'todos:bot-1'}}})]),
+    links: expect.arrayContaining([{ rel: 'conversation', target: { kind: 'session', sessionId: 'session-1' } }]),
   });
-  const receiveRemote = vi.fn(async () => ({ ok: false as const, errorCode: 'TEST_RECEIPT', message: 'test' }));
-  const verifyRemoteMessage = vi.fn(async () => true);
-  const readRemoteReceipt = vi.fn(async () => ({ messageId: 'delivery-1', accepted: true as const }));
-  setBotRemoteMessageService({ receiveRemote, verifyRemoteMessage, readRemoteReceipt });
-  await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates',
-    actionId: 'message-receipt', resourceRef: discovered.ref,
-    input: { senderBotId: 'sender', messageId: 'delivery-1', controllerDeviceId: 'spoofed' } }))
-    .resolves.toMatchObject({ effects: [], messageId: 'delivery-1', accepted: true });
-  expect(readRemoteReceipt).toHaveBeenCalledWith({ controllerDeviceId: 'remote-mac', senderBotId: 'sender', targetBotId: 'bot-1', messageId: 'delivery-1' });
-  const invoke = () => remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates',
-    actionId: 'send-message', resourceRef: discovered.ref,
-    input: { senderBotId: 'sender', messageId: 'delivery-1', message: 'hello', controllerDeviceId: 'spoofed' } });
-  await expect(invoke()).resolves.toMatchObject({ effects: [], teammateMessage: { errorCode: 'TEST_RECEIPT' } });
-  expect(receiveRemote).toHaveBeenCalledWith({ controllerDeviceId: 'remote-mac', senderBotId: 'sender',
-    targetBotId: 'bot-1', messageId: 'delivery-1', message: 'hello' });
-  await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates',
-    actionId: 'verify-message', resourceRef: discovered.ref,
-    input: { targetBotId: 'target', messageId: 'delivery-1', message: 'hello', controllerDeviceId: 'spoofed' } }))
-    .resolves.toMatchObject({ effects: [], verified: true });
-  expect(verifyRemoteMessage).toHaveBeenCalledWith({ controllerDeviceId: 'remote-mac', senderBotId: 'bot-1',
-    targetBotId: 'target', messageId: 'delivery-1', message: 'hello' });
-  const longBotId = 'b'.repeat(128);
+  // Teammates keep no todos: new clients get no link; an older computer that still opens the page gets an empty list.
+  expect((await get()).links?.some((link) => link.rel === 'todos')).toBe(false);
+  await expect(remoteResourceRegistry.get(context, { client, ref: { ...discovered.ref, id: 'todos:bot-1' } }))
+    .resolves.toMatchObject({ blocks: [{ primitive: 'teammate-todos', data: { items: [], total: 0 } }] });
+  // V2 retired teammate-to-teammate messages; an older computer still sending one gets a stable refusal.
   for (const actionId of ['send-message', 'verify-message', 'message-receipt']) {
-    const request = { client, collectionId: 'teammates', actionId,
-      resourceRef: { ...discovered.ref, id: longBotId },
-      input: { senderBotId: longBotId, targetBotId: longBotId, messageId: 'delivery-1', message: 'hello' } };
-    await expect(remoteResourceRegistry.invoke(context, request)).resolves.toMatchObject({ effects: [] });
-    await expect(remoteResourceRegistry.invoke(context, { ...request, resourceRef: { ...request.resourceRef, id: longBotId + 'b' } }))
-      .rejects.toMatchObject({ code: 'NOT_FOUND' });
-    await expect(remoteResourceRegistry.invoke(context, { ...request,
-      input: { ...request.input, senderBotId: longBotId + 'b', targetBotId: longBotId + 'b' } }))
-      .rejects.toMatchObject({ code: 'NOT_FOUND' });
-    await expect(remoteResourceRegistry.invoke(context, { ...request, input: { ...request.input, messageId: 'm'.repeat(81) } }))
-      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates', actionId, resourceRef: discovered.ref,
+      input: { senderBotId: 'sender', targetBotId: 'target', messageId: 'delivery-1', message: 'hello' } }))
+      .rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
   }
-  expect(receiveRemote).toHaveBeenLastCalledWith(expect.objectContaining({ senderBotId: longBotId, targetBotId: longBotId }));
-  expect(verifyRemoteMessage).toHaveBeenLastCalledWith(expect.objectContaining({ senderBotId: longBotId, targetBotId: longBotId }));
-  expect(readRemoteReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ senderBotId: longBotId, targetBotId: longBotId }));
-  db.current = false;
-  await expect(invoke()).rejects.toMatchObject({ code: 'NOT_FOUND' });
-  db.current = true;
   source.hiddenAt = 200;
-  await expect(invoke()).rejects.toMatchObject({ code: 'NOT_FOUND' });
-  expect(receiveRemote).toHaveBeenCalledTimes(2);
   expect((await list()).items).toEqual([]);
   await expect(get()).rejects.toMatchObject({
     code: 'NOT_FOUND', message: 'remote resource does not exist',
@@ -185,14 +151,9 @@ it('reports a teammate this computer no longer has as not found, without failing
   await expect(remoteResourceRegistry.get(context, { client,
     ref: { collectionId: 'teammates', kind: 'bot', id: 'gone' } }))
     .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'remote resource does not exist' });
-  await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates',
-    actionId: 'send-message', resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'gone' },
-    input: { senderBotId: 'sender', messageId: 'delivery-1', message: 'hello' } }))
-    .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'remote resource does not exist' });
-  await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates',
-    actionId: 'todo-daily-check', resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'todos:gone' },
-    input: { enabled: true } }))
-    .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Teammate unavailable' });
+  await expect(remoteResourceRegistry.get(context, { client,
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'todos:gone' } }))
+    .rejects.toMatchObject({ code: 'NOT_FOUND', message: "Buddy unavailable" });
 });
 
 // The phone and other Macs report what they showed; the host keeps the one position every device reads.

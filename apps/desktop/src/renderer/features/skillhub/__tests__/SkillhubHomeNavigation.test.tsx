@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { transferableAbortController } from 'node:util';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useRef } from 'react';
-import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { createHashRouter, MemoryRouter, Outlet, Route, RouterProvider, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  router: null as ReturnType<typeof createHashRouter> | null,
   user: null as { membershipKind: 'org' } | null,
   dataOwnerId: 'owner-a',
   t: (key: string) => key,
@@ -23,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+// Use a real hash router without loading unrelated application routes.
+vi.mock('@/router', () => ({ get router() { return mocks.router; } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ user: mocks.user, dataOwnerId: mocks.dataOwnerId, mode: 'cloud' }),
@@ -43,6 +47,11 @@ import { SkillhubHomeView } from '../SkillhubHomeView';
 import { SkillhubLocalLayout } from '../SkillhubLocalLayout';
 import { useSkillhubHomeNavigation } from '../hooks/useSkillhubHomeNavigation';
 import { useSettingsEscape } from '@/components/settings/useSettingsEscape';
+import { checklistRoute } from '@/features/setup-migration/checklistTargets';
+import { SetupMigrationSection } from '@/components/settings/SetupMigrationSection';
+import { SetupMigrationWalkthroughBar } from '@/features/setup-migration/SetupMigrationWalkthroughBar';
+import { stopSetupMigrationWalkthrough } from '@/features/setup-migration/setupMigrationStore';
+import type { SetupMigrationChecklistItem } from '../../../../shared/setupMigration';
 
 function NavigationControls() {
   const location = useLocation();
@@ -144,6 +153,82 @@ describe('Skill home navigation', () => {
   it('still opens a fresh catalog on Public', () => {
     renderCatalog();
     expectTab('public');
+  });
+
+  // #9685: unit regression through the production checklist destination and catalog.
+  // Existing navigation tests start at the catalog, missing migration on a fresh target.
+  // One manual skill and no installed skills must expose Local and the existing import action.
+  it('opens the manual skill migration destination on Local with file import available', () => {
+    mocks.store.skills = [];
+    renderCatalog(checklistRoute({
+      id: 'skill-manual:notes', kind: 'skill-manual', label: 'notes', ref: 'notes',
+    }));
+
+    expectTab('local');
+    expect(screen.getByRole('button', { name: 'skillhub.home.importAria' }).hasAttribute('disabled'))
+      .toBe(false);
+  });
+
+  // #9685 review: unit regression through the real settings, walkthrough and hash router.
+  // Cold-entry coverage misses a saved Public tab at the same manual-skill URL.
+  it('reopens Local and clears stale search when opening or advancing a manual skill at the same URL', async () => {
+    // Node's Request (used by the data router) needs a native signal, not jsdom's.
+    const nativeAbortController = transferableAbortController();
+    vi.stubGlobal('AbortController', nativeAbortController.constructor);
+    vi.stubGlobal('AbortSignal', nativeAbortController.signal.constructor);
+    const previousUrl = window.location.href;
+    const previousState = window.history.state;
+    const previousApi = window.electronAPI;
+    let checklist: SetupMigrationChecklistItem[] = ['one', 'two', 'three'].map((name) => ({
+      id: `skill-manual:${name}`, kind: 'skill-manual', label: name, ref: name,
+    }));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      ...previousApi,
+      setupMigration: {
+        state: async () => ({ lastRun: { sourceName: 'Source', checklist } }),
+        dismiss: async ({ id }: { id: string }) => {
+          checklist = checklist.map((item) => item.id === id ? { ...item, done: true } : item);
+        },
+      },
+    } });
+    window.history.replaceState(null, '', '#/settings');
+    const router = createHashRouter([{
+      element: <><NavigationControls /><Outlet /></>,
+      children: [
+        { path: '/settings', element: <SetupMigrationSection /> },
+        { element: <SkillhubLocalLayout />, children: [{ path: '/skillhub/local', element: null }] },
+      ],
+    }]);
+    mocks.router = router;
+    try {
+      // App mounts the global migration host outside RouterProvider.
+      render(<><SetupMigrationWalkthroughBar /><RouterProvider router={router} /></>);
+      fireEvent.click(await screen.findByRole('button', { name: 'setupMigration.checklist.startAll' }));
+      await waitFor(() => expectTab('local'));
+      const destination = window.location.hash;
+
+      for (const action of ['open', 'skip', 'next']) {
+        fireEvent.change(screen.getByRole('textbox', { name: 'skillhub.home.search' }), { target: { value: 'notes' } });
+        fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.public' }));
+        expectTab('public');
+        expect(window.location.hash).toBe(destination);
+        fireEvent.click(screen.getByRole('button', { name: `setupMigration.walkthrough.${action}` }));
+        await waitFor(() => expectTab('local'));
+        expect((screen.getByRole('textbox', { name: 'skillhub.home.search' }) as HTMLInputElement).value).toBe('');
+      }
+
+      // Reopening the same destination should not add duplicate browser-Back stops.
+      fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+      await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/settings'));
+    } finally {
+      act(() => stopSetupMigrationWalkthrough());
+      cleanup();
+      router.dispose();
+      mocks.router = null;
+      window.history.replaceState(previousState, '', previousUrl);
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: previousApi });
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each([

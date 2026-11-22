@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   availability: vi.fn(() => true),
   resourceChanged: vi.fn(() => () => {}),
   focused: true,
+  remoteGroup: null as BotGroupRemoteChatData | null,
 }));
 
 vi.mock('react-native', () => ({
@@ -26,6 +27,7 @@ vi.mock('react-native', () => ({
   Pressable: ({ children, testID, onPress, accessibilityLabel, accessibilityState, disabled }: any) => el('button', {
     'data-testid': testID, 'aria-label': accessibilityLabel, 'aria-expanded': accessibilityState?.expanded, onClick: onPress, disabled,
   }, children),
+  useWindowDimensions: () => ({ width: 390, height: 844 }),
   StyleSheet: { create: (value: unknown) => value },
 }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress }, action.label) }));
@@ -37,7 +39,7 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invo
   openLink: h.openLink, getPresenceAvailability: h.availability, onRemoteResourceChanged: h.resourceChanged }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/device-link/remoteResources', () => ({ getRemoteResource: vi.fn(async () => null) }));
-vi.mock('@/session/botGroupRemote', () => ({ BOT_GROUP_CLIENT_PRIMITIVES: [], botGroupChatDataFromResource: () => null, botGroupResourceRef: (id: string) => ({ id }) }));
+vi.mock('@/session/botGroupRemote', () => ({ BOT_GROUP_CLIENT_PRIMITIVES: [], botGroupChatDataFromResource: () => h.remoteGroup, botGroupResourceRef: (id: string) => ({ id }) }));
 vi.mock('@/session/BotGroupAvatars', () => ({ BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BotGroupAvatar: () => null }));
 vi.mock('@/session/InteractionPanel', () => ({ InteractionPanel: (props: any) => { h.panel = props; return el('div', { 'data-testid': 'panel' }); } }));
 vi.mock('@/session/remoteSessionStore', async (importOriginal) => {
@@ -55,11 +57,17 @@ vi.mock('@/session/useCompanionGenerationCopy', () => ({
   useCompanionGenerationCopy: (input: { phase: string | null; active: boolean }) => { h.copy(input); return input.active ? `copy:${input.phase}` : null; },
 }));
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, el('span', { 'data-testid': 'status' }, title), children) }));
+// Native viewers and media transport are outside this speaker/normalization
+// test. Keep the real process component, matching the other group adapters.
+vi.mock('@/session/ImageLightbox', () => ({ ImageLightbox: () => null }));
+vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async (media: any) => ({ url: media.url }) }));
+vi.mock('@/session/MessageRenderer', () => ({ WorkToolActivityRow: ({ activity }: any) => el('p', null, activity.message.normalized.label, activity.toolResult) }));
 vi.mock('@/session/BotGroupMessageText', () => ({ BotGroupMarkdownText: ({ content }: any) => el('p', null, content) }));
 vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => el('span', { 'data-testid': 'status' }, text) }));
 
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
+vi.mock('@/session/BotGroupMenu', () => ({ BotGroupMenu: ({ children }: any) => children(() => {}) }));
 vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 import { BotGroupSpeakerRow } from '@/session/BotGroupSpeakerRow';
 import { BotGroupWorkArea } from '@/session/BotGroupWorkArea';
@@ -77,6 +85,7 @@ beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
   vi.clearAllMocks(); h.pending = {}; h.live = {}; h.panel = null;
   h.focused = true;
+  h.remoteGroup = null;
   remoteSessionStore.clear();
   h.invoke.mockResolvedValue([{ request: { requestId: 'r1' } }]);
   node = document.createElement('div'); root = createRoot(node);
@@ -117,7 +126,7 @@ it('shows the teammate’s pending prompt inline instead of the working line', a
 it('says it is waiting when the host reports a prompt the phone cannot show yet', async () => {
   h.live.s1 = { sessionId: 's1', phase: 'needs-interaction', compactDetail: '' };
   await render({});
-  expect(node.querySelector('[data-testid="botGroup.speaking.waiting"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: '' }));
+  expect(node.querySelector('[data-testid="status"]')?.textContent).toContain(i18n.t('groupChat.waitingConfirm', { name: '' }));
   expect(h.panel).toBeNull();
 });
 
@@ -128,12 +137,16 @@ it('does not subscribe without a lane or while the computer is offline', async (
   expect(h.invoke).not.toHaveBeenCalled();
 });
 
-// Regression: a group lane must open its original task on the correct computer.
-it('opens the ordinary task with no companion wrapper or new execution', async () => {
-  await render({ sessionId: 'group-lane', deviceId: 'studio', online: false });
+// Product decision: hide the whole-task shortcut; keep the execution's stop footer usable.
+it('hides original-task navigation while keeping the group stop action available', async () => {
+  const stop = vi.fn();
+  await render({ sessionId: 'group-lane', deviceId: 'studio', online: false,
+    footer: el('button', { onClick: stop }, 'Stop') });
   h.invoke.mockClear();
+  expect(node.querySelectorAll('button')).toHaveLength(1);
   await act(async () => node.querySelector('button')!.click());
-  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'group-lane', deviceId: 'studio' } });
+  expect(stop).toHaveBeenCalledOnce();
+  expect(h.push).not.toHaveBeenCalled();
   expect(h.invoke).not.toHaveBeenCalled();
 });
 
@@ -157,7 +170,7 @@ it.each([
 ])('localizes queued work with the real %s catalog', async (locale, expected) => {
   await i18n.changeLanguage(locale);
   await render({ executionStatus: 'queued' });
-  expect(node.querySelector('[data-testid="status"]')?.textContent).toBe(expected);
+  expect(node.querySelector('[data-testid="status"]')?.textContent).toContain(expected);
 });
 
 // 测试价值：真实 BotGroupWorkArea + BotGroupSpeakerRow 的收起、展开与交互到达。
@@ -167,84 +180,89 @@ it.each([
 // tier：unit，原生宿主和远端读取用内存 fake，不连接网络。
 // 复验：保留主干消息工作租约回归；工作区用例覆盖离线、折叠与待确认恢复。
 function workGroup(): BotGroupRemoteChatData {
-  return { id: 'group', members: [{ botId: 'abu', name: '阿布', isOwned: true }, { botId: 'other', name: '其他伙伴', isOwned: false }],
+  return { id: 'group', supportsOwnedStop: true, members: [{ botId: 'abu', name: '阿布', isOwned: true }, { botId: 'other', name: '其他伙伴', isOwned: false }],
     round: { status: 'running', speakers: [
-      { botId: 'abu', sessionId: 's1', executionId: 'e1', executionStatus: 'queued', activity: 'reply' },
-      { botId: 'other', sessionId: 's2', executionId: 'e2', executionStatus: 'running', activity: 'reply' },
+      { botId: 'abu', sessionId: 's1', executionId: 'e1', isSelfRequested: true, executionStatus: 'queued', activity: 'reply' },
+      { botId: 'other', sessionId: 's2', executionId: 'e2', isSelfRequested: false, executionStatus: 'running', activity: 'reply' },
     ] } } as BotGroupRemoteChatData;
 }
 async function renderWork(group: BotGroupRemoteChatData, online = true, controls: { onStop?: () => Promise<void>; stopping?: boolean } = {}) {
   await act(async () => root.render(el(BotGroupWorkArea, { group, deviceId: 'mac', online, identityFor: (botId, name) => ({ botId, name }), onError: vi.fn(), ...controls })));
 }
-const toggle = () => node.querySelector<HTMLButtonElement>('[data-testid="botGroup.work.toggle"]')!;
-
-it('collapses queued and running work into one disclosure, including offline work', async () => {
+// Unit / #11488: a late-opening phone must read the exact persisted input,
+// including epoch and chat-only queue IDs; older hosts retain the legacy fallback.
+it.each([undefined, 'bot-group:group:e1:3:abu', 'chat-only-queue'].flatMap(inputClientId => [false, true].map(remote => ({ inputClientId, remote }))))('loads existing process history with host input $inputClientId (remote=$remote)', async ({ inputClientId, remote }) => {
   const group = workGroup();
-  // Two executions for one teammate must not inflate the teammate count.
-  group.round.speakers.push({ ...group.round.speakers[1], executionId: 'e3', executionStatus: 'queued' });
+  group.round.speakers = [{ ...group.round.speakers[0], executionStatus: 'running', inputClientId }];
+  if (remote) {
+    h.remoteGroup = { ...group, round: { ...group.round, speakers: [...group.round.speakers] } };
+    group.members[0].homeDeviceId = 'executor';
+    group.round.speakers = [{ ...group.round.speakers[0], sessionId: null, inputClientId: 'wrong-host-input' }];
+  }
+  const anchor = inputClientId ?? 'bot-group:group:e1:abu';
+  h.invoke.mockImplementation(async (_device, channel, args) => {
+    if (channel !== 'local-db:messages:around-client-id') return [];
+    if (args[1] !== anchor && args[1] !== 'stage') throw new Error('NOT_FOUND');
+    return [{ clientId: anchor, role: 'user', content: 'hidden input' },
+      { clientId: 'stage', role: 'assistant', content: 'Saved stage before opening', agentMeta: { assistantPhase: 'commentary' } }];
+  });
+  await renderWork(group);
+  expect(h.invoke).toHaveBeenCalledWith(remote ? 'executor' : 'mac', 'local-db:messages:around-client-id', ['s1', anchor, { radius: 80 }]);
+  expect(node.textContent).toContain('Saved stage before opening');
+});
+// Unit regression: two people request the same Cindy; queued and running rows retain distinct attribution.
+it('names each requester on concurrent Cindy progress rows', async () => {
+  await i18n.changeLanguage('en');
+  const group = workGroup();
+  group.members[0]!.name = 'Cindy';
+  group.round.speakers = [
+    { ...group.round.speakers[0]!, requesterName: 'Ann' },
+    { ...group.round.speakers[0]!, requesterName: 'Chris', executionId: 'e2', executionStatus: 'running' },
+  ];
   await renderWork(group, false);
-  expect(toggle().textContent).toBe('排队 1 · 进行中 1');
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(0);
-  await act(async () => toggle().click());
-  expect(toggle().getAttribute('aria-expanded')).toBe('true');
-  expect(node.textContent).toContain('阿布');
-  expect(node.textContent).toContain('其他伙伴');
+  const rows = node.querySelectorAll('[data-testid="botGroup.speaking"]');
+  expect(rows[0]?.textContent).toContain('Cindy · for Ann');
+  expect(rows[1]?.textContent).toContain('Cindy · for Chris');
+  expect(rows[0]?.getAttribute('aria-label')).toContain('Cindy · for Ann');
+});
+// 测试价值：生产工作区必须逐 execution 连续可读（群聊 §5）；旧覆盖只验证按 Bot 收起。
+// 最小失败输入：同一 Bot 排队 + 运行、另一位等待；两个自有 lane 的确认不在过程折叠内。
+// tier: unit，沿用本文件内存远端与真实工作区入口。
+it('shows every execution directly, including two executions for the same teammate offline', async () => {
+  const group = workGroup();
+  group.round.speakers.push({ ...group.round.speakers[0], executionId: 'e3', sessionId: 's3', executionStatus: 'running' });
+  await renderWork(group, false);
+  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(3);
+  expect(node.querySelector('[data-testid="botGroup.work.toggle"]')).toBeNull();
   expect(node.textContent).toContain('排队中');
-  await act(async () => toggle().click());
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(0);
+  expect(node.textContent).toContain('其他伙伴');
 });
 
-it('keeps collapsed lanes subscribed and reveals only owned prompts as they arrive', async () => {
+it('keeps confirmations for my requests outside process folds and never reads another requester’s lane', async () => {
   h.invoke.mockResolvedValue([]);
   const group = workGroup();
-  group.round.speakers[1].executionStatus = 'needs_input';
-  await renderWork(group);
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(0);
-  expect(h.subscribe).toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
-  h.pending.s1 = [{ request: { requestId: 'permission', kind: 'permission' } }];
-  await renderWork(group);
-  expect(node.querySelector('[data-testid="panel"]')).not.toBeNull();
-  expect(node.textContent).toContain('阿布');
-  expect(node.textContent).not.toContain('其他伙伴');
-  expect(toggle().getAttribute('aria-expanded')).toBe('false');
-  h.pending.s1 = [];
-  await renderWork(group);
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(0);
+  group.round.speakers.push({ ...group.round.speakers[0], executionId: 'e3', sessionId: 's3', executionStatus: 'needs_input' });
   group.round.speakers[0].executionStatus = 'needs_input';
-  await renderWork(group, false);
-  expect(node.querySelector('[data-testid="status"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: identity.name }));
+  group.round.speakers[1].executionStatus = 'needs_input';
+  h.pending.s1 = [{ request: { requestId: 'permission', kind: 'permission' } }];
+  h.pending.s3 = [{ request: { requestId: 'question', kind: 'ask_user' } }];
+  h.pending.s2 = [{ request: { requestId: 'foreign', kind: 'permission' } }];
+  await renderWork(group);
+  const panels = node.querySelectorAll('[data-testid="panel"]');
+  expect(panels).toHaveLength(2);
+  for (const panel of panels) expect(panel.closest('section')).toBeNull();
+  expect(h.subscribe).toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
+  expect(h.subscribe).not.toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s2']);
+  expect(node.textContent).toContain('其他伙伴');
+  expect(node.textContent).not.toContain('其他伙伴在等你确认');
 });
 
-it('clears expanded details when the round finishes and when switching groups', async () => {
+it('removes live process entries when the round finishes', async () => {
   const group = workGroup();
   await renderWork(group);
-  await act(async () => toggle().click());
-  await renderWork({ ...group, id: 'another-group' });
-  expect(toggle().getAttribute('aria-expanded')).toBe('false');
-  await act(async () => toggle().click());
-  await renderWork({ ...group, id: 'another-group', round: { ...group.round, status: 'idle', speakers: [] } });
+  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
+  await renderWork({ ...group, round: { ...group.round, status: 'idle', speakers: [] } });
   expect(node.textContent).toBe('');
-  await renderWork({ ...group, id: 'another-group' });
-  expect(toggle().getAttribute('aria-expanded')).toBe('false');
-});
-
-// PR #7806 unit: real row actions and timestamp; existing cases only cover task navigation.
-// Minimal input: one active execution with a known start, followed by a pending stop.
-it('shows real elapsed time and disables the group stop action while pending', async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(20_000);
-  const stop = vi.fn(async () => undefined);
-  await render({ startedAt: 15_000, onStop: stop });
-  expect(node.textContent).toContain('已工作 5 秒');
-  await act(async () => vi.advanceTimersByTime(1000));
-  expect(node.textContent).toContain('已工作 6 秒');
-  await act(async () => (node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement).click());
-  expect(stop).toHaveBeenCalledTimes(1);
-  await render({ startedAt: 15_000, onStop: stop, stopPending: true });
-  const button = node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement;
-  expect(button.disabled).toBe(true);
-  expect(button.textContent).toBe(i18n.t('groupChat.speaking.stopping'));
-  vi.useRealTimers();
 });
 
 // Unit regression: real store refuses new text after task-detail blur unless
@@ -265,8 +283,6 @@ it('keeps new stage text visible after returning from the task and releases it o
   }, 'continued'));
   expect(remoteSessionStore.getMessages('s1').some(message => message.content === 'New stage after return')).toBe(true);
   expect(node.textContent).toContain('New stage after return');
-  await act(async () => (node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement).click());
-  expect(stop).toHaveBeenCalledTimes(1);
   h.focused = false;
   await render(props);
   await act(async () => remoteSessionStore.applyMakerEvent('s1', {
@@ -289,10 +305,107 @@ it('preserves exactly one group stop across disclosure and pending snapshots', a
   expect(onStop).toHaveBeenCalledTimes(1);
   await renderWork(group, true, { onStop, stopping: true });
   expect(stopButton().disabled).toBe(true);
-  await act(async () => toggle().click());
   expect(node.querySelectorAll('[data-testid="botGroup.work.stop"]')).toHaveLength(1);
   expect(stopButton().disabled).toBe(true);
   expect(node.textContent).toContain('其他伙伴');
   await renderWork(group, false, { onStop });
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});
+
+// Native acceptance found a waiting row still ending in a running placeholder.
+// Unit: the real process projection must settle its pending stage outside the waiting card.
+it('does not claim it is still thinking or processing while a confirmation is pending', async () => {
+  h.invoke.mockResolvedValue([]);
+  h.pending.s1 = [{ request: { requestId: 'permission', kind: 'permission' } }];
+  await render({ groupId: 'g', executionId: 'e', startedAt: 1 });
+  expect(node.textContent).toContain(i18n.t('groupChat.waitingConfirm', { name: '' }));
+  expect(node.textContent).not.toContain(i18n.t('chat.teammateProcess.processing'));
+  expect(node.textContent).not.toContain(i18n.t('chat.teammateProcess.thinking'));
+});
+
+// Unit: same-bot executions must not borrow the current step's task text (§8.2).
+it.each([true, false])('labels only an unambiguous current step execution (identity supplied: %s)', async identified => {
+  const group = workGroup();
+  group.plans = [{ id: 'p', kind: 'work', status: 'running', currentStep: 0, steps: [
+    { position: 0, status: 'running', botId: 'abu', task: 'Only the current execution', ...(identified ? { executionId: 'current' } : {}) },
+  ] }] as any;
+  group.round.speakers = [
+    { botId: 'abu', activity: 'step', executionId: 'old', executionStatus: 'running', sessionId: null },
+    { botId: 'abu', activity: 'step', executionId: 'current', executionStatus: 'running', sessionId: null },
+    { botId: 'abu', activity: 'step', executionId: 'queued', executionStatus: 'queued', sessionId: null },
+  ];
+  await renderWork(group);
+  const rows = node.querySelectorAll('section');
+  expect(rows[0].textContent).not.toContain('Only the current execution');
+  expect(rows[1].textContent?.includes('Only the current execution')).toBe(identified);
+  expect(rows[2].textContent).not.toContain('Only the current execution');
+});
+
+it('lets me stop my companion without exposing another requester?s pending confirmations', async () => {
+  const group = workGroup();
+  group.serverBacked = true;
+  group.round.speakers[0].isSelfRequested = false;
+  group.round.speakers[0].executionStatus = 'needs_input';
+  h.pending.s1 = [{ request: { requestId: 'foreign-request', kind: 'permission' } }];
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  expect(node.querySelectorAll('[data-testid="panel"]')).toHaveLength(0);
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
+  expect(h.subscribe).not.toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
+});
+
+
+
+// Unit regression: hide only the unauthorized control, never the public execution rows.
+it('keeps all work visible without offering an unauthorized stop', async () => {
+  const group = workGroup();
+  group.round.canStop = false;
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});
+
+// Without enqueue time, receipt/source order still selects the latest own stop row.
+it('places the stop on the latest own source when execution receipts arrive reversed', async () => {
+  const group = workGroup();
+  group.messages = [{ id: 'early', createdAt: 10 }, { id: 'later', createdAt: 30 }] as any;
+  group.round.speakers = [
+    { botId: 'abu', activity: 'reply', sessionId: null, executionId: 'later-work', sourceMessageId: 'later', isSelfRequested: true, executionStatus: 'queued' },
+    { botId: 'abu', activity: 'reply', sessionId: null, executionId: 'early-work', sourceMessageId: 'early', isSelfRequested: true, executionStatus: 'running' },
+  ];
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  const rows = node.querySelectorAll('[data-testid="botGroup.speaking"]');
+  expect(rows[0]?.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+  expect(rows[1]?.textContent).toContain(i18n.t('groupChat.speaking.queued'));
+  expect(rows[1]?.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
+});
+
+// Review #4581739972: arranging is a status row; only an execution hosts the group control.
+it.each([
+  { serverBacked: true, own: true, admin: false },
+  { serverBacked: false, own: true, admin: false },
+  { serverBacked: true, own: false, admin: true },
+])('keeps the stop off the newest planning row ($serverBacked, $own, $admin)', async ({ serverBacked, own, admin }) => {
+  const group = workGroup();
+  Object.assign(group, { serverBacked, supportsScopedStop: true, canStopAll: admin });
+  group.round.othersActive = true;
+  group.round.speakers = [
+    { ...group.round.speakers[0]!, timelineAt: 10, isSelfRequested: own, executionStatus: 'running' },
+    { botId: 'abu', sessionId: null, activity: 'planning', timelineAt: 20, isSelfRequested: true },
+  ];
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  const rows = node.querySelectorAll('[data-testid="botGroup.speaking"]');
+  expect(rows).toHaveLength(2);
+  expect(rows[0]?.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
+  expect(rows[1]?.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+  expect(node.querySelectorAll('[data-testid="botGroup.work.stop"]')).toHaveLength(1);
+});
+
+it.each([true, false])('shows planning without an execution stop (admin: %s)', async admin => {
+  const group = workGroup();
+  Object.assign(group, { serverBacked: true, supportsScopedStop: true, canStopAll: admin });
+  group.round.othersActive = true;
+  group.round.speakers = [{ botId: 'abu', sessionId: null, activity: 'planning', isSelfRequested: true }];
+  await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
+  expect(node.querySelector('[data-testid="botGroup.speaking"]')).not.toBeNull();
   expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
 });

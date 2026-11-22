@@ -16,6 +16,25 @@ afterEach(() => {
 });
 
 describe('useDeviceLinkDeviceList initial request', () => {
+  // App routing, unit: real store + hook must publish an app-only directory
+  // change. Old snapshot equality compared platform but silently dropped app.
+  it('publishes a refreshed App label so an already listed Friend stops being a computer target', async () => {
+    const target: DeviceLinkDeviceView = { deviceId: 'peer', name: 'Mac', platform: 'darwin', appVersion: '1',
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false, lastSeenAt: null };
+    let changed!: (snapshot: DeviceLinkPresenceSnapshot) => void;
+    const listDevices = vi.fn().mockResolvedValueOnce({ devices: [target] })
+      .mockResolvedValue({ devices: [{ ...target, app: 'cindy-friend' }] });
+    vi.stubGlobal('electronAPI', { deviceLink: { listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+      onPresenceChanged: (callback: typeof changed) => { changed = callback; }, onStatusChanged: vi.fn(), onControlTargetChanged: vi.fn(),
+    } });
+    const { useDeviceLinkDeviceList } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result, unmount } = renderHook(() => useDeviceLinkDeviceList());
+    await waitFor(() => expect(result.current?.[0]?.name).toBe('Mac'));
+    act(() => changed({ deviceId: 'peer', deviceName: 'Mac', platform: 'darwin', app: 'cindy-friend', appVersion: '1',
+      online: true, busy: false, remoteControlEnabled: true, lastSeenAt: 1000 }));
+    await waitFor(() => expect(result.current?.[0]?.app).toBe('cindy-friend'));
+    unmount();
+  });
   it('silently retries a failed directory request without a later push event', async () => {
     let resolveRetry: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let resolvePresenceRefresh: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
@@ -113,6 +132,109 @@ describe('useDeviceLinkDeviceList initial request', () => {
       request: { status: 'ready', error: null },
       settled: true,
     });
+  });
+
+  // 一条腿读到的目录:行已显示,但另一条腿上的设备还缺。要按退避再问一次,而不是等
+  // 30 分钟预算过期、或等一个无关的 push(Codex review #9360「Retry the missing leg
+  // after displaying a partial list」)。
+  it('schedules a retry after displaying a partial directory', async () => {
+    const peer = {
+      deviceId: 'peer-1', name: 'Peer Mac', platform: 'darwin', appVersion: '0.1.27',
+      lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true,
+      controlEnabled: true, isSelf: false,
+    };
+    const listDevices = vi
+      .fn()
+      .mockResolvedValueOnce({ devices: [peer], partial: true })
+      .mockResolvedValue({ devices: [peer] });
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    const { result } = renderHook(() => ({ devices: useDeviceLinkDeviceList() }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(result.current.devices).toHaveLength(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(nextDeviceListRetryDelay(0));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+  });
+
+  // 一条腿长期坏着时,部分目录会**一直**成功返回。清零退避会让每次重问都从 2 秒开始,
+  // 永远到不了 30 秒上限 —— 一条坏腿就把追问变成每 2 秒一轮
+  // (Greptile review #9360「部分目录始终两秒重读」)。
+  // 最小失败输入:listDevices 每次都返回 { devices:[peer], partial:true }。
+  // tier:unit(模块级共享单例 + fake timers)。
+  it('keeps the backoff ladder growing while the directory stays partial', async () => {
+    const peer = {
+      deviceId: 'peer-1', name: 'Peer Mac', platform: 'darwin', appVersion: '0.1.27',
+      lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true,
+      controlEnabled: true, isSelf: false,
+    };
+    const listDevices = vi.fn().mockResolvedValue({ devices: [peer], partial: true });
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    renderHook(() => ({ devices: useDeviceLinkDeviceList() }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+
+    const firstDelay = nextDeviceListRetryDelay(0);            // 2s
+    const secondDelay = nextDeviceListRetryDelay(firstDelay);  // 4s
+    await act(async () => {
+      vi.advanceTimersByTime(firstDelay);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    // 第二次重问在 4 秒后,不是又是 2 秒:部分目录不清零退避阶梯。
+    await act(async () => {
+      vi.advanceTimersByTime(secondDelay - firstDelay);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.advanceTimersByTime(secondDelay - firstDelay);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(3);
   });
 
   it('keeps the backoff timer when presence arrives before the first snapshot', async () => {
@@ -521,6 +643,58 @@ describe('useDeviceLinkDeviceList initial request', () => {
     });
     expect(listDevices).toHaveBeenCalledTimes(1);
     expect(result.current.request).toEqual({ status: 'ready', error: null });
+  });
+
+  // 账号边界:main 侧按 owner 记限流期限,渲染侧这份模块级单例也得跟着清 ——
+  // 否则新账号的第一次目录读失败时,退避会一直等到上一个账号留下的期限。
+  it('does not carry the previous account rate-limit deadline across a relay stop', async () => {
+    let statusChanged:
+      ((payload: { status: 'stopped' | 'connecting' | 'online' }) => void) | undefined;
+    const deadline = Date.now() + 60_000;
+    const listDevices = vi.fn()
+      .mockResolvedValueOnce({ devices: [], retryAtMs: deadline })
+      .mockRejectedValue(new Error('relay unavailable'));
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(
+          (callback: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void) => {
+            statusChanged = callback;
+          },
+        ),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    renderHook(() => useDeviceLinkDeviceList());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+
+    // 登出 / relay 停止 = 账号边界:上一个账号的限流期限到此为止。
+    act(() => statusChanged?.({ status: 'stopped' }));
+    // 新账号上线,第一次目录读失败 → 退避按自己的阶梯(2 秒)走,不等旧期限(60 秒)。
+    act(() => statusChanged?.({ status: 'online' }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.advanceTimersByTime(nextDeviceListRetryDelay(0));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(3);
   });
 
   it('caps silent retry backoff while preserving recovery', async () => {
@@ -1225,6 +1399,59 @@ it('keeps a failed expiry refresh settled until the normal retry backoff', async
   expect(listDevices).toHaveBeenCalledTimes(3);
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：真实 useDeviceLinkDeviceList 记下超大的服务端限流期限后，
+ *   退避定时器的延时不得越过 32 位计时器上限（越过 = 立刻触发 = 对目录读的紧追循环）。
+ * - Bug/规则依据：Codex review #9360 —— 超大 Retry-After 必须分片等待；同一模块级单例
+ *   的远端项目那份已有分片用例，设备目录这份此前没有。
+ * - 现有覆盖缺口：既有用例只覆盖正常量级的限流期限（60 秒），不覆盖越过计时器上限的期限。
+ * - 最小失败输入：retryAtMs = now + 3e9（> 2^31 - 1），随后一次目录读失败触发退避。
+ * - tier：unit（jsdom + fake timers）。
+ */
+it('chunks a rate-limit deadline beyond the 32-bit timer limit instead of tight-looping', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const deadline = Date.now() + 3_000_000_000; // > 2^31 - 1（约 24.8 天）
+  const listDevices = vi.fn()
+    .mockResolvedValueOnce({ devices: [], retryAtMs: deadline })
+    .mockRejectedValue(new Error('relay unavailable'));
+  let statusChanged:
+    ((payload: { status: 'stopped' | 'connecting' | 'online' }) => void) | undefined;
+  vi.stubGlobal('electronAPI', { deviceLink: {
+    listDevices,
+    getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+    onPresenceChanged: vi.fn(),
+    onStatusChanged: vi.fn((callback: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void) => {
+      statusChanged = callback;
+    }),
+    onControlTargetChanged: vi.fn(),
+  } });
+  const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+  const { useDeviceLinkDeviceList } = await import('@/features/device-link/useDeviceLinkDeviceList');
+  renderHook(() => useDeviceLinkDeviceList());
+  for (let i = 0; i < 6; i += 1) await act(async () => { await Promise.resolve(); });
+  expect(listDevices).toHaveBeenCalledTimes(1);
+
+  // 下一轮目录读失败 → 退避要让过那个超大的限流期限。
+  act(() => statusChanged?.({ status: 'online' }));
+  for (let i = 0; i < 6; i += 1) await act(async () => { await Promise.resolve(); });
+  expect(listDevices).toHaveBeenCalledTimes(2);
+
+  // 任何一片的延时都不该越过 32 位上限（溢出 = 立刻触发 = 紧追循环）。
+  const delays = setTimeoutSpy.mock.calls
+    .map((call) => call[1])
+    .filter((value): value is number => typeof value === 'number');
+  expect(delays.length).toBeGreaterThan(0);
+  expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647);
+
+  // 分片没走完之前不重读。
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000_000); });
+  expect(listDevices).toHaveBeenCalledTimes(2);
+  // 墙上期限到点之后重读恢复（之后按自己的退避阶梯继续）。
+  await act(async () => { await vi.advanceTimersByTimeAsync(3_000_000_000); });
+  expect(listDevices.mock.calls.length).toBeGreaterThan(2);
+});
+
 it('removes an offline device immediately and ignores a directory reply started before deletion', async () => {
   const target = { deviceId: 'old-device', name: 'Old Mac', platform: 'darwin', appVersion: '0.1.0-dev',
     online: false, busy: false, remoteControlEnabled: false, controlEnabled: true, isSelf: false, lastSeenAt: null,
@@ -1244,5 +1471,37 @@ it('removes an offline device immediately and ignores a directory reply started 
   expect(result.current).toEqual([]);
   await act(async () => { resolveStale({ devices: [target] }); });
   expect(result.current).toEqual([]);
+  unmount();
+});
+
+// 「全部任务」删除残留回归，unit：单测目录行覆盖不到菜单额外合入的任务缓存和拒绝记录。
+// 先返回不完整目录，再返回行完全相同的完整目录，验证仅成员资格变化也会更新菜单。
+it('reconciles cached and rejected machine options only when the directory confirms absence', async () => {
+  const offline = { deviceId: 'offline', name: 'Offline Mac', platform: 'darwin', appVersion: '1',
+    online: false, busy: false, remoteControlEnabled: false, controlEnabled: true, isSelf: false, lastSeenAt: null,
+  } satisfies DeviceLinkDeviceView;
+  const listDevices = vi.fn()
+    .mockResolvedValueOnce({ devices: [offline], partial: true })
+    .mockResolvedValueOnce({ devices: [offline] })
+    .mockResolvedValue({ devices: [], partial: true });
+  vi.stubGlobal('electronAPI', { deviceLink: { listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+    onPresenceChanged: vi.fn(), onStatusChanged: vi.fn(), onControlTargetChanged: vi.fn(),
+  } });
+  const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+  const { revokedDevicesStore } = await import('@/features/device-link/revokedDevicesStore');
+  const { retryDeviceLinkDeviceList } = await import('@/features/device-link/useDeviceLinkDeviceList');
+  const { useSwitcherDevices } = await import('@/features/device-link/useMachineSwitcher');
+  for (const id of ['offline', 'deleted']) {
+    remoteProjectsStore.setDeviceSessions(id, id, []);
+    remoteProjectsStore.markDeviceDisconnected(id);
+  }
+  revokedDevicesStore.markRevoked('deleted-rejected');
+  const { result, unmount } = renderHook(() => useSwitcherDevices().map(device => device.deviceId).sort());
+  await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(1));
+  expect(result.current).toEqual(['deleted', 'deleted-rejected', 'offline']);
+  await act(async () => retryDeviceLinkDeviceList());
+  expect(result.current).toEqual(['offline']);
+  await act(async () => retryDeviceLinkDeviceList());
+  expect(result.current).toEqual(['offline']);
   unmount();
 });

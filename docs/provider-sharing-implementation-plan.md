@@ -49,7 +49,7 @@
   分享者电脑、受邀者电脑与手机各过一遍(`@cindy/device-link` 的 `scrubSharedProvider` / `scrubProviderShareLabel`)；
   自动命名截断后的半个登录名、大小写不同的写法与邮箱用户名也去掉，目录里地址带的用户名密码与查询参数一并去掉，
   本机的数据归属(`dataOwnerId` / `ownerGeneration`)不下发。
-- **只经分享的供应商(复审补)**：受邀者的请求不走视觉桥(视觉后端是 B 的其它供应商；Pi 的 vision 工具还会直接读本机
+- **只经分享的供应商(复审补，视觉桥已退役)**：以下是旧版隔离设计记录；新版本整体移除视觉桥，原生图片与分享授权保持原路径。旧版受邀者的请求不走视觉桥(视觉后端是 B 的其它供应商；Pi 的 vision 工具还会直接读本机
   文件)，Claude Code 的工具循环复核也不对受邀者开(复核用 B 的辅助模型)，疑似循环按缺省中断。Pi 受邀者的 env 只留
   分享的供应商引用到的变量(api key 与请求头)。同一任务重新打开时，迟到的旧实例不再登记出站边界。
 - **受邀者选模型(真机反馈补)**：模型列表与发送前检查还要读分享者电脑的 Agent 能力、可用 Agent 与 Agent 就绪；
@@ -199,7 +199,7 @@ P0 拆成两部分。受邀者身份由 `RemoteAgentHostDeps.controllerTrust` �
 | ID | 工作项 | 说明 |
 |---|---|---|
 | C1-18 | i18n 与术语 | Desktop 五种语言 `common.json`；在 `i18n/glossary.json` 登记「供应商分享」等 `proposed` 条目；跑 `pnpm check:i18n-glossary` |
-| C1-19 | 规则文档同步 | 修订 `docs/dev-rules/protocol-compatibility.md`「远程 Agent」中「只进同账号 allowlist」的表述，补充 providerShare 范围的协议说明 |
+| C1-19 | 规则文档同步 | 修订 `docs/dev-rules/protocol-compatibility/remote-agent.md`「远程 Agent」中「只进同账号 allowlist」的表述，补充 providerShare 范围的协议说明 |
 
 ### 4.3 数据模型（服务端草案）
 

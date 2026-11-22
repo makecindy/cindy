@@ -61,6 +61,38 @@ export function personalOpenTypes(region = 'global') {
         'public.mime-type':['application/x-xd-cindy']}}],
   };
 }
+/**
+ * Privacy usage strings shared with the Forge package. macOS silently refuses some protected
+ * resources when the key is absent: without NSLocalNetworkUsageDescription the personal runtime
+ * (and every agent/scheduled child process it is responsible for) gets EHOSTUNREACH even to the
+ * LAN gateway, which broke SSH hosts, direct device paths and LAN health checks (2026-11).
+ */
+export function personalUsageDescriptions(root) {
+  const locales = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/resources/mac-permission-locales.json'), 'utf8'));
+  const english = locales?.en;
+  if (!english || typeof english !== 'object') throw Error('Missing macOS permission descriptions');
+  const entries = Object.entries(english).filter(([key, value]) => /^NS[A-Za-z]+UsageDescription$/.test(key) && typeof value === 'string' && value.trim());
+  if (!entries.some(([key]) => key === 'NSLocalNetworkUsageDescription')) throw Error('Missing local network usage description');
+  return Object.fromEntries(entries);
+}
+/** Build the input helper into the app before sealing it; no profile cache identity. */
+export function preparePersonalInput(root, app, run) {
+  const caller = fs.readFileSync(path.join(root, 'packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift'), 'utf8');
+  const input = fs.readFileSync(path.join(root, 'apps/desktop/native/remote-desktop/macos-input.swift'), 'utf8');
+  const directory = path.join(app, 'Contents/Resources/tools/remote-desktop');
+  fs.mkdirSync(directory, {recursive:true});
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-personal-input-'));
+  try {
+    const main = path.join(temporary, 'main.swift');
+    fs.writeFileSync(main, caller + '\n' + input);
+    // The linked Info.plist names Cindy in the owner-verification prompt; identifier unchanged.
+    run('xcrun', ['swiftc', '-D', 'DESKTOP_INPUT_PERSONAL', '-O', main,
+      '-o', path.join(directory, 'cindy-macos-desktop-input'),
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+      '-Xlinker', path.join(root, 'apps/desktop/native/remote-desktop/macos-input-Info.plist')]);
+  } finally { fs.rmSync(temporary, {recursive:true,force:true}); }
+}
+
 export function prepareNativeCapabilities(root, {name = 'personal', region = 'global', runtimeApp, signingIdentity} = {}) {
   const file = receiptPath(root);
   if (fs.existsSync(file)) { nativeIdentity(root); return JSON.parse(fs.readFileSync(file)); }
@@ -87,7 +119,7 @@ export function prepareNativeCapabilities(root, {name = 'personal', region = 'gl
   run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleIconFile cindy.icns',path.join(app,'Contents/Info.plist')]);
   // Import structured fields without replacing Electron's existing plist or signing a live app.
   execFileSync('python3', ['-c', 'import json,plistlib,sys; p=sys.argv[1]; d=plistlib.load(open(p,"rb")); d.update(json.load(sys.stdin)); plistlib.dump(d,open(p,"wb"))',
-    path.join(app,'Contents/Info.plist')], {input:JSON.stringify(personalOpenTypes(region))});
+    path.join(app,'Contents/Info.plist')], {input:JSON.stringify({...personalOpenTypes(region), ...personalUsageDescriptions(root)})});
   fs.copyFileSync(path.join(desktop,'resources/icon.icns'),path.join(app,'Contents/Resources/cindy.icns'));
   // Some developer Electron distributions omit resource seals. Seal the base
   // runtime before adding the separately sandbox-signed WidgetKit extension.
@@ -107,17 +139,21 @@ export function prepareNativeCapabilities(root, {name = 'personal', region = 'gl
   run(process.execPath,[build,'extension',app,'arm64']);
   const extension = path.join(app,'Contents/PlugIns/CindyAgentActivity.appex');
   if (!fs.existsSync(extension)) throw Error('Required Live Activity widget extension was skipped');
+  if (signingIdentity) preparePersonalInput(root, app, run);
   // Preserve the extension's sandbox signature; do not use --deep to re-sign it.
   run('codesign',['--force','--sign','-',app]);
-  if (signingIdentity) signDeveloperRuntime(app, signingIdentity);
+  if (signingIdentity) {
+    signDeveloperRuntime(app, signingIdentity);
+    verifyDeveloperSignature(path.join(app,'Contents/Resources/tools/remote-desktop/cindy-macos-desktop-input'), signingIdentity);
+  }
   run('codesign',['--verify','--deep','--strict',app]);
   const files = {};
   const collect = p => { for (const e of fs.readdirSync(p,{withFileTypes:true})) { const f=path.join(p,e.name); if(e.isDirectory())collect(f); else if(e.isFile())files[path.relative(root,f)]=digest(f); } };
   collect(resources);
-  if (!runtimeApp) { collect(extension); collect(packagedResources);
+  if (!runtimeApp) { if (signingIdentity) collect(path.join(app,'Contents/Resources/tools/remote-desktop')); collect(extension); collect(packagedResources);
   for(const f of [path.join(app,'Contents/Info.plist'),path.join(app,'Contents/Resources/cindy.icns'),path.join(app,'Contents/Resources/cindy-live-activity-silent.caf')])files[path.relative(root,f)]=digest(f);
   }
-  const report=save({state:'built',bundleId,sdk,developerDir:env.DEVELOPER_DIR || null,files});
+  const report=save({state:'built',capabilities:{desktopInput:!!signingIdentity},bundleId,sdk,developerDir:env.DEVELOPER_DIR || null,files});
   console.log('PERSONAL_NATIVE_CAPABILITY=live-activity:built'); return report;
 }
 
@@ -139,6 +175,12 @@ export function signDeveloperRuntime(app, identity) {
     }
   };
   walk(app); sign(app, true);
+}
+export function designatedRequirement(app) {
+  const result = spawnSync('codesign', ['-d', '-r-', app], {encoding:'utf8'});
+  const requirement = `${result.stdout || ''}\n${result.stderr || ''}`.split('\n').find(line => line.startsWith('designated => '));
+  if (result.status !== 0 || !requirement) throw Error('Cannot read personal app signing requirement');
+  return requirement;
 }
 export function verifyDeveloperSignature(app, identity) {
   execFileSync('codesign', ['--verify','--deep','--strict', app], {stdio:'pipe'});
@@ -174,7 +216,10 @@ export function prepareStableNativeCapabilities(root, options = {}) {
   const store = path.join(env.PERSONAL_STATE_DIR,'runtimes',personalBundleId(options.name || 'personal', options.region || 'global'));
   execFileSync('git',['lfs','pull','--include=apps/desktop/native/agent-island/**','--exclude='],{cwd:root,stdio:'inherit'});
   const names = execFileSync('git',['ls-files','-z','--','apps/desktop/native/agent-island'],{cwd:root,encoding:'utf8'}).split('\0').filter(Boolean);
-  names.push('apps/desktop/resources/icon.icns');
+  names.push('apps/desktop/resources/icon.icns',
+    'apps/desktop/native/remote-desktop/macos-input.swift',
+    'apps/desktop/native/remote-desktop/macos-input-Info.plist',
+    'packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift');
   const toolchain = resolveNativeToolchain();
   const inputs = {protocol:1, platform:process.platform, arch:process.arch, node:process.versions.node,
     electronBytes:treeIdentity(path.join(root,'node_modules/electron/dist/Electron.app')),
@@ -192,7 +237,7 @@ export function prepareStableNativeCapabilities(root, options = {}) {
   const collect = dir => { for (const e of fs.readdirSync(dir,{withFileTypes:true})) {
     const f=path.join(dir,e.name); if(e.isDirectory())collect(f); else if(e.isFile())files[path.relative(root,f)]=digest(f);
   } }; collect(resources);
-  const report = {version:2,state:'built',bundleId:inputs.bundleId,runtime,files};
+  const report = {version:2,state:'built',capabilities:{desktopInput:true},bundleId:inputs.bundleId,runtime,files};
   fs.writeFileSync(file,JSON.stringify(report,null,2)+'\n');
   nativeIdentity(root); return report;
 }

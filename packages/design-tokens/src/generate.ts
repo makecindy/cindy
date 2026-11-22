@@ -124,7 +124,18 @@ export async function buildProductionFiles(root = findRepoRoot()) {
               declaration("UI_TEXT_TOKEN_SIZES", values(f.numeric)) +
               declaration("SCALED_TAILWIND_TOKENS", values(f.text)) +
               declaration("TAILWIND_LINE_HEIGHTS", values(f.lineHeight)) +
-              declaration("NUMERIC_TEXT_CLASSES", Object.keys(f.numeric)),
+              declaration("SCALABLE_APPEARANCE_TOKENS", Object.fromEntries(
+                Object.entries(f.css).flatMap(([name, id]) => {
+                  if (!/^(space|motion)-/.test(name)) return [];
+                  const match = cssValue(id).match(/^([\d.]+)(rem|px|ms|s)$/);
+                  return match ? [[`--${name}`, { value: Number(match[1]), unit: match[2] }]] : [];
+                }),
+              )) +
+              declaration("NUMERIC_TEXT_CLASSES", Object.keys(f.numeric)) +
+              // 层级刻度：JS 里需要数字的地方（style 计算、组件 zIndex 参数）读这里；
+              // 类名表供 cn() 的 tailwind-merge 识别 z-<层名> 冲突。
+              declaration("Z_INDEX_LAYERS", values(f.zIndex)) +
+              declaration("Z_INDEX_CLASSES", Object.keys(f.zIndex)),
           );
           const tailwindPath = "apps/desktop/tailwind.config.ts";
           const tailwindMappings =
@@ -132,6 +143,7 @@ export async function buildProductionFiles(root = findRepoRoot()) {
             declaration("TAILWIND_SPACING", vars(f.spacing)) +
             declaration("TAILWIND_RADIUS", radius) +
             declaration("TAILWIND_FONT_WEIGHT", vars(f.fontWeight)) +
+            declaration("TAILWIND_Z_INDEX", vars(f.zIndex)) +
             declaration(
               "MOTION_CSS",
               Object.fromEntries(

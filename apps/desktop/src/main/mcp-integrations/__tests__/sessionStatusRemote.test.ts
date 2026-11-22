@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
-import { createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
+import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker.js';
 import { admitTaskAction } from '../../maker-ipc/taskActionAuthorization.js';
 
@@ -17,18 +17,19 @@ function setup(outcome: InvokeResultPayload | Error) {
 describe('remote session archive status', () => {
   // #6399, unit: invocation admission precedes transport queue/connection waits.
   // Exercise its actual preSend callback, preserving earlier receipts on rejection.
-  it.each(['active', 'archived'] as const)('rechecks %s action at the final transport send', async status => {
+  it.each(['active', 'archived', 'deleted'] as const)('rechecks %s action at the final transport send', async status => {
     let current = true;
     const check = () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
     const decision = await admitTaskAction(
-      { server: 'cindy_helper', tool: status === 'active' ? 'unarchive_sessions' : 'archive_sessions', sessionId: 'caller', args: {} },
+      { server: 'cindy_helper', tool: status === 'active' ? 'unarchive_sessions' : status === 'deleted' ? 'delete_session' : 'archive_sessions', sessionId: 'caller', args: {} },
       { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => check(), assertCurrentSync: check },
     );
     if (!decision.ok || !decision.run) throw new Error('Expected admission');
     const send = vi.fn();
     const setStatus = createRemoteSessionsStatusSetter({
       captureAccess: () => () => {},
-      invoke: async (_device, _channel, args, options) => {
+      invoke: async (_device, channel, args, options) => {
+        if (channel === 'local-db:sessions:get') return { ok: true, result: { id: args[0] } };
         if (args[0] === 's2') current = false; // connection wait completed after input replacement
         options?.preSend?.();
         send(args[0]);
@@ -64,6 +65,17 @@ describe('remote session archive status', () => {
     expect(s.invoke).toHaveBeenCalledOnce();
   });
 
+  // Unit: the remote delete tool must distinguish a promoted task while older
+  // hosts, which omit the flag, keep receiving the original deletion payload.
+  it.each([true, undefined])('deletes the inspected remote task (promotion=%s)', async promoted => {
+    const s = setup({ ok: true, result: { id: 's1', status: 'deleted' } });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1', sideChatPromoted: promoted } });
+    expect(await s.setStatus({ ...request, sessionIds: ['s1'], status: 'deleted' })).toMatchObject({ ok: true });
+    expect(s.invoke).toHaveBeenLastCalledWith('studio', 'local-db:sessions:patch-meta',
+      ['s1', promoted ? { status: 'deleted', deleteTarget: 'task' } : { status: 'deleted' }],
+      { preSend: expect.any(Function) });
+  });
+
   it('uses only the existing patch-meta channel with the stripped id and status', async () => {
     const s = setup(row('s1'));
     expect(await s.setStatus({ ...request, sessionIds: ['s1'] })).toEqual({ ok: true, changed: [
@@ -83,7 +95,7 @@ describe('remote session archive status', () => {
     ['IPC_ERROR', '[BACKPRESSURE] db worker RPC queue overloaded', 'REMOTE_RESULT_UNKNOWN'],
     ['IPC_ERROR', '[DEVICE_LINK_CONTROL_DISABLED] off', 'REMOTE_DISABLED'],
     ['IPC_ERROR', '[PRECONDITION_FAILED] 已删除的任务不能恢复或归档', 'PRECONDITION_FAILED'],
-    ['IPC_ERROR', '[PRECONDITION_FAILED] Bot task lifecycle is managed by teammate recovery and history controls', 'PRECONDITION_FAILED'],
+    ['IPC_ERROR', "[PRECONDITION_FAILED] Bot task lifecycle is managed by teammate recovery and history controls", 'PRECONDITION_FAILED'],
     ['IPC_ERROR', '[PRECONDITION_FAILED] Worktree is busy or its recovery record could not be saved', 'REMOTE_RESULT_UNKNOWN'],
     ['IPC_ERROR', '[NOT_FOUND] Session 不存在', 'NOT_FOUND'],
     ['IPC_ERROR', '[NOT_FOUND] Session does not exist', 'REMOTE_RESULT_UNKNOWN'],
@@ -157,5 +169,27 @@ describe('remote session archive status', () => {
     const setStatus = createRemoteSessionsStatusSetter({ invoke, captureAccess: () => { throw new Error('switching'); } });
     expect(await setStatus(request)).toMatchObject({ errorCode: 'HOST_NOT_READY', changed: [] });
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+// Agent snooze_sessions on another computer (2026-11-22): the same patch-meta call the
+// inbox makes there, accepted only when the returned row carries the requested wake time.
+describe('remote task snooze', () => {
+  const until = '2026-12-01T01:00:00.000Z';
+  it('patches only snoozedUntil and treats a mismatched receipt as unknown', async () => {
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => ({
+      ok: true as const,
+      result: { id: args[0], status: 'active', title: 't', workingDir: null, snoozedUntil: args[0] === 's1' ? until : null },
+    }));
+    const snooze = createRemoteSessionsSnoozeSetter({ invoke, captureAccess: () => () => {} });
+    expect(await snooze({ deviceId: 'studio', sessionIds: ['s1', 's2', 's3'], snoozedUntil: until })).toMatchObject({
+      ok: false, errorCode: 'REMOTE_RESULT_UNKNOWN',
+      changed: [{ sessionId: 's1', snoozedUntil: until, title: 't' }],
+      failedSessionId: 's2', remainingSessionIds: ['s3'],
+    });
+    expect(invoke.mock.calls.map((call) => call.slice(1, 3))).toEqual([
+      ['local-db:sessions:patch-meta', ['s1', { snoozedUntil: until }]],
+      ['local-db:sessions:patch-meta', ['s2', { snoozedUntil: until }]],
+    ]);
   });
 });

@@ -18,5 +18,6 @@ export function canUsePeerInvoke(channel: string, args: unknown[]): boolean {
 /** Attachment failures restart through OSS, never replay uncertain staging operations over WSS. */
 export function canServePeerInvoke(channel: string, args: unknown[]): boolean {
   return canUsePeerInvoke(channel, args) || (channel === FILE_PEER_CHANNEL && args.length === 1 &&
-    !!args[0] && typeof args[0] === 'object' && (args[0] as { action?: unknown }).action === 'attachment');
+    !!args[0] && typeof args[0] === 'object' && ((args[0] as { action?: unknown }).action === 'attachment' ||
+      ((args[0] as { action?: unknown }).action === 'open' && (args[0] as { range?: unknown }).range !== undefined)));
 }

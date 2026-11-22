@@ -55,6 +55,24 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('send_to_session tool', () => {
+  // Unit contract: task host and provider location are independent; conflicting aliases
+  // must fail before host dispatch, and uncertain creation returns an address to inspect.
+  it('routes creation locations independently and preserves a recovery address', async () => {
+    const { registry, sendToSession } = setup({ result: { ok: false, errorCode: 'DELIVERY_UNKNOWN',
+      message: 'Inspect before retrying', recoverySessionId: 'work-pc::new-task' } });
+    const result = parse(await registry.call('send_to_session', { message: 'Work', device: 'work-pc',
+      provider_device_id: 'model-pc', project_path: '/remote/project' }));
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ device: 'work-pc',
+      agentDeviceId: 'model-pc', projectDir: '/remote/project' }));
+    expect(result).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN', data: { target_session_id: 'work-pc::new-task' } });
+    for (const args of [
+      { target_session_id: 'existing', device: 'work-pc' },
+      { provider_device_id: 'one', agent_device_id: 'two' },
+    ]) expect(parse(await registry.call('send_to_session', { message: 'Work', ...args })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(sendToSession).toHaveBeenCalledOnce();
+  });
+
   // Unit: preserve omitted vs null membership through the real tool boundary;
   // the host resolves inheritance independently of the execution checkout.
   it.each([undefined, null])('passes project choice %j without replacing it with cwd', async project_path => {
@@ -108,13 +126,6 @@ describe('send_to_session tool', () => {
     const control = registry.list('control').map((t) => t.name);
     expect(handoff).toContain('send_to_session');
     expect(control).not.toContain('send_to_session');
-  });
-
-  it.each(['coordination', 'user-visible'])('passes message purpose with the bound caller identity: %s', async purpose => {
-    const { registry, sendToSession } = setup();
-    const result = await registry.call('send_to_session', { target_session_id: 'parent', message: 'Update', message_purpose: purpose });
-    expect(result.isError).toBeUndefined();
-    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'parent', messagePurpose: purpose, dispatcherSessionId: expect.any(String) }));
   });
 
   it('缺 message → INVALID_ARGS, host 不被调', async () => {
@@ -393,8 +404,8 @@ describe('send_to_session tool', () => {
     const tool = registry.get('send_to_session')!;
     // inputShape 是 z.ZodRawShape（值是 core $ZodType，不声明 description），按 classic ZodType 读取说明文案。
     const shape = tool.inputShape as unknown as Record<string, { description?: string } | undefined>;
-    expect(shape.agent_device_id?.description).toContain('locations[].agent_device_id');
-    expect(tool.description).toContain('【agent_device_id(仅 create 模式)】');
+    expect(shape.agent_device_id?.description).toContain('locations[].provider_device_id');
+    expect(tool.description).toContain('【provider_device_id(旧名 agent_device_id，仅 create 模式)】');
     expect(tool.description).toMatch(/PROVIDER_ROUTE_UNAVAILABLE: 仅 create/);
     expect(tool.description).toMatch(/INVALID_ARGS: .*agent_device_id/);
   });
@@ -607,10 +618,9 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     }
   });
 
-  it('宿主不支持、内部协调用途、无来源任务时明确拒绝, 不发出', async () => {
+  it('宿主不支持、无来源任务时明确拒绝, 不发出', async () => {
     const cases = [
       [remoteSetup({ remote: false }), {}, 'REMOTE_UNSUPPORTED'],
-      [remoteSetup(), { message_purpose: 'coordination' }, 'INVALID_ARGS'],
       [remoteSetup({ sessionId: undefined }), {}, 'LEAD_NOT_SUPPORTED'],
     ] as const;
     for (const [s, extra, errorCode] of cases) {

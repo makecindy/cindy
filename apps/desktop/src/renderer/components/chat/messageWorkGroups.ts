@@ -17,6 +17,7 @@ import type { GeneratedFileRef } from '@/lib/generatedFiles';
 import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 import type { TodoItem } from './TodoListCard';
 import type { ToolMediaItem } from './AgentActionRow';
+import type { BotStartedTask } from './BotStartedTasks';
 
 export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage; pending?: true };
 type AgentPlanRenderItem = {
@@ -117,6 +118,12 @@ export type RenderItem =
   | TurnChangesRenderItem
   | GeneratedFilesRenderItem
   | {
+      /** Teammate chat: the tasks a reply started or sent work to (BotStartedTasks). */
+      type: 'bot_started_tasks';
+      key: string;
+      tasks: BotStartedTask[];
+    }
+  | {
       /** tool-result-media: 把 tool_result 里的 xdt_image_url(s) / xdt_video_urls
        *  提取出来作为独立视觉消息渲染,跳出 tool_segment 折叠卡片。统一容器,
        *  按 kind 分发到 ChatImageView / ChatVideoView。
@@ -163,6 +170,10 @@ export function isCompletedAssistantMessage(message: ChatMessage): boolean {
   if (message.failedSamplingAttempt) return false;
   return (
     message.turnCompleted === true ||
+    // Older scheduler final reports were persisted without a completion marker.
+    // Their reserved client id identifies the canonical answer, not stream prose.
+    (message.role === 'assistant' && message.turnCompleted !== false && !message.isStreaming &&
+      message.clientId.startsWith('schedule-result:')) ||
     (message.turnMoney?.amount ?? 0) > 0 ||
     (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
     // turnUsageDetails 也只在 turn 结束时 patch(算不出报价的轮次只落它),

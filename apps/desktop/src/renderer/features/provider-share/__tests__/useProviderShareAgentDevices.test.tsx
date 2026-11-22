@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import { PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL } from '@cindy/device-link';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { useDevicesPluginEngines } from '@/hooks/usePluginEngines';
 
 import { resetProviderShareStoreForTests } from '../providerShareStore';
 import { useProviderShareAgentDevices } from '../useProviderShareAgentDevices';
@@ -28,6 +29,7 @@ const catalog = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: catalog.refresh }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  hasDeviceProvidersInterest: (deviceId: string) => catalog.cached.has(deviceId),
   getCachedDeviceProviders: (deviceId: string) => (catalog.cached.has(deviceId) ? {
     providers: catalog.subscriptions.has(deviceId) ? [{ subscriptionFastPolicy: { allowFast: false } }] : [],
   } : null),
@@ -171,7 +173,10 @@ describe('useProviderShareAgentDevices', () => {
     catalog.subscriptions.add('share:subscription');
     catalog.stale.add('share:subscription');
     await act(async () => { push?.(initial); await Promise.resolve(); await Promise.resolve(); });
-    expect(catalog.refresh.mock.calls).toEqual([['share:subscription']]);
+    expect(catalog.refresh.mock.calls).toEqual([
+      ['share:subscription'],
+      ['share:api', undefined, { retireOnly: true }],
+    ]);
   });
   it('only offers new shares that the controlled host has loaded, even if the controller has more cross-region shares', async () => {
     initial = [share({ shareId: 'both' }), share({ shareId: 'controller-only' })];
@@ -599,7 +604,9 @@ describe('useProviderShareAgentDevices', () => {
       push?.([share({ shareId: 'a' }), share({ shareId: 'b', hostOnline: false })]);
       await Promise.resolve(); await Promise.resolve();
     });
-    expect(catalog.refresh.mock.calls.map(([deviceId]) => deviceId).sort()).toEqual(['share:b', 'share:c']);
+    expect(catalog.refresh.mock.calls.map(([deviceId]) => deviceId).sort()).toEqual(['share:a', 'share:b', 'share:c']);
+    expect(catalog.refresh.mock.calls.find(([deviceId]) => deviceId === 'share:a'))
+      .toEqual(['share:a', undefined, { retireOnly: true }]);
     expect(result.current.devices.map((device) => device.deviceId)).toEqual(['share:a', 'share:b']);
   });
 
@@ -615,5 +622,54 @@ describe('useProviderShareAgentDevices', () => {
     expect(catalog.refresh).toHaveBeenCalledWith('share:b', revoked);
     expect(catalog.refresh).toHaveBeenCalledWith('share:c', revoked, { retireOnly: true });
     expect(catalog.refresh).not.toHaveBeenCalledWith('share:a', expect.anything());
+  });
+
+  it('separates plugin engine shares into pluginEngineDevices and refreshes a loaded picker when catalog push arrives', async () => {
+    initial = [
+      share({ shareId: 'builtin', providerId: 'anthropic', providerLabel: 'Anthropic' }),
+      share({ shareId: 'plugin', providerId: 'acp-plugin:dsh-acp:dsh', providerLabel: 'DeepSeek Harness' }),
+    ];
+    let offeredModels = [{ id: 'deepseek-v4', displayName: 'DeepSeek V4' }];
+    invoke.mockImplementation(async (deviceId: string, channel: string) => {
+      if (deviceId === 'share:plugin' && channel === 'maker:list-plugin-engines') {
+        return [{
+          key: 'dsh-acp:dsh',
+          providerId: 'acp-plugin:dsh-acp:dsh',
+          ghostId: 'dsh-acp',
+          harnessId: 'dsh',
+          name: 'DeepSeek Harness',
+          availability: { state: 'available' },
+          models: offeredModels,
+          permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+          defaultPermissionMode: 'ask',
+          remoteUse: { supported: true, shareSupported: true, enabled: true },
+        }];
+      }
+      return null;
+    });
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.devices).toEqual([{ deviceId: 'share:builtin', name: 'from Magi' }]);
+    expect(result.current.pluginEngineDevices).toEqual([{ deviceId: 'share:plugin', name: 'from Magi' }]);
+    expect(result.current.nameFor('share:plugin')).toBe('from Magi');
+    expect(result.current.isKnown('share:plugin')).toBe(true);
+    expect(result.current.isReceived('share:plugin')).toBe(true);
+
+    const picker = renderHook(() => useDevicesPluginEngines(['share:plugin']));
+    // Unread picker candidates stay idle on push until opened.
+    await act(async () => {
+      catalogPush?.({ deviceId: 'share:plugin', channel: 'maker:provider:changed', payload: {} });
+      await Promise.resolve();
+    });
+    expect(invoke).not.toHaveBeenCalled();
+
+    // Once opened (loaded), a share catalog invalidation push refreshes the open picker immediately.
+    await act(async () => { picker.result.current.read(); });
+    await waitFor(() => expect(picker.result.current.catalogues.get('share:plugin')?.[0]?.models).toEqual(offeredModels));
+    offeredModels = [{ id: 'deepseek-v4-lite', displayName: 'DeepSeek V4 Lite' }];
+    await act(async () => {
+      catalogPush?.({ deviceId: 'share:plugin', channel: 'maker:provider:changed', payload: {} });
+    });
+    await waitFor(() => expect(picker.result.current.catalogues.get('share:plugin')?.[0]?.models).toEqual(offeredModels));
   });
 });

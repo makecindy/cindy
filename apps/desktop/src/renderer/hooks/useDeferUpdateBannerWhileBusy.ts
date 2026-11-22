@@ -5,6 +5,7 @@ import {
   getUpdateBannerDismissState,
   isUpdateBannerPinnedFor,
   markUpdateBannerAutoShown,
+  revealRequestedUpdateBanner,
   useUpdateBannerDismiss,
 } from '@/hooks/useUpdateBannerDismiss';
 
@@ -16,7 +17,7 @@ import {
  * 后再弹出。系统自己弹出的,后来又 busy 同样收回去;用户点 X 关掉的不自动恢复;
  * 用户点火焰唤回的钉住当前这一版,busy 不再藏。待装版本变了,钉住作废并重新探针。
  *
- * 这条 IPC 是为点击「立即重启」设计的一次性探针(含 PI 目录同步扫描),不是廉价订阅。
+ * 横幅轮询异步读取 Pi 任务目录。点击「立即重启」时会重新检查当前活动。
  * 要知道「任务何时停 / 后来又没停」必须再问同一条定义,但不能把它当成 2s 热循环,
  * 也不另做活动缓存或事件总线。首次立刻问一次以免闪横幅;之后按
  * UPDATE_BANNER_BUSY_POLL_MS 续询(busy 等停下,已弹出等又 busy)。用户关掉或钉住后
@@ -56,6 +57,12 @@ export function useDeferUpdateBannerWhileBusy(
 
   useEffect(() => {
     if (!isActiveUpdateStatus(status)) return;
+
+    if (getUpdateBannerDismissState().revealRequested) {
+      // superseding 不消费请求；去重记录在 store 里，同一请求只展开一次。
+      revealRequestedUpdateBanner(status, versionOrNull, status === 'ready');
+      return;
+    }
 
     const read = () => apiRef.current;
 
@@ -105,7 +112,7 @@ export function useDeferUpdateBannerWhileBusy(
       cancelled = true;
       if (timer !== null) clearTimeout(timer);
     };
-  }, [status, versionOrNull, dismissApi.dismissed, dismissApi.reason, dismissApi.pinnedByUser]);
+  }, [status, versionOrNull, dismissApi.dismissed, dismissApi.reason, dismissApi.pinnedByUser, dismissApi.revealRequested, dismissApi.revealSeq]);
 
   return hideUntilDecided;
 }

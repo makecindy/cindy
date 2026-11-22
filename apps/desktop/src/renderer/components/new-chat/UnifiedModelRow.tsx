@@ -10,8 +10,8 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
-import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
-import { modelSupplierLabel } from '@cindy/model-providers';
+import { providerDisplayName } from '@/lib/providerDisplayName';
+import { isCustomRoutedProvider, modelSupplierLabel } from '@cindy/model-providers';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { PriceFreeBadge, PriceTierMarks, type UnifiedRowPriceDisplay } from './priceTierMarks';
@@ -76,15 +76,19 @@ export function UnifiedModelRow({
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   sourceLabel,
+  sourceNotice,
   measurementOnly = false,
+  readable = false,
 }: {
   /** Hidden intrinsic-width probe: share row typography, omit interaction and fixed-size artwork. */
   measurementOnly?: boolean;
+  readable?: boolean;
   /**
    * Supplied only in the combined All / Favorites views; omitted = the local description.
    * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
    */
   sourceLabel?: string;
+  sourceNotice?: string | undefined;
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
   config: UnifiedRowConfig;
@@ -119,6 +123,8 @@ export function UnifiedModelRow({
   const displayName = localizedModelName(entry.displayName, t);
   const description = localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
   const provider = providers.find((item) => item.id === entry.providerId);
+  const wireModelId = config.wireModelId ?? entry.modelId;
+  const showModelId = isCustomRoutedProvider(provider) && wireModelId !== displayName;
   // Read the effective engine's exact wire entry, never the recommended sibling's source.
   const source = entry.capabilities[config.agent]?.discoveredSource;
   const supplier = modelSupplierLabel(source);
@@ -142,7 +148,7 @@ export function UnifiedModelRow({
     configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
   }${configurationEnabled && config.fast ? ` · ${t(config.fast === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.speed.fast')}` : ''}`;
   const paymentRequiredActionLabel = paymentRequired
-    ? [displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
+    ? [displayName, showModelId ? wireModelId : null, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
         .filter(Boolean)
         .join(' · ')
     : undefined;
@@ -214,7 +220,7 @@ export function UnifiedModelRow({
           : t('newChat.modelSelector.unified.addFavorite')
       }
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
         isFavoriteRow || justFavorited
           ? 'text-[var(--favorite-star)] opacity-100'
           : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
@@ -238,7 +244,7 @@ export function UnifiedModelRow({
       title={t('newChat.modelSelector.unified.customize')}
       aria-label={t('newChat.modelSelector.unified.customize')}
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
         active
           ? 'text-[var(--text-secondary)] opacity-100'
           : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--text-secondary)]',
@@ -251,7 +257,7 @@ export function UnifiedModelRow({
     paymentRequired && paymentRequiredLabel ? (
       <span
         data-payment-required-badge
-        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
+        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-px text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
       >
         <Lock size={10} />
         {paymentRequiredLabel}
@@ -267,6 +273,75 @@ export function UnifiedModelRow({
       </span>
     ) : null;
 
+  const sourceDetails = sourceLabel ? (
+    // Reuse the source/account details without mounting another quota subscriber.
+    !measurementOnly && (
+      <ModelSourceDetails
+        className={readable ? 'w-full min-w-0 pl-0 pt-0' : undefined}
+        providerId={entry.providerId}
+        label={sourceDisplayLabel ?? sourceLabel}
+        accountIdentity={
+          provider?.openAiAccount?.identity?.trim() ||
+            provider?.subscriptionAccount?.identity?.trim()
+        }
+        modelId={config.wireModelId ?? entry.modelId}
+      />
+    )
+  ) : description ? (
+    // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
+    // 描述是辅助信息,不该比模型名更长地占据视线(2026-08-13 实测反馈)。
+    // 颜色按旧选择器恢复用 --text-secondary(同日裁决:tertiary 太淡看不清;
+    // 与名字的区分靠名字的 14px/medium,不靠把描述压淡)。
+    <div
+      title={descriptionLabel}
+      className={cn(
+        'min-w-0 max-w-[30ch] truncate text-12 font-normal leading-[1.4] text-[var(--text-secondary)]',
+        !readable && 'pl-[26px] pt-px',
+      )}
+    >
+      {descriptionLabel}
+    </div>
+  ) : null;
+  const price = (
+    <>
+      {priceDisplay?.kind === 'free' && (
+        <PriceFreeBadge label={t('newChat.modelSelector.pricing.free')} />
+      )}
+      {priceDisplay?.kind === 'tier' && priceDisplay.tier !== undefined && (
+        <PriceTierMarks
+          litOf={litWholeMarks}
+          formatClipPct={String}
+          exposeLit={false}
+          priceDisplay={priceDisplay}
+          symbol={priceSymbol}
+          tier={priceDisplay.tier}
+        />
+      )}
+    </>
+  );
+  const routeDetails = (
+    <span data-model-row-meta className={cn('flex shrink-0 items-center gap-2', !readable && 'ml-auto')}>
+      <span
+        title={tripleTitle}
+        data-unified-triple
+        // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,所有行一致)。
+        className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 font-normal text-[var(--text-tertiary)]"
+      >
+        {measurementOnly
+          ? <span className="h-3 w-3 shrink-0" />
+          : <engineOption.Mark size={12} className="shrink-0" />}
+        {configurationEnabled && config.effort && (
+          <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>
+        )}
+        {configurationEnabled && config.fast && (measurementOnly
+          ? <span style={{ width: 11, height: 11 }} className="shrink-0" />
+          : <SpeedIcon mode={config.fast} size={11} className="shrink-0" />)}
+      </span>
+      {paymentRequiredUnlock}
+      {paymentRequiredBadge}
+    </span>
+  );
+
   return (
     <div
       {...rowRootProps}
@@ -276,12 +351,13 @@ export function UnifiedModelRow({
         // The model panel is the one exception on the chosen row: whole-row fill, no check.
         COMPOSER_MENU_ROW,
         '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col px-3 py-2',
+        readable && 'min-w-0',
         // The glide layer covers the hovered row, so the static fill steps aside there.
         selected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
         (interactionDisabled || paymentRequired) && 'cursor-not-allowed opacity-50',
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className={cn('flex gap-2', readable ? 'min-w-0 items-start' : 'items-center')}>
         {/* 设计稿 .mark:18×18 定位盒(图标本体 13-17px 居中)。没有这个盒,名字起点
             随图标实际宽度浮动,第二行描述的 26px 缩进(18+8)就对不上第一行的名字。 */}
         <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
@@ -292,90 +368,48 @@ export function UnifiedModelRow({
               {...(provider?.name !== undefined ? { name: provider.name } : {})}
               {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
               {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
+              customIcon={provider?.customIcon}
               colorClass="text-[var(--text-secondary)]"
               withMargin={false}
             />
           )}
         </span>
         <span
-          // 布局同设计稿 .m-name:内容宽、不 grow —— 徽标/钱串紧贴模型名左排,
-          // 右侧三元组由 ml-auto 推到最右;空间不足时名字先收缩截断,title 给全名。
-          // 字号/字重**不跟设计稿的 13.5px/normal**,按旧选择器恢复(text-14 + medium):
-          // Chris 2026-08-13 实测裁决 —— 名字变小去粗后与描述行难以区分。
           title={displayName}
-          className="min-w-0 truncate font-medium leading-5"
+          className={cn(
+            'min-w-0 font-medium leading-5',
+            readable ? 'flex-1 [overflow-wrap:anywhere]' : 'truncate',
+          )}
         >
           {displayName}
         </span>
-        {priceDisplay?.kind === 'free' && (
-          <PriceFreeBadge label={t('newChat.modelSelector.pricing.free')} />
-        )}
-        {priceDisplay?.kind === 'tier' && priceDisplay.tier !== undefined && (
-          <PriceTierMarks
-            litOf={litWholeMarks}
-            formatClipPct={String}
-            exposeLit={false}
-            priceDisplay={priceDisplay}
-            symbol={priceSymbol}
-            tier={priceDisplay.tier}
-          />
-        )}
+        {!readable && price}
         {onStar && (measurementOnly ? <span className="h-5 w-5 shrink-0" /> : starButton)}
         {configurationEnabled && customizable && (
           measurementOnly ? <span className="h-5 w-5 shrink-0" /> : customizeButton
         )}
-        {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
-            设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
-        <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">
-          <span
-            title={tripleTitle}
-            data-unified-triple
-            // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,所有行一致)。
-            className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 font-normal text-[var(--text-tertiary)]"
-          >
-            {measurementOnly
-              ? <span className="h-3 w-3 shrink-0" />
-              : <engineOption.Mark size={12} className="shrink-0" />}
-            {configurationEnabled && config.effort && (
-              <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>
-            )}
-            {configurationEnabled && config.fast && (measurementOnly
-              ? <span style={{ width: 11, height: 11 }} className="shrink-0" />
-              : <SpeedIcon mode={config.fast} size={11} className="shrink-0" />)}
-          </span>
-          {paymentRequiredUnlock}
-          {paymentRequiredBadge}
-        </span>
+        {!readable && routeDetails}
         {/* 行尾不放 ✅(Chris 2026-08-13 裁决:选中已有整行底色,再加勾是重复信号,
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。模型面板是输入框菜单
             「选中 = 勾 + 500」约定的唯一例外,2026-10-04 用户再次确认保留整行底色、不加勾。 */}
       </div>
-      {sourceLabel ? (
-        // Source details use w-0/min-w-full and do not contribute intrinsic width.
-        // Do not mount another quota-clock subscriber just to measure this row.
-        !measurementOnly && (
-          <ModelSourceDetails
-            providerId={entry.providerId}
-            label={providerAccountLabel(
-              sourceDisplayLabel ?? sourceLabel,
-              provider?.openAiAccount?.identity?.trim() ||
-                provider?.subscriptionAccount?.identity?.trim(),
-            )}
-            modelId={config.wireModelId ?? entry.modelId}
-          />
-        )
-      ) : description ? (
-        // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
-        // 描述是辅助信息,不该比模型名更长地占据视线(2026-08-13 实测反馈)。
-        // 颜色按旧选择器恢复用 --text-secondary(同日裁决:tertiary 太淡看不清;
-        // 与名字的区分靠名字的 14px/medium,不靠把描述压淡)。
-        <div
-          title={descriptionLabel}
-          className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
-        >
-          {descriptionLabel}
+      {showModelId && !measurementOnly && (
+        <div className="w-0 min-w-full break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+          {wireModelId}
         </div>
-      ) : null}
+      )}
+      {readable ? (
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pl-[26px]">
+          {sourceDetails && <div className="min-w-[80px] flex-1">{sourceDetails}</div>}
+          {price}
+          {routeDetails}
+        </div>
+      ) : sourceDetails}
+      {sourceNotice && !measurementOnly && (
+        <div className="w-0 min-w-full text-balance break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]">
+          {sourceNotice}
+        </div>
+      )}
     </div>
   );
 }

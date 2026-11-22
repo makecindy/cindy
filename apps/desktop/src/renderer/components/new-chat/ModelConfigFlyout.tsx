@@ -22,6 +22,7 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 
 import { ModelHarnessPicker } from './ModelHarnessPicker';
 import { EffortSlider } from '@/components/ui/effort-slider';
+import { Switch } from '@/components/ui/switch';
 import type { UnifiedEngine, UnifiedRowConfig } from './unifiedModelSelection';
 
 /** 底栏三态(等高,切态不改变浮层高度 —— 规格 §1.3「高度恒定」)。 */
@@ -49,6 +50,7 @@ export interface ModelConfigFlyoutProps {
   onEngineChange: (engine: UnifiedEngine) => void;
   onEffortChange: (effort: Effort) => void;
   onFastChange: (enabled: boolean | 'ultrafast') => void;
+  thinking?: { enabled: boolean; disabled?: boolean; onChange: (enabled: boolean) => void };
   onResetToRecommended: () => void;
   onAddFavorite: () => void;
   onRemoveFavorite: () => void;
@@ -83,13 +85,15 @@ export function ModelConfigFlyout({
   onEngineChange,
   onEffortChange,
   onFastChange,
+  thinking,
   onResetToRecommended,
   onAddFavorite,
   onRemoveFavorite,
 }: ModelConfigFlyoutProps) {
   const { t } = useTranslation();
   const displayName = localizedModelName(entry.displayName, t);
-  const showSlider = config.efforts.length > 1;
+  const showThinking = config.agent === 'pi' && config.capability?.thinkingToggle === true;
+  const showSlider = !showThinking && config.efforts.length > 1;
   const contextLimit = useModelContextLimit(deviceId ? null : {
     providerId: entry.providerId,
     agent: config.engine === 'cc' ? 'claude-code' : config.engine,
@@ -150,7 +154,7 @@ export function ModelConfigFlyout({
               : t('newChat.modelSelector.unified.addFavorite')
           }
           className={cn(
-            'mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-colors',
+            'mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-colors',
             starred
               ? 'text-[var(--favorite-star)]'
               : 'text-[var(--text-tertiary)] hover:text-[var(--favorite-star)]',
@@ -161,7 +165,7 @@ export function ModelConfigFlyout({
         </button>
       </div>
 
-      <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-[3px] text-12 text-[var(--text-tertiary)]">
+      <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-0.5 text-12 text-[var(--text-tertiary)]">
         {sourceLabel}
         {contextWindow > 0 && (
           <>
@@ -181,6 +185,17 @@ export function ModelConfigFlyout({
         </p>
       )}
 
+      {showThinking && thinking && (
+        <div className="flex items-center justify-between gap-2 pt-3.5 text-13 text-[var(--text-primary)]">
+          <span>{t('newChat.modelSelector.thinking')}</span>
+          <Switch
+            aria-label={t('newChat.modelSelector.thinking')}
+            checked={thinking.enabled}
+            disabled={disabled || thinking.disabled}
+            onCheckedChange={thinking.onChange}
+          />
+        </div>
+      )}
       {(showSlider || config.fastCapable) && (
         // 设计稿 .fly-ctrl:first-of-type:第一个控件行上距 14px。
         <div className="flex items-center gap-2 pt-3.5">
@@ -277,7 +292,7 @@ export function ModelConfigFlyout({
         //   第 2 行:折后价单行排列 —— 输入 ¥32 · 输出 ¥162 · 缓存读取 ¥3.2
         // 原价对比收进 title(hover 才看):浮层是「选之前扫一眼」的地方,一张对照表
         // 会把它变成账单页,且删除线在 12px 下几乎看不清。
-        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-[9px] text-12 leading-[1.7] text-[var(--text-tertiary)]">
+        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-2 text-12 leading-[1.7] text-[var(--text-tertiary)]">
           <div className="flex flex-wrap items-baseline gap-x-1">
             <span>{t('newChat.modelSelector.pricing.title')}</span>
             {price.kind === 'free' ? (

@@ -12,11 +12,12 @@ vi.mock('@cindy/maker-shared/remote-desktop-viewer', () => ({
   },
 }));
 
+let api: RemoteDesktopViewerApi;
 let controller: DesktopViewerController;
 let snapshot: ViewerSnapshot;
 beforeEach(async () => {
   vi.useFakeTimers();
-  const api = {
+  api = {
     state: async () => ({
       generation: 1,
       active: true,
@@ -90,4 +91,21 @@ it('does not present unrecognized routes or invalid latency as confirmed measure
   expect(snapshot).toMatchObject({ transport: 'video', latency: null });
   receive({ type: 'network', transport: 'direct', latencyMs: Number.NaN });
   expect(snapshot).toMatchObject({ transport: 'direct', latency: null });
+});
+
+// Unit: a relay frame can outlive recovery of the same lease's video path.
+it('keeps recovered video when the obsolete screenshot times out', async () => {
+  const original = api.request;
+  let rejectFrame!: (cause: unknown) => void;
+  const request = vi.spyOn(api, 'request').mockImplementation((generation, message) =>
+    message.op === 'frame'
+      ? new Promise((_resolve, reject) => { rejectFrame = reject; })
+      : original(generation, message),
+  );
+  await vi.advanceTimersByTimeAsync(350);
+  receive({ type: 'streaming' });
+  rejectFrame(new Error('[PRECONDITION_FAILED] INVOKE_TIMEOUT'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ ready: true, transport: 'video' });
+  expect(request.mock.calls.filter(([, message]) => message.op === 'stop')).toEqual([]);
 });

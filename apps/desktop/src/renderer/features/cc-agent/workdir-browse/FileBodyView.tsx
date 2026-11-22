@@ -1,4 +1,5 @@
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { DownloadRing } from '@/components/ui/download-meter';
 /**
  * FileBodyView — middle pane of the workdir-browse view.
  *
@@ -56,6 +57,7 @@ import { useTranslation } from 'react-i18next';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { createFileTransferProgressValues } from '@/lib/fileTransferProgress';
 
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import {
   acquireFindInPage,
@@ -83,7 +85,8 @@ import { UnrenderablePlaceholder } from './UnrenderablePlaceholder';
 import { DocSearchBar } from './DocSearchBar';
 import { setActiveFileBodyHandle } from './lib/activeFileBodyHandle';
 import { loadFileScroll, saveFileScroll } from './lib/fileScrollStore';
-import { basename, formatBytes, formatMtime } from './lib/fileMeta';
+import { isVideoPath } from './lib/videoExt';
+import { basename, formatBytes, formatMtime, toOsAbsolutePath } from './lib/fileMeta';
 import { OpenInSystemActions } from './OpenInSystemActions';
 import { isDrawioPath } from './lib/drawioExt';
 import { isImagePath } from './lib/imageExt';
@@ -140,6 +143,10 @@ function getContextMenuPosition(x: number, y: number): { x: number; y: number } 
 
 export interface FileBodyViewProps {
   workdir: string;
+  /** A retained sidebar page can stay mounted while its player is hidden. */
+  visible?: boolean;
+  /** A resumed editor has checked its current contents before saving a draft. */
+  autosaveReady?: boolean;
   /**
    * 非空 = SSH remote 会话:保存(writeFile)经 main 路由到远端 file-service;
    * 图片 / PDF 预览与"在系统中打开"依赖本机文件路径,remote 下降级为占位卡。
@@ -163,6 +170,7 @@ export interface FileBodyViewProps {
     size: number;
     mtimeMs: number;
     truncated: boolean;
+    resolvedPath?: string;
   }) => void;
   /**
    * 来自 URL ?search 参数 — workdir-browse 搜索面板里点命中行时,父组件把命中
@@ -200,6 +208,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     content,
     onSaved,
     allowEdit = true,
+    visible = true,
+    autosaveReady = true,
     jumpQuery,
     jumpLine,
     onSearchJumpConsumed,
@@ -217,6 +227,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // 全部 per-file:relPath 变化时通过下方 effect 一次性清空,避免上一文件的 dirty
   // 错带到新文件里。
   const [editMode, setEditMode] = useState(false);
+  const [svgSource, setSvgSource] = useState(false);
+  const [svgDraft, setSvgDraft] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -233,13 +245,16 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   // 用 ref 而不是 state 存 initial value:editor 内部是 uncontrolled 的,
   // 外部不需要为了对比而触发 re-render。
   const initialContentRef = useRef('');
+  const initialResolvedPathRef = useRef<string | undefined>(undefined);
   // initialContentRef 的 LF 归一化镜像:onChange 每键 dirty 判定只做一次
   // 原生 !==,归一化成本挪到基准写入时(setBaseline)一次性支付。
   const initialContentNormalizedRef = useRef('');
   const latestDiskContentRef = useRef('');
+  const latestResolvedPathRef = useRef<string | undefined>(undefined);
 
   /** dirty 比对基准的唯一写入口:同步维护原文与归一化两份。 */
-  const setBaseline = useCallback((raw: string) => {
+  const setBaseline = useCallback((raw: string, resolvedPath?: string) => {
+    initialResolvedPathRef.current = resolvedPath;
     initialContentRef.current = raw;
     initialContentNormalizedRef.current = normalizeBaseline(raw);
   }, []);
@@ -258,6 +273,9 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     });
   }
   const autosave = autosaveRef.current;
+  useLayoutEffect(() => {
+    autosave.setPaused(!visible || !autosaveReady);
+  }, [autosave, autosaveReady, visible]);
 
   // ── Search state ────────────────────────────────────────────────────────
   // barVisible 控制 DocSearchBar 的可见性(Ctrl+F 用户开 / Esc 关)。
@@ -312,6 +330,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
 
   useEffect(() => {
     setEditMode(false);
+    setSvgSource(false);
+    setSvgDraft(null);
     setDirty(false);
     setSaving(false);
     setSaveError(null);
@@ -332,6 +352,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     lastInitRelPathRef.current = null;
   }, [relPath, autosave]);
 
+  const isSvg = !!relPath && /\.svg$/i.test(relPath) && !isDrawioPath(relPath);
+  const showSvgPreview = isSvg && !svgSource;
   const isText = content.kind === 'text';
   const isTruncated = content.kind === 'text' && content.truncated;
   // 可编辑条件:文本 + 未截断 + 有 relPath。Truncated 文件保存会把后半段截掉,
@@ -353,6 +375,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useEffect(() => {
     if (content.kind === 'text') {
       latestDiskContentRef.current = content.content;
+      latestResolvedPathRef.current = content.resolvedPath;
     }
   }, [content]);
 
@@ -382,10 +405,10 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     // 走 setValue 的同时, getValue 比对决定要不要真 dispatch。
     const normalize = (s: string) => s.replace(/\r\n/g, '\n');
     if (normalize(editor.getValue()) === normalize(content.content)) {
-      setBaseline(content.content);
+      setBaseline(content.content, content.resolvedPath);
       return;
     }
-    setBaseline(content.content);
+    setBaseline(content.content, content.resolvedPath);
     editor.setValue(content.content);
   }, [content, editMode, dirty, alwaysEdit, setBaseline]);
 
@@ -402,7 +425,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     if (content.kind !== 'text') return;
     if (lastInitRelPathRef.current === relPath) return;
     lastInitRelPathRef.current = relPath;
-    setBaseline(content.content);
+    setBaseline(content.content, content.resolvedPath);
     setDirty(false);
     setEditMode(true);
   }, [alwaysEdit, content, relPath, setBaseline]);
@@ -449,7 +472,12 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
       opts?.guardExternalChange &&
       normalize(latestDiskContentRef.current) !== normalize(original)
     ) {
-      const msg = t('ccAgent.workdirBrowse.fileBody.externalChangeBlocked');
+      const targetChanged = initialResolvedPathRef.current !== undefined &&
+        latestResolvedPathRef.current !== undefined &&
+        initialResolvedPathRef.current !== latestResolvedPathRef.current;
+      const msg = targetChanged
+        ? t('ccAgent.workdirBrowse.fileBody.targetChanged')
+        : t('ccAgent.workdirBrowse.fileBody.externalChangeBlocked');
       setSaveError(msg);
       toast.error(t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: msg }));
       return false;
@@ -467,16 +495,19 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         remoteHostId,
         relPath,
         content: next,
+        expectedResolvedPath: initialResolvedPathRef.current,
       });
       if (!res.ok) {
-        setSaveError(res.message);
+        const message = res.message.includes('FILE_TARGET_CHANGED')
+          ? t('ccAgent.workdirBrowse.fileBody.targetChanged') : res.message;
+        setSaveError(message);
         // 写盘失败:toast 立即提示 + saveError banner 持续展示详情,两者互补
         // (toast 1.2s 自动消失,banner 留到下一次保存或切文件)。
-        toast.error(t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: res.message }));
+        toast.error(t('ccAgent.workdirBrowse.fileBody.saveFailed', { message }));
         return false;
       }
       // 同步推进 baseline,后续 dirty 比对从磁盘最新内容算起。
-      setBaseline(next);
+      setBaseline(next, res.resolvedPath ?? initialResolvedPathRef.current);
       latestDiskContentRef.current = next;
       setDirty(false);
       // 把刚写到磁盘的内容直接回传给父层(走 setLocal 路径同步推 cache + state),
@@ -488,6 +519,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         size: res.size,
         mtimeMs: res.mtimeMs,
         truncated: false,
+        resolvedPath: initialResolvedPathRef.current,
       });
       if (!opts?.silent) {
         toast.success(t('ccAgent.workdirBrowse.fileBody.saved'));
@@ -558,6 +590,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     'find-in-page',
     () => {
       if (mermaidModalOpen() || getTextPreviewHost()) return false;
+      setSvgSource(true);
       setBarVisible(true);
       queueMicrotask(() => {
         searchInputRef.current?.focus();
@@ -713,6 +746,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     if (!relPath || content.kind !== 'text' || !jumpQuery) return;
     const jumpKey = `${relPath}|${jumpQuery}|${jumpLine ?? ''}`;
     if (lastJumpKeyRef.current === jumpKey) return;
+    setSvgSource(true);
 
     // 阶段 1: 把 query 灌进去, 等 runner 跑完。setSearchQuery 同值是 no-op
     // (React 优化), 只在真不同时才 setState。
@@ -794,9 +828,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   }
 
   if (content.kind === 'fetching') {
-    return (
-      <FetchingProgress received={content.received} total={content.total} phase={content.phase} />
-    );
+    return <FetchingProgress key={content.requestId} {...content} />;
   }
 
   if (content.kind === 'cached') {
@@ -808,6 +840,8 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         stat={content.stat}
         cachePath={content.cachePath}
         stale={content.stale === true}
+        progress={content.progress}
+        visible={visible}
       />
     );
   }
@@ -837,6 +871,15 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
           size={content.stat.size}
           mtimeMs={content.stat.mtimeMs}
           remote
+        />
+      );
+    }
+    if (isVideoPath(content.stat.relPath)) {
+      const filePath = toOsAbsolutePath(workdir, content.stat.relPath);
+      return (
+        <VideoFilePreview
+          key={JSON.stringify([filePath, content.stat.size, content.stat.mtimeMs])}
+          workdir={workdir} stat={content.stat} filePath={filePath} visible={visible}
         />
       );
     }
@@ -966,7 +1009,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
           - alwaysEdit (code/text):没有按钮,只在 dirty 时挂 amber "未保存" chip。
             保存通过 Ctrl+S 或右键菜单,UI 更干净。
           z-10 确保浮在内容上。 */}
-      <div className="absolute right-[18px] top-[14px] z-10 flex items-center gap-2">
+      <div className="absolute right-[18px] top-[14px] z-raised flex items-center gap-2">
         {!barVisible && canEdit && !isMarkdown && (alwaysEdit ? dirty || saving : editMode) && (
           <EditingChip dirty={dirty} compact={alwaysEdit} saving={saving} />
         )}
@@ -988,97 +1031,131 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         ) : null}
       </div>
 
+      {isSvg && !content.truncated && (
+        <div className="flex shrink-0 gap-2 px-4 py-2">
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={() => {
+              closeSearch();
+              setSvgSource((value) => !value);
+            }}
+          >
+            {t(svgSource ? 'attachmentPreview.rendered' : 'attachmentPreview.source')}
+          </Button>
+        </div>
+      )}
       {/* 保存错误 toast —— 出现在按钮组下方,主动重试或切文件后清掉。 */}
       {saveError && (
         <ErrorNotice
           role="alert"
-          className="absolute right-[18px] top-[54px] z-10 max-w-[360px]"
+          className="absolute right-[18px] top-[54px] z-raised max-w-[360px]"
           message={t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: saveError })}
         />
       )}
 
-      {
-        // PlaintextEditor 路径:
-        //   - 编辑模式(任意文件):同一套 CodeMirror,代码走 code 主题、
-        //                        markdown 走 markdown live-preview 主题、
-        //                        text 走 plain 主题。
-        //   - 不可编辑文本(如截断文件):readOnly=true,仍然走同一引擎。
-        // key 只包含 relPath —— editMode 切换走 PlaintextEditor 内部的 readOnly
-        // Compartment reconfigure,不重建 EditorView,这样代码文件 preview↔edit
-        // 时 scrollTop 不会被重置回顶部(用户拖到下面点编辑会"跳回顶上"的回归)。
-        // initialValue:编辑模式取 initialContentRef.current(enterEdit 时的快
-        // 照,作为 dirty 比对基准);预览模式取 content.content(磁盘最新)。
-        // 注意:不 remount 时 initialValue 只在首次 mount 生效 —— 这正是想要
-        // 的:用户编辑期间外部 onSaved 回调触发 content 刷新不会把编辑器内容
-        // 冲掉。文件切换(relPath 变)时 key 变化仍会 remount,无影响。
-        <div className="flex min-h-0 flex-1 flex-col">
-          {content.truncated && (
-            // editContainerCls 现在不带 px(为了让 cm-scroller 拉满到右边沿),
-            // 这里 banner 自己补 px-[30px] 让左右内边距和 .cm-content 对齐。
-            <div className="flex-none px-[30px] py-3">
-              <div
-                className={cn(
-                  'rounded-lg border px-3 py-2 text-xs',
-                  'border-[var(--cmd-palette-border)] bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]',
-                )}
-              >
-                {t('ccAgent.workdirBrowse.fileBody.truncatedNotice')}
-              </div>
-            </div>
-          )}
-          <div
-            className={editContainerCls}
-            onContextMenu={(e) => {
-              // 表格 widget 有自己的结构操作菜单;其它 Markdown 区域继续给
-              // 文档级"插入表格",非 Markdown 给"保存"。
-              if (!canEdit || !editMode) return;
-              const target = e.target;
-              if (
-                target instanceof HTMLElement &&
-                target.closest('.cm-md-table-widget')
-              ) {
-                return;
-              }
-              e.preventDefault();
-              menuInsertPointRef.current = { x: e.clientX, y: e.clientY };
-              setMenuPos(getContextMenuPosition(e.clientX, e.clientY));
-            }}
-          >
-            <PlaintextEditor
-              ref={editorRef}
-              key={relPath}
-              initialValue={editMode ? initialContentRef.current : content.content}
-              language={
-                renderable.kind === 'code'
-                  ? renderable.lang
-                  : renderable.kind === 'markdown'
-                    ? 'markdown'
-                    : undefined
-              }
-              readOnly={!editMode}
-              initialScrollTop={scrollAnchor?.top}
-              initialScrollLine={scrollAnchor?.line}
-              initialScrollOffset={scrollAnchor?.offset}
-              imageBaseDir={imageBaseDir}
-              onScroll={handleEditorScroll}
-              onChange={
-                editMode
-                  ? (val) => {
-                      // val 来自 CodeMirror,行尾恒为 LF;基准的归一化在
-                      // setBaseline 时一次性完成,这里每键只付一次原生比较。
-                      const hasChange = val !== initialContentNormalizedRef.current;
-                      setDirty(hasChange);
-                      if (isMarkdown) {
-                        if (hasChange) autosave.schedule();
-                        else autosave.cancel();
-                      }
-                    }
-                  : undefined
-              }
+      {/* Both views share a measured viewport. display:none makes CodeMirror's
+          initial scroll restoration observe zero and overwrite the saved anchor. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)]">
+        {showSvgPreview && !content.truncated && (
+          <div className="col-start-1 row-start-1 min-h-0">
+            <ImagePreview
+              workdir={workdir}
+              relPath={relPath}
+              size={content.size}
+              mtimeMs={content.mtimeMs}
+              sessionId={sessionId}
+              remote={!!remoteHostId || !!deviceId}
+              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(dirty && svgDraft !== null ? svgDraft : content.content)}`}
             />
           </div>
-        </div>
-      }
+        )}
+
+        {
+          // PlaintextEditor 路径:
+          //   - 编辑模式(任意文件):同一套 CodeMirror,代码走 code 主题、
+          //                        markdown 走 markdown live-preview 主题、
+          //                        text 走 plain 主题。
+          //   - 不可编辑文本(如截断文件):readOnly=true,仍然走同一引擎。
+          // key 只包含 relPath —— editMode 切换走 PlaintextEditor 内部的 readOnly
+          // Compartment reconfigure,不重建 EditorView,这样代码文件 preview↔edit
+          // 时 scrollTop 不会被重置回顶部(用户拖到下面点编辑会"跳回顶上"的回归)。
+          // initialValue:编辑模式取 initialContentRef.current(enterEdit 时的快
+          // 照,作为 dirty 比对基准);预览模式取 content.content(磁盘最新)。
+          // 注意:不 remount 时 initialValue 只在首次 mount 生效 —— 这正是想要
+          // 的:用户编辑期间外部 onSaved 回调触发 content 刷新不会把编辑器内容
+          // 冲掉。文件切换(relPath 变)时 key 变化仍会 remount,无影响。
+          <div className={cn('col-start-1 row-start-1 flex min-h-0 flex-col', showSvgPreview && !content.truncated && 'invisible')}>
+            {content.truncated && (
+              // editContainerCls 现在不带 px(为了让 cm-scroller 拉满到右边沿),
+              // 这里 banner 自己补 px-[30px] 让左右内边距和 .cm-content 对齐。
+              // 30px 跟随编辑器主题（DESIGN.md §5 登记），改其一须两边同改。
+              <div className="flex-none px-[30px] py-3">
+                <div
+                  className={cn(
+                    'rounded-lg border px-3 py-2 text-xs',
+                    'border-[var(--cmd-palette-border)] bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]',
+                  )}
+                >
+                  {t('ccAgent.workdirBrowse.fileBody.truncatedNotice')}
+                </div>
+              </div>
+            )}
+            <div
+              className={editContainerCls}
+              onContextMenu={(e) => {
+                // 表格 widget 有自己的结构操作菜单;其它 Markdown 区域继续给
+                // 文档级"插入表格",非 Markdown 给"保存"。
+                if (!canEdit || !editMode) return;
+                const target = e.target;
+                if (
+                  target instanceof HTMLElement &&
+                  target.closest('.cm-md-table-widget')
+                ) {
+                  return;
+                }
+                e.preventDefault();
+                menuInsertPointRef.current = { x: e.clientX, y: e.clientY };
+                setMenuPos(getContextMenuPosition(e.clientX, e.clientY));
+              }}
+            >
+              <PlaintextEditor
+                ref={editorRef}
+                key={relPath}
+                initialValue={editMode ? initialContentRef.current : content.content}
+                language={
+                  renderable.kind === 'code'
+                    ? renderable.lang
+                    : renderable.kind === 'markdown'
+                      ? 'markdown'
+                      : undefined
+                }
+                readOnly={!editMode}
+                initialScrollTop={scrollAnchor?.top}
+                initialScrollLine={scrollAnchor?.line}
+                initialScrollOffset={scrollAnchor?.offset}
+                imageBaseDir={imageBaseDir}
+                onScroll={handleEditorScroll}
+                onChange={
+                  editMode
+                    ? (val) => {
+                        // val 来自 CodeMirror,行尾恒为 LF;基准的归一化在
+                        // setBaseline 时一次性完成,这里每键只付一次原生比较。
+                        const hasChange = val !== initialContentNormalizedRef.current;
+                        setDirty(hasChange);
+                        if (isSvg) setSvgDraft(val);
+                        if (isMarkdown) {
+                          if (hasChange) autosave.schedule();
+                          else autosave.cancel();
+                        }
+                      }
+                    : undefined
+                }
+              />
+            </div>
+          </div>
+        }
+      </div>
 
       {/* 右键菜单(编辑态触发 → 直接锚到鼠标 client 坐标)。
           Markdown 文档只放插入类动作; 代码 / 普通文本保留保存入口。 */}
@@ -1089,7 +1166,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
             aria-orientation="vertical"
             onPointerDown={(e) => e.stopPropagation()}
             className={cn(
-              'fixed z-[9999] w-[168px] rounded-xl p-0.5 overflow-hidden',
+              'fixed z-fullscreen w-[168px] rounded-xl p-0.5 overflow-hidden',
               'bg-[var(--cmd-palette-bg)]',
               'border border-[var(--cmd-palette-border)]',
               'shadow-[shadow:var(--shadow-menu)]',
@@ -1194,14 +1271,8 @@ function EditingChip({
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-12 font-medium',
         'shadow-[shadow:var(--shadow-menu)] backdrop-blur',
         showAmber
-          ? cn(
-              'border-amber-300/70 bg-amber-50/95 text-amber-800',
-              'dark:border-amber-700/60 dark:bg-amber-950/80 dark:text-amber-200',
-            )
-          : cn(
-              'border-[var(--cmd-palette-border)] bg-white/85 text-[var(--settings-section-desc)]',
-              'dark:bg-[#1f1f1e]/85',
-            ),
+          ? 'border-[var(--upgrade-banner-border)] bg-[color-mix(in_srgb,var(--cmd-palette-bg)_95%,transparent)] text-[var(--upgrade-banner-fg)]'
+          : 'border-[var(--cmd-palette-border)] bg-[color-mix(in_srgb,var(--cmd-palette-bg)_85%,transparent)] text-[var(--settings-section-desc)]',
       )}
     >
       {showSaving ? (
@@ -1211,7 +1282,7 @@ function EditingChip({
           aria-hidden
           className={cn(
             'inline-block size-1.5 rounded-full',
-            showAmber ? 'bg-amber-500 animate-pulse' : 'bg-[#22863a] animate-pulse',
+            showAmber ? 'bg-[var(--warning-fg)] animate-pulse' : 'bg-[var(--status-success)] animate-pulse',
           )}
         />
       )}
@@ -1233,30 +1304,93 @@ function CachedFileView({
   stat,
   cachePath,
   stale,
+  progress,
+  visible,
 }: {
   workdir: string;
   stat: { relPath: string; size: number; mtimeMs: number };
   cachePath: string;
+  visible: boolean;
   /** true = 实时取回失败后回落的历史副本(可能非远端最新),顶部标注提示。 */
   stale?: boolean;
+  progress?: Extract<FileContent, { kind: 'fetching' }>;
 }) {
   const { t } = useTranslation();
-  const body = <CachedFileBody workdir={workdir} stat={stat} cachePath={cachePath} />;
-  if (!stale) return body;
-  // stale 副本:顶部一条 amber 标注(配色沿用本文件 EditingChip 的 warning
-  // amber 系,语义豁免色),正文照常预览。
   return (
-    <div className="flex h-full w-full flex-col">
-      <div
-        className={cn(
-          'shrink-0 border-b px-4 py-1.5 text-center text-12',
-          'border-amber-200/60 bg-amber-50/80 text-amber-800',
-          'dark:border-amber-800/50 dark:bg-amber-950/60 dark:text-amber-200',
-        )}
-      >
-        {t('ccAgent.workdirBrowse.fileBody.cachedStaleNotice')}
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
+      {progress && <FetchingProgress key={progress.requestId} {...progress} compact />}
+      {stale && (
+        <div
+          className={cn(
+            'shrink-0 border-b px-4 py-1.5 text-center text-12',
+            'border-[var(--upgrade-banner-border)] bg-[var(--upgrade-banner-bg)] text-[var(--upgrade-banner-fg)]',
+          )}
+        >
+          {t('ccAgent.workdirBrowse.fileBody.cachedStaleNotice')}
+        </div>
+      )}
+      <div className="min-h-0 flex-1">
+        <CachedFileBody workdir={workdir} stat={stat} cachePath={cachePath} visible={visible} />
       </div>
-      <div className="min-h-0 flex-1">{body}</div>
+    </div>
+  );
+}
+
+function VideoFilePreview({ workdir, stat, filePath, visible, cached = false }: {
+  workdir: string;
+  stat: { relPath: string; size: number; mtimeMs: number };
+  filePath: string;
+  visible: boolean;
+  cached?: boolean;
+}) {
+  const { t } = useTranslation();
+  const [videoFailed, setVideoFailed] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!visible || !video) return;
+    return () => { if (!video.paused) video.pause(); };
+  }, [visible, videoFailed]);
+  if (videoFailed) {
+    return (
+      <UnrenderablePlaceholder
+        workdir={workdir}
+        relPath={stat.relPath}
+        size={stat.size}
+        mtimeMs={stat.mtimeMs}
+        remote={cached}
+        localCopyPath={cached ? filePath : null}
+      />
+    );
+  }
+  // 布局对齐 ImagePreview:播放器 flex-1 自适应,元信息 + 系统打开按钮
+  // shrink-0 固定(min-h-0 + overflow-hidden 防大视频撑破 flex 边界)。
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-8 py-6">
+      <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
+        {/* 缓存副本是本地文件,xdt-file:// range 流式,2GB 也可拖进度条 */}
+        <video
+          ref={videoRef}
+          controls
+          className="min-h-0 min-w-0 max-h-full max-w-full rounded-lg bg-black"
+          preload="metadata"
+          src={toLocalFileUrl(filePath, `${stat.mtimeMs}-${stat.size}`)}
+          onPlay={event => { if (!visible) event.currentTarget.pause(); }}
+          onError={() => setVideoFailed(true)}
+        />
+      </div>
+      <div className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+        {basename(stat.relPath)}
+        {stat.size > 0 && (
+          <>
+            {' · '}
+            {formatBytes(stat.size)}
+            {' · '}
+            {t('ccAgent.workdirBrowse.unrenderable.modifiedAt', { time: formatMtime(stat.mtimeMs) })}
+          </>
+        )}
+      </div>
+      <OpenInSystemActions absPath={filePath} systemPreview={!cached} className="shrink-0" />
     </div>
   );
 }
@@ -1266,10 +1400,12 @@ function CachedFileBody({
   workdir,
   stat,
   cachePath,
+  visible,
 }: {
   workdir: string;
   stat: { relPath: string; size: number; mtimeMs: number };
   cachePath: string;
+  visible: boolean;
 }) {
   const sep = Math.max(cachePath.lastIndexOf('/'), cachePath.lastIndexOf('\\'));
   const cacheDir = cachePath.slice(0, sep);
@@ -1279,13 +1415,10 @@ function CachedFileBody({
   /** 缓存副本超 READ_CACHED 32MB 显示上限被截断:顶部提示,别让局部当全量。 */
   const [textTruncated, setTextTruncated] = useState(false);
   const [probed, setProbed] = useState(false);
-  // 容器被协议放行但轨道编码 Chromium 不支持(典型:HEVC .mov)→ <video>
-  // onError,回落占位卡走系统播放器。
-  const [videoFailed, setVideoFailed] = useState(false);
   const isImg = isImagePath(stat.relPath);
   const isPdf = isPdfPath(stat.relPath);
   // Chromium 可原生播放的视频容器;其余视频格式落占位卡走系统播放器。
-  const isVideo = /\.(mp4|m4v|mov|webm)$/i.test(stat.relPath);
+  const isVideo = isVideoPath(stat.relPath);
   // 载入缓存副本(读盘 + IPC + 首次渲染)对 30MB 级文本是秒级的,同样走
   // 延迟门控 loading:小文件保持空白零跳变,大文件超阈值后浮现 spinner。
   const showLoading = useDelayedFlag(!probed && !isImg && !isPdf);
@@ -1294,7 +1427,6 @@ function CachedFileBody({
     setText(null);
     setTextTruncated(false);
     setProbed(false);
-    setVideoFailed(false);
     if (isImg || isPdf || isVideo) return;
     let cancelled = false;
     void window.electronAPI.fileBrowser.readCached({ cachePath }).then((res) => {
@@ -1317,44 +1449,24 @@ function CachedFileBody({
     return <PdfPreview workdir={cacheDir} relPath={cacheBase} size={stat.size} mtimeMs={stat.mtimeMs} />;
   }
   if (isVideo) {
-    if (videoFailed) {
-      return (
-        <UnrenderablePlaceholder
-          workdir={workdir}
-          relPath={stat.relPath}
-          size={stat.size}
-          mtimeMs={stat.mtimeMs}
-          remote
-          localCopyPath={cachePath}
-        />
-      );
-    }
-    // 布局对齐 ImagePreview:播放器 flex-1 自适应,元信息 + 系统打开按钮
-    // shrink-0 固定(min-h-0 + overflow-hidden 防大视频撑破 flex 边界)。
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-8 py-6">
-        <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
-          {/* 缓存副本是本地文件,xdt-file:// range 流式,2GB 也可拖进度条 */}
-          <video
-            controls
-            className="min-h-0 min-w-0 max-h-full max-w-full rounded-lg bg-black"
-            src={toLocalFileUrl(cachePath)}
-            onError={() => setVideoFailed(true)}
-          />
-        </div>
-        <div className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-          {basename(stat.relPath)}
-          {stat.size > 0 && (
-            <>
-              {' · '}
-              {formatBytes(stat.size)}
-              {' · '}
-              {t('ccAgent.workdirBrowse.unrenderable.modifiedAt', { time: formatMtime(stat.mtimeMs) })}
-            </>
-          )}
-        </div>
-        <OpenInSystemActions absPath={cachePath} className="shrink-0" />
-      </div>
+      <VideoFilePreview
+        key={JSON.stringify([cachePath, stat.size, stat.mtimeMs])}
+        workdir={workdir} stat={stat} filePath={cachePath} visible={visible} cached
+      />
+    );
+  }
+  if (text !== null && /\.svg$/i.test(stat.relPath) && !isDrawioPath(stat.relPath)) {
+    return (
+      <FileBodyView
+        workdir={cacheDir}
+        relPath={cacheBase}
+        allowEdit={false}
+        content={{
+          kind: 'text', relPath: cacheBase, content: text,
+          size: stat.size, mtimeMs: stat.mtimeMs, truncated: textTruncated,
+        }}
+      />
     );
   }
   if (text !== null) {
@@ -1408,30 +1520,47 @@ function FetchingProgress({
   received,
   total,
   phase,
+  compact = false,
 }: {
   received: number;
   total: number;
   phase?: 'upload' | 'download';
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   const sample = useRef(createFileTransferProgressValues());
   const values = sample.current({ received, total, phase });
+  const status = t(
+    values.preparing
+      ? 'chat.remoteFile.fetching'
+      : total <= 0
+        ? phase === 'upload'
+          ? 'chat.remoteFile.uploadProgressUnknown'
+          : 'chat.remoteFile.downloadProgressUnknown'
+        : phase === 'upload'
+          ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
+          : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
+    values,
+  );
+  if (compact) {
+    return (
+      <div className="flex shrink-0 border-b border-[var(--cmd-palette-border)] px-3 py-1.5">
+        <DownloadRing
+          label={t('chat.remoteFile.fetching')}
+          status={status}
+          progress={{
+            phase: values.preparing ? 'preparing' : 'downloading', loaded: received, total: total > 0 ? total : null,
+            percent: values.percent ?? null, speedBps: 0, etaSeconds: null,
+          }}
+        />
+      </div>
+    );
+  }
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-3">
       <Spinner size={18} className="text-[var(--cmd-palette-item-meta)]" />
       <span className="text-13 text-[var(--cmd-palette-item-meta)]">
-        {t(
-          values.preparing
-            ? 'chat.remoteFile.fetching'
-            : total <= 0
-              ? phase === 'upload'
-                ? 'chat.remoteFile.uploadProgressUnknown'
-                : 'chat.remoteFile.downloadProgressUnknown'
-              : phase === 'upload'
-                ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
-                : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
-          values,
-        )}
+        {status}
       </span>
     </div>
   );

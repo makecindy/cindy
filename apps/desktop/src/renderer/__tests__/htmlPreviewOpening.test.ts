@@ -11,7 +11,7 @@ vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', async (importOrigin
 vi.mock('@/hooks/useLinkOpenPreference', () => ({ getLinkOpenPreference: mocks.preference, getLinkOpenPreferenceForUrl: mocks.preference }));
 vi.mock('@/features/cc-agent/embeddedSessionNavigation', () => ({ useSidebarTargetSessionId: (id: string) => id }));
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.error, loading: mocks.loading, dismiss: mocks.dismiss } }));
-import { openHtmlFileByPreference } from '../components/chat/useOpenWithMenu';
+import { openHtmlFileByPreference } from '../components/chat/messageLinkActions';
 const t = ((key: string) => key) as TFunction;
 const context = { origin: { kind: 'device' as const, deviceId: 'remote-device' }, workingDir: '/remote' };
 beforeEach(() => {

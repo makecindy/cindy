@@ -1,13 +1,18 @@
+import { PROJECT_ARCHIVE_GUARD_SQL } from '../projectArchiveGuard.js';
+import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
+import { writeModelUsage } from '../worker/opHandlers/modelUsageTx.js';
 import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
+import { IDLE_ARCHIVE_GUARD_SQL } from '../../task-management/eligibility.js';
+import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, ORCA_WORKER_LINK_TEAM_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../sessionDeleteTarget.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -24,9 +29,17 @@ import {
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
+import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCorruption.js';
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const isSqliteCorruption = ${isSqliteCorruption.toString()};
+const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
+let corruptionError = null;
+const viewStateCardSql = ${viewStateCardSql.toString()};
+const assertViewStateCard = ${assertViewStateCard.toString()};
+const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
+const deleteDeletedSessionViewStates = ${deleteDeletedSessionViewStates.toString()};
 const sanitizeToolResultDiagnostics = ${sanitizeToolResultDiagnostics.toString()};
 const extractToolResultDiagnostics = ${extractToolResultDiagnostics.toString()};
 const compactToolCardResult = ${compactToolCardResult.toString()};
@@ -34,10 +47,17 @@ const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toSt
 const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
 const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
 const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
+const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
+const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
+const COMMITTED_SIDE_CHAT_WORKER_SQL = ${JSON.stringify(COMMITTED_SIDE_CHAT_WORKER_SQL)};
+const ORCA_WORKER_LINK_TEAM_SQL = ${JSON.stringify(ORCA_WORKER_LINK_TEAM_SQL)};
+const assertSessionDeleteTarget = ${assertSessionDeleteTarget.toString()};
+const SIDE_CHAT_CLOSE_TARGET_SQL = ${JSON.stringify(SIDE_CHAT_CLOSE_TARGET_SQL)};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
+const writeModelUsage = ${writeModelUsage.toString()};
 const recordPiUsage = ${recordPiUsage.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
@@ -407,15 +427,21 @@ function readLocalWorktreeReferences() {
     const file = path.join(root, name);
     if (!fs.lstatSync(file).isFile()) throw new Error('task database is not a regular file');
     const isCurrent = file === currentPath;
-    const nextDb = isCurrent ? db : new Database(file, {
-      readonly: true, fileMustExist: true,
-      ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
-    });
+    let nextDb;
     try {
+      nextDb = isCurrent ? db : new Database(file, {
+        readonly: true, fileMustExist: true,
+        ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
+      });
       const references = nextDb.transaction(() => nextDb.prepare(worktreeReferenceQuery(nextDb)).all())();
       rows.push(...references.map((row) => ({ ...row, currentDatabase: isCurrent })));
+    } catch (error) {
+      if (!isCurrent && isSqliteCorruption(error)) {
+        throw Object.assign(new Error('Task reference source is corrupt'), { code: 'DB_REFERENCE_SOURCE_CORRUPT', cause: error });
+      }
+      throw error;
     } finally {
-      if (!isCurrent) nextDb.close();
+      if (!isCurrent && nextDb) nextDb.close();
     }
   }
   const after = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
@@ -438,8 +464,10 @@ function dispatchTransaction(readyDb, payload) {
   switch (name) {
     case 'usage.recordMediaSpend':
       return recordMediaSpend(readyDb, request.args);
+    case 'usage.recordModelUsage':
+      return readyDb.transaction(() => writeModelUsage(readyDb, request.args))();
     case 'usage.recordPiUsage':
-      return recordPiUsage(readyDb, request.args);
+      return recordPiUsage(readyDb, request.args, writeModelUsage);
     case 'authorization.readProjection':
       return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
     case 'rewind.commit':
@@ -495,6 +523,8 @@ function dispatchTransaction(readyDb, payload) {
       return sessionAgentSwitchFallback(readyDb, request.args);
     case 'context.rebuild':
       return contextRebuild(readyDb, request.args);
+    case 'mcpApps.viewState.save':
+      return saveMcpAppViewState(readyDb, request.args);
     case 'message.insert':
       return messageInsert(readyDb, request.args);
     case 'message.updateContent':
@@ -762,6 +792,10 @@ function contextRebuild(readyDb, args) {
           nullableString(replacement.providerId), nullableString(replacement.effort),
           fastModeToStorage(replacement.fastMode), sessionId, expectedClearedAt,
           expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
+      : payload.expectedSdkSessionId !== undefined
+        ? readyDb.prepare(
+            'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
+          ).run(updatedAt, sessionId, expectedClearedAt, expectString(payload.expectedSdkSessionId, 'expectedSdkSessionId'), 'deleted')
       : readyDb.prepare(
           'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
         ).run(updatedAt, sessionId, expectedClearedAt);
@@ -1084,11 +1118,13 @@ function messageDelete(readyDb, args) {
     // 保留不含正文/元数据的最小 tombstone，阻止外部 Claude/Codex transcript
     // importer 下次 messages:list 时把同一 clientId 重新导入；本地有效记录中
     // 消息内容已物理清空，普通历史读取因 rewind_at 非空完全不可见。
+    const deleteState = readyDb.prepare('DELETE FROM mcp_app_view_states WHERE message_id = ?');
     const scrubTarget = readyDb.prepare(
       "UPDATE messages SET role = 'message_tombstone', content = 'null', tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, rewind_at = ? WHERE id = ? AND session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL",
     );
     for (const target of targets) {
       const scrubbed = scrubTarget.run(updatedAt, target.id, sessionId, target.clientId);
+      deleteState.run(target.id);
       if (scrubbed.changes !== 1) {
         throw Object.assign(new Error('Message 删除竞态: ' + target.clientId), {
           code: 'PRECONDITION_FAILED',
@@ -1169,7 +1205,7 @@ function sessionsRenameTitles(readyDb, args) {
   })();
 }
 
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel', 'group') LIMIT 1";
 
 // ⚠️ 与 worker/opHandlers/tx.ts 的 sessionsSetStatus 必须逐字保持一致。
 function sessionsSetStatus(readyDb, args) {
@@ -1183,15 +1219,19 @@ function sessionsSetStatus(readyDb, args) {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT status, source, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   return readyDb.transaction(() => {
     const applied = [];
     const now = Date.now();
     for (const sessionId of sessionIds) {
+      const guard = payload.projectGuard;
+      if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+        sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, status === 'active' ? 'archived' : 'active',
+      )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
       const existing = selectSession.get(sessionId);
       if (!existing) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       if (existing.status === 'deleted') {
@@ -1199,11 +1239,19 @@ function sessionsSetStatus(readyDb, args) {
           code: 'PRECONDITION_FAILED',
         });
       }
+      if (existing.sideChatClosePending) {
+        throw Object.assign(new Error('Finish closing the follow-up before changing its status'), { code: 'PRECONDITION_FAILED' });
+      }
       // Routine/channel lanes follow ordinary task lifecycle; keep in sync with worker/opHandlers/tx.ts.
       if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {
         throw Object.assign(new Error('Bot 任务必须通过 Bot 生命周期管理: ' + sessionId), {
           code: 'PRECONDITION_FAILED',
         });
+      }
+      // Restoring history never makes it the live receiver again. Detach in
+      // the same transaction, before a later trigger can create its successor.
+      if (existing.source === 'bot' && (status === 'archived' || existing.status === 'archived')) {
+        readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
       }
       const updated = updateSession.get(status, now, sessionId);
       if (closeSharedTasks && status === 'archived') {
@@ -1233,23 +1281,55 @@ function sessionsSetTerminalStatus(readyDb, args) {
     throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
   }
   return readyDb.transaction(() => {
-    const existing = readyDb.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
+    const guard = payload.projectGuard;
+    if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+      sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, 'active',
+    )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
+    if (payload.idleArchiveCutoff !== undefined && (status !== 'archived'
+      || typeof payload.idleArchiveCutoff !== 'number' || !Number.isFinite(payload.idleArchiveCutoff)
+      || !readyDb.prepare(IDLE_ARCHIVE_GUARD_SQL).get(sessionId, payload.idleArchiveCutoff))) {
+      throw Object.assign(new Error('Task is no longer idle'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (payload.unusedOnly !== undefined && (payload.unusedOnly !== true || status !== 'deleted'
+      || !readyDb.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
+      throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
+    }
+    const existing = readyDb.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    const closeParentId = payload.sideChatCloseParentId;
+    if (status === 'archived' && existing.sideChatClosePending && closeParentId === undefined) {
+      throw Object.assign(new Error('Finish closing the follow-up before changing its status'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (closeParentId !== undefined && (status !== 'archived' || !readyDb.prepare(SIDE_CHAT_CLOSE_TARGET_SQL).get(sessionId, closeParentId))) {
+      throw Object.assign(new Error('The linked follow-up no longer matches this tab'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (status === 'deleted') {
+      const hasCommittedWorker = existing.source === 'side-chat' && !existing.sideChatPromoted
+        && Boolean(readyDb.prepare('SELECT id FROM sessions WHERE id = ? AND ' + COMMITTED_SIDE_CHAT_WORKER_SQL).get(sessionId));
+      assertSessionDeleteTarget({ ...existing, hasCommittedWorker }, payload.deleteTarget);
+    }
     // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
     if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
+    if (existing.source === 'bot') {
+      readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
+    }
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = readyDb.prepare(
-      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
-    ).get(status, now, sessionId);
+      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, closeParentId === undefined ? 0 : 1, payload.idleArchiveCutoff ?? null, now, sessionId);
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
-    const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
+    const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
       ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +
-          "WHERE parent_session_id = ? AND source = 'side-chat' AND status <> 'deleted' " +
+          "WHERE parent_session_id = ? AND source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted' " +
+          'AND NOT ' + COMMITTED_SIDE_CHAT_WORKER_SQL + ' ' +
           'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
           'remote_host_id AS remoteHostId, source').all(now, sessionId)
       : [];
+    if (status === 'deleted') {
+      deleteDeletedSessionViewStates(readyDb, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
+    }
     for (const child of deletedSideChats) {
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }
@@ -1395,6 +1475,7 @@ function sessionImportShare(readyDb, args) {
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
+    deleteDeletedSessionViewStates(readyDb, replaceSessions.map(session => session.id));
     let count = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');
@@ -1533,9 +1614,7 @@ function orcaUpsertWorker(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   readyDb.transaction(() => {
-    const activeTeam = readyDb.prepare(
-      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
-    ).get(teamId);
+    const activeTeam = readyDb.prepare(ORCA_WORKER_LINK_TEAM_SQL).get(teamId);
     if (!activeTeam) {
       throw new Error('Orca team ' + teamId + ' is no longer active');
     }
@@ -1624,6 +1703,10 @@ function orcaReserveWorkerCreation(readyDb, args) {
   const expiresAt = expectNumber(payload.expiresAt, 'expiresAt');
   return readyDb.transaction(() => {
     readyDb.prepare('DELETE FROM orca_worker_creation_reservations WHERE expires_at <= ?').run(now);
+    // 与 worker/opHandlers/tx.ts 的 orcaReserveWorkerCreation 保持一致：已归档／已删除任务的 Worker 让出名字。
+    readyDb.prepare(\`UPDATE orca_workers SET label = label || '~' || id, updated_at = ?
+      WHERE team_id = ? AND label = ? COLLATE NOCASE
+        AND session_id IN (SELECT id FROM sessions WHERE status != 'active')\`).run(now, teamId, label);
     const duplicateWorker = readyDb.prepare(
       'SELECT 1 FROM orca_workers WHERE team_id = ? AND label = ? COLLATE NOCASE LIMIT 1',
     ).get(teamId, label);
@@ -2109,7 +2192,11 @@ function forkSession(readyDb, args) {
         expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
         expectString(newSession.id, 'newSession.id'),
         'assistant', '', null,
-        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        JSON.stringify({ contextRebuild: {
+          reason: content.reason,
+          handoff: content.handoffPreview ?? content.handoff,
+          handoffCoverage: content.handoffCoverage,
+        } }),
         expectString(newSession.agentKind, 'newSession.agentKind'),
         markerCreatedAt,
       );
@@ -2484,9 +2571,11 @@ parentPort.on('message', async (req) => {
   const startedAt = performance.timeOrigin + performance.now();
   const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
+    if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
     const result = await dispatch(req.op, req.args);
     parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
+    if (isSqliteCorruption(err)) corruptionError = err;
     parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err), timing: timing() });
   }
 });
@@ -2571,6 +2660,8 @@ export interface WorkerThreadTransportOptions {
   maxBackgroundInFlightRpcs?: number;
   /** 后台读排队上限；超出只拒后台读，不挡写入。 */
   maxBackgroundQueuedRpcs?: number;
+  /** Synchronous notification after admission is closed; never requests a restart. */
+  onCorruption?: (error: Error) => void;
 }
 
 export class WorkerThreadTransport implements DbTransport {
@@ -2585,6 +2676,7 @@ export class WorkerThreadTransport implements DbTransport {
   private nextId = 1;
   private closed = false;
   private closing = false;
+  private corruptionError: Error | null = null;
   private vecLoaded = false;
   private readonly pending = new Map<number, PendingRpc>();
   private readonly queued: QueuedRpc[] = [];
@@ -2602,6 +2694,9 @@ export class WorkerThreadTransport implements DbTransport {
       return Promise.reject(
         createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport is closed'),
       );
+    }
+    if (this.corruptionError && op !== 'closeDb') {
+      return Promise.reject(createCorruptDbUnavailableError(this.corruptionError));
     }
     const id = this.nextId++;
     const req: RpcRequest = { id, op, args };
@@ -2830,7 +2925,7 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private drainQueue(): void {
-    while (!this.closed && this.pending.size < this.maxInFlightRpcs) {
+    while (!this.closed && !this.corruptionError && this.pending.size < this.maxInFlightRpcs) {
       const next = this.takeNextQueued();
       if (!next) return;
       this.dispatch(next);
@@ -2865,14 +2960,15 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private createWorker(): Worker {
+    const { onCorruption: _onCorruption, ...workerData } = this.opts;
     // 显式 workerScriptPath 用于真实文件 worker 校验，不能被临时 inline fallback 覆盖。
     if (this.opts.workerScriptPath) {
-      return new Worker(this.resolveWorkerScriptPath(), { workerData: this.opts });
+      return new Worker(this.resolveWorkerScriptPath(), { workerData });
     }
     if (this.shouldUseInlineWorker()) {
-      return new Worker(WORKER_CODE, { eval: true, workerData: this.opts });
+      return new Worker(WORKER_CODE, { eval: true, workerData });
     }
-    return new Worker(this.resolveWorkerScriptPath(), { workerData: this.opts });
+    return new Worker(this.resolveWorkerScriptPath(), { workerData });
   }
 
   private shouldUseInlineWorker(): boolean {
@@ -2893,6 +2989,18 @@ export class WorkerThreadTransport implements DbTransport {
 
   private handleMessage(msg: WorkerMessage): void {
     if ('id' in msg) {
+      // A timed-out response still reports the health of this connection. Close
+      // admission before resolving/rejecting promises or draining queued work.
+      if (!msg.ok && isSqliteCorruption(msg.error) && !this.corruptionError) {
+        this.corruptionError = Object.assign(new Error(msg.error.message), { code: msg.error.code });
+        for (const queued of this.queued.splice(0)) {
+          if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
+          queued.reject(createCorruptDbUnavailableError(this.corruptionError));
+        }
+        // Keep already-posted requests pending: some may have committed. The
+        // worker rejects unstarted work and returns actual completed outcomes.
+        try { this.opts.onCorruption?.(this.corruptionError); } catch { /* Admission remains closed. */ }
+      }
       const pending = this.pending.get(msg.id);
       if (!pending) return;
       this.pending.delete(msg.id);

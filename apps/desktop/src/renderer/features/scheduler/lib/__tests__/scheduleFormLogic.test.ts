@@ -26,6 +26,7 @@ import {
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
+  scheduleEngineFormFields,
   webhookSourceFormFields,
   canSubmitSessionBinding,
   captureBinding,
@@ -356,6 +357,7 @@ describe('buildScheduleInput webhook trigger', () => {
   // A sender this build does not know came from a newer version; submitting it as GitHub
   // would switch the server's format and reject every delivery.
   it.each([
+    [{ webhookPreset: 'github-app', webhookRepositories: 'Example/Project\nother/repo, example/project' }, { preset: 'github-app', repositories: ['example/project', 'other/repo'] }],
     [{ webhookPreset: 'stripe', webhookSigned: false }, { preset: 'stripe', signed: false }],
     [{ webhookPreset: 'linear', webhookSigned: true }, { preset: 'linear' }],
     [{ webhookPreset: 'from-a-newer-version' }, undefined],
@@ -1128,5 +1130,34 @@ describe('missingRequiredTemplateParamLabel', () => {
         { key: 'suite', label: 'Suite', type: 'string', required: true, default: 'full' },
       ],
     } as ScheduleTemplate, { suite: '' })).toBeNull();
+  });
+});
+
+// Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19), unit: the form keeps the engine next
+// to the built-in choice (like the new-task draft). Minimal failing inputs: a saved plugin-engine
+// automation reopening as Claude Code with model 'deepseek-v4', or saving with Fast / worktree /
+// another computer still attached.
+describe('plugin engine selection', () => {
+  const ENGINE = 'acp-plugin:_ns__local__dsh-acp:dsh';
+  it('saves the engine as a local new-task-each-run route and reopens it as the engine', () => {
+    const input = buildScheduleInput(makeForm({
+      agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', fastMode: true,
+      workspaceKind: 'project', workingDir: '/repo', useWorktree: true, agentDeviceId: 'studio',
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'max' },
+    }));
+    expect(input).toMatchObject({ agentKind: 'acp', modelAgentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4',
+      effort: 'max', fastMode: false, useWorktree: false, agentDeviceId: undefined, modelAgentDeviceId: undefined });
+    const fields = scheduleEngineFormFields({ ...input, id: 's', status: 'active', createdAt: 1, updatedAt: 1,
+      notify: { desktop: true, feishu: false } } as Schedule);
+    expect(fields).toMatchObject({ pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'max' },
+      model: '', providerId: '', modelAgentKind: undefined });
+    expect(fields.agentKind).not.toBe('acp');
+  });
+
+  it('keeps built-in automations unchanged', () => {
+    const input = buildScheduleInput(makeForm({ agentKind: 'codex', model: 'gpt-5.5', pluginEngine: null }));
+    expect(input.agentKind).toBe('codex');
+    expect(scheduleEngineFormFields({ ...input, id: 's', status: 'active', createdAt: 1, updatedAt: 1,
+      notify: { desktop: true, feishu: false } } as Schedule).pluginEngine).toBeNull();
   });
 });

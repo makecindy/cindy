@@ -31,6 +31,13 @@ const api: DesktopCaptureApi = {
   liveScreenFrames: (lease, keyframe) =>
     ipcRenderer.invoke(DESKTOP_LOCAL.LIVE_SCREEN_FRAMES, lease, keyframe),
 };
+// The one-shot reply port is held by this preload and carries only the final byte counts.
+function onFinishTraffic(channel: string, finish: () => Promise<{ sent: number; received: number }>): void {
+  ipcRenderer.once(channel, event => {
+    const port = event.ports[0];
+    if (port) void finish().then(({ sent, received }) => port.postMessage({ sent, received })).finally(() => port.close());
+  });
+}
 if (location.search === '?mode=recording') {
   const recording: RecordingAudioApi = {
     register: () => ipcRenderer.invoke(RECORDING_AUDIO.REGISTER),
@@ -40,6 +47,8 @@ if (location.search === '?mode=recording') {
   contextBridge.exposeInMainWorld('recordingAudio', recording);
 } else if (location.search === '?mode=direct') {
   const direct: DirectLinkHostApi = {
+    onFinishTraffic: finish => onFinishTraffic(DIRECT_LINK_LOCAL.FINISH_TRAFFIC, finish),
+    traffic: (sent, received) => { void ipcRenderer.invoke(DIRECT_LINK_LOCAL.TRAFFIC, sent, received).catch(() => {}); },
     register: () => ipcRenderer.invoke(DIRECT_LINK_LOCAL.REGISTER),
     event: (event) => { void ipcRenderer.invoke(DIRECT_LINK_LOCAL.EVENT, event).catch(() => {}); },
     onCommand: (listener) => {
@@ -51,6 +60,8 @@ if (location.search === '?mode=recording') {
   contextBridge.exposeInMainWorld('directLinkHost', direct);
 } else if (location.search === '?mode=files') {
   const files: FilePeerHostApi = {
+    onFinishTraffic: finish => onFinishTraffic(FILE_PEER_LOCAL.FINISH_TRAFFIC, finish),
+    traffic: (sent, received) => { void ipcRenderer.invoke(FILE_PEER_LOCAL.TRAFFIC, sent, received).catch(() => {}); },
     closed: (connection, reason) => ipcRenderer.invoke(FILE_PEER_LOCAL.CLOSED, connection, reason),
     register: () => ipcRenderer.invoke(FILE_PEER_LOCAL.REGISTER),
     onCommand: (listener) => {
@@ -62,8 +73,8 @@ if (location.search === '?mode=recording') {
       };
     },
     reply: (id, ok, value) => ipcRenderer.invoke(FILE_PEER_LOCAL.REPLY, id, ok, value),
-    read: (connection, ticket, offset) =>
-      ipcRenderer.invoke(FILE_PEER_LOCAL.READ, connection, ticket, offset),
+    read: (connection, ticket, offset, maxBytes) =>
+      ipcRenderer.invoke(FILE_PEER_LOCAL.READ, connection, ticket, offset, maxBytes),
     write: (sink, offset, base64) =>
       ipcRenderer.invoke(FILE_PEER_LOCAL.WRITE, sink, offset, base64),
     invoke: (connection, payload, body) =>

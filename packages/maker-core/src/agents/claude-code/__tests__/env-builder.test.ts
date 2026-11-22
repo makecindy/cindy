@@ -31,6 +31,29 @@ function createAuthAdapter(env: Record<string, string> = {}): AuthAdapter {
 }
 
 describe('buildClaudeEnv', () => {
+  // #10523, unit: endpoint materialization used to freeze the direct fallback
+  // even when a managed local proxy was still starting or had failed.
+  it('waits for the managed local endpoint and does not emit the fallback after failure', async () => {
+    let complete!: (url: string) => void;
+    const resolveLocalEndpoint = vi.fn(() => new Promise<string>(resolve => { complete = resolve; }));
+    const config = { endpoint: 'https://upstream.invalid', resolveLocalEndpoint };
+    let settled = false;
+    const env = buildClaudeEnv(createAuthAdapter(), config).then(value => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    complete('http://127.0.0.1:12345');
+    expect((await env).ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:12345');
+    resolveLocalEndpoint.mockRejectedValueOnce(new Error('proxy unavailable'));
+    await expect(buildClaudeEnv(createAuthAdapter(), config)).rejects.toThrow('proxy unavailable');
+  });
+
+  it('keeps native subscription and remote environments independent of the local proxy', async () => {
+    const resolveLocalEndpoint = vi.fn(async () => { throw new Error('proxy unavailable'); });
+    const config = { endpoint: 'https://metadata.invalid', remoteEndpoint: 'https://remote.invalid', resolveLocalEndpoint };
+    expect((await buildClaudeEnv(createAuthAdapter(), config, { nativeCliAuth: true })).ANTHROPIC_BASE_URL).toBeUndefined();
+    expect((await buildClaudeEnv(createAuthAdapter(), config, { mode: 'remote' })).ANTHROPIC_BASE_URL).toBe(config.remoteEndpoint);
+    expect(resolveLocalEndpoint).not.toHaveBeenCalled();
+  });
   it('uses an explicit subscription profile only for local native authentication', async () => {
     const nativeSubscriptionAccount = { id: 'fixture', configDir: '/fixture/.claude-second', assertCurrent() {}, readState: async () => ({ authenticated: true }) };
     const getAuthEnv = vi.fn(async (options?: AuthAdapterOptions): Promise<Record<string, string>> => options?.nativeSubscriptionAccount ? { CLAUDE_CONFIG_DIR: options.nativeSubscriptionAccount.configDir } : {});
@@ -336,6 +359,26 @@ describe('buildClaudeEnv', () => {
     const env = await buildClaudeEnv(createAuthAdapter(), {}, {});
 
     expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
+  });
+
+  // 回归:CLI 用 CLAUDE_SECURESTORAGE_CONFIG_DIR 决定读哪条钥匙串登录,且优先于
+  // CLAUDE_CONFIG_DIR(空串还会回到默认条目)。继承残留会让默认账号或供应商内订阅账号
+  // 读到另一份登录,所以和 CLAUDE_CONFIG_DIR 一样必须进 strip 名单。
+  it.each([
+    ['default account', undefined],
+    ['added subscription account', '/fixture/.claude-second'],
+  ] as const)('drops an inherited CLAUDE_SECURESTORAGE_CONFIG_DIR for the %s', async (_label, configDir) => {
+    expect(SENSITIVE_ANTHROPIC_ENV_KEYS).toContain('CLAUDE_SECURESTORAGE_CONFIG_DIR');
+    vi.stubEnv('CLAUDE_SECURESTORAGE_CONFIG_DIR', '');
+    const nativeSubscriptionAccount = configDir
+      ? { id: 'fixture', configDir, assertCurrent() {}, readState: async () => ({ authenticated: true }) }
+      : undefined;
+    const auth = createAuthAdapter(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {});
+
+    const env = await buildClaudeEnv(auth, {}, { nativeCliAuth: true, nativeSubscriptionAccount });
+
+    expect('CLAUDE_SECURESTORAGE_CONFIG_DIR' in env).toBe(false);
+    expect(env.CLAUDE_CONFIG_DIR).toBe(configDir);
   });
 
   it('null 决定要**删掉** behaviorFlags 带进来的同名键(只跳过赋值不够)', async () => {

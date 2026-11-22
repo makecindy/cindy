@@ -1,25 +1,65 @@
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
+
 export interface AgentActivitySink {
   setState(json: string | null): void;
   markStale(): void;
 }
 
 /** Coalesce store bursts without postponing the latest state indefinitely. Undefined
- * means the connection cannot attest to the snapshot; null means no tasks remain. */
-export function createAgentActivitySync(read: () => string | null | undefined, sink: AgentActivitySink) {
+ * means the connection cannot attest to the snapshot; null means no tasks remain.
+ * `isExpired` reports whether the activity on screen is past its stale date. */
+export function createAgentActivitySync(
+  read: () => string | null | undefined,
+  sink: AgentActivitySink,
+  canSync: () => boolean = () => true,
+  isExpired?: () => Promise<boolean>,
+) {
   let last: string | null | undefined;
   let lastWrite = -Infinity;
   let stale = false;
   let disposed = false;
+  let checking = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+
+  // Content nobody can confirm stays until its own stale date, then goes: an
+  // absent activity is better than outdated information left on the Lock Screen.
+  const endIfExpired = async () => {
+    if (!isExpired || checking || last === null) return;
+    checking = true;
+    try {
+      if (!(await isExpired()) || disposed || !stale || !canSync()) return;
+      sink.setState(null);
+      mobileDebugLog("info", "lifecycle", "activity-local-sync", { outcome: "expired", recovered: false });
+      last = null;
+      lastWrite = Date.now();
+    } catch {
+      /* native module unavailable: the system still marks the activity stale */
+    } finally {
+      checking = false;
+    }
+  };
 
   const sync = (force = false) => {
     if (disposed) return;
+    // Background JS/store state cannot attest to host freshness. Retain the last
+    // native deadline instead of ending, renewing or expiring it on suspension.
+    // Check here as well as at the event source so queued writes obey this gate.
+    if (!canSync()) {
+      clearTimeout(timer);
+      timer = undefined;
+      return;
+    }
     const json = read();
     if (json === undefined) {
       clearTimeout(timer);
       timer = undefined;
-      if (!stale) sink.markStale();
+      if (!stale) {
+        // Older native builds cannot report expiry; they keep the early grey-out.
+        if (!isExpired) sink.markStale();
+        mobileDebugLog("info", "lifecycle", "activity-unverified");
+      }
       stale = true;
+      void endIfExpired();
       return;
     }
     const elapsed = Date.now() - lastWrite;
@@ -33,6 +73,9 @@ export function createAgentActivitySync(read: () => string | null | undefined, s
     clearTimeout(timer);
     timer = undefined;
     sink.setState(json);
+    mobileDebugLog("debug", "lifecycle", "activity-local-sync", {
+      outcome: json === null ? "ended" : "confirmed", recovered: stale,
+    });
     last = json;
     lastWrite = Date.now();
     stale = false;

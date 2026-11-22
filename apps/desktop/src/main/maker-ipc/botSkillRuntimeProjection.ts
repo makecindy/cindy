@@ -28,7 +28,10 @@ export function botSkillRuntimeSummary(item: BotSkillSummary):
  * every path on argv / injecting every raw YAML description into the prompt.
  * Originals and relative resources stay in place; nothing is truncated on disk.
  */
-export async function projectBotSkillMounts(root: string, skills: Iterable<BotSkillSummary> | AsyncIterable<BotSkillSummary>) {
+export async function projectBotSkillMounts(root: string, skills: Iterable<BotSkillSummary> | AsyncIterable<BotSkillSummary>,
+  /** false: `root/skills` is not where the Skills are (a V2 teammate's are in its project), so a
+   * native mount of `root` would load the old copies; always use the discovery Skill instead. */
+  options: { native?: boolean } = {}) {
   const pluginRoot = path.join(root, '.runtime-skills');
   const catalogPath = path.join(pluginRoot, 'catalog.jsonl');
   const hadCatalog = !!await fs.stat(catalogPath).catch(() => null);
@@ -36,8 +39,9 @@ export async function projectBotSkillMounts(root: string, skills: Iterable<BotSk
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   let chunk = '';
   let bytes = 0;
-  let direct = true;
+  let direct = options.native !== false;
   let small: BotSkillSummary[] = [];
+  let seen = false;
   const write = async (item: BotSkillSummary) => {
     if (!handle) {
       await fs.mkdir(pluginRoot, { recursive: true });
@@ -53,6 +57,7 @@ export async function projectBotSkillMounts(root: string, skills: Iterable<BotSk
     // Refresh even an empty catalog when a formerly large shelf shrinks.
     if (hadCatalog) handle = await fs.open(temporary, 'wx', 0o600);
     for await (const item of skills) {
+      seen = true;
       if (direct) {
         bytes += item.frontmatterBytes + Buffer.byteLength(JSON.stringify(botSkillRuntimeSummary(item)));
         direct = bytes <= BOT_SKILL_RUNTIME_INDEX_BYTES && !item.requiresDiscovery
@@ -75,6 +80,8 @@ export async function projectBotSkillMounts(root: string, skills: Iterable<BotSk
     try { await handle?.close(); }
     finally { await fs.rm(temporary, { force: true }); }
   }
+  // Nothing to mount; `artifacts` keeps a cache keyed elsewhere from expecting a catalog.
+  if (!seen && !direct) return { pluginRoot: root, skills: [], artifacts: [] };
   if (direct) return {
     pluginRoot: root,
     // Only the byte-bounded native prefix is sorted/retained in memory.

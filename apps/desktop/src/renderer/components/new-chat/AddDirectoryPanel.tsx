@@ -57,7 +57,6 @@ interface AddDirectoryPanelProps {
   onSelectRecent: (option: FolderPickerOption) => Promise<void>;
   /** 打开系统选择器；用户取消时面板留在本页。 */
   onBrowse: () => Promise<void>;
-  maxHeight?: number;
 }
 
 export function AddDirectoryPanel({
@@ -66,7 +65,6 @@ export function AddDirectoryPanel({
   onBack,
   onSelectRecent,
   onBrowse,
-  maxHeight = 400,
 }: AddDirectoryPanelProps) {
   const { t } = useTranslation();
   const projectOptions = useProjectPickerOptions();
@@ -167,7 +165,7 @@ export function AddDirectoryPanel({
   const rowClass = (disabled?: boolean) =>
     cn(
       COMPOSER_MENU_ROW,
-      'flex w-full items-center gap-2 px-[10px] text-left',
+      'flex w-full items-center gap-2 px-2.5 text-left',
       disabled && 'cursor-not-allowed opacity-50',
     );
 
@@ -176,21 +174,25 @@ export function AddDirectoryPanel({
       ref={rootRef}
       tabIndex={-1}
       data-composer-suggestion-panel=""
+      data-morph-scroll="inner"
       // 整页都是面板自己的输入面：焦点落在这里(含搜索框)时编辑器失焦不能把面板关掉。
       data-composer-suggestion-search=""
       onKeyDown={handleKeyDown}
       aria-busy={pending}
-      className="pointer-events-auto relative outline-none"
+      // 外壳锁成不滚后，会把量到的确定高度写到本层的 style.height 上。
+      // 没有外壳时高度仍是 auto，独立挂载按内容撑开。
+      className="pointer-events-auto relative flex min-h-0 max-h-full flex-1 flex-col outline-none"
     >
       <div
         ref={highlightPanelRef}
         {...menuPanelAttrs}
         // 标题、搜索框与「选择其他文件夹」固定，只有目录列表滚动(与项目选择器一致)。
-        className="relative flex w-full min-w-0 flex-col overflow-hidden p-[6px]"
-        style={{ maxHeight }}
+        // 高度由外层 MorphPopover 的确定高度经 flex-1 传下来；不用 h-full，
+        // 否则父层只有 max-h-full 时高度仍是 auto，列表会按全部内容撑高 (#9536)。
+        className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden p-1.5"
       >
         <MenuHighlightLayer />
-        <div className="flex h-[32px] items-center gap-1 pb-[2px]">
+        <div className="flex h-[32px] items-center gap-1 pb-0.5">
           <button
             type="button"
             onMouseDown={(event) => event.preventDefault()}
@@ -208,19 +210,19 @@ export function AddDirectoryPanel({
             {t('extraDirs.addTitle')}
           </span>
           <Tip text={t('extraDirs.writableHintDetail')} side="top">
-            <span className="ml-auto shrink-0 pr-[6px] text-12 text-[var(--cmd-palette-item-meta)]">
+            <span className="ml-auto shrink-0 pr-1.5 text-12 text-[var(--cmd-palette-item-meta)]">
               {t('extraDirs.writableHint')}
             </span>
           </Tip>
         </div>
         {/* 有搜索框时省掉分组标题：新建任务页面板只有 240px，标题再占一行列表就只剩两行多。 */}
         {!showSearch && (
-          <div className="flex h-[24px] items-center px-[10px] text-12 font-medium text-[var(--cmd-palette-item-meta)]">
+          <div className="flex h-[24px] items-center px-2.5 text-12 font-medium text-[var(--cmd-palette-item-meta)]">
             {t('newChat.folderPicker.recent')}
           </div>
         )}
         {showSearch && (
-          <div className="px-[4px] pb-[6px]">
+          <div className="px-1 pb-1.5">
             <div className="relative">
               <Search
                 size={12}
@@ -249,6 +251,7 @@ export function AddDirectoryPanel({
         <div
           role="list"
           aria-label={t('newChat.folderPicker.recent')}
+          // 标题和「选择其他文件夹」固定，只有这一层在上面那个确定高度里滚动 (#9536)。
           className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
         >
           {visibleOptions.map((option, index) => (
@@ -264,7 +267,7 @@ export function AddDirectoryPanel({
               onClick={() => activate(index)}
               {...menuRowAttrs({ current: index === focusedIndex, disabled: pending })}
               // 与「+」主面板动作行同高的单行：新建任务页面板高度只有 240px，两行行高放不下几个目录。
-              className={cn(rowClass(pending), 'py-2')}
+              className={cn(rowClass(pending), 'shrink-0 py-2')}
             >
               <FolderIcon size={14} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
               {withMenuLabels(<span className="min-w-0 shrink truncate">{option.name}</span>)}
@@ -278,7 +281,7 @@ export function AddDirectoryPanel({
           {visibleOptions.length === 0 && (
             <div
               role="status"
-              className="flex h-[40px] select-none items-center px-[10px] text-13 text-[var(--cmd-palette-empty)]"
+              className="flex h-[40px] select-none items-center px-2.5 text-13 text-[var(--cmd-palette-empty)]"
             >
               {query && showSearch ? t('extraDirs.noMatchingRecent') : t('extraDirs.noRecent')}
             </div>
@@ -287,11 +290,11 @@ export function AddDirectoryPanel({
         {failed && (
           <ErrorNotice
             role="alert"
-            className="mx-[4px] my-[4px]"
+            className="mx-1 my-1"
             message={t('extraDirs.addFailed')}
           />
         )}
-        <div role="separator" className="my-[6px] border-t border-[var(--cmd-palette-border)]" />
+        <div role="separator" className="my-1.5 border-t border-[var(--cmd-palette-border)]" />
         <button
           ref={focusedIndex === rowCount - 1 ? focusedRowRef : undefined}
           type="button"
@@ -302,7 +305,7 @@ export function AddDirectoryPanel({
           {...{ [ROW_ATTR]: '' }}
           onClick={() => activate(rowCount - 1)}
           {...menuRowAttrs({ current: focusedIndex === rowCount - 1, disabled: pending })}
-          className={cn(rowClass(pending), 'py-2')}
+          className={cn(rowClass(pending), 'shrink-0 py-2')}
         >
           <FolderPlus size={14} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
           {withMenuLabels(

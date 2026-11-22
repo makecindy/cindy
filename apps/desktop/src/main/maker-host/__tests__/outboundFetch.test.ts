@@ -11,6 +11,7 @@ const resolverState = vi.hoisted(() => ({
 
 const undiciState = vi.hoisted(() => ({
   fetch: vi.fn(async () => ({ ok: true, status: 200, headers: new Headers(), body: null })),
+  actualFetch: null as ((...args: unknown[]) => Promise<unknown>) | null,
 }));
 
 /** 造一个 3xx 响应桩(带可取消的 body,验证我们会归还连接)。 */
@@ -50,6 +51,7 @@ vi.mock('../outbound-proxy-resolver.js', () => ({
 // 只替换 fetch:ProxyAgent / Agent 用真实类,断言才能验证选型。
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
+  undiciState.actualFetch = actual.fetch as (...args: unknown[]) => Promise<unknown>;
   return { ...actual, fetch: (...args: unknown[]) => undiciState.fetch(...(args as [])) };
 });
 
@@ -515,10 +517,30 @@ describe('outboundFetch', () => {
     );
   });
 
+  // #9208 unit: benchmark-only approval must retain exact URL and HTTPS checks.
+  // Existing private-network approval coverage cannot detect broad fake-IP grants.
+  it('binds the benchmark-only exception to one HTTPS target', async () => {
+    const url = 'https://198.18.0.73/data';
+    const approval = { targetUrl: url, allowBenchmarkFakeIp: true };
+    const before = vi.fn(() => { throw new Error('dispatch reached'); });
+    await expect(guardedOutboundFetch(url, {}, before, approval)).rejects.toThrow('dispatch reached');
+    expect(before).toHaveBeenCalledOnce();
+    before.mockClear();
+    await expect(guardedOutboundFetch(url + '?changed=1', {}, before, approval)).rejects.toThrow('approval target mismatch');
+    const cleartext = url.replace('https:', 'http:');
+    await expect(guardedOutboundFetch(cleartext, {}, before, { ...approval, targetUrl: cleartext })).rejects.toThrow(/HTTPS/i);
+    expect(before).not.toHaveBeenCalled();
+    expect(undiciState.fetch).not.toHaveBeenCalled();
+  });
+
   it('allows only the explicitly approved network target and keeps manual redirects', async () => {
     const requests: Array<{ path?: string; method?: string; authorization?: string }> = [];
-    // The shared runtime resolves its own undici version; use a server owned by
-    // this test instead of relying on the Desktop-only fetch mock above.
+    // Use a server owned by this test. With pnpm hoisting, the shared runtime can
+    // resolve the same undici module as this file and get the fetch mock above, so
+    // let that mock reach the network here.
+    undiciState.fetch.mockImplementation(
+      async (...args: unknown[]) => (await undiciState.actualFetch!(...args)) as never,
+    );
     const server = createServer((request, response) => {
       requests.push({ path: request.url, method: request.method, authorization: request.headers.authorization });
       response.writeHead(302, { location: '/unapproved' });

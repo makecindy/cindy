@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
 import { readFileSync } from 'node:fs';
@@ -48,6 +49,9 @@ vi.mock('@cindy/maker-shared', async () => {
 vi.mock('@cindy/device-link', async () => ({
   ...await import('../../../../../packages/device-link/src/sharedTaskPeer'),
   ...await import('../../../../../packages/device-link/src/metadataContinuity'),
+  // BotStartedTasks reads the buddy roster, which loads favorite length limits
+  // from this barrel. Keep that real submodule instead of the unused client graph.
+  ...await import('../../../../../packages/device-link/src/modelFavorites'),
 }));
 // Selection never edits/resends messages or controls an Agent session. Keep the
 // real message bodies/actions, without booting those unrelated dependency trees.
@@ -208,7 +212,7 @@ describe('SelectionQuoteButton — message body selection actions', () => {
         createElement(Tooltip.Provider, null,
           createElement(ConfirmDialogProvider, null,
             createElement('div', { ref: containerRef },
-              createElement(UserMessage, {
+              createElement(UserMessage, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
                 workingDir: '', content: userText,
                 createdAt: '2026-11-09T10:00:00Z', sharedAuthorName: 'Message author',
                 ...userProps,
@@ -217,13 +221,13 @@ describe('SelectionQuoteButton — message body selection actions', () => {
               // UserMessage/AssistantMessage to stay out of a selected quote.
               createElement(BotMessageTimelineHeader, { startsUnread: true, groupTimestamp: 1794218400000 }),
               createElement(MessageSourceLabels, { sourceGroup: { groupId: 'group-1', name: 'Planning' }, align: 'start' }),
-              createElement(AssistantMessage, {
+              createElement(AssistantMessage, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
                 workingDir: '', content: reply,
                 createdAt: '2026-11-09T10:01:00Z', ghostReplyPending: true,
                 showActionBar: true, turnCostUsd: 0.001,
               }),
               cards,
-              nextUser && createElement(UserMessage, { workingDir: '', content: nextUser }),
+              nextUser && createElement(UserMessage, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, workingDir: '', content: nextUser }),
               createElement(SelectionQuoteButton, { sessionId, containerRef, onAskInSideChat }),
             ),
             createElement('p', null, 'Outside the message stream'),

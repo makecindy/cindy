@@ -11,6 +11,7 @@ export interface SessionHeaderNativeTitleProps {
   onTitleDoubleTap?: () => void;
   tags?: import('@cindy/maker-shared').TaskTag[];
   title: string;
+  projectIcon?: import('react').ReactNode;
   pinned: boolean;
   syncing: boolean;
   syncingImmediately: boolean;
@@ -21,7 +22,15 @@ export function SessionHeaderNativeTitle(_props: SessionHeaderNativeTitleProps) 
   return null;
 }
 
-export function SessionHeaderNativeBlur(_props: { height: number; edge?: 'top' | 'bottom'; inset?: number; fadeInside?: number }) {
+export interface SessionHeaderNativeBlurProps {
+  height: number;
+  edge?: 'top' | 'bottom';
+  inset?: number;
+  fadeInside?: number;
+  horizontalOutsets?: { left: number; right: number };
+}
+
+export function SessionHeaderNativeBlur(_props: SessionHeaderNativeBlurProps) {
   return null;
 }
 
@@ -30,7 +39,7 @@ export interface SessionHeaderNativeActionsProps {
   desktopLabel: string;
   filesLabel: string;
   moreLabel: string;
-  files: SessionActionStripAction | undefined;
+  files: Pick<SessionActionStripAction, 'disabled' | 'disabledReason'> | undefined;
   onDetails(): void;
   onDesktop(): void;
   onAction(id: SessionActionStripAction["id"]): void;

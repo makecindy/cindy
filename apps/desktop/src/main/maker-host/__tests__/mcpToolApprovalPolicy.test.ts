@@ -10,12 +10,94 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // unit: the real approval policy must not reuse a read grant for a later external Discord write.
+  it('keeps Discord discovery quiet and multiplexed operations on per-call approval', () => {
+    for (const toolName of ['status', 'list_tools']) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName })).toBe('auto-approve');
+    for (const toolName of ['call_tool', undefined]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName, toolParams: { name: 'send_message', args: { text: 'external' } } })).toBe('prompt-each-time');
+  });
+  // PR #11126 security: clone/private credentials and directory expansion used to
+  // inherit trusted-server silence. Unit public policy; existing write cases did
+  // not cover project profiles, nested/stringified arguments or missing outer names.
+  it('reviews project access for every tool envelope while leaving metadata and reads alone', () => {
+    for (const [name, input] of [
+      ['create_project', { repository_url: 'https://gitlab.com/team/private', device: 'computer' }],
+      ['create_project', { working_dir: '/existing' }],
+      ['create_project', { name: 'Blank' }],
+      [
+        'update_project_info',
+        {
+          project_key: 'local:/repo',
+          field: 'profile',
+          value: { directories: [{ path: '/private', access: 'write' }] },
+        },
+      ],
+      [
+        'update_project_info',
+        { project_key: 'local:/repo', field: 'profile', value: { directories: [] } },
+      ],
+    ] as const) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_helper',
+          toolName: name,
+          toolParams: input,
+        }),
+      ).toBe('prompt-each-time');
+      for (const args of [input, JSON.stringify(input)])
+        for (const toolName of ['call_tool', undefined])
+          expect(
+            getDesktopMcpToolApprovalPolicy({
+              serverName: 'cindy_helper',
+              toolName,
+              toolParams: { name, args },
+            }),
+          ).toBe('prompt-each-time');
+    }
+    for (const [name, args] of [
+      ['get_project_info', { project_key: 'local:/repo' }],
+      [
+        'update_project_info',
+        { project_key: 'local:/repo', field: 'profile', value: { name: 'Updated', icon: null } },
+      ],
+    ] as const)
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_helper',
+          toolName: 'call_tool',
+          toolParams: { name, args },
+        }),
+      ).toBe('auto-approve');
+  });
+  // §21 unit: the shared files dispatcher contains both reads and destructive
+  // operations. Trusted helper approval must never turn a write into a read.
+  it('keeps file writes and deletions in per-call approval for direct and progressive calls', () => {
+    for (const op of ['write', 'delete', undefined]) {
+      const args = { op, directoryRef: 'selected', path: 'a.txt' };
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'file_request', toolParams: args })).toBe('prompt-each-time');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name: 'file_request', args } })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'file_request', toolParams: { op: 'read' } })).toBe('auto-approve');
+  });
+  // Unit: profile changes remain risk actions even when they are the only runtime field.
+  it.each(['acceptEdits', 'auto', 'bypassPermissions'])('reviews explicit permission profile %s', permission_mode => {
+    const args = { session_id: 'target', expected_generation: 0, permission_mode };
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'set_session_runtime', toolParams: args })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name: 'set_session_runtime', args } })).toBe('prompt-each-time');
+  });
+
   // PR #9145: removing redundant Host consent must not let trusted MCP servers
   // bypass the task's normal review. Public policy entry, unit tier; both dispatch routes.
   it.each([
     ['cindy_scheduler', 'schedule_delete'],
-    ['cindy_scheduler', 'routine_delete'],
-    ['cindy_helper', 'routine_delete'],
+    ['cindy_helper', 'delete_session'],
+    ['cindy_helper', 'rewind_session'],
+    ['cindy_helper', 'export_session'],
+    ['cindy_helper', 'import_session'],
+    ['cindy_helper', 'terminal_start'],
+    ['cindy_helper', 'terminal_write'],
+    ['cindy_helper', 'terminal_resize'],
+    ['cindy_helper', 'terminal_stop'],
+    ['cindy_helper', 'terminal_forget'],
   ])('routes %s %s through ordinary per-call approval', (serverName, name) => {
     for (const toolParams of [{ id: 'automation' }, { id: 'automation', device: 'local' }]) {
       expect(getDesktopMcpToolApprovalPolicy({ serverName, toolName: name, toolParams })).toBe('prompt-each-time');
@@ -208,6 +290,17 @@ describe('desktop MCP approval policy', () => {
       expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool',
         toolParams: { name: 'browser', args: { action: 'setBackend', backend } },
       })).toBe('auto-approve');
+    }
+    // A batch must not carry a reviewed action past approval (2026-11-10); ordinary sequences stay quiet.
+    for (const [steps, policy] of [
+      [[{ action: 'navigate', url: 'https://example.test/' }, { action: 'upload', paths: ['/tmp/a.pdf'] }], 'prompt-each-time'],
+      [[{ action: 'batch', steps: [toUser] }], 'prompt-each-time'],
+      ['not-a-list', 'prompt-each-time'],
+      [[{ action: 'navigate', url: 'https://example.test/' }, { action: 'extract', extract: { fields: { title: 'h1' } } }], 'auto-approve'],
+    ] as const) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'batch', steps } },
+      })).toBe(policy);
     }
   });
   it('never lets import discovery grant reusable approval to start a migration', () => {
@@ -509,7 +602,6 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(policy('list_tools')).toBe('auto-approve');
     for (const name of [
       'list_projects',
-      'create_project',
       'rename_project',
       'remove_project',
       'search_skills',
@@ -619,23 +711,24 @@ describe('Orca Worker directory authorization', () => {
 
 
 describe('teammate pre-run command approval', () => {
-  it.each(['schedule_set_pre_run_hook', 'routine_save'])('reviews %s through direct and progressive calls', (name) => {
+  it('reviews schedule_set_pre_run_hook through direct and progressive calls', () => {
+    const name = 'schedule_set_pre_run_hook';
     const args = { preRunHook: { command: 'node check.mjs' } };
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: name, toolParams: args })).toBe('prompt-each-time');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name, args } })).toBe('prompt-each-time');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams: { name, args } })).toBe('prompt-each-time');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams: JSON.stringify({ name, args: JSON.stringify(args) }) })).toBe('prompt-each-time');
-    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'routine_list', toolParams: {} })).toBe('auto-approve');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'list_sessions', toolParams: {} })).toBe('auto-approve');
   });
 
-  it('does not mistake an unnamed direct script or routine input for a safe progressive call', () => {
+  it('does not mistake an unnamed direct script or named input for a safe progressive call', () => {
     const policy = (toolParams: unknown) =>
       getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams });
     expect(policy({ script: 'process.exit(2)' })).toBe('prompt-each-time');
-    expect(policy({ name: 'routine_list', prompt: 'Check PRs', enabled: true,
+    expect(policy({ name: 'list_sessions', prompt: 'Check PRs', enabled: true,
       triggers: [], preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
-    expect(policy({ name: 'routine_list', args: {}, preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
-    expect(policy({ name: 'routine_list', args: {} })).toBe('auto-approve');
+    expect(policy({ name: 'list_sessions', args: {}, preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
+    expect(policy({ name: 'list_sessions', args: {} })).toBe('auto-approve');
   });
 });
 
@@ -705,16 +798,5 @@ describe('cross-device actions use the task permission mode', () => {
     expect(helper('sess-9')).toBe('prompt-each-time');
     expect(helper('local::sess-9')).toBe('prompt-each-time');
     expect(helper(undefined)).toBe('prompt-each-time');
-    // A follow-up continue into another computer's task is the same cross-computer write.
-    const follow = (taskId: string, toolName: string) => getDesktopMcpToolApprovalPolicy({
-      serverName: 'cindy_helper',
-      toolName,
-      toolParams: toolName === 'call_tool'
-        ? { name: 'continue_workbench_task', args: { task_id: taskId, message: 'continue' } }
-        : { task_id: taskId, message: 'continue' },
-    });
-    expect(follow('mbp::sess-9', 'call_tool')).toBe('prompt-each-time');
-    expect(follow('mbp::sess-9', 'continue_workbench_task')).toBe('prompt-each-time');
-    expect(follow('sess-9', 'continue_workbench_task')).toBe('prompt-each-time');
   });
 });

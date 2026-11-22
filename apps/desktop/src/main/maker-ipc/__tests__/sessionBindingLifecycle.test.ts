@@ -491,10 +491,18 @@ describe('binding with the real maker-core Session', () => {
       await queued;
       expect(old.handle.send).not.toHaveBeenCalled();
       expect(next.handle.send).toHaveBeenCalledTimes(preserve ? 1 : 0);
-      // Close cleared the old active input: a later user input remains dispatchable.
+      // Unit regression: a suppressed preparation close belongs to the old runtime.
+      // The replacement's first input must remain active until its own terminal event;
+      // the old fixture incorrectly relied on close synthesizing done for that input.
       for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(coordinator.getActiveInputClientId('task')).toBe(preserve ? 'first' : null);
       await coordinator.enqueue('task', item('second'));
       for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(next.handle.send).toHaveBeenCalledTimes(1);
+      if (preserve) {
+        coordinator.onTurnEvent('task', 'done');
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+      }
       expect(next.handle.send).toHaveBeenCalledTimes(preserve ? 2 : 1);
       expect(suppression.isSuppressed('task')).toBe(false);
       next.closeFinished.resolve();

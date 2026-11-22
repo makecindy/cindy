@@ -13,13 +13,14 @@ import {
   readyPendingPluginSuggestion,
 } from '../pendingPluginSuggestion';
 import {
-  pluginSetupRoute,
   pluginSkillSetupStates,
   prependSlashSkill,
   usePluginSkillSetup,
 } from '../pluginSkillSetup';
 
-const toast = vi.hoisted(() => ({ info: vi.fn(), error: vi.fn() }));
+const toast = vi.hoisted(() => ({ info: vi.fn(), error: vi.fn(), success: vi.fn() }));
+const install = vi.hoisted(() => vi.fn());
+const setEnabled = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const installed = vi.hoisted(() => ({ ghosts: [] as unknown[] }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/toast', () => ({ toast }));
@@ -29,10 +30,11 @@ vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
 
 const OWNER = 'owner-a';
 const SESSION_TARGET = JSON.stringify(['session', 's1']);
-const github = (enabled: boolean) =>
+const github = (enabled: boolean, approval: 'approved' | 'invalid' = 'approved') =>
   ({
     manifest: { id: 'cindy-github', name: 'GitHub', version: '1.0.0' },
     enabled,
+    approval: { state: approval, revision: 'r' },
     dir: '/plugins/cindy-github',
     namespace: null,
   }) as unknown as InstalledGhost;
@@ -50,11 +52,11 @@ function text(doc: unknown): string {
 
 type Setup = ReturnType<typeof usePluginSkillSetup>;
 const latest: { setup?: Setup; path?: string } = {};
-function Harness(props: { targetKey?: string; enabled?: boolean; draftKey?: string }) {
+function Harness(props: { targetKey?: string; enabled?: boolean; draftKey?: string; workingDir?: string }) {
   latest.setup = usePluginSkillSetup({
     enabled: props.enabled ?? true,
     ownerId: OWNER,
-    workingDir: '/repo',
+    workingDir: props.workingDir ?? '/repo',
     targetKey: props.targetKey ?? SESSION_TARGET,
     draftKey: props.draftKey ?? 's1',
   });
@@ -85,18 +87,37 @@ beforeEach(() => {
   latest.path = undefined;
   toast.info.mockReset();
   toast.error.mockReset();
+  toast.success.mockReset();
+  install.mockReset();
+  install.mockImplementation(async () => {
+    installed.ghosts = [github(true)];
+    return { ghost: github(true) };
+  });
+  setEnabled.mockReset();
+  setEnabled.mockResolvedValue({ ok: true });
   cancelPendingPluginSuggestion();
   vi.stubGlobal('electronAPI', {
     ghosts: {
       listSync: () => ({ ghosts: installed.ghosts }),
       workdirPrefsSync: () => ({ disabled: disabledInWorkdir }),
+      workdirPrefs: async () => ({ disabled: disabledInWorkdir, workdirKey: '/repo' }),
       recommendationsSync: () => ({ ownerId: OWNER, sources: [], recentIds: [], newlyInstalledId: null }),
+      setEnabled,
     },
-    pluginMarket: { lookup: async () => ({ items: marketItems }) },
+    pluginMarket: {
+      lookup: async () => ({ items: marketItems }),
+      detail: async (pluginId: string) => ({
+        ...(marketItems as { pluginId: string }[]).find((item) => item.pluginId === pluginId),
+        releaseId: 'release-1',
+        manifest: { id: 'cindy-github' },
+      }),
+      install,
+    },
   });
 });
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   clearDraft('s1');
   clearDraft('s2');
   cancelPendingPluginSuggestion();
@@ -115,15 +136,6 @@ describe('plugin Skill setup state', () => {
     expect(pluginSkillSetupStates([github(true)], '/repo')[0].state).toBe('enable');
   });
 
-  it('routes to the installed page or exactly one market listing', async () => {
-    expect(await pluginSetupRoute(github(false), 'cindy-github')).toBe('/plugins?ghost=cindy-github');
-    expect(await pluginSetupRoute(undefined, 'cindy-github')).toBe('/plugins?market=market-github');
-    marketItems = [marketItem('a'), marketItem('b')];
-    expect(await pluginSetupRoute(undefined, 'cindy-github')).toBeNull();
-    marketItems = [marketItem('a', 'conflict')];
-    expect(await pluginSetupRoute(undefined, 'cindy-github')).toBeNull();
-  });
-
   it('prepends the Skill and keeps what the user wrote', () => {
     expect(text(prependSlashSkill(null, 'pr'))).toBe('/pr ');
     expect(text(prependSlashSkill(plainTextToTiptapDoc('fix the login bug'), 'pr'))).toBe(
@@ -135,9 +147,35 @@ describe('plugin Skill setup state', () => {
 });
 
 describe('usePluginSkillSetup', () => {
-  it('sends a missing plugin to its market page and fills the task composer on return', async () => {
+  // PB97: task switching must render without waiting synchronously for main.
+  // Unit: a delayed directory policy must neither leak an old setup row nor
+  // lose the existing enable action once that policy arrives.
+  it('renders without synchronous IPC and ignores the previous directory response', async () => {
+    installed.ghosts = [github(true)];
+    const pending = new Map<string, (value: { disabled: string[]; workdirKey: string }) => void>();
+    const sync = vi.spyOn(window.electronAPI.ghosts, 'workdirPrefsSync');
+    vi.spyOn(window.electronAPI.ghosts, 'workdirPrefs').mockImplementation((dir) => new Promise((resolve) => pending.set(dir, resolve)));
+    const view = render(<MemoryRouter><Harness workingDir="/a" /></MemoryRouter>);
+    expect(latest.setup).toBeUndefined();
+    expect(sync).not.toHaveBeenCalled();
+    await act(async () => {});
+    view.rerender(<MemoryRouter><Harness workingDir="/b" /></MemoryRouter>);
+    await act(async () => {});
+    await act(async () => pending.get('/a')!({ disabled: ['cindy-github'], workdirKey: '/a' }));
+    expect(latest.setup).toBeUndefined();
+    await act(async () => pending.get('/b')!({ disabled: ['cindy-github'], workdirKey: '/b' }));
+    expect(latest.setup?.entries[0].replacesInstalled).toBe(true);
+    expect(sync).not.toHaveBeenCalled();
+    // Selection still checks the current policy and keeps the existing draft.
+    saveDraft('s1', { text: plainTextToTiptapDoc('keep this'), attachments: [] });
+    act(() => latest.setup!.onSelect('pr'));
+    expect(sync).toHaveBeenCalledWith('/b');
+    expect(text(getDraft('s1')?.text)).toBe('/pr |keep this');
+  });
+  // 2026-11-17: picking the row installs the plugin here instead of opening its page.
+  it('installs a missing plugin right here and fills the task composer', async () => {
     saveDraft('s1', { text: plainTextToTiptapDoc('fix the login bug'), attachments: [] });
-    const first = renderAt('/cc-agent/s1');
+    renderAt('/cc-agent/s1');
     expect(latest.setup?.entries).toEqual([
       {
         skillName: 'pr',
@@ -147,7 +185,47 @@ describe('usePluginSkillSetup', () => {
       },
     ]);
     act(() => latest.setup!.onSelect('pr'));
-    await waitFor(() => expect(latest.path).toMatch(/^\/plugins\?market=market-github&recommendation=/));
+    await waitFor(() => expect(text(getDraft('s1')?.text)).toBe('/pr |fix the login bug'));
+    expect(install).toHaveBeenCalledExactlyOnceWith('market-github', {
+      expectedReleaseId: 'release-1',
+      expectedManifest: { id: 'cindy-github' },
+      allowSourceReplacement: false,
+    });
+    expect(latest.path).toBe('/cc-agent/s1');
+    expect(getPendingPluginSuggestion()).toBeNull();
+  });
+
+  it('turns a disabled plugin on right here, also in this project', async () => {
+    installed.ghosts = [github(false)];
+    disabledInWorkdir = ['cindy-github'];
+    const setWorkdirDisabled = vi.fn(async () => {
+      disabledInWorkdir = [];
+      return { disabled: [] };
+    });
+    Object.assign(window.electronAPI.ghosts, { setWorkdirDisabled });
+    setEnabled.mockImplementation(async () => {
+      installed.ghosts = [github(true)];
+      return { ok: true };
+    });
+    renderAt('/cc-agent/s1');
+    await waitFor(() => expect(latest.setup?.entries[0].meta).toBe('commandPalette.pluginSkillSetup.enable'));
+    expect(latest.setup?.entries[0].replacesInstalled).toBe(true);
+    act(() => latest.setup!.onSelect('pr'));
+    await waitFor(() => expect(text(getDraft('s1')?.text)).toBe('/pr '));
+    expect(setEnabled).toHaveBeenCalledExactlyOnceWith('cindy-github', true, 'approved:r');
+    expect(setWorkdirDisabled).toHaveBeenCalledExactlyOnceWith('/repo', 'cindy-github', false);
+    expect(latest.path).toBe('/cc-agent/s1');
+  });
+
+  // What cannot be settled here (an install record to recover) keeps the plugin page and its way back.
+  it('sends an unverified install to its page and fills the task composer on return', async () => {
+    installed.ghosts = [github(false, 'invalid')];
+    saveDraft('s1', { text: plainTextToTiptapDoc('fix the login bug'), attachments: [] });
+    const first = renderAt('/cc-agent/s1');
+    await waitFor(() => expect(latest.setup?.entries[0].meta).toBe('commandPalette.pluginSkillSetup.enable'));
+    act(() => latest.setup!.onSelect('pr'));
+    await waitFor(() => expect(latest.path).toMatch(/^\/plugins\?ghost=cindy-github&recommendation=/));
+    expect(setEnabled).not.toHaveBeenCalled();
     const pending = getPendingPluginSuggestion()!;
     expect(pending).toMatchObject({ ownerId: OWNER, targetKey: SESSION_TARGET, returnTo: '/cc-agent/s1', skillName: 'pr' });
     first.unmount();
@@ -156,26 +234,17 @@ describe('usePluginSkillSetup', () => {
     installed.ghosts = [github(true)];
     expect(readyPendingPluginSuggestion(pending.nonce, OWNER, 'cindy-github')).toBe(pending.nonce);
     // Another task's composer on the same screen leaves the request alone.
-    renderAt(
+    await act(async () => renderAt(
       { pathname: '/cc-agent/s1', state: { pluginSuggestionNonce: pending.nonce } },
       <Harness targetKey={JSON.stringify(['session', 's2'])} draftKey="s2" />,
-    );
+    ));
     expect(getPendingPluginSuggestion()?.nonce).toBe(pending.nonce);
     cleanup();
-    renderAt({ pathname: '/cc-agent/s1', state: { pluginSuggestionNonce: pending.nonce } });
+    await act(async () => renderAt({ pathname: '/cc-agent/s1', state: { pluginSuggestionNonce: pending.nonce } }));
     expect(text(getDraft('s1')?.text)).toBe('/pr |fix the login bug');
     expect(getDraft('s2')).toBeUndefined();
     expect(getPendingPluginSuggestion()).toBeNull();
     expect(latest.setup).toBeUndefined();
-  });
-
-  it('opens the installed page for a disabled plugin', async () => {
-    installed.ghosts = [github(false)];
-    renderAt('/cc-agent/s1');
-    expect(latest.setup?.entries[0].meta).toBe('commandPalette.pluginSkillSetup.enable');
-    expect(latest.setup?.entries[0].replacesInstalled).toBe(true);
-    act(() => latest.setup!.onSelect('pr'));
-    await waitFor(() => expect(latest.path).toMatch(/^\/plugins\?ghost=cindy-github&recommendation=/));
   });
 
   it('explains instead of guessing when the market has no single listing', async () => {
@@ -183,6 +252,7 @@ describe('usePluginSkillSetup', () => {
     renderAt('/cc-agent/s1');
     act(() => latest.setup!.onSelect('pr'));
     await waitFor(() => expect(toast.info).toHaveBeenCalledWith('newChat.pluginSuggestions.unavailable'));
+    expect(install).not.toHaveBeenCalled();
     expect(getPendingPluginSuggestion()).toBeNull();
     expect(latest.path).toBe('/cc-agent/s1');
   });

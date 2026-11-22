@@ -7,12 +7,13 @@
  *   3. 还没运行过的任务：不显示某一台的配额，悬停说明开始后由组选电脑；
  *   4. 本机建的组：任务在本机运行时读本机账号。
  */
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => catalogs.selfDeviceId }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalDataOwnerGeneration: () => 0, useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => catalogs.selfDeviceId }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -81,7 +82,9 @@ const catalogs = vi.hoisted(() => {
     key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
   });
   return {
+    provider,
     selfDeviceId: 'desk',
+    disabledProviders: {} as Record<string, true>,
     local: [provider('a-local', 'A Local', 'me@desk')] as unknown[],
     localGroups: {
       'a-local': {
@@ -119,7 +122,7 @@ const claude = (used: number) => ({
 });
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: catalogs.local, providerOrder: [] }),
+  useProviders: () => ({ providers: catalogs.local, providerOrder: [], disabledProviders: catalogs.disabledProviders }),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   evictDeviceProviders: vi.fn(),
@@ -176,7 +179,8 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
-import { __resetForTest as resetFavorites } from '@/state/modelFavorites';
+import { __resetForTest as resetFavorites, addModelFavorite, setModelFavoritesOwner } from '@/state/modelFavorites';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const devices = [
   { deviceId: 'device-c', name: 'Studio' },
@@ -211,6 +215,7 @@ const remaining = (button: HTMLElement) =>
   button.querySelector('[data-weekly-remaining]')?.getAttribute('data-weekly-remaining') ?? null;
 
 beforeEach(() => {
+  catalogs.disabledProviders = {};
   resetEnginePrefs();
   resetFavorites();
 });
@@ -351,5 +356,104 @@ describe('模型列表里供应商组那一项的用量', () => {
         members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'a-local', limit: 4, weight: 1, paused: false }],
       };
     }
+  });
+});
+
+// 同账号借用(供应商「运行于」)：同一个供应商在本机和另一台自己的电脑上都能用时只列一处。
+describe('同一个供应商在几台自己的电脑上只列一项', () => {
+  const renderNewTask = () => render(
+    React.createElement(ModelSelectorContent, {
+      modelId: 'opus', effort: 'high', onModelChange: vi.fn(), onEffortChange: vi.fn(),
+      currentProviderId: 'a-local', onProviderChange: vi.fn(), vendorKey: 'cc',
+      remoteAgent: { devices, selectedDeviceId: null, selfDeviceId: 'desk', onRelocate: vi.fn(async () => true) },
+    }),
+  );
+  const railNames = () => screen.getAllByRole('button').map((button) => button.getAttribute('aria-label') ?? button.textContent ?? '');
+  const withShared = async (local: Record<string, unknown>, check: () => void, remote: Record<string, unknown> = {}) => {
+    const original = { local: catalogs.local, laptop: catalogs.byDevice['device-d'] };
+    catalogs.local = [...catalogs.local, catalogs.provider('b-shared', 'B Shared', 'me@desk', { subscriptionAccountKeys: ['same-account'], ...local })];
+    catalogs.byDevice['device-d'] = [...original.laptop!, catalogs.provider('b-shared', 'B Shared', 'me@desk', { subscriptionAccountKeys: ['same-account'], remoteInvocationEnabled: true, ...remote })];
+    try {
+      renderNewTask();
+      await act(async () => {});
+      check();
+    } finally {
+      catalogs.local = original.local;
+      catalogs.byDevice['device-d'] = original.laptop!;
+    }
+  };
+
+  it('signed in here: only this computer\'s entry, no copy from the laptop', async () => {
+    await withShared({}, () => {
+      expect(railNames().some((name) => name.startsWith('B Shared · me@desk'))).toBe(true);
+      expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(false);
+    });
+  });
+
+  it('collapses every duplicate connection on one own computer, while retaining an extra model', async () => {
+    const original = catalogs.byDevice['device-d'];
+    const alias = catalogs.provider('duplicate-remote', 'Remote Alias', 'me@desk', {
+      subscriptionAccountKeys: ['same-account'], remoteInvocationEnabled: true,
+    });
+    const extra = catalogs.provider('extra-remote', 'Extra Remote', 'me@desk', {
+      subscriptionAccountKeys: ['same-account'], remoteInvocationEnabled: true,
+      models: { 'claude-code': [{ id: 'extra', name: 'Extra', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' }] },
+    });
+    catalogs.byDevice['device-d'] = [...original!, alias, extra];
+    try {
+      await withShared({}, () => {
+        expect(railNames().some(name => name.startsWith('Remote Alias · Laptop'))).toBe(false);
+        expect(railNames().some(name => name.startsWith('Extra Remote · Laptop'))).toBe(true);
+      });
+    } finally { catalogs.byDevice['device-d'] = original; }
+  });
+
+  it('an explicitly disabled extra source stays out of browsing until re-enabled', async () => {
+    const key = remoteProviderDisableKey('device-d', 'b-shared');
+    catalogs.disabledProviders = { [key]: true };
+    await withShared({}, () => {
+      expect(railNames().some(name => name.startsWith('B Shared · Laptop'))).toBe(false);
+    }, { subscriptionAccountKeys: ['different-account'] });
+    catalogs.disabledProviders = {};
+    await withShared({}, () => {
+      expect(railNames().some(name => name.startsWith('B Shared · Laptop'))).toBe(true);
+    }, { subscriptionAccountKeys: ['different-account'] });
+  });
+
+  it('not signed in here: the laptop\'s entry stands in, once', async () => {
+    await withShared({ connected: false }, () => {
+      expect(railNames().filter((name) => name.startsWith('B Shared')).length).toBe(1);
+      expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(true);
+    });
+  });
+
+  it('pinned to the laptop: the laptop\'s entry replaces this computer\'s', async () => {
+    await withShared({ runLocation: 'device-d' }, () => {
+      expect(railNames().filter((name) => name.startsWith('B Shared')).length).toBe(1);
+      expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(true);
+    });
+  });
+
+  // PR #9740 review：改选的电脑上这个供应商被暂停了，就回到本机那一项，不能两边都不显示。
+  it('pinned to a laptop where it is suspended: this computer\'s entry stays', async () => {
+    await withShared({ runLocation: 'device-d' }, () => {
+      expect(railNames().filter((name) => name.startsWith('B Shared')).length).toBe(1);
+      expect(railNames().some((name) => name.startsWith('B Shared · me@desk'))).toBe(true);
+    }, { suspended: true });
+  });
+
+  // PR #9740 review：收起本机那一项时，本机已有的收藏不能跟着消失。
+  it('pinned to the laptop: a favorite saved on this computer stays in favorites', async () => {
+    setDataOwnerGeneration('me', 1);
+    setModelFavoritesOwner('me');
+    addModelFavorite({ providerId: 'b-shared', modelId: 'opus', agent: 'cc' });
+    await withShared({ runLocation: 'device-d' }, () => {
+      const favorites = within(screen.getByRole('listbox')).getByRole('group', { name: 'newChat.modelSelector.unified.favoritesGroup' });
+      expect(within(favorites).getAllByText('Opus')).toHaveLength(1);
+      // 模型分组里仍只有一处，不把本机那一项带回来。
+      const groups = within(screen.getByRole('listbox')).getAllByRole('group').map((group) => group.getAttribute('aria-label') ?? '');
+      expect(groups).not.toContain('B Shared');
+    });
+    setDataOwnerGeneration(null, 0);
   });
 });

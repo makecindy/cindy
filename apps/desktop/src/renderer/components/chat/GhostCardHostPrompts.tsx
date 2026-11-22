@@ -23,7 +23,7 @@ import { GHOST_CARD_ACTION_PROMPT_MAX_LEN } from '@/../shared/ghost';
 function BlockingScrim({ modal = false }: { modal?: boolean }) {
   return (
     <div
-      className={modal ? 'modal-scrim fixed inset-0 z-40' : 'fixed inset-0 z-40'}
+      className={modal ? 'modal-scrim fixed inset-0 z-modal' : 'fixed inset-0 z-page-top'}
       data-testid="ghost-card-scrim"
       onMouseDown={(e) => e.preventDefault()}
     />
@@ -139,18 +139,18 @@ export function GhostCardLinkConfirm({
     <AlertDialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) onCancel(); }}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay
-          className="modal-scrim fixed inset-0 z-40"
+          className="modal-scrim fixed inset-0 z-modal"
           style={WINDOW_DRAG_STYLE}
           data-testid="ghost-card-scrim"
           onMouseDown={(event) => event.preventDefault()}
         />
       <AlertDialog.Content
-        className="modal-panel fixed inset-0 z-50 m-auto h-fit w-80 p-3.5 outline-none"
+        className="modal-panel fixed inset-0 z-modal-raised m-auto h-fit w-80 p-3.5 outline-none"
         style={WINDOW_NO_DRAG_STYLE}
         onOpenAutoFocus={dialog.onOpenAutoFocus}
         onCloseAutoFocus={dialog.onCloseAutoFocus}
       >
-        <AlertDialog.Title asChild><div className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
+        <AlertDialog.Title asChild><div className="text-13 font-medium" style={{ color: 'var(--text-primary)' }}>
           {t('chat.ghostCall.linkConfirmTitle')}
         </div></AlertDialog.Title>
         <AlertDialog.Description asChild><div className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>

@@ -10,7 +10,9 @@
  *   （非白名单值直接变 INVALID_ARGS，不会进入 runner）。
  */
 export const AGENT_KIND = ['claude-code', 'codex', 'pi'] as const;
+/** Engines a schedule can run on: built-in Harnesses plus `acp` = a plugin engine on this computer. */
+export const SCHEDULE_AGENT_KIND = [...AGENT_KIND, 'acp'] as const;
 export const EFFORT = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export const SCHEDULE_STATUS = ['active', 'paused', 'expired'] as const;
 export const EXECUTION_MODE = ['agent', 'script'] as const;
-export const SCRIPT_CAPABILITY = ['github.read', 'jira.read', 'jira.comment', 'sessions.dispatch', 'feishu.read'] as const;
+export { SCRIPT_CAPABILITIES as SCRIPT_CAPABILITY } from '@cindy/maker-scheduler';

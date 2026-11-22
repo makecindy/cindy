@@ -1,3 +1,4 @@
+import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
 import { voiceInputSettings } from './VoiceInputSection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
@@ -78,6 +79,7 @@ import {
   validateVoiceInputCustomAsrWebsocketUrl,
 } from '../../../shared/voiceInputCustomAsr';
 import type { VoiceInputConnectionTestFailureReason } from '../../../shared/voiceInputConnectionTest';
+import appI18n from 'i18next';
 
 const log = createLogger('VoiceInputSection');
 // Recognition-language availability is independent of UI localization.
@@ -190,7 +192,7 @@ function formatHistoryTime(createdAt: number, locale: string): string {
       minute: '2-digit',
     }).format(new Date(createdAt));
   } catch {
-    return new Date(createdAt).toLocaleString();
+    return new Date(createdAt).toLocaleString(appI18n.language);
   }
 }
 
@@ -583,7 +585,7 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
             ) : null}
 
             {customAsrSelected ? (
-              <div className="flex flex-col gap-3 rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3.5">
+              <div className="flex flex-col gap-3 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3.5">
                 <p className="text-12 leading-[1.45] text-[var(--settings-section-sublabel)]">
                   {t('settings.voiceInput.serviceSource.customAsr.notice')}
                 </p>
@@ -801,7 +803,7 @@ function VoiceInputPermissionBadge({
   const children = granted ? (
     <>
       <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-section-title)]">
-        <Check size={10} strokeWidth={2.4} className="text-emerald-600 dark:text-emerald-300" />
+        <Check size={10} strokeWidth={2.4} className="text-[var(--status-success)]" />
       </span>
       {labelText}
     </>
@@ -1038,20 +1040,19 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
 
   const requestPermission = useCallback(async (kind: VoiceInputPermissionKind) => {
     try {
-      if (kind === 'microphone') {
-        if (permissions.microphone.ok) {
-          await window.electronAPI.voiceInput.openMicrophoneSettings();
-        } else {
-          const result = await requestRendererMicrophonePermission();
-          if (!result.ok) {
-            await window.electronAPI.voiceInput.openMicrophoneSettings();
-          }
+      if (kind === 'microphone' && !permissions.microphone.ok) {
+        const result = await requestRendererMicrophonePermission();
+        if (result.ok) return;
+        if (result.status === 'device-unavailable') {
+          toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+          return;
         }
-      } else if (kind === 'inputMonitoring') {
-        await window.electronAPI.voiceInput.openInputMonitoringSettings();
-      } else {
-        await window.electronAPI.voiceInput.openAccessibilitySettings();
       }
+      const voice = window.electronAPI.voiceInput;
+      const opened = kind === 'microphone' ? await voice.openMicrophoneSettings()
+        : kind === 'inputMonitoring' ? await voice.openInputMonitoringSettings()
+        : await voice.openAccessibilitySettings();
+      if (!opened.ok) toast.error(t('settings.voiceInput.permissions.openFailed'));
     } catch {
       toast.error(t('settings.voiceInput.permissions.openFailed'));
     } finally {
@@ -1995,7 +1996,12 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     label={t('settings.voiceInput.permissions.accessibility.label')}
                     granted={permissions.accessibility.ok}
                     onGrant={() => void requestPermission('accessibility')}
-                    tooltip={t('settings.voiceInput.permissions.accessibility.tooltip')}
+                    tooltip={[
+                      t('settings.voiceInput.permissions.accessibility.tooltip'),
+                      !permissions.accessibility.ok && usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease)
+                        ? t('macControlPermission.selectApp', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+                        : '',
+                    ].filter(Boolean).join(' ')}
                   />
                 )}
             </span>
@@ -2064,7 +2070,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
             >
               {customDictionaryExpanded ? (
                 <div id="voice-input-custom-dictionary" className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-4 rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <p className="text-13 font-medium text-[var(--settings-section-title)]">
                         {t('settings.voiceInput.refinement.dictionary.autoLearning.label')}
@@ -2086,7 +2092,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-4 rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <p className="text-13 font-medium text-[var(--settings-section-title)]">
                         {t('settings.voiceInput.refinement.dictionary.deviceSync.label')}
@@ -2213,19 +2219,19 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     <Dialog.Portal>
                       <Dialog.Overlay
                         className={cn(
-                          'modal-scrim fixed inset-0 z-50',
+                          'modal-scrim fixed inset-0 z-modal',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       />
                       <Dialog.Content
                         onPointerDownOutside={(event) => event.preventDefault()}
                         className={cn(
-                          'modal-panel fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
+                          'modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
                           'p-5 outline-none',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       >
-                        <Dialog.Title className="text-18 font-semibold leading-[1.35] text-[var(--settings-section-title)]">
+                        <Dialog.Title className="text-18 font-medium leading-[1.35] text-[var(--settings-section-title)]">
                           {t('settings.voiceInput.refinement.dictionary.addDialog.title')}
                         </Dialog.Title>
                         <Dialog.Description className="sr-only">
@@ -2247,7 +2253,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                           aria-label={t('settings.voiceInput.refinement.dictionary.newAriaLabel')}
                           placeholder={t('settings.voiceInput.refinement.dictionary.newPlaceholder')}
                           className={cn(
-                            'mt-5 h-12 w-full rounded-[12px] px-4',
+                            'mt-5 h-12 w-full rounded-xl px-4',
                             'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
                             'text-15 text-[var(--settings-input-text)] outline-none transition-colors',
                             'placeholder:text-[var(--settings-input-placeholder)]',
@@ -2309,7 +2315,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                           <div
                             key={entry.id}
                             className={cn(
-                              'group min-w-0 rounded-[12px] border border-[var(--settings-input-border)]',
+                              'group min-w-0 rounded-xl border border-[var(--settings-input-border)]',
                               'bg-[var(--settings-input-bg)] px-3 py-2.5 transition-colors',
                               'hover:bg-[var(--settings-menu-bg-hover)]',
                               editing && 'md:col-span-2',
@@ -2510,7 +2516,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                       })}
                     </div>
                   ) : (
-                    <p className="rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
+                    <p className="rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
                       {t(
                         dictionaryFilter === 'automatic'
                           ? 'settings.voiceInput.refinement.dictionary.emptyAutomatic'
@@ -2682,7 +2688,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     <div
                       key={entry.id}
                       className={cn(
-                        'flex items-start gap-3 rounded-[12px] p-3',
+                        'flex items-start gap-3 rounded-xl p-3',
                         'border border-[var(--settings-theme-card-border)]',
                         'bg-[var(--settings-input-bg)]',
                       )}
@@ -2734,7 +2740,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                   ))}
                 </div>
               ) : (
-                <p className="rounded-[12px] border border-[var(--settings-theme-card-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
+                <p className="rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
                   {t('settings.voiceInput.history.empty')}
                 </p>
               )}

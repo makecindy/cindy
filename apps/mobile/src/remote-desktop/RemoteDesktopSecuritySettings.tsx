@@ -42,6 +42,10 @@ export interface RemoteDesktopSecuritySettingsProps {
   onBiometricVerification(value: boolean): void;
   idleTimeoutMinutes?: number;
   idleTimeoutAvailable?: boolean;
+  /** The host applies its own away time (docs/product-rules/privacy-screen.md); no idle setting here. */
+  hostIdle?: boolean;
+  /** How the host protects itself on exit; decides the wording. */
+  exitProtection?: "privacy-screen" | "lock";
   onIdleTimeout?(minutes: number): void;
   lockOnExit?: boolean;
   lockOnExitAvailable?: boolean;
@@ -236,11 +240,17 @@ export function RemoteDesktopSecuritySettings(
           </Text>
           <Text style={hint}>
             {t(
-              props.lockOnExitAvailable
-                ? "remoteDesktop.lockOnExitHint"
-                : "remoteDesktop.settingUnsupported",
+              !props.lockOnExitAvailable
+                ? "remoteDesktop.settingUnsupported"
+                : props.exitProtection === "privacy-screen"
+                  ? "remoteDesktop.lockOnExitHintPrivacy"
+                  : "remoteDesktop.lockOnExitHint",
             )}
           </Text>
+          {props.lockOnExitAvailable && props.exitProtection === "lock" && (
+            // The host offers a privacy screen but it is off: say where to turn it on.
+            <Text style={hint}>{t("remoteDesktop.lockedEnablePrivacyHint")}</Text>
+          )}
         </View>
         <View style={switchSlot}>
           <NativeSwitch
@@ -253,73 +263,76 @@ export function RemoteDesktopSecuritySettings(
           />
         </View>
       </View>
-      <View style={{ padding: spacing.md, gap: spacing.sm }}>
-        <Text
-          style={{
-            color: colors.textPrimary,
-            fontSize: typeScale.body,
-            lineHeight: lineHeight.body,
-          }}
-        >
-          {t("remoteDesktop.idleLock")}
-        </Text>
-        <NativePullDownMenu
-          disabled={!props.idleTimeoutAvailable}
-          accessibilityLabel={t("remoteDesktop.idleLock")}
-          actions={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
-            id: String(minutes),
-            title: idleLabel(minutes),
-            state: minutes === props.idleTimeoutMinutes ? "on" : "off",
-          }))}
-          onAction={(value) => props.onIdleTimeout?.(Number(value))}
-        >
-          <Pressable
-            testID="remoteDesktop.idleLock"
-            disabled={!props.idleTimeoutAvailable}
-            accessibilityRole="button"
-            accessibilityLabel={t("remoteDesktop.idleLock")}
-            accessibilityValue={{
-              text: idleLabel(
-                props.idleTimeoutMinutes ?? REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
-              ),
+      {/* Hosts with their own away time decide idle protection themselves. */}
+      {!props.hostIdle && (
+        <View style={{ padding: spacing.md, gap: spacing.sm }}>
+          <Text
+            style={{
+              color: colors.textPrimary,
+              fontSize: typeScale.body,
+              lineHeight: lineHeight.body,
             }}
-            onPress={() => {
-              if (Platform.OS === "ios" && !usesNativePullDownMenu())
-                ActionSheetIOS.showActionSheetWithOptions(
-                  {
-                    options: [
-                      ...REMOTE_DESKTOP_IDLE_MINUTES.map(idleLabel),
-                      t("common.cancel"),
-                    ],
-                    cancelButtonIndex: REMOTE_DESKTOP_IDLE_MINUTES.length,
-                  },
-                  (index) => {
-                    const minutes = REMOTE_DESKTOP_IDLE_MINUTES[index];
-                    if (minutes !== undefined) props.onIdleTimeout?.(minutes);
-                  },
-                );
-            }}
-            style={{ minHeight: 44, justifyContent: "center" }}
           >
-            <Text
-              style={{
-                color: props.idleTimeoutAvailable
-                  ? colors.inputCaret
-                  : colors.textSecondary,
-                fontSize: typeScale.body,
-                lineHeight: lineHeight.body,
+            {t("remoteDesktop.idleLock")}
+          </Text>
+          <NativePullDownMenu
+            disabled={!props.idleTimeoutAvailable}
+            accessibilityLabel={t("remoteDesktop.idleLock")}
+            actions={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
+              id: String(minutes),
+              title: idleLabel(minutes),
+              state: minutes === props.idleTimeoutMinutes ? "on" : "off",
+            }))}
+            onAction={(value) => props.onIdleTimeout?.(Number(value))}
+          >
+            <Pressable
+              testID="remoteDesktop.idleLock"
+              disabled={!props.idleTimeoutAvailable}
+              accessibilityRole="button"
+              accessibilityLabel={t("remoteDesktop.idleLock")}
+              accessibilityValue={{
+                text: idleLabel(
+                  props.idleTimeoutMinutes ?? REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
+                ),
               }}
+              onPress={() => {
+                if (Platform.OS === "ios" && !usesNativePullDownMenu())
+                  ActionSheetIOS.showActionSheetWithOptions(
+                    {
+                      options: [
+                        ...REMOTE_DESKTOP_IDLE_MINUTES.map(idleLabel),
+                        t("devices.common.cancel"),
+                      ],
+                      cancelButtonIndex: REMOTE_DESKTOP_IDLE_MINUTES.length,
+                    },
+                    (index) => {
+                      const minutes = REMOTE_DESKTOP_IDLE_MINUTES[index];
+                      if (minutes !== undefined) props.onIdleTimeout?.(minutes);
+                    },
+                  );
+              }}
+              style={{ minHeight: 44, justifyContent: "center" }}
             >
-              {props.idleTimeoutAvailable
-                ? idleLabel(
-                    props.idleTimeoutMinutes ??
-                      REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
-                  )
-                : t("remoteDesktop.settingUnsupported")}
-            </Text>
-          </Pressable>
-        </NativePullDownMenu>
-      </View>
+              <Text
+                style={{
+                  color: props.idleTimeoutAvailable
+                    ? colors.inputCaret
+                    : colors.textSecondary,
+                  fontSize: typeScale.body,
+                  lineHeight: lineHeight.body,
+                }}
+              >
+                {props.idleTimeoutAvailable
+                  ? idleLabel(
+                      props.idleTimeoutMinutes ??
+                        REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
+                    )
+                  : t("remoteDesktop.settingUnsupported")}
+              </Text>
+            </Pressable>
+          </NativePullDownMenu>
+        </View>
+      )}
       {supportsAutoUnlock(props.hostPlatform) &&
         (props.notice || (!props.available && !props.busy)) && (
           <Text style={alertText} accessibilityRole="alert">

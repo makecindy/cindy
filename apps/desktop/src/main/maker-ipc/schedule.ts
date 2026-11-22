@@ -40,7 +40,7 @@ import path from 'node:path';
 
 import { ipcMain, BrowserWindow, app } from 'electron';
 
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
 import type {
   Scheduler,
   Schedule,
@@ -81,6 +81,7 @@ import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { isPluginEngineTask } from '../maker-host/engineKind.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import {
   resolveBoundSessionGenerationRoute,
@@ -88,6 +89,11 @@ import {
 } from './scheduleGenerationRoute.js';
 
 const log = createLogger('maker-ipc:schedule');
+
+/** Refuses only plugin-engine tasks; every other engine keeps its existing path unchanged. */
+function runsOnBuiltinEngine<T extends { agentKind: EngineKind }>(value: T): value is T & { agentKind: AgentKind } {
+  return !isPluginEngineTask(value);
+}
 
 function broadcast(channel: string, payload: unknown): void {
   // device-link tap:schedule:event 在 PUSH_FORWARD_ALLOWLIST,补 tap 才会真正转发给控制端,
@@ -239,6 +245,34 @@ async function withScheduler<T>(cb: (deps: SchedulerDeps) => Promise<T>): Promis
     rewrapSchedulerError(err);
   }
 }
+
+/**
+ * Pause as the Automations page does. Also clears the automation's unread results: pausing
+ * means the owner no longer cares about the current batch. Shared with the teammate settings pages.
+ */
+export async function pauseScheduleClearingUnread(scheduleId: string): Promise<Schedule> {
+  return withScheduler(async ({ scheduler, storage }) => {
+    const result = await scheduler.pause(scheduleId);
+    // pause 后顺手清掉这条 schedule 名下的未读历史 —— 用户主动暂停就视为
+    // 已不再关心当前一批结果,badge 一并消化。失败仅记日志,不影响 pause 本身。
+    try {
+      const updated = await storage.markAllRunsRead(scheduleId);
+      if (updated > 0) {
+        broadcast(MAKER_PUSH.SCHEDULE_EVENT, { type: 'read', scheduleId });
+      }
+    } catch (readErr) {
+      log.warn(`[pause] mark-all-runs-read failed (non-fatal): ${String(readErr)}`);
+    }
+    return result;
+  });
+}
+
+/** The scheduler calls of the teammate settings pages; the same instance the Automations page uses. */
+export const scheduleHostAccess = {
+  list: () => withScheduler(({ scheduler }) => scheduler.list()),
+  inflight: (scheduleId: string) => withScheduler(({ scheduler }) => Promise.resolve(scheduler.getInflightCount(scheduleId))),
+  resume: (scheduleId: string) => withScheduler(({ scheduler }) => scheduler.resume(scheduleId)),
+};
 
 /**
  * Device-link JSON 边界翻译:mobile 清空 intervalMs 用可序列化的 null 表达
@@ -456,23 +490,8 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown) => {
-    const scheduleId = requireString(id, 'id');
-    return withScheduler(async ({ scheduler, storage }) => {
-      const result = await scheduler.pause(scheduleId);
-      // pause 后顺手清掉这条 schedule 名下的未读历史 —— 用户主动暂停就视为
-      // 已不再关心当前一批结果,badge 一并消化。失败仅记日志,不影响 pause 本身。
-      try {
-        const updated = await storage.markAllRunsRead(scheduleId);
-        if (updated > 0) {
-          broadcast(MAKER_PUSH.SCHEDULE_EVENT, { type: 'read', scheduleId });
-        }
-      } catch (readErr) {
-        log.warn(`[pause] mark-all-runs-read failed (non-fatal): ${String(readErr)}`);
-      }
-      return result;
-    });
-  });
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown) =>
+    pauseScheduleClearingUnread(requireString(id, 'id')));
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
@@ -551,6 +570,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         ? requestedAgentKind ? { agentKind: requestedAgentKind, model: model ?? '', agentDeviceId: null } : null
         : await maker.getSessionMeta(targetSessionId).catch(() => null);
       if (session?.agentDeviceId) return unsupportedRemoteGeneration(providerId, model ?? session.model, session.agentKind);
+      // A plugin-engine task has no catalog route for utility generation, and
+      // schedules do not run on plugin engines (docs/plans/acp-plugin-bridge.md).
+      // Fail closed with no candidate instead of guessing a built-in transport.
+      if (session && !runsOnBuiltinEngine(session)) return { ok: false as const, reason: 'no_candidate' as const, attempts: [] };
       // Bound-session fallback must use the same live connection snapshot as
       // the provider picker. Never turn an unconnected built-in provider into
       // a routable candidate just because it exists in the catalog.

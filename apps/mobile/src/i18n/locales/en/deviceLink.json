@@ -24,7 +24,7 @@
   },
   "connectStep1": "Install and open {{appName}} on your computer",
   "connectStep2": "Sign in with the same account as your phone",
-  "connectStep3": "Under Settings → Remote Connection, turn on \"Allow same-account devices to control this computer\"",
+  "connectStep3": "Under Settings → Remote Connection, turn on “Allow same-account devices to control this computer”",
   "brandEyebrow": "Cindy Mobile",
   "cloudTeaserTitle": "{{appName}} in the Cloud, Coming Soon",
   "cloudTeaserCopy": "Once it launches, the mobile app works on its own, no computer needed.",
@@ -65,6 +65,7 @@
     "noCredentials": "{{agent}} can't be used because it isn't signed in on the computer. Sign in through {{appName}} on the computer under Settings → Model Providers, then try again.",
     "noEncryption": "{{agent}} can't be used because secure system storage on the computer is unavailable. Check Keychain on macOS or account encryption on Windows, then restart {{appName}} on the computer.",
     "proxyNotReady": "{{agent}} isn't ready on the computer yet. Try again shortly; if this continues, restart {{appName}} on the computer.",
+    "sharedLinkUnavailable": "{{agent}} can’t be used right now: Codex is signed in on the computer, but {{appName}} can’t reach that login (the link to it can’t be created; on Windows a standard account usually can’t create it). Make sure {{appName}} on the computer may create that link (on Windows, run it once as administrator or turn on developer mode), then try again.",
     "default": "{{agent}} can't be used because its computer sign-in is unavailable. Sign in again through {{appName}} on the computer under Settings → Model Providers. ({{reason}})"
   },
   "remoteError": {

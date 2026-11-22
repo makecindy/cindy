@@ -19,6 +19,62 @@ describe('history reading projection', () => {
     expect(projected.flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id))
       .toContain('1');
   });
+  // Tier: behavior. Tool facts are memoized per (id, outline body); a rewritten body
+  // carries a new digest, so a result that turned into a card must surface again.
+  it('re-derives a tool result when its outline stamp changes', () => {
+    const call = { ...row(1, 'tool_use', { toolName: 'Bash', toolUseId: 't', input: { command: 'ls' } }), historyContentStamp: 'a' };
+    const result = { ...row(2, 'tool_result', 'ready'), toolUseId: 't', historyContentStamp: 'a' };
+    const rows = [row(0, 'user', 'Work'), call, result];
+    const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
+      .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
+    expect(visibleIds(projectHistoryView(rows, false, true))).not.toContain('2');
+    const rewritten = rows.map((r) => r.id === '2'
+      ? { ...r, content: JSON.stringify({ xdt_card_id: 'card' }), historyContentStamp: 'b' } : r);
+    expect(visibleIds(projectHistoryView(rewritten, false, true))).toContain('2');
+  });
+  // Tier: behavior. The outline stamp is length plus the last 96 bytes, so an
+  // equal-length rewrite of the middle keeps it: the digest key still re-reads it.
+  it('re-derives a tool result when an equal-length rewrite keeps the outline stamp', () => {
+    const pad = 'y'.repeat(200);
+    const body = (marker: string) => JSON.stringify({ [marker]: 'card', pad });
+    const stamp = `${body('xdt_card_id').length}:same-tail`;
+    const call = { ...row(1, 'tool_use', { toolName: 'Bash', toolUseId: 't', input: { command: 'ls' } }), historyContentStamp: stamp };
+    const rows = [row(0, 'user', 'Work'), call,
+      { ...row(2, 'tool_result', body('xdt_card_id')), toolUseId: 't', historyContentStamp: stamp }];
+    const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
+      .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
+    expect(visibleIds(projectHistoryView(rows, false, true))).toContain('2');
+    const rewritten = rows.map((r) => r.id === '2' ? { ...r, content: body('xdt_card_ix') } : r);
+    expect(visibleIds(projectHistoryView(rewritten, false, true))).not.toContain('2');
+  });
+  // Unit regression: two 16-character bodies that collide under a single 32-bit
+  // FNV-1a (`<tool_use_error>` vs `xdt-file:///Al乇坋`) shared the same stamp here,
+  // so the cache used to keep the tool error's "not visible" bit and fold the newly
+  // delivered file result back into deferred work.
+  it('separates colliding bodies that share an outline stamp', () => {
+    const stamp = '16:same-tail';
+    const call = { ...row(1, 'tool_use', { toolName: 'Bash', toolUseId: 't', input: { command: 'ls' } }), historyContentStamp: stamp };
+    const bodies = ['<tool_use_error>', 'xdt-file:///Al乇坋'];
+    const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
+      .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
+    for (const [index, body] of bodies.entries()) {
+      const rows = [row(0, 'user', 'Work'), call,
+        { ...row(2, 'tool_result', body), toolUseId: 't', historyContentStamp: stamp }];
+      const visible = visibleIds(projectHistoryView(rows, false, true)).includes('2');
+      // Only the media URI is a delivered result; the tool error stays an activity.
+      expect({ index, visible }).toEqual({ index, visible: index === 1 });
+    }
+  });
+  // Tier: behavior. A teammate's reply lists the tasks it started from these receipts; folded into
+  // deferred work they never reached the chat (2026-11-10).
+  it('keeps a send_to_session receipt available outside deferred work', () => {
+    const rows = [row(0, 'user', 'Start a task'), row(1, 'thinking', 'plan'),
+      row(2, 'tool_use', { toolName: 'mcp__cindy_helper__call_tool', toolUseId: 'send', input: { name: 'send_to_session', args: {} } }),
+      { ...row(3, 'tool_result', JSON.stringify({ ok: true, target_session_id: 's-1', wake_kind: 'created', target_title: 'Fix it' })), toolUseId: 'send' },
+      { ...row(4, 'assistant', 'Started it.'), agentMeta: { turnCompleted: true } }];
+    const visible = projectHistoryView(rows, false, true).flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id);
+    expect(visible).toEqual(expect.arrayContaining(['2', '3']));
+  });
   it.each([false, true])('archives interrupted progress in recoverable history ranges (streaming=%s)', (streaming) => {
     const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Checking the build'),
       row(2, 'thinking', 'detail'), row(3, 'error', { message: 'Usage limit reached' }),
@@ -459,13 +515,19 @@ describe('shared history view lifecycle', () => {
     expect(view.getSnapshot().details.size).toBe(0);
   });
 
-  it('releases a large partial detail body when collapsed during pagination', async () => {
+  // #11009: cancellation must stop the indicator and discard late completion,
+  // while retaining warm bodies and still evicting large ordinary partial reads.
+  it.each([
+    { cached: false, preview: true }, { cached: true, preview: true }, { cached: false, preview: false },
+  ])('stops a cancelled paginated read (cached=$cached, preview=$preview)', async ({ cached, preview }) => {
     const body = row(1, 'thinking', 'x'.repeat(1024 * 1024));
+    const items = projectHistoryView([body], preview);
+    const warm = cached ? [row(1, 'thinking', 'previous complete body')] : [];
     let finish!: (page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void;
     let started!: () => void;
     const secondPage = new Promise<void>(resolve => { started = resolve; });
     const view = new HistoryViewController<HistoryMessageSource>({
-      page: async () => ({ version: 1, items: projectHistoryView([body], false), hasMore: false, nextCursor: null }),
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
       details: async (_ref, after) => {
         if (!after) return { version: 1, messages: [body], hasMore: true, nextCursor: 'next' };
         started();
@@ -473,19 +535,67 @@ describe('shared history view lifecycle', () => {
       },
       expanded: async () => undefined,
     });
+    if (cached) await view.restoreCachedView(async () => ({
+      ...view.getSnapshot(), items, ready: true,
+      details: new Map([[items[0].key, { messages: warm, revision: 'previous', lastMessageId: body.id,
+        loading: false, complete: true, error: null }]]),
+    }));
     await view.refresh();
     const group = view.getSnapshot().items[0];
     if (group.type !== 'work') throw new Error('Expected a work group');
     view.setExpanded(group.key, true);
     const pending = view.loadDetails(group.summary);
     await secondPage;
-    expect(view.getSnapshot().details.get(group.key)?.messages).toHaveLength(1);
+    expect(view.getSnapshot().details.get(group.key)).toMatchObject({
+      messages: cached ? warm : preview ? [] : [body], loading: true,
+    });
     view.setExpanded(group.key, false);
-    expect(view.getSnapshot().details.size).toBe(0);
+    const cancelled = view.getSnapshot().details.get(group.key);
+    if (cached || preview) expect(cancelled).toMatchObject({ messages: warm, loading: false, complete: false });
+    else expect(cancelled).toBeUndefined();
     finish({ version: 1, messages: [], hasMore: false, nextCursor: null });
     await pending;
-    expect(view.getSnapshot().details.size).toBe(0);
+    expect(view.getSnapshot().details.get(group.key)).toBe(cancelled);
   });
+
+  // #11009 scope regression (unit): only the full range that can switch back
+  // to a detail preview needs atomic publication. Other first reads must keep
+  // their first page readable during a slow/failing second page.
+  it.each(['completed', 'lines', 'preview', 'preview-full'] as const)(
+    'preserves partial-read availability outside the preview-switch path (%s)', async (mode) => {
+      const rows = Array.from({ length: 8 }, (_, i) => row(i + 1, 'thinking', `step ${i}`));
+      const items = projectHistoryView(rows, mode !== 'completed');
+      const group = items[0];
+      if (group.type !== 'work') throw new Error('Expected a work group');
+      if (mode === 'lines') group.summary.lines = [];
+      const summary = mode === 'preview' ? group.summary.preview! : group.summary;
+      const first = rows.findIndex(message => message.id === summary.firstMessageId);
+      const firstPage = rows.slice(first, first + 2);
+      let fail!: (error: Error) => void;
+      let started!: () => void;
+      const secondPage = new Promise<void>(resolve => { started = resolve; });
+      const view = new HistoryViewController<HistoryMessageSource>({
+        page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+        details: async (_ref, after) => {
+          if (!after) return { version: 1, messages: firstPage, hasMore: true, nextCursor: 'next' };
+          started();
+          return new Promise((_resolve, reject) => { fail = reject; });
+        },
+        expanded: async () => undefined,
+      });
+      await view.refresh();
+      view.setExpanded(summary.key, true);
+      const pending = view.loadDetails(summary);
+      await secondPage;
+      const visible = mode === 'preview-full' ? [] : firstPage;
+      expect(view.getSnapshot().details.get(summary.key)).toMatchObject({ messages: visible, loading: true });
+      const error = new Error('Second page failed');
+      fail(error);
+      await pending;
+      expect(view.getSnapshot().details.get(summary.key)).toMatchObject({ messages: visible, loading: false, error });
+      view.setActive(false);
+    },
+  );
 
   it.each([false, true])('joins an expanded detail read through its latest revision (changed=%s)', async (changed) => {
     let rows = [row(1, 'thinking', 'old')];

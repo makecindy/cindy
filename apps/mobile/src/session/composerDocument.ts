@@ -8,7 +8,6 @@
  */
 import {
   boundAgentReferenceText,
-  buildTodoReferenceHref,
   parseTodoReferenceHref,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
@@ -336,6 +335,7 @@ export function replaceComposerTextRange(
   const start = Math.max(0, Math.min(from, to));
   const end = Math.max(start, Math.max(from, to));
   const before: ComposerNode[] = [];
+  const spanned: ComposerNode[] = [];
   const after: ComposerNode[] = [];
   let offset = 0;
   let atomIndex = 0;
@@ -369,11 +369,16 @@ export function replaceComposerTextRange(
       const localEnd = Math.min(text.length, end - nodeStart);
       if (localStart > 0) before.push({ ...node, text: text.slice(0, localStart) });
       if (localEnd < text.length) after.unshift({ ...node, text: text.slice(localEnd) });
+    } else if (node.type === 'quote') {
+      // A quote has no projected text, so a text range spanning its position
+      // (`/`, quote, `com` replaced by a palette pick) cannot delete it. It
+      // stays right after the replacement, keeping a picked command in front.
+      spanned.push(node);
     }
   }
 
   if (!atomRange && start >= offset) before.push(...document.nodes.slice(before.length));
-  return normalizeComposerDocument({ version: 1, nodes: [...before, ...replacement, ...after] });
+  return normalizeComposerDocument({ version: 1, nodes: [...before, ...replacement, ...spanned, ...after] });
 }
 
 export function mentionComposerNode(
@@ -462,13 +467,6 @@ export function restoreComposerSlashRuntimeAliases(
     return { type: 'text', text: wire, slashCommand: wire };
   });
   return changed ? normalizeComposerDocument({ version: 1, nodes }) : document;
-}
-
-/** One of the teammate's todos, quoted from its 近况 sheet (same wire as Desktop's todo chip). */
-export function todoReferenceComposerNode(input: { botId: string; todoId: string; title: string }): ComposerMentionNode {
-  const href = buildTodoReferenceHref(input.botId, input.todoId);
-  const label = input.title.trim() || 'Todo';
-  return { type: 'mention', kind: 'todo', label, raw: `[${label.replace(/([[\]\\])/g, '\\$1')}](${href})`, href };
 }
 
 export function sessionLinkComposerNode(input: {

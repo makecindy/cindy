@@ -124,7 +124,7 @@ function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
   const kind = (request as { kind?: unknown }).kind;
   return (
-    kind === 'mcp_setup' || kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'
+    kind === 'mcp_setup' || (kind === 'issue_confirm' && (request as Record<string, unknown>).remoteConfirmSupported !== true) || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'
   );
 }
 

@@ -26,6 +26,7 @@ import { createLogger } from '@/lib/logger';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { extractIpcError } from '@/utils/ipcError';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
+import appI18n from 'i18next';
 
 const log = createLogger('SessionShareImportWizard');
 
@@ -249,13 +250,13 @@ export function SessionShareImportWizard({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[480px] p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -324,7 +325,7 @@ export function SessionShareImportWizard({
                         ? 'Pi'
                         : 'Codex',
                     count: preview.messageCount,
-                    exportedAt: new Date(preview.exportedAt).toLocaleString(),
+                    exportedAt: new Date(preview.exportedAt).toLocaleString(appI18n.language),
                   })}
                 </p>
                 {preview.orcaWorkerCount > 0 && (

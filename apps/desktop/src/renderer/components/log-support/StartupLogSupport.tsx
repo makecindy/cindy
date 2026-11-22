@@ -47,7 +47,7 @@ export function StartupLogSupport() {
     <>
       {visible && (
         <div
-          className="pointer-events-none fixed inset-x-0 bottom-2 z-[9999] flex justify-center"
+          className="pointer-events-none fixed inset-x-0 bottom-2 z-fullscreen flex justify-center"
           style={WINDOW_NO_DRAG_STYLE}
         >
           {/* Login's bare-text action treatment; only the label's padded hit area is interactive. */}
@@ -55,7 +55,7 @@ export function StartupLogSupport() {
             type="button"
             aria-haspopup="dialog"
             aria-expanded={open}
-            className="pointer-events-auto flex h-8 items-center justify-center border-0 bg-transparent px-4 text-12 font-normal leading-4 text-[var(--login-secondary-text)] underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--login-link-text)]"
+            className="pointer-events-auto flex h-8 items-center justify-center border-0 bg-transparent px-4 text-12 font-normal leading-4 text-[var(--login-secondary-text)] underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             onClick={() => setOpen(true)}
           >
             {t('logSupport.title')}

@@ -21,18 +21,36 @@ function reader(source: HistoryMessageSource[]) {
   return { list, api: createHistoryViewReader({ list, anchor, running: () => false }) };
 }
 describe('host history view', () => {
+  // Unit: page sealing used two full anchor reads although the production
+  // reader already supports bounded ID validation. Reject invalidated history
+  // through that same validator, without loading endpoint bodies again.
+  it('batch-validates page endpoints and rejects invalidated history before publishing', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const anchor = vi.fn(async (_sid: string, id: string) => source.find(r => r.id === id)!);
+    const validate = vi.fn(async (_sid: string, _ids: string[]) => {});
+    const api = createHistoryViewReader({ list: base.list, anchor, validate, running: () => false });
+    expect((await api.page('s')).items.length).toBeGreaterThan(0);
+    expect(validate).toHaveBeenCalledExactlyOnceWith('s', ['0', '1']);
+    expect(anchor).not.toHaveBeenCalled();
+    validate.mockRejectedValueOnce(new Error('History range changed'));
+    await expect(api.page('s')).rejects.toThrow('History range changed');
+  });
+
   // Unit performance regression: concurrent closed-history pages duplicated DB
   // scans/projection. Existing pagination tests never overlapped requests.
-  // Two identical in-flight reads must share work, but later reads remain fresh.
-  it('shares in-flight closed pages, fans out shape callbacks and rereads after completion', async () => {
+  // Two identical in-flight reads must share work, and the settled page stays
+  // cached until a DB write bumps the revision (task switch P1-2).
+  it('shares in-flight closed pages, fans out shape callbacks and caches the settled page until the revision moves', async () => {
     const source = [row(0, 'user'), row(1), row(2, 'assistant')];
     const base = reader(source);
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const list = vi.fn(async (...args: Parameters<typeof base.list>) => { await gate; return base.list(...args); });
     let scope = 'local';
+    let revision = 'owner-a:1';
     const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
-      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      revision: async () => revision, anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
       shareScope: () => scope });
     const firstShape = vi.fn(), secondShape = vi.fn();
     const a = api.page('s', undefined, true, { onShape: firstShape });
@@ -44,13 +62,154 @@ describe('host history view', () => {
     expect(firstShape).toHaveBeenCalledTimes(1);
     expect(secondShape).toHaveBeenCalledWith(firstShape.mock.calls[0][0]);
     expect(list).toHaveBeenCalledTimes(1);
+    // Settled page: a repeat read hits the cache and replays the shape.
+    const replayedShape = vi.fn();
+    await api.page('s', undefined, true, { onShape: replayedShape });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(replayedShape).toHaveBeenCalledWith(firstShape.mock.calls[0][0]);
+    // A DB write bumps the revision: the page rereads.
+    revision = 'owner-a:2';
     await api.page('s', undefined, true);
     expect(list).toHaveBeenCalledTimes(2);
     // A device-link caller reads with different import side effects: never joined.
     const local = api.page('s', undefined, true);
     scope = 'device-link';
     await Promise.all([local, api.page('s', undefined, true)]);
-    expect(list).toHaveBeenCalledTimes(4);
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+  // A folded live row hides its id inside the work summary, not in `messages`.
+  // Such a page must not be cached either: the run can be cancelled and the
+  // projected row lost without any DB write to invalidate the key.
+  // Unit: a run that starts during the read projects the page in streaming mode
+  // and may carry live rows. Neither may be cached: the run can end without a DB
+  // write, so the revision stays put while the page stops being true.
+  it('never caches a page projected while the session was running', async () => {
+    const source = [row(0, 'user'), row(1), { ...row(2, 'tool_result'), toolUseId: 't9', content: 'ok' }];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let runningCalls = 0;
+    // The wrapper checks `running` twice before the read; the projection asks
+    // again, so the third call is the one that turns the page into a live view.
+    const running = vi.fn(() => ++runningCalls === 3);
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running });
+    const first = await api.page('s', undefined, true);
+    expect(first.items.some((item) => item.type === 'work' && item.summary.isStreaming)).toBe(true);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // streaming page not cached
+  });
+  // Unit: live rows come from the run in memory, not the DB. A cancelled run
+  // releases them without a write, so a page holding one must not be cached.
+  it('never caches a page that carries a row owned by the live source', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let live: HistoryMessageSource[] = [{ ...row(2, 'assistant'), id: 'live-1' }];
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      live: () => live });
+    await api.page('s', undefined, true);
+    live = [];
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // live row not cached
+  });
+  // Unit: a settled page is only valid while the session stays idle with an
+  // empty live source. A run that ends leaves its final row in the live source
+  // until the write lands, and the revision only moves once the write succeeds,
+  // so a hit taken then would hide the newest message until the TTL expires.
+  it('does not serve a settled page while the live source still holds rows', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let live: HistoryMessageSource[] = [];
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      live: () => live });
+    await api.page('s', undefined, true);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(1); // settled page served
+    live = [{ ...row(2, 'assistant'), id: 'live-1' }];
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // live row pending: re-read instead of serving the settled page
+  });
+  it('never caches a page whose work summary keeps a live row id', async () => {
+    const liveThinking = { ...row(1, 'thinking'), id: 'history-live:c1' };
+    const source: HistoryMessageSource[] = [
+      row(0, 'user'), liveThinking, { ...row(2, 'tool_result'), toolUseId: 't9', content: 'ok' },
+    ];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      isVolatileItemId: id => id.startsWith('history-live:') });
+    const page = await api.page('s', undefined, true);
+    const work = page.items.find((item) => item.type === 'work');
+    if (!work || work.type !== 'work') throw new Error('missing work');
+    expect(work.summary.liveMessageIds).toEqual(['history-live:c1']);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // folded live row: never cached
+  });
+  // Settling guards (review round 1): a page is only kept when it is still a
+  // settled read — live-projected rows must not come back after their run was
+  // cancelled, a mid-read DB write invalidates the key anyway, and a page older
+  // than the TTL rereads so transient degradation (e.g. image restore failures)
+  // self-heals instead of being pinned forever.
+  it('never caches pages with live-projected rows or a moved revision, and expires settled pages by TTL', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let revision = 'owner-a:1';
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => revision, anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      isVolatileItemId: id => id.startsWith('history-live:') });
+    // Live row projected into the page: settle it, then reread — never cached.
+    const liveBase = reader([...source, { ...row(2, 'user'), id: 'history-live:x' }]);
+    list.mockImplementationOnce((...args: Parameters<typeof base.list>) => liveBase.list(...args)).mockImplementationOnce(base.list);
+    await api.page('s', undefined, true);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // volatile page not cached
+    // Revision moves while the read is in flight: the settled key is dead on arrival.
+    revision = 'owner-a:3';
+    list.mockImplementationOnce(async (...args: Parameters<typeof base.list>) => {
+      const result = await base.list(...args);
+      revision = 'owner-a:4';
+      return result;
+    });
+    await api.page('s', undefined, true);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(4); // stale key not cached
+    // A clean page caches, but only for the TTL window.
+    vi.useFakeTimers();
+    try {
+      await api.page('s', undefined, true);
+      expect(list).toHaveBeenCalledTimes(4); // clean page from the segment above still cached
+      vi.advanceTimersByTime(31_000);
+      await api.page('s', undefined, true);
+      expect(list).toHaveBeenCalledTimes(5); // TTL expiry rereads
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  // Unit: the cache must not serve a running task (live rows change without
+  // writes) and must not pin a failed read.
+  it('keeps running-task pages uncached and drops failed pages instead of caching them', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let running = false;
+    let revision = 'rev-1';
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => revision, anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => running });
+    await api.page('s', undefined, true);
+    running = true;
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // running bypasses the settled cache
+    running = false;
+    revision = 'rev-2';
+    list.mockRejectedValueOnce(new Error('read failed'));
+    await expect(api.page('s', undefined, true)).rejects.toThrow('read failed');
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(4); // the failed read was not cached
   });
   it('reaches a long run through compact outlines and keeps SDK metadata in hydrated details', async () => {
     const source = [row(0, 'user'), ...Array.from({ length: 1100 }, (_, i) => ({
@@ -372,6 +531,62 @@ describe('history scan budget', () => {
     expect(list).toHaveBeenCalledTimes(1);
     await expect(api.page('s', page.nextCursor!)).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
   });
+  // Unit regression: the outlined page used to scan up to a hundred read
+  // batches, so opening a tool-heavy session blocked on a multi-second scan.
+  // A page must stop at the row budget and continue from its cursor.
+  it('cuts an outlined page at the row budget and continues from its cursor', async () => {
+    let n = 0;
+    const source = [row(n++, 'user')];
+    // Subagent rows hide behind one card, so a page must read thousands of rows
+    // before twenty visible items exist.
+    for (let turn = 0; turn < 12; turn++) {
+      source.push({ ...row(n++, 'tool_use'), toolUseId: `turn-${turn}`,
+        content: { toolName: 'Agent', input: { description: `Turn ${turn}` } } });
+      for (let step = 0; step < 1998; step++) source.push({ ...row(n++), content: 'x', agentMeta: { parentUuid: `turn-${turn}` } });
+      source.push({ ...row(n++, 'assistant'), content: '# Report\nDelivered', agentMeta: { turnCompleted: true } });
+    }
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list, outline: base.list,
+      hydrate: async (_sid, ids) => source.filter((r) => ids.includes(r.id)),
+      anchor: async (_sid, id) => source.find((r) => r.id === id)!, running: () => false });
+    const page = await api.page('s', undefined, true);
+    expect(base.list).toHaveBeenCalledTimes(12);
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(page.items.length).toBeLessThan(20);
+    expect(page.hasMore).toBe(true);
+    const ids = (items: typeof page.items) => items.flatMap((item) => item.type === 'work'
+      ? [item.summary.firstMessageId, item.summary.lastMessageId]
+      : item.messages.map((message) => message.id));
+    const everything = ids(projectHistoryView(source, false, true));
+    expect(ids(page.items)).toEqual(everything.slice(everything.length - ids(page.items).length));
+    const received = [...page.items];
+    let before = page.nextCursor ?? undefined;
+    let pages = 1;
+    while (before) {
+      const older = await api.page('s', before, true);
+      received.unshift(...older.items);
+      before = older.nextCursor ?? undefined;
+      expect(++pages).toBeLessThan(20);
+    }
+    expect(ids(received)).toEqual(everything);
+  });
+  // Tier: behavior. Greptile #11190: an empty read is the only signal that the
+  // window starts at history, which moves project()'s cut to row 0. Without a
+  // rebuild the withheld oldest work group never becomes reachable again.
+  it('releases the oldest work group once a page reaches the start of history', async () => {
+    const source = Array.from({ length: 999 }, (_, index) => row(index));
+    source.push({ ...row(999, 'assistant'), content: '# Report\nDelivered', agentMeta: { turnCompleted: true } });
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list, outline: base.list,
+      hydrate: async (_sid, ids) => source.filter((r) => ids.includes(r.id)),
+      anchor: async (_sid, id) => source.find((r) => r.id === id)!, running: () => false });
+    const page = await api.page('s', undefined, true);
+    expect(base.list).toHaveBeenCalledTimes(2);
+    expect(page.items[0]).toMatchObject({ type: 'work', summary: { firstMessageId: '0', lastMessageId: '998' } });
+    expect(page.items.at(-1)).toMatchObject({ type: 'messages', messages: [{ id: '999' }] });
+    expect(page.hasMore).toBe(false);
+  });
+
   it('stops a boundary-free history before a twenty-first query without returning partial groups', async () => {
     const { api, list } = reader(Array.from({ length: 2500 }, (_, i) => row(i)));
     await expect(api.page('s')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });

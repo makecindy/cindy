@@ -55,13 +55,13 @@ export function CrossAgentConvertDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[440px] p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -141,11 +141,11 @@ function StepIcon({ status }: { status: CrossAgentStepStatus }) {
     case 'running':
       return <Spinner size={16} className="text-[var(--confirm-title)]" />;
     case 'success':
-      return <Check className="h-4 w-4 shrink-0 text-emerald-500" />;
+      return <Check className="h-4 w-4 shrink-0 text-[var(--status-success)]" />;
     case 'skipped':
       return <CircleSlash className="h-4 w-4 shrink-0 text-[var(--confirm-desc)]" />;
     case 'failed':
-      return <X className="h-4 w-4 shrink-0 text-red-500" />;
+      return <X className="h-4 w-4 shrink-0 text-[var(--error-fg)]" />;
     default:
       return null;
   }

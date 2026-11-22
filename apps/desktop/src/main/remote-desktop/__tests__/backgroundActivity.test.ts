@@ -30,7 +30,37 @@ describe('capture background activity is isolated from the chat window', () => {
 });
 
 describe('remote desktop state polling', () => {
-  it('does not probe Windows for routine polls, but checks fresh status on explicit requests', async () => {
+  // Regression: plugin live screens reused the desktop lease and showed a false
+  // desktop-control warning. Existing polling coverage only exercised idle state.
+  // Unit: invoke the production STATE handler with the same active lease, with
+  // and without a plugin session; real desktop viewing/control must remain visible.
+  it.each([false, true])(
+    'excludes plugin screens from the desktop notice (controlling=%s)',
+    async (controlling) => {
+      const active = { peer: 'other-computer', controlling };
+      for (const liveSession of [null, {}]) {
+        let handler!: () => Promise<Record<string, unknown>>;
+        compile(between(source, '  ipcMain.handle(DESKTOP_LOCAL.STATE', '  let windowsSetupBusy'), {
+          ipcMain: {
+            handle: (_name: string, callback: typeof handler) => {
+              handler = callback;
+            },
+          },
+          DESKTOP_LOCAL: { STATE: 'state' },
+          assertTrustedAppRendererEvent: () => {},
+          readDeviceLinkSettings: () => ({ remoteDesktopEnabled: true }),
+          remoteDesktop: { state: active },
+          liveSession,
+          controlledOverlay: { visible: false },
+          permissions: { guideOpen: false },
+        });
+        expect((await handler()).active).toEqual(liveSession ? null : active);
+      }
+    },
+  );
+  // Unit: the mounted settings page requests service status even while its row is hidden.
+  it('checks fresh Windows status only when explicitly requested for an enabled desktop', async () => {
+    let enabled = true;
     const readWindowsDesktopSupport = vi.fn(async () => 'ready');
     const assertTrustedAppRendererEvent = vi.fn();
     let handler: (event: unknown, check?: unknown) => Promise<Record<string, unknown>>;
@@ -42,8 +72,9 @@ describe('remote desktop state polling', () => {
       },
       DESKTOP_LOCAL: { STATE: 'state' },
       assertTrustedAppRendererEvent,
-      readDeviceLinkSettings: () => ({ remoteDesktopEnabled: false }),
+      readDeviceLinkSettings: () => ({ remoteDesktopEnabled: enabled }),
       remoteDesktop: { state: null },
+      liveSession: null,
       controlledOverlay: { visible: false },
       permissions: { guideOpen: false },
       readWindowsDesktopSupport,
@@ -54,13 +85,16 @@ describe('remote desktop state polling', () => {
     for (let poll = 0; poll < 60; poll++) {
       expect(await handler!({}, poll % 2 ? false : undefined)).not.toHaveProperty('windowsSupport');
     }
+    enabled = false;
+    expect(await handler!({}, true)).not.toHaveProperty('windowsSupport');
     expect(readWindowsDesktopSupport).not.toHaveBeenCalled();
+    enabled = true;
     expect(await handler!({}, true)).toHaveProperty('windowsSupport', 'ready');
     readWindowsDesktopSupport.mockResolvedValue('missing');
     expect(await handler!({}, true)).toHaveProperty('windowsSupport', 'missing');
     expect(readWindowsDesktopSupport).toHaveBeenCalledTimes(2);
     await expect(handler!({}, 'true')).rejects.toThrow('INVALID_PARAMS');
     expect(readWindowsDesktopSupport).toHaveBeenCalledTimes(2);
-    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(63);
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(64);
   });
 });

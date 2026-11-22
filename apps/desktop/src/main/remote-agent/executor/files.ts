@@ -162,7 +162,7 @@ export interface RipgrepRunner {
 
 export function createRipgrepRunner(rgPath: string): RipgrepRunner {
   return (args, cwd, { maxLines, signal }) => new Promise((resolve, reject) => {
-    const child = spawn(rgPath, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], signal });
+    const child = spawn(rgPath, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], signal, windowsHide: true });
     const lines: string[] = [];
     let stderr = '';
     let stopped = false;

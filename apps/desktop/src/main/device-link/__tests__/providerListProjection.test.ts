@@ -51,6 +51,27 @@ const projectForCurrentController = (result: unknown) =>
     modelVisibilityOverrides?: Record<string, boolean>;
   };
 
+// 2026-11-18 (Dash): remote control and the phone listed the pool plus the old connections merged into
+// it, which the computer's own Settings hides. Only the provider switch decides remote use now, and a
+// merged connection follows its pool, so the catalog keeps it behind the pool whatever the switches or
+// models are. Only same-account readers learn which pool it belongs to.
+it.each([
+  { pool: false, old: true, sameAccount: true },
+  { pool: true, old: true, sameAccount: true },
+  { pool: false, old: false, sameAccount: true },
+  { pool: true, old: true, sameAccount: false },
+])('keeps a merged connection behind its pool in every remote catalog: %j', ({ pool, old, sameAccount }) => {
+  const models = (ids: string[]) => ({ codex: ids.map(id => ({ id, name: id, efforts: [], contextWindow: 1000 })) });
+  const projected = __testing.projectInvokeResultForTunnel('maker:provider:list', { providers: [
+    { id: 'target', name: 'Target', agents: ['codex'], models: models(['model-a']), remoteInvocationEnabled: pool },
+    { id: 'original', name: 'Original', agents: ['codex'], models: models(['model-a', 'model-b']), remoteInvocationEnabled: old,
+      subscriptionPoolAlias: true, subscriptionPoolTarget: 'target' },
+  ] }, false, [], sameAccount) as { providers: Record<string, unknown>[] };
+  const original = projected.providers.find(provider => provider.id === 'original');
+  expect(original?.subscriptionPoolAlias).toBe(true);
+  expect(original?.subscriptionPoolTarget).toBe(sameAccount ? 'target' : undefined);
+});
+
 describe('schedule binding list projection', () => {
   const fields = {
     id: 'heartbeat', name: 'Heartbeat', status: 'paused', targetSessionId: 'task',
@@ -64,6 +85,8 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'explicit-off', persistentSession: false },
       { ...fields, id: 'expired', status: 'expired' },
       { ...fields, id: 'unbound', targetSessionId: undefined },
+      // The pre-run command never crosses the tunnel.
+      { ...fields, id: 'pr', preRunHook: { command: "node gate.mjs 'https://github.com/o/r/pull/9'" } },
     ];
     const projected = __testing.projectInvokeResultForTunnel(
       'maker:schedule:list', full, false, [null, { sessionBindings: true }],
@@ -73,7 +96,9 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'second', recurring: false },
       { ...fields, id: 'persistent', persistentSession: true },
       { ...fields, id: 'explicit-off' },
+      { ...fields, id: 'pr' },
     ]);
+    expect(JSON.stringify(projected)).not.toContain('gate.mjs');
     expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
     expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
   });
@@ -444,6 +469,43 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
     expect(providers[0].logoKind).toBe('vercel');
     expect(providers[0].routing).toEqual({ codex: {} });
+  });
+
+  // PR #9941 review, unit: the enterprise artwork set by the host reaches this account's
+  // current controllers only. Other accounts (shared-task / provider-share guests), legacy
+  // controllers and non-organization sources never receive it.
+  it('企业专属图标只透传给同账号的当前控制端，且只认企业来源', () => {
+    const enterprise = {
+      ...xdProviderWithFullRouting(),
+      id: 'byok-1b2c3d4e',
+      source: 'organization',
+      logoKind: 'openai-spectrum',
+      routing: { codex: { upstream: 'https://gateway.example.invalid/v1' } },
+    };
+    const forged = { ...enterprise, id: 'custom-provider', source: 'user' };
+    const projectFor = (supportsFullLogoKinds: boolean, sameAccount: boolean) =>
+      (__testing.projectInvokeResultForTunnel(
+        'maker:provider:list', { providers: [enterprise, forged] }, supportsFullLogoKinds, [], sameAccount,
+      ) as { providers: Record<string, unknown>[] }).providers;
+
+    const own = projectFor(true, true);
+    expect(own[0].logoKind).toBe('openai-spectrum');
+    expect(own[1]).not.toHaveProperty('logoKind');
+    expect(projectFor(true, false)[0]).not.toHaveProperty('logoKind');
+    expect(projectFor(false, true)[0]).not.toHaveProperty('logoKind');
+  });
+
+  // Unit: the real tunnel projection only exposes the optional v2 directory SVG to the same
+  // account. A foreign controller or a user provider with the same field must get no SVG.
+  it('restricts custom artwork to same-account organization suppliers', () => {
+    const customIcon = '<svg/>';
+    const enterprise = { ...xdProviderWithFullRouting(), id: 'byok-test', source: 'organization', customIcon };
+    const forged = { ...enterprise, id: 'user-test', source: 'user' };
+    const payload = { providers: [enterprise, forged] };
+    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', payload, true, [], true))
+      .toMatchObject({ providers: [expect.objectContaining({ customIcon }), expect.not.objectContaining({ customIcon })] });
+    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', payload, true, [], false))
+      .toMatchObject({ providers: [expect.not.objectContaining({ customIcon }), expect.not.objectContaining({ customIcon })] });
   });
 
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {

@@ -174,7 +174,26 @@ export function packageHash(dir) {
   }
   return hash.digest('hex');
 }
-export function copyPlugin(id, source, dest) {
+// The browser bridge loads the packaged executable, even when the seed came from source.
+function browserNativeHost(manifest) {
+  return manifest.id === 'my-browser' && manifest.browserExtension?.nativeHost;
+}
+
+function verifyBrowserNative(dir, manifest) {
+  const native = browserNativeHost(manifest);
+  if (!native) return;
+  invariant(native.binary === 'native-host/bin', 'Unsupported Cindy Chrome native host layout');
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    for (const arch of ['arm64', 'x64']) {
+      const filename = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
+      const file = path.join(dir, native.binary, platform + '-' + arch, filename);
+      const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+      invariant(stat?.isFile() && stat.size > 0, 'Missing Cindy Chrome native host: ' + file);
+    }
+  }
+}
+
+export function copyPlugin(id, source, dest, { repositoryRoot } = {}) {
   const files = pluginFiles(source), manifest = json(path.join(source, 'ghost.json'));
   invariant(manifest.id === id, `Plugin manifest ID differs: ${id}`);
   invariant(!fs.existsSync(dest), `Plugin destination already exists: ${id}`);
@@ -182,6 +201,12 @@ export function copyPlugin(id, source, dest) {
   for (const [rel, src] of files) {
     const to = path.join(dest, rel); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(src, to);
   }
+  if (browserNativeHost(manifest) && repositoryRoot) {
+    invariant(path.resolve(source) === path.resolve(repositoryRoot, id), 'Browser build must use the composed plugin checkout');
+    execFileSync(process.execPath, [path.join(repositoryRoot, 'scripts/build-browser-native.mjs'),
+      path.join(dest, 'native-host'), path.join(dest, 'native-host/bin')], { cwd: repositoryRoot, stdio: 'inherit' });
+  }
+  verifyBrowserNative(dest, manifest);
   // Source versions are facts. Never make an old local tree outrank a public
   // release by manufacturing a higher version during packaging.
   invariant(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(manifest.version), `${id}: invalid version`);
@@ -211,8 +236,10 @@ export function prepareLocalPlugins(config, checkout, destination, provenance = 
   for (const id of Object.keys(config.localPlugins).sort()) {
     const source = localPluginSource(config, id, checkout);
     const dest = path.join(destination, id);
-    const entry = copyPlugin(id, source, dest);
-    invariant(packageHash(source) === entry.sha256, `${id}: source changed while copying`);
+    const sourceHash = packageHash(source);
+    const repositoryRoot = typeof config.localPlugins[id] === 'string' ? undefined : checkout;
+    const entry = copyPlugin(id, source, dest, { repositoryRoot });
+    invariant(packageHash(source) === sourceHash, `${id}: source changed while copying`);
     entries.push({ ...entry, namespace: 'local', contentHash: pluginContentHash(dest),
       provenance: typeof config.localPlugins[id] === 'string' ? { kind: 'directory', directory: source } : { kind: 'repository', ...provenance } });
   }
@@ -286,7 +313,7 @@ export function prepare(config, out, exec = run, { resume = false } = {}) {
           continue;
         }
         const dest = path.join(report.directory, 'apps/desktop/resources/builtin-ghosts/official', id);
-        report.plugins.push({ ...copyPlugin(id, source, dest), localOverride: false });
+        report.plugins.push({ ...copyPlugin(id, source, dest, { repositoryRoot: checkout }), localOverride: false });
       }
       report.localPlugins = prepareLocalPlugins(config, checkout,
         path.join(report.directory, 'apps/desktop/resources/personal-plugins'),
@@ -309,6 +336,10 @@ export function verifyReport(file) {
   for (const p of r.plugins) invariant(packageHash(path.join(r.directory, 'apps/desktop/resources/builtin-ghosts/official', p.id)) === p.sha256, `Plugin ${p.id} changed; prepare again`);
   const personal = path.join(r.directory, 'apps/desktop/resources/personal-plugins');
   invariant((r.localPluginsHash ?? null) === (fs.existsSync(personal) ? packageHash(personal) : null), 'Personal plugin inventory changed; prepare again');
+  for (const base of [path.join(r.directory, 'apps/desktop/resources/builtin-ghosts/official'), personal]) {
+    const dir = path.join(base, 'my-browser');
+    if (fs.existsSync(dir)) verifyBrowserNative(dir, json(path.join(dir, 'ghost.json')));
+  }
   const seeds = path.join(r.directory, 'apps/desktop/resources/builtin-ghosts');
   if (fs.existsSync(seeds)) {
     invariant(fs.readdirSync(seeds).every(n => n === 'official'), 'Unexpected seed root; prepare again');
@@ -328,14 +359,20 @@ export async function main(argv) {
   const options = {};
   for (let i = 0; i < rest.length; i += 2) {
     invariant(/^--[a-z-]+$/.test(rest[i]) && rest[i + 1] && !rest[i + 1].startsWith('--'), 'Options require a value');
-    invariant(['config', 'out', 'app', 'plugins', 'report', 'brain', 'action', 'receipt', 'expected-pid'].includes(rest[i].slice(2)), `Unknown option ${rest[i]}`);
+    invariant(['config', 'out', 'app', 'plugins', 'report', 'brain', 'action', 'receipt', 'expected-pid', 'database-plan', 'approve-database-upgrade', 'approve-unmerged-migration-pr'].includes(rest[i].slice(2)), `Unknown option ${rest[i]}`);
     options[rest[i].slice(2)] = rest[i + 1];
   }
   const need = key => { invariant(options[key], `--${key} is required`); return path.resolve(options[key]); };
+  if (command === 'prune-plan') {
+    const {managedConfig} = await import('./personal-build/managed.mjs');
+    const {retentionPlan} = await import('./personal-build/retention.mjs');
+    console.log(JSON.stringify(retentionPlan(managedConfig(need('config'))),null,2)); return;
+  }
   if (['mobile-build', 'mobile-next', 'mobile-record', 'mobile-status'].includes(command)) {
     const {mobileCommand} = await import('./personal-build/mobile.mjs'); return mobileCommand(command, options);
   }
-  if (['auto-check', 'auto-launch', 'auto-status', 'auto-recover', 'auto-bootstrap', 'manual-check', 'manual-activate', 'manual-restart'].includes(command)) { const { automaticCommand } = await import('./personal-build/automatic.mjs'); return automaticCommand(command, options); }
+  if (command === 'reconcile-running') { const {reconcileRunning} = await import('./personal-build/reconcile-running.mjs'); return reconcileRunning(options); }
+  if (['database-plan', 'auto-check', 'auto-launch', 'auto-status', 'auto-recover', 'auto-bootstrap', 'supervisor-release', 'registry-clean', 'install-recover', 'manual-check', 'manual-activate', 'manual-restart'].includes(command)) { const { automaticCommand } = await import('./personal-build/automatic.mjs'); return automaticCommand(command, options); }
   if (['launch', 'stage', 'apply', 'rollback', 'doctor', 'sync-plugins', 'select', 'request', 'export'].includes(command)) {
     const { managedCommand } = await import('./personal-build/managed.mjs');
     return managedCommand(command, options);
@@ -401,7 +438,7 @@ export async function main(argv) {
     pnpm(['restart:desktop:remote', '--', `--region=${r.region}`, `--isolated=${r.name}`], r.directory); return;
   }
   invariant(!command || command === 'help', `Unknown command ${command}`);
-  console.log('personal-build: init --config FILE [--app CHECKOUT] [--plugins CHECKOUT]\nprepare --config FILE --out NEW_DIRECTORY\ncheck|start|status --report FILE\naudit --brain CINDY_BRAIN_DIRECTORY\ncontinue --report FILE\nexport --report FILE --out NEW_DIRECTORY\nlaunch|doctor|sync-plugins|stage|apply|rollback --config FILE\nselect --config FILE --report FILE\nrequest --config FILE --action stage|stage-restart|restart\nbundle-tools --out NEW_DIRECTORY\nauto-launch|auto-check|auto-status|auto-recover --config FILE\nauto-bootstrap --config FILE --report BOOTSTRAP_REPORT\nmanual-check --config FILE --report BUILD_REPORT --out NEW_MANUAL_REPORT\nmanual-activate --config FILE --report MANUAL_REPORT\nmanual-restart --config FILE --report MANUAL_REPORT --expected-pid PID --out NEW_RECEIPT\nmobile-build|mobile-next|mobile-status --report BUILD_REPORT\nmobile-record --report BUILD_REPORT --action devices|info|install --receipt PLUGIN_RECEIPT\nManaged macOS lifecycle requires explicit runtime configuration. Restart only follows a request.');
+  console.log('personal-build: reconcile-running --config FILE --app REPAIRED_CHECKOUT --expected-pid PID --out NEW_RECEIPT\ninit --config FILE [--app CHECKOUT] [--plugins CHECKOUT]\nprepare --config FILE --out NEW_DIRECTORY\ncheck|start|status --report FILE\naudit --brain CINDY_BRAIN_DIRECTORY\ncontinue --report FILE\nexport --report FILE --out NEW_DIRECTORY\nlaunch|doctor|sync-plugins|stage|apply|rollback --config FILE\nprune-plan --config FILE (read-only retention inventory)\nselect --config FILE --report FILE\nrequest --config FILE --action stage|stage-restart|restart\nbundle-tools --out NEW_DIRECTORY\nauto-launch|auto-check|auto-status|auto-recover --config FILE\nauto-bootstrap --config FILE --report BOOTSTRAP_REPORT\ndatabase-plan --config FILE --report BUILD_REPORT --out NEW_PLAN --approve-database-upgrade yes [--approve-unmerged-migration-pr NUMBER]\nmanual-check --config FILE --report BUILD_REPORT --out NEW_MANUAL_REPORT [--database-plan PLAN]\nmanual-activate --config FILE --report MANUAL_REPORT\nmanual-restart --config FILE --report MANUAL_REPORT --expected-pid PID --out NEW_RECEIPT\nsupervisor-release --config FILE --expected-pid PID\nregistry-clean --config FILE (explicit LaunchServices repair; no TCC changes)\ninstall-recover --config FILE --report CHECKED_BUILD_REPORT (stopped filesystem transition only)\nfreshness|snapshot --config FILE --report BUILD_REPORT\nmobile-build|mobile-next|mobile-status --report BUILD_REPORT\nmobile-record --report BUILD_REPORT --action devices|info|install --receipt PLUGIN_RECEIPT\nManaged macOS lifecycle requires explicit runtime configuration. Restart only follows a request.');
 }
 if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });

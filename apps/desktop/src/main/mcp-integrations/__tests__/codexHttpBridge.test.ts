@@ -284,15 +284,14 @@ describe('codexHttpBridge', () => {
 
   it.each(['codex', 'claude-code'] as const)('serves live remote introspection and keeps Bot tasks scoped over the %s helper route', async (agentKind) => {
     let surface: 'bot' | 'default' = 'bot';
-    const start = vi.fn(async () => ({ ok: true as const, delegationId: 'remote-task', childSessionId: 'child-session', status: 'running', deadlineAt: 1000 }));
-    const unavailable = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'unused' }));
+    const start = vi.fn(async () => ({ ok: true as const, agents: [{ id: 'remote-task' }], unavailableDevices: [] }));
     const machines = { computers: [{ name: 'Desktop', availability: 'online' }], ssh: [] };
     const listMachines = vi.fn(async () => ({ ok: true as const, machines }));
     bridge = await startCodexHttpBridge({
       serverFactories: { cindy_helper: () => createXdtHelperMcpServer({
         resolveSurface: async () => surface,
         machines: { list: listMachines },
-        sessionTasks: { startSessionTask: start, getSessionTask: unavailable, messageSessionTask: unavailable, stopSessionTask: unavailable },
+        botMessaging: { listAgents: start },
       }, { agentKind, workingDir: '', getSessionContext: getLiziMcpSessionContext }) },
       pluginIdByServerName: { cindy_helper: 'xdt_helper' },
       additionalBearerTokens: () => ['remote-test-token'],
@@ -329,11 +328,9 @@ describe('codexHttpBridge', () => {
     });
     const list = async () => readRpcResponse(await request('tools/list')) as Promise<{ result: { tools: Array<{ name: string }> } }>;
     await current.withDiscoveryContext(ctx, async () => {
-      expect((await list()).result.tools.map(t => t.name)).toEqual(expect.arrayContaining([
-        'start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task',
-      ]));
+      expect((await list()).result.tools.map(t => t.name)).toEqual(expect.arrayContaining(['list_agents']));
       if (agentKind === 'codex') {
-        const denied = await request('tools/call', { name: 'start_session_task', arguments: { instruction: 'too early' } });
+        const denied = await request('tools/call', { name: 'list_agents', arguments: {} });
         expect(denied.status).toBe(401);
         await denied.text();
       }
@@ -342,11 +339,11 @@ describe('codexHttpBridge', () => {
     const firstList = await list();
     expect((await list()).result).toEqual(firstList.result);
     const result = await readRpcResponse(await request('tools/call', {
-      name: 'start_session_task', arguments: { project_path: '/project', instruction: 'Build the report' },
+      name: 'list_agents', arguments: {},
       ...(agentKind === 'codex' ? { _meta: { threadId: 'remote-thread' } } : {}),
     }));
     expect(result).toMatchObject({ result: { content: [{ type: 'text', text: expect.stringContaining('remote-task') }] } });
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ callerSessionId: 'remote-bot', objective: 'Build the report' }));
+    expect(start).toHaveBeenCalledWith({ callerSessionId: 'remote-bot' });
     // The ordinary remote surface retains Cindy introspection, but not local controls or Bot-only tasks.
     surface = 'default';
     expect((await list()).result.tools.map(t => t.name).sort()).toEqual(['call_tool', 'list_machines', 'list_tools']);
@@ -366,7 +363,7 @@ describe('codexHttpBridge', () => {
       name: 'call_tool', arguments: { name: 'get_current_session_id', args: {} },
     }));
     expect(introspection).toMatchObject({ result: { content: [{ text: expect.stringContaining('remote-bot') }] } });
-    await request('tools/call', { name: 'start_session_task', arguments: { instruction: 'denied' } }).then(readRpcResponse);
+    await request('tools/call', { name: 'list_agents', arguments: {} }).then(readRpcResponse);
     expect(start).toHaveBeenCalledTimes(1);
     if (agentKind === 'codex') {
       // A remote token cannot borrow a local or Pi context to get the broad helper surface.
@@ -1345,15 +1342,20 @@ describe('codexHttpBridge', () => {
     expect(bridge.mcpSessionCount()).toBe(1);
   });
 
-  // Review finding on the cleanup above: an initialize that already passed the ctx check
-  // can finish after the Session unregistered, missing the cleanup scan. The factory runs
-  // between the ctx check and the table insert, so unregistering there is that interleaving.
-  it('does not keep an MCP session whose owner unregistered while it was initializing', async () => {
+  // Regression: real HTTP initialize can pass routing and miss the cleanup scan.
+  // The server factory gives a deterministic pause before insertion. Unit tier with
+  // a loopback bridge, covering both task removal and an instance close with its task alive.
+  it.each(['task', 'instance'] as const)('closes a handshake crossing %s cleanup', async scope => {
+    let closeDuringInitialize = true;
     const ctx = { agentKind: 'pi' as const, sessionId: 'pi-session', sessionInstanceId: 'pi-instance', workingDir: '/repo', vendorOptions: {} };
     bridge = await startCodexHttpBridge({
       serverFactories: {
         cindy_orca: () => {
-          bridge?.unregisterSessionCtx('pi-session', ctx);
+          if (closeDuringInitialize) {
+            closeDuringInitialize = false;
+            if (scope === 'task') bridge?.unregisterSessionCtx('pi-session', ctx);
+            else bridge?.closeSessionInstance('pi-instance');
+          }
           return createTestServer();
         },
       },
@@ -1361,8 +1363,9 @@ describe('codexHttpBridge', () => {
     });
     bridge.registerSessionCtx('pi-session', ctx);
     bridge.registerSessionToken('pi-session', 'pi-token');
-    const init = await fetch(
-      withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' }),
+    const url = withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' });
+    const initialize = () => fetch(
+      url,
       {
         method: 'POST',
         headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json', authorization: 'Bearer pi-token' },
@@ -1374,8 +1377,17 @@ describe('codexHttpBridge', () => {
         }),
       },
     );
+    const init = await initialize();
+    expect(init.status).toBe(200);
     await init.text();
     expect(bridge.mcpSessionCount()).toBe(0);
+    if (scope === 'instance') {
+      // A reconnect can reuse the same instance ID after the cleanup.
+      const next = await initialize();
+      expect(next.status).toBe(200);
+      await next.text();
+      expect(bridge.mcpSessionCount()).toBe(1);
+    }
   });
 
   it('rejects an unregistered ?session= query while leaving token-only requests untouched', async () => {

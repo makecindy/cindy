@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { BotDeleteDialog } from './BotDeleteDialog';
 import { withoutBotHiddenLanes } from './botGroupLane';
+import appI18n from 'i18next';
 
 /**
  * User-facing Bot management only. Health counters, delivery queues, Routes and
@@ -225,7 +226,7 @@ export function BotLifecycleSettings({
                           </span>
                         ) : null}
                         <span className="mt-1 block text-10 text-[var(--text-tertiary)]">
-                          {new Date(hit?.createdAt ?? item.session.updatedAt).toLocaleString()}
+                          {new Date(hit?.createdAt ?? item.session.updatedAt).toLocaleString(appI18n.language)}
                         </span>
                       </button>
                     );
@@ -260,7 +261,7 @@ export function BotLifecycleSettings({
                         {item.title}
                       </span>
                       <span className="block text-10 text-[var(--text-tertiary)]">
-                        {new Date(item.updatedAt).toLocaleString()}
+                        {new Date(item.updatedAt).toLocaleString(appI18n.language)}
                       </span>
                     </span>
                     <span className="text-11 text-[var(--text-secondary)]">{t('bots.open')}</span>

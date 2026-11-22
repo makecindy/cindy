@@ -13,6 +13,7 @@
 import {
   buildBotMemoryScopeKey,
   MemoryError,
+  parseFilename,
   type MakerMemoryStore,
   type MemoryRecord,
 } from '@cindy/maker-core';
@@ -55,6 +56,8 @@ export function splitImportedMemoryText(text: string): string[] {
 interface BotMemoryOwner {
   canonicalSessionId: string | null;
   assertCurrent?: () => void;
+  /** A project-mode teammate keeps its memory in its project, like an ordinary task there. */
+  scopeKey?: string;
 }
 
 export interface BotMemoryServiceDeps {
@@ -136,6 +139,15 @@ function readFilename(value: unknown): string {
   return value;
 }
 
+/** Cloud copies include internal shards; curated settings keep their narrower validator. */
+function readRawFilename(value: unknown) {
+  const parsed = typeof value === 'string' ? parseFilename(value) : null;
+  if (!parsed || parsed.slug.length > 64 || /[^a-z0-9_-]/.test(parsed.slug)) {
+    throwIpcError('INVALID_PARAMS', 'Invalid memory');
+  }
+  return { filename: value as string, ...parsed };
+}
+
 function readExpected(value: unknown): string {
   if (typeof value !== 'string' || !value || value.length > 64) {
     throwIpcError('INVALID_PARAMS', 'Invalid memory version');
@@ -154,10 +166,10 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     botId: string,
   ): Promise<{ store: MakerMemoryStore; owner: BotMemoryOwner }> {
     const owner = await deps.readBot(botId);
-    if (!owner) throwIpcError('NOT_FOUND', 'Teammate not found');
+    if (!owner) throwIpcError('NOT_FOUND', 'Buddy not found');
     try {
       owner.assertCurrent?.();
-      const store = await deps.getStore(buildBotMemoryScopeKey(botId));
+      const store = await deps.getStore(owner.scopeKey ?? buildBotMemoryScopeKey(botId));
       owner.assertCurrent?.();
       return { store, owner };
     } catch (error) {
@@ -307,11 +319,10 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
      * Goes through the store so MEMORY.md, FTS and the runtime refresh stay consistent.
      */
     async restoreRaw(botId: string, rawFilename: unknown, raw: string): Promise<void> {
-      const filename = readFilename(rawFilename);
-      const [, type, name] = /^([a-z]+)_(.+)\.md$/.exec(filename)!;
+      const { filename, type, slug: name } = readRawFilename(rawFilename);
       const parsed = matter(raw);
       const data = parsed.data as { title?: unknown; description?: unknown; bodyLength?: unknown };
-      const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim().slice(0, BOT_MEMORY_TITLE_MAX) : name!;
+      const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim().slice(0, BOT_MEMORY_TITLE_MAX) : name;
       const exact = Number.isSafeInteger(data.bodyLength) && parsed.content.length === (data.bodyLength as number) + 1 && parsed.content.endsWith('\n');
       const body = exact ? parsed.content.slice(0, -1) : parsed.content.trim();
       if (!body) throwIpcError('INVALID_PARAMS', 'Invalid memory content');
@@ -324,7 +335,8 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
           if (error instanceof MemoryError && error.code === 'not-found') return null;
           throw error;
         });
-        await store.write({ type: type as BotMemoryType, name: name!, title, description, body,
+        // 传完整文件名: 恢复要原样重建旧分片 (可能带 <type>- 前缀), 不能当成新 slug
+        await store.write({ type, name: filename, title, description, body,
           mode: existing ? 'update' : 'create', preserveBody: exact }).catch(translateStoreError);
         owner.assertCurrent?.();
       });
@@ -333,7 +345,7 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
 
     /** Remove a memory regardless of its version (cloud tombstone). Missing is fine. */
     async removeRaw(botId: string, rawFilename: unknown): Promise<void> {
-      const filename = readFilename(rawFilename);
+      const { filename } = readRawFilename(rawFilename);
       const { store, owner } = await storeOf(botId);
       await serialized(`${botId}/${filename}`, async () => {
         await store.delete(filename).catch((error: unknown) => {

@@ -1,0 +1,248 @@
+/**
+ * #10200: static native-Google route tests miss dynamically discovered Chat models.
+ * E2E tier: production catalog builder -> PiAgent models.json -> official Pi binary
+ * -> strict loopback Chat server -> translated text/error/done. No real account.
+ * Only the destination is redirected after building the official Google spec;
+ * model parameters and the production serializer are not mocked.
+ */
+import { createServer } from 'node:http';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { PiAgent } from '../../../../../../packages/maker-core/src/agents/pi/index.js';
+import type { AgentDeps, AgentSessionHandle } from '../../../../../../packages/maker-core/src/agents/base-agent.js';
+import type { AgentEvent } from '../../../../../../packages/maker-core/src/types/events.js';
+import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
+import { buildPiNativeProvidersFromConfigs } from '../pi-native-catalog.js';
+import { applyExistingModelLocalPatch, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
+
+const binary = process.env.CINDY_TEST_PI_BINARY ?? path.resolve('../../apps/pi-bin',
+  `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'pi.exe' : 'pi');
+const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
+
+// #10434, E2E: the native map alone cannot prove that a UI switch with no
+// intensity default survives startup, off and on again in the actual Pi SDK.
+describe.skipIf(!existsSync(binary))('MiMo thinking switch through real Pi', () => {
+  it('sends enabled, disabled and enabled without reasoning_effort', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cindy-mimo-switch-'));
+    const workingDir = path.join(root, 'work');
+    mkdirSync(workingDir);
+    const requests: Array<Record<string, unknown>> = [];
+    const server = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      requests.push(body);
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const choice of [
+        { index: 0, delta: { role: 'assistant', content: 'fixture-ok' }, finish_reason: null },
+        { index: 0, delta: {}, finish_reason: 'stop' },
+      ]) res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1,
+        model: body.model, choices: [choice] })}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const endpoint = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+      const config = { id: 'mimo-fixture', name: 'MiMo', runtimes: { pi: {
+        baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat' as const,
+        piCatalogProviderId: 'xiaomi-token-plan-cn', models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }],
+      } } };
+      const projected = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      expect(projected.models.pi![0]).toMatchObject({ thinkingToggle: true, efforts: [], defaultEffort: null });
+      const native = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined,
+        { ...BUNDLED_CATALOG, providers: [projected] });
+      const provider = native.providers[0];
+      // Redirect only the destination. Preserve the production model, adapter,
+      // capabilities and native level map; no real account or paid request.
+      provider.baseUrl = `${endpoint}/v1`;
+      const deps: AgentDeps = {
+        auth: { getState: async () => ({ authenticated: true, identity: 'fixture', authSource: 'api-key' as const }),
+          triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+        binaryPath: binary, logger, runtimeConfig: { endpoint },
+        resolvePiAgentHome: () => path.join(root, 'agent'), resolvePiGlobalContextHome: () => root,
+        resolvePiNativeProviders: async () => native,
+      };
+      handle = await new PiAgent(deps).startSession({ sessionId: 'mimo-switch', workingDir,
+        providerId: provider.id, model: 'mimo-v2.6-pro', thinkingEnabled: true });
+      for (const enabled of [undefined, false, true]) {
+        if (enabled !== undefined) await handle.setThinkingEnabled!(enabled);
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'Hello' });
+        await collected;
+        expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'completed' });
+      }
+      expect(requests.map(body => body.thinking)).toEqual([
+        { type: 'enabled' }, { type: 'disabled' }, { type: 'enabled' },
+      ]);
+      for (const body of requests) expect(body).not.toHaveProperty('reasoning_effort');
+    } finally {
+      try { await handle?.close(); } finally {
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  }, 30_000);
+});
+
+describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () => {
+  it.each([
+    { status: 200, staleRoute: false },
+    // #10225: the route resolver drops this legacy path before the request.
+    { status: 200, staleRoute: true },
+    { status: 400, staleRoute: false },
+    { status: 401, staleRoute: false },
+    // #11023: the private gateway URL is intentionally unavailable. The strict
+    // loopback reproduces its reported store rejection without a paid endpoint.
+    { status: 200, staleRoute: false, customGateway: true },
+  ])('settles HTTP $status (stale route: $staleRoute, custom: $customGateway)', async ({ status, staleRoute, customGateway }) => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cindy-google-chat-'));
+    const agentHome = path.join(root, 'agent');
+    const workingDir = path.join(root, 'work');
+    mkdirSync(workingDir);
+    // #11108: production override -> real Pi -> paired, bounded wire IDs.
+    const fixture = path.join(workingDir, 'fixture.txt');
+    writeFileSync(fixture, 'fixture');
+    const longId = 'call_' + 'a'.repeat(2000);
+    const requests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
+    const server = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const hasStore = Object.hasOwn(body, 'store');
+      const code = hasStore ? 400 : status;
+      requests.push({ url: req.url ?? '', body, status: code });
+      if (code !== 200) {
+        res.writeHead(code, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { code, status: code === 401 ? 'UNAUTHENTICATED' : 'INVALID_ARGUMENT',
+          message: hasStore ? 'Invalid JSON payload received. Unknown name "store": Cannot find field.'
+            : code === 401 ? 'API key not valid. Please pass a valid API key.' : 'Missing required field: messages.' } }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (customGateway && requests.length === 1) {
+        for (const choice of [
+          { index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0,
+            id: longId, type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: fixture }) },
+          }] }, finish_reason: null },
+          { index: 0, delta: {}, finish_reason: 'tool_calls' },
+        ]) res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1,
+          model: body.model, choices: [choice] })}\n\n`);
+        res.end('data: [DONE]\n\n');
+        return;
+      }
+      for (const choice of [
+        { index: 0, delta: { role: 'assistant', content: 'fixture-ok' }, finish_reason: null },
+        { index: 0, delta: {}, finish_reason: 'stop' },
+      ]) res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1,
+        model: body.model, choices: [choice] })}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const endpoint = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+      const official = 'https://generativelanguage.googleapis.com/v1beta/openai';
+      const upstream = customGateway ? 'https://truefoundry.example.invalid/v1' : official;
+      const modelId = customGateway ? 'production-chat' : 'gemini-3.8-flash';
+      const config = { id: 'google-fixture', name: 'Google', runtimes: { pi: {
+        ...(!customGateway ? { catalogPresetId: 'google-gemini-api' } : {}),
+        baseUrl: upstream, wireProtocol: 'openai-chat' as const,
+        models: [{ id: modelId, name: modelId,
+          ...(customGateway ? { reasoning: true, reasoningEfforts: ['xhigh' as const], reasoningDefaultEffort: 'xhigh' as const } : {}),
+          ...(staleRoute ? {
+          api: 'openai-completions' as const,
+          route: { baseUrl: 'https://stale.example/v1', wireProtocol: 'anthropic-messages' as const,
+            requestPath: '/custom/messages' },
+        } : {}) }],
+      } } };
+      const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, buildUserProvider(config)] };
+      if (customGateway) {
+        const custom = catalog.providers.at(-1)!;
+        // The persisted local override is sanitized and projected through the
+        // production catalog path, not injected into Pi's generated models.json.
+        const parsed = sanitizeModelCatalogOverrides({ patches: {
+          [`${encodeURIComponent(custom.id)}:${modelId}`]: { perAgent: { pi: { supportsStore: false, maxToolCallIdLength: 64 } } },
+        } });
+        expect(parsed.invalid).toEqual([]);
+        custom.models.pi = custom.models.pi!.map(model =>
+          applyExistingModelLocalPatch(custom.id, 'pi', model, parsed.overrides));
+      }
+      const native = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
+      const provider = native.providers[0];
+      expect(provider.models[0].api ?? provider.api).toBe('openai-completions');
+      expect(provider.models[0].baseUrl ?? provider.baseUrl).toBe(upstream);
+      // Keep the selected API, model and compat intact; route the HTTP test only to loopback.
+      provider.baseUrl = `${endpoint}/v1beta/openai`;
+      const deps: AgentDeps = {
+        auth: { getState: async () => ({ authenticated: true, identity: 'fixture', authSource: 'api-key' as const }),
+          triggerLogin: async () => ({ authenticated: true }), logout: async () => {},
+          getAuthEnv: async () => ({}) },
+        binaryPath: binary, logger, runtimeConfig: { endpoint },
+        resolvePiAgentHome: () => agentHome,
+        resolvePiGlobalContextHome: () => root,
+        resolvePiNativeProviders: async () => native,
+      };
+      handle = await new PiAgent(deps).startSession({ sessionId: `google-chat-${status}`, workingDir,
+        providerId: provider.id, model: modelId, permissionMode: 'bypassPermissions' });
+      const runtimeDir = path.join(agentHome, 'run-tmp');
+      const configHome = readdirSync(runtimeDir).map(name => path.join(runtimeDir, name))
+        .find(dir => existsSync(path.join(dir, 'models.json')))!;
+      const serialized = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8'));
+      const events: AgentEvent[] = [];
+      const collected = (async () => {
+        for await (const event of handle!.events()) {
+          events.push(event);
+          if (event.type === 'done') break;
+        }
+      })();
+      const started = performance.now();
+      await handle.send({ type: 'user', content: 'Hello' });
+      await collected;
+      const elapsedMs = performance.now() - started;
+      expect(requests.map(request => ({ url: request.url, hasStore: Object.hasOwn(request.body, 'store'),
+        status: request.status })), JSON.stringify(events.filter(event => event.type === 'error' || event.type === 'done')))
+        .toEqual(Array.from({ length: customGateway ? 2 : 1 }, () => ({ url: '/v1beta/openai/chat/completions', hasStore: false, status })));
+      expect(serialized.providers[provider.id].models[0].compat.supportsStore).toBe(false);
+      if (customGateway) {
+        expect(serialized.providers[provider.id].models[0].compat.maxToolCallIdLength).toBe(64);
+        const messages = requests[1].body.messages as Array<{ role: string; tool_calls?: Array<{ id: string }>; tool_call_id?: string }>;
+        const callId = messages.flatMap(message => message.tool_calls ?? [])[0].id;
+        expect(callId.length).toBeLessThanOrEqual(64);
+        expect(messages.find(message => message.role === 'tool')?.tool_call_id).toBe(callId);
+        expect(requests[0].body).toMatchObject({ model: modelId, reasoning_effort: 'xhigh' });
+        expect(requests[0].body.tools).toEqual(expect.arrayContaining([
+          expect.objectContaining({ type: 'function' }),
+        ]));
+      }
+      if (status === 200) {
+        expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'completed' });
+        expect(events.some(event => event.type === 'text' && JSON.stringify(event.data).includes('fixture-ok'))).toBe(true);
+      } else {
+        expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'failed' });
+        expect(events.some(event => event.type === 'error' && JSON.stringify(event.data)
+          .includes(status === 401 ? 'API key not valid' : 'Missing required field'))).toBe(true);
+      }
+      // Event completion, not a sleep: a 4xx must not enter the six-retry backoff.
+      expect(elapsedMs).toBeLessThan(10_000);
+    } finally {
+      try {
+        await handle?.close();
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  }, 30_000);
+});

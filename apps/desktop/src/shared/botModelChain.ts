@@ -1,10 +1,10 @@
-import { normalizeModelRoute, modelRouteLocationKey, type ModelRoute } from '@cindy/maker-shared/model-route';
+import { normalizeCompanionModelRoute, modelRouteLocationKey, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
 
 export const BOT_MODEL_CHAIN_MAX = 5;
 
-export type BotHarness = 'claude' | 'codex' | 'pi';
+export type BotHarness = CompanionModelRoute['harness'];
 
-export type BotModelRoute = ModelRoute;
+export type BotModelRoute = CompanionModelRoute;
 
 /** Runtime-control uses the same full route identity as the Bot editor. */
 export function botModelRouteRuntimeKey(
@@ -15,23 +15,10 @@ export function botModelRouteRuntimeKey(
 }
 
 export function normalizeBotHarness(value: unknown): BotHarness {
-  return value === 'codex' || value === 'pi' || value === 'claude' ? value : 'claude';
+  return value === 'codex' || value === 'pi' || value === 'claude' || value === 'acp' ? value : 'claude';
 }
 
-export const normalizeBotModelRoute = normalizeModelRoute;
-
-/** Optional task-specific route. Absence inherits the live primary route, never a stored copy. */
-export function readBotTaskModelOverride(value: unknown): BotModelRoute | null {
-  if (value === null || value === undefined) return null;
-  const record = value as Partial<BotModelRoute>;
-  const route = normalizeBotModelRoute(value);
-  if (!route || !['claude', 'codex', 'pi'].includes(String(record.harness))
-    || (record.providerId !== null && typeof record.providerId !== 'string')
-    || typeof record.effort !== 'string' || (typeof record.fastMode !== 'boolean' && record.fastMode !== 'ultrafast')) {
-    throw new Error('Invalid task model route');
-  }
-  return route;
-}
+export const normalizeBotModelRoute = normalizeCompanionModelRoute;
 
 /**
  * Read the ordered route chain while preserving every legacy single-model Bot.
@@ -48,13 +35,26 @@ export function normalizeBotModelChain(
     const single = normalizeBotModelRoute(legacy);
     if (single) candidates.push(single);
   }
+  return uniqueBotModelRoutes(candidates).slice(0, BOT_MODEL_CHAIN_MAX);
+}
+
+/** A remote form must save every submitted route, in order, or reject the entire edit. */
+export function parseRemoteBotModelChain(value: unknown): BotModelRoute[] | null {
+  if (!Array.isArray(value) || !value.length || value.length > BOT_MODEL_CHAIN_MAX
+    || value.some(route => !route || normalizeBotHarness(route.harness) !== route.harness)) return null;
+  const routes = normalizeBotModelChain(value);
+  return routes.length === value.length ? routes : null;
+}
+
+/** A group entry and a plain route with the same fallback model are different choices. */
+function uniqueBotModelRoutes(routes: readonly BotModelRoute[]): BotModelRoute[] {
   const seen = new Set<string>();
-  return candidates.filter((item) => {
-    const key = `${item.harness}\u0000${item.providerId ?? ''}\u0000${item.model}${modelRouteLocationKey(item.agentDeviceId)}`;
+  return routes.filter((item) => {
+    const key = `${item.harness}\u0000${item.providerId ?? ''}\u0000${item.model}${modelRouteLocationKey(item.agentDeviceId)}\u0000${item.modelGroup ?? ''}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, BOT_MODEL_CHAIN_MAX);
+  });
 }
 
 export function primaryBotModelRoute(
@@ -96,16 +96,40 @@ export function botModelRouteIndex(
   return legacyMatches.length === 1 ? legacyMatches[0]!.index : -1;
 }
 
-/** Select the next explicit route; never invent one from the global catalog. */
+const range = (from: number, to: number): number[] =>
+  Array.from({ length: Math.max(0, to - from) }, (_, at) => from + at);
+
+/**
+ * The order to try after the current route. A model group expands into consecutive
+ * routes tagged with its id and its strategy may have started anywhere in them, so
+ * the rest of that group (wrapping to the ones before the current) comes first.
+ */
+function fallbackOrder(chain: readonly BotModelRoute[], currentIndex: number): number[] {
+  const group = currentIndex >= 0 ? chain[currentIndex]!.modelGroup : undefined;
+  if (!group) return range(currentIndex + 1, chain.length);
+  let start = currentIndex;
+  while (start > 0 && chain[start - 1]!.modelGroup === group) start -= 1;
+  let end = currentIndex + 1;
+  while (end < chain.length && chain[end]!.modelGroup === group) end += 1;
+  return [...range(currentIndex + 1, end), ...range(start, currentIndex), ...range(end, chain.length)];
+}
+
+/**
+ * Select the next explicit route; never invent one from the global catalog.
+ * The chain may be one already expanded from model groups, so it is not cut to
+ * BOT_MODEL_CHAIN_MAX here (that limit is for what the owner saves).
+ */
 export function nextBotModelRoute(
   value: unknown,
   current: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'>,
   visitedRoutes: readonly string[] = [],
   isUsable: (route: BotModelRoute) => boolean = () => true,
 ): BotModelRoute | null {
-  const chain = normalizeBotModelChain(value);
+  const chain = uniqueBotModelRoutes(Array.isArray(value)
+    ? value.map(normalizeBotModelRoute).filter((item): item is BotModelRoute => item !== null)
+    : []);
   const currentIndex = botModelRouteIndex(chain, current);
-  for (let index = currentIndex + 1; index < chain.length; index += 1) {
+  for (const index of fallbackOrder(chain, currentIndex)) {
     const route = chain[index]!;
     if (!isUsable(route)) continue;
     const runtimeKey = botModelRouteRuntimeKey(route);
@@ -129,10 +153,10 @@ export function botProfileModelSelectionChanged(previous: Record<string, unknown
 export function normalizeBotProfileModelChain(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
+  // `taskModelOverride` (the retired teammate task model) is not read here: a stored value stays as
+  // it is, opaque, so a profile carrying it loads and saves, and the cloud still carries it for an
+  // older computer (companion-cloud/capabilities.ts).
   const next = { ...value };
-  if (Object.prototype.hasOwnProperty.call(next, 'taskModelOverride')) {
-    next.taskModelOverride = readBotTaskModelOverride(next.taskModelOverride);
-  }
   if (Object.prototype.hasOwnProperty.call(next, 'modelChain')) {
     const chain = normalizeBotModelChain(next.modelChain);
     if (chain.length === 0 && next.modelChainOverride !== null && next.modelOverride !== null) {

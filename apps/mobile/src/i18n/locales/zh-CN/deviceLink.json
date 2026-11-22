@@ -43,9 +43,9 @@
   "tooManyConnectionsTitle": "连接数已达上限",
   "tooManyConnectionsHint": "当前账号同时在线的设备过多，请断开其它设备后重试。",
   "versionMismatchTitle": "版本不匹配",
-  "versionMismatchHint": "当前 App 版本与服务端协议不一致，请升级到最新版本。",
+  "versionMismatchHint": "当前 App 版本与服务端协议不一致，请升级到最新版本后重试。",
   "unstableTitle": "连接反复断开",
-  "unstableHint": "连接不稳定，请检查网络并等待连接恢复",
+  "unstableHint": "连接不稳定，请检查网络并等待连接恢复。",
   "relay": {
     "label": {
       "online": "Relay 已连接",
@@ -65,6 +65,7 @@
     "noCredentials": "{{agent}} 无法使用：电脑端尚未登录。请在电脑端 {{appName}} 的「设置 → 模型供应商」完成登录后再试。",
     "noEncryption": "{{agent}} 无法使用：电脑端系统安全存储不可用，读取不到已保存的密钥。请检查系统钥匙串（macOS）或系统账户加密（Windows），然后重启电脑端 {{appName}}。",
     "proxyNotReady": "{{agent}} 暂时无法使用：电脑端组件尚未就绪。请稍候重试；若持续出现，请重启电脑端 {{appName}}。",
+    "sharedLinkUnavailable": "{{agent}} 暂时无法使用：电脑端的 Codex 已经登录，但 {{appName}} 读不到那份登录（建不出指向它的链接，Windows 上通常是普通权限建不了）。请确认电脑端的 {{appName}} 有权限创建链接（Windows 上可以用管理员身份运行一次，或开启开发者模式）后重试。",
     "default": "{{agent}} 无法使用：电脑端登录凭证不可用。请在电脑端 {{appName}} 的「设置 → 模型供应商」重新登录后再试。（{{reason}}）"
   },
   "remoteError": {

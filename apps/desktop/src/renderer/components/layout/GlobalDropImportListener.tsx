@@ -12,8 +12,7 @@
  *     执行路由,但**不 stopPropagation**:事件继续传到内层,内层 handler 自查
  *     标记(lib/globalDropIntercept.ts)后清理自己的拖拽 UI 状态再 return,
  *     避免"悬停识别不到 → 内层遮罩已亮 → drop 被吞 → 计数不归零遮罩卡死"。
- *   - 路由:.cindy → inspect 验明正身 → 装入 + 停靠,与设置页
- *     「注入意识…」同一编排(renderer/cindy-brain/installFlow.ts);
+ *   - 路由:.cindy → 识别类型 → 装入主题或走原插件安装编排;
  *     .cshare(含旧 .xdtshare)→ 经 main 的 classify-path 验明后打开会话导入向导。
  *
  * 冒泡层(兜底,仅"落在空白处"且 capture 未接管的 drop 会到达——内层 drop 区
@@ -33,7 +32,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { installGhostFromFile } from '@/cindy-brain/installFlow';
+import { isComposerAttachmentDrag } from '@/lib/composerDrop';
+import { isSessionLinkDropTarget } from '@/lib/sessionLinkDrop';
+import { importCindyFile } from '@/cindy-brain/importCindyFile';
 import {
   classifyGlobalDropPath,
   markGlobalDropIntercepted,
@@ -66,6 +67,7 @@ export function GlobalDropImportListener({
     (ghostId: string) => navigate(`/plugins?panel=${encodeURIComponent(ghostId)}`),
     [navigate],
   );
+  const openThemes = useCallback(() => navigate('/settings?tab=appearance'), [navigate]);
 
   // 双击 .cindy 的转交消费:挂载时取一次(冷启动双击,main 已缓存)+ 订阅
   // 信号(已运行时双击)。取到路径即走与按钮/拖入完全相同的装入编排。
@@ -73,9 +75,10 @@ export function GlobalDropImportListener({
     const consumePending = async () => {
       const { filePath } = await window.electronAPI.ghosts.takePendingInstall();
       if (filePath) {
-        await installGhostFromFile(filePath, {
+        await importCindyFile(filePath, {
           t,
           openPluginPanel,
+          openThemes,
         });
       }
     };
@@ -83,7 +86,7 @@ export function GlobalDropImportListener({
     return window.electronAPI.ghosts.onInstallRequested(() => {
       void consumePending().catch((err) => log.warn('consume pending cindy install failed', err));
     });
-  }, [openPluginPanel, t]);
+  }, [openPluginPanel, openThemes, t]);
 
   useEffect(() => {
     // 悬停识别:单文件且 MIME 命中才给遮罩。
@@ -100,8 +103,19 @@ export function GlobalDropImportListener({
       interceptRef.current = false;
       setDragHint(null);
     };
+    // Reserve this MIME before package import, split panes and full-page drop zones.
+    const routeComposerDrag = (e: DragEvent) => {
+      if (!isComposerAttachmentDrag(e.dataTransfer)) return false;
+      if (!isSessionLinkDropTarget(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+      }
+      return true;
+    };
     // ---- capture 层:悬停接管 + drop 全局路由(先于一切内层 handler)----
     const onDragEnterCapture = (e: DragEvent) => {
+      if (routeComposerDrag(e)) return;
       dragDepthRef.current += 1;
       const hint = hintForDrag(e.dataTransfer);
       if (hint) {
@@ -111,6 +125,7 @@ export function GlobalDropImportListener({
       if (interceptRef.current) e.stopPropagation();
     };
     const onDragLeaveCapture = (e: DragEvent) => {
+      if (routeComposerDrag(e)) return;
       if (interceptRef.current) e.stopPropagation();
       if (dragDepthRef.current > 0) dragDepthRef.current -= 1;
       if (dragDepthRef.current === 0) {
@@ -119,12 +134,14 @@ export function GlobalDropImportListener({
       }
     };
     const onDragOverCapture = (e: DragEvent) => {
+      if (routeComposerDrag(e)) return;
       if (!interceptRef.current) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
     };
     const onDropCapture = (e: DragEvent) => {
+      if (routeComposerDrag(e)) return;
       resetDragState();
       const files = e.dataTransfer?.files;
       if (!files || files.length !== 1) return;
@@ -142,10 +159,10 @@ export function GlobalDropImportListener({
       e.preventDefault();
       markGlobalDropIntercepted(e);
       if (kind === 'cindy') {
-        // 验明正身 → 装入的编排在 installFlow(与设置页装入按钮同契约)。
-        void installGhostFromFile(path, {
+        void importCindyFile(path, {
           t,
           openPluginPanel,
+          openThemes,
         });
         return;
       }
@@ -204,7 +221,7 @@ export function GlobalDropImportListener({
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [confirm, navigate, onOpenShareImport, openPluginPanel, t]);
+  }, [confirm, navigate, onOpenShareImport, openPluginPanel, openThemes, t]);
 
   return (
     <>

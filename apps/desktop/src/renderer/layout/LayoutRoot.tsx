@@ -23,6 +23,7 @@ import { SidebarPresentationContext, useSidebarPresentation } from './sidebarPre
 import { sidebarExpansionWidth } from './sidebarExpansion';
 import { installGhostDevTools } from '../cindy-brain/ghostDevTools';
 import { ensureGhostPanelsRegistered, useGhostPanelsSync } from '../cindy-brain/ghostPanels';
+import type { InstalledGhost } from '../../shared/ghost';
 import { registerBuiltinPanels } from '../panels/builtinPanels';
 import {
   getPanelKind,
@@ -816,7 +817,7 @@ function RootDivider({
     >
       {/* 隐形抓握区:比 1px 缝宽,悬停变色提示可拖;no-drag 保证收到指针事件。 */}
       <div
-        className="absolute inset-y-0 left-[-3px] z-10 w-[7px] cursor-col-resize"
+        className="absolute inset-y-0 left-[-3px] z-raised w-[7px] cursor-col-resize"
         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         onPointerEnter={() => setHover(true)}
         onPointerLeave={() => setHover(false)}
@@ -937,7 +938,7 @@ function ColumnDivider({
       style={hover ? { background: 'hsl(var(--sidebar-action-icon))' } : undefined}
     >
       <div
-        className="absolute inset-x-0 top-[-3px] z-10 h-[7px] cursor-row-resize"
+        className="absolute inset-x-0 top-[-3px] z-raised h-[7px] cursor-row-resize"
         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         onPointerEnter={() => setHover(true)}
         onPointerLeave={() => setHover(false)}
@@ -949,6 +950,7 @@ function ColumnDivider({
 }
 
 interface LayoutRootProps {
+  onInstalledGhostsChange?: (ghosts: InstalledGhost[]) => void;
   /**
    * 内容区被全屏路由接管中(如设置页):只渲染 chat-main(接管方的宿主),
    * 其余面板连同分割线全部不渲染;布局树数据不动,退出接管即原样恢复。
@@ -963,6 +965,7 @@ interface LayoutRootProps {
 }
 
 export function LayoutRoot({
+  onInstalledGhostsChange,
   suppressNonChatPanels = false,
   rightTabsCollapsed = false,
   sidebarExpansionReady = true,
@@ -978,7 +981,7 @@ export function LayoutRoot({
   installGhostDevTools();
 
   // 装/卸广播 → 注册表对齐 + 重渲(卸下不动布局树,靠这里让引擎重过滤在场面板)。
-  useGhostPanelsSync();
+  useGhostPanelsSync(onInstalledGhostsChange);
   // 注册表版本:页签组 pane 的 kind 随「组里有没有页签」动态注册 / 注销,引擎按它
   // 重过滤在场面板(插件装卸也经注册表,统一走这一个信号)。
   const ghostSyncVersion = useSyncExternalStore(subscribePanelRegistry, getPanelRegistryVersion);

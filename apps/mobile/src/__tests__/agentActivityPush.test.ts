@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const fixture = vi.hoisted(() => ({
   realm: "global",
+  appState: { currentState: "active" },
   relay: null as { baseUrl: string } | null,
   application: {
     getPushNotificationServiceEnvironmentAsync: vi.fn(),
@@ -17,7 +18,7 @@ const fixture = vi.hoisted(() => ({
     addListener: vi.fn(() => ({ remove: vi.fn() })),
   },
 }));
-vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
+vi.mock("react-native", () => ({ Platform: { OS: "ios" }, AppState: fixture.appState }));
 vi.mock("expo-modules-core", () => ({
   requireOptionalNativeModule: (name: string) => name === "ExpoApplication" ? fixture.application : fixture.native,
 }));
@@ -34,6 +35,7 @@ import {
   startActivityPushSync,
   unregisterActivityPush,
 } from "@/widgets/agentActivityPush";
+import { setMobileDebugSink } from "@/debug/mobileDebugLog";
 import { setMobileAuthOwner } from "@/auth/authOwnerGeneration";
 
 const registration = () => ({
@@ -47,7 +49,7 @@ const registration = () => ({
 });
 const options = () => ({
   accountScope: activityAccountScope("a"),
-  getAccessToken: vi.fn(async () => "test-credential"),
+  getAccessToken: vi.fn(async (): Promise<string | null> => "test-credential"),
   onRegistered: vi.fn(),
   urlScheme: "cindy",
   labels: {
@@ -59,13 +61,14 @@ const options = () => ({
   },
 });
 const fetchMock = vi.fn<typeof fetch>();
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); setMobileDebugSink(undefined); });
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("__DEV__", true);
   fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
   vi.stubGlobal("fetch", fetchMock);
   fixture.realm = "global";
+  fixture.appState.currentState = "active";
   fixture.relay = null;
   fixture.application.getPushNotificationServiceEnvironmentAsync.mockResolvedValue("development");
   fixture.application.getApplicationReleaseTypeAsync.mockResolvedValue(0);
@@ -231,4 +234,196 @@ it("waits for a sent registration before logout DELETE and rejects its late succ
   ]);
   expect(opts.onRegistered).not.toHaveBeenCalled();
   sync.dispose();
+});
+
+// Unit: an unchanged update token used to suppress foreground recovery forever.
+// Exercise the transport, including the no-extra-request and ownership boundaries.
+it("refreshes a stale registered activity on resume without publishing local diagnostics", async () => {
+  vi.useFakeTimers();
+  const opts = options();
+  fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update", isStale: false });
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update", isStale: true });
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1]!.body as string)).not.toHaveProperty("isStale");
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(30_000);
+    fetchMock.mockResolvedValue({ ok: false, status: 503 } as Response);
+    opts.onRegistered.mockClear();
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit: a stale ActivityKit event while suspended must not add background network work.
+it("defers background stale recovery until foreground and preserves ownership without auth", async () => {
+  const opts = options();
+  fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update", isStale: false });
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    fixture.appState.currentState = "background";
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update", isStale: true });
+    await sync.sync();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fixture.appState.currentState = "active";
+    opts.getAccessToken.mockResolvedValueOnce(null);
+    opts.onRegistered.mockClear();
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  } finally { sync.dispose(); }
+});
+
+// Unit: a reconnect rebuilds the syncer; a failed first attempt must not undo an
+// already confirmed server takeover (it would re-enable the partial local mirror).
+it("keeps a confirmed server takeover when a rebuilt syncer fails to register", async () => {
+  const opts = { ...options(), initiallyRegistered: true };
+  fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update" });
+  fetchMock.mockResolvedValue({ ok: false, status: 503 } as Response);
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    expect(fetchMock).toHaveBeenCalled();
+    expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+  } finally { sync.dispose(); }
+});
+
+// Unit: reconnects used to reset both freshness observation and the 30s budget.
+// Existing tests only kept one syncer. Recreate it against the same activity and
+// observe actual HTTP payloads, including recovery on old/new native modules.
+it('preserves the recovery budget across syncers and sends an explicit bounded recovery hint', async () => {
+  vi.useFakeTimers();
+  const diagnostic = vi.fn();
+  setMobileDebugSink(diagnostic);
+  const recovery = {};
+  const opts = { ...options(), recovery };
+  fixture.native.getPushRegistration.mockResolvedValue({
+    ...registration(), activityId: 'live', updateToken: 'update', isStale: true,
+    confirmedAt: 100, staleAt: 200,
+  });
+  let sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(body.refreshStale).toBe(true);
+    expect(body).not.toHaveProperty('confirmedAt');
+    // The service ends an activity it cannot confirm once this date has passed.
+    expect(body.staleAt).toBe(200);
+    sync.dispose();
+    sync = startActivityPushSync(opts);
+    await sync.sync(true);
+    expect(fetchMock.mock.calls.filter(call => JSON.parse(call[1]!.body as string).refreshStale)).toHaveLength(1);
+    vi.advanceTimersByTime(30_000);
+    await sync.sync(true);
+    expect(JSON.parse(fetchMock.mock.calls.at(-1)![1]!.body as string).refreshStale).toBe(true);
+    // Timestamps move with every update: new content must not register again.
+    const count = fetchMock.mock.calls.length;
+    fixture.native.getPushRegistration.mockResolvedValue({
+      ...registration(), activityId: 'live', updateToken: 'update', isStale: false,
+      confirmedAt: 300, staleAt: 1200,
+    });
+    await sync.sync();
+    expect(fetchMock).toHaveBeenCalledTimes(count);
+    expect(diagnostic).toHaveBeenCalledWith("info", "lifecycle", ["activity-recovered"]);
+    expect(diagnostic).toHaveBeenCalledWith("debug", "lifecycle", ["activity-content", {
+      confirmedAt: 300, staleAt: 1200, stale: false,
+    }]);
+    // A different activity has an independent recovery budget.
+    fixture.native.getPushRegistration.mockResolvedValue({
+      ...registration(), activityId: 'next', updateToken: 'next', isStale: true,
+    });
+    await sync.sync();
+    expect(JSON.parse(fetchMock.mock.calls.at(-1)![1]!.body as string).refreshStale).toBe(true);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit: an expired activity the service could not recover stayed on the Lock
+// Screen until the system limit (offline phone, or a service with no source).
+// Existing cases only cover the recovery request, not its outcome. Drive the
+// real syncer: recovery inside the window keeps the activity, none ends it.
+it.each([true, false])("ends an activity still expired after its recovery window (recovery event=%s)", async (event) => {
+  vi.useFakeTimers();
+  const live = { ...registration(), activityId: "live", updateToken: "update" };
+  fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: true, staleAt: 200 });
+  const sync = startActivityPushSync(options());
+  try {
+    await sync.sync();
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: false, staleAt: 1200 });
+    if (event) await sync.sync();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fixture.native.setState).not.toHaveBeenCalled();
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: true, staleAt: 1200 });
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(fixture.native.setState).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit, discussion_r4615525500: the real syncer must end the same stale
+// activity at its original deadline after disposal/recreation. Existing tests
+// only waited within one syncer. Reconnect before and after the 20s deadline;
+// fake timers keep this regression in the fast unit tier.
+it.each([10_000, 25_000])("preserves the expiry deadline across a reconnect after %sms", async (elapsed) => {
+  vi.useFakeTimers();
+  const opts = { ...options(), recovery: {} };
+  fixture.native.getPushRegistration.mockResolvedValue({
+    ...registration(), activityId: "live", updateToken: "update", isStale: true,
+  });
+  let sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(5_000);
+    sync.dispose();
+    await vi.advanceTimersByTimeAsync(elapsed - 5_000);
+    sync = startActivityPushSync(opts);
+    await sync.sync();
+    if (elapsed < 20_000) {
+      await vi.advanceTimersByTimeAsync(20_000 - elapsed - 1);
+      expect(fixture.native.setState).not.toHaveBeenCalled();
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// The saved deadline belongs to one stale episode of one registration, not to
+// recovered content or a rotated token. Exercise both reset boundaries through
+// the same production entry so an old deadline cannot end a new recovery early.
+it.each(["recovered", "rotated"])("starts a new expiry window after %s registration", async (change) => {
+  vi.useFakeTimers();
+  const opts = { ...options(), recovery: {} };
+  const live = { ...registration(), activityId: "live", updateToken: "update", isStale: true };
+  fixture.native.getPushRegistration.mockResolvedValue(live);
+  let sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(10_000);
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live,
+      ...(change === "recovered" ? { isStale: false } : { updateToken: "rotated" }),
+    });
+    await sync.sync();
+    if (change === "recovered") {
+      fixture.native.getPushRegistration.mockResolvedValue(live);
+      await sync.sync();
+    }
+    sync.dispose();
+    sync = startActivityPushSync(opts);
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(fixture.native.setState).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+  } finally { sync.dispose(); vi.useRealTimers(); }
 });

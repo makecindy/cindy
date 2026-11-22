@@ -1,4 +1,6 @@
 import { ChevronRight } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
 import { CreditPoolRowView } from '@/features/billing/CreditPoolRowView';
@@ -21,12 +23,28 @@ import { quotaWindowLabel } from '@/components/status/usageCardModel';
 import { ProviderUsageSection } from './ProviderUsageSection';
 import { useShareTimeFormat } from './useShareTimeFormat';
 
-/** 可见页面每五秒复核权限；不持久化数据，身份变化、失败与隐藏都丢弃旧结果。 */
-export function ProviderShareInsightsSection({ share }: { share: ProviderShareReceived }) {
+/**
+ * 「组成员」：供应商组里这台分享来的电脑展开后只显示获准的额度(与分享详情同一读取、权限与刷新)，不读用量历史；
+ * 分享者开放了用量明细时给入口去分享详情查看(provider-groups.md §10)。
+ */
+type InsightsVariant = 'page' | 'groupMember';
+
+/** 可见页面每十五秒复核权限；不持久化数据，身份变化、失败与隐藏都丢弃旧结果。 */
+export function ProviderShareInsightsSection({
+  share,
+  variant = 'page',
+  onOpenUsage,
+}: {
+  share: ProviderShareReceived;
+  variant?: InsightsVariant;
+  onOpenUsage?: () => void;
+}) {
   useOptionalAuthUser();
   const owner = getDataOwnerGeneration();
   return (
     <InsightsView
+      variant={variant}
+      onOpenUsage={onOpenUsage}
       key={JSON.stringify([
         owner,
         share.shareId,
@@ -39,7 +57,15 @@ export function ProviderShareInsightsSection({ share }: { share: ProviderShareRe
   );
 }
 
-function InsightsView({ share }: { share: ProviderShareReceived }) {
+function InsightsView({
+  share,
+  variant,
+  onOpenUsage,
+}: {
+  share: ProviderShareReceived;
+  variant: InsightsVariant;
+  onOpenUsage?: () => void;
+}) {
   const { t, i18n } = useTranslation();
   const owner = getDataOwnerGeneration();
   const identity = JSON.stringify([
@@ -139,9 +165,10 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
       if (document.visibilityState !== 'hidden') void load();
     };
     document.addEventListener('visibilitychange', visibility);
+    // 保守优化：只降低轮询频率，查询、缓存、可见性和迟到回包语义不变。
     const timer = window.setInterval(() => {
       void load();
-    }, 5_000);
+    }, 15_000);
     return () => {
       alive = false;
       generation.current++;
@@ -162,6 +189,40 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
     new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(
       value,
     );
+  if (variant === 'groupMember') {
+    const note = (text: string) => (
+      <p role="status" className="px-4 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">{text}</p>
+    );
+    const quota = view?.status.quota === 'ready' ? view.quota : null;
+    if (!error && !view) return null;
+    return (
+      <div data-testid="provider-share-member-quota" className="-mt-1">
+        {error || !view
+          ? note(t(`providerShare.insights.${error ?? 'unavailable'}`))
+          : !quota
+              ? note(t(`providerShare.insights.${view.capabilities.quota ? 'unavailable' : 'notShared'}`))
+              : quota.accounts.length === 0
+                ? note(t('providerShare.insights.noOwnAccounts'))
+                : quota.accounts.map((account, index) => (
+                    <QuotaAccount
+                      key={index}
+                      bare
+                      account={account}
+                      title={quota.group ? t('providerShare.insights.account', { number: index + 1 }) : null}
+                      stamp={stamp}
+                    />
+                  ))}
+        {view?.capabilities.usage && onOpenUsage && (
+          <div className="px-4 pb-3">
+            <Button variant="secondary" tone="quiet" size="xs" onClick={onOpenUsage}>
+              {t('providerShare.insights.usageTitle')}
+              <ChevronRight aria-hidden className="size-3.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <section
       className="shrink-0 border-t border-[var(--border-default)] px-5 py-4"
@@ -346,11 +407,15 @@ function QuotaAccount({
   account,
   title,
   stamp,
+  bare = false,
 }: {
   account: ProviderShareQuotaAccount;
   title: string | null;
   stamp(value: number): string;
+  /** 嵌在组成员行下：不画外框，左右边距与同组其他电脑的额度一致。 */
+  bare?: boolean;
 }) {
+  const px = bare ? 'px-4' : 'px-5';
   const { t, i18n } = useTranslation();
   const money = (value: number, currency: string) =>
     formatBillingAmount(String(value), currency, i18n.resolvedLanguage ?? i18n.language);
@@ -383,12 +448,12 @@ function QuotaAccount({
     );
   };
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
+    <div className={cn(!bare && 'overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]')}>
       {title && (
-        <h4 className="px-5 pt-3 text-13 font-medium text-[var(--text-primary)]">{title}</h4>
+        <h4 className={cn(px, 'pt-3 text-13 font-medium text-[var(--text-primary)]')}>{title}</h4>
       )}
       {account.state !== 'ready' ? (
-        <p className="px-5 py-3 text-12 text-[var(--text-secondary)]">
+        <p className={cn(px, 'py-3 text-12 text-[var(--text-secondary)]')}>
           {t(`providerShare.insights.${account.state}`)}
         </p>
       ) : (
@@ -397,7 +462,7 @@ function QuotaAccount({
             <>
               {balance.pools.length > 0 ? (
                 <>
-                  <p className="px-5 pt-3 text-20 font-medium leading-[1.3] tracking-[-0.02em] tabular-nums text-[var(--text-primary)]">
+                  <p className={cn(px, 'pt-3 text-20 font-medium leading-[1.3] tracking-[-0.02em] tabular-nums text-[var(--text-primary)]')}>
                     {money(balance.remaining, balance.currency)}
                   </p>
                   {balance.pools.map((pool) =>
@@ -408,7 +473,7 @@ function QuotaAccount({
                 balanceRow(t('billing.balance.title'), balance.remaining, balance.total)
               )}
               {balance.resetsAt !== null && (
-                <p className="px-5 pb-2 text-12 text-[var(--text-secondary)]">
+                <p className={cn(px, 'pb-2 text-12 text-[var(--text-secondary)]')}>
                   {t('providerShare.insights.resets', { time: stamp(balance.resetsAt) })}
                 </p>
               )}
@@ -438,7 +503,7 @@ function QuotaAccount({
         </>
       )}
       {account.updatedAt !== null && (
-        <p className="px-5 pb-3 text-11 leading-[1.5] text-[var(--text-tertiary)]">
+        <p className={cn(px, 'pb-3 text-11 leading-[1.5] text-[var(--text-tertiary)]')}>
           {t('providerShare.insights.updated', { time: stamp(account.updatedAt) })}
         </p>
       )}

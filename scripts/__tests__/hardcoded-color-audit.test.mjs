@@ -67,6 +67,47 @@ test('numeric colour functions need a colour-bearing context; plain strings are 
   ]) assert.deepEqual(matchBareColors(source), values, source);
 });
 
+// #8369: production findBareColors/inspectFile must keep lexical findings and
+// offsets beyond old PR #8543's context windows. Existing short fixtures cannot
+// expose truncated declarations, label exclusions or generated-line cost.
+// Tier: existing root runner; timing is measured separately on the real asset.
+test('long colour contexts and Markdown boundaries preserve audit semantics (#8369)', () => {
+  const long = 'transparent 0%,'.repeat(6_000);
+  for (const value of ['#123abc', 'rgb(1,2,3)']) {
+    const source = `.x{background:linear-gradient(${long}${value});}`;
+    assert.deepEqual(findBareColors(source), [{ value, index: source.indexOf(value), end: source.indexOf(value) + value.length }]);
+    assert.equal(inspect(renderer + 'new.css', source).find(f => f.rule === 'bare-color')?.disposition, 'block');
+  }
+  for (const [source, values] of [
+    ['[#4022' + ' text'.repeat(220) + '](https://example.org)', []],
+    ['const label = "[#4022 ![CI](badge.svg)](https://example.org)";', []],
+    ["const rows = [{ color: '#fff', help: '[Guide](https://example.org)' }];", ['#fff']],
+    ["const style = { color: palettes[resolveColor('#fff')]() };", ['#fff']],
+    ["'--panel-shadow':\n 'inset " + long + "rgb(1 2 3)'", ['rgb(1 2 3)']],
+    ['color:\n ' + long + '#fff', ['#fff']],
+    ["url(' \t#fff')", ['#fff']],
+    ['color: ' + long + '\n#fff', []],
+    ['/*' + 'x'.repeat(80_000) + "*/ const a = '#fff';", ['#fff']],
+    ['['.repeat(80_000), []],
+  ]) assert.deepEqual(matchBareColors(source), values, source.slice(0, 100));
+});
+
+test('generated colour lists keep every value and original offset (#8369)', () => {
+  // The existing root-runner tier already exercises CLI subprocesses. Bound the
+  // synchronous scan from outside its process so a regression actually stops.
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { findBareColors } from './scripts/shared/hardcoded-color-match.mjs';
+    const count = 100_000;
+    const unit = 'color:#fff;';
+    const hits = findBareColors(unit.repeat(count));
+    assert.equal(hits.length, count);
+    assert.ok(hits.every((hit, i) => hit.value === '#fff' && hit.index === i * unit.length + 6 && hit.end === i * unit.length + 10));
+  `], { cwd: root, encoding: 'utf8', timeout: 10_000 });
+  assert.equal(run.error, undefined, run.error?.message);
+  assert.equal(run.status, 0, run.stderr);
+});
+
 test('nested fallback and mixed expressions report each literal at its real location', () => {
   const source = `// PR #4135\nconst a = 'hsl(var(--x,\n  var(--y, #123456)))';\nconst b = 'color-mix(in srgb, var(--x), rgb(1, 2, 3))';`;
   assert.deepEqual(matchBareColors(source), ['#123456', 'rgb(1, 2, 3)']);
@@ -104,17 +145,13 @@ test('every old exempt Desktop consumer rejects an unapproved new colour', () =>
   }
 });
 
-test('old approved Toast, hljs, composer and asset values are narrow, not file bypasses', () => {
+test('old approved hljs and asset values are narrow, not file bypasses; retired Toast and composer values block', () => {
   const cases = [
-    ['components/ui/toast/Toast.tsx', "export const VARIANT_MAP = { info: { color: '#417CDD' } };", 'allowed'],
-    ['components/ui/toast/Toast.tsx', "const OTHER_MAP = { color: '#417CDD' };", 'block'],
-    ['components/ui/toast/Toast.tsx', "export const VARIANT_MAP = { error: { color: '#417CDD' } };", 'block'],
-    ['components/ui/toast/Toast.tsx', "backgroundColor: '#417CDD',", 'block'],
-    ['components/ui/toast/Toast.tsx', "background-color: '#417CDD';", 'block'],
-    ['components/ui/toast/Toast.tsx', "export const VARIANT_MAP = { info: { color: '#417CCE' } };", 'block'],
+    // The Toast exemption was withdrawn on 2026-11-11 (A-15): VARIANT_MAP consumes status tokens.
+    ['components/ui/toast/Toast.tsx', "export const VARIANT_MAP = { info: { color: '#417CDD' } };", 'block'],
     ['styles/globals.css', '[data-theme="cindy-dark"] .hljs-section { color: #2573ec; }', 'allowed'],
     ['styles/globals.css', '.new-control { color: #2573ec; }', 'block'],
-    // The composer fallback exemption expired on 2026-09-17 (“集成收口删”) and was not renewed.
+    // The composer fallback exemption expired on 2026-09-17 (“集成收口删”); the fallbacks were removed 2026-11-11 (A-07).
     ['components/new-chat/ChatInput.tsx', "'var(--composer-pill-bg, #FCFCFC)'", 'block'],
     ['components/new-chat/ChatInput.tsx', "'var(--composer-pill-bg, #123abc)'", 'block'],
     ['components/new-chat/ChatInput.tsx', "'var(--other-bg, #FCFCFC)'", 'block'],
@@ -126,15 +163,16 @@ test('old approved Toast, hljs, composer and asset values are narrow, not file b
   for (const [file, source, expected] of cases) assert.equal(inspect(renderer + file, source).find(f => f.rule === 'bare-color')?.disposition, expected, source);
   // The binding is structural: the same file's own object resolves to the
   // approved path, so the real sources stay allowed while lookalikes block.
-  const toast = fs.readFileSync(path.join(root, renderer, 'components/ui/toast/Toast.tsx'), 'utf8');
+  const toast = "export const VARIANT_MAP = { info: { color: '#417CDD' } };";
   assert.deepEqual(objectPathAt(toast, toast.indexOf("'#417CDD'")), ['VARIANT_MAP', 'info']);
   assert.deepEqual(objectPathAt("const OTHER_MAP = { color: '#417CDD' };", 28), ['OTHER_MAP']);
   const anonymous = 'registerColor("md-table-bg", { light: "#fff" });';
   assert.deepEqual(objectPathAt(anonymous, anonymous.indexOf('"#fff"')), []);
   const css = fs.readFileSync(path.join(root,renderer,'styles/globals.css'),'utf8');
   const approvedSelectors = inspect(renderer+'styles/globals.css',css).filter(f=>f.rule==='bare-color' && f.disposition==='allowed');
-  assert.deepEqual(approvedSelectors.map(f=>f.value),['#2573ec','#c9d1d9']);
-  for (const file of ['components/ui/toast/Toast.tsx', 'components/settings/AgentIslandSection.tsx', 'components/settings/WorkLouderCodexKeyboardLayout.tsx']) {
+  // Composer Stop working glow palette (DESIGN §2, registered 2026-11-18), then the hljs pair.
+  assert.deepEqual(approvedSelectors.map(f=>f.value),['#32c850','#1eb9aa','#ff7828','#6446ff','#f032b4','#b428f0','#288cff','#ff3264','#ffffff','#000000','#2573ec','#c9d1d9']);
+  for (const file of ['components/settings/AgentIslandSection.tsx', 'components/settings/WorkLouderCodexKeyboardLayout.tsx']) {
     const source = fs.readFileSync(path.join(root, renderer + file), 'utf8');
     const hits = inspect(renderer + file, source).filter(f => f.rule === 'bare-color');
     assert.ok(hits.length > 0);
@@ -308,8 +346,10 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   const summary = workflow.jobs.verify.steps[0];
   for (const checks of ['success','failure','cancelled','skipped']) {
     for (const shards of ['success','failure','cancelled','skipped']) {
+      // The parallel typecheck job blocks verify like the checks it was split from.
+      for (const typecheck of checks === 'success' && shards === 'success' ? ['success','failure','cancelled','skipped'] : ['success']) {
       // Host combinations only matter once the other gates pass.
-      const allGreen = checks === 'success' && shards === 'success';
+      const allGreen = checks === 'success' && shards === 'success' && typecheck === 'success';
       for (const selection of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
       for (const required of allGreen ? ['true','false',''] : ['true']) {
       for (const hosts of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
@@ -318,6 +358,7 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       // this contract test behaves the same on Windows and Linux.
       const aggregateScript = summary.run
         .replaceAll('$VERIFY_CHECKS_RESULT', checks)
+        .replaceAll('$TYPECHECK_RESULT', typecheck)
         .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards)
         .replaceAll('$HOST_CHANGES_RESULT', selection)
         .replaceAll('$HOST_REQUIRED', required)
@@ -327,7 +368,8 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       // Host regressions may be skipped only when selection succeeded and said they are not needed.
       const hostOk = selection === 'success'
         && ((required === 'true' && hosts === 'success') || (required === 'false' && hosts === 'skipped'));
-      assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success' && hostOk);
+      assert.equal(aggregate.status === 0, allGreen && hostOk);
+      }
       }
       }
       }
@@ -335,6 +377,7 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   }
   const propagatedScript = summary.run
     .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
+    .replaceAll('$TYPECHECK_RESULT', 'success')
     .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success')
     .replaceAll('$HOST_CHANGES_RESULT', 'success')
     .replaceAll('$HOST_REQUIRED', 'true')
@@ -441,7 +484,7 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
   assert.match(workflow.jobs.verify.if,/always\(\)/);
-  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','linux-unit-shards','host-changes','host-regressions']);
+  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','typecheck','linux-unit-shards','host-changes','host-regressions']);
   const host = workflow.jobs['host-regressions'];
   assert.equal(host.needs, 'host-changes');
   assert.deepEqual(host.strategy.matrix.os, ['ubuntu-latest', 'windows-latest', 'macos-latest']);

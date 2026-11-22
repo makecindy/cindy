@@ -1,6 +1,10 @@
+import { readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { randomUUID } from 'node:crypto';
 import { effectiveSourceIdForModel, isModelVisible, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import type { resolveNewMakerDefaultTuple } from '../../shared/newMakerDefaultTuple.js';
+import type { ModelRoute } from '@cindy/maker-shared/model-route';
+import { listPluginEngineViews } from './pluginEnginesIpc.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, isPluginEngineEffort } from '../../shared/pluginEngines.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -18,8 +22,8 @@ export function configureAppDefaultModelSelection(dispatch: typeof dispatchSelec
 /** Validate exactly the requested model; recommendations belong to default
  * selection, never to admission of an explicit task or teammate route. */
 function resolveAvailableLocalRoute(
-  args: Parameters<typeof resolveNewMakerDefaultTuple>[0] & { preferredRoute?: BotModelRoute | null },
-): BotModelRoute | null {
+  args: Parameters<typeof resolveNewMakerDefaultTuple>[0] & { preferredRoute?: ModelRoute | null },
+): ModelRoute | null {
   const preferred = args.preferredRoute;
   // Remote routes are validated against their own authorized catalog below.
   if (!preferred || preferred.agentDeviceId || args.providersLoading || !args.availableAgentsLoaded) return null;
@@ -35,7 +39,7 @@ function resolveAvailableLocalRoute(
 
 export function availableAppDefaultModels(input: {
   providers: readonly ProviderView[];
-  currentRoute?: BotModelRoute | null;
+  currentRoute?: ModelRoute | null;
   tuning?: (agent: 'claude-code' | 'codex' | 'pi', providerId: string, model: string) => { effort?: string; fastMode?: boolean | 'ultrafast' };
   availableAgents: ReadonlySet<'cc' | 'codex' | 'pi'>;
   enabled: NonNullable<Parameters<typeof resolveAvailableLocalRoute>[0]['isModelEnabled']>;
@@ -46,7 +50,7 @@ export function availableAppDefaultModels(input: {
   return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi'] as const).flatMap(agent =>
     (provider.models[agent] ?? []).flatMap(model => {
       const remembered = input.tuning?.(agent, provider.id, model.id);
-      const route: BotModelRoute = { harness: agent === 'claude-code' ? 'claude' : agent,
+      const route: ModelRoute = { harness: agent === 'claude-code' ? 'claude' : agent,
         providerId: provider.id, model: model.id,
         effort: model.defaultEffort && model.efforts.includes(model.defaultEffort) ? model.defaultEffort : '',
         fastMode: false };
@@ -100,7 +104,7 @@ export interface TaskModelSelection {
 }
 
 /** Resolve one per-task selection from the live catalog; never mutate picker/default preferences. */
-export async function resolveTaskModelSelection(selection: TaskModelSelection): Promise<BotModelRoute> {
+export async function resolveTaskModelSelection(selection: TaskModelSelection): Promise<ModelRoute> {
   const { available } = await inspectAppDefaultModel();
   const option = available.find(entry => entry.id === selection.id);
   if (!option) throw new Error('任务模型已不可用，请重新查询可用模型');
@@ -119,8 +123,34 @@ export async function resolveTaskModelSelection(selection: TaskModelSelection): 
 /** Resolve legacy implicit sources using the ordinary default policy, without persisting changes. */
 export async function resolveAvailableTaskModels(routes: readonly BotModelRoute[]): Promise<Array<BotModelRoute | null>> {
   const owner = activeOwnerScopeKey();
-  const local = routes.some(route => !route.agentDeviceId) ? await readSelection() : null;
+  const local = routes.some(route => route.harness !== 'acp' && !route.agentDeviceId) ? await readSelection() : null;
+  const assertOwner = () => {
+    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Account changed during model lookup');
+  };
+  const localEngines = routes.some(route => route.harness === 'acp' && !route.agentDeviceId) ? listPluginEngineViews() : [];
+  const remoteEngineCatalogs = new Map<string, Promise<typeof localEngines>>();
+  const readEngines = (deviceId: string) => {
+    let pending = remoteEngineCatalogs.get(deviceId);
+    if (!pending) {
+      assertOwner();
+      pending = readRemotePluginEngines(deviceId).catch(() => []);
+      remoteEngineCatalogs.set(deviceId, pending);
+    }
+    return pending;
+  };
+  assertOwner();
   return Promise.all(routes.map(async route => {
+    if (route.harness === 'acp') {
+      if (route.fastMode) return null;
+      const engines = route.agentDeviceId ? await readEngines(route.agentDeviceId) : localEngines;
+      assertOwner();
+      const engine = engines.find(item => item.providerId === route.providerId && item.availability.state !== 'unavailable');
+      if (!engine) return null;
+      const offered = engine.models.find(model => model.id === route.model);
+      if (!offered && (route.model !== PLUGIN_ENGINE_DEFAULT_MODEL || engine.defaultModelAllowed === false)) return null;
+      if (route.effort && (!isPluginEngineEffort(route.effort) || !offered?.efforts?.includes(route.effort))) return null;
+      return route;
+    }
     if (route.agentDeviceId) {
       const { readRemoteProviderRoute } = await import('../remote-agent/controller/deviceCatalog.js');
       // An unavailable saved source must leave the form open for reselection.

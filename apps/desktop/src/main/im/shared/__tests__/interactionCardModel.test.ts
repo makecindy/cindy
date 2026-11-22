@@ -8,7 +8,8 @@
  * 对齐(渲染差异 —— 按钮文案来源、标题格式、省略号样式 —— 允许不同)。
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 import { SESSION_PERMISSION_DESTINATION, type InteractionRequest } from '@cindy/maker-core';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../../shared/providerShareCredentialConsent';
@@ -138,6 +139,11 @@ const PERMISSION_RICH: PermissionRequest = {
   displayName: '运行命令',
   description: '在工作目录执行 shell 命令',
 };
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('composeInteractionModel — v1 规则', () => {
   it('ask: 只取第一问, 至多 MAX_OPTIONS 个选项, multiSelect 降级单选', () => {
@@ -438,6 +444,18 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
     expect(hook?.card.body).toContain('自动审批需要你决定：');
     expect(hook?.card.buttons.map((b) => b.id)).toEqual(['perm:allow', 'perm:deny']);
     expect(hook?.decisions.has('perm:always')).toBe(false);
+  });
+
+  // PR #11758 / unit: a local executor fallback has no session grant. The existing
+  // auto-review and MCP App cases do not cover an ordinary request marked once-only.
+  it('offers only one approval for a local executor fallback in IM and Hook', () => {
+    const request: PermissionRequest = { ...PERMISSION_RICH, metadata: { permissionScope: 'once' } };
+    expect(cards.buildPermissionCard(request).buttons.map((button) => button.id))
+      .toEqual(['permission:allow:once', 'permission:deny']);
+    const hook = composeInteractionCard(request);
+    expect(hook?.card.buttons.map((button) => button.id)).toEqual(['perm:allow', 'perm:deny']);
+    expect(hook?.decisions.has('perm:always')).toBe(false);
+    expect(buildPermissionAllowAlwaysDecision(request)).toEqual({ kind: 'permission', behavior: 'allow' });
   });
 
   it('安全默认: IM cancelPending 与 hook defaultDecision 同形(只有 reason 由渠道给)', async () => {

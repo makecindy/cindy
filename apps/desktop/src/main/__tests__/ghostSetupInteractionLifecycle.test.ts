@@ -60,14 +60,13 @@ describe('host-owned interaction lifecycle contract', () => {
     const ownershipHelperEnd = registerSource.indexOf('\n}\n', ownershipHelperStart) + 2;
     const ownershipHelper = registerSource.slice(ownershipHelperStart, ownershipHelperEnd);
     for (const bridgeName of [
-      'issueConfirmBridge',
       'renameSessionsConfirmBridge',
       'ghostGrantConfirmBridge',
     ]) {
       expect(ownershipHelper).toContain(bridgeName);
     }
     expect(registerSource).toMatch(
-      /assertResolveInteractionOrigin\(\s*decision,\s*isPendingDesktopOnlyConfirmation\(requestId\),?\s*\);/,
+      /assertResolveInteractionOrigin\(\s*decision,\s*isPendingDesktopOnlyConfirmation\(requestId\),\s*issueConfirmBridge\.pendingSnapshots\(\)\.some\(\(\{ request \}\) => request\.requestId === requestId\),?\s*\);/,
     );
   });
 

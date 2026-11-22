@@ -1,10 +1,18 @@
 {
+  "agentNet": {
+    "enabled": "启用 Agent-Net",
+    "onlyEncrypted": "仅使用加密连接",
+    "hint": "设备之间使用端到端加密。仅使用加密连接时，两端都需要启用 Agent-Net。",
+    "updateRequired": "请安装新版应用以使用 Agent-Net。",
+    "notConfigured": "当前中转尚未提供 Agent-Net，请更新中转或加入 V2 中转。",
+    "failed": "未能修改 Agent-Net 设置，请检查中转连接后重试。"
+  },
   "settings": {
     "sectionTitle": "中转服务",
     "currentLabel": "中转服务",
     "official": "{{appName}} 官方中转",
     "switchToOfficial": "切回官方中转",
-    "officialHint": "设备之间经 {{appName}} 官方中转连接。要改用自建中转，在中转所在的电脑上显示加入二维码，用手机相机扫码加入。",
+    "officialHint": "设备之间经 {{appName}} 官方中转连接。你的电脑在用自己的中转时会列在这里，点一下即可加入；别人分享的中转，用手机相机扫对方给的二维码加入。",
     "selfHostedHint": "设备之间经自建中转 {{address}} 连接；登录、模型和共享任务等仍使用 {{appName}} 官方服务。",
     "removedHint": "这台手机已被移出中转，或中转已停用。可以切回官方中转，或在电脑上重新加入。",
     "credentialMissingHint": "这台手机上找不到中转凭证。请在电脑上重新加入，或切回官方中转。",
@@ -12,7 +20,15 @@
     "confirmBody": "这台手机会退出「{{name}}」，改用 {{appName}} 官方中转。之后要再用这个中转，需要在电脑上重新加入。",
     "confirmAction": "切回",
     "switchFailed": "没能切回官方中转，请稍后重试。",
-    "pushUnavailable": "使用自建中转时，电脑上的任务通知不会推送到这台手机。"
+    "pushUnavailable": "使用自建中转时，电脑上的任务通知不会推送到这台手机。",
+    "accountManagedOn": "在「{{device}}」上管理",
+    "accountSwitchTitle": "加入「{{name}}」？",
+    "accountSwitchBody": "这是你账号下的中转，由「{{device}}」放行，这台手机自动加入，不需要分享链接。使用自建中转时，这台手机收不到电脑上的任务通知。",
+    "accountSwitchAction": "加入",
+    "sharedHint": "设备之间经别人分享的中转 {{address}} 连接，只能连接你自己的设备；登录、模型和共享任务等仍使用 {{appName}} 官方服务。",
+    "sharedCurrent": "{{name}}（{{owner}} 分享）",
+    "accountSharedBy": "{{owner}} 分享 · 由「{{device}}」加入",
+    "accountSharedOn": "由「{{device}}」加入"
   },
   "issue": {
     "removedTitle": "已移出中转",
@@ -34,22 +50,28 @@
     "retry": "重试",
     "signedOut": "请先登录 {{appName}}，再加入这个中转。",
     "signIn": "去登录",
-    "invalidLink": "加入链接无效或已失效，请在电脑上重新生成。",
-    "cancelled": "已取消加入。要加入这个中转，请在电脑上重新生成加入链接。"
+    "invalidLink": "分享链接无效或已失效，请在电脑上重新生成。",
+    "cancelled": "已取消加入。要加入这个中转，请在电脑上重新生成分享链接。",
+    "accountRequesting": "正在请「{{device}}」放行…",
+    "accountWaiting": "正在加入，等待「{{device}}」放行…",
+    "openOnComputer": "这是其他账号分享的中转，请在你的电脑上打开这条链接加入。电脑加入后，这台手机会在设置的中转服务里看到它，点一下即可加入。"
   },
   "errors": {
     "unreachable": "连不上这个中转。请确认手机和电脑在同一网络，或手机能访问这个地址。",
-    "insecureUnreachable": "连不上这个中转。手机只能通过 https 加入中转，请在电脑上为中转配置证书后重新生成加入链接。",
-    "notRelay": "这个地址不是 {{appName}} 中转，请检查加入链接。",
+    "insecureUnreachable": "连不上这个中转。手机只能通过 https 加入中转，请在电脑上为中转配置证书后重新生成分享链接。",
+    "notRelay": "这个地址不是 {{appName}} 中转，请检查分享链接。",
     "incompatible": "这个中转与当前版本的 {{appName}} 不兼容，请把中转和 {{appName}} 都更新到最新版本。",
     "accountMismatch": "这个中转属于另一个 {{appName}} 账号。",
-    "codeInvalid": "加入链接已失效，请在电脑上重新生成。",
+    "codeInvalid": "分享链接已失效，请在电脑上重新生成。",
     "rateLimited": "尝试次数太多，请稍后再试。",
     "rejected": "电脑上拒绝了这次加入。",
-    "expired": "等待同意超时，请在电脑上重新生成加入链接。",
-    "ownerMismatch": "中转返回的证书不是加入链接里的主人签发的，可能连到了别人伪造的中转，已停止加入。",
+    "expired": "等待同意超时，请在电脑上重新生成分享链接。",
+    "ownerMismatch": "中转返回的证书不是分享链接里的主人签发的，可能连到了别人伪造的中转，已停止加入。",
     "failed": "没能加入中转，请稍后重试。",
-    "saveFailed": "已获同意，但没能在这台手机上保存中转凭证。请在电脑上重新生成加入链接后再试。",
-    "credentialUnavailable": "这台手机没有可用的中转凭证。请重新加入，或在设置里切回官方中转。"
+    "saveFailed": "已获同意，但没能在这台手机上保存中转凭证。请在电脑上重新生成分享链接后再试。",
+    "credentialUnavailable": "这台手机没有可用的中转凭证。请重新加入，或在设置里切回官方中转。",
+    "ownerUnavailable": "「{{device}}」没有回应。请确认它开着 {{appName}} 并已联网，或请它分享链接给你。",
+    "relayUnavailable": "「{{device}}」已经不在用这个中转了。",
+    "accountDirectoryUnavailable": "暂时连不上 {{appName}} 账号服务，读不到你账号下的中转。请稍后重试，或请对方分享链接给你。"
   }
 }

@@ -6,6 +6,7 @@ const actions = new Set<Promise<void>>();
 const waiters: Array<() => void> = [];
 let revision = 0;
 let agentRevision = 0;
+let upgradePause: symbol | null = null;
 export const HUMAN_INPUT_QUIET_MS = 300;
 export const AGENT_INPUT_WAIT_MS = 5_000;
 export const desktopInputRevision = (): number => revision;
@@ -13,6 +14,26 @@ export const agentDesktopInputRevision = (): number => agentRevision;
 export const isAgentDesktopInputActive = (): boolean => actions.size > 0;
 export const hasRemoteDesktopInput = (): boolean => humans.size > 0;
 export const isHumanDesktopInputActive = (): boolean => [...humans].some((human) => human.busy);
+
+/** Pause new input only after every native gesture/action has finished. This
+ * lease belongs to the signed client, not the Node task runtime. A failed
+ * upgrade releases it; exiting a client cannot transfer a held key. */
+export function pauseDesktopInputForClientUpgrade(): { release(): void } | null {
+  if (upgradePause || actions.size || waiters.length || isHumanDesktopInputActive()) return null;
+  const token = Symbol('client-upgrade');
+  upgradePause = token;
+  revision++;
+  return { release() {
+    if (upgradePause !== token) return;
+    upgradePause = null;
+    revision++;
+  } };
+}
+
+function assertInputNotPaused(): void {
+  if (upgradePause) throw inputError('DESKTOP_CLIENT_UPGRADING',
+    'Desktop is reconnecting during an upgrade. No input was dispatched.');
+}
 
 /** Tracks queued native input and held gestures for one input-helper generation. */
 export class HumanDesktopInput {
@@ -32,6 +53,7 @@ export class HumanDesktopInput {
 
   begin(events: DesktopInput[]): { ready: Promise<void>; complete: () => void } {
     if (this.released) throw new Error('DESKTOP_LEASE_EXPIRED');
+    assertInputNotPaused();
     revision++;
     this.pending++;
     for (const event of events) {
@@ -109,6 +131,7 @@ async function runOwnedInput<T>(
   run: (assertCurrent: () => void) => Promise<T>,
   validate?: () => void,
 ): Promise<T> {
+  assertInputNotPaused();
   if (isHumanDesktopInputActive()) {
     throw inputError('DESKTOP_INPUT_BUSY',
       'Remote desktop input is active. Yield briefly, then get fresh window state before retrying; the remote connection can stay open.',

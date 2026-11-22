@@ -6,6 +6,7 @@ import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIde
 import type { SandboxHandle, SandboxHostAdapter } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.js';
 import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH } from '../../../desktop/src/main/cindy-brain/runtime/ghostFiles.js';
 import { GHOST_HTML_CSP } from '../../../desktop/src/main/cindy-brain/runtime/ghostPageHandler.js';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 
 export interface HeadlessPluginSandboxPorts {
   /** Captured by the launcher, never selected by plugin data. */
@@ -13,6 +14,7 @@ export interface HeadlessPluginSandboxPorts {
   bridgeSource: string;
   ownerKey: () => string;
   isCurrent: (ghost: InstalledGhost, ownerKey: string) => boolean;
+  profileHoldMessage?(): string | null;
   pageHandler: (ghost: InstalledGhost, origin: string, current: () => boolean) => (request: Request) => Promise<Response>;
   send: (ghost: InstalledGhost, payload: unknown) => Promise<unknown>;
 }
@@ -35,6 +37,10 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
   const partitions = new Map<string, Promise<Partition>>();
   const logic = new Map<string, { page: Page; partition: Partition; bridge: JSHandle }>();
   const closing = new Set<Promise<unknown>>();
+  const assertNotHeld = () => {
+    const held = ports.profileHoldMessage?.();
+    if (held) throwIpcError('PRECONDITION_FAILED', held);
+  };
   function closeContext(context: BrowserContext) {
     const pending = context.close().catch(() => undefined).finally(() => closing.delete(pending));
     closing.add(pending);
@@ -74,7 +80,9 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
     }
     if (!pending) {
       pending = (async () => {
-        const context = await (await browser()).newContext({
+        const instance = await browser();
+        assertNotHeld();
+        const context = await instance.newContext({
           acceptDownloads: false, serviceWorkers: 'block', permissions: [],
           bypassCSP: false, ignoreHTTPSErrors: false,
         });
@@ -94,14 +102,22 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
             const request = route.request();
             let url: URL;
             try { url = new URL(request.url()); } catch { await route.abort('blockedbyclient'); return; }
-            if (url.origin !== origin) {
-              // The existing page contract allows external HTTPS images only.
-              if (url.protocol === 'https:' && request.resourceType() === 'image') await route.continue();
-              else await route.abort('blockedbyclient');
-              return;
-            }
-            if (url.username || url.password) { await route.abort('blockedbyclient'); return; }
+            const refuseWhileHeld = (held: string) => {
+              if (url.origin === origin) {
+                return route.fulfill({ status: 409, json: { ok: false, errorCode: 'PRECONDITION_FAILED', message: held } });
+              }
+              return route.abort('blockedbyclient');
+            };
             try {
+              const held = ports.profileHoldMessage?.();
+              if (held) { await refuseWhileHeld(held); return; }
+              if (url.origin !== origin) {
+                // The existing page contract allows external HTTPS images only.
+                if (url.protocol === 'https:' && request.resourceType() === 'image') await route.continue();
+                else await route.abort('blockedbyclient');
+                return;
+              }
+              if (url.username || url.password) { await route.abort('blockedbyclient'); return; }
               const body = request.postDataBuffer();
               // Page configuration endpoints already have a 64 KiB body contract.
               if (body && body.length > 65_536) { await route.fulfill({ status: 413 }); return; }
@@ -109,6 +125,8 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
                 method: request.method(), headers: request.headers(),
                 ...(body && !['GET', 'HEAD'].includes(request.method()) ? { body: new Uint8Array(body) } : {}),
               }));
+              const nowHeld = ports.profileHoldMessage?.();
+              if (nowHeld) { await response.body?.cancel(); await refuseWhileHeld(nowHeld); return; }
               if (!current()) { await response.body?.cancel(); await route.abort('blockedbyclient'); return; }
               const bytes = Buffer.from(await response.arrayBuffer());
               if (!current()) { await route.abort('blockedbyclient'); return; }
@@ -138,43 +156,60 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
     create(ghost): SandboxHandle {
       let destroyed = false;
       let page: Page | undefined;
+      let stopLoading: (() => void) | undefined;
       let gone: ((details: { reason: string }) => void) | undefined;
       const id = installedGhostStoragePart(ghost);
+      const loadPage = async () => {
+        assertNotHeld();
+        const partition = await partitionFor(ghost);
+        assertNotHeld();
+        if (destroyed) throw new Error('PLUGIN_RUNTIME_STOPPED');
+        page = await partition.context.newPage();
+        const livePage = page;
+        if (destroyed || !partition.current()) { await page.close(); throw new Error('PLUGIN_PAGE_UNAVAILABLE'); }
+        page.on('crash', () => { if (!destroyed) gone?.({ reason: 'crashed' }); });
+        page.on('close', () => { if (!destroyed) gone?.({ reason: 'closed' }); });
+        const valid = () => !destroyed && partition.current() && !livePage.isClosed();
+        await page.exposeBinding('__cindyPluginRequest', async (source, kind, payload) => {
+          if (!partition.current() || source.page !== livePage || source.frame !== livePage.mainFrame() ||
+              new URL(source.frame.url()).origin !== partition.origin) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+          assertNotHeld();
+          if (!valid()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+          if (kind === 'ping') return { ok: true, id };
+          if (kind !== 'send') throw new Error('PLUGIN_REQUEST_INVALID');
+          const result = await ports.send(ghost, payload);
+          if (!valid()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+          return result;
+        });
+        // Initialize the private delivery handle before loading plugin code.
+        // Unlike a global callback it cannot be replaced or called by a panel.
+        await page.route(`${partition.origin}${GHOST_BOOT_PATH}`, route => route.fulfill({
+          status: 200, contentType: 'text/html', headers: { 'Content-Security-Policy': GHOST_HTML_CSP },
+          body: '<!doctype html><html><head></head><body></body></html>',
+        }));
+        await page.goto(`${partition.origin}${GHOST_BOOT_PATH}`);
+        const bridge = await page.evaluateHandle(`(() => { ${ports.bridgeSource}\nconst bridge = CindyPluginBridge.createGhostPageBridge({ ping: () => window.__cindyPluginRequest('ping'), send: payload => window.__cindyPluginRequest('send', payload) }); Object.defineProperty(window, 'cindy', { value: bridge.api, writable: false, configurable: false }); return bridge; })()`);
+        if (!valid()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+        logic.set(id, { page, partition, bridge });
+        await page.addScriptTag({ url: `${partition.origin}${GHOST_MAIL_SDK_PATH}` });
+        await page.addScriptTag({ url: `${partition.origin}/${ghost.manifest.entry}` });
+        if (!valid()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+      };
       return {
         async load() {
-          const partition = await partitionFor(ghost);
-          if (destroyed) throw new Error('PLUGIN_RUNTIME_STOPPED');
-          page = await partition.context.newPage();
-          const livePage = page;
-          if (destroyed || !partition.current()) { await page.close(); throw new Error('PLUGIN_PAGE_UNAVAILABLE'); }
-          page.on('crash', () => { if (!destroyed) gone?.({ reason: 'crashed' }); });
-          page.on('close', () => { if (!destroyed) gone?.({ reason: 'closed' }); });
-          const valid = () => !destroyed && partition.current() && !livePage.isClosed();
-          await page.exposeBinding('__cindyPluginRequest', async (source, kind, payload) => {
-            if (!valid() || source.page !== livePage || source.frame !== livePage.mainFrame() ||
-                new URL(source.frame.url()).origin !== partition.origin) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
-            if (kind === 'ping') return { ok: true, id };
-            if (kind !== 'send') throw new Error('PLUGIN_REQUEST_INVALID');
-            const result = await ports.send(ghost, payload);
-            if (!valid()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
-            return result;
+          const stopped = new Promise<never>((_resolve, reject) => {
+            stopLoading = () => reject(new Error('PLUGIN_RUNTIME_STOPPED'));
           });
-          // Initialize the private delivery handle before loading plugin code.
-          // Unlike a global callback it cannot be replaced or called by a panel.
-          await page.route(`${partition.origin}${GHOST_BOOT_PATH}`, route => route.fulfill({
-            status: 200, contentType: 'text/html', headers: { 'Content-Security-Policy': GHOST_HTML_CSP },
-            body: '<!doctype html><html><head></head><body></body></html>',
-          }));
-          await page.goto(`${partition.origin}${GHOST_BOOT_PATH}`);
-          const bridge = await page.evaluateHandle(`(() => { ${ports.bridgeSource}\nconst bridge = CindyPluginBridge.createGhostPageBridge({ ping: () => window.__cindyPluginRequest('ping'), send: payload => window.__cindyPluginRequest('send', payload) }); Object.defineProperty(window, 'cindy', { value: bridge.api, writable: false, configurable: false }); return bridge; })()`);
-          logic.set(id, { page, partition, bridge });
-          await page.addScriptTag({ url: `${partition.origin}${GHOST_MAIL_SDK_PATH}` });
-          await page.addScriptTag({ url: `${partition.origin}/${ghost.manifest.entry}` });
-          if (!valid()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+          // A context can close during newPage() before the page handle arrives.
+          // Stop releases the startup waiter immediately. loadPage still checks
+          // destroyed before using or retaining any late-arriving page.
+          try { await Promise.race([loadPage(), stopped]); }
+          finally { stopLoading = undefined; }
         },
         destroy() {
           if (destroyed) return;
           destroyed = true;
+          stopLoading?.();
           if (logic.get(id)?.page === page) logic.delete(id);
           if (page) void page.close().catch(() => undefined);
         },
@@ -187,20 +222,35 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
   };
   return {
     adapter,
-    async deliver(id: string, message: unknown): Promise<boolean> {
+    /** A gateway request has one delivery attempt. Once submitted, only the plugin's
+     * verdict or the gateway deadline can settle it, even if its page then closes. */
+    acceptGatewayDelivery(id: string, message: unknown): true {
+      assertNotHeld();
+      const target = logic.get(id);
+      if (!target || target.partition.id !== id || !target.partition.current() || target.page.isClosed()) {
+        throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+      }
+      void target.bridge.evaluate((bridge, payload) => bridge.deliver(payload), message).catch(() => {});
+      return true;
+    },
+    async deliver(id: string, message: unknown, options: { failOnUncertain?: boolean } = {}): Promise<boolean> {
+      if (ports.profileHoldMessage?.()) return false;
       const target = logic.get(id);
       if (!target?.partition.current() || target.page.isClosed()) return false;
       try { await target.bridge.evaluate((bridge, payload) => bridge.deliver(payload), message); return target.partition.current(); }
-      catch { return false; }
+      catch { if (options.failOnUncertain) throw new Error('PLUGIN_DELIVERY_UNKNOWN'); return false; }
     },
     /** A zero-bridge page in the exact same owner × installation partition. */
     async openPage(ghost: InstalledGhost, pathname: string): Promise<Page> {
+      assertNotHeld();
       const partition = await partitionFor(ghost);
+      assertNotHeld();
       const url = new URL(pathname, partition.origin);
       if (url.origin !== partition.origin) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
       const page = await partition.context.newPage();
       try {
         await page.goto(url.href);
+        assertNotHeld();
         if (!partition.current()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
         return page;
       } catch (error) { await page.close(); throw error; }

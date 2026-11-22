@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readDesktopInputPermission, resolveDesktopInputBinary } from '../inputHost';
+import { readDesktopInputPermission, requestDesktopInputPermission, resolveDesktopInputBinary } from '../inputHost';
 import { readLinuxDesktopInputSupport } from '../linuxInput';
 
 const mocks = vi.hoisted(() => ({
@@ -40,6 +40,7 @@ describe('desktop input permission detection', () => {
     vi.clearAllMocks();
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
     mocks.app.isPackaged = false;
+    vi.spyOn(fs, 'readFile').mockResolvedValue('fixture source');
     mocks.access.mockResolvedValue(undefined);
     mocks.exec.mockResolvedValue({ stdout: 'ready\n' });
   });
@@ -102,6 +103,49 @@ describe('desktop input permission detection', () => {
     mocks.exec.mockRejectedValue(new Error('compiler unavailable'));
     expect(await readDesktopInputPermission()).toBe('unknown');
   });
+
+  // Remote keyboard/mouse control needs event posting. Other users of the same
+  // helper (window inspection and the away guard) request only their AX access.
+  it('checks event posting passively for remote control and requests it only on explicit action', async () => {
+    mocks.exec.mockResolvedValue({ stdout: 'permission\n' });
+    expect(await readDesktopInputPermission('postEvents')).toBe('missing');
+    expect(mocks.exec.mock.calls[0][1]).toEqual(['--check', '--post-events']);
+    const signal = new AbortController().signal;
+    expect(await requestDesktopInputPermission(() => true, signal, 'postEvents')).toBe(false);
+    expect(mocks.exec.mock.calls[1][1]).toEqual(['--request-permission', '--post-events']);
+    mocks.exec.mockResolvedValue({ stdout: 'ready\n' });
+    expect(await requestDesktopInputPermission(() => true, signal)).toBe(true);
+    expect(mocks.exec.mock.calls[2][1]).toEqual(['--request-permission']);
+  });
+
+  // Regression: a signed personal shell was probing an ad-hoc helper outside
+  // its app, so the visible app grant did not describe the input executable.
+  // Unit: actual resolver/probe, in-memory receipt/files; no existing case covered
+  // source-mode runtimes with shipped helpers. Missing promised helpers must fail.
+  it.each([true, false])(
+    'uses only the sealed personal input helper (present=%s)',
+    async (present) => {
+      const resources = path.resolve('/fixture/Cindy.app/Contents/Resources');
+      const previous = process.resourcesPath;
+      Object.defineProperty(process, 'resourcesPath', { value: resources, configurable: true });
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({ capabilities: { desktopInput: true } }),
+      );
+      if (!present) mocks.access.mockRejectedValue(new Error('ENOENT'));
+      try {
+        expect(await readDesktopInputPermission()).toBe(present ? 'granted' : 'unknown');
+        if (present)
+          expect(mocks.exec).toHaveBeenCalledExactlyOnceWith(
+            path.join(resources, 'tools', 'remote-desktop', 'cindy-macos-desktop-input'),
+            ['--check'],
+            { timeout: 5000, maxBuffer: 1024 },
+          );
+        else expect(mocks.exec).not.toHaveBeenCalled();
+      } finally {
+        Object.defineProperty(process, 'resourcesPath', { value: previous, configurable: true });
+      }
+    },
+  );
 
   it('does not probe Accessibility on Windows', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');

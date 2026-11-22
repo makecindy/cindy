@@ -1,5 +1,7 @@
 import type { ScrollViewInstance } from 'react-native';
-import { askAnswerError, askQuestionOptions, interactionPriority } from '@cindy/maker-shared/interaction';
+import { IssueConfirmCard, type MobileIssueConfirmRequest } from './IssueConfirmCard';
+import { clearIssueConfirmDraft } from './interactionDraftStore';
+import { askAnswerError, askQuestionOptions } from '@cindy/maker-shared/interaction';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { PluginSetupNativeActions } from '@/plugins/PluginSetupNativeActions';
 import { sha256 } from '@noble/hashes/sha256';
@@ -8,15 +10,13 @@ import { InputHandoffCard } from '@/inputHandoff/InputHandoffCard';
 import { parseInputHandoffSnapshotLike } from '@/inputHandoff/inputHandoffNative';
 import { mobilePluginSetupActions } from '@/plugins/pluginSetupActions';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
   Check,
-  ShieldCheck,
-  MessageCircle,
   ChevronDown,
   ChevronUp,
   CornerDownLeft,
@@ -38,6 +38,7 @@ import {
   StyleSheet,
   View,
   useWindowDimensions,
+  type LayoutChangeEvent,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -47,8 +48,9 @@ import { ChatFilePathContext, type ChatFilePathContextValue } from '@/session/ch
 import { QuestionReferenceText } from '@/session/QuestionReferenceText';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
-import { asyncQuestionNeedsSupplement, formatAsyncQuestionSupplement, withdrawnQuestionDraftText } from '@cindy/maker-shared/interaction';
+import { asyncQuestionNeedsSupplement, formatAsyncQuestionReplyDisplay, formatAsyncQuestionSupplement, withdrawnQuestionDraftText } from '@cindy/maker-shared/interaction';
 import { useAskCardVoice } from '@/session/useAskCardVoice';
+import { PendingAnswerTrailingInsetContext } from '@/session/usePendingQuestionScroll';
 import { buildQueuedTextMessage } from '@/session/inputProjection';
 import {
   answerKey,
@@ -78,7 +80,7 @@ import {
   remoteInteractionHandling,
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
-  sortPendingInteractions,
+  selectPendingInteractionByRequestId,
   type AskQuestion,
   type PermissionReviewPresentation,
   type PlanReviewEvidencePresentation,
@@ -186,6 +188,7 @@ function InteractionPanelContent({
   collapse,
   deviceId,
   fillAvailableHeight = false,
+  pinPermissionActions = false,
   sessionId,
   interactions,
   activeRequestId: controlledActiveRequestId,
@@ -210,6 +213,7 @@ function InteractionPanelContent({
   };
   deviceId: string;
   fillAvailableHeight?: boolean;
+  pinPermissionActions?: boolean;
   sessionId: string;
   interactions: PendingInteraction[];
   activeRequestId?: string | null;
@@ -221,10 +225,6 @@ function InteractionPanelContent({
   const styles = useInteractionStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const sortedInteractions = useMemo(
-    () => sortPendingInteractions(interactions),
-    [interactions],
-  );
   const [localActiveRequestId, setLocalActiveRequestId] = useState<string | null>(null);
   const activeRequestId = controlledActiveRequestId !== undefined
     ? controlledActiveRequestId
@@ -233,25 +233,21 @@ function InteractionPanelContent({
     if (controlledActiveRequestId !== undefined) onActiveRequestIdChange?.(requestId);
     else setLocalActiveRequestId(requestId);
   };
-  const fallbackInteraction = sortedInteractions[0] ?? null;
-  const activeInteraction = useMemo(() => {
-
-    if (!activeRequestId) return fallbackInteraction;
-    const selected = sortedInteractions.find((item) => readRequestId(item) === activeRequestId);
-    if (!selected || (fallbackInteraction && interactionPriority(fallbackInteraction) < interactionPriority(selected))) return fallbackInteraction;
-    return selected;
-  }, [activeRequestId, fallbackInteraction, sortedInteractions]);
+  const activeInteraction = useMemo(
+    () => selectPendingInteractionByRequestId(interactions, activeRequestId),
+    [interactions, activeRequestId],
+  );
   const { width: screenWidth } = usePaneViewport();
   useEffect(() => {
     if (!activeRequestId) return;
-    if (!sortedInteractions.some((item) => readRequestId(item) === activeRequestId)) {
+    if (!interactions.some((item) => readRequestId(item) === activeRequestId)) {
       setActiveRequestId(null);
     }
-  }, [activeRequestId, sortedInteractions]);
+  }, [activeRequestId, interactions]);
   if (!activeInteraction) return null;
   const kind = interactionKind(activeInteraction);
-  const queuePresentation = buildPendingInteractionQueuePresentation(sortedInteractions, {
-    maxVisible: sortedInteractions.length || 1,
+  const queuePresentation = buildPendingInteractionQueuePresentation(interactions, {
+    maxVisible: interactions.length || 1,
   }, mobilePresentationLocalizer);
   const activeRequestIdForPresentation = readRequestId(activeInteraction);
   const selectedQueueItem = queuePresentation.items.find((item) => item.requestId === activeRequestIdForPresentation)
@@ -371,9 +367,9 @@ function InteractionPanelContent({
     );
   }
   return (
-    <View style={[styles.root, fillAvailableHeight && styles.rootFill, rootLayoutStyle]} testID="interaction.panel">
-      {/* 代输入条自带用途与位置,单独一条时不再叠一层队列头。 */}
-      {kind === 'input_handoff' && activeQueuePresentation.totalCount <= 1 ? null : (
+    <View style={[styles.root, kind === 'issue_confirm' && activeInteraction.request.remoteConfirmSupported === true && styles.selfContainedCard, fillAvailableHeight && styles.rootFill, rootLayoutStyle]} testID="interaction.panel">
+      {/* 代输入与反馈自带说明；单条反馈的收起入口并入卡片，不重复队列标题。 */}
+      {activeQueuePresentation.totalCount <= 1 && (kind === 'input_handoff' || (kind === 'issue_confirm' && activeInteraction.request.remoteConfirmSupported === true)) ? null : (
         <PendingTaskHeader
           onCollapse={canToggleCollapsed ? toggleCollapsed : undefined}
           onSelectRequest={setActiveRequestId}
@@ -386,10 +382,13 @@ function InteractionPanelContent({
         deviceId={deviceId}
         sessionId={sessionId}
         item={activeInteraction}
+        embedded={embedded}
+        pinPermissionActions={pinPermissionActions}
         planViewerState={planViewerState}
         onPlanViewerStateChange={onPlanViewerStateChange}
         onError={onError}
         touchLayout={touchLayout}
+        onCollapse={kind === 'issue_confirm' && activeQueuePresentation.totalCount <= 1 && canToggleCollapsed ? toggleCollapsed : undefined}
       />
     </View>
   );
@@ -417,8 +416,7 @@ function cardStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayou
 }
 
 function actionsStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayout, companion = false): StyleProp<ViewStyle> {
-  // Teammate cards (K5): equal-width buttons; a full-width primary takes its own row.
-  if (companion) return [styles.actions, { gap: spacing.sm, justifyContent: 'flex-start', marginTop: spacing.sm }];
+  if (companion) return [styles.actions, { gap: spacing.sm, justifyContent: 'flex-end', marginTop: spacing.sm }];
   return [
     styles.actions,
     {
@@ -451,9 +449,8 @@ function resolveButtonLayoutStyle(
   touchLayout: InteractionTouchLayout,
   variant: 'primary' | 'secondary' | 'inline',
   companion = false,
-  fullWidth = false,
 ): StyleProp<ViewStyle> {
-  if (companion) return { minHeight: COMPANION_BUTTON_HEIGHT, flexGrow: 1, flexBasis: fullWidth ? '100%' : 0 };
+  if (companion) return { minHeight: COMPANION_BUTTON_HEIGHT, flexGrow: 0, flexShrink: 1, maxWidth: '100%' };
   return {
     minHeight: touchLayout.actionButtonMinHeight,
     minWidth: variant === 'inline' ? touchLayout.inlineButtonMinWidth : touchLayout.actionButtonMinWidth,
@@ -534,18 +531,24 @@ function InteractionItem({
   deviceId,
   sessionId,
   item,
+  embedded,
+  pinPermissionActions,
   planViewerState,
   onPlanViewerStateChange,
   onError,
   touchLayout,
+  onCollapse,
 }: {
   deviceId: string;
   sessionId: string;
   item: PendingInteraction;
+  embedded: boolean;
+  pinPermissionActions: boolean;
   planViewerState?: MobilePlanViewerState;
   onPlanViewerStateChange?(state: MobilePlanViewerState): void;
   onError(message: string | null): void;
   touchLayout: InteractionTouchLayout;
+  onCollapse?(): void;
 }) {
   const { t } = useTranslation();
   const maker = useMobileMakerTransport(deviceId);
@@ -605,7 +608,11 @@ function InteractionItem({
           const answerText = formatAsyncQuestionSupplement(normalizeAskQuestions(item.request.questions),
             (decision.answers ?? {}) as Record<string, string>);
           const answerId = bytesToHex(sha256(answerText));
-          const queued = buildQueuedTextMessage(session, text, new Date(), `question-reply:${currentRequestId}:${answerId}`, { planMode: false });
+          // History and the queue show the question and the answer; only the model's copy
+          // carries the native reply format and the delayed-answer note.
+          const queued = buildQueuedTextMessage(session, formatAsyncQuestionReplyDisplay(normalizeAskQuestions(item.request.questions),
+            (decision.answers ?? {}) as Record<string, string>), new Date(), `question-reply:${currentRequestId}:${answerId}`, { planMode: false });
+          queued.text = text;
           // Only a definite negative ACK permits enqueue after steer.
           const steered = inputProjection.queuePaused ? false
             : await maker.input.steer(sessionId, queued, { touchUserSend: true });
@@ -630,6 +637,7 @@ function InteractionItem({
       remoteSessionStore.releaseProtectedQuestion(sessionId, currentRequestId);
       if (kind === 'ask_user_question') clearAskUserDraft(currentRequestId);
       if (kind === 'plan_review') clearPlanReviewDraft(currentRequestId);
+      if (kind === 'issue_confirm') clearIssueConfirmDraft(currentRequestId);
       if (optimisticDismiss) {
         remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, { kind: 'confirmed' });
       } else if (options.resolvedRevision !== undefined) {
@@ -675,6 +683,8 @@ function InteractionItem({
   if (kind === 'permission') {
     return (
       <PermissionCard
+        pinActions={pinPermissionActions}
+        key={readRequestId(item)}
         busy={busy}
         item={item}
         onDecision={(decision) => void submitDecision(decision)}
@@ -714,6 +724,10 @@ function InteractionItem({
         touchLayout={touchLayout}
       />
     );
+  }
+  if (kind === 'issue_confirm' && item.request.remoteConfirmSupported === true && !isSharedTaskPeer(deviceId)) {
+    return <IssueConfirmCard key={requestId} request={item.request as unknown as MobileIssueConfirmRequest}
+      busy={busy} inline={embedded} onCollapse={onCollapse} onDecision={(decision) => void submitDecision(decision)} />;
   }
   if (kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm') {
     return (
@@ -795,12 +809,14 @@ function PermissionCard({
   busy,
   item,
   onDecision,
+  pinActions,
   touchLayout,
 }: {
   onError(message: string | null): void;
   busy: boolean;
   item: PendingInteraction;
   onDecision(decision: Record<string, unknown>): void;
+  pinActions: boolean;
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useInteractionStyles();
@@ -813,10 +829,14 @@ function PermissionCard({
   );
   const companion = useContext(CompanionInteractionContext);
   const companionIdentity = useContext(CompanionIdentityContext);
-  const { colors } = useTheme();
+  const hung = useContext(CompanionHungContext);
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
+  const isPluginInstall = item.request.toolName === 'cindy.plugin.install';
+  const isFirstInstall = isPluginInstall && (item.request.input as { operation?: unknown } | null)?.operation === 'install';
+  const [showInstallDetails, setShowInstallDetails] = useState(false);
+  const installSummary = isPluginInstall && !showInstallDetails;
   const permissionState = buildMobilePermissionCardState({ armedDecision, presentation });
   const requestDecision = (
     action: 'allow-once' | 'always-allow',
@@ -842,7 +862,7 @@ function PermissionCard({
       variant="secondary"
     />
   );
-  const alwaysButton = permissionState.canShowAlwaysAllow ? (
+  const alwaysButton = !isPluginInstall && permissionState.canShowAlwaysAllow ? (
     <ResolveButton
       key="always"
       accessibilityLabel={t('interaction.permission.alwaysAllowAccessibility')}
@@ -863,29 +883,30 @@ function PermissionCard({
   const allowButton = (
     <ResolveButton
       key="allow"
-      accessibilityLabel={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
+      accessibilityLabel={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
       armed={armedDecision === 'allow-once'}
       busy={busy}
       confirmLabel={t('interaction.permission.allowOnceConfirm')}
-      label={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnce')}
-      onPress={() => requestDecision('allow-once', buildPermissionDecision('allow'))}
+      label={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnce')}
+      onPress={() => installSummary && !isFirstInstall ? setShowInstallDetails(true) : requestDecision('allow-once', buildPermissionDecision('allow'))}
       requestId={requestId}
-      // K5: with three choices the primary takes its own full-width row on top.
-      touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion, companion && !!alwaysButton)}
+      touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion)}
       testID="interaction.permission.allowOnceButton"
       variant="primary"
     />
   );
-  return (
-    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.permission.card">
+  const details = (
+    <>
       {companion ? <>
-        {/* K2 / K3: kind as the eyebrow, then what it will do; who asks is the portrait the card hangs from. */}
         <View style={styles.companionCaption} testID="interaction.permission.requester">
-          <ShieldCheck size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
-          <Text style={styles.kind}>{permissionState.title}</Text>
+          {!hung ? companionIdentity?.avatar : null}
+          <View style={styles.companionHeaderCopy}>
+            <Text style={styles.cardTitle}>{!hung && companionIdentity
+              ? t('interaction.companion.permissionRequest', { name: companionIdentity.name }) : permissionState.title}</Text>
+            {!hung && companionIdentity ? <Text style={styles.kind}>{permissionState.title}</Text> : null}
+          </View>
         </View>
-        <Text style={styles.cardTitle}>{presentation.description
-          || (companionIdentity ? t('interaction.companion.permissionRequest', { name: companionIdentity.name }) : permissionState.title)}</Text>
+        {!installSummary && presentation.description ? <Text style={styles.companionDescription}>{presentation.description}</Text> : null}
       </> : <View style={styles.compactCardHeader}>
         <Text style={styles.kind}>{t('interaction.permission.kind')}</Text>
         <Text numberOfLines={1} style={styles.compactCardTitle}>{permissionState.title}</Text>
@@ -895,15 +916,35 @@ function PermissionCard({
         onPress={() => { void Linking.openURL(url).catch((error) => onError(formatRemoteError(error))); }}>
         {url}
       </Text> : null}
-      {isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
+      {installSummary ? <Text style={styles.body}>{presentation.description?.split('\n', 1)[0]}</Text> : isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
         input={item.request.input}
         armed={!!armedDecision}
         presentation={presentation}
         riskWarningText={permissionState.riskWarningText}
         touchLayout={touchLayout}
       />}
+      {isFirstInstall && <InteractionTouchButton
+        accessibilityLabel={t('interaction.companion.details')} expanded={showInstallDetails}
+        disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}>
+        <Text style={styles.companionDetailsText}>{t('interaction.companion.details')}</Text>
+      </InteractionTouchButton>}
+    </>
+  );
+  return (
+    <View style={[cardStyle(styles, touchLayout, companion), pinActions && styles.permissionScrollable]} testID="interaction.permission.card">
+      {pinActions ? (
+        <ScrollView
+          style={styles.permissionScrollable}
+          contentContainerStyle={{ gap: companion ? spacing.sm : touchLayout.cardGap }}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          testID="interaction.permission.scroll"
+        >
+          {details}
+        </ScrollView>
+      ) : details}
       <InteractionActions touchLayout={touchLayout}>
-        {companion && alwaysButton ? [allowButton, denyButton, alwaysButton] : [denyButton, alwaysButton, allowButton]}
+        {[denyButton, alwaysButton, allowButton]}
       </InteractionActions>
     </View>
   );
@@ -951,7 +992,7 @@ function PermissionEvidence({
       </Text>)}
       <Text style={styles.companionMeta}><Text style={styles.companionMetaLabel}>{`${t('interaction.companion.operation')}  `}</Text>{presentation.toolName}</Text>
       {presentation.sourceDescription ? <Text selectable style={styles.body}>{presentation.sourceDescription}</Text> : null}
-      {presentation.autoReviewUnavailable ? <Text style={styles.body}>{t('interaction.permission.autoReviewUnavailable')}</Text> : null}
+      {presentation.autoReviewUnavailable ? <Text style={styles.body}>{t(presentation.autoReviewQuotaExhausted ? 'session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'interaction.permission.autoReviewUnavailable')}</Text> : null}
       {presentation.autoReviewReason ? <Text selectable style={styles.body} testID="interaction.permission.autoReviewReason">
         {t('interaction.permission.autoReviewReason', { reason: presentation.autoReviewReason })}
       </Text> : null}
@@ -992,7 +1033,7 @@ function PermissionEvidence({
       {presentation.autoReviewUnavailable || presentation.description ? (
         <Text style={styles.permissionDescription}>
           {presentation.autoReviewUnavailable
-            ? t('interaction.permission.autoReviewUnavailable')
+            ? t(presentation.autoReviewQuotaExhausted ? 'session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'interaction.permission.autoReviewUnavailable')
             : presentation.description}
         </Text>
       ) : null}
@@ -1125,6 +1166,31 @@ function AskUserQuestionForm({
   }, mobilePresentationLocalizer), [currentIndex, i18nInstance.language, questions]);
   const current = presentation.current;
   const isWithdrawn = typeof item.request.withdrawalReason === 'string';
+  // A question whose only answer is free text keeps the question readable while
+  // typing: report what sits below the answer box inside this card so the page
+  // reveals the box, not the trailing Skip/Close row (2026-11-12, question
+  // scrolled out of view). The panel's bottom padding stays below the box, the
+  // same gap the end of the card gets, because it sits behind the keyboard.
+  const freeTextOnly = !!current && (isWithdrawn || askQuestionOptions(current).length === 0);
+  const reportTrailingInset = useContext(PendingAnswerTrailingInsetContext);
+  const answerLayoutRef = useRef({ cardHeight: 0, composerBottom: 0 });
+  const syncTrailingInset = useCallback(() => {
+    const { cardHeight, composerBottom } = answerLayoutRef.current;
+    if (cardHeight > 0 && composerBottom > 0) reportTrailingInset?.(Math.max(0, cardHeight - composerBottom));
+  }, [reportTrailingInset]);
+  const onCardLayout = (event: LayoutChangeEvent) => {
+    answerLayoutRef.current.cardHeight = event.nativeEvent.layout.height;
+    if (freeTextOnly) syncTrailingInset();
+  };
+  const onFreeTextComposerLayout = (event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    answerLayoutRef.current.composerBottom = y + height;
+    syncTrailingInset();
+  };
+  useEffect(() => {
+    if (!freeTextOnly) reportTrailingInset?.(0);
+    return () => reportTrailingInset?.(0);
+  }, [freeTextOnly, reportTrailingInset]);
   const withdrawnDraftRef = useRef<string | null>(null);
   useEffect(() => {
     const key = `${requestId}:${currentIndex}`;
@@ -1295,19 +1361,19 @@ function AskUserQuestionForm({
   </View>;
 
   return (
-    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.ask.card">
+    <View onLayout={onCardLayout} style={cardStyle(styles, touchLayout, companion)} testID="interaction.ask.card">
       {/* 收起入口统一在队列头(PendingTaskHeader),卡内不再自持一份 collapsed state:
           两套状态时页面级那份被卡片 key 变化冲掉,收起会自己弹回来。 */}
       <View style={styles.compactCardHeader}>
-        {companion && <MessageCircle size={iconSize.sm} color={colors.textSecondary} />}
-        <Text style={styles.askHeaderKind}>{t(item.request.withdrawalReason ? 'interaction.panel.questionWithdrawn' : 'interaction.panel.awaitingAnswer')}</Text>
-        <View style={styles.compactHeaderActions}>
+        {companion && presentation.header && !isWithdrawn ? <View style={styles.askHeaderChip}><Text style={styles.askHeaderChipLabel}>{presentation.header}</Text></View>
+          : <Text style={styles.askHeaderKind}>{t(isWithdrawn ? 'interaction.panel.questionWithdrawn' : 'interaction.panel.awaitingAnswer')}</Text>}
+        {questions.length > 1 ? <View style={styles.compactHeaderActions}>
           <Text style={styles.pageText}>{presentation.pageLabel}</Text>
-        </View>
+        </View> : null}
       </View>
-      <Text style={styles.askQuestion} testID="interaction.ask.question"><QuestionReferenceText text={presentation.title} /></Text>
-      {!isWithdrawn && <Text style={styles.askMetaCaption}>{metaCaption}</Text>}
-      {typeof item.request.withdrawalReason === 'string' && (
+      <Text style={styles.askQuestion} accessibilityHint={isWithdrawn ? undefined : metaCaption} testID="interaction.ask.question"><QuestionReferenceText text={presentation.title} /></Text>
+      {!companion && !isWithdrawn ? <Text style={styles.askMetaCaption}>{metaCaption}</Text> : null}
+      {isWithdrawn && (
         <Text style={styles.questionWithdrawalNotice} testID="interaction.ask.withdrawn">
           {t('interaction.panel.withdrawnDraft', { reason: item.request.withdrawalReason })}
         </Text>
@@ -1365,7 +1431,7 @@ function AskUserQuestionForm({
             );
           })}
           {!current.answerConstraints?.choices && (showCustomInput ? (
-            <View style={styles.answerComposer} testID="interaction.ask.composer">
+            <View style={styles.askAnswerComposer} testID="interaction.ask.composer">
               <TextInput
                 accessibilityLabel={t('interaction.panel.customAnswerInputAccessibility')}
                 autoFocus
@@ -1379,7 +1445,7 @@ function AskUserQuestionForm({
                 onSelectionChange={(event) => { if (!voice.busy) selectionRef.current = event.nativeEvent.selection; }}
                 placeholder={t('interaction.panel.customAnswerPlaceholder')}
                 placeholderTextColor={colors.textPlaceholder}
-                style={styles.answerComposerInput}
+                style={styles.askAnswerInput}
                 multiline
                 testID="interaction.ask.customInput"
                 value={customInput}
@@ -1416,10 +1482,10 @@ function AskUserQuestionForm({
           ))}
         </View>
       ) : (
-        <View style={styles.answerComposer} testID="interaction.ask.composer">
+        <View onLayout={onFreeTextComposerLayout} style={styles.askAnswerComposer} testID="interaction.ask.composer">
+          {/* No autoFocus: the keyboard would cover the question before it is read. */}
           <TextInput
             accessibilityLabel={t('interaction.panel.answerInput')}
-            autoFocus
             editable={!busy && !voiceLocked}
             onKeyPress={({ nativeEvent }) => { if (nativeEvent.key.length === 1) onStartAnswer(); }}
             onChangeText={(text) => {
@@ -1430,7 +1496,7 @@ function AskUserQuestionForm({
             onSelectionChange={(event) => { if (!voice.busy) selectionRef.current = event.nativeEvent.selection; }}
             placeholder={t('interaction.panel.answerInput')}
             placeholderTextColor={colors.textPlaceholder}
-            style={styles.answerComposerInput}
+            style={styles.askAnswerInput}
             testID="interaction.ask.textInput"
             multiline
             value={customInput}
@@ -2173,10 +2239,11 @@ function InteractionTouchButton({
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  companionCaption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  companionRequester: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  companionRequesterAvatar: { flexShrink: 0 },
-  companionRequesterText: { flex: 1, minWidth: 0, gap: 2 },
+  companionCaption: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  companionHeaderCopy: { flex: 1, minWidth: 0, gap: spacing.xs },
+  askHeaderChip: { alignSelf: 'flex-start', borderRadius: radius.control, backgroundColor: colors.surfaceChip, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  askHeaderChipLabel: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  companionDescription: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionEvidence: { gap: spacing.sm },
   companionHungRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   companionHungAvatar: { flexShrink: 0, marginTop: 2 },
@@ -2186,11 +2253,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   companionMeta: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionMetaLabel: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  companionFact: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
-  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-start' },
   root: {
+    flexShrink: 1,
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     gap: spacing.sm,
@@ -2201,6 +2266,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flex: 1,
     minHeight: 0,
   },
+  selfContainedCard: { borderBottomWidth: 0 },
   taskHeaderWrap: {
     gap: spacing.xs,
   },
@@ -2453,6 +2519,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
   },
+  permissionScrollable: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
   permissionEvidence: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -2612,6 +2679,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.regular, textAlignVertical: 'top',
   },
   answerComposerActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.sm },
+  // Question answers start as one line beside the mic and send buttons and grow
+  // with the text; the buttons stay on the last line (2026-11-12 user request).
+  askAnswerComposer: {
+    width: '100%', minWidth: 0, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.xs,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.control,
+    backgroundColor: colors.surface, paddingVertical: spacing.xs, paddingLeft: spacing.sm, paddingRight: spacing.xs,
+  },
+  askAnswerInput: {
+    flex: 1, minWidth: 0, minHeight: 44, maxHeight: 148,
+    paddingHorizontal: spacing.xs, paddingTop: (44 - lineHeight.body) / 2, paddingBottom: (44 - lineHeight.body) / 2,
+    color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body,
+    fontWeight: fontWeight.regular, textAlignVertical: 'top',
+  },
   answerComposerSend: { width: 44, height: 44, minWidth: 44, paddingHorizontal: 0, flexGrow: 0, flexShrink: 0 },
   customInputRow: {
     alignItems: 'center',
@@ -2630,16 +2710,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     flex: 1,
-    fontSize: typeScale.body,
-    minHeight: 44,
-    paddingHorizontal: spacing.md,
-  },
-  inlineInputWide: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
     fontSize: typeScale.body,
     minHeight: 44,
     paddingHorizontal: spacing.md,
@@ -2972,18 +3042,18 @@ const makeCompanionStyles = (colors: ThemeColors) => {
     compactCardHeader: { ...base.compactCardHeader, minHeight: 0, flexWrap: 'wrap' as const },
     compactCardTitleWrap: { ...base.compactCardTitleWrap, flexDirection: 'column' as const, alignItems: 'flex-start' as const },
     compactCardTitle: { ...base.compactCardTitle, flex: 0, flexShrink: 1 },
-    permissionCodeBlock: { ...base.permissionCodeBlock, backgroundColor: colors.chatCodeSurface, borderRadius: radius.control, borderWidth: 0 },
+    card: { ...base.card, padding: spacing.lg },
+    cardTitle: { ...base.cardTitle, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.semibold },
+    askQuestion: { ...base.askQuestion, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+    permissionCodeBlock: { ...base.permissionCodeBlock, backgroundColor: colors.chatCodeSurface, borderRadius: radius.control, borderWidth: StyleSheet.hairlineWidth },
     codeText: { ...base.codeText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-    // K5: 38pt buttons (hitSlop to 44), 15/20 labels centered; secondary is a quiet chip fill without a border.
     primaryButton: { ...base.primaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md },
-    secondaryButton: { ...base.secondaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md, borderWidth: 0, backgroundColor: colors.surfaceChip },
+    secondaryButton: { ...base.secondaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md, borderWidth: StyleSheet.hairlineWidth, backgroundColor: 'transparent' },
     primaryText: { ...base.primaryText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, textAlign: 'center' as const },
     secondaryText: { ...base.secondaryText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, textAlign: 'center' as const },
     permissionRiskRow: { ...base.permissionRiskRow, borderRadius: radius.control },
-    // K8: options read as one grouped list inside the card.
     optionList: { ...base.optionList, borderRadius: radius.control },
-    inlineInput: { ...base.inlineInput, borderRadius: radius.pill },
-    inlineInputWide: { ...base.inlineInputWide, borderRadius: radius.pill },
+    inlineInput: { ...base.inlineInput, borderRadius: radius.control },
     planEditor: { ...base.planEditor, borderRadius: radius.control },
     optionCustom: { ...base.optionCustom, fontStyle: 'normal' as const },
     pluginSetupStep: { ...base.pluginSetupStep, borderWidth: 0 },

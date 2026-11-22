@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DbSlimmingStartupProgress } from '../../../../shared/localDbMaintenance';
+import {
+  initialDownloadProgress,
+  type DownloadProgress,
+} from '../../../../shared/downloadProgress';
 
 /**
  * SplashScreen wave4 统一面板版测试(implementation-plan Step 3b WHAT1/WHAT3)。
@@ -28,6 +32,7 @@ const mocks = vi.hoisted(() => ({
       speed?: string;
       downloaded?: string;
       total?: string;
+      download?: DownloadProgress;
     },
     resetSignal: 0,
     tipsText: null as string | null,
@@ -258,6 +263,30 @@ describe('SplashScreen wave4 统一面板', () => {
       );
     },
   );
+
+  // Regression (2026-11-17): a retry left the bar frozen with stale speed and no reason.
+  it.each<[Partial<DownloadProgress>, string]>([
+    [
+      { phase: 'retrying', retryReason: 'slow', attempt: 2 },
+      '42%·downloadProgress.retry.slow·downloadProgress.attempt',
+    ],
+    [{ phase: 'verifying' }, '42%·downloadProgress.phase.verifying'],
+    [
+      { phase: 'downloading', speedBps: 1024, etaSeconds: 30 },
+      '42%·411.2 KB/s·8.5 MB / 20 MB·downloadProgress.eta',
+    ],
+  ])('explains the shared download phase on the stats line: %o', (download, label) => {
+    mocks.splash.downloadProgress = 42;
+    mocks.splash.downloadInfo = {
+      progress: 42,
+      speed: '411.2 KB/s',
+      downloaded: '8.5 MB',
+      total: '20 MB',
+      download: { ...initialDownloadProgress('downloading', 100), percent: 42, ...download },
+    };
+    renderSplash('splash_downloading');
+    expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+  });
 
   it.each<[number, string]>([
     [0, '0%'],

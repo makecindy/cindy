@@ -241,13 +241,13 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
     >
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[480px]',
             'max-h-[80vh] overflow-hidden flex flex-col',
           )}
@@ -273,7 +273,7 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
                 <ShieldAlert size={22} className="text-[var(--error-fg-strong)]" />
               </div>
             )}
-            <Dialog.Title className="text-base font-semibold text-[var(--msg-assistant-text)]">
+            <Dialog.Title className="text-base font-medium text-[var(--msg-assistant-text)]">
               {title}
             </Dialog.Title>
             <p className="text-center text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]">

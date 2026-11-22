@@ -318,29 +318,38 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     const selectableTextSource = readFileSync(resolve(process.cwd(), 'src/session/MarkdownSelectableText.tsx'), 'utf8');
     expect(selectableTextSource).toContain("from 'react-native-uitextview'");
     expect(selectableTextSource).toContain('function MarkdownSelectableText({');
-    expect(selectableTextSource).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
+    // #10103: native paragraph layout also covers non-selectable streaming text;
+    // selection itself remains controlled by selectable and the completed state.
+    expect(selectableTextSource).toContain("if ((selectable || paragraphLayout) && allowIosUITextView && Platform.OS === 'ios') {");
     expect(selectableTextSource).toContain('uiTextView');
     expect(selectableTextSource).toContain('function MarkdownSelectableSpan(');
     expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
-    expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
+    expect(markdownBodySource).toContain('(blockSelectable || paragraphLayout) && (allowIosUITextView || paragraphLayout) && Platform.OS === \'ios\'');
 
     // 气泡不抢占正文的原生选字或表格、代码块横向滚动手势。
     expect(bubbleSource).not.toContain('<Pressable');
     expect(bubbleSource).not.toContain('onLongPress');
     expect(bubbleSource).not.toContain('<GestureDetector');
 
-    // 列表内正文只有原生渲染路径:无选择 WebView、无全屏选择查看器。
+    // 列表内保留原生正文、选字和交互，只在 Android 普通任务表格就绪时交接给文档载体。
     expect(markdownBodySource).toContain('testID="message.markdownBody"');
-    // Agent 回复二次测宽:stretch 量到像素宽后钉死,避免 UITextView 首帧偏矮被列表裁切。
-    // 只在 iOS 测宽;Android 行为由 userMessageCollapse.test.ts 执行真实 MarkdownBody 覆盖。
+    // iOS Agent 回复 stretch 测宽后钉像素宽，避免 UITextView 首帧偏矮被列表裁切。
+    expect(markdownBodySource).toContain("const measuresSettledWidth = pinContentWidth && Platform.OS === 'ios';");
     expect(markdownBodySource).toContain('nextSettledContentWidth');
     expect(markdownBodySource).toContain('collapsable={false}');
-    expect(markdownBodySource).toContain('onLayout={measuresSettledWidth ? handleSettledWidthLayout : undefined}');
+    expect(markdownBodySource).toMatch(
+      /onLayout=\{measuresSettledWidth \|\| measureTableBootstrap \? event => \{\s+if \(measuresSettledWidth\) handleSettledWidthLayout\(event\);/,
+    );
+    // Android 只在启用表格选区的任务测量原生占位；文档接手后不以其高度改写占位。
+    expect(markdownBodySource).toContain("const measureTableBootstrap = Platform.OS === 'android' && androidTableSelection;");
+    expect(markdownBodySource).toMatch(
+      /if \(measureTableBootstrap && !showTableDocument\) \{[\s\S]*?setNativeBodySize\(/,
+    );
     expect(markdownBodySource).toContain('pinContentWidth');
     expect(markdownBodySource).toContain('pinSettledWidth');
     expect(markdownBodySource).toContain("pinContentWidth ? { alignSelf: 'stretch' } : null");
-    expect(markdownBodySource).toContain(
-      'style={pinSettledWidth ? { width: contentWidth, maxWidth: \'100%\' } : null}',
+    expect(markdownBodySource).toMatch(
+      /\{!showTableDocument \? \(\s*<View\s+collapsable=\{false\}\s+style=\{\[\s+pinSettledWidth \? \{ width: contentWidth, maxWidth: '100%' \} : null,/,
     );
     expect(markdownBodySource).toContain(
       "key={`${group.key}:${pinSettledWidth ? contentWidth : 'hug'}`}",

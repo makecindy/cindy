@@ -8,7 +8,7 @@
  * 有效历史作为 wire-only 前缀注入到全新原生会话，显示/落库仍只有用户新消息。
  */
 
-import { buildHandoffText, type HandoffSourceMessage } from './agentHandoff.js';
+import { buildHandoff, type HandoffCoverage, type HandoffSourceMessage } from './agentHandoff.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import type {
@@ -46,13 +46,7 @@ export interface MessageDeleteHandlerDeps {
     clientId: string,
   ): Promise<MessageDeletionTarget | null>;
   listMessagesForContext(sessionId: string): Promise<ContextSourceMessage[]>;
-  /**
-   * 伙伴工作记忆账本渲染段(botWorkingMemory);删除消息后的重建交接同样带上,
-   * 但由待删消息产生的条目必须先排除,否则被删轮次的承诺 / 纠正会借交接回到新上下文。
-   */
-  readWorkingMemoryNote?(sessionId: string, opts: { excludeMessageIds: ReadonlySet<string> }): Promise<string | null>;
-  /** 删除提交后持久清掉由这些消息产生的账本条目;失败不影响删除。 */
-  pruneWorkingMemory?(sessionId: string, deletedMessageIds: ReadonlySet<string>): Promise<void>;
+  resolveHandoffWindow?(sessionId: string): Promise<number | null>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   hasBackgroundActivity(sessionId: string): boolean;
   closeSession(sessionId: string): Promise<void>;
@@ -63,6 +57,7 @@ export interface MessageDeleteHandlerDeps {
     clientIds: string[],
     handoff: string,
     subagentTurnWindow?: SubagentTurnDeletionWindow,
+    handoffCoverage?: HandoffCoverage,
   ): Promise<MessageDeleteCommittedPayload>;
   /** 见 sessionAgentSwitchHandler 同名字段:带代次写,防 /clear 竞态。 */
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
@@ -129,6 +124,7 @@ export async function performMessageDeletion(
     // durable FIFO 里可能仍有在删除请求前产生、但尚未落库的 tool_result / Subagent
     // 观察。屏障后必须重读目标与历史，确保它们进入同一轮的删除范围且不会混入 handoff。
     // 代次也在这份最终历史之前读取；期间若发生 /clear，registry 会拒绝旧代 handoff。
+    const targetContextWindow = await deps.resolveHandoffWindow?.(sessionId);
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     const [target, source] = await Promise.all([
       deps.getMessage(sessionId, clientId),
@@ -140,12 +136,12 @@ export async function performMessageDeletion(
     const deletedClientIds = new Set(target.deletedClientIds);
     const remaining = source.filter((message) => !deletedClientIds.has(message.clientId));
     const label = engineLabel(sessionRow.agentKind);
-    const handoff = buildHandoffText(remaining, {
+    const { handoff, handoffCoverage } = buildHandoff(remaining, {
       fromLabel: label,
       toLabel: label,
       sessionId,
+      targetContextWindow,
       reason: 'message-deletion',
-      workingMemory: (await deps.readWorkingMemoryNote?.(sessionId, { excludeMessageIds: deletedClientIds })) ?? null,
     });
 
     const committed = await deps.commitDeletion(
@@ -153,10 +149,9 @@ export async function performMessageDeletion(
       target.deletedClientIds,
       handoff,
       target.subagentTurnWindow,
+      handoffCoverage,
     );
     deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
-    // 持久账本在删除提交后再清:提交失败时账本不动,交接文本已经排除过这些条目。
-    await deps.pruneWorkingMemory?.(sessionId, new Set(committed.deletedClientIds));
     await deps.onCommitted(committed, clientId);
     deps.log.info('message delete committed; native context will rebuild on next send', {
       sessionId,

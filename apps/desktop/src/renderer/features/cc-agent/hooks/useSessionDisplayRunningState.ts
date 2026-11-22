@@ -1,6 +1,9 @@
 import { useMemo } from 'react';
 import type { Session } from '@/lib/ccAgent.types';
-import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivityStore';
+import {
+  useBackgroundActivitySessionIds,
+  useBackgroundCommandWorkSessionIds,
+} from '@/lib/sessionBackgroundActivityStore';
 import { useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { useCindyMakeRunningSessionIds } from '@/lib/cindyMakeState';
 import { useOrcaLeadWorkerMap } from './useOrcaLeadWorkerMap';
@@ -11,7 +14,13 @@ export function useSessionDisplayRunningState(
   runningSessionIds: ReadonlySet<string>,
 ) {
   const orcaLeadWorkerMap = useOrcaLeadWorkerMap(sessions);
-  const backgroundActivitySessionIds = useBackgroundActivitySessionIds();
+  const backgroundModelActivitySessionIds = useBackgroundActivitySessionIds();
+  const backgroundCommandWorkSessionIds = useBackgroundCommandWorkSessionIds();
+  // 回合已结束但任务没做完的两种情况同口径点亮:后台子代理仍在调模型、后台命令仍在工作。
+  const backgroundActivitySessionIds = useMemo(() => {
+    if (backgroundCommandWorkSessionIds.size === 0) return backgroundModelActivitySessionIds;
+    return new Set([...backgroundModelActivitySessionIds, ...backgroundCommandWorkSessionIds]);
+  }, [backgroundModelActivitySessionIds, backgroundCommandWorkSessionIds]);
   const startingSessionIds = useStartingSessionIds(runningSessionIds);
   const cindyMakeRunningSessionIds = useCindyMakeRunningSessionIds();
   const effectiveRunningSessionIds = useMemo(() => {

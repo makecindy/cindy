@@ -450,7 +450,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(workerPanelSource).toContain('navigationMode="sidebar-embedded"');
     expect(workerPanelSource).toContain('sidebarTargetSessionId={leadSessionId}');
     expect(sessionViewSource).toContain('sidebarTargetSessionId={sidebarTargetSessionId}');
-    expect(sessionViewSource).toContain("const ownsWindowRoute = navigationMode === 'route-owner';");
+    expect(sessionViewSource).toContain("const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';");
     expect(sessionViewSource).toContain('ownsWindowRoute && handoffFrom');
     expect(sessionViewSource).toContain('canNavigateSession && session?.parentSessionId');
     expect(sessionViewSource).toContain(
@@ -487,7 +487,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('shows the Lead identity bar only in the plain Orca Lead route', () => {
     expect(sessionViewSource).toContain(
-      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
+      'const ownsRoute = paneFocused && (routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode));',
     );
     expect(sessionViewSource).toContain('const collabEnabled = isOrcaLeadSessionView;');
     expect(sessionViewSource).toContain('const showOrcaLeadIdentityBar = ownsRoute && collabEnabled;');

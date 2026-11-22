@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { zstdCompress, zstdDecompress, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
 import type { NativeSubscriptionAccount } from '@cindy/maker-core';
@@ -13,6 +13,39 @@ const { ownerState } = vi.hoisted(() => ({
     afterFastRead: undefined as 'relax' | 'owner' | undefined,
   },
 }));
+
+// Install before the bridge captures its default ports. A bare-fetch regression
+// must fail locally, including when the core captures fetch at module load time.
+const desktopTransport = vi.hoisted(() => {
+  const realFetch = globalThis.fetch;
+  const loopbackOrigins = new Set<string>();
+  const bareFetch = vi.fn<typeof fetch>((input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (url.protocol === 'http:' && url.hostname === '127.0.0.1' && loopbackOrigins.has(url.origin)) {
+      return realFetch(input, init);
+    }
+    return Promise.reject(new Error('Unexpected non-fixture fetch in subscription forwarding test'));
+  });
+  vi.stubGlobal('fetch', bareFetch);
+  return {
+    loopbackOrigins, bareFetch,
+    fetch: vi.fn<typeof fetch>(),
+    getGrokToken: vi.fn(async () => 'fixture-default-xai-token'),
+    peekGrokToken: vi.fn(() => 'fixture-default-xai-token'),
+    invalidateXai: vi.fn(async () => 'ignored' as const),
+    recordXaiRateLimit: vi.fn(),
+  };
+});
+
+vi.mock('../outbound-fetch.desktop.js', () => ({ outboundFetch: desktopTransport.fetch }));
+vi.mock('../grok-oauth-login.desktop.js', () => ({
+  getGrokAccessToken: desktopTransport.getGrokToken,
+  peekGrokAccessToken: desktopTransport.peekGrokToken,
+}));
+vi.mock('../xai-auth-invalidation-host.js', () => ({ invalidateXaiBridgeAuth: desktopTransport.invalidateXai }));
+vi.mock('../../usageBroadcaster.js', () => ({ recordXaiRateLimitSnapshot: desktopTransport.recordXaiRateLimit }));
+
+afterAll(() => vi.unstubAllGlobals());
 
 // Measure actual asynchronous zstd work on the production HTTP path. The
 // synchronous fixture encoder/decoder remains untouched.
@@ -83,6 +116,7 @@ import { registerUsagePricing, clearUsagePricing } from '../model-usage-pricing.
 import { registerGuestProviderRoute } from '../guest-provider-route-store.js';
 import { bindHostedSessionProvider } from '../session-provider-store.js';
 import { setSessionFastMode } from '../session-effort-store.js';
+import { decideProviderGroupFailure } from '../../provider-group/failurePolicy.js';
 
 function responseRecorder() {
   const response = new EventEmitter() as EventEmitter & {
@@ -132,6 +166,118 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
 }
 
 describe('PI native subscription forwarding', () => {
+  // #8667: injected deps and the Host assembly do not protect Desktop's default
+  // outbound port. Exercise the real Desktop wrapper/core with synthetic auth;
+  // assert the forwarded stream or readable network failure, never real cloud I/O.
+  it.each(['xai', 'openai'].flatMap(provider => [false, true].map(networkFailure => ({ provider, networkFailure }))))(
+    'uses the default Desktop transport for $provider (networkFailure=$networkFailure)', async ({ provider, networkFailure }) => {
+      desktopTransport.fetch.mockReset();
+      desktopTransport.bareFetch.mockClear();
+      desktopTransport.invalidateXai.mockClear();
+      desktopTransport.getGrokToken.mockClear();
+      const invalidateAuth = vi.fn();
+      const account: NativeSubscriptionAccount = { id: 'fixture-default-account', configDir: '/fixture/default-account',
+        assertCurrent: () => {}, readState: async () => ({ authenticated: true }),
+        readCodexTokens: async () => ({ accessToken: 'fixture-default-codex-token', chatgptAccountId: 'fixture-default-account' }),
+        invalidateAuth };
+      const endpoint = provider === 'xai' ? 'https://api.x.ai/v1/responses' : 'https://chatgpt.com/backend-api/codex/responses';
+      const stream = 'event: response.completed\ndata: {"type":"response.completed"}\n\n';
+      if (networkFailure) desktopTransport.fetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+      else desktopTransport.fetch.mockResolvedValueOnce(new Response(stream, {
+        status: 200, headers: { 'content-type': 'text/event-stream' },
+      }));
+      const body = { model: provider === 'xai' ? 'grok-4.6' : 'gpt-6.1-sol', input: 'fixture prompt' };
+      const res = responseRecorder();
+      await getPiNativeSubscriptionHandler(provider, 'fixture-default-transport', undefined, provider === 'openai' ? account : undefined)({
+        rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body,
+        ctx: { method: 'POST', url: provider === 'xai' ? '/v1/responses' : '/codex/responses', headers: {} }, res,
+      } as never);
+      expect(desktopTransport.fetch).toHaveBeenCalledExactlyOnceWith(endpoint, expect.objectContaining({
+        method: 'POST', headers: expect.objectContaining({
+          authorization: `Bearer fixture-default-${provider === 'xai' ? 'xai' : 'codex'}-token`,
+          ...(provider === 'openai' ? { 'chatgpt-account-id': 'fixture-default-account' } : {}),
+        }),
+      }));
+      const request = desktopTransport.fetch.mock.calls[0]![1]!;
+      expect(JSON.parse(Buffer.from(request.body as Uint8Array).toString())).toMatchObject(body);
+      if (networkFailure) {
+        expect(res.status).toBe(502);
+        expect(JSON.parse(Buffer.concat(res.chunks).toString())).toMatchObject({ error: {
+          type: 'upstream_error', provider, endpoint,
+          message: `${provider === 'xai' ? 'xAI/Grok' : 'OpenAI/ChatGPT'} upstream request failed: fetch failed`,
+        } });
+      } else {
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toBe('text/event-stream');
+        expect(Buffer.concat(res.chunks).toString()).toBe(stream);
+      }
+      expect(desktopTransport.bareFetch).not.toHaveBeenCalled();
+      expect(desktopTransport.invalidateXai).not.toHaveBeenCalled();
+      expect(invalidateAuth).not.toHaveBeenCalled();
+      expect(desktopTransport.getGrokToken).toHaveBeenCalledTimes(provider === 'xai' ? 1 : 0);
+    },
+  );
+
+  // Unit regression from the shared-task log: a migrated OpenAI id and an
+  // account-pool lease must reach the real auth reader, not a mocked success.
+  it.each(['openai', 'openai-migrated-fixture'])('uses the selected pool account for %s', async providerId => {
+    if (providerId !== 'openai') setCustomProviders([buildUserProvider({
+      id: providerId, name: 'Migrated fixture', auth: { method: 'oauth', native: 'codex' }, runtimes: {},
+    })]);
+    const read = vi.fn(async () => ({ accessToken: 'fixture-selected-access', chatgptAccountId: 'fixture-selected-account' }));
+    const account: NativeSubscriptionAccount = { id: 'selected-profile', configDir: '/fixture/selected',
+      assertCurrent: () => {}, readState: async () => ({ authenticated: true }), readCodexTokens: read };
+    const injected = deps({ getChatgptAuth: getChatgptBridgeAuth });
+    const res = responseRecorder();
+    const body = { model: 'gpt-6.1-sol', input: [] };
+    await getPiNativeSubscriptionHandler(providerId, 'selected-profile-http', injected, account)({
+      rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body,
+      ctx: { method: 'POST', url: '/codex/responses', headers: {} }, res,
+    } as never);
+    expect(res.status).toBe(200);
+    expect(read).toHaveBeenCalledOnce();
+    expect(injected.fetch).toHaveBeenCalledExactlyOnceWith('https://chatgpt.com/backend-api/codex/responses',
+      expect.objectContaining({ headers: expect.objectContaining({ authorization: 'Bearer fixture-selected-access',
+        'chatgpt-account-id': 'fixture-selected-account' }) }));
+  });
+
+  it.each([false, true])('preserves account failure semantics without sending upstream (unavailable=%s)', async unavailable => {
+    const read = vi.fn();
+    const account: NativeSubscriptionAccount = { id: 'signed-out', configDir: '/fixture/signed-out',
+      assertCurrent: () => {}, readState: async () => {
+        if (unavailable) throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+        return { authenticated: false };
+      }, readCodexTokens: read };
+    const injected = deps({ getChatgptAuth: getChatgptBridgeAuth });
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'signed-out-http', injected, account)({
+      rawBody: Buffer.from('{}'), parsedBody: {},
+      ctx: { method: 'POST', url: '/codex/responses', headers: {} }, res,
+    } as never);
+    expect(res.status).toBe(unavailable ? 502 : 401);
+    const message = JSON.parse(Buffer.concat(res.chunks).toString()).error.message;
+    expect(message).toBe(unavailable
+      ? '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable'
+      : '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login');
+    expect(decideProviderGroupFailure({ message }, 'run')).toEqual({
+      action: 'switch', cause: unavailable ? 'failed' : 'auth', connection: null, cool: !unavailable,
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(injected.fetch).not.toHaveBeenCalled();
+    expect(injected.invalidateChatgpt).not.toHaveBeenCalled();
+  });
+
+  it.each(['foreign-provider', 'missing-reader'])('does not misreport %s as a signed-out account', async kind => {
+    const readState = vi.fn(async () => ({ authenticated: true }));
+    const read = vi.fn(async () => ({ accessToken: 'fixture-unused', chatgptAccountId: 'fixture-unused-account' }));
+    const account: NativeSubscriptionAccount = { id: 'fixture-profile', configDir: '/fixture/profile',
+      assertCurrent: () => {}, readState, ...(kind === 'foreign-provider' ? { readCodexTokens: read } : {}) };
+    await expect(getChatgptBridgeAuth(kind === 'foreign-provider' ? 'xai' : 'openai', account))
+      .rejects.toThrow('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
+    expect(read).not.toHaveBeenCalled();
+    expect(readState).not.toHaveBeenCalled();
+  });
+
   // Standard: exercise the real account bridge without reading an on-disk credential.
   it('reads and refreshes only the selected profile and fences its dispatch proof', async () => {
     let current = true;
@@ -198,7 +344,10 @@ describe('PI native subscription forwarding', () => {
         vi.mocked(injected.fetch).mockClear();
         vi.mocked(injected.getChatgptAuth).mockClear();
         for (const model of ['gpt-6.1-sol[1m]', 'unknown-model', undefined]) {
-          expect((await request(model)).status).toBe(403);
+          const refused = await request(model);
+          expect(refused.status).toBe(403);
+          const message = JSON.parse(Buffer.concat(refused.chunks).toString()).error.message;
+          expect(decideProviderGroupFailure({ errorStatus: refused.status, message }, 'run').action).toBe('switch');
           expect(injected.fetch).not.toHaveBeenCalled();
           expect(injected.getChatgptAuth).not.toHaveBeenCalled();
         }
@@ -218,6 +367,43 @@ describe('PI native subscription forwarding', () => {
       } finally { binding.release(); }
     },
   );
+
+  // Unit / provider-groups §6.1: the real native HTTP handler must distinguish
+  // a foreign provider from catalog loss. Existing grant tests only used the
+  // registered provider, so a scope refusal could still relocate the task.
+  it.each([
+    { providerId: 'openai', compressed: false },
+    { providerId: 'openai', compressed: true },
+    { providerId: 'xai', compressed: false },
+  ])('stops group recovery for a foreign $providerId native route (zstd: $compressed)', async ({ providerId, compressed }) => {
+    const modelDenial = vi.fn(() => ({ code: 'fixture-model-denial', message: 'Fixture model limit.' }));
+    const binding = registerGuestProviderRoute('pi-scope-guest', 'shared-a', undefined, undefined, modelDenial);
+    const injected = deps();
+    const body = { model: 'fixture-private-model', input: [] };
+    const raw = Buffer.from(JSON.stringify(body));
+    const res = responseRecorder();
+    try {
+      await getPiNativeSubscriptionHandler(providerId, 'pi-scope-guest', injected)({
+        rawBody: compressed ? zstdCompressSync(raw) : raw,
+        parsedBody: compressed ? undefined : body,
+        ctx: { reqId: 1, method: 'POST', url: providerId === 'openai' ? '/codex/responses' : '/v1/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+        res,
+      } as never);
+      const payload = Buffer.concat(res.chunks).toString();
+      const error = JSON.parse(payload).error;
+      expect(res.status).toBe(403);
+      expect(error.code).toBe('shared_provider_only');
+      expect(error.message).toContain('[SHARED_PROVIDER_SCOPE_DENIED]');
+      expect(payload).not.toContain('fixture-private-model');
+      expect(payload).not.toContain('shared-a');
+      expect(decideProviderGroupFailure({ errorStatus: res.status, message: error.message }, 'run'))
+        .toEqual({ action: 'stay', why: 'policy' });
+      expect(injected.fetch).not.toHaveBeenCalled();
+      expect(injected.getChatgptAuth).not.toHaveBeenCalled();
+      expect(injected.getGrokToken).not.toHaveBeenCalled();
+      expect(modelDenial).not.toHaveBeenCalled();
+    } finally { binding.release(); }
+  });
 
   afterEach(() => {
     setCustomProviders([]);
@@ -510,6 +696,7 @@ describe('PI native subscription forwarding', () => {
       input: 'hello',
     })));
 
+    desktopTransport.loopbackOrigins.add(new URL(proxy.url).origin);
     try {
       const response = await fetch(`${proxy.url}/codex/responses`, {
         method: 'POST',
@@ -520,6 +707,7 @@ describe('PI native subscription forwarding', () => {
       await response.text();
     } finally {
       await proxy.dispose();
+      desktopTransport.loopbackOrigins.delete(new URL(proxy.url).origin);
     }
 
     const init = fetchMock.mock.calls[0]![1];
@@ -555,6 +743,7 @@ describe('PI native subscription forwarding', () => {
       routingTransform: () => ({ localHandler: handler }),
     });
 
+    desktopTransport.loopbackOrigins.add(new URL(proxy.url).origin);
     try {
       await expect((async () => {
         const response = await fetch(`${proxy.url}/codex/responses`, {
@@ -566,6 +755,7 @@ describe('PI native subscription forwarding', () => {
       })()).rejects.toThrow();
     } finally {
       await proxy.dispose();
+      desktopTransport.loopbackOrigins.delete(new URL(proxy.url).origin);
     }
   });
 
@@ -961,7 +1151,9 @@ describe('PI native subscription forwarding', () => {
     },
   );
 
-  it('sanitizes native xAI Responses input before forwarding', async () => {
+  // #9469: capture bytes at the native forwarding fetch boundary. Previous
+  // ModelInput fixtures exercised only text/reasoning, missing image-only results.
+  it('sanitizes native xAI Responses input and forwards Pi tool images', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
@@ -975,6 +1167,10 @@ describe('PI native subscription forwarding', () => {
         { type: 'message', role: 'user', content: 'go' },
         { type: 'agent_message', author: '/root', content: 'done' },
         { type: 'reasoning', id: 'rs_1', content: null, encrypted_content: 'BLOB' },
+        { type: 'function_call', name: 'read', arguments: '{"path":"/fixture.png"}', call_id: 'read_image' },
+        { type: 'function_call_output', call_id: 'read_image', output: [
+          { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+        ] },
       ],
     };
 
@@ -999,6 +1195,10 @@ describe('PI native subscription forwarding', () => {
         content: [{ type: 'output_text', text: '[collab /root]\ndone' }],
       },
       { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+      { type: 'function_call', name: 'read', arguments: '{"path":"/fixture.png"}', call_id: 'read_image' },
+      { type: 'function_call_output', call_id: 'read_image', output: [
+        { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+      ] },
     ]);
     expect(request.tools).toEqual([{ type: 'x_search' }]);
   });

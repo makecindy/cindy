@@ -11,6 +11,7 @@ import { useDiscordBot } from '@/hooks/useDiscordBot';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { ImLifecycleAnnouncementSection } from './ImLifecycleAnnouncementSection';
+import { DiscordChannelAccessSection } from './DiscordChannelAccessSection';
 
 const DISCORD_DEVELOPER_PORTAL_URL = 'https://discord.com/developers/applications';
 
@@ -179,7 +180,7 @@ export function DiscordBotSection({
               spellCheck={false}
               autoComplete="off"
               className={cn(
-                'h-[42px] w-full rounded-full pl-[14px] pr-10',
+                'h-[42px] w-full rounded-full pl-3.5 pr-10',
                 'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
                 'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
                 'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -213,7 +214,7 @@ export function DiscordBotSection({
             autoComplete="off"
             inputMode="numeric"
             className={cn(
-              'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
+              'h-[42px] w-full rounded-full pl-3.5 pr-3.5',
               'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
               'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
               'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -243,7 +244,7 @@ export function DiscordBotSection({
                 disabled={isDisconnecting}
                 aria-label={t('settings.discordBot.disconnectAria')}
                 className={cn(
-                  'mr-[4px] flex shrink-0 items-center justify-center bg-transparent p-0',
+                  'mr-1 flex shrink-0 items-center justify-center bg-transparent p-0',
                   'text-[var(--settings-trash-icon)] transition-colors hover:text-[var(--settings-trash-icon-hover)]',
                   isDisconnecting && 'cursor-not-allowed opacity-40',
                 )}
@@ -279,6 +280,10 @@ export function DiscordBotSection({
           />
         </>
       )}
+
+      <div id={imBotSettings.discordChannels.targetId}>
+        <DiscordChannelAccessSection connected={status.kind === 'connected'} />
+      </div>
 
       <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
         <button data-setting-id={imBotSettings.discord.id}

@@ -186,6 +186,11 @@ function HostRow({
             {t('settings.remote.readOnlyFromSshConfig')}
           </span>
         )}
+        {!snap.config.managedByCindy && snap.config.authMethod === 'agent' && (
+          <span className="text-11 leading-relaxed" style={{ color: 'var(--settings-integration-subtitle)' }}>
+            {t('settings.remote.importedAgentHint')}
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -1105,9 +1110,14 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       // instead of the generic i18n key, so the user sees the exact
       // command they need to run.
       const ipc = extractIpcError(err);
-      if (ipc?.code === 'SSH_HOST_KEY_MISMATCH') {
-        toast.error(t('settings.remote.hostKey.title'));
-      } else if (ipc?.code === 'SSH_AUTH_FAILED') {
+      if (
+        ipc?.code === 'SSH_HOST_KEY_MISMATCH'
+        || ipc?.code === 'SSH_AUTH_FAILED'
+        || ipc?.code === 'SSH_CONNECT_FAILED'
+        || ipc?.code === 'SSH_AGENT_UNAVAILABLE'
+      ) {
+        // Preserve the actual connection failure, including localized host-key
+        // diagnostics, configured IdentityAgent failures and backing store paths.
         toast.error(ipc.message);
       } else if (ipc?.code === 'SSH_KEY_FILE_NOT_FOUND') {
         // Local key-path problem (fs ENOENT on the configured identityFile),
@@ -1290,7 +1300,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
   }, [refresh, reloadCommittedMutationOnce, t]);
 
   return (
-    <div className="flex flex-col gap-[14px]">
+    <div className="flex flex-col gap-3.5">
       <div className="flex items-center justify-between">
         {showTitle ? (
           <h2

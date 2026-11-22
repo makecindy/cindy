@@ -4,6 +4,7 @@ vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMed
 ]) }));
 vi.mock('../localDb/client/current.js', () => ({ getDbClient: vi.fn(() => ({ drizzle: {} })) }));
 import type { PendingSamplingSettlement } from '../assistantSamplingSettlement.js';
+import type { Message } from '../../renderer/lib/ccAgent.types';
 const settlements = vi.hoisted(() => ({ entries: new Map<string, PendingSamplingSettlement>(), sequence: 0 }));
 vi.mock('../assistantSamplingSettlement.js', () => ({ assistantSamplingSettlements: {
   put(entry: Omit<PendingSamplingSettlement, 'file'>) {
@@ -27,6 +28,7 @@ import { readTaskResultsForReply } from '../botTaskReplyResults.js';
  *   - 返回的 { persistId, content } 与实际落库内容**同源同值**(Option C 不 diverge 的命门);
  *   - 两种到达顺序都最终落全文;buffer / eager-create / done-orphan 三条路径;
  *   - 幂等(内容未变不重复 update)、guard。
+ * ACP 补参回归（PR #11549）：待执行调用没有参数，稍后补参数时更新同一个持久化行并广播给控制端。
  *
  * createMessage / updateMessageContent(better-sqlite3 路径)被 mock 掉,只断言调用入参;
  * 落库走模块内 writeChain microtask,断言前先 flush 一个宏任务边界。
@@ -772,6 +774,23 @@ describe('update_plan tool_use persistence', () => {
         input: { text: '1. Read code\n2. Run tests' },
       },
     );
+  });
+
+  it('patches and republishes the existing ACP tool row when a pending call gains input', async () => {
+    const start = { toolUseId: 'acp-tool-1', toolName: 'Edit', input: {} };
+    const parameters = { ...start, input: { path: 'notes.txt' } };
+    const rowId = onToolUseEvent(SESSION, start, null, 'turn', undefined, undefined, true);
+    expect(rowId).toBeDefined();
+    const updated = { clientId: rowId!, role: 'tool_use' as const, content: parameters } as Message;
+    vi.mocked(updateMessageContent).mockResolvedValueOnce(updated);
+    const patchedId = onToolUseEvent(SESSION, { ...parameters, acpInputPatch: true }, null,
+      'background', undefined, undefined, true);
+
+    await flushWrites();
+    expect(patchedId).toBe(rowId);
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, rowId, parameters);
+    expect(broadcastMessageRow).toHaveBeenCalledWith(SESSION, updated, ownerScopeState.scope);
   });
 
   it('updates the existing web_search row when completed carries authoritative input', async () => {
@@ -1830,6 +1849,51 @@ describe('background tool_result persistence', () => {
         content: FULL,
         agentMeta: oldMeta,
       }),
+      broadcastGuard(),
+    );
+  });
+
+  // PR #11776 review: a plugin engine (Antigravity) keeps a call it has not finished open past
+  // `end_turn` and reports the result between turns. Only collab calls kept their context, so the
+  // late result of an ordinary call (its `git commit`) was dropped and gone after reopening the task.
+  it('keeps a plugin engine call left running at the end of its answer, so its later result is saved', async () => {
+    const meta = { uuid: 'acp-turn' };
+    noteSessionAgentKind(SESSION, 'acp');
+    noteAgentMeta(SESSION, meta);
+    onToolUseEvent(SESSION, { toolUseId: 'commit', toolName: 'git commit', input: {} }, meta);
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+
+    const fullResult = onToolResultFullEvent(SESSION, { toolUseId: 'commit', fullText: FULL }, null, 'background');
+    const result = onToolResultEvent(SESSION, { summary: SUMMARY, toolUseIds: ['commit'] }, null, 'background');
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'tool_result', content: FULL, agentMeta: meta }),
+      broadcastGuard(),
+    );
+  });
+
+  // Same review: a reply a plugin engine writes between turns has no done to commit it. Once its
+  // final segment is committed (sessionEventStreamCore) the whole reply is written as one row.
+  it('saves a plugin engine reply written between turns when its final segment is committed', async () => {
+    noteSessionAgentKind(SESSION, 'acp');
+    onAssistantTextEvent(SESSION, { text: 'The content is ', isFinal: false }, null, 'background');
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'The content is `finished`', isFinal: true, isFullText: true },
+      null,
+      'background',
+    );
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', content: 'The content is `finished`' }),
       broadcastGuard(),
     );
   });

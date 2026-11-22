@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { normalizeWorkingDir } from '@/features/cc-agent/lib/projectGrouping';
+import { useProjectLabel } from '../hooks/useProjectLabel';
 import type { Schedule, SchedulerRuntimeSnapshot } from '@cindy/maker-scheduler';
 
 import { TaskListCell } from './TaskListCell';
@@ -88,6 +89,7 @@ export function TaskListPane({
 }: Props) {
   const { t } = useTranslation();
   const [collapsed, toggleCollapsed] = useCollapsedProjects();
+  const projectLabel = useProjectLabel();
   const waitingScheduleIds = useMemo(
     () => new Set(runtimeSnapshot?.waitingSchedules.map((waiting) => waiting.scheduleId) ?? []),
     [runtimeSnapshot],
@@ -123,7 +125,7 @@ export function TaskListPane({
             ? t('newChat.folderPicker.dialogue')
             : key === OTHER_GROUP_KEY
               ? t('scheduler.list.section.otherGroup')
-              : lastPathSegment(items[0].workingDir ?? key),
+              : projectLabel(items[0].workingDir ?? key),
         schedules: sortWithinGroup(items),
         hasProjectSchedules: items.some((s) => s.source === 'project'),
       }))
@@ -134,7 +136,7 @@ export function TaskListPane({
         if (b.workingDir === DIALOGUE_GROUP_KEY) return -1;
         return 0;
       });
-  }, [schedules, t]);
+  }, [schedules, t, projectLabel]);
 
   return (
     <aside
@@ -144,7 +146,7 @@ export function TaskListPane({
         'border-r border-[var(--cmd-palette-border)]',
       )}
     >
-      <div className="flex shrink-0 items-center justify-between px-[10px] pb-2 pt-[14px]">
+      <div className="flex shrink-0 items-center justify-between px-2.5 pb-2 pt-3.5">
         <TaskListFilterPopover value={statusFilter} onChange={onStatusFilterChange} />
         <span className="text-11 text-[var(--settings-section-desc)]">{schedules.length}</span>
       </div>
@@ -186,7 +188,7 @@ export function TaskListPane({
                         e.stopPropagation();
                         onCreateProjectSchedule(group.workingDir);
                       }}
-                      className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                      className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                     >
                       <SquarePen size={14} strokeWidth={2} />
                     </button>
@@ -204,7 +206,7 @@ export function TaskListPane({
                           e.stopPropagation();
                           void onOpenProjectConfig(group.workingDir);
                         }}
-                        className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                        className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                       >
                         <ExternalLink size={12} strokeWidth={2} />
                       </button>
@@ -216,7 +218,7 @@ export function TaskListPane({
                           e.stopPropagation();
                           void onReloadProject(group.workingDir);
                         }}
-                        className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                        className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                       >
                         <RefreshCw size={12} strokeWidth={2} />
                       </button>
@@ -224,7 +226,7 @@ export function TaskListPane({
                   )}
               </div>
               {!isCollapsed && (
-                <ul className="flex flex-col gap-1 pt-1 pl-[18px]">
+                <ul className="flex flex-col gap-1 pt-1 pl-4">
                   {group.schedules.map((s) => (
                     <li key={s.id}>
                       <TaskListCell
@@ -273,7 +275,7 @@ export function TaskListPane({
         role="separator"
         aria-orientation="vertical"
         aria-label={t('scheduler.list.resizeAria')}
-        className="group/handle absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize"
+        className="group/handle absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize"
         onPointerDown={onResizeStart}
         onDoubleClick={onResizeReset}
       >
@@ -327,6 +329,3 @@ function sortWithinGroup(items: Schedule[]): Schedule[] {
   });
 }
 
-function lastPathSegment(input: string): string {
-  return input.split(/[\\/]/).filter(Boolean).pop() ?? input;
-}

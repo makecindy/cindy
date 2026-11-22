@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../i18n.desktop';
 import { createSharedPermission } from '../../maker-ipc/sharedPermission';
 import {
   composeInteractionCard,
@@ -6,6 +7,11 @@ import {
   registerHookInteraction,
   resolveHookInteraction,
 } from '../interactions';
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('hook permission mirrors', () => {
   it('publishes cancellation instead of a held approval when the turn ends', async () => {

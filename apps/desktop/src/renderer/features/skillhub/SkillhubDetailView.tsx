@@ -556,7 +556,7 @@ function SkillUsagePanel({
                 <div
                   role="img"
                   aria-label={t('skillhub.detail.usageTrendChartLabel')}
-                  className="flex h-14 items-end gap-[3px] border-b border-[var(--cmd-palette-border)]"
+                  className="flex h-14 items-end gap-0.5 border-b border-[var(--cmd-palette-border)]"
                 >
                   {trendRows.map((point) => {
                     const height =
@@ -766,18 +766,18 @@ function DiagnosisAgentPickerDialog({
     <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!loading) onOpenChange(nextOpen); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] w-full max-w-[420px] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal w-full max-w-[420px] -translate-x-1/2 -translate-y-1/2',
             'p-5',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         >
-          <Dialog.Title className="text-base font-semibold text-[var(--msg-assistant-text)]">
+          <Dialog.Title className="text-base font-medium text-[var(--msg-assistant-text)]">
             {t('skillhub.detail.usageDiagnosisAgentTitle')}
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-sm leading-relaxed text-[var(--cmd-palette-item-meta)]">
@@ -2058,7 +2058,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
                       </Button>
               ) : (
                 <span className={cn(
-                  'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
+                  'inline-flex h-9 items-center gap-1.5 rounded-full border px-3.5',
                   'text-13 text-[var(--cmd-palette-item-meta)]',
                   'border-[var(--confirm-btn-secondary-border)]',
                 )}>
@@ -2070,7 +2070,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
             {/* Local registry fallback / foreign installed skill. */}
             {detailAction?.kind === 'installed-tag' && (
               <span className={cn(
-                'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
+                'inline-flex h-9 items-center gap-1.5 rounded-full border px-3.5',
                 'text-13 text-[var(--cmd-palette-item-meta)]',
                 'border-[var(--confirm-btn-secondary-border)]',
               )}>
@@ -2311,7 +2311,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
                 // gap-[2px] adds a hairline rhythm between rows so the
                 // selected/hover backgrounds don't visually merge into
                 // a single block.
-                <div className="flex flex-col gap-[2px]">
+                <div className="flex flex-col gap-0.5">
                   {files.map((f) => (
                     <FileTreeRow
                       key={f.name}

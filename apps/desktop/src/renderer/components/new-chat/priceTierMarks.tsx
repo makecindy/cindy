@@ -88,7 +88,7 @@ export function PriceTierMarks({
               <span
                 data-discount-badge
                 // 中性胶囊将折扣与模型名称分开。
-                className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
+                className="inline-flex shrink-0 items-center rounded-full px-2 py-px text-10 font-medium leading-[1.45]"
                 style={{
                   color: 'var(--text-secondary)',
                   backgroundColor: 'var(--surface-chip)',
@@ -131,7 +131,7 @@ export function PriceFreeBadge({ label }: { label: string }) {
   return (
     <span
       data-price-free
-      className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
+      className="inline-flex shrink-0 items-center rounded-full px-2 py-px text-10 font-medium leading-[1.45]"
       style={{
         color: 'var(--text-secondary)',
         backgroundColor: 'var(--surface-chip)',

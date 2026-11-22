@@ -8,15 +8,20 @@ import { createHostService } from './service.mjs';
  */
 
 import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { isAuthorized } from './api-token.mjs';
 import { clientErrorMessage } from './client-error.mjs';
+import { createLogger } from '../../desktop/src/main/logger.ts';
+import { parseTypedError, typedErrorStatus } from './typed-error.mjs';
 import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from './web-auth.mjs';
 import { buildWebShim } from './web-client-build.mjs';
+import { HOST_IPC_MANIFEST_PATH, HOST_IPC_PATH_PREFIX } from '@cindy/maker-shared/host-ipc-registry';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
+const HOST_PROMPT_BUFFER_BYTES = 1024 * 1024;
 
 function send(response, status, body, extraHeaders = {}) {
   response.writeHead(status, { ...JSON_HEADERS, ...extraHeaders });
@@ -92,13 +97,34 @@ export function createHostServer(input) {
   let authDrain;
   const cancelPendingAuth = () => authDrain ??= Promise.resolve().then(() => deps.cancelPendingAuth?.());
   const unsubscribeSessions = deps.webAuth.onSessionRevoke?.(caller => deps.releaseAuthCaller?.(caller));
+  const log = deps.serverLog ?? createLogger('host-server');
+  // Only the step and the error's code or name: a message can carry account or sign-in details.
+  const signOutStep = (step, run) => {
+    const warn = (error) => {
+      const code = typeof error?.code === 'string' ? error.code : (error instanceof Error ? error.name : typeof error);
+      log.warn('a sign-out step failed; the sign-out continues', { step, error: code });
+    };
+    try { return Promise.resolve(run()).catch(warn); }
+    catch (error) { warn(error); return Promise.resolve(); }
+  };
   const logout = () => {
     if (logoutFlight) return logoutFlight;
-    // Revoke browser streams immediately and drain existing database callers
-    // before the owner runtime closes. Concurrent sign-out clicks share a result.
-    deps.webAuth.clear();
-    logoutFlight = cancelPendingAuth().then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
-      .finally(() => { logoutFlight = undefined; });
+    // The owner boundary's stop comes first (agent/owner-boundary.ts): a turn that fails on the
+    // teardown below is an interruption, not an ended turn with an error row. Once begun, the boundary
+    // must reach dispose: whatever fails before it, deps.logout() still runs (its runOwnerBoundary
+    // disposes the stopped input runtime, which rebuilds it) and the stop is released.
+    const releaseStop = deps.beginOwnerBoundaryStop?.() ?? (() => {});
+    // Revoke browser streams immediately and drain existing database callers before the owner runtime
+    // closes. Concurrent sign-out clicks share a result. As in runOwnerBoundary, each step runs whatever
+    // the one before it did: a failed revoke must not leave the platform client open, nor a sign-in in
+    // progress that completes after the sign-out. A step that fails is not the logout's failure: the user
+    // still signs out, and the logout's own result (or error) is what the caller gets.
+    const revoked = signOutStep('revoke web sessions', () => deps.webAuth.clear());
+    const closed = signOutStep('close platform client', () => deps.platformClient?.()?.close());
+    logoutFlight = Promise.all([revoked, closed])
+      .then(() => signOutStep('cancel pending sign-in', () => cancelPendingAuth()))
+      .then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
+      .finally(() => { releaseStop(); logoutFlight = undefined; });
     return logoutFlight;
   };
   const server = createServer(async (request, response) => {
@@ -111,16 +137,52 @@ export function createHostServer(input) {
       response.setHeader('x-content-type-options', 'nosniff');
       response.setHeader('x-frame-options', 'DENY');
       if (!isLoopbackRequest(request)) { send(response, 403, { error: 'origin_not_allowed' }); return; }
+      // An updating Desktop reconnects to the *same* backend. Do not execute a
+      // stale client's writes after another Host reuses its address. Existing
+      // clients without the optional header retain the original recovery path.
+      const expectedInstance = request.headers['x-cindy-host-instance'];
+      if (expectedInstance !== undefined) {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        if (!deps.instanceId || expectedInstance !== deps.instanceId) {
+          send(response, 409, { error: 'host_instance_changed' }); return;
+        }
+      }
+      if (request.method === 'POST' && url.pathname === '/control/attachment') {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        const health = await deps.probe();
+        send(response, 200, { protocol: 1, instanceId: deps.instanceId, pid: health.pid,
+          ready: health.runtime?.state === 'ready', remoteReady: health.remote?.status === 'online',
+          clientHandoffReady: health.clientHandoffReady === true });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === HOST_IPC_MANIFEST_PATH) {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        // Mismatches were rejected above; the manifest additionally requires the pin.
+        if (expectedInstance === undefined) { send(response, 428, { error: 'host_instance_required' }); return; }
+        if (!deps.ipcRoute) { send(response, 404, { error: 'not_found' }); return; }
+        send(response, 200, deps.ipcRoute.manifest());
+        return;
+      }
       const ownerRequest = (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/') && url.pathname !== '/api/me')
-        || ['/control/remote', '/events', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
+        || ['/control/platform', '/control/remote', '/events', '/chat', '/sessions', '/plugins'].includes(url.pathname) || url.pathname.startsWith('/sessions/');
       if (ownerRequest) {
         if (ownerPaused || logoutFlight || deps.isOwnerReady?.() === false) {
-          send(response, 409, { error: 'owner_runtime_unavailable' }); return;
+          // Why, when the Host can say it (coexistence plan A: its start was refused because a desktop
+          // uses this profile): a reason code and a sentence for the window. Older clients read only `error`.
+          send(response, 409, { error: 'owner_runtime_unavailable', ...(deps.ownerUnavailableReason?.() ?? {}) }); return;
         }
         const completion = new Promise(resolve => { finishOwnerRequest = resolve; });
         ownerRequests.add(completion);
         finishOwnerRequest = (() => { const complete = finishOwnerRequest;
           return () => { ownerRequests.delete(completion); complete(); }; })();
+      }
+      if (request.method === 'POST' && url.pathname === '/control/platform') {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        if (!deps.instanceId || expectedInstance !== deps.instanceId) { send(response, 409, { error: 'host_instance_changed' }); return; }
+        if (!deps.platformClient?.()) { send(response, 409, { error: 'platform_client_unavailable' }); return; }
+        const body = await readJson(request);
+        send(response, 200, await deps.platformClient().control(body.action, body.client));
+        return;
       }
       if (request.method === 'POST' && url.pathname === '/control/remote') {
         if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
@@ -199,7 +261,18 @@ export function createHostServer(input) {
         }
         const caller = deps.webAuth.caller?.(request.headers.cookie)
           ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
-        const result = await service(url.pathname, body, { caller });
+        if (url.pathname.startsWith(HOST_IPC_PATH_PREFIX)) {
+          if (!deps.ipcRoute) { send(response, 404, { error: 'not_found' }); return; }
+          let channel;
+          try { channel = decodeURIComponent(url.pathname.slice(HOST_IPC_PATH_PREFIX.length)); } catch { channel = ''; }
+          const routed = await deps.ipcRoute.handle({ channel, caller, headers: request.headers, body });
+          send(response, routed.status, routed.body);
+          return;
+        }
+        const trustedNativeClient = isLoopbackRequest(request) && !request.headers.origin
+          && isAuthorized(request.headers.authorization, deps.token)
+          && Boolean(deps.instanceId && request.headers['x-cindy-host-instance'] === deps.instanceId);
+        const result = await service(url.pathname, body, { caller, trustedNativeClient });
         send(response, result.status, result.body);
         return;
       }
@@ -249,6 +322,17 @@ export function createHostServer(input) {
           response.write(`${idLine}data: ${JSON.stringify(event)}\n\n`);
           response.flush?.();
         });
+        // Confirmations go to one authenticated controller and never enter the
+        // replay buffer. Disconnect cancels its pending answers; replay cannot
+        // resurrect an old permission dialog.
+        const confirmationCaller = deps.webAuth.caller?.(request.headers.cookie)
+          ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
+        const disconnectController = confirmationCaller && versioned && url.searchParams.get('confirmations') === '1' ? deps.connectController?.(confirmationCaller, event => {
+          if (response.writableEnded || response.destroyed || response.writableLength > HOST_PROMPT_BUFFER_BYTES || !isWebAuthorized(request, deps)) return false;
+          const written = response.write(`data: ${JSON.stringify({ type: 'host_prompt', channel: event.channel, payload: event.payload })}\n\n`);
+          response.flush?.();
+          return written || response.writableLength === 0;
+        }) : undefined;
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;
           if (!isWebAuthorized(request, deps)) { response.end(); return; }
@@ -256,6 +340,7 @@ export function createHostServer(input) {
         }, 15_000);
         const revoke = deps.webAuth.onRevoke(() => response.end());
         request.on('close', () => {
+          disconnectController?.();
           revoke();
           clearInterval(keepAlive);
           unsubscribe();
@@ -264,7 +349,15 @@ export function createHostServer(input) {
       }
 
       if (request.method === 'GET' && url.pathname === '/health') {
-        send(response, 200, isWebAuthorized(request, deps) ? await deps.probe() : { status: 'ok', service: 'cindy-host' });
+        if (!isWebAuthorized(request, deps)) {
+          send(response, 200, { status: 'ok', service: 'cindy-host' });
+          return;
+        }
+        const health = await deps.probe();
+        // Plugin identities are local diagnostics. Browser pairing does not grant this read.
+        const legacyPluginApprovals = request.headers.origin === undefined && isAuthorized(request.headers.authorization, deps.token)
+          ? deps.legacyPluginApprovals?.() : undefined;
+        send(response, 200, legacyPluginApprovals === undefined ? health : { ...health, legacyPluginApprovals });
         return;
       }
 
@@ -317,6 +410,13 @@ export function createHostServer(input) {
         response.end();
         return;
       }
+      // A typed error whose code is in the shared table answers with its status and code
+      // (typed-error.mjs, as the IPC route). The message stays the whole `[CODE] message`: the web
+      // client reads the code from the response text (apps/web/shim.js requestHost). Anything else
+      // stays the 500 below.
+      const typed = parseTypedError(error);
+      const status = typed ? typedErrorStatus(typed.code) : null;
+      if (typed && status !== null) { send(response, status, { error: typed.code, message: `[${typed.code}] ${typed.message}`, ...(typed.reason && { reason: typed.reason }) }); return; }
       send(response, 500, { error: 'internal_error', message: clientErrorMessage(error) });
     } finally {
       finishOwnerRequest?.();
@@ -327,16 +427,37 @@ export function createHostServer(input) {
       }
     }
   });
+  const platformSockets = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024, perMessageDeflate: false });
+  server.on('upgrade', (request, socket, head) => {
+    // Native-client channel: no web cookie, cross-origin caller, or unpinned Host.
+    if (request.url !== '/control/platform/socket' || stopping || ownerPaused || logoutFlight
+      || !isLoopbackRequest(request) || request.headers.origin
+      || !isAuthorized(request.headers.authorization, deps.token)
+      || !deps.instanceId || request.headers['x-cindy-host-instance'] !== deps.instanceId
+      || deps.isOwnerReady?.() === false || !deps.platformClient?.()) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
+    }
+    const bridge = deps.platformClient();
+    platformSockets.handleUpgrade(request, socket, head, ws => {
+      void bridge.accept(ws).catch(() => ws.terminate());
+    });
+  });
+  server.once('close', () => { for (const socket of platformSockets.clients) socket.terminate(); platformSockets.close(); });
   // Stop accepting new work first. The caller closes SSE connections after the
   // queue and runtime have drained; they do not keep database requests in flight.
   const stopAccepting = () => {
     stopping = true;
+    // Reject queued and in-flight platform calls before HTTP drains them.
+    deps.platformClient?.()?.close();
+    for (const socket of platformSockets.clients) socket.terminate();
     server.close();
     const drained = activeRequests ? new Promise(resolve => drainWaiters.add(resolve)) : Promise.resolve();
     return Promise.all([cancelPendingAuth(), drained]);
   };
   const pauseOwnerRequests = () => {
     ownerPaused = true;
+    deps.platformClient?.()?.close();
+    for (const socket of platformSockets.clients) socket.terminate();
     deps.webAuth.clear();
     return Promise.all([cancelPendingAuth(), Promise.allSettled([...ownerRequests])]);
   };

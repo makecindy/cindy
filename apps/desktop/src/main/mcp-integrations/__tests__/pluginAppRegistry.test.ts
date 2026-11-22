@@ -6,7 +6,8 @@ import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { sharedPluginConnection, type AppServerConfig } from '../../mcp-apps/connection.js';
 import { McpAppsHost, appServerRevision } from '../../mcp-apps/host.js';
-import type { InstalledGhost } from '../../../shared/ghost.js';
+import { validateGhostManifest, validateNormalizedGhostManifest, type InstalledGhost } from '../../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import { publishPluginAppResult } from '../../mcp-apps/pluginCards.js';
 import { refreshGhostLocalizationIfChanged } from '../../cindy-brain/ghostLocalizationRefresh.js';
@@ -38,7 +39,7 @@ vi.mock('../../cindy-brain/ghostContentTree.js', async (importOriginal) => {
 });
 import { resetAppServers, setMcpAppsHost, readAppServer } from '../../mcp-apps/runtime.js';
 import { pagePermissionGrants } from '../../mcp-apps/pagePermissions.js';
-import { refreshPluginApps, pluginAppServerId } from '../plugin-app-registry.js';
+import { refreshPluginApps, pluginAppServerId, readPluginHostUi } from '../plugin-app-registry.js';
 // Production registration entry, no Node process or network. Existing App host tests
 // do not own plugin receipts. Minimal failure: missing ui fact or old owner callback.
 // Tier: unit; mocks only external account/storage boundaries, real SDK discovery.
@@ -92,6 +93,47 @@ function fixture() {
   };
 }
 
+// Registered native settings do not imply approval for an MCP App transport.
+// Minimal failure: a settings-approved plugin with UI approval absent (unit).
+it('projects all installed Host declarations while keeping unapproved legacy pages out of their registry', () => {
+  const f = fixture();
+  f.ghost.manifest.mcpApps = { ui: getPluginToolUi(f.ghost.manifest), host: {
+    views: [{ id: 'view', title: 'View', resourceUri: 'ui://form' }],
+    settings: [{ id: 'enabled', title: 'Enabled', type: 'boolean', default: true }] } };
+
+  const instance = installedGhostStoragePart(f.ghost);
+  f.refresh();
+  const old = readPluginHostUi(instance)!;
+  f.setGhost({ ...f.ghost, uiCapabilityApproved: undefined });
+  expect(() => old.config.plugin!.assertCurrent()).toThrow();
+  f.refresh();
+  expect(readPluginHostUi(instance)?.host.settings).toHaveLength(1);
+  expect(readPluginHostUi(instance)?.host.views).toHaveLength(1);
+  expect(state.configs.size).toBe(0);
+});
+
+// Stable binding identity is part of View lifecycle: list/localization updates
+// cannot reload a live resource, while actual approval changes must revoke it (unit).
+it('preserves Host UI bindings across unchanged directory refreshes and revokes changed approval', () => {
+  const f = fixture();
+  f.ghost.manifest.mcpApps = { ui: getPluginToolUi(f.ghost.manifest), host: {
+    views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://form' }], capabilities: ['context'],
+  } };
+
+  const instance = installedGhostStoragePart(f.ghost);
+  f.refresh();
+  const binding = readPluginHostUi(instance);
+  expect(binding).toBeDefined();
+  f.ghost.manifest.name = 'Localized';
+  f.refresh();
+  expect(readPluginHostUi(instance)).toBe(binding);
+  expect(state.reads).toBe(0);
+  f.setGhost({ ...f.ghost, approval: { state: 'approved', revision: 'two' } });
+  f.refresh();
+  expect(readPluginHostUi(instance)).not.toBe(binding);
+  expect(() => binding!.config.plugin!.assertCurrent()).toThrow();
+});
+
 // PR #8752: locale-only refresh skipped App registry localization, so new cards
 // retained the old title. Unit through the real locale entry, registry and card writer;
 // the existing direct-registry refresh test cannot catch the missing caller update.
@@ -121,7 +163,7 @@ it('uses the new locale for cards published after a locale-only refresh', async 
       currentGhostAppContext: () => ({ context: { region: 'global' } }),
       getResolvedMainLocale: () => 'fr', refreshGhostLocalizationIfChanged, refreshPluginApps,
       findGhostForInstanceId: () => localized, isGhostBoundaryPending: () => false,
-      broadcastGhostsChanged: vi.fn(), sendToGhostLogic: vi.fn(),
+      broadcastGhostsChanged: vi.fn(), sendToGhostLogic: vi.fn(), reconcilePluginHarnesses: vi.fn(),
     });
     refreshGhostLocalization('en');
     await publishPluginAppResult(localized, 'task', 'open', {}, 'done');
@@ -142,6 +184,37 @@ it.each(['unapproved', 'disabled', 'invalid'] as const)(
     f.refresh();
     expect(state.configs.size).toBe(0);
     expect(state.reads).toBe(0);
+  },
+);
+// #11918, unit: use the installed receipt reader, production registry and SDK
+// resource read. Existing discovery tests did not open a historical typed-wrong page.
+it.each([['240', undefined], [-1, 80], [240, 240], [900, 720]] as const)(
+  'opens the approved page and projects its initialHeight %s', async (initialHeight, expected) => {
+    const f = fixture();
+    const uri = 'ui://form';
+    const manifest = { ...f.ghost.manifest, minCindyVersion: '0.1.122-beta',
+      mcpApps: { ui: { resources: [{ uri, file: 'form.html', initialHeight }], tools: { open: { resourceUri: uri } } } } };
+    const installed = validateNormalizedGhostManifest(manifest);
+    if (!installed.ok) throw new Error(installed.reason);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-card-height-'));
+    const client = new Client({ name: 'host', version: '1' });
+    try {
+      await fs.writeFile(path.join(dir, 'form.html'), '<p>Form</p>');
+      state.realFiles = true;
+      f.setGhost({ ...f.ghost, dir, manifest: installed.manifest });
+      f.refresh();
+      const config = readAppServer(pluginAppServerId(f.ghost))!;
+      expect(config.plugin!.revision).toBe('one');
+      await client.connect(config.plugin!.createTransport());
+      const resource = (await client.readResource({ uri })).contents[0];
+      expect(resource).toMatchObject({ uri, text: '<p>Form</p>' });
+      expect(resource._meta?.['cindy/initial-height']).toBe(expected);
+      expect((await client.listTools()).tools[0]._meta?.['cindy/initial-height']).toBe(expected);
+      expect(validateGhostManifest(manifest).ok).toBe(typeof initialHeight === 'number');
+    } finally {
+      await client.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   },
 );
 it('discovers tools with the real SDK without reading HTML during registration or initialization', async () => {

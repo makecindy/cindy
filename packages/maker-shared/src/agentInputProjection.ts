@@ -1,5 +1,5 @@
 import { stripChatQuoteMarkerLines } from './chatQuotes.js';
-import { allDeepLinkSchemes } from './brandIdentity.js';
+import { allDeepLinkSchemes, buildTaskDeepLink } from './brandIdentity.js';
 
 /** Stable cross-client marker for a retryable local Codex resume preflight. */
 export const CODEX_RESUME_NOT_READY_MARKER = '[CODEX_RESUME_NOT_READY]';
@@ -77,7 +77,7 @@ export interface AgentInputPluginResourceReference extends AgentInputReferenceBa
   description?: string;
 }
 
-/** One persistent Cindy Bot selected as the intended delegation or handoff target. */
+/** One persistent Cindy Bot selected as the intended collaboration target. */
 export interface AgentInputBotReference extends AgentInputReferenceBase {
   kind: 'bot';
   botId: string;
@@ -97,7 +97,10 @@ export interface AgentInputTodoReference extends AgentInputReferenceBase {
 export interface AgentInputBotHostSnapshot {
   availability: 'ready' | 'degraded' | 'failed' | 'unverified' | 'unavailable';
   activity: 'working' | 'idle' | 'unknown';
+  /** Always 0 since V1 teammate background tasks were retired; kept for older readers. */
   activeDelegations: number;
+  /** The teammate's main chat on this computer; messages to it go through send_to_session. */
+  mainSessionId?: string;
   /** Bounded host diagnosis; never raw capability or transcript data. */
   reason?: string;
 }
@@ -118,6 +121,36 @@ export interface AgentFacingTextSource {
   text: string;
   quotesEncoded?: boolean;
   agentReferences?: readonly AgentInputReference[];
+  /** Host-verified route for replying to a referenced conversation. */
+  sendToSession?: AgentSendToSessionHint;
+}
+
+export interface AgentSendToSessionHint {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  supportsRemote: boolean;
+}
+
+/**
+ * Derive the send_to_session capability from the same session-start facts used
+ * to mount the helper. Review sessions, SSH Claude/Codex sessions, and plugin
+ * engines without the Cindy bridge must not be told to call a missing tool.
+ */
+export function resolveAgentSendToSessionHint(options: {
+  agentKind?: string;
+  remoteHostId?: string | null;
+  reviewMode?: boolean;
+  supportsRemote?: boolean;
+}): AgentSendToSessionHint | undefined {
+  if (options.reviewMode === true) return undefined;
+  const agentKind = options.agentKind === 'cc' ? 'claude-code' : options.agentKind;
+  if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
+    return undefined;
+  }
+  if (options.remoteHostId && agentKind !== 'pi') return undefined;
+  return {
+    agentKind,
+    supportsRemote: options.supportsRemote === true,
+  };
 }
 
 /** Bounded readable message text plus an explicit truncation bit. */
@@ -542,10 +575,14 @@ function readBotHostSnapshot(value: unknown): AgentInputBotHostSnapshot | null {
   const reason = typeof candidate.reason === 'string'
     ? oneLine(candidate.reason).slice(0, 240)
     : '';
+  const mainSessionId = typeof candidate.mainSessionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(candidate.mainSessionId)
+    ? candidate.mainSessionId
+    : '';
   return {
     availability: availability as AgentInputBotHostSnapshot['availability'],
     activity: activity as AgentInputBotHostSnapshot['activity'],
     activeDelegations: activeDelegations as number,
+    ...(mainSessionId ? { mainSessionId } : {}),
     ...(reason ? { reason } : {}),
   };
 }
@@ -582,7 +619,28 @@ function quotedMetadata(value: string): string {
     .replace(/\u2029/g, '\\u2029');
 }
 
-function formatReference(reference: AgentInputReference): string {
+function formatSessionReferenceAction(
+  targetSessionId: string,
+  isRemoteTarget: boolean,
+  hint: AgentSendToSessionHint | undefined,
+): string | null {
+  if (!hint) return null;
+  if (isRemoteTarget && !hint.supportsRemote) {
+    return 'Action: this conversation is on another computer, and this task cannot send messages to it directly.';
+  }
+  const call = hint.agentKind === 'pi'
+    ? `call cindy_mcp_call_tool with server="cindy_helper", tool="call_tool", and args={"name":"send_to_session","args":{"target_session_id":${JSON.stringify(targetSessionId)},"message":"<message>"}}`
+    : `call cindy_helper's call_tool with name="send_to_session" and args containing target_session_id=${JSON.stringify(targetSessionId)} and message="<message>"`;
+  const remoteClause = isRemoteTarget
+    ? ' Use the deviceId::sessionId form because this conversation is on another computer.'
+    : '';
+  return `Action: this is the conversation the user referenced. Do not send merely because it is referenced; answer, read, or summarize it unless the surrounding request asks for delivery. If the user asks you to send a message to this conversation, ${call}.${remoteClause}`;
+}
+
+function formatReference(
+  reference: AgentInputReference,
+  sendToSession: AgentSendToSessionHint | undefined,
+): string {
   if (reference.kind === 'message') {
     const bounded = boundAgentReferenceText(reference.text ?? '');
     const truncated = reference.truncated === true || bounded.truncated;
@@ -597,10 +655,23 @@ function formatReference(reference: AgentInputReference): string {
     ].join('\n');
   }
   if (reference.kind === 'session') {
+    // The session ID alone cannot locate a task on another device or under a guest grant.
+    const query = reference.href.split('#', 1)[0].split('?')[1];
+    const deviceId = query ? new URLSearchParams(query).get('device') : null;
+    const targetSessionId = deviceId && sendToSession?.supportsRemote
+      ? `${deviceId}::${reference.sessionId}`
+      : reference.sessionId;
+    const action = formatSessionReferenceAction(
+      targetSessionId,
+      Boolean(deviceId),
+      sendToSession,
+    );
     return [
       '[Referenced conversation]',
       `Title: ${quotedMetadata(oneLine(reference.title ?? '') || `Conversation ${reference.sessionId}`)}`,
       `Session ID: ${quotedMetadata(reference.sessionId)}`,
+      ...(deviceId ? [`Task link: ${quotedMetadata(buildTaskDeepLink(reference.sessionId, deviceId))}`] : []),
+      ...(action ? [action] : []),
       '[/Referenced conversation]',
     ].join('\n');
   }
@@ -647,14 +718,14 @@ function formatReference(reference: AgentInputReference): string {
       'Resolution: the host already resolved this exact stable Bot ID. Do not list Bots, search chat history, or inspect another task runtime merely to identify or locate it.',
       ...(snapshot
         ? [
-            `Host status: availability=${snapshot.availability}; activity=${snapshot.activity}; active_tracked_tasks=${snapshot.activeDelegations}.`,
+            `Host status: availability=${snapshot.availability}; activity=${snapshot.activity}.`,
             ...(snapshot.reason ? [`Host note: ${quotedMetadata(snapshot.reason)}`] : []),
           ]
         : [
             "Host status: not refreshed. Do not invent availability or activity.",
           ]),
-      "Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this teammate, call send_to_agent once with this Bot ID. For independently tracked work or deliverables, use start_session_task instead; it does not target a Bot.",
-      "Boundary: Do not blindly forward the surrounding user text. A teammate message only confirms delivery and must never stand in for a tracked task.",
+      `Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this buddy, call send_to_session once with ${snapshot?.mainSessionId ? `target_session_id ${quotedMetadata(snapshot.mainSessionId)} (its main chat)` : 'the session_id that list_agents returns for this Bot ID'}.`,
+      "Boundary: Do not blindly forward the surrounding user text. A buddy message only confirms delivery, not that any work is done.",
       '[/Referenced Cindy Bot]',
     ].join('\n');
   }
@@ -668,10 +739,14 @@ function formatReference(reference: AgentInputReference): string {
       '[/Referenced todo]',
     ].join('\n');
   }
+  // Remote project links store the sidebar identity. Its prefix identifies the
+  // host and is not part of the native working directory.
+  const scoped = /^(device|remote):([^:]+):([\s\S]+)$/.exec(reference.workingDir);
   return [
     '[Referenced project]',
     `Name: ${quotedMetadata(oneLine(reference.name))}`,
-    `Working directory: ${quotedMetadata(reference.workingDir)}`,
+    ...(scoped ? [`Project key: ${quotedMetadata(reference.workingDir)}`] : []),
+    `Working directory: ${quotedMetadata(scoped?.[3] ?? reference.workingDir)}`,
     '[/Referenced project]',
   ].join('\n');
 }
@@ -696,7 +771,7 @@ export function projectAgentFacingText(source: AgentFacingTextSource): string {
   let cursor = 0;
   for (const reference of references) {
     parts.push(projectLiteralText(source.text.slice(cursor, reference.start), stripMarkers));
-    parts.push(formatReference(reference));
+    parts.push(formatReference(reference, source.sendToSession));
     cursor = reference.end;
   }
   parts.push(projectLiteralText(source.text.slice(cursor), stripMarkers));

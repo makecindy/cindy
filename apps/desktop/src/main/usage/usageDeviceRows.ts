@@ -122,7 +122,13 @@ function finiteNonNegative(value: unknown): number {
 }
 
 function isAgentKind(value: unknown): value is DailyModelUsageRow['agentKind'] {
-  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'media';
+  return (
+    value === 'claude-code' ||
+    value === 'codex' ||
+    value === 'pi' ||
+    value === 'media' ||
+    value === 'auxiliary'
+  );
 }
 
 /** 控制端和缓存共用的逐行校验:远端 / 磁盘数据一律当不可信输入。 */
@@ -152,6 +158,11 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
     modelRows.push({
       day: row.day,
       agentKind: row.agentKind,
+      ...(row.requestCount !== undefined
+        ? { requestCount: finiteNonNegative(row.requestCount) }
+        : {}),
+      ...(isShortString(row.source) ? { source: row.source } : {}),
+      ...(isShortString(row.providerId) ? { providerId: row.providerId } : {}),
       model: row.model,
       money,
       inputTokens: finiteNonNegative(row.inputTokens),
@@ -166,7 +177,9 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
   >) {
     if (!row || !isDayKey(row.day) || !isShortString(row.sessionId)) continue;
     const tokens = finiteNonNegative(row.tokens);
-    if (tokens > 0) sessionRows.push({ day: row.day, sessionId: row.sessionId, tokens });
+    if (tokens > 0) sessionRows.push({ day: row.day, sessionId: row.sessionId, tokens,
+      ...(row.auxiliaryTokens !== undefined ? { auxiliaryTokens: Math.min(tokens, finiteNonNegative(row.auxiliaryTokens)) } : {}),
+    });
   }
   const tasks: UsageTaskMeta[] = [];
   for (const task of (Array.isArray(raw.tasks) ? raw.tasks : []) as Array<Partial<UsageTaskMeta>>) {

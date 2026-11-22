@@ -392,7 +392,8 @@ describe('interactionModel', () => {
       { persistId: 'ask', request: { kind: 'ask_user_question', requestId: 'ask-1' } },
     ];
 
-    const selectedAsk = selectPendingInteractionByRequestId(interactions, 'ask-1');
+    expect(selectPendingInteractionByRequestId(interactions, 'ask-1')).toBe(interactions[0]);
+    const selectedAsk = selectPendingInteractionByRequestId(interactions.slice(1), 'ask-1');
     const selectedPlan = selectPendingInteractionByRequestId(interactions, 'plan-1');
 
     expect(selectedAsk?.request.requestId).toBe('ask-1');
@@ -413,6 +414,14 @@ describe('interactionModel', () => {
       activeKind: selectedPlan ? interactionKind(selectedPlan) : null,
       collapsed: true,
       planViewerState: 'expanded',
+    })).toBe(false);
+    // The feedback footer must stay outside the scrolling body, but collapsing
+    // must still release the fixed-height surface (unit; simulator regression).
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: 'issue_confirm', planViewerState: 'half',
+    })).toBe(true);
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: 'issue_confirm', planViewerState: 'half', collapsed: true,
     })).toBe(false);
   });
 
@@ -949,4 +958,12 @@ describe('resolveInteractionResilient', () => {
     }, 's1', 'req-1', {}, { sleep: noSleep })).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
     expect(resolveCalls).toBe(4); // 首次 + 3 次重试
   });
+});
+
+// #8706 unit: shared projection retains only the known quota marker for Mobile's permission card.
+it('projects safe review quota metadata and ignores it on ordinary permissions', () => {
+  const request = { kind: 'permission', requestId: 'quota', toolName: 'Bash',
+    metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted', autoReviewReason: 'stale model reason' } };
+  expect(buildPermissionReviewPresentation(request)).toMatchObject({ autoReviewUnavailable: true, autoReviewQuotaExhausted: true, autoReviewReason: null });
+  expect(buildPermissionReviewPresentation({ ...request, metadata: { autoReviewUnavailableReason: 'quota_exhausted' } })).not.toHaveProperty('autoReviewQuotaExhausted');
 });

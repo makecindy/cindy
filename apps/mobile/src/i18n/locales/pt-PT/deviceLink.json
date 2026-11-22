@@ -24,7 +24,7 @@
   },
   "connectStep1": "Instale e abra {{appName}} no computador",
   "connectStep2": "Inicie sessão com a mesma conta do telemóvel",
-  "connectStep3": "Em Definições → Ligação remota, ative \"Permitir que dispositivos da mesma conta controlem este computador\"",
+  "connectStep3": "Em Definições → Ligação remota, ative «Permitir que dispositivos da mesma conta controlem este computador»",
   "brandEyebrow": "Cindy Mobile",
   "cloudTeaserTitle": "{{appName}} na nuvem, em breve",
   "cloudTeaserCopy": "Após o lançamento, a aplicação móvel funcionará de forma autónoma, sem precisar de computador.",
@@ -65,6 +65,7 @@
     "noCredentials": "Não é possível utilizar {{agent}} porque não tem sessão iniciada no computador. Inicie sessão através de {{appName}} no computador, em Definições → Fornecedores de modelos, e tente novamente.",
     "noEncryption": "Não é possível utilizar {{agent}} porque o armazenamento seguro do sistema no computador está indisponível. Verifique o Porta-chaves no macOS ou a encriptação da conta no Windows e reinicie {{appName}} no computador.",
     "proxyNotReady": "{{agent}} ainda não está pronto no computador. Tente novamente em breve; se o problema persistir, reinicie {{appName}} no computador.",
+    "sharedLinkUnavailable": "Não é possível utilizar {{agent}} agora: o Codex tem sessão iniciada no computador, mas o {{appName}} não consegue usá-la (não é possível criar a ligação a essa conta; com uma conta padrão do Windows, normalmente não é). Verifique se o {{appName}} no computador tem permissão para criar essa ligação (no Windows, execute-o uma vez como administrador ou ative o modo de programador) e tente novamente.",
     "default": "Não é possível utilizar {{agent}} porque o início de sessão no computador está indisponível. Inicie sessão novamente através de {{appName}} no computador, em Definições → Fornecedores de modelos. ({{reason}})"
   },
   "remoteError": {

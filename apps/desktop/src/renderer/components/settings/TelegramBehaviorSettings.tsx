@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { imBotSettings } from './ImBotSection.settings-search';
 import { cn } from '@/lib/utils';
 import type {
   TelegramHookBehavior,
@@ -55,6 +56,7 @@ function mergeOfficialGroupActivation(
 }
 
 function SegmentedRow<T extends string>(props: {
+  source: SettingsSource;
   label: string;
   hint: string;
   options: readonly T[];
@@ -62,6 +64,8 @@ function SegmentedRow<T extends string>(props: {
   optionLabel: (option: T) => string;
   onChange: (option: T) => void;
 }) {
+  // Personal rows belong to the personal Telegram card; official rows to the Cindy Telegram card.
+  const setting = props.source === 'official' ? imBotSettings.cindyTelegram : imBotSettings.telegram;
   return (
     <div className="flex flex-col gap-1.5">
       <div
@@ -71,6 +75,7 @@ function SegmentedRow<T extends string>(props: {
         {props.label}
       </div>
       <SegmentedControl
+        data-setting-id={setting.id}
         aria-label={props.label}
         value={props.value}
         onValueChange={props.onChange}
@@ -93,7 +98,7 @@ function SettingsRequestError(props: { message: string; retryLabel: string; onRe
   return (
     <div className="flex items-center justify-between gap-3 text-11 text-[var(--settings-section-desc)]">
       <span>{props.message}</span>
-      <Button variant="secondary" size="sm" compact type="button" onClick={props.onRetry}>
+      <Button data-settings-search-action="Retry loading or saving Telegram bot settings after a failed request" variant="secondary" size="sm" compact type="button" onClick={props.onRetry}>
         {props.retryLabel}
       </Button>
     </div>
@@ -272,6 +277,7 @@ export function TelegramBehaviorSettings({
         />
       )}
       <SegmentedRow
+        source={source}
         label={t(`${root}.behavior.emojiLabel`)}
         hint={t(`${root}.behavior.emojiHint.${behavior.emojiReactions}`)}
         options={EMOJI_OPTIONS}
@@ -280,6 +286,7 @@ export function TelegramBehaviorSettings({
         onChange={(emojiReactions) => patch({ emojiReactions })}
       />
       <SegmentedRow
+        source={source}
         label={t(`${root}.behavior.groupQuoteLabel`)}
         hint={t(`${root}.behavior.groupQuoteHint.${behavior.replyQuoteGroup}`)}
         options={GROUP_QUOTE_OPTIONS}
@@ -288,6 +295,7 @@ export function TelegramBehaviorSettings({
         onChange={(replyQuoteGroup) => patch({ replyQuoteGroup })}
       />
       <SegmentedRow
+        source={source}
         label={t(`${root}.behavior.dmQuoteLabel`)}
         hint={t(`${root}.behavior.dmQuoteHint.${behavior.replyQuoteDm}`)}
         options={DM_QUOTE_OPTIONS}
@@ -310,9 +318,12 @@ export function TelegramPersonaSettings() {
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.telegramBot.getPersona().then((value) => {
-      if (!cancelled) setPersona(value);
-    });
+    void window.electronAPI.telegramBot
+      .getPersona()
+      .then((value) => {
+        if (!cancelled) setPersona(value);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -342,12 +353,11 @@ export function TelegramPersonaSettings() {
     // 本次调用带的就是最新值, 去抖窗口的待存内容随之落盘。
     pendingSave.current = null;
     setSyncState('syncing');
-    const result = await window.electronAPI.telegramBot.setPersona({
-      botName: persona.botName,
-      soul: persona.soul,
-      syncProfile: true,
-    });
-    setSyncState(result.profileSynced ? 'done' : 'failed');
+    const synced = await window.electronAPI.telegramBot
+      .setPersona({ botName: persona.botName, soul: persona.soul, syncProfile: true })
+      .then((result) => result.profileSynced === true)
+      .catch(() => false);
+    setSyncState(synced ? 'done' : 'failed');
     setTimeout(() => setSyncState('idle'), 2500);
   };
 
@@ -363,6 +373,7 @@ export function TelegramPersonaSettings() {
         {t('settings.telegramBot.persona.nameLabel')}
       </label>
       <input
+        data-setting-id={imBotSettings.telegram.id}
         type="text"
         value={persona.botName}
         maxLength={64}
@@ -370,7 +381,7 @@ export function TelegramPersonaSettings() {
         placeholder={t('settings.telegramBot.persona.namePlaceholder')}
         spellCheck={false}
         className={cn(
-          'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
+          'h-[42px] w-full rounded-full pl-3.5 pr-3.5',
           'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
           'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
           'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -384,6 +395,7 @@ export function TelegramPersonaSettings() {
         {t('settings.telegramBot.persona.soulLabel')}
       </label>
       <textarea
+        data-setting-id={imBotSettings.telegram.id}
         value={persona.soul}
         maxLength={4000}
         rows={5}
@@ -403,6 +415,7 @@ export function TelegramPersonaSettings() {
           variant="secondary"
           size="md"
           compact
+          data-settings-search-action="Push the saved bot name to the Telegram profile page"
           loading={syncState === 'syncing'}
           type="button"
           onClick={() => void syncProfile()}
@@ -438,6 +451,7 @@ export function TelegramGroupActivationSettings({
   const latestRevision = useRef(0);
   const mounted = useRef(true);
   const root = i18nRoot(source);
+  const groupSetting = source === 'official' ? imBotSettings.cindyTelegram : imBotSettings.telegram;
   const bindingKey = `${source}:${bindingId ?? ''}`;
   const activeBindingKey = useRef(bindingKey);
 
@@ -625,6 +639,7 @@ export function TelegramGroupActivationSettings({
               </div>
             </div>
             <SegmentedControl
+              data-setting-id={groupSetting.id}
               aria-label={`${group.chatName || group.chatId} · ${t(`${root}.groups.title`)}`}
               value={group.activation}
               onValueChange={(mode) => setMode(group.chatId, mode)}

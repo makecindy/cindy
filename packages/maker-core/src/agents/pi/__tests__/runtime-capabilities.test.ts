@@ -271,20 +271,20 @@ describe('Pi runtime capability parsing', () => {
     expect(parsePiRuntimeCommands({ commands })).toEqual({ ok: false });
   });
 
-  it('redacts rpc failures and classifies unsupported/timeout as unknown', async () => {
-    const unsupported = await capturePiRuntimeCapabilityManifest(
+  it('redacts rpc failures and classifies timeout as unknown', async () => {
+    const rejected = await capturePiRuntimeCapabilityManifest(
       { request: async () => ({ type: 'response', command: 'get_commands', success: false, error: '/secret/provider/path unsupported' }) },
       { sessionId: 's1', sdkSessionId: '/private/session.jsonl' },
       1,
       'ready',
     );
-    expect(unsupported).toMatchObject({
+    expect(rejected).toMatchObject({
       sessionId: 's1',
       sdkSessionId: '/private/session.jsonl',
-      status: 'unknown',
-      error: { stage: 'ready', code: 'unsupported', message: 'Pi does not support runtime command discovery' },
+      status: 'failed',
+      error: { stage: 'ready', code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' },
     });
-    expect(JSON.stringify(unsupported)).not.toContain('secret/provider/path');
+    expect(JSON.stringify(rejected)).not.toContain('secret/provider/path');
 
     const timedOut = await capturePiRuntimeCapabilityManifest(
       { request: async () => { throw new Error('pi rpc timeout after 30000ms: get_commands /token=secret'); } },
@@ -294,6 +294,26 @@ describe('Pi runtime capability parsing', () => {
     );
     expect(timedOut).toMatchObject({ status: 'unknown', error: { code: 'timeout' } });
     expect(JSON.stringify(timedOut)).not.toContain('token=secret');
+  });
+
+  // Pi's missing-command response is exactly `Unknown command: get_commands`.
+  // Parameter and theme "unsupported" errors must stay failed, or slash input
+  // is escaped into ordinary model text with no sign the command did not run.
+  it.each([
+    ['Unknown command: get_commands', 'unknown', 'unsupported'],
+    ['UNKNOWN COMMAND: GET_COMMANDS', 'unknown', 'unsupported'],
+    ["The parameter 'temperature' is not supported", 'failed', 'rpc_failed'],
+    ['unsupported parameter: prompt_cache_key', 'failed', 'rpc_failed'],
+    ['Theme switching not supported in RPC mode', 'failed', 'rpc_failed'],
+    ['Unknown command: set_model', 'failed', 'rpc_failed'],
+  ])('classifies get_commands error %j as %s/%s', async (error, status, code) => {
+    const manifest = await capturePiRuntimeCapabilityManifest(
+      { request: async () => ({ type: 'response', command: 'get_commands', success: false, error }) },
+      { sessionId: 's1' },
+      1,
+      'ready',
+    );
+    expect(manifest).toMatchObject({ status, error: { code } });
   });
 
   it('marks malformed and explicit rpc failures without throwing', async () => {

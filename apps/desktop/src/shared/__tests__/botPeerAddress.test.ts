@@ -15,6 +15,6 @@ describe('stable teammate addresses', () => {
     ['d', 'a::b'], ['d', '../b'], ['d', 'b\n'],
   ])('rejects malformed or over-limit identity %j / %j', (deviceId, botId) => {
     expect(parseBotPeerAddress(`${deviceId}::${botId}`)).toBeNull();
-    expect(() => botPeerAddress(deviceId, botId)).toThrow('Invalid teammate address');
+    expect(() => botPeerAddress(deviceId, botId)).toThrow("Invalid buddy address");
   });
 });

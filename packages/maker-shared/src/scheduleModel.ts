@@ -5,6 +5,7 @@ import type {
   RemoteScheduleStatus,
   RemoteTimestamp,
 } from './scheduleTypes';
+import { parseAgentErrorCode } from './errorRedaction.js';
 import {
   presentationDate,
   presentationText,
@@ -231,7 +232,11 @@ export function summarizeRun(
       : null,
     title: runStatusLabel(run.status, localizer),
     subtitle,
-    detail: error || previewText(result) || null,
+    detail: run.status === 'failed' && isScheduleActionExpired(error)
+      ? run.failureRecovered
+        ? presentationText(localizer, 'session.failedScheduleNotice.actionRecovered', '这次操作的授权已失效。同一自动化后来已成功运行。')
+        : presentationText(localizer, 'session.failedScheduleNotice.actionExpired', '这次操作的任务授权已失效。请查看自动化最近一次运行的结果。')
+      : error || previewText(result) || null,
     markReadLabel: canMarkRead
       ? presentationText(localizer, 'devices.automations.presentation.run.markRead', '已读')
       : null,
@@ -605,14 +610,48 @@ function readString(value: Record<string, unknown>, key: string): string | null 
 /** Historical failure notices are independent of read receipts. */
 export type ScheduleFailureKind = 'precheck' | 'rate-limit' | 'execution';
 export interface FailedScheduleRunSnapshot {
+  /** Next scheduled fire of this failure's automation, if still active. */
+  nextFireAt?: number;
   runId: string;
   firedAt: number;
+  finishedAt?: number;
   scheduleId?: string;
   failureKind?: ScheduleFailureKind;
   /** Optional on older hosts; error content is only disclosed on demand. */
   errorMsg?: string;
   /** The check script belongs to a plugin that is not installed or not enabled. */
   missingPlugin?: ScheduleMissingPlugin;
+  prCheckDiagnosis?: PrCheckDiagnosis;
+}
+
+export interface PrCheckDiagnosis {
+  kind: 'dns' | 'timeout' | 'auth' | 'rate-limit' | 'unknown';
+  host?: string;
+  device: string;
+  failures: number;
+  retryAt: number;
+}
+
+/** Validate hook output and records from older or remote hosts before presenting them. */
+export function readPrCheckDiagnosis(raw: unknown): PrCheckDiagnosis | undefined {
+  if (!isRecord(raw)) return;
+  const { kind, host, device, failures, retryAt } = raw;
+  if (kind !== 'dns' && kind !== 'timeout' && kind !== 'auth' && kind !== 'rate-limit' && kind !== 'unknown') return;
+  if (typeof device !== 'string' || !device.trim() || device.length > 256) return;
+  if (typeof failures !== 'number' || !Number.isSafeInteger(failures) || failures < 1) return;
+  if (typeof retryAt !== 'number' || !Number.isSafeInteger(retryAt) || retryAt <= 0 || retryAt > 8640000000000000) return;
+  if (kind === 'dns') {
+    if (typeof host !== 'string' || !/^[a-z0-9.-]{1,253}$/i.test(host)) return;
+    return { kind, device, failures, retryAt, host };
+  }
+  return { kind, device, failures, retryAt };
+}
+
+export function scheduleFailureMessageParams(run: FailedScheduleRunSnapshot, locale?: string) {
+  const d = run.prCheckDiagnosis;
+  if (!d) return { name: run.missingPlugin?.name };
+  return { device: d.device, host: d.host, failures: d.failures,
+    retry: new Date(d.retryAt).toLocaleString(locale) };
 }
 
 /** Host diagnosis of a blocked check: its script belongs to an unavailable plugin. */
@@ -647,11 +686,38 @@ export function scheduleRunMissingPlugin(run: {
   };
 }
 
+/** Only recognize host error envelopes, not a code quoted in arbitrary script output. */
+export function isScheduleActionExpired(message?: string): boolean {
+  const detail = message?.replace(/^scheduled task auto-resume failed: /, '');
+  return detail === 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+}
+
+/** The run may be gone by the time a diagnosis task is opened. */
+export function scheduleFailureDetails(run: FailedScheduleRunSnapshot): string {
+  const date = new Date(run.firedAt);
+  return [
+    run.scheduleId && `scheduleId: ${run.scheduleId}`,
+    `runId: ${run.runId}`,
+    Number.isFinite(date.getTime()) && `firedAt: ${date.toISOString()}`,
+    run.errorMsg,
+  ].filter(Boolean).join('\n');
+}
+
 /** Old hosts can omit the classification; keep their warning generic. */
 export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): string {
+  if ((!run.failureKind || run.failureKind === 'execution') &&
+    parseAgentErrorCode(run.errorMsg ?? '')?.code === 'MODEL_CATALOG_UNCONFIRMED') {
+    return 'modelCatalogUnconfirmed';
+  }
   if (run.failureKind === 'precheck' && run.missingPlugin) {
     const key = run.missingPlugin.installed ? 'pluginDisabled' : 'pluginMissing';
     return run.missingPlugin.name ? key : `${key}Unnamed`;
+  }
+  if ((run.failureKind === 'precheck' || run.failureKind === 'rate-limit') && run.prCheckDiagnosis) {
+    return `prCheck_${run.prCheckDiagnosis.kind}`;
+  }
+  if ((!run.failureKind || run.failureKind === 'execution') && isScheduleActionExpired(run.errorMsg)) {
+    return run.nextFireAt && run.nextFireAt > Date.now() ? 'actionScheduled' : 'actionExpired';
   }
   return run.failureKind === 'rate-limit' ? 'rateLimited'
     : run.failureKind === 'precheck' ? 'precheck' : 'text';
@@ -693,9 +759,13 @@ export function compareFailedScheduleRuns(a: FailedScheduleRunSnapshot, b: Faile
 }
 export function shouldShowFailedScheduleNotice(state: {
   latestFailedRun?: FailedScheduleRunSnapshot | null;
+  userSendAt?: RemoteTimestamp;
   readOnly: boolean; tailError: boolean; interrupted: boolean; continuationPending: boolean;
   error: boolean; credentialWait: boolean; streaming: boolean; running: boolean;
 }): boolean {
-  return !!state.latestFailedRun && !state.readOnly && !state.tailError && !state.interrupted
+  const run = state.latestFailedRun;
+  if (run?.finishedAt && toMillis(state.userSendAt) > run.finishedAt
+    && /^scheduled task auto-resume failed(?::|$)/.test(run.errorMsg ?? '')) return false;
+  return !!run && !state.readOnly && !state.tailError && !state.interrupted
     && !state.continuationPending && !state.error && !state.credentialWait && !state.streaming && !state.running;
 }

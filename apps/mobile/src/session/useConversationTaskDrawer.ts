@@ -1,10 +1,14 @@
+import { playHaptic } from '@/platform/haptics';
 import { useTaskDrawerPresentation } from './TaskDrawerPresentation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useIsFocused } from 'expo-router/react-navigation';
 import { BackHandler, Platform } from 'react-native';
 import { useSessionListDrawerMotion, useSessionListDrawerOpenGesture } from './SessionListDrawer';
 
 /** One lifecycle for every conversation: gesture ownership, exit fencing and deferred navigation. */
 export function useConversationTaskDrawer({ enabled, persistent, width }: { enabled: boolean; persistent: boolean; width: number }) {
+  const focused = useIsFocused();
+  const presentation = useTaskDrawerPresentation();
   const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
   const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);
   const sessionListDrawerWidthRef = useRef(width);
@@ -17,16 +21,17 @@ export function useConversationTaskDrawer({ enabled, persistent, width }: { enab
   const sessionListDrawerClosingRef = useRef(false);
   // overlayMounted for gesture callbacks that can arrive before it renders.
   const sessionListDrawerShownRef = useRef(false);
-  const openSessionListDrawer = useCallback(() => {
-    if (!enabled || persistent || sessionListDrawerClosingRef.current) return;
+  const showSessionListDrawer = useCallback((feedback: boolean) => {
+    if (!focused || !enabled || persistent || presentation?.isExiting() || sessionListDrawerClosingRef.current || sessionListDrawerShownRef.current) return;
+    if (feedback) playHaptic('commit');
     sessionListDrawerShownRef.current = true;
     setSessionListDrawerOverlayMounted(true);
     setSessionListDrawerOpen(true);
-  }, [persistent, enabled]);
+  }, [focused, persistent, enabled, presentation]);
+  const openSessionListDrawer = useCallback(() => showSessionListDrawer(true), [showSessionListDrawer]);
   // Floating mode: a rightward swipe on the task pulls the list out instead of
   // going back; let go too early and it slides back.
   const sessionListDrawerFloating = enabled && !persistent;
-  const presentation = useTaskDrawerPresentation();
   const localMotion = useSessionListDrawerMotion();
   const sessionListDrawerMotion = presentation?.motion ?? localMotion;
   // Whether the drawer has rendered open since it was last released. A pull
@@ -52,12 +57,15 @@ export function useConversationTaskDrawer({ enabled, persistent, width }: { enab
   const [sessionListDrawerPulling, setSessionListDrawerPulling] = useState(false);
   const pullSessionListDrawer = useCallback(() => {
     setSessionListDrawerPulling(true);
-    openSessionListDrawer();
-  }, [openSessionListDrawer]);
-  const endSessionListDrawerPull = useCallback(() => setSessionListDrawerPulling(false), []);
+    showSessionListDrawer(false);
+  }, [showSessionListDrawer]);
+  const endSessionListDrawerPull = useCallback((opened: boolean) => {
+    setSessionListDrawerPulling(false);
+    if (opened && sessionListDrawerShownRef.current && !sessionListDrawerClosingRef.current) playHaptic('commit');
+  }, []);
   const sessionListDrawerPullGesture = useSessionListDrawerOpenGesture({
     motion: sessionListDrawerMotion,
-    enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling),
+    enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling) && focused,
     width: sessionListDrawerWidthRef.current,
     onOpen: pullSessionListDrawer,
     onCancel: settleSessionListDrawerPull,
@@ -104,6 +112,13 @@ export function useConversationTaskDrawer({ enabled, persistent, width }: { enab
     pendingDrawerNavigationRef.current = null;
     action();
   }, []);
+  useLayoutEffect(() => {
+    if (focused || !sessionListDrawerOverlayMounted) return;
+    // A covered route can outlive its drawer surface. Its close callback may
+    // never arrive, and an external navigation supersedes any queued target.
+    pendingDrawerNavigationRef.current = null;
+    handleSessionListDrawerClosed();
+  }, [focused, sessionListDrawerOverlayMounted, handleSessionListDrawerClosed]);
   useEffect(() => {
     if (!persistent || !sessionListDrawerOverlayMounted) return;
     setSessionListDrawerOpen(false);

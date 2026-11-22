@@ -7,7 +7,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resumableCompose } from './composition.mjs';
 import { readJournal } from './recovery.mjs';
-import { configFrom, discover, copyPlugin, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
+import {registeredApps} from './app-registry.mjs';
+import { configFrom, discover, copyPlugin, localPluginSource, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '../personal-build.mjs');
@@ -92,6 +93,9 @@ export function runtimeEnv(c, configFile, manifest = {}) {
     PERSONAL_NODE: r.node, PERSONAL_TOOL_PATH: r.toolPaths.join(path.delimiter),
     PATH: [path.dirname(r.node), ...r.toolPaths, process.env.PATH || ''].join(path.delimiter),
   };
+  // Routing belongs to one supervised Main, never to a preparation subprocess or nested dev app.
+  delete result.CINDY_PERSONAL_MONITOR_DIR;
+  delete result.CINDY_PERSONAL_GENERATION;
   for (const key of ['TARGET', 'MAIN', 'PACK', 'LABEL', 'DB_SCRIPT', 'FETCH']) result[`PERSONAL_${key}`] = manifest[key] || '';
   return result;
 }
@@ -123,6 +127,20 @@ export function doctor(c, exec = run) {
     const f = path.join(r.stateDir, file); if (fs.existsSync(f)) result[file] = fs.readFileSync(f, 'utf8').trim();
   }
   if (fs.existsSync(path.join(r.stateDir, '.database-transition'))) result.issues.push('Unfinished database transition; inspect apply-result');
+  if (fs.existsSync(r.personalApp + '.personal-transition.json')) result.issues.push('Unfinished fixed app installation; retain the transition and inspect it before switching');
+  const appParent=path.dirname(r.personalApp), legacyPrefix='.'+path.basename(r.personalApp)+'.previous-';
+  result.legacyAppBackups=fs.existsSync(appParent) ? fs.readdirSync(appParent).filter(name=>name.startsWith(legacyPrefix)).map(name=>path.join(appParent,name)) : [];
+  if(process.platform==='darwin' && fs.existsSync(r.personalApp+'.personal-install.json')) {
+    try {
+      const installed=read(r.personalApp+'.personal-install.json'), id=installed.inputs.bundleId;
+      if(installed.registrationPending)result.issues.push('LaunchServices registration needs repair; run registry-clean after inspecting retired paths');
+      result.registeredApps=registeredApps(id);
+      if(result.registeredApps.length!==1 || result.registeredApps[0]!==r.personalApp)result.issues.push('Personal Bundle ID has stale or missing LaunchServices registrations; inspect paths before unregistering retired copies');
+    } catch(e) { result.issues.push(`Cannot inspect personal app registrations: ${e.message}`); }
+  }
+  result.recoveryAdvice = result.supervised?.phase === 'blocked'
+    ? 'Inspect the failed launch and data compatibility; do not edit the journal or clear rejected versions.'
+    : 'Use auto-status to inspect supervision; auto-recover checks its independent known-good receipt before recovery.';
   const pluginReport = path.join(r.stateDir, 'plugins-report.json');
   if (fs.existsSync(pluginReport)) { result.plugins = read(pluginReport); if (result.plugins.state === 'failed') result.issues.push('Latest plugin synchronization failed; previous seeds retained'); }
   for (const b of brains(c)) result.duplicates.push(...auditPlugins(b).duplicates);
@@ -162,18 +180,15 @@ export function syncPlugins(c, exec = run) {
     const candidates = [];
     for (const id of [...ids].sort()) {
       if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) continue;
-      const source = c.localPlugins[id] || path.join(checkout, id);
+      const source = localPluginSource(c, id, checkout);
       if (!fs.existsSync(path.join(source, 'ghost.json'))) {
         check(!c.localPlugins[id], `Local plugin ${id} has no ghost.json`);
         if (previous.includes(id)) report.retired.push({ id, action: 'retained', reason: 'No canonical manifest; review before retirement' });
         continue;
       }
-      let mainManifest;
-      let existsOnMain = false;
-      try { exec('git', ['-C', checkout, 'cat-file', '-e', `${selection.baseSha}:${id}/ghost.json`], checkout); existsOnMain = true; } catch { /* New plugin. */ }
-      if (existsOnMain) mainManifest = JSON.parse(exec('git', ['-C', checkout, 'show', `${selection.baseSha}:${id}/ghost.json`], checkout));
       const dest = path.join(temp, 'seeds', id), isActive = active.has(id);
-      const entry = copyPlugin(id, source, dest, isActive ? mainManifest : undefined);
+      const repositoryRoot = typeof c.localPlugins[id] === 'string' ? undefined : checkout;
+      const entry = copyPlugin(id, source, dest, { repositoryRoot });
       entry.kind = isActive ? (c.localPlugins[id] ? 'local' : 'pr') : 'retire';
       if (!isActive) {
         // Remove only a seed, never installed files or ledgers. Host handles store ownership.
@@ -231,7 +246,13 @@ export function toolBundle(dest) {
     check(fs.lstatSync(path.join(here, name)).isFile(), 'Unexpected tool bundle entry');
     fs.copyFileSync(path.join(here, name), path.join(dest, 'personal-build', name));
   }
-  for (const file of ['personal-build.mjs', ...fs.readdirSync(here).map(n => `personal-build/${n}`)]) hashes[file] = createHash('sha256').update(fs.readFileSync(path.join(dest, file))).digest('hex');
+  // Keep the process classifier with the tool, so recovery can inspect older releases too.
+  const guards=['restart-desktop-remote.mjs','desktop-whoami.mjs','desktop-dev-verdict.mjs','shared/desktop-dev-region.mjs'];
+  for(const file of guards) {
+    const target=path.join(dest,file);fs.mkdirSync(path.dirname(target),{recursive:true});
+    fs.copyFileSync(path.join(path.dirname(cli),file),target);
+  }
+  for (const file of ['personal-build.mjs', ...guards, ...fs.readdirSync(here).map(n => `personal-build/${n}`)]) hashes[file] = createHash('sha256').update(fs.readFileSync(path.join(dest, file))).digest('hex');
   save(path.join(dest, 'bundle.json'), { version: 1, files: hashes }); return hashes;
 }
 

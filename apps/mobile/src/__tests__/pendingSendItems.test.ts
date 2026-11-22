@@ -282,6 +282,18 @@ describe('reply before user echo', () => {
 });
 
 describe('buildPendingSendItems', () => {
+  // PR #9727: history can be absent while an answer is queued or settling.
+  // Existing dedup tests did not cover card-only replies. Tier: unit.
+  it.each(['queued', 'settling', 'outbox'] as const)('keeps card answers out of %s bubbles and menus', (phase) => {
+    const answerId = 'question-reply:answered:request-1';
+    const supplementId = 'question-reply:request-2';
+    const ids = [answerId, 'ordinary', supplementId];
+    const input = phase === 'outbox'
+      ? { outbox: ids.map(id => outboxItem(id)) }
+      : { [phase === 'queued' ? 'queue' : 'settling']: ids.map(id => queued(id)) };
+    expect(build(input).map(item => item.clientId)).toEqual(['ordinary', supplementId]);
+  });
+
   it('shares the message item key so the bubble and the real message land in one place', () => {
     const [item] = build({ queue: [queued('abc')] });
     expect(item.key).toBe(pendingSendItemKey('abc'));
@@ -527,6 +539,15 @@ describe('pending bubble source labels', () => {
     persistedContent: persisted,
     origin,
   }) as QueuedRemoteMessage;
+
+  // 回归：合批数量不能被首个 Worker 的名字替代；正文保持原样（unit）。
+  it('labels a system batch by count while preserving every report', () => {
+    const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
+    const [item] = build({ queue: [withOrigin('batch', { kind: 'orca', senderLabel: 'A',
+      autoBridge: true, autoBridgeBatchCount: 2 }, body, JSON.stringify({ orcaSource: 'worker', content: body }))] });
+    expect(item.source).toEqual({ kind: 'orca', label: '系统回传的 2 条 Worker 结果' });
+    expect(item.text).toBe(body);
+  });
 
   it('labels automation, task, teammate, Orca and plugin rows like the desktop queue panel', () => {
     const items = build({

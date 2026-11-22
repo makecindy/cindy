@@ -1,14 +1,16 @@
 /**
  * MobileProviderMark —— provider-aware 模型下拉里每行前缀 / trigger 药丸的「来源徽标」。
  *
- * 对齐桌面 ProviderMark:目录供应商用**官方单色 mark**，品牌路径与 provider id/upstream
+ * 对齐桌面 ProviderMark:目录供应商用**品牌 mark**，品牌路径与 provider id/upstream
  * 识别由 @cindy/model-providers/branding 双端共享；未知自定义供应商回退首字母 monogram，使用与桌面一致的 4px 方盒。XD mark 非正方形(158:282),渲染时在 size×size 盒内
  * 垂直居中,保证与正方形 mark 同行对齐。
  */
-import type { ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
+import { Image } from 'expo-image';
+import { utf8Bytes } from '@cindy/device-link';
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
-import Svg, { G, Path } from 'react-native-svg';
+import Svg, { Defs, G, LinearGradient, Path, Stop } from 'react-native-svg';
 
 import {
   ANTHROPIC_PROVIDER_PATH,
@@ -20,6 +22,7 @@ import {
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight as fontWeightToken, lineHeight, radius, typeScale } from '@/theme/tokens';
 import {
+  MODEL_SPECTRUM_COLORS,
   PROVIDER_LOGO_PATHS,
   CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR,
   isProviderLogoKind,
@@ -30,6 +33,7 @@ import { resolveModelIconKind } from '@cindy/model-providers/sections';
 
 import { providerMonogram } from './providerModelSections';
 import { RemoteSourceMark } from './RemoteSourceMark';
+import { resolveProviderSvgColorScheme } from './resolveProviderSvgColorScheme';
 
 const MARK_SIZE = 18;
 /** 官方 mark 的字形边长:比 monogram 容器缩一档(桌面同比:行内 mark ≈ 12.3 vs 容器 18),避免视觉过重。 */
@@ -92,6 +96,7 @@ export interface MobileProviderMarkProps {
   routing?: ProviderLogoRouting;
   /** 被控端剥离 routing 前解析出的非敏感品牌;device-link 场景优先使用。 */
   logoKind?: string;
+  customIcon?: string;
   /** 供应商展示名(monogram 取首字母;官方 mark 分支不消费)。 */
   name: string;
   /** mark 单色;缺省 textSecondary(列表行口径,trigger 场景可传 textPrimary)。 */
@@ -101,7 +106,64 @@ export interface MobileProviderMarkProps {
 }
 
 /** 渲染单个供应商的来源徽标(官方 mark 或 monogram)。 */
-export function MobileProviderMark({
+export function MobileProviderMark(props: MobileProviderMarkProps) {
+  const fallback = <DefaultProviderMark {...props} />;
+  if (typeof props.customIcon !== 'string' || !props.customIcon) return fallback;
+  return (
+    <MobileCustomProviderIcon
+      key={props.customIcon}
+      svg={props.customIcon}
+      color={props.color}
+      remote={props.remote}
+    >
+      {fallback}
+    </MobileCustomProviderIcon>
+  );
+}
+
+function MobileCustomProviderIcon({ svg, children, color, remote }: {
+  svg: string;
+  children: ReactNode;
+  color?: string;
+  remote?: boolean;
+}) {
+  const { mode } = useTheme();
+  const themedSvg = resolveProviderSvgColorScheme(svg, mode);
+  return (
+    <MobileProviderImage
+      key={themedSvg}
+      svg={themedSvg}
+      fallback={children}
+      color={color}
+      remote={remote}
+    />
+  );
+}
+
+function MobileProviderImage({ svg, fallback, color, remote }: {
+  svg: string;
+  fallback: ReactNode;
+  color?: string;
+  remote?: boolean;
+}) {
+  const [failed, setFailed] = useState(false);
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  if (failed) return fallback;
+  // expo-image's native data URL loaders support base64 on both platforms.
+  const uri = `data:image/svg+xml;base64,${btoa(String.fromCharCode(...utf8Bytes(svg)))}`;
+  return withRemote(
+    <View accessible={false} style={styles.markBox}>
+      <Image source={{ uri }} contentFit="contain" style={{ width: GLYPH_SIZE, height: GLYPH_SIZE }}
+        onError={() => setFailed(true)} />
+    </View>,
+    remote,
+    GLYPH_INSET,
+    color ?? colors.textSecondary,
+  );
+}
+
+function DefaultProviderMark({
   providerId,
   routing,
   logoKind,
@@ -129,6 +191,8 @@ export function MobileProviderMark({
         GLYPH_INSET,
         fill,
       );
+    case 'openai-spectrum':
+      return withRemote(<View accessible={false} style={styles.markBox}><OpenAISpectrumArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
     case 'openai':
       return withRemote(
         <View accessible={false} style={styles.markBox}>
@@ -189,6 +253,7 @@ export interface MobileModelIconMarkProps {
   providerId?: string;
   routing?: ProviderLogoRouting;
   logoKind?: string;
+  customIcon?: string;
   name: string;
   color?: string;
   /** 同 MobileProviderMark.remote。 */
@@ -197,11 +262,12 @@ export interface MobileModelIconMarkProps {
 
 /**
  * 模型行 / composer 药丸的图标 —— 统一规则(与桌面 ModelIconMark 同源,共享
- * resolveModelIconKind 口径):模型条目带 `icon`(**AI Gateway / 目录设定**)就渲染
- * 对应厂牌 mark;缺省或未知值回落来源供应商标。禁止在客户端按 model id 猜厂牌。
+ * resolveModelIconKind 口径):优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
+ * 禁止在客户端按 model id 猜厂牌。
  */
 export function MobileModelIconMark({
   icon,
+  customIcon,
   providerId,
   routing,
   logoKind,
@@ -239,6 +305,7 @@ export function MobileModelIconMark({
       providerId={providerId}
       routing={routing}
       logoKind={logoKind}
+      customIcon={customIcon}
       remote={remote}
     />
   );
@@ -250,5 +317,23 @@ function CindyArtwork({ fill }: { fill: string }) {
       <Path d={CINDY_MARK_PATH} fill={fill} />
       <Path d={CINDY_MARK_EARRING_PATH} fill={CINDY_MARK_EARRING_COLOR} />
     </G>
+  </Svg>;
+}
+
+/** Adds spectrum color to the OpenAI blossom only for XD's byok-openai-codex
+ * provider. Temporary stand-in: remove when administrators can upload provider
+ * icons in the backend. Never reuse for other brands or as a general UI gradient. */
+function OpenAISpectrumArtwork({ fill }: { fill: string }) {
+  const { mode } = useTheme();
+  const gradientId = `openai-spectrum-${useId().replace(/:/g, '')}`;
+  const colors = MODEL_SPECTRUM_COLORS[mode];
+  return <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
+    <Defs>
+      <LinearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={2} y1={2} x2={22} y2={22}>
+        {colors.map((color, index) => <Stop key={index} offset={index / (colors.length - 1)} stopColor={color} />)}
+      </LinearGradient>
+    </Defs>
+    <Path d={OPENAI_PROVIDER_PATH} fill={fill} opacity={mode === 'dark' ? 0.30 : 0.35} />
+    <Path d={OPENAI_PROVIDER_PATH} fill={`url(#${gradientId})`} opacity={mode === 'dark' ? 0.78 : 0.72} />
   </Svg>;
 }

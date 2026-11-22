@@ -14,6 +14,7 @@ import type { WorktreeMeta } from '../worktree/types';
 
 const state = vi.hoisted(() => ({ root: '', refs: [] as unknown[], registry: new Map<string, WorktreeMeta>() }));
 const managerMocks = vi.hoisted(() => ({ copy: vi.fn(), create: vi.fn() }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.root, getAppDataDir: () => state.root }));
 vi.mock('../worktree/WorktreeManager', () => ({
   copyClaudeSiviDirs: managerMocks.copy,
   createWorktree: managerMocks.create,
@@ -37,12 +38,32 @@ vi.mock('../worktree/runtimeLeases', async (original) => ({
 }));
 vi.mock('../worktree/gitExec', async (original) => {
   const actual = await original<typeof import('../worktree/gitExec')>();
-  return { ...actual, gitExec: vi.fn<typeof actual.gitExec>((args, cwd, options) => actual.gitExec(args, cwd, {
-    ...options, extraEnv: { ...options?.extraEnv, GIT_CONFIG_GLOBAL: path.join(state.root, 'git-global'), GIT_CONFIG_NOSYSTEM: '1' },
-  })) };
+  return { ...actual, gitExec: vi.fn<typeof actual.gitExec>(async (args, cwd, options) => {
+    const isolated = { ...options, extraEnv: { ...options?.extraEnv,
+      GIT_CONFIG_GLOBAL: path.join(state.root, 'git-global'), GIT_CONFIG_NOSYSTEM: '1' } };
+    if (!args.includes('multibox')) return actual.gitExec(args, cwd, isolated);
+    if (args.includes('--version')) return { stdout: 'Multibox fixture', stderr: '' };
+    // The optional CLI is not installed in CI: model its verified external contract with
+    // real Git metadata/checkouts plus the two carried fixture files, not a fake restore.
+    const native = args.map((arg) => arg === 'multibox' ? 'worktree' : arg)
+      .filter((arg) => arg !== '--json' && arg !== '--wait');
+    const result = await actual.gitExec(native, cwd, isolated);
+    if (args.includes('add')) {
+      const target = args[args.length - 2];
+      for (const file of ['.multibox.toml', path.join('ignored', 'cache.bin')]) {
+        const source = path.join(cwd!, file);
+        try { await fs.lstat(source); } catch { continue; }
+        await fs.mkdir(path.dirname(path.join(target, file)), { recursive: true });
+        try { await fs.copyFile(source, path.join(target, file), 1); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
+    }
+    return result;
+  }) };
 });
 
-import { checkpointWorktreeForReuse, recycleManagedWorktree } from '../worktree/managedRecycle';
+import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
 import { restoreRecordedWorktree } from '../worktree/restoreRecovery';
 import { newRecycleRecord, readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';
 import { releaseObsoleteRecoverySnapshots } from '../worktree/recycleMaintenance';
@@ -83,6 +104,149 @@ describe('worktree recovery with real Git', () => {
     state.refs.push({ id: name, status: 'archived', source: 'desktop', currentDatabase: true, workingDir: worktree, worktreePath: worktree });
     return meta;
   };
+
+  // A discard choice covers only the confirmed checkout contents. Existing recovery
+  // tests exercise automatic snapshots, not the discard journal flag or later edits.
+  it.each(['unchanged', 'later-edits', 'archive-again'] as const)(
+    'recycles a worktree after archive-and-discard: %s',
+    async (scenario) => {
+      const meta = await createFixture(`discard-${scenario}`);
+      const branchHead = await git(repo, 'rev-parse', meta.branch);
+      await requestWorktreeRecycle(meta.sessionId);
+      await requestWorktreeRecycle(meta.sessionId, [meta.path], true);
+      const requested = (await readRecycleRecord(meta.path))!;
+      if (scenario === 'later-edits') {
+        await fs.writeFile(path.join(meta.path, 'draft.txt'), 'later edits');
+      }
+      if (scenario === 'archive-again') await requestWorktreeRecycle(meta.sessionId);
+
+      expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(true);
+      expect(await git(repo, 'rev-parse', meta.branch)).toBe(branchHead);
+      if (scenario === 'unchanged') {
+        expect(await restoreRecordedWorktree(meta.sessionId, meta.path)).toBeNull();
+        await expect(git(repo, 'rev-parse', '--verify', requested.snapshot!.ref)).rejects.toThrow();
+      } else {
+        expect(await restoreRecordedWorktree(meta.sessionId, meta.path)).toBe(true);
+        expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe(
+          scenario === 'later-edits' ? 'later edits' : `discard-${scenario} contents\n`,
+        );
+      }
+    },
+  );
+
+  // PR #10836: normal recycle records bypassed the legacy Multibox restore helper.
+  // Restore through the real journal entry, preserving all three Git states and a local
+  // config that differs from the source. Existing native tests cannot observe carried
+  // engine caches. Small real-Git matrix belongs in git-integration, not default unit.
+  it('restores a Multibox recycle record with caches and the saved staged, unstaged and untracked bytes', async () => {
+    const meta = await createFixture('multibox-recorded');
+    await fs.writeFile(path.join(repo, '.multibox.toml'), '[carry]\nextra = ["ignored/"]\n');
+    await fs.mkdir(path.join(repo, 'ignored'), { recursive: true });
+    await fs.writeFile(path.join(repo, 'ignored', 'cache.bin'), 'warm engine cache');
+    await fs.writeFile(path.join(meta.path, '.multibox.toml'), '[carry]\nextra = ["own-cache/"]\n');
+    await fs.writeFile(path.join(meta.path, 'tracked.txt'), 'staged bytes\n');
+    await git(meta.path, 'add', 'tracked.txt');
+    await fs.writeFile(path.join(meta.path, 'tracked.txt'), 'working bytes\n');
+    try {
+      expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(true);
+      expect(await restoreRecordedWorktree(meta.sessionId, meta.path)).toBe(true);
+      expect(await fs.readFile(path.join(meta.path, 'ignored', 'cache.bin'), 'utf8')).toBe('warm engine cache');
+      expect(await fs.readFile(path.join(meta.path, 'tracked.txt'), 'utf8')).toBe('working bytes\n');
+      expect(await git(meta.path, 'show', ':tracked.txt')).toBe('staged bytes');
+      expect(await fs.readFile(path.join(meta.path, '.multibox.toml'), 'utf8')).toContain('own-cache/');
+      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('multibox-recorded contents\n');
+      expect(await git(meta.path, 'symbolic-ref', 'HEAD')).toBe('refs/heads/cindy/multibox-recorded');
+      expect((await readRecycleRecord(meta.path))?.phase).toBe('restored');
+    } finally {
+      await fs.rm(path.join(repo, '.multibox.toml'), { force: true });
+      await fs.rm(path.join(repo, 'ignored', 'cache.bin'), { force: true });
+    }
+  }, 30_000);
+
+  // The new durable Multibox stage must resume metadata-only work after a crash, while
+  // preserving later file, index or HEAD edits instead of mistaking them for clone output.
+  // Those are distinct user-data boundaries absent from the native mkdir-resume case.
+  it.each(['resume', 'files', 'index', 'head'] as const)('handles interrupted Multibox metadata restoration: %s', async (change) => {
+    const meta = await createFixture(`multibox-resume-${change}`);
+    const config = path.join(repo, '.multibox.toml');
+    await fs.writeFile(config, '[carry]\n');
+    const execute = vi.mocked(gitExec).getMockImplementation()!;
+    let interrupted = false;
+    vi.mocked(gitExec).mockImplementation(async (args, cwd, options) => {
+      const result = await execute(args, cwd, options);
+      if (!interrupted && args[0] === 'update-ref' && args[1] === '--no-deref' && args[2] === 'HEAD') {
+        interrupted = true;
+        throw new Error('interrupted after HEAD restoration');
+      }
+      return result;
+    });
+    try {
+      expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(true);
+      await expect(restoreRecordedWorktree(meta.sessionId, meta.path)).rejects.toThrow('interrupted after HEAD restoration');
+      vi.mocked(gitExec).mockImplementation(execute);
+      const record = (await readRecycleRecord(meta.path))!;
+      expect(record.multiboxRestore).toBe(true);
+      if (change === 'files') await fs.writeFile(path.join(meta.path, 'newer.txt'), 'new user file');
+      if (change === 'index') {
+        await fs.writeFile(path.join(meta.path, 'tracked.txt'), 'new staged bytes');
+        await git(meta.path, 'add', 'tracked.txt');
+        await fs.writeFile(path.join(meta.path, 'tracked.txt'), 'base\n');
+      }
+      if (change === 'head') await git(meta.path, 'commit', '--allow-empty', '-m', 'new user commit');
+      const head = await git(meta.path, 'rev-parse', 'HEAD');
+      expect(await restoreRecordedWorktree(meta.sessionId, meta.path)).toBe(change === 'resume');
+      expect(await git(meta.path, 'rev-parse', 'HEAD')).toBe(head);
+      if (change === 'resume') {
+        expect(await git(meta.path, 'symbolic-ref', 'HEAD')).toBe(`refs/heads/${meta.branch}`);
+        expect((await readRecycleRecord(meta.path))?.multiboxRestore).toBeUndefined();
+      } else {
+        expect(await git(repo, 'rev-parse', record.snapshot!.ref)).toBe(record.snapshot!.commit);
+        expect((await readRecycleRecord(meta.path))?.phase).toBe('restoring');
+        if (change === 'files') expect(await fs.readFile(path.join(meta.path, 'newer.txt'), 'utf8')).toBe('new user file');
+        if (change === 'index') expect(await git(meta.path, 'show', ':tracked.txt')).toBe('new staged bytes');
+      }
+    } finally {
+      vi.mocked(gitExec).mockImplementation(execute);
+      await fs.rm(config, { force: true });
+    }
+  }, 30_000);
+
+  // PR #10836 review: a manual switch can happen after the detached-HEAD probe. A
+  // dereferencing reset would move that unrelated branch. Inject exactly before the
+  // HEAD write and assert the real user ref is unchanged; real Git/integration tier.
+  it('preserves a concurrent-user-branch switch during Multibox HEAD restoration', async () => {
+    const meta = await createFixture('multibox-head-race');
+    const config = path.join(repo, '.multibox.toml');
+    await fs.writeFile(config, '[carry]\n');
+    const userHead = await git(repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'user branch head');
+    await git(repo, 'branch', 'user-during-restore', userHead);
+    const execute = vi.mocked(gitExec).getMockImplementation()!;
+    let switched = false;
+    vi.mocked(gitExec).mockImplementation(async (args, cwd, options) => {
+      const writesHead = (args[0] === 'reset' && args[1] === '--soft')
+        || (args[0] === 'update-ref' && args[2] === 'HEAD');
+      if (!switched && writesHead) {
+        switched = true;
+        await git(meta.path, 'switch', 'user-during-restore');
+      }
+      return execute(args, cwd, options);
+    });
+    try {
+      expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(true);
+      const restored = await restoreRecordedWorktree(meta.sessionId, meta.path).catch(() => false);
+      expect(switched).toBe(true);
+      expect(await git(repo, 'rev-parse', 'refs/heads/user-during-restore')).toBe(userHead);
+      expect(restored).toBe(false);
+      const record = (await readRecycleRecord(meta.path))!;
+      expect(await git(repo, 'rev-parse', record.snapshot!.ref)).toBe(record.snapshot!.commit);
+      // The injected user switch itself removes snapshot-only tracked paths. Recovery
+      // must retain their authoritative snapshot, not undo that deliberate checkout.
+      expect(await git(repo, 'show', `${record.snapshot!.commit}:draft.txt`)).toBe('multibox-head-race contents');
+    } finally {
+      vi.mocked(gitExec).mockImplementation(execute);
+      await fs.rm(config, { force: true });
+    }
+  }, 30_000);
 
   it('preserves a legacy borrowed source after build scripts clean the worktree', async () => {
     const meta = await createFixture('borrowed-clean');

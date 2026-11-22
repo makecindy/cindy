@@ -148,6 +148,12 @@ export function isAcceptedTurnContinuationOnlyReason(reason: unknown): boolean {
   );
 }
 
+/** A requested close shares the crash reason. Only the unfinished iterator EOF is recoverable here. */
+export function isUnexpectedWorkerStreamEnd(signals: InterruptedTurnErrorSignals): boolean {
+  return signals.reason === 'session_event_loop_crashed'
+    && signals.message === 'Session event loop stopped unexpectedly without a terminal event';
+}
+
 /** The agent serving this route on another computer is gone (remote-agent controller / host). */
 export function isRemoteAgentRouteLostReason(reason: unknown): boolean {
   return reason === 'remote_agent_closed' || reason === 'remote_agent_lost';
@@ -159,7 +165,8 @@ export function isRemoteAgentRouteLostReason(reason: unknown): boolean {
  * already have run there). Only a Bot candidate route is ever granted the latter resume.
  */
 export function isContinuationOnlyAutoResumeReason(reason: unknown): boolean {
-  return isAcceptedTurnContinuationOnlyReason(reason) || isRemoteAgentRouteLostReason(reason);
+  return isAcceptedTurnContinuationOnlyReason(reason) || isRemoteAgentRouteLostReason(reason)
+    || reason === 'session_event_loop_crashed';
 }
 
 /**
@@ -418,6 +425,10 @@ export interface InterruptedTurnAutoResumeGuardDeps {
   random?: () => number;
 }
 
+export type ExternalAutomaticRecoveryDecision =
+  | { action: 'allow'; attempt: number; maxAttempts: number; episodeAttempt: number; maxEpisodeAttempts: number }
+  | { action: 'exhausted'; reason: 'consecutive' | 'episode'; consecutiveAttempts: number; episodeAttempts: number };
+
 /**
  * 中断自动续跑的决策器。
  *
@@ -431,6 +442,45 @@ export class InterruptedTurnAutoResumeGuard {
   private readonly sessions = new Map<string, SessionGuardState>();
 
   constructor(private readonly deps: InterruptedTurnAutoResumeGuardDeps) {}
+
+  /**
+   * Consume the same bounded budget for recovery paths that do not create a
+   * normal interrupted-turn attempt token (for example provider-group
+   * failover). Progress and real user input still reset the same counters.
+   */
+  claimExternalAutomaticRecovery(sessionId: string): ExternalAutomaticRecoveryDecision {
+    const s = this.state(sessionId);
+    const exhaustedReason = s.episodeAttempts >= INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS
+      ? 'episode' : s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS
+        ? 'consecutive' : null;
+    if (exhaustedReason) {
+      if (!s.exhaustedWarned) {
+        s.exhaustedWarned = true;
+        this.deps.log.warn('automatic recovery budget exhausted', {
+          sessionId, reason: exhaustedReason,
+          consecutiveAttempts: s.consecutiveAttempts,
+          episodeAttempts: s.episodeAttempts,
+        });
+      }
+      return { action: 'exhausted', reason: exhaustedReason,
+        consecutiveAttempts: s.consecutiveAttempts, episodeAttempts: s.episodeAttempts };
+    }
+    s.consecutiveAttempts += 1;
+    s.episodeAttempts += 1;
+    s.sessionTotalResumes += 1;
+    return { action: 'allow', attempt: s.consecutiveAttempts,
+      maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      episodeAttempt: s.episodeAttempts,
+      maxEpisodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS };
+  }
+
+  isBudgetExhausted(sessionId: string): boolean {
+    const s = this.sessions.get(sessionId);
+    return Boolean(s?.exhaustedWarned && (
+      s.episodeAttempts >= INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS ||
+      s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS
+    ));
+  }
 
   private now(): number {
     return this.deps.now ? this.deps.now() : Date.now();

@@ -1,9 +1,9 @@
 import { Button } from '@/components/ui/button';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useRef, type RefObject } from 'react';
-import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import {
   RUNTIME_FILL_ENDPOINT_FIELDS,
@@ -39,9 +39,6 @@ interface RuntimeFillSelectionRow {
   fields: RuntimeFillField[];
   targetState: Exclude<RuntimeFillTargetState, 'same' | 'incompatible'>;
 }
-
-const FOCUS_RING =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 
 function runtimeFillUrlSummary(value: string, fallback: string): string {
   const trimmed = value.trim();
@@ -198,7 +195,7 @@ export function CustomProviderRuntimeFillOverlay({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10001]',
+            'modal-scrim fixed inset-0 z-modal-raised',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -215,14 +212,14 @@ export function CustomProviderRuntimeFillOverlay({
             returnFocusRef.current.focus();
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised -translate-x-1/2 -translate-y-1/2',
             'flex max-h-[78vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col',
             'outline-none',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <div className="px-5 pb-2 pt-4">
-            <Dialog.Title className="text-15 font-semibold text-[var(--settings-section-title)]">
+            <Dialog.Title className="text-15 font-medium text-[var(--settings-section-title)]">
               {state.stage === 'review'
                 ? t('settings.providers.custom.runtimeFill.reviewTitle')
                 : t('settings.providers.custom.runtimeFill.confirmTitle')}
@@ -241,7 +238,7 @@ export function CustomProviderRuntimeFillOverlay({
 
           <div className="flex-1 overflow-y-auto px-5 pb-2 pt-2">
             <div
-              className="mb-3 flex items-center justify-between gap-3 rounded-[10px] px-3 py-2.5"
+              className="mb-3 flex items-center justify-between gap-3 rounded-lg px-3 py-2.5"
               style={{ backgroundColor: 'var(--surface)' }}
             >
               <span className="text-12 text-[var(--text-tertiary)]">
@@ -253,7 +250,7 @@ export function CustomProviderRuntimeFillOverlay({
             </div>
 
             {state.oauthPiUnavailable && (
-              <p className="mb-3 rounded-[10px] border border-[var(--border-default)] px-3 py-2.5 text-11 leading-[1.5] text-[var(--text-tertiary)]">
+              <p className="mb-3 rounded-xl border border-[var(--border-default)] px-3 py-2.5 text-11 leading-[1.5] text-[var(--text-tertiary)]">
                 {t('settings.providers.custom.runtimeFill.oauthPiUnavailable')}
               </p>
             )}
@@ -302,7 +299,7 @@ export function CustomProviderRuntimeFillOverlay({
                     </div>
 
                     {state.stage === 'review' ? (
-                      <div className="overflow-hidden rounded-[10px] border border-[var(--border-default)]">
+                      <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
                         <div
                           className="grid grid-cols-[0.8fr_1fr_1fr] gap-2 px-3 py-2 text-10 text-[var(--text-tertiary)]"
                           style={{ backgroundColor: 'var(--surface)' }}
@@ -356,27 +353,15 @@ export function CustomProviderRuntimeFillOverlay({
                             state.selected[target.agent]?.includes(field),
                           );
                           return (
-                            <button
+                            <label
                               key={row.key}
-                              type="button"
-                              role="checkbox"
-                              aria-checked={selected}
-                              onClick={() => onToggleField(target.agent, row.fields[0])}
-                              className={cn(
-                                'flex w-full items-center gap-2.5 rounded-[9px] border border-[var(--border-default)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)] active:scale-[0.98]',
-                                FOCUS_RING,
-                              )}
+                              className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--border-default)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)] active:scale-[0.98]"
                             >
-                              <span
-                                className={cn(
-                                  'flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors',
-                                  selected
-                                    ? 'border-[var(--settings-input-border-focus)] bg-[var(--surface-elevated)] text-[var(--settings-section-title)]'
-                                    : 'border-[var(--settings-input-border)] text-transparent',
-                                )}
-                              >
-                                <Check size={12} strokeWidth={3} />
-                              </span>
+                              <Checkbox
+                                data-settings-search-action="Choose whether this runtime field is copied into the target provider draft"
+                                checked={selected}
+                                onChange={() => onToggleField(target.agent, row.fields[0])}
+                              />
                               <span className="min-w-0 flex-1">
                                 <span className="block text-12 font-medium text-[var(--settings-section-title)]">
                                   {row.key === 'endpointBundle'
@@ -395,7 +380,7 @@ export function CustomProviderRuntimeFillOverlay({
                                       : t('settings.providers.custom.runtimeFill.fillEmpty')}
                                 </span>
                               </span>
-                            </button>
+                            </label>
                           );
                         })}
                       </div>

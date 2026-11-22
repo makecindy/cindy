@@ -7,6 +7,7 @@ import {
   type RemoteActionDescriptor,
 } from '@cindy/device-link';
 import { normalizeBotModelChain, type BotModelRoute } from '../../../shared/botModelChain';
+import { normalizeModelGroupsConfig, type ModelGroupsConfig } from '../../../shared/modelGroups';
 
 export type SettingsValues = Record<string, string | boolean>;
 export interface SettingsPanel {
@@ -18,6 +19,8 @@ export interface SettingsPanel {
   action?: RemoteActionDescriptor;
   values: SettingsValues;
   entries: Array<{ id: string; title: SettingsPanel['title']; resourceId: string }>;
+  /** The host computer's model groups (models panel only); absent from older hosts. */
+  modelGroups?: ModelGroupsConfig;
 }
 export interface RemoteBotSettingsData {
   resource: RemoteResource;
@@ -137,7 +140,7 @@ export function parseRemoteBotSettings(
     !id(resource.revision, 1_024) ||
     !isText(resource.display?.title)
   )
-    throw new Error('Invalid teammate settings');
+    throw new Error('Invalid buddy settings');
   const actions = new Map<string, RemoteActionDescriptor>();
   if (Array.isArray(resource.actions) && resource.actions.length <= 256) {
     const duplicates = new Set<string>();
@@ -173,6 +176,9 @@ export function parseRemoteBotSettings(
       text: block.fallbackMarkdown,
       action,
       values,
+      // Normalized like the local config: bad entries dropped, sizes bounded.
+      ...(block.id === 'models' && data.modelGroups !== undefined
+        ? { modelGroups: normalizeModelGroupsConfig(data.modelGroups) } : {}),
       ...(block.id === 'follow-up' ? {
         invitationAvailable: data.invitationAvailable === true,
         dismissAction: actions.get(String(record(data.operationActions).dismiss ?? '')),

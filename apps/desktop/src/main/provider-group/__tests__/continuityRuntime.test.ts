@@ -85,7 +85,8 @@ function setRemoteControl(enabled: boolean): void {
   syncRemoteControlAccessGeneration();
 }
 beforeEach(() => {
-  vi.clearAllMocks(); io.owner = 'account'; io.realm = 'realm'; io.epoch = 0; io.allowed = true; io.supported = true;
+  vi.clearAllMocks(); io.owner = 'account'; io.realm = 'realm'; io.epoch = 0; io.allowed = true;
+  io.supported = true;
   io.remoteControl = true; io.revokedControllers = []; io.prepares.length = 0; io.self = 'M';
   io.slowInspect = false; io.entered = undefined; io.inspectGate = Promise.resolve();
   io.inspectError = undefined;

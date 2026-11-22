@@ -1,13 +1,40 @@
 {
+  "pushDiagnostics": {
+    "title": "Push-Diagnose",
+    "read": "Push-Status lesen",
+    "busy": "Wird gelesen…",
+    "failed": "Push-Status konnte nicht gelesen werden. Bitte erneut versuchen.",
+    "copyFailed": "Token konnte nicht kopiert werden.",
+    "copied": "Token kopiert.",
+    "bundle": "App-ID",
+    "build": "Build",
+    "environment": "APNs-Umgebung",
+    "permission": "Systemberechtigung",
+    "alerts": "Banner",
+    "lockScreen": "Sperrbildschirm",
+    "notificationCenter": "Mitteilungszentrale",
+    "copy": "APNs-Token kopieren",
+    "hide": "Ergebnis ausblenden",
+    "unknown": "Unbekannt",
+    "on": "Ein",
+    "off": "Aus",
+    "hint": "Nur auf Anfrage auslesen. Das APNs-Token wird nur hier angezeigt, nicht in Diagnosen gespeichert oder von diesem Werkzeug hochgeladen. Beim Verlassen oder im Hintergrund wird es ausgeblendet. Nur für Apples Push-Konsole kopieren; kopierter Text bleibt in der Zwischenablage.",
+    "permissions": {
+      "granted": "Erlaubt",
+      "denied": "Abgelehnt",
+      "undetermined": "Nicht angefragt",
+      "provisional": "Stille Zustellung"
+    }
+  },
   "localLogs": {
-    "upload": "Protokolle hochladen",
+    "upload": "Logs hochladen",
     "uploadResult": {
       "unavailable": "Der Log-Upload ist in diesem Build nicht verfügbar.",
       "consentRequired": "Akzeptiere die Datenschutzerklärung, bevor du Logs hochlädst.",
       "empty": "Keine aktuellen Logs. Aktiviere die Aufzeichnung und reproduziere zuerst das Problem.",
       "failed": "Upload fehlgeschlagen. Die Logs bleiben auf diesem Smartphone gespeichert."
     },
-    "title": "Debug-Protokolle",
+    "title": "Debug-Logs",
     "record": "Logs aufzeichnen",
     "export": "Logs exportieren",
     "clear": "Logs löschen",
@@ -20,6 +47,12 @@
     "footer": "Logs bleiben bis zu 7 Tage oder bis zu einer Größe von 8 MB auf diesem Smartphone und werden nie automatisch hochgeladen. Exportierte Logs enthalten weder Gesprächstexte noch Zugangsdaten. Bei Uploads werden nur gefilterte Ausführungsprotokolle und Versionsinfos gesendet."
   },
   "title": "Einstellungen",
+  "promptRecommendation": {
+    "label": "Eingabevorschläge",
+    "description": "Nach einer Antwort Vorschläge für die nächste Eingabe anzeigen. Gilt nur auf diesem Smartphone.",
+    "saveFailed": "Die Einstellung gilt vorerst, konnte aber nicht gespeichert werden.",
+    "reset": "Auf Standard zurücksetzen"
+  },
   "appearance": {
     "title": "Darstellung",
     "modeLabel": "Darstellung",
@@ -29,6 +62,28 @@
       "dark": "Dunkel"
     },
     "saveFailed": "Darstellungsmodus konnte nicht gespeichert werden. Nach einem Neustart gilt wieder die vorherige Einstellung.",
+    "wallpaper": {
+      "title": "Hintergrundbild",
+      "choose": "Foto oder Video auswählen",
+      "replace": "Hintergrundbild ersetzen",
+      "remove": "Hintergrundbild entfernen",
+      "importing": "Wird verarbeitet…",
+      "tooLarge": "Wähle ein Foto bis 20 MB oder ein Video bis 100 MB.",
+      "importFailed": "Das Foto oder Video konnte nicht importiert werden.",
+      "saveFailed": "Die Hintergrundeinstellung konnte nicht gespeichert werden.",
+      "static": "Statisch",
+      "dynamic": "Dynamisch",
+      "motionLabel": "Anzeige",
+      "options": {
+        "none": "Keine",
+        "custom": "Eigenes Hintergrundbild",
+        "cindy-whisper": "Flüstern",
+        "cindy-night-glance": "Nächtlicher Blick",
+        "cindy-scarlet-stroll": "Scharlachroter Spaziergang",
+        "cindy-neon": "Neonsilhouette",
+        "cindy-prism": "Prismensplitter"
+      }
+    },
     "userBubble": {
       "title": "Farbe meiner Nachrichtenblasen",
       "presets": "Farbe",
@@ -52,6 +107,16 @@
       "reset": "Auf Standard zurücksetzen",
       "apply": "Anwenden",
       "hex": "Farbwert"
+    },
+    "appIcon": {
+      "label": "App-Symbol",
+      "saveFailed": "Das App-Symbol konnte nicht geändert werden. Bitte versuche es erneut.",
+      "options": {
+        "default": "Standard",
+        "cat": "Schwarze Katze",
+        "wordmark": "Cindy-Wortmarke",
+        "mark": "Cindy-Symbol"
+      }
     }
   },
   "language": {
@@ -81,11 +146,11 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Klassische Prosa (Standard)",
+        "prose": "Klassische Prosa",
         "tang-poetry": "Tang-Lyrik",
         "song-ci": "Song-Ci",
         "yuan-qu": "Yuan-Qu",
-        "chu-ci": "Chuci",
+        "chu-ci": "Chu-Ci",
         "parallel-prose": "Parallelprosa",
         "pre-qin": "Vor-Qin-Meister",
         "historian": "Stil des Großen Historikers",
@@ -135,11 +200,20 @@
     "permissionDenied": "Erlaube Cindy-Benachrichtigungen in deinen Systemeinstellungen.",
     "unregisterQueued": "Deaktiviert. Die Abmeldung wird abgeschlossen, sobald du wieder online bist.",
     "preview": "Chatvorschauen anzeigen",
-    "background": "Chat im Hintergrund verbunden halten",
-    "backgroundActive": "Chatnachrichten werden im Hintergrund empfangen",
+    "background": "Hintergrundbenachrichtigungen",
+    "backgroundActive": "Benachrichtigungen werden im Hintergrund empfangen",
     "backgroundStop": "Empfang beenden",
-    "backgroundHint": "Die Hintergrundverbindung funktioniert ohne Google und zeigt eine dauerhafte Benachrichtigung an. Darüber kannst du sie beenden.",
-    "googleUnavailable": "Google-Push ist nicht verfügbar. Aktiviere die Hintergrundverbindung für den Chat, um Nachrichten zu empfangen."
+    "backgroundHint": "Cindy hält bei möglicherweise nicht verfügbarem Google-Push automatisch eine Hintergrundverbindung. Dabei erscheint eine dauerhafte Benachrichtigung.",
+    "googleUnavailable": "Google-Push ist nicht verfügbar. Die Hintergrundverbindung richtet sich nach deinen Benachrichtigungseinstellungen.",
+    "backgroundModes": {
+      "auto": "Automatisch",
+      "on": "Immer an",
+      "off": "Aus"
+    },
+    "actionReplyPlaceholder": "Antwort eingeben",
+    "actionNotDelivered": "Das ist nicht bei deinem Computer angekommen. Öffne Cindy, um zu antworten.",
+    "actionReplyNotDelivered": "Deine Antwort wurde nicht gesendet. Öffne Cindy, um sie erneut zu senden: {{text}}",
+    "actionRequestEnded": "Diese Anfrage wurde bereits beantwortet oder ist abgelaufen."
   },
   "about": {
     "sectionTitle": "Über dieses Smartphone",
@@ -211,7 +285,7 @@
     "openUserAgreement": "Nutzungsvereinbarung öffnen",
     "appFilingNumber": "App-Registrierungsnummer",
     "analytics": "Nutzungsstatistiken",
-    "analyticsHint": "Hilft uns, App-Starts und die Nutzerbindung zu verstehen. Übermittelt Geräteinfos wie Modell, Betriebssystem und App-Version sowie eine Gerätekennung und nach der Anmeldung deine Konto-ID; niemals Unterhaltungen, Dateien oder Prompts.",
+    "analyticsHint": "Wenn du diese Option aktivierst, erfassen wir App-Starts und wiederkehrende Besuche mit einem Kontopseudonym und einer Gerätekennung. Das hilft uns, das Produkt zu verbessern. Für Zahlungen verwenden wir ein eigenes Pseudonym. Deine Chats, Dateien und Prompts sind in diesen Statistiken nicht enthalten.\nÄltere Daten enthalten die ursprünglichen Konto-IDs. Wer diese Daten einsehen kann, kann ein neues Pseudonym möglicherweise über dieselbe Gerätekennung einem Konto zuordnen.",
     "analyticsSaveFailed": "Diese Einstellung konnte nicht gespeichert werden und wird nach einem Neustart möglicherweise zurückgesetzt.",
     "analyticsReset": "Auf Standard zurücksetzen",
     "analyticsResetAction": "Zurücksetzen"
@@ -248,7 +322,7 @@
   "voiceSpeakerFilter": {
     "actionFailed": "Die Änderung konnte nicht gespeichert werden. Versuch es erneut.",
     "title": "Meine Stimme erkennen",
-    "sectionTitle": "Stimmabdruckfilter",
+    "sectionTitle": "Stimmprofilfilter",
     "label": "Meine Stimme erkennen",
     "entryHint": "Blendet andere Personen bei der Spracheingabe aus. Dein Stimmprofil bleibt auf diesem Smartphone.",
     "openAccessibility": "Einstellungen zur Erkennung meiner Stimme öffnen",
@@ -314,10 +388,10 @@
       "errors": {
         "too_short": "In Abschnitt {{index}} wurde zu wenig Sprache erkannt. Nimm ihn erneut auf.",
         "no_embedding": "Aus Abschnitt {{index}} konnte kein Stimmprofil ermittelt werden. Nimm ihn erneut auf.",
-        "inconsistent": "Passage {{index}} klingt nicht nach derselben Person wie die anderen; möglicherweise wurde eine andere Stimme oder ein Geräusch aufgenommen. Nimm sie erneut auf.",
+        "inconsistent": "Abschnitt {{index}} klingt nicht nach derselben Person wie die anderen; möglicherweise wurde eine andere Stimme oder ein Geräusch aufgenommen. Nimm ihn erneut auf.",
         "models_missing": "Das Erkennungsmodell ist noch nicht vollständig heruntergeladen. Versuche es gleich noch einmal.",
-        "storage_unavailable": "Der Systemschlüsselbund ist nicht verfügbar, daher kann der Stimmabdruck nicht verschlüsselt gespeichert werden. Versuche es später erneut.",
-        "failed": "Der Stimmabdruck konnte nicht erstellt werden. Versuche es erneut.",
+        "storage_unavailable": "Der Systemschlüsselbund ist nicht verfügbar, daher kann das Stimmprofil nicht verschlüsselt gespeichert werden. Versuche es später erneut.",
+        "failed": "Das Stimmprofil konnte nicht erstellt werden. Versuche es erneut.",
         "microphone": "Das Mikrofon kann nicht verwendet werden. Prüfe die Mikrofonberechtigung und versuch es erneut.",
         "noAudio": "Das Mikrofon hat keinen Ton erfasst. Prüfe es und versuch es erneut."
       },
@@ -356,7 +430,7 @@
     "sectionTitle": "Handheld",
     "label": "Handheld-Modus",
     "entryHint": "Bediene Cindy mit dem eingebauten Controller eines Gaming-Handhelds und halte die Sprachtaste gedrückt, um zu sprechen.",
-    "on": "An",
+    "on": "Ein",
     "off": "Aus",
     "openAccessibility": "Einstellungen für den Handheld-Modus öffnen",
     "title": "Handheld-Modus",
@@ -388,7 +462,92 @@
       "voice": "Gedrückt halten zum Sprechen",
       "scrollKeys": "Rechter Stick",
       "scroll": "Scrollen",
-      "page": "Seite vor / zurück"
+      "page": "Seite vor / zurück",
+      "triggerScrollKeys": "L2 / R2 + Steuerkreuz auf/ab",
+      "triggerScroll": "Sichtbaren Inhalt scrollen",
+      "sendText": "Eingegebenen Text senden",
+      "taskHint": "Diese Kurzbefehle gelten auf Sitzungsseiten. Ist eine Taste der Spracheingabe zugewiesen, hat diese Vorrang; beim Loslassen bleibt der Text im Nachrichtenfeld."
     }
+  },
+  "projectInfo": {
+    "automatic": "Projektsymbol verwenden",
+    "autoLoading": "Projektsymbol wird gesucht…",
+    "autoNone": "Initialen aus dem Projektnamen werden verwendet.",
+    "autoSource": "Quelle",
+    "githubAvatar": "GitHub-Profilbild verwenden",
+    "title": "Projekteinstellungen",
+    "name": "Anzeigename",
+    "saveName": "Name speichern",
+    "reset": "Standard wiederherstellen",
+    "icon": "Symbol",
+    "directory": "Projektordner",
+    "done": "Fertig",
+    "failed": "Speichern fehlgeschlagen. Erneut versuchen.",
+    "unavailable": "Einstellungen nicht verfügbar. Einen aktualisierten Computer verbinden und erneut versuchen.",
+    "back": "Zurück",
+    "cancel": "Abbrechen",
+    "changeIcon": "Symbol ändern",
+    "chooseIcon": "Symbol auswählen",
+    "save": "Speichern",
+    "symbols": "Symbole",
+    "emoji": "Emoji",
+    "letters": "Buchstaben",
+    "image": "Bild",
+    "upload": "Bild hochladen",
+    "imageHint": "PNG, JPG oder WebP · quadratischer Zuschnitt",
+    "imageError": "Das Bild konnte nicht gelesen werden. Versuche eine kleinere PNG- oder JPG-Datei.",
+    "search": "Symbole suchen",
+    "customEmoji": "Oder ein Emoji einfügen",
+    "lettersHint": "Ein oder zwei Buchstaben oder Zahlen.",
+    "thisComputer": "Dieser Computer",
+    "nameHint": "Name in der Projektliste. Der Ordnername bleibt unverändert.",
+    "copy": "Pfad kopieren",
+    "copied": "Kopiert",
+    "applyIcon": "Symbol verwenden",
+    "noResults": "Keine passenden Symbole",
+    "discardHint": "Ungespeicherte Änderungen verwerfen?",
+    "keepEditing": "Weiter bearbeiten",
+    "discard": "Verwerfen",
+    "colors": {
+      "default": "Standard (dem Design folgen)"
+    },
+    "directories": "Projektverzeichnisse",
+    "directoriesHint": "Gilt ab dem nächsten Durchlauf für alle Aufgaben dieses Projekts. Bestehende aufgabenspezifische Verzeichnisse bleiben erhalten.",
+    "removeDirectory": "Verzeichnis entfernen",
+    "directoryPath": "Vollständiger Verzeichnispfad",
+    "addDirectory": "Verzeichnis hinzufügen",
+    "browseDirectory": "Verzeichnisse durchsuchen",
+    "mainDirectory": "Hauptverzeichnis",
+    "createTitle": "Neues Projekt",
+    "createAction": "Projekt erstellen",
+    "repository": "Repository-URL",
+    "repositoryHint": "Unterstützt GitHub, GitLab und andere Git-Repositories über HTTPS oder SSH.",
+    "autoDirectory": "Ohne Verzeichnisauswahl wird {{path}} verwendet. Bei Namenskonflikten wird eine Nummer ergänzt.",
+    "cloning": "Repository wird geklont…",
+    "invalidRepository": "Eine gültige GitHub-, GitLab- oder Git-Repository-URL eingeben.",
+    "createFailed": "Projekt konnte nicht erstellt werden. Schreibzugriff, Repository-URL und Git-Zugriff auf diesem Computer prüfen. Das Klon-Ziel muss leer sein.",
+    "createNamePlaceholder": "Projektname",
+    "createNameHint": "Gib deinem Projekt einen Namen, um loszulegen.",
+    "createFromRepository": "Aus einem Code-Repository erstellen",
+    "createBlank": "Zu einem leeren Projekt wechseln",
+    "source_blank": "Leeres Projekt",
+    "source_existing": "Vorhandenen Ordner öffnen",
+    "source_repository": "Code-Repository importieren",
+    "sourceHint_blank": "Name eingeben. Der Projektordner wird automatisch erstellt.",
+    "sourceHint_existing": "Einen vorhandenen Projektordner auf diesem Computer wählen.",
+    "sourceHint_repository": "Repository-Link einfügen und auf diesen Computer herunterladen.",
+    "source": "Projektquelle",
+    "sourceShort_blank": "Neu",
+    "sourceShort_existing": "Ordner",
+    "sourceShort_repository": "Repository",
+    "automaticMain": "Hauptordner · Automatisch",
+    "source_local": "Lokaler Ordner",
+    "sourceShort_local": "Lokaler Ordner",
+    "sourceHint_local": "Einen Namen zum Erstellen eingeben oder einen vorhandenen Ordner wählen.",
+    "chooseExistingFolder": "Vorhandenen Ordner wählen",
+    "changeMainDirectory": "Ändern"
+  },
+  "navigation": {
+    "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
   }
 }

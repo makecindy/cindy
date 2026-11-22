@@ -211,7 +211,9 @@ export function parseRemotePluginPreferences(value: unknown): RemotePluginPrefer
       Array.isArray(data.tasks.config) ||
       !Array.isArray(data.tasks.permissionModes) ||
       !data.tasks.permissionModes.every((mode) => typeof mode === 'string') ||
-      typeof data.tasks.defaultPermissionMode !== 'string')
+      typeof data.tasks.defaultPermissionMode !== 'string' ||
+      (data.tasks.remoteRoutes !== undefined && typeof data.tasks.remoteRoutes !== 'boolean') ||
+      (data.tasks.config.agentDeviceId !== undefined && data.tasks.config.agentDeviceId !== null && typeof data.tasks.config.agentDeviceId !== 'string'))
   )
     throw new Error('INVALID_RESPONSE');
   return data;

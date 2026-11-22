@@ -56,6 +56,82 @@ const appInfo = build => ({ok:true, result:{ok:true, udid:mobileIdentity.deviceI
   bundleId:mobileIdentity.bundleId, installed:true,
   app:{bundleIdentifier:mobileIdentity.bundleId, bundleVersion:build}, matchesLocal:null}});
 
+// Distribution regressions exercise mobileConfig and the production Python verifier/exporter.
+// Minimum failures: incomplete extension profiles, development/debug signing and a traversal IPA.
+// Script integration tier; existing registration tests do not cover native export.
+// Standalone file measured 4.37s on macOS; fixtures never read developer credentials.
+test('distribution is explicit without changing historical delivery identities', () => {
+  const validate = value => mobileConfig(value, '/personal', 'global');
+  assert.equal(Object.hasOwn(validate(mobileIdentity), 'distribution'), false);
+  assert.equal(validate({...mobileIdentity, distribution:'ad-hoc'}).distribution, 'ad-hoc');
+  assert.throws(() => validate({...mobileIdentity, distribution:'production'}), /distribution/);
+  assert.throws(() => validate({...mobileIdentity, distribution:null}), /distribution/);
+  const profiles = Object.fromEntries(['', '.CindyNotificationService', '.CindyHomeWidgets', '.expo-sharing-extension']
+    .map((suffix, i) => [mobileIdentity.bundleId + suffix, `Fixture profile ${i}`]));
+  assert.deepEqual(validate({...mobileIdentity, distribution:'ad-hoc', exportProvisioningProfiles:profiles}).exportProvisioningProfiles, profiles);
+  for (const invalid of [null, [], {}, {...profiles, unexpected:'profile'}, {...profiles, [mobileIdentity.bundleId]:''},
+    {...profiles, [mobileIdentity.bundleId]:'bad\nprofile'}]) {
+    assert.throws(() => validate({...mobileIdentity, distribution:'ad-hoc', exportProvisioningProfiles:invalid}), /exportProvisioningProfiles/);
+  }
+  assert.throws(() => validate({...mobileIdentity, exportProvisioningProfiles:profiles}), /exportProvisioningProfiles/);
+});
+
+test('Ad Hoc export and verification reject development, enterprise and unsafe archives', () => {
+  const script = fileURLToPath(new URL('../personal-build/mobile-ios.py', import.meta.url));
+  execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `
+import pathlib, runpy, sys, tempfile, zipfile, stat
+m = runpy.run_path(sys.argv[1])
+identity = {'distribution': 'ad-hoc', 'teamId': 'ABCDEFGHIJ'}
+assert m['export_options'](identity) == {'method':'release-testing', 'destination':'export',
+    'teamID':'ABCDEFGHIJ', 'signingStyle':'automatic', 'manageAppVersionAndBuildNumber':False}
+profiles = {'com.example.personal' + suffix: 'Fixture ' + str(i) for i, suffix in enumerate(
+    ['', '.CindyNotificationService', '.CindyHomeWidgets', '.expo-sharing-extension'])}
+manual = {**identity, 'bundleId':'com.example.personal', 'exportProvisioningProfiles':profiles}
+options = m['export_options'](manual)
+assert options['signingStyle'] == 'manual' and options['signingCertificate'] == 'Apple Distribution'
+assert options['provisioningProfiles'] == profiles and options['manageAppVersionAndBuildNumber'] is False
+for invalid in [None, {}, {**profiles, 'unexpected':'profile'}, {**profiles, 'com.example.personal':''}]:
+    try: m['export_options']({**manual, 'exportProvisioningProfiles':invalid})
+    except RuntimeError: pass
+    else: raise AssertionError('accepted incomplete export profiles')
+
+ent = {'aps-environment':'production', 'get-task-allow':False}
+profile = {'Entitlements':dict(ent), 'ProvisionedDevices':['fixture']}
+m['verify_distribution'](identity, ent, profile, main=True)
+m['verify_distribution'](identity, {'get-task-allow':False}, profile)
+for signed, provisioned in [
+    ({**ent, 'aps-environment':'development'}, {'Entitlements':{**ent, 'aps-environment':'development'}}),
+    ({**ent, 'get-task-allow':True}, profile),
+    (ent, {**profile, 'ProvisionsAllDevices':True}),
+    (ent, {'Entitlements':{**ent, 'get-task-allow':True}}),
+]:
+    try: m['verify_distribution'](identity, signed, provisioned, main=True)
+    except RuntimeError: pass
+    else: raise AssertionError('accepted invalid distribution signing')
+for unsafe in ['../escape', '/absolute', 'Payload/link']:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        with zipfile.ZipFile(root / 'app.ipa', 'w') as z:
+            item = zipfile.ZipInfo(unsafe)
+            if unsafe.endswith('link'): item.external_attr = (stat.S_IFLNK | 0o777) << 16
+            z.writestr(item, 'fixture')
+        try: m['extract_export'](root)
+        except RuntimeError: pass
+        else: raise AssertionError('accepted unsafe IPA')
+        assert not (root / 'unpacked').exists()
+with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp)
+    with zipfile.ZipFile(root / 'app.ipa', 'w') as z:
+        item = zipfile.ZipInfo('Payload/Fixture.app/Fixture')
+        item.external_attr = (stat.S_IFREG | 0o755) << 16
+        z.writestr(item, 'executable fixture')
+    m['extract_export'](root)
+    assert (root / 'unpacked/Payload/Fixture.app/Fixture').read_text() == 'executable fixture'
+    if sys.platform != 'win32':
+        assert (root / 'unpacked/Payload/Fixture.app/Fixture').stat().st_mode & 0o111
+`, script]);
+});
+
 test('mobile certificate pin accepts SHA-256 and rejects legacy, mixed or malformed configuration', () => {
   const validate = value => mobileConfig(value, '/personal', 'global');
   assert.equal(validate({...mobileIdentity, signingCertificateSha256:'a'.repeat(64)}).signingCertificateSha256, 'A'.repeat(64));
@@ -183,7 +259,10 @@ test('local plugins preserve source versions and compatibility instead of relabe
   assert.equal(packageHash(src), packageHash(dest));
   assert.equal(JSON.parse(fs.readFileSync(path.join(src, 'ghost.json'))).version, '1.2.0');
   put(path.join(dest, 'main.js'), 'changed'); assert.notEqual(packageHash(dest), copied.sha256);
-  fs.symlinkSync(path.join(root, 'dest', 'main.js'), path.join(src, 'link.js'));
+  // Windows file symlinks require an elevated token or Developer Mode. A
+  // junction exercises the same non-regular-entry rejection without either.
+  if (process.platform === 'win32') fs.symlinkSync(dest, path.join(src, 'link'), 'junction');
+  else fs.symlinkSync(path.join(dest, 'main.js'), path.join(src, 'link.js'));
   assert.throws(() => copyPlugin('sample', src, path.join(root, 'rejected'), {}), /non-regular/);
   assert.equal(fs.existsSync(path.join(root, 'rejected')), false);
 });
@@ -377,4 +456,23 @@ test('each preparation captures a new selection; activation checks the fixed sna
  assert.throws(()=>verifyUpgradeSnapshot(f.config,changed),/differs from upgrade snapshot/);
  const old=structuredClone(report);delete old.upgradeSnapshot;
  assert.throws(()=>verifyUpgradeSnapshot(f.config,old),/Missing upgrade snapshot/);
+});
+
+test('browser seeds build native hosts before hashing and reject incomplete packages', t => {
+  const root = tmp(t), source = path.join(root, 'my-browser');
+  put(path.join(source, 'ghost.json'), { id: 'my-browser', version: '1.0.0', browserExtension: { nativeHost: { binary: 'native-host/bin' } } });
+  assert.throws(() => copyPlugin('my-browser', source, path.join(root, 'incomplete')), /Missing Cindy Chrome native host/);
+  put(path.join(root, 'scripts/build-browser-native.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    for (const os of ['darwin', 'linux', 'win32']) for (const arch of ['x64', 'arm64']) {
+      const dir = path.join(process.argv[3], os + '-' + arch);
+      fs.mkdirSync(dir, {recursive:true});
+      fs.writeFileSync(path.join(dir, 'cindy-browser-native' + (os === 'win32' ? '.exe' : '')), 'fixture');
+    }
+  `);
+  const dest = path.join(root, 'complete');
+  const entry = copyPlugin('my-browser', source, dest, { repositoryRoot: root });
+  assert.equal(entry.sha256, packageHash(dest));
+  assert.equal(fs.existsSync(path.join(source, 'native-host/bin')), false);
 });

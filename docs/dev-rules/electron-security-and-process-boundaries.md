@@ -2,7 +2,14 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、
-> 导航、外链、文件／数据库／凭证访问或 Electron 特权能力之前
+> 导航、外链、文件／数据库／凭证访问或 Electron 特权能力之前；新增或修改独立窗口、
+> 辅助窗口或弹出型 `BrowserWindow` 之前（§3.1「独立辅助窗口统一生命周期基线」）
+> **适用路径**：`apps/desktop/src/preload/**`、`apps/desktop/src/main/security/**`、
+> `apps/desktop/src/main/webview-security.ts`、`apps/desktop/src/main/bootstrap-electron.ts`、
+> `apps/desktop/src/main/secondary-windows.ts`、`apps/desktop/src/main/*-window/**`、
+> `apps/desktop/src/main/**/window.ts`、`apps/desktop/src/main/**/ipc.ts`、
+> `apps/desktop/src/main/**/*Ipc.ts`、`apps/desktop/src/main/maker-ipc/{register,channels}.ts`、
+> `apps/desktop/forge.config.ts`、`apps/desktop/src/renderer/index.html`
 
 本规则以 [Electron 官方安全指南](https://www.electronjs.org/docs/latest/tutorial/security)
 为基线，并结合 Cindy 当前 Electron 41 的实际架构补充项目约束。安全优先级高于为了
@@ -98,7 +105,7 @@ Renderer 可以负责组件渲染、交互状态、表单状态、展示数据�
    再次显示时先展示保留快照并异步刷新。例外：承载实时会话的窗口（远程桌面查看器）
    以 `pauseWhenHidden: false` 让会话跨越最小化、切换 Space 与原生全屏切换，只在用户
    关闭窗口时结束——macOS 会把后两者及完全遮挡都报告成原生 hide；隐藏期间改由被控端
-   暂停视频（见 `protocol-compatibility.md`「远程桌面查看窗口隐藏时暂停视频」）。
+   暂停视频（见 `protocol-compatibility/remote-desktop-pause-video-when-hidden.md`「远程桌面查看窗口隐藏时暂停视频」）。
 4. **隐藏时重置交互态**：必须清除焦点，并重置自绘窗口按钮、hover／pressed、确认框、
    选中项与待执行操作等瞬时状态，确保二次打开不会继承上次关闭时的视觉或交互状态。
 5. **使用真正的轻量入口**：独立窗口不得先进入完整 `App` 再在组件树内分流；使用独立的
@@ -329,6 +336,19 @@ MCP 请求钩子。此身份要求来自 YouTube 官方文档，不伪装成第�
   仍使用 `file://` 是存量架构，迁移需要单独设计和验证，不能在普通功能 PR 中顺带改动。
 - 打包必须保留现有 Fuses：关闭 RunAsNode、Node options 和 CLI inspect，开启 cookie 加密、
   ASAR 完整性校验并只从 ASAR 加载应用。
+- 主进程不得从比程序文件本身更容易被改写、又不受 ASAR 完整性校验保护的位置加载代码或字节码。
+  V8 会原样执行编译缓存里的字节码，因此主进程编译缓存（`mainCompileCache.ts`）在正式版只对代码
+  位于当前用户目录下的 Windows 安装开启：这类安装的程序文件本来就能被同一用户改写，缓存不扩大
+  攻击面。判断用解析 junction／符号链接后的真实路径，经用户目录下的 junction 启动受保护目录的
+  安装不算在内；路径无法解析时不开启。
+  macOS、Linux 正式版以及装在受保护目录的 Windows 不由 Cindy 开启；在 macOS 上，注入的代码还会
+  继承应用已获得的录屏、辅助功能等系统权限。要让这些平台受益，应在打包时生成缓存并放进受签名
+  保护的安装包，不能改成运行时写入用户目录。
+  这道开关只决定 Cindy 自己是否开启。启动环境里的 `NODE_COMPILE_CACHE` 会让 Node 在任何应用代码
+  运行前直接启用缓存（Electron 42 主进程实测，2026-11-22）。Node options fuse 不覆盖这个变量，
+  这一入口在引入编译缓存之前就存在。等应用代码能检查时入口块已经加载，应用内无法关闭：在不允许
+  开启的安装上只记录 `enabled-by-environment` 警告供排查，不沿用、不清理该目录。真正关闭需要
+  Electron 提供对应 fuse，或由启动器清理环境变量。
 - 使用当前受支持的 Electron 版本；升级时重新核对官方安全清单、默认值变化和 breaking
   changes，不因“默认已经安全”删除显式配置。
 

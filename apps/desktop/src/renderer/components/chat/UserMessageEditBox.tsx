@@ -325,7 +325,7 @@ export function UserMessageEditBox({
   return (
     <div
       className={cn(
-        'w-full rounded-[12px]',
+        'w-full rounded-xl',
         'border border-[var(--msg-user-border)]',
         'bg-[var(--msg-user-bg)]',
         'px-4 pt-3 pb-2.5',
@@ -340,7 +340,7 @@ export function UserMessageEditBox({
         spellCheck={false}
         rows={1}
         className={cn(
-          'block w-full resize-none outline-none border-none bg-transparent p-0',
+          'chat-content-text block w-full resize-none outline-none border-none bg-transparent p-0',
           'max-h-[40vh] overflow-y-auto',
           'text-15 font-normal leading-[1.6] text-[var(--msg-user-text)]',
           'disabled:opacity-60',

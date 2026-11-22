@@ -56,6 +56,11 @@ void mountPage({
       defaults: IM_DEFAULT_SETTINGS,
     });
     return {
+      deviceLink: {
+        listDevices: async () => ({ devices: [] }),
+        onPresenceChanged: subscription('presence'),
+        onControlTargetChanged: subscription('controlTarget'),
+      },
       maker: {
         imDefaultSettingsGet: async () => state(),
         imDefaultSettingsSet: async (patch: ImDefaultSettingsPatch) => {

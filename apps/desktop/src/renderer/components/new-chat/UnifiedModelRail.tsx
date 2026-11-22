@@ -1,8 +1,11 @@
 import type { ReactNode } from 'react';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Star } from 'lucide-react';
+import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
+import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
+import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
 
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -13,6 +16,8 @@ import { Tip } from '@/components/ui/tooltip';
 
 import {
   useProviderWeeklyQuota,
+  useProviderUsageSnapshots,
+  useWeeklyQuotaFromSnapshots,
   type ProviderGroupUsageOf,
   type ProviderUsageScope,
 } from './useProviderWeeklyQuota';
@@ -22,7 +27,10 @@ import { ProviderRailMark } from './UnifiedFlyoutHost';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import {
   engineOfAgentKind,
+  railItemDeviceId,
   railItemKey,
+  type DeviceModelGroupsRailTab,
+  type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
@@ -47,7 +55,13 @@ export function UnifiedModelRail({
   providerUsage = null,
   providerGroupUsage,
   remoteSources,
+  pluginEngineTabs,
+  modelGroupDeviceTabs,
 }: {
+  /** 插件引擎格的名字与图标，按 providerId (与所在电脑)对应 `plugin-engine` 格。 */
+  pluginEngineTabs?: readonly PluginEngineRailTab[];
+  /** 另一台电脑的「模型组」格的名字(悬停与读屏)。 */
+  modelGroupDeviceTabs?: readonly DeviceModelGroupsRailTab[];
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
   onSelect: (item: UnifiedRailItem) => void;
@@ -90,10 +104,14 @@ export function UnifiedModelRail({
         // 设计稿 .rail-sep:「★/同引擎」与「全部/来源」两段之间的 22px 细线;
         // 远程供应商每台电脑一段,段首同样一条细线。
         const previous = index > 0 ? items[index - 1] : undefined;
+        // 另一台电脑上的插件引擎格与那台的供应商格同属一段。
+        const itemDeviceId = railItemDeviceId(item);
         const separatorBefore =
           item.kind === 'all' ||
-          (item.kind === 'remote-provider' &&
-            (previous?.kind !== 'remote-provider' || previous.deviceId !== item.deviceId));
+          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId));
+        const engineTab = item.kind === 'plugin-engine'
+          ? pluginEngineTabs?.find((tab) => tab.providerId === item.providerId && (tab.deviceId ?? null) === (item.deviceId ?? null))
+          : undefined;
         const engineOption =
           item.kind === 'engine' ? agentOptionOf(engineOfAgentKind(item.agent)) : null;
         const railProviders =
@@ -148,6 +166,14 @@ export function UnifiedModelRail({
                   })
                 : item.kind === 'all'
                   ? t('newChat.modelSelector.unified.railAll')
+                  : item.kind === 'model-groups' && item.deviceId
+                    ? t('modelGroups.picker.deviceTitle', {
+                        device: modelGroupDeviceTabs?.find((tab) => tab.deviceId === item.deviceId)?.name ?? '',
+                      })
+                  : item.kind === 'model-groups'
+                    ? t('modelGroups.title')
+                  : item.kind === 'plugin-engine'
+                    ? (engineTab?.name ?? t('newChat.pluginEngines.genericName'))
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
@@ -194,12 +220,33 @@ export function UnifiedModelRail({
                 <engineOption.Mark size={14} className="shrink-0" />
               ) : item.kind === 'all' ? (
                 <LayoutGrid size={16} />
+              ) : item.kind === 'model-groups' && item.deviceId ? (
+                // 另一台电脑的模式：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <Waypoints size={16} />
+                </RemoteSourceMark>
+              ) : item.kind === 'model-groups' ? (
+                <Waypoints size={16} />
+              ) : item.kind === 'plugin-engine' && item.deviceId ? (
+                // 另一台电脑上的引擎：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
+                </RemoteSourceMark>
+              ) : item.kind === 'plugin-engine' ? (
+                // 和供应商格一样画来源自己的标：提供引擎的插件图标(没有时画通用拼图，跟随格的前景色)。
+                <PluginEngineIcon
+                  size={16}
+                  iconDataUrl={engineTab?.iconDataUrl}
+                  className=""
+                />
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (
-                <RemoteSourceMark>
-                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
-                </RemoteSourceMark>
+                !item.providerId && isProviderShareAgentDeviceId(item.deviceId) ? <Share2 size={16} /> : (
+                  <RemoteSourceMark>
+                    <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                  </RemoteSourceMark>
+                )
               ) : null}
             </RailButton>
           </div>
@@ -230,8 +277,18 @@ function RailButton(props: RailButtonProps) {
   if (props.shareDeviceId) {
     return <SharedProviderQuotaButton {...props} shareDeviceId={props.shareDeviceId} />;
   }
+  // Groups already resolve an executing member. Keep that member's runtime
+  // mirror, rather than previewing a new allocation on the same computer.
+  if (props.provider && props.groupNote)
+    return <ProviderQuotaButton {...props} provider={props.provider} />;
   return props.provider ? (
-    <ProviderQuotaButton {...props} provider={props.provider} />
+    <ModelPickerAccountBoundary
+      providerId={props.provider.auth?.method === 'oauth' ? props.provider.id : ''}
+      subscriptionPool={!!props.provider.subscriptionPool || !!props.provider.subscriptionAccountPool}
+      deviceId={props.usageDeviceId}
+    >
+      <ProviderQuotaButton {...props} provider={props.provider} />
+    </ModelPickerAccountBoundary>
   ) : (
     <RailButtonView {...props} />
   );
@@ -243,8 +300,28 @@ function SharedProviderQuotaButton(props: RailButtonProps & { shareDeviceId: str
 }
 
 function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }) {
-  const quota = useProviderWeeklyQuota(props.provider, { deviceId: props.usageDeviceId });
-  return <RailButtonView {...props} quota={quota} />;
+  const { t } = useTranslation();
+  const pickerAccount = useModelPickerAccount(props.provider.id, props.usageDeviceId);
+  const usage = useProviderUsageSnapshots(props.provider, { deviceId: props.usageDeviceId ?? null });
+  const quota = useWeeklyQuotaFromSnapshots(usage);
+  const pool = useModelPoolQuota(props.provider.id, props.usageDeviceId, usage);
+  const identity = pool?.isPool
+    ? t('providerGroup.member.accountCount', { count: pool.members.length })
+    : pool && pickerAccount ? pool.members[0].identity
+    : pickerAccount
+      ? pickerAccount.identity
+      : props.accountIdentity;
+  const displayedQuota = pool
+    ? pool.average === null
+      ? null
+      : {
+          usedPercent: 100 - pool.average,
+          resetsAt: pool.isPool ? null : pool.members[0]?.resetsAt ?? null,
+        }
+    : quota;
+  return (
+    <RailButtonView {...props} accountIdentity={identity} quota={displayedQuota} pool={pool} />
+  );
 }
 
 function RailButtonView({
@@ -257,31 +334,53 @@ function RailButtonView({
   disabled,
   children,
   quota,
+  pool,
 }: RailButtonProps & {
   quota?: ReturnType<typeof useProviderWeeklyQuota>;
+  pool?: ModelPoolQuota | null;
 }) {
   const { t } = useTranslation();
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
-  const quotaLabel =
-    remaining === null
+  const quotaLabel = pool?.hasAccountDetails
+    ? pool.label
+    : remaining === null
       ? null
       : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: remaining })}`;
   const reset = formatQuotaResetCountdown(quota?.resetsAt, Date.now(), t);
   // 供应商组：组名不带某一台的账号，账号跟在「当前在 {电脑} 上运行」后面。
   const displayLabel = groupNote ? label : providerAccountLabel(label, accountIdentity);
   const note = groupNote ? providerAccountLabel(groupNote, accountIdentity) : null;
-  const description = [note, quotaLabel].filter(Boolean).join(' · ');
-  const tooltip =
-    quotaLabel || note ? (
-      <>
-        <div>{displayLabel}</div>
-        {note && <div>{note}</div>}
-        {quotaLabel && <div>{quotaLabel}</div>}
-        {reset && <div>{reset}</div>}
-      </>
-    ) : (
-      displayLabel
-    );
+  const accountLines = pool?.hasAccountDetails ? pool.members.map((member) =>
+    [
+      member.identity,
+      member.remaining === null
+        ? '—'
+        : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: member.remaining })}`,
+      member.fiveHourLabel,
+      member.recovery,
+      member.reset,
+      member.resetSoon ? t('subscriptionAccounts.quotaResetSoon') : null,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  ) : undefined;
+  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
+    <>
+      <div>{displayLabel}</div>
+      {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}
+      <ModelPoolQuotaDetails pool={pool} accountInTitle={!groupNote && !!accountIdentity && displayLabel.includes(accountIdentity)} />
+    </>
+  ) : quotaLabel || note ? (
+    <>
+      <div>{displayLabel}</div>
+      {note && <div>{note}</div>}
+      {quotaLabel && <div>{quotaLabel}</div>}
+      {reset && <div>{reset}</div>}
+    </>
+  ) : (
+    displayLabel
+  );
   return (
     <Tip
       text={tooltip}
@@ -298,7 +397,7 @@ function RailButtonView({
         aria-pressed={isActive}
         data-rail-item={itemKey}
         className={cn(
-          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-[9px] transition-colors',
+          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-lg transition-colors',
           isActive
             ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
             : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
@@ -306,6 +405,15 @@ function RailButtonView({
         )}
       >
         <span className="flex h-[24px] items-center justify-center">{children}</span>
+        {(pool?.warning || !!pool?.resetSoonCount) && (
+          <span
+            aria-hidden
+            data-pool-reset-soon={pool?.resetSoonCount ? '' : undefined}
+            data-quota-warning={pool?.warning?.kind}
+            className={cn('pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full',
+              pool?.warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
+          />
+        )}
         {quota && (
           <span
             aria-hidden="true"

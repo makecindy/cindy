@@ -4,12 +4,18 @@ export default {
   name: 'relay-service',
   entry: './fixture.tsx',
   viewport: { width: 760, height: 720 },
-  real: 'RelayServicePanel and useSelfHostedRelayState: route list with one row per server, icon-only switch/rename/remove actions, server details, deploy, rename, join and host dialogs',
-  notCovered: 'Real SSH, deployment, certificate issuance, joining and switching; covered separately by deployment/runtime unit tests',
+  real: 'RelayServicePanel, useSelfHostedRelayState, RelayShareDialog and RelayShareGlobalHost: route list with one row per server, icon-only share/switch/rename/remove actions, server details, pending requests, share, approval, deploy, rename, join and host dialogs',
+  notCovered: 'Real SSH, deployment, certificate issuance, join codes, joining and switching; covered separately by deployment/runtime unit tests',
   cases: {
     default: { about: 'Official relay in use; a deployed server relay is available to switch to' },
-    server: { about: 'Server relay in use: details with devices, certificate and version', viewport: { width: 360, height: 900 } },
-    host: { about: 'This computer is the relay: settings icon and its add-device area' },
+    server: { about: 'Server relay in use: details with devices, certificate and version; no QR code or join link on the page', viewport: { width: 360, height: 900 } },
+    host: { about: 'This computer is the relay: share and settings icons' },
+    share: { about: 'Sharing the relay in use opens a dialog with a one-time link, QR code and countdown; regenerating issues a new link' },
+    pending: { about: 'A join request pops the approval dialog; Decide later keeps it in the relay row, where Review reopens it and approving clears it' },
+    account: { about: 'A relay in use on another computer of this account is listed with only a switch icon; switching asks once and joins without a link' },
+    tenant: { about: 'Another account asks to use the relay: the approval names the account and explains its separate line; the shared-with list allows stopping after a confirmation' },
+    shared: { about: 'A relay shared by another account is in use: it is labelled as shared, has no share icon, and leaving warns that this account\'s devices on it disconnect' },
+    'share-own': { about: 'A relay that cannot be shared with other accounts yet says so in the share dialog' },
     'retry-replace': { about: 'A failed replacement rechecks the server and asks again before clearing its relay' },
     'retry-own': { about: 'A failed deployment retains its elapsed time and retries its own relay without clearing it' },
     'retry-existing': { about: 'An existing complete relay keeps an entry to view and retry a redeployment that failed before changing the server' },
@@ -170,6 +176,111 @@ export default {
     } else if (ui.case === 'server') {
       assert.ok(await serverRow.getByText(await ui.t(`${relay}.manage.deviceCount`, { count: 3 }), { exact: true }).isVisible());
       assert.equal(await serverRow.getByRole('button', { name: removeLabel, exact: true }).count(), 1);
+      // 用户 2026-11-09:平时只显示线路信息,分享走弹窗;正在用的中转行上是分享图标,页面上没有二维码和链接。
+      const labels = await serverButtons.evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
+      assert.deepEqual(labels.slice(0, 3), [await ui.t(`${relay}.share.action`), await ui.t(`${route}.rename`), removeLabel]);
+      assert.equal(await page.getByRole('img', { name: await ui.t(`${relay}.share.qrAlt`) }).count(), 0);
+      // 用户 2026-11-11:详情里要看得出中转支持哪些连接、这台电脑现在走的是哪个。
+      // 页面把 Agent-Net 的连字符换成不折行连字符，窄屏时名字不会被拆到两行。
+      const keepName = (text) => text.replace(/Agent-Net/g, 'Agent‑Net');
+      await serverRow.getByText(keepName(await ui.t(`${relay}.manage.protocolsBoth`)), { exact: true }).waitFor();
+      await serverRow.getByText(await ui.t(`${relay}.manage.connection`), { exact: true }).waitFor();
+      await serverRow.getByText('Device Link', { exact: true }).waitFor();
+      await serverRow.getByText(keepName(await ui.t(`${relay}.manage.connectionLegacy`)), { exact: true }).waitFor();
+    } else if (ui.case === 'share') {
+      await serverRow.getByRole('button', { name: await ui.t(`${relay}.share.action`), exact: true }).click();
+      const dialog = page.getByTestId('relay-share-dialog');
+      await dialog.getByRole('img', { name: await ui.t(`${relay}.share.qrAlt`), exact: true }).waitFor({ timeout: 3_000 });
+      const field = dialog.getByRole('textbox', { name: await ui.t(`${relay}.share.fieldLabel`), exact: true });
+      assert.match(await field.inputValue(), /c=first-/);
+      await ui.capture('share-dialog');
+      await dialog.getByRole('button', { name: await ui.t(`${relay}.share.regenerate`), exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('[data-testid="relay-share-dialog"] input')?.value.includes('c=second-'), null, { timeout: 3_000 });
+      await dialog.getByRole('button', { name: await ui.t(`${relay}.share.done`), exact: true }).click();
+      await dialog.waitFor({ state: 'detached' });
+    } else if (ui.case === 'pending') {
+      // 申请自动弹出审批;「稍后处理」后留在中转那一行里,「处理」重新打开,同意后消失。
+      const dialog = page.getByTestId('relay-approve-dialog');
+      await dialog.waitFor({ timeout: 3_000 });
+      assert.equal(await dialog.getByTestId('provider-share-pairing-code').innerText(), '5461');
+      await ui.capture('approve-dialog');
+      await dialog.getByRole('button', { name: await ui.t(`${relay}.approve.later`), exact: true }).click();
+      await dialog.waitFor({ state: 'detached' });
+      const review = serverRow.getByRole('button', { name: await ui.t(`${relay}.requests.open`), exact: true });
+      await review.waitFor({ timeout: 3_000 });
+      await ui.capture('pending-in-row');
+      await review.click();
+      await dialog.waitFor({ timeout: 3_000 });
+      await dialog.getByRole('button', { name: await ui.t(`${relay}.approve.approve`), exact: true }).click();
+      await dialog.waitFor({ state: 'detached' });
+      await review.waitFor({ state: 'detached', timeout: 3_000 });
+    } else if (ui.case === 'account') {
+      // 用户 2026-11-09:同账号的设备不用链接,直接出现那台电脑的中转,点切换就加入;分享和管理只在那台电脑上。
+      const device = 'Lizi MacBook Pro';
+      const row = page.getByRole('listitem').filter({ hasText: 'Home relay' });
+      await row.getByText(await ui.t(`${route}.accountManagedOn`, { device }), { exact: true }).waitFor();
+      assert.deepEqual(
+        await row.getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label'))),
+        [await ui.t(`${route}.useNamed`, { name: 'Home relay' })],
+      );
+      await ui.capture('account-row');
+      await row.getByRole('button', { name: await ui.t(`${route}.useNamed`, { name: 'Home relay' }), exact: true }).click();
+      const confirmation = page.getByRole('alertdialog', { name: await ui.t(`${route}.switchTitle`, { name: 'Home relay' }), exact: true });
+      await confirmation.getByText(await ui.t(`${route}.switchToAccount`, { device }), { exact: true }).waitFor();
+      await ui.capture('account-confirm');
+      await confirmation.getByRole('button', { name: await ui.t(`${route}.switchConfirm`), exact: true }).click();
+      await page.locator('li[aria-current="true"]').filter({ hasText: 'Home relay' }).waitFor({ timeout: 3_000 });
+      // 加入后仍是那一行被选中,不再另起一行「已加入」。
+      assert.equal(await page.getByRole('listitem').filter({ hasText: 'Home relay' }).count(), 1);
+    } else if (ui.case === 'tenant') {
+      // 用户 2026-11-09:给非同账号分享。审批说清楚对方拿到的是自己独立的线路;分享给的账号可以随时停止。
+      const dialog = page.getByTestId('relay-approve-dialog');
+      await dialog.getByText(await ui.t(`${relay}.approve.titleAccount`, { account: 'Bob', relay: 'Test' }), { exact: true }).waitFor({ timeout: 3_000 });
+      await dialog.getByText(await ui.t(`${relay}.approve.calloutAccount`, { relay: 'Test' }), { exact: true }).waitFor();
+      assert.equal(await dialog.getByTestId('provider-share-pairing-code').innerText(), '0712');
+      await ui.capture('approve-account');
+      await dialog.getByRole('button', { name: await ui.t(`${relay}.approve.approve`), exact: true }).click();
+      await dialog.waitFor({ state: 'detached' });
+      const tenants = page.getByTestId('relay-tenants');
+      await tenants.getByText('Bob', { exact: true }).waitFor({ timeout: 3_000 });
+      const alice = tenants.getByRole('listitem').filter({ hasText: 'Alice' });
+      await alice.getByText(await ui.t(`${relay}.tenants.devices`, { count: 2 }), { exact: false }).waitFor();
+      await ui.capture('tenants');
+      await alice.getByRole('button', { name: await ui.t(`${relay}.tenants.revoke`), exact: true }).click();
+      const confirmation = page.getByRole('alertdialog', { name: await ui.t(`${relay}.tenants.revokeTitle`, { account: 'Alice' }), exact: true });
+      await confirmation.getByRole('button', { name: await ui.t(`${relay}.tenants.revoke`), exact: true }).click();
+      // The confirmation temporarily hides the background from the accessibility
+      // tree. Wait for its close before counting the remaining account rows.
+      await confirmation.waitFor({ state: 'detached' });
+      await alice.waitFor({ state: 'detached', timeout: 3_000 });
+      assert.equal(await tenants.getByRole('listitem').count(), 1);
+    } else if (ui.case === 'shared') {
+      const row = page.getByRole('listitem').filter({ hasText: 'Lizi relay' });
+      assert.equal(await row.getAttribute('aria-current'), 'true');
+      await row.getByText(await ui.t(`${route}.kindShared`), { exact: true }).waitFor();
+      await row.getByText(await ui.t(`${route}.sharedBy`, { name: 'Lizi' }), { exact: true }).waitFor();
+      // 别人分享来的中转不能再分享出去。
+      assert.equal(await row.getByRole('button', { name: await ui.t(`${relay}.share.action`), exact: true }).count(), 0);
+      await page.getByText(await ui.t(`${route}.sharedOwnDevicesHint`), { exact: true }).waitFor();
+      await ui.capture('shared-row');
+      const official = await ui.t(`${relay}.summary.official`);
+      await page.getByRole('button', { name: await ui.t(`${route}.useNamed`, { name: official }), exact: true }).click();
+      const confirmation = page.getByRole('alertdialog', { name: await ui.t(`${relay}.confirm.sharedOwnerTitle`), exact: true });
+      await confirmation.getByText(await ui.t(`${relay}.confirm.sharedOwnerDescription`, { name: 'Lizi relay' }), { exact: true }).waitFor();
+      await ui.capture('shared-leave');
+      await confirmation.getByRole('button', { name: await ui.t(`${relay}.actions.useOfficial`), exact: true }).click();
+      await page.getByRole('listitem').filter({ hasText: 'Lizi relay' }).waitFor({ state: 'detached', timeout: 3_000 });
+    } else if (ui.case === 'share-own') {
+      await serverRow.getByRole('button', { name: await ui.t(`${relay}.share.action`), exact: true }).click();
+      const dialog = page.getByTestId('relay-share-dialog');
+      await dialog.getByTestId('relay-share-own-account-only').waitFor({ timeout: 3_000 });
+      assert.equal(await dialog.getByTestId('relay-share-own-account-only').innerText(), await ui.t(`${relay}.share.ownAccountOnly`));
+      // 2026-11-10 实机:只能给自己设备用(V1)时,弹窗不能再说「对方账号可以用」「全程加密」。
+      await dialog.getByText(await ui.t(`${relay}.share.descriptionOwn`), { exact: true }).waitFor();
+      for (const key of ['description', 'calloutIsolation', 'calloutPrivacy', 'scanHint']) {
+        assert.equal(await dialog.getByText(await ui.t(`${relay}.share.${key}`), { exact: true }).count(), 0, `own-only dialog shows ${key}`);
+      }
+      await ui.capture('share-own-account-only');
     } else {
       const settings = page.getByRole('button', { name: await ui.t(`${relay}.actions.editHost`), exact: true });
       await settings.click();

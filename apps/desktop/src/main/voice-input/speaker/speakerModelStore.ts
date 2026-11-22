@@ -11,12 +11,22 @@ import {
   type SpeakerModelAsset,
 } from '@cindy/voice-input-core';
 
-import { DownloadError, createDownloader, type DownloadOptions, type DownloadResult } from '../../downloader';
+import {
+  DownloadError,
+  createDownloadProgressReporter,
+  createDownloader,
+  type DownloadOptions,
+  type DownloadProgressReporter,
+  type DownloadResult,
+} from '../../downloader';
 import type { VoiceSpeakerFilterStatus } from '../../../shared/voiceSpeakerFilter';
 
 export type SpeakerModelPaths = { vadModel: string; embeddingModel: string };
 
-type ModelState = Pick<VoiceSpeakerFilterStatus, 'modelState' | 'downloadedBytes' | 'totalBytes' | 'downloadError'>;
+type ModelState = Pick<
+  VoiceSpeakerFilterStatus,
+  'modelState' | 'downloadedBytes' | 'totalBytes' | 'downloadError' | 'download'
+>;
 
 type SpeakerModelStoreOptions = {
   /** Directory owned by this store; models are shared by every account. */
@@ -41,6 +51,7 @@ export class SpeakerModelStore {
   private inflight: Promise<void> | null = null;
   private abort: AbortController | null = null;
   private progress = new Map<string, number>();
+  private reporter: DownloadProgressReporter | null = null;
   private lastError: VoiceSpeakerFilterStatus['downloadError'];
   private readonly checkedFiles = new Map<string, { file: string; stamp: string; valid: boolean }>();
 
@@ -59,11 +70,12 @@ export class SpeakerModelStore {
 
   getState(): ModelState {
     if (this.inflight) {
-      let downloaded = 0;
-      for (const asset of SPEAKER_MODEL_ASSETS) {
-        downloaded += this.isInstalled(asset) ? asset.bytes : Math.min(asset.bytes, this.progress.get(asset.sha256) ?? 0);
-      }
-      return { modelState: 'downloading', downloadedBytes: downloaded, totalBytes: SPEAKER_MODEL_TOTAL_BYTES };
+      return {
+        modelState: 'downloading',
+        downloadedBytes: this.downloadedBytes(),
+        totalBytes: SPEAKER_MODEL_TOTAL_BYTES,
+        ...(this.reporter ? { download: this.reporter.snapshot() } : {}),
+      };
     }
     if (this.getModelPaths()) {
       return { modelState: 'ready', downloadedBytes: SPEAKER_MODEL_TOTAL_BYTES, totalBytes: SPEAKER_MODEL_TOTAL_BYTES };
@@ -84,6 +96,13 @@ export class SpeakerModelStore {
     this.abort = controller;
     this.lastError = undefined;
     this.progress = new Map();
+    // Throttled pushes to the renderer; the final state is sent on completion.
+    this.reporter = createDownloadProgressReporter({
+      initialPhase: 'preparing',
+      total: SPEAKER_MODEL_TOTAL_BYTES,
+      throttleMs: 250,
+      emit: () => this.options.onChange?.(),
+    });
     const run = this.downloadAll(controller.signal).finally(() => {
       if (this.inflight === run) {
         this.inflight = null;
@@ -109,9 +128,15 @@ export class SpeakerModelStore {
     const dir = this.options.dir();
     try {
       fs.mkdirSync(dir, { recursive: true });
+      // Counted here rather than via isInstalled(): no sync file checks per progress event.
+      let finishedBytes = 0;
       for (const asset of SPEAKER_MODEL_ASSETS) {
-        if (this.isInstalled(asset)) continue;
-        let lastNotified = 0;
+        if (this.isInstalled(asset)) {
+          finishedBytes += asset.bytes;
+          continue;
+        }
+        const reporter = this.reporter;
+        const before = finishedBytes;
         await this.download({
           url: `${base}/${speakerModelCdnPath(asset)}`,
           targetPath: this.localPath(asset),
@@ -123,14 +148,17 @@ export class SpeakerModelStore {
           signal,
           onProgress: (event) => {
             this.progress.set(asset.sha256, event.loaded);
-            // Throttle pushes to the renderer; the final state is sent on completion.
-            const now = Date.now();
-            if (now - lastNotified >= 250) {
-              lastNotified = now;
-              this.options.onChange?.();
-            }
+            reporter?.setBytes(
+              before + Math.min(asset.bytes, event.loaded),
+              SPEAKER_MODEL_TOTAL_BYTES,
+              event.speedBps,
+            );
           },
+          ...(reporter
+            ? { onRetry: reporter.callbacks.onRetry, onVerifying: reporter.callbacks.onVerifying }
+            : {}),
         });
+        finishedBytes += asset.bytes;
         this.options.logger?.info('speaker model downloaded', { file: asset.fileName, bytes: asset.bytes });
       }
       this.removeStaleFiles(dir);
@@ -142,6 +170,16 @@ export class SpeakerModelStore {
       });
       throw error;
     }
+  }
+
+  private downloadedBytes(): number {
+    let downloaded = 0;
+    for (const asset of SPEAKER_MODEL_ASSETS) {
+      downloaded += this.isInstalled(asset)
+        ? asset.bytes
+        : Math.min(asset.bytes, this.progress.get(asset.sha256) ?? 0);
+    }
+    return downloaded;
   }
 
   private localPath(asset: SpeakerModelAsset): string {

@@ -111,24 +111,26 @@ describe('companion profile uploader', () => {
 
   it('leaves a part that could not be read untouched in the cloud, and refuses a hand-over', async () => {
     const t = setup();
-    const routine = { key: 'companion.routine.v1:r1', value: { id: 'r1' } };
-    t.setValues([profile('soul'), routine]);
+    const workbench = { key: 'companion.workbench.v1', value: { directories: [], tasks: { t: {} } } };
+    t.setValues([profile('soul'), workbench]);
     await t.uploader.syncBot('bot', 'actor');
-    // The routine engine is not ready this time: the profile still goes up, the routine is not tombstoned.
-    t.setValues([profile('soul v2'), { key: 'companion.routine.v1:', value: null, unread: true }]);
+    // The workbench cannot be read this time: the profile still goes up, the workbench is not tombstoned.
+    t.setValues([profile('soul v2'), { key: 'companion.workbench.v1', value: null, unread: true }]);
     await t.uploader.syncBot('bot', 'actor');
     expect(t.writes().map(w => [w.key, w.value === null])).toEqual([
-      ['companion.profile.v1', false], ['companion.routine.v1:r1', false], ['companion.profile.v1', false]]);
+      ['companion.profile.v1', false], ['companion.workbench.v1', false], ['companion.profile.v1', false]]);
     await expect(t.uploader.syncBot('bot', 'actor', Number.POSITIVE_INFINITY, { requireAll: true })).rejects.toThrow('COMPANION_READ_INCOMPLETE');
   });
 
-  it('clears a todo that left the travelling window from the cloud', async () => {
+  // Teammates no longer keep todos, and routines no longer go up (2026-11-08: their scheduled work
+  // is the project's automations). Rows this computer uploaded before are cleared from the cloud.
+  it.each(['companion.todo.v1:todo:1', 'companion.routine.v1:r1'])('clears %s, which this computer uploaded before', async key => {
     const t = setup();
-    t.setValues([profile('soul'), { key: 'companion.todo.v1:todo:1', value: { id: 'todo:1' } }]);
+    t.setValues([profile('soul'), { key, value: { id: 'x' } }]);
     await t.uploader.syncBot('bot', 'actor');
     t.setValues([profile('soul')]);
     await t.uploader.syncBot('bot', 'actor');
-    expect(t.writes().filter(w => w.key === 'companion.todo.v1:todo:1').map(w => w.value)).toEqual([{ id: 'todo:1' }, null]);
+    expect(t.writes().filter(w => w.key === key).map(w => w.value)).toEqual([{ id: 'x' }, null]);
   });
 
   it('spreads a large first upload over cycles', async () => {

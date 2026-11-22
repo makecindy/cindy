@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  DeviceLinkClient,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
@@ -19,8 +20,13 @@ import {
   PROTOCOL_VERSION,
   type InvokeResultPayload,
   SessionMessageReuse,
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
+  CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
 } from '@cindy/device-link';
 import { versionMessageBody } from '../sessionMessageReuse';
+import { encodeHistoryViewDelta } from '../historyViewDelta';
 
 vi.mock('electron', () => ({
   app: {
@@ -45,7 +51,7 @@ vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch.desktop';
+import { __testing, dropAllControllers, runInvoke, wireInboundDispatch, setHistoryToolNameReader, setRemoteTurnChangeAction } from '../dispatch.desktop';
 import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
@@ -68,8 +74,13 @@ function mkClient(
     sendLinkAccept: vi.fn(),
     closeLink: vi.fn(),
     onFrame: vi.fn(),
+    onInboundPeerReleased: vi.fn(() => () => {}),
     sendPush: over.sendPush ?? vi.fn(),
   };
+}
+
+function readSession(payload: unknown): unknown {
+  return (payload as { sessionId?: unknown } | null)?.sessionId;
 }
 
 const tooLarge = () => new DeviceLinkError('PAYLOAD_TOO_LARGE', 'frame exceeds 2097152 bytes');
@@ -175,6 +186,79 @@ describe('negotiated mobile tool projection', () => {
     expect(payload.resolvedContent).toBe(text);
     expect(row.content.input).toBe(input);
   });
+  // Protocol contract (protocol-compatibility/device-link-tool-event-body-optional.md): each
+  // tool-body rule reaches only the controller that declared it. If not, an undeclared (old) Desktop
+  // would lose result text it may still read, or an old Mobile its tool inputs. Unit tier: production
+  // forwardPush, in-memory client.
+  it('drops tool event text and inputs only for controllers that declared it', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('old', ['session:s1'], 'old', []);
+    subscriptions.subscribe('desktop', ['session:s1'], 'desktop', [CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1]);
+    subscriptions.subscribe('mobile', ['session:s1'], 'mobile', [DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+      CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1, CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1]);
+    const output = 'ok line\n'.repeat(1_000);
+    const plan = { toolUseId: 'plan', toolName: 'update_plan', input: { plan: [{ step: 'Measure', status: 'in_progress' }] } };
+    const pushes: [string, Record<string, unknown>][] = [
+      ['maker:event', { sessionId: 's1', persistId: 'u', event: { type: 'tool_use', data: { toolUseId: 'use', toolName: 'Bash', input: { command: 'pnpm test' } } } }],
+      ['maker:event', { sessionId: 's1', persistId: 'r', resolvedContent: output, event: { type: 'tool_result_full', data: { toolUseId: 'use', fullText: output } } }],
+      ['maker:event', { sessionId: 's1', persistId: 'p', event: { type: 'tool_use', data: plan } }],
+    ];
+    for (const [channel, payload] of pushes) __testing.forwardPush(channel, payload);
+    const to = (dst: string) => client.sendPush.mock.calls.filter((call) => call[0] === dst).map((call) => call[2]);
+
+    expect(to('old')).toEqual(pushes.map(([, payload]) => payload));
+    expect(to('desktop')).toEqual([pushes[0][1],
+      { ...pushes[1][1], event: { type: 'tool_result_full', data: { toolUseId: 'use' } } }, pushes[2][1]]);
+    const [mobileUse, mobileResult, mobilePlan] = to('mobile');
+    expect(mobileUse.event.data).toEqual({ toolUseId: 'use', toolName: 'Bash', input: null });
+    expect(mobileResult).toEqual({ sessionId: 's1', persistId: 'r', event: { type: 'tool_result_full', data: { toolUseId: 'use' } } });
+    expect(mobilePlan.event.data).toEqual(plan);
+  });
+
+  // Protocol contract (protocol-compatibility/device-link-tool-result-live-limit.md): only a controller
+  // that declared tool-result-live-limit-v1 gets a large ordinary live result as head + marker within
+  // 256 KB; results the Desktop row parses whole (cards, process media) and non-detail tools stay
+  // whole. Otherwise an old Desktop would show cut logs, or a card / process-media result would
+  // stop rendering. Unit tier: production forwardPush with an in-memory client.
+  it('limits large ordinary live results only for controllers that declared it', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    const names: Record<string, string> = { bash: 'Bash', failed: 'Bash', card: 'mcp__docs__search', media: 'Bash', agent: 'Agent' };
+    setHistoryToolNameReader((_sessionId, toolUseId) => names[toolUseId] ?? '');
+    try {
+      subscriptions.subscribe('old', ['session:s1'], 'old', []);
+      subscriptions.subscribe('limited', ['session:s1'], 'limited', [CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+        CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1]);
+      subscriptions.subscribe('limit-only', ['session:s1'], 'limit-only', [CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1]);
+      const log = '编译输出 line\n'.repeat(30_000);
+      const card = JSON.stringify({ xdt_card_id: 'card-1', ok: true, rows: 'r'.repeat(300_000) });
+      const media = JSON.stringify({ text: 'x'.repeat(300_000), cindy_process_media: [{ kind: 'image', url: 'https://example.com/a.png' }] });
+      const result = (toolUseId: string, body: string) => ({ sessionId: 's1', persistId: `p-${toolUseId}`, resolvedContent: body,
+        event: { type: 'tool_result_full', data: { toolUseId, fullText: body } } });
+      const failure = `<tool_use_error>${log}</tool_use_error>`;
+      const pushes = [result('bash', log), result('card', card), result('media', media), result('agent', log), result('failed', failure)];
+      for (const payload of pushes) __testing.forwardPush('maker:event', payload);
+      const to = (dst: string) => client.sendPush.mock.calls.filter((call) => call[0] === dst).map((call) => call[2]);
+
+      expect(to('old')).toEqual(pushes);
+      const [bash, cardPush, mediaPush, agentPush, failed] = to('limited');
+      const whole = [cardPush, mediaPush, agentPush];
+      const marker = '\n\n[remote content truncated: live result shows first 256KB]';
+      expect(bash.resolvedContent.endsWith(marker)).toBe(true);
+      expect(Buffer.byteLength(bash.resolvedContent)).toBeLessThanOrEqual(256 * 1024);
+      expect(log.startsWith(bash.resolvedContent.slice(0, -marker.length))).toBe(true);
+      expect(bash.event.data).toEqual({ toolUseId: 'bash' });
+      expect(whole.map((push) => push.resolvedContent)).toEqual([card, media, log]);
+      // A cut failure keeps its marker and the diagnostics the persisted copy would carry.
+      expect(failed.resolvedContent.startsWith('<tool_use_error>')).toBe(true);
+      expect(failed.resolvedContent).toContain('[tool result diagnostics: {"isError":true}]');
+      const [onlyLimited] = to('limit-only');
+      expect(onlyLimited.event.data.fullText).toBe(bash.resolvedContent);
+    } finally {
+      setHistoryToolNameReader(() => '');
+    }
+  });
 });
 
 describe('history detail interest', () => {
@@ -250,6 +334,66 @@ describe('history detail interest', () => {
     client.sendPush.mockClear();
     __testing.forwardPush('maker:event', payload);
     expect(client.sendPush.mock.calls.some(([peer]) => peer === 'changed')).toBe(false);
+  });
+  // Protocol contract (protocol-compatibility/device-link-history-relink-folded.md): with
+  // history-relink-folded-v1 a session that was read and folded keeps folded through a link change
+  // until it is re-read: no details in the offline backlog, boundaries plus the notice that makes it
+  // re-read on the new link.
+  // A never-read or expanded session keeps full pushes (it may render raw rows or the user chose
+  // details); without the notice the folded rows would never appear. Unit tier: production forwardPush.
+  it('keeps a declaring controller folded across a link change until it re-reads', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = mkClient();
+      __testing.setActiveClient(client as never);
+      const topics = ['session:folded', 'session:listed', 'session:failed', 'session:expanded', 'session:unread'];
+      subscriptions.subscribe('relink', topics, 'relink', [CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1]);
+      subscriptions.subscribe('legacy', topics, 'legacy', []);
+      for (const peer of ['relink', 'legacy']) {
+        for (const sessionId of ['folded', 'listed', 'failed']) subscriptions.prepareHistoryView(peer, sessionId)!.update(['work']);
+        const expanded = subscriptions.prepareHistoryView(peer, 'expanded')!;
+        expanded.update(['work']);
+        expanded.setExpanded(['work']);
+      }
+      const detail = (sessionId: string) => ({ sessionId, event: { type: 'thinking', data: { stage: 'final', blockId: 'b', text: 'detail' } } });
+      const events = (peer: string) => client.sendPush.mock.calls.filter(([to, channel]) => to === peer && channel === 'maker:event').map((call) => call[2]);
+
+      for (const peer of ['relink', 'legacy']) subscriptions.clearController(peer);
+      for (const sessionId of ['folded', 'expanded', 'unread']) __testing.forwardPush('maker:event', detail(sessionId));
+      expect(__testing.queuedPushesFor('relink').map((item) => readSession(item.payload))).toEqual(['expanded', 'unread']);
+      expect(__testing.queuedPushesFor('legacy')).toHaveLength(3);
+
+      // Real controllers re-declare their capabilities on the new link.
+      for (const peer of ['relink', 'legacy']) {
+        __testing.handleLinkOpen(client as never, peer, `${peer}-link`, undefined);
+        subscriptions.subscribe(peer, topics, peer, peer === 'relink' ? [CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1] : []);
+      }
+      client.sendPush.mockClear();
+      __testing.forwardPush('maker:event', detail('folded'));
+      expect(events('relink')).toEqual([]);
+      expect(events('legacy')).toEqual([detail('folded')]);
+      await vi.advanceTimersByTimeAsync(600);
+      expect(client.sendPush).toHaveBeenCalledWith('relink', 'maker:history-view-changed', { sessionId: 'folded' });
+
+      // A raw list read or a failed page read on the new link releases the session to full pushes.
+      registry.register('local-db:messages:list', () => []);
+      registry.register('local-db:messages:view', () => { throw new Error('[INTERNAL] read failed'); });
+      expect(await runInvoke('relink', { channel: 'local-db:messages:list', args: ['listed', {}] })).toMatchObject({ ok: true });
+      expect(await runInvoke('relink', { channel: 'local-db:messages:view', args: ['failed', {}] })).toMatchObject({ ok: false });
+      client.sendPush.mockClear();
+      for (const sessionId of ['listed', 'failed']) __testing.forwardPush('maker:event', detail(sessionId));
+      expect(events('relink')).toEqual([detail('listed'), detail('failed')]);
+
+      const reread = subscriptions.prepareHistoryView('relink', 'folded')!;
+      reread.update(['work']);
+      reread.setExpanded(['work']);
+      client.sendPush.mockClear();
+      __testing.forwardPush('maker:event', detail('folded'));
+      expect(events('relink')).toEqual([detail('folded')]);
+    } finally {
+      __testing.reset();
+      vi.useRealTimers();
+    }
   });
   it.each([false, true])('invalidates a sampled pending view even when notice precedes its result: %s', async (finishBeforeNotice) => {
     vi.useFakeTimers();
@@ -1399,4 +1543,55 @@ it('compacts rich answer history into a complete replayable snapshot instead of 
   expect(operation).toMatchObject({ seq: 1, op: 'create', id: 'text', props: { text: '中'.repeat(600) + '80' } });
   expect(result.endsWith('\n```\n')).toBe(true);
   expect(encodedByteLength(result)).toBeLessThan(128 * 1024);
+});
+
+/**
+ * history-view-delta-v1 Host bases are released at the same point as the list delta bases:
+ * `DeviceLinkClient.closeLink(..., 'inbound')` for a controller this Host closes on purpose.
+ * A timeout or an outbound close keeps them, so a reconnecting controller still reads deltas.
+ * Logout (hosting dropped for 'shutdown', then client.stop() clears all list bases) releases every
+ * controller's bases. Without the release, a revoked controller's fingerprints, and after logout
+ * those of a controller that had disconnected, stay in the process until LRU eviction.
+ */
+describe('history delta bases follow the Host closing a controller', () => {
+  it('drops a controller closed on purpose, and every controller on logout', () => {
+    // Never started: closeLink releases per-controller state without a socket.
+    const client = new DeviceLinkClient({
+      getWsUrl: () => 'ws://memory.invalid/device-link', getToken: async () => 'test-token',
+      getHello: () => ({ deviceName: 'host', platform: 'darwin', appVersion: 'test', remoteControlEnabled: true, busy: false }),
+      createWebSocket: () => { throw new Error('not started'); },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const off = wireInboundDispatch(client);
+    const page = { version: 1 as const, hasMore: false, nextCursor: null,
+      items: [{ type: 'messages' as const, key: 'c1', messages: [{ id: 'm1', clientId: 'c1', role: 'user', content: 'hi', createdAt: '2026-11-11T00:00:00.000Z' }] }] };
+    const shape = { keys: ['c1'], fingerprints: ['fp-c1'], running: new Map<string, string>() };
+    const read = (controller: string, base?: string) => {
+      const result = encodeHistoryViewDelta(controller, 'release-s', 'true:true', { version: 1, ...(base ? { base } : {}) }, page, shape);
+      return { same: result.items[0].type === ('same' as string), token: result.historyDelta!.token! };
+    };
+    try {
+      const a = read('release-ctrl-a').token;
+      const b = read('release-ctrl-b').token;
+      client.closeLink('release-ctrl-a', 'transport-timeout', 'inbound');
+      client.closeLink('release-ctrl-a', 'user', 'outbound');
+      expect(read('release-ctrl-a', a).same).toBe(true);
+
+      client.closeLink('release-ctrl-a', 'revoked', 'inbound');
+      const reread = read('release-ctrl-a', a);
+      expect(reread.same).toBe(false);
+      expect(read('release-ctrl-b', b).same).toBe(true);
+      expect(read('release-ctrl-a', reread.token).same).toBe(true);
+
+      // Logout / losing ownership drops every controller on purpose, including one whose link had
+      // already ended normally (kept for its reconnect, so not in any closeLink set any more).
+      const left = read('release-ctrl-left').token;
+      dropAllControllers(client, 'shutdown');
+      expect(read('release-ctrl-left', left).same).toBe(false);
+      expect(read('release-ctrl-b', b).same).toBe(false);
+    } finally {
+      off();
+      client.stop();
+    }
+  });
 });

@@ -32,7 +32,7 @@ import {
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
 import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle, RequestTransform } from './types.js';
 
@@ -108,6 +108,7 @@ let upstreamClose: (() => Promise<void>) | null = null;
 
 afterEach(async () => {
   if (proxy) { await proxy.dispose(); proxy = null; }
+  await closeTestConnections();
   if (upstreamClose) { await upstreamClose(); upstreamClose = null; }
 });
 
@@ -173,6 +174,40 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(json.error.message).toMatch(new RegExp(`connect ECONNREFUSED 127\\.0\\.0\\.1:${port}`));
     expect(json.error.message).toMatch(/nothing is listening on that local port/);
     expect(json.error.message).toMatch(/local proxy or an SSH tunnel/);
+  });
+
+  // 测试价值(unit,真实回环 HTTP):生产入口 createAnthropicCompatProxy 转发 /responses;
+  // 上游在请求体还没传完时关掉连接,客户端收 502「upstream unreachable: write EPIPE」。
+  // 2026-11-19 Codex 远程压缩反复以此失败,日志只有错误文案,分不清是请求过大、复用了
+  // 失效连接还是超时;现有用例只覆盖回环 ECONNREFUSED。最小失败输入:4 MiB 请求体,
+  // 上游收到首块数据即断开 → 失败日志须带字节数、耗时、连接是否复用,且不含 base path / query。
+  it('logs size, timing and connection reuse when the upstream drops the connection mid-upload', async () => {
+    const server = createServer((req) => {
+      req.once('data', () => req.socket.destroy());
+    });
+    const port = await listenOnAvailableLoopbackPort(server);
+    upstreamClose = () => new Promise<void>((r) => server.close(() => r()));
+    const errors: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    proxy = await createAnthropicCompatProxy({
+      upstream: `http://127.0.0.1:${port}/base?key=secret-in-query`,
+      transformRequest: [],
+      logger: { error: (msg, ctx) => errors.push({ msg, ctx }) },
+    });
+
+    const payload = { model: 'test-model', input: 'x'.repeat(4 * 1024 * 1024) };
+    const result = await post(proxy.url, payload);
+
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.message).toMatch(/^upstream unreachable: /);
+    const failure = errors.find((e) => e.msg === 'upstream request failed');
+    expect(failure?.ctx).toMatchObject({
+      upstreamOrigin: `http://127.0.0.1:${port}`,
+      bodyBytes: Buffer.byteLength(JSON.stringify(payload)),
+      reusedSocket: false,
+      elapsedMs: expect.any(Number),
+    });
+    expect(failure?.ctx?.errorCode).toMatch(/^(?:EPIPE|ECONNRESET)$/);
+    expect(JSON.stringify(failure?.ctx)).not.toContain('secret-in-query');
   });
 
   it('pipes successful response bodies through a request-scoped transform', async () => {

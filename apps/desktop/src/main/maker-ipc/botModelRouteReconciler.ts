@@ -2,12 +2,12 @@ import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline
 import { ScheduledModelSelectionBusyError } from './scheduledModelSelection';
 import { getSessionRuntimeControlSnapshot } from './sessionRuntimeControl';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 
 interface RuntimeRoute {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   effort: string | null;
@@ -21,6 +21,8 @@ interface BotRouteState {
   scheduledModelBaseline?: string | null;
   followsCindyDefault?: boolean;
   next?: RuntimeRoute;
+  /** The model groups this chain uses, as configured; editing them re-picks like a profile change. */
+  modelGroupsSignature?: string;
 }
 
 interface RouteApplyOptions {
@@ -29,7 +31,13 @@ interface RouteApplyOptions {
 
 function configuredKey(state: BotRouteState, chain = state.chain): string {
   // Restore defaults is a configuration change even when its routes are equal.
-  return JSON.stringify([chain, state.followsCindyDefault === true]);
+  // Without model groups the key stays exactly as before, so upgrading does not re-apply.
+  // A group entry is decided by its group; its saved model is only the fallback. Filling that in
+  // (the settings preview saves it right after the group) is the same choice, not one to pick again.
+  return JSON.stringify(state.modelGroupsSignature === undefined
+    ? [chain, state.followsCindyDefault === true]
+    : [chain.map((route) => (route.modelGroup ? { modelGroup: route.modelGroup } : route)),
+      state.followsCindyDefault === true, state.modelGroupsSignature]);
 }
 
 function configuredRoute(
@@ -45,6 +53,9 @@ function configuredRoute(
   // Following defaults must not undo a working fallback on every send. Only a
   // changed chain or an explicit save should supersede the accepted route.
   if (!isDraftChange && state.hasRuntimeOverride && (previous === undefined || previous === key)) return null;
+  // The task owns its model: a configuration already applied here is not applied again,
+  // so a model picked in the task stands until the teammate's configuration changes.
+  if (!isDraftChange && previous === key) return null;
   const primary = chain[0];
   if (!primary) return null;
   return {
@@ -80,6 +91,13 @@ export function createBotModelRouteApplier(deps: {
   onApplied(sessionId: string): Promise<void>;
 }) {
   return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<RuntimeRoute> => {
+    // A same-plugin model change on the same location goes directly to ACP. Keep the saved choice pending until that prompt is finished.
+    if (current.agentKind === 'acp' && route.agentKind === 'acp'
+      && current.providerId === route.providerId
+      && (current.agentDeviceId ?? null) === (route.agentDeviceId ?? null)
+      && !deps.isIdle(sessionId)) {
+      throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
+    }
     const resolved = await deps.stage(sessionId, route, current) ?? route;
     if (deps.isIdle(sessionId)) await deps.applyPendingSwitch(sessionId);
     // Same-Harness choices wait in runtime control, not the Harness registry.
@@ -105,13 +123,40 @@ export function createBotModelRouteReconciler(deps: {
   readAppliedGroup?(sessionId: string): Promise<{ providerId: string; groupDeviceId: string | null } | null>;
   /** An accepted permanent choice supersedes temporary preferences, even without a switch. */
   onSelectionAccepted?(sessionId: string, expectedBaseline?: string | null): Promise<void | boolean>;
+  /** Durable record of the configuration last applied to each task, kept across restarts. */
+  applied?: { get(sessionId: string): Promise<string | undefined>; set(sessionId: string, key: string): Promise<void> };
+  /**
+   * The primary entry is a model group: its own rule picks the source (model-groups.md §6.2).
+   * null keeps the saved route. `commit` records the pick once the route is actually applied;
+   * previews pass dryRun and never commit.
+   */
+  pickModelGroup?(groupId: string, saved: RuntimeRoute, options: { dryRun: boolean }):
+    Promise<{ route: RuntimeRoute; commit(): void } | null>;
 }) {
   let owner: string | undefined;
   const configured = new Map<string, string>();
   const revisions = new Map<string, number>();
   const inFlight = new Map<string, Promise<void>>();
-  const resolveConfiguredRoute = async (sessionId: string, state: BotRouteState, previous: string | undefined, chain = state.chain) => {
-    const route = configuredRoute(state, previous, chain);
+  const withModelGroupPick = async (
+    route: RuntimeRoute | null,
+    chain: readonly BotModelRoute[],
+    picked?: (commit: () => void) => void,
+  ): Promise<RuntimeRoute | null> => {
+    const groupId = chain[0]?.modelGroup;
+    if (!route || !groupId || !deps.pickModelGroup) return route;
+    const pick = await deps.pickModelGroup(groupId, route, { dryRun: !picked });
+    if (!pick) return route;
+    picked?.(pick.commit);
+    return pick.route;
+  };
+  const resolveConfiguredRoute = async (
+    sessionId: string,
+    state: BotRouteState,
+    previous: string | undefined,
+    chain = state.chain,
+    picked?: (commit: () => void) => void,
+  ) => {
+    const route = await withModelGroupPick(configuredRoute(state, previous, chain), chain, picked);
     // A committed member is the saved group choice in execution, not a model
     // change. Preserve it after failover/reopen; explicit saves and drafts win.
     if (!route || state.next || (previous !== undefined && previous !== configuredKey(state))
@@ -154,12 +199,14 @@ export function createBotModelRouteReconciler(deps: {
         }
         const key = configuredKey(state);
         const previous = parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
-          ? '' : configured.get(sessionId);
-        const route = await resolveConfiguredRoute(sessionId, state, previous);
+          ? '' : configured.get(sessionId) ?? await deps.applied?.get(sessionId).catch(() => undefined);
+        let commitPick: (() => void) | undefined;
+        const route = await resolveConfiguredRoute(sessionId, state, previous, undefined, (commit) => { commitPick = commit; });
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
         if (!route) {
           configured.set(sessionId, key);
+          await deps.applied?.set(sessionId, key).catch(() => {});
           return;
         }
         const current = state.current;
@@ -182,7 +229,10 @@ export function createBotModelRouteReconciler(deps: {
         }
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
+        // The group's pick was applied: record it (advances「轮流」, writes「最近的选择」).
+        commitPick?.();
         configured.set(sessionId, key);
+        await deps.applied?.set(sessionId, key).catch(() => {});
         return;
       }
     };
@@ -204,6 +254,15 @@ export function createBotModelRouteReconciler(deps: {
   };
   return Object.assign(reconcile, {
     invalidate,
+    /** A model chosen in the task itself (composer or an explicit request) stands until the configuration changes. */
+    async acceptTaskChoice(sessionId: string): Promise<void> {
+      const epoch = syncOwner();
+      const state = await deps.read(sessionId, 'apply');
+      if (!state || deps.ownerEpoch() !== epoch) return;
+      const key = configuredKey(state);
+      configured.set(sessionId, key);
+      await deps.applied?.set(sessionId, key).catch(() => {});
+    },
     /** Called under the send lock only after the frozen route is unavailable.
      * Resolve the real saved profile (including routine/location choices), never
      * the session row that may still contain the automation's temporary route. */
@@ -223,7 +282,9 @@ export function createBotModelRouteReconciler(deps: {
       if (state.scheduledModelBaseline !== expectedBaseline || !baseline || baseline.pendingBotProfileVersion) {
         throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before recovery');
       }
-      const route = configuredRoute(state, '');
+      let commitPick: (() => void) | undefined;
+      const route = await withModelGroupPick(configuredRoute(state, ''), state.chain, (commit) => { commitPick = commit; });
+      assertCurrent();
       if (!route || !deps.onSelectionAccepted) return false;
       const key = configuredKey(state);
       // Even an equal route must pass validation and the runtime switch boundary.
@@ -251,6 +312,7 @@ export function createBotModelRouteReconciler(deps: {
         throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before recovery cleanup');
       }
       assertCurrent();
+      commitPick?.();
       configured.set(sessionId, key);
       return true;
     },

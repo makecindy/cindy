@@ -199,6 +199,37 @@ describe('packGhostDir', () => {
       expect(zip.file('assets/search.png')).not.toBeNull();
     }
   });
+  // #11918, unit: authoring uses the strict manifest reader even though an
+  // installed copy with this historical field can still serve its page.
+  it('rejects a quoted initialHeight at packaging and import but preserves an approved historical release', async () => {
+    const manifest = { ...GOOD_MANIFEST, schemaVersion: 3, slots: undefined, minCindyVersion: PLUGIN_UI_MIN_CINDY_VERSION,
+      mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'form.html', initialHeight: '240' }],
+        tools: { do_thing: { resourceUri: 'ui://form' } } } } };
+    const files = { 'ghost.json': JSON.stringify(manifest), 'form.html': '<p>Form</p>', 'main.js': '' };
+    const dir = await makeSrcDir(files);
+    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('resources[0].initialHeight') });
+
+    const archive = new JSZip();
+    for (const [name, contents] of Object.entries(files)) archive.file(name, contents);
+    const file = path.join(workDir, 'historical.cindy');
+    await fs.promises.writeFile(file, await archive.generateAsync({ type: 'nodebuffer' }));
+    const options = { getRootDir: () => path.join(workDir, 'ghosts') };
+    const manager = new GhostManager(options);
+    const reopened = new GhostManager(options);
+    try {
+      expect(await manager.install(file)).toMatchObject({ rejection: { code: 'file-invalid' } });
+      const historic = await manager.install(file, { manifestSource: 'stored-release', uiCapabilityApproved: true, initiallyEnabled: true });
+      if ('rejection' in historic) throw new Error(historic.rejection.reason);
+      expect(historic.ghost.approval.state).toBe('approved');
+      const [ghost] = reopened.list();
+      expect(ghost).toMatchObject({ enabled: true, approval: historic.ghost.approval, uiCapabilityApproved: true });
+      expect(getPluginToolUi(ghost.manifest)?.resources).toEqual([{ uri: 'ui://form', file: 'form.html' }]);
+    } finally {
+      manager.disposeNotificationIndex();
+      reopened.disposeNotificationIndex();
+    }
+  });
   it.each([null, 'xd'])('rejects author-declared namespace %s before v2 normalization', async (namespace) => {
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify({ ...GOOD_MANIFEST, namespace }),
@@ -1937,26 +1968,25 @@ describe('FORGE_GUIDE', () => {
     );
     expect(manualSection).toContain('Manual-only');
     expect(manualSection).toContain('不需要声明虚假工具');
-    expect(manualSection).toContain('首个支持 Manual-only 发现与读取的 Cindy 正式版本');
+    expect(manualSection).toContain('Manual-only 发现与读取时，按 §2 的规则填写 `minCindyVersion`');
     expect(FORGE_GUIDE).not.toContain('cindy_ios_simulator');
   });
 
-  it('manual 发布契约按顺序锁定 Cindy 版本门槛与旧客户端回退', () => {
+  it('manual 版本契约使用开发测试版本并保留旧客户端回退', () => {
     expect(FORGE_GUIDE).toContain(
       'Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` 追加筛选或确认弹窗',
     );
+    expect(FORGE_GUIDE).toContain('用到新能力时，填开发测试所用的 Cindy 版本');
 
     const manualSection = FORGE_GUIDE.slice(
       FORGE_GUIDE.indexOf('## 3.6 manual:按需披露复杂工作流与分层资料'),
       FORGE_GUIDE.indexOf('## 4. main.js 电子脑'),
     );
     const orderedRequirements = [
-      'Cindy 先发布',
-      '确认首个支持它的**正式版本号**',
-      '`minCindyVersion` 设为不低于\n该正式版本',
-      '把存量\n`skill.items` 改成 Manual 的版本也必须设置上述 `minCindyVersion`',
-      '服务端还要保留上一份带 Skill 的历史 release',
-      '旧客户端能通过历史版本回退',
+      '按 §2 的规则填写 `minCindyVersion`',
+      '把存量 `skill.items` 改成 Manual 时',
+      '服务端仍要保留上一份带 Skill 的历史 release',
+      '旧客户端\n能通过历史版本回退',
     ];
     let previousIndex = -1;
     for (const requirement of orderedRequirements) {
@@ -2606,6 +2636,18 @@ describe('packGhostDir · manual 渐进披露手册', () => {
       });
     }
   });
+});
+
+// 生产入口：真实 packGhostDir；新具名资源示例须保留 Host 声明和 HTML，不靠占位工具。
+// 原工具卡样例不覆盖无资源关联的工具 + 具名页面。最小输入为随包三文件示例，tier: unit。
+it('packs the named Host UI author example through the original packer', async () => {
+  const dir = path.join(workDir, 'host-ui-example');
+  await fs.promises.cp(new URL('../../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/', import.meta.url), dir, { recursive: true });
+  const packed = await packGhostDir(dir);
+  expect(packed).toMatchObject({ ok: true, manifest: { mcpApps: {
+    ui: { tools: { refresh: { visibility: ['app'] } } },
+    host: { views: [{ id: 'board', scope: 'global' }, { id: 'task-board', scope: 'task' }] },
+  } } });
 });
 
 // Unit / §3.2: the real packer must include the page and enforce its first release.

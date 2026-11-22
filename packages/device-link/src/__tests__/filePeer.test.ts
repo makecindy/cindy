@@ -31,14 +31,38 @@ describe("file transfer signaling", () => {
     { action: "offer", sdp: "a".repeat(131073) },
     { action: "close", connection: "../other" },
     { action: "open", connection, url: 1 },
+    // 2026-11-17 session transport: the bounds an Agent-Net peer may ask for are the data channel's.
+    { action: "stream-read", connection, ticket: "t", offset: 0, maxBytes: 1 },
+    { action: "stream-read", connection, ticket: connection, offset: -1, maxBytes: 1 },
+    { action: "stream-read", connection, ticket: connection, offset: 0, maxBytes: 0 },
+    { action: "stream-read", connection, ticket: connection, offset: 0, maxBytes: 256 * 1024 + 1 },
+    { action: "stream-rpc", connection, payload: "" },
+    { action: "stream-rpc", connection, payload: "{}", body: "a".repeat(Math.ceil(1024 * 1024 / 3) * 4 + 1) },
+    { action: "stream-rpc", connection: "../other", payload: "{}" },
   ])("rejects malformed requests %#", (value) => {
     expect(() => parseFilePeerRequest(value)).toThrow();
+  });
+  it("parses the session transport requests and bounds the RPC wait to an hour", () => {
+    expect(parseFilePeerRequest({ action: "stream-open", sessionBound: true })).toEqual({ action: "stream-open", sessionBound: true });
+    expect(parseFilePeerRequest({ action: "stream-read", connection, ticket: connection, offset: 5, maxBytes: 256 * 1024 }))
+      .toEqual({ action: "stream-read", connection, ticket: connection, offset: 5, maxBytes: 256 * 1024 });
+    expect(parseFilePeerRequest({ action: "stream-rpc", connection, payload: "{}", body: "aGk=", timeoutMs: 10 * 60 * 60_000 }))
+      .toEqual({ action: "stream-rpc", connection, payload: "{}", body: "aGk=", timeoutMs: 60 * 60_000 });
   });
   it("enables session-bound lifetime only with explicit boolean opt-in", () => {
     const offer = { action: "offer", sdp: "v=0" };
     expect(parseFilePeerRequest({ ...offer, sessionBound: true })).toEqual({ ...offer, sessionBound: true });
     for (const sessionBound of [undefined, false, 1, "true", null])
       expect(parseFilePeerRequest({ ...offer, sessionBound })).toEqual(offer);
+  });
+  it('validates negotiated bounded ranges without changing old full-file requests', () => {
+    const base = { action: 'open', connection, url: 'xdt-file://test' };
+    const range = { start: 1, end: 1048576, version: 'a'.repeat(64) };
+    expect(parseFilePeerRequest({ ...base, range })).toEqual({ ...base, range });
+    for (const bad of [null, { ...range, start: -1 }, { ...range, end: 1048577 },
+      { ...range, end: 0 }, { ...range, version: '' }, { ...range, start: 1.5 }])
+      expect(() => parseFilePeerRequest({ ...base, range: bad })).toThrow('FILE_PEER_RANGE');
+    expect(parseFilePeerRequest(base)).toEqual(base);
   });
   it("accepts empty files and rejects unbounded metadata", () => {
     expect(

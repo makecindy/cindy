@@ -24,6 +24,8 @@ export interface User {
   orgSlug: string | null;
   /** 企业 logo(auth console 组织设置上传);个人身份或未设置为 null。 */
   orgLogoUrl: string | null;
+  tapdbChargeAlias?: string;
+  tapdbUsageAlias?: string;
   passportId: string;
 }
 
@@ -39,6 +41,8 @@ export interface CurrentUser extends User {
 export function mapMembershipToAuthUser(membership: AuthMembership, passportId?: string): CurrentUser {
   return {
     id: membership.id,
+    tapdbChargeAlias: membership.tapdbChargeAlias,
+    tapdbUsageAlias: membership.tapdbUsageAlias,
     name: membership.displayName || membership.email || 'Cindy',
     membershipDisplayName: membership.displayName,
     // auth-server 自助头像(PATCH /api/me/profile);null = 未设置(UI 首字母兜底)。

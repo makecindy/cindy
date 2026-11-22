@@ -1,4 +1,4 @@
-import { pickModelMetadata, MODEL_METADATA_FIELDS, validDiscoveredModelSource } from '@cindy/model-providers';
+import { pickModelMetadata, MODEL_METADATA_FIELDS, PROVIDER_VIDEO_APIS, isProviderVideoApi, validDiscoveredModelSource } from '@cindy/model-providers';
 import {
   mergeDiscoveredRuntimeModels,
   validModelMetadata,
@@ -234,8 +234,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.imageApi !== undefined && r.imageApi !== 'openai-images') {
     return invalid(`runtime '${agent}' imageApi must be openai-images`);
   }
-  if (r.videoApi !== undefined && r.videoApi !== 'xai-videos') {
-    return invalid(`runtime '${agent}' videoApi must be xai-videos`);
+  if (r.videoApi !== undefined && !isProviderVideoApi(r.videoApi)) {
+    return invalid(`runtime '${agent}' videoApi must be one of ${PROVIDER_VIDEO_APIS.join(', ')}`);
   }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
   for (const m of r.models) {
@@ -256,6 +256,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         !['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) || typeof value !== 'number' || !Number.isFinite(value) || value < 0)
     )) return invalid(`runtime '${agent}' discoveredCost invalid`);
     if (mm.opaqueModelId !== undefined && mm.opaqueModelId !== true) return invalid(`runtime '${agent}' opaqueModelId invalid`);
+    if (mm.listedUpstream !== undefined && mm.listedUpstream !== true) return invalid(`runtime '${agent}' listedUpstream invalid`);
+    if (mm.missingUpstream !== undefined && mm.missingUpstream !== true) return invalid(`runtime '${agent}' missingUpstream invalid`);
     if (mm.discoveredSource !== undefined && !validDiscoveredModelSource(mm.discoveredSource)) return invalid(`runtime '${agent}' discoveredSource invalid`);
     if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
       return invalid(`runtime '${agent}' discoveredMetadata invalid`);
@@ -601,6 +603,8 @@ function normalizeRuntime(
       ...pickModelMetadata({ ...m, name: m.name.trim() }),
       ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
       ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
+      ...(m.listedUpstream === true ? { listedUpstream: true as const } : {}),
+      ...(m.missingUpstream === true ? { missingUpstream: true as const } : {}),
       ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
       ...(typeof m.supportsUltrafastMode === 'boolean'
         ? { supportsUltrafastMode: m.supportsUltrafastMode } : {}),
@@ -651,7 +655,7 @@ function normalizeRuntime(
     out.supportsImageGeneration = true;
   }
   if (rt.imageApi === 'openai-images') out.imageApi = rt.imageApi;
-  if (rt.videoApi === 'xai-videos') out.videoApi = rt.videoApi;
+  if (isProviderVideoApi(rt.videoApi)) out.videoApi = rt.videoApi;
   if (agent !== 'pi' && rt.requestPath && rt.requestPath.trim()) {
     out.requestPath = rt.requestPath.trim();
   }
@@ -730,7 +734,9 @@ function invalidateEditedProviderMetadata(
       JSON.stringify([runtime.baseUrl, runtime.modelsUrl, runtime.headers, runtime.wireProtocol, runtime.requestPath,
         auth?.method === 'apiKey' || !auth ? null : auth]);
     if (context(before, previous.auth) !== context(after, next.auth)) {
-      after.models = after.models.map(({ discoveredSource: _source, ...model }) => model);
+      // A different endpoint is a different catalog: drop source receipts and the
+      // #11298 upstream-listing marker so its absences are never offered as withdrawals.
+      after.models = after.models.map(({ discoveredSource: _source, listedUpstream: _listed, missingUpstream: _missing, ...model }) => model);
     }
     after.models = after.models.map(model => {
       const old = before.models.find(row => row.id === model.id);
@@ -754,15 +760,52 @@ function invalidateEditedProviderMetadata(
   )
     return next;
   const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
+  // Removing some models (e.g. confirmed withdrawals, #11298) leaves the remaining
+  // catalog-backed rows untouched; official metadata is looked up per remaining ID.
+  // Replacements, additions alongside removals and emptying the list still clear it.
+  const previousPiIds = new Set(previousPi.models.map((model) => model.id));
+  const nextPiIds = new Set(nextPi.models.map((model) => model.id));
+  const onlyRemoved = nextPiIds.size > 0 && [...nextPiIds].every((id) => previousPiIds.has(id))
+    && preservesPiCatalogModels(previousPi.models.filter((model) => nextPiIds.has(model.id)), nextPi.models);
   const unchanged =
     normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl) &&
     effectivePiWireProtocol(previousPi.wireProtocol) ===
       effectivePiWireProtocol(nextPi.wireProtocol) &&
-    preservesPiCatalogModels(previousPi.models, nextPi.models);
+    (preservesPiCatalogModels(previousPi.models, nextPi.models) || onlyRemoved);
   if (unchanged) return next;
   const pi = { ...nextPi };
   delete pi.piCatalogProviderId;
   return { ...next, runtimes: { ...next.runtimes, pi } };
+}
+
+/**
+ * Apply user-confirmed withdrawals (#11298) to the latest saved connection. Only rows
+ * that are still marked `listedUpstream`, have no per-model route and no manual name
+ * are removed; anything changed since the review (re-listed elsewhere, new endpoint or
+ * key cleared the marker, edited into a manual route) is kept.
+ */
+export function removeConfirmedWithdrawnModels(
+  latest: CustomProviderConfig,
+  targets: readonly { agent: AgentKind; modelId: string }[],
+): { config: CustomProviderConfig; removed: { agent: AgentKind; modelId: string }[]; goneIds: string[] } {
+  const config = structuredClone(latest);
+  const removed: { agent: AgentKind; modelId: string }[] = [];
+  for (const agent of VALID_AGENTS) {
+    const runtime = config.runtimes[agent];
+    if (!runtime) continue;
+    const ids = new Set(targets.filter((target) => target.agent === agent).map((target) => target.modelId));
+    if (!ids.size) continue;
+    runtime.models = runtime.models.filter((model) => {
+      // missingUpstream is the latest refresh's absence receipt; a relisted row lost it.
+      if (!ids.has(model.id) || model.listedUpstream !== true || model.missingUpstream !== true
+        || model.route || model.nameExplicit) return true;
+      removed.push({ agent, modelId: model.id });
+      return false;
+    });
+  }
+  const remaining = new Set(Object.values(config.runtimes).flatMap((runtime) => runtime?.models.map((model) => model.id) ?? []));
+  const goneIds = [...new Set(removed.map(({ modelId }) => modelId))].filter((id) => !remaining.has(id));
+  return { config, removed, goneIds };
 }
 
 /**
@@ -866,6 +909,8 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                   ['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0)) }
                 : {}),
               ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
+              ...(m.listedUpstream === true ? { listedUpstream: true as const } : {}),
+              ...(m.missingUpstream === true ? { missingUpstream: true as const } : {}),
               ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
               ...(validModelMetadata(m.discoveredMetadata)
                 ? { discoveredMetadata: m.discoveredMetadata }
@@ -909,7 +954,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       entry.supportsImageGeneration = true;
     }
     if (r.imageApi === 'openai-images') entry.imageApi = r.imageApi;
-    if (r.videoApi === 'xai-videos') entry.videoApi = r.videoApi;
+    if (isProviderVideoApi(r.videoApi)) entry.videoApi = r.videoApi;
     if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;
     }

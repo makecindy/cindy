@@ -162,6 +162,8 @@ export interface IMHostMediaCache {
     options?: {
       /** Re-check transport/account ownership after the async lookup, before host-side pinning. */
       shouldReuse?: () => boolean;
+      /** Background-only reuse keeps the blob eligible for cache collection. */
+      staging?: boolean;
     },
   ): Promise<{ absPath: string; url: string; mimeType: string } | null>;
   /** host 托管媒体 URL(cindy-media://)→ 绝对路径;认不出返回 null(出站上传用)。 */
@@ -197,6 +199,8 @@ export interface IMUnsupportedEntry {
 }
 
 export interface IMMessageEvent {
+  /** In-process ingress lease. Recheck before admitting queued work; never serialize to models or clients. */
+  assertCurrent?(): void;
   /** In-process durable transport handoff; never serialized to the model or remote clients. */
   delivery?: {
     /** A queued retry was withdrawn by a later owner stop command. */
@@ -291,6 +295,8 @@ export interface IMMessageEvent {
     /** Referenced media that was not supplied to this turn. */
     unavailableAttachments?: string[];
   };
+  /** Verified BlueBubbles inline-reply root, resolved in the same connected chat. */
+  imessageReplyGuid?: string;
   /** Feishu quote resources; host downloads after accepting the inbound turn. */
   feishuReplyAttachments?: AttachmentRef[];
   /** Native private topic metadata. Root message id and thread id are distinct. */
@@ -307,6 +313,8 @@ export interface IMMessageEvent {
 }
 
 export interface IMCardActionEvent {
+  /** Authenticated platform actor, before group lane normalization. */
+  actorId?: string;
   channelName: string;
   /**
    * Identity of the user who pressed the button. For group cards on lane
@@ -372,6 +380,28 @@ export interface InteractiveCardSpec {
   /** Markdown body. */
   body: string;
   buttons: InteractiveCardButton[];
+  /**
+   * 按钮排布。`row`(默认): 少量短按钮横排, 如允许 / 拒绝。
+   * `list`: 选项列表(模型、项目、会话等), 每个选项独占一行、按卡片宽度展开,
+   * 避免多按钮挤在一行时文字被压缩截断。不支持排布的渠道忽略此字段。
+   */
+  buttonLayout?: 'row' | 'list';
+}
+
+/**
+ * 一轮工作的过程记录(用了哪些工具、想了什么), 收口时随终稿交给渠道。
+ * 支持折叠的渠道把它收成一行、点开可回看; 不支持的渠道忽略, 终稿只留正文。
+ */
+export interface StreamingProcessRecord {
+  /** 折叠后露出的那一行, 如「过程记录 · 12 项 · 1m20s」。 */
+  title: string;
+  /** 逐项记录, 一项一行(纯展示文本)。 */
+  lines: readonly string[];
+}
+
+export interface StreamingFinalizeOptions {
+  /** 本轮的过程记录; 没有工作项的快答不带。 */
+  process?: StreamingProcessRecord;
 }
 
 /** Handle returned by `startStreamingText`; allows throttled append + finalise. */
@@ -387,8 +417,9 @@ export interface StreamingTextHandle {
   replace(fullText: string): void;
   /**
    * Replace the card with `finalText` and stop throttling.
+   * `options.process` 是可选的过程记录, 由支持折叠的渠道与正文一起呈现。
    */
-  finalize(finalText: string): Promise<void>;
+  finalize(finalText: string, options?: StreamingFinalizeOptions): Promise<void>;
   /** Cancel without finalising (still leaves the last rendered text on screen). */
   close(): void;
   /**

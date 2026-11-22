@@ -56,7 +56,7 @@ function run({ targetTop = 42, missing = false, loading = false, exact = false, 
   const bindings = {
     useCallback: (fn: unknown) => fn,
     useEffect: (fn: () => void) => fn(),
-    scrollRef: { current: el },
+    messageViewportRef: { current: null }, scrollRef: { current: el },
     itemsRef: { current: { children: missing ? [] : [target] } },
     visibleRenderItemsRef: { current: items },
     visibleRenderItems: items,
@@ -108,7 +108,7 @@ describe('history viewport compensation', () => {
     };
     const bindings = {
       useCallback: (fn: unknown) => fn,
-      scrollRef: { current: { getBoundingClientRect: () => ({ top: 0, bottom: 700 }) } },
+      messageViewportRef: { current: null }, scrollRef: { current: { getBoundingClientRect: () => ({ top: 0, bottom: 700 }) } },
       itemsRef: { current: { children: [estimatedRow, readingRow] } },
       visibleRenderItemsRef: { current: [{ key: 'null-row' }, { key: 'estimated-row' }, { key: 'reading-row' }] },
       lastViewportTopRef: { current: previous },

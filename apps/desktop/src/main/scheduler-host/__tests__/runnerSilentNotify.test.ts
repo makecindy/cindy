@@ -152,6 +152,7 @@ function createRunnerHarness(
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -424,6 +425,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
         expect.objectContaining({
           clientId: 'schedule-result:run-1',
           content: 'Final answer',
+          agentMeta: expect.objectContaining({ turnCompleted: true }),
         }),
         expect.anything(),
       );

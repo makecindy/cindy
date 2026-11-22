@@ -13,6 +13,10 @@ const h = vi.hoisted(() => {
   log.child.mockReturnValue(log);
   return {
     blocked, log, ipcHandle: vi.fn(), snapshotHandler: vi.fn(), transferHandler: vi.fn(),
+    // Blocked like every other host boundary unless a case supplies one scan result.
+    scanAllSkills: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => {
+      throw new Error('unexpected Skill scan in register test');
+    }),
     oldBearer: vi.fn(() => 'fake-orphaned-old-bearer'),
     deps: undefined as SetupMigrationServiceDeps | undefined,
     normalize: undefined as ((raw: unknown) => PersistedSetupMigrationState) | undefined,
@@ -74,7 +78,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendere
 vi.mock('../../skillhub/activationPreferences.js', () => ({ setCindySkillEnabled: h.blocked }));
 vi.mock('../../skillhub/installService.js', () => ({ install: h.blocked }));
 vi.mock('../../skillhub/installLock.js', () => ({ tryAcquireSkillInstallLock: h.blocked }));
-vi.mock('../../skillhub/scanner.js', () => ({ scanAllSkills: h.blocked }));
+vi.mock('../../skillhub/scanner.js', () => ({ scanAllSkills: h.scanAllSkills }));
 vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: h.blocked }));
 vi.mock('../transferPrompt.js', () => ({ confirmSetupTransfer: h.blocked }));
 
@@ -97,12 +101,12 @@ const stateWith = (checklist: unknown[]) => ({
 
 beforeAll(async () => {
   const { registerSetupMigration } = await import('../register.js');
-  registerSetupMigration({ getMaker: h.blocked, getManagedSkillRoots: h.blocked, getBuiltInSkills: h.blocked, getMainWindow: h.blocked });
+  registerSetupMigration({ getMaker: h.blocked, getManagedSkillRoots: h.blocked, getBuiltInSkills: h.blocked, getMainWindow: h.blocked, getLegacyMigrated: h.blocked });
   expect(h.normalize).toBeTypeOf('function');
   expect(h.deps).toBeDefined();
   expect(h.snapshotHandler).toHaveBeenCalledTimes(1);
   expect(h.transferHandler).toHaveBeenCalledTimes(1);
-  expect(h.ipcHandle).toHaveBeenCalledTimes(5);
+  expect(h.ipcHandle).toHaveBeenCalledTimes(6);
   expect(h.blocked).not.toHaveBeenCalled();
 });
 beforeEach(() => {
@@ -159,5 +163,33 @@ describe('real setup-migration registration callbacks', () => {
     // service.ts preserves done before consulting this live predicate (covered there).
     expect(h.oldBearer).not.toHaveBeenCalled();
     expect(h.blocked).not.toHaveBeenCalled();
+  });
+});
+
+// PR #12070 review: startup only warms the shared Skill preparation, and that pass is rejected
+// while a saved owner is restored. Setup migration scans installed Skills for the snapshot this
+// computer sends and the plan it builds, so it must join the same preparation first. Runs last:
+// it registers again, replacing the dependencies the cases above captured.
+describe('setup migration Skill scans', () => {
+  it('joins shared Skill preparation before scanning global Skills', async () => {
+    const order: string[] = [];
+    h.scanAllSkills.mockImplementationOnce(async () => {
+      order.push('scan');
+      return { skills: [], sources: [] };
+    });
+    const { registerSetupMigration } = await import('../register.js');
+    registerSetupMigration({
+      getMaker: () => ({}) as never,
+      getManagedSkillRoots: () => [],
+      getBuiltInSkills: () => [],
+      prepareSharedSkills: async () => {
+        order.push('prepare');
+      },
+      getMainWindow: h.blocked,
+      getLegacyMigrated: h.blocked,
+    });
+
+    await expect(deps().localSkills()).resolves.toEqual(new Map());
+    expect(order).toEqual(['prepare', 'scan']);
   });
 });

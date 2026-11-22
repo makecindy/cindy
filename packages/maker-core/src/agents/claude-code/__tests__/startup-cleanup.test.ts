@@ -36,6 +36,28 @@ describe('Claude startup exit evidence', () => {
     };
   }
 
+  // Unit: offline construction must expose local capabilities, while missing
+  // runtime failure on actual dispatch still proves no process owns the workdir.
+  it('defers the live runtime getter until use and observes a later installation', async () => {
+    let installed = false;
+    const readPath = vi.fn(() => {
+      if (!installed) throw new Error('runtime not installed');
+      return process.execPath;
+    });
+    const dependencies = deps();
+    Object.defineProperty(dependencies, 'binaryPath', { get: readPath });
+    const agent = new ClaudeCodeAgent(dependencies);
+    expect(readPath).not.toHaveBeenCalled();
+    await expect(agent.startSession({ sessionId: 'offline', workingDir, model: 'claude-sonnet-4-6' }))
+      .rejects.toBeInstanceOf(AgentStartupStoppedError);
+    expect(sdk.query).not.toHaveBeenCalled();
+    installed = true;
+    sdk.query.mockImplementationOnce(() => { throw new Error('dispatch reached'); });
+    await expect(agent.startSession({ sessionId: 'installed', workingDir, model: 'claude-sonnet-4-6' }))
+      .rejects.toThrow('dispatch reached');
+    expect(sdk.query).toHaveBeenCalledOnce();
+  });
+
   it.each(['getState', 'getAuthEnv'] as const)('proves %s failures happened before any SDK dispatch', async (hook) => {
     const dependencies = deps();
     const error = new TypeError('preparation failed');
@@ -62,8 +84,32 @@ describe('Claude startup exit evidence', () => {
     expect(sdk.query).not.toHaveBeenCalled();
   });
 
+  // #10523, unit: reject before SDK dispatch and preserve the no-process exit
+  // evidence so a failed proxy does not leave a workdir lease stuck.
+  it.each([undefined, 'fixture-provider'])('reports proxy failure before spawning and retries (%s)', async providerId => {
+    const dependencies = deps();
+    const error = new Error('proxy unavailable');
+    let ready = false;
+    vi.mocked(dependencies.auth.getState).mockImplementation(async options => ({
+      authenticated: options?.credentialMode !== 'provider-oauth' || ready,
+      ...(!ready ? { errorReason: 'proxy_not_ready' } : {}),
+    }));
+    dependencies.runtimeConfig.resolveLocalEndpoint = vi.fn().mockRejectedValueOnce(error)
+      .mockImplementation(async () => { ready = true; return 'http://127.0.0.1:12345'; });
+    const agent = new ClaudeCodeAgent(dependencies);
+    await expect(agent.startSession({ workingDir, providerId, model: 'claude-sonnet-4-6' }))
+      .rejects.toMatchObject({ cause: error });
+    expect(sdk.query).not.toHaveBeenCalled();
+    sdk.query.mockImplementationOnce(() => { throw new Error('dispatch reached'); });
+    await expect(agent.startSession({ workingDir, providerId, model: 'claude-sonnet-4-6' })).rejects.toThrow('dispatch reached');
+    expect(sdk.query).toHaveBeenCalledOnce();
+  });
+
   it('retains protection when the remote factory rejects without proving exit', async () => {
     const dependencies = deps();
+    dependencies.runtimeConfig.resolveLocalEndpoint = vi.fn(async () => { throw new Error('local proxy unavailable'); });
+    // Remote execution must not read an unavailable local runtime getter.
+    Object.defineProperty(dependencies, 'binaryPath', { get: () => { throw new Error('local runtime missing'); } });
     const error = new Error('remote startup reply lost');
     dependencies.remoteCcQueryFactory = vi.fn().mockRejectedValueOnce(error);
     await expect(new ClaudeCodeAgent(dependencies).startSession({

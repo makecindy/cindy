@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
@@ -116,7 +117,7 @@ describe('chat selection clipboard', () => {
   it.each([true, false].flatMap(money => [1, 0.5, 0].map(opacity => ({ money, opacity }))))('omits message action metadata (money=$money, opacity=$opacity)', ({ money, opacity }) => {
     productionSelectionCss();
     const { root, select, copy } = setup(<TooltipProvider><p>Message body</p>
-      <MessageActionBar copyText="Message body" align="left" hovered
+      <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} copyText="Message body" align="left" hovered
         createdAt={new Date(Date.now() - 180_000).toISOString()}
         turnMoney={money ? { currency: 'USD', amount: 0.03, approximate: false, kind: 'actual-cost' } : undefined}
         turnUsageDetails={{ inputTokens: 12000, outputTokens: 300, cacheReadTokens: 0, cacheCreateTokens: 0, totalTokens: 12300, cacheHitRate: 0 }} />
@@ -196,13 +197,11 @@ describe('chat selection clipboard', () => {
       <p>after task</p></>);
     root.classList.toggle('select-text', selectText);
     const buttons = [...root.querySelectorAll('button')];
-    expect(buttons.some(button => button.textContent?.includes(state === 'waiting' ? 'bots.collab.lookAt' : 'bots.collab.watchWork'))).toBe(true);
-    const action = buttons.find(button => button.textContent?.includes(state === 'waiting' ? 'bots.collab.lookAt' : 'bots.collab.watchWork'))!;
+    // Old delegation cards are read-only since V1 delegation was removed (PR #9314): every state only
+    // opens its task (no look-at, add-a-note or stop).
+    const action = buttons.find(button => button.textContent?.includes('bots.collab.watchWork'))!;
     expect(getComputedStyle(action).userSelect).toBe(selectText ? 'text' : 'none');
-    if (state === 'running') {
-      expect(buttons.some(button => button.textContent?.includes('bots.collab.addNote'))).toBe(true);
-      expect(buttons.some(button => button.textContent?.includes('bots.collab.stop'))).toBe(true);
-    }
+    expect(buttons.some(button => /bots\.collab\.(?:lookAt|addNote|stop)/.test(button.textContent ?? ''))).toBe(false);
     if (state === 'completed') fireEvent.click(buttons.find(button => button.textContent?.includes('bots.collab.expandResult'))!);
     select();
     const formats = copy().clipboardData.setData.mock.calls;

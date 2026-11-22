@@ -15,7 +15,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => false, language: 'en' } }),
   initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
@@ -129,5 +129,48 @@ describe('ErrorMessageCard — LiteLLM 网关凭据失效', () => {
     expect(screen.getByText('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.gatewayProxyTokenInvalid')).toBeNull();
     expect(screen.queryByText(/LiteLLM_VerificationTokenTable/)).toBeNull();
+  });
+});
+
+describe('provider-supplied error guidance', () => {
+  const applyUrl = 'https://console.example.com/#/work-orders/apply/22';
+  const nested = JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: '尚未开通。申请地址：' + applyUrl } });
+  const error = 'unexpected status 407 Proxy Authentication Required: ' +
+    JSON.stringify({ error: { message: 'VendorException - ' + nested, code: '407' } }) +
+    ', url: http://127.0.0.1/responses';
+
+  it.each(['live', 'history'])('shows the nested explanation and its link before details in %s', (surface) => {
+    render(surface === 'live'
+      ? createElement(ErrorBanner, { error, retryText: 'hi', onRetry: vi.fn() })
+      : createElement(ErrorMessageCard, { message: error }));
+    expect(screen.getByText('尚未开通。申请地址：')).toBeTruthy();
+    expect(screen.getByRole('link').getAttribute('href')).toBe(applyUrl);
+    expect(screen.queryByText(error)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(error)).toBeTruthy();
+  });
+
+  it('accepts new codes, languages and multiple links without promoting diagnostics', () => {
+    const message = JSON.stringify({ error: { code: 'FUTURE', message: 'technical diagnostic',
+      user_message: 'Read https://docs.example.com or visit https://help.example.com. token=secret-value' } });
+    render(createElement(ErrorMessageCard, { message }));
+    expect(screen.getAllByRole('link').map(link => link.getAttribute('href')))
+      .toEqual(['https://docs.example.com/', 'https://help.example.com/']);
+    expect(screen.queryByText(/technical diagnostic|secret-value/)).toBeNull();
+  });
+
+  it('handles a text-only problem detail and keeps local file references inert', () => {
+    render(createElement(ErrorMessageCard, { message: JSON.stringify({ detail: 'Try a smaller file. See file:///private' }) }));
+    expect(screen.getByText('Try a smaller file. See file:///private')).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('leaves malformed envelopes and unrelated response fields in details', () => {
+    const error = '502: {"input":{"message":"request body"},"url":"https://debug.example.com"}';
+    const { rerender } = render(createElement(ErrorMessageCard, { message: error }));
+    expect(screen.queryByText(/request body/)).toBeNull();
+    rerender(createElement(ErrorMessageCard, { message: '502: {"message":' }));
+    expect(screen.queryByText(/502/)).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
   });
 });

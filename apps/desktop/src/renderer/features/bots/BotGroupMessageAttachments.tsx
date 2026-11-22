@@ -159,7 +159,7 @@ function PendingAttachmentChip({
       data-state={state}
       className={cn(
         'inline-flex h-7 min-w-0 max-w-[min(280px,100%)] items-center gap-1.5 px-2.5 py-1.5',
-        'rounded-[9999px] border border-dashed border-[var(--msg-user-border)] bg-[var(--surface-chip)]',
+        'rounded-full border border-dashed border-[var(--msg-user-border)] bg-[var(--surface-chip)]',
         'text-13 font-medium text-[var(--text-secondary)]',
       )}
     >
@@ -168,8 +168,9 @@ function PendingAttachmentChip({
       ) : (
         <FileTypeIcon name={name} size={14} className="shrink-0" />
       )}
-      <span className="min-w-0 truncate">{name}</span>
-      <span aria-hidden="true" className="shrink-0 font-normal text-[var(--text-tertiary)]">
+      {/* 名字先让出宽度；窄气泡里较长的状态译文（西语、法语等）也可省略，完整内容在 title 里。 */}
+      <span className="min-w-0 shrink-[3] truncate">{name}</span>
+      <span aria-hidden="true" className="min-w-0 truncate font-normal text-[var(--text-tertiary)]">
         {status}
       </span>
     </span>

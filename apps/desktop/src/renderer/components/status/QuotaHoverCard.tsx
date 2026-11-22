@@ -10,6 +10,8 @@ import { useTranslation } from 'react-i18next';
 
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import {
   formatQuotaResetCountdown,
   formatQuotaResetDuration,
@@ -209,7 +211,7 @@ function WindowBlock({
     return (
       <section
         data-testid="quota-window"
-        className="col-span-full grid grid-cols-subgrid items-center py-[7px] tabular-nums"
+        className="col-span-full grid grid-cols-subgrid items-center py-1.5 tabular-nums"
       >
         {titleNode}
         {bar}
@@ -238,7 +240,7 @@ function WindowBlock({
       <div>
         {titleNode}
         {bar}
-        <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
+        <div className="mt-1.5 flex items-baseline justify-between gap-3 tabular-nums">
           <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
           <div className="flex min-w-0 items-center gap-2">
             {resetCountdown !== null ? (
@@ -335,7 +337,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
       ) : null}
 
       {turnUsage.totalTokensText != null ? (
-        <div className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums">
+        <div className="mt-1 flex items-baseline justify-between gap-3 tabular-nums">
           <span className="text-[var(--text-secondary)]">{t('quotaCard.tokenLabel')}</span>
           <span className="min-w-0 break-words text-right font-medium text-[var(--text-primary)]">
             {turnUsage.totalTokensText}
@@ -352,7 +354,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
       ) : null}
 
       {turnUsage.cacheLineText != null ? (
-        <div className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums">
+        <div className="mt-1 flex items-baseline justify-between gap-3 tabular-nums">
           <span className="text-[var(--text-secondary)]">{t('quotaCard.cacheLabel')}</span>
           <span className="min-w-0 break-words text-right font-medium text-[var(--text-primary)]">
             {turnUsage.cacheLineText}
@@ -361,7 +363,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
       ) : null}
 
       {turnUsage.turnDurationText != null || turnUsage.outputRateText != null ? (
-        <dl data-testid="quota-performance" className="mt-[5px] space-y-[5px] tabular-nums">
+        <dl data-testid="quota-performance" className="mt-1 space-y-1 tabular-nums">
           {turnUsage.turnDurationText != null ? (
             <div className="flex items-baseline justify-between gap-3">
               <dt className="text-[var(--text-secondary)]">{t('quotaCard.timeLabel')}</dt>
@@ -382,7 +384,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
       ) : null}
 
       {!showModelCostBreakdown && turnUsage.model != null ? (
-        <div className="mt-[5px] flex items-baseline justify-between gap-3">
+        <div className="mt-1 flex items-baseline justify-between gap-3">
           <span className="text-[var(--text-secondary)]">{t('quotaCard.modelLabel')}</span>
           <span className="min-w-0 break-words text-right font-medium text-[var(--text-primary)]">
             {turnUsage.model}
@@ -393,7 +395,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
       {turnUsage.suggestionText != null ? (
         <div
           data-testid="quota-suggestion"
-          className="mt-2.5 flex items-start gap-[7px] rounded-lg bg-[var(--warning-bg-soft)] px-2.5 py-[7px] text-12 text-[var(--text-primary)]"
+          className="mt-2.5 flex items-start gap-1.5 rounded-lg bg-[var(--warning-bg-soft)] px-2.5 py-1.5 text-12 text-[var(--text-primary)]"
         >
           <span aria-hidden="true" className="shrink-0 text-[var(--quota-bar-warn)]">
             ●
@@ -521,7 +523,7 @@ export function QuotaHoverCard({
         tabIndex={embedded ? undefined : 0}
         className={cn(
           'min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
-          !embedded && 'overflow-y-auto pt-[6px]',
+          !embedded && 'overflow-y-auto pt-1.5',
           subgrid && SUBGRID_LAYER,
         )}
       >
@@ -539,7 +541,7 @@ export function QuotaHoverCard({
               {planLabel ? (
                 <span
                   data-testid="quota-plan-badge"
-                  className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-[7px] py-px text-11 font-medium"
+                  className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-1.5 py-px text-11 font-medium"
                 >
                   {planLabel}
                 </span>
@@ -565,7 +567,22 @@ export function QuotaHoverCard({
         {!embedded && windows.length === 0 && windowAction ? (
           <div className="flex justify-end px-4">{windowAction}</div>
         ) : null}
-        {emptyText ? (
+        {account.refreshFailure ? (
+          <ErrorNotice
+            role="status"
+            className="mx-4 my-2"
+            message={t('quotaCard.codexRefreshFailed')}
+            actions={
+              <Button
+                variant="secondary"
+                disabled={account.refreshFailure.retrying}
+                onClick={account.refreshFailure.retry}
+              >
+                {t(account.refreshFailure.retrying ? 'quotaCard.retryingQuota' : 'quotaCard.retryQuota')}
+              </Button>
+            }
+          />
+        ) : emptyText ? (
           <div className="px-4 py-2 text-[var(--text-secondary)]">{emptyText}</div>
         ) : null}
         {notices.map((notice, index) => (
@@ -625,7 +642,7 @@ export function QuotaHoverCard({
             ref={dashboardButtonRef}
             type="button"
             onClick={onOpenDashboard}
-            className="mx-2 mt-0.5 flex w-[calc(100%_-_16px)] items-center gap-[9px] rounded-full px-2 py-[7px] text-left font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-elevated)] active:scale-[0.98]"
+            className="mx-2 mt-0.5 flex w-[calc(100%_-_16px)] items-center gap-2 rounded-full px-2 py-1.5 text-left font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-elevated)] active:scale-[0.98]"
           >
             <svg
               aria-hidden="true"

@@ -18,6 +18,8 @@ import { deriveCindyMediaConfig } from '../cindyMediaCatalog.js';
 
 import { GhostCindySlot, type CindySlotDeps } from '../cindySlot';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
+import { probeImageSize } from '../imageProbe.js';
+import type { LegacyMediaResult } from '../../cindy-media/legacyMediaInvocation.js';
 import {
   GHOST_CINDY_DEPOSIT_BURST,
   GHOST_CINDY_DEPOSIT_MAX_BYTES,
@@ -36,6 +38,7 @@ function fakeGhost(
       media?: string[];
       text?: string[];
       embed?: string[];
+      models?: string[];
       search?: string[];
       oneshotModel?: string;
     } | null;
@@ -63,11 +66,28 @@ function fakeGhost(
           }),
     },
     dir: '/fake/brain/art',
+    approval: { state: 'approved', revision: 'test-revision' },
     enabled: overrides.enabled ?? true,
   } as InstalledGhost;
 }
 
-function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
+type MediaFixture = {
+  buffer: Uint8Array; mimeType: string;
+  videoParams?: LegacyMediaResult['videoParams'];
+};
+type FixtureParams = {
+  prompt: string; model: string; providerId?: string; imagePaths?: string[];
+  aspectRatio?: string; refMode?: string; duration?: number;
+  resolution?: string; ratio?: string; fps?: number; audio?: boolean;
+};
+type FixtureDeps = Partial<CindySlotDeps> & {
+  generateImage?: (params: FixtureParams) => Promise<MediaFixture>;
+  editImage?: (params: FixtureParams) => Promise<MediaFixture>;
+  generateVideo?: (params: FixtureParams) => Promise<MediaFixture>;
+  editVideo?: (params: FixtureParams) => Promise<MediaFixture>;
+};
+
+function makeSlot(overrides: FixtureDeps = {}): {
   slot: GhostCindySlot;
   generateImage: ReturnType<typeof vi.fn>;
   editImage: ReturnType<typeof vi.fn>;
@@ -118,7 +138,9 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
       : null,
   );
   const imageCapabilities = vi.fn(() => null);
-  const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => `/disk/${hash}.png`);
+  const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => ({
+    absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png`,
+  }));
   const getImageConfig = vi.fn(() => ({
     models: [
     { id: 'gpt-image-2', label: 'GPT Image 2' },
@@ -170,10 +192,34 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getGhost: () => fakeGhost(),
     getOwnerScopeKey: () => 'cloud:test-owner:1',
     isOwnerBoundaryPending: () => false,
-    generateImage,
-    editImage,
-    generateVideo,
-    editVideo,
+    // Provider byte fixtures stand in for Core. Slot itself now consumes only
+    // already-ingested references; retain the old parameter/permission assertions.
+    invokeMedia: async (request) => {
+      const params: FixtureParams = {
+        prompt: request.prompt, model: request.model,
+        ...(request.providerId ? { providerId: request.providerId } : {}),
+        ...(request.aspectRatio !== undefined ? { aspectRatio: request.aspectRatio } : {}),
+        ...(request.kind.startsWith('edit_') ? { imagePaths: request.imagePaths } : {}),
+        ...(request.refMode ? { refMode: request.refMode } : {}),
+      };
+      for (const key of ['duration', 'resolution', 'ratio', 'fps', 'audio'] as const) {
+        if (request[key] !== undefined) Object.assign(params, { [key]: request[key] });
+      }
+      const generators = {
+        gen_image: overrides.generateImage ?? generateImage,
+        edit_image: overrides.editImage ?? editImage,
+        gen_video: overrides.generateVideo ?? generateVideo,
+        edit_video: overrides.editVideo ?? editVideo,
+      };
+      const generated = await generators[request.kind](params);
+      const dims = request.kind.endsWith('image') ? probeImageSize(generated.buffer) : null;
+      return {
+        url: 'cindy-media://blobs/abc.png', hash: 'a'.repeat(64), ext: '.png',
+        mimeType: generated.mimeType, bytes: generated.buffer.byteLength,
+        ...(dims ?? {}),
+        ...('videoParams' in generated ? { videoParams: generated.videoParams } : {}),
+      };
+    },
     resolveOwnedMedia,
     getImageConfig,
     getVideoConfig,
@@ -213,6 +259,44 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
 const REQ = { type: 'cindy-request', kind: 'gen_image', prompt: '一只猫' };
 const HASH_S = '5'.repeat(64);
 const EDIT_REQ = { type: 'cindy-request', kind: 'edit_image', prompt: '加顶帽子', hashes: [HASH_S] };
+
+describe('Core 媒体兼容入口', () => {
+  it('改图把归属校验得到的受管引用交给 Core，保留视频适配器所需的路径', async () => {
+    const url = `cindy-media://blobs/${HASH_S}.png`;
+    const output = { url, hash: HASH_S, ext: '.png', mimeType: 'image/png', bytes: 1 };
+    const invokeMedia = vi.fn(async () => output);
+    const { slot } = makeSlot({
+      invokeMedia,
+      resolveOwnedMedia: vi.fn(async () => ({ absPath: '/disk/source.png', url })),
+    });
+    expect(await slot.handleModelRequest('art', {
+      kind: 'edit_image', prompt: '换成蓝色', hashes: [HASH_S],
+    })).toMatchObject({ ok: true });
+    expect(invokeMedia).toHaveBeenCalledWith(expect.objectContaining({
+      imagePaths: ['/disk/source.png'], imageRefs: [url],
+    }));
+  });
+
+  it('保留 Core 已入仓的结果，不要求再次生成图片字节', async () => {
+    const media = {
+      url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
+      hash: 'a'.repeat(64), ext: '.png', mimeType: 'image/png',
+      bytes: 1024, width: 512, height: 512,
+    };
+    const invokeMedia = vi.fn(async () => media);
+    const saveGhostMedia = vi.fn(async () => media);
+    const { slot, generateImage } = makeSlot({
+      invokeMedia, saveGhostMedia,
+    } as unknown as Partial<CindySlotDeps>);
+
+    expect(await slot.handleModelRequest('art', REQ)).toMatchObject({
+      ok: true, url: media.url, hash: media.hash, width: 512, height: 512,
+    });
+    expect(invokeMedia).toHaveBeenCalledOnce();
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ media }));
+  });
+});
 
 describe('载荷校验', () => {
   it('未知 kind / 空 prompt / 超长 prompt → 结构化拒绝', async () => {
@@ -496,6 +580,60 @@ describe('Cindy Web Search', () => {
     });
     expect(switching.claimPipeCall).not.toHaveBeenCalled();
     expect(switching.settlePipeCallClaim).not.toHaveBeenCalled();
+  });
+
+  // #7730 review:首次登录凭证还在下发或同步暂时失败时,搜索服务因缺 key 回
+  // NOT_CONFIGURED。这是马上会好的临时状态,按账号切换同一口径回 UPSTREAM_UNAVAILABLE,
+  // 且未出网,binding 仍可重试。已就绪时的 NOT_CONFIGURED(服务端未配置)原样透传。
+  it.each([
+    [false, true, 'UPSTREAM_UNAVAILABLE'],
+    [false, false, 'NOT_CONFIGURED'],
+    [true, true, 'NOT_CONFIGURED'],
+  ] as const)('搜索未就绪 NOT_CONFIGURED、模型服务就绪=%s、凭证暂时不可用=%s → %s', async (ready, transient, errorCode) => {
+    const { slot, settlePipeCallClaim } = makeSlot({
+      getGhost: searchGhost,
+      searchWeb: vi.fn(async () => ({
+        ok: false as const,
+        errorCode: 'NOT_CONFIGURED' as const,
+        message: '搜索尚未就绪',
+        requestStarted: false,
+      })),
+      isModelAccessReady: () => ready,
+      isModelAccessTransientlyUnavailable: () => transient,
+    });
+    expect(await slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({ ok: false, errorCode });
+    expect(settlePipeCallClaim).toHaveBeenLastCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      true,
+    );
+  });
+
+  // #7730 review:凭证在 await 期间写入时,事后探测已是就绪;调用开始时的临时状态
+  // 仍然算数,否则一次马上能成的请求会被报成终态。
+  it('搜索出网前凭证暂时不可用、返回前凭证已写入 → 仍按临时状态回 UPSTREAM_UNAVAILABLE', async () => {
+    let provisioning = true;
+    const { slot } = makeSlot({
+      getGhost: searchGhost,
+      searchWeb: vi.fn(async () => {
+        provisioning = false;
+        return {
+          ok: false as const,
+          errorCode: 'NOT_CONFIGURED' as const,
+          message: '搜索尚未就绪',
+          requestStarted: false,
+        };
+      }),
+      isModelAccessReady: () => !provisioning,
+      isModelAccessTransientlyUnavailable: () => provisioning,
+    });
+    expect(await slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+    });
   });
 
   it('仅明确未出网的失败允许重试；已出网错误保留错误码并消费 binding', async () => {
@@ -785,6 +923,32 @@ describe('目录空清单 = 能力暂不可用', () => {
     expect(editImage).not.toHaveBeenCalled();
   });
 
+  // #7581:模型服务不再是插件级前置门禁,未登录时媒体代办要在调用这一刻给出对因的错误,
+  // 而不是"目录暂时取不到、重启试试"。已登录但目录为空仍是旧口径的临时状态。
+  // 账号切换期间网关能力暂时为否:仍按临时状态回复,不能误判为未登录。
+  // 首次登录凭证还在下发(key 未写入)或同步暂时失败(同账号可重试)同理。
+  it.each([
+    [false, false, false, 'NO_CANDIDATE', 'Cindy 模型服务未登录'],
+    [true, false, false, undefined, '模型目录暂时取不到'],
+    [false, true, false, undefined, '模型目录暂时取不到'],
+    [false, false, true, undefined, '模型目录暂时取不到'],
+  ] as const)('图像清单空、模型服务就绪=%s、账号切换中=%s、凭证暂时不可用=%s → 对因的拒单', async (ready, switching, provisioning, errorCode, text) => {
+    const { slot, generateImage } = makeSlot({
+      getImageConfig: vi.fn(() => EMPTY_CONFIG) as unknown as CindySlotDeps['getImageConfig'],
+      isModelAccessReady: () => ready,
+      isModelAccessTransientlyUnavailable: () => provisioning,
+      isOwnerBoundaryPending: () => switching,
+    });
+    const result = (await slot.handleModelRequest('art', REQ)) as {
+      ok: boolean;
+      message: string;
+      errorCode?: string;
+    };
+    expect(result).toMatchObject({ ok: false });
+    expect(result.errorCode).toBe(errorCode);
+    expect(result.message).toContain(text);
+    expect(generateImage).not.toHaveBeenCalled();
+  });
 });
 
 describe('媒体选型没有逐插件覆盖(2026-10 起只走系统默认)', () => {
@@ -812,7 +976,9 @@ describe('视频代办(gen_video / edit_video)', () => {
     expect(r).toMatchObject({ ok: true, model: 'seedance-fast', modelLabel: 'Seedance 快速' });
     expect(getVideoConfig).toHaveBeenCalledWith('generate');
     expect(generateVideo).toHaveBeenCalledWith({ prompt: '一只猫奔跑', model: 'seedance-fast' });
-    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'video/mp4' }));
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({
+      media: expect.objectContaining({ mimeType: 'video/mp4' }),
+    }));
   });
 
   it('tier 档位查视频翻译表(best → seedance-pro);失效点名回落默认', async () => {
@@ -1016,7 +1182,7 @@ describe('代办链路', () => {
     expect(saveGhostMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         ghostId: 'art',
-        mimeType: 'image/png',
+        media: expect.objectContaining({ mimeType: 'image/png' }),
         ownerScopeKey: 'cloud:test-owner:1',
       }),
     );
@@ -1120,7 +1286,7 @@ describe('代办链路', () => {
     const { slot } = makeSlot({
       generateImage: vi.fn(
         () => new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => pending.push(res)),
-      ) as unknown as CindySlotDeps['generateImage'],
+      ) as unknown as NonNullable<FixtureDeps['generateImage']>,
     });
 
     const first = slot.handleModelRequest('art', REQ);
@@ -1136,7 +1302,7 @@ describe('代办链路', () => {
     let release: (v: { buffer: Uint8Array; mimeType: string }) => void = () => {};
     const gate = new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => (release = res));
     const { slot } = makeSlot({
-      generateImage: vi.fn(() => gate) as unknown as CindySlotDeps['generateImage'],
+      generateImage: vi.fn(() => gate) as unknown as NonNullable<FixtureDeps['generateImage']>,
       getInflightLimit: vi.fn(() => 1) as unknown as CindySlotDeps['getInflightLimit'],
     });
 
@@ -1158,7 +1324,7 @@ describe('代办链路', () => {
     const { slot } = makeSlot({
       generateImage: vi.fn(
         () => new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => pending.push(res)),
-      ) as unknown as CindySlotDeps['generateImage'],
+      ) as unknown as NonNullable<FixtureDeps['generateImage']>,
       getInflightLimit: vi.fn(() => 2) as unknown as CindySlotDeps['getInflightLimit'],
     });
 
@@ -1277,7 +1443,7 @@ describe('改图代办(edit_image)', () => {
   it('任一源图不在本意识名下 → 整单拒(统一话术)', async () => {
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
-        hash === HASH_S ? `/disk/${hash}.png` : null,
+        hash === HASH_S ? { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` } : null,
       ) as unknown as CindySlotDeps['resolveOwnedMedia'],
     });
     const r = await slot.handleModelRequest('art', {
@@ -1295,7 +1461,7 @@ describe('改图代办(edit_image)', () => {
       async (_ghostId: string, hash: string, taskOwnerScopeKey: string) => {
         expect(taskOwnerScopeKey).toBe('cloud:owner-a:1');
         ownerScopeKey = 'cloud:owner-b:2';
-        return `/disk/${hash}.png`;
+        return { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` };
       },
     );
     const editImage = vi.fn();
@@ -1317,7 +1483,7 @@ describe('改图代办(edit_image)', () => {
     const HASH = 'a'.repeat(64);
     const blob = `assets/${HASH.slice(0, 2)}/${HASH}/blob.png`;
     const resolveOwnedMedia = vi.fn(async (_g: string, key: string) =>
-      key === blob ? `/library/${blob}` : null,
+      key === blob ? { absPath: `/library/${blob}`, url: `cindy-media://blobs/${HASH}.png` } : null,
     );
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia,
@@ -1648,7 +1814,7 @@ describe('寄存(deposit_media / release_media)', () => {
     // 归属账本认寄存物(生产由 ledger.ghostCanRead 的 ghost-deposit 分支保证)。
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
-        hash === HASH_D ? `/disk/${hash}.png` : null,
+        hash === HASH_D ? { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` } : null,
       ),
     } as Partial<CindySlotDeps>);
     const dep = await slot.handleModelRequest('art', depositReq(b64(PNG)));
@@ -1962,7 +2128,7 @@ describe('快问快答(oneshot_text)', () => {
     expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
   });
 
-  it('每单现读用户选择:改回跟随默认后下一单即走系统辅助模型链', async () => {
+  it('无官方网关仍使用用户选择:改回跟随默认后下一单即走系统辅助模型链', async () => {
     const oneshotText = vi.fn(async (_params: { route?: unknown }) => ({ ok: true as const, text: 'ok' }));
     let selection: { providerId: string; agentKind: 'codex'; model: string } | null = {
       providerId: 'openai', agentKind: 'codex', model: 'gpt-5.5',
@@ -1971,9 +2137,13 @@ describe('快问快答(oneshot_text)', () => {
       getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
       getOneshotModelSelection: () => selection,
       oneshotText,
+      isModelAccessReady: () => false,
+      isModelAccessTransientlyUnavailable: () => false,
     });
-    await slot.handleModelRequest('art', ONESHOT);
-    expect(oneshotText.mock.lastCall?.[0]?.route).toMatchObject({ model: 'gpt-5.5' });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: true, text: 'ok' });
+    expect(oneshotText.mock.lastCall?.[0]?.route).toMatchObject({
+      providerId: 'openai', model: 'gpt-5.5',
+    });
     selection = null;
     await slot.handleModelRequest('art', ONESHOT);
     expect(oneshotText.mock.lastCall?.[0]?.route).toBeUndefined();
@@ -1994,6 +2164,75 @@ describe('快问快答(oneshot_text)', () => {
         message: '不行',
       });
     }
+  });
+
+  // #7730 review:插件级的模型服务门禁拿掉后,首次登录凭证还在下发、或同步暂时失败
+  // (同账号可重试)时,插件会在 key 写入前打到链上无候选。这是马上会好的临时状态,
+  // 不能报 NO_CANDIDATE(手册要求插件对它不重试、直接让用户去登录)。
+  it.each([
+    [false, false, 'NO_CANDIDATE'],
+    [false, true, 'INTERNAL'],
+    [true, true, 'NO_CANDIDATE'],
+  ] as const)('链上无候选、模型服务就绪=%s、凭证暂时不可用=%s → %s', async (ready, transient, errorCode) => {
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => ({ ok: false as const, reason: 'no_candidate' as const, message: '不行' })),
+      isModelAccessReady: () => ready,
+      isModelAccessTransientlyUnavailable: () => transient,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
+  });
+
+  // #7730 review:oneshot 快照了缺 key 的状态回 no_candidate,CredentialsSync 在 promise
+  // 续体之前写好 key。事后看已就绪,但这单仍是临时失败,不能报终态 NO_CANDIDATE。
+  it('链上无候选时凭证在 await 期间写入 → 仍回 INTERNAL', async () => {
+    let provisioning = true;
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => {
+        provisioning = false;
+        return { ok: false as const, reason: 'no_candidate' as const, message: '不行' };
+      }),
+      isModelAccessReady: () => !provisioning,
+      isModelAccessTransientlyUnavailable: () => provisioning,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+  });
+
+  // #7730 review:插件钉在停用的非 Cindy 供应商上,requestUtilityText 对显式选择 fail closed、
+  // 不回落 Cindy;凭证下发窗口救不回这条路由,不能改报临时失败。钉在 xd 上则仍是临时口径。
+  it.each([
+    ['byo', 'NO_CANDIDATE'],
+    ['xd', 'INTERNAL'],
+  ] as const)('凭证暂时不可用时钉在 %s 上链上无候选 → %s', async (providerId, errorCode) => {
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => ({ ok: false as const, reason: 'no_candidate' as const, message: '不行' })),
+      getOneshotModelSelection: () => ({ providerId, agentKind: 'codex' as const, model: 'm' }),
+      isModelAccessReady: () => false,
+      isModelAccessTransientlyUnavailable: () => true,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
+  });
+
+  // #11001 review:handleModelRequest 必须按执行层推断的供应商分类,不能将缺 key 的
+  // 自配路线误报为等待 Cindy。现有用例只覆盖显式 providerId;最小输入是仅 agent/model
+  // 的固定选择 + no_candidate + Cindy 凭证下发中。unit,不出网。
+  it.each([
+    ['byo', 'NO_CANDIDATE'],
+    ['xd', 'INTERNAL'],
+    [undefined, 'NO_CANDIDATE'],
+  ] as const)('缺供应商的固定路线实际解析为 %s 时无候选 → %s', async (providerId, errorCode) => {
+    const oneshotText = vi.fn(async () => ({
+      ok: false as const, reason: 'no_candidate' as const, message: '不行', providerId,
+    }));
+    const { slot } = withText({
+      oneshotText,
+      getOneshotModelSelection: () => ({ agentKind: 'codex' as const, model: 'm' }),
+      isModelAccessReady: () => false,
+      isModelAccessTransientlyUnavailable: () => true,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
+    expect(oneshotText).toHaveBeenCalledWith(expect.objectContaining({
+      route: { kind: 'catalog', agentKind: 'codex', model: 'm' },
+    }));
   });
 
   it('expectJson:剥围栏后可解析 → 返回清洗后的 JSON 文本;不可解析 → BAD_MODEL_OUTPUT', async () => {
@@ -2313,6 +2552,46 @@ describe('文本转向量(embed_text)', () => {
       errorCode: 'NO_CANDIDATE',
     });
     expect(embedText).not.toHaveBeenCalled();
+  });
+
+  // #7730 review:向量目录来自网关,凭证还在下发或同步暂时失败时目录为空、执行层
+  // 报 AUTH_FAILED,都是马上会好的临时状态,不能报 NO_CANDIDATE。
+  it.each([
+    ['目录为空', { getEmbedConfig: vi.fn(() => ({ models: [], defaults: null })) }],
+    [
+      '执行层 AUTH_FAILED',
+      {
+        embedText: vi.fn(async () => {
+          throw Object.assign(new Error('no key'), { code: 'AUTH_FAILED' });
+        }),
+      },
+    ],
+  ] as const)('%s + 凭证暂时不可用 → INTERNAL', async (_label, deps) => {
+    const { slot } = withEmbed({
+      ...deps,
+      isModelAccessReady: () => false,
+      isModelAccessTransientlyUnavailable: () => true,
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+  });
+
+  it('执行层 AUTH_FAILED 时凭证在 await 期间写入 → 仍回 INTERNAL', async () => {
+    let provisioning = true;
+    const { slot } = withEmbed({
+      embedText: vi.fn(async () => {
+        provisioning = false;
+        throw Object.assign(new Error('no key'), { code: 'AUTH_FAILED' });
+      }),
+      isModelAccessReady: () => !provisioning,
+      isModelAccessTransientlyUnavailable: () => provisioning,
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
   });
 
   it('能力未接线(deps 缺 embedText / getEmbedConfig)→ 结构化拒绝,fail closed', async () => {
@@ -2635,5 +2914,52 @@ describe('文本转向量(embed_text)· 失败码与时间预算', () => {
     expect(embedDocuments.mock.calls[0][0]).toMatchObject({
       timeoutMs: GHOST_CINDY_EMBED_TIMEOUT_MS,
     });
+  });
+});
+
+// Unit: new paid model requests must enforce the plugin declaration and the existing
+// inflight limit. Legacy media/oneshot tests do not exercise the new kind dispatch.
+it('requires declared model API and shares the existing inflight limit', async () => {
+  const evaluate = vi.fn(async () => ({ ok: true, models: [{ id: 'example', provider_id: 'xd', name: 'Example' }] }));
+  const denied = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0) });
+  expect(await denied.slot.handleModelRequest('art', { kind: 'list_models', api: 'rerank' })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+  expect(evaluate).not.toHaveBeenCalled();
+  const legacy = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => fakeGhost({ model: { image: ['generate'], models: ['rerank'] } }) });
+  for (const request of [{ kind: 'list_models', api: 'rerank' }, { kind: 'rerank', query: 'q', documents: ['d'] }]) {
+    expect(await legacy.slot.handleModelRequest('art', request)).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+  }
+  expect(evaluate).not.toHaveBeenCalled();
+  const allowed = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => ({ ...fakeGhost({ model: { models: ['rerank'] } }), approvedCindyModelActions: ['rerank'] }) });
+  expect(await allowed.slot.handleModelRequest('art', { kind: 'list_models', api: 'rerank' })).toEqual({ ok: true, models: [{ model: 'example', providerId: 'xd', name: 'Example' }] });
+  const busy = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => ({ ...fakeGhost({ model: { models: ['rerank'] } }), approvedCindyModelActions: ['rerank'] }), getInflightLimit: () => 0 });
+  expect(await busy.slot.handleModelRequest('art', { kind: 'rerank', query: 'q', documents: ['d'] })).toMatchObject({ ok: false, errorCode: 'BUSY' });
+  expect(evaluate).toHaveBeenCalledTimes(1);
+});
+
+describe('plugin direct media request', () => {
+  const request = {
+    kind: 'media_request',
+    operation: 'image.generate',
+    model: 'test-image',
+    body: { prompt: 'a square' },
+  };
+
+  it('requires the recorded media-request permission before dispatch', async () => {
+    const ghost = fakeGhost({ model: { models: ['media_request'] } });
+    const dispatchMediaRequest = vi.fn(async () => ({
+      ok: true as const, status: 200, contentType: 'application/json', body: '{}', encoding: 'utf8' as const,
+    }));
+    const { slot } = makeSlot({ getGhost: () => ghost, dispatchMediaRequest });
+    expect(await slot.handleModelRequest('art', request)).toMatchObject({
+      ok: false, errorCode: 'PERMISSION_DENIED',
+    });
+    expect(dispatchMediaRequest).not.toHaveBeenCalled();
+
+    ghost.approvedCindyModelActions = ['media_request'];
+    expect(await slot.handleModelRequest('art', request, 'media-source-session')).toMatchObject({ ok: true, status: 200 });
+    expect(dispatchMediaRequest).toHaveBeenCalledTimes(1);
+    expect(dispatchMediaRequest).toHaveBeenCalledWith(request, expect.objectContaining({
+      instance: 'art', sessionId: 'media-source-session',
+    }));
   });
 });

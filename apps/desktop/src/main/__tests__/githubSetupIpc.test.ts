@@ -1,14 +1,20 @@
+vi.mock('../git-context/githubAppAuthorization.desktop', () => ({ readGithubAppToken: vi.fn(async (): Promise<string | null> => null), onGithubAppAuthorizationChanged: () => () => {} }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../secrets/providerSecretStore', () => ({ readGhostSecret: vi.fn() }));
 vi.mock('../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../appSessionState', () => ({ activeOwnerScopeKey: () => 'test-owner', getActiveAppSession: () => ({ dataOwnerId: 'test-owner' }) }));
 const mocks = vi.hoisted(() => ({
-  handlers: new Map<string, (...args: any[]) => unknown>(),
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
   guard: vi.fn(),
   start: vi.fn(),
+  connectGithub: vi.fn(),
+  installGithub: vi.fn(),
+  githubStatus: vi.fn(),
+  openExternal: vi.fn(),
   invalidate: vi.fn(),
   send: vi.fn(),
   readToken: vi.fn(),
+  readTokenDetailed: vi.fn(),
   disposers: [] as Array<() => void>,
   connected: undefined as undefined | (() => void),
   focused: null as null | { isDestroyed(): boolean; webContents: { send(channel: string): void } },
@@ -17,10 +23,14 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../deepLink', () => ({ getDeepLinkMainWindow: () => mocks.main }));
 vi.mock('../secondary-windows', () => ({ isSecondaryAppWindow: (win: unknown) => win === mocks.secondary }));
+vi.mock('../scheduler-host/webhook/runtime.js', () => ({ getScheduleWebhookHost: () => ({
+  connectGithub: mocks.connectGithub, installGithub: mocks.installGithub, githubStatus: mocks.githubStatus,
+}) }));
 vi.mock('electron', () => ({
+  shell: { openExternal: mocks.openExternal },
   app: { getPath: () => '/test/userData', once: (_event: string, dispose: () => void) => mocks.disposers.push(dispose) },
   ipcMain: {
-    handle: (name: string, fn: (...args: any[]) => unknown) => mocks.handlers.set(name, fn),
+    handle: (name: string, fn: (...args: unknown[]) => unknown) => mocks.handlers.set(name, fn),
   },
   BrowserWindow: {
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.send } }],
@@ -28,9 +38,12 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: mocks.guard }));
-vi.mock('../git-context/ghBinary', () => ({ configureManagedGhRoot: vi.fn() }));
+vi.mock('../git-context/ghBinary', () => ({
+  configureManagedGhRoot: vi.fn(),
+  exposeInstalledManagedGh: vi.fn(async () => undefined),
+}));
 vi.mock('../git-context/ghCliTokenSource', () => ({
-  getSharedGhCliTokenSource: () => ({ invalidate: mocks.invalidate, readToken: mocks.readToken }),
+  getSharedGhCliTokenSource: () => ({ invalidate: mocks.invalidate, readToken: mocks.readToken, readTokenDetailed: mocks.readTokenDetailed }),
 }));
 vi.mock('../git-context/githubSetup', () => ({
   createGithubSetup: (_root: string, connected: () => void) => {
@@ -38,6 +51,7 @@ vi.mock('../git-context/githubSetup', () => ({
     return { start: mocks.start, snapshot: () => ({ phase: 'idle' }), cancel: vi.fn() };
   },
 }));
+import { readGithubAppToken } from '../git-context/githubAppAuthorization.desktop';
 import { openGithubSignIn, readGithubConnection, registerGithubSetupIpc } from '../git-context/githubSetupIpc';
 import { readGhostSecret } from '../secrets/providerSecretStore';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
@@ -48,6 +62,7 @@ beforeEach(() => {
   vi.mocked(readGhostSecret).mockReset();
   vi.mocked(outboundFetch).mockReset();
   mocks.readToken.mockResolvedValue(null);
+  mocks.readTokenDetailed.mockResolvedValue({ ok: false, reason: 'gh-not-logged-in' });
 });
 afterEach(() => mocks.disposers.splice(0).forEach(dispose => dispose()));
 
@@ -67,6 +82,13 @@ describe('GitHub setup IPC boundary', () => {
       expect(mocks.send).toHaveBeenCalledWith('git-context:github-connected');
     },
   );
+  it('preserves a local CLI timeout as inconclusive and still verifies a configured fallback', async () => {
+    mocks.readTokenDetailed.mockResolvedValue({ ok: false, reason: 'gh-timeout' });
+    expect(await readGithubConnection()).toEqual({ status: 'network', source: 'gh-cli' });
+    vi.mocked(readGhostSecret).mockReturnValue('fake-fallback');
+    vi.mocked(outboundFetch).mockResolvedValue(new Response('{"login":"test-user"}'));
+    expect(await readGithubConnection()).toMatchObject({ status: 'connected', source: 'token' });
+  });
   it('does not verify or subscribe to a same-name enterprise credential', async () => {
     const instanceId = '_ns__acme__cindy-github';
     vi.mocked(readGhostSecret).mockImplementation((id) => id === instanceId ? 'synthetic-enterprise-pat' : null);
@@ -88,6 +110,24 @@ describe('GitHub setup IPC boundary', () => {
     expect(mocks.start).not.toHaveBeenCalled();
     start({});
     expect(mocks.start).toHaveBeenCalledOnce();
+  });
+  it('opens only fixed GitHub authorization and installation paths for trusted callers', async () => {
+    registerGithubSetupIpc(vi.fn());
+    const connect = mocks.handlers.get('git-context:github-app:connect')!;
+    mocks.connectGithub.mockResolvedValue('https://github.com/login/oauth/authorize?state=synthetic');
+    await connect({});
+    expect(mocks.openExternal).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=synthetic');
+    mocks.installGithub.mockResolvedValue('https://github.com/apps/example-app/installations/new');
+    await mocks.handlers.get('git-context:github-app:install')!({});
+    expect(mocks.installGithub).toHaveBeenCalledOnce();
+    expect(mocks.openExternal).toHaveBeenLastCalledWith('https://github.com/apps/example-app/installations/new');
+    mocks.openExternal.mockClear();
+    mocks.connectGithub.mockResolvedValue('https://attacker.test/login/oauth/authorize');
+    await expect(connect({})).rejects.toThrow();
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+    expect(() => connect({}, { url: 'https://github.com' })).toThrow();
+    mocks.guard.mockImplementationOnce(() => { throw new Error('untrusted'); });
+    expect(() => connect({})).toThrow('untrusted');
   });
   // Star is a local fixed-target action: arbitrary payloads and untrusted frames cannot write.
   it('guards the Star endpoints and uses the existing GitHub credential source', async () => {
@@ -159,4 +199,27 @@ it('reads only the requested plugin\'s fallback token when one is given', async 
   expect(outboundFetch).not.toHaveBeenCalled();
   expect(readGhostSecret).toHaveBeenCalledWith('other-plugin', 'token');
   expect(readGhostSecret).not.toHaveBeenCalledWith('cindy-github', 'github_pat');
+});
+
+// Unit / trusted local IPC. A legacy gh login cannot stand in for an App grant;
+// failure to read one repository count must preserve the granted scope and permissions.
+it('reads the installation scope with the App grant only when explicitly requested', async () => {
+  registerGithubSetupIpc(vi.fn());
+  const read = mocks.handlers.get('git-context:github-app:access')!;
+  await expect(read({})).resolves.toEqual({ status: 'missing' });
+  expect(mocks.readToken).not.toHaveBeenCalled();
+  expect(outboundFetch).not.toHaveBeenCalled();
+  vi.mocked(readGithubAppToken).mockResolvedValueOnce('synthetic-grant');
+  vi.mocked(outboundFetch)
+    .mockResolvedValueOnce(Response.json({ installations: [{
+      id: 7, app_slug: 'example-app', account: { login: 'example' }, repository_selection: 'all',
+      permissions: { contents: 'write' }, suspended_at: null,
+    }] }))
+    .mockResolvedValueOnce(new Response(null, { status: 403 }));
+  await expect(read({})).resolves.toEqual({ status: 'ready', installations: [{
+    id: 7, app: 'example-app', owner: 'example', selection: 'all', visibleRepositories: null,
+    permissions: { contents: 'write' }, suspended: false,
+  }] });
+  expect(outboundFetch).toHaveBeenLastCalledWith('https://api.github.com/user/installations/7/repositories?per_page=1',
+    expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer synthetic-grant' }) }));
 });

@@ -1,5 +1,5 @@
 import { cronToConfig } from '@/features/scheduler/lib/cronCodexPreset';
-import { cronToHuman } from '@/features/scheduler/lib/cronToHuman';
+import { cronToHuman } from '../../../shared/scheduleCronLabel';
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 // cronToHuman localizes only these shapes; for any other it falls back to an English sentence.
