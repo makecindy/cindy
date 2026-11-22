@@ -287,13 +287,17 @@ describe('cindy-tool-fold extension source', () => {
   it('slices a large folded record without pinning the whole history back in', async () => {
     const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
     const messages = pairs(40);
-    messages[0] = call('huge-write', 'write', { path: 'a.txt', content: 'w'.repeat(30000) });
-    messages[1] = result('huge-write', 'write', 'wrote 30000 bytes');
+    messages[0] = call('huge-write', 'read', { path: 'big.txt' });
+    messages[1] = result('huge-write', 'read', 'w'.repeat(30000));
     projection(context, messages);
     const recovered = await tool.execute('t-slice', { call_id: 'huge-write' });
     const text = String(recovered.content![0].text);
     expect(text.length).toBeLessThan(1200);
     expect(text).toContain('Call cindy_toolfold_read again with offset');
+    // 部分读取不能钉住：钉住会把整段塞回下一次请求，读上限就白设了。
+    const afterSlice = projection(context, messages);
+    expect(callIds(afterSlice)).not.toContain('huge-write');
+    expect(records(afterSlice).join('\n')).toContain('huge-write');
   });
 
   // Bug: 超过 pin 预算的记录存进 giants 时存的是“调用说明 + 参数 + 结果”整段，

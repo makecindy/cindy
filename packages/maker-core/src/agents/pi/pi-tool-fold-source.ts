@@ -620,12 +620,12 @@ export default function (pi) {
       }
       var raw = String(original.text || '');
       if (!giants.has(String(id))) {
-        // 不超过 pin 预算的记录照旧钉住：下一次请求里看得到原文，这是既有契约。
-        // 超过预算则只转存 giant 注册表、不钉；否则 pinOriginal 会自占一条超出预算的
-        // 名额（“至少保留一条”），同一段文本在下一次请求里就出现两份：恢复结果与钉回的原调用。
+        // 只有「这次真的把整段返回」才钉住：读上限比 pin 预算小时，钉住等于把整段
+        // 塞回下一次请求，把读上限直接作废（上下文快满时尤其危险）。部分读取只转存
+        // 结果到 giant 注册表，投影里那条往返继续留在折叠态。
         // 只存结果那半：giants 是「结果」的注册表，存整段会在下次 findOriginal 里
         // 再拼一次调用说明与参数（续读的 offset 随之失真）。
-        if (raw.length <= PIN_BUDGET_CHARS) {
+        if (raw.length <= PIN_BUDGET_CHARS && raw.length <= RECOVERY_READ_MAX_CHARS) {
           pinOriginal(id);
         } else if (!admitGiant(String(id), String(original.result || ''))) {
           pinOriginal(id);
