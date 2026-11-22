@@ -1,3 +1,4 @@
+import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -48,6 +49,7 @@ export function RemoteDesktopPermissions() {
   }, [refresh]);
   if (status?.screenRecording === 'notRequired' && status.accessibility === 'notRequired')
     return null;
+  const modernPermissions = usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease);
   const ready =
     status &&
     desktopPermissionReady(status.screenRecording) &&
@@ -76,7 +78,7 @@ export function RemoteDesktopPermissions() {
           <div key={permission} className="flex flex-col gap-1">
             <ComputerPermissionRow
               compact
-              label={t(`remoteDesktop.${permission}`)}
+              label={t(modernPermissions && permission === 'accessibility' ? 'macControlPermission.pane' : `remoteDesktop.${permission}`)}
               iconSrc={permission === 'screenRecording' ? screenRecordingIcon : accessibilityIcon}
               granted={value === 'granted'}
               pending={!status || pending !== null}
@@ -92,9 +94,11 @@ export function RemoteDesktopPermissions() {
               }}
             />
             {value !== 'granted' && (
-              <p className="text-12 text-[var(--settings-section-desc)]">
+              <p className="whitespace-pre-line text-12 text-[var(--settings-section-desc)]">
                 {value === 'unknown' ? `${t('remoteDesktop.permissionUnknown')} · ` : ''}
-                {t(`remoteDesktop.${permission}Help`)}
+                {modernPermissions && permission === 'accessibility'
+                  ? t('macControlPermission.review', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+                  : t(`remoteDesktop.${permission}Help`)}
               </p>
             )}
           </div>

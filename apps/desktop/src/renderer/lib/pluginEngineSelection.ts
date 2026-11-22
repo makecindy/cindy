@@ -91,13 +91,15 @@ export function isPluginEngineSelectable(engine: PluginEngineView): boolean {
 
 /**
  * Engines shown in a model picker: engines reported unavailable (for example, plugin installed
- * locally without signing in) stay out of the picker unless one is already the active choice.
+ * locally without signing in, or turned off in Settings → Model providers) and engines the user
+ * hid there stay out of the picker unless one is already the active choice.
  */
 export function visiblePluginEngineChoices<T extends PluginEngineChoice>(
   engines: readonly T[],
   active?: { providerId: string; deviceId?: string | null } | null,
 ): T[] {
-  return engines.filter((engine) => isPluginEngineSelectable(engine) || isSamePluginEngineChoice(active, engine));
+  return engines.filter((engine) =>
+    (isPluginEngineSelectable(engine) && engine.hidden !== true) || isSamePluginEngineChoice(active, engine));
 }
 
 function parseHarnessIdentity(providerId: string): { storagePart: string; harnessId: string } | null {
@@ -283,5 +285,13 @@ export function remotePluginEngineChoices(
         !!pluginEngineKeyFromProviderId(engine.providerId)
         && isPluginEngineOfferedRemotely(engine)
         && (engine.models.length > 0 || engine.defaultModelAllowed !== false))
-      .map((engine) => ({ ...engine, deviceId: device.deviceId, deviceName: displayName(device.deviceId, device.name) })));
+      .map((engine) => {
+        const choice: PluginEngineChoice = {
+          ...engine, deviceId: device.deviceId, deviceName: displayName(device.deviceId, device.name),
+        };
+        // Hiding an engine is its owner's choice for the pickers of tasks on that computer; an
+        // engine offered to this computer's tasks is listed here either way.
+        delete choice.hidden;
+        return choice;
+      }));
 }

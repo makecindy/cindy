@@ -656,6 +656,7 @@ export function usageScope(
 ): MenubarUsageScopeInput {
   const label = (model: string) => modelNames.get(usageModelKey(model)) ?? formatModelShort(model);
   const scope = emptyScope(days, devices);
+  scope.currency = payload?.totals?.today?.currency;
   if (!payload) return scope;
   const indexOfDay = new Map(days.map((day, index) => [day, index]));
   const windows: Array<keyof MenubarUsageScopeData['models']> = ['7', '30', '90'];

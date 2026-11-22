@@ -2642,12 +2642,12 @@ function BillingOfferDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9990]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           aria-describedby={undefined}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[9991] flex max-h-[min(720px,calc(100vh-48px))]',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[min(720px,calc(100vh-48px))]',
             'w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col',
             comparingPlans ? 'max-w-[1120px]' : 'max-w-[600px]',
             'overflow-hidden',

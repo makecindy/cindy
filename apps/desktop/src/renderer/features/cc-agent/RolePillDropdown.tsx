@@ -678,7 +678,7 @@ function WorkerLayoutMenu({
       {open && (
         <div
           className={cn(
-            'absolute right-0 z-50 flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+            'absolute right-0 z-dropdown flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
             menuPlacement?.placeAbove ? 'bottom-full mb-1' : 'top-full mt-1',
           )}
           style={{
@@ -788,7 +788,7 @@ function WorkerLayoutMenu({
                         <X size={13} />
                       </button>
                       {isError && (
-                        <WorkerErrorBadge className="absolute right-2 top-1.5 z-10 shadow-[0_0_0_1.5px_var(--surface-elevated)]" />
+                        <WorkerErrorBadge className="absolute right-2 top-1.5 z-raised shadow-[0_0_0_1.5px_var(--surface-elevated)]" />
                       )}
                     </div>
                   );
@@ -1408,7 +1408,7 @@ export function RolePillDropdown({
         ref={triggerRef}
         type="button"
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border py-[3px] px-2.5',
+          'inline-flex items-center gap-1.5 rounded-full border py-0.5 px-2.5',
           'text-11 leading-none',
           // focused worker 出错时 trigger 也描红(dropdown 布局下它是常驻可见的当前 worker)
           currentAttention === 'error'
@@ -1452,7 +1452,7 @@ export function RolePillDropdown({
         <div
           ref={popoverRef}
           className={cn(
-            'absolute left-0 z-50 flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+            'absolute left-0 z-dropdown flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
             menuPlacement?.placeAbove ? 'bottom-full mb-1' : 'top-full mt-1',
           )}
           style={{
@@ -1567,7 +1567,7 @@ export function RolePillDropdown({
                   </button>
                   {/* 出错行的显式 ERR 徽章(角标叠右上); 行整体已描红, 徽章给出明确标记 */}
                   {isError && (
-                    <WorkerErrorBadge className="absolute right-2 top-1.5 z-10 shadow-[0_0_0_1.5px_var(--surface-elevated)]" />
+                    <WorkerErrorBadge className="absolute right-2 top-1.5 z-raised shadow-[0_0_0_1.5px_var(--surface-elevated)]" />
                   )}
                 </div>
               );

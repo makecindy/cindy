@@ -12,6 +12,9 @@
 import { Fragment, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { toast } from '@/lib/toast';
+import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
 import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
@@ -29,6 +32,23 @@ export function AwayFromComputerSection({ embedded = false }: { embedded?: boole
   const platform = window.electronAPI?.platform;
   // Hyprland draws its cover in the compositor; there is no preview there yet.
   const canPreview = platform !== 'linux';
+
+  const idle = awayGuard.preview === 'idle';
+  const permissionUnknown = awayGuard.preview === 'checkFailed' ||
+    (idle && (awayGuard.readFailed || (privacyOn && awayGuard.state?.permission === 'unknown')));
+  const permissionMissing = awayGuard.preview === 'permission' ||
+    (idle && !awayGuard.readFailed && privacyOn && awayGuard.state?.permission === 'missing');
+  const failed = awayGuard.preview === 'unavailable' || (idle && !!awayGuard.state?.backgroundFailure);
+  const appPath = awayGuard.state?.permissionAppPath;
+  const modernPermissions = usesMacProtectionOverride(platform, window.electronAPI?.osRelease);
+  const openPermission = async () => {
+    try {
+      await window.electronAPI.remoteDesktop.openPermission('accessibility');
+      await awayGuard.refresh();
+    } catch {
+      toast.error(t('settings.computerUse.directControl.toast.openPermissionSettingsFailed'));
+    }
+  };
 
   const rows: { key: string; node: ReactNode }[] = [
     {
@@ -54,7 +74,7 @@ export function AwayFromComputerSection({ embedded = false }: { embedded?: boole
     },
   ];
 
-  if (awayGuard.available) {
+  if (awayGuard.available || awayGuard.readFailed) {
     rows.push({
       key: 'away-guard',
       node: (
@@ -70,39 +90,68 @@ export function AwayFromComputerSection({ embedded = false }: { embedded?: boole
                 : awayFromComputerSettings.awayGuard.descriptionKey,
           )}
           checked={privacyOn}
-          disabled={awayGuard.busy}
+          disabled={awayGuard.busy || !awayGuard.available}
           onCheckedChange={(enabled) => void awayGuard.setEnabled(enabled)}
           ariaLabel={t(awayFromComputerSettings.awayGuard.titleKey)}
           note={
             <div className="flex flex-col items-start gap-2 pt-1">
-              {awayGuard.preview === 'permission' ||
-              (privacyOn && awayGuard.state?.permission === 'missing') ? (
-                <p className={SETTINGS_HINT} role="status">
-                  {t('settings.windowBehavior.awayGuard.permission')}
-                </p>
+              {permissionMissing ? (
+                <ErrorNotice
+                  className="min-w-0 max-w-full break-words"
+                  role="alert"
+                  message={t('settings.windowBehavior.awayGuard.permissionMissing')}
+                  description={<span className="whitespace-pre-line">{modernPermissions
+                    ? t('macControlPermission.review', { app: appPath?.split('/').pop() ?? 'Cindy' })
+                    : t('settings.windowBehavior.awayGuard.permission')}</span>}
+                  actions={
+                    <Button
+                      data-settings-search-action="Opens macOS System Settings for the privacy screen control permission"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void openPermission()}
+                    >
+                      {t('regionScreenshot.permission.openSettings')}
+                    </Button>
+                  }
+                >
+                  {appPath && (
+                    <p className={`${SETTINGS_HINT} mt-1 select-all font-mono [overflow-wrap:anywhere]`}>{appPath}</p>
+                  )}
+                </ErrorNotice>
+              ) : permissionUnknown || failed ? (
+                <ErrorNotice
+                  role="alert"
+                  message={t(permissionUnknown ? 'settings.windowBehavior.awayGuard.checkFailed' : 'settings.windowBehavior.awayGuard.previewUnavailable')}
+                  actions={permissionUnknown && (
+                    <Button
+                      data-settings-search-action="Checks the current system permission again after a failed read"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void awayGuard.refresh()}
+                    >
+                      {t('remoteDesktop.recheckPermissions')}
+                    </Button>
+                  )}
+                />
               ) : null}
               {canPreview && (
-              <div className="flex flex-wrap items-center gap-2" aria-live="polite">
-                <Button
-                  data-settings-search-action="Shows the privacy screen now so the owner can check locking and unlocking"
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  disabled={awayGuard.preview === 'starting'}
-                  onClick={() => void awayGuard.startPreview()}
-                >
-                  {t('settings.windowBehavior.awayGuard.preview')}
-                </Button>
-                {awayGuard.preview === 'starting' ? (
-                  <p className={SETTINGS_HINT}>
-                    {t('settings.windowBehavior.awayGuard.previewStarting')}
-                  </p>
-                ) : awayGuard.preview === 'unavailable' ? (
-                  <p className={SETTINGS_HINT} role="alert">
-                    {t('settings.windowBehavior.awayGuard.previewUnavailable')}
-                  </p>
-                ) : null}
-              </div>
+                <div className="flex flex-wrap items-center gap-2" aria-live="polite">
+                  <Button
+                    data-settings-search-action="Shows the privacy screen now so the owner can check locking and unlocking"
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    disabled={awayGuard.preview === 'starting' || !awayGuard.available}
+                    onClick={() => void awayGuard.startPreview()}
+                  >
+                    {t('settings.windowBehavior.awayGuard.preview')}
+                  </Button>
+                  {awayGuard.preview === 'starting' ? (
+                    <p className={SETTINGS_HINT}>
+                      {t('settings.windowBehavior.awayGuard.previewStarting')}
+                    </p>
+                  ) : null}
+                </div>
               )}
             </div>
           }

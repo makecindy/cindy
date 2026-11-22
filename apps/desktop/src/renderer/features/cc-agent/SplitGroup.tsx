@@ -1110,7 +1110,7 @@ function DropHighlight({ side, label }: { side: DropSide; label: string }) {
     <div
       data-split-drop-side={side}
       className={cn(
-        'pointer-events-none absolute z-40 flex items-center justify-center',
+        'pointer-events-none absolute z-page-top flex items-center justify-center',
         'border border-foreground/30 bg-foreground/5',
         positionClass,
       )}

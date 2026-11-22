@@ -427,7 +427,7 @@ export function FolderPickerPopover({
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
         className={cn(
-          'z-[10010] w-[320px] rounded-xl p-2',
+          'w-[320px] rounded-xl p-2',
           'bg-[var(--folder-picker-bg)]',
           'border border-[var(--folder-picker-border)]',
         )}

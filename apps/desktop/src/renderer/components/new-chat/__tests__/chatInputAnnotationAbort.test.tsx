@@ -120,7 +120,16 @@ vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor |
   if (editor && editor !== h.editor) editor.on('transaction', ({ transaction }) => { if (transaction.docChanged) h.documentChanged(); });
   h.editor = editor;
   const state = h.voiceState ?? (h.listening ? 'listening' : 'idle');
-  return { state, prepare: h.prepare, getState: () => h.voiceState ?? (h.listening ? 'listening' : 'idle'), isListening: state === 'listening', isBusy: state === 'listening' || state === 'submitting' || state === 'refining', draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange, start: () => { h.listening = true; return true; }, stop: h.stop, cancel: h.cancel };
+  return {
+    state, prepare: h.prepare, stop: h.stop, cancel: h.cancel,
+    getState: () => h.voiceState ?? (h.listening ? 'listening' : 'idle'),
+    getLastSubmittedText: () => '',
+    getLastRefinement: () => null,
+    isListening: state === 'listening',
+    isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
+    draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange,
+    start: () => { h.listening = true; return true; },
+  };
 } }));
 vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: h.localProviders, providerOrder: [], loading: false }) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
@@ -185,7 +194,14 @@ beforeEach(() => {
   window.electronAPI = api;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
 });
-afterEach(() => { cleanup(); clearDraft('composer-regression'); h.remoteProviders = []; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  clearDraft('composer-regression');
+  clearDraft('dictation-destination');
+  h.remoteProviders = [];
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function TaskComposer(props: ComponentProps<typeof ChatInput>) {
   const botMentions = useTaskBotMentions(props.deviceLinkDeviceId, props.remoteHostId, props.botMentions);
@@ -431,6 +447,15 @@ it('does not rehydrate an empty stored document when voice busy state changes', 
   expect(h.editor!.state.selection.from).toBe(1);
 });
 
+function focusDictationHost(editor: Editor) {
+  // jsdom lacks Chromium's native editing session.
+  supplyRangeGeometry();
+  vi.stubGlobal('EditContext', EventTarget);
+  const host = Object.assign(editor.view.dom, { editContext: null as EventTarget | null });
+  act(() => editor.view.focus());
+  return host;
+}
+
 // Replaces voiceInputEditorEditability's source guard (PR #6196, section 3.2).
 // The voice hook is an external boundary; the editor and ChatInput lock effects
 // are real. Existing hydration tests never observe editability, attachment
@@ -441,11 +466,19 @@ it('does not rehydrate an empty stored document when voice busy state changes', 
 it('locks editor and attachments for the whole voice run, but keeps permissions available', async () => {
   const view = renderComposer();
   await waitFor(() => expect(h.editor).not.toBeNull());
+  const host = focusDictationHost(h.editor!);
+  let recordingContext: EventTarget | null = null;
   for (const state of ['idle', 'listening', 'submitting', 'refining', 'idle'] as const) {
     h.voiceState = state;
     view.rerender(<ChatInput {...view.props} />);
     const busy = state !== 'idle';
     expect(h.editor!.isEditable, state).toBe(!busy);
+    if (state === 'listening') {
+      expect(host.editContext).toBeInstanceOf(EventTarget);
+      recordingContext = host.editContext;
+    }
+    expect(host.editContext, state).toBe(busy ? recordingContext : null);
+    expect(host.getAttribute('aria-readonly'), state).toBe(busy ? 'true' : null);
     expect((screen.getByRole('button', { name: 'test-suggestions' }) as HTMLButtonElement).disabled, state).toBe(busy);
     expect((screen.getByTestId('permission-selector') as HTMLButtonElement).disabled, state).toBe(false);
     if (state === 'listening') {
@@ -456,6 +489,47 @@ it('locks editor and attachments for the whole voice run, but keeps permissions 
       expect(h.stop).toHaveBeenCalledExactlyOnceWith({ waitForRefinement: true, onReadyForEndCue: expect.any(Function) });
     }
   }
+});
+
+// A second lock can take over while the same composer is still read-only.
+// Calling setEditable again emits an update and schedules an unnecessary draft save.
+it('releases the native input session on a second lock and on switching drafts', async () => {
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor!;
+  const host = focusDictationHost(editor);
+  h.voiceState = 'listening';
+  view.rerender(<ChatInput {...view.props} />);
+  expect(host.editContext).toBeInstanceOf(EventTarget);
+
+  const update = vi.fn();
+  editor.on('update', update);
+  view.rerender(<ChatInput {...view.props} disabled />);
+  expect(editor.isEditable).toBe(false);
+  expect(host.editContext).toBeNull();
+  expect(update).not.toHaveBeenCalled();
+
+  view.rerender(<ChatInput {...view.props} />);
+  expect(host.editContext).toBeInstanceOf(EventTarget);
+  h.voiceState = 'refining';
+  h.draftText = 'Source dictation';
+  view.rerender(<ChatInput {...view.props} draftKey="dictation-destination" />);
+  expect(host.editContext).toBeNull();
+  expect(host.getAttribute('aria-readonly')).toBeNull();
+  expect(editor.isEditable).toBe(true);
+  expect(editor.getText()).toBe('');
+  expect(getDraft('composer-regression')?.text).toEqual(plainTextToTiptapDoc('Source dictation'));
+});
+
+it('uses the normal Windows editor lock even when EditContext is available', async () => {
+  window.electronAPI = Object.create(window.electronAPI, { platform: { value: 'win32' } });
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const host = focusDictationHost(h.editor!);
+  h.voiceState = 'listening';
+  view.rerender(<ChatInput {...view.props} />);
+  expect(h.editor!.isEditable).toBe(false);
+  expect(host.editContext).toBeNull();
 });
 
 // User request 2026-10-24: empty composer hints must follow hover/hold/click,
@@ -1144,6 +1218,35 @@ it('keeps a remote draft with no directory local-scan-free, but searches nonempt
   expect(h.scan).toHaveBeenLastCalledWith('', expect.any(String), 2000, 'needle', 'remote-device', expect.objectContaining({ includeLocalContext: false, includeTaskHistory: true }));
 });
 
+// Unit, L342: the mounted composer sends the admitted route while a model
+// choice is a preview. A missing catalog row leaves the explicit provider in
+// the payload, and the default route stays null. The onSend port is the fixture.
+it.each([
+  ['active provider absent from the catalog', 'missing-connection', false],
+  ['current provider absent from the catalog during a preview', 'missing-connection', true],
+  ['default provider during a preview', null, true],
+] as const)('preserves the %s in the send payload', async (_label, providerId, preview) => {
+  const sessionId = 'composer-provider-route';
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only'), sshModel('preview-only')])];
+  if (preview) {
+    makerChatStore.noteAgentSwitchIntent(sessionId, 'codex', { model: 'preview-only', providerId: 'openai' });
+  }
+  const onSend = vi.fn<ComponentProps<typeof ChatInput>['onSend']>().mockResolvedValue(true);
+  try {
+    renderComposer({ sessionId, ...(preview ? { remoteHostId: 'builder' } : { deviceLinkDeviceId: 'target' }),
+      runtimeAgentKind: 'codex', vendorKey: 'codex', initialModel: 'remote-only',
+      initialProviderId: providerId, initialEffort: 'low', onSend });
+    await waitFor(() => expect(h.editor).not.toBeNull());
+    await act(async () => { h.editor!.commands.setContent('<p>Continue the task</p>'); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0][1]).toBe('remote-only');
+    expect(onSend.mock.calls[0][6]).toMatchObject({ providerId });
+  } finally {
+    makerChatStore.clearAgentSwitchIntent(sessionId);
+  }
+});
+
 it('restores text, attachments and strokes after an aborted annotated send', async () => {
   h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
   const restoreFiles = vi.fn((files: readonly AttachedFile[]) => [...files]);
@@ -1156,7 +1259,7 @@ it('restores text, attachments and strokes after an aborted annotated send', asy
     removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles, restoreFiles,
   };
   // makerChatStore 在烧录失败时返回 false(见 pendingQueueDefer 的中止用例)。
-  const onSend = vi.fn().mockResolvedValue(false);
+  const onSend = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
   const view = render(
     <ChatInput sessionId="ssh-annotated" initialWorkingDir="/workspace" runtimeAgentKind="codex"
       vendorKey="codex" deviceLinkDeviceId={null} remoteHostId="builder" attachmentState={attachmentState}
@@ -1179,6 +1282,12 @@ it('restores text, attachments and strokes after an aborted annotated send', asy
   expect(clearFiles).toHaveBeenCalled();
   const restored = restoreFiles.mock.calls.at(-1)?.[0] ?? [];
   expect(restored).toEqual([expect.objectContaining({ id: 'tray-annotated', annotationStrokes: strokes })]);
+  expect(h.editor!.isEditable).toBe(true);
+  await act(async () => { h.editor!.commands.setContent('<p>Edited before retry</p>'); });
+  await act(async () => { fireEvent.click(send); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  expect(onSend.mock.calls[1][0]).toBe('Edited before retry');
+  expect(onSend.mock.calls[1][4]).toEqual([expect.objectContaining({ id: 'tray-annotated' })]);
 });
 
 // PR #6433 / unit: retry a recovered creator draft through the real existing-task

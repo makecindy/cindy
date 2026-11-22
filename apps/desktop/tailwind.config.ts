@@ -121,6 +121,24 @@ const TAILWIND_FONT_WEIGHT = {
   "medium": "var(--font-weight-medium)",
   "semibold": "var(--font-weight-semibold)"
 };
+const TAILWIND_Z_INDEX = {
+  "below": "var(--z-below)",
+  "raised": "var(--z-raised)",
+  "page-float": "var(--z-page-float)",
+  "page-overlay": "var(--z-page-overlay)",
+  "page-top": "var(--z-page-top)",
+  "float": "var(--z-float)",
+  "float-top": "var(--z-float-top)",
+  "fullscreen": "var(--z-fullscreen)",
+  "modal": "var(--z-modal)",
+  "modal-raised": "var(--z-modal-raised)",
+  "modal-nested": "var(--z-modal-nested)",
+  "dropdown": "var(--z-dropdown)",
+  "tooltip": "var(--z-tooltip)",
+  "modal-popover-nested": "var(--z-modal-popover-nested)",
+  "toast": "var(--z-toast)",
+  "toast-top": "var(--z-toast-top)"
+};
 const MOTION_CSS = {
   "instant": "var(--motion-instant, 80ms)",
   "fast": "var(--motion-fast, 150ms)",
@@ -214,6 +232,8 @@ const config: Config = {
       spacing: TAILWIND_SPACING,
       borderRadius: TAILWIND_RADIUS,
       fontWeight: TAILWIND_FONT_WEIGHT,
+      // 层级刻度（DESIGN.md §6 层级刻度）：z-modal 等类名读 tokens.css 的 --z-* 变量。
+      zIndex: TAILWIND_Z_INDEX,
       transitionDuration: { DEFAULT: MOTION_CSS.fast },
       transitionTimingFunction: { DEFAULT: MOTION_CSS['ease-move'] },
       lineClamp: {

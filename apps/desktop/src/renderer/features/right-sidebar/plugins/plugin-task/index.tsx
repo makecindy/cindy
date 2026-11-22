@@ -56,6 +56,7 @@ function PluginTaskTabPillTitle({ state, t }: { state: PluginTaskTabState; t: TF
 function PluginTaskTabPillIcon({ state }: { state: PluginTaskTabState }) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   if (ghost?.iconDataUrl) {
+    // design: intrinsic-geometry — 13px 插件品牌图的内容裁剪（图标自身的圆角，不是控件边框），与 plugin-view 页签一致
     return <img src={ghost.iconDataUrl} alt="" width={13} height={13} className="rounded-[3px]" />;
   }
   return <Puzzle size={13} />;
