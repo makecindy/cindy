@@ -259,7 +259,7 @@ import {
   readCodexRolloutModelProvider,
   sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
-import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
+import { hasCurrentTeammateInstructions, rememberDeliveredTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
@@ -1749,7 +1749,7 @@ const isLikelyValidThreadId = (id: string | undefined): id is string =>
 export class CodexAgent extends BaseAgent {
   readonly kind = 'codex' as const;
   readonly capabilities: Capabilities;
-  /** Teammate instruction marker this process put into each thread; cleared by a compaction it sees. */
+  /** Teammate instruction marker this process put into each recent thread (bounded); cleared by a compaction it sees. */
   private readonly deliveredTeammateInstructions = new Map<string, string>();
 
   /**
@@ -7510,7 +7510,7 @@ assertRouteCurrent();
       } else if (developerInstructions) {
         codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         if (opts.botRuntimeProfile) {
-          this.deliveredTeammateInstructions.set(threadId, teammateRuntimeInstructionItem(developerInstructions).marker);
+          rememberDeliveredTeammateInstructions(this.deliveredTeammateInstructions, threadId, teammateRuntimeInstructionItem(developerInstructions).marker);
         }
       }
       sdkSessionId = threadId;
@@ -7745,7 +7745,7 @@ assertRouteCurrent();
             });
             assertCurrentHost('thread/inject_items');
           }
-          this.deliveredTeammateInstructions.set(threadId, current.marker);
+          rememberDeliveredTeammateInstructions(this.deliveredTeammateInstructions, threadId, current.marker);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         // Resumed app-server threads may have sticky collaborationMode='plan' from

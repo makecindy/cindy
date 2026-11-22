@@ -35,6 +35,20 @@ function tailInstructionState(tail: string, marker: string, truncated: boolean):
   return 'unknown';
 }
 
+/** Threads whose delivered marker a process remembers; older ones fall back to the tail check. */
+export const DELIVERED_TEAMMATE_INSTRUCTIONS_LIMIT = 256;
+
+/** Remember the marker a process put into a thread, keeping the most recent threads only. Forgetting
+ * one only costs a re-delivery when its tail cannot answer, never a skipped guide. */
+export function rememberDeliveredTeammateInstructions(delivered: Map<string, string>, threadId: string, marker: string): void {
+  delivered.delete(threadId);
+  delivered.set(threadId, marker);
+  for (const oldest of delivered.keys()) {
+    if (delivered.size <= DELIVERED_TEAMMATE_INSTRUCTIONS_LIMIT) break;
+    delivered.delete(oldest);
+  }
+}
+
 /** Bounded dedupe only. A missing/compacted/unreadable marker means re-deliver, never skip the guide.
  * Passing a remote reader (even without tail support) never falls through to the local filesystem.
  * `delivered` is the marker this process itself put into the thread (thread/start or injection); it

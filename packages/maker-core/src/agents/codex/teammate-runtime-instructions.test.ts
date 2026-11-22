@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions';
+import { DELIVERED_TEAMMATE_INSTRUCTIONS_LIMIT, hasCurrentTeammateInstructions, rememberDeliveredTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions';
 let root: string;
 let file: string;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'teammate-runtime-context-')); file = join(root, 'rollout.jsonl'); });
@@ -73,4 +73,16 @@ it('trusts this process\'s own delivery only when the bounded tail is inconclusi
   expect(await hasCurrentTeammateInstructions(file, marker, undefined, marker)).toBe(false);
   await writeFile(file, entry('OTHER'));
   expect(await hasCurrentTeammateInstructions(file, marker, undefined, marker)).toBe(false);
+});
+// Review (#12144): a long-running process keeps delivery records for recent threads only; a
+// re-delivered thread counts as recent again.
+it('keeps delivery records for the most recent threads only', () => {
+  const delivered = new Map<string, string>();
+  for (let i = 0; i < DELIVERED_TEAMMATE_INSTRUCTIONS_LIMIT; i += 1) rememberDeliveredTeammateInstructions(delivered, `t${i}`, 'm');
+  rememberDeliveredTeammateInstructions(delivered, 't0', 'm2');
+  rememberDeliveredTeammateInstructions(delivered, 'new', 'm');
+  expect(delivered.size).toBe(DELIVERED_TEAMMATE_INSTRUCTIONS_LIMIT);
+  expect(delivered.get('t0')).toBe('m2');
+  expect(delivered.has('t1')).toBe(false);
+  expect(delivered.get('new')).toBe('m');
 });
