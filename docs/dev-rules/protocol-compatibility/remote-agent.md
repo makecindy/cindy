@@ -41,6 +41,14 @@ Desktop 与 Node Host 的共同发送事务在既有 user 行的 `agentMeta.disp
 未收到信号时，原消息最多额外定时检查一次。每次派发仍须通过完整账号检查；
 已取消的消息和可能已送达但未确认的发送不走这条重试路径。不改变中继协议。
 
+ACP 会话命令状态（2026-11-22）：`t: 'state'` 可选追加 `pluginEngineCommandNames`，只在运行端句柄提供每会话
+命令名单（`getPluginEngineCommandNames`，当前为 ACP `available_commands_update` 广播的名字清单）时发送。它复用
+既有 `maker:remote-agent:v1` NDJSON 状态行，不新增 `op`、方法、能力协商、IPC allowlist 或 relay 解析。新控制端
+从 `started.state` 与后续状态行读取同一字段，由代理句柄的 `getPluginEngineCommandNames` 透出，供发送／steer 守卫
+（`defusePluginEngineWireEnvelope`）识别引擎自有命令；新控制端连旧运行端时字段缺省即空名单，旧控制端把未知
+状态键作为不透明状态忽略。host 仍仅在现有状态快照变化时发送（当前最长间隔 2 秒）；供应商组和自建中转透明
+转发原状态行，无需同步改动。回归覆盖 host 快照与 proxy 的初始／增量状态。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。

@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller } from '../controller/poller';
 import { RemoteAgentRunClient } from '../controller/runClient';
-import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
+import { createRemoteAgentHost, hostSessionIdFor, snapshotHandleState, type HostedStartInput } from '../host/runHost';
 import * as runTunnel from '../host/tunnel';
 
 /** 协议层 id 是 36 位 UUID 形态。 */
@@ -112,6 +112,24 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+// Regression for #11963: the host's existing state snapshot is the only path
+// for a remote ACP session's per-session command roster to reach its controller.
+it('includes an engine-advertised command roster in state only when the handle exposes one', () => {
+  const pluginEngineCommandNames = ['deploy', 'review'];
+  const acpState = snapshotHandleState({
+    id: 'acp-session',
+    model: 'm',
+    getPluginEngineCommandNames: () => pluginEngineCommandNames,
+  } as unknown as AgentSessionHandle);
+  expect(acpState).toMatchObject({ pluginEngineCommandNames });
+
+  const builtinState = snapshotHandleState({
+    id: 'builtin-session',
+    model: 'm',
+  } as unknown as AgentSessionHandle);
+  expect(builtinState).not.toHaveProperty('pluginEngineCommandNames');
 });
 
 function sessionRoot(controller: string, sessionId: string): string {

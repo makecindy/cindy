@@ -682,6 +682,11 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     get disabledSkillPaths() {
       return Array.isArray(state.disabledSkillPaths) ? state.disabledSkillPaths as string[] : undefined;
     },
+    ...(started.agentKind === 'acp' ? {
+      getPluginEngineCommandNames: () => Array.isArray(state.pluginEngineCommandNames)
+        ? (state.pluginEngineCommandNames as unknown[]).filter((n): n is string => typeof n === 'string')
+        : [],
+    } : {}),
 
     send: (message, opts) => sendLikeTracked('send', message, opts),
     steer: (message, opts) => sendLikeTracked('steer', message, opts),

@@ -4,11 +4,20 @@
  * (控制端 UI,见 D2),且**全量可用** —— /goal /learn /cmd 的业务体由 main 按
  * ctx.deviceId 隧道路由到被控端,不再有静态黑名单剔除。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadAllCommands } from '@/lib/slashCommands';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS,
+  loadAllCommands,
+  refreshSlashCommandRosterWhileOpen,
+} from '@/lib/slashCommands';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 beforeEach(() => {
+  vi.unstubAllGlobals();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -210,6 +219,45 @@ describe('loadAllCommands deviceId', () => {
     expect(s.listAgentCommands).toHaveBeenCalledWith('pi', {
       allowManagedPiPackagePreview: false,
     });
+  });
+
+  // Regression for #11963: an ACP update may arrive while / remains open.
+  // Refreshes must be sequential and stop when the palette closes, avoiding a
+  // queue of stale Device Link reads if one host response is slow.
+  it('refreshes an open ACP roster after each prior read settles, then stops', async () => {
+    vi.useFakeTimers();
+    const s = stubElectron();
+    let finishFirst!: (value: Awaited<ReturnType<typeof s.listAgentCommands>>) => void;
+    s.listAgentCommands.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValueOnce({ success: true, commands: [c('deploy', 'agent-builtin')] });
+    const observed: import('@cindy/maker-core').UnifiedCommand[][] = [];
+    const refresh = async () => {
+      observed.push(await loadAllCommands('claude-code', null, {
+        sessionId: 'acp-session', skipAgentSkills: true, forceReload: true,
+      }));
+    };
+    const stop = refreshSlashCommandRosterWhileOpen(refresh);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.listAgentCommands).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS * 3);
+      expect(s.listAgentCommands).toHaveBeenCalledTimes(1);
+
+      finishFirst({ success: true, commands: [c('start', 'agent-builtin')] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observed[0]?.some((command) => command.name === 'start')).toBe(true);
+      await vi.advanceTimersByTimeAsync(ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS - 1);
+      expect(s.listAgentCommands).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.listAgentCommands).toHaveBeenCalledTimes(2);
+      expect(observed[1]?.some((command) => command.name === 'deploy')).toBe(true);
+
+      stop();
+      await vi.advanceTimersByTimeAsync(ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS * 3);
+      expect(s.listAgentCommands).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+    }
   });
 
   it('reports a pending Pi runtime catalog so the open palette can retry', async () => {

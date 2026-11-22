@@ -856,6 +856,30 @@ describe('exec-server relay gate', () => {
   });
 });
 
+describe('remote ACP command state', () => {
+  // Regression for #11963: the proxy's AgentSessionHandle must expose both the
+  // initial host snapshot and later state updates; old hosts still mean no commands.
+  it('projects the remote engine roster from the initial and updated state', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const startedNames = ['start'];
+    const updatedNames = ['deploy'];
+    const create = (state: Record<string, unknown>) => createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'acp-1', agentKind: 'acp', model: 'm', shadowDir: '', methods: [], state },
+      workspace,
+      mapEvent: mapClaudeHostedEvent,
+      recordApproval: () => {},
+      newId: () => 'request-id',
+      dispose: async () => {},
+    });
+    const controller = create({ pluginEngineCommandNames: startedNames });
+    expect(controller.handle.getPluginEngineCommandNames?.()).toEqual(startedNames);
+    controller.onState({ pluginEngineCommandNames: updatedNames });
+    expect(controller.handle.getPluginEngineCommandNames?.()).toEqual(updatedNames);
+    expect(create({}).handle.getPluginEngineCommandNames?.()).toEqual([]);
+  });
+});
+
 describe('wire payloads', () => {
   it('accepts imported files with relative paths and personal files in the new Skill and rule folders', () => {
     const payload = decodeOpenPayload({

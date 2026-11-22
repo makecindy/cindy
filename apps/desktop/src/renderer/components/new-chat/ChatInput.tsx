@@ -301,6 +301,7 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  refreshSlashCommandRosterWhileOpen,
   pluginSkillSetupName,
   rewriteBuiltInSkillDraftForSend,
   leadingSlashInvocation,
@@ -4802,7 +4803,7 @@ export function ChatInput({
       );
       // device-link 远程会话:agent-builtin / agent-skill 从被控端读(deviceLinkDeviceId);
       // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
-      loadAllCommands(
+      return loadAllCommands(
         paletteAgentKind,
         slashWorkingDir,
         {
@@ -5307,8 +5308,11 @@ export function ChatInput({
 
   useEffect(() => {
     if (!slashOpen) return;
+    if (pluginEngineActive && sessionId) {
+      return refreshSlashCommandRosterWhileOpen(() => reloadSlashCommands({ forceReload: true }));
+    }
     reloadSlashCommands({ forceReload: true });
-  }, [slashOpen, reloadSlashCommands]);
+  }, [pluginEngineActive, reloadSlashCommands, sessionId, slashOpen]);
   useEffect(() => {
     if (!slashOpen) {
       piRuntimeRetryRef.current = 0;

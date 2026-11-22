@@ -58,6 +58,29 @@ export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [
   100, 250, 500, 1_000, 2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000,
 ] as const;
 
+/** While an ACP `/` palette is open, refresh its session-specific command roster at this cadence. */
+export const ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS = 5_000;
+
+/** Start one sequential refresh loop; the returned disposer prevents new reads after the palette closes. */
+export function refreshSlashCommandRosterWhileOpen(refresh: () => void | Promise<void>): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const run = () => {
+    if (stopped) return;
+    void Promise.resolve()
+      .then(() => stopped ? undefined : refresh())
+      .catch(() => undefined)
+      .finally(() => {
+        if (!stopped) timer = setTimeout(run, ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS);
+      });
+  };
+  run();
+  return () => {
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
+}
+
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
     && (
