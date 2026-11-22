@@ -18,12 +18,15 @@ import {
 import { getCachedPluginHarnessModels, onPluginHarnessModelsChanged } from '../maker-host/acp-host.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  PLUGIN_ENGINE_NAME_MAX,
   PLUGIN_ENGINES_INVOKE,
   PLUGIN_ENGINES_PUSH,
   pluginEngineProviderId,
   type PluginEnginePermissionMode,
+  type PluginEnginePrefsInput,
   type PluginEngineView,
 } from '../../shared/pluginEngines.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 
 /**
  * The list the plugin publishes for its engine wins (like a provider's own model list); without
@@ -52,6 +55,15 @@ function engineModels(harness: PluginHarness): PluginEngineView['models'] {
 /** The models a new task on this engine can pick from (published list, else the last-seen one). */
 export function pluginEngineModelsOf(harness: PluginHarness): PluginEngineView['models'] {
   return engineModels(harness);
+}
+
+/** The engine without what only its own computer's settings page shows. */
+function withoutSettingsDetails(view: PluginEngineView): PluginEngineView {
+  if (view.declaredName === undefined && view.disabledModels === undefined) return view;
+  const offered = { ...view };
+  delete offered.declaredName;
+  delete offered.disabledModels;
+  return offered;
 }
 
 /** Names of the agent modes Cindy can show (the renderer localizes them by id). */
@@ -99,29 +111,95 @@ export interface PluginEngineRemoteUseAccess {
 }
 let remoteUseAccess: PluginEngineRemoteUseAccess | null = null;
 
+/** What the user set for one engine in Settings → Model providers (maker-host/plugin-engine-prefs-store.ts). */
+export interface PluginEngineSettings {
+  name?: string;
+  hidden?: true;
+  suspended?: true;
+  disabledModels?: readonly string[];
+}
+
+/**
+ * The per-account store behind those settings, supplied by the desktop wiring for the same reason
+ * as PluginEngineRemoteUseAccess. Until it is supplied every engine reads as the plugin declares it.
+ */
+export interface PluginEngineSettingsAccess {
+  read(key: string): PluginEngineSettings;
+  update(key: string, patch: Omit<PluginEnginePrefsInput, 'key'>): Promise<unknown>;
+  onChange(listener: () => void): () => void;
+}
+let settingsAccess: PluginEngineSettingsAccess | null = null;
+
+/** The user's settings for an engine, for admission (pluginEngineSessionAdmission.ts). */
+export function pluginEngineSettingsOf(harness: Pick<PluginHarness, 'key'>): PluginEngineSettings {
+  return settingsAccess?.read(harness.key) ?? {};
+}
+
 function toView(harness: PluginHarness): PluginEngineView {
+  const settings = pluginEngineSettingsOf(harness);
+  const listed = engineModels(harness);
+  const off = settings.disabledModels?.length ? new Set(settings.disabledModels) : null;
+  const disabledModels = off ? listed.filter((model) => off.has(model.id)) : [];
   return {
     key: harness.key,
     providerId: pluginEngineProviderId(harness.key),
     ghostId: harness.ghostId,
     harnessId: harness.harnessId,
-    name: harness.name,
+    name: settings.name ?? harness.name,
     ...(harness.description ? { description: harness.description } : {}),
     ...(harness.iconDataUrl ? { iconDataUrl: harness.iconDataUrl } : {}),
-    availability: harness.availability,
+    // Turned off by the user: reported like an engine its plugin cannot run, which every reader
+    // (older phones and computers included) already keeps out of new tasks.
+    availability: settings.suspended ? { state: 'unavailable', reason: 'suspended' } : harness.availability,
     ...(harness.reportsUsage ? { reportsUsage: true } : {}),
-    models: engineModels(harness),
+    models: off ? listed.filter((model) => !off.has(model.id)) : listed,
     ...enginePermissionModes(harness),
     remoteUse: remoteUseAccess?.read(harness) ?? {
       supported: harness.remoteWorkspace === true,
       enabled: false,
       shareSupported: harness.remoteWorkspace === true && harness.guestWorkspace === true,
     },
+    ...(settings.hidden ? { hidden: true as const } : {}),
+    ...(settings.suspended ? { suspended: true as const } : {}),
+    ...(settings.name ? { declaredName: harness.name } : {}),
+    ...(disabledModels.length > 0 ? { disabledModels } : {}),
   };
 }
 
 export function listPluginEngineViews(): PluginEngineView[] {
   return getPluginHarnessRegistry().list().map(toView);
+}
+
+const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models']);
+
+/** Shape and size check of a settings change; null = not a valid request. */
+function parsePluginEnginePrefsInput(input: unknown): PluginEnginePrefsInput | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const value = input as Record<string, unknown>;
+  if (Object.keys(value).some((field) => !PREFS_FIELDS.has(field))) return null;
+  if (typeof value.key !== 'string' || !value.key || value.key.length > 200) return null;
+  const request: PluginEnginePrefsInput = { key: value.key };
+  if (value.name !== undefined) {
+    if (value.name !== null && (typeof value.name !== 'string' || !value.name.trim()
+      || value.name.trim().length > PLUGIN_ENGINE_NAME_MAX)) return null;
+    request.name = value.name === null ? null : value.name.trim();
+  }
+  if (value.hidden !== undefined) {
+    if (typeof value.hidden !== 'boolean') return null;
+    request.hidden = value.hidden;
+  }
+  if (value.suspended !== undefined) {
+    if (typeof value.suspended !== 'boolean') return null;
+    request.suspended = value.suspended;
+  }
+  if (value.models !== undefined) {
+    const models = value.models as { ids?: unknown; disabled?: unknown } | null;
+    if (!models || typeof models !== 'object' || Array.isArray(models) || typeof models.disabled !== 'boolean'
+      || !Array.isArray(models.ids) || models.ids.length === 0 || models.ids.length > 200
+      || models.ids.some((id) => typeof id !== 'string' || !id || id.length > 256)) return null;
+    request.models = { ids: [...new Set(models.ids as string[])], disabled: models.disabled };
+  }
+  return Object.keys(request).length > 1 ? request : null;
 }
 
 /**
@@ -132,10 +210,15 @@ export function listPluginEngineViews(): PluginEngineView[] {
 export const REMOTE_PLUGIN_ENGINE_ICON_MAX_CHARS = 64 * 1024;
 const REMOTE_PLUGIN_ENGINE_TOTAL_ICON_MAX_CHARS = 512 * 1024;
 
-/** Keep the engine list usable when a device has a large catalogue of plugin artwork. */
+/**
+ * The list a phone or another computer reads. Keeps it usable when a device has a large catalogue
+ * of plugin artwork, and leaves out what only this computer's settings page shows (the declared
+ * name behind a display name, the models the user turned off).
+ */
 export function remotePluginEngineViews(views: readonly PluginEngineView[]): PluginEngineView[] {
   let remainingIconChars = REMOTE_PLUGIN_ENGINE_TOTAL_ICON_MAX_CHARS;
-  return views.map((view) => {
+  return views.map((listed) => {
+    const view = withoutSettingsDetails(listed);
     if (!view.iconDataUrl) return view;
     const size = view.iconDataUrl.length;
     if (size <= REMOTE_PLUGIN_ENGINE_ICON_MAX_CHARS && size <= remainingIconChars) {
@@ -187,12 +270,15 @@ export interface RegisterPluginEnginesIpcOpts {
   isDeviceLinkInvoke?(): boolean;
   /** The per-engine remote-use switch; absent = engines cannot be opened to other computers here. */
   remoteUse?: PluginEngineRemoteUseAccess;
+  /** The user's per-engine settings; absent = engines are listed as declared and cannot be changed here. */
+  settings?: PluginEngineSettingsAccess;
 }
 
 /** Returns a disposer for the change subscriptions. */
 export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): () => void {
   const remote = () => opts.isDeviceLinkInvoke?.() === true;
   remoteUseAccess = opts.remoteUse ?? null;
+  settingsAccess = opts.settings ?? null;
   opts.handle(PLUGIN_ENGINES_INVOKE.LIST, (event) => {
     if (remote()) return remotePluginEngineViews(listPluginEngineViews());
     opts.assertTrusted(event);
@@ -220,6 +306,38 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     publish();
     return remoteUse;
   });
+  // Renaming, hiding or turning off an engine (or its models) is decided at this computer only.
+  opts.handle(PLUGIN_ENGINES_INVOKE.SET_PREFS, async (event, input) => {
+    if (remote()) {
+      throwIpcError('PERMISSION_DENIED', 'Plugin engine settings can only be changed on the computer that has the plugin');
+    }
+    opts.assertTrusted(event);
+    const request = parsePluginEnginePrefsInput(input);
+    if (!request) throwIpcError('INVALID_PARAMS', 'Invalid plugin engine settings request');
+    const access = settingsAccess;
+    if (!access) throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin engine settings are not available here');
+    const { key, ...patch } = request;
+    const harness = getPluginHarnessRegistry().list().find((item) => item.key === key);
+    // Setting something needs an engine this computer lists (and models it lists); undoing always
+    // works, also for an engine whose plugin was turned off meanwhile.
+    const sets = typeof patch.name === 'string' || patch.hidden === true || patch.suspended === true
+      || patch.models?.disabled === true;
+    if (sets && !harness) throwIpcError('NOT_FOUND', 'The plugin that provides this engine is disabled or removed');
+    if (harness && patch.models?.disabled) {
+      const listed = new Set(engineModels(harness).map((model) => model.id));
+      if (patch.models.ids.some((id) => !listed.has(id))) throwIpcError('INVALID_PARAMS', 'Unknown plugin engine model');
+    }
+    // The plugin's own name is the default, not a display name to remember.
+    if (harness && patch.name === harness.name) patch.name = null;
+    try {
+      await access.update(key, patch);
+    } catch {
+      // The store's own errors can name files of this computer; they stay in main's log.
+      throwIpcError('INTERNAL', 'Plugin engine settings could not be saved');
+    }
+    publish();
+    return harness ? toView(harness) : null;
+  });
   let lastPayload = '';
   const publish = (): void => {
     const engines = listPluginEngineViews();
@@ -231,10 +349,13 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   const offRegistry = getPluginHarnessRegistry().onChange(publish);
   const offModels = onPluginHarnessModelsChanged(publish);
   const offRemoteUse = remoteUseAccess?.onChange(publish);
+  const offSettings = settingsAccess?.onChange(publish);
   return () => {
     offRegistry();
     offModels();
     offRemoteUse?.();
+    offSettings?.();
     remoteUseAccess = null;
+    settingsAccess = null;
   };
 }

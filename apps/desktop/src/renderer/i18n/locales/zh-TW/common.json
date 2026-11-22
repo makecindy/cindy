@@ -4546,6 +4546,22 @@
         "hideProvider": "在模型選擇器中隱藏",
         "showProvider": "在模型選擇器中顯示"
       },
+      "plugin": {
+        "title": "插件提供的供應商",
+        "badge": "插件",
+        "rowTip": "{{provider}} · 由插件提供",
+        "source": "由插件提供",
+        "declaredName": "插件裡的名稱：{{name}}",
+        "note": "這個供應商由已安裝的插件提供，用插件自己的引擎執行任務。登入和連線在插件裡管理；停用或解除安裝插件後，它會從這裡消失。",
+        "openPlugin": "打開插件",
+        "resetName": "恢復插件裡的名稱",
+        "suspendedBanner": "該供應商已停用，新任務和自動化都不會再使用它，你的其他電腦和分享的人也不能呼叫。插件本身不受影響。如果只是不想在模型選擇器裡看到它，可以改為隱藏。",
+        "hiddenBanner": "已從模型選擇器中隱藏。正在使用它的任務和自動化不受影響。",
+        "unavailableBanner": "插件回報這個引擎暫時無法執行。打開插件可以查看原因。",
+        "unavailableBannerReason": "暫時無法執行：{{reason}}",
+        "modelsEmpty": "這個引擎還沒有列出模型，新任務會使用它自己的預設模型。執行過一次任務後，這裡會列出具體的模型。",
+        "modelSwitchAria": "啟用 {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "API key 連線",
         "replaceKey": "編輯連線設定",
@@ -8533,7 +8549,9 @@
           "unsupported": "這個插件還不支援讓其他電腦使用它的引擎。",
           "remoteControlOff": "這台電腦還沒有允許同帳號裝置遠端控制，其他電腦不能使用這個引擎。",
           "ariaLabel": "允許你的其他電腦使用 {{engine}}",
-          "descriptionShareable": "開啟後，你的其他電腦和分享的好友無需安裝插件即可用這個引擎執行任務。Agent 在這台電腦上執行，使用這台電腦的登入和配額；檔案和指令仍留在任務所在的電腦上。"
+          "descriptionShareable": "開啟後，你的其他電腦和分享的好友無需安裝插件即可用這個引擎執行任務。Agent 在這台電腦上執行，使用這台電腦的登入和配額；檔案和指令仍留在任務所在的電腦上。",
+          "providerDisabled": "這個供應商已在模型供應商裡停用，其他電腦不能使用這個引擎。",
+          "openProviders": "前往「模型供應商」設定"
         },
         "githubRelease": {
           "title": "插件更新",

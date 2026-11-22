@@ -19,6 +19,11 @@ export const PLUGIN_ENGINES_INVOKE = {
    * only: it is not on the device-link allowlist, another computer cannot flip it.
    */
   SET_REMOTE_USE: 'maker:set-plugin-engine-remote-use',
+  /**
+   * Renames, hides or turns off one engine of this computer, or turns some of its models off
+   * (Settings → Model providers). Local window only, like SET_REMOTE_USE.
+   */
+  SET_PREFS: 'maker:set-plugin-engine-prefs',
 } as const;
 
 export const PLUGIN_ENGINES_PUSH = {
@@ -101,7 +106,37 @@ export interface PluginEngineView {
    * not offered.
    */
   remoteUse?: { supported: boolean; enabled: boolean; shareSupported?: boolean };
+  /**
+   * What the user set for this engine on its own computer (Settings → Model providers). All four
+   * are absent until the user changes something, and on a Cindy version from before they existed.
+   *
+   * `hidden`: left out of the model pickers of tasks on that computer; tasks already on it and
+   * automations go on. `suspended`: turned off there, so `availability.state` is 'unavailable'
+   * and nothing new can start on it (readers that do not know the flag already treat it that way).
+   * A model the user turned off is not in `models`. A display name the user gave replaces `name`.
+   */
+  hidden?: true;
+  suspended?: true;
+  /** The name the plugin declares, when `name` is the user's own. Not sent to phones or other computers. */
+  declaredName?: string;
+  /** The models the user turned off, as the engine lists them. Not sent to phones or other computers. */
+  disabledModels?: PluginEngineModel[];
 }
+
+/** One change to an engine's settings; only the fields present are changed. */
+export interface PluginEnginePrefsInput {
+  /** `<pluginInstance>:<harnessId>`. */
+  key: string;
+  /** A display name on this computer; null goes back to the name the plugin declares. */
+  name?: string | null;
+  hidden?: boolean;
+  suspended?: boolean;
+  /** Turns these models of the engine off or on again. */
+  models?: { ids: string[]; disabled: boolean };
+}
+
+/** Longest display name the user can give an engine (a plugin's declared name has the same bound). */
+export const PLUGIN_ENGINE_NAME_MAX = 64;
 
 /** The engine can run a task of another computer of the same account right now. */
 export function isPluginEngineOfferedRemotely(view: Pick<PluginEngineView, 'availability' | 'remoteUse'>): boolean {
@@ -146,6 +181,12 @@ export function parseOfferedPluginEngines(raw: unknown): PluginEngineView[] {
         ...(typeof remoteUse.shareSupported === 'boolean' ? { shareSupported: remoteUse.shareSupported } : {}),
       },
     };
+    // The owner's picker and settings choices stay on the owner's computer: an engine that is
+    // offered here is listed for this computer's tasks whether or not its owner hid it there.
+    delete offered.hidden;
+    delete offered.suspended;
+    delete offered.declaredName;
+    delete offered.disabledModels;
     return isPluginEngineOfferedRemotely(offered) ? [offered] : [];
   });
 }

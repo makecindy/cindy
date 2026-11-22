@@ -46,6 +46,11 @@ export interface MobilePluginEngine {
   /** 插件图标(data URL)；缺省 = 通用引擎标识。 */
   iconDataUrl?: string;
   availability: { state: 'available' | 'unavailable' | 'unknown'; message?: string };
+  /**
+   * 用户在那台电脑的「设置 → 模型供应商」里把它从模型选择器中隐藏了：选择器不再列出，已经在用它的任务
+   * 照常显示名字、图标和用量。旧电脑不带这个字段。用户在那里停用的引擎由那台电脑报成 unavailable。
+   */
+  hidden?: true;
   models: MobilePluginEngineModel[];
   permissionModes: { id: string; displayName: string }[];
   defaultPermissionMode: string;
@@ -160,6 +165,7 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
       ...(description ? { description } : {}),
       ...(iconDataUrl ? { iconDataUrl } : {}),
       availability: { state, ...(message ? { message } : {}) },
+      ...(item.hidden === true ? { hidden: true as const } : {}),
       models,
       permissionModes: modes,
       defaultPermissionMode: requestedDefault && modes.some((mode) => mode.id === requestedDefault)
@@ -347,8 +353,9 @@ export function buildPluginEngineGroups(
   for (const engine of options.engines) {
     const selectable = isPluginEngineSelectable(engine);
     const active = options.active?.providerId === engine.providerId ? options.active : null;
-    // 只装了插件但未登录 / 未就绪的引擎不在模型选择器里占位；仅当前任务已选该引擎时保留以便识别状态。
-    if (!selectable && !active) continue;
+    // 只装了插件但未登录 / 未就绪的引擎、用户在那台电脑上隐藏的引擎都不在模型选择器里占位；
+    // 仅当前任务已选该引擎时保留以便识别状态。
+    if ((!selectable || engine.hidden) && !active) continue;
     const engineMatches = !needle || engine.name.toLowerCase().includes(needle);
     const rows = pluginEngineModelRows(engine, active?.modelId)
       .filter((model) => engineMatches

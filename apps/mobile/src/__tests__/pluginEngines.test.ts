@@ -278,4 +278,22 @@ describe('a task running on a plugin engine', () => {
       ...labels, unavailable: () => '',
     })).toEqual([]);
   });
+
+  // 2026-11-22：电脑上的「设置 → 模型供应商」可以把插件引擎从模型选择器中隐藏(引擎列表追加可选 hidden)。
+  // 生产入口：normalizePluginEngines(device-link 回包) + buildPluginEngineGroups(选择器分组)。
+  // 依据：隐藏只改陈列，Desktop 与 Mobile 选择器同一口径，已选着它的任务照常显示。此前的用例没有这个字段。
+  // 最小失败输入：隐藏的引擎仍列在选择器里；当前任务选着的引擎被隐藏后选不中 / 不显示；hidden 不是 true 也被隐藏。
+  it('omits an engine hidden on its computer unless the task is already on it', () => {
+    const [hidden, notHidden] = normalizePluginEngines([
+      { ...desktopView, hidden: true },
+      { ...desktopView, providerId: 'acp-plugin:_ns__local__agy:agy', name: 'Antigravity', hidden: 'yes' },
+    ]);
+    expect(hidden).toMatchObject({ providerId: DSH, hidden: true });
+    expect(notHidden).not.toHaveProperty('hidden');
+    const picker = (active: { providerId: string; modelId: string } | null) =>
+      buildPluginEngineGroups({ engines: [hidden!, notHidden!], active }, '', { ...labels, unavailable: () => '' })
+        .map((group) => group.title);
+    expect(picker(null)).toEqual(['Antigravity']);
+    expect(picker({ providerId: DSH, modelId: 'deepseek-v4' })).toEqual(['DeepSeek Harness', 'Antigravity']);
+  });
 });

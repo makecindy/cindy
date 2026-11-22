@@ -4645,6 +4645,22 @@
         "hideProvider": "Ocultar do seletor de modelos",
         "showProvider": "Mostrar no seletor de modelos"
       },
+      "plugin": {
+        "title": "Provedores de plugins",
+        "badge": "Plugin",
+        "rowTip": "{{provider}} · Fornecido por um plugin",
+        "source": "Fornecido por um plugin",
+        "declaredName": "Nome no plugin: {{name}}",
+        "note": "Este provedor vem de um plugin instalado e executa tarefas com o mecanismo do próprio plugin. O login e a conexão são gerenciados no plugin. Se você desativar ou desinstalar o plugin, ele some desta lista.",
+        "openPlugin": "Abrir plugin",
+        "resetName": "Restaurar o nome do plugin",
+        "suspendedBanner": "Este provedor está desativado: novas tarefas e automações não o usam mais, e seus outros computadores e as pessoas com quem você compartilha também não podem usá-lo. O plugin em si não é afetado. Se você só não quer vê-lo no seletor de modelos, oculte-o em vez disso.",
+        "hiddenBanner": "Oculto do seletor de modelos. As tarefas e automações que já o usam não são afetadas.",
+        "unavailableBanner": "O plugin informa que este mecanismo não pode ser executado no momento. Abra o plugin para ver o motivo.",
+        "unavailableBannerReason": "Não pode ser executado no momento: {{reason}}",
+        "modelsEmpty": "Este mecanismo ainda não listou seus modelos, então novas tarefas usam o modelo padrão dele. Depois que uma tarefa for executada nele, os modelos aparecerão aqui.",
+        "modelSwitchAria": "Ativar {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "Conexão por chave de API",
         "replaceKey": "Editar configurações da conexão",
@@ -8648,7 +8664,9 @@
           "unsupported": "Este plugin ainda não permite usar o mecanismo dele a partir de outros computadores.",
           "remoteControlOff": "Este computador ainda não permite controle remoto, então outros computadores não podem usar este mecanismo.",
           "ariaLabel": "Permitir que seus outros computadores usem {{engine}}",
-          "descriptionShareable": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem executar tarefas com este mecanismo sem instalar o plugin. O Agent é executado neste computador, usando o login e a cota dele. Os arquivos e os comandos permanecem no computador em que a tarefa está."
+          "descriptionShareable": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem executar tarefas com este mecanismo sem instalar o plugin. O Agent é executado neste computador, usando o login e a cota dele. Os arquivos e os comandos permanecem no computador em que a tarefa está.",
+          "providerDisabled": "Este provedor está desativado em Provedores, então outros computadores não podem usar este mecanismo.",
+          "openProviders": "Abrir configurações de provedores"
         },
         "githubRelease": {
           "title": "Atualizações do plug-in",

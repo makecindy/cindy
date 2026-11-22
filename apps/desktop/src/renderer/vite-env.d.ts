@@ -5820,6 +5820,14 @@ interface ElectronAPI {
      * (PluginEngineView.remoteUse). The new state also arrives through onPluginEnginesChanged.
      */
     setPluginEngineRemoteUse?: (key: string, enabled: boolean) => Promise<{ supported: boolean; enabled: boolean }>;
+    /**
+     * Renames, hides or turns off one engine of this computer, or turns some of its models off
+     * (Settings → Model providers). Resolves with the engine as it is listed afterwards (null when
+     * its plugin is no longer on); the new list also arrives through onPluginEnginesChanged.
+     */
+    setPluginEnginePrefs?: (
+      input: import('../shared/pluginEngines').PluginEnginePrefsInput,
+    ) => Promise<import('../shared/pluginEngines').PluginEngineView | null>;
     /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
     onPluginEnginesChanged: (
       cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,

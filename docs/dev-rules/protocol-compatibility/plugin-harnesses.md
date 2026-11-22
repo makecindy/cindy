@@ -92,6 +92,50 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 
 实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx` 与 `PluginEngineRemoteUse.test.tsx`。
 
+## 插件引擎进入模型供应商列表（2026-11-22）
+
+这台电脑上已启用、已批准的插件声明的引擎，同时列在「设置 → 模型供应商」左栏(名字后带「插件」标识)，插件停用或
+卸载后随引擎列表消失。只在视图与设置层和普通供应商并列：`@cindy/model-providers` 的类型、普通供应商的目录、
+排序与停用存储(`model-disable-prefs.json`、供应商顺序、`local-codex-provider-prefs.json`)都不改，不增加 manifest
+字段、权限行、批准状态或安装迁移，存量插件影响：无。产品约定见[供应商设置](../../product-rules/provider-settings.md)。
+
+- **设置存储**：按账号的 `owners/<账号>/plugin-engine-prefs.json`，
+  `{ engines: { "<插件实例>:<引擎 id>": { name?, hidden?, suspended?, disabledModels? } } }`，只记用户改过的项，
+  恢复默认即删除对应字段(整项为空时删除键，文件为空时删除文件)。显示名 ≤64 字符，关闭的模型 ≤200 个、id ≤256 字符，
+  最多 256 个引擎；文件缺失、损坏或形状不对按「没有设置」读取，不会把引擎读成停用。插件停用再启用保留设置。
+  「允许被远程调用」仍在 `remote-provider-access-prefs.json`，不搬动。
+- **写入通道**：`maker:set-plugin-engine-prefs`，正文 `{ key, name?: string | null, hidden?, suspended?, models?: { ids, disabled } }`，
+  只改出现的字段，返回写入后的引擎视图(插件已不在时为 `null`)。只在本机窗口可用，不进 device-link allowlist；
+  device-link 调用 `PERMISSION_DENIED`，形状或长度不对、关闭引擎没列出的模型 `INVALID_PARAMS`，给已不在列表里的
+  引擎写入新设置 `NOT_FOUND`(撤销已有设置始终允许)。写入后照常经 `maker:plugin-engines-changed` 推完整列表。
+- **`maker:list-plugin-engines` 的变化**(既有字段的新取值 + 追加可选字段，旧端无需升级)：
+  - 用户起的显示名直接作为 `name`；关掉的模型不在 `models` 里；停用的引擎报 `availability: { state: 'unavailable', reason: 'suspended' }`
+    (不带 `message`，避免旧手机把主进程语言的文案原样显示)。旧手机与旧电脑本来就把 `unavailable` 的引擎排除在新任务之外。
+  - 追加可选 `hidden: true`、`suspended: true`。新版桌面与手机的模型选择器不列 `hidden` 的引擎(当前任务已选着它时保留)；
+    旧端不认识 `hidden`，照旧列出，隐藏只改陈列，不构成越权。
+  - 追加可选 `declaredName`(有显示名时的插件原名)与 `disabledModels`(关掉的模型)，只给本机窗口的设置页；
+    device-link 回包(手机、同账号其他电脑、分享受邀者)在 `remotePluginEngineViews` 去掉这两项。
+  - 没有任何设置时回包与此前逐字段一致，不多出字段。
+- **借用方不受主人的「隐藏」影响**：另一台电脑或受邀者借用引擎时(`parseOfferedPluginEngines`、
+  renderer `remotePluginEngineChoices`)去掉 `hidden`、`suspended`、`declaredName`、`disabledModels`；停用的引擎因
+  `unavailable` 不再开放。
+- **准入**(在装着插件的电脑上判定，前端不列出不算边界)：停用的引擎与关掉的模型不能开新任务、不能把任务换过去、
+  不能用于自动化与协同 Worker(`admitPluginEngineSession` / `admitPluginEngineSwitchTarget`)；停用的引擎不对同账号
+  其他电脑和分享受邀者开放(`isPluginEngineOfferedRemotely` / `isPluginEngineOfferedToGuests`)，远程调用开关原样保留，
+  启用后恢复；关掉的模型在执行端的 `pluginEngines.isOffered`(`remote-agent/host/service.ts`)同样拒绝，与
+  `remoteModelAccess` 的模型范围叠加。隐藏不参与任何准入。本机已在运行的任务不被打断；其他电脑与受邀者的任务沿用既有的逐轮实时复核，
+  停用或关掉模型后从下一轮起被拒绝(与关闭「允许被远程调用」相同)。
+- **中转**：走既有 invoke 帧与既有只读 channel，没有新帧、新 channel 进 allowlist 或恢复语义变化，官方与自建中转
+  原样转发回包里多出的可选字段，无需修改；未做互通重跑，依据是 device-link 包与 allowlist 均无改动。
+- **暂未提供**：与普通供应商混排的拖动排序、模型选择器里的「已隐藏」展开区、设置页列出同账号其他电脑上的插件引擎、
+  供应商组与引擎切换。
+
+实现见 `maker-host/plugin-engine-prefs-store.ts`、`maker-ipc/pluginEnginesIpc.ts`、`maker-ipc/pluginEngineSessionAdmission.ts`、
+`maker-host/pluginEngineRemoteUse.ts`、renderer `components/settings/PluginEngineProviders.tsx` 与 mobile
+`session/pluginEngines.ts`；回归见 `plugin-engine-prefs-store.test.ts`、`pluginEnginesIpc.test.ts`、
+`pluginEngineSessionAdmission.test.ts`、`PluginEngineProviders.test.tsx`、`providersSectionDeepLink.test.tsx`、
+`PluginEnginesSection.test.tsx` 与 mobile `pluginEngines.test.ts`。
+
 ## 引擎账号用量
 
 执行引擎通过 `PUT /harnesses` 的可选布尔标志 `reportsUsage: true` 表示其主 JSON-RPC worker

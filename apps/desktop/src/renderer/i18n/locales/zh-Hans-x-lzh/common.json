@@ -4546,6 +4546,22 @@
         "hideProvider": "隐于模型之选",
         "showProvider": "显于模型之选"
       },
+      "plugin": {
+        "title": "法器所供之供方",
+        "badge": "法器",
+        "rowTip": "{{provider}} · 法器所供",
+        "source": "法器所供",
+        "declaredName": "法器中之名：{{name}}",
+        "note": "此供方出于已安设之法器，以法器自身之引擎行差事。登门与连接皆于法器中理之；法器停用或卸除，则此项自此处隐去。",
+        "openPlugin": "启法器",
+        "resetName": "复法器中之名",
+        "suspendedBanner": "此供方已停，新差事与自运皆不复用之，君之他机与所共之友亦不得调用。法器自身不受其扰。若但不欲见于模型之选，可改为隐。",
+        "hiddenBanner": "已隐于模型之选。方用之差事与自运皆不受其扰。",
+        "unavailableBanner": "法器报称此引擎暂不能行。启法器可察其故。",
+        "unavailableBannerReason": "暂不能行：{{reason}}",
+        "modelsEmpty": "此引擎尚未列其模型，新差事从其自身之预设模型。行过一差事后，其模型即列于此。",
+        "modelSwitchAria": "启 {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "API key 连接",
         "replaceKey": "修连接之设",
@@ -8519,7 +8535,9 @@
           "unsupported": "此法器尚未许他机用其引擎。",
           "remoteControlOff": "此机尚未许同名籍之设备远程控制，他机不可用此引擎。",
           "ariaLabel": "许君之他机用 {{engine}}",
-          "descriptionShareable": "启之，则君之他机与所共之友无须安设法器，即可用此引擎行差事；Agent 行于此机，用此机之登门与限额；文件与指令仍留于差事所在之机。"
+          "descriptionShareable": "启之，则君之他机与所共之友无须安设法器，即可用此引擎行差事；Agent 行于此机，用此机之登门与限额；文件与指令仍留于差事所在之机。",
+          "providerDisabled": "此供方已于模型供方中停，他机不可用此引擎。",
+          "openProviders": "往「模型供方」设置"
         },
         "githubRelease": {
           "title": "法器更新",
