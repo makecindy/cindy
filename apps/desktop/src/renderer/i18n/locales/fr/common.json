@@ -8921,7 +8921,7 @@
       },
       "installProgress": {
         "awaitingConsent": "En attente de confirmation…",
-        "installFailed": "Échec de l’installation"
+        "installFailed": "Échec de l'installation"
       },
       "updateAll": {
         "title": "Tout mettre à jour · {{count}} plugins",
@@ -18993,7 +18993,7 @@
     },
     "sidebar": {
       "loading": "chargement…",
-      "skillHub": "Skill Hub",
+      "skillHub": "SkillHub",
       "backToLocal": "Retour aux skills locaux",
       "openInExplorer": "Ouvrir dans le gestionnaire de fichiers",
       "nameTakenAria": "Nom déjà utilisé",

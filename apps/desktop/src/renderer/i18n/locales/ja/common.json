@@ -1638,7 +1638,7 @@
       "about": "約 {{value}}",
       "estimating": "見積もり中",
       "estimatingSub": "データが不足",
-      "last7Days": "直近 7 日",
+      "last7Days": "直近7日",
       "runsOut": "使い切る目安",
       "aroundDate": "{{date}}ごろ",
       "atThisPace": "今のペースで",
@@ -11342,7 +11342,7 @@
           "daily": "毎日",
           "manual": "手動"
         },
-        "minutes": "{{count}}分",
+        "minutes": "{{count}} 分",
         "presence": "本人が対応中 · 不在{{minutes}}分で再開",
         "scheduledWait": "{{time}}に開始",
         "attribution": "{{name}} が {{owner}} に代わって返信",
@@ -15065,9 +15065,9 @@
       "userTurnCostDetailsTitle": "リクエストの明細",
       "relative": {
         "justNow": "たった今",
-        "minutesAgo_other": "{{count}}分前",
-        "hoursAgo_other": "{{count}}時間前",
-        "daysAgo_other": "{{count}}日前"
+        "minutesAgo_other": "{{count}} 分前",
+        "hoursAgo_other": "{{count}} 時間前",
+        "daysAgo_other": "{{count}} 日前"
       }
     },
     "runningStatus": {
@@ -18746,7 +18746,7 @@
     },
     "sidebar": {
       "loading": "読み込み中…",
-      "skillHub": "Skill Hub",
+      "skillHub": "SkillHub",
       "backToLocal": "ローカルに戻る",
       "openInExplorer": "ファイルマネージャで開く",
       "nameTakenAria": "名前は既に使用されています",

@@ -1765,7 +1765,7 @@
       "gateTitle": "로그인하면 남은 양을 볼 수 있어요",
       "gateBody": "Cindy에 로그인하거나 로그인 건너뛰기를 선택하면 여기에 구독 남은 양과 오늘 사용량이 표시돼요.",
       "settings": "관리",
-      "refresh": "새로 고침",
+      "refresh": "새로고침",
       "monthScopeLocal": "최근 30일 · 이 컴퓨터",
       "monthScopeAll": "최근 30일 · 모든 기기",
       "expand": "펼치기",
@@ -2098,7 +2098,7 @@
           "install": "설치",
           "reinstall": "다시 설치",
           "uninstall": "제거",
-          "refresh": "새로 고침",
+          "refresh": "새로고침",
           "run": "실행",
           "syncAuth": "인증 동기화",
           "syncAuthTip": "로컬 Codex 자격 증명을 이 원격에 복사해서 다시 로그인하지 않도록 합니다"
@@ -4951,7 +4951,7 @@
             "none": "선택한 채널 없음"
           },
           "toggleAria": "{{guild}} 켜기",
-          "more": "더보기",
+          "more": "더 보기",
           "modeAria": "{{guild}}에서 적용할 채널",
           "mode": {
             "all": "모든 채널",
@@ -13108,7 +13108,7 @@
         "quota": {
           "prefix": "⚠️ 제공자 한도 도달",
           "currentProvider": "현재 제공자",
-          "namedProvider": "“{{name}}”",
+          "namedProvider": "\"{{name}}\"",
           "headlineSpendCap": "{{prefix}}: 워크스페이스 소유자가 설정한 지출 한도에 도달했습니다({{who}}). 이 작업은 지금 계속할 수 없습니다.",
           "headlineUsageLimit": "{{prefix}}: {{who}} 계정의 사용량이 한도에 도달했습니다. 이 작업은 지금 계속할 수 없습니다.",
           "headlineBalance": "{{prefix}}: {{who}} 계정의 잔액 또는 할당량이 부족합니다. 이 작업은 지금 계속할 수 없습니다.",
@@ -17172,7 +17172,7 @@
       "treeLoading": "파일 불러오는 중…",
       "treeAction": {
         "collapseAll": "모두 접기",
-        "refresh": "새로 고침",
+        "refresh": "새로고침",
         "showIgnoredDirs": "무시된 디렉터리 표시",
         "hideIgnoredDirs": "무시된 디렉터리 숨기기",
         "showIgnoredDirsUnsupported": "상대 기기의 {{appName}} 버전이 오래되어 무시된 디렉터리를 표시할 수 없습니다"

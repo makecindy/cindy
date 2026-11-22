@@ -9311,7 +9311,7 @@
         "deleteFailed": "Falha ao excluir"
       },
       "deleteConfirm": {
-        "title": "Excluir \"{{name}}\"?",
+        "title": "Excluir “{{name}}”?",
         "message": "Novas sessões do Agent não carregarão mais este MCP.",
         "confirm": "Excluir"
       },
