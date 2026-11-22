@@ -47,6 +47,19 @@ export interface BotCompactRuntimeRefreshDeps {
 }
 
 /**
+ * A resource/profile refresh signal may keep the live runtime only when the
+ * preflight compared against an applied baseline and found it unchanged. No
+ * hydrated Profile or no applied baseline (e.g. its first write failed) is not
+ * proof of "unchanged", so it keeps the previous rebuild.
+ */
+export function botRuntimeRefreshNeedsReplacement(snapshot: {
+  runtimeEpochChanged: boolean;
+  runtimeEpochBaseline: boolean;
+} | null | undefined): boolean {
+  return !snapshot || !snapshot.runtimeEpochBaseline || snapshot.runtimeEpochChanged;
+}
+
+/**
  * Preserve the live runtime when a frozen Bot resource changed. The preflight
  * must finish before close, and ownership is checked again immediately before
  * the destructive half of the swap. The preflight reports whether the runtime

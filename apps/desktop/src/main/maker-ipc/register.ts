@@ -802,6 +802,7 @@ import { withSessionPermissionChange } from './sessionPermissionChange.js';
 import { retryBotWelcomePermissionDispatch, withBotPermissionChange } from './botPermissionDispatch.js';
 import { getPluginHostToolCaller } from '../mcp-integrations/hostToolCaller.js';
 import {
+  botRuntimeRefreshNeedsReplacement,
   createBotCompactRuntimeRefreshCoordinator,
   prepareBotCapabilityEpochBeforeSend,
   refreshBotRuntimeAfterModelSelection,
@@ -9679,11 +9680,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // old process and its resume ownership untouched.
         const replaced = await withRehydrateCloseSuppressed(expectedSession.id, async () => {
           const refreshed = await replaceBotRuntimeAfterPreflight({
-            // Same comparison as the pre-send path: an unchanged runtime epoch
-            // (e.g. a V2 teammate memory edit) is not worth a restart.
-            preflight: async () => !!(await preflightBotRuntimeResources(
-              createOpts as MakerSessionCreateOpts,
-            ))?.runtimeEpochChanged,
+            // An epoch confirmed unchanged against an applied baseline (e.g. a
+            // V2 teammate memory edit) is not worth a restart; no baseline still rebuilds.
+            preflight: async () => botRuntimeRefreshNeedsReplacement(
+              await preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts),
+            ),
             isCurrentOwner: () => maker.getSession(expectedSession.id) === expectedSession,
             isIdle: () => !isRuntimeBusy(),
             close: () => maker.closeSession(expectedSession.id, 'runtime-refresh'),
