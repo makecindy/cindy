@@ -38,6 +38,17 @@ describe('wireNoteMemory', () => {
     });
   });
 
+  // 2026-11-21: the idle direct send plans only `started-tasks`. Its commit used to rewrite every
+  // other kind to "absent", so the next ordinary send repeated the client note. Unit tier.
+  it('a plan for one kind leaves the other remembered notes alone', () => {
+    const memory = createWireNoteMemory();
+    memory.plan('s1', { 'client-environment': PHONE, 'started-tasks': null }).commit();
+    const letter = memory.plan('s1', { 'started-tasks': '[你开出的任务] A：空闲' });
+    expect(letter.notes).toEqual({ 'started-tasks': '[你开出的任务] A：空闲' });
+    letter.commit();
+    expect(memory.plan('s1', { 'client-environment': PHONE, 'started-tasks': '[你开出的任务] A：空闲' }).notes).toEqual({});
+  });
+
   it('does not treat an uncommitted (rejected) send as delivered', () => {
     const memory = createWireNoteMemory();
     memory.plan('s1', { 'ui-language': UI });

@@ -4015,6 +4015,37 @@ describe('Cindy Make task note', () => {
     await transaction.sendToAgentAccepted('session-1', 'Continue');
     expect(vi.mocked(session.send).mock.calls[1][0]).not.toContain('[Side chat context]');
   });
+  // 2026-11-21: a conversation that started tasks hears their state on its next turn, once per
+  // change, without the note reaching the saved text. Unit tier: real transaction + wireNoteMemory;
+  // without the wiring the first send carries no `[你开出的任务]`.
+  it('adds the started-task state to the wire message once per change, never to the saved text', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const memory = createWireNoteMemory();
+    const note = '[你开出的任务] 你在这条对话里用 send_to_session 新建的下列任务，开出后还没有发回；以下是宿主读到的当前状态，不是对方的回信：\n- 任务「A」(session_id: a)：空闲';
+    const readStartedTaskStateNote = vi.fn(async () => note);
+    const { deps } = createDeps({
+      getSession: () => session,
+      readStartedTaskStateNote,
+      planRepeatableWireNotes: (sessionId, notes, opts) => memory.plan(sessionId, notes, opts),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', '进度怎么样', undefined, {
+      persistUserMessage: { clientId: 'q1', content: '进度怎么样', origin: { kind: 'session', senderSessionId: 'b' } },
+    });
+    expect(vi.mocked(session.send).mock.calls[0]?.[0]).toContain(`${note}\n\n`);
+    expect(readStartedTaskStateNote).toHaveBeenCalledWith('session-1', { currentSenderSessionId: 'b' });
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[1].content).toBe('进度怎么样');
+
+    await transaction.sendToAgentAccepted('session-1', '还有吗', undefined, {
+      persistUserMessage: { clientId: 'q2', content: '还有吗' },
+    });
+    expect(vi.mocked(session.send).mock.calls[1]?.[0]).not.toContain('[你开出的任务]');
+
+    await transaction.sendToAgentAccepted('session-1', '/compact');
+    expect(session.send).toHaveBeenLastCalledWith('/compact', expect.anything());
+  });
+
   it('annotates the wire message of a cindy-make task but persists the original text', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const { deps } = createDeps({

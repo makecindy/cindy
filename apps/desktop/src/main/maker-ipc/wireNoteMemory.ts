@@ -16,9 +16,11 @@
  *
  * 只有跨过不可逆 dispatch 边界(accepted)才 `commit`;被拒 / 抛错不记,下次照常重发。
  * `[消息来源]` 不在此列:它陈述的是"本条"由谁发,逐条都要带。
+ * `[你开出的任务]`(started-tasks)在此列:状态没变就不重说;空闲直发只计划这一段,commit 只改
+ * 本次计划里出现的段。
  */
 
-export type RepeatableWireNoteKind = 'ui-language' | 'client-environment' | 'cindy-make' | 'side-chat' | 'bot-thread';
+export type RepeatableWireNoteKind = 'ui-language' | 'client-environment' | 'cindy-make' | 'side-chat' | 'bot-thread' | 'started-tasks';
 
 export type RepeatableWireNotes = Partial<Record<RepeatableWireNoteKind, string | null>>;
 
@@ -35,7 +37,7 @@ export interface WireNoteMemory {
   reset(sessionId: string): void;
 }
 
-const KINDS: readonly RepeatableWireNoteKind[] = ['ui-language', 'client-environment', 'cindy-make', 'side-chat', 'bot-thread'];
+const KINDS: readonly RepeatableWireNoteKind[] = ['ui-language', 'client-environment', 'cindy-make', 'side-chat', 'bot-thread', 'started-tasks'];
 
 export function createWireNoteMemory(): WireNoteMemory {
   const lastSent = new Map<string, Map<RepeatableWireNoteKind, string | null>>();
@@ -62,8 +64,10 @@ export function createWireNoteMemory(): WireNoteMemory {
         commit() {
           // plan 之后 reset 过:这份计划面对的是旧上下文,不记为已发送,下一轮整体重发。
           if (epochOf(sessionId) !== epoch) return;
-          const next = new Map<RepeatableWireNoteKind, string | null>();
-          for (const kind of KINDS) next.set(kind, notes[kind] ?? null);
+          // Only the kinds this plan was given change; a path that plans one kind (the idle
+          // direct send plans `started-tasks` alone) must not make the others look unsent.
+          const next = new Map<RepeatableWireNoteKind, string | null>(lastSent.get(sessionId) ?? []);
+          for (const kind of KINDS) if (kind in notes) next.set(kind, notes[kind] ?? null);
           lastSent.set(sessionId, next);
         },
       };

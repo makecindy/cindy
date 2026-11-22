@@ -29,6 +29,7 @@ import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGA
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
+import { prependNoteToWireUserMessage } from '../agentHandoff.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
@@ -432,6 +433,36 @@ describe('plugin continuation through production send admission', () => {
     expect(h.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
     expect(h.admitLocalSession).not.toHaveBeenCalled();
   });
+});
+
+// 2026-11-21: a letter that wakes an idle conversation goes out by the idle direct send, not the
+// send transaction; it must carry the same `[你开出的任务]`, deduplicated by the same memory.
+// Unit tier through the production slice; without the wiring the first letter has no note.
+it('a letter to an idle conversation carries the started-task state once per change', async () => {
+  const note = '[你开出的任务] 你在这条对话里用 send_to_session 新建的下列任务，开出后还没有发回；以下是宿主读到的当前状态，不是对方的回信：\n- 任务「A」(session_id: a)：出错';
+  const sent: unknown[] = [];
+  const opener = {
+    id: 'opener', agentKind: 'claude-code', permissionMode: 'ask', isTurnRunning: () => false,
+    send: async (message: unknown, opts: SendOptions & { onAccepted?: () => Promise<void>; onDispatching?: () => void }) => {
+      sent.push(message);
+      await opts.onAccepted?.();
+      opts.onDispatching?.();
+      return { accepted: true };
+    },
+  };
+  const readStartedTaskStateNote = vi.fn(async () => note);
+  const h = botTaskDispatchHarness({ opener: { permissionMode: 'ask', planModeEnabled: false } }, { opener }, {
+    shouldPrependMobileClientPromptNote: () => true,
+    buildWireMessageSourceNote: () => null,
+    prependNoteToWireUserMessage,
+    readStartedTaskStateNote,
+    sessionQueueOriginForDispatcher: () => ({ kind: 'session', senderSessionId: 'b' }),
+  });
+  await h.sendToSessionInternal({ targetSessionId: 'opener', message: 'B is done', dispatcherSessionId: 'b' });
+  await h.sendToSessionInternal({ targetSessionId: 'opener', message: 'B again', dispatcherSessionId: 'b' });
+  expect(readStartedTaskStateNote).toHaveBeenCalledWith('opener', { currentSenderSessionId: 'b' });
+  expect(JSON.stringify(sent[0])).toContain('[你开出的任务]');
+  expect(JSON.stringify(sent[1])).not.toContain('[你开出的任务]');
 });
 
 it('advances an accepted send_to_session with a dispatcher without touching human-send time', async () => {

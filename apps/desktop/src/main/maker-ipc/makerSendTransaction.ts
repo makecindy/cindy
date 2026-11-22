@@ -531,6 +531,11 @@ export interface MakerSendTransactionDeps {
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
   readBotThreadNote?(sessionId: string): Promise<PrivateChatContext | null>;
+  /**
+   * `[你开出的任务]`(startedTaskStateNote.ts):这条对话用 send_to_session 新建、开出后还没发回的
+   * 本机任务的当前状态;没有可说的为 null。只进 wire 消息,按 wireNoteMemory 去重。
+   */
+  readStartedTaskStateNote?(sessionId: string, opts: { currentSenderSessionId?: string }): Promise<string | null>;
   /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
   readInputHandoffOwnerNote?(sessionId: string): string | null;
   inputHandoffOwnerNoteDelivered?(sessionId: string): void;
@@ -1684,6 +1689,13 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const botThreadNote = allowsEnvironmentNotes
         ? ((await deps.readBotThreadNote?.(sessionId).catch(() => null)) ?? null)
         : null;
+      const currentOrigin = soForReconcile.persistUserMessage?.origin as { kind?: unknown; senderSessionId?: unknown } | undefined;
+      const startedTaskNote = allowsEnvironmentNotes && !sess.remoteHostId
+        ? ((await deps.readStartedTaskStateNote?.(sessionId, {
+            currentSenderSessionId: currentOrigin?.kind === 'session' && typeof currentOrigin.senderSessionId === 'string'
+              ? currentOrigin.senderSessionId : undefined,
+          }).catch(() => null)) ?? null)
+        : null;
       const repeatableNotes: RepeatableWireNotes = {
         'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
           ? SIDE_CHAT_CONTEXT : null,
@@ -1691,6 +1703,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         'bot-thread': botThreadNote ? JSON.stringify([botThreadNote.text, botThreadNote.imageUrls]) : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
+        'started-tasks': startedTaskNote,
       };
       const wireNotePlan = allowsEnvironmentNotes
         ? (deps.planRepeatableWireNotes?.(sessionId, repeatableNotes, { force: pendingHandoff !== null }) ?? null)
@@ -1706,6 +1719,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       let outgoing = uiLanguageNote
         ? prependNoteToWireUserMessage(withCindyMakeNote as HandoffWireMessage, uiLanguageNote)
         : withCindyMakeNote;
+      if (plannedNotes['started-tasks']) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['started-tasks']);
+      }
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
       }

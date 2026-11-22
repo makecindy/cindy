@@ -1313,6 +1313,7 @@ import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from './planRecon
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { readReplyQuoteNote, REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
 import { readBotDmThreadContextNote } from './botDmThreadContext.js';
+import { createDesktopStartedTaskStateNoteReader } from './startedTaskStateNoteHost.js';
 import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
 import { resolveSessionUsageReset } from './sessionUsageReset.js';
 import {
@@ -3350,6 +3351,16 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
 let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
 let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 let codexIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
+
+/** `[你开出的任务]` reader; the live phase is the runtime snapshot get_task_digest also reads. */
+const readStartedTaskStateNoteForOwner = createDesktopStartedTaskStateNoteReader(async (taskId) => {
+  const result = await tryGetOrcaCollabService()?.getSessionRuntime({ targetSessionId: taskId });
+  return result?.ok ? result.runtime : null;
+});
+/** A shared task's turns are seen by its guests; the owner's task titles stay out of them. */
+function readStartedTaskStateNote(sessionId: string, opts: { currentSenderSessionId?: string }): Promise<string | null> {
+  return isSessionSharedTaskActive(sessionId) ? Promise.resolve(null) : readStartedTaskStateNoteForOwner(sessionId, opts);
+}
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -12074,9 +12085,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             },
           )
         : null;
-      const outgoingMessage: UserMessage = sourceNote
+      const withSourceNote: UserMessage = sourceNote
         ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, sourceNote) as UserMessage)
         : withHandoff;
+      // [你开出的任务] also reaches a conversation woken idle by a letter; same dedupe as the send transaction.
+      const sender = source?.origin as { kind?: unknown; senderSessionId?: unknown } | undefined;
+      // Planned even when there is nothing to say, so a state that clears and comes back is said again.
+      const startedTaskPlan = !session.remoteHostId && shouldPrependMobileClientPromptNote(message, session.agentKind)
+        ? wireNoteMemory.plan(session.id, {
+            'started-tasks': await readStartedTaskStateNote(session.id, {
+              currentSenderSessionId: sender?.kind === 'session' && typeof sender.senderSessionId === 'string'
+                ? sender.senderSessionId : undefined,
+            }).catch(() => null),
+          }, { force: Boolean(pendingHandoff) })
+        : null;
+      const plannedStartedTaskNote = startedTaskPlan?.notes['started-tasks'];
+      const outgoingMessage: UserMessage = plannedStartedTaskNote
+        ? (prependNoteToWireUserMessage(withSourceNote as HandoffWireMessage, plannedStartedTaskNote) as UserMessage)
+        : withSourceNote;
       // Idle direct sends never carry internal coordination (that is force-queued).
       const releaseTurnSource = noteChannelTurnSource(session.id, channelTurnSourceFor(source?.origin, false));
       try {
@@ -12113,6 +12139,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentHandoffPending.consume(session.id);
         }
         if (sendResult.accepted) {
+          startedTaskPlan?.commit();
           void touchSessionActivityInDb(session.id);
         }
         return sendResult;
@@ -18405,6 +18432,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readReplyQuoteNote,
     // 私聊话题的 [话题说明]:按持久化的话题链接现读,不是话题时为 null。
     readBotThreadNote: readBotDmThreadContextNote,
+    // [你开出的任务]:这条对话开出、还没发回的本机任务现在的状态。共享任务的访客不是账号本人,
+    // 不把主人的任务标题带进他那一轮。
+    readStartedTaskStateNote: (sessionId, opts) =>
+      getDeviceLinkInvokeContext()?.sharedTask ? Promise.resolve(null) : readStartedTaskStateNote(sessionId, opts),
     readInputHandoffOwnerNote: (sessionId) =>
       getDeviceLinkInvokeContext()?.sharedTask ? null : (getInputHandoffService()?.ownerMessageNote(sessionId) ?? null),
     inputHandoffOwnerNoteDelivered: (sessionId) => getInputHandoffService()?.ownerMessageNoteDelivered(sessionId),
