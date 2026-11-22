@@ -131,9 +131,12 @@ function ledgersReset(ledger: LeadLedger): void {
 /** 记一条宿主派发凭据。真实派发重置抑制状态：同一个动作值得重新判定。 */
 export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFact): void {
   const ledger = ledgerFor(leadSessionId);
-  observeGeneration(ledger, fact.turnGeneration);
   ledger.facts.push(fact);
   if (ledger.facts.length > MAX_FACTS) ledger.facts.splice(0, ledger.facts.length - MAX_FACTS);
+  // 凭据不参与轮次观察：投递落地可能晚于它所属的轮次收口，迟到的旧凭据既不能抹掉
+  // 当前账本，也不能重新武装唤醒——否则下一轮会在「本轮什么都没派」的情况下再被叫一次。
+  // 只有比这次矛盾更新的轮次里的派发才值得重新判定。
+  if (ledger.incidentFloor !== null && fact.turnGeneration <= ledger.incidentFloor) return;
   ledger.woke = false;
   ledger.escalated = false;
   ledger.escalatedAt = null;
@@ -281,13 +284,13 @@ export function describeDeclarationVerdict(verdict: {
 }): string {
   switch (verdict.reason) {
     case 'no-declaration':
-      return 'You dispatched this turn but submitted no report_turn declaration';
+      return 'The host recorded a dispatch that no report_turn declaration covers';
     case 'declared-not-dispatched':
       return `You declared a dispatch to ${verdict.detail} that the host never accepted`;
     case 'dispatched-not-declared':
-      return `The host dispatched to ${verdict.detail} this turn, but your declaration leaves it out`;
+      return `The host dispatched to ${verdict.detail}, but your declaration leaves it out`;
     case 'unknown-message-id':
-      return `The queued message id ${verdict.detail} matches no dispatch of this turn`;
+      return `The queued message id ${verdict.detail} matches no dispatch the host recorded`;
   }
 }
 

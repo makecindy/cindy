@@ -1433,6 +1433,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
 
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
+      // 轮次在**请求时**取：排队投递可能晚于本轮收口才落地，落地时才读会把它记到下一轮头上。
+      const dispatchTurnGeneration =
+        deps.getLiveSession(link.leadSessionId)?.getTurnGeneration?.() ?? 0;
       let result: DispatchWorkerMessageResult;
       try {
         await params.assertCurrent?.();
@@ -1499,12 +1502,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         return { result, wasLiveBeforeDispatch };
       }
       // 派发凭据只认宿主这次成功落地的投递，供 Lead 收口时的主张对账使用。
-      const dispatchGeneration = deps.getLiveSession(link.leadSessionId)?.getTurnGeneration?.() ?? 0;
       const workerLabel = target.label ?? target.role ?? target.id;
       const delivery = result.mode === 'queued' ? 'queued' : 'direct';
       noteLeadDispatchFact(link.leadSessionId, {
         dispatchId: result.clientId,
-        turnGeneration: dispatchGeneration,
+        turnGeneration: dispatchTurnGeneration,
         workerId: target.id,
         workerLabel,
         delivery,
@@ -2502,9 +2504,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
     const reason = describeDeclarationVerdict(verdict);
     const lines = [
-      "[Orca host] This turn's report_turn declaration does not match the host dispatch records.",
+      "[Orca host] Your report_turn declaration does not match the host dispatch records.",
       `${reason}.`,
-      'Call report_turn once now: assignments lists every worker you gave work to this turn, dispatched lists every dispatch the host accepted (direct, steered, or queued), and pending lists assignments you did not dispatch with what you are waiting for.',
+      'Call report_turn once now and cover it: assignments lists every worker you gave work to, dispatched lists every dispatch the host accepted (direct, steered, or queued), and pending lists assignments you did not dispatch with what you are waiting for.',
     ];
     if (action === 'wake') {
       const delivered = await deps

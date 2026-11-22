@@ -230,12 +230,40 @@ describe('lead turn declaration reconciliation', () => {
   });
 
   it('asks once, then escalates, then stays quiet until a real dispatch resets it', () => {
-    expect(settleDispatchClaimIncident('lead-1', false)).toBe('wake');
-    expect(settleDispatchClaimIncident('lead-1', false)).toBe('escalate');
-    expect(settleDispatchClaimIncident('lead-1', false)).toBeNull();
+    expect(settleDispatchClaimIncident('lead-1', false, 0)).toBe('wake');
+    expect(settleDispatchClaimIncident('lead-1', false, 0)).toBe('escalate');
+    expect(settleDispatchClaimIncident('lead-1', false, 0)).toBeNull();
 
-    noteLeadDispatchFact('lead-1', fact());
-    expect(settleDispatchClaimIncident('lead-1', false)).toBe('wake');
+    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 1 }));
+    expect(settleDispatchClaimIncident('lead-1', false, 1)).toBe('wake');
+  });
+
+  it('does not re-arm the wake for a fact that lands after its turn settled', () => {
+    // 第 5 轮派发、收口时没交声明→唤醒一次。
+    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 5 }));
+    dispatchFactsForTurn('lead-1', 5);
+    expect(settleDispatchClaimIncident('lead-1', false, 5)).toBe('wake');
+
+    // 同一笔派发迟到落地（仍在第 5 轮）：账本不能因此重新武装，唤醒轮不能被告知「本轮派了」。
+    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 5, dispatchId: 'mq-2' }));
+    expect(settleDispatchClaimIncident('lead-1', false, 6)).toBe('escalate');
+  });
+
+  it('keeps the open incident when a stale fact arrives', () => {
+    dispatchFactsForTurn('lead-1', 8);
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
+      dispatched: [],
+      pending: [],
+      turnGeneration: 8,
+    });
+
+    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 3 }));
+
+    expect(dispatchFactsForTurn('lead-1', 8)).toHaveLength(0);
+    const verdict = reconcileLeadTurnDeclaration('lead-1', []);
+    if (verdict.consistent) throw new Error('expected the declaration to survive');
+    expect(verdict.reason).toBe('declared-not-dispatched');
   });
 
   it('drops a fact once the dispatch is retracted', () => {
