@@ -523,6 +523,7 @@ export class QuotaOverviewService {
     let stale = false;
     const collected = await collectMenubarInputs({
       nowMs,
+      now: Date.now,
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
       readSubscriptionPool: (providerId) => force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),

@@ -184,13 +184,23 @@ describe('collectMenubarInputs', () => {
   }
 
   it.each([
-    { label: 'both windows', reading: ready(), value: '65', fills: [0.8, 0.65], countdown: true },
-    { label: 'the old plan', reading: ready({ ...glmQuota, weekly: null }), value: '80', fills: [0.8], countdown: false },
-    { label: 'an expired weekly window', reading: ready({ ...glmQuota, weekly: { usedPercent: 35, resetsAt: NOW } }), value: '80', fills: [0.8], countdown: false },
-    { label: 'no plan', reading: ready({ ...glmQuota, noPlan: true }), value: '—', fills: [], countdown: false },
-    { label: 'stale data', reading: ready(glmQuota, true), value: '—', fills: [], countdown: false },
-    { label: 'a failed read', reading: { status: 'unavailable', error: 'network' } as const, value: '—', fills: [], countdown: false },
-  ])('shows the correct GLM amount in the panel for $label', async ({ reading, value, fills, countdown }) => {
+    { label: 'a missing 5-hour reset', reading: ready(), value: '65', fills: [0.8, 0.65], resets: ['Weekly resets'], plan: '' },
+    {
+      label: 'a named plan with both resets',
+      reading: ready({ ...glmQuota, level: 'pro', fiveHour: { usedPercent: 20, resetsAt: NOW + 3_600_000 } }),
+      value: '65', fills: [0.8, 0.65], resets: ['5-hour resets', 'Weekly resets'], plan: 'PRO',
+    },
+    { label: 'the old plan', reading: ready({ ...glmQuota, weekly: null }), value: '80', fills: [0.8], resets: [], plan: '' },
+    { label: 'an expired weekly window', reading: ready({ ...glmQuota, weekly: { usedPercent: 35, resetsAt: NOW } }), value: '80', fills: [0.8], resets: [], plan: '' },
+    {
+      label: 'two expired windows',
+      reading: ready({ ...glmQuota, fiveHour: { usedPercent: 20, resetsAt: NOW }, weekly: { usedPercent: 35, resetsAt: NOW - 1 } }),
+      value: '—', fills: [], resets: [], plan: '',
+    },
+    { label: 'no plan', reading: ready({ ...glmQuota, level: 'pro', noPlan: true }), value: '—', fills: [], resets: [], plan: '' },
+    { label: 'stale data', reading: ready({ ...glmQuota, level: 'pro' }, true), value: '—', fills: [], resets: [], plan: '' },
+    { label: 'a failed read', reading: { status: 'unavailable', error: 'network' } as const, value: '—', fills: [], resets: [], plan: '' },
+  ])('shows the correct GLM amount in the panel for $label', async ({ reading, value, fills, resets, plan }) => {
     const readZhipu = vi.fn(async () => reading);
     const collectDeps = deps({
       listProviders: async () => [
@@ -204,10 +214,25 @@ describe('collectMenubarInputs', () => {
     expect(view.sources.map(source => [source.id, source.value ?? source.valueLabel])).toEqual([['glm', value]]);
     const detail = view.details.glm;
     expect(detail.bigValue).toBe(value);
+    expect(detail.plan).toBe(plan);
     expect(detail.legend).toHaveLength(fills.length > 1 ? fills.length : 0);
     expect(detail.rings.map(ring => ring.fraction)).toEqual(fills.length ? fills : [0]);
-    expect(detail.facts.filter(fact => fact.label.includes('resets'))).toHaveLength(countdown ? 1 : 0);
-    expect(view.sources[0]?.resetsAtMs ?? null).toBe(countdown ? glmQuota.weekly?.resetsAt : null);
+    expect(detail.facts.filter(fact => fact.label.includes('resets')).map(fact => fact.label).sort()).toEqual(resets);
+    expect(view.sources[0]?.resetsAtMs ?? null).toBe(resets.length ? glmQuota.weekly?.resetsAt : null);
+  });
+
+  it('falls back to the 5-hour GLM quota if weekly resets during collection', async () => {
+    let now = NOW;
+    const view = await panel(deps({
+      now: () => now,
+      listProviders: async () => [glm],
+      readZhipu: async () => {
+        now = NOW + 1;
+        return ready({ ...glmQuota, weekly: { usedPercent: 35, resetsAt: now } });
+      },
+    }));
+    expect(view.sources[0]).toMatchObject({ id: 'glm', value: '80', resetsAtMs: null });
+    expect(view.details.glm.facts.map(fact => fact.label)).not.toContain('Weekly resets');
   });
 
   it('keeps existing providers’ amounts, resets, details and relative order with GLM connected', async () => {

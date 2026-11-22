@@ -77,6 +77,7 @@ export interface MenubarSessionRow {
 }
 
 export interface MenubarCollectDeps {
+  now?: () => number;
   nowMs: number;
   listProviders(): Promise<ProviderView[]>;
   /** Null means the provider still uses the original single-account reader. */
@@ -181,7 +182,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     if (deps.readZhipu && provider.auth?.method === 'apiKey'
       && Object.values(provider.routing ?? {}).some(isZhipuCodingPlanRoute)) {
       const result = await safe(`zhipu:${provider.id}`, () => deps.readZhipu!(provider.id), null);
-      return zhipuSource(provider, result, deps.nowMs);
+      return zhipuSource(provider, result);
     }
     return paygSource(provider);
   });
@@ -201,7 +202,13 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
 
   const tasks = await collectTasks(deps, localUsage, today, safe);
   const consuming = consumingSourceIds(tasks, providers);
+  const collectedAt = deps.now?.() ?? deps.nowMs;
   for (const source of sources) {
+    // A GLM window may have reset while another provider or task was still loading.
+    if (source.kind === 'subscription' && source.family === 'zhipu') {
+      source.windows = source.windows.filter(window => window.resetsAtMs === null || window.resetsAtMs > collectedAt);
+      if (!source.windows.length) source.updatedAtMs = null;
+    }
     if (consuming.has(source.id) && !(source.kind === 'subscription' && source.pooled)) source.consuming = true;
   }
   const distinct = distinctLocalSubscriptions(sources);
@@ -859,17 +866,17 @@ export function opencodeGoSource(provider: ProviderView, result: ProviderAccount
   };
 }
 
-function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null, nowMs: number): MenubarSubscriptionInput {
+function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null): MenubarSubscriptionInput {
   const snapshot = result?.status === 'ready' && !result.stale
     && result.snapshot.kind === 'zhipu-coding-plan-quota' && !result.snapshot.noPlan ? result.snapshot : null;
   const windows: MenubarWindowInput[] = [];
-  if (snapshot?.fiveHour && (snapshot.fiveHour.resetsAt === null || snapshot.fiveHour.resetsAt > nowMs)) {
+  if (snapshot?.fiveHour) {
     windows.push({
       kind: 'session', usedPercent: snapshot.fiveHour.usedPercent,
       resetsAtMs: snapshot.fiveHour.resetsAt, windowMinutes: FIVE_HOUR_MINUTES,
     });
   }
-  if (snapshot?.weekly && (snapshot.weekly.resetsAt === null || snapshot.weekly.resetsAt > nowMs)) {
+  if (snapshot?.weekly) {
     windows.push({
       kind: 'week', usedPercent: snapshot.weekly.usedPercent,
       resetsAtMs: snapshot.weekly.resetsAt, windowMinutes: WEEK_MINUTES,
@@ -878,7 +885,8 @@ function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult 
   return {
     kind: 'subscription', id: provider.id, providerId: provider.id, family: 'zhipu',
     logoSvg: providerLogo(provider.id, provider.name, provider.routing), brand: provider.name || 'GLM Coding Plan',
-    account: null, plan: null, windows, credits: null, creditsUnlimited: false, prepaidUsd: null,
+    account: null, plan: snapshot?.level?.toUpperCase() || null,
+    windows, credits: null, creditsUnlimited: false, prepaidUsd: null,
     updatedAtMs: windows.length > 0 ? snapshot?.fetchedAt ?? null : null,
   };
 }

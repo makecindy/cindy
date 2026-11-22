@@ -174,6 +174,7 @@ enum QuotaReadFreshness {
 const quotaInFlight = new Map<string, {
   freshness: QuotaReadFreshness;
   result: Promise<ProviderAccountUsageResult>;
+  glmCallers?: Set<() => boolean>;
 }>();
 
 class AccountUsageRequestError extends Error {
@@ -488,7 +489,7 @@ export async function readProviderAccountUsage(
   const resolution = resolveProviderAccountUsage(request.providerId, request.agent);
   const go = resolution?.integrationId === 'opencode-go-quota-v1';
   const zhipu = resolution?.integrationId === 'zhipu-coding-plan-quota-v1';
-  const kimi = hasKimiRoute && !go;
+  const kimi = hasKimiRoute && !go && !zhipu;
   const afterGoLimit = go && reason === 'after-limit';
   const shareRead = kimi || go || zhipu;
   const identity = resolution ? createHash('sha256').update(JSON.stringify([config, resolution])).digest('hex') : null;
@@ -506,26 +507,34 @@ export async function readProviderAccountUsage(
     return { status: 'unsupported' };
   }
   const revision = kimi ? String(generation?.revision) : '';
-  // The resolved identity includes the actual engine and credential, including when the panel omitted agent.
-  const flightKey = `${providerScope}:${identity}:${revision}`;
+  // The official GLM endpoint returns account-wide quota even when several connections use the key.
+  // Keep this identity local to the owner generation and independent of the requesting engine.
+  const zhipuAccountKey = zhipu ? JSON.stringify([
+    ownerStamp.dataOwnerId, ownerStamp.generation, resolution.integrationId, resolution.endpoint,
+    createHash('sha256').update(resolution.key).digest('hex'),
+  ]) : undefined;
+  const flightKey = zhipuAccountKey ?? `${providerScope}:${identity}:${revision}`;
   const previous = shareRead ? quotaInFlight.get(flightKey) : undefined;
   const freshness = afterGoLimit ? QuotaReadFreshness.AfterGoLimit
     : (go || zhipu) && request.forceRefresh ? QuotaReadFreshness.Manual : QuotaReadFreshness.Cached;
   let pending: Promise<ProviderAccountUsageResult>;
   if (previous && previous.freshness >= freshness) {
+    previous.glmCallers?.add(current);
     pending = previous.result;
   } else {
+    const glmCallers = zhipu ? new Set([current]) : undefined;
+    const readCurrent = glmCallers ? () => [...glmCallers].some(isCurrent => isCurrent()) : current;
     const run = async (): Promise<ProviderAccountUsageResult> => {
       // Let the earlier read settle before refreshing. Its response cannot then overwrite the post-limit cache.
       if (previous) {
         await previous.result.catch(() => undefined);
-        if (!current()) return { status: 'unavailable', error: 'updating' };
+        if (!readCurrent()) return { status: 'unavailable', error: 'updating' };
       }
-      return readResolvedAccountUsage(request, resolution, ownerStamp, current, revision, afterGoLimit);
+      return readResolvedAccountUsage(request, resolution, ownerStamp, readCurrent, revision, afterGoLimit, zhipuAccountKey);
     };
     pending = run();
     if (shareRead) {
-      const entry = { freshness, result: pending };
+      const entry = { freshness, result: pending, glmCallers };
       quotaInFlight.set(flightKey, entry);
       const clear = () => { if (quotaInFlight.get(flightKey) === entry) quotaInFlight.delete(flightKey); };
       void pending.then(clear, clear);
@@ -533,7 +542,11 @@ export async function readProviderAccountUsage(
   }
   const result = await pending;
   if (!current()) return { status: 'unavailable', error: 'updating' };
-  return { ...result, dashboardUrl: getProviderAccountUsageDashboardUrl(resolution.endpoint) };
+  return {
+    ...result,
+    ...(zhipu && result.status === 'ready' ? { agent: resolution.agent } : {}),
+    dashboardUrl: getProviderAccountUsageDashboardUrl(resolution.endpoint),
+  };
 }
 
 async function readResolvedAccountUsage(
@@ -543,10 +556,11 @@ async function readResolvedAccountUsage(
   current: () => boolean,
   revision: string,
   afterGoLimit: boolean,
+  zhipuAccountKey?: string,
 ): Promise<ProviderAccountUsageResult> {
   // 缓存键含凭证指纹：同一供应商下换 key（不同账户）后旧账户快照绝不复用。
   const keyFingerprint = createHash('sha256').update(resolution.key).digest('hex').slice(0, 12);
-  const cacheKey = `${ownerStamp.dataOwnerId ?? 'local'}:${ownerStamp.generation}:${request.providerId}:${resolution.integrationId}:${resolution.endpoint}:${resolution.agent}:${keyFingerprint}:${revision}`;
+  const cacheKey = zhipuAccountKey ?? `${ownerStamp.dataOwnerId ?? 'local'}:${ownerStamp.generation}:${request.providerId}:${resolution.integrationId}:${resolution.endpoint}:${resolution.agent}:${keyFingerprint}:${revision}`;
   const now = accountUsageNow();
   const record = cache.get(cacheKey);
   const structuredQuota = resolution.integrationId === 'kimi-coding-quota-v1'
