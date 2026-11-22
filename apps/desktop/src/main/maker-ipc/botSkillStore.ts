@@ -540,14 +540,18 @@ export async function seedBotSkillIfMissing(
  * 让调用方能分辨「学会了」和「改进了」。
  */
 const skillWrites = new Map<string, Promise<unknown>>();
+/** Standard upgrades and enable/disable moves share the same per-profile write order. */
+export async function withBotSkillWrite<T>(root: string, action: () => Promise<T>): Promise<T> {
+  const pending = (skillWrites.get(root) ?? Promise.resolve()).catch(() => {}).then(action);
+  skillWrites.set(root, pending);
+  try { return await pending; }
+  finally { if (skillWrites.get(root) === pending) skillWrites.delete(root); }
+}
+
 export async function saveBotSkill(
   userDataDir: string, botId: string, input: BotSkillWriteInput,
 ): Promise<{ record: BotSkillRecord; created: boolean }> {
-  const key = botSkillRootDir(userDataDir, botId);
-  const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(() => writeBotSkill(userDataDir, botId, input));
-  skillWrites.set(key, pending);
-  try { return await pending; }
-  finally { if (skillWrites.get(key) === pending) skillWrites.delete(key); }
+  return withBotSkillWrite(botSkillRootDir(userDataDir, botId), () => writeBotSkill(userDataDir, botId, input));
 }
 /** Like readSkillFilePath, but only a missing file counts as absent; other errors propagate. */
 async function strictSkillFilePath(skillDir: string): Promise<string | null> {
@@ -659,7 +663,7 @@ export async function applyBotSkillFiles(userDataDir: string, botId: string, slu
 export async function setBotSkillEnabled(userDataDir: string, botId: string, slug: string, enabled: boolean): Promise<void> {
   if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid skill slug');
   const key = botSkillRootDir(userDataDir, botId);
-  const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
+  await withBotSkillWrite(key, async () => {
     const previous = await readBotSkill(userDataDir, botId, slug);
     if (!previous) throw new BotSkillStoreError('NOT_FOUND', 'Skill does not exist');
     if ((previous.enabled !== false) === enabled) return;
@@ -668,9 +672,6 @@ export async function setBotSkillEnabled(userDataDir: string, botId: string, slu
     await fs.rename(resolveSkillDir(userDataDir, botId, slug, !enabled), skillDir);
     invalidateBotSkillCaches(key);
   });
-  skillWrites.set(key, pending);
-  try { await pending; }
-  finally { if (skillWrites.get(key) === pending) skillWrites.delete(key); }
 }
 
 async function writeBotSkill(

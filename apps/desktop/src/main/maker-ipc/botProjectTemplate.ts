@@ -14,7 +14,7 @@ import { promises as fs, renameSync } from 'node:fs';
 import path from 'node:path';
 import { createTwoFilesPatch } from 'diff';
 import { canonicalJson, COMPANION_VALUE_MAX_BYTES } from '../companion-cloud/uploader.js';
-import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile } from './botSkillStore.js';
+import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile, withBotSkillWrite } from './botSkillStore.js';
 import { PROJECT_SETTINGS_GUIDE, PROJECT_SETTINGS_PATH, isStandardProjectSkill } from './botProjectSettingsGuide.js';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
@@ -362,6 +362,31 @@ export async function removeProjectPersonalSkill(workspace: string, slug: string
   return true;
 }
 
+/** Older template versions could recreate their stock folder beside an explicitly disabled skill.
+ * Keep such a folder, including any extra assets, outside the native active scan. */
+async function standardSkillLocation(workspace: string, relative: string, standard: string, baseline?: string) {
+  const profile = path.dirname(workspace);
+  const slug = path.basename(path.dirname(relative));
+  const shelf = path.join('disabled-skills', slug);
+  if (await throughLink(profile, shelf)) return null;
+  const active = path.join(workspace, relative);
+  if (!await exists(path.join(profile, shelf))) return { target: active, disabled: false, recovered: false };
+  const manifest = path.join(shelf, 'SKILL.md');
+  const lower = path.join(shelf, 'skill.md');
+  if (await throughLink(profile, manifest) || await throughLink(profile, lower)) return null;
+  const target = !await exists(path.join(profile, manifest)) && await exists(path.join(profile, lower))
+    ? path.join(profile, lower) : path.join(profile, manifest);
+  const duplicate = await readText(active);
+  const recovered = duplicate !== null && (duplicate === standard || hash(duplicate) === baseline);
+  if (recovered) {
+    const backup = path.join('disabled-skill-backups', `${slug}-${randomUUID()}`);
+    if (await throughLink(profile, backup)) return null;
+    await fs.mkdir(path.dirname(path.join(profile, backup)), { recursive: true });
+    await fs.rename(path.dirname(active), path.join(profile, backup));
+  }
+  return { target, disabled: true, recovered };
+}
+
 /** The standard a layered file was last written from, or null when it is not known. */
 async function previousStandard(workspace: string, relative: string, current: string, base: string | undefined,
   readPrevious?: ReadPreviousTemplate): Promise<string | null> {
@@ -381,6 +406,11 @@ async function previousStandard(workspace: string, relative: string, current: st
 export async function applyTeammateTemplate(workspace: string, displayName: string,
   version = TEAMMATE_TEMPLATE_VERSION, files = teammateTemplateFiles(displayName),
   readPrevious?: ReadPreviousTemplate): Promise<boolean> {
+  return withBotSkillWrite(path.dirname(workspace), () => applyTemplateFiles(workspace, version, files, readPrevious));
+}
+
+async function applyTemplateFiles(workspace: string, version: number, files: Record<string, string>,
+  readPrevious?: ReadPreviousTemplate): Promise<boolean> {
   if (await throughLink(workspace, TEAMMATE_TEMPLATE_RECORD)) return false;
   const recordPath = path.join(workspace, TEAMMATE_TEMPLATE_RECORD);
   const recordText = await readText(recordPath);
@@ -391,7 +421,7 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
     || Array.isArray(record.files)) record = null;
   // Routing is additive even for an owner-edited AGENTS.md: the rest of that file is untouched.
   // Codex/Pi may select AGENTS.override.md; Claude may have a custom CLAUDE.md instead of @AGENTS.md.
-  let routed = false;
+  let projectChanged = false;
   for (const relative of ['AGENTS.md', 'AGENTS.override.md', 'CLAUDE.md']) {
     if (await throughLink(workspace, relative)) continue;
     const current = await readText(path.join(workspace, relative));
@@ -406,25 +436,30 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
     const updated = `${current}${current.endsWith('\n') ? '\n' : '\n\n'}${missing.join('\n\n')}\n`;
     await write(path.join(workspace, relative), updated);
     if (record?.files[relative] === hash(current)) record.files[relative] = hash(updated);
-    routed = true;
+    projectChanged = true;
   }
   const currentVersion = record?.version === version;
   const next: TeammateTemplateRecord = { version, files: {}, pending: [] };
   for (const [relative, content] of Object.entries(files)) {
-    const target = path.join(workspace, relative);
+    let target = path.join(workspace, relative);
     const standardSkill = isLayeredFile(relative);
     if (currentVersion && !standardSkill && relative !== PROJECT_SETTINGS_PATH) continue;
     // The project linked this place elsewhere (its Skills folder, say): never write through it.
     if (await throughLink(workspace, relative) || await throughLink(workspace, path.join(PENDING_DIR, relative))) continue;
-    if (standardSkill) {
-      // A disabled project skill lives in its profile, outside the engine's skill scan.
-      const disabled = path.join(path.dirname(workspace), 'disabled-skills', path.basename(path.dirname(relative)));
-      if (await exists(disabled)) continue;
-    }
-    const current = await readText(target);
-    if (currentVersion && current !== null && (relative !== PROJECT_SETTINGS_PATH || current === content || record?.files[relative] !== hash(current))) continue;
-    if (standardSkill && current === null && await exists(path.join(path.dirname(target), 'skill.md'))) continue;
     const base = record?.files[relative];
+    const location = standardSkill ? await standardSkillLocation(workspace, relative, content, base) : null;
+    if (standardSkill && !location) continue;
+    if (location) target = location.target;
+    if (location?.recovered) projectChanged = true;
+    const current = await readText(target);
+    if (currentVersion && current !== null) {
+      // A receipt written while the disabled shelf was skipped has no baseline for this file.
+      const missedDisabledUpgrade = location?.disabled && (location.recovered || !base || !record?.files[PROJECT_SETTINGS_PATH])
+        && standardPart(current).standard !== standardPart(content).standard;
+      const updatedGuide = relative === PROJECT_SETTINGS_PATH && current !== content && record?.files[relative] === hash(current);
+      if (!missedDisabledUpgrade && !updatedGuide) continue;
+    }
+    if (standardSkill && !location?.disabled && current === null && await exists(path.join(path.dirname(target), 'skill.md'))) continue;
     if (standardSkill) {
       if (await throughLink(workspace, path.join(STANDARD_DIR, relative))) continue;
       // Only recover this standard skill. A saved personal addition can survive accidental deletion.
@@ -466,7 +501,7 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
   }
   if (currentVersion && record) {
     Object.assign(record.files, next.files);
-    if (!routed && !Object.keys(next.files).length) return false;
+    if (!projectChanged && !Object.keys(next.files).length) return false;
     await write(recordPath, `${JSON.stringify(record, null, 2)}\n`);
     return true;
   }
