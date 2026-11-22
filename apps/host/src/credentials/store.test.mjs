@@ -126,6 +126,40 @@ test('macOS and Windows retain Desktop keychain identity and pass secrets only o
   }
 });
 
+// 测试价值
+// - 生产入口与可观察结果：createCredentialStore 写/读 owner-scoped 密文时，原生 OS 加密 helper 必须使用共享 profile 根的 Keychain/DPAPI 身份。
+// - Bug／规则依据：PR #11697 P1（Windows `Local State` 与 Desktop safeStorage 互通）；docs/dev-rules/credentials-and-local-storage.md §通用存储要求。
+// - 现有覆盖缺口：上一用例只覆盖记录目录与身份目录相同，未覆盖两者分离。
+// - 最小失败输入：identityUserDir=profileDir、userDataDir=profileDir/owners/.../feishu-local-cli；修复前 helper 收到 owner-scoped 子目录。
+// - tier：unit（注入 helper 调用，不接触真实 OS 凭证）。
+// - 实测耗时：1.31s（Host `node --test` 单独运行 `src/credentials/store.test.mjs`）。
+test('keeps owner-scoped records on the profile-root OS credential identity', async (t) => {
+  const profileDir = tempProfile(t);
+  const recordDir = path.join(profileDir, 'owners', 'fixture-owner', 'feishu-local-cli');
+  fs.writeFileSync(path.join(profileDir, 'keychain-identity'), 'CindyDev\r\n');
+  const calls = [];
+  const store = await createCredentialStore({
+    userDataDir: recordDir,
+    identityUserDir: profileDir,
+    platform: 'win32',
+    electronBinary: 'test-electron',
+    run: (_binary, _args, options) => {
+      calls.push(options);
+      const { operation, value } = JSON.parse(options.input);
+      return { status: 0, stdout: JSON.stringify({ value: operation === 'encrypt' ? `sealed:${value}` : value.slice(7) }) };
+    },
+  });
+  store.write('feishu_local_cli_profile_v1', 'fixture-archive');
+  assert.equal(store.read('feishu_local_cli_profile_v1'), 'fixture-archive');
+  assert.equal(fs.existsSync(path.join(recordDir, 'safe-storage', 'feishu_local_cli_profile_v1.enc')), true);
+  assert.equal(fs.existsSync(path.join(recordDir, 'keychain-identity')), false);
+  assert.equal(calls.length, 2);
+  for (const options of calls) {
+    assert.equal(options.env.CINDY_HOST_DATA_DIR, profileDir);
+    assert.equal(options.env.CINDY_HOST_CREDENTIAL_APP, 'CindyDev');
+  }
+});
+
 test('native codec rejects an incomplete identity and does not replace a record when encryption fails', async (t) => {
   const userDataDir = tempProfile(t);
   const options = { userDataDir, platform: 'win32', electronBinary: 'test-electron',

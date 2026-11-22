@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createFeishuLocalMcpServer } from '../cindy_feishuLocalMcpServer.js';
-import { FEISHU_LOCAL_REQUIRED_SCOPES, rowHash } from '../feishu-local/descriptor.js';
+import {
+  FEISHU_LOCAL_REQUIRED_SCOPES,
+  a1RangeCovers,
+  parseA1Range,
+  rowHash,
+} from '../feishu-local/descriptor.js';
 import type {
   FeishuLocalAuthState,
   FeishuLocalBinaryProbe,
@@ -307,6 +312,57 @@ describe('cindy_feishu_local MCP server', () => {
     const result = await callTool(port, name, args);
     expect(result.reason_code).toBe('INVALID_ARGS');
     expect(state.calls).toHaveLength(0);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：MCP set_cell_image / clear_cells 的 dry_run 与 a1RangeCovers 对整行、整列范围给出正确的确认令牌或拒绝语义。
+  // - Bug／规则依据：PR #11697 P2（无界轴被误判为不覆盖具体单元格）及「对称半边」收敛要求。
+  // - 现有覆盖缺口：只覆盖有界 A92:K92 与明确不覆盖的 A85:K85，未覆盖 `92:92` / `I:K`。
+  // - 最小失败输入：row_range=`92:92` 或 `I:K`、目标 `I92`；修复前返回 INVALID_ARGS 且不调用 CLI。
+  // - tier：unit（MCP 内存传输 + 纯 A1 解析，无真实进程或网络）。
+  // - 实测耗时：1.34s（`@cindy/mcps` Vitest 单独运行 `src/__tests__/feishuLocalMcpServer.test.ts`）。
+  it.each([
+    ['set_cell_image', '92:92', {
+      spreadsheet: 'fixture-token', sheet: { sheet_id: 'sheet-fixture' }, cell: 'I92',
+      row_range: '92:92', expected_row_hash: rowHash([['value']]),
+      image_ref: 'cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png', dry_run: true,
+    }],
+    ['clear_cells', '92:92', {
+      spreadsheet: 'fixture-token', sheet: { sheet_id: 'sheet-fixture' }, range: 'I92',
+      row_range: '92:92', expected_row_hash: rowHash([['value']]), dry_run: true,
+    }],
+    ['set_cell_image', 'I:K', {
+      spreadsheet: 'fixture-token', sheet: { sheet_id: 'sheet-fixture' }, cell: 'I92',
+      row_range: 'I:K', expected_row_hash: rowHash([['value']]),
+      image_ref: 'cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png', dry_run: true,
+    }],
+    ['clear_cells', 'I:K', {
+      spreadsheet: 'fixture-token', sheet: { sheet_id: 'sheet-fixture' }, range: 'I92',
+      row_range: 'I:K', expected_row_hash: rowHash([['value']]), dry_run: true,
+    }],
+  ] as const)('accepts %s with unbounded row_range %s before a dry-run write', async (name, _range, args) => {
+    const { port, state } = makeFakePort();
+    const result = await callTool(port, name, args);
+    expect(result.ok).toBe(true);
+    expect(typeof result.confirmation_token).toBe('string');
+    expect(state.calls.some(call => call.argv.includes('+cells-get'))).toBe(true);
+    expect(state.calls.some(call =>
+      (call.argv.includes('+cells-set-image') || call.argv.includes('+cells-clear')) &&
+      !call.argv.includes('--dry-run'))).toBe(false);
+    noRawOutput(result);
+  });
+
+  it.each([
+    ['whole row covers a cell', '92:92', 'I92', true],
+    ['whole columns cover a cell', 'I:K', 'I92', true],
+    ['bounded rows do not cover whole columns', '92:92', 'A:A', false],
+    ['bounded columns do not cover whole rows', 'A85:K85', '85:85', false],
+  ] as const)('%s symmetrically on the row and column axes', (_name, outerRange, innerRange, expected) => {
+    const outer = parseA1Range(outerRange);
+    const inner = parseA1Range(innerRange);
+    expect(outer).not.toBeNull();
+    expect(inner).not.toBeNull();
+    expect(a1RangeCovers(outer!, inner!)).toBe(expected);
   });
 
   it.each([

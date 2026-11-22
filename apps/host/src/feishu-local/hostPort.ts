@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { createNodeFeishuLocalPort } from '@cindy/mcps/feishu-local';
-import type { FeishuLocalHostPort, FeishuLocalSetupInput } from '@cindy/mcps/feishu-local';
+import type {
+  FeishuLocalHostPort,
+  FeishuLocalSetupInput,
+  NodeFeishuLocalPortOptions,
+} from '@cindy/mcps/feishu-local';
 import { createCredentialStore } from '../credentials/store.mjs';
 import { hostBlobStore } from '../media-store.js';
 import { createGhostAttachmentResolver } from '../../../desktop/src/main/mcp-integrations/ghostAttachmentResolveCore.js';
@@ -20,6 +24,8 @@ interface HostPortOptions {
   current?(): boolean;
   ownerScope?(): string;
   t?(key: string): string;
+  createStore?: typeof createCredentialStore;
+  spawnFn?: NodeFeishuLocalPortOptions['spawnFn'];
 }
 
 interface BoundCredentialAdapter {
@@ -36,14 +42,20 @@ function setupUnavailable(): SetupResult {
 
 export function createFeishuLocalHostPort(options: HostPortOptions): FeishuLocalHostPort {
   const credentialDir = ownerScopedPath(options.profileDir, options.ownerId ?? 'local', 'feishu-local-cli');
+  const createStore = options.createStore ?? createCredentialStore;
   let storePromise: ReturnType<typeof createCredentialStore> | null = null;
   const getStore = () => {
     if (!storePromise) {
-      const pending = createCredentialStore({ userDataDir: credentialDir });
-      // The Host may assemble providers before its credential identity exists.
-      // Mark the lazy rejection handled; individual reads/writes still fail closed.
-      pending.catch(() => {});
+      const pending = createStore({
+        userDataDir: credentialDir,
+        identityUserDir: options.profileDir,
+      });
+      // Only a successful store is reusable. A transient keyring failure must
+      // not stay cached after the OS identity becomes available again.
       storePromise = pending;
+      pending.catch(() => {
+        if (storePromise === pending) storePromise = null;
+      });
     }
     return storePromise;
   };
@@ -103,6 +115,7 @@ export function createFeishuLocalHostPort(options: HostPortOptions): FeishuLocal
     deviceId: () => options.deviceId?.() ?? 'node-host',
     credentials,
     managedBinaryPath: path.join(options.profileDir, 'managed-tools', 'lark-cli', 'current', process.platform === 'win32' ? 'lark-cli.exe' : 'lark-cli'),
+    ...(options.spawnFn ? { spawnFn: options.spawnFn } : {}),
     resolveManagedImage: async (imageRef) => {
       try {
         const resolved = resolveImageUrl(imageRef);

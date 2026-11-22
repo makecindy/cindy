@@ -172,16 +172,23 @@ export function parseA1Cell(value: string): A1Bounds | null {
   return bounds;
 }
 
+function axisCovers(
+  outerFirst: number | null,
+  outerLast: number | null,
+  innerFirst: number | null,
+  innerLast: number | null,
+): boolean {
+  // A null boundary means the whole axis. An unbounded read covers any target,
+  // while an unbounded target still requires an unbounded read. Row and column
+  // ranges share this predicate so neither half can drift.
+  if (innerFirst === null || innerLast === null) return outerFirst === null || outerLast === null;
+  if (outerFirst === null || outerLast === null) return true;
+  return outerFirst <= innerFirst && outerLast >= innerLast;
+}
+
 export function a1RangeCovers(outer: A1Bounds, inner: A1Bounds): boolean {
-  const rowCovered = inner.firstRow === null || inner.lastRow === null
-    ? outer.firstRow === null && outer.lastRow === null
-    : outer.firstRow !== null && outer.lastRow !== null &&
-      outer.firstRow <= inner.firstRow && outer.lastRow >= inner.lastRow;
-  const columnCovered = inner.firstColumn === null || inner.lastColumn === null
-    ? outer.firstColumn === null && outer.lastColumn === null
-    : outer.firstColumn !== null && outer.lastColumn !== null &&
-      outer.firstColumn <= inner.firstColumn && outer.lastColumn >= inner.lastColumn;
-  return rowCovered && columnCovered;
+  return axisCovers(outer.firstRow, outer.lastRow, inner.firstRow, inner.lastRow)
+    && axisCovers(outer.firstColumn, outer.lastColumn, inner.firstColumn, inner.lastColumn);
 }
 
 export function isValidSingleCell(value: string): boolean {
