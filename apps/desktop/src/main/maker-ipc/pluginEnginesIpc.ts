@@ -159,6 +159,7 @@ function toView(harness: PluginHarness): PluginEngineView {
       enabled: false,
       shareSupported: harness.remoteWorkspace === true && harness.guestWorkspace === true,
     },
+    ...(off ? { defaultModelAllowed: false } : {}),
     ...(settings.hidden ? { hidden: true as const } : {}),
     ...(settings.suspended ? { suspended: true as const } : {}),
     ...(settings.name ? { declaredName: harness.name } : {}),
@@ -285,9 +286,16 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     return listPluginEngineViews();
   });
   // Picker opened: ask engine plugins to republish their models (cooldown per plugin in the registry).
-  opts.handle(PLUGIN_ENGINES_INVOKE.REFRESH, (event) => {
-    if (!remote()) opts.assertTrusted(event);
-    requestPluginHarnessRefresh();
+  opts.handle(PLUGIN_ENGINES_INVOKE.REFRESH, (event, targetGhostId) => {
+    if (remote()) {
+      requestPluginHarnessRefresh();
+      return;
+    }
+    opts.assertTrusted(event);
+    if (targetGhostId !== undefined && (typeof targetGhostId !== 'string' || !targetGhostId)) {
+      throwIpcError('INVALID_PARAMS', 'Invalid plugin refresh target');
+    }
+    requestPluginHarnessRefresh(Date.now(), targetGhostId);
   });
   opts.handle(PLUGIN_ENGINES_INVOKE.USAGE, (event, key) => {
     if (!remote()) opts.assertTrusted(event);

@@ -5814,7 +5814,7 @@ interface ElectronAPI {
      * Asks engine plugins to republish their models, like the provider model refresh when the picker
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
      */
-    refreshPluginEngines?: () => Promise<void>;
+    refreshPluginEngines?: (targetGhostId?: string) => Promise<void>;
     /**
      * Opens or closes one engine of this computer for the owner's other computers
      * (PluginEngineView.remoteUse). The new state also arrives through onPluginEnginesChanged.

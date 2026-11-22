@@ -79,6 +79,17 @@ describe('plugin engine settings store', () => {
     })).toEqual({ engines: { [KEY]: { name: 'Work', hidden: true, disabledModels: ['a', 'b'] } } });
   });
 
+  // At the file's limit, concurrent model toggles must reject overflow explicitly (unit).
+  it('checks the merged model limit under the write lock', async () => {
+    const ids = Array.from({ length: 199 }, (_, index) => 'model-' + index);
+    await updatePluginEnginePrefs(KEY, { models: { ids, disabled: true } });
+    const attempts = await Promise.allSettled(['first', 'second'].map(id =>
+      updatePluginEnginePrefs(KEY, { models: { ids: [id], disabled: true } })));
+    expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.find(result => result.status === 'rejected')).toMatchObject({ reason: expect.any(Error) });
+    expect(readPluginEnginePrefs(KEY).disabledModels).toHaveLength(200);
+  });
+
   it('writes and notifies only when a setting actually changes', async () => {
     host.owner = 'notify';
     const changes: number[] = [];

@@ -155,6 +155,7 @@ function applyPatch(current: PluginEnginePrefs, patch: PluginEnginePrefsPatch): 
       if (patch.models.disabled) disabled.add(id);
       else disabled.delete(id);
     }
+    if (disabled.size > PLUGIN_ENGINE_PREFS_MODELS_MAX) throw new Error('Too many plugin engine models turned off');
     next.disabledModels = [...disabled];
   }
   return normalizeEntry(next);
@@ -168,12 +169,6 @@ export async function updatePluginEnginePrefs(key: string, patch: PluginEnginePr
   if (!isPluginEnginePrefsKey(key)) throw new Error('Unknown plugin engine');
   if (typeof patch.name === 'string' && normalizeName(patch.name) === undefined) {
     throw new Error('Invalid plugin engine name');
-  }
-  if (patch.models?.disabled) {
-    const stored = readPluginEnginePrefs(key).disabledModels?.length ?? 0;
-    if (stored + patch.models.ids.length > PLUGIN_ENGINE_PREFS_MODELS_MAX) {
-      throw new Error('Too many plugin engine models turned off');
-    }
   }
   let changed = false;
   let value: PluginEnginePrefsFile;

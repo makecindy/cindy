@@ -1022,7 +1022,7 @@ export function installRemoteAgentHost(options: {
       isOffered: (providerId, controller, model) => {
         if (!isControllerAuthorized(controller)) return false;
         // A model the user turned off here (Settings → Model providers) is off for everyone.
-        if (model !== undefined && isPluginEngineModelTurnedOff(providerId, model)) return false;
+        if (isPluginEngineModelTurnedOff(providerId, model)) return false;
         if (isProviderSharePeer(controller)) {
           const access = ownedProviderShareGuestAccess(controller);
           return !!access

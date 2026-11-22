@@ -9,6 +9,12 @@ export const PLUGIN_ENGINE_PROVIDER_PREFIX = 'acp-plugin:';
 /** Model value that lets the engine keep its own default (used until it reported its models). */
 export const PLUGIN_ENGINE_DEFAULT_MODEL = 'default';
 
+/** A harness-controlled default can resolve to any model, including one the user turned off. */
+export function isPluginEngineModelDisabled(model: string, disabledModels?: readonly string[]): boolean {
+  return !!disabledModels?.length
+    && (model === PLUGIN_ENGINE_DEFAULT_MODEL || disabledModels.includes(model));
+}
+
 export const PLUGIN_ENGINES_INVOKE = {
   LIST: 'maker:list-plugin-engines',
   USAGE: 'maker:get-plugin-engine-usage',

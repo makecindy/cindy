@@ -98,8 +98,9 @@ describe('opening a task on a plugin engine', () => {
     const oneModelOff = () => ({ disabledModels: ['deepseek-v4'] });
     expect(() => admitWith(body({ model: 'deepseek-v4' }), available, () => models, oneModelOff))
       .toThrow('DeepSeek Harness 的这个模型已在「设置 → 模型供应商」中关闭');
+    expect(() => admitWith(body({ model: 'default' }), available, () => models, oneModelOff)).toThrow('关闭');
     expect(admitWith(body({ model: 'no-levels' }), available, () => models, oneModelOff).model).toBe('no-levels');
-    expect(admitWith(body(), available, () => models, oneModelOff).model).toBe('default');
+    expect(() => admitWith(body(), available, () => models, oneModelOff)).toThrow('关闭');
     // Nothing set: the same result as before these settings existed.
     expect(admitWith(body({ model: 'deepseek-v4', effort: 'max' }), available, () => models, () => ({})))
       .toEqual(admitPluginEngineSession(body({ model: 'deepseek-v4', effort: 'max' }), available));

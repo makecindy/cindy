@@ -262,7 +262,7 @@ describe('plugin providers in the provider list', () => {
       models: [],
     });
     renderDetail(notSignedIn);
-    expect(api.refreshPluginEngines).toHaveBeenCalledTimes(1);
+    expect(api.refreshPluginEngines).toHaveBeenCalledExactlyOnceWith(notSignedIn.ghostId);
     expect(screen.getByRole('status').textContent).toBe('newChat.pluginEngines.unavailable');
     expect(screen.getByTestId('plugin-engine-unavailable').textContent)
       .toBe('settings.providers.plugin.unavailableBannerReason:{"reason":"Sign in with gemini auth"}');

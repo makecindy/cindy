@@ -14,7 +14,7 @@
  * (`--cindy-guest-workspace`), isolating sharer-personal CLI skills/config/history from guests.
  */
 import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/pluginHarnesses.js';
-import { pluginEngineKeyFromProviderId, pluginEngineProviderId } from '../../shared/pluginEngines.js';
+import { isPluginEngineModelDisabled, PLUGIN_ENGINE_DEFAULT_MODEL, pluginEngineKeyFromProviderId, pluginEngineProviderId } from '../../shared/pluginEngines.js';
 import { readPluginEnginePrefs } from './plugin-engine-prefs-store.js';
 import { isRemoteProviderInvocationAllowed, setRemoteProviderInvocationEnabled } from './remote-provider-access-store.js';
 
@@ -76,9 +76,9 @@ export function isPluginEngineOfferedToGuests(providerId: string | null | undefi
  * in the list other computers read; this is the check on the computer that runs the engine, for a
  * request that names it anyway (a choice saved before it was turned off).
  */
-export function isPluginEngineModelTurnedOff(providerId: string | null | undefined, model: string): boolean {
+export function isPluginEngineModelTurnedOff(providerId: string | null | undefined, model = PLUGIN_ENGINE_DEFAULT_MODEL): boolean {
   const key = pluginEngineKeyFromProviderId(providerId);
-  return !!key && readPluginEnginePrefs(key).disabledModels?.includes(model) === true;
+  return !!key && isPluginEngineModelDisabled(model, readPluginEnginePrefs(key).disabledModels);
 }
 
 /** Any engine is currently offered to the owner's other computers. */

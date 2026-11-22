@@ -109,6 +109,8 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
   device-link 调用 `PERMISSION_DENIED`，形状或长度不对、关闭引擎没列出的模型 `INVALID_PARAMS`，给已不在列表里的
   引擎写入新设置 `NOT_FOUND`(撤销已有设置始终允许)。写入后照常经 `maker:plugin-engines-changed` 推完整列表。
 - **`maker:list-plugin-engines` 的变化**(既有字段的新取值 + 追加可选字段，旧端无需升级)：
+  - 有模型被关闭时，`defaultModelAllowed: false` 禁止回退到由引擎自行决定的默认模型。默认模型可能选中被关闭的模型，
+    因此本机和远程执行端也拒绝该请求。恢复全部模型后恢复原默认行为。
   - 用户起的显示名直接作为 `name`；关掉的模型不在 `models` 里；停用的引擎报 `availability: { state: 'unavailable', reason: 'suspended' }`
     (不带 `message`，避免旧手机把主进程语言的文案原样显示)。旧手机与旧电脑本来就把 `unavailable` 的引擎排除在新任务之外。
   - 追加可选 `hidden: true`、`suspended: true`。新版桌面与手机的模型选择器不列 `hidden` 的引擎(当前任务已选着它时保留)；

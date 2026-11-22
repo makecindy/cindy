@@ -258,6 +258,13 @@ describe('a task running on a plugin engine', () => {
   });
 
   // 2026-11-20 用户反馈：只安装了插件但尚未登录/不可用(unavailable)的引擎不在模型选择器里占位；仅当前已选该引擎时保留提示。
+  // An explicitly closed default is absent even with an empty catalog (unit, mobile picker).
+  it('does not recreate a default when the host has turned it off', () => {
+    const engines = normalizePluginEngines([{ ...desktopView, models: [], defaultModelAllowed: false }]);
+    expect(engines[0]).toMatchObject({ defaultModelAllowed: false, models: [] });
+    expect(buildPluginEngineGroups({ engines, active: null }, '', { ...labels, unavailable: () => '' })).toEqual([]);
+  });
+
   it('omits an unavailable engine unless it is already the active selection', () => {
     const [unavailable] = normalizePluginEngines([{ ...desktopView, providerId: 'acp-plugin:_ns__local__agy:agy',
       name: 'Antigravity', availability: { state: 'unavailable', message: 'Install agy' } }]);

@@ -51,6 +51,7 @@ export interface MobilePluginEngine {
    * 照常显示名字、图标和用量。旧电脑不带这个字段。用户在那里停用的引擎由那台电脑报成 unavailable。
    */
   hidden?: true;
+  defaultModelAllowed?: false;
   models: MobilePluginEngineModel[];
   permissionModes: { id: string; displayName: string }[];
   defaultPermissionMode: string;
@@ -166,6 +167,7 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
       ...(iconDataUrl ? { iconDataUrl } : {}),
       availability: { state, ...(message ? { message } : {}) },
       ...(item.hidden === true ? { hidden: true as const } : {}),
+      ...(item.defaultModelAllowed === false ? { defaultModelAllowed: false as const } : {}),
       models,
       permissionModes: modes,
       defaultPermissionMode: requestedDefault && modes.some((mode) => mode.id === requestedDefault)
@@ -190,10 +192,11 @@ export function isPluginEngineSelectable(engine: Pick<MobilePluginEngine, 'avail
 
 /** 引擎下列出的模型行：上报过的模型，或在还没上报时只有「默认模型」一项；当前选的是默认时它也保留。 */
 export function pluginEngineModelRows(
-  engine: Pick<MobilePluginEngine, 'models'>,
+  engine: Pick<MobilePluginEngine, 'models' | 'defaultModelAllowed'>,
   activeModelId?: string | null,
 ): (MobilePluginEngineModel & { isDefault: boolean })[] {
   const models = engine.models.map((model) => ({ ...model, isDefault: false }));
+  if (engine.defaultModelAllowed === false) return models;
   const defaultRow = { id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: '', efforts: [], isDefault: true };
   if (models.length === 0) return [defaultRow];
   return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL ? [defaultRow, ...models] : models;

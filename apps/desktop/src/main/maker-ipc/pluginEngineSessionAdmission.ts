@@ -15,6 +15,7 @@ import type { PluginHarness } from '../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../localDb/sessionOpening.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineModelDisabled,
   isPluginEngineEffort,
   pluginEngineKeyFromProviderId,
   type PluginEngineEffort,
@@ -66,7 +67,7 @@ export function admitPluginEngineSession(
     throw new Error(hint ? `${harness.name} 当前不可用：${hint}` : `${harness.name} 当前不可用。`);
   }
   const model = typeof body.model === 'string' && body.model.trim() ? body.model : PLUGIN_ENGINE_DEFAULT_MODEL;
-  if (settings?.disabledModels?.includes(model)) throw new Error(pluginEngineModelOffMessage(harness.name));
+  if (isPluginEngineModelDisabled(model, settings?.disabledModels)) throw new Error(pluginEngineModelOffMessage(harness.name));
   const requested = body.effort;
   const offered = modelsOf(harness).find((item) => item.id === model)?.efforts ?? [];
   const effort = isPluginEngineEffort(requested) && offered.includes(requested) ? requested : '';

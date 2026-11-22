@@ -293,7 +293,7 @@ function EngineUsage({ engine }: { engine: PluginEngineView }) {
       active = false;
       window.removeEventListener('focus', read);
     };
-  }, [engine.key]);
+  }, [engine.ghostId]);
   if (!reading) return null;
   return (
     <div data-testid="provider-usage-module" className="shrink-0 border-t px-1 py-2" style={DIVIDER_STYLE}>
@@ -419,7 +419,7 @@ export function PluginEngineProviderDetail({
   const unavailable = !engine.suspended && !engineReady(engine);
   // 与模型选择器同一时机：打开时请插件重新上报模型(主进程按插件冷却)，新列表随推送到达。
   useEffect(() => {
-    requestPluginEnginesRefresh();
+    requestPluginEnginesRefresh(engine.ghostId);
   }, [engine.key]);
   const statusKey = engine.suspended
     ? 'settings.providers.pill.suspended'

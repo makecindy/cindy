@@ -193,6 +193,16 @@ describe('plugin engines with the settings from Settings → Model providers', (
     });
   });
 
+  // The last model toggle must not reopen the engine-selected default in device catalogs (unit).
+  it('keeps the default unavailable when all listed models are turned off', async () => {
+    const ipc = register();
+    await ipc.set({ key: KEY, models: { ids: ['deepseek-v4', 'deepseek-lite'], disabled: true } });
+    expect(ipc.list()[0]).toMatchObject({ models: [], defaultModelAllowed: false });
+    expect(isPluginEngineModelTurnedOff(ipc.list()[0]!.providerId, 'default')).toBe(true);
+    await ipc.set({ key: KEY, models: { ids: ['deepseek-v4', 'deepseek-lite'], disabled: false } });
+    expect(ipc.list()[0]).not.toHaveProperty('defaultModelAllowed');
+  });
+
   it('gives a phone or another computer the engine as offered, without this computer’s settings details', async () => {
     const ipc = register();
     await ipc.set({ key: KEY, name: 'Work DeepSeek', hidden: true, models: { ids: ['deepseek-lite'], disabled: true } });
@@ -238,10 +248,10 @@ describe('plugin engines with the settings from Settings → Model providers', (
     await ipc.set({ key: KEY, suspended: false });
     expect([isPluginEngineOfferedRemotely(providerId), isPluginEngineOfferedToGuests(providerId)]).toEqual([true, true]);
 
-    // One model turned off: only that model is refused, for a request that still names it.
+    // One model turned off: the closed model and the harness-controlled default are refused.
     await ipc.set({ key: KEY, models: { ids: ['deepseek-lite'], disabled: true } });
     expect(['deepseek-lite', 'deepseek-v4', 'default'].map((model) => isPluginEngineModelTurnedOff(providerId, model)))
-      .toEqual([true, false, false]);
+      .toEqual([true, false, true]);
     expect(isPluginEngineModelTurnedOff('anthropic', 'deepseek-lite')).toBe(false);
   });
 
