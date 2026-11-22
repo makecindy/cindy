@@ -20,7 +20,7 @@ import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js'
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
-import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
+import { getSilentContinuationTiming, isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { writeSessionListActivity } from '../sessionActivityWrite.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
 import {
@@ -235,8 +235,8 @@ export interface RegisterSessionIpcOpts {
   isBusyForProjectArchive?: (sessionId: string) => boolean;
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
-  /** Close a local Pi/Codex runtime only if its current turn is idle. */
-  closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  /** Refuse a local move during a turn; the transcript mover handles closing an idle Claude runtime. */
+  closeIdleSessionForMove?: (sessionId: string, storedAgentKind: string) => Promise<boolean>;
   /**
    * 任务级上下文窗口预算（tokens）变化后，把新值应用到**活着的**运行实例上
    * （空闲关 handle 冷重建；回合中登记 pending，回合结束后生效）。
@@ -1522,10 +1522,11 @@ export function registerSessionIpc(
 
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
-    const db = getDbClient().drizzle;
-    const row = await selectSessionWithCount(db, sid);
+    const dbClient = getDbClient();
+    const row = await selectSessionWithCount(dbClient.drizzle, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return projectSessionDetail(row, opts.resolveContextWindow);
+    const timing = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient);
+    return projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt);
   });
 
   /**

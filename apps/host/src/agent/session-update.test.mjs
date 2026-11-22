@@ -776,6 +776,22 @@ test('move: an idle Codex task moves to a project; its runtime is closed, and th
   assert.ok((await listRecentWorkdirs()).find(entry => entry.path === storedDir(to))?.lastUsedAt > new Date(1_000).toISOString());
 });
 
+// L338, unit: preserve the executor cleanup for cold Pi/Codex tasks even when Maker
+// has already released its live session but executor bindings can still exist.
+test('move: cold Pi and Codex tasks still release their executor state', async t => {
+  const f = await fixture(t);
+  for (const agentKind of ['pi', 'codex']) {
+    const id = 'cold-' + agentKind;
+    const from = moveDir(f, id + '-from');
+    const to = moveDir(f, id + '-to');
+    await f.task(id, { agentKind, workDir: from });
+    assert.equal(f.liveSession(id), undefined);
+    await f.update(id, { workingDir: to });
+    assert.equal((await f.row(id)).workingDir, storedDir(to));
+    assert.equal(f.closedByExecutor.filter(closed => closed === id).length, 1);
+  }
+});
+
 test('move: a Claude task\'s transcripts follow it, and the resume id the move persisted is in the row and the published patch', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   const claudeConfig = path.join(f.root, 'claude-config');
@@ -788,13 +804,27 @@ test('move: a Claude task\'s transcripts follow it, and the resume id the move p
   const liveId = '22222222-2222-4222-8222-222222222222';
   await f.task('move-claude', { workDir: from });
   await f.database.drizzle.update(sessions).set({ sdkSessionId: storedId }).where(eq(sessions.id, 'move-claude'));
+  const coldId = 'cold-claude';
+  await f.task(coldId, { workDir: from });
+  await f.update(coldId, { workingDir: to });
+  assert.equal((await f.row(coldId)).workingDir, storedDir(to));
+  assert.deepEqual(f.closedByExecutor, [], 'no idle runtime close is needed for a cold task');
   // The live runtime is ahead of the row (a fork whose rows are not written yet); its transcript is on disk.
   const session = f.runtime('move-claude');
   session.sdkSessionId = liveId;
   const source = path.join(claudeConfig, 'projects', 'old-key');
   mkdirSync(source, { recursive: true });
   writeFileSync(path.join(source, `${liveId}.jsonl`), '{"type":"user"}\n');
-  await f.update('move-claude', { workingDir: `${to}/`, workspaceKind: 'project' });
+  const patch = { workingDir: `${to}/`, workspaceKind: 'project' };
+  let running = true;
+  session.isTurnRunning = () => running;
+  const before = await f.row('move-claude');
+  await assert.rejects(f.update('move-claude', patch), error => error.code === 'PRECONDITION_FAILED');
+  assert.deepEqual(await f.row('move-claude'), before);
+  assert.equal(f.liveSession('move-claude'), session);
+  assert.deepEqual(readdirSync(path.join(claudeConfig, 'projects')), ['old-key']);
+  running = false;
+  await f.update('move-claude', patch);
   const row = await f.row('move-claude');
   assert.deepEqual([row.workingDir, row.sdkSessionId], [storedDir(to), liveId]);
   assert.deepEqual(movedEvents(f, 'move-claude').at(-1).patch,
@@ -879,15 +909,21 @@ test('move: the worktree registry decides ownership; no registry is no binding, 
 test('move: a task in a turn, or whose turn is still settling, is not moved and its runtime is not closed', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   const to = moveDir(f, 'busy-to');
-  for (const [id, state] of [['busy-turn', 'in a turn'], ['busy-settling', 'settling']]) {
-    await f.task(id, { agentKind: 'pi', workDir: moveDir(f, `${id}-from`) });
-    f.runtime(id, { agentKind: 'pi', inTurn: state === 'in a turn' });
+  for (const [id, agentKind, state] of [
+    ['busy-claude', 'claude-code', 'in a turn'],
+    ['busy-codex', 'codex', 'in a turn'],
+    ['busy-turn', 'pi', 'in a turn'],
+    ['busy-settling', 'pi', 'settling'],
+  ]) {
+    await f.task(id, { agentKind, workDir: moveDir(f, `${id}-from`) });
+    const session = f.runtime(id, { agentKind, inTurn: state === 'in a turn' });
     if (state === 'settling') f.settling.add(id);
     const before = await f.row(id);
     await assert.rejects(f.update(id, { workingDir: to, workspaceKind: 'project' }),
       error => error.code === 'PRECONDITION_FAILED' && error.message.includes('运行中的任务不能移动'), state);
     assert.deepEqual(await f.row(id), before, state);
-    assert.ok(f.liveSession(id), `${state}: the runtime is kept`);
+    assert.equal(f.liveSession(id), session, `${state}: the same runtime is kept`);
+    assert.deepEqual(movedEvents(f, id), []);
   }
   assert.deepEqual(f.closedByExecutor, []);
 });

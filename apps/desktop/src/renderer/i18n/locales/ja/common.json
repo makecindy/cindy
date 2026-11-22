@@ -14489,6 +14489,7 @@
       "steerNotSent": "送信されていません。現在は割り込みできません。下書きは保持されています。",
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "credentialSwitchFailed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
+      "credentialSwitchKeptSettings": "切り替えは完了しませんでした。タスクは引き続き元の設定を使用します。",
       "modelSwitchContextGuard": {
         "warnToast": "この会話はすでに {{used}} 使っています。切替後は新しいモデルの容量（{{total}}）の約 {{pct}}% になります",
         "condensedToast": "新しいモデルに合わせて以前のやり取りを圧縮します。会話履歴はすべて引き続き確認できます。",
@@ -15764,6 +15765,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "コンテキストが上限に達したため、このメッセージを処理できませんでした。後続のメッセージは引き続き順番に処理します。",
       "attachmentPrefix": "添付：",
       "attachmentAttachedAria": "{{name}}を添付済み",
       "saveAttachmentAs": "添付ファイル {{name}} を別名で保存",

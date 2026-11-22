@@ -14489,6 +14489,7 @@
       "steerNotSent": "未遣，暫不能插話，草稿已留",
       "credentialSwitchApplied": "模型所出已易，即行生效。",
       "credentialSwitchFailed": "模型來源切換未成，請重擇。",
+      "credentialSwitchKeptSettings": "此次更易未成，任務仍循舊設。",
       "modelSwitchContextGuard": {
         "warnToast": "此段言談已用 {{used}}，換過去約佔新模型容量（{{total}}）之 {{pct}}%",
         "condensedToast": "為合新模型之容量，較早之言將壓縮，言談全錄仍可閱。",
@@ -15755,6 +15756,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "上下文已滿，此訊未能處理。後訊仍將依次處理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附 {{name}}",
       "saveAttachmentAs": "另存附卷 {{name}}",

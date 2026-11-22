@@ -14489,6 +14489,7 @@
       "steerNotSent": "未傳送，暫時無法插話，草稿已保留",
       "credentialSwitchApplied": "模型來源切換已生效。",
       "credentialSwitchFailed": "模型來源切換失敗，請重新選擇。",
+      "credentialSwitchKeptSettings": "這次切換未完成，任務會繼續使用原來的設定。",
       "modelSwitchContextGuard": {
         "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
         "condensedToast": "為了配合新模型，較早的對話會壓縮，完整的對話記錄仍可查看。",
@@ -15763,6 +15764,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "上下文已滿，這則訊息無法處理。後續訊息會繼續依序處理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",

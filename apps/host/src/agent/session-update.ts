@@ -68,8 +68,8 @@ export function createHostSessionUpdate(deps: {
   move: {
     /** The desktop's worktree registry, read only. */
     lookupSessionWorktreeBinding: SessionWorktreeBindingLookup;
-    /** False when the task's turn is running; otherwise its runtime is closed (or there is none). */
-    closeIdleSessionForMove(sessionId: string): Promise<boolean>;
+    /** Refuse a busy task. Non-Claude tasks release executor state even after losing their live handle. */
+    closeIdleSessionForMove(sessionId: string, storedAgentKind: string): Promise<boolean>;
     /** The desktop's local-db:recent-workdirs:changed. */
     broadcastRecentWorkdirsChanged(path: string): void;
   };

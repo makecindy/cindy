@@ -173,26 +173,25 @@ function broadcastOwnedPayload(
   channel: string,
   payload: unknown,
   ownerScope?: DataOwnerBroadcastScope | null,
+  localWindowsOnly = false,
 ): void {
   const ownerStamp = ownerStampForBroadcast(ownerScope);
   if (ownerStamp === null) return;
-  if (ownerScope !== undefined && ownerScope !== null) {
-    broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
-  } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast(channel, payload);
-  } else {
-    broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
+  const includeOwnerStamp = ownerScope != null || ownerStamp !== undefined;
+  if (!localWindowsOnly) {
+    if (includeOwnerStamp) {
+      broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
+    } else {
+      broadcastTap.tapWindowBroadcast(channel, payload);
+    }
   }
-  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      if (hasCapturedScope) {
+      if (includeOwnerStamp) {
         win.webContents.send(channel, payload, ownerStamp);
-      } else if (ownerStamp === undefined) {
-        win.webContents.send(channel, payload);
       } else {
-        win.webContents.send(channel, payload, ownerStamp);
+        win.webContents.send(channel, payload);
       }
     } catch {
       /* swallow per-window broadcast failures */
@@ -725,20 +724,22 @@ export async function runMessagesListImportSideEffects(
 /**
  * 消息行广播:本机全部窗口 + device-link tap 通道(控制端镜像)。renderer 的
  * handleMessageCreatedRaw 对已存在 clientId 走 merge/替换语义,因此**更新**行
- * (如 dismiss)复用同一事件即可让 peer 视图刷新,无需新增 onUpdated 通道。
+ * (如 dismiss)复用同一事件即可让 peer 视图刷新。localWindowsOnly 将刷新限制在本机窗口。
  */
 export function broadcastMessageRow(
   sessionId: string,
   msg: Message,
   ownerScope?: DataOwnerBroadcastScope | null,
+  options?: { localWindowsOnly: boolean },
 ): void {
   // Main-created rows may bypass the DB mapper. Never broadcast View-only data
   // to top-level renderers or same-account control devices.
   const historyContent = projectMcpAppHistory(msg.content, msg.agentMeta?.mcpApp === true);
   const content = msg.role === 'agent_switch' ? projectHandoffPreview(historyContent) : historyContent;
   const message = content === msg.content ? msg : { ...msg, content };
-  broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope);
-  if (msg.role === 'user' || msg.role === 'assistant') {
+  const localWindowsOnly = options?.localWindowsOnly ?? false;
+  broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope, localWindowsOnly);
+  if (!localWindowsOnly && (msg.role === 'user' || msg.role === 'assistant')) {
     if (hasTaskChangeListener('message')) publishTaskChange({ kind: 'message', sessionId, message }, ownerStampForBroadcast(ownerScope));
     scheduleBotRemoteResourceChangedForSession(sessionId, ownerScope?.ownerScopeKey);
   }
