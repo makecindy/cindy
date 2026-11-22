@@ -2470,6 +2470,8 @@ describe('Cindy media 本机路径揭示', () => {
       const message = String((result as { message?: unknown }).message);
       expect(message).toContain('这不是用户拒绝');
       expect(message).toContain('不要自动重试');
+      // 超时后旧卡已撤下:恢复顺序只能是用户就位后重新调用、确认新卡,不能叫用户先去点旧卡。
+      expect(message).toContain('新的确认卡');
       expect(message).not.toContain('后重试');
     }
   });

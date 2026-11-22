@@ -780,10 +780,12 @@ function isInsideSessionWorkdir(targetAbs: string, workdirAbs: string | null): b
 /**
  * 确认卡超时 = 没人点，不是用户拒绝。卡片目前只在运行 Cindy 的电脑上出现（手机只显示
  * 「只能在电脑上处理」，IM 只收到文字提醒），所以模型重试只会再等一轮，必须停手转告。
+ * 超时后卡片已撤下，用户回到电脑也点不到旧卡，只能等用户就位后由 Agent 重新发起。
  */
 const DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS =
-  'Cindy 在运行它的那台电脑上弹出了确认卡，时限内没有人确认，本次调用已取消。这不是用户拒绝。'
-  + '这类确认目前只能在那台电脑上处理，手机和 IM 里都无法确认。不要自动重试；请告诉用户需要到那台电脑上确认后再试';
+  'Cindy 在运行它的那台电脑上弹出了确认卡，时限内没有人确认，本次调用已取消，那张卡也已撤下。这不是用户拒绝。'
+  + '这类确认目前只能在那台电脑上处理，手机和 IM 里都无法确认。不要自动重试；请告诉用户这一步需要在那台电脑上点允许，'
+  + '等用户表示已在电脑旁后再重新调用一次（会弹出新的确认卡）';
 const GRANT_CONFIRM_TIMEOUT_MESSAGE =
   `文件授权确认超时：${DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS}，或改用不需要这次授权的办法（例如请用户把文件放进当前工作目录，或作为附件发进对话）。`;
 const LOCAL_PATH_REVEAL_TIMEOUT_MESSAGE =
