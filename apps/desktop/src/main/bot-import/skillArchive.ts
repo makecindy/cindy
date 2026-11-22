@@ -6,7 +6,6 @@ import { StringDecoder } from 'node:string_decoder';
 import { fingerprint, inside } from './files.js';
 import { CompanionImportError, type ImportFile, type ImportItem, type ImportResourceRef } from './types.js';
 import { createStreamingEnvironmentRedactor, redactEnvironmentValues } from './process.js';
-import { detectSensitivePath } from '../security/sensitivePath.js';
 import { inspectSkillFile, skillFileChunks, streamImportSkillFiles, SKILL_RESOURCE_CHUNK_BYTES, type SkillEncoding } from './skillFileStreams.js';
 
 export interface SkillArchiveIo {
@@ -90,23 +89,11 @@ function validateHeader(value: unknown): Header {
   return h;
 }
 
-/**
- * Credential files and Python environments stay in the private originals only: the readable copy
- * lives in the teammate's project, which Git versions and other tools read. Commands then run from
- * the originals (the readable SKILL.md says so), so nothing the skill needs is lost.
- */
-export function isPrivateSkillResource(name: string): boolean {
-  const parts = name.split('/');
-  return parts.slice(0, -1).some(part => part === '.venv' || part === 'venv')
-    || parts[parts.length - 1]!.toLowerCase() === 'token.json'
-    || detectSensitivePath(name) !== null;
-}
-
 /** Caller owns a private staging directory. Nothing becomes an active Skill
  * until the final authenticated archive record has been consumed. */
 export async function materializeSkillArchive(ref: ImportResourceRef, root: string, io: Pick<SkillArchiveIo, 'readResource'>,
   secrets: Record<string, string>, assertOwner: () => void, project = true, slug = '', onProjection?: (needsPrivate: boolean) => void): Promise<void> {
-  let current: { header: Header; handle?: FileHandle; omitted: boolean; hash: ReturnType<typeof createHash>; size: number; text: ReturnType<typeof codec>; redact: ReturnType<typeof createStreamingEnvironmentRedactor> } | undefined;
+  let current: { header: Header; handle?: FileHandle; hash: ReturnType<typeof createHash>; size: number; text: ReturnType<typeof codec>; redact: ReturnType<typeof createStreamingEnvironmentRedactor> } | undefined;
   let complete = false, manifest: Header | undefined, changed = false, interpreter = false;
   try {
     for await (const encoded of io.readResource(ref, assertOwner)) {
@@ -119,16 +106,11 @@ export async function materializeSkillArchive(ref: ImportResourceRef, root: stri
         interpreter ||= !!header.interpreterLink;
         const output = path.resolve(root, header.name);
         if (!inside(root, output)) throw new CompanionImportError('INVALID_TARGET');
-        const omitted = project && header.name !== 'SKILL.md' && isPrivateSkillResource(header.name);
-        changed ||= omitted;
-        let handle: FileHandle | undefined;
-        if (!omitted) {
-          await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
-          const parent = await fs.realpath(path.dirname(output));
-          if (!inside(await fs.realpath(root), parent)) throw new CompanionImportError('INVALID_TARGET');
-          handle = header.interpreterLink ? undefined : await fs.open(output, 'wx', header.executable ? 0o700 : 0o600);
-        }
-        current = { header, handle, omitted, hash: createHash('sha256'), size: 0, text: codec(header.encoding), redact: createStreamingEnvironmentRedactor(secrets, () => { changed = true; }) };
+        await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
+        const parent = await fs.realpath(path.dirname(output));
+        if (!inside(await fs.realpath(root), parent)) throw new CompanionImportError('INVALID_TARGET');
+        const handle = header.interpreterLink ? undefined : await fs.open(output, 'wx', header.executable ? 0o700 : 0o600);
+        current = { header, handle, hash: createHash('sha256'), size: 0, text: codec(header.encoding), redact: createStreamingEnvironmentRedactor(secrets, () => { changed = true; }) };
         if (header.name === 'SKILL.md') { if (manifest || !header.size) throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID'); manifest = header; }
       } else if (typeof record.data === 'string' && current) {
         const bytes = Buffer.from(record.data, 'base64');
@@ -144,7 +126,7 @@ export async function materializeSkillArchive(ref: ImportResourceRef, root: stri
         if (current.handle) {
           if (project && current.header.encoding !== 'binary') await current.handle.writeFile(current.text.encode(current.redact(current.text.end(), true)));
           await current.handle.close();
-        } else if (!current.omitted) await fs.symlink(current.header.interpreterLink!, path.join(root, current.header.name), 'file');
+        } else await fs.symlink(current.header.interpreterLink!, path.join(root, current.header.name), 'file');
         current = undefined;
       } else if (record.complete === true && !current && manifest) complete = true;
       else throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID');

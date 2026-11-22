@@ -111,34 +111,6 @@ it.each(['utf8', 'utf16le', 'utf16be'] as const)('redacts split %s credentials a
   expect((await fs.readFile(path.join(original, 'run.txt'))).equals(bytes)).toBe(true);
 });
 
-// Unit, 2026-11-21 teammate project review: the readable copy is published into the teammate's
-// Git project, and a skill's own `.env`, `token.json` and `.venv` went there unmasked (only known
-// selected values are masked). Gap: no test covered which files the readable copy contains. Minimal
-// input: unknown credential files and a venv beside ordinary code, no secrets selected.
-it('leaves credential files and Python environments out of the readable copy, keeping them in the originals', async () => {
-  const { directory, item } = await source();
-  const files: Record<string, string> = {
-    '.env': 'API_KEY=unselected', '.env.example': 'API_KEY=', 'token.json': '{"refresh_token":"r"}',
-    '.venv/lib/site.py': 'x', 'venv/pyvenv.cfg': 'home = /none', 'scripts/run.py': 'print(1)',
-  };
-  for (const [name, text] of Object.entries(files)) {
-    await fs.mkdir(path.dirname(path.join(directory, name)), { recursive: true });
-    await fs.writeFile(path.join(directory, name), text);
-  }
-  const { ref } = await captureSkillArchive('bot', item, io, {}, () => {});
-  let needsPrivate: boolean | undefined;
-  await importBotSkillDirectory(root, 'bot', 'report',
-    stage => materializeSkillArchive(ref, stage, io, {}, () => {}, true, 'report', value => { needsPrivate = value; }), () => {});
-  const readable = path.join(root, 'bots', 'bot', 'skills', 'report');
-  expect((await fs.readdir(readable, { recursive: true })).map(String).sort()).toEqual(['.env.example', 'SKILL.md', 'scripts', path.join('scripts', 'run.py')]);
-  expect(await fs.readFile(path.join(readable, 'SKILL.md'), 'utf8')).toContain('$CINDY_IMPORTED_SKILLS/report');
-  expect(needsPrivate).toBe(true);
-  const original = path.join(root, 'original');
-  await fs.mkdir(original);
-  await materializeSkillArchive(ref, original, io, {}, () => {}, false);
-  for (const [name, text] of Object.entries(files)) expect(await fs.readFile(path.join(original, name), 'utf8')).toBe(text);
-});
-
 it('does not publish a truncated archive and preserves user edits during restart recovery', async () => {
   const { directory, item } = await source();
   await fs.writeFile(path.join(directory, 'run.txt'), 'original');

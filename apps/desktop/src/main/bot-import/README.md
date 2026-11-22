@@ -116,10 +116,7 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   other buffered source metadata/documents still share the 128 MiB memory budget.
   These are parser/memory protections, not an aggregate Skill migration quota.
   Credential-safe readable copies are streamed into private staging directories
-  and published only after archive integrity verification. The readable copy is
-  part of the teammate's Git project, so it leaves out credential files (the
-  shared sensitive-path list plus `token.json`) and anything under `.venv`/`venv`;
-  such a Skill counts as masked, so its commands use the complete originals. Originals remain in
+  and published only after archive integrity verification. Originals remain in
   the account vault and are streamed into a temporary directory for authorized
   commands only when their published copy required masking or interpreter links.
   Failed/unpublished Skills never enter the executable environment; their

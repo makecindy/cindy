@@ -131,7 +131,7 @@ describe('buddy repository initialization (#10216)', () => {
     await gitExec(['commit', '-m', 'v1'], workspace);
     await expect(ensureTeammateProjectIgnored({ botId: 'old_ignore', ownerRoot: root, workspace })).resolves.toBe(true);
     const ignored = (file: string) => gitExec(['check-ignore', '-q', file], workspace).then(() => true, () => false);
-    for (const file of ['.env.local', 'skills/a/.env', 'token.json', '.venv/bin/python', 'venv/lib/x.py', '.cindy-worktrees/t/a.txt', 'key.pem']) {
+    for (const file of ['.env.local', '.agents/skills/a/.env', '.agents/skills/a/token.json', '.agents/skills/a/.venv/bin/python', 'venv/lib/x.py', '.cindy-worktrees/t/a.txt', 'key.pem']) {
       expect(await ignored(file), file).toBe(true);
     }
     for (const file of ['.env.example', 'notes.md', 'keep.log']) expect(await ignored(file), file).toBe(false);

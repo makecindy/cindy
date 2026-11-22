@@ -6,13 +6,12 @@ import type { CompanionEnvironment } from './environment.js';
 import type { ImportFile } from './types.js';
 import { writeImportFiles } from './files.js';
 import { redactEnvironmentValues } from './process.js';
-import { isPrivateSkillResource, materializeSkillArchive } from './skillArchive.js';
+import { materializeSkillArchive } from './skillArchive.js';
 
 /** Keep executable originals private; never publish their known credentials to a harness. */
 export function projectImportedSkill(files: readonly ImportFile[], slug: string, secrets: Record<string, string>) {
-  const readable = files.filter(file => file.name === 'SKILL.md' || !isPrivateSkillResource(file.name));
-  let changed = readable.length !== files.length;
-  const projected = readable.map(file => {
+  let changed = false;
+  const projected = files.map(file => {
     const bigEndian = file.bytes[0] === 0xfe && file.bytes[1] === 0xff;
     const utf16 = bigEndian || file.bytes[0] === 0xff && file.bytes[1] === 0xfe;
     if (utf16 && file.bytes.length % 2) return file;

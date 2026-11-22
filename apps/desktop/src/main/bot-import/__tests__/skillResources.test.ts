@@ -63,9 +63,7 @@ it('retains and materializes native interpreter aliases without copying them int
     { name: interpreterName, bytes: Buffer.from('native fixture'), executable: true, interpreterLink: target },
   ];
   const projected = projectImportedSkill(files, 'native', {});
-  // 2026-11-21: the environment stays out of the readable (project) copy; commands use the originals.
-  expect(projected.files.map(file => file.name)).toEqual(['SKILL.md']);
-  expect(projected.files[0]!.bytes.toString()).toContain('$CINDY_IMPORTED_SKILLS/native');
+  expect(projected.files).toEqual(files);
   expect(projected.originals?.[1]?.interpreterLink).toBe(target);
   try {
     await withImportedSkillResources({ version: 1, env: {}, mcp: [], credentials: [], skillFiles: { native: projected.originals! } }, () => {}, async env => {
