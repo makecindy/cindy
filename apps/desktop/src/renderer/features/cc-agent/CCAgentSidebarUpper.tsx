@@ -4,7 +4,6 @@ import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
 import { InboxUnreadReporter, useTaskListMode } from '@/hooks/useTaskListMode';
 import {
-  matchesTaskCreators,
   useTaskCreatorIndex,
   useTaskCreatorOptions,
 } from '@/features/bots/botFollowScopes';
@@ -60,6 +59,7 @@ import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { isTeammateOwnInboxTask } from '@cindy/maker-shared/live-task-priority';
 
 import { cn } from '@/lib/utils';
 import { provisionalDraftTaskId, subscribeProvisionalDraftTask } from './provisionalDraftTask';
@@ -1657,10 +1657,9 @@ function ExpandedView({
     [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex],
   );
   // The inbox counts a task as a teammate's by the same test as the teammate filter.
-  const isInboxTeammateTask = useCallback(
-    (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
-    [taskCreatorIndex],
-  );
+  // A teammate's own conversations and its project's tasks stay out of the inbox until they need the
+  // owner; a task it opened elsewhere is ordinary work (shared with the phone).
+  const isInboxTeammateTask = isTeammateOwnInboxTask;
   // Pins are shortcuts. Classify the task through its own project or dialogue in the inbox.
   const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, true,
     undefined, localPlatform, undefined, projectAliasMembers);
