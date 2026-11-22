@@ -30,7 +30,7 @@ import { createInteractionProjection, projectInteractionDismissedForRemote } fro
 import { RECOVERY_CHECKPOINT_MARKER } from '../../desktop/src/main/maker-ipc/recoveryMarker.js';
 import { checkRemoteWorkingDir, remoteWorkingDirRejectionToIpcError } from '../../desktop/src/main/device-link/remote-workdir-guard.js';
 import { desktopTransferCodec } from '../../desktop/src/main/device-link/transferCodec.js';
-import { clearControllerPlatforms, setControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.js';
+import { clearControllerPlatforms, isDesktopPlatform, setControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.js';
 import { createHostWebSocketAgent } from './outbound.mjs';
 import { MESSAGE_METADATA_REFRESH } from './events.mjs';
 import { createDnsFallbackLookup } from '../../desktop/src/main/device-link/dnsFallbackLookup.js';
@@ -38,10 +38,24 @@ import { createLogger } from '../../desktop/src/main/logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.js';
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.js';
-import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.js';
 import { explicitPorts } from './agent/explicit-ports.js';
 import { listDir, mkdirP, statPath } from '../../desktop/src/main/fsBrowse/core.js';
 import { requireObject, requireString } from '../../desktop/src/main/utils/ipcValidate.js';
+import { getHostNewMakerDefaults, getHostNewMakerDefaultsByVendor } from './agent/remote-draft-preferences.js';
+import { applyHostNewMakerDraftPref, applyHostNewMakerWorktreePref } from './agent/remote-draft-preferences.js';
+import { getNewMakerWorktreeBranchPreference, applyNewMakerWorktreeBranchPreference } from './agent/worktree-branch-preferences.js';
+import { readGitSafetySettingsState } from '../../desktop/src/main/maker-host/git-safety-settings-store.js';
+import { stampDirectSendSourceDevice } from '../../desktop/src/main/maker-ipc/mobileClientPromptNote.js';
+import type { MainOwnedInputBoundaryStamp } from '../../desktop/src/main/maker-ipc/mobileClientPromptNote.js';
+import { registerMakerSessionSendHandler } from '../../desktop/src/main/maker-ipc/sessionSendHandler.js';
+import type { HostWorktreeLifecycle } from './agent/worktree-lifecycle.js';
+import { registerNewMakerWorktreeBranchPreferenceHandler } from '../../desktop/src/main/maker-ipc/newMakerWorktreeBranchPreferenceHandler.js';
+import { registerPrecreatedWorktreeDiscardHandler } from '../../desktop/src/main/maker-ipc/precreatedWorktreeDiscardHandler.js';
+import type { IpcHandlerRegistry } from '../../desktop/src/main/maker-ipc/ipcHandlerRegistry.js';
+import type { CreateWorktreeReq } from '../../desktop/src/main/worktree/types.js';
+import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
+import { requireBuiltinAgentKind } from '../../desktop/src/main/maker-host/engineKind.js';
 
 /**
  * What each port the Host hands the shared inbound dispatch (dispatch.ts InboundDispatchPorts) can do
@@ -132,6 +146,8 @@ type ServiceResult = { status: number; body: any };
 const TRANSPORT_STATEMENT_WAIT_MS = 2_000;
 export interface HostDeviceLinkPorts {
   profileDir: string;
+  /** Assembled by Host startup; Device Link only validates and forwards requests. */
+  worktree: HostWorktreeLifecycle;
   version: string;
   getWsUrl(): string;
   getToken(): Promise<string | null>;
@@ -143,6 +159,16 @@ export interface HostDeviceLinkPorts {
   onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
+  /** The desktop-compatible maker:send transaction (agent/input-queue.mjs). */
+  send?(sessionId: string, message: unknown, createOpts?: unknown, sendOpts?: unknown): Promise<unknown>;
+  /** Captures the current clear boundary and input generation before a direct send. */
+  assertRemoteInputControlBoundary?(sessionId: string, opts: unknown): Promise<MainOwnedInputBoundaryStamp>;
+  /** The desktop-compatible extra-directory grant flow, including validation and rollback. */
+  setExtraDirs?(sessionId: string, dirs: string[]): Promise<string[] | { dirs: string[] } | void>;
+  /** Optional host event hub used to mirror draft and worktree preference changes. */
+  publish?(event: any): void;
+  /** A precreated Worktree is claimed as soon as its DB row or live runtime exists. */
+  isSessionClaimed(sessionId: string): Promise<boolean>;
   /** Coexistence plan A: the refusal while a desktop uses this profile, or null. */
   profileHold?(): ProfileHold | null;
   /** The remote plugin OAuth entry; the desktop's plugin-oauth runtime unless a test passes its own. */
@@ -164,6 +190,18 @@ export interface HostDeviceLinkPorts {
    * nothing here changes the Device Link client's behaviour.
    */
   agentNet?: Omit<AgentNetNodePorts, 'enabled' | 'current'>;
+}
+
+function readGitSafetyWire() {
+  const state = readGitSafetySettingsState();
+  return {
+    mode: state.value.mode,
+    autoSnapshotEnabled: state.value.autoSnapshotEnabled,
+    autoInitProjectGit: state.value.autoInitProjectGit,
+    isCustomized: state.isCustomized,
+    defaultMode: state.defaults.mode,
+    defaultAutoSnapshotEnabled: state.defaults.autoSnapshotEnabled,
+  };
 }
 
 export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
@@ -243,7 +281,166 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     assertCurrent();
     return result;
   });
-  registry.register('maker:create-session', ([input]) => { refuseWhileHeld(); return deps.createRuntimeSession(input); });
+  // The remote project/draft flow reads the Host-owned persisted mirror. The getter
+  // hydrates the shared reader on first use after every Host restart.
+  registry.register('maker:get-new-maker-defaults', ([agentKind]) => {
+    assertCurrent();
+    const kind = requireString(agentKind, 'agentKind');
+    if (kind !== 'claude-code' && kind !== 'codex' && kind !== 'pi') {
+      throw new Error('[INVALID_PARAMS] agentKind must be claude-code, codex or pi');
+    }
+    return getHostNewMakerDefaults(requireBuiltinAgentKind(kind, 'Plugin engines in the Node Host'));
+  });
+  const worktrees = deps.worktree;
+  registry.register('worktree:detect-cwd', async ([raw]) => {
+    assertCurrent();
+    const body = requireObject(raw);
+    try {
+      const result = await worktrees.detect(requireString(body.cwd, 'cwd'));
+      assertCurrent();
+      return result;
+    } catch {
+      throwIpcError('INTERNAL', 'Worktree directory probe failed');
+    }
+  });
+  registry.register('worktree:list-branches', async ([raw]) => {
+    assertCurrent();
+    const body = requireObject(raw);
+    const result = await worktrees.listBranches(requireString(body.baseRepo, 'baseRepo'));
+    assertCurrent();
+    return result;
+  });
+  registry.register('worktree:suggest-name', async ([raw]) => {
+    assertCurrent();
+    const body = requireObject(raw);
+    const name = await worktrees.suggestName(requireString(body.baseRepo, 'baseRepo'));
+    assertCurrent();
+    return { name };
+  });
+  registry.register('worktree:create', async ([raw]) => {
+    refuseWhileHeld();
+    assertCurrent();
+    const body = requireObject(raw);
+    const request: CreateWorktreeReq = {
+      sessionId: requireString(body.sessionId, 'sessionId'),
+      baseRepo: requireString(body.baseRepo, 'baseRepo'),
+      name: requireString(body.name, 'name'),
+      sourceBranch: requireString(body.sourceBranch, 'sourceBranch'),
+      ...(body.recoveryKey !== undefined ? { recoveryKey: requireString(body.recoveryKey, 'recoveryKey') } : {}),
+      ...(body.ephemeral !== undefined ? { ephemeral: body.ephemeral === true } : {}),
+    };
+    const context = getDeviceLinkInvokeContext();
+    const result = await worktrees.createWorktree(request, {
+      // Experience routing only: mobile/unknown controllers keep using their local ref.
+      refreshDefaultSource: !context || isDesktopPlatform(context.controllerPlatform),
+      assertWriteAllowed: () => { refuseWhileHeld(); assertCurrent(); },
+    });
+    assertCurrent();
+    return result;
+  });
+  const ipcRegistry: IpcHandlerRegistry = {
+    handle: (channel, handler) => registry.register(channel, args => handler(undefined, ...args)),
+  };
+  registerPrecreatedWorktreeDiscardHandler(ipcRegistry, {
+    assertCaller: () => { refuseWhileHeld(); assertCurrent(); },
+    withSessionLock: (sessionId, task) => withSendToSessionLock(sessionId, async () => {
+      refuseWhileHeld();
+      assertCurrent();
+      return task();
+    }),
+    isSessionClaimed: async sessionId => {
+      refuseWhileHeld();
+      assertCurrent();
+      return deps.isSessionClaimed(sessionId);
+    },
+    discard: worktrees.discardPrecreatedWorktree,
+    discardByRecoveryKey: worktrees.discardPrecreatedWorktreeByRecoveryKey,
+    cancel: worktrees.cancelPrecreatedWorktree,
+  });
+  registerMakerSessionSendHandler(ipcRegistry, {
+    sendToAgentAccepted: async (sessionId, message, createOpts, sendOpts) => {
+      if (!deps.send) throw new Error('[NOT_SUPPORTED] maker:send is not available on this Host');
+      refuseWhileHeld();
+      if (!sessionId) throw new Error('[INVALID_PARAMS] sessionId required');
+      const result = await deps.send(sessionId, message, createOpts,
+        stampDirectSendSourceDevice(sendOpts, readDeviceLinkInvokeSourceDevice()));
+      assertCurrent();
+      return result;
+    },
+    assertRemoteInputControlBoundary: async (sessionId, opts) => {
+      if (!deps.assertRemoteInputControlBoundary) {
+        throw new Error('[NOT_SUPPORTED] maker:send input boundary is not available on this Host');
+      }
+      return deps.assertRemoteInputControlBoundary(sessionId, opts);
+    },
+  });
+  registry.register(MAKER_INVOKE.SET_EXTRA_DIRS, async ([sessionId, dirs]) => {
+    if (!deps.setExtraDirs) throw new Error('[NOT_SUPPORTED] maker:set-extra-dirs is not available on this Host');
+    refuseWhileHeld();
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('[INVALID_PARAMS] sessionId required');
+    if (!Array.isArray(dirs)) throw new Error('[INVALID_PARAMS] dirs must be an array');
+    const result = await deps.setExtraDirs(sessionId, dirs);
+    // The grant transaction exposes metadata internally; the wire contract is the applied subset.
+    const applied = Array.isArray(result) ? result : result?.dirs;
+    if (Array.isArray(applied)) {
+      dispatch.markRemoteSettingPersistedInsideHandler(applied);
+      return applied;
+    }
+    return result;
+  });
+  registry.register(MAKER_INVOKE.SET_EFFORT, ([sessionId, effort]) => call('/api/sessions/set-effort', { sessionId, effort }));
+  registry.register(MAKER_INVOKE.SET_PERMISSION_MODE, ([sessionId, mode]) => call('/api/sessions/set-permission-mode', { sessionId, mode }));
+  registry.register(MAKER_INVOKE.SET_PLAN_MODE, ([sessionId, enabled]) => call('/api/sessions/set-plan-mode', { sessionId, enabled }));
+  registry.register(MAKER_INVOKE.SET_FAST_MODE, ([sessionId, enabled]) => call('/api/sessions/set-fast-mode', { sessionId, enabled }));
+  registry.register(MAKER_INVOKE.SET_THINKING_ENABLED, ([sessionId, enabled]) => call('/api/sessions/set-thinking-enabled', { sessionId, enabled }));
+  registry.register(MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, ([pref]) => {
+    refuseWhileHeld();
+    const result = applyHostNewMakerDraftPref(pref);
+    deps.publish?.({ type: 'new_maker_defaults_changed' });
+    return result;
+  });
+  registry.register(MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_PREF, ([pref]) => {
+    refuseWhileHeld();
+    const result = applyHostNewMakerWorktreePref(pref);
+    deps.publish?.({ type: 'new_maker_defaults_changed' });
+    return result;
+  });
+  registerNewMakerWorktreeBranchPreferenceHandler(ipcRegistry, {
+    isDeviceLinkInvoke,
+    assertTrustedCaller: () => throwIpcError('PERMISSION_DENIED', 'Trusted Cindy caller required'),
+    getPreference: baseRepo => {
+      assertCurrent();
+      return getNewMakerWorktreeBranchPreference(baseRepo);
+    },
+    applyPreference: input => {
+      refuseWhileHeld();
+      assertCurrent();
+      return applyNewMakerWorktreeBranchPreference(input);
+    },
+    broadcast: (_channel, snapshot) => deps.publish?.({ type: 'new_maker_worktree_branch_changed', snapshot }),
+  });
+  registry.register(MAKER_INVOKE.GIT_SAFETY_GET, () => {
+    assertCurrent();
+    return readGitSafetyWire();
+  });
+  registry.register('maker:create-session', async ([input]) => {
+    const body = requireObject(input);
+    const requestedId = typeof body.id === 'string' && body.id ? body.id : null;
+    const create = async () => {
+      refuseWhileHeld();
+      assertCurrent();
+      const result = await deps.createRuntimeSession(input) as { sessionId?: unknown };
+      if (typeof result?.sessionId === 'string') {
+        try { await worktrees.backfillWorktreePath(result.sessionId); }
+        catch (error) { log.warn('Worktree path backfill failed', error); }
+      }
+      assertCurrent();
+      return result;
+    };
+    // The precreated flow supplies its id up front. Serialize the DB/runtime
+    // claim and path backfill with discard/cancel's final ownership check.
+    return requestedId ? withSendToSessionLock(requestedId, create) : create();
+  });
   registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => {
     // The preview is a read. Like project-info writes at the service boundary,
     // apply is refused on entry and rechecked at the write boundary after waiting.
@@ -573,6 +770,12 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         if (event[MESSAGE_METADATA_REFRESH] !== true) {
           emit('local-db:messages:created', { sessionId: id, message: event.message });
         }
+        break;
+      case 'new_maker_defaults_changed':
+        emit(MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED, getHostNewMakerDefaultsByVendor());
+        break;
+      case 'new_maker_worktree_branch_changed':
+        emit('maker:new-maker-worktree-branch:changed', event.snapshot);
         break;
       case 'project_aliases_changed':
         emit('local-db:project-aliases:changed', {});

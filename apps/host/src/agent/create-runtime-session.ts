@@ -8,11 +8,14 @@
  * (null until it is ready), the send path's provider group refusal and the runtime selection's start
  * admission (runtime-selection.ts).
  */
+import path from 'node:path';
 import type { Maker } from '@cindy/maker-core';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { ensureDialogueWorkspaceDir } from '../../../desktop/src/main/localDb/dialogueWorkspace.js';
 import type { LocalRouteAdmissionOpts } from '../../../desktop/src/main/maker-ipc/localRouteAdmission.ts';
 import { readHostCreateSessionOpts } from '../create-session-request.js';
+
+const sameDir = (a?: string | null, b?: string | null) => (a ? path.resolve(a) : '') === (b ? path.resolve(b) : '');
 
 export interface HostRuntimeSessionCreatePorts {
   serverDeps: { createSession(input: Record<string, unknown>): Promise<{ id: string }> };
@@ -20,10 +23,12 @@ export interface HostRuntimeSessionCreatePorts {
   /** The send path's provider group refusal (send-preflight.ts createHostProviderExecutionCheck). */
   assertProviderExecutionSupported(id: string, providerId?: string | null): void;
   admitLocalRoute(opts: LocalRouteAdmissionOpts): Promise<void>;
+  /** The stored task row of a caller-provided id, or null when no such row exists. */
+  readStoredSession(id: string): Promise<{ status: string; workingDir: string | null } | null>;
 }
 
 export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePorts, input: unknown) {
-  const { serverDeps, getAgentGraph, assertProviderExecutionSupported, admitLocalRoute } = ports;
+  const { serverDeps, getAgentGraph, assertProviderExecutionSupported, admitLocalRoute, readStoredSession } = ports;
   const scope = activeOwnerScopeKey();
   const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);
   // These routes need separate execution services; never reinterpret a remote
@@ -38,13 +43,23 @@ export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePo
   // one the row is created with.
   await admitLocalRoute(opts);
   if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) throw new Error('Host account changed');
-  const row = await serverDeps.createSession({
-    id: opts.id, agentKind: opts.agentKind, workingDir: opts.workingDir,
-    workspaceKind: opts.workspaceKind, model: opts.model,
-    permissionMode: opts.permissionMode, effort: opts.effort, providerId: opts.providerId,
-    fastMode: opts.fastMode, planModeEnabled: opts.planMode,
-    extraDirs: opts.extraDirs, writableDirs: opts.writableDirs,
-  });
+  // A controller retries a create with the same id when the first reply was lost (the mobile
+  // creation pipeline relies on this, as maker-core reuses a provided id). The row then already
+  // exists: start its runtime again instead of failing the insert on sessions.id.
+  const stored = opts.id ? await readStoredSession(opts.id) : null;
+  if (stored && (stored.status !== 'active' || sameDir(stored.workingDir, opts.workingDir) === false)) {
+    throw new Error('[PRECONDITION_FAILED] This task id already belongs to a different task');
+  }
+  if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) throw new Error('Host account changed');
+  const row = stored
+    ? { id: opts.id as string }
+    : await serverDeps.createSession({
+      id: opts.id, agentKind: opts.agentKind, workingDir: opts.workingDir,
+      workspaceKind: opts.workspaceKind, model: opts.model,
+      permissionMode: opts.permissionMode, effort: opts.effort, providerId: opts.providerId,
+      fastMode: opts.fastMode, planModeEnabled: opts.planMode,
+      extraDirs: opts.extraDirs, writableDirs: opts.writableDirs,
+    });
   const agentGraph = getAgentGraph();
   if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending() || !agentGraph) throw new Error('Host account changed');
   const session = await agentGraph.maker.createSession({ ...opts, id: row.id });

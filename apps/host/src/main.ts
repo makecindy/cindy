@@ -12,6 +12,7 @@ import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
 import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
+import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
@@ -70,7 +71,10 @@ import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedI
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
-import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
+import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb, readSessionWorkingDirFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
+import { applyRemoteDirectoryGrantUpdate } from '../../desktop/src/main/maker-ipc/remoteDirectoryGrantUpdate.js';
+import { createTaskWritableDirsUpdater } from '../../desktop/src/main/projectDirectoryRuntime.js';
+import { extraDirsForRuntime, libraryRootForRuntime, replaceUserExtraDirs, validateExtraDirs, excludeDirectoryGrantConflictsWithSlots } from '../../desktop/src/main/maker-ipc/extraDirsValidator.js';
 import { createProviderGroupStore } from '../../desktop/src/main/provider-group/storeCore.js';
 import { createProviderGroupBindings } from '../../desktop/src/main/provider-group/bindings.js';
 import { createHostHarnessBinaries, HOST_HARNESS_KINDS } from './agent/harness-binary.js';
@@ -178,6 +182,8 @@ import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-
 import { readSwitchOptionsAgentDeviceId, readSwitchOptionsConfirmedContextWindow } from '../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
 import { setSessionRouteLockImplementation } from '../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
+import { createHostWorktreeLifecycle } from './agent/worktree-lifecycle.ts';
+import { requireBuiltinAgentKind } from '../../desktop/src/main/maker-host/engineKind.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
@@ -1202,7 +1208,8 @@ const readSessionForRun = async (sessionId: string) => {
   if (!row || row.status !== 'active') throw new Error('session is not active');
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
-  const agentKind: 'claude-code' | 'codex' | 'pi' = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+  const storedKind = requireBuiltinAgentKind(row.agentKind as EngineKind, 'Host task execution');
+  const agentKind: 'claude-code' | 'codex' | 'pi' = storedKind === 'codex' ? 'codex' : storedKind === 'pi' ? 'pi' : 'claude-code';
   return {
     id: row.id,
     status: row.status, source: row.source, botId: botLink?.botId ?? null,
@@ -1996,7 +2003,8 @@ const serverDeps = {
     ensureSharedGlobalSkills: () => sharedGlobalSkills.ensureSharedGlobalSkills(),
   }),
   capabilities: async (agentKind: string) => {
-    const kind = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'claude-code';
+    const requested = requireBuiltinAgentKind(agentKind as EngineKind, 'Host model capabilities');
+    const kind = requested === 'codex' ? 'codex' : requested === 'pi' ? 'pi' : 'claude-code';
     const baseCaps = agentGraph?.capabilitiesByAgent?.[kind];
     if (!baseCaps) throw new Error(`Agent '${kind}' is not registered`);
     const providerSnapshot = await listProviders({ gateway: currentGateway(), ownerId: runtime.owner });
@@ -2232,12 +2240,59 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
   };
 }
 
+async function setSessionExtraDirs(sessionId: string, requestedDirs: string[]): Promise<string[] | void> {
+  const owner = activeOwnerScopeKey();
+  const generation = inputQueue.profileHoldGeneration();
+  const assertWriteAllowed = () => {
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) {
+      throw new Error('[PRECONDITION_FAILED] Host account changed');
+    }
+    const held = inputQueue.profileHoldReason();
+    if (held || generation !== inputQueue.profileHoldGeneration()) {
+      throw new Error(`[PRECONDITION_FAILED] ${held ?? 'Host profile ownership changed'}`);
+    }
+  };
+  assertWriteAllowed();
+  return withSendToSessionLock(sessionId, async () => {
+    assertWriteAllowed();
+    const session = agentGraph?.maker.getSession(sessionId);
+    if (session && !session.capabilities.extraDirs.supported) return;
+    const workDir = session?.workDir || await readSessionWorkingDirFromDb(sessionId);
+    const runtime = session
+      ? {
+          setExtraDirs: (dirs: string[]) => session.setExtraDirs(extraDirsForRuntime(dirs), libraryRootForRuntime(dirs)),
+          setWritableDirs: createTaskWritableDirsUpdater(session),
+        }
+      : { setExtraDirs: async () => {}, setWritableDirs: async () => {} };
+    const persisted = await readSessionExtraDirsFromDb(sessionId);
+    const dirs = replaceUserExtraDirs(requestedDirs, persisted);
+    const result = await applyRemoteDirectoryGrantUpdate('extraDirs', dirs, runtime, {
+      assertWriteAllowed,
+      validate: dirs => validateExtraDirs(dirs, workDir),
+      readExtraDirs: async () => persisted,
+      readWritableDirs: () => readSessionWritableDirsFromDb(sessionId),
+      excludeConflicts: excludeDirectoryGrantConflictsWithSlots,
+      persist: patch => runtimeSelection.persistSessionFields(sessionId, patch),
+      terminate: async () => {
+        if (session && agentGraph) await agentGraph.maker.closeSessionIfCurrent(session, 'runtime-refresh');
+      },
+    });
+    // Device Link returns the applied subset, not the transaction metadata.
+    return result.dirs;
+  });
+}
+
 function startDeviceLink(): void {
   if (deviceLink) return;
   const endpoint = readAuthEndpoints(account.realm === 'cn' ? 'cn' : 'global').deviceLinkApiBaseUrl;
   if (!endpoint) throw new Error('The endpoint manifest does not contain a Device Link relay');
+  const worktree = createHostWorktreeLifecycle(profileDir);
+  if (!inputQueue.profileHoldReason()) {
+    void worktree.reconcilePendingSafeDirectoryCleanups().catch(error =>
+      hostLog.warn('deferred Worktree safe.directory cleanup failed', { error }));
+  }
   deviceLink = createHostDeviceLink({
-    profileDir, version: layout.version,
+    profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
     getWsUrl: () => endpoint.replace(/^https:/, 'wss:') + '/api/device-link/ws',
@@ -2261,14 +2316,30 @@ function startDeviceLink(): void {
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
     // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).
     profileHold: inputQueue.profileHoldReason,
+    isSessionClaimed: async sessionId => {
+      if (agentGraph?.maker.getSession(sessionId)) return true;
+      const [row] = await getDbClient().drizzle.select({ id: sessionTable.id })
+        .from(sessionTable).where(eq(sessionTable.id, sessionId)).limit(1);
+      return !!row;
+    },
     createRuntimeSession: input => {
       return createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,
       getAgentGraph: () => agentGraph,
       assertProviderExecutionSupported,
       admitLocalRoute: opts => runtimeSelection.admitLocalRoute(opts),
+      readStoredSession: async id => {
+        const [row] = await getDbClient().drizzle
+          .select({ status: sessionTable.status, workingDir: sessionTable.workingDir })
+          .from(sessionTable).where(eq(sessionTable.id, id)).limit(1);
+        return row ? { status: row.status, workingDir: row.workingDir || null } : null;
+      },
     }), input);
     },
+    send: (sessionId, message, createOpts, sendOpts) => inputQueue.send(sessionId, message, createOpts, sendOpts),
+    assertRemoteInputControlBoundary: (sessionId, opts) => inputQueue.assertRemoteInputControlBoundary(sessionId, opts),
+    setExtraDirs: setSessionExtraDirs,
+    publish: event => eventHub.publish(event),
     availabilityPolicy: availabilityPolicy ?? undefined,
     disableShareAvailability,
 

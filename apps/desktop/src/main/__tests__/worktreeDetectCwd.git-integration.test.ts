@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { createCheckoutService } from '../worktree/checkout';
+import '../worktree/desktopWorktreePorts';
 import { awaitBackgroundCheckout, createWorktree, detectCwd } from '../worktree/WorktreeManager';
 import { app } from 'electron';
 import type { WorktreeMeta } from '../worktree/types';
