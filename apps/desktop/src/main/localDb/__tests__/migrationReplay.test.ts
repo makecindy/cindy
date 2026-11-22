@@ -87,6 +87,52 @@ function maxMigrationSeq(): number {
   return Math.max(...listMigrations(drizzleDir()).map((migration) => migration.seq));
 }
 
+// Migration tier: identical CNY estimates may come from a native tariff or from fixed FX.
+// Replay through the production loader with an exact opt-in, a stale opt-in and a real charge.
+describe('native usage currency upgrade', () => {
+  it('repairs only supported estimates and reconciles the matching model bucket once', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, agent_kind TEXT,
+          agent_meta TEXT, created_at INTEGER, rewind_at INTEGER);
+        CREATE TABLE daily_model_usage (day TEXT,agent_kind TEXT,model TEXT,cost_currency TEXT,
+          cost_amount REAL,cost_usd REAL DEFAULT 0,cost_is_approximate INTEGER,input_tokens INTEGER,
+          output_tokens INTEGER,cache_read_tokens INTEGER,cache_create_tokens INTEGER,updated_at INTEGER,
+          PRIMARY KEY(day,agent_kind,model,cost_currency));
+      `);
+      const at = Date.UTC(2026, 10, 12, 12);
+      const price = { amount: 6.7, currency: 'CNY', kind: 'value-estimate', approximate: true,
+        estimateReasons: ['reference-price'] };
+      const insert = db.prepare("INSERT INTO messages VALUES (?, 'task', 'assistant', 'codex', ?, ?, NULL)");
+      const records = [];
+      for (const id of ['projected', 'native', 'stale', 'charge']) {
+        const model = id + '-model';
+        const money = id === 'charge' ? { ...price, kind: 'actual-cost' } : price;
+        insert.run(id, JSON.stringify({turnCost: money,userTurnCost: money,turnUsageDetails: {
+          providerId: 'test-provider', billingSource: 'subscription', perModelCost: [{model,money}],
+        }}), at);
+        if (id !== 'native') records.push({id,amount: id === 'stale' ? 20 : 6.7,createdAt: at,provider: 'test-provider',models: [model]});
+      }
+      writeFileSync(db.name + '.native-usd-estimates.json', JSON.stringify({version: 1,records}));
+      db.prepare(`INSERT INTO daily_model_usage VALUES
+        (date(? / 1000,'unixepoch','localtime'),'codex','projected-model#billing=subscription','CNY',6.7,0,1,3,4,0,0,?),
+        (date(? / 1000,'unixepoch','localtime'),'codex','projected-model#billing=subscription','USD',2,0,1,2,1,0,0,?)`).run(at,at,at,at);
+      const replay = () => runMigrationReplay(db, {drizzleDir: drizzleDir(), currentVersion: 158});
+      replay();
+      const read = (id: string) => JSON.parse(db.prepare('SELECT agent_meta FROM messages WHERE id=?').pluck().get(id) as string);
+      const restored = {currency: 'USD',amount: 1,kind: 'value-estimate'};
+      expect(read('projected')).toMatchObject({turnCost: restored,userTurnCost: restored,
+        turnUsageDetails: {perModelCost: [{money: restored}]}});
+      for (const id of ['native','stale','charge']) expect(read(id).turnCost).toMatchObject({currency: 'CNY',amount: 6.7});
+      replay();
+      expect(db.prepare('SELECT cost_currency,cost_amount,input_tokens,output_tokens FROM daily_model_usage').all())
+        .toEqual([{cost_currency: 'USD',cost_amount: 3,input_tokens: 5,output_tokens: 5}]);
+    } finally { cleanup(); }
+  });
+});
+
 // Migration tier: a follow-up that already has an Orca worker becomes visible after upgrading.
 // A team with no worker stays attached, and replay after reopening must not touch native IDs.
 describeMigrationReplay('existing side-chat teams', () => {
@@ -148,7 +194,9 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0156_schedule_primary_host.sql',
         '0157_promote_orca_side_chat.sql',
         '0158_close_linked_side_chat.sql',
-        '0159_schedule_model_group.sql',
+        '0159_restore_native_usage_currency.sql',
+        '0160_native_usage_amount_metadata.sql',
+        '0161_schedule_model_group.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
@@ -381,7 +429,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -561,7 +609,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

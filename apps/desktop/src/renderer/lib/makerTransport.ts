@@ -739,6 +739,7 @@ export function estimatedSessionValueFor(sessionId: string, options?: { includeB
   entries: Array<{
     clientId: string;
     money?: import('../../shared/regionalMoney').RegionalMoney;
+    additionalEstimates?: import('../../shared/regionalMoney').RegionalMoney[];
     costUsd?: number;
     turnUsageDetails?: unknown;
   }>;
