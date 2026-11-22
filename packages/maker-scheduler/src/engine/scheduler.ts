@@ -4508,24 +4508,7 @@ export class Scheduler extends EventEmitter {
       // 自动 attempt,这个分支理论上到不了 manual 行;但真到了也不能把它标 expired ——
       // 那会让一个"只按需手动跑"的任务在 UI 上变成已过期。
       if (!current.recurring && !current.manual) {
-        const updated = await this.storage.update(scheduleId, {
-          lastFiredAt: attempt.startedAt,
-          lastFinishedAt: now,
-          status: 'expired',
-          nextFireAt: undefined,
-        }, current);
-        // 只有真落笔过期了才把缓存里的这条摘掉。CAS 落空说明行已经被改过(用户改了
-        // cadence / 截止时间 / recurring),过期没有落笔 —— 缓存里此刻是用户改好的
-        // 新版,顺手删掉的话 due 循环要等下一次 30 秒 DB 同步才重新看到它,期间该
-        // 触发的任务被延后(Codex P2 on #12087)。
-        if (updated?.status === 'expired') this.activeSchedules.delete(scheduleId);
-        this.logger?.info?.('scheduler: expired one-shot schedule after stalled run', {
-          schedulerInstanceId: this.schedulerInstanceId,
-          processId: this.processId,
-          scheduleId,
-          runId: attempt.runId,
-          persisted: updated !== null,
-        });
+        const updated = await this.expireStalledOneShot(scheduleId, current, attempt, now);
         if (updated) return true;
         // CAS 落空:行已经被改过。**不能**就此收尾 —— 用户可能把这条一次性任务改
         // 成了周期任务,而改「recurring」本身不触发重算(重算的触发字段是 cron /
@@ -4541,13 +4524,53 @@ export class Scheduler extends EventEmitter {
           !fresh.manual &&
           fresh.nextFireAt === undefined
         ) {
-          await this.replanRecurringSchedule(scheduleId, fresh, attempt, now);
+          // await 而不是直接 return 那个 promise:直接 return 会让 async 栈里
+          // 少掉本函数这一帧(调用栈被压平),按栈认「补排路径」的调用方会认不出
+          // 这次写入。结论照样要往外传(见下面的 settled)。
+          const settled = await this.replanRecurringSchedule(scheduleId, fresh, attempt, now);
+          return settled;
         }
         return true;
       }
-      await this.replanRecurringSchedule(scheduleId, current, attempt, now);
-      return true;
+      const settled = await this.replanRecurringSchedule(scheduleId, current, attempt, now);
+      return settled;
     }
+  }
+
+  /**
+   * 一次性任务的过期落笔(卡死收口路径):记下这次已消耗的触发 + 置 expired +
+   * 清 nextFireAt —— 与 fireOneInner 的正常终态段一致。
+   *
+   * lastFiredAt 用 attempt.startedAt(登记时刻):强制收口路径手里没有 run 行的
+   * firedAt,两者只差一次 claim 的毫秒级延迟。
+   *
+   * CAS 落空返回 null:行在这期间又被改过(用户改了 cadence / 截止时间 /
+   * recurring),过期没有落笔 —— 缓存里此刻是用户改好的新版,顺手删掉的话 due
+   * 循环要等下一次 30 秒 DB 同步才重新看到它,期间该触发的任务被延后
+   * (Codex P2 on #12087)。
+   */
+  private async expireStalledOneShot(
+    scheduleId: string,
+    row: Schedule,
+    attempt: ReplanAttempt,
+    now: number,
+  ): Promise<Schedule | null> {
+    const updated = await this.storage.update(scheduleId, {
+      lastFiredAt: attempt.startedAt,
+      lastFinishedAt: now,
+      status: 'expired',
+      nextFireAt: undefined,
+    }, row);
+    // 只有真落笔过期了才把缓存里的这条摘掉。
+    if (updated?.status === 'expired') this.activeSchedules.delete(scheduleId);
+    this.logger?.info?.('scheduler: expired one-shot schedule after stalled run', {
+      schedulerInstanceId: this.schedulerInstanceId,
+      processId: this.processId,
+      scheduleId,
+      runId: attempt.runId,
+      persisted: updated !== null,
+    });
+    return updated;
   }
 
   /**
@@ -4562,15 +4585,18 @@ export class Scheduler extends EventEmitter {
    * 落笔前先留收据:这次写下的排期值要能被后续补排认出「这是谁写的」——
    * 退役写入的识别靠签发身份 + 写入时那一版的 CAS 身份,不靠「这个值是不是已经
    * 过期」(见 isRetiredReplanWrite)。
+   *
+   * 返回 true = 结论已定(凭据可以摘掉);返回 false = 这次没做成 —— 行在我们
+   * 落笔期间又被改过,还没拿到确定结论,凭据继续上膛,由后续 tick 重试。
    */
   private async replanRecurringSchedule(
     scheduleId: string,
     current: Schedule,
     attempt: ReplanAttempt,
     now: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const next = computeNextFireAt(current, now);
-    if (next === undefined) return; // manual:按语义不续命
+    if (next === undefined) return true; // manual:按语义不续命
     const write = this.storage.update(scheduleId, { nextFireAt: next }, current);
     const receipt = this.recordReplanWrite(scheduleId, next, attempt.issueSeq, current);
     void write.then(
@@ -4610,6 +4636,26 @@ export class Scheduler extends EventEmitter {
           );
           updated = await takeover;
         }
+      } else if (
+        fresh &&
+        fresh.status === 'active' &&
+        !fresh.manual &&
+        !fresh.recurring &&
+        fresh.nextFireAt === undefined
+      ) {
+        // 用户在补排挂起期间把这条**周期**任务改成了**一次性**:改「recurring」
+        // 本身不触发重算(重算的触发字段是 cron / 时区 / interval / manual /
+        // 截止时间),于是新版是 active 且 nextFireAt 为空 —— 而这次触发已经被
+        // 卡死的那一轮消耗掉了,按一次性语义它应当**过期**。
+        //
+        // 不处理的话这条行既不会被触发(没有排期),也不会自动过期(周期 DB sync
+        // 只重灌行、不补 nextFireAt),只能等进程重启才被当成"还没跑过"重新排
+        // 一次 —— 一次性任务因此多跑一轮(Codex P1 on #12087)。
+        //
+        // 过期写入再落空说明行又被改过:这次没做成,凭据继续上膛,由后续 tick
+        // 重试(重试时按新一版重新判定)。
+        const expired = await this.expireStalledOneShot(scheduleId, fresh, attempt, now);
+        return expired !== null;
       }
     }
     if (updated && updated.status === 'active') {
@@ -4623,6 +4669,7 @@ export class Scheduler extends EventEmitter {
       nextFireAt: next,
       persisted: updated !== null,
     });
+    return true;
   }
 
   /**
