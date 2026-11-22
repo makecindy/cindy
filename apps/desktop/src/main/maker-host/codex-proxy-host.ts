@@ -3332,7 +3332,7 @@ function createTransformRequestChain(
       || VOLCENGINE_ARK_CHAT_HOST_RE.test(endpoint.hostname);
     const requestModel = String(body.model ?? '');
     const gatewayDialect = providerId === 'xd' && isXdGatewayUpstream(upstreamBase) &&
-      (isXdGrokWireModel(requestModel) || /^(?:deepseek\/|bytedance-seed\/|doubao-seed-)/.test(requestModel));
+      (isXdGrokWireModel(requestModel) || /^(?:deepseek\/|bytedance-seed\/|doubao-seed-|qwen\/|moonshotai\/)/.test(requestModel));
     return execAdapter.adaptRequest(body, ctx.reqId,
       { harness: 'codex', protocol: 'openai-responses', upstreamBase, model }, knownEndpoint || gatewayDialect);
   };

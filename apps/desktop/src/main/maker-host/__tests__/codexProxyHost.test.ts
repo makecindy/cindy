@@ -7002,6 +7002,9 @@ describe('codex proxy host', () => {
     ['x-ai-grok/grok-4.7', 'text/event-stream'],
     ['deepseek/deepseek-v4.1-flash', 'application/json'],
     ['deepseek/deepseek-v4.1-flash', 'text/event-stream'],
+    ['qwen/qwen4-max', 'application/json'],
+    ['qwen/qwen4-max', 'text/event-stream'],
+    ['moonshotai/kimi-k3.1-pro', 'application/json'],
   ])('round-trips XD Gateway namespace tools for %s (%s)', async (model, contentType) => {
     const host = await freshCodexProxyHost();
     const { setXdGatewayModels } = await import('../active-catalog.js');
