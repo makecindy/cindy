@@ -16,7 +16,7 @@ import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../maker-ipc/agent-input-coordinator';
 import {
   createContextOverflowRollover, isContextOverflowErrorData, isOversizedHistoryErrorData,
-  isUnsupportedRequestOptionErrorData,
+  isUnsupportedRequestOptionErrorData, isPiRequestBodyTooLargeErrorData,
 } from '../maker-ipc/contextOverflowRollover';
 import {
   claimContextRecoveryTerminal, deferContextRecoveryTerminal, settleContextRecoveryTerminal,
@@ -2092,7 +2092,8 @@ describe('Desktop recovery assembly ordering and fences', () => {
         const ports: ContextRecoveryTerminalPorts = {
           getRollover: () => rollover, getSuppressedBroadcasts: () => new Map(),
           isTerminalTurnErrorEvent, isContextOverflowErrorData, isOversizedHistoryErrorData,
-          isUnsupportedRequestOptionErrorData, reserveTurnErrorPersistId: vi.fn(),
+          isUnsupportedRequestOptionErrorData, isPiRequestBodyTooLargeErrorData,
+          reserveTurnErrorPersistId: vi.fn(),
           releaseReservedTurnErrorPersistId: vi.fn(), onTurnErrorEvent: vi.fn(),
           broadcastToAllWindows: vi.fn(), handleAgentIslandEventAfterBroadcast: vi.fn(),
           eventChannel: () => 'maker:event', log: { warn: vi.fn() },
