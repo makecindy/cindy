@@ -122,7 +122,7 @@ async function until(action: () => Promise<boolean>, timeoutMs = 5000) {
   }
 }
 
-it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP streams through the real native C ABI', async () => {
+it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP streams, levels and abandoned streams through the real native C ABI', async () => {
   const native = new NativePeer();
   const seed = Buffer.alloc(32, 31).toString('base64url'); // Public, deterministic unit fixture.
   await native.call({ seed, context: 'unit-native-interop', deviceId: 'native-host' }, 'create');
@@ -144,8 +144,11 @@ it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP
   });
   cleanups.push(() => endpoint.close());
   const connection: Connection = endpoint.connect(Buffer.from(identity.transportKey, 'base64url'), { address: '127.0.0.1', port: identity.udpPort });
-  const output: Buffer[] = [];
-  connection.on('stream', (stream: RecvStream) => stream.on('data', data => output.push(Buffer.from(data))));
+  const output: Buffer[] = [], byStream = new Map<number, number>(), ended = new Set<number>();
+  connection.on('stream', (stream: RecvStream) => {
+    stream.on('data', data => { output.push(Buffer.from(data)); byStream.set(stream.id, (byStream.get(stream.id) ?? 0) + data.length); });
+    stream.on('end', () => ended.add(stream.id));
+  });
   let nativeId: number | undefined;
   await until(async () => {
     const poll = await native.call({ op: 'poll' });
@@ -166,6 +169,36 @@ it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP
   expect(await native.call({ op: 'write', id: nativeId, stream, data: payload.toString('base64url') })).toBe(payload.length);
   await until(async () => { await native.call({ op: 'poll' }); return Buffer.concat(output).length >= payload.length; });
   expect(Buffer.concat(output)).toEqual(payload);
+
+  // 2026-11-22, core v2-1 (docs/agent-net-session-plan.md section 7 items 1, 3, 5) through both drivers. The native engine opens a
+  // stream on one of the eight levels and abandons it right after writing: Node reads exactly what went out before, then its end.
+  expect(connection.supportsLevels).toBe(true);
+  const abandoned = await native.call({ op: 'openStream', id: nativeId, level: 5 }) as number;
+  await expect(native.call({ op: 'openStream', id: nativeId, level: 8 })).rejects.toThrow('INVALID_PRIORITY');
+  let written = 0;
+  for (let i = 0; i < 8; i++) written += await native.call({ op: 'write', id: nativeId, stream: abandoned, data: Buffer.alloc(65_536, i).toString('base64url') });
+  const dropped = await native.call({ op: 'abandon', id: nativeId, stream: abandoned }) as number;
+  expect(dropped).toBeGreaterThan(0);
+  await until(async () => { await native.call({ op: 'poll' }); return ended.has(abandoned); });
+  expect(byStream.get(abandoned) ?? 0).toBe(written - dropped);
+  // Node abandons its own stream once part of it was acknowledged: the native engine reads the rest of what went out, then the end.
+  const nativeRead = new Map<number, number>(), nativeEnded = new Set<number>();
+  const pollNative = async () => {
+    for (const state of (await native.call({ op: 'poll' })).connections) {
+      for (const chunk of state.data) nativeRead.set(chunk.stream, (nativeRead.get(chunk.stream) ?? 0) + Buffer.from(chunk.data, 'base64url').length);
+      for (const event of state.events) if (event.kind === 'finish') nativeEnded.add(event.stream);
+    }
+  };
+  const total = 2 << 20, outgoing = connection.openStream(5);
+  outgoing.write(Buffer.alloc(total, 9));
+  await until(async () => { await pollNative(); return (outgoing.progress()?.ackedBytes ?? 0) > 100_000; });
+  expect(outgoing.progress()!.stalledUs).toBeLessThan(2_000_000);
+  expect(connection.sendProgress()!.queued[5]).toBeGreaterThan(0);
+  const nodeDropped = outgoing.abandon();
+  expect(nodeDropped).toBeGreaterThan(0);
+  expect(outgoing.abandon()).toBeNull();
+  await until(async () => { await pollNative(); return nativeEnded.has(outgoing.id); }, 10_000);
+  expect(nativeRead.get(outgoing.id)).toBe(total - nodeDropped!);
   expect(captured.length).toBeGreaterThan(3);
   expect(captured.some(packet => packet.includes('PRIVATE_NATIVE_INTEROP_MESSAGE_'))).toBe(false);
   await native.call({ op: 'admit', peers: [] });

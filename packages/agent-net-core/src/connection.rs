@@ -12,7 +12,10 @@ use alloc::vec::Vec;
 use crate::congestion::{Bbr, RECOVERY_TIMEOUTS, RateSample};
 use crate::parity::{self, MAX_UNKNOWNS};
 use crate::rtt::RttEstimator;
-use crate::stream::{DEFAULT_STREAM, HEADED_LENGTH_BIT, Priority, RecvStream, STREAM_HEADER_LEN, Scheduler, SendStream, StreamEvent, StreamHeader};
+use crate::stream::{
+    DEFAULT_STREAM, HEADED_LENGTH_BIT, PRIORITY_LEVELS, Priority, RecvStream, STREAM_HEADER_LEN, Scheduler, SendProgress, SendStream, StreamEvent,
+    StreamHeader, StreamProgress,
+};
 use crate::wire::{self, Frame};
 
 const MAX_SEGMENTS_PER_PACKET: usize = 16;
@@ -415,6 +418,8 @@ pub struct Connection {
     send_streams: BTreeMap<u32, SendStream>,
     scheduler: Scheduler,
     next_stream_id: u32,
+    /// 上一次有数据被确认的时刻；之前没有数据在等时，是数据开始等的时刻（`send_progress`）。
+    progress_at: u64,
     /// 交互流和其他流都在发：其他流要给它让路，也要少占网络里的队列。
     mixed_traffic: bool,
     last_interactive_at: Option<u64>,
@@ -582,6 +587,7 @@ impl Connection {
             send_buffered: 0,
             send_streams: BTreeMap::from([(DEFAULT_STREAM, SendStream::new(Priority::Normal, 0))]),
             scheduler: Scheduler::default(),
+            progress_at: 0,
             next_stream_id: DEFAULT_STREAM + 1,
             mixed_traffic: false,
             last_interactive_at: None,
@@ -788,6 +794,7 @@ impl Connection {
         }
         if !self.has_unacked_data() {
             self.last_heard = now_us;
+            self.progress_at = now_us;
         }
         let per_stream = self.stream_send_buffer();
         let Some(priority) = self.send_streams.get(&stream).filter(|state| !state.finishing).map(|state| state.priority) else { return 0 };
@@ -800,6 +807,9 @@ impl Connection {
         let total_room = if own == 0 { total_room.max(max_segment) } else { total_room };
         let room = per_stream.saturating_sub(own).min(total_room);
         let accepted = data.len().min(room);
+        if own == 0 && accepted > 0 {
+            state.progress_at = now_us;
+        }
         state.pending.extend(&data[..accepted]);
         self.send_buffered += accepted;
         accepted
@@ -809,6 +819,42 @@ impl Connection {
     /// （Agent-Net 会话的积压，慢线路上不再往里灌推送，交互回复不排在大批推送后面）。
     pub fn stream_buffered(&self, stream: u32) -> usize {
         self.send_streams.get(&stream).map_or(0, |state| state.pending.len() + state.unacked)
+    }
+
+    /// 一条流的进展。流不存在时是 `None`：没开过，或者已经写完、全部被确认（结束标记也确认了）。
+    /// 上层据此按进展判超时：字节一直在被确认的流再慢也不算卡住，有字节在等却很久没有一个被确认才算。
+    pub fn stream_progress(&self, now_us: u64, stream: u32) -> Option<StreamProgress> {
+        let state = self.send_streams.get(&stream)?;
+        let buffered = state.pending.len() + state.unacked;
+        let waiting = buffered > 0 || (state.finishing && !state.fin_sent);
+        Some(StreamProgress { acked_bytes: state.acked, buffered, stalled_us: if waiting { now_us.saturating_sub(state.progress_at) } else { 0 } })
+    }
+
+    /// 发送方向的进展：每一档还在发送缓冲里的字节（写进来还没发的，加发了还没确认的），以及有数据没被确认时距上一次有数据被确认
+    /// 过了多久。上层据此看线路是不是变慢、推送是不是积压，不用自己数。
+    pub fn send_progress(&self, now_us: u64) -> SendProgress {
+        let mut queued = [0usize; PRIORITY_LEVELS];
+        for state in self.send_streams.values() {
+            queued[state.priority.value() as usize] += state.pending.len() + state.unacked;
+        }
+        let stalled_us = if self.has_unacked_data() { now_us.saturating_sub(self.progress_at) } else { 0 };
+        SendProgress { queued, stalled_us }
+    }
+
+    /// 放弃一条流：写进来还没切成分片的字节不再发，流随即结束，对端收到已经发出的那部分和结束标记。已经发出、还没被确认的
+    /// 分片照常重传：全连接共用分片序号，对端要收齐才能往后交付，这部分最多是在途的那一窗。线上格式不变，旧版对端看到的是一条
+    /// 提前结束的流，所以上层要自己看出内容不全（比如按头里写的长度）。返回丢掉的字节数；默认流、不存在或已经发出结束标记的流
+    /// 返回 `None`。
+    pub fn abandon_stream(&mut self, stream: u32) -> Option<usize> {
+        if stream == DEFAULT_STREAM {
+            return None;
+        }
+        let state = self.send_streams.get_mut(&stream).filter(|state| !state.fin_sent)?;
+        let dropped = state.pending.len();
+        state.pending.clear();
+        state.finishing = true;
+        self.send_buffered -= dropped;
+        Some(dropped)
     }
 
     /// 这条流不再写了。之前写入的数据发完后，对端会收到 [`StreamEvent::Finished`]。默认流不能结束。
@@ -1617,8 +1663,15 @@ impl Connection {
         }
         segment.acked = true;
         let was_in_flight = core::mem::replace(&mut segment.in_flight, false);
+        let (stream, bytes) = (segment.stream, segment.data.len());
         if was_in_flight {
             self.in_flight -= 1;
+        }
+        // 确认都在收到包时处理，`last_heard` 就是此刻。
+        self.progress_at = self.last_heard;
+        if let Some(state) = self.send_streams.get_mut(&stream) {
+            state.acked += bytes as u64;
+            state.progress_at = self.last_heard;
         }
     }
 
@@ -1867,7 +1920,7 @@ impl Connection {
         // 给交互流留一点窗口：窗口被丢包卡住时，新消息不用等大量数据。
         let reserve = if self.mixed_traffic { (window / INTERACTIVE_WINDOW_RESERVE).max(1) } else { 0 };
         self.scheduler.pick(&self.send_streams, |id, stream| {
-            let allowed = if stream.priority == Priority::Interactive { room > 0 } else { room > reserve };
+            let allowed = if stream.priority.is_urgent() { room > 0 } else { room > reserve };
             allowed && stream.has_data() && self.peer_allows(id, stream)
         })
     }
@@ -1905,7 +1958,7 @@ impl Connection {
         self.send_buffered += size - count;
         self.tail_stream = (id, next_seq);
         self.scheduler.record(id, priority, &self.send_streams);
-        let urgent = priority == Priority::Interactive;
+        let urgent = priority.is_urgent();
         *(if urgent { &mut self.last_interactive_at } else { &mut self.last_other_at }) = Some(now_us);
         self.update_mixed_traffic(now_us);
         self.segments.push_back(Segment { data, stream: id, headed, urgent, acked: false, in_flight: false, sent_before: false });
@@ -2260,7 +2313,7 @@ impl Connection {
 
     /// 下一个新分片是不是交互流的。
     fn next_interactive_stream(&self) -> Option<u32> {
-        self.next_stream().filter(|id| self.send_streams.get(id).is_some_and(|stream| stream.priority == Priority::Interactive))
+        self.next_stream().filter(|id| self.send_streams.get(id).is_some_and(|stream| stream.priority.is_urgent()))
     }
 
     /// 接下来要发的是交互流的数据。

@@ -15,7 +15,7 @@
 //!   含 300 Mbit/s 路径的吞吐验证和恶意包压力验证，不作为 5 秒内轻量单测。
 //! - 测试本身的有效性由 `sim/mutants.py` 验证：注入已知 bug，这里必须变红。
 
-use agent_net_core::{Config, Connection, DEFAULT_STREAM, PacketError, Priority, RecoveryPolicy, StreamEvent};
+use agent_net_core::{Config, Connection, DEFAULT_STREAM, PRIORITY_LEVELS, PacketError, Priority, RecoveryPolicy, StreamEvent};
 use agent_net_sim::{Link, LinkProfile, Rng, random_case};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
@@ -1012,4 +1012,119 @@ fn crafted_stream_packet(packet_number: u32, sn: u32, stream: u32, seq: u32, fin
     packet.push(fin as u8);
     packet.extend_from_slice(payload);
     packet
+}
+
+/// 2026-11-22：八档优先级（会话层方案第 7 节第 1 项）。原来的三档是其中的 1、3、6；数小的先发，0、1 两档按交互流对待，
+/// 每一档都有数据在等时最低的一档照样有进展。只用原来三档的结果不变，由上面的用例和 `sim/results/2026-11-22-stream-levels` 的矩阵对比看守。
+#[test]
+fn every_level_sends_by_number_and_none_starves() {
+    assert_eq!(Priority::level(PRIORITY_LEVELS as u8), None);
+    assert_eq!([Priority::Interactive, Priority::Normal, Priority::Background].map(Priority::value), [1, 3, 6]);
+    assert!(Priority::level(0).unwrap().is_urgent() && Priority::Interactive.is_urgent() && !Priority::level(2).unwrap().is_urgent());
+    let mut pair = Pair::new(&wide_config(), path(2_000_000, 20_000), path(2_000_000, 20_000), 11);
+    let streams: Vec<u32> = (0..PRIORITY_LEVELS as u8).map(|level| pair.a.open_stream(Priority::level(level).unwrap()).unwrap()).collect();
+    let size = 48 * 1024;
+    for &stream in &streams {
+        assert_eq!(pair.a.send_stream(0, stream, &vec![stream as u8; size]), size);
+        assert!(pair.a.finish_stream(stream));
+    }
+    let mut received = vec![0usize; streams.len()];
+    let mut finished_at = vec![None; streams.len()];
+    while finished_at.iter().any(Option::is_none) {
+        assert!(pair.now < 30_000_000, "没在 30 秒内收完：{received:?}");
+        pair.advance();
+        for (index, &stream) in streams.iter().enumerate() {
+            received[index] += drain(&mut pair.b, pair.now, stream);
+        }
+        while let Some(event) = pair.b.poll_event() {
+            if let StreamEvent::Finished(stream) = event {
+                finished_at[streams.iter().position(|&id| id == stream).unwrap()] = Some(pair.now);
+            }
+        }
+    }
+    assert!(received.iter().all(|&bytes| bytes == size), "{received:?}");
+    let finished: Vec<u64> = finished_at.into_iter().flatten().collect();
+    assert!(finished.windows(2).all(|pair| pair[0] <= pair[1]), "数小的先收完：{finished:?}");
+    assert!(finished[0] < finished[PRIORITY_LEVELS - 1], "{finished:?}");
+}
+
+/// 2026-11-22：放弃一条流（会话层方案第 7 节第 3 项）。写进来还没发出的字节不再发，对端收到发出去的那部分和结束标记，
+/// 别的流照常；之后流不在了，再放弃返回 `None`。每一步都核对发送缓冲的账目（`Pair::pump` 里的 `check_invariants`）。
+#[test]
+fn abandoned_stream_drops_unsent_bytes_and_finishes() {
+    let mut pair = Pair::new(&wide_config(), path(4_000_000, 20_000), path(4_000_000, 20_000), 7);
+    let (big, other) = (pair.a.open_stream(Priority::Background).unwrap(), pair.a.open_stream(Priority::Normal).unwrap());
+    let written = pair.a.send_stream(0, big, &vec![7u8; 900_000]);
+    assert!(written > 500_000, "{written}");
+    let (mut big_read, mut other_read) = (0, 0);
+    while pair.now < 100_000 {
+        pair.advance();
+        big_read += drain(&mut pair.b, pair.now, big);
+    }
+    let dropped = pair.a.abandon_stream(big).expect("流还在、还没结束");
+    assert!(dropped > 0 && dropped < written, "{dropped} / {written}");
+    assert_eq!(pair.a.abandon_stream(DEFAULT_STREAM), None);
+    assert_eq!(pair.a.send_stream(pair.now, big, &[1]), 0, "放弃以后不再收字节");
+    assert_eq!(pair.a.send_stream(pair.now, other, &[3u8; 10_000]), 10_000);
+    assert!(pair.a.finish_stream(other));
+    let (mut big_finished, mut other_finished) = (false, false);
+    while !(big_finished && other_finished) {
+        assert!(pair.now < 20_000_000, "big {big_read} other {other_read}");
+        pair.advance();
+        big_read += drain(&mut pair.b, pair.now, big);
+        other_read += drain(&mut pair.b, pair.now, other);
+        while let Some(event) = pair.b.poll_event() {
+            big_finished |= event == StreamEvent::Finished(big);
+            other_finished |= event == StreamEvent::Finished(other);
+        }
+    }
+    assert_eq!(big_read, written - dropped, "收到的正好是放弃前发出去的");
+    assert_eq!(other_read, 10_000);
+    while pair.a.stream_progress(pair.now, big).is_some() {
+        assert!(pair.now < 30_000_000);
+        pair.advance();
+    }
+    assert_eq!(pair.a.abandon_stream(big), None);
+}
+
+/// 2026-11-22：进展统计（会话层方案第 7 节第 5 项）。链路断着时，有字节在等的流和整个发送方向的停顿时间跟着涨、确认字节不动；
+/// 链路通了以后确认字节增加、停顿回落；全部确认后发送方向停顿为 0，流不在了。
+#[test]
+fn progress_reports_stalls_and_acknowledged_bytes() {
+    let mut pair = Pair::new(&wide_config(), path(4_000_000, 20_000), path(4_000_000, 20_000), 5);
+    let stream = pair.a.open_stream(Priority::Normal).unwrap();
+    let start = 50_000;
+    while pair.now < start {
+        pair.advance();
+    }
+    assert_eq!(pair.a.send_stream(pair.now, stream, &[9u8; 20_000]), 20_000);
+    let written_at = pair.now;
+    let queued = pair.a.send_progress(pair.now).queued;
+    assert!(queued[Priority::Normal.value() as usize] >= 20_000 && queued.iter().sum::<usize>() == queued[Priority::Normal.value() as usize], "{queued:?}");
+    // 断网 1.5 秒：发出的包都丢掉。
+    while pair.now < written_at + 1_500_000 {
+        pair.pump();
+        pair.packets.clear();
+        pair.advance();
+    }
+    let stalled = pair.a.stream_progress(pair.now, stream).unwrap();
+    assert_eq!(stalled.acked_bytes, 0);
+    assert!(stalled.stalled_us >= 1_400_000, "{stalled:?}");
+    assert!(pair.a.send_progress(pair.now).stalled_us >= 1_400_000);
+    // 通了以后。
+    let mut moved = None;
+    while moved.is_none() {
+        assert!(pair.now < written_at + 20_000_000);
+        pair.advance();
+        drain(&mut pair.b, pair.now, stream);
+        moved = pair.a.stream_progress(pair.now, stream).filter(|progress| progress.acked_bytes > 0);
+    }
+    assert!(moved.unwrap().stalled_us < 500_000, "{moved:?}");
+    assert!(pair.a.finish_stream(stream));
+    while pair.a.stream_progress(pair.now, stream).is_some() {
+        assert!(pair.now < written_at + 30_000_000);
+        pair.advance();
+        drain(&mut pair.b, pair.now, stream);
+    }
+    assert_eq!(pair.a.send_progress(pair.now).stalled_us, 0);
 }

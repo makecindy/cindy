@@ -21,7 +21,9 @@ const SEND_BUFFER_BYTES: usize = 24 << 20;
 const MAX_REPORTED_STREAMS: usize = 16;
 /// What this build adds over the first native release; JS checks it before using any of them (an older
 /// installed binary keeps working with newer JS, without these).
-const FEATURES: [&str; 5] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io"];
+/// `stream-levels`（2026-11-22）：`openStream` 认 `level`（核心的八档，0 最急），`abandon` 放弃一条流，`buffered` 的每一项
+/// 在 `[流, 缓冲字节]` 后面多两项 `[累计确认字节, 停顿毫秒]`（只读前两项的旧 JS 不受影响）。
+const FEATURES: [&str; 6] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels"];
 /// Relayed datagrams the application still has to carry over its relay WebSocket; beyond this the oldest go (the
 /// transport resends them). Only fills while the application does not poll.
 const MAX_OUTBOX: usize = 1024;
@@ -172,9 +174,13 @@ impl NativeEngine {
                 Ok(Value::Null)
             },
             "openStream" => {
-                let priority = match command["priority"].as_str().unwrap_or("normal") {
-                    "interactive" => Priority::Interactive, "normal" => Priority::Normal,
-                    "background" => Priority::Background, _ => return Err("INVALID_PRIORITY"),
+                let priority = if let Some(level) = command.get("level").filter(|level| !level.is_null()) {
+                    level.as_u64().and_then(|level| u8::try_from(level).ok()).and_then(Priority::level).ok_or("INVALID_PRIORITY")?
+                } else {
+                    match command["priority"].as_str().unwrap_or("normal") {
+                        "interactive" => Priority::Interactive, "normal" => Priority::Normal,
+                        "background" => Priority::Background, _ => return Err("INVALID_PRIORITY"),
+                    }
                 };
                 let id = number(command, "id")?;
                 let connection = self.endpoint.connection_mut(id).ok_or("CONNECTION_CLOSED")?;
@@ -196,6 +202,11 @@ impl NativeEngine {
             "finish" => {
                 let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
                 Ok(json!(connection.finish_stream(number(command, "stream")?)))
+            },
+            // 没发出的字节不再发，流随即结束；返回丢掉的字节数，流已经结束或不在时是 null（核心的 `abandon_stream`）。
+            "abandon" => {
+                let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
+                Ok(json!(connection.abandon_stream(number(command, "stream")?)))
             },
             "close" => {
                 let id = number(command, "id")?;
@@ -466,7 +477,10 @@ impl NativeEngine {
             // Bytes still in the core's send buffer per stream this side opened (not sent yet, or sent and unacknowledged): the
             // session's backlog reading counts them, as the Desktop's does (transport.ts `coreBufferedBytes`).
             let buffered: Vec<Value> = self.local_streams.get(&id).into_iter().flatten()
-                .map(|stream| json!([stream, connection.stream_buffered(*stream)])).collect();
+                .map(|stream| match connection.stream_progress(now, *stream) {
+                    Some(progress) => json!([stream, progress.buffered, progress.acked_bytes, progress.stalled_us / 1000]),
+                    None => json!([stream, 0, null, 0]),
+                }).collect();
             connections.push(json!({"id":id,"established":connection.is_established(),"dead":connection.is_dead(),
                 "closedByPeer":connection.closed_by_peer(),"remoteKey":encoded(connection.remote_static()),
                 "unacked":connection.connection().has_unacked_data(),

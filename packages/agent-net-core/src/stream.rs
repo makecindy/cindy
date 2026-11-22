@@ -18,30 +18,45 @@ pub(crate) const STREAM_HEADER_LEN: usize = 9;
 /// 分片长度字段的最高位：这个分片带流头。
 pub(crate) const HEADED_LENGTH_BIT: u16 = 0x8000;
 const FLAG_FIN: u8 = 1;
-const PRIORITIES: usize = 3;
+/// 优先级的档数：0 最急，`PRIORITY_LEVELS - 1` 最不急。
+pub const PRIORITY_LEVELS: usize = 8;
+const PRIORITIES: usize = PRIORITY_LEVELS;
 /// 同一优先级里每条流连发这么多个分片再换下一条：换流要带流头，轮得太勤开销不小。
 const ROUND_QUANTUM: u32 = 8;
 /// 高优先级连续占用这么多个分片后，让有数据的最低一档发一个，免得被彻底饿死。
 const STARVATION_LIMIT: u32 = 15;
 
-/// 流的优先级，只影响本端发送顺序。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Priority {
-    /// 聊天、远程控制这类小消息，有数据就先发。
-    Interactive,
-    #[default]
-    Normal,
-    /// 大文件这类后台传输，用剩下的带宽。
-    Background,
-}
+/// 流的优先级，只影响本端发送顺序，线上不带，两端可以各用各的档。共 [`PRIORITY_LEVELS`] 档，数小的先发；
+/// 原来的三档是其中三档（交互 1、普通 3、后台 6），只用这三档时和只有三档时逐个分片相同：调度、防饿死和缓冲预留只看先后。
+/// 0 和 1 两档按交互流对待（[`Priority::is_urgent`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Priority(u8);
 
+#[allow(non_upper_case_globals)]
 impl Priority {
+    /// 聊天、远程控制这类小消息，有数据就先发。
+    pub const Interactive: Priority = Priority(1);
+    pub const Normal: Priority = Priority(3);
+    /// 大文件这类后台传输，用剩下的带宽。
+    pub const Background: Priority = Priority(6);
+
+    /// 第 `level` 档，0 最急；超出 [`PRIORITY_LEVELS`] 时是 `None`。
+    pub const fn level(level: u8) -> Option<Priority> {
+        if (level as usize) < PRIORITY_LEVELS { Some(Priority(level)) } else { None }
+    }
+
+    /// 这一档的数，0 最急。
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+
+    /// 交互流：数据不用等发送节奏和拥塞窗口（每个往返有限额），窗口里给它留一点，和大流同时在发时连接压低排队。
+    pub const fn is_urgent(self) -> bool {
+        self.0 <= Priority::Interactive.0
+    }
+
     fn rank(self) -> usize {
-        match self {
-            Priority::Interactive => 0,
-            Priority::Normal => 1,
-            Priority::Background => 2,
-        }
+        self.0 as usize
     }
 
     pub(crate) fn is_lower_than(self, other: Priority) -> bool {
@@ -52,6 +67,32 @@ impl Priority {
     pub(crate) fn is_lowest(self) -> bool {
         self.rank() == PRIORITIES - 1
     }
+}
+
+impl Default for Priority {
+    fn default() -> Self {
+        Priority::Normal
+    }
+}
+
+/// 一条发出的流的进展（`Connection::stream_progress`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StreamProgress {
+    /// 累计被对端确认的字节，含流头。
+    pub acked_bytes: u64,
+    /// 还在发送缓冲里的字节：写进来还没发的，加发了还没确认的。
+    pub buffered: usize,
+    /// 有字节在等时，距上一次有字节被确认（或开始等）过了多久；没有字节在等时是 0。
+    pub stalled_us: u64,
+}
+
+/// 发送方向的进展（`Connection::send_progress`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SendProgress {
+    /// 每一档还在发送缓冲里的字节，下标是 [`Priority::value`]。
+    pub queued: [usize; PRIORITY_LEVELS],
+    /// 有数据没被确认时，距上一次有数据被确认（或开始等）过了多久；都确认了是 0。
+    pub stalled_us: u64,
 }
 
 /// 收到的流发生了变化。
@@ -97,11 +138,15 @@ pub(crate) struct SendStream {
     pub(crate) credit_end: u64,
     pub(crate) finishing: bool,
     pub(crate) fin_sent: bool,
+    /// 累计被对端确认的字节，含流头。
+    pub(crate) acked: u64,
+    /// 上一次有字节被确认的时刻；之前没有字节在等时，是字节开始等的时刻（见 `Connection::stream_progress`）。
+    pub(crate) progress_at: u64,
 }
 
 impl SendStream {
     pub(crate) fn new(priority: Priority, credit_end: u64) -> Self {
-        Self { priority, pending: VecDeque::new(), unacked: 0, next_seq: 0, credit_end, finishing: false, fin_sent: false }
+        Self { priority, pending: VecDeque::new(), unacked: 0, next_seq: 0, credit_end, finishing: false, fin_sent: false, acked: 0, progress_at: 0 }
     }
 
     /// 还有东西要切成分片。
