@@ -16,6 +16,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { startMakeDoctor, cancelMakeDoctor } from '@/lib/cindyMakeDoctor';
 import { toast } from '@/lib/toast';
 import type { CindyMakeTaskOptions, MakeDoctorReport } from '../../../shared/cindyMakeDoctor';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 export interface CindyMakePreflightProps {
   request: string;
@@ -155,11 +156,11 @@ export function CindyMakePreflightDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !open && requestClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           ref={contentRef}
           tabIndex={-1}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden p-4 outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden p-4 outline-none"
           onOpenAutoFocus={(event) => {
             // The report and Continue action arrive asynchronously. Start at the
             // readable content instead of making Close the initial action.
@@ -179,7 +180,7 @@ export function CindyMakePreflightDialog({
             <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
               {t('cindyMake.title')}
             </Dialog.Title>
-            <Tip text={closeLabel} contentClassName="z-[10002]">
+            <Tip text={closeLabel}>
               <span className="inline-flex">
                 <Button
                   ref={closeButtonRef}
@@ -252,7 +253,7 @@ export function CindyMakePreflightDialog({
             description={t(`cindyMake.preflight.closeDescription.${closeStage}`)}
             confirmText={t('cindyMake.preflight.closeConfirm')}
             cancelText={t('cindyMake.preflight.keepOpen')}
-            zIndex={10002}
+            zIndex={Z_INDEX_LAYERS['modal-nested']}
             onConfirm={() => {
               if (!submitting.current) onOpenChange(false);
             }}

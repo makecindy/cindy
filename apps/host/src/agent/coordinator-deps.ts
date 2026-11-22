@@ -12,6 +12,7 @@ import { explicitPorts } from './explicit-ports.ts';
 type Deps = AgentInputCoordinatorDeps;
 type LiveSession = {
   agentKind?: string;
+  capabilities?: { sameTurnSteer?: { supported: boolean } };
   isTurnRunning?(): boolean;
   getTurnGeneration?(): number | null;
   getObservedCurrentTurnTerminal?(): ReturnType<NonNullable<Deps['getObservedCurrentTurnTerminal']>>;
@@ -134,6 +135,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // window; it never reports the Host's own record as a running Session.
     isLiveTurnRunning: id => executor.isSettling(id) ? undefined : deps.getMaker()?.getSession(id)?.isTurnRunning?.(),
     isLiveSessionPresent: id => !!deps.getMaker()?.getSession(id),
+    // Read on every queue projection, which must not throw.
+    supportsSameTurnSteer: id => deps.getMaker()?.getSession(id)?.capabilities?.sameTurnSteer?.supported ?? null,
     getTurnGeneration: id => deps.getMaker()?.getSession(id)?.getTurnGeneration?.() ?? null,
     getTurnSessionIdentity: id => (deps.getMaker()?.getSession(id) as object | undefined) ?? null,
     getObservedCurrentTurnTerminal: id => deps.getMaker()?.getSession(id)?.getObservedCurrentTurnTerminal?.(),
@@ -286,6 +289,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // ── Not bound on the Host, and why ─────────────────────────────────────────────────────────
     // Orca tasks are refused at Host admission: no saved report is restored, so none is revalidated.
     canRestoreOrcaReport: undefined,
+    // Host sessions are not stamped with a reconciled send_to_session route, so no hint is projected.
+    sendToSessionHint: undefined,
     // The usage-limit resume arrives with the third batch (release table).
     onUsageLimitedTurnError: undefined,
     isScheduledQuotaInput: undefined,

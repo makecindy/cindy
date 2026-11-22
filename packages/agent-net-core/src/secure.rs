@@ -75,7 +75,7 @@ use crate::connection::{Config, Connection, PacketError, Stats};
 use crate::crypto::{Crypto, HASH_LEN, PUBLIC_KEY_LEN, TAG_LEN};
 use crate::ids::ConnectionIds;
 use crate::noise::{FIRST_MESSAGE_FIXED_LEN, Handshake, HandshakeError, SECOND_MESSAGE_FIXED_LEN, TransportKeys};
-use crate::stream::{Priority, StreamEvent};
+use crate::stream::{Priority, SendProgress, StreamEvent, StreamProgress};
 use crate::wire;
 
 const INITIATION: u8 = 0x81;
@@ -1072,6 +1072,18 @@ impl<C: Crypto> SecureConnection<C> {
 
     pub fn stream_buffered(&self, stream: u32) -> usize {
         self.connection.stream_buffered(stream)
+    }
+
+    pub fn stream_progress(&self, now_us: u64, stream: u32) -> Option<StreamProgress> {
+        self.connection.stream_progress(now_us, stream)
+    }
+
+    pub fn send_progress(&self, now_us: u64) -> SendProgress {
+        self.connection.send_progress(now_us)
+    }
+
+    pub fn abandon_stream(&mut self, stream: u32) -> Option<usize> {
+        self.connection.abandon_stream(stream)
     }
 
     pub fn poll_event(&mut self) -> Option<StreamEvent> {

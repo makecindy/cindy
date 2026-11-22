@@ -48,6 +48,7 @@ import {
   GripVertical,
   KeyRound,
   LogOut,
+  ChevronRight,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -130,6 +131,11 @@ import {
   type OwnRemoteProvider,
 } from './OwnRemoteProviders';
 import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
+import {
+  PluginEngineProviderDetail,
+  PluginEngineProviderRows,
+  pluginEngineRailGroup,
+} from './PluginEngineProviders';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import {
   isLocalRuntimeBetaProviderId,
@@ -144,7 +150,10 @@ import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
 import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../../shared/pluginEngines';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
@@ -203,6 +212,16 @@ function providerHasModels(provider: ProviderView): boolean {
 function writeProviderDisabled(providerId: string, disabled: boolean, errorText: string): void {
   void window.electronAPI.maker
     .setModelDisable({ kind: 'provider', providerId, disabled })
+    .catch(() => toast.error(errorText));
+}
+
+/**
+ * 写供应商级「在模型选择器中隐藏」(model-disable-store 的 hiddenProviders)。只改陈列:
+ * 已在用它的任务、辅助模型链和后台功能照常调用;刷新同样由 PROVIDER_CHANGED 驱动。
+ */
+function writeProviderHidden(providerId: string, hidden: boolean, errorText: string): void {
+  void window.electronAPI.maker
+    .setModelDisable({ kind: 'provider-hidden', providerId, hidden })
     .catch(() => toast.error(errorText));
 }
 
@@ -409,7 +428,7 @@ function CustomTag({ label }: { label: string }) {
 
 function BetaTag({ label }: { label: string }) {
   return (
-    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
       {label}
     </span>
   );
@@ -823,9 +842,11 @@ function DetailHeader({
                     }
                   />
                 )}
-                {provider?.suspended && (
+                {provider?.suspended ? (
                   <CustomTag label={t('settings.providers.pill.suspended')} />
-                )}
+                ) : provider?.hidden ? (
+                  <CustomTag label={t('settings.providers.pill.hidden')} />
+                ) : null}
                 {badge}
               </div>
               <span
@@ -906,6 +927,23 @@ function DetailHeader({
                     </DropdownMenuItem>
                   )}
                   {menuItems}
+                  {/* 隐藏与停用是两件事,并排放才分得清:隐藏只让它不出现在模型选择器里,
+                    停用是不再让任何新任务和后台功能用它。 */}
+                  <DropdownMenuItem
+                    onClick={() =>
+                      writeProviderHidden(
+                        provider.id,
+                        !provider.hidden,
+                        t('settings.providers.models.visibilityWriteFailed'),
+                      )
+                    }
+                  >
+                    {t(
+                      provider.hidden
+                        ? 'settings.providers.menu.showProvider'
+                        : 'settings.providers.menu.hideProvider',
+                    )}
+                  </DropdownMenuItem>
                   {provider.geminiImageSettingsConnectionId === undefined && <DropdownMenuItem
                     onClick={() =>
                       writeProviderDisabled(
@@ -2204,7 +2242,7 @@ function XdGatewayHeader({
         syncStatus.accountTier === 'free' ? (
           <span
             data-testid="cindy-ai-free-tier-badge"
-            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
           >
             {t('settings.providers.xd.accountTier.free')}
           </span>
@@ -2440,6 +2478,7 @@ function ListRow({
   total,
   onMove,
   sortable,
+  stateNote = true,
 }: {
   provider: ProviderView;
   selected: boolean;
@@ -2449,6 +2488,8 @@ function ListRow({
   total: number;
   onMove: (delta: -1 | 1) => void;
   sortable: boolean;
+  /** 「已隐藏 / 已停用」注记。行已经收在同名分组里时不再重复，改回显示模型数。 */
+  stateNote?: boolean;
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
@@ -2527,13 +2568,21 @@ function ListRow({
             >
               {t('settings.providers.openai.reconnectRequired')}
             </span>
-          ) : provider.suspended ? (
+          ) : stateNote && provider.suspended ? (
             // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
             <span
               className="shrink-0 select-none text-11"
               style={{ color: 'var(--text-tertiary)' }}
             >
               {t('settings.providers.pill.suspended')}
+            </span>
+          ) : stateNote && provider.hidden ? (
+            // 同理:已隐藏时窄栏以状态取代计数,回答「它为什么不在选择器里」。
+            <span
+              className="shrink-0 select-none text-11"
+              style={{ color: 'var(--text-tertiary)' }}
+            >
+              {t('settings.providers.pill.hidden')}
             </span>
           ) : (
             // Keep the account suffix visible in the narrow rail; the detail lists the count.
@@ -2672,20 +2721,36 @@ export function ProvidersSection() {
   const selectedRemote = selectedRemoteKey
     ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
     : null;
-  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null;
+  // 由插件提供的供应商(插件引擎)：这台电脑上已启用并批准的插件声明的引擎，各占左栏一行。插件停用或
+  // 卸载后引擎从列表里消失，选中的那一行随之落回普通供应商，不留空详情。
+  const pluginEngines = usePluginEngines();
+  const [selectedEngineKey, setSelectedEngineKey] = useState<string | null>(null);
+  const selectedEngine = selectedEngineKey
+    ? pluginEngines.find((engine) => engine.key === selectedEngineKey) ?? null
+    : null;
+  // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(三者互斥)。
+  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null || selectedEngine !== null;
   // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
   const selectProvider = useCallback((providerId: string) => {
     setSelectedShareId(null);
     setSelectedRemoteKey(null);
+    setSelectedEngineKey(null);
     setSelectedId(providerId);
   }, []);
   const selectShare = useCallback((shareId: string) => {
     setSelectedRemoteKey(null);
+    setSelectedEngineKey(null);
     setSelectedShareId(shareId);
   }, []);
   const selectRemote = useCallback((key: string) => {
     setSelectedShareId(null);
+    setSelectedEngineKey(null);
     setSelectedRemoteKey(key);
+  }, []);
+  const selectEngine = useCallback((key: string) => {
+    setSelectedShareId(null);
+    setSelectedRemoteKey(null);
+    setSelectedEngineKey(key);
   }, []);
   const [pendingProviderOrder, setPendingProviderOrder] = useState<{
     dataOwnerId: string | null;
@@ -2964,11 +3029,8 @@ export function ProvidersSection() {
   );
 
   const moveProviderWithKeyboard = useCallback(
-    (providerId: string, delta: -1 | 1): void => {
-      const shared = ownedShares.get(null)?.has(providerId) === true;
-      const currentIds = listProviders
-        .filter(provider => (ownedShares.get(null)?.has(provider.id) === true) === shared)
-        .map(provider => provider.id);
+    (providerId: string, delta: -1 | 1, currentIds: readonly string[]): void => {
+      // 在**所在的那一段**里移动(常规 / 我分享的 / 已隐藏 / 已停用):相邻的是屏幕上相邻的那一行。
       const index = currentIds.indexOf(providerId);
       const nextIndex = index + delta;
       if (index < 0 || nextIndex < 0 || nextIndex >= currentIds.length) return;
@@ -2987,7 +3049,7 @@ export function ProvidersSection() {
         }),
       );
     },
-    [byId, listProviders, ownedShares, persistVisibleProviderOrder, t],
+    [byId, listProviders, persistVisibleProviderOrder, t],
   );
 
   // 检测建议:CLI 已安装 + 对应渠道存在于目录 + 未连接,且**未以任何形态占行**
@@ -3026,7 +3088,7 @@ export function ProvidersSection() {
   // 并从 URL 摘除；这条分享已不在列表里(刚被撤销或退出)时只停在供应商页。设备互联断开或换账号时 main
   // 会先推一份空列表表示「暂时读不到」(providerShareStore 同一口径)，这时保留参数，等列表回来再选中；
   // 等待期间用户自己改选了别的，就放弃这次跳转，不在列表回来时把右栏切走。
-  const selectionKey = `${selectedId ?? ''}\n${selectedShareId ?? ''}\n${selectedRemoteKey ?? ''}`;
+  const selectionKey = `${selectedId ?? ''}\n${selectedShareId ?? ''}\n${selectedRemoteKey ?? ''}\n${selectedEngineKey ?? ''}`;
   const receivedShareWaitRef = useRef<string | null>(null);
   useEffect(() => {
     const target = searchParams.get(PROVIDER_SHARE_RECEIVED_PARAM);
@@ -3106,8 +3168,16 @@ export function ProvidersSection() {
     (selectedId === CINDY_SIGNIN_ID || (selectedId == null && listProviders.length === 0));
 
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
+  const defaultSelectedIdRef = useRef<string | null>(null);
   const effectiveSelected = useMemo(() => {
-    const selected = listProviders.find((p) => p.id === selectedId) ?? listProviders[0] ?? null;
+    // 默认落在还在用的供应商上:已隐藏 / 已停用的收在折叠分组里,默认选中它们会一打开就把分组撑开。
+    // 但正在看的那一个被隐藏 / 停用时不能跳走(详情里的说明条和恢复入口就在它身上),
+    // 所以默认选中是粘住的:先认上一次显示的那一个。
+    const selected = listProviders.find((p) => p.id === selectedId)
+      ?? listProviders.find((p) => p.id === defaultSelectedIdRef.current)
+      ?? listProviders.find((p) => !p.suspended && !p.hidden)
+      ?? listProviders[0] ?? null;
+    defaultSelectedIdRef.current = selected?.id ?? null;
     // Pool connection state covers all its accounts; native auth only describes the legacy default login.
     return selected?.id === 'openai'
       ? {
@@ -3508,13 +3578,25 @@ export function ProvidersSection() {
 
   // 「分享 {供应商}」管理页：设置内的子页面，返回回到该供应商的详情。只替换主体内容，
   // 下方的添加 / 编辑 / 导入弹窗层保持挂载，不会因打开管理页而丢失正在填写的内容。
+  const shareManageIsPluginEngine = Boolean(shareManageProviderId && pluginEngineKeyFromProviderId(shareManageProviderId));
+  const shareManagePluginEngine = shareManageIsPluginEngine && shareManageProviderId
+    ? pluginEngines.find((engine) => engine.providerId === shareManageProviderId) ?? null
+    : null;
   const shareManageProvider = shareManageRemote?.provider ?? (shareManageProviderId ? byId.get(shareManageProviderId) ?? null : null);
   const shareManagePage = shareManageProviderId ? (
     <ProviderShareManagePage
       key={`${shareManageRemote?.deviceId ?? 'local'}:${shareManageProviderId}`}
       providerId={shareManageProviderId}
-      providerName={shareManageProvider ? providerDisplayName(shareManageProvider, t) : shareManageProviderId}
-      providerIcon={shareManageProvider ? providerIcon(shareManageProvider, 18) : null}
+      providerName={
+        shareManageIsPluginEngine
+          ? (shareManagePluginEngine?.name ?? shareManageProviderId)
+          : (shareManageProvider ? providerDisplayName(shareManageProvider, t) : shareManageProviderId)
+      }
+      providerIcon={
+        shareManageIsPluginEngine
+          ? <PluginEngineIcon size={18} iconDataUrl={shareManagePluginEngine?.iconDataUrl} />
+          : (shareManageProvider ? providerIcon(shareManageProvider, 18) : null)
+      }
       deviceId={shareManageRemote?.deviceId}
       deviceName={shareManageRemote?.deviceName}
       initialGroup={shareManageRemote?.group}
@@ -3522,18 +3604,58 @@ export function ProvidersSection() {
       // 供应商还没加载出来时不判「未开放」；生成链接时 main 会再校验。
       gate={providerShareGate({
         remoteControlEnabled: shareManageRemote ? true : remoteControlEnabled,
-        invocationEnabled: !shareManageProvider || shareManageProvider.remoteInvocationEnabled === true,
+        invocationEnabled: shareManageIsPluginEngine
+          ? (!shareManagePluginEngine || shareManagePluginEngine.remoteUse?.enabled === true)
+          : (!shareManageProvider || shareManageProvider.remoteInvocationEnabled === true),
       })}
       onBack={() => {
         if (shareManageRemote) setSelectedRemoteKey(shareManageRemote.key);
-        else setSelectedId(shareManageProviderId);
+        else if (shareManagePluginEngine) selectEngine(shareManagePluginEngine.key);
+        else if (!shareManageIsPluginEngine) setSelectedId(shareManageProviderId);
         setShareManageProviderId(null);
         setShareManageRemote(null);
       }}
     />
   ) : null;
 
-  const renderLocalProviderList = (sectionProviders: ProviderView[]) => (
+  // ── 左栏分组:已隐藏 / 已停用各自收进一个默认折叠的分组 ─────────────────────
+  // 常规列表只留还在模型选择器里出现的供应商;「我分享的供应商」保持原样(那是管理分享的入口)。
+  const remoteHidden = (entry: OwnRemoteProvider) =>
+    !entry.provider.suspended && remoteDisable.isHidden(entry.deviceId, entry.provider.id);
+  const activeLocalProviders = ordinaryLocalProviders.filter(provider => !provider.suspended && !provider.hidden);
+  const hiddenLocalProviders = ordinaryLocalProviders.filter(provider => !provider.suspended && provider.hidden);
+  const suspendedLocalProviders = ordinaryLocalProviders.filter(provider => provider.suspended);
+  const activeRemoteProviders = ordinaryRemoteProviders.filter(entry => !entry.provider.suspended && !remoteHidden(entry));
+  const hiddenRemoteProviders = ordinaryRemoteProviders.filter(remoteHidden);
+  const suspendedRemoteProviders = ordinaryRemoteProviders.filter(entry => entry.provider.suspended);
+  const activeEngines = pluginEngines.filter(engine => pluginEngineRailGroup(engine) === 'active');
+  const hiddenEngines = pluginEngines.filter(engine => pluginEngineRailGroup(engine) === 'hidden');
+  const suspendedEngines = pluginEngines.filter(engine => pluginEngineRailGroup(engine) === 'suspended');
+  const [railGroupOpen, setRailGroupOpen] = useState<{ hidden: boolean; suspended: boolean }>(
+    { hidden: false, suspended: false },
+  );
+  // 选中的供应商落进某个分组时(刚把它隐藏 / 停用,或从深链、搜索进来)把那一组打开一次;
+  // 之后用户可以再收起,不反复弹开。
+  const selectedLocalId = !otherDeviceSelected && !cindySigninActive ? effectiveSelected?.id ?? null : null;
+  const selectedEngineRailGroup = selectedEngine ? pluginEngineRailGroup(selectedEngine) : null;
+  const selectedRailGroup: 'hidden' | 'suspended' | null =
+    selectedEngineRailGroup === 'hidden' ||
+    hiddenLocalProviders.some(provider => provider.id === selectedLocalId) ||
+    hiddenRemoteProviders.some(entry => entry.key === selectedRemote?.key)
+      ? 'hidden'
+      : selectedEngineRailGroup === 'suspended' ||
+          suspendedLocalProviders.some(provider => provider.id === selectedLocalId) ||
+          suspendedRemoteProviders.some(entry => entry.key === selectedRemote?.key)
+        ? 'suspended'
+        : null;
+  const selectedRailKey = selectedRemote?.key ?? selectedEngine?.key ?? selectedLocalId;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedRailKey 让「换了一个同组的供应商」也触发一次展开。
+  useEffect(() => {
+    if (!selectedRailGroup) return;
+    setRailGroupOpen(open => (open[selectedRailGroup] ? open : { ...open, [selectedRailGroup]: true }));
+  }, [selectedRailGroup, selectedRailKey]);
+
+  const renderLocalProviderList = (sectionProviders: ProviderView[], stateNote = true) => (
     <SortableList
       items={sectionProviders}
       getId={provider => provider.id}
@@ -3556,8 +3678,9 @@ export function ProvidersSection() {
           }}
           position={index + 1}
           total={sectionProviders.length}
-          onMove={delta => moveProviderWithKeyboard(provider.id, delta)}
+          onMove={delta => moveProviderWithKeyboard(provider.id, delta, sectionProviders.map(item => item.id))}
           sortable={sectionProviders.length > 1}
+          stateNote={stateNote}
         />
       )}
       disabled={sectionProviders.length < 2}
@@ -3578,6 +3701,52 @@ export function ProvidersSection() {
       }}
     />
   );
+
+  const renderEngineRows = (engines: readonly PluginEngineView[]) => (
+    <PluginEngineProviderRows
+      engines={engines}
+      selectedKey={selectedEngine?.key ?? null}
+      onSelect={key => {
+        setFocusedModel(null);
+        selectEngine(key);
+      }}
+    />
+  );
+
+  /** 「已隐藏 / 已停用」折叠分组:标题即开关,带数量;没有成员时整组不出现。 */
+  const renderRailStateGroup = (
+    group: 'hidden' | 'suspended',
+    locals: ProviderView[],
+    remotes: readonly OwnRemoteProvider[],
+    engines: readonly PluginEngineView[],
+  ) => {
+    const count = locals.length + remotes.length + engines.length;
+    if (count === 0) return null;
+    const open = railGroupOpen[group];
+    const label = t(group === 'hidden' ? 'settings.providers.pill.hidden' : 'settings.providers.pill.suspended');
+    return (
+      <div data-provider-rail-group={group} role="group" aria-label={label} className="flex flex-col gap-0.5">
+        <button
+          data-settings-search-action="Expand or collapse the hidden or suspended provider navigation group"
+          type="button"
+          aria-expanded={open}
+          onClick={() => setRailGroupOpen(current => ({ ...current, [group]: !current[group] }))}
+          className="mt-2 flex w-full items-center gap-1 rounded-lg px-2.5 py-1 text-left text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+        >
+          <ChevronRight
+            size={12}
+            aria-hidden
+            className={cn('shrink-0 transition-transform motion-reduce:transition-none', open && 'rotate-90')}
+          />
+          <span className="min-w-0 truncate">{label}</span>
+          <span className="tabular-nums opacity-60">{count}</span>
+        </button>
+        {open && renderLocalProviderList(locals, false)}
+        {open && renderEngineRows(engines)}
+        {open && renderRemoteProviderRows(remotes)}
+      </div>
+    );
+  };
 
   return (
     <SubscriptionPoolViewCache.Provider value={subscriptionPoolViews}>
@@ -3617,19 +3786,21 @@ export function ProvidersSection() {
                   }}
                 />
               )}
-              {(ordinaryLocalProviders.length > 1 || sharedLocalProviders.length > 1) && (
+              {(activeLocalProviders.length > 1 || sharedLocalProviders.length > 1) && (
                 <div className="select-none px-1.5 pb-1 pt-1">
                   <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
                     {t('settings.providers.order.hint')}
                   </span>
                 </div>
               )}
-              {renderLocalProviderList(ordinaryLocalProviders)}
+              {renderLocalProviderList(activeLocalProviders)}
               <span className="sr-only" aria-live="polite" aria-atomic="true">
                 {orderAnnouncement}
               </span>
+              {/* 由插件提供的供应商：接在本机供应商后面，名字后带「插件」标识。 */}
+              {renderEngineRows(activeEngines)}
               {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
-              {renderRemoteProviderRows(ordinaryRemoteProviders)}
+              {renderRemoteProviderRows(activeRemoteProviders)}
               {(sharedLocalProviders.length > 0 || sharedRemoteProviders.length > 0) && (
                 <div
                   data-testid="provider-share-owned"
@@ -3653,6 +3824,9 @@ export function ProvidersSection() {
                   selectShare(shareId);
                 }}
               />
+              {/* 不在模型选择器里出现的供应商收在列表末尾:先是只隐藏的,再是停用的。 */}
+              {renderRailStateGroup('hidden', hiddenLocalProviders, hiddenRemoteProviders, hiddenEngines)}
+              {renderRailStateGroup('suspended', suspendedLocalProviders, suspendedRemoteProviders, suspendedEngines)}
               {suggestions.length > 0 && (
                 <>
                   <span
@@ -3704,7 +3878,9 @@ export function ProvidersSection() {
                 ? `share:${selectedShare.shareId}`
                 : selectedRemote
                   ? `remote:${selectedRemote.key}`
-                  : effectiveSelected?.id
+                  : selectedEngine
+                    ? `engine:${selectedEngine.key}`
+                    : effectiveSelected?.id
             }
             className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
@@ -3719,6 +3895,13 @@ export function ProvidersSection() {
                   setShareManageRemote(selectedRemote);
                   setShareManageProviderId(selectedRemote.provider.id);
                 }}
+              />
+            ) : selectedEngine ? (
+              <PluginEngineProviderDetail
+                engine={selectedEngine}
+                remoteControlEnabled={remoteControlEnabled}
+                pendingShareRequests={pendingShareCounts.get(selectedEngine.providerId) ?? 0}
+                onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(selectedEngine.providerId); }}
               />
             ) : cindySigninActive ? (
               /* 登录引导是 brand-scale surface(DESIGN §3):48px 标识 → 24px 名字 →
@@ -3793,13 +3976,52 @@ export function ProvidersSection() {
                       <span style={{ color: 'var(--text-tertiary)' }}>
                         {t('settings.providers.detail.suspendedBanner')}
                       </span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {/* 很多人停用只是不想在选择器里看到它:就地给「改为隐藏」,一步换成
+                          想要的状态(显示关掉 + 恢复调用)。已经隐藏过的不再重复给。 */}
+                        {!effectiveSelected.hidden && (
+                          <PillButton
+                            label={t('settings.providers.button.hideInstead')}
+                            onClick={() => {
+                              void window.electronAPI.maker
+                                .setModelDisable({ kind: 'provider-hidden', providerId: effectiveSelected.id, hidden: true })
+                                .then(() => window.electronAPI.maker.setModelDisable({
+                                  kind: 'provider', providerId: effectiveSelected.id, disabled: false,
+                                }))
+                                .catch(() => toast.error(t('settings.providers.models.accessWriteFailed')));
+                            }}
+                          />
+                        )}
+                        <PillButton
+                          label={t('settings.providers.button.enableProvider')}
+                          onClick={() =>
+                            writeProviderDisabled(
+                              effectiveSelected.id,
+                              false,
+                              t('settings.providers.models.accessWriteFailed'),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {/* 已隐藏(未停用):说清它还在工作、去哪里还能选到,并就地给恢复入口。
+                    模型区照常显示 —— 隐藏不影响逐模型设置。 */}
+                  {!effectiveSelected.suspended && effectiveSelected.hidden && (
+                    <div
+                      className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                    >
+                      <span className="min-w-0 flex-1" style={{ color: 'var(--text-tertiary)' }}>
+                        {t('settings.providers.detail.hiddenBanner')}
+                      </span>
                       <PillButton
-                        label={t('settings.providers.button.enableProvider')}
+                        label={t('settings.providers.button.showProvider')}
                         onClick={() =>
-                          writeProviderDisabled(
+                          writeProviderHidden(
                             effectiveSelected.id,
                             false,
-                            t('settings.providers.models.accessWriteFailed'),
+                            t('settings.providers.models.visibilityWriteFailed'),
                           )
                         }
                       />

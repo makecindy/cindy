@@ -1,3 +1,4 @@
+import { holdError, type ProfileHold } from './agent/profile-hold.js';
 /** Node assembly of the existing Device Link host. Identity, admission, replay,
  * visibility and revocation remain in the same dispatcher as desktop. */
 import os from 'node:os';
@@ -31,6 +32,7 @@ import { checkRemoteWorkingDir, remoteWorkingDirRejectionToIpcError } from '../.
 import { desktopTransferCodec } from '../../desktop/src/main/device-link/transferCodec.js';
 import { clearControllerPlatforms, setControllerPlatform } from '../../desktop/src/main/device-link/controllerPlatform.js';
 import { createHostWebSocketAgent } from './outbound.mjs';
+import { MESSAGE_METADATA_REFRESH } from './events.mjs';
 import { createDnsFallbackLookup } from '../../desktop/src/main/device-link/dnsFallbackLookup.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
@@ -142,7 +144,7 @@ export interface HostDeviceLinkPorts {
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   /** Coexistence plan A: the refusal while a desktop uses this profile, or null. */
-  profileHold?(): string | null;
+  profileHold?(): ProfileHold | null;
   /** The remote plugin OAuth entry; the desktop's plugin-oauth runtime unless a test passes its own. */
   requestPluginOauth?(peer: string, raw: unknown): Promise<unknown>;
   /** Cancels a peer's (or every) pending plugin authorization in memory; the runtime's unless a test passes its own. */
@@ -214,7 +216,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   // calls (they write through the plugin) are refused, as the service refuses other writes.
   const refuseWhileHeld = () => {
     const held = deps.profileHold?.();
-    if (held) throw Object.assign(new Error(`[PRECONDITION_FAILED] ${held}`), { code: 'PRECONDITION_FAILED' });
+    if (held) throw holdError(held);
   };
   // Project-directory browsing uses the same pure helpers as the desktop. The Device Link
   // allowlist admits these channels only for same-account controllers, and the paths always
@@ -488,6 +490,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       transferCodec: desktopTransferCodec,
       path: (peer) => node.route(peer).path,
       rttMs: (peer) => node.route(peer).rttMs,
+      onRelayStall: (peer) => node.relayStalled(peer),
       connectedAt: node.connectedAt,
       connect: node.connect,
       agentNetPeer: node.agentNetPeer,
@@ -565,7 +568,12 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       case 'interaction_request': emit(MAKER_PUSH.INTERACTION_REQUEST, { sessionId: id, request: event.request }); break;
       case 'interaction_dismissed': emit(MAKER_PUSH.INTERACTION_DISMISSED, { sessionId: id, requestId: event.requestId, reason: event.reason }); break;
       case 'input_projection': emit(MAKER_PUSH.INPUT_PROJECTION, event.projection); break;
-      case 'message_created': emit('local-db:messages:created', { sessionId: id, message: event.message }); break;
+      case 'message_created':
+        // Existing user rows can consume a pending reply's position on older controllers.
+        if (event[MESSAGE_METADATA_REFRESH] !== true) {
+          emit('local-db:messages:created', { sessionId: id, message: event.message });
+        }
+        break;
       case 'project_aliases_changed':
         emit('local-db:project-aliases:changed', {});
         if (event.catalogChanged === true) emit('local-db:recent-workdirs:changed', {});

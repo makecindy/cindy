@@ -142,6 +142,7 @@ import {
   PreviewButton as LightboxToolbarButton,
 } from './PreviewChrome';
 import { previewAdjacentIndex, previewSourceName } from '@cindy/maker-shared/attachment-preview';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /** 图片不允许缩得比"适配窗口"更小,所以下限是 1 而不是共享常量的 0.2。 */
 const IMAGE_MIN_SCALE = 1;
@@ -195,7 +196,7 @@ function ImagePreviewWindowActions({
         const label = t(key, { defaultValue });
         const active = mode === actionMode;
         return (
-          <Tip key={key} text={label} contentClassName="z-[10003]">
+          <Tip key={key} text={label}>
             <Button
               type="button"
               size="md"
@@ -1566,7 +1567,7 @@ function ImageLightboxContent({
     width: panelRect.width,
     height: panelRect.height,
     overflow: 'hidden',
-    zIndex: 9999,
+    zIndex: Z_INDEX_LAYERS.fullscreen,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1792,9 +1793,6 @@ function ImageLightboxContent({
           <DropdownMenuContent
             align="start"
             sideOffset={2}
-            // lightbox overlay 是 z-9999；默认 DropdownMenuContent(z-50) 会被遮住,
-            // 这里提升到 overlay 上方。
-            className="z-[10000]"
           >
             {canAnnotate && !isAnnotating ? (
               <DropdownMenuItem
@@ -1880,7 +1878,7 @@ function ImageLightboxContent({
                 %
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="z-[10002]">
+            <DropdownMenuContent>
               <DropdownMenuItem onClick={resetViewport}>
                 {t('attachmentPreview.fit')}
               </DropdownMenuItem>
@@ -1987,7 +1985,7 @@ function ImageLightboxContent({
             {index + 1} / {galleryItems.length}
           </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent className="z-[10002] max-h-72 overflow-auto">
+                <DropdownMenuContent className="max-h-72 overflow-auto">
                   {galleryItems.map((item, itemIndex) => (
                     <DropdownMenuItem
                       key={item.galleryId ?? `${itemIndex}:${item.src}`}

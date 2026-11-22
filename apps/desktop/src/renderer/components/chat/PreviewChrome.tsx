@@ -16,6 +16,7 @@ import {
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { cn } from '@/lib/utils';
 import { ActivePreviewCollection } from './AttachmentCollectionContext';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /** Scope teardown runs after closing/switching; don't restore into a removed viewer. */
 export function usePreviewFocusReturn() {
@@ -91,7 +92,7 @@ export function previewCompactPanelStyle(extraHeight = 0): CSSProperties {
  * 再声明为拖拽区(作为后代可靠生效),预览期间仍能拖动窗口。预览窗从这条
  * 下面开始,不与它重叠。
  */
-export function PreviewScrim({ onClose, zIndex = 9999 }: { onClose: () => void; zIndex?: number }) {
+export function PreviewScrim({ onClose, zIndex = Z_INDEX_LAYERS.fullscreen }: { onClose: () => void; zIndex?: number }) {
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 键盘关闭由查看器的 Escape 处理,遮罩只承接点外关闭。
     <div
@@ -137,7 +138,7 @@ export function PreviewHeader({
     <header
       data-preview-drag-handle={isDraggable ? '' : undefined}
       className={cn(
-        'absolute inset-x-0 top-0 z-10 flex h-16 min-w-0 items-center gap-3 border-b border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 text-[var(--text-primary)]',
+        'absolute inset-x-0 top-0 z-raised flex h-16 min-w-0 items-center gap-3 border-b border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 text-[var(--text-primary)]',
         isDraggable && 'cursor-grab select-none',
       )}
       style={isDraggable ? { touchAction: 'none', ...WINDOW_NO_DRAG_STYLE } : undefined}
@@ -184,7 +185,6 @@ export function PreviewHeader({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               onEscapeKeyDown={(event) => event.stopPropagation()}
-              className="z-[10002]"
               align="end"
             >
               {menu}
@@ -216,7 +216,7 @@ export function PreviewButton({
   keepPointerFocus?: boolean;
 }) {
   return (
-    <Tip text={label} contentClassName="z-[10003]">
+    <Tip text={label}>
       <button
         type="button"
         aria-label={label}
@@ -247,7 +247,7 @@ export function PreviewFooter({
   return (
     <footer
       className={cn(
-        'absolute inset-x-0 bottom-0 z-10 flex min-h-16 flex-wrap items-center justify-center gap-1 border-t border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)]',
+        'absolute inset-x-0 bottom-0 z-raised flex min-h-16 flex-wrap items-center justify-center gap-1 border-t border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)]',
         className,
       )}
       onClick={(event) => event.stopPropagation()}
@@ -277,7 +277,7 @@ export function PreviewFooter({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
-              className="z-[10002] max-h-72 overflow-auto"
+              className="max-h-72 overflow-auto"
               onEscapeKeyDown={(event) => event.stopPropagation()}
             >
               {collection.items.map((item, index) => (

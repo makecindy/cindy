@@ -174,6 +174,7 @@ export interface MenubarUsageDeviceInput {
 }
 
 export interface MenubarUsageScopeInput {
+  currency?: 'USD' | 'CNY';
   daily: MenubarUsageScopeData['daily'];
   models: MenubarUsageScopeData['models'];
   devices: MenubarUsageDeviceInput[];
@@ -1175,6 +1176,11 @@ class Builder {
     return `${Math.round(remaining)}%`;
   }
 
+  private taskMoneySymbol(): string {
+    const currency = this.input.usage.scopes.local.currency;
+    return currency ? (currency === 'CNY' ? '¥' : '$') : this.input.moneySymbol;
+  }
+
   private statusTexts(): Record<MenubarStatusTextMode, string | null> {
     const tightest = this.tightest();
     const hasSubscriptions = this.visibleSubscriptions().some((source) => this.usableRemaining(source) !== null);
@@ -1185,7 +1191,7 @@ class Builder {
       icon: null,
       lowest: tightest ? `${Math.round(this.remaining(tightest) ?? 0)}%` : hasSubscriptions ? '0%' : null,
       today: today ? this.money(today.money.reduce((sum, value) => sum + value, 0)) : null,
-      task: running.length ? this.money(running.reduce((sum, task) => sum + task.valueToday, 0)) : null,
+      task: running.length ? this.money(running.reduce((sum, task) => sum + task.valueToday, 0), this.taskMoneySymbol()) : null,
     };
   }
 
@@ -1195,6 +1201,7 @@ class Builder {
     return {
       locale: this.input.locale,
       moneySymbol: this.input.moneySymbol,
+      taskMoneySymbol: this.taskMoneySymbol(),
       strings: this.input.uiStrings,
       statusTextByMode: this.input.gate ? { icon: null, lowest: null, today: null, task: null } : this.statusTexts(),
       updatedAtMs: this.input.updatedAtMs,

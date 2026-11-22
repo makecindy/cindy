@@ -17,16 +17,25 @@ const SEND_PACKET_SIZE: usize = 1350 - udp_paths::UP_OVERHEAD;
 /// bandwidth and round trip. Interop with 128-segment peers is the core's (packages/agent-net-core/sim/results/2026-11-17-window-interop).
 const SEND_WINDOW: u32 = 8192;
 const SEND_BUFFER_BYTES: usize = 24 << 20;
-/// Streams this side opened whose send-buffer size `poll` reports (data, control and the three session lanes).
-const MAX_REPORTED_STREAMS: usize = 16;
+/// Streams this side opened whose send-buffer size `poll` reports: data, control, the three session lanes and the session's
+/// body streams (JS keeps at most 32, nativeTransport.ts `MAX_NATIVE_BODIES`). A stream the core retired is reported once, then
+/// leaves the set.
+const MAX_REPORTED_STREAMS: usize = 40;
 /// What this build adds over the first native release; JS checks it before using any of them (an older
 /// installed binary keeps working with newer JS, without these).
-const FEATURES: [&str; 4] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait"];
+/// `stream-levels`（2026-11-22）：`openStream` 认 `level`（核心的八档，0 最急），`abandon` 放弃一条流，`buffered` 的每一项
+/// 在 `[流, 缓冲字节]` 后面多两项 `[累计确认字节, 停顿毫秒]`（只读前两项的旧 JS 不受影响）。
+/// `stream-retired`（2026-11-22）：`buffered` 里核心已经收回的流报一次就不再报，名额（`MAX_REPORTED_STREAMS`）留给新开的流。
+/// `probe-grants`（2026-11-22）：核心回对端探测的确认带上所有流的额度。没有它的核心只带编号最小的两条，对端开的第 6 条流
+/// 最初的额度没送到时一直停在 128 个分片上；JS 只在有它的引擎上用会话 v2 的正文流（nativeTransport.ts `bodies`）。
+const FEATURES: [&str; 8] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired", "probe-grants"];
 /// Relayed datagrams the application still has to carry over its relay WebSocket; beyond this the oldest go (the
 /// transport resends them). Only fills while the application does not poll.
 const MAX_OUTBOX: usize = 1024;
 /// `pump` asks to be called again at least this often: the relay UDP registration and STUN keep their own timers.
 const MAX_PUMP_WAKE_MS: u64 = 250;
+/// Stream writes in one `io` call; the application sends a turn's worth (at most a megabyte).
+const MAX_IO_WRITES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Address { Udp(SocketAddr), Link(u32) }
@@ -73,9 +82,12 @@ pub struct NativeEngine {
     finishing: BTreeMap<u32, BTreeSet<u32>>,
     poisoned: bool,
     /// Datagrams for relay links that did not go over relay UDP, until the next `collect`.
-    outbox: Vec<Value>,
+    outbox: Vec<(u32, Vec<u8>)>,
     /// What `pump` collected for the application and `poll` has not handed over yet.
     stash: Option<Value>,
+    /// The bytes of the datagrams and stream data `collect` put in a result, which names them by index (`blob`) until `poll`
+    /// or `io` hands them over: as base64 in the JSON or raw after the header.
+    blobs: Vec<Vec<u8>>,
     /// The connection states the application last saw (`signature`).
     reported: String,
     media: crate::media::MediaCrypto,
@@ -101,8 +113,8 @@ impl NativeEngine {
         } else { None };
         Ok(Self { crypto, device_id, enhanced_transport, endpoint, admitted, relay_tags: BTreeMap::new(), relay_links: BTreeMap::new(), relay_udp: None,
             stun: None, local_streams: BTreeMap::new(), udp, clock: Instant::now(), now: 0,
-            streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, outbox: Vec::new(), stash: None, reported: String::new(),
-            media: Default::default(), media_http: None })
+            streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, outbox: Vec::new(), stash: None, blobs: Vec::new(),
+            reported: String::new(), media: Default::default(), media_http: None })
     }
     fn config(enhanced_transport: bool) -> Config {
         if !enhanced_transport { return Config { max_packet_size: MAX_PACKET_SIZE, ..Config::default() }; }
@@ -167,9 +179,13 @@ impl NativeEngine {
                 Ok(Value::Null)
             },
             "openStream" => {
-                let priority = match command["priority"].as_str().unwrap_or("normal") {
-                    "interactive" => Priority::Interactive, "normal" => Priority::Normal,
-                    "background" => Priority::Background, _ => return Err("INVALID_PRIORITY"),
+                let priority = if let Some(level) = command.get("level").filter(|level| !level.is_null()) {
+                    level.as_u64().and_then(|level| u8::try_from(level).ok()).and_then(Priority::level).ok_or("INVALID_PRIORITY")?
+                } else {
+                    match command["priority"].as_str().unwrap_or("normal") {
+                        "interactive" => Priority::Interactive, "normal" => Priority::Normal,
+                        "background" => Priority::Background, _ => return Err("INVALID_PRIORITY"),
+                    }
                 };
                 let id = number(command, "id")?;
                 let connection = self.endpoint.connection_mut(id).ok_or("CONNECTION_CLOSED")?;
@@ -191,6 +207,11 @@ impl NativeEngine {
             "finish" => {
                 let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
                 Ok(json!(connection.finish_stream(number(command, "stream")?)))
+            },
+            // 没发出的字节不再发，流随即结束；返回丢掉的字节数，流已经结束或不在时是 null（核心的 `abandon_stream`）。
+            "abandon" => {
+                let connection = self.endpoint.connection_mut(number(command, "id")?).ok_or("CONNECTION_CLOSED")?;
+                Ok(json!(connection.abandon_stream(number(command, "stream")?)))
             },
             "close" => {
                 let id = number(command, "id")?;
@@ -265,11 +286,66 @@ impl NativeEngine {
     pub(crate) fn poison(&mut self) { self.poisoned = true; }
     /// Everything the application reads: the state now, with what `pump` already collected in front of it.
     fn poll(&mut self) -> Result<Value, &'static str> {
+        let mut result = self.read();
+        take_blobs(&mut result, &mut self.blobs, |item, bytes| { item.insert("data".into(), json!(encoded(&bytes))); });
+        Ok(result)
+    }
+    fn read(&mut self) -> Value {
         self.network();
         let mut result = self.collect();
         if let Some(stash) = self.stash.take() { merge(&mut result, stash); }
         self.reported = signature(&result);
-        Ok(result)
+        result
+    }
+    /// `binary-io` builds (lib.rs `cindy_agent_net_io`): in one call, relayed datagrams (`datagrams`: `[link, length]`), stream
+    /// writes (`writes`: `[connection, stream, length]`) and, with `poll`, everything `poll` reads. The bytes are not in the
+    /// header: they follow it raw, in the order it lists them, both ways; a datagram or a stream chunk in the poll carries
+    /// `len` where `poll` carries base64 `data`. On the phone, base64 and JSON text of stream data cost the JS thread more
+    /// than the request itself, and a write and the poll after it were two bridge round trips (2026-11-21).
+    ///
+    /// `written` answers each write in order: the bytes the stream took, or -1 when the connection is gone. After a write the
+    /// stream did not take in full, later writes to it in the same call take nothing, so what a stream takes stays in order.
+    pub fn io(&mut self, header: &Value, payload: &[u8]) -> Result<(Value, Vec<u8>), &'static str> {
+        if self.poisoned { return Err("NATIVE_ENGINE_FAILURE"); }
+        self.update_clock();
+        let mut cursor = 0usize;
+        let mut next = |length: &Value| -> Result<&[u8], &'static str> {
+            let length = length.as_u64().and_then(|value| usize::try_from(value).ok()).filter(|value| *value <= IO_SIZE).ok_or("INVALID_NATIVE_IO")?;
+            let end = cursor.checked_add(length).filter(|end| *end <= payload.len()).ok_or("INVALID_NATIVE_IO")?;
+            let bytes = &payload[cursor..end];
+            cursor = end;
+            Ok(bytes)
+        };
+        let list = |key: &str| header[key].as_array().map_or(&[][..], Vec::as_slice);
+        let (datagrams, writes) = (list("datagrams"), list("writes"));
+        if datagrams.len() > MAX_OUTBOX || writes.len() > MAX_IO_WRITES { return Err("INVALID_NATIVE_IO"); }
+        for datagram in datagrams {
+            let link = datagram[0].as_u64().and_then(|link| u32::try_from(link).ok()).ok_or("INVALID_NATIVE_IO")?;
+            let data = next(&datagram[1])?;
+            // As the `datagram` operation: only a relay link admitted right now, never a UDP source address.
+            if link > 0 && self.admitted.borrow().values().any(|id| *id == link) { self.endpoint.on_datagram(self.now, Address::Link(link), data); }
+        }
+        let mut written = Vec::with_capacity(writes.len());
+        let mut short = BTreeSet::new();
+        for write in writes {
+            let id = write[0].as_u64().and_then(|id| u32::try_from(id).ok()).ok_or("INVALID_NATIVE_IO")?;
+            let stream = write[1].as_u64().and_then(|stream| u32::try_from(stream).ok()).ok_or("INVALID_NATIVE_IO")?;
+            let data = next(&write[2])?;
+            if short.contains(&(id, stream)) { written.push(json!(0)); continue; }
+            let Some(connection) = self.endpoint.connection_mut(id) else { written.push(json!(-1)); continue; };
+            let accepted = connection.send_stream(self.now, stream, data);
+            if accepted < data.len() { short.insert((id, stream)); }
+            written.push(json!(accepted));
+            if accepted > 0 { self.send_now(); }
+        }
+        if cursor != payload.len() { return Err("INVALID_NATIVE_IO"); }
+        let mut out = Vec::new();
+        let poll = if header["poll"] == true {
+            let mut result = self.read();
+            take_blobs(&mut result, &mut self.blobs, |item, bytes| { item.insert("len".into(), json!(bytes.len())); out.extend_from_slice(&bytes); });
+            result
+        } else { Value::Null };
+        Ok((json!({"written":written,"poll":poll}), out))
     }
     /// The engine's own turn, without the application (`native-wait` builds; lib.rs `cindy_agent_net_pump`): read the socket,
     /// run the timers, send what is due. Acknowledgements, retransmissions and keepalives no longer wait for the JS thread.
@@ -338,7 +414,7 @@ impl NativeEngine {
                     };
                     if !over_udp {
                         if self.outbox.len() >= MAX_OUTBOX { self.outbox.remove(0); }
-                        self.outbox.push(json!({"link":link,"data":encoded(&io[..len])}));
+                        self.outbox.push((link, io[..len].to_vec()));
                     }
                 },
             }
@@ -353,7 +429,10 @@ impl NativeEngine {
     fn collect(&mut self) -> Value {
         let mut io = [0u8; IO_SIZE];
         let now = self.now;
-        let packets = std::mem::take(&mut self.outbox);
+        let blobs = &mut self.blobs;
+        let mut blob = |bytes: Vec<u8>| { blobs.push(bytes); blobs.len() - 1 };
+        let packets: Vec<Value> = std::mem::take(&mut self.outbox).into_iter()
+            .map(|(link, data)| json!({"link":link,"blob":blob(data)})).collect();
         let mut accepted = Vec::new();
         while accepted.len() < 32 {
             let Some(id) = self.endpoint.accept() else { break; };
@@ -390,7 +469,7 @@ impl NativeEngine {
                         if finishing.contains(&stream) { completed.push(stream); }
                         break;
                     }
-                    data.push(json!({"stream":stream,"data":encoded(&io[..len])}));
+                    data.push(json!({"stream":stream,"blob":blob(io[..len].to_vec())}));
                     remaining -= len;
                 }
             }
@@ -402,8 +481,13 @@ impl NativeEngine {
             let security = connection.security_stats();
             // Bytes still in the core's send buffer per stream this side opened (not sent yet, or sent and unacknowledged): the
             // session's backlog reading counts them, as the Desktop's does (transport.ts `coreBufferedBytes`).
+            let mut retired = Vec::new();
             let buffered: Vec<Value> = self.local_streams.get(&id).into_iter().flatten()
-                .map(|stream| json!([stream, connection.stream_buffered(*stream)])).collect();
+                .map(|stream| match connection.stream_progress(now, *stream) {
+                    Some(progress) => json!([stream, progress.buffered, progress.acked_bytes, progress.stalled_us / 1000]),
+                    None => { retired.push(*stream); json!([stream, 0, null, 0]) },
+                }).collect();
+            if let Some(reported) = self.local_streams.get_mut(&id) { for stream in retired { reported.remove(&stream); } }
             connections.push(json!({"id":id,"established":connection.is_established(),"dead":connection.is_dead(),
                 "closedByPeer":connection.closed_by_peer(),"remoteKey":encoded(connection.remote_static()),
                 "unacked":connection.connection().has_unacked_data(),
@@ -441,6 +525,22 @@ fn merge(result: &mut Value, mut stash: Value) {
         let Some(current) = connections.iter_mut().find(|current| current["id"] == old["id"]) else { continue; };
         for key in ["events", "data"] { front(&mut old[key], &mut current[key]); }
     }
+}
+/// Hands over the bytes a result names by `blob` (see `NativeEngine::blobs`), in the order the application reads them: the
+/// datagrams, then each connection's stream data. `finish` puts each in place of its index.
+fn take_blobs(result: &mut Value, blobs: &mut Vec<Vec<u8>>, mut finish: impl FnMut(&mut serde_json::Map<String, Value>, Vec<u8>)) {
+    let mut take = |item: &mut Value| {
+        let Some(item) = item.as_object_mut() else { return; };
+        let Some(index) = item.remove("blob").and_then(|index| index.as_u64()) else { return; };
+        let bytes = usize::try_from(index).ok().and_then(|index| blobs.get_mut(index)).map(std::mem::take).unwrap_or_default();
+        finish(item, bytes);
+    };
+    for packet in result.get_mut("packets").and_then(Value::as_array_mut).into_iter().flatten() { take(packet); }
+    for connection in result.get_mut("connections").and_then(Value::as_array_mut).into_iter().flatten() {
+        for chunk in connection.get_mut("data").and_then(Value::as_array_mut).into_iter().flatten() { take(chunk); }
+    }
+    // What was collected for a connection gone since is not in the result; its bytes go here.
+    blobs.clear();
 }
 /// Something the application must read now: a datagram to relay, a new connection, stream data or events.
 fn has_work(result: &Value) -> bool {

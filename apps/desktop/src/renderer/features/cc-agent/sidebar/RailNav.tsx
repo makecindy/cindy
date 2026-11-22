@@ -120,9 +120,9 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
       ref={ref}
       role="tooltip"
       className={cn(
-        'pointer-events-none fixed z-[9999] rounded-xl',
+        'pointer-events-none fixed z-fullscreen rounded-xl',
         'bg-[var(--surface-elevated)] border border-sidebar-border',
-        'px-3 pb-[11px] pt-[10px]',
+        'px-3 pb-[11px] pt-2.5',
       )}
       style={{
         left: preview.anchorRight + 10,
@@ -319,7 +319,7 @@ export function RailNav({
               });
             }}
             onMouseLeave={() => setPreview(null)}
-            className="group/pin flex w-full shrink-0 flex-col items-center gap-[2px] py-[2px]"
+            className="group/pin flex w-full shrink-0 flex-col items-center gap-0.5 py-0.5"
           >
             <span
               className={cn(

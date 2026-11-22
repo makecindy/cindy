@@ -1088,6 +1088,30 @@ if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-scree
   print("locked"); exit(0)
 }
 guard AXIsProcessTrusted() else { print("permission"); fflush(stdout); exit(2) }
+if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--editable-at" {
+  guard let session = ownedConsoleSession(), !(session["CGSSessionScreenIsLocked"] as? Bool ?? false),
+    let x = Float(CommandLine.arguments[2]), let y = Float(CommandLine.arguments[3]),
+    x.isFinite, y.isFinite else { exit(2) }
+  let system = AXUIElementCreateSystemWide()
+  AXUIElementSetMessagingTimeout(system, 0.25)
+  var hit: AXUIElement?
+  guard AXUIElementCopyElementAtPosition(system, x, y, &hit) == .success else { exit(2) }
+  // Web fields can expose an inner text node at the tapped point.
+  for _ in 0..<5 {
+    guard let element = hit, handoffBool(element, kAXEnabledAttribute) != false else { break }
+    let role = handoffString(element, kAXRoleAttribute) ?? ""
+    if handoffEditableRoles.contains(role) || handoffIsSecure(element) {
+      // Clicking a read-only preview can leave focus in the previous editor.
+      let focused = handoffElement(handoffAttr(system, kAXFocusedUIElementAttribute))
+      let editable = (handoffBool(element, "AXEditable") != false) &&
+        (focused.map { CFEqual($0, element) } == true || handoffBool(element, kAXFocusedAttribute) == true)
+      print(editable ? "editable" : "other"); exit(0)
+    }
+    if ["AXButton", "AXLink", "AXWindow", "AXWebArea"].contains(role) { break }
+    hit = handoffElement(handoffAttr(element, kAXParentAttribute))
+  }
+  print("other"); exit(0)
+}
 if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   // A single bounded request; values stay on stdin and are never echoed.
   var bytes: [UInt8] = []

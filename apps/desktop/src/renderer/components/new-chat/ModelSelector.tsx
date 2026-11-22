@@ -364,7 +364,7 @@ function ModelOptionsFloatingPanel({
     <div
       ref={refs.setFloating}
       data-radix-popper-content-wrapper=""
-      className={cn('z-50 w-[248px]', className)}
+      className={cn('z-dropdown w-[248px]', className)}
       style={{
         ...floatingStyles,
         visibility: isPositioned ? undefined : 'hidden',
@@ -402,7 +402,7 @@ function ModelOptionsFloatingPanel({
               onScheduleClose();
             }}
             className={cn(
-              'w-full overflow-hidden rounded-[12px] p-2 shadow-[shadow:var(--shadow-menu)] outline-none duration-100',
+              'w-full overflow-hidden rounded-xl p-2 shadow-[shadow:var(--shadow-menu)] outline-none duration-100',
               'animate-float-in border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
               className,
             )}
@@ -620,7 +620,7 @@ function ModelPromotionBadge({ children }: { children: ReactNode }) {
   return (
     <span
       data-model-promotion-badge
-      className="inline-flex shrink-0 items-center rounded-full bg-[var(--accent-cta-bg)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--accent-pure-cta-fg)]"
+      className="inline-flex shrink-0 items-center rounded-full bg-[var(--accent-cta-bg)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--accent-pure-cta-fg)]"
     >
       {children}
     </span>
@@ -1928,11 +1928,20 @@ function ModelSelectorContentView({
         isVisible: (providerId, model, agent) =>
           isDeviceModelVisible(catalog.modelVisibilityOverrides, agent, providerId, model),
         includePaymentRequired: true,
+        // 这份 entries 同时是那台电脑上收藏的解析目录(UnifiedModelPanel.resolveDeviceFavorite):
+        // 那台电脑自己隐藏的供应商不能从这里剔掉,否则它名下的收藏会直接消失。左栏另行收起。
+        includeHiddenProviders: true,
         scope: 'draft',
       });
       // 「运行于」收起的供应商只是不占左栏；那台电脑上的收藏仍按完整目录解析，不因收起消失。
+      // 被隐藏的供应商同理(那台电脑自己隐藏的,或用户在本机设置里对它隐藏的):不占左栏,
+      // 收藏与正在用的那一项照常解析。
+      const hiddenThere = new Set(shared.filter((provider) => provider.hidden === true).map((provider) => provider.id));
       const providerIds = [...new Set(entries.map((entry) => entry.providerId))].filter(
-        (providerId) => !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)),
+        (providerId) =>
+          !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)) &&
+          ((!hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId)) ||
+            (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)),
       );
       return entries.length > 0
         ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
@@ -3390,7 +3399,7 @@ function ModelSelectorContentView({
                         <span
                           aria-label={t('settings.providers.models.subscription')}
                           title={t('settings.providers.models.subscription')}
-                          className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]"
+                          className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium text-[var(--text-secondary)]"
                         >
                           {t('newChat.modelSelector.meta.subscriptionBadgeCompact', {
                             defaultValue: t('settings.providers.models.subscription'),
@@ -3434,7 +3443,7 @@ function ModelSelectorContentView({
               scheduleOptionsClose();
             }}
             className={cn(
-              'w-[248px] overflow-hidden rounded-[12px] p-2 shadow-[shadow:var(--shadow-menu)] duration-100',
+              'w-[248px] overflow-hidden rounded-xl p-2 shadow-[shadow:var(--shadow-menu)] duration-100',
               'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
               overlayContentClassName,
             )}
@@ -3455,9 +3464,9 @@ function ModelSelectorContentView({
     currentAgentKind &&
     !providersLoading &&
     connected.length === 0 ? (
-      <div className="flex flex-col gap-[14px] p-2">
+      <div className="flex flex-col gap-3.5 p-2">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-[var(--model-item-hover)]">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--model-item-hover)]">
             <Unplug size={16} className="text-[var(--text-secondary)]" />
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
@@ -3475,7 +3484,7 @@ function ModelSelectorContentView({
             disabled={interactionDisabled}
             onClick={() => onNavigateToProviders()}
             className={cn(
-              'flex h-[34px] w-full items-center justify-center rounded-[8px]',
+              'flex h-[34px] w-full items-center justify-center rounded-lg',
               'bg-[var(--accent-cta-bg)] transition-opacity hover:opacity-90',
             )}
           >
@@ -4291,7 +4300,7 @@ function ModelSelectorContentView({
                   {!deviceId && sec.provider.id === 'xd' && modelAccessAccountTier === 'free' && (
                     <span
                       data-testid="cindy-ai-model-group-free-tier-badge"
-                      className="ml-auto inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
+                      className="ml-auto inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-px text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
                     >
                       {t('settings.providers.xd.accountTier.free')}
                     </span>
@@ -5661,7 +5670,7 @@ export function ModelSelector({
           readableFieldPanel ? 'w-[max(var(--radix-popover-trigger-width),440px)] max-w-[calc(100vw-24px)]'
             : fieldPanelFollowsTrigger ? 'w-[var(--radix-popover-trigger-width)]'
             : isFieldTrigger ? 'w-auto min-w-[var(--radix-popover-trigger-width)]' : 'w-auto',
-          'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
+          'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-xl p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',
         )}

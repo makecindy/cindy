@@ -309,7 +309,7 @@ export function AtMentionPanel({
   const renderSectionHeader = (label: string) => (
     <div
       className={cn(
-        'flex h-[24px] items-center px-[10px]',
+        'flex h-[24px] items-center px-2.5',
         'text-12 font-medium text-[var(--cmd-palette-item-meta)]',
       )}
     >
@@ -451,7 +451,7 @@ export function AtMentionPanel({
         className={cn(
           COMPOSER_MENU_ROW,
           'flex w-full shrink-0 items-center gap-2',
-          'h-[44px] px-[10px] text-left',
+          'h-[44px] px-2.5 text-left',
           disabled && 'cursor-not-allowed opacity-45',
         )}
       >
@@ -550,7 +550,7 @@ export function AtMentionPanel({
         'pointer-events-auto',
         // 内嵌时外壳会把量到的确定高度写到本层 style.height 上，条目多时只滚下面这一层 (#9536)。
         // 没有外壳时高度仍是 auto。data-morph-scroll 告诉外壳不要再出一条滚动条；切页后重新判定。
-        embedded ? 'relative flex min-h-0 max-h-full flex-1 flex-col' : 'absolute left-0 bottom-full mb-2 z-50',
+        embedded ? 'relative flex min-h-0 max-h-full flex-1 flex-col' : 'absolute left-0 bottom-full mb-2 z-float',
       )}
     >
       <div
@@ -567,9 +567,9 @@ export function AtMentionPanel({
           // 外壳看到 data-morph-scroll="inner" 后保持不滚，避免并排两条竖向滚动条 (#9536)。
           // 不再用 h-full：父层只有 max-h-full 时百分比高度仍是 auto，列表会按内容撑出去。
           'overflow-x-hidden overflow-y-auto',
-          'p-[6px]',
+          'p-1.5',
           !embedded && [
-            'rounded-[12px] border',
+            'rounded-xl border',
             'bg-[var(--cmd-palette-bg)]',
             'border-[var(--cmd-palette-border)]',
           ],
@@ -580,7 +580,7 @@ export function AtMentionPanel({
       >
         <MenuHighlightLayer />
         {hasSearchBox ? (
-          <div className="px-[4px] pb-[6px]">
+          <div className="px-1 pb-1.5">
             <div className="relative">
               <Search
                 size={12}
@@ -610,7 +610,7 @@ export function AtMentionPanel({
           </div>
         ) : null}
         {showLoadingSkeleton && (
-          <div className="space-y-[4px] p-[4px]">
+          <div className="space-y-1 p-1">
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
@@ -620,11 +620,11 @@ export function AtMentionPanel({
           </div>
         )}
         {showErrorState && (
-          <div className="flex flex-col items-center justify-center py-[16px] gap-[10px]">
+          <div className="flex flex-col items-center justify-center py-4 gap-2.5">
             <div className="text-13 text-[var(--error-fg)]">
               {t('newChat.atMention.scanFailed')}
             </div>
-            <div className="text-12 text-[var(--cmd-palette-item-meta)] px-[12px] text-center">
+            <div className="text-12 text-[var(--cmd-palette-item-meta)] px-3 text-center">
               {state.kind === 'error' ? state.message : ''}
             </div>
             <Button
@@ -679,7 +679,7 @@ export function AtMentionPanel({
                           <div
                             key={p}
                             {...menuRowAttrs()}
-                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] shrink-0 items-center gap-2 px-[10px]')}
+                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] shrink-0 items-center gap-2 px-2.5')}
                           >
                             <FolderPlus
                               size={16}
@@ -725,7 +725,7 @@ export function AtMentionPanel({
             {isEmptyRootQuery && !hasSearchBox && (
               <div
                 className={cn(
-                  'mt-2 border-t border-[var(--cmd-palette-border)] select-none px-[10px] py-[8px] text-12',
+                  'mt-2 border-t border-[var(--cmd-palette-border)] select-none px-2.5 py-2 text-12',
                   'text-[var(--cmd-palette-item-meta)]',
                 )}
               >
@@ -735,7 +735,7 @@ export function AtMentionPanel({
             {!isEmptyRootQuery && !hasSearchBox && state.kind === 'ready' && state.truncated && (
               <div
                 className={cn(
-                  'select-none px-[10px] py-[8px] text-12',
+                  'select-none px-2.5 py-2 text-12',
                   'text-[var(--cmd-palette-item-meta)]',
                 )}
               >
@@ -754,7 +754,7 @@ export function AtMentionPanel({
                 {...menuRowAttrs()}
                 className={cn(
                   COMPOSER_MENU_ROW,
-                  'flex w-full items-center gap-2 px-[10px] py-[8px] text-left',
+                  'flex w-full items-center gap-2 px-2.5 py-2 text-left',
                   'text-12 text-[var(--error-fg)]',
                 )}
               >
@@ -771,7 +771,7 @@ export function AtMentionPanel({
         <div
           ref={tooltipRef}
           className={cn(
-            'w-[280px] overflow-y-auto rounded-[12px] border p-[14px]',
+            'w-[280px] overflow-y-auto rounded-xl border p-3.5',
             'bg-[var(--cmd-palette-bg)]',
             'border-[var(--cmd-palette-border)]',
             'absolute left-[488px]',  // 480 panel + 8 gap
@@ -785,7 +785,7 @@ export function AtMentionPanel({
           <div className="text-14 font-medium text-[var(--cmd-palette-item-text)]">
             {focusedItem.name}
           </div>
-          <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
+          <div className="mt-2 text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
             {focusedItem.description}
           </div>
         </div>
