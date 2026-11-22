@@ -174,6 +174,16 @@ describe('伙伴集菜单在最小窗口内的可达性', () => {
   });
 });
 
+// DESIGN.md §14.6 键盘可达性:Radix 的 typeahead 用菜单项文本匹配。失效后果:
+// 已选成员文本带装饰勾号「✓」,按姓名键入时无法定位到该成员,键盘用户无法
+// 从长列表里找到要移出的伙伴。textValue 把检索文本与装饰内容解耦。
+describe('伙伴集菜单的键盘检索文本', () => {
+  const buddySetGroupsSource = readFileSync(resolve(__dirname, '..', 'BuddySetGroups.tsx'), 'utf8').replace(/\r\n/g, '\n');
+  it('成员菜单项用纯姓名作 textValue', () => {
+    expect(buddySetGroupsSource).toContain('textValue={buddy.name}');
+  });
+});
+
 describe('群聊与伙伴行同一套几何', () => {
   const groupRow = readFileSync(
     resolve(__dirname, '..', 'BotGroupSidebarRow.tsx'),

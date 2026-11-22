@@ -151,6 +151,7 @@ export function BuddySetGroups<T extends BuddySetChatEntry>({
                         return (
                           <DropdownMenuItem
                             key={buddy.id}
+                            textValue={buddy.name}
                             onSelect={() => onChange((current) => ownerId === set.buddySetId
                               ? removeBuddyFromSet(current, buddy.id)
                               : assignBuddyToSet(current, buddy.id, set.buddySetId))}
