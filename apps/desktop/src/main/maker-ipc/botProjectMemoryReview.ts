@@ -78,12 +78,22 @@ try {
     if (humanInput(row) && ++humanMessages >= minimumHumanMessages) break;
   }
   // A review counts once its run succeeded. A failed, cancelled or never-started run leaves
-  // the material for the next one; the review's own edits end at its finish time.
+  // the material for the next one.
   if (pending) {
-    const previous = db.prepare('SELECT status, finished_at FROM schedule_runs WHERE id = ?').get(pending.runId);
+    const previous = db.prepare('SELECT status, finished_at, session_id FROM schedule_runs WHERE id = ?').get(pending.runId);
     if (previous?.status === 'success') {
+      const finishedAt = Number.isFinite(previous.finished_at) ? previous.finished_at : pending.firedAt;
+      // Edits made while it ran are its own only if no other task of this teammate was active
+      // then (the review shares the project folder). Otherwise they wait for the next review.
+      const workspacePrefix = source.workspace + path.sep;
+      const concurrent = db.prepare(
+        "SELECT 1 FROM messages m WHERE m.created_at > ? AND m.created_at <= ? AND m.session_id IS NOT ? AND (" +
+        "m.session_id IN (SELECT session_id FROM bot_session_links WHERE bot_id = ?) OR m.session_id IN (" +
+        "SELECT id FROM sessions WHERE working_dir = ? OR project_dir = ? OR substr(working_dir, 1, length(?)) = ?)) LIMIT 1"
+      ).get(pending.firedAt, finishedAt, previous.session_id ?? null, source.botId,
+        source.workspace, source.workspace, workspacePrefix, workspacePrefix);
       reviewedAt = pending.firedAt;
-      since = Math.max(since, Number.isFinite(previous.finished_at) ? previous.finished_at : pending.firedAt);
+      since = Math.max(since, concurrent ? pending.firedAt : finishedAt);
       pending = null;
     } else if (previous?.status === 'running') {
       previousRunning = true;
@@ -106,6 +116,7 @@ let truncated = false;
 // Memory records are Markdown. The supplied guide, the generated index (MEMORY.md is rewritten
 // whenever memory storage starts, even unchanged), the search index and receipts are not.
 const derived = ['.cindy/memory/README.md', '.cindy/memory/MEMORY.md'];
+const skipped = ['node_modules', '__pycache__', 'venv'];
 function collect(root, rootName, memory) {
   const queue = [[root, rootName]];
   for (let index = 0; index < queue.length; index++) {
@@ -120,7 +131,8 @@ function collect(root, rootName, memory) {
     }
     for (const entry of entries) {
       if (++visited > budget) { truncated = true; return; }
-      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      // Dependencies and runtime caches are not material (the same folders teammate Skills skip).
+      if (entry.name.startsWith('.') || skipped.includes(entry.name) || entry.name.endsWith('.pyc')) continue;
       const full = path.join(dir, entry.name);
       const name = relative + '/' + entry.name;
       if (entry.isDirectory()) queue.push([full, name]);

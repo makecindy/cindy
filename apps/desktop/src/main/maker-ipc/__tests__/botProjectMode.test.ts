@@ -217,15 +217,16 @@ describe('ensureBotProjectAutomations', () => {
   // teammate reviewed, so its saved memories only piled up. Unit, real generated check with
   // SQLite and files: changed memory or skills admit a review at most weekly; only a review
   // whose run succeeded consumes them (#12080 review P1); the review's own edits, the supplied
-  // memory guide, the generated MEMORY.md index (#12080 review), the search index and self-tests
-  // do not count.
+  // memory guide, the generated MEMORY.md index, the search index, dependency and Python caches
+  // (#12080 review) and self-tests do not count.
   it('reviews a quiet teammate whose memory or skills changed, at most once a week', async () => {
     await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
     const db = new DatabaseSync(database.path);
     db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
       CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
-      CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at INTEGER);`);
-    const finish = db.prepare('INSERT INTO schedule_runs VALUES (?, ?, ?)');
+      CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at INTEGER, session_id TEXT);
+      CREATE TABLE sessions(id TEXT PRIMARY KEY, working_dir TEXT, project_dir TEXT);`);
+    const finish = db.prepare('INSERT INTO schedule_runs(id, status, finished_at) VALUES (?, ?, ?)');
     const day = 86_400_000;
     const start = Date.now();
     const touch = async (relative: string, at: number) => {
@@ -241,6 +242,8 @@ describe('ensureBotProjectAutomations', () => {
       await touch('.cindy/memory/fts.db', start + 1);
       await touch('.cindy/memory/.cindy-memory-migration-v1.json', start + 1);
       await touch('.agents/skills/brew/node_modules/dep/index.js', start + 1);
+      await touch('.agents/skills/brew/__pycache__/tool.cpython-312.pyc', start + 1); // #12080 review
+      await touch('.agents/skills/brew/tool.pyc', start + 1);
       expect(await runMemoryCheck(workingDir, start + 2, { runId: 'r1' })).toBe(2);
       await touch('.cindy/memory/coffee.md', start + 3);
       await touch('.agents/skills/brew/SKILL.md', start + 3);
@@ -249,7 +252,7 @@ describe('ensureBotProjectAutomations', () => {
       expect(await runMemoryCheck(workingDir, start + day, { runId: 'r2', log: first })).toBe(0);
       expect(first.join('\n')).toContain('.cindy/memory/coffee.md');
       expect(first.join('\n')).toContain('.agents/skills/brew/SKILL.md');
-      expect(first.join('\n')).not.toMatch(/README|MEMORY\.md|fts\.db|migration|node_modules/);
+      expect(first.join('\n')).not.toMatch(/README|MEMORY\.md|fts\.db|migration|node_modules|\.pyc/);
       // That run failed before tidying: the next night tries again with the same material.
       finish.run('r2', 'failed', start + day + 1_000);
       const retry: string[] = [];
@@ -266,6 +269,40 @@ describe('ensureBotProjectAutomations', () => {
       expect(second.join('\n')).not.toContain('coffee.md');
       finish.run('r6', 'success', start + 9 * day + 60_000);
       expect(await runMemoryCheck(workingDir, start + 17 * day, { runId: 'r7' })).toBe(2);
+    } finally { db.close(); }
+  });
+
+  // #12080 review (Codex P2): the review shares the project folder with the teammate's other
+  // tasks. A memory another task saved while the review ran is not the review's own edit and
+  // must wait for the next one. Unit, real generated check with SQLite and files.
+  it('keeps a memory another task saved while the review ran for the next review', async () => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at INTEGER, session_id TEXT);
+      CREATE TABLE sessions(id TEXT PRIMARY KEY, working_dir TEXT, project_dir TEXT);
+      INSERT INTO bot_session_links VALUES ('bot-1', 'chat');`);
+    const day = 86_400_000;
+    const start = Date.now();
+    const touch = async (relative: string, at: number) => {
+      const file = path.join(workingDir, relative);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, relative);
+      await fs.utimes(file, at / 1000, at / 1000);
+    };
+    try {
+      await touch('.cindy/memory/coffee.md', start - 1_000);
+      expect(await runMemoryCheck(workingDir, start, { runId: 'r1' })).toBe(0);
+      // While the review tidies coffee.md, the teammate's chat saves tea.md.
+      await touch('.cindy/memory/coffee.md', start + 60_000);
+      db.prepare("INSERT INTO messages VALUES ('review', 'assistant', NULL, ?, NULL, 'tidying')").run(start + 50_000);
+      db.prepare("INSERT INTO messages VALUES ('chat', 'assistant', NULL, ?, NULL, 'saved')").run(start + 70_000);
+      await touch('.cindy/memory/tea.md', start + 70_000);
+      db.prepare("INSERT INTO schedule_runs VALUES ('r1', 'success', ?, 'review')").run(start + 120_000);
+      const next: string[] = [];
+      expect(await runMemoryCheck(workingDir, start + 8 * day, { runId: 'r2', log: next })).toBe(0);
+      expect(next.join('\n')).toContain('.cindy/memory/tea.md');
     } finally { db.close(); }
   });
 
