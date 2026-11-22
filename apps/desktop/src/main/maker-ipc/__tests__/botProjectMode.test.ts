@@ -45,7 +45,7 @@ import { OWN_RULES_HEADING } from '../botProjectTemplate.js';
 // protocol has its own process tests; retain one real spawn below. Repeated
 // cold Node startups made the activity matrix exceed 60s on CI (#10413).
 async function runMemoryCheck(workingDir: string, firedAt: number,
-  event: { lastFinishedAt?: number; scheduleId?: string; log?: string[] } = {}): Promise<number> {
+  event: { lastFinishedAt?: number; scheduleId?: string; runId?: string; log?: string[] } = {}): Promise<number> {
   let exitCode = 0;
   const output = { write: (_text: string, done?: () => void) => { done?.(); } };
   const script = await fs.readFile(path.join(workingDir, '..', '.memory-review-check-v1.cjs'), 'utf8');
@@ -215,14 +215,16 @@ describe('ensureBotProjectAutomations', () => {
 
   // User report 2026-11-22: owners who send fewer than 20 messages a day never got their
   // teammate reviewed, so its saved memories only piled up. Unit, real generated check with
-  // SQLite and files: changed memory or skills admit a review at most weekly; the review's own
-  // edits, the supplied memory guide, the search index and self-tests do not count.
+  // SQLite and files: changed memory or skills admit a review at most weekly; only a review
+  // whose run succeeded consumes them (#12080 review P1); the review's own edits, the supplied
+  // memory guide, the search index and self-tests do not count.
   it('reviews a quiet teammate whose memory or skills changed, at most once a week', async () => {
     await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
     const db = new DatabaseSync(database.path);
     db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
-      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);`);
-    db.close();
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at INTEGER);`);
+    const finish = db.prepare('INSERT INTO schedule_runs VALUES (?, ?, ?)');
     const day = 86_400_000;
     const start = Date.now();
     const touch = async (relative: string, at: number) => {
@@ -231,28 +233,59 @@ describe('ensureBotProjectAutomations', () => {
       await fs.writeFile(file, relative);
       await fs.utimes(file, at / 1000, at / 1000);
     };
-    expect(await runMemoryCheck(workingDir, start)).toBe(2); // Nothing saved yet.
-    await touch('.cindy/memory/README.md', start + 1);
-    await touch('.cindy/memory/fts.db', start + 1);
-    await touch('.cindy/memory/.cindy-memory-migration-v1.json', start + 1);
-    expect(await runMemoryCheck(workingDir, start + 2)).toBe(2);
-    await touch('.cindy/memory/coffee.md', start + 3);
-    await touch('.agents/skills/brew/SKILL.md', start + 3);
-    expect(await runMemoryCheck(workingDir, start + 4, { scheduleId: 'self-test' })).toBe(0);
-    const first: string[] = [];
-    expect(await runMemoryCheck(workingDir, start + day, { log: first })).toBe(0);
-    expect(first.join('\n')).toContain('.cindy/memory/coffee.md');
-    expect(first.join('\n')).toContain('.agents/skills/brew/SKILL.md');
-    expect(first.join('\n')).not.toMatch(/README|fts\.db|migration/);
-    await touch('.cindy/memory/coffee.md', start + day + 60_000); // The review tidied it.
-    expect(await runMemoryCheck(workingDir, start + 2 * day, { lastFinishedAt: start + day + 120_000 })).toBe(2);
-    await touch('.cindy/memory/tea.md', start + 3 * day);
-    expect(await runMemoryCheck(workingDir, start + 4 * day, { lastFinishedAt: start + 2 * day })).toBe(2);
-    const second: string[] = [];
-    expect(await runMemoryCheck(workingDir, start + 8 * day, { lastFinishedAt: start + 4 * day, log: second })).toBe(0);
-    expect(second.join('\n')).toContain('.cindy/memory/tea.md');
-    expect(second.join('\n')).not.toContain('coffee.md');
-    expect(await runMemoryCheck(workingDir, start + 16 * day, { lastFinishedAt: start + 8 * day + 60_000 })).toBe(2);
+    try {
+      expect(await runMemoryCheck(workingDir, start, { runId: 'r0' })).toBe(2); // Nothing saved yet.
+      await touch('.cindy/memory/README.md', start + 1);
+      await touch('.cindy/memory/fts.db', start + 1);
+      await touch('.cindy/memory/.cindy-memory-migration-v1.json', start + 1);
+      await touch('.agents/skills/brew/node_modules/dep/index.js', start + 1);
+      expect(await runMemoryCheck(workingDir, start + 2, { runId: 'r1' })).toBe(2);
+      await touch('.cindy/memory/coffee.md', start + 3);
+      await touch('.agents/skills/brew/SKILL.md', start + 3);
+      expect(await runMemoryCheck(workingDir, start + 4, { scheduleId: 'self-test', runId: 'self-test' })).toBe(0);
+      const first: string[] = [];
+      expect(await runMemoryCheck(workingDir, start + day, { runId: 'r2', log: first })).toBe(0);
+      expect(first.join('\n')).toContain('.cindy/memory/coffee.md');
+      expect(first.join('\n')).toContain('.agents/skills/brew/SKILL.md');
+      expect(first.join('\n')).not.toMatch(/README|fts\.db|migration|node_modules/);
+      // That run failed before tidying: the next night tries again with the same material.
+      finish.run('r2', 'failed', start + day + 1_000);
+      const retry: string[] = [];
+      expect(await runMemoryCheck(workingDir, start + 2 * day, { runId: 'r3', log: retry })).toBe(0);
+      expect(retry.join('\n')).toContain('.cindy/memory/coffee.md');
+      await touch('.cindy/memory/coffee.md', start + 2 * day + 60_000); // The review tidied it.
+      finish.run('r3', 'success', start + 2 * day + 120_000);
+      expect(await runMemoryCheck(workingDir, start + 3 * day, { runId: 'r4' })).toBe(2);
+      await touch('.cindy/memory/tea.md', start + 4 * day);
+      expect(await runMemoryCheck(workingDir, start + 5 * day, { runId: 'r5' })).toBe(2); // Within the week.
+      const second: string[] = [];
+      expect(await runMemoryCheck(workingDir, start + 9 * day, { runId: 'r6', log: second })).toBe(0);
+      expect(second.join('\n')).toContain('.cindy/memory/tea.md');
+      expect(second.join('\n')).not.toContain('coffee.md');
+      finish.run('r6', 'success', start + 9 * day + 60_000);
+      expect(await runMemoryCheck(workingDir, start + 17 * day, { runId: 'r7' })).toBe(2);
+    } finally { db.close(); }
+  });
+
+  // #12080 review P2: the walk is bounded by entries visited, not by changes found, and memory
+  // comes first. Unit, real generated check: a 2,100-file Skill folder still finishes and the
+  // changed memory record is found.
+  it('bounds the walk of a large Skill folder and checks memory first', async () => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);`);
+    db.close();
+    const firedAt = Date.now();
+    const skill = path.join(workingDir, '.agents', 'skills', 'big', 'data');
+    await fs.mkdir(skill, { recursive: true });
+    await Promise.all(Array.from({ length: 2100 }, (_, i) => fs.writeFile(path.join(skill, `f${i}.txt`), '')));
+    await fs.mkdir(path.join(workingDir, '.cindy', 'memory'), { recursive: true });
+    await fs.writeFile(path.join(workingDir, '.cindy', 'memory', 'coffee.md'), 'Oat milk');
+    const log: string[] = [];
+    expect(await runMemoryCheck(workingDir, firedAt, { log })).toBe(0);
+    expect(log.join('\n')).toContain('.cindy/memory/coffee.md');
+    expect(log.join('\n')).toContain('Stopped after 2000 entries');
   });
 
   // The check installed before 2026-11-22 (dff1c6e5) only counted messages. Unit, real

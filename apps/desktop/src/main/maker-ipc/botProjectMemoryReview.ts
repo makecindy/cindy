@@ -28,6 +28,22 @@ const event = JSON.parse(input);
 if (event.event !== 'schedule-pre-run' || !Number.isFinite(event.firedAt)) {
   throw new Error('Missing schedule pre-run event');
 }
+const fs = require('node:fs');
+const path = require('node:path');
+// The record of the last review sits beside this check, outside the project's Git history.
+const statePath = path.join(source.workspace, '..', '.memory-review-state-v1.json');
+let stored = '';
+let state = {};
+try {
+  stored = fs.readFileSync(statePath, 'utf8');
+  state = JSON.parse(stored) || {};
+} catch (error) {
+  if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+}
+let reviewedAt = Number.isFinite(state.reviewedAt) ? state.reviewedAt : 0;
+let since = Number.isFinite(state.since) ? state.since : 0;
+let pending = typeof state.pending?.runId === 'string' && Number.isFinite(state.pending.firedAt) ? state.pending : null;
+let previousRunning = false;
 const minimumHumanMessages = 20;
 let humanMessages = 0;
 const db = new DatabaseSync(source.databasePath, { readOnly: true });
@@ -61,31 +77,34 @@ try {
   for (const row of rows) {
     if (humanInput(row) && ++humanMessages >= minimumHumanMessages) break;
   }
+  // A review counts once its run succeeded. A failed, cancelled or never-started run leaves
+  // the material for the next one; the review's own edits end at its finish time.
+  if (pending) {
+    const previous = db.prepare('SELECT status, finished_at FROM schedule_runs WHERE id = ?').get(pending.runId);
+    if (previous?.status === 'success') {
+      reviewedAt = pending.firedAt;
+      since = Math.max(since, Number.isFinite(previous.finished_at) ? previous.finished_at : pending.firedAt);
+      pending = null;
+    } else if (previous?.status === 'running') {
+      previousRunning = true;
+    } else {
+      pending = null;
+    }
+  }
 } finally {
   db.close();
 }
 // A teammate the owner talks to less still saves memories and skills. Those files changing is
 // reason enough for a review, at most once a week; a teammate with no new material never runs.
-const fs = require('node:fs');
-const path = require('node:path');
-const statePath = path.join(source.workspace, '..', '.memory-review-state-v1.json');
-let state = {};
-try {
-  state = JSON.parse(fs.readFileSync(statePath, 'utf8')) || {};
-} catch (error) {
-  if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
-}
-const reviewedAt = Number.isFinite(state.reviewedAt) ? state.reviewedAt : 0;
-const storedSince = Number.isFinite(state.since) ? state.since : 0;
-let since = storedSince;
-// The review's own edits are not new material: once it has finished, look only past its end.
-if (reviewedAt > since && Number.isFinite(event.lastFinishedAt) && event.lastFinishedAt >= reviewedAt) {
-  since = event.lastFinishedAt;
-}
 const baseline = Math.max(since, reviewedAt);
 const changed = [];
+// Bounded walk, memory first: a large Skill folder cannot hold up the check.
+const budget = 2000;
+let visited = 0;
+let truncated = false;
 // Memory records are Markdown; the search index and migration receipts beside them are not.
 function collect(dir, relative, memory) {
+  if (visited >= budget) { truncated = true; return; }
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -94,8 +113,8 @@ function collect(dir, relative, memory) {
     throw error;
   }
   for (const entry of entries) {
-    if (changed.length >= 500) return;
-    if (entry.name.startsWith('.')) continue;
+    if (++visited > budget) { truncated = true; return; }
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
     const full = path.join(dir, entry.name);
     const name = relative + '/' + entry.name;
     if (entry.isDirectory()) collect(full, name, memory);
@@ -106,21 +125,29 @@ function collect(dir, relative, memory) {
 collect(path.join(source.workspace, '.cindy', 'memory'), '.cindy/memory', true);
 collect(path.join(source.workspace, '.agents', 'skills'), '.agents/skills', false);
 const week = 7 * 24 * 60 * 60 * 1000;
-const run = humanMessages >= minimumHumanMessages
-  || (changed.length > 0 && (!reviewedAt || event.firedAt - reviewedAt >= week));
+const run = !previousRunning && (humanMessages >= minimumHumanMessages
+  || (changed.length > 0 && (!reviewedAt || event.firedAt - reviewedAt >= week)));
+if (run) {
+  if (typeof event.runId === 'string' && event.runId) pending = { runId: event.runId, firedAt: event.firedAt };
+  else reviewedAt = event.firedAt;
+}
+const next = JSON.stringify({ reviewedAt, since, ...(pending ? { pending } : {}) });
 // Self-tests only report the decision; they never move the review's record.
-if (event.scheduleId !== 'self-test' && (run || since !== storedSince)) {
+if (event.scheduleId !== 'self-test' && next !== stored) {
   const temp = statePath + '.' + process.pid + '.tmp';
-  fs.writeFileSync(temp, JSON.stringify({ reviewedAt: run ? event.firedAt : reviewedAt, since }));
+  fs.writeFileSync(temp, next);
   fs.renameSync(temp, statePath);
 }
+const unchecked = truncated ? '\n(Stopped after ' + budget + ' entries; the rest of the folders were not checked.)' : '';
 if (run && changed.length > 0) {
   console.log('Memory and skill files changed since the last review (check these and the records they relate to):\n'
-    + changed.slice(0, 40).join('\n') + (changed.length > 40 ? '\n…and ' + (changed.length - 40) + ' more' : ''));
+    + changed.slice(0, 40).join('\n') + (changed.length > 40 ? '\n…and ' + (changed.length - 40) + ' more' : '') + unchecked);
 } else if (!run) {
-  console.log(changed.length > 0
-    ? changed.length + ' memory or skill files changed; the next review waits until a week after the last one.'
-    : 'Only ' + humanMessages + '/' + minimumHumanMessages + ' human messages in the last day and no memory or skill changes; memory and skills review skipped.');
+  console.log(previousRunning
+    ? 'The previous memory and skills review is still running; skipped.'
+    : changed.length > 0
+      ? changed.length + ' memory or skill files changed; the next review waits until a week after the last one.' + unchecked
+      : 'Only ' + humanMessages + '/' + minimumHumanMessages + ' human messages in the last day and no memory or skill changes; memory and skills review skipped.' + unchecked);
   process.exitCode = 2;
 }
 process.stdout.write('', () => process.exit(process.exitCode || 0));
