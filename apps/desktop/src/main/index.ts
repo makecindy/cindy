@@ -289,6 +289,7 @@ const desktopDevInstanceOptions = (() => {
     try {
       commit = execFileSync('git', ['rev-parse', 'HEAD'], {
         cwd: rootDir,
+        windowsHide: true,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       }).trim() || null;

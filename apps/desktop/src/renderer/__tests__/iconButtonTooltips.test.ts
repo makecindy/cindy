@@ -363,12 +363,13 @@ describe('icon-only button tooltip coverage', () => {
     const automation = rendererSource('features/cc-agent/sidebar/AutomationSessionGroupItem.tsx');
     const sessionItem = rendererSource('features/cc-agent/sidebar/SessionItem.tsx');
 
-    expect(mobileDownload).toMatch(
-      /text=\{t\('sidebar\.mobileDownload\.close'\)\}[\s\S]*?contentClassName="z-\[10001\]"/,
-    );
-    expect(sessionExport).toMatch(
-      /sessionShare\.export\.(?:hide|show)Password[\s\S]*?contentClassName="z-\[10001\]"/,
-    );
+    // 共享 Tip 默认在 tooltip 层(10011),高于所有弹窗;弹窗里的 Tip 不再手动抬层级
+    // (DESIGN.md §6 层级刻度)。
+    expect(rendererSource('components/ui/tooltip.tsx')).toContain("'z-tooltip select-none");
+    expect(mobileDownload).toContain("text={t('sidebar.mobileDownload.close')}");
+    expect(sessionExport).toMatch(/sessionShare\.export\.(?:hide|show)Password/);
+    expect(mobileDownload).not.toMatch(/contentClassName="z-/);
+    expect(sessionExport).not.toMatch(/contentClassName="z-/);
     expect(automation).toContain('controlledOpen={rowTooltipOpen}');
     expect(automation).toContain('setRowTooltipOpen(!isAutomationGroupInlineAction(event.target))');
     expect(automation).toContain('onPointerLeave={() => setRowTooltipOpen(false)}');

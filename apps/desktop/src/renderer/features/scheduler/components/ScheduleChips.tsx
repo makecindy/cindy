@@ -114,7 +114,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
 });
 
 const POPOVER_BASE = cn(
-  'z-[10010] rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
+  'rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
   'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]',
 );
 
@@ -243,7 +243,7 @@ export function ScheduleSettingsButton({
         )}
 
         {!lockEnabled && (
-        <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-[10020]">
+        <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-modal-popover-nested">
           <label
             className={cn(
               'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
@@ -396,7 +396,7 @@ export function ScheduleChip({
         align="start"
         sideOffset={8}
         collisionPadding={16}
-        className="z-[10010] w-[600px] rounded-xl bg-transparent p-0 shadow-none border-0"
+        className="w-[600px] rounded-xl bg-transparent p-0 shadow-none border-0"
         onWheel={stopWheel}
       >
         <div
@@ -843,7 +843,7 @@ function TimePicker({
         align="end"
         sideOffset={6}
         collisionPadding={16}
-        className={cn(POPOVER_BASE, 'z-[10020] w-[168px]')}
+        className={cn(POPOVER_BASE, 'z-modal-popover-nested w-[168px]')}
         onWheel={stopWheel}
       >
         <div className="grid grid-cols-2 gap-1.5">
@@ -1204,9 +1204,9 @@ export function ModelEffortChip({
         sideOffset={8}
         collisionPadding={16}
         className={cn(
-          // z-[10010]:本 chip 在 ScheduleFormDialog 内,弹层必须盖过对话框(沿用原
-          // POPOVER_BASE 的层级——丢了它会渲染在对话框下层、点了"没反应")。
-          'z-[10010] overflow-hidden rounded-xl p-0 shadow-[shadow:var(--shadow-menu)]',
+          // 本 chip 在 ScheduleFormDialog 内:共享 PopoverContent 默认在 dropdown 层
+          // (10010),已盖过对话框;不要再局部降层,否则会渲染在对话框下层、点了"没反应"。
+          'overflow-hidden rounded-xl p-0 shadow-[shadow:var(--shadow-menu)]',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
           'w-auto',
@@ -1242,7 +1242,7 @@ export function ModelEffortChip({
           // An explicit selection always pins the connection, including the native default.
           reselectEmitsChange
           selectedRowClickOpensConfiguration
-          overlayContentClassName="z-[10020]"
+          overlayContentClassName="z-modal-popover-nested"
           discoveringModels={discovery.pending}
           {...(pluginEngines ? { pluginEngines } : {})}
           followSession={

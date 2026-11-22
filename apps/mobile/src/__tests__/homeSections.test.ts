@@ -514,7 +514,7 @@ it('builds inbox sections and recomputes snooze expiry without losing collapsed 
 
 // 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks
 // (by the teammate filter's test) are listed only while they need the user or run.
-it('leaves idle teammate tasks out of the inbox until they need the user or run', () => {
+it('leaves idle teammate conversations out of the inbox until they need the user or run', () => {
   const routine = listItem('routine', '2026-11-18T08:00:00Z');
   (routine.session as { source?: string; companion?: object }).source = 'bot';
   (routine.session as { companion?: object }).companion = { id: 'bot-1', role: 'routine' };
@@ -526,7 +526,9 @@ it('leaves idle teammate tasks out of the inbox until they need the user or run'
     unreadSessionIds: new Set(['routine', 'opened', 'mine']) };
   const ids = (key: string) => buildInboxHomeSections(home, new Set(), signals, Date.now())
     .find(s => s.key === key)!.data.flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
-  expect(ids('inbox-inbox')).toEqual(['mine']);
+  // 2026-11-22: a task the teammate opened in the owner's project comes back with its result like
+  // the owner's own; only the teammate's own conversations stay out until they need the user.
+  expect(ids('inbox-inbox').sort()).toEqual(['mine', 'opened']);
   expect(ids('inbox-working')).toEqual([]);
   routine.pendingInteractionCount = 1;
   signals.runningSessionIds.add('opened');
@@ -609,7 +611,9 @@ it.each(['chat', 'project'] as const)('keeps each %s automation run independent 
   const now = Date.parse('2026-11-18T09:00:00Z');
   const make = (id: string, at: string) => ({
     ...listItem(id, at),
+    // A teammate's routine run lives in its project, as on a real host.
     session: { id, source: 'scheduler', status: 'active', updatedAt: at,
+      workingDir: '/Users/me/Library/Application Support/Cindy/owners/o1/bots/mate/workspace',
       taskTeammate: { id: 'mate', name: 'Mate' } },
     scheduleInfo: { scheduleId: 's', scheduleName: 'Routine', running: false,
       latestRunAt: 0, unreadCount: 0, unreadRunIds: [] },
@@ -625,6 +629,7 @@ it.each(['chat', 'project'] as const)('keeps each %s automation run independent 
     if (mode === 'followed' || mode === 'unread') {
       latest.scheduleInfo!.hasActiveFollowUp = true;
       delete (latest.session as { taskTeammate?: unknown }).taskTeammate;
+      delete (latest.session as { workingDir?: unknown }).workingDir;
     }
     const grouped = groupAutomationListItems([latest, older], now, true, () => 'mac');
     expect(grouped).toHaveLength(1);

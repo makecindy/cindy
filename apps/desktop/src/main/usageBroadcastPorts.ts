@@ -33,6 +33,7 @@ export interface UsageBroadcastPorts {
     patch: Record<string, unknown>,
   ): Promise<MessageAgentMetaPatchResult | null>;
   readPriorUserRoundCost(sessionId: string, assistantClientId: string): Promise<{
+    amounts?: RegionalMoney[];
     additionalCosts?: RegionalMoney[];
     money: RegionalMoney | null;
     costUsd: number;

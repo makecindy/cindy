@@ -55,6 +55,25 @@ export function createSavedQuotaRestoreHarness(coordinator: AgentInputCoordinato
     (sid: string) => Promise<void>;
 }
 
+export function createInputRetryHarness(coordinator: AgentInputCoordinator) {
+  const channel = source.indexOf('    MAKER_INVOKE.INPUT_RETRY_LAST_ERROR,');
+  const start = source.lastIndexOf('  ipcMain.handle(', channel);
+  const end = source.indexOf('\n  );', channel);
+  if (channel < 0 || start < 0 || end < channel) throw new Error('INPUT_RETRY_LAST_ERROR handler not found');
+  const program = transpileModule(source.slice(start, end + '\n  );'.length), {
+    compilerOptions: { target: ScriptTarget.ES2022 },
+  }).outputText;
+  type Handler = (event: unknown, sessionId: string, options: unknown) => Promise<AgentInputProjection>;
+  let handler!: Handler;
+  const bindings = {
+    ipcMain: { handle: (_channel: string, callback: Handler) => { handler = callback; } },
+    MAKER_INVOKE, inputCoordinator: coordinator, requireSessionId: (id: string) => id,
+    isDeviceLinkInvoke: () => false, assertRemoteInputControlBoundary: async () => {},
+  };
+  new Function(...Object.keys(bindings), program)(...Object.values(bindings));
+  return (sessionId: string, options: unknown) => handler({}, sessionId, options);
+}
+
 export function createInputStopHarness(coordinator: AgentInputCoordinator, options: {
   remote?: boolean;
   awaitQueuePersistence?: (sid: string) => Promise<void>;

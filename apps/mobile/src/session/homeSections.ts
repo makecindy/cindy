@@ -1,4 +1,4 @@
-import { taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
+import { isTeammateOwnInboxTask, taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { i18n } from '@/i18n';
 import {
@@ -33,7 +33,6 @@ import {
   localizeRemoteSessionListItem,
   type RemoteSessionListItem,
 } from './sessionList';
-import { taskTeammateId } from './teammateTaskSource';
 import type { RemoteSession } from './types';
 
 /** 首页列表的一行:目录分组头,或一条任务(置顶 / 普通 / 项目内)。 */
@@ -622,8 +621,9 @@ export function buildInboxHomeSections(
         const group = taskInboxSection(task, {
           ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx), naturalPriorityRankForId(task.id, ctx)),
           following: item.scheduleInfo?.hasActiveFollowUp === true,
-          // A teammate's task is listed only while it needs the user or runs (2026-11-18).
-          teammate: taskTeammateId(task as RemoteSession) !== undefined,
+          // A teammate's own conversations and its project's tasks are listed only while they need
+          // the user or run (2026-11-18); a task it opened elsewhere is the user's work (2026-11-22).
+          teammate: isTeammateOwnInboxTask(task as RemoteSession),
         }, nowMs);
         if (!group) continue;
         const sourceLabel = group === 'snoozed' ? snoozeLabel(taskSnoozeUntil(task)) : row.sourceLabel;

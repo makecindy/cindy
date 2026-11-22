@@ -41,14 +41,14 @@ export function InputHandoffDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           aria-describedby={undefined}
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(440px,calc(100vw-32px))] flex-col gap-4 overflow-hidden p-6 outline-none"
+          className="modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] w-[min(440px,calc(100vw-32px))] flex-col gap-4 overflow-hidden p-6 outline-none"
           data-testid="input-handoff-dialog"
         >
           <div className="shrink-0"><InputHandoffDialogHeader snapshot={snapshot} /></div>
