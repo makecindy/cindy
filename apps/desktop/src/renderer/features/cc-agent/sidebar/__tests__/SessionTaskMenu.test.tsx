@@ -235,6 +235,7 @@ it('hides the mute entry for a task whose notifications another device sends', (
   render(<Harness target={{ ...session, deviceLinkDeviceId: 'device-b' } as Session} />);
   openMenu();
   expect(screen.queryByRole('menuitem', { name: 'muteNotifications' })).toBeNull();
+  expect(screen.queryByRole('menuitem', { name: 'deliveryReceipt' })).toBeNull();
 });
 
 it('shows unpin without a branch entry even for a forked Pi task', () => {
