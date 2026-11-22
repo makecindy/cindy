@@ -1,3 +1,6 @@
+import { profileReleaseFixture } from '../test-support/profile-release-fixture.mjs';
+import { bindHostProfileServices } from './profile-services.ts';
+import { releaseFailure } from './profile-hold.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +9,7 @@ import path from 'node:path';
 
 import { createRequire } from 'node:module';
 
-import { readMemorySettings, createHostMemoryManager, createHostMemoryMcpProviders, attachAgentsToMakerMemory } from './memory.mjs';
+import { readMemorySettings, createHostMemoryManager, attachAgentsToMakerMemory } from './memory.mjs';
 import { configureHostOwner } from './claude-auth.mjs';
 import { beginAppSessionBoundary } from '../../../desktop/src/main/appSessionState.ts';
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.ts';
@@ -79,7 +82,7 @@ test('memory retained by an old task cannot reopen storage across an account bou
  * model once no auxiliary chain is injected. The owner database is open and current, as in main.ts,
  * with the calling task 'task-memory' in it: every memory call checks its caller against it.
  */
-async function hostMemoryFixture(t, ownerId, makeReview, profileHold) {
+async function hostMemoryFixture(t, ownerId, makeReview, queue = { profileHoldReason: () => null }) {
   // The database lives in the fixture's profile: close it before the profile is removed.
   t = lifoCleanup(t);
   // Real path: a teammate project is recognised from its absolute path, which macOS tmp links hide.
@@ -101,17 +104,17 @@ async function hostMemoryFixture(t, ownerId, makeReview, profileHold) {
   t.after(async () => { clearCurrentDbClient(); await database.dispose(); });
   opened.db.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES ('task-memory','desktop','active',1,1);`);
 
-  const manager = createHostMemoryManager({ userDataDir: root, ownerId, review: makeReview?.(root), profileHold });
+  const memory = bindHostProfileServices(queue).memory({ userDataDir: root, ownerId, review: makeReview?.(root) });
+  const { manager } = memory;
   t.after(() => manager.dispose());
   const oneShots = [];
   attachAgentsToMakerMemory(manager, { 'claude-code': { oneShot: async prompt => { oneShots.push(prompt); return 'merge nothing'; } } });
   const helperDecisions = [];
   // Runs inside session_search, between its first checks and the search (memory-mcp-ports.ts).
   const hooks = { duringHistoryDecision: () => {} };
-  const provider = createHostMemoryMcpProviders(manager, {
+  const provider = memory.providers({
     readsAccountHistory: async sessionId => { helperDecisions.push(sessionId); hooks.duringHistoryDecision(); return false; },
     deviceId: () => 'host-device',
-    profileHold,
   }).find(p => p.name === 'cindy_memory');
   const connect = async (workingDir, sessionId = 'task-memory') => {
     const { instance } = provider.toClaudeSdkConfig({ sessionId, agentKind: 'claude-code', workingDir });
@@ -133,11 +136,11 @@ const NOTE = { type: 'project', name: 'release-notes', title: 'Release notes', d
 // Use the real owner files and FTS and both MCP entry points.
 test('profile hold refuses memory store tools and preserves the existing files', async t => {
   const message = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
-  let held = null;
+  const fixture = profileReleaseFixture(t);
   const f = await hostMemoryFixture(t, 'memory-hold-owner', () => ({
     isOneShotRouteDisabled: async () => false,
     reviewOneShot: async () => 'Keep the note',
-  }), () => held);
+  }), fixture.queue);
   const call = await f.connect(f.root);
   const body = result => JSON.parse(result.content[0].text);
   const seed = await call('memory_write', NOTE);
@@ -157,18 +160,20 @@ test('profile hold refuses memory store tools and preserves the existing files',
     ['memory_consolidate', { sources: ['project_second-note.md'], target: { ...NOTE, name: 'merged-note' } }],
     ['memory_delete', { filename }],
   ];
-  held = message;
+  await fixture.occupy(message);
   for (const [tool, args] of cases) {
     const result = await call(tool, args);
     assert.equal(result.isError, true, tool);
     assert.deepEqual(body(result), { ok: false, code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] ' + message }, tool);
   }
+  await fixture.failRelease();
+  assert.deepEqual(body(await call('memory_write', NOTE)), { ok: false, ...releaseFailure() });
   const cold = await f.connect(path.join(f.root, 'cold-task'));
   assert.equal(body(await cold('memory_list')).code, 'PRECONDITION_FAILED');
   assert.equal(body(await call.listTools()).ok, true);
   assert.equal(body(await call('session_search', { query: 'release' })).ok, true);
   assert.deepEqual(snapshot(), before);
-  held = null;
+  await fixture.recover();
   for (const [tool, args] of cases) {
     const result = await call(tool, args);
     assert.equal(body(result).ok, true, JSON.stringify({ tool, result }));
@@ -179,7 +184,7 @@ test('profile hold refuses memory store tools and preserves the existing files',
 // writes a digest straight through the manager, outside MCP.
 test('profile hold fences engine store initialization and Pi digest writes', async t => {
   let held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
-  const f = await hostMemoryFixture(t, 'memory-engine-hold-owner', undefined, () => held);
+  const f = await hostMemoryFixture(t, 'memory-engine-hold-owner', undefined, { profileHoldReason: () => held });
   const workdir = path.join(f.root, 'engine-task');
   const note = { ...NOTE, type: 'digest' };
   await assert.rejects(f.manager.getStore(workdir), { code: 'PRECONDITION_FAILED' });

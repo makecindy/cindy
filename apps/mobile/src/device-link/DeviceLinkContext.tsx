@@ -7,6 +7,8 @@ import { createBackgroundConnection } from './backgroundConnection';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, releaseTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
+import { TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
+import { receiveHostTaskActivity } from '../widgets/foregroundTaskActivity';
 import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { dispatchCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
@@ -261,6 +263,8 @@ export interface DeviceLinkContextValue {
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
   recoverWaitingPeer(deviceId: string): Promise<boolean>;
   closeLink(deviceId: string): void;
+  getUserCloseEpoch?(deviceId: string): number;
+  onUserClose?(deviceId: string, listener: () => void): () => void;
   /** Acquire before background grace ends; always release on settlement/cancellation. Hard deadline enforced by lifecycle. */
   beginBackgroundTransition?(): () => void;
   /**
@@ -311,6 +315,7 @@ function lowPriorityReadGateFor(client: PeerLinks): LowPriorityReadGate {
  * 被控端按能力缺失降级)。被控端只在看到对应能力后才发送新 wire 形状。
  */
 const CONTROLLER_CAPABILITIES = [
+  ...(Platform.OS === 'ios' ? [TASK_ACTIVITY_CAPABILITY] : []),
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
@@ -2225,8 +2230,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     return true;
   }, [hasOutboundPeerRecoveryIntent, rehydrateWithClient, sendOpenLinkOnce]);
 
+  const userCloseListeners = useRef(new Map<string, Set<() => void>>());
+  const onUserClose = useCallback((deviceId: string, listener: () => void) => {
+    const listeners = userCloseListeners.current.get(deviceId) ?? new Set<() => void>();
+    userCloseListeners.current.set(deviceId, listeners);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) userCloseListeners.current.delete(deviceId);
+    };
+  }, []);
+  const getUserCloseEpoch = useCallback((deviceId: string) => userCloseEpochsRef.current.get(deviceId) ?? 0, []);
   const closeLink = useCallback((deviceId: string) => {
     userCloseEpochsRef.current.set(deviceId, (userCloseEpochsRef.current.get(deviceId) ?? 0) + 1);
+    for (const listener of userCloseListeners.current.get(deviceId) ?? []) listener();
     resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
     forcedPeerRecoveryIntentRef.current.cancel(deviceId);
@@ -2372,6 +2389,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     openLink,
     recoverWaitingPeer,
     reopenLink,
+    getUserCloseEpoch,
+    onUserClose,
     closeLink,
     invoke,
     subscribe,
@@ -2381,6 +2400,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }), [
     beginBackgroundTransition,
     holdBackgroundConnection,
+    getUserCloseEpoch,
+    onUserClose,
     closeLink,
     recoveringDeviceIds,
     connectionEpoch,
@@ -2469,6 +2490,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   if (env.kind !== 'push' || !env.src) return;
   const rawPush = env.payload as PushPayload;
   const push = { ...rawPush, payload: decodeModelSpeedPayload(rawPush.channel, rawPush.payload) };
+  if (push.channel === TASK_ACTIVITY_SNAPSHOT) {
+    if (!isScopedPeer(env.src)) receiveHostTaskActivity(env.src, push.payload);
+    return;
+  }
   recordDeviceLinkPush(push.channel, push.payload);
   dispatchCredentialSwitchOutcome(env.src, push.channel, push.payload);
   if (push.channel === 'local-db:task-tags:changed') {

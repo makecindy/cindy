@@ -1,3 +1,4 @@
+import { acceptedAttachmentReplay, type ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { TRUSTED_DESKTOP_QUEUE_ORIGIN, type TrustedDesktopQueueOriginReceipt } from './queuedInputOrigin.js';
 export { TRUSTED_DESKTOP_QUEUE_ORIGIN, TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT, stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin, restoreTrustedDesktopQueuedOrigin, revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../shared/forwardedRequest.js';
@@ -25,7 +26,7 @@ import {
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
-import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE, type AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
@@ -269,6 +270,7 @@ export interface MakerSendTransactionSession {
   readonly agentDeviceId?: string | null;
   readonly stablePermissionModeState?: Session['stablePermissionModeState'];
   readonly stablePlanModeState?: Session['stablePlanModeState'];
+  readonly sendToSessionHint?: AgentSendToSessionHint;
   hostStartupPreferences?: CreateOpts['hostStartupPreferences'];
   id: string;
   /** Exact in-memory incarnation; a reused session id must not inherit turn grants. */
@@ -376,7 +378,7 @@ export interface MakerSendTransactionDeps {
     role: 'lead' | 'worker' | null | undefined,
   ): Promise<void>;
   broadcastSessionCreated(sessionId: string): void;
-  prepareSendUserMessage(sessionId: string, message: unknown): Promise<IpcUserMessage>;
+  prepareSendUserMessage(sessionId: string, message: unknown, replay?: typeof ACCEPTED_ATTACHMENT_REPLAY): Promise<IpcUserMessage>;
   /**
    * Direct device-link sends may carry OSS attachment references that need to
    * become local paths before normalization. Keep this after the transaction's
@@ -1217,15 +1219,22 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const nextInput = typeof message === 'string' ? message
         : message && typeof message === 'object' && 'content' in message ? message.content : undefined;
       const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
-      await deps.applyPendingAgentSwitch?.(
-        sessionId,
-        requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
-          ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
-          ...(scheduled ? { scheduled: true } : {}),
-          ...(clientId ? { clientId } : {}),
-          ...(nextInputChars > 0 ? { nextInputChars } : {}),
-        } : undefined,
-      );
+      try {
+        await deps.applyPendingAgentSwitch?.(
+          sessionId,
+          requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
+            ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
+            ...(scheduled ? { scheduled: true } : {}),
+            ...(clientId ? { clientId } : {}),
+            ...(nextInputChars > 0 ? { nextInputChars } : {}),
+          } : undefined,
+        );
+      } catch (error) {
+        if (!isCredentialModeSwitchBusyError(error)) throw error;
+        return toCompatibleMakerSendResult(createHostSendFailure('CREDENTIAL_SWITCH_BUSY', error.message, {
+          busySessionIds: error.sessionIds,
+        }));
+      }
       try {
         const promptPreparation = deps.prepareRuntimePrompt?.(sessionId);
         if (promptPreparation) {
@@ -1524,7 +1533,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       };
       let normalized: IpcUserMessage;
       try {
-        normalized = await deps.prepareSendUserMessage(sessionId, outgoingMessage);
+        const replay = acceptedAttachmentReplay(requestedSendOpts);
+        normalized = replay
+          ? await deps.prepareSendUserMessage(sessionId, outgoingMessage, replay)
+          : await deps.prepareSendUserMessage(sessionId, outgoingMessage);
       } catch (err) {
         await cleanupRejectedMaterialization();
         throw err;
@@ -1641,6 +1653,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             {
               visibleText: reconcilePersistText,
               autoResume: soForReconcile.persistUserMessage?.autoResume === true,
+              sendToSession: sess.sendToSessionHint,
             },
           )
         : null;

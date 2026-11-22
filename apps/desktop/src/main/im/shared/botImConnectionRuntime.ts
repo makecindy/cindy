@@ -16,6 +16,7 @@ import { BLUEBUBBLES_SECRET_KEYS, parseBlueBubblesConfig } from '@cindy/im';
  * 这里不 import host.ts, 避免把 IM 子系统拽进单测收集期。
  */
 
+import type { TeammateGroupBinding, TeammateGroupRequest } from '@cindy/mcps';
 import { BrowserWindow, ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
 import type { BlueBubblesIM, DingTalkIM, DiscordIM, FeishuIM, IMStatus, TelegramIM, WecomIM } from '@cindy/im';
@@ -28,6 +29,7 @@ import { withBotProfileLocks } from '../../maker-ipc/botProfileLock';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
 import { isIpcError } from '../../../shared/ipc-errors';
+import { clearDirectDeliveries, directDeliveryDirectory } from '../imessage/directDelivery';
 import { ownerScopedImSecrets } from '../ownerScopedStorage';
 import { readWechatChannelSettings, writeWechatCompanionBinding } from '../wechat/channelSettings';
 import {
@@ -47,6 +49,9 @@ import {
 } from '../../../shared/botImConnection';
 import {
   addBotImConnectionRecord,
+  claimIMessageGroup,
+  authorizedIMessageRoute,
+  removeDelegatedIMessageGroups,
   isBotImChannel,
   isBotImConnectionId,
   listBotImConnections,
@@ -286,6 +291,25 @@ export async function startBotImConnections(): Promise<void> {
 /** 账号 IM 连接停止: 释放全部实例, 记录保留。 */
 export async function stopBotImConnections(): Promise<void> {
   for (const live of [...instances.values()]) await releaseInstance(live);
+}
+
+/** Match an existing session link against the verified, currently connected direct chat. */
+export function getBotIMessageDirectTarget(botId: string, routeKey: string | null) {
+  const connections = listBotImConnectionsForBot(botId).filter(record => record.channel === 'imessage');
+  // The canonical task has no connection identity of its own.
+  if (routeKey === null && connections.length !== 1) return null;
+  const matches = [];
+  for (const record of connections) {
+    const live = instances.get(record.id);
+    if (live?.transport.kind !== 'imessage' || live.record.botId !== botId) continue;
+    const { im, orchestrator } = live.transport;
+    if (im.getStatus().kind !== 'connected' || !im.connectedOrigin) continue;
+    const chat = routeKey === null ? im.getOwnerUserId() : orchestrator.adapter.connectedChatForLane?.(botId, routeKey);
+    if (chat && /^(?:any|iMessage);-;/.test(chat) && !im.isGroup(chat)) {
+      matches.push({ im, chat, connection: record.id, origin: im.connectedOrigin });
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
 }
 
 export function getBotImConnectionOrchestrator(id: string): ImOrchestrator | undefined {
@@ -605,6 +629,73 @@ async function addBotImConnectionNow(
   return { ...list, connection: view };
 }
 
+/** Exposes only the caller's delegated lanes, including saved routes whose host is offline. */
+export function listTeammateIMessageGroups(botId: string) {
+  return listBotImConnections().flatMap(record => {
+    if (record.channel !== 'imessage') return [];
+    const transport = instances.get(record.id)?.transport;
+    const im = transport?.kind === 'imessage' ? transport.im : undefined;
+    return Object.entries(record.iMessageGroupRoutes ?? {}).flatMap(([group, route]) => {
+      if (route.botId !== botId) return [];
+      const status = im?.getStatus().kind ?? 'offline';
+      if (status === 'connected' && !authorizedIMessageRoute(record, group, im!.groupAuthorization(group))) return [];
+      return [{ channel: 'imessage', connectionId: record.id, group, status, replyMode: route.replyMode }];
+    });
+  });
+}
+
+/** Only matching groups on an already-authorized live transport are eligible. */
+export async function configureTeammateIMessageGroup(botId: string, request: TeammateGroupRequest,
+  assertCurrent: () => void, authorize: (match: TeammateGroupBinding, replyMode: string) => Promise<boolean>): Promise<TeammateGroupBinding[]> {
+  const inspect = () => {
+    assertCurrent();
+    const matches: TeammateGroupBinding[] = [];
+    for (const record of listBotImConnections()) {
+      if (record.channel !== 'imessage' || (request.action === 'apply' && record.id !== request.connectionRef)) continue;
+      const transport = instances.get(record.id)?.transport;
+      if (transport?.kind !== 'imessage' || transport.im.getStatus().kind !== 'connected') continue;
+      for (const chat of transport.im.listChats()) {
+        if (!/^(?:iMessage|any);\+;/.test(chat.guid) || (chat.guid !== request.group
+          && (request.action !== 'inspect' || chat.displayName !== request.group))) continue;
+        const authorization = transport.im.groupAuthorization(chat.guid);
+        if (!authorization) continue;
+        const route = authorizedIMessageRoute(record, chat.guid, authorization);
+        const replyMode = route?.replyMode ?? record.groupActivation?.[chat.guid] ?? 'mention';
+        matches.push({ connectionRef: record.id, group: chat.guid, name: chat.displayName ?? chat.guid,
+          assignedToSelf: (route?.botId ?? record.botId) === botId, replyMode,
+          revision: `${authorization}.${route?.revision ?? record.id}.${replyMode}` });
+      }
+    }
+    return matches;
+  };
+  const matches = inspect();
+  if (request.action === 'inspect') return matches;
+  const match = matches[0];
+  if (!match) throw new Error('GROUP_NOT_CONNECTED');
+  const transport = instances.get(match.connectionRef)?.transport;
+  if (transport?.kind !== 'imessage') throw new Error('GROUP_NOT_CONNECTED');
+  const authorization = transport.im.groupAuthorization(match.group);
+  if (!authorization) throw new Error('GROUP_NOT_CONNECTED');
+  if (match.assignedToSelf && match.replyMode === request.replyMode) return matches;
+  if (match.revision !== request.revision) throw new Error('GROUP_ROUTE_CHANGED');
+  const assertTransport = await transport.im.verifyGroupHandoff(match.group);
+  const check = () => {
+    assertCurrent();
+    assertTransport();
+    if (instances.get(match.connectionRef)?.transport !== transport) throw new Error('GROUP_ROUTE_CHANGED');
+  };
+  check();
+  if (!match.assignedToSelf && !await authorize(match, request.replyMode)) throw new Error('GROUP_ACCESS_NOT_GRANTED');
+  await withBotProfileLocks([botId], async () => {
+    check();
+    if (await readBotProfileStatus(botId) !== 'active') throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
+    await claimIMessageGroup(match.connectionRef, match.group, botId, request.revision, request.replyMode, authorization, check,
+      () => transport.orchestrator.turnRunner.detachIdleCompanionGroup(transport.im.botContextId!, match.group));
+  });
+  broadcastChanged();
+  return inspect();
+}
+
 /** Same transport and connection ID: no lane archive, rebinding or receipt deletion. */
 export function getBotIMessageConfig(id: string) {
   const record = readBotImConnection(id);
@@ -663,13 +754,13 @@ export async function listBotImConnectionGroups(id: string): Promise<BotImConnec
   const groups = transport?.kind === 'imessage'
     ? transport.im.listChats().filter(chat => transport.im.isGroup(chat.guid)).map(chat => ({ chatId: chat.guid, chatName: chat.displayName ?? null }))
     : record.botContextId ? await requireDeps().listKnownGroups(record) : [];
-  const activation = record.groupActivation ?? {};
   return {
     connectionId: id,
     groups: groups.map((group) => ({
       chatId: group.chatId,
       chatName: group.chatName,
-      activation: activation[group.chatId] === 'always' ? 'always' : 'mention',
+      activation: (transport?.kind === 'imessage' && authorizedIMessageRoute(record, group.chatId, transport.im.groupAuthorization(group.chatId))?.replyMode)
+        || record.groupActivation?.[group.chatId] || 'mention',
     })),
   };
 }
@@ -679,7 +770,8 @@ export async function setBotImConnectionGroupMode(
   chatId: string,
   mode: 'mention' | 'always',
 ): Promise<BotImConnectionGroupsPayload> {
-  const updated = await setBotImConnectionGroupActivation(id, chatId, mode);
+  const transport = instances.get(id)?.transport;
+  const updated = await setBotImConnectionGroupActivation(id, chatId, mode, transport?.kind === 'imessage' ? transport.im.groupAuthorization(chatId) : null);
   if (!updated) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
   const live = instances.get(id);
   if (live) live.record = updated;
@@ -719,6 +811,7 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
   const record = readBotImConnection(id);
   if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
   const live = instances.get(id);
+  const deliveryDirectory = record.channel === 'imessage' ? directDeliveryDirectory(id) : undefined;
   // 先归档这条连接的全部隐藏专线, 再放掉它们的运行时。
   let archivedSessionIds: string[] = [];
   if (record.botContextId) {
@@ -753,6 +846,7 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
     }
     await releaseInstance(live);
   }
+  if (deliveryDirectory) clearDirectDeliveries(deliveryDirectory);
   purgeSecrets(record);
   await removeBotImConnectionRecord(id);
   log.info(`bot im connection ${id} (${record.channel}) removed archivedLanes=${archivedSessionIds.length}`);
@@ -779,6 +873,7 @@ export async function setWechatCompanionBinding(
 
 /** 伙伴被删除 / 归档时带走它的全部连接。 */
 export async function removeBotImConnectionsForBot(botId: string): Promise<void> {
+  await removeDelegatedIMessageGroups(botId);
   // WeChat shares the personal transport: remove only the teammate assignment,
   // even when there are no dedicated connections. Keep its authorization intact.
   if (readWechatChannelSettings().companionBotId === botId) {

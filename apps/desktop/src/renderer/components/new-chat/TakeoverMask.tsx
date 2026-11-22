@@ -63,12 +63,12 @@ export function TakeoverMask({ sessionId, channel, userId, displayName }: Takeov
     <div
       className={cn(
         'flex w-full items-center justify-between gap-3',
-        'h-[90px] rounded-[12px] px-4',
+        'h-[90px] rounded-xl px-4',
         'bg-[hsl(var(--content-area))]',
         'border border-[hsl(var(--sidebar-border))]',
       )}
     >
-      <div className="flex items-center gap-[10px]">
+      <div className="flex items-center gap-2.5">
         <div
           className={cn(
             'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
@@ -77,7 +77,7 @@ export function TakeoverMask({ sessionId, channel, userId, displayName }: Takeov
         >
           <RadioTower size={16} className="text-[var(--workingdir-icon)]" />
         </div>
-        <div className="flex flex-col gap-[2px]">
+        <div className="flex flex-col gap-0.5">
           <div className="text-14 font-medium leading-tight text-[var(--msg-assistant-text)]">
             {t('newChat.takeoverMask.heading', { user: userLabel, channel: channelLabel })}
           </div>

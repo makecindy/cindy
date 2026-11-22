@@ -102,7 +102,8 @@ import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.desktop.js';
 import { getComputerMcpDeps } from './computer.desktop.js';
 import { discordIm, feishuIm, wechatIm } from '../im';
-import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
+import { directDeliveryFile, prepareDirectDelivery } from '../im/imessage/directDelivery';
+import { getBotFeishuTransport, getBotIMessageDirectTarget } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
@@ -162,6 +163,7 @@ import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
   setSessionsStatusInDb,
+  setSessionsSnoozeInDb,
 } from '../localDb/ipc/sessions.js';
 import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
@@ -175,7 +177,7 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
-import { createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
+import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
@@ -1169,6 +1171,30 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
+      setSessionsSnooze: async ({ sessionIds, snoozedUntil }) => {
+        if (!tryGetDbClient()) {
+          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready', changed: [] };
+        }
+        const codeOf = (err: unknown) => isIpcError(err) && ['NOT_FOUND', 'PRECONDITION_FAILED', 'INVALID_PARAMS'].includes(err.code)
+          ? (err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : err.code) : 'INTERNAL';
+        try {
+          // Like deletion: the sync guard runs inside patch-meta, right before each write.
+          const guard = captureTaskActionSyncGuard();
+          const { changed, error } = await setSessionsSnoozeInDb(sessionIds, snoozedUntil, assertTaskActionCurrent, guard);
+          if (!error) return { ok: true, changed };
+          const index = sessionIds.indexOf(error.sessionId);
+          return {
+            ok: false, errorCode: codeOf(error.cause), changed,
+            message: error.cause instanceof Error ? error.cause.message : String(error.cause),
+            failedSessionId: error.sessionId, remainingSessionIds: sessionIds.slice(index + 1),
+          };
+        } catch (err) {
+          return { ok: false, errorCode: codeOf(err), message: err instanceof Error ? err.message : String(err), changed: [] };
+        }
+      },
+      setRemoteSessionsSnooze: deps.historyRemote
+        ? createRemoteSessionsSnoozeSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })
+        : undefined,
       listAvailableModels: async params => {
         if (params.callerSessionId && isSessionSharedTaskActive(params.callerSessionId))
           return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
@@ -1664,7 +1690,40 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     isEnabled: ctx => hasImChannelVendorOptions(ctx.vendorOptions, 'imessage')
       || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
     toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
-      instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
+      instance: createIMessageMcpServer({
+        getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+        sendDirectDelivery: async (context, targetSessionId, text) => {
+          const db = tryGetDbClient();
+          const session = context.sessionId;
+          if (!db || !session || !context.sessionInstanceId) throw new Error('OWNER_INPUT_REQUIRED');
+          const owner = activeOwnerScopeKey();
+          const boundary = getTaskActionInputState(session).boundary;
+          const assertCurrent = () => {
+            const input = getTaskActionInputState(session);
+            if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey() || db !== tryGetDbClient() ||
+                !input.ownerInput || input.boundary !== boundary || getTaskActionSession(session)?.instanceId !== context.sessionInstanceId) {
+              throw new Error('OWNER_INPUT_REQUIRED');
+            }
+          };
+          assertCurrent();
+          const link = await db.queryOne<{ botId: string; role: string; routeKey: string | null }>(
+            `SELECT src.bot_id AS botId, dest.role, dest.route_key AS routeKey FROM bot_session_links src
+             JOIN bot_profiles p ON p.id = src.bot_id AND p.status = 'active'
+             JOIN bot_session_links dest ON dest.bot_id = p.id AND dest.archived_at IS NULL
+             JOIN sessions s ON s.id = dest.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE src.session_id = ? AND src.role = 'canonical' AND src.archived_at IS NULL
+             AND dest.session_id = ? AND dest.role IN ('canonical', 'channel')`, [session, targetSessionId]);
+          assertCurrent();
+          if (!link || (link.role === 'channel' && !link.routeKey)) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const target = getBotIMessageDirectTarget(link.botId, link.role === 'canonical' ? null : link.routeKey);
+          if (!target) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const file = directDeliveryFile(link.botId, target.connection, target.origin, target.chat);
+          const record = prepareDirectDelivery(file, text);
+          const receipt = await target.im.sendDirectDelivery(target.chat, text, record.requestId);
+          assertCurrent();
+          return receipt;
+        },
+      }) }),
   });
 
   gated.push({

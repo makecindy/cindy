@@ -28,6 +28,7 @@ type Input = Pick<PreparedSessionEvent, 'event' | 'attributedEvent' | 'broadcast
   | 'isPlannedUpgradeClose' | 'isRemoteAuthRetry' | 'isGatewayProxyTokenRecovery'> & {
   session: Session;
   autoResumeSuppressesPersist: boolean;
+  inputClientId?: string;
   persistId: SessionDeliveryResult['persistId'];
 };
 
@@ -46,6 +47,7 @@ export function claimContextRecoveryTerminal(ports: ContextRecoveryTerminalPorts
         ? (ports.getRollover()?.claim(session.id, {
             instanceId: event.sessionInstanceId,
             generation: event.sessionTurnGeneration,
+            ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
           }, ports.isContextOverflowErrorData(attributedEvent.data)
             || ports.isOversizedHistoryErrorData(attributedEvent.data)
             || ports.isUnsupportedRequestOptionErrorData(attributedEvent.data)
@@ -111,6 +113,7 @@ export function settleContextRecoveryTerminal(ports: ContextRecoveryTerminalPort
         ?.tryRecover(session.id, overflowErrorData, {
           instanceId: event.sessionInstanceId,
           generation: event.sessionTurnGeneration,
+          ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
         })
         .then((recovered) => {
           if (recovered) {

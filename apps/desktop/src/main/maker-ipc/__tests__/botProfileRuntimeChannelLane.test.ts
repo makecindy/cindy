@@ -149,6 +149,24 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.path === '/official/pr/SKILL.md')).toMatchObject({ contentSha256: 'a'.repeat(64) });
   });
 
+  // PR #12070 review: the Bot snapshot is frozen for the session and taken before the Agent launch
+  // prepares; startup only warms the shared Skill preparation, so hydration must join it first.
+  it('joins shared Skill preparation before listing the Bot skill catalog', async () => {
+    seed('channel', 'im:telegram:777:dm:555', { skillMode: 'allowlist', skills: ['personal'] });
+    const opts = { id: 'lane', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const order: string[] = [];
+    await hydrateBotProfileRuntime(opts, {
+      prepareSharedSkills: async () => { order.push('prepare'); },
+      listSkills: async () => {
+        order.push('list');
+        return [{ name: 'personal', path: '/personal/SKILL.md' }];
+      },
+      fingerprintSkillSource: async () => 'a'.repeat(64),
+    }, { persistSnapshot: false });
+    expect(order).toEqual(['prepare', 'list']);
+    expect(opts.botRuntimeProfile?.skillPolicy.configured).toEqual(['personal']);
+  });
+
   it('resumes a frozen delegation task with the official set it already ran with', async () => {
     const resource = (name: string, path: string) => ({ name, path, sha256: 'a'.repeat(64) });
     const run = async (skillResources: unknown[], skills = ['personal']) => {

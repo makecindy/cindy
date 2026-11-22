@@ -524,6 +524,7 @@ import {
   dropAllControllers,
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   remoteInvokeEpoch,
 } from '../device-link/dispatch.desktop';
@@ -532,11 +533,13 @@ import {
   applyControllerDisplayNamePresence,
   createControllerDisplayNameFreshnessTracker,
 } from '../device-link/controllerDisplayNameFreshness';
+import { setRemoteBotSessionLookup } from '../device-link/remoteBotSessionBoundary';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DeviceLinkError,
   PROVIDER_GROUP_REMOTE_CHANNEL,
+  TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT,
   SESSION_ACTIVITY_CHANNEL,
   type Envelope,
 } from '@cindy/device-link';
@@ -2463,6 +2466,35 @@ describe('被控端订阅 registry + topic 转发', () => {
       }
     });
 
+    // Unit: an opted-in iPhone receives the whole-host change through the real sessions
+    // delivery queue. Older subscriptions never receive it, and a now-hidden title is removed.
+    it('delivers authorized task summaries only to capable subscribers', async () => {
+      vi.useFakeTimers();
+      remoteControlEnabled = true;
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      let hidden = false;
+      setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'ordinary');
+      try {
+        feed(subFrame('phone', SUB, ['sessions'], 'iPhone', [TASK_ACTIVITY_CAPABILITY]));
+        feed(subFrame('legacy', SUB, ['sessions'], 'Mac'));
+        const summary = { schemaVersion: 1, revision: 1, waitingCount: 1, runningCount: 0, unreadCount: 0,
+          selected: { sessionId: 'task', title: 'Task', status: 'attention' } } as const;
+        publishHostTaskActivity(() => summary);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(calls.push.filter(item => item.channel === TASK_ACTIVITY_SNAPSHOT)).toEqual([
+          { dst: 'phone', channel: TASK_ACTIVITY_SNAPSHOT, payload: summary },
+        ]);
+        hidden = true;
+        publishHostTaskActivity(() => summary, 'phone');
+        await vi.advanceTimersByTimeAsync(500);
+        expect(calls.push.at(-1)).toEqual({ dst: 'phone', channel: TASK_ACTIVITY_SNAPSHOT, payload: { unavailable: true } });
+      } finally {
+        setRemoteBotSessionLookup(null);
+        vi.useRealTimers();
+      }
+    });
+
     it('定向 replay 只投给目标控制端,不扇出给其它订阅者;未订阅目标为 no-op', () => {
       remoteControlEnabled = true;
       const { client, calls, feed } = makeFakeClient();
@@ -3090,6 +3122,68 @@ describe('远程 set-* 持久化回流', () => {
 
     expect(r).toEqual({ ok: true, result: handlerResult });
     expect(persist).not.toHaveBeenCalled();
+  });
+
+  // Integration: exercise the real set-model handler's landing result through
+  // the allowed controller dispatch. A missing in-lock mark would write it
+  // through the ordinary Device Link settings fallback after the lock releases.
+  it('does not write back a deferred credential route after Device Link dispatch', async () => {
+    type SelectionPorts = import('../maker-ipc/sessionRuntimeSelectionApply.js').SessionRuntimeSelectionPorts;
+    const { createHandleSetModel } = await import('../maker-ipc/sessionRuntimeSelectionApply.js');
+    const { registerSessionSetModelHandler } = await import('../maker-ipc/sessionSetModelHandler.js');
+    const { createSharedTaskSettingGuard } = await import('../maker-ipc/sharedTaskSetting.js');
+    const { setCurrentDbClient, clearCurrentDbClient } = await import('../localDb/client/current.js');
+    const { setSessionProvider, clearSessionProvider, getSessionProvider } =
+      await import('../maker-host/session-provider-store.js');
+    const { PendingCredentialSwitchService } = await import('../maker-ipc/pendingCredentialSwitch.js');
+    const id = 'sess-1';
+    const row = { status: 'active', agentKind: 'codex', model: 'old', providerId: 'old-source',
+      effort: 'low', fastMode: false, sdkSessionId: null, contextTokens: 0, contextWindow: 0 };
+    const db = { drizzle: { select: () => ({ from: () => ({ where: () => ({ limit: async () => [row] }) }) }) } };
+    setCurrentDbClient(db as never, 'fixture-owner');
+    setSessionProvider(id, row.providerId);
+    const runtime = { id, model: row.model, agentKind: 'codex' as const, isTurnRunning: () => true };
+    const maker = { getSession: () => runtime, listActiveSessions: () => [runtime], closeSession: vi.fn(),
+      getSessionMeta: async () => ({ agentKind: 'codex' }) };
+    const pending = new PendingCredentialSwitchService({ maker });
+    const persistSessionFields = vi.fn();
+    const broadcastSessionPatched = vi.fn();
+    const writeBack = vi.fn();
+    const selector = createHandleSetModel(() => ({
+      maker, pendingCredentialSwitchHolder: pending, agentSwitchPending: new Map(), agentSwitchDeps: {},
+      assertReviewSettingsUnlocked: async () => {}, assertModelRouteUsable: async () => undefined,
+      captureSharedTaskSettingGuard: () => createSharedTaskSettingGuard(undefined, id, { admitted: false }),
+      getSessionDbAgentKind: () => 'codex', isSessionInTurn: () => true,
+      readStoredSessionContextWindowBudget: async () => null, resolveConfiguredContextWindow: () => undefined,
+      getCodexProxyAuthInjectionState: () => null, getPendingCredentialSwitchTarget: () => pending.get(id),
+      getDesktopProviderService: () => ({ listProviders: async () => [] }),
+      registerPendingCredentialSwitchForSession: async (_sessionId: string, target: import('../maker-ipc/pendingCredentialSwitch.js').PendingCredentialSwitchTarget) =>
+        pending.register(id, { ...target, agentKind: 'codex' }),
+      broadcastSessionPatched, broadcastSessionRuntimeProjection: vi.fn(async () => {}),
+      persistSessionFields, markRemoteSettingPersistedInsideHandler, log: diagnosticLog,
+    } as unknown as SelectionPorts));
+    setRemoteSettingsPersist(writeBack);
+    // This is the shared landing mode, after a task pick has already been staged.
+    const assertTrustedSender = vi.fn();
+    registerSessionSetModelHandler({ handle: registry.register }, {
+      isDeviceLinkInvoke, assertTrustedSender,
+      apply: (...args) => selector(...args, { source: 'user', applyingUserSelectionOnSend: true }),
+    });
+    try {
+      const result = await runInvoke('ctrl-a', { channel: 'maker:set-model', args: [id, 'next', 'next-source'] });
+      if (!result.ok) throw new Error(JSON.stringify(result.error));
+      expect(result.result).toMatchObject({ deferred: true });
+      expect(pending.get(id)).toMatchObject({ model: 'next', providerId: 'next-source' });
+      expect(assertTrustedSender).not.toHaveBeenCalled();
+      expect(writeBack).not.toHaveBeenCalled();
+      expect(persistSessionFields).not.toHaveBeenCalled();
+      expect(getSessionProvider(id)).toBe('old-source');
+      expect(broadcastSessionPatched).toHaveBeenCalledExactlyOnceWith(id, {
+        agentSwitchIntent: { targetAgentKind: 'codex', model: 'next', providerId: 'next-source', effort: 'low', fastMode: false },
+      });
+    } finally {
+      pending.clear(id); clearSessionProvider(id); clearCurrentDbClient();
+    }
   });
 
   it.each([['maker:set-permission-mode','ask'],['maker:set-plan-mode',true]])('%s commits inside the handler without a later duplicate write', async (channel,value) => {

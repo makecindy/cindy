@@ -134,11 +134,13 @@ export function projectSessionReadResult(
 export function projectSessionDetail(
   row: SessionRowWithCount,
   resolve?: (session: ContextWindowSession) => number | null,
+  productStartedAt = row.activeTurnStartedAt,
+  settledProductEndedAt?: number | null,
 ) {
-  const start = row.activeTurnStartedAt;
-  const end = row.lastTurnEndedAt;
+  const start = settledProductEndedAt === undefined ? row.activeTurnStartedAt : productStartedAt;
+  const end = settledProductEndedAt === undefined ? row.lastTurnEndedAt : settledProductEndedAt;
   const turnElapsedMs = start != null && start > (row.clearedAt ?? 0)
-    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - start)
+    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - (productStartedAt ?? start))
     : null;
   return { ...projectSessionReadResult(row, resolve), turnElapsedMs };
 }

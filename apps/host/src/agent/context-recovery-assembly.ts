@@ -29,6 +29,8 @@ import { directoryGrantsForRuntime } from '../../../desktop/src/main/maker-ipc/e
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../../desktop/src/main/device-link/broadcast-tap.ts';
+import { messageToCamel } from '../../../desktop/src/main/localDb/mapper.js';
+import { markOversizedInputSkippedRow } from '../../../desktop/src/main/localDb/messageMutations.js';
 import { getCurrentDbClientSnapshot, getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { botProfiles, botSessionLinks, sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { commitContextRebuildWithPorts } from '../../../desktop/src/main/localDb/contextRebuildPersistence.ts';
@@ -36,6 +38,7 @@ import { findLatestContextRebuildMeta, findLatestUserMessageForRebuild } from '.
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.ts';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../../desktop/src/shared/modelContextLimit.ts';
+import { MESSAGE_METADATA_REFRESH } from '../events.mjs';
 import { explicitPorts } from './explicit-ports.ts';
 
 type Log = ContextOverflowRolloverDeps['log'];
@@ -83,6 +86,7 @@ export interface HostRecoveryRuntimePorts {
   /** Checks the database owner bound to this queue runtime when the turn started. */
   assertCurrent(): void;
   drainHistories(): Promise<void>;
+  behindDurableWrites(sessionId: string, label: string, write: () => Promise<void>): Promise<void>;
   resetWireNotes(sessionId: string): void;
   readAutoReviewHistory: ReplayContextRecoveryPorts['readAutoReviewHistory'];
   /** The Host coordinator; its clear is the coordinator's, synchronous, as on the desktop (input-queue.mjs). */
@@ -106,6 +110,22 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
   const callbacks: RecoveryCallbackPorts = explicitPorts<RecoveryCallbackPorts>({
     getCoordinator: () => runtime.coordinator,
     resetWireNotes: id => runtime.resetWireNotes(id),
+    persistSkippedOversizedInput: (sessionId, clientId) => {
+      const owner = getCurrentDbClientSnapshot();
+      if (!owner) return;
+      void runtime.behindDurableWrites(sessionId, 'oversized-input-skipped', async () => {
+        runtime.assertCurrent();
+        if (getCurrentDbClientSnapshot() !== owner) return;
+        const row = await markOversizedInputSkippedRow(owner.client, sessionId, clientId);
+        if (row && getCurrentDbClientSnapshot() === owner) {
+          const event = {
+            type: 'message_created', sessionId, messageId: row.id, message: messageToCamel(row),
+            [MESSAGE_METADATA_REFRESH]: true,
+          };
+          host.publish(event);
+        }
+      }).catch(() => host.log.warn('Could not save the skipped input notice', { sessionId }));
+    },
   });
   return createContextOverflowRollover(explicitPorts<Parameters<typeof createContextOverflowRollover>[0]>({
     // Plugin-owned and headless plugin setup turns: the Host refuses both inputs today.
@@ -114,6 +134,9 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     // - a teammate's own sessions widen the recalled history; the Host refuses teammate tasks, so a
     //   recovery reads only the current conversation, as the desktop does for an ordinary task.
     listCompanionSessionIds: undefined,
+    // - Host sessions carry no host-reconciled send_to_session route (coordinator-deps.ts), so a
+    //   replayed source note adds no reply route.
+    sendToSessionHint: undefined,
     // - a subscription account change that needs a native session handoff: the Host has no
     //   subscription account handoff before a send yet (release table, row 30), so none is reported.
     needsNativeSessionHandoff: undefined,
@@ -162,7 +185,7 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
       contextRecoveryRebuilt(callbacks, sessionId);
       runtime.noteRebuilt(sessionId);
     },
-    getRecoveryAbortSignal: sessionId => contextRecoveryAbortSignal(callbacks, sessionId),
+    getRecoveryAbortSignal: (sessionId, claim) => contextRecoveryAbortSignal(callbacks, sessionId, claim),
     readPiNativeCompatOverride: host.piCompat?.read,
     recordPiNativeCompatOverride: host.piCompat?.record,
     replayUserMessage: (sessionId, content, agentFacingWireContent, recovery) => replayContextRecoveryWithPorts({

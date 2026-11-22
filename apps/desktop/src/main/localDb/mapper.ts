@@ -65,6 +65,9 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
   addRegionalMoney,
+  addCompatibleRegionalMoney,
+  mixedEstimateAmounts,
+  asValueEstimateMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
   usdMoney,
@@ -254,7 +257,7 @@ export function boundSerializedMessageContent(
  * 出口处补一个空字符串 `userId: ''`，避免类型缺失；上层消费如果需要用户 id 应该读 AuthContext。
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
-  const legacyMoney = row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
+  const legacyMoney = row.totalCostUsd > 0 ? { ...legacyUsdMoney(row.totalCostUsd), approximate: !!row.totalCostUsdIsApproximate } : undefined;
   const currentMoney =
     row.totalCostCurrency && row.totalCostAmount > 0
       ? normalizeRegionalMoney({
@@ -292,6 +295,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     sdkSessionId: row.sdkSessionId,
     totalTokenUsage: row.totalTokenUsage,
     totalCostUsd: legacyUsdProjection,
+    ...(row.totalCostUsdIsApproximate && { totalCostUsdIsApproximate: true }),
     totalMoney,
     contextTokens: row.contextTokens,
     contextWindow: row.contextWindow,
@@ -440,7 +444,7 @@ export function sessionCreateToRow(
         permissionMode?: string;
         fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
-        agentKind?: AgentKind;
+        agentKind?: AgentKind | 'acp';
         orcaRole?: OrcaRole | null;
         parentSessionId?: string | null;
         forkedAtMessageId?: string | null;
@@ -1056,12 +1060,16 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
           estimateReasons: ['subscription-value'],
         })
       : undefined;
-  const estimatedValueMoney =
-    legacyEstimate && currentEstimate
-      ? legacyEstimate.currency === currentEstimate.currency
-        ? addRegionalMoney([legacyEstimate, currentEstimate])
-        : currentEstimate
-      : (currentEstimate ?? legacyEstimate ?? zeroUsageMoney('value-estimate'));
+  const estimateAmounts = [
+    ...(currentEstimate ? [currentEstimate] : []),
+    ...(legacyEstimate ? [legacyEstimate] : []),
+    ...(row.otherEstimatedValueAmount > 0 && row.costCurrency ? [{
+      ...asValueEstimateMoney(legacyUsdMoney(row.otherEstimatedValueAmount)),
+      currency: row.costCurrency === 'USD' ? 'CNY' as const : 'USD' as const,
+    }] : []),
+  ];
+  const estimatedValueMoney = addCompatibleRegionalMoney(estimateAmounts, currentEstimate?.currency)
+    ?? zeroUsageMoney('value-estimate');
   return {
     id: row.id,
     scheduleId: row.scheduleId,
@@ -1074,6 +1082,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     estimatedValueUsd: row.estimatedValueUsd,
     costMoney,
     estimatedValueMoney,
+    ...mixedEstimateAmounts(estimateAmounts),
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
