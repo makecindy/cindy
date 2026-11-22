@@ -1040,6 +1040,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           让会话标题与其它行落在同一文字列(见文件头注释)。 */}
       <span className={cn("flex shrink-0 items-center justify-center empty:hidden", inboxMode ? "w-[18px]" : "w-[15px]")}>
         <SessionStatusIcon
+          hasSeparateStatusIndicator={showRightStatus}
           hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
           identityIcon={showProject && inboxProject ? (
             <ResolvedProjectIcon directory={inboxProject}

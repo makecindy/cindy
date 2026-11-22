@@ -595,6 +595,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const statusIconNode = (
     <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, "empty:hidden", inboxMode && "!w-[18px]")} aria-hidden>
       <SessionStatusIcon
+          hasSeparateStatusIndicator={rightStatusKind !== 'time'}
           hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
           identityIcon={showProject && inboxProject ? (
             <ResolvedProjectIcon directory={inboxProject}
