@@ -57,7 +57,12 @@ function RemoteBotSessionGate() {
   const recoveryHere = localCompanionNeedsRecovery(cloud, botId);
   const deviceListState = useDeviceLinkDeviceListRequestState();
   // Right after launch or waking, "not connected yet" is not "offline" (cloud-companions.md §3.1).
-  const connecting = useDeviceLinkFirstConnectionPending();
+  // Only a chat opened inside the window waits for it; an open chat keeps its 15 s grace below,
+  // and a later drop does not re-protect a chat that was already open (#6257).
+  const firstConnectionPending = useDeviceLinkFirstConnectionPending();
+  const openedConnecting = useRef(firstConnectionPending);
+  if (!firstConnectionPending) openedConnecting.current = false;
+  const connecting = openedConnecting.current;
   const recoveringHere = useRef(false);
   if (recoveryHere) recoveringHere.current = true;
   const recoveryHydrationPending = !requestedSessionId && recoveringHere.current

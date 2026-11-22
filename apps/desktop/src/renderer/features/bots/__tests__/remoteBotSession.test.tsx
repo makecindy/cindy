@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   navigate: vi.fn(),
   requestedSessionId: undefined as string | undefined,
   online: true,
+  connectionKnown: undefined as boolean | undefined,
   listed: true,
   cached: false,
   lastReplyAt: 0,
@@ -50,6 +51,7 @@ vi.mock('../useRemoteBots', () => ({
       avatarColor: '',
       sessionId: 'old-canonical',
       online: h.online,
+      connectionKnown: h.connectionKnown,
       lastReplyAt: h.lastReplyAt,
     },
   ],
@@ -76,6 +78,7 @@ beforeEach(() => {
   h.navigate.mockReset();
   h.requestedSessionId = undefined;
   h.online = true;
+  h.connectionKnown = undefined;
   h.listed = true;
   h.cached = false;
   h.lastReplyAt = 0;
@@ -362,6 +365,60 @@ it.each([['one minute', 60_000], ['a night', 8 * 60 * 60_000]] as const)('gives 
     expect(screen.getByText('ccAgent.sidebar.machineSwitcher.connecting')).toBeTruthy();
     expect(h.cloudView).not.toHaveBeenCalled();
     act(() => { vi.advanceTimersByTime(FIRST_CONNECTION_WINDOW_MS); });
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(await screen.findByText('cloud-offline-view')).toBeTruthy();
+});
+
+// Acceptance (issue #12014): the window counts from the drop, not from opening the chat, and
+// its end restores the original judgment; it never declares an unknown home offline by itself.
+it('counts the window from the drop, not from opening the chat', async () => {
+  homeOfflineActor();
+  vi.useFakeTimers();
+  try {
+    act(() => h.relayStatus?.({ status: 'connecting' }));
+    act(() => { vi.advanceTimersByTime(FIRST_CONNECTION_WINDOW_MS - 1); });
+    render(<RemoteBotSessionView />);
+    expect(screen.getByText('ccAgent.sidebar.machineSwitcher.connecting')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(1); });
+  } finally {
+    vi.useRealTimers();
+  }
+  expect(await screen.findByText('cloud-offline-view')).toBeTruthy();
+});
+
+it('restores the original judgment when the window ends, so an unknown home is still not offline', () => {
+  homeOfflineActor();
+  h.connectionKnown = false;
+  vi.useFakeTimers();
+  try {
+    act(() => h.relayStatus?.({ status: 'connecting' }));
+    render(<RemoteBotSessionView />);
+    act(() => { vi.advanceTimersByTime(FIRST_CONNECTION_WINDOW_MS); });
+    expect(h.cloudView).not.toHaveBeenCalled();
+    expect(screen.queryByText('ccAgent.sidebar.machineSwitcher.connecting')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Decision in issue #12014: the window protects only a chat opened inside it. An open chat keeps
+// #6257's 15 s grace even when this computer's relay drops at the same moment (that drop opens a
+// new window); before, it waited for the 30 s window instead.
+it('moves an open chat to the cloud conversation after 15 s when the home and this relay drop together', async () => {
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  const { rerender } = render(<RemoteBotSessionView />);
+  await screen.findByText('remote-conversation');
+  vi.useFakeTimers();
+  try {
+    h.online = false;
+    act(() => h.relayStatus?.({ status: 'connecting' }));
+    rerender(<RemoteBotSessionView />);
+    act(() => { vi.advanceTimersByTime(CLOUD_HOME_GRACE_MS - 1); });
+    expect(screen.getByText('remote-conversation')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(1); });
   } finally {
     vi.useRealTimers();
   }
