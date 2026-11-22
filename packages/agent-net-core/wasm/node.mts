@@ -345,6 +345,7 @@ export class SendStream {
   private queued = 0;
   private finishing = false;
   private finished = false;
+  private abandoned = false;
 
   constructor(
     private readonly connection: Connection,
@@ -386,20 +387,21 @@ export class SendStream {
 
   /**
    * 放弃这条流：排在这里的和核心里还没发出的字节都不再发，流随即结束；已经发出、还没确认的照常送到（见核心的 `abandon_stream`）。
-   * 对端看到的是一条提前结束的流，要自己看出内容不全。返回丢掉的字节数；核心没有这个能力（旧版）、流已经结束或连接关了时返回 `null`，
-   * 这时什么都没改。
+   * 对端看到的是一条提前结束的流，要自己看出内容不全。`finish` 之后也能放弃：结束标记还没发出时，核心里没发的字节照样丢掉。
+   * 返回丢掉的字节数；核心没有这个能力（旧版）、已经放弃过、结束标记已经发出、流不在了或连接关了时返回 `null`，这时什么都没改。
    */
   abandon(): number | null {
-    if (this.connection.closed || this.finished) return null;
+    if (this.connection.closed || this.abandoned) return null;
     const dropped = this.connection.endpoint.call((core) => (core.conn_abandon ? core.conn_abandon(this.connection.id, this.id) : -3));
-    if (dropped < 0) return null;
     const local = this.queued;
+    if (dropped === -3 || (dropped < 0 && local === 0)) return null;
+    this.abandoned = true;
     this.queue.length = 0;
     this.queued = 0;
     this.finishing = true;
     this.finished = true;
     this.connection.endpoint.schedule();
-    return dropped + local;
+    return Math.max(0, dropped) + local;
   }
 
   /** 这条流的进展；核心不提供（旧版）、连接关了时是 `null`；写完并全部被确认后是 `null`（流在核心里已经不在了）。 */

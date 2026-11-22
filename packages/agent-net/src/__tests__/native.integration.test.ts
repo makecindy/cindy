@@ -189,11 +189,15 @@ it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP
       for (const event of state.events) if (event.kind === 'finish') nativeEnded.add(event.stream);
     }
   };
-  const total = 2 << 20, outgoing = connection.openStream(5);
+  // Written and finished, then given up (a result its caller cancelled): even with everything and the end handed to the core, the
+  // core still drops what it has not sent. The native side does not read meanwhile, so nothing more is acknowledged.
+  const total = 1 << 20, outgoing = connection.openStream(5);
   outgoing.write(Buffer.alloc(total, 9));
+  outgoing.finish();
   await until(async () => { await pollNative(); return (outgoing.progress()?.ackedBytes ?? 0) > 100_000; });
   expect(outgoing.progress()!.stalledUs).toBeLessThan(2_000_000);
   expect(connection.sendProgress()!.queued[5]).toBeGreaterThan(0);
+  await until(async () => outgoing.handedOver);
   const nodeDropped = outgoing.abandon();
   expect(nodeDropped).toBeGreaterThan(0);
   expect(outgoing.abandon()).toBeNull();
