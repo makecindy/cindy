@@ -3361,11 +3361,16 @@ export class AgentInputCoordinator {
       // Direct assignments do not have an active coordinator item until steered.
       const previous = accepted.activeTurn;
       const receipt = this.directWorkerReceipts.get(steerRuntime);
-      const workerSource = previous
-        ? previous.persisted && previous.vendorTurnGeneration === steerVendorTurnGeneration && !previous.stopped
-          ? previous.item : null
-        : receipt && receipt.generation === steerVendorTurnGeneration && !receipt.signal.aborted
-          ? receipt.item : null;
+      let workerSource: AgentInputQueuedMessage | null | undefined;
+      if (previous) {
+        if (previous.vendorTurnGeneration === steerVendorTurnGeneration && !previous.stopped) {
+          const durableSource = previous.workerRecoverySource;
+          workerSource = previous.persisted ? previous.item
+            : durableSource?.runtime === steerRuntime ? durableSource.item : null;
+        }
+      } else if (receipt && receipt.generation === steerVendorTurnGeneration && !receipt.signal.aborted) {
+        workerSource = receipt.item;
+      }
       if (workerSource && workerInputs.has(workerSource.createOpts)) {
         workerInputs.add(item.createOpts);
         workerRecoverySource = { runtime: steerRuntime, item: workerSource };
@@ -4723,7 +4728,7 @@ export class AgentInputCoordinator {
       // already-durable input of this turn without waiting for the steer row.
       const steerRecovery = active?.workerRecoverySource;
       const pendingSteerWorkerItem =
-        active?.persisting && !active.stopped && steerRecovery && runtime === steerRecovery.runtime &&
+        active && !active.persisted && !active.stopped && steerRecovery && runtime === steerRecovery.runtime &&
         meta?.sessionInstanceId && meta.sessionInstanceId === readSessionInstanceId(runtime) &&
         meta.sessionTurnGeneration === active.vendorTurnGeneration &&
         isUnexpectedWorkerStreamEnd({ ...signals, message })

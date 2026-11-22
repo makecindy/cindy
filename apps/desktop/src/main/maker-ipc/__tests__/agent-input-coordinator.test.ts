@@ -14576,7 +14576,7 @@ describe('Orca report durable recovery', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it.each(['write-succeeds', 'write-fails', 'requested-close'] as const)(
+  it.each(['write-succeeds', 'write-fails', 'failed-before-eof', 're-steered-after-write-failure', 'requested-close'] as const)(
     'settles Worker EOF during an accepted steer write (%s)', async outcome => {
       vi.useFakeTimers();
       const steerWrite = deferred<void>();
@@ -14601,6 +14601,15 @@ describe('Orca report durable recovery', () => {
         const steering = h.coordinator.steerControlInput('worker',
           { item: makeItem('steer', 'Clarify the assignment') }, { session: runtime, turnGeneration: 1 });
         await savingSteer.promise;
+        if (outcome === 'failed-before-eof' || outcome === 're-steered-after-write-failure') {
+          steerWrite.reject(new Error('steer row unavailable'));
+          await expect(steering).resolves.toBe('steered');
+        }
+        if (outcome === 're-steered-after-write-failure') {
+          await expect(h.coordinator.steerControlInput('worker',
+            { item: makeItem('second-steer', 'Update the assignment') },
+            { session: runtime, turnGeneration: 1 })).resolves.toBe('steered');
+        }
 
         h.setRunning(false);
         h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
