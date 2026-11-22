@@ -581,6 +581,24 @@ describe('cindy-tool-fold extension source', () => {
     expect(isRecord(out[0])).toBe(true);
   });
 
+  it('bounds the text of an image-bearing result and keeps the image', async () => {
+    const { toolResult, tool } = loadExtension();
+    const giant = 'z'.repeat(25000);
+    const out = toolResult({
+      toolName: 'mcp__shot__capture',
+      toolCallId: 'img-1',
+      content: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }, { type: 'text', text: giant }],
+    }) as { content: Block[] } | undefined;
+    expect(out).toBeDefined();
+    const blocks = out!.content ?? [];
+    expect(blocks.some((b) => b.type === 'image')).toBe(true);
+    const kept = blocks.filter((b) => b.type === 'text').map((b) => String(b.text ?? '')).join('\n');
+    expect(kept.length).toBeLessThan(2600);
+    expect(kept).toContain('cindy_toolfold_read("img-1")');
+    const recovered = await tool.execute('t-img', { call_id: 'img-1' });
+    expect(String(recovered.content![0].text)).toContain(giant);
+  });
+
   it('counts parallel calls, not messages, toward the pairs gate', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '32', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1000000000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
     // One assistant message with 32 parallel calls: 32 complete pairs in one trip.

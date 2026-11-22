@@ -443,15 +443,14 @@ export default function (pi) {
           : 'full text not retained (call "' + sid + '"); re-run if needed]') }] };
     }
     if (!Array.isArray(content)) return undefined;
-    var hasImage = false;
     var total = 0;
     for (var i = 0; i < content.length; i++) {
       var block = content[i];
       if (!block) continue;
-      if (block.type === 'image') hasImage = true;
       if (block.type === 'text' && typeof block.text === 'string') total += block.text.length;
     }
-    if (hasImage || total <= INGEST_LIMIT) return undefined;
+    // 图片旁边的长文本同样要限：这条往返本来就不折（带图），再让文本整段进来就没人能压它。
+    if (total <= INGEST_LIMIT) return undefined;
     var id = String((event && event.toolCallId) || '');
     if (!id) return undefined;
     var fullText = textOf(content);
