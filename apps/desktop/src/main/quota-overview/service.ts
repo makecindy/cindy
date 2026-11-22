@@ -48,7 +48,7 @@ import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i1
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readProviderAccountUsage } from '../maker-host/provider-account-usage.js';
 import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import {
   readClaudeSubscriptionUsageSnapshotForDeviceLink,
@@ -527,6 +527,7 @@ export class QuotaOverviewService {
       readSubscriptionPool: (providerId) => force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
       readOpenCodeGo: (providerId) => readOpenCodeGoAccountUsage({ providerId, forceRefresh: force }),
+      readZhipu: (providerId) => readProviderAccountUsage({ providerId, forceRefresh: force }),
       readCodex: (providerId) => readCodexAccountUsageSnapshot(providerId),
       readClaude: (providerId) => readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId),
       readXai: (providerId) => readXaiSubscriptionUsageSnapshotForDeviceLink(providerId),

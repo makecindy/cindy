@@ -20,7 +20,12 @@ import {
   usageScope,
 } from '../collect';
 import { readRemoteSubscriptions, retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen, type RemoteSubscriptionDeps } from '../remoteSubscriptions';
-import { topModels, type MenubarSubscriptionInput } from '../snapshot';
+import { buildMenubarView, topModels, type MenubarSubscriptionInput } from '../snapshot';
+import { createMenubarTranslate } from '../strings';
+import { MENUBAR_HARNESS_LOGOS } from '../logos';
+import { DEFAULT_MENUBAR_SETTINGS } from '../../../shared/menubarQuota';
+import type { ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
+import { rawMainString } from '../../i18n.desktop';
 import type { UsageHistoryPayload, UsageHistoryTask } from '../../usage/usageHistory';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 
@@ -153,6 +158,83 @@ describe('collectMenubarInputs', () => {
       ...overrides,
     };
   }
+
+  describe('GLM Coding Plan', () => {
+    const codingPlan = provider({
+      id: 'custom-glm',
+      name: 'GLM Coding Plan',
+      auth: { method: 'apiKey' },
+      routing: { 'claude-code': { upstream: 'https://open.bigmodel.cn/api/anthropic' } } as ProviderView['routing'],
+    });
+    const snapshot: ZhipuCodingPlanQuotaSnapshot = {
+      kind: 'zhipu-coding-plan-quota',
+      fetchedAt: NOW,
+      level: 'pro',
+      noPlan: false,
+      fiveHour: { usedPercent: 20, resetsAt: NOW + 3_600_000 },
+      weekly: { usedPercent: 35, resetsAt: NOW + 86_400_000 },
+    };
+
+    async function view(overrides: Partial<MenubarCollectDeps> = {}) {
+      const collected = await collectMenubarInputs(deps({
+        listProviders: async () => [codingPlan],
+        readZhipu: async () => ({ status: 'ready', stale: false, snapshot }),
+        ...overrides,
+      }));
+      return buildMenubarView({
+        ...collected,
+        nowMs: NOW,
+        locale: 'en',
+        moneySymbol: '$',
+        settings: DEFAULT_MENUBAR_SETTINGS,
+        updatedAtMs: NOW,
+        harnessLogos: MENUBAR_HARNESS_LOGOS,
+        uiStrings: {},
+        t: createMenubarTranslate('en', (key) => rawMainString(key, 'en')),
+      });
+    }
+
+    it('uses the weekly allowance on the panel and renders both windows in the details', async () => {
+      const panel = await view({
+        listProviders: async () => [codingPlan, provider({
+          id: 'payg-glm',
+          auth: { method: 'apiKey' },
+          routing: { 'claude-code': { upstream: 'https://open.bigmodel.cn/api/paas/v4' } } as ProviderView['routing'],
+        })],
+        readZhipu: async (id) => id === codingPlan.id ? { status: 'ready', stale: false, snapshot } : { status: 'unsupported' },
+      });
+      expect(panel.sources).toMatchObject([{ id: codingPlan.id, value: '65', valueUnit: '%', resetsAtMs: snapshot.weekly?.resetsAt }]);
+      const detail = panel.details[codingPlan.id];
+      expect(detail.legend.map((entry) => entry.label)).toEqual(['5-hour 80%', 'Weekly 65%']);
+      expect(detail.facts.map((fact) => fact.label)).toEqual(expect.arrayContaining(['5-hour resets', 'Weekly resets']));
+    });
+
+    it('keeps the 5-hour percentage when an old plan supplies no weekly window or reset time', async () => {
+      const panel = await view({ readZhipu: async () => ({
+        status: 'ready', stale: false, snapshot: { ...snapshot, fiveHour: { usedPercent: 20, resetsAt: null }, weekly: null },
+      }) });
+      expect(panel.sources[0]).toMatchObject({ value: '80', valueUnit: '%' });
+      const detail = panel.details[codingPlan.id];
+      expect(detail.bigValue).toBe('80');
+      expect(detail.legend).toEqual([]);
+      expect(detail.facts.some((fact) => /reset/i.test(fact.label))).toBe(false);
+    });
+
+    it.each([
+      ['stale', async () => ({ status: 'ready', stale: true, snapshot } as const)],
+      ['unavailable', async () => ({ status: 'unavailable', error: 'network' } as const)],
+      ['no plan', async () => ({ status: 'ready', stale: false, snapshot: { ...snapshot, noPlan: true } } as const)],
+      ['expired windows', async () => ({
+        status: 'ready', stale: false, snapshot: {
+          ...snapshot, fiveHour: { usedPercent: 20, resetsAt: NOW }, weekly: { usedPercent: 35, resetsAt: NOW - 1 },
+        },
+      } as const)],
+    ] as const)('shows no current allowance for %s', async (_name, readZhipu) => {
+      const panel = await view({ readZhipu });
+      expect(panel.sources[0]).toMatchObject({ value: null, fill: null });
+      expect(panel.details[codingPlan.id]).toMatchObject({ bigValue: '—', legend: [] });
+    });
+  });
 
   it('includes auxiliary task tokens without charging them at the conversation model rate', async () => {
     const input = usage([task('mixed')]);

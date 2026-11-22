@@ -12,7 +12,33 @@
 import type { KimiCodingUsageSnapshot } from './kimiCodingUsage';
 import type { OpenCodeGoUsageSnapshot } from './opencodeGoUsage';
 
-import type { AgentKind } from '@cindy/model-providers';
+import type { AgentKind, ProviderView } from '@cindy/model-providers';
+
+const ZHIPU_ANTHROPIC_BASES = [
+  'https://open.bigmodel.cn/api/anthropic',
+  'https://open.bigmodel.cn/api/anthropic/',
+  'https://api.z.ai/api/anthropic',
+  'https://api.z.ai/api/anthropic/',
+];
+const ZHIPU_CODING_PREFIXES = [
+  'https://open.bigmodel.cn/api/coding/',
+  'https://api.z.ai/api/coding/',
+];
+
+/** 是否智谱 GLM Coding Plan 接入（CN 与 Global，/api/anthropic 或 /api/coding/*）；按量付费不算。 */
+export function isZhipuCodingPlanProviderView(provider: ProviderView | undefined | null): boolean {
+  if (!provider) return false;
+  if (provider.id === 'zhipu-coding-plan-cn' || provider.id === 'zai-coding-plan-global') {
+    return true;
+  }
+  return Object.values(provider.routing ?? {}).some(
+    (route) => {
+      const upstream = route?.upstream ?? '';
+      return ZHIPU_ANTHROPIC_BASES.includes(upstream)
+        || ZHIPU_CODING_PREFIXES.some((prefix) => upstream.startsWith(prefix));
+    },
+  );
+}
 
 export interface ProviderAccountUsageRequest {
   providerId: string;
