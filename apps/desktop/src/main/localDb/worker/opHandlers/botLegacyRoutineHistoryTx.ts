@@ -1,15 +1,19 @@
 import type Database from 'better-sqlite3';
 
 /**
- * The retired V1 routine engine opened one teammate task per run (`route_key = 'routine:…'`). Runs that
- * were archived into the teammate's history without a single message are empty shells: nothing to
- * read or search, yet every teammate profile read still walks their links. Delete only those.
- *
- * A candidate is kept when anything at all points at it: any message (rewound ones included), or any
- * value anywhere else in the database equal to its id (read from the live schema, so a table added
- * later is checked too). One transaction, safe to repeat: a second run finds nothing.
+ * The retired V1 routine engine could open one teammate task per run ("new task each time",
+ * `route_key = 'routine:<routine>:<uuid>'`). Before it learned to discard them (2026-10-30), a run its
+ * pre-run check stopped left such a task behind with nothing in it; those were later archived into the
+ * teammate's history. Delete only those: a single-run task, archived, with no message (rewound ones
+ * included), that the caller's V1 run records prove never reached the model (`neverDispatchedSessionIds`,
+ * read by botV1Routines.ts), and that no value anywhere else in the database refers to (read from the live
+ * schema, so a table added later is checked too). A reused task (`routine:<routine>`) is always kept.
+ * One transaction, safe to repeat: a second run finds nothing.
  */
-const CANDIDATES_SQL = `SELECT l.session_id FROM bot_session_links l
+/** Routine ids are `[A-Za-z0-9_-]` only, so this never matches a reused task's key. */
+const SINGLE_RUN_ROUTE_KEY = /^routine:[A-Za-z0-9_-]+:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const CANDIDATES_SQL = `SELECT l.session_id AS id, l.route_key AS routeKey FROM bot_session_links l
   JOIN sessions s ON s.id = l.session_id
   WHERE l.role = 'history' AND l.route_key GLOB 'routine:?*' AND l.archived_at IS NOT NULL
     AND s.source = 'bot' AND s.status = 'archived'
@@ -47,9 +51,14 @@ function referenceColumns(db: Database.Database): Array<{ table: string; columns
   return found;
 }
 
-export function botsPruneEmptyLegacyRoutineHistory(db: Database.Database): { removed: number } {
+export function botsPruneEmptyLegacyRoutineHistory(db: Database.Database, args: unknown): { removed: number } {
+  const evidence = (args as { neverDispatchedSessionIds?: unknown } | null)?.neverDispatchedSessionIds;
+  if (!Array.isArray(evidence)) throw new Error('neverDispatchedSessionIds must be an array');
+  const neverDispatched = new Set(evidence.filter((id): id is string => typeof id === 'string'));
   return db.transaction(() => {
-    const candidates = db.prepare(CANDIDATES_SQL).pluck().all() as string[];
+    const candidates = (db.prepare(CANDIDATES_SQL).all() as Array<{ id: string; routeKey: string }>)
+      .filter(({ id, routeKey }) => SINGLE_RUN_ROUTE_KEY.test(routeKey) && neverDispatched.has(id))
+      .map(({ id }) => id);
     if (candidates.length === 0) return { removed: 0 };
     const pending = new Set(candidates);
     const referenced = new Set<string>();

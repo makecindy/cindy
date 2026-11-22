@@ -207,7 +207,7 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
     case 'bots.archiveChannelLanes':
       return botsArchiveChannelLanes(db, txArgs as BotsArchiveChannelLanesArgs);
     case 'bots.pruneEmptyLegacyRoutineHistory':
-      return botsPruneEmptyLegacyRoutineHistory(db);
+      return botsPruneEmptyLegacyRoutineHistory(db, txArgs);
     case 'botGroups.create':
       return botGroupsCreate(db, txArgs as Parameters<typeof botGroupsCreate>[1]);
     case 'botGroups.setMembers':

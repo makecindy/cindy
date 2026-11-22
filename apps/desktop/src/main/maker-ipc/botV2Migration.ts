@@ -11,7 +11,7 @@
  * A receipt is written only after all steps succeed; a failure retries on the next start.
  * A teammate upgraded before its project memory lived inside the project gets that one move here.
  * Copies whose main computer is another one are skipped: that computer upgrades them.
- * Each start also removes V1 routine runs left in teammate history as empty shells.
+ * Each start also removes single-run V1 routine tasks that never reached the model and stayed empty.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -34,7 +34,7 @@ import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { ensureBotProjectAutomations, ensureTeammateTemplate, ensureWorkspaceRepository, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
 import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
-import { readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
+import { readV1NeverDispatchedSessionIds, readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
 import {
   BOT_V2_CARRYOVER_FILE,
   buildCarryover,
@@ -316,12 +316,27 @@ setNewTeammateSetup(migrateTeammateToV2);
 let running: { scope: string; promise: Promise<void> } | null = null;
 
 /**
- * V1 routine runs archived into teammate history without a single message, and referenced by
- * nothing else (botLegacyRoutineHistoryTx.ts). Safe to repeat; a failure retries on the next start.
+ * Single-run V1 routine tasks in teammate history that never reached the model, as their run records
+ * prove, and have no message or other reference (botLegacyRoutineHistoryTx.ts). Without readable run
+ * records nothing is deleted. Safe to repeat; a failure retries on the next start.
  */
-async function pruneEmptyLegacyRoutineHistory(): Promise<void> {
+async function pruneEmptyLegacyRoutineHistory(ownerRoot: string, assertCurrent: () => void): Promise<void> {
   try {
-    const { removed } = await getDbClient().tx('bots.pruneEmptyLegacyRoutineHistory', {});
+    // Cheap check first, so the run records are read only while there is something to decide.
+    const candidate = await getDbClient().queryOne(`SELECT 1 FROM bot_session_links l
+      WHERE l.role = 'history' AND l.route_key GLOB 'routine:?*:?*' AND l.archived_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.session_id = l.session_id) LIMIT 1`);
+    if (!candidate) return;
+    assertCurrent();
+    const neverDispatched = await readV1NeverDispatchedSessionIds(ownerRoot);
+    if (!neverDispatched) {
+      log.warn('V1 routine run records unreadable; empty V1 routine runs kept');
+      return;
+    }
+    if (neverDispatched.size === 0) return;
+    assertCurrent();
+    const { removed } = await getDbClient().tx('bots.pruneEmptyLegacyRoutineHistory',
+      { neverDispatchedSessionIds: [...neverDispatched] });
     if (removed > 0) log.info('removed empty V1 routine runs from teammate history', { removed });
   } catch (error) {
     log.warn('empty V1 routine run cleanup failed; retries on next start', { error: String(error) });
@@ -334,7 +349,9 @@ export function migrateTeammatesToV2(): Promise<void> {
   if (running?.scope === scope) return running.promise;
   const promise = (async () => {
     const ownerRoot = ownerScopedUserDataPath();
-    await pruneEmptyLegacyRoutineHistory();
+    await pruneEmptyLegacyRoutineHistory(ownerRoot, () => {
+      if (activeOwnerScopeKey() !== scope) throw new Error('OWNER_CHANGED');
+    });
     if (activeOwnerScopeKey() !== scope) return;
     const rows = await getDbClient().drizzle.select({ id: botProfiles.id }).from(botProfiles)
       .where(inArray(botProfiles.status, ['active', 'paused']));

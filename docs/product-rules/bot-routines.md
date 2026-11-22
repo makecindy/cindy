@@ -15,7 +15,7 @@
 >   脚本、命令、监控任务不再接管，继续在来源运行。
 > - 从旧电脑经云端伙伴同步来的例行任务，按例行任务 id 各转成一次项目自动化；本机不再上传例行任务，但仍拥有该前缀以清理自己的旧行。
 > - 已有的 `role = 'routine'` 运行任务作为历史照常在任务列表可见、可打开。
-> - 已归入伙伴历史、没有任何消息也没有被引用的旧运行任务（`role = 'history'`、`route_key = 'routine:…'`）在启动时删除，见[伙伴运行时](./cindy-bots-runtime.md) §3.1；有消息的保留。
+> - `fresh` 单次运行任务（`route_key = 'routine:<规则>:<uuid>'`）已归入伙伴历史、运行记录全部为 `skipped`（从未派发）、没有任何消息也没有被引用的，在启动时删除，即下文 2026-10-30「未派发即回收」对此前遗留任务的补执行，见[伙伴运行时](./cindy-bots-runtime.md) §3.1；复用任务、派发过或无法判定的一律保留。
 > - 旧控制端调用例行任务设置操作得到 `UNSUPPORTED_CAPABILITY`，读 `routines` 集合与例行任务技能页得到 `NOT_FOUND`。
 > - 插件：声明 `routineEvents`、`will-routine-run` 的插件照常安装，钩子不再触发；`routine-request` 管子对
 >   status / publish 返回稳定的空操作；`routineEvents` 不再让插件常驻。见 [插件安全与编写](../dev-rules/plugin-security-and-authoring.md)。

@@ -599,12 +599,13 @@ describe('Bot named worker transactions', () => {
   });
 
   // Test value: the startup cleanup (`bots.pruneEmptyLegacyRoutineHistory`) deletes user data, so it pins
-  // exactly what goes: an archived V1 routine run in teammate history with no message and no other
-  // reference. A real account had 102 such shells; the 18 runs with messages must stay. Minimal failure:
-  // a rewound message, a non-routine history task, a run record, or an attachment ref (`media_refs.ref_id`) that the
-  // predicate overlooks.
+  // exactly what goes: an archived single-run V1 routine task in teammate history that its run records prove
+  // never reached the model, with no message and no other reference (bot-routines.md, 2026-10-30 ruling).
+  // A real account had 102 such shells; the 18 runs with messages must stay. Minimal failure: a reused task,
+  // a task without that proof, a rewound message, a run record or an attachment ref that the predicate
+  // overlooks.
   // Unit tier, isolated SQLite.
-  it('removes only empty archived V1 routine runs from teammate history, once', () => {
+  it('removes only proven-undispatched empty single-run V1 routine tasks from teammate history, once', () => {
     db.exec(`
       CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         rewind_at INTEGER);
@@ -627,6 +628,7 @@ describe('Bot named worker transactions', () => {
     const rows: Array<[id: string, role: string, routeKey: string | null, status: string]> = [
       ['empty-fresh', 'history', `routine:r1:${uuid}`, 'archived'],
       ['empty-persistent', 'history', 'routine:r2', 'archived'],
+      ['empty-unproven', 'history', `routine:r1:${uuid.replace('0f', '6f')}`, 'archived'],
       ['with-message', 'history', `routine:r1:${uuid.replace('0f', '1f')}`, 'archived'],
       ['with-rewound', 'history', `routine:r1:${uuid.replace('0f', '2f')}`, 'archived'],
       ['with-run', 'history', `routine:r1:${uuid.replace('0f', '3f')}`, 'archived'],
@@ -648,14 +650,17 @@ describe('Bot named worker transactions', () => {
     db.prepare("INSERT INTO schedule_runs (id, session_id) VALUES ('run-1', 'with-run')").run();
     db.prepare("INSERT INTO media_refs (id, ref_kind, ref_id) VALUES ('ref-1', 'session-attachment', 'with-media')").run();
     const remaining = () => db.prepare('SELECT id FROM sessions ORDER BY id').pluck().all();
-    const kept = ['delegated', 'main', 'old-canonical', 'restored', 'routine-lane', 'with-media', 'with-message', 'with-rewound', 'with-run'];
+    const kept = ['delegated', 'empty-persistent', 'empty-unproven', 'main', 'old-canonical', 'restored', 'routine-lane',
+      'with-media', 'with-message', 'with-rewound', 'with-run'];
+    // Everything but `empty-unproven` comes with run records saying it never reached the model.
+    const args = { neverDispatchedSessionIds: rows.map(([id]) => id).filter((id) => id !== 'empty-unproven') };
 
-    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args: {} })).toEqual({ removed: 2 });
+    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args })).toEqual({ removed: 1 });
     expect(remaining()).toEqual(kept);
-    expect(db.prepare("SELECT COUNT(*) FROM bot_session_links WHERE session_id IN ('empty-fresh', 'empty-persistent')").pluck().get()).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) FROM bot_session_links WHERE session_id = 'empty-fresh'").pluck().get()).toBe(0);
     expect(db.prepare('SELECT COUNT(*) FROM messages').pluck().get()).toBe(2);
     // Repeating it (another window, the next start) changes nothing.
-    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args: {} })).toEqual({ removed: 0 });
+    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args })).toEqual({ removed: 0 });
     expect(remaining()).toEqual(kept);
   });
 

@@ -1397,7 +1397,7 @@ export type DbTxArgsByName = {
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
-  'bots.pruneEmptyLegacyRoutineHistory': Record<string, never>;
+  'bots.pruneEmptyLegacyRoutineHistory': { neverDispatchedSessionIds: string[] };
   'botGroups.create': BotGroupsCreateArgs;
   'botGroups.setMembers': BotGroupsSetMembersArgs;
   'botGroups.delete': BotGroupsDeleteArgs;
