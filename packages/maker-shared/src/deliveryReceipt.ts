@@ -2,6 +2,7 @@
  * 一个任务的只读交付收据。只投影既有读结果，不落库、不把「这一轮结束」写成已完成。
  * 命令成败与 apps/desktop agentHandoff 的 extractCommandOutcome 共用 judgeCommandOutcome。
  */
+import path from 'node:path';
 import { isBotDeliverableFile, type BotDeliverableFile } from './botDeliverable.js';
 import { describeToolUse } from './toolUseDescriptor.js';
 
@@ -28,6 +29,8 @@ export interface DeliveryReceiptFileInput {
   artifact?: unknown;
   /** 改名前的路径。只有 status 为 renamed 时使用。 */
   oldPath?: string | null;
+  /** 这条记录所属变更集的工作目录。相对路径只按它解析一次。 */
+  cwd?: string | null;
   /**
    * false 表示这条记录所属的变更已经撤销，不再描述当前工作区。
    * 省略表示仍然生效。
@@ -102,6 +105,28 @@ export interface DeliveryReceiptInput {
   pullRequests?: DeliveryReceiptPullRequest[];
   /** 关联列表没读到。不能当成没有 PR，也不能把 CI 写成通过或未跑。 */
   pullRequestsUnavailable?: boolean;
+  /**
+   * 变更集标明采集不完整（例如敏感文件没有内容）。
+   * 不能因此写成「这次没有改动文件」。
+   */
+  captureIncomplete?: boolean;
+}
+
+function pathApiFor(filePath: string, base: string | null): path.PlatformPath {
+  if (filePath.startsWith('\\') || /^[A-Za-z]:[\/]/.test(filePath)) return path.win32;
+  if (filePath.startsWith('/')) return path.posix;
+  if (base && (base.startsWith('\\') || /^[A-Za-z]:[\/]/.test(base))) return path.win32;
+  return path.posix;
+}
+
+/** 绝对路径保持原样，重复调用不改变结果。相对路径按记录自己的工作目录拼接。 */
+export function resolveDeliveryReceiptPath(filePath: string, base: string | null | undefined): string {
+  if (!filePath) return filePath;
+  const root = base?.trim() ? base : null;
+  const api = pathApiFor(filePath, root);
+  if (api.isAbsolute(filePath)) return filePath;
+  if (!root) return filePath;
+  return api.join(root, filePath);
 }
 
 export function judgeCommandOutcome(input: {
@@ -205,7 +230,9 @@ function outcomeText(content: unknown, record: Record<string, unknown>): string 
 }
 
 function commandOutcomeOf(content: unknown): string | undefined {
-  const record = contentRecord(content);
+  // 字符串是命令输出本身。不能因为输出碰巧是 JSON，就把里面的 exitCode / isError 当成进程状态。
+  if (typeof content === 'string') return judgeCommandOutcome({ text: content });
+  const record = asRecord(content);
   if (!record) return undefined;
   return judgeCommandOutcome({
     isError: record.isError,
@@ -328,8 +355,15 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
   const remember = (path: string) => {
     if (!byPath.has(path)) order.push(path);
   };
-  for (const file of changed) {
+  for (let file of changed) {
     if (!file.path || file.applied === false) continue;
+    const base = file.cwd ?? input.workingDir;
+    const resolved = {
+      ...file,
+      path: resolveDeliveryReceiptPath(file.path, base),
+      oldPath: file.oldPath ? resolveDeliveryReceiptPath(file.oldPath, base) : file.oldPath,
+    };
+    file = resolved;
     if (file.status === 'renamed' && file.oldPath && file.oldPath !== file.path) {
       const previous = byPath.get(file.oldPath);
       if (previous) previous.removed = true;
@@ -398,6 +432,7 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
       interactionKind: input.interactionKind,
       workflowWaitingOn: input.workflowWaitingOn,
     }),
-    conversationOnly: !changes.shown && !verification.shown && !outputSection.shown,
+    conversationOnly:
+      !input.captureIncomplete && !changes.shown && !verification.shown && !outputSection.shown,
   };
 }

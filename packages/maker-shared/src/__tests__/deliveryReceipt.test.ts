@@ -7,7 +7,7 @@
  * - tier：unit。纯函数，无 IO。
  */
 import { describe, expect, it } from 'vitest';
-import { buildDeliveryReceipt, judgeCommandOutcome } from '../deliveryReceipt.js';
+import { buildDeliveryReceipt, judgeCommandOutcome, resolveDeliveryReceiptPath } from '../deliveryReceipt.js';
 
 describe('buildDeliveryReceipt', () => {
   it('keeps the changed file and the failed command exit code', () => {
@@ -26,7 +26,7 @@ describe('buildDeliveryReceipt', () => {
         { role: 'tool_result', toolUseId: 't1', content: 'FAIL src/list.test.ts\nexit code 1' },
       ],
     });
-    expect(receipt.changes.items.map((file) => file.path)).toEqual(['src/list.ts']);
+    expect(receipt.changes.items.map((file) => file.path)).toEqual(['/repo/src/list.ts']);
     expect(receipt.verification.items).toEqual([
       { command: 'pnpm test:unit', outcome: 'exit 1', failed: true },
     ]);
@@ -166,6 +166,40 @@ describe('buildDeliveryReceipt', () => {
     expect(receipt.verification.items).toEqual([
       { command: 'pnpm test', outcome: 'failed', failed: true },
     ]);
+  });
+
+  it('leaves a Windows absolute path unchanged and does not read JSON stdout as an exit code', () => {
+    const root = ['', '', 'server', 'share', 'repo'].join('\\');
+    const unc = ['', '', 'server', 'share', 'repo', 'out', 'report.csv'].join('\\');
+    const extended = ['\\\\?\\C:', 'repo', 'out', 'report.csv'].join('\\');
+    expect(resolveDeliveryReceiptPath(unc, root)).toBe(unc);
+    expect(resolveDeliveryReceiptPath('out/report.csv', root)).toBe(unc);
+    expect(resolveDeliveryReceiptPath(extended, ['\\\\?\\C:', 'repo'].join('\\'))).toBe(extended);
+    const receipt = buildDeliveryReceipt({
+      title: 'Report',
+      changedFiles: [{ path: 'out/report.csv', status: 'added', cwd: root }],
+      messages: [
+        {
+          role: 'tool_use',
+          toolUseId: 't1',
+          content: { toolName: 'exec', toolUseId: 't1', input: { command: 'print-report' } },
+        },
+        { role: 'tool_result', toolUseId: 't1', content: '{"exitCode":7}' },
+      ],
+    });
+    expect(receipt.changes.items.map((file) => file.path)).toEqual([unc]);
+    expect(receipt.verification.items).toEqual([
+      { command: 'print-report', outcome: '', failed: false },
+    ]);
+  });
+
+  it('does not call an incomplete capture a conversation with no file changes', () => {
+    const receipt = buildDeliveryReceipt({
+      title: 'Edit env',
+      captureIncomplete: true,
+    });
+    expect(receipt.conversationOnly).toBe(false);
+    expect(receipt.changes.shown).toBe(false);
   });
 
   it('does not describe an unread pull-request list as none or passed', () => {

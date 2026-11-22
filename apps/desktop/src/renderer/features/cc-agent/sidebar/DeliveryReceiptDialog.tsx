@@ -30,12 +30,6 @@ interface ListedMessage {
 
 type ReceiptFacts = Omit<DeliveryReceiptInput, 'phase' | 'interactionKind' | 'workflowWaitingOn'>;
 
-function resolveReceiptPath(filePath: string, workingDir: string | null): string {
-  if (!workingDir) return filePath;
-  if (filePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(filePath)) return filePath;
-  return `${workingDir.replace(/[\\/]+$/, '')}/${filePath.replace(/^[\\/]+/, '')}`;
-}
-
 async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
   const [sets, messages, git, refs] = await Promise.all([
     window.electronAPI.maker.listTurnChangeSets(session.id),
@@ -50,15 +44,18 @@ async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
   ]);
   const changedFiles: DeliveryReceiptFileInput[] = [];
   let unlistedChangeCount = 0;
+  let captureIncomplete = false;
   for (const set of [...sets].sort((a, b) => a.createdAt - b.createdAt)) {
     unlistedChangeCount += Math.max(0, set.fileCount - set.files.length);
+    if (set.state === 'partial' || set.incompleteReasons.length > 0) captureIncomplete = true;
     const applied = set.workspaceState !== 'undone';
     for (const file of set.files) {
       changedFiles.push({
-        path: resolveReceiptPath(file.path, set.cwd),
-        oldPath: file.oldPath ? resolveReceiptPath(file.oldPath, set.cwd) : null,
+        path: file.path,
+        oldPath: file.oldPath,
         status: file.status,
         applied,
+        cwd: set.cwd,
       });
     }
   }
@@ -72,6 +69,7 @@ async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
       messages: messageInputs(messages),
       pullRequests: [],
       pullRequestsUnavailable: true,
+      captureIncomplete,
     };
   }
   const activeRefs = refs.filter((ref) => ref.removedAt == null);
@@ -94,6 +92,7 @@ async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
     unlistedChangeCount,
     messages: messageInputs(messages),
     pullRequests,
+    captureIncomplete,
   };
 }
 
@@ -109,12 +108,10 @@ function messageInputs(messages: unknown) {
 function ReceiptFiles({
   items,
   omitted,
-  workingDir,
   remote,
 }: {
   items: Array<{ path: string; name?: string; openable?: boolean }>;
   omitted: number;
-  workingDir: string | null;
   remote: boolean;
 }) {
   const { t } = useTranslation();
@@ -131,7 +128,7 @@ function ReceiptFiles({
               type="button"
               className="min-h-8 w-full truncate rounded-lg px-1 text-left text-sm text-[var(--text-primary)] hover:bg-titlebar-button-hover"
               onClick={() => {
-                void window.electronAPI.openPath(resolveReceiptPath(file.path, workingDir));
+                void window.electronAPI.openPath(file.path);
               }}
             >
               {file.name || file.path}
@@ -273,7 +270,7 @@ export function DeliveryReceiptDialog({
               {receipt.changes.shown && (
                 <section>
                   <h2 className="font-medium">{t('deliveryReceipt.changes')}</h2>
-                  <ReceiptFiles items={receipt.changes.items} omitted={receipt.changes.omitted} workingDir={receipt.workingDir} remote={Boolean(session?.remoteHostId)} />
+                  <ReceiptFiles items={receipt.changes.items} omitted={receipt.changes.omitted} remote={Boolean(session?.remoteHostId)} />
                 </section>
               )}
               {receipt.verification.shown && (
@@ -297,7 +294,7 @@ export function DeliveryReceiptDialog({
               {receipt.outputs.shown && (
                 <section>
                   <h2 className="font-medium">{t('deliveryReceipt.outputs')}</h2>
-                  <ReceiptFiles items={receipt.outputs.items} omitted={receipt.outputs.omitted} workingDir={receipt.workingDir} remote={Boolean(session?.remoteHostId)} />
+                  <ReceiptFiles items={receipt.outputs.items} omitted={receipt.outputs.omitted} remote={Boolean(session?.remoteHostId)} />
                 </section>
               )}
               <p className="break-all">
