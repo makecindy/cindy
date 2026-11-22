@@ -5606,7 +5606,7 @@
       "uninstallTitle": "Pi 확장을 제거할까요?",
       "uninstallDescription": "{{name}}을(를) 이 기기에서 제거합니다. 이미 열려 있는 Pi 작업은 닫을 때까지 이전 확장을 유지합니다.",
       "confirmUninstall": "제거",
-      "extensionDialogConfirm": "확인",
+      "extensionDialogConfirm": "계속",
       "cancel": "취소",
       "relativePathUnsupported": "설정에서 로컬 확장을 설치할 때는 절대 경로를 사용하세요. ./extension 같은 상대 경로는 Pi 작업에서 설치할 수 있습니다.",
       "resources": {
@@ -9376,7 +9376,7 @@
       "allow": "허용",
       "deny": "거부",
       "questionTitle": "답변이 필요합니다",
-      "submit": "제출",
+      "submit": "답변 보내기",
       "planTitle": "계획 검토",
       "approve": "승인",
       "requestChanges": "수정 요청",
@@ -11859,7 +11859,7 @@
           "soleOwnerHint": "그룹에 나만 남았어요. 그룹을 보관하면 기록을 유지하고 나중에 다시 사용할 수 있어요.",
           "archive": "그룹 보관",
           "archiveHint": "그룹을 보관하면 모든 멤버의 새 메시지와 동반자 실행이 중지돼요. 기록은 유지돼요. 그룹을 검색해 기록을 보거나 보관을 해제할 수 있어요.",
-          "confirm": "확인",
+          "confirm": "도구 사용 허용",
           "lastOwner": "나가거나 소유자를 내보내기 전에 다른 멤버에게 소유권을 이전하세요.",
           "conflict": "다른 멤버가 설정을 변경했습니다. 새로 고침 후 다시 시도하세요.",
           "unarchive": "그룹 보관 해제",
@@ -12715,7 +12715,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "확인",
+      "confirm": "계속",
       "cancel": "취소",
       "dontShowAgain": "다음부터 표시하지 않기"
     },
@@ -14936,7 +14936,7 @@
       "back": "뒤로",
       "skip": "건너뛰기",
       "next": "다음",
-      "submit": "제출",
+      "submit": "답변 보내기",
       "sendAndContinue": "보내고 계속",
       "close": "닫기",
       "customAnswer": "다른 답변 입력…",

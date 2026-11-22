@@ -5607,7 +5607,7 @@
       "uninstallTitle": "卸载 Pi 扩展？",
       "uninstallDescription": "将从这台设备移除 {{name}}。当前已打开的 Pi 任务仍会保留旧扩展，关闭后才会彻底卸载。",
       "confirmUninstall": "卸载",
-      "extensionDialogConfirm": "确认",
+      "extensionDialogConfirm": "继续",
       "cancel": "取消",
       "resources": {
         "extension": "扩展代码",
@@ -9376,7 +9376,7 @@
       "allow": "允许",
       "deny": "拒绝",
       "questionTitle": "需要你回答",
-      "submit": "提交",
+      "submit": "发送答复",
       "planTitle": "计划待审核",
       "approve": "批准",
       "requestChanges": "要求修改",
@@ -11859,7 +11859,7 @@
           "soleOwnerHint": "群里只剩你。可以归档群，保留历史记录，以后再恢复使用。",
           "archive": "归档群",
           "archiveHint": "归档会对所有成员停用本群，停止新消息和伙伴执行。历史记录保留，之后可通过搜索找到本群、查看历史并取消归档。",
-          "confirm": "确认",
+          "confirm": "允许使用工具",
           "lastOwner": "请先将群主转让给其他成员，再退出或移除当前群主。",
           "conflict": "群设置已被其他成员更新，请刷新后重试。",
           "unarchive": "取消归档",
@@ -12715,7 +12715,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "确认",
+      "confirm": "继续",
       "cancel": "取消",
       "dontShowAgain": "下次不再提示"
     },
@@ -14936,7 +14936,7 @@
       "back": "返回",
       "skip": "跳过",
       "next": "下一题",
-      "submit": "提交",
+      "submit": "发送答复",
       "sendAndContinue": "发送并继续",
       "close": "关闭",
       "customAnswer": "输入其他回答…",

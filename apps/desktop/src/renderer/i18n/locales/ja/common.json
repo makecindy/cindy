@@ -5606,7 +5606,7 @@
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
       "confirmUninstall": "アンインストール",
-      "extensionDialogConfirm": "確認",
+      "extensionDialogConfirm": "続行",
       "cancel": "キャンセル",
       "relativePathUnsupported": "設定からローカル拡張機能を入れる場合は絶対パスを使ってください。./extension のような相対パスは Pi タスクからインストールできます。",
       "resources": {
@@ -9376,7 +9376,7 @@
       "allow": "許可",
       "deny": "拒否",
       "questionTitle": "回答が必要です",
-      "submit": "送信",
+      "submit": "回答を送信",
       "planTitle": "プランの確認",
       "approve": "承認",
       "requestChanges": "修正を依頼",
@@ -11859,7 +11859,7 @@
           "soleOwnerHint": "メンバーはあなただけです。グループをアーカイブすると履歴が残り、後で再開できます。",
           "archive": "グループをアーカイブ",
           "archiveHint": "アーカイブすると、すべてのメンバーに対して新しいメッセージと仲間の実行が停止します。履歴は保持されます。グループを検索して履歴を閲覧したり、アーカイブを解除したりできます。",
-          "confirm": "確認",
+          "confirm": "ツールの使用を許可",
           "lastOwner": "退出またはオーナーを削除する前に、別のメンバーに所有権を譲渡してください。",
           "conflict": "設定が更新されました。再読み込みしてお試しください。",
           "unarchive": "アーカイブを解除",
@@ -12715,7 +12715,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "確認",
+      "confirm": "続行",
       "cancel": "キャンセル",
       "dontShowAgain": "次回から表示しない"
     },
@@ -14936,7 +14936,7 @@
       "back": "戻る",
       "skip": "スキップ",
       "next": "次へ",
-      "submit": "送信",
+      "submit": "回答を送信",
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
