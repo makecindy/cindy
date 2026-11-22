@@ -273,15 +273,16 @@ export class ExternalChromeBackend implements BrowserBackend {
         // Probe without dispatch: even status can boot the runtime service in
         // a browser-less session. Any survivor still goes through stopBrowser's
         // existing profile/port ownership checks before adopted-process cleanup.
-        if (!this.used) {
+        const coldQuit = !this.used;
+        if (coldQuit) {
           // Backend switches do not own quit-time inherited-process cleanup.
           if (!this.quiescing) return;
-          if (await this.confirmBrowserGone()) {
+          if (await this.confirmBrowserGone(true)) {
             completed = true;
             return;
           }
         }
-        const stopped = await this.stopBrowser({ action: 'stop' });
+        const stopped = await this.stopBrowser({ action: 'stop' }, coldQuit);
         completed = stopped.ok;
         if (!stopped.ok) {
           this.logger.warn('managed browser stop during dispose failed', {
@@ -538,7 +539,7 @@ export class ExternalChromeBackend implements BrowserBackend {
     const hardBlocked = this.routeBlocked && !this.routeBlockedByUnprovenLiveness;
     const sameRouteAlive = sameRoute
       && !hardBlocked
-      && (state === 'running' || (await this.resolveLiveness(currentStatus, true)) !== 'gone');
+      && (state === 'running' || (await this.resolveLiveness(currentStatus)) !== 'gone');
     if (sameRouteAlive) {
       // The process is confirmed alive on the route we still hold, so a block
       // this path was allowed past — transient by definition — has served its
@@ -703,7 +704,7 @@ export class ExternalChromeBackend implements BrowserBackend {
     return actionWithProxy(started, requested);
   }
 
-  private async stopBrowser(request: BackendRequest): Promise<BackendResult> {
+  private async stopBrowser(request: BackendRequest, coldQuit = false): Promise<BackendResult> {
     const result = await this.runtime.call(this.withoutProxy(request));
     if (!result.ok) {
       // A failed vendored stop is not proof the browser is gone either: the
@@ -743,12 +744,10 @@ export class ExternalChromeBackend implements BrowserBackend {
     // Readiness is not exit either — a busy Chrome reports running:false while
     // still alive. Confirm absence independently before releasing the proxy
     // guard, or a survivor keeps serving the old route while we reset to direct.
-    // Wait only when the runtime actually sent a stop. With stopped:false it
-    // owns no process; waiting would delay the adopted-process cleanup below.
-    let stoppedSafely = (await this.resolveLiveness(
-      undefined,
-      (result.data as { stopped?: unknown } | undefined)?.stopped === true,
-    )) === 'gone';
+    // A cold quit without a stop signal can proceed directly to adopted-process
+    // cleanup when the port still listens. Other calls give it time to exit.
+    const stopped = (result.data as { stopped?: unknown } | undefined)?.stopped === true;
+    let stoppedSafely = (await this.resolveLiveness(undefined, coldQuit && !stopped)) === 'gone';
     // An adopted process (Cindy restarted while its managed Chrome stayed
     // alive) cannot be terminated by the vendored stop: its ownership state is
     // in-memory and empty, so `stop` reports ok with stopped:false forever.
@@ -802,7 +801,7 @@ export class ExternalChromeBackend implements BrowserBackend {
    * whether a `'stopped'` readiness signal can be trusted. Pass the result of a
    * call that already carries state to avoid a redundant `status` round trip.
    */
-  private async resolveLiveness(known?: BrowserControlResult, waitForExit = false): Promise<Liveness> {
+  private async resolveLiveness(known?: BrowserControlResult, fastIfListening = false): Promise<Liveness> {
     const cheap = known ? runningState(known) : 'unknown';
     if (cheap === 'running') return 'running';
     const state = cheap === 'unknown'
@@ -811,14 +810,14 @@ export class ExternalChromeBackend implements BrowserBackend {
     if (state === 'running') return 'running';
     // Readiness says stopped/unknown — that is not proof of absence, so ask the
     // non-destructive probe. Anything short of verified absence is `unproven`.
-    return (await this.confirmBrowserGone(waitForExit)) ? 'gone' : 'unproven';
+    return (await this.confirmBrowserGone(fastIfListening)) ? 'gone' : 'unproven';
   }
 
-  private async confirmBrowserGone(waitForExit = false): Promise<boolean> {
+  private async confirmBrowserGone(fastIfListening = false): Promise<boolean> {
     try {
       const cdpHttpUrl = this.resolveCdpHttpUrl();
       if (this.options.isBrowserGone) return await this.options.isBrowserGone(cdpHttpUrl);
-      return await isManagedBrowserGone(cdpHttpUrl, { waitForExit });
+      return await isManagedBrowserGone(cdpHttpUrl, { fastIfListening });
     } catch (err) {
       this.logger.warn('managed browser liveness probe failed', redactBrowserProxyText(err));
       return false;
@@ -900,10 +899,7 @@ export class ExternalChromeBackend implements BrowserBackend {
     // Require verified absence before handing the route to a new launch. The
     // vendored `stopped: true` only means signals were sent, so it cannot skip
     // this check: a survivor would keep serving the old route under a new one.
-    if ((await this.resolveLiveness(
-      undefined,
-      (stopped.data as { stopped?: unknown } | undefined)?.stopped === true,
-    )) !== 'gone') {
+    if ((await this.resolveLiveness()) !== 'gone') {
       this.routeBlocked = true;
       return {
         ok: false,
@@ -927,10 +923,7 @@ export class ExternalChromeBackend implements BrowserBackend {
         // this runtime launched — readiness alone would again mistake a busy
         // browser for an exited one, and the vendored `stopped: true` only
         // reports that signals were sent, not that the process exited.
-        stoppedSafely = (await this.resolveLiveness(
-          undefined,
-          (stopped.data as { stopped?: unknown } | undefined)?.stopped === true,
-        )) === 'gone';
+        stoppedSafely = (await this.resolveLiveness()) === 'gone';
       }
     } catch (err) {
       stoppedSafely = false;

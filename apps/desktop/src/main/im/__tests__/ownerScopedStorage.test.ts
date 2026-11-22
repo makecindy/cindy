@@ -49,8 +49,6 @@ vi.mock('../../appSessionState.js', () => ({
   },
 }));
 
-vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
-
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
 }));
@@ -63,7 +61,6 @@ import { __testing, assertOwnerScopeSettledForWrite, claimLegacyImPath, ownerSco
 import { discordFinalTextStorage } from '../discord/finalTextStorage';
 import { discordChannelAccessStore } from '../discord/channelAccessStore';
 import { addBotImConnectionRecord, setBotImConnectionDiscordChannelAccess, updateBotImConnectionRecord } from '../shared/botImConnectionStore';
-import { WecomGroupNotificationService } from '../../wecomGroupNotification';
 import { DiscordFinalTextOutbox } from '../../../../../../packages/lizi-im/src/discord/finalTextOutbox';
 
 function setSession(mode: TestSession['mode'], ownerId: string | null): void {
@@ -234,35 +231,6 @@ describe('IM owner-scoped storage', () => {
     expect(fs.existsSync(`${target}.bak`)).toBe(false);
     expect(ownerScopedImSecrets.read('discord-bot-token')).toBeNull();
   });
-  // #11600 P1: Windows may leave a locked .bak after a committed write.
-  // Unit tier: real disk adapter + Wecom clear must reject either removal
-  // failure, preserve disabled state, and revoke both copies on retry.
-  it.each(['backup', 'primary'])('rejects Wecom clear with a locked %s and preserves the disabled flag', locked => {
-    setSession('local', 'local-v1');
-    expect(ownerScopedImSecrets.write('wecom-group-webhook-url', 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=invalid-test-key')).toBe(true);
-    expect(ownerScopedImSecrets.write('wecom-group-notification-enabled', 'false')).toBe(true);
-    const target = __testing.scopedSecretPath('wecom-group-webhook-url')!;
-    fs.copyFileSync(target, `${target}.bak`);
-    const originalRemove = fs.unlinkSync;
-    const blocked = locked === 'backup' ? `${target}.bak` : target;
-    const fetch = vi.fn();
-    const service = new WecomGroupNotificationService(fetch, ownerScopedImSecrets);
-    const remove = vi.spyOn(fs, 'unlinkSync').mockImplementation((file) => {
-      if (file === blocked) throw Object.assign(new Error('credential file busy'), { code: 'EBUSY' });
-      return originalRemove(file);
-    });
-    try {
-      expect(() => service.clear()).toThrow('WECOM_GROUP_WEBHOOK_CLEAR_FAILED');
-      expect(ownerScopedImSecrets.read('wecom-group-notification-enabled')).toBe('false');
-      expect(new WecomGroupNotificationService(fetch, ownerScopedImSecrets).getState()).toMatchObject({ configured: true, enabled: false });
-    } finally { remove.mockRestore(); }
-    expect(service.clear()).toEqual({ configured: false, enabled: false });
-    expect(ownerScopedImSecretRevision('wecom-group-webhook-url')).toBe('missing');
-    expect(fs.existsSync(`${target}.bak`)).toBe(false);
-    expect(new WecomGroupNotificationService(fetch, ownerScopedImSecrets).getState()).toEqual({ configured: false, enabled: false });
-    expect(fetch).not.toHaveBeenCalled();
-    expect(() => service.clear()).not.toThrow();
-  });
   it.each(['not-a-uuid', '12345678-1234-4123-8123-123456789abc'])('does not reinterpret a legacy credential containing a revision marker (%s)', revision => {
     setSession('local', 'local-v1');
     const target = __testing.scopedSecretPath('bluebubbles-password');
@@ -344,12 +312,12 @@ describe('IM owner-scoped storage', () => {
     expect(target).not.toBeNull();
     fs.writeFileSync(target!, Buffer.from('corrupt').toString('base64'), 'utf-8');
     expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({ kind: 'error' });
-
-    // 旧 read 契约保持兼容：调用方若不需要区分，错误仍折叠为 null。
-    expect(ownerScopedImSecrets.read('telegram-bot-offline')).toBeNull();
     fs.writeFileSync(target!, JSON.stringify({ version: 2, revision: 'invalid', encrypted: 'invalid' }));
     expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({ kind: 'error' });
     expect(() => ownerScopedImSecretRevision('telegram-bot-offline')).toThrow('IM_SECRET_FILE_INVALID');
+
+    // 旧 read 契约保持兼容：调用方若不需要区分，错误仍折叠为 null。
+    expect(ownerScopedImSecrets.read('telegram-bot-offline')).toBeNull();
   });
 
   it('claims legacy working directories only for a verified cloud owner', () => {

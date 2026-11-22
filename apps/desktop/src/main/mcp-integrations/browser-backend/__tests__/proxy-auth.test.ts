@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { resetBrowserProxyDnsVerdictCache } from '@cindy/browser-control-runtime';
+import { resetBrowserProxyDnsVerdictCache, type BrowserControlRequest } from '@cindy/browser-control-runtime';
 import { ExternalChromeBackend } from '../external-chrome-backend.js';
 
 import {
@@ -481,6 +481,33 @@ describe('BrowserProxyAuthCoordinator', () => {
     }
   });
 
+  // #11600 P1: an ordinary tabs call must admit a new launch after a closing
+  // browser releases its port. Injected liveness skips this real loopback race.
+  // Integration tier: a listener with failed readiness releases the port shortly
+  // after status, and the runtime records whether tabs actually reached it.
+  it('admits ordinary tabs after a closing browser releases its port', async () => {
+    const server = createServer((_request, response) => response.end('{}'));
+    const port = await listen(server);
+    let release: ReturnType<typeof setTimeout> | undefined;
+    const call = vi.fn(async (request: BrowserControlRequest) => {
+      if (request.action === 'status' && !release) {
+        // real-wait: production probes must observe a port released after readiness fails.
+        release = setTimeout(() => server.close(), 100);
+      }
+      return { ok: true, action: request.action, status: 200, data: { running: false } };
+    });
+    const backend = new ExternalChromeBackend({ call }, { warn: vi.fn() }, {
+      cdpHttpUrl: `http://127.0.0.1:${port}`,
+    });
+    try {
+      expect(await backend.call({ action: 'tabs' })).toMatchObject({ ok: true });
+      expect(server.listening).toBe(false);
+      expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: 'tabs' }));
+    } finally {
+      clearTimeout(release);
+    }
+  });
+
   // #8992: use the real default liveness probe against the existing loopback
   // fixture, not an immediate injected verdict. HTTP can answer while the
   // runtime's WebSocket readiness is false. Two 10s exit-confirmation probes
@@ -508,7 +535,7 @@ describe('BrowserProxyAuthCoordinator', () => {
     expect(warn).not.toHaveBeenCalled();
     // The endpoint is still listening: the cleanup receipt above is a seam,
     // while both presence decisions exercise the production TCP/CDP probe.
-    await expect(isManagedBrowserGone(cdp.cdpUrl)).resolves.toBe(false);
+    await expect(isManagedBrowserGone(cdp.cdpUrl, { fastIfListening: true })).resolves.toBe(false);
   }, 16_000);
 
   beforeEach(() => {

@@ -387,14 +387,11 @@ async function confirmCdpGone(cdpHttpUrl: string): Promise<boolean> {
  */
 export async function isManagedBrowserGone(
   cdpHttpUrl: string,
-  options?: { waitForExit?: boolean },
+  options?: { fastIfListening?: boolean },
 ): Promise<boolean> {
-  // A listening port already disproves absence, even when HTTP/WebSocket
-  // readiness is broken. Do not spend an exit-confirmation window waiting for
-  // a live browser before its caller has had a chance to request cleanup.
-  // After a stop sent signals, however, a listener can be on its way out.
-  // Preserve the bounded confirmation window before declaring that stop failed.
-  if (!options?.waitForExit && await isCdpPortListening(cdpHttpUrl)) return false;
+  // During cold quit, a listening port disproves absence and lets the caller
+  // begin ownership-checked cleanup without consuming another wait window.
+  if (options?.fastIfListening && await isCdpPortListening(cdpHttpUrl)) return false;
   return await confirmCdpGone(cdpHttpUrl);
 }
 
