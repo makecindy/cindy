@@ -217,7 +217,8 @@ describe('ensureBotProjectAutomations', () => {
   // teammate reviewed, so its saved memories only piled up. Unit, real generated check with
   // SQLite and files: changed memory or skills admit a review at most weekly; only a review
   // whose run succeeded consumes them (#12080 review P1); the review's own edits, the supplied
-  // memory guide, the search index and self-tests do not count.
+  // memory guide, the generated MEMORY.md index (#12080 review), the search index and self-tests
+  // do not count.
   it('reviews a quiet teammate whose memory or skills changed, at most once a week', async () => {
     await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
     const db = new DatabaseSync(database.path);
@@ -236,6 +237,7 @@ describe('ensureBotProjectAutomations', () => {
     try {
       expect(await runMemoryCheck(workingDir, start, { runId: 'r0' })).toBe(2); // Nothing saved yet.
       await touch('.cindy/memory/README.md', start + 1);
+      await touch('.cindy/memory/MEMORY.md', start + 1); // Rebuilt on every storage start.
       await touch('.cindy/memory/fts.db', start + 1);
       await touch('.cindy/memory/.cindy-memory-migration-v1.json', start + 1);
       await touch('.agents/skills/brew/node_modules/dep/index.js', start + 1);
@@ -247,7 +249,7 @@ describe('ensureBotProjectAutomations', () => {
       expect(await runMemoryCheck(workingDir, start + day, { runId: 'r2', log: first })).toBe(0);
       expect(first.join('\n')).toContain('.cindy/memory/coffee.md');
       expect(first.join('\n')).toContain('.agents/skills/brew/SKILL.md');
-      expect(first.join('\n')).not.toMatch(/README|fts\.db|migration|node_modules/);
+      expect(first.join('\n')).not.toMatch(/README|MEMORY\.md|fts\.db|migration|node_modules/);
       // That run failed before tidying: the next night tries again with the same material.
       finish.run('r2', 'failed', start + day + 1_000);
       const retry: string[] = [];

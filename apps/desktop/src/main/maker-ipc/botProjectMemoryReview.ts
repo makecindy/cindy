@@ -102,7 +102,9 @@ const changed = [];
 const budget = 2000;
 let visited = 0;
 let truncated = false;
-// Memory records are Markdown; the search index and migration receipts beside them are not.
+// Memory records are Markdown. The supplied guide, the generated index (MEMORY.md is rewritten
+// whenever memory storage starts, even unchanged), the search index and receipts are not.
+const derived = ['.cindy/memory/README.md', '.cindy/memory/MEMORY.md'];
 function collect(dir, relative, memory) {
   if (visited >= budget) { truncated = true; return; }
   let entries;
@@ -118,7 +120,7 @@ function collect(dir, relative, memory) {
     const full = path.join(dir, entry.name);
     const name = relative + '/' + entry.name;
     if (entry.isDirectory()) collect(full, name, memory);
-    else if (entry.isFile() && (!memory || (entry.name.endsWith('.md') && name !== '.cindy/memory/README.md'))
+    else if (entry.isFile() && (!memory || (entry.name.endsWith('.md') && !derived.includes(name)))
       && fs.statSync(full).mtimeMs > baseline) changed.push(name);
   }
 }
