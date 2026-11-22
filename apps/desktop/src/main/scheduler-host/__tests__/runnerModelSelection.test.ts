@@ -279,7 +279,7 @@ function createRunnerHarness(
     >[0]['resolveDefaultModelRoute'];
     getSessionMeta?: () => Promise<typeof meta>;
     admitPluginEngine?: ConstructorParameters<typeof MakerScheduleRunner>[0]['admitPluginEngine'];
-    pickScheduleModelGroup?: ConstructorParameters<typeof MakerScheduleRunner>[0]['pickScheduleModelGroup'];
+    modelGroupStart?: ConstructorParameters<typeof MakerScheduleRunner>[0]['modelGroupStart'];
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
@@ -319,7 +319,7 @@ function createRunnerHarness(
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
     ...(opts.admitPluginEngine ? { admitPluginEngine: opts.admitPluginEngine } : {}),
-    ...(opts.pickScheduleModelGroup ? { pickScheduleModelGroup: opts.pickScheduleModelGroup } : {}),
+    ...(opts.modelGroupStart ? { modelGroupStart: opts.modelGroupStart } : {}),
   });
   return { runner, createSession, closeSession };
 }
@@ -358,67 +358,61 @@ describe('MakerScheduleRunner model selection', () => {
   // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19), unit through runner.fire. A fresh
   // run on a plugin engine must start that engine with its own model and level, never be checked
   // against or rerouted through the built-in catalog, and fail plainly when the plugin is turned off.
-  // model-groups.md §6.3, unit through runner.fire: a schedule with a mode re-picks its source on every run
-  // and the picked model is what the new task starts with; the pick is recorded only once the run started.
-  // Gap: scheduled runs only knew the saved model. Minimal input: a fresh Codex schedule saved on one model
-  // whose mode picks another. Failure: the task starts on the saved model, or the pick is recorded before or
-  // without a task.
+  // model-groups.md §6.3 (2026-11-22: a mode belongs to the task), unit through runner.fire: a run that creates a
+  // new task picks its source from the mode and hands the token to the ordinary task startup, which settles the
+  // pick on the first dispatched turn; a run sent to an existing task does not pick (that task follows its own
+  // mode). Gap: scheduled runs only knew the saved model. Minimal input: a fresh Codex schedule saved on one model
+  // whose mode picks another, and the same schedule bound to a live task. Failure: the new task starts on the saved
+  // model or without the token, or a bound run re-picks.
   describe('model group schedules', () => {
-    it('starts the new task on the model the mode picked and records it after the run started', async () => {
+    const picked = (token = 'tok-1') => ({
+      prepare: vi.fn(async () => ({
+        route: { agentKind: 'codex' as const, model: 'gpt-picked', providerId: 'openai-work', agentDeviceId: null },
+        token,
+      })),
+      canRoute: vi.fn(async () => true),
+    });
+
+    it('starts the new task on the model the mode picked and hands the token to task startup', async () => {
       const h = createSessionHarness();
-      const started = vi.fn();
-      const pickScheduleModelGroup = vi.fn(async () => ({
-        route: { modelAgentKind: 'codex' as const, model: 'gpt-picked', providerId: '', effort: undefined, modelAgentDeviceId: '' },
-        started,
-      }));
+      const modelGroupStart = picked();
       const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
-        pickScheduleModelGroup, resolveModelSelection: async (choice) => choice,
+        modelGroupStart, resolveModelSelection: async (choice) => choice,
       });
       const opts = await fireToCompletion(harness, h, baseSchedule({
         agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
-      }));
-      expect(pickScheduleModelGroup).toHaveBeenCalledOnce();
+      })) as { model: string; modelGroupStart?: string };
+      expect(modelGroupStart.prepare).toHaveBeenCalledWith('daily', { keptModelName: 'gpt-saved', localOnly: false });
       expect(opts.model).toBe('gpt-picked');
-      expect(started).toHaveBeenCalledWith(h.session.id, expect.any(Function));
-      // PR #11881 review r4653462655: the note anchors on the message this run sent, not the first user
-      // message after the pick (another message may land while pre-run checks wait).
-      const userMessage = mocks.createMessage.mock.calls.find((call) => call[1]?.role === 'user')?.[1];
-      expect(started.mock.calls[0]![1]()).toBe(userMessage?.clientId);
+      expect(opts.modelGroupStart).toBe('tok-1');
     });
 
-    // PR #11881 review r4651177672: the pick was recorded only after the whole reply, so a failed run was
-    // never recorded and a long run's decision had expired. It must be recorded once the message is dispatched.
-    it('records the pick when the message is dispatched, before the reply, even if the run then fails', async () => {
+    it('keeps the saved model when the mode has nothing to pick, and still hands the token over for the note', async () => {
       const h = createSessionHarness();
-      const started = vi.fn();
+      const modelGroupStart = { prepare: vi.fn(async () => ({ token: 'tok-kept' })), canRoute: vi.fn(async () => false) };
       const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
-        pickScheduleModelGroup: async () => ({
-          route: { modelAgentKind: 'codex' as const, model: 'gpt-picked', providerId: '', effort: undefined, modelAgentDeviceId: '' },
-          started,
-        }),
-        resolveModelSelection: async (choice) => choice,
+        modelGroupStart, resolveModelSelection: async (choice) => choice,
+      });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      })) as { model: string; modelGroupStart?: string };
+      expect(opts.model).toBe('gpt-saved');
+      expect(opts.modelGroupStart).toBe('tok-kept');
+    });
+
+    it('does not pick when the run goes to a task that still exists', async () => {
+      const h = createSessionHarness();
+      const modelGroupStart = picked();
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        modelGroupStart, resolveModelSelection: async (choice) => choice,
       });
       const firing = harness.runner.fire(baseSchedule({
-        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily', targetSessionId: 'bound',
       }), createFireContext()).catch((error: unknown) => error);
-      await vi.waitFor(() => expect(h.send).toHaveBeenCalled());
-      await vi.waitFor(() => expect(started).toHaveBeenCalledWith(h.session.id, expect.any(Function)));
-      h.emit({ type: 'error', data: { message: 'upstream failed' } });
+      await vi.waitFor(() => expect(mocks.getSessionRowSnapshot).toHaveBeenCalled());
+      h.emit({ type: 'done', data: {} });
       await firing;
-      expect(started).toHaveBeenCalledOnce();
-    });
-
-    it('keeps the saved model when the mode has nothing to pick', async () => {
-      const h = createSessionHarness();
-      const started = vi.fn();
-      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
-        pickScheduleModelGroup: async () => ({ started }), resolveModelSelection: async (choice) => choice,
-      });
-      const opts = await fireToCompletion(harness, h, baseSchedule({
-        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
-      }));
-      expect(opts.model).toBe('gpt-saved');
-      expect(started).toHaveBeenCalledOnce();
+      expect(modelGroupStart.prepare).not.toHaveBeenCalled();
     });
   });
 
@@ -561,15 +555,12 @@ describe('MakerScheduleRunner model selection', () => {
   // resolves. Failure: save rejected although runs would use the mode; or a mode with nothing usable admitted.
   it('admits a mode that picks a usable source even when the saved fallback model is gone', async () => {
     const resolveModelSelection = vi.fn(async () => { throw new Error('[MODEL_SELECTION_UNAVAILABLE] removed'); });
-    const pickScheduleModelGroup = vi.fn(async () => ({
-      route: { modelAgentKind: 'codex' as const, model: 'gpt-picked', providerId: '', effort: undefined, modelAgentDeviceId: '' },
-      started: vi.fn(),
-    }));
-    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection, pickScheduleModelGroup });
+    const modelGroupStart = { prepare: vi.fn(), canRoute: vi.fn(async () => true) };
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection, modelGroupStart });
     const schedule = baseSchedule({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gone', providerId: 'removed', modelGroup: 'daily' });
     await expect(harness.runner.validateModelSelection(schedule)).resolves.toBeUndefined();
     expect(resolveModelSelection).not.toHaveBeenCalled();
-    pickScheduleModelGroup.mockResolvedValueOnce({ started: vi.fn() } as never);
+    modelGroupStart.canRoute.mockResolvedValueOnce(false);
     await expect(harness.runner.validateModelSelection(schedule)).rejects.toThrow('modelAgentDeviceId');
   });
 

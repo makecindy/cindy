@@ -1451,6 +1451,7 @@ import {
 import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
 import { botModelGroupsSignature, expandBotModelGroups, modelGroupCandidateRoute } from '../model-groups/botRoutes.js';
 import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
+import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
 import { bindModelGroupSession, readModelGroupBindingForDispatch } from '../model-groups/sessionBindings.js';
@@ -4739,6 +4740,14 @@ let recordDispatchedModelHolder: ((sessionId: string, clientId: string) => void)
 export function bootstrapScheduledSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal, assertOwner?: () => void): ReturnType<Maker['createSession']> {
   if (!scheduledSessionBootstrapHolder) throw new Error('Scheduled session startup is not initialized');
   return scheduledSessionBootstrapHolder(options, signal, assertOwner);
+}
+
+/** 每一轮派发都经过这里：经模式新建的任务在第一轮结算选路、绑定与说明(model-groups/sessionStart.ts)。 */
+function withModelGroupStartSettlement(record: (sessionId: string, clientId: string) => void) {
+  return (sessionId: string, clientId: string): void => {
+    record(sessionId, clientId);
+    modelGroupSessionStart.dispatched(sessionId, clientId);
+  };
 }
 
 export function recordDispatchedModel(sessionId: string, clientId: string): void {
@@ -8969,6 +8978,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
     creationSignal?.addEventListener('abort', closeCancelled, { once: true });
     try {
+    // 入口按模式选好来源后随建任务参数交来的凭据：这个任务第一轮派发时结算(model-groups/sessionStart.ts)。
+    const modelGroupStart = o.modelGroupStart;
+    delete o.modelGroupStart;
+    if (o.id && typeof modelGroupStart === 'string') modelGroupSessionStart.attach(o.id, modelGroupStart);
     assertAccess?.();
     await applyPersistedCindyMakeMarker(o, readSessionSource);
     assertAccess?.();
@@ -18307,11 +18320,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
     beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
-    onModelDispatched: recordDispatchedModelHolder = createTurnModelAttribution({
+    onModelDispatched: recordDispatchedModelHolder = withModelGroupStartSettlement(createTurnModelAttribution({
       captureModelChoice,
       maker: { getSession: (sessionId) => builtinLiveSession(sessionId) }, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
       enqueueDurableWrite, patchMessageAgentMeta, createDbMessage, log,
-    }),
+    })),
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
       assertTaskPromptCurrent(sessionId);
       const remote = isDeviceLinkInvoke();

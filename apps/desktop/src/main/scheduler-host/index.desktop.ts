@@ -1,5 +1,5 @@
 import { projectForNewTask } from '../mcp-integrations/projectManagementCore.js';
-import { createDesktopScheduleModelGroupPicker } from '../model-groups/schedulePick.desktop.js';
+import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { app } from 'electron';
 import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
@@ -92,7 +92,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     const promptRunner = new MakerScheduleRunner({
       projectForNewTask,
       // 设了模式的定时任务每次运行前按模式重新选来源(model-groups.md §6.3)。
-      pickScheduleModelGroup: createDesktopScheduleModelGroupPicker(),
+      modelGroupStart: modelGroupSessionStart,
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,
       getDb: deps.getDb,
