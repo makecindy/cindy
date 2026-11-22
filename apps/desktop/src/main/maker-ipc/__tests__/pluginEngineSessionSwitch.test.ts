@@ -313,6 +313,24 @@ describe('switching a plugin-engine task back to a built-in engine', () => {
     expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
   });
 
+  // Unit, real switch handler: a companion on a shared plugin keeps the active
+  // source when selected again, even if a different engine was queued earlier.
+  it('clears an older switch when reselecting the current shared companion engine', async () => {
+    const agentDeviceId = 'share:friend';
+    const { deps, pendingSwitches } = makeDeps({ ...pluginRow(), source: 'bot', agentDeviceId });
+    pendingSwitches.set('s1', { targetAgentKind: 'codex', model: 'other-model' });
+
+    const result = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, agentDeviceId,
+      configStaged: true,
+    });
+
+    expect(result).toMatchObject({ switched: false, sameEngineRevision: expect.any(Number) });
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+    expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  });
+
   // A saved companion model must switch the existing chat across host, remote and shared plugin engines, discarding the previous SDK session.
   it('runs the chosen host, remote and shared plugins on a companion chat', async () => {
     const OTHER_ENGINE = 'acp-plugin:alternate:engine';
