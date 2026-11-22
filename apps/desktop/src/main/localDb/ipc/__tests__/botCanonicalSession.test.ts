@@ -277,6 +277,7 @@ import {
   markBotProfileRuntimeApplied,
   markBotProfileRuntimeFailed,
 } from '../../../maker-ipc/botProfileRuntime';
+import { botRuntimeRefreshNeedsReplacement } from '../../../maker-ipc/botCompactRuntimeRefresh';
 import { createBotDirectMessageService } from '../../../maker-ipc/botDirectMessageService';
 import { configureBotCanonicalReplacementCoordinator } from '../../../maker-ipc/botCanonicalReplacementCoordinator';
 import type { MakerSessionCreateOpts } from '../../../maker-ipc/sessionRequest';
@@ -3161,6 +3162,35 @@ describe('Bot canonical Session lifecycle', () => {
       expect((await hydrateBotProfileRuntime(makeOpts(), deps))?.runtimeEpochChanged).toBe(false);
       updatedAt = 'v2';
       expect((await hydrateBotProfileRuntime(makeOpts(), deps))?.runtimeEpochChanged).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // PR #11992 review (P1): a refresh signal may skip the rebuild only after a
+  // real comparison. If the first runtime-applied write failed (Maker still
+  // publishes the runtime), there is no baseline: a later Profile change must
+  // still rebuild instead of being read as "unchanged".
+  it('keeps rebuilding on refresh signals until an applied baseline exists', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+    try {
+      const created = await invoke('local-db:bots:create-canonical-session', {
+        botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      });
+      const makeOpts = (): MakerSessionCreateOpts => ({
+        id: created.session.id, agentKind: 'codex', workingDir: created.session.workingDir,
+        workspaceKind: 'dialogue', model: 'gpt-5', permissionMode: 'bypassPermissions',
+      });
+      await hydrateBotProfileRuntime(makeOpts()); // started, but never marked applied
+      await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { inputHandoff: false } });
+      const noBaseline = await hydrateBotProfileRuntime(makeOpts(), {}, { persistSnapshot: false });
+      expect(noBaseline?.runtimeEpochChanged).toBe(false);
+      expect(botRuntimeRefreshNeedsReplacement(noBaseline)).toBe(true);
+
+      await markBotProfileRuntimeApplied((await hydrateBotProfileRuntime(makeOpts()))!);
+      const unchanged = await hydrateBotProfileRuntime(makeOpts(), {}, { persistSnapshot: false });
+      expect(botRuntimeRefreshNeedsReplacement(unchanged)).toBe(false);
     } finally {
       clock.mockRestore();
     }
