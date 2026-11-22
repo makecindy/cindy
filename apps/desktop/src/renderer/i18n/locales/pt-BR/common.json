@@ -3439,7 +3439,7 @@
       }
     },
     "sessionImport": {
-      "title": "Importar sessões",
+      "title": "Importação de sessões",
       "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue trabalhando. O Cindy apenas lê os originais e nunca os altera.",
       "rescan": "Buscar novamente",
       "allSources": "Todas as origens",
@@ -4447,7 +4447,7 @@
         "runLocation": {
           "label": "Executar em",
           "optionLocal": "Este computador",
-          "notSignedIn": "Sem login",
+          "notSignedIn": "Login não realizado",
           "local": "As novas tarefas rodam neste computador. Você pode escolher outro dos seus computadores conectados.",
           "pinned": "As novas tarefas rodam em {{device}} com o login dele. As tarefas em andamento continuam onde estão.",
           "inline": "Executa em",
@@ -8026,7 +8026,7 @@
         "filtersAria": "Filtrar plugins por origem",
         "origin": {
           "public": "Públicos",
-          "organization": "Da equipe",
+          "organization": "Compartilhados pela equipe",
           "local": "Locais",
           "custom": "Personalizados"
         },
@@ -8274,7 +8274,7 @@
       },
       "installConsent": {
         "installTitle": "Instalar o plugin “{{name}}”?",
-        "updateTitle": "Atualizar o plugin “{{name}}”?",
+        "updateTitle": "Atualizar o plugin \"{{name}}\"?",
         "installMeta": "Versão {{version}} · {{source}}",
         "updateMeta": "Versão {{from}} → {{to}} · {{source}}",
         "installDescription": "Nada é instalado até você confirmar. O plugin é ativado logo após a instalação, e você pode desativá-lo ou desinstalá-lo a qualquer momento na página Plugins.",
@@ -8283,7 +8283,7 @@
         "noPermissions": "Este plugin não declara permissões adicionais.",
         "addedTitle": "Permissões novas ou alteradas:",
         "removedTitle": "Não são mais necessárias:",
-        "addedBadge": "Nova",
+        "addedBadge": "Novo",
         "unchangedCount": "Permissões inalteradas: {{count}}",
         "oauthClientChanged": "Esta atualização altera o cliente OAuth. As contas conectadas que usam a autorização integrada do plugin expirarão após a atualização e precisarão ser reconectadas.",
         "originMarket": "Do marketplace de plugins do {{appName}}",
@@ -11550,7 +11550,7 @@
         "nameRequired": "Insira um nome para o grupo",
         "membersLabel": "Escolher amigos",
         "selectedCount_one": "{{count}} selecionado, até {{max}}",
-        "selectedCount_other": "{{count}} selecionados, até {{max}}",
+        "selectedCount_other": "{{count}} selecionado, até {{max}}",
         "minMembers": "Escolha pelo menos {{min}} amigos",
         "notEnoughBots": "Você precisa de pelo menos {{min}} amigos disponíveis para iniciar uma conversa em grupo. Adicione um amigo primeiro.",
         "submit": "Criar conversa em grupo",
@@ -12931,7 +12931,7 @@
             "providerDisconnected": "⚠️ Esta conversa do Discord usa o provedor “{{provider}}” ({{model}}), mas ele não está conectado ou a conexão expirou.",
             "agentLogin": "⚠️ Esta conversa do Discord usa o provedor “{{provider}}” ({{model}}), que exige fazer login primeiro com as credenciais do {{agentKind}}.",
             "fixAttached": "Corrija a autenticação em Configurações → Provedores no desktop e continue enviando mensagens.",
-            "fixDetached": "Altere a “Configuração de novas conversas” e continue enviando mensagens. Se você escolheu um modelo específico para esta conversa, envie `/model` para escolher de novo."
+            "fixDetached": "Altere a “Configuração de novas conversas” e é só continuar enviando mensagens. Se esta conversa tiver um modelo escolhido separadamente, envie `/model` para escolher de novo."
           }
         },
         "cards": {
@@ -17002,7 +17002,7 @@
         "nameTaken": "Já existe uma pasta com este nome",
         "nameInvalid": "O nome não pode conter \\ / : * ? \" < > | nem terminar com ponto ou espaço",
         "loadFailed": "Não foi possível carregar o local do projeto",
-        "failed": "Falha ao criar o projeto",
+        "failed": "Falha ao criar projeto",
         "done": "Projeto criado e sessão movida"
       },
       "sessionMenu": {
@@ -19339,7 +19339,7 @@
         "message": "Escolha uma categoria antes de publicar no Mercado"
       },
       "NAME_TAKEN": {
-        "title": "Nome em uso",
+        "title": "Nome já em uso",
         "message": "Este nome já é usado por outro autor. Renomeie e publique novamente."
       },
       "INVALID_DEPT": {

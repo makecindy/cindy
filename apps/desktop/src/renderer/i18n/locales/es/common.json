@@ -2367,7 +2367,7 @@
       "themeAria": {
         "light": "Tema claro",
         "dark": "Tema oscuro",
-        "system": "Seguir sistema"
+        "system": "Según el sistema"
       },
       "sidebarCardMode": {
         "label": "Estilo fijado",
@@ -3303,7 +3303,7 @@
           "filters": {
             "all": "Todos",
             "automatic": "Automáticos",
-            "manual": "Manuales"
+            "manual": "Manual"
           },
           "sources": {
             "automatic": "Automático",
@@ -3439,7 +3439,7 @@
       }
     },
     "sessionImport": {
-      "title": "Importar sesiones",
+      "title": "Importación de sesión",
       "description": "Trae sesiones de otras herramientas de programación con IA a Cindy y sigue trabajando. Cindy solo lee los originales y nunca los modifica.",
       "rescan": "Buscar de nuevo",
       "allSources": "Todos los orígenes",
@@ -3782,7 +3782,7 @@
           "baseUrl": "URL base",
           "protocol": "Protocolo de API",
           "chooseProtocol": "Elige un protocolo",
-          "apiKey": "Clave de API",
+          "apiKey": "Clave API",
           "keepKey": "Dejar vacío para conservar la clave leída",
           "missingUrl": "Se requiere una URL",
           "status": {
@@ -4447,7 +4447,7 @@
         "runLocation": {
           "label": "Ejecutar en",
           "optionLocal": "Esta computadora",
-          "notSignedIn": "Sin sesión",
+          "notSignedIn": "Sesión no iniciada",
           "local": "Las tareas nuevas se ejecutan en esta computadora. Puedes elegir otra de tus computadoras con sesión iniciada.",
           "pinned": "Las tareas nuevas se ejecutan en {{device}} con su sesión. Las tareas en curso siguen donde están.",
           "inline": "Se ejecuta en",
@@ -4857,7 +4857,7 @@
       "sessionNotification": {
         "label": "Notificaciones de sesión",
         "cellLabel": "Enviar un mensaje directo de Feishu / Lark cuando una sesión finalice o necesite una respuesta",
-        "hint": "Envía un mensaje privado a través del bot Feishu o Lark vinculado; sólo cuando la ventana está desenfocada.",
+        "hint": "Envía un mensaje privado a través del bot de Feishu o Lark vinculado; solo cuando la ventana no tiene el foco.",
         "disabledHint": "Primero configure el bot y envíele un mensaje directo una vez para completar la vinculación."
       },
       "bind": "Vincular"
@@ -4880,7 +4880,7 @@
       "errorNote": "La conexión no se completó. Verifique su red y escanee nuevamente. Cindy nunca almacena credenciales en texto plano después de una conexión fallida.",
       "disabledNote": "Personal WeChat está pausado en esta versión por la política de compatibilidad. Las sesiones y configuraciones guardadas no se eliminan.",
       "permission": {
-        "label": "Modo de permiso",
+        "label": "Modo de permisos",
         "hint": "Se aplica al nuevo contexto después de /new. Las acciones riesgosas aún requieren confirmación en Cindy Desktop.",
         "fullAccessDisabled": "Personal WeChat aún no admite acceso completo porque las acciones que no se pueden confirmar en WeChat no deben ejecutarse directamente.",
         "permissionModeDisabled": "Personal WeChat siempre utiliza la política de confirmación de Cindy Desktop, por lo que este modo de permiso no está disponible."
@@ -8274,7 +8274,7 @@
       },
       "installConsent": {
         "installTitle": "¿Instalar el complemento “{{name}}”?",
-        "updateTitle": "¿Actualizar el complemento “{{name}}”?",
+        "updateTitle": "¿Actualizar el complemento \"{{name}}\"?",
         "installMeta": "Versión {{version}} · {{source}}",
         "updateMeta": "Versión {{from}} → {{to}} · {{source}}",
         "installDescription": "No se instala nada hasta que confirmes. El complemento se activa justo después de instalarse y puedes desactivarlo o desinstalarlo cuando quieras en la página Complementos.",
@@ -11550,7 +11550,7 @@
         "nameRequired": "Introduce un nombre para el grupo",
         "membersLabel": "Elige amigos",
         "selectedCount_one": "{{count}} seleccionado, hasta {{max}}",
-        "selectedCount_other": "{{count}} seleccionados, hasta {{max}}",
+        "selectedCount_other": "{{count}} seleccionado, hasta {{max}}",
         "minMembers": "Elige al menos {{min}} amigos",
         "notEnoughBots": "Necesitas al menos {{min}} amigos disponibles para iniciar un chat grupal. Primero agrega un amigo.",
         "submit": "Crear chat grupal",
@@ -12931,7 +12931,7 @@
             "providerDisconnected": "⚠️ Esta conversación de Discord usa el proveedor «{{provider}}» ({{model}}), pero no está conectado o la conexión ha caducado.",
             "agentLogin": "⚠️ Esta conversación de Discord usa el proveedor «{{provider}}» ({{model}}), que requiere iniciar sesión primero con las credenciales de {{agentKind}}.",
             "fixAttached": "Corrige la autenticación en Configuración → Proveedores en el escritorio y sigue enviando mensajes.",
-            "fixDetached": "Cambia la «Configuración de nuevas conversaciones» y sigue enviando mensajes. Si elegiste un modelo específico para esta conversación, envía `/model` para volver a elegirlo."
+            "fixDetached": "Cambia la “Configuración de nuevas conversaciones” y sigue enviando mensajes. Si esta conversación tiene un modelo elegido aparte, envía `/model` para volver a elegirlo."
           }
         },
         "cards": {
@@ -19339,7 +19339,7 @@
         "message": "Elige una categoría antes de publicar en el mercado"
       },
       "NAME_TAKEN": {
-        "title": "Nombre en uso",
+        "title": "El nombre ya está en uso",
         "message": "Otro autor ya usa este nombre. Cámbialo y vuelve a publicar."
       },
       "INVALID_DEPT": {
@@ -21534,7 +21534,7 @@
       "development": "Versión oficial en desarrollo",
       "withChanges": "{{version}} + {{count}} de tus cambios",
       "withChanges_one": "{{version}} + {{count}} cambio propio",
-      "withChanges_other": "{{version}} + {{count}} cambios propios",
+      "withChanges_other": "{{version}} + {{count}} de tus cambios",
       "withOwnChanges": "{{version}} + tus cambios",
       "noChanges": "{{version}}, aún sin cambios tuyos",
       "latest": {

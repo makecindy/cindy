@@ -1886,7 +1886,7 @@
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
       "linkOpen": "開啟連結",
-      "streamFade": "回覆動效",
+      "streamFade": "回覆動畫",
       "compatMode": "小技巧",
       "voiceInput": "語音輸入",
       "import": "任務匯入",
@@ -1947,7 +1947,7 @@
         "add": "新增",
         "reload": "重新讀取 ~/.ssh/config",
         "connect": "連線",
-        "disconnect": "斷開",
+        "disconnect": "中斷連線",
         "remove": "移除",
         "expand": "展開 agent 設定",
         "collapse": "收起 agent 設定",
@@ -4758,7 +4758,7 @@
       "sessionNotification": {
         "label": "任務完成通知",
         "cellLabel": "任務完成或需要回覆時傳送飛書 / Lark 訊息",
-        "hint": "透過已繫結的飛書或 Lark 機器人私訊你一則訊息；僅在視窗失焦時傳送。",
+        "hint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先設定 Bot 並傳送一則訊息給它，以完成繫結。"
       },
       "bind": "繫結"
@@ -5466,7 +5466,7 @@
       "toggleAria": "切換回覆文字漸顯效果"
     },
     "personalization": {
-      "title": "個人化",
+      "title": "個性化",
       "subtitle": "自訂提示詞",
       "description": "為你的助手提供額外的指令和上下文。",
       "placeholder": "在這裡輸入自訂指令，會追加到 Claude / Codex 的系統提示詞末尾。\n\n· 僅對 {{appName}} 內嵌的 Agent 會話生效；已有會話維持啟動時快照，修改後下一個新會話才套用。\n· 想讓所有 Claude Code 會話（含終端機直接執行、其他 IDE）硬性生效：在 ~/.claude/settings.json 裡設定 SessionStart hook（harness 級強制）。\n· Codex CLI 可在 ~/.codex/hooks.json 設定 SessionStart hook 強制注入（harness 級，和 CC 同款）；或透過 ~/.codex/AGENTS.md 自動載入（軟約束，模型可能忽略）。",
@@ -5797,7 +5797,7 @@
           "updatingBody": "更新完成後會自動恢復連線。",
           "selectPluginTitle": "選擇瀏覽器擴充功能",
           "selectPluginBody": "請開啟插件詳情，選擇「使用此瀏覽器擴充功能」，確認 Cindy 使用的擴充功能。",
-          "selectPlugin": "開啟插件",
+          "selectPlugin": "打開插件",
           "updatePluginTitle": "更新 Cindy Chrome 插件",
           "updatePluginBody": "已安裝的 Cindy Chrome 插件版本較舊，還不支援「我的瀏覽器」。更新到最新版後，再依提示把擴充功能裝進瀏覽器。",
           "updatePlugin": "前往更新",
@@ -8598,7 +8598,7 @@
           "remoteQuickAnswerHint": "這個模型不在本機執行。快問快答只能從本機發出，會改用系統輔助模型。",
           "restoreModel": "還原預設模型"
         },
-        "toolsTitle": "Tools",
+        "toolsTitle": "工具",
         "permissionsTitle": "權限",
         "infoDescription": "描述",
         "customSlotAsleep": "插件已停用，啟用後這裡將顯示它的設定介面。",
@@ -12783,7 +12783,7 @@
             "providerDisconnected": "⚠️ 目前 Discord 對話使用供應商「{{provider}}」（{{model}}），未連線或連線已失效。",
             "agentLogin": "⚠️ 目前 Discord 對話使用供應商「{{provider}}」（{{model}}），需要先登入 {{agentKind}} 憑證。",
             "fixAttached": "請在 desktop 的「設定 → 模型供應商」中修復驗證後，直接繼續傳送訊息。",
-            "fixDetached": "修改「新對話配置」後直接繼續傳送訊息即可；若目前對話曾單獨選過模型，請傳送 `/model` 重新選擇。"
+            "fixDetached": "修改「新對話配置」後直接繼續傳送訊息即可；若目前對話單獨選過模型，請傳送 `/model` 重新選擇。"
           }
         },
         "cards": {
@@ -12793,7 +12793,7 @@
             "btnAllowOnce": "✅ 僅本次允許",
             "btnAllowAlways": "✅ 一律允許",
             "btnDeny": "❌ 拒絕",
-            "resolvedAllowOnce": "✅ 已允許（僅限本次）",
+            "resolvedAllowOnce": "✅ 已允許（僅本次）",
             "resolvedAllowAlways": "✅ 已允許（這個工具之後都放行）",
             "resolvedDeny": "❌ 已拒絕"
           },
@@ -12972,7 +12972,7 @@
           "unsupportedNotice": "ℹ️ 以下內容我處理不了，先放一邊了：\n{{list}}\n\n其他部分收到啦，正在處理~",
           "companionUnavailable": "⏸ 夥伴現在接不了訊息：{{reason}}",
           "authMissing": {
-            "currentProvider": "目前供應商",
+            "currentProvider": "目前的供應商",
             "reasonGatewayKey": "需要先設定 Cindy AI Key",
             "reasonProviderKey": "還沒有設定該供應商的 API Key",
             "reasonProviderDisconnected": "未連線或連線已失效",
@@ -13135,7 +13135,7 @@
           "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
           "autoReviewReason": "自動審批需要你決定：{{reason}}",
           "previewUnserializable": "<無法序列化>",
-          "previewTruncated": "…（已截斷）",
+          "previewTruncated": "…(已截斷)",
           "choiceReceived": "已收到你的選擇。",
           "allowedSession": "✅ 已允許（本任務）",
           "allowedOnce": "✅ 已允許（僅本次）",
@@ -13259,7 +13259,7 @@
           "unsupportedOnly": "🙏 暫時無法處理這則訊息：\n{{items}}",
           "unsupportedNotice": "ℹ️ 以下內容未能處理：\n{{items}}\n\n其他內容將繼續處理。",
           "authMissing": {
-            "providerFallback": "目前供應商",
+            "providerFallback": "目前的供應商",
             "reasonGatewayKey": "需要先設定 Cindy AI Key",
             "reasonProviderKey": "尚未設定該供應商的 API Key",
             "reasonProviderDisconnected": "連線已中斷或失效",
@@ -15730,7 +15730,7 @@
       "openInSidebarFileBrowser": "在檔案列表中定位",
       "openInSidebarFileBrowserFailed": "在側邊欄檔案瀏覽器中開啟失敗",
       "openInSidebarFileBrowserOutsideWorkdir": "該檔案不在當前任務工作目錄內，無法在側邊欄檔案瀏覽器中定位",
-      "openInDefaultBrowser": "在瀏覽器開啟",
+      "openInDefaultBrowser": "在瀏覽器中檢視",
       "copyLink": "複製連結",
       "addPrToHeader": "加入頂欄",
       "prAlreadyInHeader": "已在頂欄",
@@ -17399,7 +17399,7 @@
       "status": {
         "active": "啟用",
         "paused": "已暫停",
-        "expired": "單次",
+        "expired": "一次",
         "running": "執行中"
       },
       "summary": {
@@ -18347,7 +18347,7 @@
       "alreadyDuplicate": "已標記為重複",
       "markDuplicateDisabled": "標記為重複（已停用）",
       "markDuplicate": "標記為重複…",
-      "privateNoDuplicate": "私有 Issue 不參與重複鏈路"
+      "privateNoDuplicate": "私有 Issue 無法設定重複關聯"
     },
     "duplicate": {
       "marked": "已標記為重複",

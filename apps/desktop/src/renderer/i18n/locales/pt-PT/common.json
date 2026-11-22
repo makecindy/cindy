@@ -2890,7 +2890,7 @@
         "projectsRootFailed": "Não foi possível atualizar a localização de novos projetos",
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
-        "dialogueDirectoryReset": "Restaurar localização predefinida",
+        "dialogueDirectoryReset": "Repor local predefinido",
         "dialogueDirectoryFailed": "Não foi possível atualizar o espaço de trabalho da conversa. Verifique se a pasta selecionada permite escrita e tente novamente.",
         "dialogueDirectoryDefault": "Predefinido",
         "dialogueDirectoryFullPath": "Caminho completo",
@@ -3439,7 +3439,7 @@
       }
     },
     "sessionImport": {
-      "title": "Importar sessões",
+      "title": "Importação de sessões",
       "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue a trabalhar. O Cindy apenas lê os originais e nunca os altera.",
       "rescan": "Procurar novamente",
       "allSources": "Todas as origens",
@@ -8026,7 +8026,7 @@
         "filtersAria": "Filtrar plugins por origem",
         "origin": {
           "public": "Públicos",
-          "organization": "Da equipa",
+          "organization": "Partilhados pela equipa",
           "local": "Locais",
           "custom": "Personalizados"
         },
@@ -8274,7 +8274,7 @@
       },
       "installConsent": {
         "installTitle": "Instalar o plugin “{{name}}”?",
-        "updateTitle": "Atualizar o plugin “{{name}}”?",
+        "updateTitle": "Atualizar o plugin \"{{name}}\"?",
         "installMeta": "Versão {{version}} · {{source}}",
         "updateMeta": "Versão {{from}} → {{to}} · {{source}}",
         "installDescription": "Nada é instalado até confirmar. O plugin é ativado imediatamente após a instalação e pode desativá-lo ou desinstalá-lo a qualquer momento na página Plugins.",
@@ -8283,7 +8283,7 @@
         "noPermissions": "Este plugin não declara permissões adicionais.",
         "addedTitle": "Permissões novas ou alteradas:",
         "removedTitle": "Deixaram de ser necessárias:",
-        "addedBadge": "Nova",
+        "addedBadge": "Novo",
         "unchangedCount": "Permissões inalteradas: {{count}}",
         "oauthClientChanged": "Esta atualização altera o cliente OAuth. As contas ligadas que utilizam a autorização integrada do plugin expirarão após a atualização e terão de ser ligadas novamente.",
         "originMarket": "Do mercado de plugins de {{appName}}",
@@ -11550,7 +11550,7 @@
         "nameRequired": "Introduza um nome para o grupo",
         "membersLabel": "Escolher amigos",
         "selectedCount_one": "{{count}} selecionado, até {{max}}",
-        "selectedCount_other": "{{count}} selecionados, até {{max}}",
+        "selectedCount_other": "{{count}} selecionado, até {{max}}",
         "minMembers": "Escolher pelo menos {{min}} amigos",
         "notEnoughBots": "Precisa de pelo menos {{min}} amigos disponíveis para iniciar uma conversa de grupo. Adicione primeiro um amigo.",
         "submit": "Criar conversa de grupo",
@@ -12931,7 +12931,7 @@
             "providerDisconnected": "⚠️ Esta conversa do Discord usa o fornecedor «{{provider}}» ({{model}}), mas não está ligado ou a ligação expirou.",
             "agentLogin": "⚠️ Esta conversa do Discord usa o fornecedor «{{provider}}» ({{model}}), que requer primeiro iniciar sessão com as credenciais do {{agentKind}}.",
             "fixAttached": "Corrija a autenticação em Definições → Fornecedores no computador e continue a enviar mensagens.",
-            "fixDetached": "Altere a «Configuração de novas conversas» e continue a enviar mensagens. Se esta conversa tiver um modelo escolhido à parte, envie `/model` para voltar a escolher."
+            "fixDetached": "Depois de alterar a “Configuração de novas conversas”, basta continuar a enviar mensagens. Se esta conversa tiver um modelo escolhido à parte, basta enviar `/model` para escolher novamente."
           }
         },
         "cards": {
@@ -13154,7 +13154,7 @@
             "btnAllowOnce": "✅ Permitir uma vez",
             "btnAllowAlways": "✅ Permitir sempre",
             "btnDeny": "❌ Recusar",
-            "resolvedAllowOnce": "✅ Permitido (só desta vez)",
+            "resolvedAllowOnce": "✅ Permitido (apenas desta vez)",
             "resolvedAllowAlways": "✅ Permitido (esta ferramenta passa a ser sempre permitida)",
             "resolvedDeny": "❌ Recusado"
           },
@@ -19339,7 +19339,7 @@
         "message": "Escolha uma categoria antes de publicar no Mercado"
       },
       "NAME_TAKEN": {
-        "title": "Nome em utilização",
+        "title": "Nome já utilizado",
         "message": "Este nome já é utilizado por outro autor. Altere o nome e volte a publicar."
       },
       "INVALID_DEPT": {

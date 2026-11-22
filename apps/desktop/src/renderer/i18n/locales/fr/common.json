@@ -251,7 +251,7 @@
     "skippedTitle_one": "{{count}} fichier ou dossier n'a pas été copié. Tout le reste a été copié intégralement :",
     "skippedTitle_other": "{{count}} fichiers ou dossiers n'ont pas été copiés. Tout le reste a été copié intégralement :",
     "skippedMore_one": "{{count}} autre élément non listé.",
-    "skippedMore_other": "{{count}} autres éléments non listés.",
+    "skippedMore_other": "{{count}} autre élément non listé.",
     "completeWithSkipped_one": "Copié, {{count}} élément ignoré",
     "completeWithSkipped_other": "Copié, {{count}} éléments ignorés",
     "skippedReasons": {
@@ -1892,7 +1892,7 @@
     },
     "title": "Paramètres",
     "search": {
-      "ariaLabel": "Rechercher dans les paramètres",
+      "ariaLabel": "Rechercher un paramètre",
       "placeholder": "Rechercher un paramètre",
       "resultsLabel": "Résultats de recherche dans les paramètres",
       "noResults": "Aucun paramètre trouvé. Essayez un autre mot-clé.",
@@ -3303,7 +3303,7 @@
           "filters": {
             "all": "Tous",
             "automatic": "Automatiques",
-            "manual": "Manuels"
+            "manual": "Manuel"
           },
           "sources": {
             "automatic": "Auto",
@@ -3439,7 +3439,7 @@
       }
     },
     "sessionImport": {
-      "title": "Importer des sessions",
+      "title": "Import de sessions",
       "description": "Importez dans Cindy des sessions provenant d’autres outils de programmation avec IA et poursuivez votre travail. Cindy lit les originaux sans jamais les modifier.",
       "rescan": "Rechercher à nouveau",
       "allSources": "Toutes les sources",
@@ -4280,7 +4280,7 @@
           "pricingLabel": "Tarifs",
           "noPricing": "Aucune donnée tarifaire pour cette route",
           "perMtok": "/ million de jetons",
-          "discount": "Remise",
+          "discount": "Réduction",
           "defaultEffort": "Effort de raisonnement par défaut",
           "defaultEffortHint": "L'effort initial pour les nouvelles tâches. Vous pouvez toujours l'ajuster au sein d'une tâche.",
           "contextLimit": "Limite de contexte",
@@ -6040,7 +6040,7 @@
           "runtimeConfirmations": "Les autorisations essentielles sont prêtes. Lors de l'utilisation réelle, macOS peut encore afficher des confirmations supplémentaires pour une application cible ou une action précise ; ne les approuvez que si vous venez de lancer une tâche Computer Use.",
           "granted": "accordée",
           "missing": "non accordée",
-          "unknown": "inconnue",
+          "unknown": "inconnu",
           "notRequired": "non requise",
           "openAccessibility": "Ouvrir les réglages Accessibilité",
           "openScreenRecording": "Ouvrir les réglages Enregistrement de l'écran",
@@ -6061,7 +6061,7 @@
           "checkFailed": "Impossible de rechercher des mises à jour",
           "rateLimited": "Vérifications limitées par GitHub",
           "lastChecked": "Dernière vérification : {{time}}",
-          "check": "Rechercher des mises à jour",
+          "check": "Vérifier les mises à jour",
           "retry": "Réessayer",
           "notChecked": "Pas encore vérifié",
           "action": "Mettre à jour",
@@ -8675,7 +8675,7 @@
           "installed": "Version installée {{version}}",
           "upstream": "Version publiée {{version}}",
           "prerelease": "Préversion",
-          "check": "Rechercher des mises à jour",
+          "check": "Vérifier les mises à jour",
           "update": "Télécharger et installer",
           "connect": "Se connecter à GitHub",
           "checking": "Recherche de mises à jour…",
@@ -9091,7 +9091,7 @@
           "all": "Tous",
           "pending": "En attente de revue",
           "needs_action": "Action requise",
-          "published": "Publiés"
+          "published": "Publié"
         },
         "loading": "Chargement…",
         "empty": "Aucun plugin soumis pour l'instant. Choisissez un plugin que vous avez développé et utilisé, puis soumettez-le pour revue.",
@@ -9110,7 +9110,7 @@
           "missing": "Non installé sur cet ordinateur",
           "unavailable": "Version locale temporairement indisponible"
         },
-        "listedVersion": "Publiée",
+        "listedVersion": "Publié",
         "pendingVersion": "En attente de revue",
         "notInstalled": "Non installé",
         "versionUnknown": "Version inconnue",
@@ -10541,7 +10541,7 @@
       },
       "commit": {
         "placeholder": "Message de commit…",
-        "submit": "Valider",
+        "submit": "Commit",
         "submitAndPush": "Valider et pousser",
         "includeUnstaged": "Inclure les modifications non indexées",
         "disabledNoStaged": "Aucune modification indexée.",
@@ -11550,7 +11550,7 @@
         "nameRequired": "Saisissez un nom de groupe",
         "membersLabel": "Choisir les amis",
         "selectedCount_one": "{{count}} sélectionné, {{max}} maximum",
-        "selectedCount_other": "{{count}} sélectionnés, {{max}} maximum",
+        "selectedCount_other": "{{count}} sélectionné, {{max}} maximum",
         "minMembers": "Choisissez au moins {{min}} amis",
         "notEnoughBots": "Il vous faut au moins {{min}} amis disponibles pour démarrer une conversation de groupe. Ajoutez d'abord un ami.",
         "submit": "Créer le groupe",
@@ -12931,7 +12931,7 @@
             "providerDisconnected": "⚠️ Cette conversation Discord utilise le fournisseur « {{provider}} » ({{model}}), mais il n'est pas connecté ou sa connexion a expiré.",
             "agentLogin": "⚠️ Cette conversation Discord utilise le fournisseur « {{provider}} » ({{model}}), qui nécessite d'abord une connexion avec les identifiants {{agentKind}}.",
             "fixAttached": "Corrigez l'authentification dans Paramètres → Fournisseurs sur le bureau, puis continuez à envoyer vos messages.",
-            "fixDetached": "Modifiez la « Configuration des nouvelles conversations », puis continuez à envoyer vos messages. Si un modèle a été choisi spécifiquement pour cette conversation, envoyez `/model` pour le choisir à nouveau."
+            "fixDetached": "Modifiez la « Configuration des nouvelles conversations », puis continuez simplement à envoyer vos messages. Si un modèle a été choisi spécifiquement pour cette conversation, envoyez `/model` pour le choisir à nouveau."
           }
         },
         "cards": {
@@ -13154,7 +13154,7 @@
             "btnAllowOnce": "✅ Autoriser une fois",
             "btnAllowAlways": "✅ Toujours autoriser",
             "btnDeny": "❌ Refuser",
-            "resolvedAllowOnce": "✅ Autorisé (cette fois seulement)",
+            "resolvedAllowOnce": "✅ Autorisé (cette fois uniquement)",
             "resolvedAllowAlways": "✅ Autorisé (cet outil sera toujours autorisé désormais)",
             "resolvedDeny": "❌ Refusé"
           },
@@ -13593,7 +13593,7 @@
             "btnAllowAlways": "✅ Toujours autoriser",
             "btnDeny": "❌ Refuser",
             "dmRoutedNotice": "🔐 `{{tool}}` nécessite votre confirmation : la carte d'autorisation vous a été envoyée en message privé. Touchez-la là-bas pour continuer~",
-            "resolvedAllowOnce": "✅ Autorisé (cette fois seulement)",
+            "resolvedAllowOnce": "✅ Autorisé (cette fois uniquement)",
             "resolvedAllowAlways": "✅ Autorisé (cet outil sera toujours autorisé désormais)",
             "resolvedDeny": "❌ Refusé"
           },
@@ -17942,7 +17942,7 @@
         "schedule": "Déclenchement",
         "notify": "Notifier",
         "prompt": "Prompt",
-        "once": "Une fois",
+        "once": "Ponctuelle",
         "automatic": "Automatique",
         "manually": "Manuellement",
         "session": "Session",
@@ -19339,7 +19339,7 @@
         "message": "Choisissez une catégorie avant de publier sur la marketplace"
       },
       "NAME_TAKEN": {
-        "title": "Nom déjà pris",
+        "title": "Nom déjà utilisé",
         "message": "Ce nom est déjà utilisé par un autre auteur. Renommez le skill et republiez-le."
       },
       "INVALID_DEPT": {
@@ -20386,7 +20386,7 @@
       "states": {
         "completed": "Terminée",
         "awaitingPayment": "En attente de paiement",
-        "canceled": "Annulée",
+        "canceled": "Résilié",
         "expired": "Expiré",
         "failed": "Échec du paiement"
       }

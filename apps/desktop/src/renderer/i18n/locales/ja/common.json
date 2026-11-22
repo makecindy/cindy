@@ -1947,7 +1947,7 @@
         "add": "追加",
         "reload": "~/.ssh/config を再読み込み",
         "connect": "接続",
-        "disconnect": "切断",
+        "disconnect": "接続を解除",
         "remove": "削除",
         "expand": "エージェント設定を展開",
         "collapse": "エージェント設定を折りたたむ",
@@ -2150,7 +2150,7 @@
         "loadFailed": "リモートマシンの読み込みに失敗",
         "addFailed": "マシンの追加に失敗",
         "addConflict": "マシンの追加中に SSH 設定が変更されました。設定を再読み込みし、ホスト項目を確認してから再試行してください。",
-        "connectFailed": "接続に失敗",
+        "connectFailed": "接続失敗",
         "disconnectFailed": "切断に失敗",
         "removeFailed": "削除に失敗",
         "autoConnectFailed": "自動接続設定の保存に失敗",
@@ -2822,7 +2822,7 @@
         "projectsRootFailed": "新規プロジェクトの保存先を更新できませんでした",
         "dialogueDirectoryOpen": "フォルダーを開く",
         "dialogueDirectoryChoose": "フォルダーを変更",
-        "dialogueDirectoryReset": "既定の保存先に戻す",
+        "dialogueDirectoryReset": "既定の場所に戻す",
         "dialogueDirectoryFailed": "チャットワークスペースを更新できませんでした。選択したフォルダーに書き込めることを確認して、もう一度お試しください。",
         "dialogueDirectoryDefault": "既定",
         "dialogueDirectoryFullPath": "フルパス",
@@ -3015,7 +3015,7 @@
           "ariaLabel": "音声認識モデルの選択"
         },
         "connectionTest": {
-          "action": "接続をテスト",
+          "action": "接続テスト",
           "testing": "テスト中",
           "testingStatus": "選択したリアルタイム ASR サービスに接続しています…",
           "success": "接続に成功しました。選択したリアルタイム ASR ルートを利用できます。",
@@ -3371,7 +3371,7 @@
       }
     },
     "sessionImport": {
-      "title": "セッションのインポート",
+      "title": "セッションインポート",
       "description": "ほかの AI コーディングツールのセッションを Cindy に取り込んで、そのまま続けられます。元の記録は読み取るだけで、変更しません。",
       "rescan": "再スキャン",
       "allSources": "すべてのソース",
@@ -3595,7 +3595,7 @@
         "catalog": "モデル一覧を更新できません。モデルを再読み込みして再試行してください。",
         "retry": "モデルを再読み込み"
       },
-      "title": "モデルプロバイダー",
+      "title": "プロバイダー",
       "subtitle": "モデルを選ぶときのソースです。各ソースは対応するモデルと課金方式を提供し、セッションごとに切り替えられます。",
       "import": {
         "title": "プロバイダーをインポート",
@@ -3729,7 +3729,7 @@
         "authorize": "ログイン",
         "logout": "接続を解除",
         "connect": "接続",
-        "disconnect": "切断",
+        "disconnect": "接続を解除",
         "cancel": "キャンセル",
         "retry": "モデル一覧を再取得",
         "retrying": "再取得中…",
@@ -4572,13 +4572,13 @@
         "toast": {
           "saved": "{{name}} の API キーを保存しました",
           "saveFailed": "{{name}} の API key の保存に失敗しました。もう一度お試しください",
-          "disconnected": "{{name}} を切断しました",
+          "disconnected": "{{name}} の接続を解除しました",
           "disconnectFailed": "{{name}} の切断に失敗しました"
         },
         "disconnectConfirm": {
           "title": "{{name}} を切断しますか？",
           "description": "この接続の API key を消去します。プロバイダーは保持され、API key を入力すると再利用できます。",
-          "confirm": "切断",
+          "confirm": "接続を解除",
           "cancel": "キャンセル"
         }
       },
@@ -4757,8 +4757,8 @@
       },
       "sessionNotification": {
         "label": "セッション完了通知",
-        "cellLabel": "セッション完了または応答が必要なときに Feishu / Lark メッセージを送信",
-        "hint": "連携済みの Feishu または Lark ボットを通じて DM を送信します。ウィンドウが非アクティブなときのみ送信されます。",
+        "cellLabel": "セッション完了または返信が必要な時に Feishu / Lark メッセージを送信",
+        "hint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
         "disabledHint": "先に Bot を設定し、DM を 1 回送信して連携を完了してください。"
       },
       "bind": "連携"
@@ -5041,7 +5041,7 @@
         "connected": "接続済み",
         "conflict": "別のデバイスで使用中",
         "offline": "オフライン",
-        "error": "接続に失敗"
+        "error": "接続失敗"
       },
       "connected": {
         "heading": "Telegram Bot 接続済み",
@@ -5084,7 +5084,7 @@
           "offline": "オフライン",
           "connecting": "接続中…",
           "idle": "未設定",
-          "error": "接続に失敗",
+          "error": "接続失敗",
           "notConfigured": "Telegram ボットが未設定",
           "otherBot": "別の Bot に連携中（競合なし）",
           "offlineDevice": "デバイスがオフラインのため操作できません",
@@ -6060,7 +6060,7 @@
           "description": "ローカルのアプリ、ウィンドウ、マウス、キーボードを操作します。"
         },
         "wechat": {
-          "name": "個人用 WeChat",
+          "name": "個人 WeChat",
           "description": "既知の WeChat 連絡先にメッセージを送信します。"
         },
         "slack": {
@@ -6216,7 +6216,7 @@
           "ownerDescription": "参加しているデバイスは切断され、リレーが停止されたと表示されます。このコンピュータは Cindy 公式リレーに戻ります。",
           "memberTitle": "公式リレーに戻しますか？",
           "memberDescription": "このコンピュータは「{{name}}」から抜け、Cindy 公式リレーを使います。再参加するには新しい共有リンクが必要です。",
-          "sharedOwnerTitle": "Cindy 公式リレーに戻しますか？",
+          "sharedOwnerTitle": "公式リレーに戻しますか？",
           "sharedOwnerDescription": "このパソコンは「{{name}}」から抜けて Cindy 公式リレーを使います。これを経由して参加したあなたのデバイスも切断されます。再び使うには、相手にもう一度共有してもらってください。",
           "serverTitle": "公式リレーに戻しますか？",
           "serverDescription": "サーバー上のリレー「{{name}}」は動作し続け、参加済みの他のデバイスは引き続き互いに接続できます。このコンピュータはいつでも戻せます。"
@@ -7113,11 +7113,11 @@
         },
         "commands": {
           "session.selectPrevious": {
-            "name": "前のタスク",
+            "name": "前のセッション",
             "description": "サイドバーで現在のタスクの上にあるタスクを開きます"
           },
           "session.selectNext": {
-            "name": "次のタスク",
+            "name": "次のセッション",
             "description": "サイドバーで現在のタスクの下にあるタスクを開きます"
           },
           "toggleRightSidebar": {
@@ -8598,7 +8598,7 @@
           "remoteQuickAnswerHint": "このモデルはこのコンピュータでは実行されません。クイック回答はこのコンピュータから送信されるため、システムの補助モデルを使います。",
           "restoreModel": "モデルをリセット"
         },
-        "toolsTitle": "Tools",
+        "toolsTitle": "ツール",
         "permissionsTitle": "権限",
         "infoDescription": "説明",
         "customSlotAsleep": "このプラグインは無効です。有効化すると、ここに設定画面が表示されます。",
@@ -8850,7 +8850,7 @@
           "validating": "検証中",
           "processing": "処理中",
           "pending": "審査待ち",
-          "approved": "公開済み",
+          "approved": "公開中",
           "rejected": "却下",
           "failed": "失敗",
           "expired": "期限切れ"
@@ -8878,7 +8878,7 @@
         "recommendation": "おすすめのプラグイン",
         "install": "{{name}} をインストール",
         "open": "{{name}} を開く",
-        "enable": "{{name}} を有効にする",
+        "enable": "{{name}} を有効化",
         "later": "後で",
         "installed": "インストール済み・利用可能",
         "installedDisabled": "インストール済み・無効",
@@ -9040,7 +9040,7 @@
           "metadata_updated": "表示情報を更新済み",
           "approved": "承認済み",
           "rejected": "差し戻し",
-          "enabled": "公開を開始",
+          "enabled": "公開中",
           "disabled": "公開停止中",
           "archived": "アーカイブ済み",
           "current_changed": "公開バージョンを変更",
@@ -10737,7 +10737,7 @@
       "activityJoinerPair": "、",
       "activityJoinerLast": "、",
       "activityNameJoiner": "、",
-      "activityNameJoinerPair": "と",
+      "activityNameJoinerPair": "、",
       "activityNameJoinerLast": "、",
       "activity": {
         "companion": "仲間の返信",
@@ -12408,7 +12408,7 @@
           "running": "返信中",
           "failed": "前回の返信でエラー"
         },
-        "noActivity": "まだメッセージがありません",
+        "noActivity": "メッセージはまだありません",
         "messageCount_other": "現在のコンテキストに {{count}} 件のメッセージ",
         "reset": "やり直す",
         "resetAria": "「{{lane}}」をやり直す",
@@ -12783,7 +12783,7 @@
             "providerDisconnected": "⚠️ この Discord の会話はプロバイダー「{{provider}}」（{{model}}）を使用していますが、未接続か、接続が無効になっています。",
             "agentLogin": "⚠️ この Discord の会話はプロバイダー「{{provider}}」（{{model}}）を使用しています。先に {{agentKind}} の認証情報でログインする必要があります。",
             "fixAttached": "デスクトップの「設定 → プロバイダー」で認証を修正してから、そのままメッセージを送信してください。",
-            "fixDetached": "「新規会話設定」を変更したら、そのままメッセージを送信してください。この会話で個別にモデルを選んでいた場合は、`/model` を送って選び直してください。"
+            "fixDetached": "「新規会話設定」を変更したら、そのままメッセージを送ってください。この会話で個別にモデルを選んでいた場合は、`/model` を送って選び直してください。"
           }
         },
         "cards": {
@@ -13135,7 +13135,7 @@
           "autoReviewUnavailable": "自動レビューが完了しませんでした。この操作を許可するか確認してください。",
           "autoReviewReason": "自動レビューがあなたの判断を求めています: {{reason}}",
           "previewUnserializable": "<シリアライズできません>",
-          "previewTruncated": "…（省略）",
+          "previewTruncated": "…(省略)",
           "choiceReceived": "選択を受け付けました。",
           "allowedSession": "✅ 許可しました（このタスク）",
           "allowedOnce": "✅ 許可しました（今回のみ）",
@@ -13891,7 +13891,7 @@
         "TIMEOUT": "設定がタイムアウトしました。もう一度お試しください。"
       },
       "form": {
-        "placeholder": "{{label}}を入力",
+        "placeholder": "{{label}}を入力してください",
         "required": "{{label}}を入力してください",
         "tooLong": "{{maxLength}}文字以内で入力してください",
         "openLink": "{{label}}を取得",
@@ -16766,7 +16766,7 @@
         "nameTaken": "同じ名前のフォルダーがすでにあります",
         "nameInvalid": "名前に \\ / : * ? \" < > | は使えません。末尾をピリオドや空白にすることもできません",
         "loadFailed": "プロジェクトの場所を読み込めませんでした",
-        "failed": "プロジェクトを作成できませんでした",
+        "failed": "プロジェクトの作成に失敗しました",
         "done": "プロジェクトを作成し、セッションを移動しました"
       },
       "sessionMenu": {
@@ -18205,7 +18205,7 @@
   "issueTracker": {
     "list": {
       "header": "Issue",
-      "newIssueButton": "新規 Issue",
+      "newIssueButton": "新しい Issue",
       "newIssueAria": "新しい Issue を作成",
       "statusFilterAria": "ステータスフィルター",
       "statusFilter": {
@@ -19033,7 +19033,7 @@
       "cancelDialog": {
         "title": "審査をキャンセルしますか?",
         "description": "今回の審査は直ちに中断されます。後で再公開できます。",
-        "confirm": "キャンセル",
+        "confirm": "審査をキャンセル",
         "cancel": "待ち続ける"
       },
       "pendingPublishDialog": {
@@ -19944,7 +19944,7 @@
         "title": "現在のプラン",
         "empty": "有効なサブスクリプションはありません",
         "emptyTitle": "サブスクリプションなし",
-        "unnamedPlan": "サブスクリプションプラン",
+        "unnamedPlan": "サブスクリプション",
         "unavailable": "サブスクリプションの状態を取得できません。更新してもう一度お試しください。",
         "action": "プランを見る",
         "changeAction": "プランを変更",
@@ -20046,7 +20046,7 @@
         "remaining": "残り",
         "expiresAt": "有効期限 {{date}}",
         "states": {
-          "active": "利用可能",
+          "active": "有効",
           "depleted": "使い切り済み",
           "expired": "期限切れ",
           "voided": "無効"
@@ -20402,7 +20402,7 @@
         "failed": "送信できませんでした。しばらくしてからお試しください。",
         "send": "送信",
         "status": {
-          "sending": "{{email}} に送信中",
+          "sending": "{{email}} に送信しています",
           "sent": "{{email}} に送信済み",
           "failed": "{{email}} への送信に失敗しました",
           "failedRetry": "{{email}} への送信に失敗しました。もう一度送れます"
@@ -20854,7 +20854,7 @@
           "cleaning-merge": "マージ用ファイルを削除",
           "environment": "ビルド環境を準備",
           "original": "現在のバージョンを確認",
-          "syncing": "最新のソースを同期",
+          "syncing": "最新ソースを同期",
           "merging": "変更をマージ",
           "checking-dependencies": "ビルドの依存関係をインストール",
           "checking-tests": "自動テストを実行",
@@ -21130,7 +21130,7 @@
         "uploading": "個人版をアップロードしています"
       },
       "status": {
-        "synced": "同期済み",
+        "synced": "同期しました",
         "pendingBuild": "個人版の生成後に同期します",
         "retrieved": "ほかのコンピューターの変更を取得しました。個人版を生成すると使えます",
         "pending": "まだ GitHub と同期していません",

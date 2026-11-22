@@ -1924,7 +1924,7 @@
       "remote": "Remote-Rechner",
       "devices": "Geräteverknüpfung",
       "feishuBot": "FeiShu-Bot",
-      "discordBot": "Discord-Bot",
+      "discordBot": "Discord Bot",
       "help": "Hilfe",
       "about": "Info",
       "imBot": "IM-Bots",
@@ -2329,7 +2329,7 @@
       "themeAria": {
         "light": "Helles Design",
         "dark": "Dunkles Design",
-        "system": "Systemeinstellung folgen"
+        "system": "Systemeinstellung verwenden"
       },
       "sidebarCardMode": {
         "label": "Stil für angeheftete Elemente",
@@ -2874,7 +2874,7 @@
         "dbSizeWarningDisableLabel": "Nicht erneut erinnern",
         "dbSizeWarningDisableDescription": "Wenn aktiviert, werden Hinweise zum Datenbankspeicher ausgeblendet.",
         "unknown": "Unbekannt",
-        "title": "Speicherplatz",
+        "title": "Speicher",
         "usageLabel": "Belegter Medienspeicher",
         "usageValue": "{{size}} ({{count}} Dateien, {{cacheSize}} Cache)",
         "statsFailed": "Statistiken vorübergehend nicht verfügbar",
@@ -3401,7 +3401,7 @@
       }
     },
     "sessionImport": {
-      "title": "Sitzungen importieren",
+      "title": "Sitzungsimport",
       "description": "Sitzungen aus anderen KI-Programmierwerkzeugen in Cindy übernehmen und weiterarbeiten. Cindy liest die Originale nur und verändert sie nicht.",
       "rescan": "Erneut suchen",
       "allSources": "Alle Quellen",
@@ -18412,7 +18412,7 @@
       "tipAuthor": "Autor: {{name}}",
       "tipAssignee": "Zugewiesen an: {{name}}",
       "labelAuthor": "Autor",
-      "labelAssignee": "Zuständiges Teammitglied",
+      "labelAssignee": "Zuständig",
       "updateFailed": "Zuweisung konnte nicht aktualisiert werden",
       "errorPrivateNoAssign": "Privaten Issues kann niemand zugewiesen werden",
       "errorPermission": "Keine Berechtigung, dieses Issue zuzuweisen"
@@ -21022,7 +21022,7 @@
         "progress": "Zusammenführen {{current}} / {{total}}: {{title}}",
         "restartTest": "Isolierte Version neu starten"
       },
-      "build": "Persönliche Version erzeugen",
+      "build": "Persönliche Version generieren",
       "regeneratePersonal": "Persönliche Version neu bauen",
       "buildDescription": "Erzeuge eine neue Version aus dem aktuellen persönlichen Quellcode. Noch nicht integrierte Änderungen werden ausgeschlossen.",
       "building": "Persönliche Version wird erzeugt…",
