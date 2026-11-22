@@ -406,7 +406,8 @@ export async function ensureRemoteHostReady(id: string, options?: ConnectOpts): 
   }
   if (host.getStatus() === 'ready') return;
   try {
-    await pool.connect(id, options);
+    if (options) await pool.connect(id, options);
+    else await pool.connect(id);
   } catch (err) {
     const { code, msg } = classifyConnectFailure(err);
     throwIpcError(code, redactHostLocalPaths(host.config, msg) ?? msg);
