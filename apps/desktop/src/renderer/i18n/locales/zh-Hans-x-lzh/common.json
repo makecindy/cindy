@@ -14321,6 +14321,8 @@
       "regionAria": "待遣之讯队列",
       "listAria": "队列之讯",
       "pausedFooter": "差事已止，队列暂停",
+
+      "steerUnsupportedNotice": "此引擎不受插话，待遣之讯俟此轮毕乃遣。",
       "resumeAction": "续遣",
       "resumeAria": "续遣队列之讯",
       "showMore_one": "尚有 {{count}} 条",

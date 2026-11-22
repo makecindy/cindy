@@ -14321,6 +14321,8 @@
       "regionAria": "送信待ちメッセージのキュー",
       "listAria": "キュー内のメッセージ",
       "pausedFooter": "タスク停止、キューは一時停止中",
+
+      "steerUnsupportedNotice": "このエンジンは割り込みに対応していません。キュー内のメッセージは現在のターンが終わってから送信されます。",
       "resumeAction": "送信を続ける",
       "resumeAria": "キューの送信を続ける",
       "showMore_one": "あと {{count}} 件",

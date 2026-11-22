@@ -85,7 +85,7 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | 重开任务 | 对端声明 `session/resume` 就用此方法，有 `loadSession` 时可用 `session/load`（回放的历史不会重复展示）。无法恢复时保留原会话，提示用户切换引擎或新建任务。 |
 | 发送 | `session/prompt`（文本、资源链接；图片仅在对端声明支持时） |
 | 停止 | `session/cancel`。未决权限请求和等待收尾期间的新权限请求均回 `cancelled`。对端 15 秒内不收尾时结束当前轮次并终止该进程，宿主确认进程退出后才允许恢复。没有进行中的回合、但 Agent 仍在回合外工作时同样发 `session/cancel`（DSH 会停下自主工作，不支持的 Agent 忽略）。 |
-| 插话 | ACP 每个会话同时只有一个 prompt；插话按排队处理（保持发送顺序），`sameTurnSteer` 标为不支持 |
+| 插话 | ACP v1 每个会话同时只有一个 prompt，没有同轮输入。Agent 在 `initialize` 结果顶层 `_meta.steering.supported: true` 声明生态通行的 `_session/steering` 扩展（claude-agent-acp、codex-acp 等）时，`sameTurnSteer` 标为支持：运行中的插话以 `{ sessionId, prompt, _meta: { steering: { idleBehavior: 'promptRequired' } } }` 注入当前回合，`injected` 即受理，回复另起一段；`promptRequired`（Agent 的回合已结束）按「没有进行中的回合」交给宿主改为下一轮发送；已发出但没有回答按「送达未知」处理，不再重发；Agent 回 method-not-found 时本会话撤回插话能力。未声明的 Agent 保持原状：`sameTurnSteer` 不支持，插话按排队处理（保持发送顺序）（2026-11-22） |
 | 回合外输出 | Agent 自主运行（回答完接着推分支、隔几分钟查 CI，或子任务回报）产生的输出标记为 `turnScope: 'background'`。回合正常结束（`end_turn`）时还没报完成的工具调用保持未完成，等 Agent 报告真实结果；Agent 30 分钟没有任何动静（运行中调用的进度更新也算动静）时按完成收尾，进程退出或被关闭时标为中断。回合外写的回复没有回合结束来收尾，停顿 2 秒即定稿（进程结束时也定稿）。显示见下文「回合外工作的显示」 |
 | 关闭 | 支持则 `session/close`，随后结束进程 |
 | 文本 / 思考 | `agent_message_chunk` / `agent_thought_chunk` → `text` / `thinking` |

@@ -2876,6 +2876,11 @@ export interface SessionChatState {
    * optimistic user bubble and preserve the original queued snapshot.
    */
   steeringQueueClientIds: string[];
+  /**
+   * The host reports this task's engine cannot take input into its running turn
+   * (projection `steerUnsupported`): no steer action, input waits for the next turn.
+   */
+  steerUnsupported: boolean;
   /** Queue is paused by an explicit Stop and resumes only via the queue Continue button. */
   queuePaused: boolean;
   /**
@@ -3064,6 +3069,7 @@ export type SessionChatLightState = Pick<
   | 'lastExpandedPlanViewerState'
   | 'pendingQueue'
   | 'steeringQueueClientIds'
+  | 'steerUnsupported'
   | 'queuePaused'
   | 'queueEditLocks'
   | 'queueInteractionLocks'
@@ -3149,6 +3155,7 @@ function createInitialState(): SessionChatState {
     sdkSessionId: null,
     pendingQueue: [],
     steeringQueueClientIds: [],
+    steerUnsupported: false,
     queuePaused: false,
     queueInteractionLocks: [],
     queueEditLocks: [],
@@ -3236,6 +3243,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   lastExpandedPlanViewerState: 'expanded',
   pendingQueue: [],
   steeringQueueClientIds: [],
+  steerUnsupported: false,
   queuePaused: false,
   queueInteractionLocks: [],
   queueEditLocks: [],
@@ -5309,6 +5317,8 @@ function applyInputProjection(
       messages,
       pendingQueue,
       steeringQueueClientIds: projection.steeringQueueClientIds,
+      // Older hosts omit it: steer stays available, as before.
+      steerUnsupported: projection.steerUnsupported === true,
       queuePaused: projection.queuePaused,
       queueExpanded: projection.queueExpanded,
       queueInteractionLocks: projection.queueInteractionLocks,
@@ -10555,6 +10565,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     lastExpandedPlanViewerState: state.lastExpandedPlanViewerState,
     pendingQueue: state.pendingQueue,
     steeringQueueClientIds: state.steeringQueueClientIds,
+    steerUnsupported: state.steerUnsupported,
     queuePaused: state.queuePaused,
     queueEditLocks: state.queueEditLocks,
     queueInteractionLocks: state.queueInteractionLocks,
@@ -10611,6 +10622,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.lastExpandedPlanViewerState === b.lastExpandedPlanViewerState &&
     a.pendingQueue === b.pendingQueue &&
     a.steeringQueueClientIds === b.steeringQueueClientIds &&
+    a.steerUnsupported === b.steerUnsupported &&
     a.queuePaused === b.queuePaused &&
     a.queueEditLocks === b.queueEditLocks &&
     a.queueInteractionLocks === b.queueInteractionLocks &&

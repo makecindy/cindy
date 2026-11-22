@@ -14375,6 +14375,8 @@
       "regionAria": "Warteschlange ausstehender Nachrichten",
       "listAria": "Nachrichten in der Warteschlange",
       "pausedFooter": "Aufgabe gestoppt, Warteschlange pausiert",
+
+      "steerUnsupportedNotice": "Diese Engine unterstützt kein Einbringen. Nachrichten in der Warteschlange werden nach der aktuellen Runde gesendet.",
       "resumeAction": "Senden fortsetzen",
       "resumeAria": "Nachrichten aus der Warteschlange weiter senden",
       "showMore_one": "{{count}} weitere",

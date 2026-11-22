@@ -14490,6 +14490,8 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens em fila",
       "pausedFooter": "Tarefa parada, fila em pausa",
+
+      "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar a enviar",
       "resumeAria": "Continuar a enviar mensagens em fila",
       "showMore_one": "mais {{count}}",

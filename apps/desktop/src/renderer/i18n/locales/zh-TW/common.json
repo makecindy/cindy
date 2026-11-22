@@ -14321,6 +14321,8 @@
       "regionAria": "待傳送訊息佇列",
       "listAria": "佇列訊息",
       "pausedFooter": "任務已停止，佇列暫停",
+
+      "steerUnsupportedNotice": "目前引擎不支援插話，排隊中的訊息會在目前回合結束後送出。",
       "resumeAction": "繼續傳送",
       "resumeAria": "繼續傳送佇列訊息",
       "showMore_one": "還有 {{count}} 條",
