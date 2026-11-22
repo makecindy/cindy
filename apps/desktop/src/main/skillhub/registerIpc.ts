@@ -1,5 +1,6 @@
 import { inspectSkillListGrants } from './customizationScanHost';
 import { createRemoteSkillsHost } from './remoteManagementHost';
+import { joinSharedSkillPreparation } from './sharedSkillPreparation';
 import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap';
@@ -469,14 +470,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
         if (!scanOwnerId || isAppSessionBoundaryPending()) {
           throw new Error('active data owner is unavailable');
         }
-        try {
-          await options.prepareSharedSkills?.();
-        } catch (error) {
-          // A broken optional Skill must not hide the rest of the list.
-          log.warn('[skillhub:scan] shared Skill preparation failed', {
-            error: error instanceof Error ? error.name : 'unknown',
-          });
-        }
+        await joinSharedSkillPreparation(options.prepareSharedSkills, 'scan');
         const projects = await validateRequestedProjects(
           params?.projects,
           options.getAllowedProjectRoots,

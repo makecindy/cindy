@@ -65,6 +65,34 @@ vi.mock('electron', () => ({
   },
 }));
 
+// Captures the remote Skills provider that registerSkillhubIpc publishes when relay is online.
+const registeredRemoteProviders = vi.hoisted(
+  () => [] as Array<{ list?: (context: { controllerDeviceId: string }) => Promise<unknown> }>,
+);
+vi.mock('../../device-link/remoteResourceRegistry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../device-link/remoteResourceRegistry')>()),
+  remoteResourceRegistry: {
+    register: (provider: (typeof registeredRemoteProviders)[number]) => {
+      registeredRemoteProviders.push(provider);
+      return () => undefined;
+    },
+  },
+}));
+// Remote access for that provider: control enabled, owner scope current, peer still authorized.
+vi.mock('../../device-link/settings-store.desktop', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../device-link/settings-store.desktop')>()),
+  readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
+}));
+vi.mock('../../device-link/broadcast-tap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../device-link/broadcast-tap')>()),
+  captureDataOwnerBroadcastScope: () => ({}),
+  isDataOwnerBroadcastScopeCurrent: () => true,
+}));
+vi.mock('../../plugin-oauth/runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../plugin-oauth/runtime')>()),
+  capturePluginOauthPeer: () => () => undefined,
+}));
+
 vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent,
   isTrustedAppRendererWindow,
@@ -372,6 +400,41 @@ describe('registerSkillhubIpc usage handlers', () => {
     expect(scanAllSkills).toHaveBeenCalledWith(
       expect.anything(), expect.anything(), expect.anything(), fails ? [] : [descriptor],
     );
+  });
+
+  // PR #12070 review: the remote Skills list served to a phone or another computer reads the
+  // same built-in bundle, so it must join the same preparation before scanning.
+  it('remote Skills list joins shared preparation before reading built-in Skills', async () => {
+    const order: string[] = [];
+    const { registerSkillhubIpc } = await import('../registerIpc');
+    registerSkillhubIpc({
+      remoteIsRelayOnline: () => true,
+      getMaker: () => ({ listAgentSkills }) as never,
+      getManagedSkillRoots,
+      getBuiltInSkills: () => {
+        order.push('read-built-ins');
+        return [];
+      },
+      prepareSharedSkills: async () => {
+        order.push('prepare');
+      },
+      getAllowedProjectRoots,
+      marketService: marketService as never,
+      publishService: { publish, cancel } as never,
+    });
+    scanAllSkills.mockImplementationOnce(async () => {
+      order.push('scan');
+      return { skills: [], sources: [] };
+    });
+
+    try {
+      await expect(registeredRemoteProviders.at(-1)!.list!({ controllerDeviceId: 'phone' }))
+        .resolves.toMatchObject({ collectionId: 'skills' });
+      expect(order).toEqual(['prepare', 'read-built-ins', 'scan']);
+    } finally {
+      // Never let an unconsumed scan result leak into later cases.
+      scanAllSkills.mockReset();
+    }
   });
 
   it('rejects publishing a path absent from the sender latest scan', async () => {

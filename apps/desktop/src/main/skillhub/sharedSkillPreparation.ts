@@ -1,0 +1,27 @@
+/**
+ * Shared Skill preparation before a SkillHub listing.
+ *
+ * Startup only warms the shared Skill preparation (built-in bundle and shared links) in the
+ * background, and that pass is rejected while a saved owner is still being restored. Every
+ * listing that reads the built-in bundle (the local SkillHub scan and the remote Skills list
+ * served to a phone or another computer) joins the same preparation first; PreparationCache
+ * lets it join an in-flight run instead of starting another.
+ */
+import { createLogger } from '../logger';
+
+const log = createLogger('skillhub');
+
+/** Waits for the preparation; a broken optional Skill must not hide the rest of the list. */
+export async function joinSharedSkillPreparation(
+  prepare: (() => Promise<void>) | undefined,
+  listing: 'scan' | 'remote-scan',
+): Promise<void> {
+  try {
+    await prepare?.();
+  } catch (error) {
+    log.warn('shared Skill preparation failed before listing', {
+      listing,
+      error: error instanceof Error ? error.name : 'unknown',
+    });
+  }
+}
