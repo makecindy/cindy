@@ -706,7 +706,7 @@ describe('companion voice mode integration', () => {
       f.say('请安排在周六下午');
       expect(f.props.onAnswer).not.toHaveBeenCalled();
       expect(f.props.onDraftChange.mock.lastCall?.[0]?.customInput).toBe('请安排在周六下午');
-      fireEvent.click(f.view.getByRole('button', { name: 'Submit' }));
+      fireEvent.click(f.view.getByRole('button', { name: 'Send answer' }));
       expect(f.props.onAnswer).toHaveBeenCalledWith('question-1', { 'Choose a plan': '请安排在周六下午' });
     });
 
