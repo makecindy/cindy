@@ -1,4 +1,4 @@
-import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { isZhipuCodingPlanRoute, type ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
@@ -83,6 +83,7 @@ export interface MenubarCollectDeps {
   readSubscriptionPool?(providerId: string): Promise<SubscriptionPoolView | null>;
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
+  readZhipu?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
   readClaude(providerId: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXai(providerId: string): Promise<XaiSubscriptionUsageSnapshot | null>;
@@ -176,6 +177,11 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     if (kind === 'xai') {
       const snapshot = await safe(`xai:${provider.id}`, () => deps.readXai(provider.id), null);
       return xaiSource(provider, snapshot, deps.nowMs);
+    }
+    if (deps.readZhipu && provider.auth?.method === 'apiKey'
+      && Object.values(provider.routing ?? {}).some(isZhipuCodingPlanRoute)) {
+      const result = await safe(`zhipu:${provider.id}`, () => deps.readZhipu!(provider.id), null);
+      return zhipuSource(provider, result, deps.nowMs);
     }
     return paygSource(provider);
   });
@@ -850,5 +856,29 @@ export function opencodeGoSource(provider: ProviderView, result: ProviderAccount
       windowMinutes: opencodeGoUsageWindowMinutes(w.id) ?? 0,
     })) ?? [],
     credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: snapshot?.fetchedAt ?? null,
+  };
+}
+
+function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null, nowMs: number): MenubarSubscriptionInput {
+  const snapshot = result?.status === 'ready' && !result.stale
+    && result.snapshot.kind === 'zhipu-coding-plan-quota' && !result.snapshot.noPlan ? result.snapshot : null;
+  const windows: MenubarWindowInput[] = [];
+  if (snapshot?.fiveHour && (snapshot.fiveHour.resetsAt === null || snapshot.fiveHour.resetsAt > nowMs)) {
+    windows.push({
+      kind: 'session', usedPercent: snapshot.fiveHour.usedPercent,
+      resetsAtMs: snapshot.fiveHour.resetsAt, windowMinutes: FIVE_HOUR_MINUTES,
+    });
+  }
+  if (snapshot?.weekly && (snapshot.weekly.resetsAt === null || snapshot.weekly.resetsAt > nowMs)) {
+    windows.push({
+      kind: 'week', usedPercent: snapshot.weekly.usedPercent,
+      resetsAtMs: snapshot.weekly.resetsAt, windowMinutes: WEEK_MINUTES,
+    });
+  }
+  return {
+    kind: 'subscription', id: provider.id, providerId: provider.id, family: 'zhipu',
+    logoSvg: providerLogo(provider.id, provider.name, provider.routing), brand: provider.name || 'GLM Coding Plan',
+    account: null, plan: null, windows, credits: null, creditsUnlimited: false, prepaidUsd: null,
+    updatedAtMs: windows.length > 0 ? snapshot?.fetchedAt ?? null : null,
   };
 }
