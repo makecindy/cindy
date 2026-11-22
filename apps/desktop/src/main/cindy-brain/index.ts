@@ -6099,6 +6099,7 @@ export function getGhostCindySlot(): GhostCindySlot {
                 ...(route.providerId ? { providerId: route.providerId } : {}),
                 agentKind: route.agentKind,
                 model: route.model,
+                disableReasoning: true,
               }
             : {}),
         });
