@@ -16802,7 +16802,7 @@
       "taskInfo": {
         "harness": "Icône du harness",
         "project": "Icône et nom du projet",
-        "teammate": "Avatar du coéquipier",
+        "teammate": "Avatar de l'ami",
         "time": "Date",
         "pr": "Statut de la PR",
         "worktree": "worktree",
