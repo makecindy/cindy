@@ -42,6 +42,25 @@ function nextIntervalFire(baseMs: number, intervalMs: number, now: number): numb
   return planned > now ? planned : now + intervalMs;
 }
 
+/** 在途请求计数的分组键:每条换发路径各记各的。 */
+function expireWriteKey(scheduleId: string): string {
+  return `expire-write:${scheduleId}`;
+}
+
+function guardReadKey(scheduleId: string): string {
+  return `guard-read:${scheduleId}`;
+}
+
+function expiryReadKey(scheduleId: string): string {
+  return `expiry-read:${scheduleId}`;
+}
+
+function replanKey(scheduleId: string): string {
+  return `replan:${scheduleId}`;
+}
+
+const SWEEP_REQUEST_KEY = 'sweep';
+
 function stableJson(value: unknown): string {
   if (value === undefined) return 'null';
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -462,15 +481,16 @@ export const RUN_LEGACY_STALE_MS = 2 * 60 * 60 * 1000;
 const DB_SYNC_INTERVAL_MS = 30_000;
 
 /**
- * 同一条任务**同时在途**的过期写入条数上限。
+ * 同一条路径上**同时在途**的存储请求条数上限(见 trackOutstandingRequest)。
  *
- * 写通道楔住(单条 UPDATE 永不 settle)而批量读一直健康时,恢复信号会淘汰孤儿
- * 登记并换发新的过期写入;旧请求不取消、不收口,在途写入就按同步周期无界增长,
- * 再次压垮存储(Codex P1 on #12087)。到顶后不再换发:过期写入停在那儿等写通道
- * 恢复(写入 settle 后计数回落,过期写入重新发得出)。三条足够把「写通道彻底楔住」
- * 与「这一条写入只是慢」区分开。
+ * 代次前进(listActive 从失败恢复)时,换发路径会覆盖登记并再发一条请求 —— 旧的
+ * promise 无法取消也收不掉。通道楔住(单条请求永不 settle)而批量读一直健康时,
+ * 恢复信号每来一次就多挂一条在途请求:过期写入按同步周期无界增长、守卫回读按
+ * 排队任务扇出、清扫与补排各留一份孤儿,再次压垮存储(Codex P1 on #12087)。到顶后
+ * 不再换发:这些请求停着等通道恢复(settle 后计数回落,换发重新发得出)。三条足够
+ * 把「通道彻底楔住」与「这一条只是慢」区分开。
  */
-const MAX_OUTSTANDING_EXPIRE_WRITES = 3;
+const MAX_OUTSTANDING_STORAGE_REQUESTS = 3;
 
 /** 公开快照字段之外，再保留最近一次长跑诊断时间用于日志节流。 */
 /**
@@ -550,15 +570,18 @@ export class Scheduler extends EventEmitter {
     update: Promise<Schedule | null>;
   }>();
   /**
-   * 每条任务**在途未 settle** 的过期写入条数。
+   * 在途未 settle 的存储请求,按路径记 token 集合(见 trackOutstandingRequest)。
    *
-   * 孤儿登记被淘汰(存储恢复、行仍是同一版)后,下一轮会换发一条新的过期写入;
-   * 写通道整体楔住时那些写入永远不 settle,旧请求既不取消也不收口 —— 每个同步
-   * 周期都多挂一条在途 UPDATE,在途写入按时间无界增长,再次压垮存储
-   * (Codex P1 on #12087)。这里给在途条数封顶:到顶后不再淘汰孤儿登记,过期写入
-   * 停在那儿等写通道恢复(恢复后写入 settle,计数回落,过期写入重新发得出)。
+   * 换发路径(过期写入 / 守卫回读 / 过期回读 / 清扫 / 补排)在代次前进时会覆盖登记
+   * 并再发一条请求 —— 旧请求无法取消。通道整体楔住时那些请求永远不 settle,每个
+   * 恢复周期都多留一批在途调用,在途量按时间无界增长,再次压垮存储
+   * (Codex P1 on #12087)。这里给每条路径的在途条数封顶。
+   *
+   * 按 token 记而不是按数字加减:stop() 会清掉计数,而上一段生命周期挂死的请求
+   * 在之后才 settle —— 那时按数字减一,减掉的是**新**一段生命周期刚发的请求的
+   * 额度,硬上限形同虚设(Codex P2 on #12087)。
    */
-  private readonly outstandingExpireWrites = new Map<string, number>();
+  private readonly outstandingRequests = new Map<string, Set<object>>();
   /**
    * 生命周期代次:每次 stop() +1。
    *
@@ -944,7 +967,9 @@ export class Scheduler extends EventEmitter {
     // 不了,但它的迟到结果已被上面的代次挡住。
     this.pendingExpireWrites.clear();
     // 在途计数同理:上一段生命周期那些挂死的过期写入不再占用新主人的换发额度。
-    this.outstandingExpireWrites.clear();
+    // 按 token 记的集合整体清掉 —— 那些挂死请求的迟到 settle 会发现自己那条
+    // token 已经不在集合里,不会去动新一段生命周期的计数(见 trackOutstandingRequest)。
+    this.outstandingRequests.clear();
     // 在途的过期回读同理:挂死的读取消不了,登记也不能跨生命周期留着(否则重启
     // 后的调度器会一直复用上一段生命周期那一份挂死的读)。
     this.pendingExpireReads.clear();
@@ -1044,8 +1069,8 @@ export class Scheduler extends EventEmitter {
             // 恢复(写入 settle 后计数回落,过期写入重新发得出去)。
             const pendingWrite = this.pendingExpireWrites.get(sch.id);
             if (pendingWrite && pendingWrite.version <= sch.updatedAt) {
-              const outstanding = this.outstandingExpireWrites.get(sch.id) ?? 0;
-              if (outstanding < MAX_OUTSTANDING_EXPIRE_WRITES) {
+              const outstanding = this.outstandingRequestCount(expireWriteKey(sch.id));
+              if (outstanding < MAX_OUTSTANDING_STORAGE_REQUESTS) {
                 this.pendingExpireWrites.delete(sch.id);
               } else {
                 this.logExpireWriteBackoff(sch.id, outstanding);
@@ -1259,7 +1284,7 @@ export class Scheduler extends EventEmitter {
         processId: this.processId,
         scheduleId,
         outstanding,
-        cap: MAX_OUTSTANDING_EXPIRE_WRITES,
+        cap: MAX_OUTSTANDING_STORAGE_REQUESTS,
       },
     );
   }
@@ -1435,8 +1460,17 @@ export class Scheduler extends EventEmitter {
   private getExpiryFallbackRead(scheduleId: string): Promise<Schedule | null> {
     const existing = this.pendingExpireReads.get(scheduleId);
     if (existing && existing.generation >= this.listActiveGeneration) return existing.read;
+    // 换发到上限:旧请求取消不了,再发一条就是无界的存储调用堆积(Codex P1 on
+    // #12087)。这一轮沿用在途那一份,等通道恢复、计数回落再换发。
+    if (
+      existing &&
+      this.outstandingRequestCount(expiryReadKey(scheduleId)) >= MAX_OUTSTANDING_STORAGE_REQUESTS
+    ) {
+      return existing.read;
+    }
     const read = this.storage.get(scheduleId);
     this.pendingExpireReads.set(scheduleId, { read, generation: this.listActiveGeneration });
+    this.trackOutstandingRequest(expiryReadKey(scheduleId), read);
     const clear = () => {
       const current = this.pendingExpireReads.get(scheduleId);
       if (current?.read === read) this.pendingExpireReads.delete(scheduleId);
@@ -1460,11 +1494,21 @@ export class Scheduler extends EventEmitter {
   private getGuardFallbackRead(scheduleId: string): Promise<Schedule | null> {
     const existing = this.inFlightGuardReads.get(scheduleId);
     if (existing && existing.generation >= this.listActiveGeneration) return existing.read;
+    // 换发到上限:旧请求取消不了,再发一条就是无界的存储调用堆积 —— 守卫读还按
+    // 排队任务扇出,一条任务能挂住一批在途调用(Codex P1 on #12087)。这一轮沿用在途
+    // 那一份,等通道恢复、计数回落再换发。
+    if (
+      existing &&
+      this.outstandingRequestCount(guardReadKey(scheduleId)) >= MAX_OUTSTANDING_STORAGE_REQUESTS
+    ) {
+      return existing.read;
+    }
     const read = this.storage.get(scheduleId);
     // 换发新读 = 退役旧读:签发记号换新,旧读已挂上的迟到收口在回包时作废
     // (Greptile P1 on #12087)。
     this.guardReadIssueTokens.set(scheduleId, {});
     this.inFlightGuardReads.set(scheduleId, { read, generation: this.listActiveGeneration });
+    this.trackOutstandingRequest(guardReadKey(scheduleId), read);
     const clear = () => {
       const current = this.inFlightGuardReads.get(scheduleId);
       if (current?.read === read) this.inFlightGuardReads.delete(scheduleId);
@@ -1554,6 +1598,43 @@ export class Scheduler extends EventEmitter {
     return Boolean(cached && current.updatedAt < cached.updatedAt);
   }
 
+  /** 某条路径上当前在途未 settle 的请求条数。 */
+  private outstandingRequestCount(key: string): number {
+    return this.outstandingRequests.get(key)?.size ?? 0;
+  }
+
+  /**
+   * 登记一条在途请求,并给同路径的在途条数封顶。
+   *
+   * 返回 false 表示这条路径的在途条数已经到顶 —— 调用方**不要**再发新请求。
+   * 换发路径(过期写入 / 守卫回读 / 过期回读 / 清扫 / 补排)在代次前进时会覆盖
+   * 登记并再发一条请求,旧请求无法取消;通道楔住时每个恢复周期都多留一批在途
+   * 调用,无界增长,再次压垮存储(Codex P1 on #12087)。到顶后沿用在途的那一份,
+   * 等通道恢复、计数回落,换发重新发得出。
+   *
+   * 计数按 token 记,跟着 promise 的 settle 走(成功/失败都算),不跟着登记走:
+   * 登记会被「孤儿淘汰」删掉(好让过期写入重新发得出去),但那条挂死的请求仍然
+   * 在途。按数字加减则会被上一段生命周期的迟到 settle 减错(见 outstandingRequests
+   * 的注释)。
+   */
+  private trackOutstandingRequest(key: string, request: Promise<unknown>): boolean {
+    if (this.outstandingRequestCount(key) >= MAX_OUTSTANDING_STORAGE_REQUESTS) return false;
+    const token = {};
+    const live = this.outstandingRequests.get(key) ?? new Set<object>();
+    live.add(token);
+    this.outstandingRequests.set(key, live);
+    const clear = () => {
+      const current = this.outstandingRequests.get(key);
+      // 生命周期已经重启过:这条属于上一段,不动新的一段的计数。
+      if (!current) return;
+      current.delete(token);
+      if (current.size === 0) this.outstandingRequests.delete(key);
+    };
+    // 两个分支都传 clear:rejected 的 promise 不能变成未处理的 rejection。
+    void request.then(clear, clear);
+    return true;
+  }
+
   /**
    * 登记在途的过期写入。`version` 是**发起时那一版**的 updatedAt(见
    * pendingExpireWrites):只有同一版本才压制后续重试,版本前进了就放行新写入。
@@ -1567,16 +1648,10 @@ export class Scheduler extends EventEmitter {
     this.pendingExpireWrites.set(scheduleId, { version, update });
     // 在途条数与登记分开记:登记会被「孤儿淘汰」删掉(好让过期写入重新发得出去),
     // 但那条挂死的请求仍然在途 —— 计数要跟着 promise 的 settle 走,不能跟着登记走。
-    this.outstandingExpireWrites.set(
-      scheduleId,
-      (this.outstandingExpireWrites.get(scheduleId) ?? 0) + 1,
-    );
+    this.trackOutstandingRequest(expireWriteKey(scheduleId), update);
     const clear = () => {
       const tracked = this.pendingExpireWrites.get(scheduleId);
       if (tracked && tracked.update === update) this.pendingExpireWrites.delete(scheduleId);
-      const outstanding = (this.outstandingExpireWrites.get(scheduleId) ?? 1) - 1;
-      if (outstanding <= 0) this.outstandingExpireWrites.delete(scheduleId);
-      else this.outstandingExpireWrites.set(scheduleId, outstanding);
     };
     // 两个分支都传 clear:rejected 的 promise 不能变成未处理的 rejection。
     void update.then(clear, clear);
@@ -2932,8 +3007,17 @@ export class Scheduler extends EventEmitter {
     // (Codex P2 on #12087)。代次不前进(一直健康或整体楔住)时照旧压制,
     // 故障期间仍是一份在途,不重新打开无界增长的口子。
     if (existing && existing.generation >= this.listActiveGeneration) return Promise.resolve();
+    // 换发到上限:旧的清扫请求取消不了,再发一份就是无界的存储调用堆积
+    // (Codex P1 on #12087)。这一轮跳过,等通道恢复、计数回落再换发。
+    if (
+      existing &&
+      this.outstandingRequestCount(SWEEP_REQUEST_KEY) >= MAX_OUTSTANDING_STORAGE_REQUESTS
+    ) {
+      return Promise.resolve();
+    }
     const sweep = this.sweepStaleRunningRuns(now);
     this.inFlightSweep = { sweep, generation: this.listActiveGeneration };
+    this.trackOutstandingRequest(SWEEP_REQUEST_KEY, sweep);
     const clear = () => {
       if (this.inFlightSweep?.sweep === sweep) this.inFlightSweep = undefined;
     };
@@ -4001,7 +4085,7 @@ export class Scheduler extends EventEmitter {
   private async replanAfterStalledClaim(attempt: StalledClaimPlan, now: number): Promise<void> {
     const { scheduleId } = attempt;
     try {
-      await this.applyStalledClaimReplan(attempt, now);
+      const settled = await this.applyStalledClaimReplan(attempt, now);
       // **任何确定性结论都要摘除重试凭据**:补上了 / 行已删 / 已 paused / 已消耗 /
       // 别的路径已经补过。只要还留着,这条凭据就永久上膛 —— 等那次合法触发被认领、
       // nextFireAt 又被清空时,重叠的 tick 会把这条陈旧重试再应用一次,凭空排出一次
@@ -4009,7 +4093,8 @@ export class Scheduler extends EventEmitter {
       // 每一个早退分支都绕过了它)。
       // 只摘**自己这一轮**的凭据:等待期间任务被重新触发又跑挂了新一轮,凭据已经
       // 顶替,旧一轮迟到的成功不能把新 run 待补的排期凭据一起删掉。
-      if (this.ownsPendingReplan(scheduleId, attempt)) {
+      // 退役的那次(settled=false)不摘:换发出来的那次补排要靠这条凭据才发得出去。
+      if (settled && this.ownsPendingReplan(scheduleId, attempt)) {
         this.pendingReplans.delete(scheduleId);
         this.replanWatermark.set(scheduleId, attempt.startedAt);
       }
@@ -4058,8 +4143,14 @@ export class Scheduler extends EventEmitter {
     return true;
   }
 
-  /** replanAfterStalledClaim 的函数体;抛错即"本次没做成",由调用方决定重试。 */
-  private async applyStalledClaimReplan(attempt: StalledClaimPlan, now: number): Promise<void> {
+  /**
+   * replanAfterStalledClaim 的函数体。
+   *
+   * 返回 true = 结论已定(凭据可以摘掉);返回 false = 这次没做成 —— 本次补排已被
+   * 退役(代次前进,换发出来的那次接手),凭据继续上膛,不能摘。
+   * 抛错同样表示"这次没做成",由调用方决定重试。
+   */
+  private async applyStalledClaimReplan(attempt: StalledClaimPlan, now: number): Promise<boolean> {
     const { scheduleId } = attempt;
     if (attempt.source !== 'automatic') {
       this.logger?.info?.('scheduler: skipping replan for stalled non-automatic run', {
@@ -4069,14 +4160,35 @@ export class Scheduler extends EventEmitter {
         runId: attempt.runId,
         source: attempt.source,
       });
-      return;
+      return true;
     }
     {
+      // 代次快照:代次前进(listActive 从失败恢复)说明本次补排已被退役 —— 换发出来
+      // 的那次会按恢复时刻落笔,本次不落笔(Codex P1 on #12087)。
+      const generation = this.listActiveGeneration;
       const current = await this.storage.get(scheduleId);
-      if (!current) return; // 行已删,无需补排
-      if (current.status !== 'active') return; // paused / expired:resume 时自己会重算
-      if (await this.expireSchedule(current, now)) return;
-      if (current.nextFireAt !== undefined) return; // 已有排期(别的路径已补),不覆盖
+      if (!current) return true; // 行已删,无需补排
+      if (current.status !== 'active') return true; // paused / expired:resume 时自己会重算
+      if (await this.expireSchedule(current, now)) return true;
+      if (this.listActiveGeneration !== generation) {
+        // 本次补排已被退役:让换发出来的那次落笔。凭据继续上膛 —— 换发出来的那次
+        // 补排要靠它才发得出去(它按同一个凭据换发),摘掉就永远发不出去了。
+        this.logger?.info?.('scheduler: retired replan skipped before writing', {
+          schedulerInstanceId: this.schedulerInstanceId,
+          processId: this.processId,
+          scheduleId,
+          runId: attempt.runId,
+        });
+        return false;
+      }
+      // 行里已经有排期 —— 那是别的路径补上的,照旧不覆盖。
+      // 但**已经落在过去**的排期只可能是被退役的那次补排写进去的:它按故障前的
+      // 时刻算出,长故障之后已经过期,任务会在恢复后立即补跑,而不是从恢复时刻
+      // 重新计时(Codex P1 on #12087)。正常补排算出的排期永远在未来(interval 与
+      // cron 都一样 —— computeNextFireAt 给的是「下一次」),所以「已经落在过去」
+      // 就是退役写入的指纹,这种行要接管过来重排。
+      const staleSchedule = current.nextFireAt !== undefined && current.nextFireAt <= now;
+      if (current.nextFireAt !== undefined && !staleSchedule) return true;
       // 一次性任务(Once)必须**过期**而不是重排。强制收口没走 fireOneInner 的正常终态段,
       // lastFiredAt 从未落定,computeNextFireAt 因此把它当成"还没跑过"又排一次 —— 一个
       // 失败的 Once 任务会自己再跑一遍(第七轮 P1)。这里补上正常路径的那套写入:记下
@@ -4094,7 +4206,11 @@ export class Scheduler extends EventEmitter {
           status: 'expired',
           nextFireAt: undefined,
         }, current);
-        this.activeSchedules.delete(scheduleId);
+        // 只有真落笔过期了才把缓存里的这条摘掉。CAS 落空说明行已经被改过(用户改了
+        // cadence / 截止时间 / recurring),过期没有落笔 —— 缓存里此刻是用户改好的
+        // 新版,顺手删掉的话 due 循环要等下一次 30 秒 DB 同步才重新看到它,期间该
+        // 触发的任务被延后(Codex P2 on #12087)。
+        if (updated?.status === 'expired') this.activeSchedules.delete(scheduleId);
         this.logger?.info?.('scheduler: expired one-shot schedule after stalled run', {
           schedulerInstanceId: this.schedulerInstanceId,
           processId: this.processId,
@@ -4102,17 +4218,36 @@ export class Scheduler extends EventEmitter {
           runId: attempt.runId,
           persisted: updated !== null,
         });
-        return;
+        return true;
       }
       const next = computeNextFireAt(current, now);
-      if (next === undefined) return; // manual:按语义不续命
+      if (next === undefined) return true; // manual:按语义不续命
       // CAS:这一版读到的行必须还是当前行才能落笔。
       // 补排可能在途很久(存储写通道挂死),期间代次前进会换发第二次补排;第二次
       // 先把按恢复时刻算出的排期写进库,第一条旧 RPC 随后恢复 —— 它按故障前时刻
       // 算出的值会把新排期盖回去,周期任务因此可能提前或重复触发(Codex P1 on
       // #12087)。CAS 让两者只有一次能落地:换发出来的那次写入之后,行已经不是
       // 读到的这一版,旧的那次写入落空(返回 null),既不覆盖持久行,也不覆盖缓存。
-      const updated = await this.storage.update(scheduleId, { nextFireAt: next }, current);
+      let updated = await this.storage.update(scheduleId, { nextFireAt: next }, current);
+      if (!updated) {
+        // CAS 落空:读之后行被别人改过 —— 用户改了任务,或者被退役的那次补排把按
+        // 故障前时刻算出的旧排期写了进去(**旧 RPC 先落地**的那一种顺序,CAS 只
+        // 挡住了"新写先落库")。重读一次:行里是一个**已经落在过去**的排期(退役
+        // 写入的指纹)就用按恢复时刻算出的值接管;别的情形保留对方的结果 ——
+        // 用户改的 cadence 优先于我们算的值(Codex P1 on #12087)。
+        const fresh = await this.storage.get(scheduleId);
+        if (
+          fresh &&
+          fresh.status === 'active' &&
+          fresh.nextFireAt !== undefined &&
+          fresh.nextFireAt <= now
+        ) {
+          const freshNext = computeNextFireAt(fresh, now);
+          if (freshNext !== undefined) {
+            updated = await this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
+          }
+        }
+      }
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(scheduleId, updated);
       }
@@ -4120,9 +4255,11 @@ export class Scheduler extends EventEmitter {
         schedulerInstanceId: this.schedulerInstanceId,
         processId: this.processId,
         scheduleId,
+        runId: attempt.runId,
         nextFireAt: next,
         persisted: updated !== null,
       });
+      return true;
     }
   }
 
@@ -4161,12 +4298,19 @@ export class Scheduler extends EventEmitter {
         inFlight.startedAt >= pending.startedAt &&
         inFlight.generation >= this.listActiveGeneration
       ) continue;
+      // 换发到上限:旧的补排请求取消不了,再发一份就是无界的存储调用堆积
+      // (Codex P1 on #12087)。这一轮跳过 —— 凭据继续上膛,通道恢复、计数回落
+      // 之后自然会重试。
+      if (this.outstandingRequestCount(replanKey(pending.scheduleId)) >= MAX_OUTSTANDING_STORAGE_REQUESTS) {
+        continue;
+      }
       const attempt = this.replanAfterStalledClaim(pending, now);
       this.inFlightReplans.set(pending.scheduleId, {
         startedAt: pending.startedAt,
         attempt,
         generation: this.listActiveGeneration,
       });
+      this.trackOutstandingRequest(replanKey(pending.scheduleId), attempt);
       try {
         await attempt;
       } finally {
