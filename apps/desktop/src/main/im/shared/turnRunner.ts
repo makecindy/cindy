@@ -709,6 +709,14 @@ export interface ImTurnRunner {
     userId: string,
     scopeKey?: string,
   ): Promise<RouteTarget | null>;
+  /**
+   * 同 resolveRouteTarget, 但连接已交给伙伴且伙伴解析不出时返回 { unavailable: 拼好的提示 },
+   * 而不是 null。持久收件箱(个人微信)据此在暂存前就拒绝, 不为这条消息建渠道自己的任务。
+   */
+  resolveRouteTargetOrUnavailable?(
+    botContextId: string,
+    userId: string,
+  ): Promise<RouteTarget | { unavailable: string } | null>;
   hasAuthForRoute(row: Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>): Promise<boolean>;
   getAuthStatusForRoute?: (
     row: Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>,
@@ -910,11 +918,21 @@ export function createTurnRunner(
     userId: string,
     scopeKey?: string,
   ): Promise<RouteTarget | null> {
+    const resolved = await resolveRouteTargetOrUnavailable(botContextId, userId, scopeKey);
+    return resolved && 'unavailable' in resolved ? null : resolved;
+  }
+
+  async function resolveRouteTargetOrUnavailable(
+    botContextId: string,
+    userId: string,
+    scopeKey?: string,
+  ): Promise<RouteTarget | { unavailable: string } | null> {
     const existing = await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, {
       createCompanion: true,
     });
     // 伙伴解析不出: 不替它建渠道自己的任务。
-    if (existing) return routeTargetOnly(existing);
+    if (existing && 'kind' in existing) return { unavailable: companionUnavailableText(existing) };
+    if (existing) return existing;
     return (await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey)).target;
   }
 
@@ -5126,6 +5144,7 @@ export function createTurnRunner(
     persistInboundUserMessageEarly,
     dispatchAgentTurn,
     resolveRouteTarget,
+    resolveRouteTargetOrUnavailable: (botContextId, userId) => resolveRouteTargetOrUnavailable(botContextId, userId),
     hasAuthForRoute: (row) => hasAuthForImRoute(row, undefined, authCheckDeps()),
     getAuthStatusForRoute: (row) => checkImRouteAuthDetailed(row, undefined, authCheckDeps()),
     prewireAttachedSession,

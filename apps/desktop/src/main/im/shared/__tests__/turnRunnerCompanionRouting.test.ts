@@ -822,6 +822,20 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(warnings).toHaveLength(1);
   });
 
+  // Durable inboxes (personal WeChat) decide before staging: the route lookup must hand back
+  // the composed notice and never create the channel's own task for an unavailable buddy.
+  it('reports an unavailable buddy to route lookups instead of creating a channel task', async () => {
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    await expect(runner.resolveRouteTargetOrUnavailable!(BOT_CONTEXT, OWNER)).resolves.toEqual({
+      unavailable: expect.stringContaining('Bot 当前未启用'),
+    });
+    await expect(runner.resolveRouteTarget(BOT_CONTEXT, OWNER)).resolves.toBeNull();
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    binding = null;
+    await expect(runner.resolveRouteTargetOrUnavailable!(BOT_CONTEXT, OWNER))
+      .resolves.toMatchObject({ row: { id: legacyIdFor(BOT_CONTEXT, OWNER) } });
+  });
+
   // A stalled processing-reaction request must not hold the rejected turn (and the lane's
   // later input queued behind it) open: cleanup is bounded like the other pre-dispatch rejections.
   it('settles a companion-unavailable rejection even when the ack reaction never resolves', async () => {

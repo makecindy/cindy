@@ -908,6 +908,54 @@ describe('WechatIM host boundary', () => {
     } finally { await im.dispose(); }
   });
 
+  // Gap left by #11996: with the buddy unavailable, ingress still staged the message and its
+  // media into a (possibly new) personal WeChat task before dispatch rejected it. A normal
+  // message must now be rejected at intake: no session, no download, no body, only the notice.
+  // Commands still need a task as their lease key and keep the previous lookup.
+  it('rejects a companion message at intake when the buddy is unavailable', async () => {
+    const { im, transport, db } = restoredConnection(() => 0);
+    let receive!: (result: Awaited<ReturnType<WechatTransport['poll']>>) => void;
+    vi.mocked(transport.poll).mockImplementationOnce(() => new Promise((resolve) => { receive = resolve; }));
+    const downloadMedia = vi.fn(async () => new Uint8Array([1, 2, 3]));
+    Object.assign(transport, { downloadMedia });
+    const resolveRouteTargetOrUnavailable = vi.fn(async () => ({ unavailable: 'buddy paused notice' }));
+    const repo = {
+      prepareNewSession: vi.fn(async () => ({})),
+      findActiveSession: vi.fn(async () => ({ id: 'wechat-own' })),
+      createSession: vi.fn(),
+    };
+    im.attachTurnRuntime({
+      runner: { companionBotIdFor: () => 'cindy', resolveRouteTarget: vi.fn(), resolveRouteTargetOrUnavailable },
+      repo, config: {}, resetSessionToDefaults: vi.fn(),
+    } as never);
+    await im.init();
+    try {
+      receive({ cursor: 'next', messages: [
+        { senderId: 'owner', messageId: 'photo', text: 'look at this', contextToken: 'context',
+          media: [{ kind: 'image' }] },
+        { senderId: 'owner', messageId: 'status', text: '/status', contextToken: 'context', media: [] },
+      ] } as never);
+      await vi.waitFor(() => expect(db.tx).toHaveBeenCalledWith('wechatCommitPollBatch', expect.anything()));
+      const [, batch] = vi.mocked(db.tx).mock.calls.find(([name]) => name === 'wechatCommitPollBatch')!;
+      const { messages, fileAttachments, mediaRefs } = batch as {
+        messages: Array<{ platformMessageId: string; sessionId: string | null; payloadJson: string;
+          rejectReply?: { text: string; errorCode: string } }>;
+        fileAttachments: unknown[]; mediaRefs: unknown[];
+      };
+      const rejected = messages.find((message) => message.platformMessageId === 'photo')!;
+      expect(rejected).toMatchObject({ sessionId: null,
+        rejectReply: { text: 'buddy paused notice', errorCode: 'COMPANION_UNAVAILABLE' } });
+      expect(JSON.parse(rejected.payloadJson)).toMatchObject({ text: '', attachments: [] });
+      expect(downloadMedia).not.toHaveBeenCalled();
+      expect(fileAttachments).toEqual([]);
+      expect(mediaRefs).toEqual([]);
+      expect(messages.find((message) => message.platformMessageId === 'status'))
+        .toMatchObject({ sessionId: 'wechat-own' });
+      expect(messages.find((message) => message.platformMessageId === 'status')?.rejectReply).toBeUndefined();
+      expect(repo.createSession).not.toHaveBeenCalled();
+    } finally { await im.dispose(); }
+  });
+
   it('removes staged files returned while replacing the previous binding', async () => {
     const previous = { bindingEpoch: 'binding-previous', cursor: 'cursor-previous' };
     const released = ['C:\\wechat-staged\\old-file.pdf'];

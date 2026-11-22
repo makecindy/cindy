@@ -27,7 +27,8 @@ export interface WechatInboundTaskInput {
   peerId: string;
   receivedAt: number;
   platformCreatedAt: number;
-  sessionId: string;
+  /** null 只用于 rejectReply: 收到时就被拒绝的消息不挂任务。 */
+  sessionId: string | null;
   conversationEpoch: number;
   payloadJson: string;
   contextToken: string;
@@ -35,6 +36,16 @@ export interface WechatInboundTaskInput {
     outboxId: string;
     clientId: string;
     text: string;
+  };
+  /**
+   * 收到时就拒绝(连接已交给伙伴但伙伴不可用): 不暂存、不挂任务, 直接带这条回复进入
+   * delivery_pending, 出箱送达后完成。此时 sessionId 为 null。
+   */
+  rejectReply?: {
+    outboxId: string;
+    clientId: string;
+    text: string;
+    errorCode: string;
   };
 }
 
@@ -252,6 +263,7 @@ export class WechatTaskStore {
           message.id,
         ),
         overloadReply: message.overloadReply,
+        ...(message.rejectReply ? { rejectReply: message.rejectReply } : {}),
       })),
       mediaBlobs: input.mediaBlobs ?? [],
       mediaRefs: input.mediaRefs ?? [],

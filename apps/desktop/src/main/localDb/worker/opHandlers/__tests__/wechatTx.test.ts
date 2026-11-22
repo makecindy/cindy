@@ -163,6 +163,47 @@ describe('WeChat reliable worker transactions', () => {
     expect(count(db, 'wechat_inbox')).toBe(2);
   });
 
+  // A companion-owned WeChat message rejected at intake (buddy unavailable) must not borrow
+  // or create a WeChat task: it commits without a session, never leases, and completes once
+  // its notice is delivered. A sessionless row is accepted only together with that reply.
+  it('commits an intake rejection without a session and completes it after its notice is delivered', () => {
+    const db = createDb();
+    activate(db, 'epoch-1', null);
+    const rejected = {
+      ...message('rejected-task', 'platform-rejected', 'session-1'),
+      sessionId: null,
+      payloadJson: JSON.stringify({ text: '', attachments: [], unsupportedMedia: [] }),
+      rejectReply: {
+        outboxId: 'outbox-rejected', clientId: 'client-rejected',
+        text: 'buddy unavailable', errorCode: 'COMPANION_UNAVAILABLE',
+      },
+    };
+    expect(commitBatch(db, { maxQueuedTasks: 1, messages: [message('task-1', 'platform-1', 'session-1'), rejected] }))
+      .toEqual({
+        committed: true,
+        insertedTaskIds: ['task-1', 'rejected-task'],
+        duplicateTaskIds: [],
+        rejectedTaskIds: ['rejected-task'],
+      });
+    expect(db.prepare(
+      `SELECT status, session_id AS sessionId, last_error_code AS errorCode
+       FROM wechat_inbox WHERE id = 'rejected-task'`,
+    ).get()).toEqual({ status: 'delivery_pending', sessionId: null, errorCode: 'COMPANION_UNAVAILABLE' });
+    expect(db.prepare("SELECT kind, text, status FROM wechat_outbox WHERE task_id = 'rejected-task'").all())
+      .toEqual([{ kind: 'error', text: 'buddy unavailable', status: 'pending' }]);
+    expect(lease(db, 'epoch-1', 200)).toMatchObject({ id: 'task-1' });
+    expect(lease(db, 'epoch-1', 201)).toBeNull();
+    expect(runTx(db, 'wechatMarkOutboxDelivered', {
+      bindingEpoch: 'epoch-1', outboxId: 'outbox-rejected', deliveredAt: 202,
+    })).toEqual({ changed: true, taskId: 'rejected-task', taskCompleted: true });
+    expect(readTaskStatus(db, 'rejected-task')).toBe('completed');
+
+    expect(() => commitBatch(db, {
+      expectedCursor: 'cursor-1', nextCursor: 'cursor-2',
+      messages: [{ ...message('orphan', 'platform-orphan', 'session-1'), sessionId: null }],
+    })).toThrow(/sessionId/);
+  });
+
   it('keeps stop commands pending when the normal inbox queue is full', () => {
     const db = createDb();
     activate(db, 'epoch-1', null);

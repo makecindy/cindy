@@ -1778,7 +1778,44 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     // Resolve the companion before staging media and persisting the durable task: its
     // message/media ownership must be the same as the session used by dispatch.
     const companion = runtime.runner.companionBotIdFor?.(botId);
-    const target = companion ? await runtime.runner.resolveRouteTarget(botId, message.senderId) : null;
+    const routed = companion
+      ? await (runtime.runner.resolveRouteTargetOrUnavailable
+        ? runtime.runner.resolveRouteTargetOrUnavailable(botId, message.senderId)
+        : runtime.runner.resolveRouteTarget(botId, message.senderId))
+      : null;
+    // 伙伴不可用: 普通消息收到时就拒绝, 不为它建或借微信自己的任务、不下载附件、不留正文,
+    // 只带「伙伴现在接不了消息」进出箱。命令仍要按任务租约串行执行, 照旧找任务。
+    if (routed && 'unavailable' in routed && !message.text.trim().startsWith('/')) {
+      return {
+        message: {
+          id: randomUUID(),
+          platformMessageId: message.messageId,
+          platformSeq: platformSequence(message, receivedAt, index),
+          peerId: message.senderId,
+          receivedAt,
+          platformCreatedAt: message.createdAt ?? receivedAt,
+          sessionId: null,
+          conversationEpoch: await this.#requireStore().getConversationEpoch(bindingEpoch, message.senderId),
+          payloadJson: JSON.stringify({
+            text: '',
+            platformMessageId: message.messageId,
+            attachments: [],
+            unsupportedMedia: [],
+          } satisfies WechatTaskPayload),
+          contextToken: message.contextToken,
+          rejectReply: {
+            outboxId: randomUUID(),
+            clientId: randomUUID(),
+            text: routed.unavailable,
+            errorCode: 'COMPANION_UNAVAILABLE',
+          },
+        },
+        mediaBlobs: [],
+        mediaRefs: [],
+        fileAttachments: [],
+      };
+    }
+    const target = routed && !('unavailable' in routed) ? routed : null;
     const session = target?.row ?? await (async () => {
       const prepared = await runtime.repo.prepareNewSession(botId, message.senderId);
       return await runtime.repo.findActiveSession(botId, message.senderId)
