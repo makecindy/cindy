@@ -67,7 +67,7 @@ internal class TaskNotificationConnection(private val context: Context) {
                   if (!config.preview) { payload.remove("body"); payload.remove("sender"); payload.remove("senderName") }
                   ChatDelivery.receive(context, mapOf("tag" to payload.getString("collapseId"),
                     "title" to payload.getString("title"), "message" to payload.optString("body"),
-                    "body" to payload.toString(), "channelId" to "chat-messages"))
+                    "body" to payload.toString(), "channelId" to "task-notifications"))
                 }
                 if (id.matches(Regex("[0-9]{1,16}-[0-9]{1,10}")) && event in listOf("notification", "cursor")) {
                   cursor = id

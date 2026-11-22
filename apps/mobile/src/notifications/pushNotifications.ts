@@ -397,7 +397,7 @@ export function configureForegroundNotificationBehavior(
       const unread = enabled && stillCurrent() && !!route && !isReading(route);
       // Action failures remain visible even when ordinary push previews are suppressed.
       const undelivered = stillCurrent() && notification.request.content.data?.[ACTION_RESULT_DATA_KEY] === true;
-      const show = undelivered || (unread && !!route?.startsWith('/companions/groups/'));
+      const show = undelivered || (unread && (route?.startsWith('/companions/groups/') === true || route?.startsWith('/sessions/') === true));
       // TaskBadgeBridge owns the foreground count. A push is not another task:
       // never increment here or overwrite the projection with an older payload.
       return { shouldShowBanner: show, shouldShowList: undelivered || unread, shouldPlaySound: show, shouldSetBadge: false };

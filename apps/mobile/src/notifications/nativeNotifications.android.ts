@@ -3,12 +3,20 @@ import { setAndroidPushAvailability } from './androidPushAvailability';
 import type { NativeNotificationsApi } from './nativeNotifications.types';
 
 // FCM and the independent background connection share the native message-ID store.
+const HIGH_IMPORTANCE = Notifications.AndroidImportance.HIGH;
+const PRIVATE_VISIBILITY = Notifications.AndroidNotificationVisibility.PRIVATE;
+
 async function prepareChannel() {
-  await Notifications.setNotificationChannelAsync('chat-messages', {
-    name: 'Cindy', importance: Notifications.AndroidImportance.HIGH,
-    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
-    showBadge: true,
-  });
+  await Promise.all([
+    Notifications.setNotificationChannelAsync('chat-messages', {
+      name: 'Cindy', importance: HIGH_IMPORTANCE,
+      lockscreenVisibility: PRIVATE_VISIBILITY, showBadge: true,
+    }),
+    Notifications.setNotificationChannelAsync('task-notifications', {
+      name: 'Cindy tasks', importance: HIGH_IMPORTANCE,
+      lockscreenVisibility: PRIVATE_VISIBILITY, showBadge: true, sound: 'default',
+    }),
+  ]);
 }
 // A missing/unreachable Google service must not keep settings and the registration queue waiting.
 let tokenRequest: ReturnType<typeof Notifications.getDevicePushTokenAsync> | undefined;

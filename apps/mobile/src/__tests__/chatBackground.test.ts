@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ stored: null as string | null, paused: false, region: 'global', country: 'US', timeZone: 'America/New_York' }));
 const native = vi.hoisted(() => ({ stop: vi.fn(), resume: vi.fn(async () => { state.paused = false; }), isPaused: vi.fn(async () => state.paused) }));
-const sdk = vi.hoisted(() => ({ getDevicePushTokenAsync: vi.fn() }));
+const sdk = vi.hoisted(() => ({ getDevicePushTokenAsync: vi.fn(), setNotificationChannelAsync: vi.fn() }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: async () => state.stored, setItem: async (_key: string, value: string) => { state.stored = value; },
   removeItem: async () => { state.stored = null; },
@@ -10,7 +10,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 vi.mock('expo-localization', () => ({ getLocales: () => [{ regionCode: state.country }], getCalendars: () => [{ timeZone: state.timeZone }] }));
 vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => state.region }));
 vi.mock('../../modules/cindy-chat-notifications/src', () => ({ default: native }));
-vi.mock('expo-notifications', () => ({ ...sdk, setNotificationChannelAsync: vi.fn(),
+vi.mock('expo-notifications', () => ({ ...sdk,
   AndroidImportance: { HIGH: 4 }, AndroidNotificationVisibility: { PRIVATE: 0 },
 }));
 import { readChatBackgroundEnabled, readChatBackgroundMode, writeChatBackgroundMode } from '../notifications/chatBackground';
@@ -29,6 +29,10 @@ describe('automatic Android notification delivery', () => {
     expect(await readChatBackgroundEnabled()).toBe(true);
     sdk.getDevicePushTokenAsync.mockResolvedValue({ type: 'android', data: 'token' });
     await notifications.getDevicePushTokenAsync();
+    expect(sdk.setNotificationChannelAsync.mock.calls.map(([id, options]) => ({ id, options }))).toEqual([
+      { id: 'chat-messages', options: expect.objectContaining({ importance: 4, showBadge: true }) },
+      { id: 'task-notifications', options: expect.objectContaining({ importance: 4, sound: 'default', showBadge: true }) },
+    ]);
     // A token alone is insufficient; only successful server registration changes the hint.
     expect(readAndroidPushAvailability()).toBe('unknown');
     setAndroidPushAvailability('available');

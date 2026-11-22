@@ -3,6 +3,9 @@ package app.cindy.notifications
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.AudioAttributes
+import android.os.Build
+import android.provider.Settings
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.util.Base64
@@ -22,6 +25,7 @@ import org.json.JSONObject
 
 /** Only account/actor/message IDs persist. Credentials and notification bodies never enter this store. */
 object ChatDelivery {
+  private const val TASK_CHANNEL = "task-notifications"
   private const val STORE = "cindy-chat-notification-ids"
   @Synchronized fun owner(context: Context, owner: String) {
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
@@ -38,6 +42,23 @@ object ChatDelivery {
     val prefs = context.getSharedPreferences("cindy-task-notification-ids", Context.MODE_PRIVATE)
     if (prefs.getString("user", "") != user) prefs.edit().clear().putString("user", user).apply()
   }
+  private fun ensureTaskChannel(context: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+    if (manager.getNotificationChannel(TASK_CHANNEL) != null) return
+    val channel = android.app.NotificationChannel(
+      TASK_CHANNEL, "Cindy tasks", android.app.NotificationManager.IMPORTANCE_HIGH
+    ).apply {
+      lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
+      setShowBadge(true)
+      setSound(
+        Settings.System.DEFAULT_NOTIFICATION_URI,
+        AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).build(),
+      )
+    }
+    manager.createNotificationChannel(channel)
+  }
+
   @Synchronized fun receive(context: Context, data: Map<String, String>) {
     var body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { return }
     val display = data.toMutableMap()
@@ -87,6 +108,12 @@ object ChatDelivery {
     // FCM, the direct connection and decrypted Agent-Net alerts must all use the
     // event ID. A task-wide tag can be replaced between enumeration and cleanup.
     body.optString("notificationId").takeIf { it.matches(Regex("[a-fA-F0-9-]{36}")) }?.let { display["tag"] = it }
+    // Keep every task delivery on its own channel, including FCM payloads from older
+    // servers that do not carry a channel ID. Android 8+ drops unknown-channel alerts.
+    if (body.optString("category") in listOf("session-done", "session-error", "session-needs-reply")) {
+      display["channelId"] = TASK_CHANNEL
+    }
+    if (display["channelId"] == TASK_CHANNEL) ensureTaskChannel(context)
     // The version-aware native writer owns this number. Expo must not apply an
     // older notification's numeric value after a newer badge-only message.
     if (body.has("taskActivity")) { display.remove("badge"); display.remove("notification_count") }

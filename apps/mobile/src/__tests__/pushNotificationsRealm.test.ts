@@ -231,12 +231,12 @@ describe('push notification realm routing', () => {
     expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [0]]);
   });
 
-  it('keeps a foreground task reminder in the tray without adding a banner', async () => {
+  it('shows an unread foreground task reminder as a banner and keeps it in the tray', async () => {
     store.set('cindy.push.enabled', '1');
     configureForegroundNotificationBehavior();
     const handler = mocks.setNotificationHandler.mock.calls.at(-1)![0];
     expect(await handler.handleNotification({ request: { content: { data: { deepLink: '/sessions/task' } } } }))
-      .toEqual({ shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false });
+      .toEqual({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false });
     expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
     store.set('cindy.push.enabled', '0');
     mocks.setBadgeCountAsync.mockClear();
