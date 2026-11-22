@@ -419,6 +419,8 @@ let confirmedAccountDeletionCredential: {
   realm: AuthRegion;
 } | null = null;
 
+const desktopAuthFetch: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
+
 function createAuthClient(
   realm: AuthRegion = pendingAuthRealm ?? activeAuthRealm,
 ): CindyAuthClient {
@@ -438,7 +440,7 @@ function createAuthClient(
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
     fetch: withProviderResponseDiagnostics(
-      scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+      scenarioFetch ?? desktopAuthFetch,
       (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
     ),
     onRequestError: (apiPath, status, error) => {
@@ -5127,7 +5129,11 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       persistedSession = { version: 1, realm: AUTH_REGION, refreshToken: legacyToken };
     }
   }
-  if (persistedSession && process.platform==='linux') confirmCloudGuestWhenOnline(()=>getClientEndpointForRealm(activeAuthRealm,'modelAccessApiBaseUrl'),getAccessToken);
+  if (persistedSession && process.platform === 'linux') {
+    confirmCloudGuestWhenOnline(
+      () => getClientEndpointForRealm(activeAuthRealm, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
+    );
+  }
   if (!persistedSession) {
     if (process.platform === 'linux' && !isPassiveSharedUserDataInstance()) {
       const guest=await readCloudGuest();
@@ -5161,7 +5167,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
               });
             },
           };
-          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store);
+          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch);
           if (superseded()) return snapshotAuthState();
           const client = createAuthClient(AUTH_REGION);
           const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);
@@ -5176,7 +5182,9 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
           await writeDeviceLinkSetting('remoteDesktopEnabled', true);
           await completeLogin(pair, epoch);
           await markCloudGuestSaved(guest, store);
-          confirmCloudGuestWhenOnline(() => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken);
+          confirmCloudGuestWhenOnline(
+            () => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
+          );
           return snapshotAuthState();
         })().catch(() => {
           log.warn('Cloud guest sign-in did not complete');

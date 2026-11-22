@@ -210,6 +210,7 @@ function setup(random = 0) {
     // Exercise the Linux cold-start path on every test host, with no enrollment on disk.
     process: { platform: 'linux', env: {} },
     deviceId: 'test-device',
+    desktopAuthFetch: vi.fn(),
     readCloudGuest: vi.fn<() => Promise<object | null>>(async () => null),
     cloudGuestSaved: vi.fn(async () => false),
     cloudGuestAuthorization: vi.fn<() => Promise<{ code: string; verifier: string }>>(),
@@ -330,7 +331,9 @@ describe('saved login recovery after startup network failure', () => {
     const startup = h.start({ onColdStartPending });
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(startup).resolves.toMatchObject({ isAuthenticated: false });
-    expect(h.deps.cloudGuestAuthorization).toHaveBeenCalledTimes(1);
+    expect(h.deps.cloudGuestAuthorization).toHaveBeenCalledExactlyOnceWith(
+      { requestId: 'pilot-order' }, 'test-device', 'https://auth.example.invalid', expect.any(Object), h.deps.desktopAuthFetch,
+    );
     expect(onColdStartPending).toHaveBeenCalledTimes(1);
     h.cancelRecovery();
     grant({ code: 'test-code', verifier: 'test-verifier' });
@@ -341,6 +344,9 @@ describe('saved login recovery after startup network failure', () => {
     const h = setup();
     const pending = h.start();
     await vi.advanceTimersByTimeAsync(20_000);
+    expect(h.deps.confirmCloudGuestWhenOnline).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Function), h.deps.getAccessToken, h.deps.desktopAuthFetch,
+    );
     await expect(pending).resolves.toMatchObject({ isAuthenticated: false });
     await vi.advanceTimersByTimeAsync(400_000);
     expect(h.request.mock.calls.length).toBeGreaterThan(3);
