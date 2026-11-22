@@ -241,20 +241,17 @@ it('keeps the pinned card across turns while awaiting a fresh rate', async () =>
   expect(screen.getByRole('button', { name: /speed/ })).toBe(trigger);
   expect(dialog.textContent).toContain('50');
   expect(screen.getByRole('img').querySelectorAll('path')).toHaveLength(3);
+  // The next turn keeps the pinned card but starts an empty chart: its figures are its own.
   rerender(<Harness startedAt={2} outputTokens={0} generationDurationMs={0} />);
   expect(screen.getByRole('dialog')).toBe(dialog);
-  const chart = screen.getByRole('img');
-  expect(chart.querySelectorAll('path')).toHaveLength(3);
+  expect(screen.getByRole('img').querySelectorAll('path')).toHaveLength(1);
   expect(screen.getByRole('dialog').textContent).toContain('—');
-  const previousLine = chart.querySelectorAll('path')[2].getAttribute('d');
   rerender(<Harness startedAt={2} outputTokens={20} generationDurationMs={500} />);
-  expect(chart.querySelectorAll('path')[2].getAttribute('d')).toBe(previousLine);
   expect(screen.getByRole('dialog').textContent).toContain('—');
   rerender(<Harness startedAt={2} outputTokens={40} generationDurationMs={1000} />);
+  expect(screen.getByRole('dialog')).toBe(dialog);
   expect(screen.getByRole('dialog').textContent).toContain('40');
-  const nextLine = screen.getByRole('img').querySelectorAll('path')[2].getAttribute('d');
-  expect(nextLine).not.toBe(previousLine);
-  expect(nextLine?.match(/[ML]/g)).toHaveLength(3);
+  expect(screen.getByRole('img').querySelectorAll('path').length).toBeLessThan(3);
 });
 
 it('keeps a clicked panel open through outside clicks and focus changes, and closes from the trigger', async () => {

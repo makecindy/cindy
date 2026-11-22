@@ -61,8 +61,9 @@ describe('running speed history', () => {
       outputTokens: 100,
       generationDurationMs: 1000,
     });
+    // A new turn starts its own chart, like the turn figures shown beside it.
     const newTurn = recordRunningTokenRate(first, { ...input, startedAt: 2 });
-    expect(newTurn.samples).toEqual(first.samples);
+    expect(newTurn.samples).toEqual([]);
     expect(newTurn.latestRate).toBeNull();
     expect(
       recordRunningTokenRate(first, { ...input, outputTokens: 50, generationDurationMs: 500 })
@@ -115,7 +116,7 @@ describe('running speed history', () => {
   });
 });
 
-it('records final usage and appends the next turn on a continuous generation timeline', () => {
+it('records final usage and starts the next turn on a chart of its own', () => {
   const active = recordRunningTokenRate(begin(), {
     ...input,
     outputTokens: 100,
@@ -131,7 +132,7 @@ it('records final usage and appends the next turn on a continuous generation tim
   expect(terminal.samples.map((sample) => sample.rate)).toEqual([100, 50]);
   expect(terminal.peak).toBe(100);
   const newTurn = recordRunningTokenRate(terminal, { ...input, startedAt: 2 });
-  expect(newTurn.samples).toEqual(terminal.samples);
+  expect(newTurn.samples).toEqual([]);
   expect(newTurn.latestRate).toBeNull();
   const next = recordRunningTokenRate(newTurn, {
     ...input,
@@ -139,8 +140,8 @@ it('records final usage and appends the next turn on a continuous generation tim
     outputTokens: 40,
     generationDurationMs: 1000,
   });
-  expect(next.samples.map((sample) => sample.rate)).toEqual([100, 50, 40]);
-  expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000, 2000, 3000]);
+  expect(next.samples.map((sample) => sample.rate)).toEqual([40]);
+  expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000]);
   expect(next.latestRate).toBe(40);
 });
 
@@ -493,6 +494,21 @@ describe('finished requests on the speed chart', () => {
     // A turn that answered without reasoning reads 0%, with no earlier turn's long stroke beside it.
     expect(history.marks).toEqual([{ durationMs: 1000, thinkingTokens: 0, requests: 1 }]);
     expect(formatThinkingShare(history.turnThinkingTokens!, history.turnThinkingOutputTokens!)).toBe('0%');
+  });
+
+  // Seen in the desktop app: a new turn's first status has no host speed yet, so the counter
+  // path records it first. It moved the chart to the new turn without clearing it, and the
+  // host speed that followed was drawn after the last turn's curve and strokes.
+  it('starts the next turn with an empty chart when its first status carries no host speed', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null),
+      { startedAt: 1, speed: speed(1500, { index: 1, atMs: 1500, thinkingTokens: 0, outputTokens: 1000 }) });
+    expect(history.samples.length).toBeGreaterThan(0);
+    history = recordRunningTokenRate(history,
+      { startedAt: 2, outputTokens: 0, generationDurationMs: 0, generationReliable: true });
+    history = recordTokenSpeed(history,
+      { startedAt: 2, speed: speed(1100, { index: 1, atMs: 1000, thinkingTokens: 300, outputTokens: 400 }) });
+    expect(history.samples.map((sample) => sample.durationMs)).toEqual([1100]);
+    expect(history.marks).toEqual([{ durationMs: 1000, thinkingTokens: 300, requests: 1 }]);
   });
 
   it('reads a request mark from the wire and drops a malformed one without dropping the speed', () => {

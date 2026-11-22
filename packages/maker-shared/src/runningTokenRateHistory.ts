@@ -83,6 +83,9 @@ export function recordRunningTokenRate(
   // Terminal status clears startedAt before the status bar finishes its linger/fade.
   // Keep its identity so a final paired usage report can still be recorded.
   const startedAt = input.startedAt ?? history.startedAt;
+  // A new turn starts an empty chart here too: at a turn's start this path records first,
+  // before the host speed arrives, and must not carry the last turn's points into it.
+  if (history.startedAt !== startedAt) history = emptyRateHistory(history.startedAt);
   const previous = history.lastReport;
   const reset =
     history.startedAt !== startedAt ||
