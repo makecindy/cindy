@@ -12524,6 +12524,7 @@
           "listenPortLabel": "Local listening port",
           "listenPortPlaceholder": "18747",
           "hint": "Connect to your BlueBubbles server on the local network. Only selected chats are handled. Stop any other automatic responder for these chats before connecting.",
+          "automationDenied": "macOS denied BlueBubbles access to Messages during a send. On the Mac running BlueBubbles, check System Settings → Privacy & Security → Automation.",
           "uncertain": "{{count}} deliveries need checking. Review the chat history before retrying to avoid duplicates."
         }
       },

@@ -12487,6 +12487,7 @@
           "listenPortLabel": "로컬 수신 포트",
           "listenPortPlaceholder": "18747",
           "hint": "로컬 네트워크의 BlueBubbles에 연결하여 선택한 채팅만 처리합니다. 연결 전에 해당 채팅의 다른 자동 응답 프로그램을 중지하세요.",
+          "automationDenied": "전송 중에 macOS가 BlueBubbles의 메시지 앱 제어 요청을 거부했습니다. BlueBubbles가 실행 중인 Mac에서 시스템 설정 → 개인정보 보호 및 보안 → 자동화를 확인하세요.",
           "uncertain": "메시지 {{count}}개의 처리 결과를 확인해야 합니다. 중복을 피하려면 재시도 전에 채팅 기록을 확인하세요."
         }
       },

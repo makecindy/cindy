@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
@@ -1681,4 +1682,37 @@ it('registers and removes only its exact callback while preserving an existing b
   await api.unregisterWebhook(callback);
   expect(rows.map(row => row.id)).toEqual([1]);
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+});
+
+// Tier 1: exercise the HTTP error envelope through final delivery and journal reload.
+// The old transport discarded the AppleScript diagnostic and collapsed attachment errors.
+it.each(['text', 'attachment'] as const)('reports a denied Apple event during final %s delivery without replay', async kind => {
+  const f = await fixture();
+  const fetcher = vi.fn(async () => Response.json({ status: 500, message: kind === 'text' ? 'Message Send Error' : 'Attachment Send Error',
+    error: { type: 'iMessage Error', message: 'Command failed: osascript (synthetic)\n12:19: execution error: Not authorized to send Apple events to Messages. (-1743)\n' } }, { status: 500 }));
+  const api = new BlueBubblesApi(f.api.origin, 'test-only', fetcher);
+  f.send.mockImplementation(api.sendText.bind(api));
+  vi.spyOn(f.api, 'sendFile').mockImplementation(api.sendFile.bind(api));
+  const output = { userId: f.chat.guid, terminal: 'done' as const, text: kind === 'text' ? 'sample' : '',
+    mediaAbsPaths: kind === 'attachment' ? [fileURLToPath(new URL('./api.ts', import.meta.url))] : [] };
+  await expect(f.im.commitFinal(output)).rejects.toThrow('BLUEBUBBLES_AUTOMATION_DENIED');
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  const reopened = await fixture(f.state());
+  expect(reopened.im.health()).toMatchObject({ uncertainSends: 1, automationDenied: true });
+  expect(reopened.send).not.toHaveBeenCalled();
+});
+
+it('keeps a generic attachment failure uncertain even when the command quotes a denial', async () => {
+  const f = await fixture();
+  const response = { status: 500, error: { type: 'iMessage Error',
+    message: 'Command failed: osascript -e "execution error: sample (-1743)"\nexecution error: timed out (-1712)' } };
+  const fetcher = vi.fn(async () => Response.json(response, { status: 500 }));
+  const api = new BlueBubblesApi(f.api.origin, 'test-only', fetcher);
+  vi.spyOn(f.api, 'sendFile').mockImplementation(api.sendFile.bind(api));
+  await expect(f.im.commitFinal({ userId: f.chat.guid, terminal: 'done', text: 'sample',
+    mediaAbsPaths: [fileURLToPath(new URL('./api.ts', import.meta.url))] })).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+  expect(f.im.health().automationDenied).toBeUndefined();
+  expect(f.im.health().uncertainSends).toBe(1);
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

@@ -165,7 +165,7 @@ export interface BotImConnectionGroupsPayload {
 
 export interface BotImConnectionView extends BotImConnectionRecord {
   /** Optional local bridge health; older clients ignore it. Never contains credentials or message text. */
-  health?: { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number };
+  health?: { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number; automationDenied?: boolean };
   status: BotImConnectionStatus;
   identity: {
     /** Telegram bot 用户名 / Discord bot 标签(连上后才有); 其它渠道为 null。 */

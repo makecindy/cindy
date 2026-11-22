@@ -46,6 +46,44 @@ export class BlueBubblesApiError extends Error {
   constructor(readonly code: string) { super(code); }
 }
 
+export const AUTOMATION_DENIED = 'BLUEBUBBLES_AUTOMATION_DENIED';
+
+async function readResponseBytes(response: Response, limit: number): Promise<Buffer> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new BlueBubblesApiError('BLUEBUBBLES_EMPTY_RESPONSE');
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) throw new BlueBubblesApiError('BLUEBUBBLES_RESPONSE_TOO_LARGE');
+      chunks.push(value);
+    }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  return Buffer.concat(chunks);
+}
+
+// BlueBubbles 1.9.9 wraps osascript stderr in error.message. The preceding
+// command may contain the entire chat and message. Only inspect the diagnostic
+// line, never expose or persist the body or use echoed command arguments.
+async function sendHttpError(response: Response, path: string): Promise<BlueBubblesApiError> {
+  const fallback = new BlueBubblesApiError(`BLUEBUBBLES_HTTP_${response.status}`);
+  if (response.status !== 500 || !['/api/v1/message/text', '/api/v1/message/attachment'].includes(path)) return fallback;
+  try {
+    const bytes = await readResponseBytes(response, 64 * 1024);
+    const envelope = JSON.parse(bytes.toString('utf8'));
+    const detail = envelope?.error?.message;
+    const lastLine = typeof detail === 'string' ? detail.trimEnd().split('\n').pop() : '';
+    if (envelope?.status === 500 && envelope.error?.type === 'iMessage Error'
+      && /^(?:\d+:\d+: )?execution error: [^\r\n]+\(-1743\)$/.test(lastLine ?? '')) {
+      return new BlueBubblesApiError(AUTOMATION_DENIED);
+    }
+  } catch { /* A missing or malformed diagnostic leaves delivery uncertain. */ }
+  return fallback;
+}
+
 export class BlueBubblesApi {
   readonly origin: string;
   private groupSendMethod: 'apple-script' | 'private-api' = 'apple-script';
@@ -67,21 +105,8 @@ export class BlueBubblesApi {
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         }),
       });
-      if (!response.ok) throw new BlueBubblesApiError(`BLUEBUBBLES_HTTP_${response.status}`);
-      const reader = response.body?.getReader();
-      if (!reader) throw new BlueBubblesApiError('BLUEBUBBLES_EMPTY_RESPONSE');
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      try {
-        for (;;) {
-          const next = await reader.read();
-          if (next.done) break;
-          size += next.value.byteLength;
-          if (size > BLUEBUBBLES_MAX_BYTES) throw new BlueBubblesApiError('BLUEBUBBLES_RESPONSE_TOO_LARGE');
-          chunks.push(next.value);
-        }
-      } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
-      const bytes = Buffer.concat(chunks);
+      if (!response.ok) throw await sendHttpError(response, path);
+      const bytes = await readResponseBytes(response, BLUEBUBBLES_MAX_BYTES);
       if (binary) return bytes as T;
       const result = JSON.parse(bytes.toString('utf8')) as { status?: number; data?: T };
       if (result.status !== undefined && result.status !== 200) throw new BlueBubblesApiError('BLUEBUBBLES_API_ERROR');

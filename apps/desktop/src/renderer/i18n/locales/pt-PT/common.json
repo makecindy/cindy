@@ -12633,6 +12633,7 @@
           "listenPortLabel": "Porta local de escuta",
           "listenPortPlaceholder": "18747",
           "hint": "Ligue-se ao seu servidor BlueBubbles na rede local. Apenas as conversas selecionadas são processadas. Pare as outras respostas automáticas destas conversas antes de ligar.",
+          "automationDenied": "Durante o envio, o macOS negou ao BlueBubbles o acesso à aplicação Mensagens. No Mac que executa o BlueBubbles, consulte Definições do Sistema → Privacidade e segurança → Automatização.",
           "uncertain": "É necessário verificar {{count}} envios. Consulte o histórico antes de tentar novamente para evitar duplicados."
         }
       },
