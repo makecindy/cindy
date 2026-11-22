@@ -2,13 +2,14 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ account: 1, button: {} as any, menu: {} as any, sheet: null as any, groupSheet: null as any, groupCreated: vi.fn(), created: vi.fn(), alert: vi.fn() }));
+const h = vi.hoisted(() => ({ account: 1, button: {} as any, menu: {} as any, sheet: null as any, groupSheet: null as any, groupCreated: vi.fn(), created: vi.fn(), alert: vi.fn(),
+  nativeMenu: true, chooser: null as any, rows: {} as Record<string, any> }));
 vi.mock('react-native', () => ({ Alert: { alert: h.alert } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.account }) }));
-vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (props: any) => createElement('button', { 'data-testid': props.testID, onClick: props.onPress }, props.label) }));
-vi.mock('@/platform/chrome/NativePullDownMenu', () => ({ usesNativePullDownMenu: () => true, NativePullDownMenu: (props: any) => { h.menu = props; return props.children; } }));
-vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: () => null }));
+vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (props: any) => { h.rows[props.testID] = props; return createElement('button', { 'data-testid': props.testID, onClick: props.onPress }, props.label); } }));
+vi.mock('@/platform/chrome/NativePullDownMenu', () => ({ usesNativePullDownMenu: () => h.nativeMenu, NativePullDownMenu: (props: any) => { h.menu = props; return props.children; } }));
+vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (props: any) => { h.chooser = props; return props.visible ? createElement('div', null, props.children) : null; } }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionCreateSheet: (props: any) => { h.sheet = props; return null; } }));
 vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates' }));
 vi.mock('@/session/BotGroupCreateSheet', () => ({ BotGroupCreateSheet: (props: any) => { h.groupSheet = props; return null; } }));
@@ -27,7 +28,7 @@ async function render(targets = hosts, groupTargets = [] as typeof hosts) {
   root ??= createRoot(document.createElement('div'));
   await act(async () => root!.render(createElement(Create, { targets, groupTargets, preferredDeviceId: 'pc', onCreated: h.created, onGroupCreated: h.groupCreated })));
 }
-beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.sheet = null; });
+beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.sheet = null; h.nativeMenu = true; h.chooser = null; h.rows = {}; });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 it('uses real menu hosts, prefers the remembered host, and dispatches receipts after form dismissal', async () => {
   await render(); expect(h.menu.actions.map((action: any) => action.title)).toEqual(['PC', 'Mac']); expect(h.sheet).toBeNull();
@@ -68,6 +69,29 @@ it('offers group chats in the same menu and reports a new group only after its f
   expect(h.groupCreated).not.toHaveBeenCalled();
   await act(async () => h.groupSheet.onClosed());
   expect(h.groupCreated).toHaveBeenCalledExactlyOnceWith(hosts[1], 'group');
+});
+
+// Regression for the P2 finding on the compatibility chooser: on installs without the
+// native MenuView, CompanionSheet stays mounted through its close animation. Opening
+// BuddySetSheet before onClosed re-enters the overlapping-Modal path that
+// useModalFadeLifecycle explicitly avoids, so the form may never appear. Minimal
+// failing input: pick the buddy-set row while the chooser is still fading out.
+// tier: unit, in-memory fakes, no native animation.
+it('opens a new buddy set only after the compatibility chooser has closed', async () => {
+  const newBuddySet = vi.fn();
+  h.nativeMenu = false;
+  root = createRoot(document.createElement('div'));
+  await act(async () => root!.render(createElement(Create, { targets: hosts, onCreated: h.created, onNewBuddySet: newBuddySet })));
+  await act(async () => h.button.onPress());
+  expect(h.chooser.visible).toBe(true);
+  await act(async () => h.rows['teammates.createChooser.buddySet'].onPress());
+  expect(newBuddySet).not.toHaveBeenCalled();
+  await act(async () => h.chooser.onClosed());
+  expect(newBuddySet).toHaveBeenCalledTimes(1);
+  // Dismissing the chooser drops the pending action instead of leaking it later.
+  await act(async () => h.chooser.onClose());
+  await act(async () => h.chooser.onClosed());
+  expect(newBuddySet).toHaveBeenCalledTimes(1);
 });
 
 // Unit: an invitation needs no computer; preserve creation actions and fence old account callbacks.

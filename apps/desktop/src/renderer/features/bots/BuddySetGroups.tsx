@@ -17,6 +17,7 @@ import {
   type BuddySet,
 } from '@cindy/maker-shared/buddy-sets';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
+import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -116,7 +117,7 @@ export function BuddySetGroups<T extends BuddySetChatEntry>({
               <button
                 type="button"
                 aria-expanded={!collapsed}
-                aria-label={collapsed ? copy.expand : copy.collapse}
+                aria-label={`${set.name}, ${collapsed ? copy.expand : copy.collapse}`}
                 onClick={() => onChange((current) => setBuddySetCollapsed(current, set.buddySetId, !collapsed))}
                 className="flex min-w-0 flex-1 items-center gap-1 text-left text-11 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
               >
@@ -126,13 +127,15 @@ export function BuddySetGroups<T extends BuddySetChatEntry>({
               </button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={copy.actions}
-                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] opacity-0 transition-colors hover:text-[var(--sidebar-nav-text)] focus:opacity-100 group-hover/buddy-set:opacity-100 data-[state=open]:opacity-100"
-                  >
-                    <Pencil size={12} strokeWidth={2} />
-                  </button>
+                  <Tip text={copy.actions} side="bottom">
+                    <button
+                      type="button"
+                      aria-label={copy.actions}
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] opacity-0 transition-colors hover:text-[var(--sidebar-nav-text)] focus:opacity-100 group-hover/buddy-set:opacity-100 data-[state=open]:opacity-100"
+                    >
+                      <Pencil size={12} strokeWidth={2} />
+                    </button>
+                  </Tip>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuSub>

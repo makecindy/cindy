@@ -162,6 +162,16 @@ describe('伙伴集菜单在最小窗口内的可达性', () => {
     expect(buddySetGroupsSource).toContain(`<DropdownMenuSubContent ${BOUNDED_SUBMENU}>`);
     expect(addToGroupSource).toContain(`<DropdownMenuSubContent ${BOUNDED_SUBMENU}>`);
   });
+
+  // DESIGN.md §14.6:每个只有图标的控件都要有本地化可访问名称 + 可见 Tip,
+  // 悬停才出现的控件也不例外。失效后果:铅笔图标不提供可见提示,鼠标用户
+  // 点开前无法辨认这是「添加伙伴 / 重命名 / 删除」入口;集头 aria-label 若不带
+  // 集名,屏幕阅读器会把多个集头都读成同一句「展开 / 收起伙伴集」。
+  it('集头动作图标带可见 Tip,折叠按钮的可访问名称保留集名', () => {
+    expect(buddySetGroupsSource).toContain('<Tip text={copy.actions} side="bottom">');
+    expect(buddySetGroupsSource).toContain('aria-label={`${set.name}, ${collapsed ? copy.expand : copy.collapse}`}');
+    expect(buddySetGroupsSource).not.toContain('aria-label={collapsed ? copy.expand : copy.collapse}');
+  });
 });
 
 describe('群聊与伙伴行同一套几何', () => {

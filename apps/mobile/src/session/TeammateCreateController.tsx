@@ -48,13 +48,14 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
   const [choosing, setChoosing] = useState(false);
   const pendingChoice = useRef<Choice | null>(null);
   const pendingInvite = useRef(false);
+  const pendingBuddySet = useRef(false);
   const receipt = useRef<RemoteResourceRef | null>(null);
   const groupReceipt = useRef<string | null>(null);
   // Callbacks already handed out keep the old account and stay fenced; new ones serve the new account.
   if (account !== accountGeneration) {
     setAccount(accountGeneration); setOpen(null); setVisible(false); setChoosing(false);
   }
-  useEffect(() => { pendingChoice.current = null; pendingInvite.current = false; receipt.current = null; groupReceipt.current = null; }, [accountGeneration]);
+  useEffect(() => { pendingChoice.current = null; pendingInvite.current = false; pendingBuddySet.current = false; receipt.current = null; groupReceipt.current = null; }, [accountGeneration]);
   const withGroups = groupTargets.length > 0 && !!onGroupCreated;
   const order = (hosts: readonly RemoteResourceHostTarget[]) => [...hosts]
     .sort((a, b) => Number(b.deviceId === preferredDeviceId) - Number(a.deviceId === preferredDeviceId));
@@ -112,17 +113,21 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
     ? <NativePullDownMenu actions={menuActions} onAction={onMenu} testID="teammates.createMenu">{button}</NativePullDownMenu>
     : button;
   const sheets = <>
-    <CompanionSheet visible={choosing} title={label} testID="teammates.createChooser" onClose={() => { pendingChoice.current = null; pendingInvite.current = false; setChoosing(false); }}
+    <CompanionSheet visible={choosing} title={label} testID="teammates.createChooser" onClose={() => { pendingChoice.current = null; pendingInvite.current = false; pendingBuddySet.current = false; setChoosing(false); }}
       onClosed={() => { if (!mounted.current || currentAccount.current !== account) return;
         const choice = pendingChoice.current; pendingChoice.current = null; if (choice) start(choice.kind, choice.host.deviceId);
         const invite = pendingInvite.current; pendingInvite.current = false;
-        if (invite && mounted.current && currentAccount.current === account) onInvite?.(); }}>
+        if (invite && mounted.current && currentAccount.current === account) onInvite?.();
+        // The compatibility chooser is a native Modal that stays mounted through
+        // the close animation; open the next sheet only after it has fully closed.
+        const buddySet = pendingBuddySet.current; pendingBuddySet.current = false;
+        if (buddySet && mounted.current && currentAccount.current === account) onNewBuddySet?.(); }}>
       {/* Same choice as the header's native menu: one plain row per choice, not full-width buttons. */}
       {fallbackChoices.map((choice) => <CompanionSettingsRow key={`${choice.kind}:${choice.host.deviceId}`} icon={null} label={choiceLabel(choice)}
         testID={`teammates.createChooser.${choice.kind}.${choice.host.deviceId}`}
         onPress={() => { pendingChoice.current = choice; setChoosing(false); }} />)}
       {onNewBuddySet ? <CompanionSettingsRow icon={null} label={mobileBuddySetCopy(t).new} testID="teammates.createChooser.buddySet"
-        onPress={() => { setChoosing(false); if (mounted.current && currentAccount.current === account) onNewBuddySet(); }} /> : null}
+        onPress={() => { pendingBuddySet.current = true; setChoosing(false); }} /> : null}
       {onInvite ? <CompanionSettingsRow icon={null} label={t('groupChat.invitation.entry')} testID="teammates.invite"
         onPress={() => { if (mounted.current && currentAccount.current === account) { pendingInvite.current = true; setChoosing(false); } }} /> : null}
     </CompanionSheet>
