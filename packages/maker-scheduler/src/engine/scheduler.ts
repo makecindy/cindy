@@ -510,6 +510,21 @@ const OUTSTANDING_PROBE_BASE_MS = 5 * 60_000;
 /** 探测间隔的封顶(退避上限)。 */
 const OUTSTANDING_PROBE_MAX_MS = 30 * 60_000;
 
+/**
+ * 每条路径在**通道没有给出新回包之前**,最多允许多少条探测请求。
+ *
+ * 探测会退役一条挂死的在途请求腾位,但那条请求**取消不了**(底层 promise 仍在途)——
+ * 记账上把它摘掉不等于真实在途量少了一条。若不额外设预算,退避每到期一次就再挂
+ * 一条永挂请求,真实在途的 DB 调用照样按时间无界增长,再次压垮存储
+ * (Codex P1 on #12087 的第五轮复评)。
+ *
+ * 所以:被探测退役的请求照样计入真实在途量(见 outstandingOrphans),每条路径的
+ * 真实在途因此有硬上限 —— MAX_OUTSTANDING_STORAGE_REQUESTS + MAX_OUTSTANDING_PROBES
+ * 条。通道给出新回包(任意一条请求 settle)时预算复位,恢复后的通道照样能自己
+ * 走通(Codex P2 on #12087)。
+ */
+const MAX_OUTSTANDING_PROBES = 2;
+
 /** 公开快照字段之外，再保留最近一次长跑诊断时间用于日志节流。 */
 /**
  * 排期补偿只需要这四项。单独抽出来是为了让"补排失败后的重试凭据"能纯内存留存:
@@ -614,10 +629,27 @@ export class Scheduler extends EventEmitter {
    */
   private readonly outstandingRequests = new Map<string, Set<{ issuedAt: number }>>();
   /**
-   * 每条路径的探测节奏(见 mayIssueStorageRequest):到顶之后允许放一条新请求去试
-   * 通道是否恢复,探测之间按退避拉开间隔,通道有响应就复位。
+   * 被探测退役、但**底层请求仍在途**的 token(见 mayIssueStorageRequest)。
+   *
+   * 探测腾位时不能只把记账摘掉:被退役的那条 promise 取消不了,真实在途的 DB 调用
+   * 并没有减少。摘掉记账等于让真实在途量按退避周期无界增长,再次压垮存储
+   * (Codex P1 on #12087 的第五轮复评)。所以退役的 token 挪到这里**照样计入**
+   * 真实在途量,每条路径因此有硬上限(在途 3 + 退役 2)。
    */
-  private readonly outstandingProbes = new Map<string, { nextProbeAt: number; backoffMs: number }>();
+  private readonly outstandingOrphans = new Map<string, Set<{ issuedAt: number }>>();
+  /**
+   * 每条路径的探测节奏(见 mayIssueStorageRequest):到顶之后允许放一条新请求去试
+   * 通道是否恢复,探测之间按退避拉开间隔,通道有响应就复位。`probes` 是通道没有
+   * 给出新回包之前已经发出去的探测条数(硬上限见 MAX_OUTSTANDING_PROBES)。
+   */
+  private readonly outstandingProbes = new Map<string, { nextProbeAt: number; backoffMs: number; probes: number }>();
+  /**
+   * 最近一次**存储确实回包**的时刻(成功的批量读,或任意一条在途请求 settle)。
+   *
+   * 探测要靠它判断「这条路径楔住的是这一条 RPC,还是整个存储都死了」:存储整体
+   * 还死着时再挂一条探测只会多一条永挂请求(Codex P1 on #12087 的第五轮复评)。
+   */
+  private lastStorageResponseAt = 0;
   /**
    * 生命周期代次:每次 stop() +1。
    *
@@ -740,18 +772,26 @@ export class Scheduler extends EventEmitter {
    */
   private readonly replanLatestIssue = new Map<string, number>();
   /**
-   * 补排写下的 nextFireAt 收据:每次补排落笔都留一份(值 + 签发序号 + 代次)。
+   * 补排写下的 nextFireAt 收据:每次补排落笔都留一份(值 + 签发序号 + 代次 +
+   * 写入时那一版的 CAS 身份)。
    *
    * 用来识别「退役写入」—— 某次已被换发取代(或发端于上一代次)的补排写进库里的那个
    * 排期。指纹必须是**签发身份**而不是「已经到期」:并发闸门会刻意让合法到期的任务
    * nextFireAt 停在过去(等槽位),用户在补排挂起期间改出的排期也会在恢复前到期 ——
    * 那些行不是退役写入。拿时间当指纹会把它们 CAS 到未来、静默吞掉一次该触发的任务
    * (Codex P1 on #12087 的第二轮复评)。
+   *
+   * 光比 nextFireAt 的**数值**也不够:旧补排把时间 X 写进库、用户随后改了 cadence
+   * 却恰好算出同一个 X 时,只比数值会把用户那一版误判成退役写入,接管过去就把用户
+   * 这次的触发静默跳过。指纹因此绑在写入时那一版的 **CAS 身份**上(见
+   * replanWriteIdentity):身份一致 = 行里这个值确实是我们写下的那一个。
    */
   private readonly replanWriteReceipts = new Map<string, Array<{
     value: number;
     issueSeq: number;
     generation: number;
+    /** 写入时那一版的 CAS 身份(见 replanWriteIdentity)。 */
+    identity: string;
   }>>();
   /** 补排签发序号(单调递增,见 replanLatestIssue)。 */
   private replanIssueSeq = 0;
@@ -1024,6 +1064,12 @@ export class Scheduler extends EventEmitter {
     // 按 token 记的集合整体清掉 —— 那些挂死请求的迟到 settle 会发现自己那条
     // token 已经不在集合里,不会去动新一段生命周期的计数(见 trackOutstandingRequest)。
     this.outstandingRequests.clear();
+    // 被探测退役、底层请求仍在途的那些同理:上一段生命周期的退役请求不能占着
+    // 新主人的真实在途额度。
+    this.outstandingOrphans.clear();
+    // 通道回包证据同理:上一段生命周期攒下的「存储是活的」不该给新主人的探测
+    // 直接开绿灯(它自己先回一次包才算数)。
+    this.lastStorageResponseAt = 0;
     // 在途的过期回读同理:挂死的读取消不了,登记也不能跨生命周期留着(否则重启
     // 后的调度器会一直复用上一段生命周期那一份挂死的读)。
     this.pendingExpireReads.clear();
@@ -1108,6 +1154,10 @@ export class Scheduler extends EventEmitter {
             this.listActiveGeneration += 1;
             this.listActiveFailed = false;
           }
+          // 批量读确实回包了 → 存储此刻是活的(某条路径楔住的是那一条 RPC,
+          // 不是整个存储)。探测通道靠这个证据判断「值不值得再挂一条请求」
+          // (见 mayIssueStorageRequest)。
+          this.lastStorageResponseAt = now;
           const previousSchedules = new Map(this.activeSchedules);
           this.activeSchedules.clear();
           const activeIds = new Set(actives.map((sch) => sch.id));
@@ -1689,12 +1739,19 @@ export class Scheduler extends EventEmitter {
     this.outstandingRequests.set(key, live);
     const clear = () => {
       const current = this.outstandingRequests.get(key);
-      // 生命周期已经重启过:这条属于上一段,不动新的一段的计数。
-      // 同样适用于已被探测退役的 token —— 它迟到 settle 时不能去动别人的计数。
-      if (!current || !current.has(token)) return;
-      current.delete(token);
-      if (current.size === 0) this.outstandingRequests.delete(key);
-      // 通道有响应 → 探测退避复位(下一次探测不用等满一个退避周期)。
+      if (current?.has(token)) {
+        current.delete(token);
+        if (current.size === 0) this.outstandingRequests.delete(key);
+      } else {
+        // 这条是被探测退役的:底层请求刚刚回来 —— 把它从「退役仍在途」里摘掉,
+        // 真实在途量跟着回落一条。
+        const orphans = this.outstandingOrphans.get(key);
+        if (!orphans?.has(token)) return;
+        orphans.delete(token);
+        if (orphans.size === 0) this.outstandingOrphans.delete(key);
+      }
+      // 通道有回包(成功或失败都算)→ 探测退避与预算复位。
+      this.lastStorageResponseAt = this.clock.now();
       this.outstandingProbes.delete(key);
     };
     // 两个分支都传 clear:rejected 的 promise 不能变成未处理的 rejection。
@@ -1717,8 +1774,14 @@ export class Scheduler extends EventEmitter {
    * (5 分钟起步,封顶 30 分钟),通道有响应就复位。恢复后的通道因此总能自己走通,
    * 而楔住时的在途量仍然有界。
    *
-   * 副作用:探测会退役一条 token(腾位)。被退役的那条若后来 settle,它的 token 已经
-   * 不在集合里,不会去动别人的计数(见 trackOutstandingRequest 的 clear)。
+   * 探测的两条硬约束(Codex P1 on #12087 的第五轮复评):
+   * ① **退役不等于少了一条在途**:被退役的请求取消不了,底层 promise 仍在途。
+   *    记账上把它摘掉只会让真实在途量按退避周期无界增长(每次退避到期再挂一条
+   *    永挂请求)。所以退役的 token 挪进 outstandingOrphans **照样计入**真实在途,
+   *    每条路径的真实在途因此有硬上限(在途 3 + 退役 2)。
+   * ② **通道确实在应答才发探测**:存储整体还死着时再挂一条只会多一条永挂请求;
+   *    有回包才说明楔住的是这一条 RPC,探测大概率能走通。任何一条请求 settle 都
+   *    复位预算,恢复后的通道照样能自己走通。
    */
   private mayIssueStorageRequest(key: string): boolean {
     const live = this.outstandingRequests.get(key);
@@ -1730,18 +1793,31 @@ export class Scheduler extends EventEmitter {
     if (now - oldest.issuedAt < OUTSTANDING_REQUEST_ORPHAN_MS) return false;
     const probe = this.outstandingProbes.get(key);
     if (probe && now < probe.nextProbeAt) return false;
+    // 探测预算:通道没有给出新回包之前,这条路径最多再挂 MAX_OUTSTANDING_PROBES 条
+    // 探测 —— 真实在途量因此有硬上限,不会随退避到期一条条堆下去。
+    if ((probe?.probes ?? 0) >= MAX_OUTSTANDING_PROBES) return false;
+    // 通道确实在应答才发探测:存储整体还死着时再挂一条只会多一条永挂请求。
+    if (this.lastStorageResponseAt === 0 || now - this.lastStorageResponseAt > OUTSTANDING_PROBE_MAX_MS) {
+      return false;
+    }
     const backoffMs = probe?.backoffMs ?? OUTSTANDING_PROBE_BASE_MS;
     this.outstandingProbes.set(key, {
       nextProbeAt: now + backoffMs,
       backoffMs: Math.min(backoffMs * 2, OUTSTANDING_PROBE_MAX_MS),
+      probes: (probe?.probes ?? 0) + 1,
     });
-    // 退役最老那条孤儿,腾一个位给探测请求。
+    // 退役最老那条孤儿,腾一个位给探测请求。被退役的那条**底层请求仍在途**,
+    // 记账挪进「退役仍在途」集合 —— 真实在途量不因探测而少算。
     live.delete(oldest);
     if (live.size === 0) this.outstandingRequests.delete(key);
+    const orphans = this.outstandingOrphans.get(key) ?? new Set<{ issuedAt: number }>();
+    orphans.add(oldest);
+    this.outstandingOrphans.set(key, orphans);
     this.logger?.warn?.('scheduler: capped storage path probed for recovery', {
       key,
       oldestAgeMs: now - oldest.issuedAt,
       cap: MAX_OUTSTANDING_STORAGE_REQUESTS,
+      probes: (probe?.probes ?? 0) + 1,
     });
     return true;
   }
@@ -4273,18 +4349,26 @@ export class Scheduler extends EventEmitter {
   /**
    * 行里的 nextFireAt 是不是某次**已被换发取代**的补排写下的值(退役写入)。
    *
-   * 指纹是**签发身份**:每次补排落笔都留一份收据(见 replanWriteReceipts),值对得上,
-   * 且那次签发已被更新的一次取代(签发序号更小)或发端于上一代次(存储从失败中恢复
-   * 过),才算退役写入。
+   * 指纹是**签发身份**:每次补排落笔都留一份收据(见 replanWriteReceipts),行里的
+   * 排期与收据记的那一版 **CAS 身份**一致(说明这个值确实是我们写下的),且那次签发
+   * 已被更新的一次取代(签发序号更小)或发端于上一代次(存储从失败中恢复过),才算
+   * 退役写入。
    *
    * 拿「已经到期」当指纹是错的:并发闸门会刻意让合法到期的任务 nextFireAt 停在
    * 过去(等槽位),用户在补排挂起期间改出的排期也会在恢复前到期 —— 那些行不是退役
    * 写入。拿时间当指纹会把它们 CAS 到未来、静默吞掉一次该触发的任务
    * (Codex P1 on #12087 的第二轮复评)。
+   *
+   * 光比 nextFireAt 的**数值**同样不够:旧补排写入的时间 X 与用户改 cadence 后恰好
+   * 算出的时间值可能相同,只比数值会把用户那一版当成退役写入接管掉,静默跳过用户
+   * 这次的触发。指纹因此绑在写入时那一版的 CAS 身份上(Codex P1 on #12087 的第五轮
+   * 复评)。
    */
-  private isRetiredReplanWrite(scheduleId: string, value: number | undefined): boolean {
-    if (value === undefined) return false;
-    const receipt = this.replanWriteReceipts.get(scheduleId)?.find((r) => r.value === value);
+  private isRetiredReplanWrite(scheduleId: string, row: Schedule | undefined): boolean {
+    if (!row || row.nextFireAt === undefined) return false;
+    const receipt = this.replanWriteReceipts
+      .get(scheduleId)
+      ?.find((r) => r.identity === replanWriteIdentity(row));
     if (!receipt) return false;
     const latest = this.replanLatestIssue.get(scheduleId);
     const superseded = latest !== undefined && receipt.issueSeq < latest;
@@ -4292,10 +4376,20 @@ export class Scheduler extends EventEmitter {
     return superseded || olderGeneration;
   }
 
-  /** 记下这次补排写下的排期(签发收据),供后续补排识别退役写入。 */
-  private recordReplanWrite(scheduleId: string, value: number, issueSeq: number): void {
+  /**
+   * 记下这次补排写下的排期(签发收据),供后续补排识别退役写入。
+   *
+   * `base` 是发起这次写入时读到的那一版:写入只改 nextFireAt,落库后那一版的 CAS
+   * 身份就是「base 换上这个值」—— 收据记的是它,不是光记一个数值。
+   */
+  private recordReplanWrite(scheduleId: string, value: number, issueSeq: number, base: Schedule): void {
     const receipts = this.replanWriteReceipts.get(scheduleId) ?? [];
-    receipts.push({ value, issueSeq, generation: this.listActiveGeneration });
+    receipts.push({
+      value,
+      issueSeq,
+      generation: this.listActiveGeneration,
+      identity: replanWriteIdentity({ ...base, nextFireAt: value }),
+    });
     this.replanWriteReceipts.set(scheduleId, receipts);
   }
 
@@ -4366,7 +4460,7 @@ export class Scheduler extends EventEmitter {
       // nextFireAt 停在过去(等槽位才派发),用户在补排挂起期间改出的排期也会在恢复
       // 前到期 —— 那些行不是退役写入。拿时间当指纹会把它们 CAS 到未来并摘掉凭据,
       // 静默吞掉一次该触发的任务(Codex P1 on #12087 的第二轮复评)。
-      const retiredWrite = this.isRetiredReplanWrite(scheduleId, current.nextFireAt);
+      const retiredWrite = this.isRetiredReplanWrite(scheduleId, current);
       if (current.nextFireAt !== undefined && !retiredWrite) return true;
       // 一次性任务(Once)必须**过期**而不是重排。强制收口没走 fireOneInner 的正常终态段,
       // lastFiredAt 从未落定,computeNextFireAt 因此把它当成"还没跑过"又排一次 —— 一个
@@ -4397,69 +4491,99 @@ export class Scheduler extends EventEmitter {
           runId: attempt.runId,
           persisted: updated !== null,
         });
-        return true;
-      }
-      const next = computeNextFireAt(current, now);
-      if (next === undefined) return true; // manual:按语义不续命
-      // CAS:这一版读到的行必须还是当前行才能落笔。
-      // 补排可能在途很久(存储写通道挂死),期间代次前进会换发第二次补排;第二次
-      // 先把按恢复时刻算出的排期写进库,第一条旧 RPC 随后恢复 —— 它按故障前时刻
-      // 算出的值会把新排期盖回去,周期任务因此可能提前或重复触发(Codex P1 on
-      // #12087)。CAS 让两者只有一次能落地:换发出来的那次写入之后,行已经不是
-      // 读到的这一版,旧的那次写入落空(返回 null),既不覆盖持久行,也不覆盖缓存。
-      // 落笔前先留收据:这次写下的排期值要能被后续补排认出「这是谁写的」——
-      // 退役写入的识别靠签发身份,不靠「这个值是不是已经过期」(见
-      // isRetiredReplanWrite)。
-      const write = this.storage.update(scheduleId, { nextFireAt: next }, current);
-      this.recordReplanWrite(scheduleId, next, attempt.issueSeq);
-      void write.then(
-        (row) => {
-          if (row) this.settleReplanWrite(scheduleId, next, attempt.issueSeq);
-          else this.dropReplanWrite(scheduleId, next, attempt.issueSeq);
-        },
-        () => this.dropReplanWrite(scheduleId, next, attempt.issueSeq),
-      );
-      let updated = await write;
-      if (!updated) {
-        // CAS 落空:读之后行被别人改过 —— 用户改了任务,或者被退役的那次补排把按
-        // 故障前时刻算出的旧排期写了进去(**旧 RPC 先落地**的那一种顺序,CAS 只
-        // 挡住了"新写先落库")。重读一次:行里是**退役写入**(按签发身份认,不看它
-        // 是否已经到期)就用按恢复时刻算出的值接管;别的情形保留对方的结果 ——
-        // 用户改的 cadence 优先于我们算的值(Codex P1 on #12087)。
+        if (updated) return true;
+        // CAS 落空:行已经被改过。**不能**就此收尾 —— 用户可能把这条一次性任务改
+        // 成了周期任务,而改「recurring」本身不触发重算(重算的触发字段是 cron /
+        // 时区 / interval / manual / 截止时间),于是新版仍是 active 且 nextFireAt
+        // 为空:按一次性语义收尾,这条任务就停摆到进程重启(周期 DB sync 只重灌行、
+        // 不补 nextFireAt,Codex P1 on #12087 的第五轮复评)。回读新版,按它自己的
+        // recurring 语义补排。
         const fresh = await this.storage.get(scheduleId);
         if (
           fresh &&
           fresh.status === 'active' &&
-          this.isRetiredReplanWrite(scheduleId, fresh.nextFireAt)
+          fresh.recurring &&
+          !fresh.manual &&
+          fresh.nextFireAt === undefined
         ) {
-          const freshNext = computeNextFireAt(fresh, now);
-          if (freshNext !== undefined) {
-            const takeover = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
-            this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq);
-            void takeover.then(
-              (row) => {
-                if (row) this.settleReplanWrite(scheduleId, freshNext, attempt.issueSeq);
-                else this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq);
-              },
-              () => this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq),
-            );
-            updated = await takeover;
-          }
+          await this.replanRecurringSchedule(scheduleId, fresh, attempt, now);
         }
+        return true;
       }
-      if (updated && updated.status === 'active') {
-        this.activeSchedules.set(scheduleId, updated);
-      }
-      this.logger?.info?.('scheduler: replanned schedule after stalled run', {
-        schedulerInstanceId: this.schedulerInstanceId,
-        processId: this.processId,
-        scheduleId,
-        runId: attempt.runId,
-        nextFireAt: next,
-        persisted: updated !== null,
-      });
+      await this.replanRecurringSchedule(scheduleId, current, attempt, now);
       return true;
     }
+  }
+
+  /**
+   * 周期任务(或被用户改成周期任务的一次性任务)的补排落笔。
+   *
+   * CAS:这一版读到的行必须还是当前行才能落笔。
+   * 补排可能在途很久(存储写通道挂死),期间代次前进会换发第二次补排;第二次
+   * 先把按恢复时刻算出的排期写进库,第一条旧 RPC 随后恢复 —— 它按故障前时刻
+   * 算出的值会把新排期盖回去,周期任务因此可能提前或重复触发(Codex P1 on
+   * #12087)。CAS 让两者只有一次能落地:换发出来的那次写入之后,行已经不是
+   * 读到的这一版,旧的那次写入落空(返回 null),既不覆盖持久行,也不覆盖缓存。
+   * 落笔前先留收据:这次写下的排期值要能被后续补排认出「这是谁写的」——
+   * 退役写入的识别靠签发身份 + 写入时那一版的 CAS 身份,不靠「这个值是不是已经
+   * 过期」(见 isRetiredReplanWrite)。
+   */
+  private async replanRecurringSchedule(
+    scheduleId: string,
+    current: Schedule,
+    attempt: ReplanAttempt,
+    now: number,
+  ): Promise<void> {
+    const next = computeNextFireAt(current, now);
+    if (next === undefined) return; // manual:按语义不续命
+    const write = this.storage.update(scheduleId, { nextFireAt: next }, current);
+    this.recordReplanWrite(scheduleId, next, attempt.issueSeq, current);
+    void write.then(
+      (row) => {
+        if (row) this.settleReplanWrite(scheduleId, next, attempt.issueSeq);
+        else this.dropReplanWrite(scheduleId, next, attempt.issueSeq);
+      },
+      () => this.dropReplanWrite(scheduleId, next, attempt.issueSeq),
+    );
+    let updated = await write;
+    if (!updated) {
+      // CAS 落空:读之后行被别人改过 —— 用户改了任务,或者被退役的那次补排把按
+      // 故障前时刻算出的旧排期写了进去(**旧 RPC 先落地**的那一种顺序,CAS 只
+      // 挡住了"新写先落库")。重读一次:行里是**退役写入**(按签发身份认,不看它
+      // 是否已经到期)就用按恢复时刻算出的值接管;别的情形保留对方的结果 ——
+      // 用户改的 cadence 优先于我们算的值(Codex P1 on #12087)。
+      const fresh = await this.storage.get(scheduleId);
+      if (
+        fresh &&
+        fresh.status === 'active' &&
+        this.isRetiredReplanWrite(scheduleId, fresh)
+      ) {
+        const freshNext = computeNextFireAt(fresh, now);
+        if (freshNext !== undefined) {
+          const takeover = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
+          this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq, fresh);
+          void takeover.then(
+            (row) => {
+              if (row) this.settleReplanWrite(scheduleId, freshNext, attempt.issueSeq);
+              else this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq);
+            },
+            () => this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq),
+          );
+          updated = await takeover;
+        }
+      }
+    }
+    if (updated && updated.status === 'active') {
+      this.activeSchedules.set(scheduleId, updated);
+    }
+    this.logger?.info?.('scheduler: replanned schedule after stalled run', {
+      schedulerInstanceId: this.schedulerInstanceId,
+      processId: this.processId,
+      scheduleId,
+      runId: attempt.runId,
+      nextFireAt: next,
+      persisted: updated !== null,
+    });
   }
 
   /**
@@ -4558,6 +4682,29 @@ export class Scheduler extends EventEmitter {
     });
     return true;
   }
+}
+
+/**
+ * 一行排期的 **CAS 身份**:`storage.update` 的 expected 判据就是这一组字段
+ * (lastFiredAt / nextFireAt / status / recurring / manual / cronExpr / timezone /
+ * intervalMs / expireAt)—— 判据一致 = 写它的时候行还是读到的那一版。
+ *
+ * 补排的退役写入指纹绑在它上面:只比 nextFireAt 的数值分不出「行里这个值是我们
+ * 写下的」与「用户改了 cadence、恰好算出同一个时间值」,后者被误判成退役写入就
+ * 会把用户这次的触发静默跳过(Codex P1 on #12087 的第五轮复评)。
+ */
+function replanWriteIdentity(row: Schedule): string {
+  return JSON.stringify([
+    row.lastFiredAt ?? null,
+    row.nextFireAt ?? null,
+    row.status,
+    row.recurring,
+    row.manual ?? false,
+    row.cronExpr ?? null,
+    row.timezone ?? null,
+    row.intervalMs ?? null,
+    row.expireAt ?? null,
+  ]);
 }
 
 function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefined {
