@@ -1,3 +1,5 @@
+import { recordCompanyPiRoots } from '../../usage/companyPiReceipts.js';
+import { companyExecutionReporting, companyModelTokens, type CaptureCompanyUsage } from '../../usage/companyTokenFacts.js';
 import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
 import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
@@ -8,6 +10,7 @@ import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLif
 import { NATIVE_HISTORY_CHECKPOINT, parseNativeHistoryCommand, type NativeHistoryCheckpointSnapshot } from '../nativeHistoryTransfer';
 import { isProductTurnDoneEvent } from '@cindy/maker-shared/turn-continuation';
 import { parseProviderSharePeer, providerShareGuestPeer } from '@cindy/device-link';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines.js';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
 /**
  * 远程 Agent 运行服务(被控端：提供 Agent 登录、订阅与供应商的电脑)。
@@ -244,7 +247,8 @@ export interface RemoteAgentHostDeps {
    *  - start：用引擎自己的入口启动，影子目录与工具隧道同内置引擎。
    */
   pluginEngines?: {
-    isOffered(providerId: string, controller: string): boolean;
+    canUse?(controller: string): boolean;
+    isOffered(providerId: string, controller: string, model?: string): boolean;
     start(input: PluginEngineHostedStartInput): Promise<AgentSessionHandle>;
   };
   startHosted(input: HostedStartInput): Promise<AgentSessionHandle>;
@@ -363,7 +367,7 @@ export interface RemoteAgentHostDeps {
 /** 受邀者任务交给的组内电脑(组所在电脑视角)。 */
 /** 一轮的用量(`meterRunUsage` 交给 recordGuestUsage / recordOwnerUsage)。 */
 export interface RunUsageRecord {
-  kind: RemoteAgentKind;
+  kind: RemoteAgentEngineKind;
   providerId: string | null;
   memberKey: string;
   samples: GuestUsageSample[];
@@ -479,6 +483,9 @@ interface PendingReverse {
 }
 
 interface Run {
+  reportingReceipt?: string;
+  authorizedUsage?: CaptureCompanyUsage;
+  turnUsage?: CaptureCompanyUsage;
   groupProviderId?: string;
   id: string;
   sessionId?: string;
@@ -744,6 +751,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
   const sharedImageJobs = createSharedImageJobs();
   const runs = new Map<string, Run>();
+  // The authenticated controller negotiates reporting while the (much slower) model runtime starts.
+  // Credentials only cross the control channel. Ownership and expiry are checked again at attachment.
+  const reportingHandshakes = new Map<string, { nonce?: string; expires: number; owner: unknown;
+    authorization?: { receipt: string; record: CaptureCompanyUsage } }>();
   // A close can finish before native startup returns its handle. Keep that
   // reservation until startup has disposed any resources that arrived late.
   const startingRuns = new WeakSet<Run>();
@@ -1572,10 +1583,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     };
   }
 
-  /** 内置引擎走 Maker 的同名引擎；插件引擎走它自己的入口(受邀者与组分配在 open 时已排除)。 */
+  /** 内置引擎走 Maker 的同名引擎；插件引擎走它自己的入口(组分配与中转在 open 时已排除)。 */
   function startHostedRun(run: Run, input: PluginEngineHostedStartInput): Promise<AgentSessionHandle> {
     if (run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND) return deps.startHosted({ ...input, kind: run.kind });
-    if (!deps.pluginEngines || run.trust !== 'owner') fail('REMOTE_AGENT_UNSUPPORTED', 'plugin engines are not available on this computer');
+    if (!deps.pluginEngines || (run.trust !== 'owner' && (!!run.relayKey || deps.pluginEngines.canUse?.(run.controller) !== true))) {
+      fail('REMOTE_AGENT_UNSUPPORTED', 'plugin engines are not available on this computer');
+    }
     return deps.pluginEngines.start(input);
   }
 
@@ -1597,7 +1610,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       forwarded: 0,
     };
     try {
-      if (run.trust === 'guest' && run.groupProviderId && deps.providerAccess) {
+      if (run.trust === 'guest' && run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && run.groupProviderId && deps.providerAccess) {
         // Group preflight did not require O's login. Every local start, including a fallback from M,
         // must resolve again against this computer's real connection state before starting an agent.
         const provider = await deps.providerAccess.resolve(builtinKindOf(run.kind), payload.options.model,
@@ -1735,9 +1748,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (payload.virtualWorkspace) append(run, { t: 'state', state: {
         workspaceProjection: { shadowDir, mirrorRoot, extraDirs, writableDirs, virtualWorkspace: true, ...(previousMirrorRoots.length ? { previousMirrorRoots } : {}) },
       } });
-      // 受邀者：先登记出站边界(本机 proxy 只让这条任务经分享的供应商出站)，再启动 Agent。
+      // 受邀者：内置引擎先登记出站边界(本机 proxy 只让这条任务经分享的供应商出站)；插件引擎由插件自身隔离并在 isOffered 核对模型。
       let guestProvider: HostedStartInput['guestProvider'];
-      if (run.trust === 'guest') {
+      if (run.trust === 'guest' && run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND) {
         if (!deps.bindGuestProviderRoute || !run.providerId) failProviderNotAllowed();
         const checkRelayModel = async (model?: string): Promise<unknown> => {
           const reply = await reverse(run, { type: 'model-access', ...(model ? { model } : {}) }, AbortSignal.timeout(10_000));
@@ -1818,6 +1831,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (run.closing) {
         await handle.close({ reason: 'navigation' }).catch(() => undefined);
         return;
+      }
+      if (run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND) {
+        // 握手后以引擎实际选中的模型复核权限，防止请求获准模型失败后静默留在未授权的默认模型上运行。
+        const activeModel = currentPluginEngineModel(run, handle) ?? PLUGIN_ENGINE_DEFAULT_MODEL;
+        if (!run.providerId || !deps.pluginEngines?.isOffered(run.providerId, run.controller, activeModel)) {
+          await handle.close({ reason: 'navigation' }).catch(() => undefined);
+          failProviderNotAllowed();
+        }
+        run.authorizedModel = activeModel;
       }
       run.handle = handle;
       run.terminalOwnership = new RemoteTurnTerminalOwnership();
@@ -1930,7 +1952,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (run.closing) break;
         if (startsRemoteProductTurn(event)) {
           run.nativeHistoryCheckpoint = undefined;
-          if (!run.abortRequested) run.activeTurn = true;
+          if (!run.abortRequested) {
+            if (!run.activeTurn) bindCompanyUsage(run);
+            run.activeTurn = true;
+          }
         }
         const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
         if (currentTerminal) {
@@ -1938,6 +1963,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           run.abortRequested = false;
         }
         meterRunUsage(run, handle.model, event);
+        if (currentTerminal) run.turnUsage = undefined;
         const failure = currentTerminal ? relayRunFailureOf(event) : null;
         if (failure && isAccountFailure(failure)) {
           groupTurnFailed = true;
@@ -2012,15 +2038,30 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     await finishRun(run, 'ended', 'navigation', false);
   }
 
+  function bindCompanyUsage(run: Run) {
+    run.turnUsage = run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && run.authorizedUsage && !run.relay && (run.guestRoute || run.ownerRoute) &&
+      run.providerId && companyExecutionReporting()?.direct(run.providerId, run.kind) ? run.authorizedUsage : undefined;
+  }
+
   function meterRunUsage(run: Run, model: string | undefined, event: AgentEvent): void {
     const record = run.trust === 'guest' ? deps.recordGuestUsage : deps.recordOwnerUsage;
     // 换了账号之后迟到的这一轮不记：用量账本按账号存放，记进去会落到新账号名下。
-    if (!record || (event.type !== 'done' && event.type !== 'status') || !deps.isOwnerCurrent(run.owner)) return;
-    // 插件引擎用它自己的账号直连厂商，Cindy 不经手它的模型请求，本机的任务也不记用量。
-    if (run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND) return;
+    if ((!record && !run.turnUsage) || (event.type !== 'done' && event.type !== 'status') || !deps.isOwnerCurrent(run.owner)) return;
+    // 插件引擎用它自己的账号直连厂商：同账号电脑不另记用量，受邀者仍记轮次与引擎上报的 token 供分享管理页查看。
+    if (run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND && run.trust !== 'guest') return;
     run.usageMeter ??= createGuestUsageMeter(run.kind);
     try {
       const observed = run.usageMeter.observe(event, model ?? '');
+      if (run.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND && !run.relay && run.turnUsage && run.providerId && companyExecutionReporting()?.direct(run.providerId, run.kind)) {
+        if (run.kind === 'pi') {
+          if (event.type === 'done' && event.source === 'pi') {
+            const usage = (event.data as { usage?: { receipts?: unknown; segments?: unknown; segmentsComplete?: boolean } } | undefined)?.usage;
+            recordCompanyPiRoots(run.turnUsage, usage?.receipts ?? (usage?.segmentsComplete ? usage.segments : undefined));
+          }
+        } else if (observed.length) {
+          run.turnUsage(observed.map(sample => companyModelTokens(sample.model, sample)));
+        }
+      }
       // Native proxy receipts already include root and child tokens. Terminal events only count turns.
       const samples = run.guestRoute?.receiptMetering ? observed.filter(sample => sample.turns > 0).map(sample => ({
         ...sample, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0,
@@ -2028,7 +2069,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (samples.length === 0) return;
       // 转给组内电脑的记在那台名下；在本机运行的(含组里选回本机)记为本机。
       const memberKey = run.relay?.member.memberKey ?? PROVIDER_GROUP_LOCAL_MEMBER_KEY;
-      record(run.controller, { kind: run.kind, providerId: run.providerId ?? null, memberKey, samples }, run.sessionId);
+      record?.(run.controller, { kind: run.kind, providerId: run.providerId ?? null, memberKey, samples }, run.sessionId);
     } catch (error) {
       deps.log?.warn('remote agent usage record failed', { runId: run.id, error: String(error) });
     }
@@ -2887,10 +2928,27 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     return run;
   }
 
+  function currentPluginEngineModel(run: Run, handle = run.handle): string | undefined {
+    const live = typeof handle?.model === 'string' && handle.model.trim() ? handle.model : undefined;
+    return live ?? run.authorizedModel;
+  }
+
   function delegatedRunAllowed(run: Run): boolean {
-    return run.trust !== 'guest' || (deps.isControllerAuthorized(run.controller)
-      && (!!run.relayKey || !deps.directGuestExecution
-        || (run.sessionId !== undefined && deps.directGuestExecution.sessionAllowed(run.controller, run.sessionId, builtinKindOf(run.kind)))));
+    if (run.trust !== 'guest') return true;
+    if (!deps.isControllerAuthorized(run.controller)) return false;
+    if (run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND) {
+      return !run.relayKey
+        && deps.pluginEngines?.canUse?.(run.controller) === true
+        && (!deps.directGuestExecution || (
+          run.sessionId !== undefined
+          && !deps.directGuestExecution.sessionDelegated(run.controller, run.sessionId)
+          && deps.directGuestExecution.sessionAllowed(run.controller, run.sessionId)
+        ))
+        && !!run.providerId
+        && deps.pluginEngines.isOffered(run.providerId, run.controller, currentPluginEngineModel(run));
+    }
+    return !!run.relayKey || !deps.directGuestExecution
+      || (run.sessionId !== undefined && deps.directGuestExecution.sessionAllowed(run.controller, run.sessionId, builtinKindOf(run.kind)));
   }
 
   async function call(run: Run, callId: string, method: RemoteAgentMethod, payload: RemoteAgentPayload): Promise<void> {
@@ -2962,6 +3020,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       // 供应商授权：新一轮对话前复核(关掉后不再开始新的一轮，进行中的这一轮照常结束)；
       // 换模型时显式换来源(含 null = 默认)要落到开放的供应商上，只换模型则沿用当前来源。
       // 受邀者每次换模型都复核：来源钉在分享的供应商上(没带来源也显式带上)，且它要提供这个模型。
+      if (method === 'send') bindCompanyUsage(run);
       let nextProviderId: string | undefined;
       const pluginEngineRun = run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND;
       // 插件引擎：来源就是引擎本身，不能换来源；关掉「允许被远程调用」或插件停用后不再开始新的一轮，也不再换模型。
@@ -2969,8 +3028,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         const opts = method === 'setModel' ? args[1] : undefined;
         const requested = opts && typeof opts === 'object' && !Array.isArray(opts) && 'providerId' in opts
           ? (opts as { providerId?: unknown }).providerId : run.providerId;
+        const targetModel = method === 'setModel'
+          ? (typeof args[0] === 'string' ? args[0] : '')
+          : currentPluginEngineModel(run);
         if (!run.providerId || requested !== run.providerId
-          || !deps.pluginEngines?.isOffered(run.providerId, run.controller)) failProviderNotAllowed();
+          || !deps.pluginEngines?.isOffered(run.providerId, run.controller, targetModel)) failProviderNotAllowed();
       }
       const access = pluginEngineRun ? undefined : deps.providerAccess;
       if (access && (method === 'send' || method === 'steer') && run.providerId
@@ -3046,7 +3108,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         throw error;
       }
       if (nextProviderId && !run.closing) run.providerId = nextProviderId;
-      if (method === 'setModel' && typeof args[0] === 'string' && !run.closing) run.authorizedModel = args[0];
+      if (method === 'setModel' && typeof args[0] === 'string' && !run.closing) {
+        const effectiveModel = pluginEngineRun ? (currentPluginEngineModel(run, handle) ?? args[0]) : args[0];
+        if (pluginEngineRun && (!run.providerId
+          || !deps.pluginEngines?.isOffered(run.providerId, run.controller, effectiveModel))) {
+          failProviderNotAllowed();
+        }
+        run.authorizedModel = effectiveModel;
+      }
       if (method === 'commitRewindFiles' && run.kind === 'claude-code') run.rewindPending = true;
       append(run, { t: 'result', callId, ok: true, ...(value !== undefined ? { value: JSON.parse(JSON.stringify(value)) } : {}) });
     } catch (error) {
@@ -3703,11 +3772,45 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         return result;
       }
+      case 'company-reporting-challenge': {
+        const k = key(controller, request.runId);
+        const run = runs.get(k);
+        const service = companyExecutionReporting();
+        if (!service?.available() || run?.closing || run?.relay) return null;
+        for (const [id, value] of reportingHandshakes) {
+          if (value.expires <= now() || !deps.isOwnerCurrent(value.owner)) reportingHandshakes.delete(id);
+        }
+        if (reportingHandshakes.size >= 128) return null;
+        const nonce = randomUUID();
+        reportingHandshakes.set(k, { nonce, expires: now() + 60000, owner: deps.captureOwner() });
+        return service.challenge(nonce);
+      }
+      case 'company-reporting-grant': {
+        const k = key(controller, request.runId);
+        const pending = reportingHandshakes.get(k);
+        const nonce = pending?.nonce;
+        if (!pending || !nonce || pending.expires <= now() || !deps.isOwnerCurrent(pending.owner)) return {};
+        pending.nonce = undefined;
+        const record = await companyExecutionReporting()?.redeem(nonce, request.grant);
+        if (!record || reportingHandshakes.get(k) !== pending || pending.expires <= now() ||
+            !deps.isOwnerCurrent(pending.owner) || !deps.isControllerAuthorized(controller)) return {};
+        const run = runs.get(k);
+        if (!run) { pending.authorization = record; return { authorized: true }; }
+        reportingHandshakes.delete(k);
+        if (!run.closing && !run.relay && deps.isOwnerCurrent(run.owner)) {
+          if (run.turnUsage && run.reportingReceipt === record.receipt) run.turnUsage = record.record;
+          run.authorizedUsage = record.record;
+          run.reportingReceipt = record.receipt;
+          return { authorized: true };
+        }
+        return {};
+      }
       case 'caps': {
         const guest = trustOf(controller) === 'guest';
         const managedSkillDigests = await ownManagedSkillDigests(guest);
         const limits = deps.readLimits?.() ?? DEFAULT_REMOTE_AGENT_LIMITS;
         const caps: RemoteAgentCaps = {
+          ...(companyExecutionReporting()?.available() && { companyTokenReporting: true as const }),
           ...(deps.fastPolicy ? { subscriptionFastPolicy: true as const, subscriptionFastPolicyCache: true as const } : {}),
           version: REMOTE_AGENT_VERSION,
           agents: (['claude-code', 'codex', 'pi'] as const).map((kind) => ({
@@ -3724,7 +3827,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(!guest && deps.nativeHistory ? { nativeHistoryTransfer: true, nativeHistoryBackup: true } : {}),
           ...(deps.imageArtifacts ? { imageRecovery: true, imageRecoveryRelay: true } : {}),
           ...(deps.generateSharedImage ? { sharedImageGeneration: true, sharedBuiltinOpenAiImage: true as const } : {}),
-          ...(!guest && deps.pluginEngines ? { pluginEngines: true as const } : {}),
+          ...(deps.pluginEngines && (!guest || deps.pluginEngines.canUse?.(controller) === true) ? { pluginEngines: true as const } : {}),
           // 能按受邀者隔离运行(供应商级授权与出站边界都已接上)，才接受组所在电脑中转过来的受邀者任务。
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
           ...(deps.directGuestExecution && deps.providerAccess && deps.bindGuestProviderRoute
@@ -3823,8 +3926,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           discardPayload(controller, request.payload);
           fail('REMOTE_AGENT_UNSUPPORTED', 'plugin engines are not available on this computer');
         }
-        const guestUnsupported = pluginEngine || !GUEST_SUPPORTED_AGENTS.has(request.agentKind as RemoteAgentKind)
-          || !deps.providerAccess || !deps.bindGuestProviderRoute;
+        const guestPluginAllowed = pluginEngine && controllerTrust === 'guest' && deps.pluginEngines?.canUse?.(controller) === true;
+        const guestUnsupported = pluginEngine
+          ? !guestPluginAllowed
+          : (!GUEST_SUPPORTED_AGENTS.has(request.agentKind as RemoteAgentKind)
+            || !deps.providerAccess || !deps.bindGuestProviderRoute);
         if (controllerTrust === 'guest' && guestUnsupported) {
           discardPayload(controller, request.payload);
           fail('REMOTE_AGENT_UNSUPPORTED', `${request.agentKind} is not available to shared users on this computer`);
@@ -3840,17 +3946,20 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         const trust: RemoteAgentControllerTrust = relayKey ? 'guest' : controllerTrust;
         if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
-          && !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, builtinKindOf(request.agentKind))) {
+          && (pluginEngine
+            ? deps.directGuestExecution.sessionDelegated(controller, payload.sessionId)
+              || !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId)
+            : !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, builtinKindOf(request.agentKind)))) {
           fail('REMOTE_AGENT_INVALID', 'this shared task is not authorized on this computer');
         }
-        if (relayKey && guestUnsupported) {
+        if (relayKey && (pluginEngine || guestUnsupported)) {
           fail('REMOTE_AGENT_UNSUPPORTED', `${request.agentKind} is not available to shared users on this computer`);
         }
-        // 插件引擎只接同账号电脑直接发来的普通任务：没有虚拟工作区(旧控制端)时它会拿到那台的真实路径，
+        // 插件引擎只接同账号电脑或直连分享受邀者发来的普通任务：没有虚拟工作区(旧控制端)时它会拿到那台的真实路径，
         // 供应商组分配与本机应用各有自己的隔离约定，都不提供。
         if (pluginEngine && (payload.virtualWorkspace !== true || payload.groupAssigned || payload.options.localApplication
           || !payload.options.providerId)) {
-          fail('REMOTE_AGENT_UNSUPPORTED', 'plugin engines only run ordinary tasks of your own computers');
+          fail('REMOTE_AGENT_UNSUPPORTED', 'plugin engines only run ordinary tasks of your own computers or direct shares');
         }
         // 转分享(provider-sharing.md §4.3)：受邀者的组替它分享的人转来的任务，只在本机主人同意过那个人时运行。
         // 新错误码只回给带了 reshareKey 的组所在电脑；旧版本按「没开放这个供应商」处理，照常换组里下一台。
@@ -3874,7 +3983,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         // The host derives this scope before provider resolution: O's own login must not prevent
         // its group from selecting M. Assigned, relayed and delegated executions keep local checks.
-        const groupRouted = controllerTrust === 'guest' && !relayKey && !payload.groupAssigned
+        const groupRouted = !pluginEngine && controllerTrust === 'guest' && !relayKey && !payload.groupAssigned
           && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)
           && !!deps.groupRelay;
         if (payload.requireGroupSwitchToken && (!groupRouted || payload.options.resumeSessionId)) {
@@ -3884,7 +3993,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         let providerId: string | undefined;
         if (pluginEngine) {
           const engineId = payload.options.providerId;
-          if (!engineId || !deps.pluginEngines!.isOffered(engineId, controller)) failProviderNotAllowed();
+          if (!engineId || !deps.pluginEngines!.isOffered(engineId, controller, payload.options.model)) failProviderNotAllowed();
           providerId = engineId;
         } else if (deps.providerAccess) {
           const resolved = await deps.providerAccess.resolve(
@@ -3959,7 +4068,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           try { await deps.directGuestExecution.acceptDelegated?.(controller, payload.sessionId); }
           catch (error) { reserved?.release(); throw error; }
         }
-        if (controllerTrust === 'guest' && !relayKey
+        if (!pluginEngine && controllerTrust === 'guest' && !relayKey
           && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)) {
           try {
             // The accepted O fallback, not a possibly stale release notice,
@@ -3985,7 +4094,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         // 供应商查询/组分配有 await；最终检查与登记间不能再等待，防止并发 open 超额。
         if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
-          && !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, builtinKindOf(request.agentKind))) {
+          && (pluginEngine
+            ? deps.directGuestExecution.sessionDelegated(controller, payload.sessionId)
+              || !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId)
+            : !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, builtinKindOf(request.agentKind)))) {
           reserved?.release();
           fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
         }
@@ -3993,7 +4105,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // Admission may throw a specific pause error after the awaited group reservation.
           // Nothing owns the reserved load until runs.set, so release it on either rejection path.
           if (pluginEngine
-            ? !providerId || !deps.pluginEngines!.isOffered(providerId, controller)
+            ? !providerId || !deps.pluginEngines!.isOffered(providerId, controller, payload.options.model)
             : providerId && deps.providerAccess && !deps.providerAccess.isAllowed(providerId, controller, payload.options.model, payload.sessionId)) {
             failProviderNotAllowed();
           }
@@ -4003,11 +4115,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           reserved?.release();
           throw error;
         }
+        const pending = reportingHandshakes.get(key(controller, request.runId));
+        const reporting = pending && now() < pending.expires && deps.isOwnerCurrent(pending.owner) ? pending.authorization : undefined;
+        if (reporting) reportingHandshakes.delete(key(controller, request.runId));
         const run: Run = {
+          reportingReceipt: reporting?.receipt, authorizedUsage: reporting?.record,
           // Routing hints prevent group loops; they are not permission to skip
           // this executor's policy. Direct and relayed guests inherit its local
           // group restriction even when the caller says it was already assigned.
-          ...(trust === 'guest' && deps.groupRelay && providerId ? { groupProviderId: providerId } : {}),
+          ...(!pluginEngine && trust === 'guest' && deps.groupRelay && providerId ? { groupProviderId: providerId } : {}),
           id: request.runId,
           sessionId: payload.sessionId,
           authorizedModel: payload.options.model,
@@ -4216,8 +4332,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     /** Old execution hosts cannot retain a newly introduced member restriction. */
     async revalidateModelAccess(): Promise<void> {
       await Promise.all([...runs.values()]
-        .filter(run => run.relay && !run.relay.modelAccess && run.providerId
-          && deps.providerAccess?.restricted?.(run.providerId, run.controller, run.sessionId))
+        .filter(run => (run.kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND
+          ? !run.providerId || !deps.pluginEngines?.isOffered(run.providerId, run.controller, currentPluginEngineModel(run))
+          : run.relay && !run.relay.modelAccess && run.providerId
+            && deps.providerAccess?.restricted?.(run.providerId, run.controller, run.sessionId)))
         .map(run => finishRun(run, 'access-revoked', 'navigation')));
     },
     /** 立即结束某个控制端的全部任务(例如分享被关闭)，不等巡检周期。 */

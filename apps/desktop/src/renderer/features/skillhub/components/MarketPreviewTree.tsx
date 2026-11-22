@@ -21,7 +21,7 @@ interface MarketPreviewTreeRowProps {
 /** File tree used by both the full market detail page and the half-screen preview panel. */
 export function MarketPreviewTree({ nodes, selectedPath, onSelect }: MarketPreviewTreeProps) {
   return (
-    <div className="flex flex-col gap-[2px]">
+    <div className="flex flex-col gap-0.5">
       {nodes.map((node) => (
         <MarketPreviewTreeRow
           key={node.path}

@@ -94,7 +94,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       "const pinSearch = section === 'scrollable' && search.query.trim().length > 0",
     );
     // 搜索吸顶不改变导航行高度，也不在输入框外绘制额外背景。
-    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30'");
+    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-page-overlay'");
     expect(topNavSource).toContain("if (section === 'scrollable')");
     expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
     expect(sidebarUpperSource).toContain(
@@ -117,9 +117,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(sidebarUpperSource).toContain("document.addEventListener('focusin', onFocusIn)");
     const inlineSearchSource = read('features', 'cc-agent', 'sidebar', 'SidebarInlineSearch.tsx');
     expect(inlineSearchSource).toContain('inputRef.current?.focus({ preventScroll: true })');
-    expect(sidebarUpperSource).not.toContain('absolute inset-0 z-20');
+    expect(sidebarUpperSource).not.toContain('absolute inset-0 z-page-float');
     expect(sidebarUpperSource).not.toContain(
-      "search.trimmed && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]'",
+      "search.trimmed && 'sticky top-0 z-page-overlay bg-[var(--cmd-palette-bg)]'",
     );
 
     // 声明语义与 useRegisterSidebarUpper 一致:卸载不复位,避免切到 /settings 时闪变。

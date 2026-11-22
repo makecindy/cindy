@@ -563,7 +563,8 @@
       "calloutUnknown": "若君不識申請之人，請拒之；拒後此連結即廢。",
       "approve": "許分享",
       "reject": "拒其請",
-      "later": "容後再理"
+      "later": "容後再理",
+      "calloutPluginEngine": "{{name}} 用之時無須於己機安設法器或 CLI，徑用此機之 CLI 登門與限額。"
     },
     "apply": {
       "loading": "方讀分享連結…",
@@ -1164,7 +1165,7 @@
     "title": "遠端桌面",
     "allow": "許遠端桌面",
     "allowHint": "許已登門之同名籍裝置，覽並操作此機之一切應用程式。須並啟上方之裝置控制。",
-    "permissionHint": "請於此機之系統設定中許螢幕錄製與輔助使用，而後重連。",
+    "permissionHint": "請於此機之系統設定中許螢幕錄製與輔助使用，而後重連。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
     "inputUnsupported": "Cindy 暫不支援此機目前桌面環境的遠端鍵鼠控制。",
     "controlUnavailable": "遠端鍵鼠控制暫不可用，請重連。",
     "beingControlled": "桌面方受遠端控制",
@@ -1281,7 +1282,7 @@
     "privacyScreen": "連時啟隱私畫面",
     "privacyScreenHint": "遠端控制時覆此機之屏。有人於機前點按或按鍵，先問斷連與否。",
     "privacyActive": "隱私畫面已啟。有人於機前點按或按鍵，先問斷連與否。",
-    "privacyFailed": "未能啟隱私畫面，機屏或仍可見。",
+    "privacyFailed": "未能啟隱私畫面，機屏或仍可見。如果被控電腦是 Mac，請在那台電腦上檢查執行中的 Cindy 是否有控制權限。",
     "hostMute": "受控者噤聲",
     "hostMuteHint": "連線之間令被控之機靜音",
     "hostMuteFailed": "不能改被控端之靜音",
@@ -1310,7 +1311,7 @@
     "credentialSigningRequired": "Mac 上之開發版缺簽名設定。請於 Mac 上設簽名並重啟 Cindy，而後再試。",
     "credentialPasswordRejected": "Mac 登入密碼驗證未成，請重新輸入。",
     "credentialIdentityChanged": "不能確認此機之身分，不向未經驗證之裝置傳送密碼。",
-    "credentialAccessibilityRequired": "請於 Mac 之 系統設定 → 隱私權與安全性 → 輔助使用 中許 Cindy，而後重連。",
+    "credentialAccessibilityRequired": "請在被控 Mac 上檢查執行中的這份 Cindy 是否有控制權限，再重新連線。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
     "credentialUnlockUnavailable": "今不能安全解鎖此 Mac。請於鎖定畫面選君之帳號而後重連；若仍未成，請於機上手動解鎖。",
     "disconnecting": "方斷…",
     "loadingDisplayModes": "方讀解析度…",
@@ -2470,8 +2471,8 @@
         "hint": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以 Touch ID 或密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。",
         "permission": "須於「系統設定 → 隱私權與安全性 → 輔助使用」許 Cindy，方能於有人觸機時即鎖屏。未許之前，屏照常熄而鎖。",
         "preview": "即試之",
-        "previewStarting": "請釋滑鼠鍵盤，三秒後覆以隱私畫面；按任一鍵即鎖屏，再解之以試。",
-        "previewUnavailable": "未能啟隱私畫面，請重啟 Cindy 再試。",
+        "previewStarting": "正在準備隱私畫面。請放開滑鼠和鍵盤，等畫面遮住後再按鍵測試鎖定。",
+        "previewUnavailable": "未能啟隱私畫面，機屏或仍可見。",
         "delay": {
           "30": "30 秒",
           "60": "1 分",
@@ -2482,7 +2483,10 @@
           "system": "隨系統"
         },
         "hintWindows": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以 Windows Hello 或密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。",
-        "hintLinux": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。"
+        "hintLinux": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。",
+        "permissionMissing": "隱私畫面未開啟。Cindy 需要系統授權，才能在有人按鍵或點按時鎖定 Mac。",
+        "checkFailed": "目前無法確認這台電腦的隱私畫面權限。",
+        "saveFailed": "無法儲存隱私畫面設定。"
       }
     },
     "agentIsland": {
@@ -3716,6 +3720,7 @@
         "connecting": "方連…",
         "rename": "易名",
         "suspended": "已停",
+        "hidden": "已隱",
         "unconfigured": "未設"
       },
       "button": {
@@ -3726,7 +3731,9 @@
         "cancel": "罷",
         "retry": "重取模型清單",
         "retrying": "方重取…",
-        "enableProvider": "啟供方"
+        "enableProvider": "啟供方",
+        "showProvider": "顯之",
+        "hideInstead": "改為隱"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4106,7 +4113,7 @@
         "paymentRequired": "付費",
         "paymentUnlock": "付費解鎖",
         "enableModel": "啟此模型",
-        "capabilityGroupHint": "不見於言談模型之選；開關定其於相應功能中列否",
+        "capabilityGroupHint": "不見於模型之選；開關定相應功能可用此模型否",
         "accessWriteFailed": "停用之設未能存，請再試",
         "visibilityWriteFailed": "模型顯示之設未能存，請再試；若仍未成，請重啟 Cindy。",
         "disabledGroup": "已停",
@@ -4250,22 +4257,22 @@
           "aria": "依模型之類篩之",
           "chat": "言談"
         },
-        "hiddenGroup": "未顯",
+        "hiddenGroup": "已隱",
         "management": {
           "brand": "製者"
         },
         "manage": {
           "title": "模型",
-          "selected": "已擇 {{count}} 個",
-          "hint": "以開關擇常用之言談模型。",
+          "selected": "顯 {{count}} 個",
+          "hint": "開關定模型見於模型之選否。關之但隱，仍可於選單之末「已隱」中擇之。",
           "menu": "理",
           "arrange": "清單排列",
           "byBrand": "依製者分組",
           "byName": "依模型名排列",
-          "selection": "常用模型",
-          "showAll": "盡選模型",
-          "hideAll": "盡罷所選",
-          "reset": "復預設之選",
+          "selection": "顯於模型之選",
+          "showAll": "盡顯",
+          "hideAll": "盡隱",
+          "reset": "復預設之顯",
           "connectionRequired": "連線後可用，已擇模型仍留。"
         }
       },
@@ -4279,7 +4286,8 @@
         "groupBadge_other": "供方組 · {{count}} 台機",
         "groupNote": "{{device}} 已將此供方立為供方組。於模型清單中擇之以新開差事，{{device}} 將依組策略分差事予下列一機執行；彼機有恙，自換一機續之。{{device}} 在線時，君可自此處之「遠端與分享」理此組及分享。",
         "groupMembersTitle": "組內之機",
-        "groupMembersFailed": "暫不能讀組內諸機之狀態。"
+        "groupMembersFailed": "暫不能讀組內諸機之狀態。",
+        "hiddenBanner": "已隱於此機模型之選。所藏與方用之差事皆不受其擾。"
       },
       "genericOAuth": {
         "subtitle": "訂閱名籍",
@@ -4323,7 +4331,8 @@
           "rejected": "此供方拒此番請求，下為前次所得之模型清單。請稍後再試，或改用他供方。",
           "empty": "此供方此番未返任何可用模型，下為前次所得之清單。請確認名籍權柄後再試。"
         },
-        "suspendedBanner": "此供方已停，憑證仍留；啟之，其模型方復可用",
+        "suspendedBanner": "此供方已停，新差事與幕後諸功皆不復用之，憑證仍留。若但不欲見於模型之選，可改為隱。",
+        "hiddenBanner": "已隱於模型之選。方用之差事與幕後諸功皆不受其擾；欲用時，仍可於選單之末「已隱」中擇之。",
         "remoteAccess": {
           "label": "許遠端呼叫",
           "description": "啟之，則君之他機與君所分享之人，可用此供方之模型；Agent 行於此機，用此機之登門與限額。",
@@ -4533,7 +4542,9 @@
       },
       "menu": {
         "disableProvider": "停此供方",
-        "enableProvider": "啟此供方"
+        "enableProvider": "啟此供方",
+        "hideProvider": "隱於模型之選",
+        "showProvider": "顯於模型之選"
       },
       "builtinApiKey": {
         "subtitle": "API key 連線",
@@ -7000,7 +7011,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已含於隱私畫面：此機不眠。"
+      "keepAwakeIncluded": "已含於隱私畫面：此機不眠。",
+      "localNetwork": {
+        "label": "區域網路",
+        "deniedHint": "無此權，同網之電腦與手機不得直連此機，唯經中繼，其速遲矣。",
+        "settingsHint": "請於「系統設定 › 隱私權與安全性 › 區域網路」啟 Cindy，歸此即自生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8502,7 +8518,8 @@
           "description": "啟之，則君之他機可用此引擎行差事；Agent 行於此機，用此機之登門與限額；檔案與指令仍留於差事所在之機。",
           "unsupported": "此法器尚未許他機用其引擎。",
           "remoteControlOff": "此機尚未許同名籍之裝置遠端控制，他機不可用此引擎。",
-          "ariaLabel": "許君之他機用 {{engine}}"
+          "ariaLabel": "許君之他機用 {{engine}}",
+          "descriptionShareable": "啟之，則君之他機與所共之友無須安設法器，即可用此引擎行差事；Agent 行於此機，用此機之登門與限額；檔案與指令仍留於差事所在之機。"
         },
         "githubRelease": {
           "title": "插件更新",
@@ -10895,6 +10912,13 @@
         "enabled": "已啟"
       },
       "close": "闔"
+    },
+    "localNetwork": {
+      "title": "啟區域網路之權",
+      "relayOnly": "汝他裝置今唯經中繼連此機，其速遲。啟之，則同網可直連。",
+      "controlEnabled": "同網裝置欲直控此機，須區域網路之權，否則唯經中繼。",
+      "allow": "啟之",
+      "dismiss": "暫不啟"
     }
   },
   "bots": {
@@ -14118,6 +14142,8 @@
         "remoteFavoriteUnavailable": "{{source}} · 暫讀不得彼機之模型",
         "favoritesGroup": "珍藏",
         "recentGroup": "近用",
+        "hiddenGroup": "已隱（{{count}}）",
+        "hiddenGroupHint": "已隱之供方與模型，仍可擇用",
         "recentEmpty": "尚無近用——擇一模型，自會來此相候",
         "favoritesSaveFailed": "珍藏之變未能存",
         "favoritesCleanupFailed": "未能清已失效之分享模型珍藏",
@@ -14296,6 +14322,8 @@
       "regionAria": "待遣之訊佇列",
       "listAria": "佇列之訊",
       "pausedFooter": "差事已止，佇列暫停",
+
+      "steerUnsupportedNotice": "此引擎不受插話，待遣之訊俟此輪畢乃遣。",
       "resumeAction": "續遣",
       "resumeAria": "續遣佇列之訊",
       "showMore_one": "尚有 {{count}} 條",
@@ -18479,7 +18507,7 @@
       "expired": "候時過久，代書已終。"
     },
     "failure": {
-      "permission": "Cindy 無讀此機界面之權柄。請於系統設定之輔助使用中允許 Cindy。",
+      "permission": "Cindy 無法讀取這台 Mac 的介面。請檢查執行中的這份 Cindy 是否有控制權限。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
       "target_gone": "目標視窗已闔。",
       "unreadable": "此界面不可讀。可於主機之機上徑自完成，而後交還 Agent。",
       "action_failed": "方才之操作未生效，請察界面後再試。",
@@ -21458,6 +21486,7 @@
       "reviewed": "已審",
       "verified-publisher": "發佈者已驗"
     },
+    "viewLimit": "所開之頁過多。移他頁出屏，或收之，此頁即自開。",
     "pluginRevoked": "法器已停用或已變更，此頁已失效",
     "pluginCspRejected": "此頁請求未宣告之網域，已拒其載入",
     "filesOnExecutionComputer": "卷之內容請於執行之機覽之",
@@ -22438,5 +22467,10 @@
       "auto": "自審",
       "bypassPermissions": "完全存取"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "在「System & App Protection Override」找到 {{app}}，按右側的 ⓘ。若清單中沒有，可按「＋」依路徑加入。",
+    "review": "$t(macControlPermission.selectApp)\n系統若提供「選擇 App」，可限定控制範圍。完整控制可存取所有 App 和資料。若同意，請逐項閱讀並按「OK」確認，再按視窗底部的允許按鈕。"
   }
 }

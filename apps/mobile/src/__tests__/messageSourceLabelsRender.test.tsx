@@ -3,7 +3,7 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useImperativeHandle, useMemo, useState, type ReactNode } from "react";
+import { act, createElement, useContext, useImperativeHandle, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 // This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
@@ -56,8 +56,11 @@ vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null })
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
+import { MessageListVisibilityContext, type MessageListVisibility } from '@/session/messageListVisibility';
 const viewportHarness = vi.hoisted(() => ({
   list: null as any,
+  visibility: null as MessageListVisibility | null,
+  bottom: 800,
   finishReveal: null as any,
   renders: 0,
   captureNativeOpacity: false,
@@ -157,9 +160,11 @@ vi.mock("react-native", async () => {
 });
 vi.mock("@legendapp/list/react-native", () => ({
   LegendList: ({ data, renderItem, ref, ...props }: any) => {
+    viewportHarness.visibility = useContext(MessageListVisibilityContext);
     viewportHarness.renders += 1;
     viewportHarness.list = { ...props, data };
     useImperativeHandle(ref, () => ({
+      getNativeScrollRef: () => ({ getBoundingClientRect: () => ({ top: 0, bottom: viewportHarness.bottom }) }),
       scrollToEnd() {},
       scrollToOffset() {},
       getState() {
@@ -394,6 +399,25 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+// Unit, PR #11917: a card inside a long, still-visible row must see fresh geometry
+// from the mounted LegendList, even when the set of visible row ids stays constant.
+it('publishes viewport geometry on native scroll, list layout and content resize', () => {
+  const h = mount([msg('long-row', 'Retained row', {})]);
+  const measured: number[] = [];
+  const list = viewportHarness.visibility!;
+  const unsubscribe = list.onViewportChange(() => measured.push(list.viewport!()!.bottom));
+  try {
+    const callbacks = viewportHarness.list;
+    viewportHarness.bottom = 600;
+    act(() => callbacks.onScroll({ nativeEvent: { contentOffset: { y: 120 }, contentSize: { height: 1500 }, layoutMeasurement: { height: 600 } } }));
+    viewportHarness.bottom = 400;
+    act(() => callbacks.onLayout({ nativeEvent: { layout: { height: 400 } } }));
+    viewportHarness.bottom = 700;
+    act(() => callbacks.onContentSizeChange(400, 1800));
+    expect(measured).toEqual([600, 400, 700]);
+  } finally { unsubscribe(); h.unmount(); viewportHarness.bottom = 800; }
 });
 
 it('updates retained companion cells when topic replies change without new messages', () => {

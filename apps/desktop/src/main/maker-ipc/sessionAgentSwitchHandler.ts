@@ -942,12 +942,8 @@ export async function performSessionAgentSwitch(
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {
-      if (row.source === 'bot' && pluginTargetDeviceId) {
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'companions use plugin engines installed on their own computer');
-      }
-      if (pluginTargetDeviceId && (isProviderShareAgentDeviceId(pluginTargetDeviceId)
-        || isSharedTaskPeer(pluginTargetDeviceId) || parseProviderSharePeer(pluginTargetDeviceId))) {
-        throwIpcError('PRECONDITION_FAILED', 'plugin engines run on your own computers only');
+      if (pluginTargetDeviceId && (isSharedTaskPeer(pluginTargetDeviceId) || parseProviderSharePeer(pluginTargetDeviceId))) {
+        throwIpcError('PRECONDITION_FAILED', 'invalid plugin engine target device');
       }
       if (!stayingOnRemotePluginEngine && !pluginTargetDeviceId) requestedAgentDeviceId = null;
     }

@@ -14,6 +14,12 @@
   "usageOnlyDevice": "{{name}} のみ",
   "usagePlans": "プランの残り利用枠",
   "usageBudget": "今期の残り予算",
+  "usageWaiting": "パソコンに接続すると、プランの残り利用枠と今日の使用量がここに表示されます",
+  "usageUpdateDesktop": "パソコンの Cindy をアップデートすると使用量を確認できます",
+  "usageWaitingTitle": "使用量はここに表示されます",
+  "usageWaitingCopy": "スマートフォンがパソコンに接続されると、各アカウントのプランの残り利用枠と毎日の使用量が自動で同期されます。通常は数秒で完了します。",
+  "usageUpdateDesktopTitle": "パソコンの Cindy をアップデートしてください",
+  "usageUpdateDesktopCopy": "パソコンの Cindy が古いため、使用量をスマートフォンに送れません。アップデートすると自動で表示されます。",
   "management": {
     "title": "デバイス管理",
     "openDevice": "{{name}} のデバイス詳細を表示",

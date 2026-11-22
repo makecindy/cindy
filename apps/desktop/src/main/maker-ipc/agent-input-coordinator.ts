@@ -98,6 +98,7 @@ import {
 import { CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '../../shared/interruptedTurn.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { attachSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata.js';
+import type { AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import { collectInlineMessageReferenceKeys } from '@cindy/maker-shared/agent-input-projection';
 import {
   appendRecoveryCheckpointPrompt,
@@ -357,6 +358,12 @@ export type AgentInputSendResult =
     };
 
 export interface AgentInputCoordinatorDeps {
+  /**
+   * The host-reconciled send_to_session route of the runtime that receives this input: 'live' for a steer
+   * into the running turn, 'send' for a dispatch whose send transaction may first apply a pending switch.
+   * Undefined when that runtime's identity is not known.
+   */
+  sendToSessionHint?: (sessionId: string, receiver: 'live' | 'send') => AgentSendToSessionHint | undefined;
   /** Revalidate a saved report against the current account's active Orca link. */
   canRestoreOrcaReport?: (sessionId: string, item: AgentInputQueuedMessage) => Promise<boolean>;
   awaitQueuePersistence?: (sessionId: string) => Promise<void>;
@@ -373,6 +380,11 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
+  /**
+   * Whether the live Session can take input into its running turn (`sameTurnSteer`).
+   * null / undefined = no live Session or probe unavailable; only `false` changes steer.
+   */
+  supportsSameTurnSteer?: (sessionId: string) => boolean | null | undefined;
   /** Live Session only — must not OR the desktop tracker. undefined = probe unavailable. */
   isLiveTurnRunning?: (sessionId: string) => boolean | undefined;
   /**
@@ -2863,6 +2875,17 @@ export class AgentInputCoordinator {
       return true;
     }
 
+    // An engine without same-turn input (a plugin engine whose agent does not offer
+    // steering) sends it after this turn instead of failing. Clients that know show a
+    // notice and no steer action; older clients still reach this path.
+    if (this.deps.supportsSameTurnSteer?.(sessionId) === false) {
+      if (opts?.fallbackToTurn === false) return false;
+      log.info('steer unsupported by engine; queued for after this turn', { sessionId, clientId: item.clientId });
+      this.fallbackPreparedAsTurn(sessionId, item, opts?.removeFromQueue === true);
+      if (opts?.touchUserSend) this.touchUserSend(sessionId);
+      return true;
+    }
+
     // 插话统一为同轮注入(2026-07-12 产品决策):Claude 与 Codex 都走
     // steerToAgent 把消息注入正在跑的 turn,不打断当前工作。需要打断的用户
     // 自己点 Stop。(历史:PR #394 曾把 Claude 改成 abort+新 turn,现回退。)
@@ -3032,7 +3055,9 @@ export class AgentInputCoordinator {
         taskActionInputGuard(sessionId, item),
         beforeMutation ? assertSteerAuthority : undefined,
       );
-      await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
+      await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts, {
+        sendToSession: this.deps.sendToSessionHint?.(sessionId, 'live'),
+      }), {
         ...(opts?.beforeMutation ? { beforeProviderStart: async () => {
           try { await opts.beforeMutation!(); }
           catch (error) { authorizationFailed = true; throw error; }
@@ -5154,6 +5179,7 @@ export class AgentInputCoordinator {
           ? state.activeTurn.item.clientId
           : null,
       continuationTurnClientId: state.activeTurn?.continuationOwnerClientId ?? null,
+      ...(this.deps.supportsSameTurnSteer?.(sessionId) === false ? { steerUnsupported: true } : {}),
       steeringQueueClientIds: [...state.steeringQueueClientIds],
       queuePaused: state.queuePaused,
       queueExpanded: state.queueExpanded,
@@ -5840,7 +5866,9 @@ export class AgentInputCoordinator {
         head.persistedContent,
         referenceContexts,
       );
-      const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
+      const makerUserMessage = buildMakerUserMessage(head, referenceContexts, {
+        sendToSession: this.deps.sendToSessionHint?.(sessionId, 'send'),
+      });
       if (requiresOrcaReportPersistence(head)) {
         // A crash after allocation may leave a committed grant without a user
         // row. Persist the uncertain attempt before entering the startup path;

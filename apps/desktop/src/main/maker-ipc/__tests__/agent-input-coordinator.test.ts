@@ -1438,6 +1438,28 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(h.onOwnerMessage).toHaveBeenCalledTimes(expected ? 1 : 0);
   });
 
+  // Regression (PR #11894 review): a steer reaches the running runtime without the send transaction's
+  // pending-switch step, so it must ask for the live route; a dispatch asks for the post-switch one.
+  // Entry: production coordinator steer and dispatch; observable: the model message content.
+  // Minimum: one referenced conversation per delivery path; tier: unit.
+  it('asks for the live route on steer and the send route on dispatch', async () => {
+    const route = { agentKind: 'claude-code' as const, supportsRemote: false };
+    const sendToSessionHint = vi.fn((_id: string, receiver: 'live' | 'send') => receiver === 'live' ? route : undefined);
+    const h = createHarness({ sendToSessionHint });
+    const href = 'cindy://session/target';
+    const referenced = (clientId: string) => makeItem(clientId, href, {
+      agentReferences: [{ kind: 'session', start: 0, end: href.length, href, sessionId: 'target', title: 'Target' }],
+    });
+    h.setRunning(true);
+    await h.coordinator.steer('route-steer', referenced('route-steer-input'));
+    expect(JSON.stringify(h.steerToAgent.mock.calls[0]?.[1])).toContain('send_to_session');
+    h.setRunning(false);
+    h.coordinator.enqueue('route-send', referenced('route-send-input'));
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledOnce());
+    expect(JSON.stringify(h.sendToAgent.mock.calls[0]?.[1])).not.toContain('send_to_session');
+    expect(sendToSessionHint.mock.calls).toEqual([['route-steer', 'live'], ['route-send', 'send']]);
+  });
+
   it('carries message sources through steer delivery and the steer user row', async () => {
     const h = createHarness();
     const sid = 'source-steer';
@@ -2075,6 +2097,8 @@ function createHarness(opts?: {
   awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
   providerGroupSwitchCandidate?: AgentInputCoordinatorDeps['providerGroupSwitchCandidate'];
+  sendToSessionHint?: AgentInputCoordinatorDeps['sendToSessionHint'];
+  supportsSameTurnSteer?: AgentInputCoordinatorDeps['supportsSameTurnSteer'];
 }) {
   let running = false;
   let liveRunningOverride: boolean | null | 'unknown' = null;
@@ -2222,6 +2246,7 @@ function createHarness(opts?: {
   >(async () => []);
   const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    sendToSessionHint: opts?.sendToSessionHint,
     rewindPersistedUserMessageAfterClear,
     sendToAgent,
     steerToAgent,
@@ -2238,6 +2263,7 @@ function createHarness(opts?: {
     onUnconfirmedAutoResumeTurn,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
+    ...(opts?.supportsSameTurnSteer ? { supportsSameTurnSteer: opts.supportsSameTurnSteer } : {}),
     isLiveTurnRunning: () => {
       if (liveRunningOverride === 'unknown') return undefined;
       return liveRunningOverride === null ? running : liveRunningOverride;
@@ -8244,6 +8270,29 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
 });
 
 describe('AgentInputCoordinator steer transaction', () => {
+  // 插件引擎的 Agent 不支持同轮插话（docs/dev-rules/protocol-compatibility/plugin-harnesses.md「插话」）。
+  // 缺口：此前插话直达 steerToAgent，被 UNSUPPORTED_CAPABILITY 拒绝后成了报错横幅。
+  // 最小失败输入：运行中、不支持插话的会话，把排队第二条插话；控制面严格插话一条。
+  it('sends a steer after this turn, without an error, when the engine cannot take same-turn input', async () => {
+    const h = createHarness({ supportsSameTurnSteer: () => false });
+    const sid = 'steer-unsupported-engine';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    h.coordinator.enqueue(sid, makeItem('q-2', 'second'));
+    const queued = h.coordinator.getProjection(sid).pendingQueue[1]!;
+
+    await expect(h.coordinator.steer(sid, queued, { removeFromQueue: true })).resolves.toBe(true);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    const projection = latestProjection(h.projections);
+    expect(projection.steerUnsupported).toBe(true);
+    expect(projection.error).toBeNull();
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2', 'q-1']);
+
+    await expect(h.coordinator.steer(sid, makeItem('q-3', 'urgent'), { fallbackToTurn: false })).resolves.toBe(false);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual(['q-2', 'q-1']);
+  });
+
   it.each(['restore', 'screening', 'references', 'valid'] as const)('runs the host steer authority guard after %s', async boundary => {
     const h = createHarness();
     const sid = 'group-steer-guard';

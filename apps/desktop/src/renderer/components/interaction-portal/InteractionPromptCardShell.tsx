@@ -61,14 +61,14 @@ export function InteractionPromptCardShell({
         onClick={() => onViewerStateChange('expanded')}
         aria-label={restoreAriaLabel}
         className={cn(
-          'w-full rounded-[12px] border',
+          'w-full rounded-xl border',
           'border-[var(--plan-card-border)] bg-[var(--plan-card-bg)]',
-          'flex h-[44px] items-center justify-between pl-[20px] pr-[10px]',
+          'flex h-[44px] items-center justify-between pl-5 pr-2.5',
           'cursor-pointer text-left transition-colors',
           'hover:bg-[var(--plan-toolbar-btn-hover-bg)]',
         )}
       >
-        <div className="flex min-w-0 items-center gap-[12px]">
+        <div className="flex min-w-0 items-center gap-3">
           <span className="min-w-0 truncate text-14 font-medium text-[var(--plan-min-title)]">
             {minimizedTitle}
           </span>
@@ -92,12 +92,12 @@ export function InteractionPromptCardShell({
     <div
       ref={rootRef}
       className={cn(
-        'w-full rounded-[12px] border p-[16px]',
+        'w-full rounded-xl border p-4',
         'border-[var(--ask-card-border)] bg-[var(--ask-card-bg)]',
         className,
       )}
     >
-      <div className="flex flex-col gap-[12px]">
+      <div className="flex flex-col gap-3">
         <div className="flex h-[28px] items-center justify-between">
           <div className="flex min-w-0 items-center">{headerLeading}</div>
           {collapsible ? (

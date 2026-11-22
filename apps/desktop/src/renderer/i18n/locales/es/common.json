@@ -576,7 +576,8 @@
       "calloutUnknown": "Si no reconoces a esta persona, rechaza la solicitud; el enlace deja de funcionar una vez rechazada.",
       "approve": "Aprobar uso compartido",
       "reject": "Rechazar solicitud",
-      "later": "Decidir más tarde"
+      "later": "Decidir más tarde",
+      "calloutPluginEngine": "{{name}} puede usarlo sin instalar el complemento ni la CLI en su computadora, usando el inicio de sesión y la cuota de la CLI de esta computadora."
     },
     "apply": {
       "loading": "Leyendo el enlace para compartir…",
@@ -1193,7 +1194,7 @@
     "title": "Escritorio remoto",
     "allow": "Permitir escritorio remoto",
     "allowHint": "Permite que tus dispositivos con sesión iniciada vean y usen todas las aplicaciones de esta computadora. También activa el control del dispositivo arriba.",
-    "permissionHint": "En la computadora, permite la grabación de pantalla y la accesibilidad en la configuración del sistema y luego vuelve a conectarte.",
+    "permissionHint": "En la computadora, permite la grabación de pantalla y la accesibilidad en la configuración del sistema y luego vuelve a conectarte. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
     "inputUnsupported": "El entorno de escritorio actual de esta computadora no admite el control remoto del teclado y el ratón en Cindy.",
     "controlUnavailable": "El control remoto de teclado y mouse no está disponible temporalmente. Vuelve a conectarte para intentarlo de nuevo.",
     "beingControlled": "Tu escritorio está siendo controlado",
@@ -1310,7 +1311,7 @@
     "privacyScreen": "Pantalla de privacidad durante la conexión",
     "privacyScreenHint": "Cubre la pantalla de esta computadora durante el control remoto. Si alguien hace clic o presiona una tecla frente a la computadora, primero pregunta si quieres desconectarte.",
     "privacyActive": "La pantalla de privacidad está activada. Si alguien hace clic o presiona una tecla frente a la computadora, primero pregunta si quieres desconectarte.",
-    "privacyFailed": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible.",
+    "privacyFailed": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible. Si el equipo remoto es un Mac, comprueba allí el permiso de control de la copia de Cindy en ejecución.",
     "hostMute": "Silenciar computadora controlada",
     "hostMuteHint": "Silenciar la computadora controlada mientras está conectada",
     "hostMuteFailed": "No se puede cambiar el estado de silencio de la computadora controlada",
@@ -1340,7 +1341,7 @@
     "credentialSigningRequired": "A la versión de desarrollo de la Mac le falta la configuración de firma. Configura la firma, reinicia Cindy en la Mac y vuelve a intentarlo.",
     "credentialPasswordRejected": "No se aceptó la contraseña de inicio de sesión de la Mac. Vuelve a ingresarla.",
     "credentialIdentityChanged": "No se pudo verificar la identidad de la computadora. No se envió ninguna contraseña a un dispositivo no verificado.",
-    "credentialAccessibilityRequired": "Permite Cindy en Configuración del sistema → Privacidad y seguridad → Accesibilidad en la Mac y luego vuelve a conectarte.",
+    "credentialAccessibilityRequired": "Comprueba en el Mac el permiso de control de la copia de Cindy que está en ejecución y vuelve a conectarte. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
     "credentialUnlockUnavailable": "No se pudo desbloquear esta Mac de forma segura. Selecciona tu cuenta en su pantalla de bloqueo y luego vuelve a conectarte; si aún falla, desbloquea la Mac localmente.",
     "disconnecting": "Desconectando…",
     "loadingDisplayModes": "Cargando resoluciones…",
@@ -2538,8 +2539,8 @@
         "hint": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con Touch ID o tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
         "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre.",
         "preview": "Probar ahora",
-        "previewStarting": "Suelta el mouse y el teclado. En 3 segundos aparecerá la pantalla de privacidad; presiona cualquier tecla para bloquear y luego desbloquea para probarlo.",
-        "previewUnavailable": "No se pudo mostrar la pantalla de privacidad. Reinicia Cindy e inténtalo de nuevo.",
+        "previewStarting": "Preparando la pantalla de privacidad. Suelta el ratón y el teclado. Cuando la pantalla quede cubierta, pulsa una tecla para probar el bloqueo.",
+        "previewUnavailable": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
@@ -2550,7 +2551,10 @@
           "system": "Sistema"
         },
         "hintWindows": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con Windows Hello o tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
-        "hintLinux": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora."
+        "hintLinux": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
+        "permissionMissing": "La pantalla de privacidad está desactivada. Cindy necesita permiso para bloquear el Mac cuando alguien haga clic o pulse una tecla.",
+        "checkFailed": "Cindy no pudo comprobar los permisos de la pantalla de privacidad en este equipo.",
+        "saveFailed": "No se pudo guardar el ajuste de la pantalla de privacidad."
       }
     },
     "agentIsland": {
@@ -3806,6 +3810,7 @@
         "connecting": "Conectando…",
         "rename": "Cambiar nombre",
         "suspended": "Desactivado",
+        "hidden": "Oculto",
         "unconfigured": "No configurado"
       },
       "button": {
@@ -3816,7 +3821,9 @@
         "cancel": "Cancelar",
         "retry": "Volver a buscar modelos",
         "retrying": "Buscando modelos de nuevo…",
-        "enableProvider": "Habilitar proveedor"
+        "enableProvider": "Habilitar proveedor",
+        "showProvider": "Mostrar",
+        "hideInstead": "Ocultar en su lugar"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4202,7 +4209,7 @@
         "paymentRequired": "De pago",
         "paymentUnlock": "Pagar para desbloquear",
         "enableModel": "Habilitar este modelo",
-        "capabilityGroupHint": "No se muestra en el selector de modelo de chat. El interruptor controla la visibilidad en la función relevante.",
+        "capabilityGroupHint": "No se muestra en el selector de modelos. El interruptor decide si la función correspondiente puede usar el modelo.",
         "accessWriteFailed": "No se pudo guardar el cambio. Por favor inténtalo de nuevo.",
         "visibilityWriteFailed": "No se pudo guardar la configuración de visibilidad del modelo. Inténtelo de nuevo o reinicie Cindy si el problema continúa.",
         "disabledGroup": "Desactivado",
@@ -4346,22 +4353,22 @@
           "aria": "Filtrar por tipo de modelo",
           "chat": "Conversación"
         },
-        "hiddenGroup": "No mostrado",
+        "hiddenGroup": "Ocultos",
         "management": {
           "brand": "Fabricante"
         },
         "manage": {
           "title": "Modelos",
-          "selected": "Seleccionados: {{count}}",
-          "hint": "Utilice los interruptores para elegir sus modelos de chat.",
+          "selected": "Mostrados: {{count}}",
+          "hint": "Los interruptores deciden qué modelos aparecen en el selector de modelos. Al desactivar uno solo se oculta; aún puedes elegirlo en «Ocultos», al final del selector.",
           "menu": "Administrar",
           "arrange": "Organizar lista",
           "byBrand": "Agrupar por fabricante",
           "byName": "Ordenar por nombre de modelo",
-          "selection": "Selección de modelo",
-          "showAll": "Seleccionar todos los modelos",
-          "hideAll": "Borrar selección",
-          "reset": "Restaurar la selección predeterminada",
+          "selection": "Mostrar en el selector de modelos",
+          "showAll": "Mostrar todos los modelos",
+          "hideAll": "Ocultar todos los modelos",
+          "reset": "Restaurar la visibilidad predeterminada",
           "connectionRequired": "Conéctate para usar estos modelos. Tus selecciones se conservan."
         },
         "modelCount_many": "Modelos {{count}}"
@@ -4378,7 +4385,8 @@
         "groupNote": "{{device}} convirtió a este proveedor en un grupo de proveedores. Cuando inicia una tarea con él, {{device}} asigna la tarea a una de las siguientes computadoras según su estrategia de grupo y la mueve a otra si esa computadora tiene un problema. Mientras {{device}} esté en línea, use Remoto y compartido aquí para administrar el grupo y sus recursos compartidos.",
         "groupMembersTitle": "Computadoras en el grupo",
         "groupMembersFailed": "No se pudo obtener el estado de las computadoras del grupo en este momento.",
-        "groupBadge_many": "Grupo de proveedores · {{count}} computadoras"
+        "groupBadge_many": "Grupo de proveedores · {{count}} computadoras",
+        "hiddenBanner": "Oculto del selector de modelos en este ordenador. Los favoritos y las sesiones que lo usan no se ven afectados."
       },
       "genericOAuth": {
         "subtitle": "Cuenta de suscripción",
@@ -4422,7 +4430,8 @@
           "rejected": "Este proveedor rechazó la solicitud. La lista a continuación corresponde a la última actualización exitosa. Vuelve a intentarlo más tarde o utiliza un proveedor diferente.",
           "empty": "Este proveedor no devolvió ningún modelo utilizable esta vez. La lista a continuación corresponde a la última actualización exitosa. Verifique el acceso a su cuenta y luego vuelva a intentarlo."
         },
-        "suspendedBanner": "Este proveedor está deshabilitado. Las credenciales se conservan; habilítalo para volver a usar sus modelos.",
+        "suspendedBanner": "Este proveedor está deshabilitado: las sesiones nuevas y las funciones en segundo plano ya no lo usan. Las credenciales se conservan. Si solo quieres que no aparezca en el selector de modelos, ocúltalo en su lugar.",
+        "hiddenBanner": "Oculto del selector de modelos. Las sesiones y las funciones en segundo plano que lo usan no se ven afectadas, y aún puedes elegirlo en «Ocultos», al final del selector.",
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Cuando está activado, sus otras computadoras y las personas con las que comparte pueden usar los modelos de este proveedor. El Agent se ejecuta en esta computadora, utilizando el inicio de sesión y la cuota de esta computadora.",
@@ -4632,7 +4641,9 @@
       },
       "menu": {
         "disableProvider": "Deshabilitar este proveedor",
-        "enableProvider": "Habilitar este proveedor"
+        "enableProvider": "Habilitar este proveedor",
+        "hideProvider": "Ocultar del selector de modelos",
+        "showProvider": "Mostrar en el selector de modelos"
       },
       "builtinApiKey": {
         "subtitle": "Conexión con clave API",
@@ -7110,7 +7121,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Incluido en la pantalla de privacidad: esta computadora no entrará en reposo."
+      "keepAwakeIncluded": "Incluido en la pantalla de privacidad: esta computadora no entrará en reposo.",
+      "localNetwork": {
+        "label": "Red local",
+        "deniedHint": "Sin este permiso, los ordenadores y teléfonos de la misma red no pueden conectarse directamente a este ordenador. Pasan por el relé, que es más lento.",
+        "settingsHint": "Activa Cindy en Ajustes del Sistema › Privacidad y seguridad › Red local. Se aplica en cuanto vuelvas."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8631,7 +8647,8 @@
           "description": "Cuando está activado, tus otras computadoras pueden ejecutar tareas con este motor. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea.",
           "unsupported": "Este complemento todavía no permite usar su motor desde otras computadoras.",
           "remoteControlOff": "Esta computadora aún no permite el control remoto, por lo que otras computadoras no pueden usar este motor.",
-          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}"
+          "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}",
+          "descriptionShareable": "Cuando está activado, tus otras computadoras y las personas con quienes lo compartas pueden ejecutar tareas con este motor sin instalar el complemento. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea."
         },
         "githubRelease": {
           "title": "Actualizaciones del complemento",
@@ -11020,6 +11037,13 @@
         "enabled": "Activado"
       },
       "close": "Cerrar diálogo de descarga"
+    },
+    "localNetwork": {
+      "title": "Permitir acceso a la red local",
+      "relayOnly": "Tus otros dispositivos solo pueden conectarse a este ordenador a través del relé, que es más lento. Permite el acceso para que los dispositivos de la misma red se conecten directamente.",
+      "controlEnabled": "Los dispositivos de la misma red solo pueden controlar este ordenador directamente con acceso a la red local. Si no, pasan por el relé.",
+      "allow": "Permitir",
+      "dismiss": "Ahora no"
     }
   },
   "bots": {
@@ -14288,6 +14312,8 @@
         "remoteFavoriteUnavailable": "{{source}} · No se pueden leer los modelos de esa computadora en este momento",
         "favoritesGroup": "Favoritos",
         "recentGroup": "Reciente",
+        "hiddenGroup": "Ocultos ({{count}})",
+        "hiddenGroupHint": "Los proveedores y modelos ocultos se pueden seguir eligiendo",
         "recentEmpty": "Aún no hay modelos recientes. Elige uno y aparecerá aquí",
         "favoritesSaveFailed": "No se pudieron guardar los cambios en favoritos",
         "favoritesCleanupFailed": "No se pudieron quitar los favoritos de los proveedores cuyo acceso compartido se revocó",
@@ -14465,6 +14491,8 @@
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",
+
+      "steerUnsupportedNotice": "Este motor no admite incorporar mensajes. Los mensajes en cola se enviarán cuando termine el turno actual.",
       "resumeAction": "Continuar enviando",
       "resumeAria": "Continuar enviando mensajes en cola",
       "showMore_one": "{{count}} más",
@@ -18721,7 +18749,7 @@
       "expired": "La entrada manual finalizó tras esperar demasiado."
     },
     "failure": {
-      "permission": "Cindy no puede leer la pantalla de esta computadora. Permite el acceso a Cindy en Accesibilidad, dentro de Configuración del sistema.",
+      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
       "target_gone": "La ventana de destino se cerró.",
       "unreadable": "No se puede leer esta pantalla. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
       "action_failed": "Esa acción no surtió efecto. Comprueba la pantalla y vuelve a intentarlo.",
@@ -21743,6 +21771,7 @@
       "reviewed": "Revisado",
       "verified-publisher": "Editor verificado"
     },
+    "viewLimit": "Hay demasiadas páginas abiertas. Desplaza otra página fuera de la vista o ciérrala para que esta se abra automáticamente.",
     "pluginRevoked": "El complemento se desactivó o cambió. Esta página ya no está disponible.",
     "pluginCspRejected": "La página solicitó un dominio no declarado y se bloqueó.",
     "filesOnExecutionComputer": "Ver el contenido del archivo en la computadora de ejecución",
@@ -22740,5 +22769,10 @@
       "auto": "Revisión automática",
       "bypassPermissions": "Acceso completo"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "En «System & App Protection Override», pulsa ⓘ junto a {{app}}. Si no aparece, añade la app en ejecución con +.",
+    "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana."
   }
 }

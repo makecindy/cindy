@@ -10,10 +10,34 @@ const { pluginEngineState } = vi.hoisted(() => ({
   pluginEngineState: {
     local: [] as any[],
     remote: null as any[] | null,
+    selectableDevices: [] as Array<{ deviceId: string; name: string; online: boolean }>,
+    sharedPluginDevices: [] as Array<{ deviceId: string; name: string }>,
+    deviceCatalogues: new Map<string, any[] | null>(),
+    readDevicePluginEngines: vi.fn(),
   },
 }));
+vi.mock('@/hooks/useControllableDevices', () => ({
+  useSelectableDevices: () => ({ devices: pluginEngineState.selectableDevices }),
+}));
+vi.mock('@/features/provider-share/useProviderShareAgentDevices', () => ({
+  useProviderShareAgentDevices: () => ({
+    devices: [],
+    pluginEngineDevices: pluginEngineState.sharedPluginDevices,
+    loaded: true,
+    nameFor: (id: string | null | undefined) =>
+      pluginEngineState.sharedPluginDevices.find((item) => item.deviceId === id)?.name ?? null,
+    isKnown: () => true,
+    isReceived: () => true,
+  }),
+}));
 vi.mock('@/hooks/usePluginEngines', () => ({
+  findPluginEngine: (list: readonly any[], providerId: string | null | undefined) =>
+    list.find((item) => item.providerId === providerId) ?? null,
   requestPluginEnginesRefresh: vi.fn(),
+  useDevicesPluginEngines: (deviceIds: readonly string[]) => ({
+    catalogues: new Map(deviceIds.map((id) => [id, pluginEngineState.deviceCatalogues.get(id) ?? null])),
+    read: pluginEngineState.readDevicePluginEngines,
+  }),
   usePluginEngines: () => pluginEngineState.local,
   useRemotePluginEngines: () => ({ engines: pluginEngineState.remote, refresh: vi.fn() }),
 }));
@@ -109,6 +133,10 @@ afterEach(() => {
   defaultModel.model = 'default-model';
   pluginEngineState.local = [];
   pluginEngineState.remote = null;
+  pluginEngineState.selectableDevices = [];
+  pluginEngineState.sharedPluginDevices = [];
+  pluginEngineState.deviceCatalogues = new Map();
+  pluginEngineState.readDevicePluginEngines.mockReset();
 });
 
 describe('BotModelChainEditor', () => {
@@ -444,4 +472,61 @@ it.each([undefined, 'controlled-host'])('saves and reopens a model offered by th
   expect(saved).toEqual([{ harness: 'acp', providerId: engine.providerId, model: 'sample-model', effort: 'high', fastMode: false }]);
   view.rerender(<BotModelChainEditor deviceId={deviceId} value={saved} onChange={onChange} />);
   expect(picker().active).toEqual({ providerId: engine.providerId, modelId: 'sample-model', effort: 'high' });
+});
+
+// 依据：伙伴模型列表与会话模型列表一致，本机未安装对应插件时也能列出、选择并回显同账号远程电脑和好友分享的插件供应商。
+// 覆盖缺口：BotModelChainEditor 此前只读本机 usePluginEngines，且选中插件引擎时清空 agentDeviceId。
+// 最小失败输入：本机无插件，仅存在一条 share:friend 插件分享与一台在线同账号电脑；tier：unit。
+it('lists, saves and reopens shared and same-account remote plugin engines without local install', () => {
+  const sharedEngine = {
+    key: 'friend:engine', providerId: 'acp-plugin:friend:engine', ghostId: 'friend', harnessId: 'engine',
+    name: 'Friend Engine', availability: { state: 'available' },
+    remoteUse: { supported: true, enabled: true, shareSupported: true },
+    models: [{ id: 'shared-model', displayName: 'Shared Model' }],
+  };
+  const peerEngine = {
+    key: 'peer:engine', providerId: 'acp-plugin:peer:engine', ghostId: 'peer', harnessId: 'engine',
+    name: 'Peer Engine', availability: { state: 'available' },
+    remoteUse: { supported: true, enabled: true },
+    models: [{ id: 'peer-model', displayName: 'Peer Model' }],
+  };
+  pluginEngineState.selectableDevices = [{ deviceId: 'mac-mini', name: 'Mac mini', online: true }];
+  pluginEngineState.sharedPluginDevices = [{ deviceId: 'share:friend', name: '来自好友的分享' }];
+  // Initial render before picker opens: catalogues not yet fetched, yet pluginEngines must still be wired so readCatalogue fires on open.
+  const onChange = vi.fn();
+  const view = render(<BotModelChainEditor value={[]} onChange={onChange} />);
+  const picker = () => modelSelectorProps.mock.lastCall![0].pluginEngines;
+  expect(picker()).toBeDefined();
+  picker().readCatalogue();
+  expect(pluginEngineState.readDevicePluginEngines).toHaveBeenCalledTimes(1);
+
+  pluginEngineState.deviceCatalogues = new Map([
+    ['share:friend', [sharedEngine]],
+    ['mac-mini', [peerEngine]],
+  ]);
+  view.rerender(<BotModelChainEditor value={[]} onChange={onChange} />);
+  expect(picker().engines).toEqual([
+    expect.objectContaining({ providerId: peerEngine.providerId, deviceId: 'mac-mini', deviceName: 'Mac mini' }),
+    expect.objectContaining({ providerId: sharedEngine.providerId, deviceId: 'share:friend', deviceName: '来自好友的分享' }),
+  ]);
+
+  picker().onSelect({ providerId: sharedEngine.providerId, deviceId: 'share:friend', modelId: 'shared-model', effort: 'high' });
+  const saved = onChange.mock.lastCall![0];
+  expect(saved).toEqual([{
+    harness: 'acp',
+    agentDeviceId: 'share:friend',
+    providerId: sharedEngine.providerId,
+    model: 'shared-model',
+    effort: 'high',
+    fastMode: false,
+  }]);
+
+  view.rerender(<BotModelChainEditor value={saved} onChange={onChange} />);
+  expect(picker().active).toEqual({
+    providerId: sharedEngine.providerId,
+    deviceId: 'share:friend',
+    modelId: 'shared-model',
+    effort: 'high',
+  });
+  expect(pluginEngineState.readDevicePluginEngines).toHaveBeenCalledWith('share:friend');
 });
