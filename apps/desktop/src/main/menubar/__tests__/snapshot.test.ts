@@ -60,6 +60,19 @@ function input(sources: MenubarSourceInput[], options: { locale?: SupportedLocal
 }
 
 describe('buildMenubarView', () => {
+  // Unit: selecting all devices must preserve the currency of local task rates, including the status item.
+  it('keeps a two-dollar local task in USD while the all-device overview displays CNY', () => {
+    const data = input([], { settings: { scope: 'all' } });
+    data.moneySymbol = '¥';
+    data.usage.scopes.local = { ...data.usage.scopes.local, currency: 'USD' };
+    data.usage.scopes.all = { ...data.usage.scopes.all, currency: 'CNY' };
+    data.tasks = [{ sessionId: 'one', title: 'Task', harness: 'codex', model: 'gpt', tokensToday: 10,
+      valueToday: 2, contextPercent: null, running: true, startedAtMs: NOW, lastActiveAtMs: NOW }];
+    const view = buildMenubarView(data);
+    expect(view).toMatchObject({ moneySymbol: '¥', taskMoneySymbol: '$', tasks: [{ value: 2 }] });
+    expect(view.statusTextByMode).toMatchObject({ task: '$2.00', today: '¥2.00' });
+  });
+
   // #10110, unit: two accounts on one peer must have distinct labels in both panel and
   // widget. Provider-only fixtures could not catch identical device labels or a task
   // action falsely promising to pick the displayed pool account.

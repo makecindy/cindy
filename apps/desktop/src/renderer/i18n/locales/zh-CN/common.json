@@ -563,7 +563,8 @@
       "calloutUnknown": "如果你不认识申请人，请拒绝；拒绝后这条链接作废。",
       "approve": "同意分享",
       "reject": "拒绝申请",
-      "later": "稍后处理"
+      "later": "稍后处理",
+      "calloutPluginEngine": "{{name}} 使用时无需在自己的电脑上安装插件或 CLI，会使用这台电脑上的 CLI 登录和配额。"
     },
     "apply": {
       "loading": "正在读取分享链接…",
@@ -1164,7 +1165,7 @@
     "title": "远程桌面",
     "allow": "允许远程桌面",
     "allowHint": "允许已登录的同账号设备查看和操作这台电脑的所有应用。需同时开启上方的设备控制。",
-    "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。",
+    "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
     "inputUnsupported": "Cindy 暂不支持这台电脑当前桌面环境的远程键鼠控制。",
     "controlUnavailable": "远程键鼠控制暂时不可用，请重新连接。",
     "beingControlled": "桌面正在被远程控制",
@@ -1281,7 +1282,7 @@
     "privacyScreen": "连接时打开隐私屏",
     "privacyScreenHint": "远程控制时遮住这台电脑的屏幕。有人在电脑前点按或按键时，会先询问是否断开连接。",
     "privacyActive": "隐私屏已打开。有人在电脑前点按或按键时，会先询问是否断开连接。",
-    "privacyFailed": "未能打开隐私屏，电脑屏幕可能仍可见。",
+    "privacyFailed": "未能打开隐私屏，电脑屏幕可能仍可见。如果被控电脑是 Mac，请在那台电脑上检查正在运行的 Cindy 是否有控制权限。",
     "hostMute": "被控端静音",
     "hostMuteHint": "连接期间将被控电脑静音",
     "hostMuteFailed": "无法修改被控端静音状态",
@@ -1310,7 +1311,7 @@
     "credentialSigningRequired": "Mac 上的开发版缺少签名配置。请在 Mac 上配置签名并重新启动 Cindy，然后重试。",
     "credentialPasswordRejected": "Mac 登录密码验证失败，请重新输入。",
     "credentialIdentityChanged": "无法确认电脑身份，不会向未经验证的设备发送密码。",
-    "credentialAccessibilityRequired": "请在 Mac 的系统设置 → 隐私与安全性 → 辅助功能中允许 Cindy，然后重新连接。",
+    "credentialAccessibilityRequired": "请在被控 Mac 上检查正在运行的这份 Cindy 的控制权限，然后重新连接。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
     "credentialUnlockUnavailable": "暂时无法安全解锁这台 Mac。请在锁屏界面选中你的账户后重连；若仍失败，请在电脑上手动解锁。",
     "disconnecting": "正在断开…",
     "loadingDisplayModes": "正在读取分辨率…",
@@ -1802,6 +1803,8 @@
       "other": "其他",
       "lowAlert": "快用完时通知",
       "privacy": "隐藏个人信息",
+      "automaticCurrency": "自动",
+      "usageCurrency": "用量统计币种",
       "usageScope": "用量统计范围",
       "manageFoot": "管理模型供应商",
       "showSource": "在菜单里显示 {{name}}",
@@ -2470,8 +2473,8 @@
         "hint": "AI 需要用屏幕时，电脑不熄屏、不锁屏，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁屏，用 Touch ID 或密码解锁。没有任务时照常熄屏锁屏。远程控制结束后，也用隐私屏保护这台电脑。",
         "permission": "需要在「系统设置 → 隐私与安全性 → 辅助功能」中允许 Cindy，才能在有人碰电脑时立即锁屏。允许之前，电脑会照常熄屏、锁屏。",
         "preview": "立即试一下",
-        "previewStarting": "请松开鼠标和键盘，3 秒后会盖上隐私屏；按任意键即可锁屏，再解锁试试。",
-        "previewUnavailable": "无法打开隐私屏，请重启 Cindy 后再试。",
+        "previewStarting": "正在准备隐私屏。请松开鼠标和键盘，等屏幕被遮住后，再按键测试锁屏。",
+        "previewUnavailable": "未能打开隐私屏，电脑屏幕可能仍可见。",
         "delay": {
           "30": "30 秒",
           "60": "1 分钟",
@@ -2482,7 +2485,10 @@
           "system": "跟随系统"
         },
         "hintWindows": "AI 需要用屏幕时，电脑不关屏、不锁定，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁定，用 Windows Hello 或密码解锁。没有任务时照常关屏锁定。远程控制结束后，也用隐私屏保护这台电脑。",
-        "hintLinux": "AI 需要用屏幕时，电脑不关屏、不锁定，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁定，用密码解锁。没有任务时照常关屏锁定。远程控制结束后，也用隐私屏保护这台电脑。"
+        "hintLinux": "AI 需要用屏幕时，电脑不关屏、不锁定，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁定，用密码解锁。没有任务时照常关屏锁定。远程控制结束后，也用隐私屏保护这台电脑。",
+        "permissionMissing": "隐私屏未开启。Cindy 需要系统授权，才能在有人按键或点击时锁定 Mac。",
+        "checkFailed": "暂时无法确认这台电脑的隐私屏权限。",
+        "saveFailed": "未能保存隐私屏设置。"
       }
     },
     "agentIsland": {
@@ -3716,6 +3722,7 @@
         "connecting": "正在连接…",
         "rename": "重命名",
         "suspended": "已停用",
+        "hidden": "已隐藏",
         "unconfigured": "未配置"
       },
       "button": {
@@ -3726,7 +3733,9 @@
         "cancel": "取消",
         "retry": "重新获取模型列表",
         "retrying": "正在重新获取…",
-        "enableProvider": "启用供应商"
+        "enableProvider": "启用供应商",
+        "showProvider": "显示",
+        "hideInstead": "改为隐藏"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4106,7 +4115,7 @@
         "paymentRequired": "付费",
         "paymentUnlock": "付费解锁",
         "enableModel": "启用此模型",
-        "capabilityGroupHint": "不会出现在对话模型选择中；开关控制对应功能是否列出。",
+        "capabilityGroupHint": "不会出现在模型选择器里；开关决定对应功能能否使用这款模型。",
         "accessWriteFailed": "停用设置未能保存，请重试",
         "visibilityWriteFailed": "模型显示设置未能保存，请重试；如果仍然失败，请重启 Cindy。",
         "disabledGroup": "已停用",
@@ -4250,22 +4259,22 @@
           "aria": "按模型类型筛选",
           "chat": "对话"
         },
-        "hiddenGroup": "未显示",
+        "hiddenGroup": "已隐藏",
         "management": {
           "brand": "厂商"
         },
         "manage": {
           "title": "模型",
-          "selected": "已选 {{count}} 个",
-          "hint": "用开关选择常用的对话模型。",
+          "selected": "显示 {{count}} 个",
+          "hint": "开关决定模型是否出现在模型选择器里。关掉只是隐藏，仍可在选择器底部的「已隐藏」里选用。",
           "menu": "管理",
           "arrange": "列表排列",
           "byBrand": "按厂商分组",
           "byName": "按模型名称排列",
-          "selection": "常用模型",
-          "showAll": "选用全部模型",
-          "hideAll": "取消全部选择",
-          "reset": "恢复默认选择",
+          "selection": "在模型选择器中显示",
+          "showAll": "全部显示",
+          "hideAll": "全部隐藏",
+          "reset": "恢复默认显示",
           "connectionRequired": "连接后可用，已选模型会保留。"
         }
       },
@@ -4279,7 +4288,8 @@
         "groupBadge_other": "供应商组 · {{count}} 台电脑",
         "groupNote": "{{device}} 把这个供应商建成了供应商组。在模型列表里选它新建任务时，{{device}} 会按组策略把任务分给下面的一台电脑运行，那台出问题时自动换一台继续。{{device}} 在线时，你可以从这里的「远程与分享」管理这个组和分享。",
         "groupMembersTitle": "组内电脑",
-        "groupMembersFailed": "暂时读不到组内电脑的状态。"
+        "groupMembersFailed": "暂时读不到组内电脑的状态。",
+        "hiddenBanner": "已从这台电脑的模型选择器中隐藏。收藏和正在使用它的任务不受影响。"
       },
       "genericOAuth": {
         "subtitle": "订阅账号",
@@ -4323,7 +4333,8 @@
           "rejected": "该供应商拒绝了这次请求，下面是上次获取的模型列表。请稍后重试或改用其它供应商。",
           "empty": "该供应商这次没有返回任何可用模型，下面是上次获取的列表。请确认账号权限后重试。"
         },
-        "suspendedBanner": "该供应商已停用，凭证已保留；启用后其模型才会重新可用",
+        "suspendedBanner": "该供应商已停用，新任务和后台功能都不会再使用它，凭证已保留。如果只是不想在模型选择器里看到它，可以改为隐藏。",
+        "hiddenBanner": "已从模型选择器中隐藏。正在使用它的任务和后台功能不受影响，需要时仍可在选择器底部的「已隐藏」里选用。",
         "remoteAccess": {
           "label": "允许被远程调用",
           "description": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
@@ -4533,7 +4544,25 @@
       },
       "menu": {
         "disableProvider": "停用此供应商",
-        "enableProvider": "启用此供应商"
+        "enableProvider": "启用此供应商",
+        "hideProvider": "在模型选择器中隐藏",
+        "showProvider": "在模型选择器中显示"
+      },
+      "plugin": {
+        "title": "插件提供的供应商",
+        "badge": "插件",
+        "rowTip": "{{provider}} · 由插件提供",
+        "source": "由插件提供",
+        "declaredName": "插件里的名称：{{name}}",
+        "note": "这个供应商由已安装的插件提供，用插件自己的引擎运行任务。登录和连接在插件里管理；停用或卸载插件后，它会从这里消失。",
+        "openPlugin": "打开插件",
+        "resetName": "恢复插件里的名称",
+        "suspendedBanner": "该供应商已停用，新任务和自动化都不会再使用它，你的其他电脑和分享的人也不能调用。插件本身不受影响。如果只是不想在模型选择器里看到它，可以改为隐藏。",
+        "hiddenBanner": "已从模型选择器中隐藏。正在使用它的任务和自动化不受影响。",
+        "unavailableBanner": "插件报告这个引擎暂时不能运行。打开插件可以查看原因。",
+        "unavailableBannerReason": "暂时不能运行：{{reason}}",
+        "modelsEmpty": "这个引擎还没有列出模型，新任务会使用它自己的默认模型。运行过一次任务后，这里会列出具体的模型。",
+        "modelSwitchAria": "启用 {{model}}"
       },
       "builtinApiKey": {
         "subtitle": "API key 连接",
@@ -7000,7 +7029,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已包含在隐私屏中：电脑不会休眠。"
+      "keepAwakeIncluded": "已包含在隐私屏中：电脑不会休眠。",
+      "localNetwork": {
+        "label": "本地网络",
+        "deniedHint": "没有这个权限时，同一网络下的电脑和手机无法直接连接这台电脑，只能经中转，速度会变慢。",
+        "settingsHint": "请在「系统设置 › 隐私与安全性 › 本地网络」里打开 Cindy，回到这里会自动生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8516,7 +8550,10 @@
           "description": "开启后，你的其他电脑可以用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。",
           "unsupported": "这个插件还不支持让其他电脑使用它的引擎。",
           "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，其他电脑不能使用这个引擎。",
-          "ariaLabel": "允许你的其他电脑使用 {{engine}}"
+          "ariaLabel": "允许你的其他电脑使用 {{engine}}",
+          "descriptionShareable": "开启后，你的其他电脑和分享的好友无需安装插件即可用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。",
+          "providerDisabled": "这个供应商已在模型供应商里停用，其他电脑不能使用这个引擎。",
+          "openProviders": "前往「模型供应商」设置"
         },
         "githubRelease": {
           "title": "插件更新",
@@ -10895,6 +10932,13 @@
         "enabled": "已开启"
       },
       "close": "关闭"
+    },
+    "localNetwork": {
+      "title": "开启本地网络权限",
+      "relayOnly": "你的其他设备现在只能经中转连接这台电脑，速度较慢。开启后，同一网络下可以直接连接。",
+      "controlEnabled": "同一网络下的设备要直接控制这台电脑，需要本地网络权限，否则只能经中转。",
+      "allow": "开启",
+      "dismiss": "暂不开启"
     }
   },
   "bots": {
@@ -14119,6 +14163,8 @@
         "remoteFavoriteUnavailable": "{{source}} · 暂时读不到那台电脑的模型",
         "favoritesGroup": "收藏",
         "recentGroup": "最近",
+        "hiddenGroup": "已隐藏（{{count}}）",
+        "hiddenGroupHint": "已隐藏的供应商和模型仍然可以选用",
         "recentEmpty": "还没有最近使用——选一个模型后，它会出现在这里",
         "favoritesSaveFailed": "未能保存收藏更改",
         "favoritesCleanupFailed": "未能清理已失效的分享模型收藏",
@@ -14296,6 +14342,8 @@
       "regionAria": "待发送消息队列",
       "listAria": "队列消息",
       "pausedFooter": "任务已停止，队列暂停",
+
+      "steerUnsupportedNotice": "当前引擎不支持插话，排队的消息会在当前这一轮结束后发送。",
       "resumeAction": "继续发送",
       "resumeAria": "继续发送队列消息",
       "showMore_one": "还有 {{count}} 条",
@@ -14443,6 +14491,7 @@
       "steerNotSent": "未发送，暂时无法插话，草稿已保留",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
+      "credentialSwitchKeptSettings": "本次切换未完成，任务会继续使用原来的设置。",
       "modelSwitchContextGuard": {
         "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
         "condensedToast": "为了适应新模型，较早的对话会压缩，完整的对话记录仍可查看。",
@@ -15718,6 +15767,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "上下文已满，这条消息未能处理。后面的消息会继续按顺序处理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",
@@ -16382,6 +16432,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "添加云主机",
+        "preparingCloud": "云主机 · 准备中",
+        "manageCloud": "管理云主机",
         "allMachines": "全部",
         "localMachine": "本机",
         "connecting": "连接中…",
@@ -16517,6 +16570,9 @@
       "taskInfoSummaryNone": "无",
       "taskInfoSummarySeparator": "、",
       "taskInfo": {
+        "harness": "Harness 图标",
+        "project": "项目图标和名称",
+        "teammate": "伙伴头像",
         "time": "时间",
         "pr": "PR 状态",
         "worktree": "worktree",
@@ -18479,7 +18535,7 @@
       "expired": "等待时间过长，代输入已结束。"
     },
     "failure": {
-      "permission": "Cindy 没有读取这台电脑界面的权限。请在系统设置的辅助功能中允许 Cindy。",
+      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
       "target_gone": "目标窗口已关闭。",
       "unreadable": "无法读取这个界面。可以在宿主电脑上直接完成，然后交还给 Agent。",
       "action_failed": "刚才的操作没有生效，请检查界面后重试。",
@@ -21458,6 +21514,7 @@
       "reviewed": "已审核",
       "verified-publisher": "发布者已验证"
     },
+    "viewLimit": "同时打开的页面太多。滚动或收起其他页面后，这里会自动打开。",
     "pluginRevoked": "插件已停用或发生变化，此页面已失效",
     "pluginCspRejected": "页面申请了未声明的域名，已拒绝加载",
     "filesOnExecutionComputer": "文件内容请在执行电脑查看",
@@ -22438,5 +22495,10 @@
       "auto": "自动审批",
       "bypassPermissions": "完全访问"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "在「System & App Protection Override」里找到 {{app}}，点右侧 ⓘ。找不到时可点「＋」，按路径添加。",
+    "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。"
   }
 }

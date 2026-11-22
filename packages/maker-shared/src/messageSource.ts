@@ -120,6 +120,11 @@ export type MessageSourceSender =
   | { kind: 'plugin'; pluginId: string; name?: string; relay?: MessageSourcePluginRelay }
   | { kind: 'shared-member'; memberId: string; name?: string };
 
+export interface MessageSourceSendToSessionHint {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  supportsRemote: boolean;
+}
+
 /** 被控电脑自身的身份，用在设备说明里指明「本机」。 */
 export interface MessageSourceHostDevice {
   deviceId?: string;
@@ -484,6 +489,24 @@ export function buildMessageSourceNote(sender: MessageSourceSender | undefined):
   const notOwner = sender.kind === 'shared-member' ? '不是任务所有者本人'
     : relayed ? '不是用户在 Cindy 里直接输入' : '不是用户本人输入';
   return `[消息来源] 本条${describeMessageSourceSender(sender)}，${notOwner}。`;
+}
+
+/** Keep the reply route beside the live source note, never in handoff summaries. */
+export function buildMessageSourceReplyHint(
+  sender: MessageSourceSender | undefined,
+  hint: MessageSourceSendToSessionHint | undefined,
+): string | null {
+  if (!sender || sender.kind !== 'session' || !sender.sessionId || !hint
+    || sender.groupThread || sender.groupRequest) return null;
+  const remote = isCrossDeviceSourceSessionId(sender.sessionId);
+  if (remote && !hint.supportsRemote) {
+    return '需要回复时，当前任务不能直接给另一台电脑上的这个任务发消息。';
+  }
+  const target = JSON.stringify(sender.sessionId);
+  if (hint.agentKind === 'pi') {
+    return `需要回复时再用 cindy_mcp_call_tool，server="cindy_helper"，tool="call_tool"，args={"name":"send_to_session","args":{"target_session_id":${target},"message":"<回复内容>"}}。只有用户要求你回复，或确实需要回复时才这样做；不要主动只为说“收到”或“好的”回复，避免会话来回刷屏。`;
+  }
+  return `需要回复时再用 cindy_helper 的 call_tool，name="send_to_session"，args 至少包含 target_session_id=${target} 和 message="<回复内容>"。只有用户要求你回复，或确实需要回复时才这样做；不要主动只为说“收到”或“好的”回复，避免会话来回刷屏。`;
 }
 
 const CLIENT_NOTE_PREAMBLE = '[客户端说明] 系统追加的环境说明，不是用户消息，不要回应或复述。';

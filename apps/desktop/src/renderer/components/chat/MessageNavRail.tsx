@@ -652,7 +652,7 @@ export function MessageNavRail({
       // 见 tickEvents 注释),不挡左缘留白里的文字选择;justify-center 让
       // 刻度组在(避开输入 overlay 的)带内垂直居中。
       className={cn(
-        'pointer-events-none absolute inset-y-0 left-2 z-30 flex w-6 flex-col items-stretch justify-center',
+        'pointer-events-none absolute inset-y-0 left-2 z-page-overlay flex w-6 flex-col items-stretch justify-center',
         // §14.4 禁硬编码 duration / cubic-bezier。不透明度变化属 fast 档
         // (150ms);原先是 Tailwind 的 duration-200 + ease-out。
         'transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',

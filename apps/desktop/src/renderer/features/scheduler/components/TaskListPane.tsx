@@ -146,7 +146,7 @@ export function TaskListPane({
         'border-r border-[var(--cmd-palette-border)]',
       )}
     >
-      <div className="flex shrink-0 items-center justify-between px-[10px] pb-2 pt-[14px]">
+      <div className="flex shrink-0 items-center justify-between px-2.5 pb-2 pt-3.5">
         <TaskListFilterPopover value={statusFilter} onChange={onStatusFilterChange} />
         <span className="text-11 text-[var(--settings-section-desc)]">{schedules.length}</span>
       </div>
@@ -275,7 +275,7 @@ export function TaskListPane({
         role="separator"
         aria-orientation="vertical"
         aria-label={t('scheduler.list.resizeAria')}
-        className="group/handle absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize"
+        className="group/handle absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize"
         onPointerDown={onResizeStart}
         onDoubleClick={onResizeReset}
       >

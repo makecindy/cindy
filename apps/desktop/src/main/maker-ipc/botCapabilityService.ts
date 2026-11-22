@@ -10,7 +10,7 @@ import { listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js'
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import type { BotToolsetContext } from '../../shared/botRemoteCapabilities.js';
 import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
@@ -25,7 +25,7 @@ export interface BotCapabilityServiceDeps {
   markOfficialSkills?: <T extends { path?: string }>(skills: readonly T[], remoteHostId?: string) => Promise<Array<T & { cindyOfficial: boolean }>>;
   readConversationConnections?(botId: string): Promise<NonNullable<BotControlState['conversations']>['connections']>;
   getMaker: () => Pick<Maker, 'listAgentSkills'>;
-  resolveBotAgentKind: (sessionId: string, modelChain?: BotModelRoute[]) => Promise<AgentKind | null>;
+  resolveBotAgentKind: (sessionId: string, modelChain?: BotModelRoute[]) => Promise<EngineKind | null>;
   getPluginRegistry: () => Pick<PluginRegistry, 'getPlugins' | 'getEnableState'>;
   isBotToolsetAvailable: (input: BotToolsetContext & { toolsetId: string }) => boolean;
   listMcpServers: NonNullable<BotProfileRuntimeDeps['listMcpServers']>;
@@ -113,15 +113,16 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean }
 }
 
 async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick<Awaited<ReturnType<typeof context>>, 'config' | 'workingDir' | 'remoteHostId' | 'botId' | 'assertOwner'>, deps: BotCapabilityServiceDeps,
-  options?: { modelChain?: BotModelRoute[]; forceReload?: boolean; agentKind?: AgentKind }): Promise<Entry[]> {
+  options?: { modelChain?: BotModelRoute[]; forceReload?: boolean; agentKind?: EngineKind }): Promise<Entry[]> {
   const joined = new Set(strings(ctx.config[fields[input.kind].list]).filter(
     (id) => input.kind !== 'toolset' || !BOT_BASELINE_PLUGIN_IDS.has(id),
   ));
   const { getMaker, getPluginRegistry, isBotToolsetAvailable } = deps;
   // Grants apply next turn, so use the same preview as settings and send-time reconciliation.
-  const agentKind = options?.agentKind ?? await deps.resolveBotAgentKind(input.callerSessionId, options?.modelChain);
+  const resolvedKind = options?.agentKind ?? await deps.resolveBotAgentKind(input.callerSessionId, options?.modelChain);
   ctx.assertOwner();
-  if (!agentKind) throw new Error('Bot next-turn route is unavailable');
+  if (!resolvedKind) throw new Error('Bot next-turn route is unavailable');
+  const agentKind: AgentKind = resolvedKind === 'acp' ? 'pi' : resolvedKind;
   const workingDir = ctx.workingDir ?? '';
   let items: Omit<Entry, 'joined'>[];
   if (input.kind === 'skill') {
@@ -389,7 +390,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
       }
     },
     /** Read the same metadata before a profile exists; this never joins or executes a capability. */
-    async forCreation(input: { botId: string; workingDir: string; agentKind: AgentKind; assertOwner: () => void }) {
+    async forCreation(input: { botId: string; workingDir: string; agentKind: EngineKind; assertOwner: () => void }) {
       const ctx = { ...input, remoteHostId: null, config: normalizeBotToolCapabilities({}) };
       const result = {} as Record<Kind, Entry[]>;
       for (const kind of ['skill', 'mcp', 'toolset'] as const)

@@ -158,10 +158,10 @@ export function MarketCard({
           : 'border-[var(--cmd-palette-border)]',
         onClick ? 'cursor-pointer' : '',
       )}
-      style={{ gap: '10px', minHeight: '220px', borderWidth: '1.5px' }}
+      style={{ gap: 'var(--space-2_5)', minHeight: '220px', borderWidth: '1.5px' }}
     >
       {/* Title */}
-      <div className="flex w-full min-w-0 items-center" style={{ gap: '10px' }}>
+      <div className="flex w-full min-w-0 items-center" style={{ gap: 'var(--space-2_5)' }}>
         <SkillIcon url={skill.icon} />
         <h3
           className="min-w-0 flex-1 truncate font-medium text-[var(--msg-assistant-text)]"
@@ -181,21 +181,21 @@ export function MarketCard({
       </div>
 
       {/* Author · Version + Visibility tag */}
-      <div className="flex w-full items-center" style={{ gap: '8px' }}>
+      <div className="flex w-full items-center" style={{ gap: 'var(--space-2)' }}>
         <span className="text-[var(--cmd-palette-item-meta)]" style={{ fontSize: 'var(--text-12)' }}>
           {skillPublisherLabel(skill)} · {versionStr}
         </span>
         {status ? (
           <span
             className={cn('inline-flex shrink-0 items-center justify-center rounded-full border font-medium', publishedStatusClass(status))}
-            style={{ height: '20px', padding: '0 8px', fontSize: 'var(--text-11)' }}
+            style={{ height: '20px', padding: '0 var(--space-2)', fontSize: 'var(--text-11)' }}
           >
             {t(publishedStatusLabelKey(status))}
           </span>
         ) : null}
         <span
           className="ml-auto inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]"
-          style={{ height: '20px', padding: '0 8px', fontSize: 'var(--text-11)' }}
+          style={{ height: '20px', padding: '0 var(--space-2)', fontSize: 'var(--text-11)' }}
         >
           {visibilityLabel(skill, allowPrivateVisibilityLabel)}
         </span>
@@ -215,15 +215,15 @@ export function MarketCard({
       {/* Footer: 时间戳 + 按钮 */}
       <div
         className="flex w-full flex-wrap items-center justify-between"
-        style={{ gap: '8px', minHeight: '36px' }}
+        style={{ gap: 'var(--space-2)', minHeight: '36px' }}
       >
         <div
           className="flex min-w-0 items-center text-[var(--cmd-palette-item-meta)]"
-          style={{ gap: '12px', fontSize: 'var(--text-11)' }}
+          style={{ gap: 'var(--space-3)', fontSize: 'var(--text-11)' }}
         >
           <span
             className="flex min-w-0 items-center"
-            style={{ gap: '4px' }}
+            style={{ gap: 'var(--space-1)' }}
             title={t('skillhub.marketCard.timeLabel')}
             aria-label={t('skillhub.marketCard.timeLabel')}
           >
@@ -232,7 +232,7 @@ export function MarketCard({
           </span>
           <span
             className="flex shrink-0 items-center"
-            style={{ gap: '4px' }}
+            style={{ gap: 'var(--space-1)' }}
             title={t('skillhub.marketCard.downloadsLabel')}
             aria-label={t('skillhub.marketCard.downloadsLabel')}
           >

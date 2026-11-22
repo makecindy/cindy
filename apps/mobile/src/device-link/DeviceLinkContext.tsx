@@ -261,6 +261,8 @@ export interface DeviceLinkContextValue {
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
   recoverWaitingPeer(deviceId: string): Promise<boolean>;
   closeLink(deviceId: string): void;
+  getUserCloseEpoch?(deviceId: string): number;
+  onUserClose?(deviceId: string, listener: () => void): () => void;
   /** Acquire before background grace ends; always release on settlement/cancellation. Hard deadline enforced by lifecycle. */
   beginBackgroundTransition?(): () => void;
   /**
@@ -2225,8 +2227,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     return true;
   }, [hasOutboundPeerRecoveryIntent, rehydrateWithClient, sendOpenLinkOnce]);
 
+  const userCloseListeners = useRef(new Map<string, Set<() => void>>());
+  const onUserClose = useCallback((deviceId: string, listener: () => void) => {
+    const listeners = userCloseListeners.current.get(deviceId) ?? new Set<() => void>();
+    userCloseListeners.current.set(deviceId, listeners);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) userCloseListeners.current.delete(deviceId);
+    };
+  }, []);
+  const getUserCloseEpoch = useCallback((deviceId: string) => userCloseEpochsRef.current.get(deviceId) ?? 0, []);
   const closeLink = useCallback((deviceId: string) => {
     userCloseEpochsRef.current.set(deviceId, (userCloseEpochsRef.current.get(deviceId) ?? 0) + 1);
+    for (const listener of userCloseListeners.current.get(deviceId) ?? []) listener();
     resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
     forcedPeerRecoveryIntentRef.current.cancel(deviceId);
@@ -2372,6 +2386,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     openLink,
     recoverWaitingPeer,
     reopenLink,
+    getUserCloseEpoch,
+    onUserClose,
     closeLink,
     invoke,
     subscribe,
@@ -2381,6 +2397,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }), [
     beginBackgroundTransition,
     holdBackgroundConnection,
+    getUserCloseEpoch,
+    onUserClose,
     closeLink,
     recoveringDeviceIds,
     connectionEpoch,

@@ -16,6 +16,7 @@ import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
 import { buildUiLanguageErrorNote, turnClassicalStyleFromSendOpts, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
 
 import type { Session } from '@cindy/maker-core';
+import type { AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 import type { MakerSendTransactionDeps } from './makerSendTransaction.js';
 import type { createWireNoteMemory } from './wireNoteMemory.js';
 
@@ -169,6 +170,8 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
           autoReviewUserText: so[FORWARDED_REQUEST_RECEIPT],
           sourcePlugin: so.sourcePlugin,
           sharedTaskAuthor: so.sharedTaskAuthor,
+        }, {
+          sendToSession: (sess as Session & { sendToSessionHint?: AgentSendToSessionHint }).sendToSessionHint,
         })
       : null;
     const withSteerReplyQuoteNote = steerReplyQuoteNote
