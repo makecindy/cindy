@@ -156,7 +156,8 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
     ? <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
     : node.candidate
       ? <ProviderMark providerId={node.candidate.providerId} name={names?.provider?.name} routing={names?.provider?.routing}
-          logoKind={names?.provider?.logoKind} colorClass="text-[var(--text-primary)]" withMargin={false} dense />
+          logoKind={names?.provider?.logoKind} customIcon={names?.provider?.customIcon}
+          colorClass="text-[var(--text-primary)]" withMargin={false} dense />
       : null;
   return (
     <button
@@ -382,7 +383,7 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
             <div className="flex min-w-0 items-center gap-2">
               {routed && item.providerId ? (
                 <>
-                  <ProviderMark providerId={item.providerId} name={provider?.name} routing={provider?.routing} logoKind={provider?.logoKind}
+                  <ProviderMark providerId={item.providerId} name={provider?.name} routing={provider?.routing} logoKind={provider?.logoKind} customIcon={provider?.customIcon}
                     colorClass="text-[var(--text-primary)]" withMargin={false} dense />
                   <div className="flex min-w-0 flex-col">
                     <span className="truncate text-13 leading-[1.5] text-[var(--text-primary)]" title={item.modelName}>{item.modelName ?? names?.modelName ?? item.model}</span>

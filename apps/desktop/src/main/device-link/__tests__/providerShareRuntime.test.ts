@@ -60,7 +60,7 @@ vi.mock('../providerShareApi.js', () => ({
       return state.ownedIncomplete ? Object.assign([...state.owned], { authorityIncomplete: true }) : state.owned;
     },
     listReceived: async () => {
-      if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
+      if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED', statusCode: 401 });
       if (state.receivedError) throw new Error('offline');
       return state.unavailableReceived.length ? Object.assign([...state.received],
         { unavailableShareIds: state.unavailableReceived, authorityIncomplete: true }) : state.received;
@@ -1300,10 +1300,103 @@ describe('provider share guest routing', () => {
     expect(denied.received).toEqual([]);
     expect(denied.confirmedRegions).toContain('global');
     expect(changed).toHaveBeenCalled();
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
 
     state.receivedDenied = false;
     await refreshReceivedShares('recovered');
     expect(getReceivedSharesSnapshot().received.map(item => item.shareId)).toEqual(['share-1']);
+    expect(resolveRemoteAgentTarget('share:share-1')).toBe(providerShareHostPeer('share-1', 'owner-mac'));
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 启动、名单刷新和远程目标解析入口。
+  // - Bug／规则依据：本次运行第一次名单被拒绝时没有历史 ID 可供判断，未确认不能报已删除。
+  // - 现有覆盖缺口：已有拒绝用例先成功加载过分享，无法覆盖重启后首次 401/403。
+  // - 最小失败输入：运行时首次收到 401，随后收到完整空名单。
+  // - tier：unit；覆盖本区名单拒绝、恢复和删除分类。
+  it('classifies a first local list denial as unavailable until a complete empty list confirms removal', async () => {
+    state.receivedDenied = true;
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('first-denial');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+
+    state.receivedDenied = false;
+    state.received = [];
+    await refreshReceivedShares('confirmed-empty');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 名单刷新入口产生 authorityIncomplete，再解析保存任务目标。
+  // - Bug／规则依据：不完整回包漏行时不能把缺行解释成分享已删除。
+  // - 现有覆盖缺口：已有 partial-list 用例只检查可用目录，没有检查未知缺行的错误分类。
+  // - 最小失败输入：首次回包标记 authorityIncomplete 且不包含目标分享，随后完整空名单。
+  // - tier：unit；覆盖不完整名单与完整名单的分类边界。
+  it('classifies a first incomplete local list that omits a share as unavailable', async () => {
+    state.unavailableReceived = ['missing-share'];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('incomplete');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+
+    state.unavailableReceived = [];
+    state.received = [];
+    await refreshReceivedShares('confirmed-empty');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 启动、leaveProviderShare 退出（含其后的名单刷新）和远程目标解析入口。
+  // - Bug／规则依据：用户在本机成功退出的分享已经确认不在了；退出后的名单刷新即使失败，也不能把它报成“暂不可用”（Greptile 审阅指出）。
+  // - 现有覆盖缺口：已有退出用例只检查偏好清理和 leftMemberIds，没有检查任务里看到的错误分类。
+  // - 最小失败输入：完整名单含 share-1，退出成功，退出后的那次名单刷新失败。
+  // - tier：unit。
+  it('keeps the removed verdict for a share left on this computer when the next list refresh fails', async () => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await leaveProviderShare('m1');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+    // An explicit exit stays ahead of the encrypted-only answer (Codex review): switching it off cannot restore a left share.
+    state.legacyHidden.add('share-1');
+    try {
+      expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+    } finally {
+      state.legacyHidden.clear();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 退出、重新获准后的名单刷新，以及远程目标解析入口。
+  // - Bug／规则依据：退出后又重新加入同一个分享时，服务端会复用 shareId；新的成员身份应取代旧的退出记录，
+  //   之后名单失败时仍报“暂不可用”（Greptile、Codex 审阅指出）。
+  // - 现有覆盖缺口：退出用例只覆盖退出后刷新失败，没有覆盖重新加入。
+  // - 最小失败输入：退出 → 名单重新包含该分享 → 下一次刷新失败。
+  // - tier：unit。
+  it('drops the exit marker once a later list includes the share again', async () => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    await leaveProviderShare('m1');
+    state.received = [received('active')];
+    await refreshReceivedShares('rejoined');
+    state.receivedError = true;
+    await refreshReceivedShares('failed');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+  });
+
+  // 测试价值：「仅使用 Agent-Net」隐藏旧版分享是本机设置给出的确定答案，名单暂时未确认时也要报
+  // LEGACY_DISABLED，告诉用户关掉开关即可恢复（Codex 审阅指出）。最小失败输入：首次名单 401 + 该分享被本机设置隐藏。tier：unit。
+  it('keeps the encrypted-only answer while the list is unconfirmed', async () => {
+    state.receivedDenied = true;
+    state.legacyHidden.add('share-1');
+    try {
+      startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+      await refreshReceivedShares('first-denial');
+      expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/^\[REMOTE_AGENT_SHARE_LEGACY_DISABLED\]/);
+    } finally {
+      state.legacyHidden.clear();
+    }
   });
 
   it('keeps the local directory budget from the list request start and does not renew it after a failure', async () => {

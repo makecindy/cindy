@@ -143,6 +143,41 @@ describe('native input lifecycle', () => {
     }
   });
 
+  // Unit: the controller's editable-field check needs the actual native acknowledgement.
+  // Existing ownership tests did not observe when the caller's click finishes.
+  it('completes a queued click only after the Agent and native injection finish', async () => {
+    const c = childProcess();
+    const host = new DesktopInputHost(vi.fn(), {
+      platform: 'darwin', resolveBinary: async () => '/test/helper',
+      spawn: () => {
+        void Promise.resolve().then(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+        return c.typed;
+      },
+    });
+    let finish!: () => void;
+    try {
+      await host.start('1');
+      const action = withAgentDesktopInput(() => new Promise<void>(resolve => { finish = resolve; }));
+      let done = false;
+      const delivered = host.input([{ kind: 'button', button: 0, down: false, x: 0.4, y: 0.8 }]);
+      void Promise.resolve(delivered).then(() => { done = true; });
+      await flush();
+      expect(done).toBe(false);
+      expect(c.child.stdin.write).not.toHaveBeenCalled();
+      finish();
+      await action;
+      await flush();
+      expect(c.child.stdin.write).toHaveBeenCalledOnce();
+      expect(done).toBe(false);
+      c.child.stdout.emit('data', Buffer.from('ok\n'));
+      expect(await delivered).toBe(true);
+    } finally {
+      finish?.();
+      host.stop();
+      c.exit();
+      await flush();
+    }
+  });
   it('keeps heartbeats alive while an Agent primitive finishes, and never replays queued input after stop', async () => {
     vi.useFakeTimers();
     const c = childProcess();

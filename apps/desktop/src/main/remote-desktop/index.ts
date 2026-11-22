@@ -108,6 +108,7 @@ import {
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
+  isEditableDesktopPoint,
   setDesktopDisplayMode,
   readDesktopInputPermission,
   resolveDesktopInputBinary,
@@ -1099,6 +1100,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       : systemAudioMuteGuard.restore('remote-desktop'),
   viewerHidden: setViewerHidden,
   videoBackground: setVideoBackground,
+  editableAt: process.platform === 'darwin' ? isEditableDesktopPoint : undefined,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
     if (nativeWayland()) {
@@ -1145,7 +1147,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       return;
     }
     try {
-      input.input(events);
+      return input.input(events);
     } catch (error) {
       // The input host refused before injecting anything (helper gone, or this
       // lease's display is unavailable). Release control so the host and the
@@ -1441,14 +1443,15 @@ export function registerRemoteDesktopIpc(
     assertTrustedAppRendererEvent(event);
     if (checkWindowsSupport !== undefined && typeof checkWindowsSupport !== 'boolean')
       throwIpcError('INVALID_PARAMS', 'Invalid Windows support status request');
+    const enabled = readDeviceLinkSettings().remoteDesktopEnabled;
     const active = remoteDesktop.state;
     return {
-      enabled: readDeviceLinkSettings().remoteDesktopEnabled,
+      enabled,
       // Like the desktop overlay, the fallback notice excludes plugin-only screens.
       active: liveSession ? null : active,
       overlay: controlledOverlay.visible,
       permissionGuide: permissions.guideOpen,
-      ...(checkWindowsSupport === true
+      ...(enabled && checkWindowsSupport === true
         ? { windowsSupport: await readWindowsDesktopSupport() }
         : {}),
     };

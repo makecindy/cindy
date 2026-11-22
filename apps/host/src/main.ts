@@ -2,9 +2,10 @@
 import './boot-env.js';
 // Second: keeps unreadable user settings files instead of deleting them.
 import './boot-settings.js';
+import {confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
 import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
 import { readProjectIconImage, readProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
-import { createHostProjectInfoUpdate } from './project-info.js';
+import { bindHostProfileServices } from './agent/profile-services.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js';
@@ -80,7 +81,7 @@ import { publishHostEndpoint, readHostProcessStatus, requestHostStop, requestHos
 import { readAdoptedSessionState } from './credentials/session.mjs';
 import { hostAccountVaultLock, HostRefreshDeferredError, HostSessionMissingError, refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
-import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
+import { attachAgentsToMakerMemory, type createHostMemoryManager } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.js';
 import { createHostReviewContextResolver } from './agent/review-context.js';
 import { createHostGitSnapshot, type HostGitSnapshot } from './agent/git-snapshot.js';
@@ -121,7 +122,7 @@ import { initializeHostPluginRemoteAuthorization } from './plugins/remote-author
 import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
-import { createHostToolService } from './agent/host-tools.js';
+import type { createHostToolService } from './agent/host-tools.js';
 import { createHostConfirmations } from './host-confirmations.js';
 import { createMainI18n } from '../../desktop/src/main/i18n.js';
 import { createHostMcpDuplicateChoices } from './agent/mcp-duplicate-choices.js';
@@ -154,7 +155,7 @@ import { createInputQueue } from './agent/input-queue.mjs';
 import { createHostSessionActivity } from './agent/session-activity.ts';
 import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/claudeIdleReleaseSettingsCore.js';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
-import { createHostRuntimePluginSettings, createHostTaskRuntimePlugins } from './agent/task-runtime-plugins.js';
+import { createHostTaskRuntimePlugins } from './agent/task-runtime-plugins.js';
 import { setGhostToolApprovalResolver } from '../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { warmRuntimePluginSettings } from '../../desktop/src/main/maker-host/runtime-plugin-settings.js';
 import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks } from './agent/runtime-selection.ts';
@@ -208,7 +209,7 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
-const usage = 'cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]';
+const usage = 'cindy-host [serve|login [--region=cn|global] [--org=<domain-or-id>] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]';
 
 /** The status command's boundary category: the running Host's, else a lock-free read of the profile. */
 function readStatusSkillProjectionBoundary(processStatus: { running: boolean | null; runtime?: { skillProjectionBoundary?: string } }) {
@@ -478,6 +479,10 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
   }
   if (expectedOwner && expectedOwner !== membership.id) throw new HostAccountMismatchError();
   currentSessionToken = sessionToken;
+  if (process.platform==='linux' && endpoints.modelAccessApiBaseUrl) {
+    const base=endpoints.modelAccessApiBaseUrl;
+    confirmCloudGuestWhenOnline(() => base, () => currentSessionToken, hostAuthFetch);
+  }
   currentDeviceId = verifiedDeviceId;
   remoteIdentityReady = canRegisterHostDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, ''));
   return { ...mapMembershipToAuthUser(membership, me.passportId), orgSlug: decodeAccessTokenOrgSlug(sessionToken) };
@@ -874,9 +879,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     onUninstallSourceState: async fromPart => {
       const current = plugins;
       if (!current || activeOwnerScopeKey() !== pluginOwner) throw new Error('Plugin account cleanup is unavailable');
-      const release = current.acquireMutationLease(current.captureMutationOwner());
-      try { await current.authorization.cleanupSourceReferences(fromPart); }
-      finally { release(); }
+      await current.cleanupUninstalledSource(fromPart);
     },
     onChanged: ghosts => {
       if (activeOwnerScopeKey() !== pluginOwner || isAppSessionBoundaryPending()) return;
@@ -888,9 +891,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   });
   const toolOwnerCurrent = () => activeOwnerScopeKey() === pluginOwner && !isAppSessionBoundaryPending();
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
-  hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
-  hostTools = createHostToolService({ profileDir: dataDir, ownerId,
-    profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
+  const confirmations = createHostConfirmations({ current: toolOwnerCurrent });
+  hostConfirmations = confirmations;
+  hostTools = profileServices.tools({ profileDir: dataDir, ownerId,
     deviceId: () => currentDeviceId ?? 'local',
     onProjectsChanged: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
@@ -931,6 +934,21 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       openExternal: async url => { await openSystemBrowser(url); },
     },
     getSession: id => agentGraph?.maker.getSession(id),
+    // A new connection host widens the plugin's network allowlist, so the user
+    // must approve it in the host's own dialog (same wording as Desktop).
+    confirmConnectionHost: (id, label, host) => {
+      const ghost = plugins?.getGhost(id);
+      if (!ghost) return Promise.resolve(false);
+      const name = ghost.manifest.name;
+      return confirmations.confirm({
+        ghostId: id, ghostName: name, ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+        body: `${i18n.t('settings.ghosts.connections.confirmMessage').replaceAll('{{name}}', name).replaceAll('{{host}}', host)}\n\n`
+          + i18n.t('settings.ghosts.connections.confirmDetail').replaceAll('{{label}}', label),
+        confirmText: i18n.t('settings.ghosts.connections.confirmAllow'),
+        cancelText: i18n.t('settings.ghosts.connections.confirmCancel'),
+        danger: false,
+      });
+    },
     requestFileConfirmation: (id, payload) => fileConfirmation.request(id, payload),
     appContext: () => ({ ok: true, context: { region: resolveHostRegion(),
       locale: ghostAppContextLocale(Intl.DateTimeFormat().resolvedOptions().locale) } }),
@@ -941,7 +959,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       } else eventHub.publish({ type: 'plugin_push', channel, payload });
     },
   });
-  if (inputQueue.isHeldForDesktop()) plugins.pauseForDesktop(profileInUseMessage());
+  const held = inputQueue.profileHoldReason();
+  if (held) plugins.pauseForDesktop(held);
 
   if (!plugins.pluginPauseFailure() && pluginManager.hasPendingMutationRecovery()) await pluginManager.retryInterruptedMutationsAfterDbReady();
 
@@ -1028,14 +1047,14 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const piBinary = harnessBinaryPaths.pi;
   if (claudeBinary || codexBinary || piBinary) {
     const gateway = modelAccess!.gateway;
-    const memoryProfileHold = () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
     let memoryReview: ReturnType<ReturnType<typeof createHostAgentGraph>['autoReview']['memoryReview']> | undefined;
-    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId, profileHold: memoryProfileHold, review: {
+    const memory = profileServices.memory({ userDataDir: dataDir, ownerId, review: {
       isOneShotRouteDisabled: agent => memoryReview?.isOneShotRouteDisabled(agent) ?? Promise.resolve(true),
       reviewOneShot: (...args) => memoryReview?.reviewOneShot(...args) ?? Promise.resolve(null),
     } });
+    makerMemory = memory.manager;
     // Flip the flag before the agents are built: their runtimeConfig snapshots it
     // at construction, and native-agent syncoff needs the agents that do not exist yet.
     if (makerMemory.isEnabled()) await makerMemory.enable({ skipAgentSync: true });
@@ -1097,10 +1116,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
       sharedGlobalSkills,
-      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories, profileHold: memoryProfileHold }), pluginGateway.provider]),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...memory.providers({ readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
-    memoryReview = agentGraph.autoReview.memoryReview(memoryProfileHold);
+    memoryReview = agentGraph.autoReview.memoryReview(memory.profileHold);
     // The desktop's Auto-review authorization context (review-context.ts).
     agentGraph.autoReview.setContextResolver(createHostReviewContextResolver({
       acceptedInput: (id: string) => inputQueue.acceptedInputProvenance(id),
@@ -1154,6 +1173,7 @@ const sessionDraftPorts = {
   notifyPluginSessionCreated: (input: { sessionId: string; workdir?: string }) => eventHub.publish({ type: 'session_created', ...input }),
 };
 setSessionOpeningModelAdmission(async body => {
+  if (body.agentKind === 'acp') throw new Error('插件引擎在无界面 Host 上不可用');
   const kind = body.agentKind === 'cc' ? 'claude-code' : body.agentKind;
   const snapshot = await listProviders({ gateway: currentGateway(), ownerId: runtime.owner });
   const execution = resolveSessionExecutionSelection({
@@ -1458,7 +1478,11 @@ const sessionMove = createHostSessionMovePorts({
 });
 setLiveCcSessionBridge(sessionMove.liveCcSessionBridge);
 
-const runtimePluginSettings = createHostRuntimePluginSettings({
+const profileServices = bindHostProfileServices({
+  profileHoldReason: inputQueue.profileHoldReason,
+  profileHoldGeneration: inputQueue.profileHoldGeneration,
+});
+const runtimePluginSettings = profileServices.plugins({
   maker: { getSessionMeta: id => {
     if (!agentGraph) throw new Error('Host runtime not ready');
     return agentGraph.maker.getSessionMeta(id);
@@ -1468,8 +1492,6 @@ const runtimePluginSettings = createHostRuntimePluginSettings({
     if (!plugins) throw new Error('Host plugin runtime not ready');
     return plugins.taskPlugins.resolveGhostControlPointPlugin(point, id);
   },
-  profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
-  holdGeneration: () => inputQueue.profileHoldGeneration(),
   publish: event => eventHub.publish(event),
 });
 const serverDeps = {
@@ -1480,7 +1502,7 @@ const serverDeps = {
   beginOwnerBoundaryStop: () => ownerBoundary.begin(),
   // Coexistence plan A: while a desktop uses this profile, only reads, stops and answers reach the
   // handlers (service.mjs HOST_PATHS_ALLOWED_WHILE_HELD). A failed release reports its write error.
-  profileHold: inputQueue.profileHoldMessage,
+  profileHold: inputQueue.profileHoldReason,
   browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
     if (!platformTools) throw new Error('HOST_RUNTIME_NOT_READY');
     return platformTools.browserSettings[handler](undefined, payload);
@@ -1692,9 +1714,8 @@ const serverDeps = {
   readProjectInfo,
   readProjectIconImage,
   resolveAutomaticProjectIcon,
-  updateProjectInfo: createHostProjectInfoUpdate({
+  updateProjectInfo: profileServices.project({
     platform: () => platformClient,
-    profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
     changed: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
   }),
   listProjectAliases: async () => {
@@ -1898,7 +1919,7 @@ const serverDeps = {
   },
   chat: createChatHandler({
     readSession: (id: string) => sessionStorage?.get(id),
-    profileHold: inputQueue.profileHoldMessage,
+    profileHold: inputQueue.profileHoldReason,
     createSession: (body: Record<string, unknown>) => serverDeps.createSession(body),
     enqueue: enqueueUserInput,
     inputStatus: (id: string, clientId: string) => inputQueue.inputStatus(id, clientId),
@@ -2239,7 +2260,7 @@ function startDeviceLink(): void {
     },
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
     // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).
-    profileHold: inputQueue.profileHoldMessage,
+    profileHold: inputQueue.profileHoldReason,
     createRuntimeSession: input => {
       return createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,

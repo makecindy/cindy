@@ -80,13 +80,18 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     const { subscribeRemoteCredentialSwitchOutcome } = await import('@/lib/makerTransport');
     const outcomes: unknown[] = [];
     const dispose = subscribeRemoteCredentialSwitchOutcome('session-a', 'device-a', (value) => outcomes.push(value));
+    listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-failed',
+      payload: { sessionId: 'session-a', reason: 'apply-failed' } }, { dataOwnerId: 'owner-a', ownerGeneration: 0 });
     listener?.({ deviceId: 'device-b', channel: 'maker:session-credential-switch-failed', payload: { sessionId: 'session-a', reason: 'apply-failed' } });
     listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-failed', payload: { sessionId: 'session-b', reason: 'apply-failed' } });
     listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-failed', payload: { sessionId: 'session-a', reason: 'unexpected' } });
     listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-failed', payload: { sessionId: 'session-a', reason: 'apply-failed', error: 'never show secret' } });
+    listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-failed',
+      payload: { sessionId: 'session-a', reason: 'apply-failed', previousSettingsRetained: true } });
     listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-applied', payload: { sessionId: 'session-a', model: 'next', providerId: null } });
     expect(outcomes).toEqual([
       { kind: 'failed', sessionId: 'session-a', reason: 'apply-failed' },
+      { kind: 'failed', sessionId: 'session-a', reason: 'apply-failed', previousSettingsRetained: true },
       { kind: 'applied', sessionId: 'session-a' },
     ]);
     dispose();

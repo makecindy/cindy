@@ -50,7 +50,7 @@ import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDev
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
 import { CindyDeviceRow } from './CindyDeviceRow';
-import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDeviceRoster';
+import { cindyDeviceKey, cindyDeviceOptions } from './cindyDeviceRoster';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
 import { BotDeleteDialog } from './BotDeleteDialog';
@@ -278,7 +278,7 @@ export function TeammatesSection() {
   const showCindy = hasMultipleCindys && Boolean(currentCindy);
   const visibleBots = [
     ...roster.visible.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
-    ...remoteBots.filter(bot => !hasMultipleCindys || !isCindyDeviceBot(bot)),
+    ...remoteBots.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
   ];
   // 已归档的群不在段内列出,经侧栏总搜索找回(TeammateSearchResults)。
   const visibleGroups = groups.filter(group => !group.archived);

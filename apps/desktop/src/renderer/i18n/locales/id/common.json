@@ -563,7 +563,8 @@
       "calloutUnknown": "Jika tidak mengenal orang ini, tolak; setelah ditolak tautan ini tidak berlaku lagi.",
       "approve": "Setujui berbagi",
       "reject": "Tolak permintaan",
-      "later": "Putuskan nanti"
+      "later": "Putuskan nanti",
+      "calloutPluginEngine": "{{name}} tidak perlu memasang plugin atau CLI di komputernya sendiri; ia memakai login dan kuota CLI di komputer ini."
     },
     "apply": {
       "loading": "Membaca tautan berbagi…",
@@ -2483,7 +2484,10 @@
           "system": "Ikuti sistem"
         },
         "hintWindows": "Saat AI memerlukan layar, komputer tidak mematikan layar atau mengunci; layar ditutup penutup dan AI tetap bekerja di belakangnya. Begitu ada yang menekan tombol atau mengklik, layar langsung terkunci, dan dibuka dengan Windows Hello atau kata sandi. Jika tidak ada tugas, layar mati dan terkunci seperti biasa. Setelah kontrol jarak jauh berakhir, penutup layar juga melindungi komputer ini.",
-        "hintLinux": "Saat AI memerlukan layar, komputer tidak mematikan layar atau mengunci; layar ditutup penutup dan AI tetap bekerja di belakangnya. Begitu ada yang menekan tombol atau mengklik, layar langsung terkunci, dan dibuka dengan kata sandi. Jika tidak ada tugas, layar mati dan terkunci seperti biasa. Setelah kontrol jarak jauh berakhir, penutup layar juga melindungi komputer ini."
+        "hintLinux": "Saat AI memerlukan layar, komputer tidak mematikan layar atau mengunci; layar ditutup penutup dan AI tetap bekerja di belakangnya. Begitu ada yang menekan tombol atau mengklik, layar langsung terkunci, dan dibuka dengan kata sandi. Jika tidak ada tugas, layar mati dan terkunci seperti biasa. Setelah kontrol jarak jauh berakhir, penutup layar juga melindungi komputer ini.",
+        "permissionMissing": "Layar privasi belum aktif. Cindy butuh izin sistem untuk mengunci Mac saat ada orang menekan tombol atau mengklik.",
+        "checkFailed": "Belum bisa memastikan izin Layar privasi di komputer ini.",
+        "saveFailed": "Pengaturan Layar privasi gagal disimpan."
       }
     },
     "agentIsland": {
@@ -3718,6 +3722,7 @@
         "connecting": "Sedang menghubungkan…",
         "rename": "Ganti nama",
         "suspended": "Nonaktif",
+        "hidden": "Disembunyikan",
         "unconfigured": "Belum dikonfigurasi"
       },
       "button": {
@@ -3728,7 +3733,9 @@
         "cancel": "Batal",
         "retry": "Ambil ulang daftar model",
         "retrying": "Sedang mengambil ulang…",
-        "enableProvider": "Aktifkan penyedia"
+        "enableProvider": "Aktifkan penyedia",
+        "showProvider": "Tampilkan",
+        "hideInstead": "Sembunyikan saja"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4281,7 +4288,8 @@
         "groupBadge_other": "Grup penyedia · {{count}} komputer",
         "groupNote": "{{device}} menjadikan penyedia ini sebagai grup penyedia. Ketika kamu membuat tugas dengan memilihnya di daftar model, {{device}} membagikan tugas ke salah satu komputer di bawah menurut strategi grup, dan memindahkannya ke komputer lain bila komputer itu mengalami masalah. Selama {{device}} online, kamu bisa mengelola grup dan berbaginya lewat “Jarak jauh & berbagi” di sini.",
         "groupMembersTitle": "Komputer dalam grup",
-        "groupMembersFailed": "Status komputer dalam grup belum bisa dibaca sekarang."
+        "groupMembersFailed": "Status komputer dalam grup belum bisa dibaca sekarang.",
+        "hiddenBanner": "Disembunyikan dari pemilih model di komputer ini. Favorit dan tugas yang sedang memakainya tidak terpengaruh."
       },
       "genericOAuth": {
         "subtitle": "Akun langganan",
@@ -4326,6 +4334,7 @@
           "empty": "Penyedia ini kali ini tidak mengembalikan model yang bisa dipakai; daftar di bawah berasal dari pengambilan terakhir. Pastikan izin akunmu, lalu coba lagi."
         },
         "suspendedBanner": "Penyedia ini sudah dinonaktifkan, kredensial tetap disimpan; modelnya baru tersedia lagi setelah diaktifkan",
+        "hiddenBanner": "Disembunyikan dari pemilih model. Tugas dan fitur latar belakang yang sedang memakainya tidak terpengaruh; saat dibutuhkan, kamu masih bisa memilihnya dari “Disembunyikan” di bagian bawah pemilih.",
         "remoteAccess": {
           "label": "Izinkan pemakaian jarak jauh",
           "description": "Jika aktif, komputer lain milikmu dan orang yang kamu beri akses bisa memakai model penyedia ini; Agent berjalan di komputer ini dengan login dan kuota komputer ini.",
@@ -4535,7 +4544,25 @@
       },
       "menu": {
         "disableProvider": "Nonaktifkan penyedia ini",
-        "enableProvider": "Aktifkan penyedia ini"
+        "enableProvider": "Aktifkan penyedia ini",
+        "hideProvider": "Sembunyikan di pemilih model",
+        "showProvider": "Tampilkan di pemilih model"
+      },
+      "plugin": {
+        "title": "Penyedia dari plugin",
+        "badge": "Plugin",
+        "rowTip": "{{provider}} · disediakan oleh plugin",
+        "source": "Disediakan oleh plugin",
+        "declaredName": "Nama di plugin: {{name}}",
+        "note": "Penyedia ini disediakan oleh plugin yang terpasang dan menjalankan tugas dengan mesin plugin itu sendiri. Login dan koneksi dikelola di dalam plugin; jika plugin dinonaktifkan atau dilepas, penyedia ini akan hilang dari sini.",
+        "openPlugin": "Buka plugin",
+        "resetName": "Pulihkan nama dari plugin",
+        "suspendedBanner": "Penyedia ini sudah dinonaktifkan; tugas baru dan otomasi tidak akan memakainya lagi, dan komputer lain maupun orang yang kamu bagikan juga tidak bisa memanggilnya. Plugin itu sendiri tidak terpengaruh. Jika kamu hanya tidak ingin melihatnya di pemilih model, sembunyikan saja.",
+        "hiddenBanner": "Disembunyikan dari pemilih model. Tugas dan otomasi yang sedang memakainya tidak terpengaruh.",
+        "unavailableBanner": "Plugin melaporkan mesin ini untuk sementara tidak bisa berjalan. Buka plugin untuk melihat penyebabnya.",
+        "unavailableBannerReason": "Sementara tidak bisa berjalan: {{reason}}",
+        "modelsEmpty": "Mesin ini belum mencantumkan model; tugas baru akan memakai model bawaan mesin itu sendiri. Setelah satu tugas berjalan, model yang tersedia akan dicantumkan di sini.",
+        "modelSwitchAria": "Aktifkan {{model}}"
       },
       "builtinApiKey": {
         "subtitle": "Koneksi API key",
@@ -7002,6 +7029,11 @@
         "cindyFriend": "Cindy Friend"
       },
       "keepAwakeIncluded": "Sudah termasuk dalam penutup layar: komputer tidak tidur.",
+      "localNetwork": {
+        "label": "Jaringan lokal",
+        "deniedHint": "Tanpa izin ini, komputer dan ponsel di jaringan yang sama tidak bisa terhubung langsung ke komputer ini; koneksi harus lewat relay dan jadi lebih lambat.",
+        "settingsHint": "Aktifkan Cindy di “Pengaturan Sistem › Privasi & Keamanan › Jaringan lokal”. Setelah kembali ke sini, pengaturan berlaku otomatis."
+      },
       "ownModelAccess": {}
     },
     "imBot": {
@@ -8518,7 +8550,10 @@
           "description": "Saat aktif, komputer lain kamu dapat menjalankan tugas dengan mesin ini. Agent berjalan di komputer ini dan memakai sesi masuk serta kuota komputer ini. File dan perintah tetap di komputer tempat tugas berada.",
           "unsupported": "Plugin ini belum mendukung penggunaan mesinnya dari komputer lain.",
           "remoteControlOff": "Komputer ini belum mengizinkan kendali jarak jauh, jadi komputer lain tidak dapat memakai mesin ini.",
-          "ariaLabel": "Izinkan komputer lain kamu memakai {{engine}}"
+          "ariaLabel": "Izinkan komputer lain kamu memakai {{engine}}",
+          "descriptionShareable": "Setelah diaktifkan, komputer lain milikmu dan teman yang kamu bagikan bisa menjalankan tugas dengan mesin ini tanpa memasang plugin. Agent berjalan di komputer ini dan memakai login serta kuota komputer ini; file dan perintah tetap berada di komputer tempat tugas dijalankan.",
+          "providerDisabled": "Penyedia ini sudah dinonaktifkan di Penyedia model, jadi komputer lain tidak bisa memakai mesin ini.",
+          "openProviders": "Buka pengaturan Penyedia model"
         },
         "githubRelease": {
           "title": "Pembaruan Plugin",
@@ -10903,6 +10938,13 @@
         "enabled": "Aktif"
       },
       "close": "Tutup"
+    },
+    "localNetwork": {
+      "title": "Aktifkan izin Jaringan lokal",
+      "relayOnly": "Perangkat lainmu sekarang hanya bisa terhubung ke komputer ini lewat relay, jadi lebih lambat. Setelah diaktifkan, perangkat di jaringan yang sama bisa terhubung langsung.",
+      "controlEnabled": "Perangkat di jaringan yang sama perlu izin Jaringan lokal untuk mengendalikan komputer ini secara langsung; tanpanya, koneksi harus lewat relay.",
+      "allow": "Aktifkan",
+      "dismiss": "Nanti saja"
     }
   },
   "bots": {
@@ -14101,6 +14143,8 @@
       "source": {
         "lastConfirmed": "Terakhir dimuat ulang: {{time}}",
         "unconfirmed": "Daftar model belum terbaru",
+        "unreachable": "Tidak bisa terhubung ke {{source}}",
+        "unreachableDetail": "Tidak bisa terhubung. Periksa jaringan.",
         "unavailable": "Model tidak tersedia",
         "reconnect": "Sambungkan lagi",
         "manage": "Kelola sumber",
@@ -14124,6 +14168,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Model di komputer itu belum bisa dibaca",
         "favoritesGroup": "Favorit",
         "recentGroup": "Terbaru",
+        "hiddenGroup": "Disembunyikan ({{count}})",
+        "hiddenGroupHint": "Penyedia dan model yang disembunyikan tetap bisa dipilih",
         "recentEmpty": "Belum ada model terbaru — pilih model dan model itu akan muncul di sini",
         "favoritesSaveFailed": "Gagal menyimpan perubahan favorit",
         "favoritesCleanupFailed": "Gagal membersihkan favorit model dari berbagi penyedia yang sudah dicabut",
@@ -14301,6 +14347,7 @@
       "regionAria": "Antrean pesan yang menunggu dikirim",
       "listAria": "Pesan dalam antrean",
       "pausedFooter": "Tugas dihentikan, antrean dijeda",
+      "steerUnsupportedNotice": "Mesin saat ini tidak mendukung sisipan pesan; pesan yang mengantre akan dikirim setelah giliran ini selesai.",
       "resumeAction": "Lanjutkan pengiriman",
       "resumeAria": "Lanjutkan pengiriman pesan dalam antrean",
       "showMore_one": "{{count}} lagi",
@@ -14448,6 +14495,7 @@
       "steerNotSent": "Tidak terkirim. Penyisipan pesan sementara tidak tersedia; drafmu tetap disimpan",
       "credentialSwitchApplied": "Pengalihan sumber model sudah berlaku.",
       "credentialSwitchFailed": "Pengalihan sumber model gagal. Pilih model lagi.",
+      "credentialSwitchKeptSettings": "Pergantian kali ini tidak selesai; tugas tetap memakai pengaturan sebelumnya.",
       "modelSwitchContextGuard": {
         "warnToast": "Percakapan ini sudah memakai {{used}}, sekitar {{pct}}% dari kapasitas model baru ({{total}})",
         "condensedToast": "Untuk menyesuaikan model baru, percakapan yang lebih lama akan dikompres; riwayat lengkap tetap dapat dilihat.",
@@ -15725,6 +15773,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "Konteks sudah penuh, jadi pesan ini tidak diproses. Pesan berikutnya tetap diproses sesuai urutan.",
       "attachmentPrefix": "Lampiran: ",
       "attachmentAttachedAria": "Terlampir {{name}}",
       "saveAttachmentAs": "Simpan lampiran {{name}} sebagai",
@@ -16390,6 +16439,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "Tambah host cloud",
+        "preparingCloud": "Host cloud · menyiapkan",
+        "manageCloud": "Kelola host cloud",
         "allMachines": "Semua",
         "localMachine": "Komputer ini",
         "connecting": "Menyambungkan…",
@@ -16525,6 +16577,9 @@
       "taskInfoSummaryNone": "Tidak ada",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Ikon Harness",
+        "project": "Ikon dan nama proyek",
+        "teammate": "Foto profil Rekan",
         "time": "Waktu",
         "pr": "Status PR",
         "worktree": "worktree",
@@ -17439,7 +17494,8 @@
         "title": "Impor otomasi repositori",
         "description": "Sumber: {{workingDir}}. Periksa definisi di bawah. Mengimpor akan menerapkan perubahan ini dan mengaktifkan otomasi baru, yang bisa menjalankan perintah dan memulai Agent dengan akses penuh. Impor hanya konten yang kamu percaya.",
         "accept": "Konfirmasi impor",
-        "removed": "Akan dihapus: {{names}}"
+        "removed": "Akan dihapus: {{names}}",
+        "fileMissing": "File otomasi di “{{projectName}}” tidak ditemukan; impor dilewati"
       },
       "toast": {
         "summary": "ditambah {{inserted}} · diperbarui {{updated}} · dihapus {{deleted}}",
@@ -17536,6 +17592,7 @@
       "openWorkdirFailed": "Gagal membuka folder"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "Waktu tunggu dalam antrean habis dan prompt tidak terkirim. Setelah tugas tujuan menganggur, klik “{{action}}” untuk menjalankannya lagi.",
       "status": {
         "running": "Berjalan",
         "success": "Berhasil",
@@ -21464,6 +21521,7 @@
       "reviewed": "Sudah ditinjau",
       "verified-publisher": "Penerbit terverifikasi"
     },
+    "viewLimit": "Terlalu banyak halaman terbuka sekaligus. Gulir atau tutup halaman lain, lalu halaman ini akan terbuka otomatis.",
     "pluginRevoked": "Plugin dinonaktifkan atau berubah. Halaman ini sudah tidak berlaku.",
     "pluginCspRejected": "Halaman meminta domain yang tidak dideklarasikan dan diblokir.",
     "filesOnExecutionComputer": "Lihat isi berkas di komputer eksekutor",
@@ -22194,6 +22252,7 @@
     "picker": {
       "empty": "Belum ada grup model. Gabungkan beberapa sumber jadi satu mode di Pengaturan supaya bisa dipilih di sini.",
       "manage": "Kelola grup model",
+      "deviceTitle": "Grup model · {{device}}",
       "switched": "“{{name}}” mengganti tugas ini ke {{model}}",
       "switchUnavailable": "“{{name}}” sekarang tidak punya sumber yang bisa dipakai tugas ini, model tidak diganti.",
       "chooseUnavailable": "“{{name}}” tidak punya sumber yang bisa dipakai saat ini, jadi tidak dipilih."
@@ -22443,5 +22502,10 @@
       "auto": "Persetujuan otomatis",
       "bypassPermissions": "Akses penuh"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "Temukan {{app}} di “System & App Protection Override”, lalu klik ⓘ di sebelah kanannya. Jika tidak ada, klik “+” dan tambahkan lewat jalur file.",
+    "review": "$t(macControlPermission.selectApp)\nJika sistem menyediakan “Pilih App”, kamu bisa membatasi cakupan kendali. Kendali seluruh mesin memberi akses ke semua aplikasi dan data. Jika setuju, baca setiap butir dan klik “OK” untuk mengonfirmasi, lalu klik tombol izinkan di bagian bawah jendela."
   }
 }

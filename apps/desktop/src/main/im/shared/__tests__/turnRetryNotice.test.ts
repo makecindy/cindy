@@ -215,6 +215,20 @@ describe('terminalErrorText', () => {
     expect(text).toContain('在这里重发这条消息');
   });
 
+  it('nested 529 presentation reason is localized across terminal paths without signaling a retry', () => {
+    // handleTurnErrorAsync, finalizeTranspond, and the official hook all consume this shared mapping.
+    const data = {
+      message: 'stream disconnected before completion',
+      reason: 'UPSTREAM_OVERLOADED',
+    };
+    const text = terminalErrorText(data);
+    expect(text).toContain('模型服务繁忙');
+    expect(text).toContain('在这里重发这条消息');
+    expect(text).not.toContain('stream disconnected before completion');
+    // The classification is presentation-only; it does not become an automatic retry signal.
+    expect(turnRetryNotice(data)).toBeNull();
+  });
+
   it('只有状态码带 529 时也命中(errorStatus 不能在取文案时被丢掉)', () => {
     // Anthropic 的 529 有时只体现在状态码上, message 里不含 529 字样。
     expect(terminalErrorText({ message: 'SDK API request failed', errorStatus: 529 })).toContain(

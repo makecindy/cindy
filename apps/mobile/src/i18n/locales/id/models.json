@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "Pengalihan sumber model sudah berlaku.",
-    "failed": "Pengalihan sumber model gagal. Pilih model lagi."
+    "failed": "Pengalihan sumber model gagal. Pilih model lagi.",
+    "previousSettingsRetained": "Pergantian kali ini tidak selesai; tugas tetap memakai pengaturan sebelumnya."
   },
   "agentSwitch": {
     "browseAccessibility": "Jelajahi model {{agent}}"
@@ -118,7 +119,29 @@
       "order": "Sesuai urutan",
       "rotate": "Bergiliran",
       "cheapest": "Paling murah"
-    }
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "Sisa kuota {{left}}%, direset {{reset}}; pakai ini dulu",
+      "expiring": "Diurutkan paling atas berdasarkan kuota",
+      "order": "Sumber tersedia yang paling atas",
+      "rotate": "Sekarang gilirannya",
+      "only": "Saat ini hanya ini yang bisa dipakai",
+      "soonest": "Kuota semua sumber habis; ini yang paling cepat pulih",
+      "soonestUntil": "Kuota semua sumber habis; ini yang paling cepat pulih ({{reset}})",
+      "cheapest": "Harga paling rendah",
+      "cheapestFree": "Langganan masih punya kuota, tanpa biaya tambahan",
+      "exceptionImage": "Pesan berisi gambar, jadi hanya dipilih dari sumber yang bisa membaca gambar",
+      "exceptionImageFallback": "Pesan berisi gambar, tetapi tidak ada sumber yang bisa membaca gambar; tetap dipilih seperti biasa",
+      "exceptionHours": "Pada jam ini dialihkan ke “{{name}}”",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "“{{name}}” mengganti tugas ini ke {{model}}",
+      "switchUnavailable": "“{{name}}” saat ini tidak punya sumber yang bisa dipakai tugas ini; model tidak diganti.",
+      "chooseUnavailable": "“{{name}}” saat ini tidak punya sumber yang bisa dipakai; tidak dipilih."
+    },
+    "anotherDevice": "Komputer lain"
   },
   "pluginEngines": {
     "genericName": "Mesin plugin",

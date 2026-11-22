@@ -1,3 +1,4 @@
+import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkSpan } from './SettingsLinkSpan';
@@ -828,7 +829,10 @@ export function MessageRenderer({
     [scrollResetKey, remoteDeviceId, accountGeneration]);
   useEffect(() => () => richContent?.clear(), [richContent]);
   // Match LegendList's key: a new list must never inherit old visibility.
-  const messageListVisibility = useMemo(() => new MessageListVisibility(), [scrollResetKey]);
+  const listRef = useRef<LegendListRef>(null);
+  const messageListVisibility = useMemo(() => new MessageListVisibility(
+    () => listRef.current?.getNativeScrollRef()?.getBoundingClientRect?.(),
+  ), [scrollResetKey]);
   const tableDocuments = useTableDocumentList(richContent);
   const historyPositioning = useMessageHistoryPositioning();
   const historyPositioningRef = useRef(historyPositioning);
@@ -857,7 +861,6 @@ export function MessageRenderer({
   );
   const focusedItemKeyRef = useRef(focusedItemKey);
   focusedItemKeyRef.current = focusedItemKey;
-  const listRef = useRef<LegendListRef>(null);
   const listMetricsRef = useRef<LegendListMetrics>({ footerSize: 0, headerSize: 0 });
   const listTopPaddingRef = useRef(0);
   const listBottomPaddingRef = useRef(0);
@@ -2359,6 +2362,7 @@ export function MessageRenderer({
     event: NativeSyntheticEvent<NativeScrollEvent>,
     isFinalDragSample = false,
   ) => {
+    messageListVisibility.viewportChanged();
     richContent?.onScroll();
     if (!historyPositioningRef.current) return;
     // Cancellation releases ownership immediately. Only endDrag may still consume its final
@@ -2503,6 +2507,7 @@ export function MessageRenderer({
     handoffHistoryPrependToUser,
     scheduleStickyShareCheck,
     richContent,
+    messageListVisibility,
     processViewport.scroll,
     processViewport.inspecting,
   ]);
@@ -2673,13 +2678,14 @@ export function MessageRenderer({
   }, [attemptAutoLoadEarlier, loadEarlierEvaluationVersion]);
 
   const handleListLayout = useCallback((event: LayoutChangeEvent) => {
+    messageListVisibility.viewportChanged();
     const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
     scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
     markMobileMvcpSettle();
     if (nearBottomRef.current) runStickToLatestVerify();
     acknowledgeCompanionReadRef.current();
-  }, [markMobileMvcpSettle, runStickToLatestVerify]);
+  }, [messageListVisibility, markMobileMvcpSettle, runStickToLatestVerify]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
     listMetricsRef.current = metrics;
@@ -2704,6 +2710,7 @@ export function MessageRenderer({
   // 上翻历史时 nearBottomRef=false,不打断。animated:false → 即时跟随、不排队动画。
   // LegendList 内置 maintainScrollAtEnd 已弃用(见 LegendList props 注释),不存在双机制叠加。
   const handleContentSize = useCallback((_width: number, height: number) => {
+    messageListVisibility.viewportChanged();
     reconcileReopeningAnchor();
     markMobileMvcpSettle();
     scrollMetricsRef.current = { ...scrollMetricsRef.current, contentHeight: height };
@@ -2729,6 +2736,7 @@ export function MessageRenderer({
     acknowledgeCompanionReadRef.current();
   }, [
     getTailFollower,
+    messageListVisibility,
     reconcileReopeningAnchor,
     markMobileMvcpSettle,
     restoreHistoryAnchorOnce,
@@ -3600,6 +3608,7 @@ function MessageBubble({
 }) {
   const { colors: userBubbleColors } = useUserBubbleAppearance();
   const { user: viewer } = useAuth();
+  const { selected: wallpaper } = useWallpaper();
   const styles = useThemedStyles(makeStyles);
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -4042,8 +4051,10 @@ function MessageBubble({
         presentation.density === 'rich' && styles.bubbleRich,
         isUser ? styles.userBubble : styles.agentBubble,
         actions.companion && !isUser && !item.message.systemCardType && styles.companionAnswer,
+        !isUser && !item.message.systemCardType && wallpaper !== 'none' && { backgroundColor: 'transparent' },
         actions.intermediateProcess && { paddingVertical: 0 },
         hookSource && styles.hookSourceBubble,
+        (isUser || hookSource) && wallpaper !== 'none' && !item.message.systemCardType && { backgroundColor: wallpaperRaisedFill(colors.surfaceElevated, mode) },
         ownBubbleColors && { backgroundColor: ownBubbleColors.background, borderColor: ownBubbleColors.border },
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
@@ -4080,7 +4091,7 @@ function MessageBubble({
       {item.message.systemCardType === 'mcp-app' ? (
         <ViewabilityGatedMcpAppCard deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
           clientId={item.message.source.clientId} title={String(item.message.systemCardData?.title ?? '')}
-          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp}
+          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp} initialHeight={item.message.systemCardData?.initialHeight}
           fallbackText={String(item.message.systemCardData?.fallbackText ?? '')} />
       ) : item.message.systemCardType ? (
         <MobileSystemCard
@@ -4629,8 +4640,11 @@ function ToolGroupCard({
  * 媒体条 / 结果预览,再点收起。展开态走共享进程内记忆(blockId 前缀 `toolrow-`,
  * 与组级 `tools-` key 空间天然隔离)。无详情可展的行不显示 chevron、不可点击。
  */
-type ToolDetailActions = Pick<MessageActions,
-  | 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia'>;
+type ToolDetailActionKey = 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia';
+type ToolDetailActions = Pick<MessageActions, ToolDetailActionKey>;
+/** Hand-picked tool actions must list every key: a dropped optional callback
+ * silently disables it for those rows (process images stopped auto-loading). */
+type ListedToolDetailActions = { [K in ToolDetailActionKey]: MessageActions[K] };
 
 function ToolActionRow({
   actions,
@@ -5232,12 +5246,14 @@ function WorkGroupCard({
   );
   // Tool detail rows do not consume message action/queue/share busy state.
   // Keep their callbacks and streaming flag stable across those unrelated updates.
-  const toolActions = useMemo(() => ({
+  const toolActions = useMemo((): ListedToolDetailActions & Pick<MessageActions, 'isSessionStreaming'> => ({
     onLoadToolInput: actions.onLoadToolInput,
     onRetryImageDelivery: actions.onRetryImageDelivery,
     onOpenPayload: actions.onOpenPayload,
+    onResolveRemoteMedia: actions.onResolveRemoteMedia,
     isSessionStreaming: actions.isSessionStreaming,
-  }), [actions.onRetryImageDelivery, actions.onLoadToolInput, actions.onOpenPayload, actions.isSessionStreaming]);
+  }), [actions.onRetryImageDelivery, actions.onLoadToolInput, actions.onOpenPayload,
+    actions.onResolveRemoteMedia, actions.isSessionStreaming]);
   const startedAtIso = isStreaming && item.startedAtMs !== undefined
     ? new Date(item.startedAtMs).toISOString()
     : undefined;

@@ -133,6 +133,10 @@ const HANDOFF_USER_OVERFLOW_OUTCOME_MAX_CHARS = 5000;
 const HANDOFF_USER_OVERFLOW_OUTCOME_MAX_FRACTION = 0.25;
 const HANDOFF_LEDGER_PATH_CHARS = 240;
 const HANDOFF_LEDGER_MAX_FRACTION = 0.25;
+const HANDOFF_ATTACHMENT_REF_CAP = 4;
+const HANDOFF_ATTACHMENT_NAME_CHARS = 120;
+const HANDOFF_ATTACHMENT_URL_CHARS = 300;
+const HANDOFF_ATTACHMENT_LONG_URL = 'managed address too long; search history for it';
 
 function handoffTokenBudget(opts: BuildHandoffOptions): number | null {
   const window = opts.targetContextWindow;
@@ -237,6 +241,62 @@ export function extractPlainText(content: unknown): string {
     if (isOrcaCommunicationRecord(c)) return c.content;
   }
   return '';
+}
+
+function attachmentRef(value: unknown, kind: 'image' | 'file') {
+  const item = asRecord(value);
+  if (!item) return null;
+  const clean = (value: unknown, limit: number, tooLong?: string): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/[\[\]]/g, '')
+      .trim();
+    if (!normalized) return undefined;
+    if (normalized.length > limit) return tooLong ?? `${normalized.slice(0, Math.max(0, limit - '…(truncated)'.length))}…(truncated)`;
+    return normalized;
+  };
+  const name = ['originalName', 'name', 'fileName']
+    .map(key => clean(item[key], HANDOFF_ATTACHMENT_NAME_CHARS))
+    .find((v): v is string => Boolean(v));
+  if (kind === 'image') {
+    const url = ['url', 'mediaId', 'mediaUrl']
+      .map(key => item[key])
+      .filter((value): value is string => typeof value === 'string'
+        && (value.startsWith('cindy-media://') || value.startsWith('xdt-image://')))
+      .map(value => clean(value, HANDOFF_ATTACHMENT_URL_CHARS, HANDOFF_ATTACHMENT_LONG_URL))
+      .find((v): v is string => Boolean(v));
+    return name || url ? { kind, name, url } : null;
+  }
+  return name ? { kind, name } : null;
+}
+
+/** Keep attachment references in replay text without reading their bytes. */
+function userAttachmentMarker(content: unknown): string {
+  const record = asRecord(parseJsonObjectString(content));
+  if (!record) return '';
+  const images = Array.isArray(record.images) ? record.images.map(item => attachmentRef(item, 'image')) : [];
+  const files = Array.isArray(record.files) ? record.files.map(item => attachmentRef(item, 'file')) : [];
+  const all = [...images, ...files].filter(item => item !== null);
+  if (!all.length) return '';
+  const shown = all.slice(0, HANDOFF_ATTACHMENT_REF_CAP).map((item, index) => {
+    const label = item.name || String(index + 1);
+    if (item.kind === 'image') return `image ${label} · ${item.url || '(managed address unavailable)'}`;
+    return `file ${label}`;
+  });
+  const remaining = all.length - shown.length;
+  if (remaining > 0) shown.push(`and ${remaining} more`);
+  if (images.some(item => item !== null)) {
+    shown.push('When you need to view an image, first try the media tool resolve_local_path. If it cannot resolve it, ask the user to send the image again.');
+  }
+  return `[Attachment references: ${shown.join('; ')}]`;
+}
+
+function userReplayText(content: unknown): { text: string; marker?: string } {
+  const text = extractPlainText(content);
+  const marker = userAttachmentMarker(content);
+  return marker ? { text, marker } : { text };
 }
 
 function isOrcaCommunicationRecord(
@@ -532,6 +592,7 @@ function imContextForHandoff(message: HandoffSourceMessage): string[] {
 interface ReplayRecord {
   label: string;
   text: string;
+  marker?: string;
   outcome?: string;
 }
 
@@ -539,15 +600,16 @@ function replayRecord(msg: HandoffSourceMessage, includeToolResults: boolean): R
   switch (msg.role) {
     case 'user': {
       const content = asRecord(parseJsonObjectString(msg.content));
-      const text = typeof msg.content !== 'string' ||
+      const replay = typeof msg.content !== 'string' ||
           (content && (isStringifyUserContentEnvelope(content) || isOrcaCommunicationRecord(content) || content.quotesEncoded === true))
-        ? extractPlainText(content ?? msg.content)
-        : msg.content;
-      if (text.startsWith(SYNTHETIC_TRIGGER_PREFIX)) return;
+          ? userReplayText(content ?? msg.content)
+          : { text: msg.content };
+      if (replay.text.startsWith(SYNTHETIC_TRIGGER_PREFIX)) return;
       const source = describeHandoffUserSource(msg);
       return {
         label: source ? `[User · ${source}]` : '[User]',
-        text: [text, ...imContextForHandoff(msg)].filter(Boolean).join('\n'),
+        text: [replay.text, ...imContextForHandoff(msg)].filter(Boolean).join('\n'),
+        ...(replay.marker ? { marker: replay.marker } : {}),
       };
     }
     case 'assistant': {
@@ -604,15 +666,17 @@ const REPLAY_OMITTED = '(Some records omitted or abbreviated: goals, constraints
 const REPLAY_TECHNICAL_RETRIEVAL = 'For an omitted tool or reasoning record, use the scoped get_chat_history query below with roles ["tool_use","tool_result","thinking"].';
 
 const REPLAY_GAP = '…(records omitted here)…';
+const REPLAY_ATTACHMENT_OMITTED = '\n[Attachment references omitted]';
 
 interface ReplayEntry {
   role: string;
   record?: ReplayRecord;
 }
 
-function replayLine(record: ReplayRecord, text = record.text): string {
+function replayLine(record: ReplayRecord, text = record.text, includeMarker = true): string {
   const separator = record.label.startsWith('[Tool]') ? ' ' : '\n';
-  return text ? `${record.label}${separator}${text}` : record.label;
+  const body = includeMarker && record.marker ? [text, record.marker].filter(Boolean).join('\n') : text;
+  return body ? `${record.label}${separator}${body}` : record.label;
 }
 
 function toolReplayStub(entry: ReplayEntry, record: ReplayRecord): string {
@@ -630,7 +694,36 @@ function toolReplayStub(entry: ReplayEntry, record: ReplayRecord): string {
   }
 }
 
-function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: number): string[] {
+function appendReplayMarkers(
+  lines: string[],
+  markers: ReadonlyArray<{ index: number; marker: string }>,
+  room: number,
+  units: number,
+): boolean {
+  const omitted: number[] = [];
+  for (let i = markers.length - 1; i >= 0; i--) {
+    const { index, marker } = markers[i]!;
+    const chars = marker.length + 1;
+    const cost = tokenUnits(marker) + ASCII_TOKEN_UNITS;
+    if (chars > room || cost > units) {
+      omitted.push(index);
+      continue;
+    }
+    lines[index] += '\n' + marker;
+    room -= chars;
+    units -= cost;
+  }
+  const noticeCost = tokenUnits(REPLAY_ATTACHMENT_OMITTED);
+  for (const index of omitted) {
+    if (room < REPLAY_ATTACHMENT_OMITTED.length || units < noticeCost) break;
+    lines[index] += REPLAY_ATTACHMENT_OMITTED;
+    room -= REPLAY_ATTACHMENT_OMITTED.length;
+    units -= noticeCost;
+  }
+  return omitted.length === 0;
+}
+
+function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: number, unitBudget: number): string[] {
   const selected: Array<string | undefined> = Array(entries.length).fill(undefined);
   // Initially the entire timeline is one omitted run. Each selection accounts
   // for the gaps it creates, joins or removes, including gaps between users.
@@ -656,7 +749,7 @@ function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: n
     const bodyRoom = available - record.label.length - 1;
     const textRoom = Math.min(textLimit, bodyRoom);
     if ((record.text && textRoom < Math.min(record.text.length, 24)) || available < record.label.length) return false;
-    const line = replayLine(record, excerpt(record.text, Math.max(0, textRoom)));
+    const line = replayLine(record, excerpt(record.text, Math.max(0, textRoom)), false);
     if (previous !== undefined && line.length <= previous.length) return false;
     return keep(index, line);
   };
@@ -665,7 +758,10 @@ function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: n
   for (const [index, entry] of entries.entries()) {
     if (entry.role === 'user') users.push(index);
   }
-  for (const index of users) keep(index, replayLine(entries[index]!.record!));
+  for (const index of users) {
+    const record = entries[index]!.record!;
+    keep(index, replayLine(record, record.text, false));
+  }
   const userOverflow = users.some(index => selected[index] === undefined);
   let recentToolReserve = 0;
   if (userOverflow) {
@@ -747,11 +843,21 @@ function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: n
   }
 
   const lines: string[] = [];
+  const markers: Array<{ index: number; marker: string }> = [];
   let inGap = false;
-  for (const line of selected) {
-    if (line !== undefined) lines.push(line);
-    else if (!inGap) lines.push(REPLAY_GAP);
+  for (const [index, line] of selected.entries()) {
+    if (line !== undefined) {
+      const marker = entries[index]?.record?.marker;
+      if (marker) markers.push({ index: lines.length, marker });
+      lines.push(line);
+    } else if (!inGap) lines.push(REPLAY_GAP);
     inGap = line === undefined;
+  }
+  // Give the remaining space to the most recent attachments. Check tokens
+  // too so adding a marker cannot force a smaller rebuild of the user text.
+  if (markers.length && room > 0) {
+    const units = unitBudget - lines.reduce((sum, line) => sum + tokenUnits(line) + ASCII_TOKEN_UNITS, 0);
+    appendReplayMarkers(lines, markers, room, units);
   }
   return lines;
 }
@@ -775,7 +881,8 @@ export function buildHandoff(
     }
   }
 
-  const build = (budget: number) => buildHandoffWithinChars(entries, opts, framing, heading, budget);
+  const build = (budget: number, completeOnly = false) =>
+    buildHandoffWithinChars(entries, opts, framing, heading, budget, tokens, completeOnly);
   if (tokens === null) return build(HANDOFF_UNKNOWN_WINDOW_CHARS);
   if (opts.reason === 'idle-gap') {
     return buildAtConservativeBudget(build, Math.min(IDLE_GAP_MAX_CHARS, tokens), tokens, opts);
@@ -784,13 +891,26 @@ export function buildHandoff(
   const frame = [...framing.before, heading, REPLAY_CONTEXT, ...framing.after].join('\n');
   let chars = frame.length;
   let units = tokenUnits(frame);
+  let markerChars = 0;
+  let markerUnits = 0;
   for (const { record } of entries) {
     if (!record) continue;
     const separators = record.text ? 2 : 1;
     chars += record.label.length + record.text.length + separators;
-    units += tokenUnits(record.label) + tokenUnits(record.text) + separators * ASCII_TOKEN_UNITS;
+    units += tokenUnits(record.label) + tokenUnits(record.text)
+      + separators * ASCII_TOKEN_UNITS;
+    if (record.marker) {
+      markerChars += record.marker.length + 1;
+      markerUnits += tokenUnits(record.marker) + ASCII_TOKEN_UNITS;
+    }
   }
-  let budget = Math.min(HANDOFF_MAX_CHARS, Math.floor(tokens * TOKEN_UNITS * chars / units));
+  const charBudget = (chars: number, units: number) => Math.min(HANDOFF_MAX_CHARS, Math.floor(tokens * TOKEN_UNITS * chars / units));
+  if (markerChars > 0) {
+    const full = build(charBudget(chars + markerChars, units + markerUnits), true);
+    if (full.handoffCoverage === 'complete') return full;
+  }
+  // Optional markers must not change the budget used to select user text.
+  let budget = charBudget(chars, units);
   // The selected suffix may be denser than the whole history. Validate the
   // exact outgoing text, including ledger and source labels, after every build.
   for (let attempt = 0; attempt <= HANDOFF_BUDGET_RETRIES && budget > tokens; attempt++) {
@@ -822,6 +942,8 @@ function buildHandoffWithinChars(
   framing: ReturnType<typeof assembleHandoffSections>,
   heading: string,
   budget: number,
+  tokens: number | null,
+  completeOnly: boolean,
 ): { handoff: string; handoffCoverage: HandoffCoverage } {
   const before = [...framing.before];
   if (before[1]) {
@@ -838,17 +960,36 @@ function buildHandoffWithinChars(
   if (entries.every(entry => entry.record !== undefined)) {
     const completeSize = entries.length
       ? entries.reduce((size, { record }) => {
-          const { label, text } = record!;
-          return size + label.length + (text ? text.length + 1 : 0) + 1;
+          const { label, text, marker } = record!;
+          const replayTextLength = text.length + (marker ? marker.length + (text ? 1 : 0) : 0);
+          return size + label.length + (replayTextLength ? replayTextLength + 1 : 0) + 1;
         }, render([''], false).length - 1)
       : render([], false).length;
     if (completeSize <= budget) {
-      return { handoff: render(entries.map(({ record }) => replayLine(record!)), false), handoffCoverage: 'complete' };
+      const handoff = render(entries.map(({ record }) => replayLine(record!)), false);
+      if (tokens === null || tokenUnits(handoff) <= tokens * TOKEN_UNITS) {
+        return { handoff, handoffCoverage: 'complete' };
+      }
+    }
+    if (!completeOnly && entries.some(({ record }) => record?.marker)) {
+      const lines = entries.map(({ record }) => replayLine(record!, record!.text, false));
+      const base = render(lines, false);
+      const remainingUnits = tokens === null ? Infinity : tokens * TOKEN_UNITS - tokenUnits(base);
+      // An attachment-only overflow must not make the omission notice
+      // displace otherwise complete history.
+      if (base.length <= budget && remainingUnits >= 0) {
+        const markers = entries.flatMap(({ record }, index) => record?.marker ? [{ index, marker: record.marker }] : []);
+        const complete = appendReplayMarkers(lines, markers, budget - base.length, remainingUnits);
+        return { handoff: render(lines, false), handoffCoverage: complete ? 'complete' : 'condensed' };
+      }
     }
   }
+  if (completeOnly) return { handoff: '', handoffCoverage: 'condensed' };
 
-  const room = budget - render([], true).length;
-  const condensed = room > 0 ? condenseReplay(entries, room, budget) : [];
+  const condensedFrame = render([], true);
+  const room = budget - condensedFrame.length;
+  const unitBudget = tokens === null ? Infinity : tokens * TOKEN_UNITS - tokenUnits(condensedFrame);
+  const condensed = room > 0 ? condenseReplay(entries, room, budget, unitBudget) : [];
   // A very small target window may not fit the long-form framing and scoped
   // retrieval examples. Keep the scope, omission notice and terminator.
   const text = render(condensed, true);

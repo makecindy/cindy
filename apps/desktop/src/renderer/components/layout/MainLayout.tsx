@@ -779,7 +779,7 @@ export function MainLayout() {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -878,7 +878,10 @@ export function MainLayout() {
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
         // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
         const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
+        const device = payload.tab === 'remote-control' && payload.focusDeviceId
+          ? '&section=devices&device=' + encodeURIComponent(payload.focusDeviceId)
+          : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}${device}`);
       }
     },
     [navigate, navigateToSession, openShareImport],
@@ -1933,7 +1936,7 @@ export function MainLayout() {
                     <div
                       data-testid="right-sidebar-fixed-trigger"
                       className={cn(
-                        'pointer-events-none absolute z-50 flex items-center gap-1',
+                        'pointer-events-none absolute z-float flex items-center gap-1',
                         rightSidebarSide === 'left' ? 'left-2 flex-row-reverse' : 'right-2',
                       )}
                       style={
@@ -1976,7 +1979,7 @@ export function MainLayout() {
                 {isMac && rightSidebarPaneAvailable && rsbWindow.loaded && (
                   <div
                     data-testid="right-sidebar-fixed-trigger"
-                    className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+                    className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
                     style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                   >
                     <RightSidebarToggle
@@ -2074,7 +2077,7 @@ export function MainLayout() {
             右上角（系统按钮下一行），与截图中的原位置一致。 */}
         {!isMac && (
           <div
-            className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
             data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >

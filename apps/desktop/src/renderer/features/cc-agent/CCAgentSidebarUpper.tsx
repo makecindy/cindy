@@ -4,7 +4,6 @@ import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
 import { InboxUnreadReporter, useTaskListMode } from '@/hooks/useTaskListMode';
 import {
-  matchesTaskCreators,
   useTaskCreatorIndex,
   useTaskCreatorOptions,
 } from '@/features/bots/botFollowScopes';
@@ -60,6 +59,7 @@ import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { isTeammateOwnInboxTask } from '@cindy/maker-shared/live-task-priority';
 
 import { cn } from '@/lib/utils';
 import { provisionalDraftTaskId, subscribeProvisionalDraftTask } from './provisionalDraftTask';
@@ -297,8 +297,8 @@ import {
 } from './lib/pinnedSidebarOrder';
 import { createLogger } from '@/lib/logger';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
-import { evictDeviceCapabilities, prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
-import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
+import { prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
+import { prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
   evictDeviceGitSafetySettings,
   prefetchDeviceGitSafetySettings,
@@ -407,8 +407,8 @@ function RemoteSidebarLoadNotice({
           'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
         !quietDeviceLoading &&
           (partial
-            ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
-            : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center'),
+            ? 'mx-3 flex items-start gap-2 rounded-lg px-3 py-2'
+            : 'mx-3 flex flex-col items-center gap-3 rounded-xl px-4 py-8 text-center'),
       )}
     >
       {isError ? (
@@ -1286,6 +1286,9 @@ function ExpandedView({
       // 插件后台隐藏任务不单独通知;显示到任务列表后恢复。
       if (session && isBackgroundTaskNotificationTarget(session)) return;
       if (session) {
+        // Listed group/IM lanes must stay silent just like the hidden-lane fallback.
+        // Main independently owns their Island errors and interaction requests.
+        if (session.companion?.role === 'group' || session.companion?.role === 'channel') return;
         const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
         sendSessionEventNotification(sessionId, title, kind, {
           remoteDevice: !!session.deviceLinkDeviceId,
@@ -1654,10 +1657,9 @@ function ExpandedView({
     [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex],
   );
   // The inbox counts a task as a teammate's by the same test as the teammate filter.
-  const isInboxTeammateTask = useCallback(
-    (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
-    [taskCreatorIndex],
-  );
+  // A teammate's own conversations and its project's tasks stay out of the inbox until they need the
+  // owner; a task it opened elsewhere is ordinary work (shared with the phone).
+  const isInboxTeammateTask = isTeammateOwnInboxTask;
   // Pins are shortcuts. Classify the task through its own project or dialogue in the inbox.
   const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, true,
     undefined, localPlatform, undefined, projectAliasMembers);
@@ -2838,29 +2840,10 @@ function ExpandedView({
       // device-link 远程项目:与本地一致先跳草稿页(主页)。草稿带上 deviceLink 目标
       // (workingDir + deviceId),草稿页显示"为远程设备新建"横幅,首条消息发出时再经
       // 隧道在被控端建会话(NewMakerDraftRoute 的 handleSend 远程分支)。
-      // 与创建页两条换设备路径同口径:被控端的能力 / 供应商 / Git safety 快照「拉一次、无 TTL、
-      // 只在设备下线才 evict」,它一直在线期间装了新模型或改了供应商,控制端不会知道 —— 草稿页
-      // 挂载时 hook 直接命中旧缓存,composer 会显示并向它提交可能已不支持的 model / provider。
-      // 这条路径是既有的(#807 未改动它),但缺口同类,一并补上,免得只有创建页那两条是对的。
-      //
-      // **evict 必须配对一次 fetch**(Codex review 第 32 轮 P1)。evict 不是幂等清理:
-      // evictDeviceCapabilities / evictDeviceProviders 会 notify `{ status: 'loading' }`,好让已挂载
-      // 的 hook 立刻知道旧快照失效。而两个 hook 的 fetch effect deps 是 `[agentKind, deviceId]` ——
-      // 用户**已经在** /cc-agent/new 且目标就是这台设备时,patchNewMakerDraft 保持同一 deviceId、
-      // navigate 到同一路由,deps 都不变,于是没有任何东西会去重拉:capabilitiesLoading 永久为真,
-      // 发送与新建目标的 gate 永久拒绝创建,用户只能切设备或重进路由才能恢复。
-      //
-      // 这里选 prefetch 而不是「同设备就跳过 evict」:刷新本身正是这条路径想要的(见上一段),
-      // 只是刷新 = 作废 + 重取,不能只做前一半。同款做法见 useDeviceLinkRemoteProjects 处理
-      // `maker:provider:changed` push 的那段(evict 紧跟 prefetch),那是本仓这条规则的既有范例。
-      //
-      // gitSafety 的 evict 不 notify loading,所以它不会卡住发送;但它的 effect deps 也是
-      // `[deviceId]`、同样不会自动重拉,不 prefetch 会让 Codex Rewind 的入口一直隐藏,
-      // 所以三个一并补齐。fire-and-forget:三个 prefetch 内部都自行 swallow 错误。
+      // Prefetch shares valid catalog entries and in-flight reads. Catalog changes,
+      // disconnects and permission expiry already invalidate the device snapshot.
       if (project.deviceLinkDeviceId) {
         const targetDeviceId = project.deviceLinkDeviceId;
-        evictDeviceCapabilities(targetDeviceId);
-        evictDeviceProviders(targetDeviceId);
         evictDeviceGitSafetySettings(targetDeviceId);
         void Promise.all([
           prefetchDeviceCapabilities(targetDeviceId),
@@ -4291,7 +4274,7 @@ function RailPanelShell({
       className={cn(
         'fixed w-[264px] rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-1.5',
         // 阴影走主题 token(AGENTS.md #16,与菜单同语言);z 必须低于 DropdownMenu
-        // 的 z-50 —— 行内右键/移动菜单要画在面板之上(review P2)。
+        // 的 dropdown 层(10010)—— 行内右键/移动菜单要画在面板之上(review P2)。
         'shadow-[shadow:var(--shadow-menu)]',
         level === 1 ? 'z-[48]' : 'z-[49]',
       )}

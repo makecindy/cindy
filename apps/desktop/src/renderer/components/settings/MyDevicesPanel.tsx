@@ -42,6 +42,7 @@ import {
   resolveActiveConnectionIssue,
 } from './myDevicesModel';
 import { appLabel, deviceLabel, platformLabel, relativeTime, selfDeviceName } from './deviceLabels';
+import { LocalNetworkPermission } from './LocalNetworkPermission';
 import appI18n from 'i18next';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
@@ -400,6 +401,7 @@ export function MyDevicesPanel({
               />
             </ControlRow>
           </div>
+          <LocalNetworkPermission />
           {s.enabled && selfSettings && <div className="mt-3">{selfSettings}</div>}
         </li>
         )}

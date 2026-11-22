@@ -151,7 +151,7 @@ export default function HookTaskCard({
     <div
       className={cn(
         // 顶部留白放在卡片上而不是头部:分享图摘掉头部后正文仍不贴边。
-        'w-full rounded-[12px] overflow-hidden pt-[10px]',
+        'w-full rounded-xl overflow-hidden pt-2.5',
         'bg-[var(--msg-tool-card-bg)]',
         'border border-[var(--msg-tool-card-border)]',
       )}
@@ -159,7 +159,7 @@ export default function HookTaskCard({
       {/* Header: IM 图标 + Cindy 署名。属于来源标注,分享图不带(只留正文)。 */}
       <div
         {...{ [SHARE_SOURCE_ATTR]: '' }}
-        className="flex items-center gap-2 px-[14px] pb-[6px]"
+        className="flex items-center gap-2 px-3.5 pb-1.5"
       >
         <ImIcon im={im} />
         {(() => {
@@ -176,7 +176,7 @@ export default function HookTaskCard({
       </div>
 
       {/* Body: 用户实际提问 */}
-      <div className="px-[14px] pb-[12px] flex flex-col gap-2">
+      <div className="px-3.5 pb-3 flex flex-col gap-2">
         <div className="relative text-14 leading-[1.6] text-[var(--text-primary)] whitespace-pre-wrap [overflow-wrap:anywhere]">
           {measureBody && (
             <div

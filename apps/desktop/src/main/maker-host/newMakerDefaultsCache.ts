@@ -1,5 +1,5 @@
 import { normalizeWorkerCreationSelection, type WorkerCreationSelection } from '../../shared/workerCreationSelection.js';
-import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { normalizeModelRoute, type ModelRoute } from '@cindy/maker-shared/model-route';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import {
   DEFAULT_ORCA_WORKER_PERMISSION_MODE,
@@ -38,7 +38,7 @@ interface VendorPrefsSnapshot {
 export interface NewMakerDraftSnapshot {
   /** Model picker preferences captured in the same owner-fenced envelope. */
   providerModelMemory?: ProviderModelMemorySnapshot;
-  selectedRoute?: BotModelRoute;
+  selectedRoute?: ModelRoute;
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
   /** 每个 vendor 是否由用户在 New Maker picker 明确选过模型；旧 renderer 缺省不提供。 */
   modelChosenByVendor?: Partial<Record<VendorKey, boolean>>;
@@ -108,7 +108,7 @@ export function syncNewMakerDraftCache(
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (!record(p.lastByVendor) || !record(p.fastModeByModel) || !record(p.effortByModel)) return false;
   setNewMakerDraftCache({
-    selectedRoute: normalizeBotModelChain([p.selectedRoute])[0],
+    selectedRoute: normalizeModelRoute(p.selectedRoute) ?? undefined,
     ...(record(p.providerModelMemory) ? { providerModelMemory: p.providerModelMemory } : {}),
     lastByVendor: p.lastByVendor!,
     ...(record(p.modelChosenByVendor) ? { modelChosenByVendor: p.modelChosenByVendor } : {}),
@@ -313,7 +313,7 @@ export interface RemoteNewMakerDefaults {
   selectedAgentKind?: 'claude-code' | 'codex' | 'pi';
 }
 
-function selectedAgentKindFromRoute(route: BotModelRoute | undefined): RemoteNewMakerDefaults['selectedAgentKind'] {
+function selectedAgentKindFromRoute(route: ModelRoute | undefined): RemoteNewMakerDefaults['selectedAgentKind'] {
   if (route?.harness === 'claude') return 'claude-code';
   if (route?.harness === 'codex' || route?.harness === 'pi') return route.harness;
   return undefined;
@@ -368,7 +368,7 @@ export function getRemoteNewMakerDefaultsByVendor(): {
 }
 
 /** Read only the active owner’s current selection; never reuse another account’s mirror. */
-export function getSelectedNewMakerRoute(ownerScope: string): BotModelRoute | undefined {
+export function getSelectedNewMakerRoute(ownerScope: string): ModelRoute | undefined {
   return selectedRouteOwner === ownerScope ? cache?.selectedRoute : undefined;
 }
 

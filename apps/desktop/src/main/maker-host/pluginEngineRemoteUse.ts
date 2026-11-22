@@ -10,24 +10,43 @@
  *    ordinary provider's switch, keyed by the engine's task `providerId` (`acp-plugin:…`), off by
  *    default.
  *
- * Only computers of the same account get this: shared users and provider groups never see plugin
- * engines (the remote-agent host refuses them before it reaches this module).
+ * Cross-account provider sharing requires the plugin to additionally publish `guestWorkspace`
+ * (`--cindy-guest-workspace`), isolating sharer-personal CLI skills/config/history from guests.
  */
 import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/pluginHarnesses.js';
-import { pluginEngineKeyFromProviderId, pluginEngineProviderId } from '../../shared/pluginEngines.js';
+import { isPluginEngineModelDisabled, PLUGIN_ENGINE_DEFAULT_MODEL, pluginEngineKeyFromProviderId, pluginEngineProviderId } from '../../shared/pluginEngines.js';
+import { readPluginEnginePrefs } from './plugin-engine-prefs-store.js';
 import { isRemoteProviderInvocationAllowed, setRemoteProviderInvocationEnabled } from './remote-provider-access-store.js';
 
 export interface PluginEngineRemoteUse {
   /** The plugin says this engine can serve a task whose files are on another computer. */
   supported: boolean;
-  /** The user opened this engine for the owner's other computers. */
+  /** The user opened this engine for remote invocation. */
   enabled: boolean;
+  /** The plugin also isolates sharer-local config/skills (`guestWorkspace`) for cross-account sharing. */
+  shareSupported: boolean;
 }
 
-export function pluginEngineRemoteUse(harness: Pick<PluginHarness, 'key' | 'remoteWorkspace'>): PluginEngineRemoteUse {
+export function pluginEngineRemoteUse(
+  harness: Pick<PluginHarness, 'key' | 'remoteWorkspace' | 'guestWorkspace'>,
+): PluginEngineRemoteUse {
   const supported = harness.remoteWorkspace === true;
+  const shareSupported = supported && harness.guestWorkspace === true;
   // A switch left on from before the plugin dropped the mode must not read as usable.
-  return { supported, enabled: supported && isRemoteProviderInvocationAllowed(pluginEngineProviderId(harness.key)) };
+  return {
+    supported,
+    enabled: supported && isRemoteProviderInvocationAllowed(pluginEngineProviderId(harness.key)),
+    shareSupported,
+  };
+}
+
+/**
+ * The engine can run right now: its plugin does not report it unavailable and the user has not
+ * turned it off in Settings → Model providers (plugin-engine-prefs-store). Turning it off keeps
+ * the remote-use switch as it was, so turning it on again restores what was opened.
+ */
+function isPluginEngineUsable(harness: Pick<PluginHarness, 'key' | 'availability'>): boolean {
+  return harness.availability.state !== 'unavailable' && readPluginEnginePrefs(harness.key).suspended !== true;
 }
 
 /** The engine named by a task `providerId` can run a task of another computer right now. */
@@ -35,13 +54,37 @@ export function isPluginEngineOfferedRemotely(providerId: string | null | undefi
   const key = pluginEngineKeyFromProviderId(providerId);
   if (!key) return false;
   const harness = getPluginHarnessRegistry().list().find((item) => item.key === key);
-  return !!harness && harness.availability.state !== 'unavailable' && pluginEngineRemoteUse(harness).enabled;
+  return !!harness && isPluginEngineUsable(harness) && pluginEngineRemoteUse(harness).enabled;
+}
+
+/**
+ * The engine named by a task `providerId` can serve a cross-account shared friend right now:
+ * listed, not unavailable, remote use enabled, and `guestWorkspace` published by the plugin.
+ */
+export function isPluginEngineOfferedToGuests(providerId: string | null | undefined): boolean {
+  const key = pluginEngineKeyFromProviderId(providerId);
+  if (!key) return false;
+  const harness = getPluginHarnessRegistry().list().find((item) => item.key === key);
+  return !!harness
+    && isPluginEngineUsable(harness)
+    && harness.guestWorkspace === true
+    && pluginEngineRemoteUse(harness).enabled;
+}
+
+/**
+ * The user turned this model of the engine off in Settings → Model providers. Such a model is not
+ * in the list other computers read; this is the check on the computer that runs the engine, for a
+ * request that names it anyway (a choice saved before it was turned off).
+ */
+export function isPluginEngineModelTurnedOff(providerId: string | null | undefined, model = PLUGIN_ENGINE_DEFAULT_MODEL): boolean {
+  const key = pluginEngineKeyFromProviderId(providerId);
+  return !!key && isPluginEngineModelDisabled(model, readPluginEnginePrefs(key).disabledModels);
 }
 
 /** Any engine is currently offered to the owner's other computers. */
 export function hasPluginEngineOfferedRemotely(): boolean {
   return getPluginHarnessRegistry().list().some((harness) =>
-    harness.availability.state !== 'unavailable' && pluginEngineRemoteUse(harness).enabled);
+    isPluginEngineUsable(harness) && pluginEngineRemoteUse(harness).enabled);
 }
 
 /**
@@ -59,5 +102,5 @@ export async function setPluginEngineRemoteUse(key: string, enabled: boolean): P
     }
   }
   await setRemoteProviderInvocationEnabled(providerId, enabled);
-  return harness ? pluginEngineRemoteUse(harness) : { supported: false, enabled: false };
+  return harness ? pluginEngineRemoteUse(harness) : { supported: false, enabled: false, shareSupported: false };
 }

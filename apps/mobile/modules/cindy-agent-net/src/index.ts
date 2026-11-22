@@ -9,6 +9,14 @@ export interface AgentNetNativeModule {
    * with the `poll` command, false after `maxMs`. Meanwhile the engine receives, acknowledges and runs its timers by itself.
    */
   wait?(id: string, maxMs: number): Promise<boolean>;
+  /**
+   * `binary-io` binaries: one frame in, one out (`encodeNativeIo` in @cindy/agent-net). With `waitMs` > 0 it first waits as
+   * `wait` does and reads only once the engine has something for JS (an empty array otherwise). `kick`: afterwards a waiting
+   * call reads if the engine has something for JS.
+   */
+  io?(id: string, input: Uint8Array, waitMs: number, kick: boolean): Promise<Uint8Array>;
+  /** `binary-io` binaries: a waiting `io` call returns now and reads. Synchronous and cheap. */
+  kick?(id: string): void;
   beginNotificationScope?(): string;
   notificationScope?(): string | null;
   openNotification?(link: string): string | null;
