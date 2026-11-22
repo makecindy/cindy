@@ -1056,7 +1056,7 @@ export function AgentActionRow({
           ref={fileChipRef}
           data-agent-action-file-chip="true"
           className={cn(
-            'inline-flex items-center gap-[3px] px-[5px] py-[0.5px]',
+            'inline-flex items-center gap-0.5 px-1 py-[0.5px]',
             'rounded-[4px] border',
             'bg-[var(--chat-input-chip-bg)]',
             'border-[var(--chat-input-chip-border)]',
@@ -1133,7 +1133,7 @@ export function AgentActionRow({
         className={cn(
           'group flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
-          'px-2 py-[3px]',
+          'px-2 py-0.5',
           ACTIVITY_ROW_HOVER_SURFACE_CLASS,
           ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           'cursor-pointer select-none outline-none',
@@ -1178,7 +1178,7 @@ export function AgentActionRow({
         <div
           data-agent-action-raw-command="true"
           title={rawCommand}
-          className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-12 leading-[1.5] text-[var(--msg-tool-card-chevron)]"
+          className="min-w-0 truncate px-2 pb-0.5 pl-[30px] font-mono text-12 leading-[1.5] text-[var(--msg-tool-card-chevron)]"
         >
           {rawCommand}
         </div>
@@ -1207,7 +1207,7 @@ export function AgentActionRow({
           // 行按钮本身是 select-none,这里必须显式 select-text,让用户能复制
           // grep pattern、bash command 这种关键文本。
           className={cn(
-            'mx-2 mt-1 mb-1 rounded-[6px] px-[10px] py-2',
+            'mx-2 mt-1 mb-1 rounded-lg px-[10px] py-2',
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]',

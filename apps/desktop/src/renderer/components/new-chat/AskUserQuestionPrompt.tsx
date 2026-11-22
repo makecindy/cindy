@@ -1028,7 +1028,7 @@ function AskUserQuestionForm({
               className={cn(
                 'min-h-[22px] min-w-0 bg-transparent text-14 font-normal leading-[1.571] outline-none',
                 // One line beside the 32px actions; centred on them by the margin.
-                composerExpanded ? 'w-full' : 'my-[5px] flex-1',
+                composerExpanded ? 'w-full' : 'my-1 flex-1',
                 'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
                 'select-text',
               )}
@@ -1155,7 +1155,7 @@ function AskUserQuestionForm({
           <Tip text={currentQ.header}>
             <span
               tabIndex={0}
-              className="mr-3 inline-block min-w-0 truncate rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-12 font-medium text-[var(--ask-badge-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              className="mr-3 inline-block min-w-0 truncate rounded-full bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-12 font-medium text-[var(--ask-badge-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
               {currentQ.header}
             </span>
@@ -1290,7 +1290,7 @@ function AskUserQuestionForm({
               autoFocus
               className={cn(
                 'min-h-[22px] min-w-0 bg-transparent text-14 leading-[1.571] outline-none',
-                composerExpanded ? 'w-full' : 'my-[5px] flex-1',
+                composerExpanded ? 'w-full' : 'my-1 flex-1',
                 'text-[var(--ask-input-text)]',
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}
