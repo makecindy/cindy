@@ -47,6 +47,12 @@ const LATE_DIAL_MS = 1_000;
  * connection the previous process had, which the new transport would drop anyway.
  */
 const EARLY_DATAGRAMS = 32;
+/**
+ * Budget for dialing a direct UDP address remembered from the previous socket before falling back to the relay. A live LAN
+ * peer answers in a few ms (or ~220 ms if the first packet drops); a restarted peer whose port changed falls back quickly
+ * instead of waiting out the full 3 s handshake deadline.
+ */
+const REMEMBERED_CANDIDATE_DIAL_MS = 350;
 /** Declared with session support between devices of one account: presence travels on the session (`presence` message). */
 const SESSION_PRESENCE_FEATURE = 'presence-v1';
 /**
@@ -144,6 +150,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private rosterValidUntil = 0;
   private lan: SocketDiscovery | null = null;
   private lanCandidates = new Map<string, { address: string; port: number }>();
+  private readonly rememberedCandidates = new Set<string>();
+  private openingRelay: Promise<void> | null = null;
   private directoryRevision = 0;
   private directoryRefresh: ReturnType<typeof setInterval> | undefined;
   private refreshingDirectory = false;
@@ -159,10 +167,40 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     // A cached online bit is not current liveness. Wait for authenticated
     // discovery instead of occupying the first cold-start dial with a dead relay.
     socket.updateDirectory((options.cachedDirectory ?? []).map(view => ({ ...view, online: false })), false);
-    try { await socket.connectRelay(); }
-    catch (error) {
-      if (socket.closed || socket.roster.size === 0) { socket.close(); throw error; }
-      socket.scheduleReconnect();
+    for (const [id, address] of options.initialCandidates ?? []) {
+      if (socket.authorized(id)) {
+        socket.lanCandidates.set(id, address);
+        socket.rememberedCandidates.add(id);
+      }
+    }
+    let relayError: unknown;
+    let relayDone: Promise<void> | null = null;
+    if (!options.deferRelay || socket.roster.size === 0) {
+      try { await socket.connectRelay(); }
+      catch (error) {
+        if (socket.closed || socket.roster.size === 0) { socket.close(); throw error; }
+        socket.scheduleReconnect();
+      }
+    } else {
+      let finishOpeningRelay!: () => void;
+      socket.openingRelay = new Promise<void>(resolve => { finishOpeningRelay = resolve; });
+      relayDone = socket.connectRelay().then(() => {
+        socket.openingRelay = null;
+        finishOpeningRelay();
+      }, error => {
+        relayError = error;
+        socket.openingRelay = null;
+        finishOpeningRelay();
+        if (socket.ready && !socket.closed) {
+          for (const [id, view] of socket.roster) {
+            if (id !== socket.deviceId && !socket.peers.has(id) && !socket.dialing.has(id)
+              && !socket.lanCandidates.has(id) && !(view.online && socket.memberAccepted(id))) {
+              socket.presence(id, false);
+            }
+          }
+        }
+        if (!socket.closed && socket.roster.size > 0) socket.scheduleReconnect();
+      });
     }
     try {
       socket.transport = await options.bindings.createTransport({
@@ -186,11 +224,21 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
           certificateFor: (id) => socket.authorized(id) ? socket.roster.get(id)?.certificate : undefined,
           onCandidate(id, address) {
             if (!socket.authorized(id)) return;
+            socket.rememberedCandidates.delete(id);
             socket.lanCandidates.set(id, address);
+            options.onDirectAddress?.(id, address);
             if (socket.ready && !socket.peers.has(id)) void socket.dial(id).catch(() => undefined);
           },
         });
         socket.lan.start();
+      }
+      if (relayDone) {
+        if (relayError !== undefined && socket.closed) { socket.close(); throw relayError; }
+        for (const id of socket.lanCandidates.keys()) {
+          if (!socket.peers.has(id)) void socket.dial(id).catch(() => {
+            if (!socket.openingRelay && !socket.peers.has(id) && !socket.roster.get(id)?.online) socket.presence(id, false);
+          });
+        }
       }
       socket.directoryRefresh = setInterval(() => { void socket.refreshDirectory().catch(() => undefined); }, 6 * 60 * 60_000);
       unrefTimer(socket.directoryRefresh);
@@ -242,12 +290,19 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
    */
   async connectSession(key: string): Promise<boolean> {
     if (this.closed || !this.sessionConfig) return false;
+    if (!this.options.client.delegation && this.roster.has(key) && this.sessionScope(key)
+      && !this.peers.has(key) && !this.dialing.has(key) && !this.lanCandidates.has(key)
+      && this.roster.get(key)!.online !== true && this.openingRelay) {
+      await this.openingRelay;
+      if (this.closed || !this.sessionConfig) return false;
+    }
     const deviceId = this.sessions.get(key)?.deviceId
       ?? (this.options.client.delegation ? this.scopedPeerTarget(key)?.relayId
-        : this.roster.has(key) && this.sessionScope(key) && (this.peers.has(key) || this.roster.get(key)!.online === true) ? key : undefined);
+        : this.roster.has(key) && this.sessionScope(key)
+          && (this.peers.has(key) || this.dialing.has(key) || this.lanCandidates.has(key) || this.roster.get(key)!.online === true) ? key : undefined);
     if (!deviceId) return false;
     if (!this.peers.has(deviceId)) {
-      try { await this.dial(deviceId); } catch { return false; }
+      try { await this.dial(deviceId); } catch { return this.peers.has(deviceId); }
     }
     return this.peers.has(deviceId);
   }
@@ -346,7 +401,14 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
     try { await this.connectRelay(); } catch (error) { if (!this.closed) this.scheduleReconnect(); throw error; }
   }
-  supports(deviceId: string): boolean { return this.authorized(deviceId) && (this.peers.has(deviceId) || this.roster.get(deviceId)?.online === true); }
+  supports(deviceId: string): boolean {
+    return this.authorized(deviceId) && (this.peers.has(deviceId) || this.roster.get(deviceId)?.online === true);
+  }
+  /** True while `connectSession` has an active or pending V2 path to try (connected, online, dialing/LAN candidate, or initial relay handshake opening). */
+  canConnectSession(deviceId: string): boolean {
+    return this.supports(deviceId) || (this.authorized(deviceId)
+      && (this.dialing.has(deviceId) || this.lanCandidates.has(deviceId) || (this.openingRelay !== null && this.roster.has(deviceId))));
+  }
   /** A previously certified V2 peer must not silently downgrade when its relay session disappears. */
   knowsPeer(deviceId: string): boolean { return this.knownV2.has(deviceId); }
   /**
@@ -382,14 +444,20 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     const key = this.transportKey(deviceId);
     if (!key || !this.authorized(deviceId)) throw new Error('UNAUTHORIZED_PEER');
     const lan = this.lanCandidates.get(deviceId);
-    const entry: RosterEntry = { id: keyHex(key), dial: { relayId: deviceId, ...(lan ? { udp: lan, preferUdp: true } : {}) } };
+    const remembered = lan !== undefined && this.rememberedCandidates.has(deviceId);
+    const entry: RosterEntry = { id: keyHex(key), dial: { relayId: deviceId,
+      ...(lan ? { udp: lan, preferUdp: true, ...(remembered ? { timeoutMs: REMEMBERED_CANDIDATE_DIAL_MS } : {}) } : {}) } };
     const connect = async () => {
       try { return await this.transport.connect(entry); }
       catch (error) {
+        if (lan && this.lanCandidates.get(deviceId) === lan) {
+          this.lanCandidates.delete(deviceId);
+          this.rememberedCandidates.delete(deviceId);
+        }
+        if (lan && !this.uplink && this.openingRelay) await this.openingRelay;
         if (!lan || !this.uplink || !this.authorized(deviceId) || keyHex(this.transportKey(deviceId)!) !== entry.id) throw error;
         // A remembered LAN address may belong to the previous network. Retire
         // only that candidate and retry this peer through its authenticated relay.
-        if (this.lanCandidates.get(deviceId) === lan) this.lanCandidates.delete(deviceId);
         return this.transport.connect({ id: entry.id, dial: { relayId: deviceId } });
       }
     };
@@ -547,7 +615,10 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     return a.issuedAt !== b.issuedAt ? a.issuedAt > b.issuedAt : a.deviceId > b.deviceId;
   }
   private dropUnauthorizedPeers(): void {
-    for (const id of this.lanCandidates.keys()) if (!this.authorized(id)) this.lanCandidates.delete(id);
+    for (const id of this.lanCandidates.keys()) if (!this.authorized(id)) {
+      this.lanCandidates.delete(id);
+      this.rememberedCandidates.delete(id);
+    }
     for (const [id, peer] of this.peers) if (!this.authorized(id) || keyHex(this.transportKey(id)!) !== peer.key) {
       this.peers.delete(id); peer.channel.close({ drain: false }); this.presence(id, false);
     }
@@ -561,7 +632,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private dialRoster(): void {
     if (!this.ready) return;
     for (const [id, view] of this.roster) if (!this.peers.has(id)) {
-      this.presence(id, false);
+      if (!this.openingRelay && !this.dialing.has(id) && !this.lanCandidates.has(id) && !(view.online && this.memberAccepted(id))) {
+        this.presence(id, false);
+      }
       this.dialOnline(id, view);
     }
     this.arrived();
@@ -572,7 +645,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
    */
   private dialOnline(id: string, view: DeviceView): void {
     if (!view.online || id === this.deviceId || !this.memberAccepted(id)) return;
-    if (this.deviceId < id || this.arriving) void this.dial(id).catch(() => this.scheduleRedial(id));
+    const offlineIfUnconnected = () => { if (!this.peers.has(id)) this.presence(id, false); };
+    if (this.deviceId < id || this.arriving) void this.dial(id).catch(() => { offlineIfUnconnected(); this.scheduleRedial(id); });
     else this.scheduleRedial(id);
   }
   /** The directory just dialed from was the relay's, not the cached one a socket opens with while the relay is unreachable. */
@@ -628,6 +702,10 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   }
   /** See Transport.relayRoute (the worker reports it to the Desktop with each status snapshot). */
   relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
+  /** Whether the relay WebSocket is currently up; false while offline or after an upgrade rejection fell back to cached directory. */
+  relayConnected(): boolean { return !this.closed && this.uplink !== null; }
+  /** Resolves once the background initial relay connection attempt (`deferRelay`) finishes. */
+  whenInitialRelaySettled(): Promise<void> { return this.openingRelay ?? Promise.resolve(); }
   /**
    * Which members of this account's directory to accept although their certificates are valid: the host's own membership
    * rule on top of the relay's (the Desktop accepts only devices in the account's Device Link device list, so a device
@@ -657,6 +735,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       throw error;
     }
     if (this.closed || generation !== this.generation) { uplink.close(); return; }
+    this.openingRelay = null;
     this.uplink = uplink; this.retryMs = 500;
     if (this.resendWhenRelayBack) { this.resendWhenRelayBack = false; this.transport?.networkChanged?.(); }
     this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
@@ -709,7 +788,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       if (!this.options.client.delegation) this.uplink?.presence(this.localHello.remoteControlEnabled, this.localHello.capabilities ?? [], this.localHello);
       this.acknowledgeHello();
       for (const [id, view] of this.roster) if (id !== this.deviceId) {
-        this.presence(id, false);
+        if (!this.openingRelay && !this.peers.has(id) && !this.dialing.has(id) && !this.lanCandidates.has(id) && !(view.online && this.memberAccepted(id))) {
+          this.presence(id, false);
+        }
         this.dialOnline(id, view);
       }
       this.arrived();
@@ -717,7 +798,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         if (peer.info) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
         this.sendPresence(peer);
       }
-      for (const id of this.lanCandidates.keys()) if (!this.peers.has(id)) void this.dial(id).catch(() => undefined);
+      for (const id of this.lanCandidates.keys()) if (!this.peers.has(id)) {
+        void this.dial(id).catch(() => { if (!this.openingRelay && !this.peers.has(id) && !this.roster.get(id)?.online) this.presence(id, false); });
+      }
       return;
     }
     if (frame.kind === 'ping') { this.deliver({ v: PROTOCOL_VERSION, kind: 'pong' }); return; }
@@ -847,7 +930,16 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.attachSession(deviceId, peer);
     this.sendPresence(peer);
     for (const item of this.pending.get(deviceId) ?? []) { this.pendingBytes -= item.bytes; this.write(peer, item.frame); }
-    this.pending.delete(deviceId); this.options.onPathChanged?.(deviceId, channel.path?.() ?? null);
+    this.pending.delete(deviceId);
+    const direct = channel.directAddress?.();
+    if (direct) this.options.onDirectAddress?.(deviceId, direct);
+    this.options.onPathChanged?.(deviceId, channel.path?.() ?? null);
+    channel.onPathChange?.((path) => {
+      if (this.peers.get(deviceId) !== peer) return;
+      const updated = channel.directAddress?.();
+      if (updated) this.options.onDirectAddress?.(deviceId, updated);
+      this.options.onPathChanged?.(deviceId, path);
+    });
   }
   /**
    * Where this node's presence goes to a peer: on its session when both declared `SESSION_PRESENCE_FEATURE` (then nothing
@@ -967,7 +1059,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.notificationAbort.abort(); this.notifyQueue = [];
     for (const timer of this.redials.values()) clearTimeout(timer);
     this.redials.clear();
-    this.lan?.close(); this.lan = null; this.lanCandidates.clear();
+    this.lan?.close(); this.lan = null; this.lanCandidates.clear(); this.rememberedCandidates.clear(); this.openingRelay = null;
     if (this.directoryRefresh) clearInterval(this.directoryRefresh); this.directoryRefresh = undefined;
     if (this.reconnect) clearTimeout(this.reconnect);
     this.reconnect = null; this.uplink?.close(); this.uplink = null;

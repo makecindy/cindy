@@ -48,12 +48,17 @@ export interface PortableSocketOptions {
   scoped?: boolean;
   cachedDirectory?: DeviceView[];
   directoryExpiresAt?: number;
+  /** Verified direct UDP addresses from the previous socket on the same local network, tried first on open. */
+  initialCandidates?: ReadonlyMap<string, { address: string; port: number }>;
+  /** Resolve `openWithBindings` as soon as the local transport is ready while the initial relay handshake finishes in the background. */
+  deferRelay?: boolean;
   /** Which directory members to accept from the start (see `AgentNetSocket.restrictPeers`). */
   peerRule?: PeerRule;
   onDirectory?(directory: DeviceView[]): void;
   onDelegationRequests?(requests: DelegationRequest[]): void;
   onDelegations?(delegations: Delegation[]): void;
   onPathChanged?(deviceId: string, path: 'direct' | 'relay' | null): void;
+  onDirectAddress?(deviceId: string, address: { address: string; port: number }): void;
   bindings: {
     notify?(recipient: DeviceView, payload: import('@cindy/device-link-protocol').NotifyPayload, signal: AbortSignal, client: SocketClient): Promise<void>;
     verifyCertificate(rootPublicKey: string, certificate: DeviceCertificate, now?: number): boolean;

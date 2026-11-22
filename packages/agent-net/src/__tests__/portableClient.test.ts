@@ -333,3 +333,86 @@ it('keeps media on the relay when the client cannot bind chunks with MD5', async
   await value.api.putMediaChunk(created.id, 0, Buffer.from('x'));
   expect(value.calls).toEqual(['POST relay.example.test/api/agent-net/media', 'PUT relay.example.test/api/agent-net/media/object-1']);
 });
+
+/** 测试价值
+ * - 生产入口与可观察结果：PortableAgentNetClient.connect 返回的手机端中转 WebSocket 上行（PortableUplink.send / close）。
+ *   底层发送缓冲持续排不空满 1 秒后丢弃新的中转 UDP 封装包（不再往半开连接里堆积）；满 45 秒仍未排空且无新消息排空时主动关闭并上报
+ *   close(1006)，交由 AgentNetSocket 重建中转连接；中途缓冲排空则清除卡死计时、连接保留。
+ * - Bug／规则依据：React Native 的 WebSocket 没有控制帧 ping，而 Agent-Net 中转服务端（server.ts）拒绝除 presence 以外的客户端文本帧。
+ *   对齐桌面端 DatagramSendQueue（1 秒丢包）与 AGENT_NET_UPLINK_KEEPALIVE（45 秒超时）。
+ * - 现有覆盖缺口：已有测试只覆盖媒体流超时与握手文本帧，未覆盖 WebSocket 发送缓冲长期不排空的半开保护与恢复。
+ * - 最小失败输入：一条已握手的 PortableUplink、两次相隔 1.1 秒的发包，以及 20 秒排空恢复／45 秒未排空关闭两分支。
+ * - tier：unit，真实签名握手与二进制封装，内存 BinarySocket + 假计时器；约 10 毫秒。 */
+it.each([
+  ['closes the half-open socket after 45 s', 'dead'],
+  ['recovers once bufferedAmount drains', 'drains'],
+  ['keeps sending when bufferedAmount is undefined (React Native)', 'undefined'],
+] as const)(
+  'handles WebSocket send-buffer tracking: %s', async (_label, mode) => {
+    vi.useFakeTimers();
+    const identity = generateIdentity('uplink-stall'), { bootstrap } = createPrivateNetwork('Uplink stall', identity);
+    let receive: BinarySocket['onmessage'] = null, ready!: () => void;
+    const listening = new Promise<void>(resolve => { ready = resolve; });
+    let stalled = mode !== 'undefined';
+    const send = vi.fn((payload: string | Uint8Array) => {
+      if (stalled && payload instanceof Uint8Array) ws.bufferedAmount += payload.byteLength;
+    });
+    const close = vi.fn();
+    const ws: BinarySocket = { readyState: 1, bufferedAmount: (mode === 'undefined' ? undefined : 0) as unknown as number,
+      binaryType: '', onerror: null, onclose: null,
+      get onmessage() { return receive; }, set onmessage(callback) { receive = callback; ready(); }, send, close };
+    const api = new PortableAgentNetClient('https://relay.example.test', { identity,
+      sign: async text => signature(identity.signingPrivateKey, text), random: async () => Buffer.alloc(32, 19).toString('base64url') },
+      bootstrap.ownerCertificate, bootstrap.rootPublicKey, { verifyCertificate, assertCurrent() {},
+        sha256: value => createHash('sha256').update(value).digest('base64url'), createWebSocket: () => ws });
+    const connected = api.connect();
+    await listening;
+    ws.onmessage!({ data: JSON.stringify({ type: 'hello', deviceId: identity.deviceId, protocolVersion: 2,
+      devices: [{ certificate: bootstrap.ownerCertificate, name: 'Phone', online: true, remoteControlEnabled: false, capabilities: [] }], delegations: [] }) });
+    const uplink = await connected;
+    const closed = vi.fn();
+    uplink.once('close', closed);
+    try {
+      uplink.send('peer-a', Uint8Array.of(1, 2, 3));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenCalledTimes(1);
+
+      if (mode === 'undefined') {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(close).not.toHaveBeenCalled();
+        expect(closed).not.toHaveBeenCalled();
+        uplink.send('peer-a', Uint8Array.of(4, 5, 6));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(send).toHaveBeenCalledTimes(2);
+        return;
+      }
+
+      expect(ws.bufferedAmount).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(1_100);
+      uplink.send('peer-a', Uint8Array.of(4, 5, 6));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+
+      if (mode === 'drains') {
+        await vi.advanceTimersByTimeAsync(20_000);
+        stalled = false;
+        ws.bufferedAmount = 0;
+        ws.onmessage!({ data: JSON.stringify({ type: 'directory', deviceId: identity.deviceId,
+          devices: [{ certificate: bootstrap.ownerCertificate, name: 'Phone', online: true, remoteControlEnabled: false, capabilities: [] }], delegations: [] }) });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(close).not.toHaveBeenCalled();
+        expect(closed).not.toHaveBeenCalled();
+        uplink.send('peer-a', Uint8Array.of(7, 8));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(send).toHaveBeenCalledTimes(2);
+      } else {
+        await vi.advanceTimersByTimeAsync(44_000);
+        expect(close).toHaveBeenCalledOnce();
+        expect(closed).toHaveBeenCalledExactlyOnceWith(1006);
+      }
+    } finally {
+      uplink.close();
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });

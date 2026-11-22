@@ -24,14 +24,60 @@ import { isScopedPeer } from '@cindy/device-link';
 
 let current: { socket: AgentNetSocket; guard(): void } | null = null;
 let openAttempt = 0;
+let refusedSelection: string | null = null;
 function live(): AgentNetSocket | null {
   try { current?.guard(); return current?.socket ?? null; } catch { return null; }
+}
+function refusalScope(): string | null {
+  const owner = getMobileAuthOwner();
+  if (!owner.accountKey) return null;
+  return JSON.stringify([owner.accountKey, getSelfHostedRelayRouteGeneration(), getMobileAgentNetPreferences().generation]);
+}
+/** True once the Agent-Net service refused this phone's identity (e.g. permanently revoked on removal); resets on account/route/preference change. */
+export function mobileAgentNetIdentityRefused(): boolean {
+  const scope = refusalScope();
+  return scope !== null && refusedSelection === scope;
+}
+function isMobileIdentityRefusal(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : '';
+  const status = (error as { status?: unknown } | null)?.status;
+  const code = (error as { code?: unknown } | null)?.code;
+  return /^AGENT_NET_UPGRADE_(401|403)$/.test(message)
+    || status === 401 || status === 403
+    || code === 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL'
+    || code === 'DEVICE_REVOKED';
+}
+function noteMobileIdentityRefused(): boolean {
+  if (mobileAgentNetRequiresEncryption()) return false;
+  const scope = refusalScope();
+  if (!scope) return false;
+  refusedSelection = scope;
+  return true;
 }
 
 // ─── Sessions (docs/agent-net-session-plan.md §10, stage 4), as the Desktop's agentNetRuntime.ts ───────────────────
 let sessionConfig: SessionConfig | null = null;
 /** When this phone's connection to each peer came up (or changed), `performance.now()`; the session layer waits briefly after it. */
 const peerConnectedAt = new Map<string, number>();
+/**
+ * Verified direct UDP addresses from the previous socket on the same local IP (process memory only, never persisted;
+ * cleared on account/route/preference change and on physical route switches). Lets a foreground resume dial LAN computers
+ * straight away without waiting for the relay WebSocket and relay UDP registration first.
+ */
+const MAX_REMEMBERED_DIRECT = 64;
+const rememberedDirect = new Map<string, { address: string; port: number; localIp: string | null }>();
+let lastKnownLocalIp: string | null = null;
+function isPrivateAddress(address: string): boolean {
+  if (address.includes(':')) return /^(fe80:|fc|fd)/i.test(address);
+  const [a, b] = address.split('.').map(Number);
+  return a === 10 || a === 127 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168)
+    || (a === 100 && b >= 64 && b < 128) || (a === 169 && b === 254);
+}
+function rememberDirectAddress(deviceId: string, address: { address: string; port: number }, localIp: string | null): void {
+  if (rememberedDirect.has(deviceId)) rememberedDirect.delete(deviceId);
+  else if (rememberedDirect.size >= MAX_REMEMBERED_DIRECT) rememberedDirect.delete(rememberedDirect.keys().next().value!);
+  rememberedDirect.set(deviceId, { address: address.address, port: address.port, localIp });
+}
 /**
  * Turns Agent-Net sessions on for this phone's connections: the main one (same account) and each shared task's own
  * (cross-account, as a guest). Two new nodes then talk on sessions instead of Device Link frames; with an older computer,
@@ -63,7 +109,7 @@ export function mobileAgentNetPeerState(peer: string): 'online' | 'offline' | nu
   if (isScopedPeer(peer)) return mobileAgentNetSharingReachable(peer) ? 'online' : null;
   const socket = live();
   if (!socket || !isMobileAgentNetActive() || !socket.knowsPeer(peer)) return null;
-  return socket.supports(peer) ? 'online' : 'offline';
+  return socket.canConnectSession(peer) ? 'online' : 'offline';
 }
 export function mobileAgentNetPeerRoute(peer: string): { path: 'direct' | 'relay' | null; rttMs: number | null } {
   const socket = live();
@@ -75,6 +121,10 @@ export function mobileAgentNetPeerConnectedAt(peer: string): number | null { ret
  * (Wi-Fi ↔ cellular, lost and back) also replaces the relay connection, which may sit half-open on the old route.
  */
 export function notifyMobileAgentNetNetworkChanged(options?: { routeChanged?: boolean }): void {
+  if (options?.routeChanged) {
+    rememberedDirect.clear();
+    lastKnownLocalIp = null;
+  }
   const socket = live();
   if (options?.routeChanged) socket?.replaceRelayConnection(); else socket?.networkChanged();
 }
@@ -134,6 +184,7 @@ export function isMobileAgentNetActive(): boolean {
   // 只走 V2 的网络(别人分享来的中转)不看「启用 Agent-Net」开关:没有旧版可退。
   if (isAgentNetOnlyRoute(route)) return settings.ready && MobileAgentNetEngine.available() && !!route!.signing?.agentNet?.certificate;
   return settings.ready && settings.enabled && MobileAgentNetEngine.available()
+    && !mobileAgentNetIdentityRefused()
     && (route ? !!route.signing?.agentNet : !!getOfficialAgentNetApiBaseUrl());
 }
 export function mobileAgentNetShouldUseLegacyPeer(id: string): boolean { return live()?.knowsPeer(id) === false; }
@@ -181,9 +232,12 @@ export function verifyMobileAgentNetTransportProof(peer: string, requestId: stri
 }
 export function stopMobileAgentNetRuntime(): void {
   openAttempt++;
+  refusedSelection = null;
   const previous = current; current = null;
   previous?.socket.close();
   peerConnectedAt.clear();
+  rememberedDirect.clear();
+  lastKnownLocalIp = null;
   deviceListReader = null;
   membership.reset();
   clearMobileAgentNetNotifications();
@@ -208,21 +262,17 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
     }
   };
   guard();
-  let identity = await ensureMobileAgentNetIdentity(options); guard();
-  const cached = await readMobileAgentNetDirectory(identity); guard();
-  const cachedDirectory = [...(cached?.devices ?? [])];
-  // Match Desktop's offline startup: our validated local certificate keeps the
-  // node alive for V1 compatibility, without authorizing any unknown remote peer
-  // or extending the cached directory's original validity window.
-  if (!cachedDirectory.some(view => view.certificate.deviceId === identity.api.identity.deviceId)) {
-    cachedDirectory.push({ certificate: identity.api.certificate, name: '', online: false, remoteControlEnabled: false, capabilities: [] });
-  }
   // Read again on every network change, for this phone's candidates (NativeTransport.networkChanged).
   const addresses = async (): Promise<string[]> => {
-    try { const address = await Network.getIpAddressAsync(); return address && address !== '0.0.0.0' ? [address] : []; }
-    catch { return []; /* Relay remains available without a local candidate. */ }
+    try {
+      const address = await Network.getIpAddressAsync();
+      const valid = address && address !== '0.0.0.0' ? address : null;
+      if (attempt === openAttempt) lastKnownLocalIp = valid;
+      return valid ? [valid] : [];
+    } catch { return []; /* Relay remains available without a local candidate. */ }
   };
   const official = preferences.enabled && !getActiveSelfHostedRelay();
+  let membershipReady: Promise<void> = Promise.resolve();
   if (official) {
     deviceListReader = async () => {
       guard();
@@ -236,19 +286,68 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
       return list.devices.map(device => device.deviceId);
     };
     if (!membership.hasDeviceList()) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([membership.prime(), new Promise<void>(resolve => { timer = setTimeout(resolve, 3_000); })]);
-      } finally { clearTimeout(timer); }
-      guard();
+      membershipReady = (async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([membership.prime(), new Promise<void>(resolve => { timer = setTimeout(resolve, 3_000); })]);
+        } finally { clearTimeout(timer); }
+      })();
     }
   }
+  const initialIpsPromise = preferences.enabled ? addresses() : Promise.resolve<string[]>([]);
+  let identity: Awaited<ReturnType<typeof ensureMobileAgentNetIdentity>>;
+  try {
+    identity = await ensureMobileAgentNetIdentity(options); guard();
+  } catch (error) {
+    if (isMobileIdentityRefusal(error) && noteMobileIdentityRefused()) throw new Error('AGENT_NET_IDENTITY_REFUSED');
+    throw error;
+  }
+  const enginePromise = identity.newTransportEngine(guard, preferences.enabled);
+  enginePromise.catch(() => undefined);
+  let cached: Awaited<ReturnType<typeof readMobileAgentNetDirectory>>;
+  let engine: MobileAgentNetEngine;
+  let initialIps: string[];
+  try {
+    [cached, engine, initialIps] = await Promise.all([
+      readMobileAgentNetDirectory(identity),
+      enginePromise,
+      initialIpsPromise,
+      membershipReady,
+    ]);
+    guard();
+  } catch (error) {
+    void enginePromise.then(created => created.destroy()).catch(() => undefined);
+    throw error;
+  }
+  const cachedDirectory = [...(cached?.devices ?? [])];
+  // Match Desktop's offline startup: our validated local certificate keeps the
+  // node alive for V1 compatibility, without authorizing any unknown remote peer
+  // or extending the cached directory's original validity window.
+  if (!cachedDirectory.some(view => view.certificate.deviceId === identity.api.identity.deviceId)) {
+    cachedDirectory.push({ certificate: identity.api.certificate, name: '', online: false, remoteControlEnabled: false, capabilities: [] });
+  }
+  const localIp = initialIps[0] ?? null;
+  const initialCandidates = new Map<string, { address: string; port: number }>();
+  if (preferences.enabled && cached?.devices.length) {
+    const cachedIds = new Set(cached.devices.map(view => view.certificate.deviceId));
+    for (const [deviceId, item] of rememberedDirect) {
+      if (deviceId === identity.api.identity.deviceId || !cachedIds.has(deviceId)) continue;
+      if (isPrivateAddress(item.address) && (!localIp || item.localIp !== localIp)) continue;
+      initialCandidates.set(deviceId, { address: item.address, port: item.port });
+    }
+  }
+  let firstAddressRead = true;
+  const readAddresses = async (): Promise<string[]> => {
+    if (firstAddressRead) { firstAddressRead = false; return initialIps; }
+    return addresses();
+  };
+  const connectedDuringOpen = new Map<string, number>();
   let openingDirectory = cachedDirectory.map(view => ({ deviceId: view.certificate.deviceId, online: false }));
-  const engine = await identity.newTransportEngine(guard, preferences.enabled);
   try {
     const socket = await AgentNetSocket.openWithBindings({
       client: identity.api, assertCurrent: guard, userId: owner.accountId,
       cachedDirectory, directoryExpiresAt: cached?.expiresAt,
+      ...(initialCandidates.size > 0 ? { initialCandidates, deferRelay: true } : {}),
       ...(official ? { peerRule: membership.rule() } : {}),
       onDirectory: devices => {
         void writeMobileAgentNetDirectory(identity, devices).catch(() => undefined);
@@ -259,16 +358,28 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         }
       },
       onPathChanged: (deviceId, path) => {
-        if (current?.guard !== guard) return;
-        if (path) peerConnectedAt.set(deviceId, performance.now()); else peerConnectedAt.delete(deviceId);
+        if (attempt !== openAttempt) return;
+        const target = current?.guard === guard ? peerConnectedAt : connectedDuringOpen;
+        if (path) target.set(deviceId, performance.now()); else target.delete(deviceId);
+      },
+      onDirectAddress: (deviceId, address) => {
+        if (attempt !== openAttempt) return;
+        rememberDirectAddress(deviceId, address, lastKnownLocalIp);
       },
       bindings: {
         verifyCertificate: verifyMobileAgentNetCertificate,
         verifyDelegation: verifyMobileAgentNetDelegation,
         notify: (recipient, payload, signal) => sendMobileAgentNetNotification(identity, recipient, payload, signal, guard),
-        createTransport: async options => {
-          const transport = await NativeTransport.create(engine, options, addresses, preferences.enabled);
+        createTransport: async transportOptions => {
           const base = identity.api.base;
+          const cachedRelay = base && preferences.enabled ? relayInfo.get(base) : undefined;
+          const knownServer = cachedRelay && Date.now() < cachedRelay.nextReadAt && cachedRelay.server ? cachedRelay.server : undefined;
+          const transport = await NativeTransport.create(
+            engine,
+            knownServer ? { ...transportOptions, relayUdpServer: knownServer } : transportOptions,
+            readAddresses,
+            preferences.enabled,
+          );
           const udp = preferences.enabled && (transport.supports('stun') || transport.supports('relay-udp-v2'));
           const privateNetwork = preferences.enabled && identity.api.certificate.networkId.startsWith('private:');
           if (base && (udp || privateNetwork)) {
@@ -276,7 +387,7 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
             void readRelayInfo(base).then(info => {
               guard();
               if (privateNetwork) setMobileAgentNetPrivateSharingSupport(base, identity.api.rootPublicKey, info.privateSharing);
-              if (udp && info.server) return transport.configureUdpServer(info.server);
+              if (udp && info.server && info.server !== knownServer) return transport.configureUdpServer(info.server);
             }).catch(() => undefined);
           }
           return transport;
@@ -289,6 +400,7 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
     const previous = current; current = { socket, guard };
     previous?.socket.close();
     peerConnectedAt.clear();
+    for (const [id, at] of connectedDuringOpen) peerConnectedAt.set(id, at);
     if (official) {
       socket.restrictPeers(membership.rule());
       membership.noteDirectory(openingDirectory);
@@ -321,6 +433,22 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
       if (renewal) clearTimeout(renewal); foreground.remove();
       if (current?.socket === socket) { current = null; peerConnectedAt.clear(); }
     });
+    if (!mobileAgentNetRequiresEncryption() && typeof identity.api.directory === 'function') {
+      // On React Native / server.ts `!active(principal)` (`socket.destroy()`), a revoked identity fails the WS upgrade as a
+      // generic socket error and `cachedDirectory` keeps `openWithBindings` alive, hiding Device Link's 4410 removal state or
+      // stranding a re-signed-in phone. Confirm once via `/directory` only when the initial WS relay attempt failed.
+      void (socket.whenInitialRelaySettled?.() ?? Promise.resolve()).then(async () => {
+        if (current?.socket !== socket || socket.relayConnected?.() !== false) return;
+        try { await identity.api.directory(); }
+        catch (error) {
+          if (current?.socket === socket && isMobileIdentityRefusal(error) && noteMobileIdentityRefused()) socket.close(1006);
+        }
+      });
+    }
     return socket;
-  } catch (error) { await engine.destroy(); throw error; }
+  } catch (error) {
+    await engine.destroy();
+    if (isMobileIdentityRefusal(error)) noteMobileIdentityRefused();
+    throw error;
+  }
 }
