@@ -3190,6 +3190,34 @@ it('applies a provider generation time that arrives after the usage it belongs t
   }
 });
 
+// Seen in a real Codex turn on this Mac: the provider's running total started again from a
+// small number mid-turn, and every later response lost its reading when timings were matched
+// by running total. Unit tier, translator entry points; smallest input: two tool calls whose
+// totals go 90 then 60.
+it('keeps matching provider timings after their running total starts again', () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(0);
+    const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+    const ids = { threadId: 't', turnId: 'turn' };
+    beginCodexGenerationTurn(rt, 'turn', 0);
+    const toolCall = (id: string, at: number, total: number, samplingMs: number, outputTokens: number) => {
+      vi.setSystemTime(at);
+      noteCodexResponseEnded(rt, 'turn');
+      noteCodexResponseTiming(rt, { turnId: 'turn', sampledTokensTotal: total, samplingMs });
+      translateItemNotification('started', { ...ids, item: { type: 'commandExecution', id, command: 'ls' } }, q, ctx);
+      vi.setSystemTime(at + 100);
+      translateItemNotification('completed', { ...ids, item: { type: 'commandExecution', id, command: 'ls', status: 'completed' } }, q, ctx);
+      settleCodexSpeedUsage(rt, { outputTokens, reasoningOutputTokens: 0 });
+      return codexSpeedSnapshot(rt)?.measurement?.latest?.rate;
+    };
+    expect(toolCall('a', 2_000, 90, 900, 90)).toBeCloseTo(100, 5);
+    expect(toolCall('b', 4_000, 60, 1_200, 60)).toBeCloseTo(50, 5);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 // Review of the speed meter (PR 9597): output that streams while a tool owns the turn, and
 // waits for the user, used to leak into the next response's speed. Unit tier, translator entry points.
 describe('codex speed around unpaired output and human waits', () => {

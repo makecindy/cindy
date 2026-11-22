@@ -125,10 +125,15 @@ export interface CodexRuntimeState {
    * streamed item does. Never reset: it describes the app-server, not a turn.
    */
   responseEndSignals: boolean;
-  /** Provider-reported generation times not yet matched to a finished response. */
-  pendingServerTimings: Array<{ turnId: string; sampledTokensTotal: number; samplingMs: number }>;
+  /**
+   * Provider-reported generation times not yet matched to a finished response, with the
+   * tokens of that one response (the provider reports a running total).
+   */
+  pendingServerTimings: Array<{ turnId: string; tokens: number; samplingMs: number }>;
+  /** The provider's running total last seen in this native turn; it restarts on a new scope. */
+  serverTimingTotal: number;
   /** The newest finished response, for a generation time that arrives after its usage. */
-  lastSettledResponse: { turnId: string; outputTokensTotal: number; requestIndex: number } | null;
+  lastSettledResponse: { turnId: string; outputTokens: number; requestIndex: number } | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
   /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
@@ -189,6 +194,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationTurnId: null,
     responseEndSignals: false,
     pendingServerTimings: [],
+    serverTimingTotal: 0,
     lastSettledResponse: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
@@ -289,15 +295,16 @@ export function settleCodexSpeedUsage(
     return undefined;
   }
   rt.speedOutputTokens += last.outputTokens;
-  // The provider counts sampled tokens per native turn, so its running total names the response.
+  // Timings arrive in response order; one names its response by that response's own tokens.
+  // Earlier unmatched ones belong to responses already settled without them.
   const turnId = rt.generationTurnId;
-  const total = rt.generationOutputTokens;
-  const timing = rt.pendingServerTimings.find((entry) => entry.turnId === turnId && entry.sampledTokensTotal === total);
-  rt.pendingServerTimings = rt.pendingServerTimings.filter((entry) => entry.turnId === turnId && entry.sampledTokensTotal > total);
+  const index = rt.pendingServerTimings.findIndex((entry) => entry.turnId === turnId && entry.tokens === last.outputTokens);
+  const timing = index >= 0 ? rt.pendingServerTimings[index] : undefined;
+  if (index >= 0) rt.pendingServerTimings.splice(0, index + 1);
   const report = rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs,
     timing ? { tokens: last.outputTokens, ms: timing.samplingMs } : undefined);
-  rt.lastSettledResponse = turnId && report
-    ? { turnId, outputTokensTotal: total, requestIndex: rt.tokenSpeed.lastRequestIndex }
+  rt.lastSettledResponse = turnId && report && !timing
+    ? { turnId, outputTokens: last.outputTokens, requestIndex: rt.tokenSpeed.lastRequestIndex }
     : null;
   return report;
 }
@@ -327,14 +334,18 @@ export function noteCodexResponseTiming(
   timing: { turnId: string; sampledTokensTotal: number; samplingMs: number },
 ): boolean {
   if (!rt.generationTimingReliable || rt.generationTurnId !== timing.turnId) return false;
+  // A total below the last one means the provider started counting again (a new connection or
+  // retried response): this response's tokens are then the whole total.
+  const tokens = timing.sampledTokensTotal > rt.serverTimingTotal
+    ? timing.sampledTokensTotal - rt.serverTimingTotal
+    : timing.sampledTokensTotal;
+  rt.serverTimingTotal = timing.sampledTokensTotal;
   const settled = rt.lastSettledResponse;
-  if (settled && settled.turnId === timing.turnId && settled.outputTokensTotal === timing.sampledTokensTotal) {
+  if (settled && settled.turnId === timing.turnId && settled.outputTokens === tokens && rt.pendingServerTimings.length === 0) {
     rt.lastSettledResponse = null;
     return rt.tokenSpeed.applyServerTiming(settled.requestIndex, timing.samplingMs);
   }
-  // Already settled without it, or not ours: only a total ahead of what has settled can still match.
-  if (timing.sampledTokensTotal <= rt.generationOutputTokens) return false;
-  rt.pendingServerTimings.push({ ...timing });
+  rt.pendingServerTimings.push({ turnId: timing.turnId, tokens, samplingMs: timing.samplingMs });
   if (rt.pendingServerTimings.length > MAX_PENDING_SERVER_TIMINGS) rt.pendingServerTimings.shift();
   return false;
 }
@@ -355,6 +366,7 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed 
   rt.generationOutputTokens = 0;
   rt.generationTurnId = null;
   rt.pendingServerTimings = [];
+  rt.serverTimingTotal = 0;
   rt.lastSettledResponse = null;
   rt.generationTimingReliable = true;
 }
