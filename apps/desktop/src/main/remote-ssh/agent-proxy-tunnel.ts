@@ -392,7 +392,10 @@ async function runCycle(entry: Entry): Promise<void> {
   if (entry.conn.getStatus() !== 'ready') {
     setState(entry, { phase: 'connecting', remotePort: entry.remotePort });
     try {
-      await entry.conn.connect();
+      // The main connection already verified this host. A ready hook or a
+      // background retry must never create trust for this auxiliary channel
+      // if the record disappeared in between (#8403).
+      await entry.conn.connect({ allowFirstTrust: false });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setState(entry, { phase: 'error', remotePort: entry.remotePort, lastError: msg });

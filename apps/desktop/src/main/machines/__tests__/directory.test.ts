@@ -16,7 +16,8 @@ vi.mock('ssh2', async original => ({ ...await original<typeof import('ssh2')>(),
     end() { this.emit('close'); }
   },
 }));
-vi.mock('../../../../../../../packages/maker-remote-ssh/src/credentials.js', () => ({
+vi.mock('../../../../../../packages/maker-remote-ssh/src/credentials.js', async original => ({
+  ...await original<typeof import('../../../../../../packages/maker-remote-ssh/src/credentials.js')>(),
   resolveAuth: vi.fn(async () => ({ label: 'synthetic-agent' })),
 }));
 import { describe, expect, it, vi } from 'vitest';

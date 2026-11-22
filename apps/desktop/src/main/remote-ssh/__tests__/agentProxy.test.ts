@@ -1,3 +1,9 @@
+import { EventEmitter } from 'node:events';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { FileHostKeyStore, hostKeyFingerprint, RemoteHost } from '@cindy/maker-remote-ssh';
+import { disposeAllTunnels } from '../agent-proxy-tunnel';
 /**
  * agent-proxy 策略层单测 (固定端口 + 双模式版)。
  *
@@ -16,6 +22,24 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// #8403: use the real tunnel connection/verifier; isolate only transport/auth.
+vi.mock('ssh2', async original => ({ ...await original<typeof import('ssh2')>(),
+  Client: class extends EventEmitter {
+    connect(config: { hostVerifier(key: Buffer, verify: (valid: boolean) => void): void }) {
+      config.hostVerifier(Buffer.from('proxy-synthetic-key'), valid => {
+        this.emit(valid ? 'ready' : 'error', new Error('verification failed'));
+      });
+    }
+    forwardIn(_host: string, port: number, callback: (err: undefined, port: number) => void) { callback(undefined, port); }
+    unforwardIn(_host: string, _port: number, callback: () => void) { callback(); }
+    end() { this.emit('close'); }
+  },
+}));
+vi.mock('../../../../../../packages/maker-remote-ssh/src/credentials.js', async original => ({
+  ...await original<typeof import('../../../../../../packages/maker-remote-ssh/src/credentials.js')>(),
+  resolveAuth: vi.fn(async () => ({ label: 'synthetic-agent' })),
+}));
 
 // ── electron mock: prefs store 落盘到内存 Map ────────────────────────────────
 let prefsFileContent: string | null = null;
@@ -760,5 +784,48 @@ describe('ssh-host-prefs-store legacy migration', () => {
     expect(fresh.getSshHostAgentProxy('bad-quote-host')).toBeNull();
     // autoConnect 等兄弟字段不受 agentProxy 非法影响。
     expect(fresh.getSshHostAutoConnect('bad-port-host')).toBe(true);
+  });
+});
+
+// Unit / #8403: a main ready notification calls applyAgentProxyForHost.
+// Existing policy tests fake the entire tunnel connection, missing its TOFU.
+// Minimal failure: enabled tunnel + matching marker + trust removed after the
+// main handshake, before the independent tunnel handshake. No real SSH host.
+describe('automatic ready-hook proxy trust', () => {
+  it.each(['known', 'deleted', 'changed'] as const)('never first-trusts the auxiliary connection: %s', async mode => {
+    await disposeAllTunnels();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-8403-proxy-'));
+    const file = path.join(root, 'known-hosts.json');
+    const store = new FileHostKeyStore(file);
+    const { host, state } = makeFakeHost({ marker: buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim() });
+    const key = `${host.config.hostname}:${host.config.port}`;
+    const matching = hostKeyFingerprint(Buffer.from('proxy-synthetic-key'));
+    await store.set(key, mode === 'changed' ? 'SHA256:old' : matching);
+    if (mode === 'deleted') await fs.rm(file);
+    setSshHostAgentProxy(host.id, TUNNEL_PREF);
+    let tunnel: RemoteHost | undefined;
+    initAgentProxy({ broadcast() {}, getMainHost: () => host,
+      createTunnelHost: config => {
+        tunnel = new RemoteHost(config, { hostKeys: store, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+        return tunnel;
+      },
+    });
+    const applying = applyAgentProxyForHost(host);
+    try {
+      await vi.waitFor(() => expect(['ready', 'failed']).toContain(tunnel?.getStatus()));
+      expect(tunnel?.getStatus()).toBe(mode === 'known' ? 'ready' : 'failed');
+      if (mode === 'deleted') {
+        expect(tunnel?.snapshot().lastError).toContain('SSH_HOST_UNVERIFIED');
+        await expect(fs.stat(file)).rejects.toMatchObject({ code: 'ENOENT' });
+      } else {
+        expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ [key]: mode === 'known' ? matching : 'SHA256:old' });
+        if (mode === 'changed') expect(tunnel?.snapshot().hostKeyMismatch).toBeDefined();
+      }
+      expect(state.pkillCount).toBe(0);
+    } finally {
+      await disposeAllTunnels();
+      await applying;
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
