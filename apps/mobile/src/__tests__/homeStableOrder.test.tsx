@@ -117,6 +117,24 @@ describe('Home display order during incremental loading', () => {
     expect(app.result()[0].data.map(row => row.key)).toEqual(keys('a', 'b'));
   });
 
+  it('keeps device sections in place across presence changes until an explicit refresh', () => {
+    const app = setup();
+    const device = (id: string) => ({ ...projects(id)[0], key: 'device:' + id });
+    const [mac, pc, laptop] = ['mac', 'pc', 'laptop'].map(device);
+    const pinned = { key: 'pinned', title: 'Pinned', data: [] };
+    const displayed = () => app.result().map(section => section.key);
+    app.render({ sections: [pinned, mac, pc], settled: true });
+    // The device picker puts available computers first when Mac goes offline.
+    const offlineMac = { ...mac, title: 'Offline Mac' };
+    app.render({ sections: [pinned, laptop, pc, offlineMac], collapsedGroups: [mac.key] });
+    expect(displayed()).toEqual([pinned.key, mac.key, pc.key, laptop.key]);
+    expect(app.result()[1]).toMatchObject({ title: 'Offline Mac', data: [] });
+    app.render({ sections: [pinned, laptop, offlineMac], collapsedGroups: [] });
+    expect(displayed()).toEqual([pinned.key, mac.key, laptop.key]);
+    app.render({ revision: 1 });
+    expect(displayed()).toEqual([pinned.key, laptop.key, mac.key]);
+  });
+
   it('keeps pinned sections independent and does not persist again on content-only updates', () => {
     const app = setup();
     const onCommit = app.input().onCommit;

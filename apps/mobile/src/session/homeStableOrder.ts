@@ -4,19 +4,30 @@ import type { HomeViewSession } from './homeViewSession';
 import { type HomeDisplayOrder } from './homeProjectOrder';
 export type { HomeDisplayOrder } from './homeProjectOrder';
 
-/** Keep existing rows in place, but always use their newest data. New rows append. */
+const isDeviceSection = (section: HomeSection) => section.key.startsWith('device:');
+const hasStableRows = (section: HomeSection) => section.key === HOME_MAIN_SECTION_KEY || isDeviceSection(section);
+const sectionOrderKey = (section: HomeSection) => 'section:' + section.key;
+
+/** Unknown keys share the last rank so newly arrived siblings keep their candidate order. */
+function inDisplayOrder<T>(items: T[], key: (item: T) => string, ranks: ReadonlyMap<string, number>): T[] {
+  const rank = (item: T) => ranks.get(key(item)) ?? Number.MAX_SAFE_INTEGER;
+  for (let i = 1; i < items.length; i++) {
+    if (rank(items[i - 1]) > rank(items[i])) return items.slice().sort((a, b) => rank(a) - rank(b));
+  }
+  return items;
+}
+
+/** Keep existing device sections and their rows in place, always using their latest content. */
 export function stabilizeHomeSections(sections: HomeSection[], previous: HomeDisplayOrder | null, scope: string): HomeSection[] {
   if (!previous || previous.scope !== scope) return sections;
-  const next = sections.map(section => {
-    if (section.key !== HOME_MAIN_SECTION_KEY && !section.key.startsWith('device:')) return section;
-    const remaining = new Map(section.data.map(row => [row.key, row]));
-    const data = [];
-    for (const key of previous.keys) {
-      const row = remaining.get(key);
-      if (row) { data.push(row); remaining.delete(key); }
-    }
-    data.push(...remaining.values());
-    return data.every((row, index) => row === section.data[index]) ? section : { ...section, data };
+  const ranks = new Map(previous.keys.map((key, index) => [key, index]));
+  const devices = inDisplayOrder(sections.filter(isDeviceSection), sectionOrderKey, ranks);
+  let deviceIndex = 0;
+  const next = sections.map(candidate => {
+    const section = isDeviceSection(candidate) ? devices[deviceIndex++] : candidate;
+    if (!hasStableRows(section)) return section;
+    const data = inDisplayOrder(section.data, row => row.key, ranks);
+    return data === section.data ? section : { ...section, data };
   });
   return next.every((section, index) => section === sections[index]) ? sections : next;
 }
@@ -49,8 +60,11 @@ export function useStableHomeSections(input: {
   [input.ready, input.sections, baseline, input.scope]);
   useLayoutEffect(() => {
     if (!input.ready) return;
-    const keys = sections.flatMap(section => section.key === HOME_MAIN_SECTION_KEY || section.key.startsWith('device:')
-      ? section.data.map(row => row.key) : []);
+    const keys = sections.flatMap(section => {
+      if (!hasStableRows(section)) return [];
+      const rows = section.data.map(row => row.key);
+      return isDeviceSection(section) ? [sectionOrderKey(section), ...rows] : rows;
+    });
     // Local cache and identity reads settle independently. An empty projection before
     // the first network result must not erase the restored order.
     if (keys.length === 0 && !input.settled) {
@@ -78,7 +92,7 @@ export function useStableHomeSections(input: {
   return useMemo(() => {
     if (!input.collapsedGroups?.length) return sections;
     const collapsed = new Set(input.collapsedGroups);
-    return sections.map(section => section.key.startsWith('device:') && collapsed.has(section.key)
+    return sections.map(section => isDeviceSection(section) && collapsed.has(section.key)
       ? { ...section, data: [] } : section);
   }, [sections, input.collapsedGroups]);
 }
