@@ -61,6 +61,7 @@ import {
   planNavRailWindow,
   planNavRailTickWidth,
   planNavRailTickProgress,
+  stepNavRailWindow,
   type NavRailEntry,
 } from './messageNavRailModel';
 import { forwardNavRailWheel } from './messageNavRailWheel';
@@ -459,13 +460,16 @@ export function MessageNavRail({
   stepScrubRef.current = (dir) => {
     const current = scrubBandRef.current;
     if (current === null) return false;
-    // 与 planNavRailWindow 同一口径:占位刻度占掉的那一格不算实际刻度。
-    const maxStart = Math.max(0, entries.length - plan.slotCount);
-    const next = Math.min(Math.max(0, current + dir), maxStart);
-    if (next === current) return false;
-    setScrubBand(next);
-    const target = dir > 0 ? next + plan.slotCount - 1 : next;
-    jumpToScrubIndex(Math.min(target, entries.length - 1));
+    // 平移与跳转目标都由模型算:占位格会在 0→1 时多出一个,刻度数随之变化。
+    const step = stepNavRailWindow({
+      start: current,
+      dir,
+      entryCount: entries.length,
+      capacity: plan.capacity,
+    });
+    if (step === null) return false;
+    setScrubBand(step.start);
+    jumpToScrubIndex(step.targetIndex);
     return true;
   };
 

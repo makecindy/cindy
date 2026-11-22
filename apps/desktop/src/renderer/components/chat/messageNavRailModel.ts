@@ -466,6 +466,34 @@ export function planNavRailWindow(input: {
 }
 
 /**
+ * 边缘推进一格:窗口平移 start + dir,并给出这一格该跳到的条目下标。
+ *
+ * 占位格的口径必须和 planNavRailWindow 同源:首次从 0 向下推进时会多出一个
+ * "⋯",刻度数随之少一根 —— 目标要按平移后的窗口算,不能用平移前的刻度数,
+ * 否则会指向一条没渲染的条目。
+ */
+export function stepNavRailWindow(input: {
+  start: number;
+  dir: number;
+  entryCount: number;
+  capacity: number;
+}): { start: number; targetIndex: number } | null {
+  const dir = input.dir < 0 ? -1 : 1;
+  const ticksAt = (start: number) => Math.max(1, input.capacity - (start > 0 ? 1 : 0));
+  const maxStart = Math.max(
+    0,
+    input.entryCount - (input.entryCount > input.capacity ? ticksAt(1) : ticksAt(0)),
+  );
+  const next = Math.min(Math.max(0, input.start + dir), maxStart);
+  if (next === input.start) return null;
+  const targetIndex = Math.min(
+    Math.max(0, input.entryCount - 1),
+    dir > 0 ? next + ticksAt(next) - 1 : next,
+  );
+  return { start: next, targetIndex };
+}
+
+/**
  * 计算刻度线宽度。悬浮或 scrub 时，以目标为中心向两侧逐级收缩 1～3 根；
  * 当前阅读位置仍保留自己的加长反馈，避免交互态覆盖阅读态。
  */

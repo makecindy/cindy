@@ -26,6 +26,7 @@ import {
   planNavRailTickProgress,
   promptPreviewLine,
   shouldBackfillForNavRail,
+  stepNavRailWindow,
 } from '@/components/chat/messageNavRailModel';
 import { forwardNavRailWheel } from '@/components/chat/messageNavRailWheel';
 
@@ -671,6 +672,36 @@ describe('planNavRailWindow', () => {
     expect(
       planNavRailWindow({ entryCount: 10, availableHeightPx: 0, activeIndex: 0 }).startIndex,
     ).toBe(0);
+  });
+});
+
+describe('stepNavRailWindow', () => {
+  it('首次从 0 向下推进:目标按出现占位后的刻度数算', () => {
+    // 0→1 会多出"⋯"占位,窗口从 [0..49] 变成 [1..49],末根是 49 而不是 50。
+    expect(
+      stepNavRailWindow({ start: 0, dir: 1, entryCount: 60, capacity: NAV_RAIL_MAX_TICKS }),
+    ).toEqual({ start: 1, targetIndex: NAV_RAIL_MAX_TICKS - 1 });
+  });
+
+  it('末窗不再推进,也不会跳过最后一条', () => {
+    const atEnd = stepNavRailWindow({ start: 11, dir: 1, entryCount: 60, capacity: NAV_RAIL_MAX_TICKS });
+    expect(atEnd).toBeNull();
+    const clampToEnd = stepNavRailWindow({
+      start: 10,
+      dir: 1,
+      entryCount: 55,
+      capacity: NAV_RAIL_MAX_TICKS,
+    });
+    expect(clampToEnd).toEqual({ start: 6, targetIndex: 54 });
+  });
+
+  it('向上推进回到起点,不足一窗时不推进', () => {
+    expect(
+      stepNavRailWindow({ start: 1, dir: -1, entryCount: 60, capacity: NAV_RAIL_MAX_TICKS }),
+    ).toEqual({ start: 0, targetIndex: 0 });
+    expect(
+      stepNavRailWindow({ start: 0, dir: 1, entryCount: 30, capacity: NAV_RAIL_MAX_TICKS }),
+    ).toBeNull();
   });
 });
 
