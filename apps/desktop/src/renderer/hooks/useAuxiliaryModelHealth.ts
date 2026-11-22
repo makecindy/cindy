@@ -2,16 +2,17 @@
  * Auxiliary-model health for the Settings card and the one-time notification
  * (docs/product-rules/auxiliary-model-health.md).
  *
- * Main announces changes on the existing app-settings push (section
- * `auxiliary-model-health`, only on real state changes); each one triggers a single
- * light read. A read that resolves after a newer one started is dropped.
+ * Refresh on health changes and configuration repairs. The settings page and
+ * main-window notice share a read, coalescing same-microtask invalidations and
+ * retaining one trailing read while the IPC is in flight.
  */
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
+import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
+import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { createLogger } from '@/lib/logger';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { toast } from '@/lib/toast';
@@ -24,24 +25,46 @@ import {
 
 const log = createLogger('useAuxiliaryModelHealth');
 
+const refreshHealth = createCoalescedRefresh<AuxiliaryModelHealth>();
+
 export function useAuxiliaryModelHealth(): AuxiliaryModelHealth | null {
-  const revision = useAppSettingsRevision(AUXILIARY_MODEL_HEALTH_SECTION);
   const [health, setHealth] = useState<AuxiliaryModelHealth | null>(null);
   useEffect(() => {
     let cancelled = false;
-    window.electronAPI.maker
-      .auxiliaryModelHealthGet()
-      .then((next) => {
-        if (!cancelled) setHealth(next);
-      })
-      .catch((error) => {
-        // Nothing to show is the safe default; the features keep their own fallbacks.
-        log.warn('auxiliaryModelHealthGet failed', error);
-      });
+    let current: AuxiliaryModelHealth | undefined;
+    let pending: Promise<AuxiliaryModelHealth> | undefined;
+    const { maker, appPreferenceControl } = window.electronAPI;
+    const refresh = () => {
+      const request = refreshHealth(() => maker.auxiliaryModelHealthGet());
+      if (pending === request) return;
+      pending = request;
+      void request.then((next) => {
+          if (cancelled) return;
+          current = next;
+          setHealth(next);
+        })
+        .catch((error) => {
+          if (!cancelled) log.warn('auxiliaryModelHealthGet failed', error);
+        });
+    };
+    const refreshConfigProblem = () => {
+      if (!current || (current.status === 'unavailable' && current.kind === 'config')) refresh();
+    };
+    const offSettings = appPreferenceControl?.onSettingsChanged(event => {
+      if (event.section === AUXILIARY_MODEL_HEALTH_SECTION && isDataOwnerPushStampCurrent(event.ownerStamp)) {
+        refresh();
+      }
+    });
+    const offProviders = maker.onProvidersChanged?.(refreshConfigProblem);
+    const offAuth = maker.auth?.onStateChanged?.(refreshConfigProblem);
+    refresh();
     return () => {
       cancelled = true;
+      offSettings?.();
+      offProviders?.();
+      offAuth?.();
     };
-  }, [revision]);
+  }, []);
   return health;
 }
 

@@ -18,6 +18,8 @@ import type { AuxiliaryModelHealth } from '../../../shared/auxiliaryModelHealth'
 const mocks = vi.hoisted(() => ({
   health: { status: 'ok' } as AuxiliaryModelHealth,
   listener: undefined as ((event: { section: string; ownerStamp: unknown }) => void) | undefined,
+  providerListener: undefined as (() => void) | undefined,
+  getHealth: vi.fn<() => Promise<AuxiliaryModelHealth>>(),
   secondary: false,
   toastWarning: vi.fn(),
   navigate: vi.fn(),
@@ -52,9 +54,16 @@ describe('useAuxiliaryModelHealthNotice', () => {
     vi.clearAllMocks();
     resetAuxiliaryModelHealthNoticeForTests();
     mocks.health = { status: 'ok' };
+    mocks.getHealth.mockReset().mockImplementation(async () => mocks.health);
     mocks.secondary = false;
     (window as unknown as { electronAPI: unknown }).electronAPI = {
-      maker: { auxiliaryModelHealthGet: vi.fn(async () => mocks.health) },
+      maker: {
+        auxiliaryModelHealthGet: mocks.getHealth,
+        onProvidersChanged: (listener: () => void) => {
+          mocks.providerListener = listener;
+          return () => { mocks.providerListener = undefined; };
+        },
+      },
       appPreferenceControl: {
         onSettingsChanged: (listener: typeof mocks.listener) => {
           mocks.listener = listener;
@@ -87,6 +96,28 @@ describe('useAuxiliaryModelHealthNotice', () => {
     await push({ status: 'ok' });
     await push(configProblem('provider_disabled'));
     await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledTimes(3));
+  });
+
+  // Repairing a supplier or its credentials does not require another model request.
+  it('reads a provider repair and can announce a later recurrence', async () => {
+    mocks.health = configProblem('provider_disabled');
+    renderHook(() => useAuxiliaryModelHealthNotice());
+    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledTimes(1));
+
+    let finishRead!: (snapshot: AuxiliaryModelHealth) => void;
+    mocks.getHealth.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    await act(async () => { mocks.providerListener?.(); });
+
+    mocks.health = { status: 'ok' };
+    await act(async () => {
+      mocks.providerListener?.();
+      mocks.providerListener?.();
+      expect(mocks.getHealth).toHaveBeenCalledTimes(2);
+      finishRead(configProblem('provider_disabled'));
+    });
+    expect(mocks.getHealth).toHaveBeenCalledTimes(3);
+    await push(configProblem('provider_disabled'));
+    expect(mocks.toastWarning).toHaveBeenCalledTimes(2);
   });
 
   it('stays quiet in secondary windows', async () => {

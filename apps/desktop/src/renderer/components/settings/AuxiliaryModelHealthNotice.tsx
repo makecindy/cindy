@@ -44,12 +44,22 @@ export function AuxiliaryModelHealthNotice({
       actions={
         <>
           {config ? (
-            <Button variant="secondary" size="sm" onClick={() => navigate('/settings?tab=providers')}>
+            <Button
+              variant="secondary"
+              size="sm"
+              data-settings-search-action="open model providers to repair the auxiliary chain"
+              onClick={() => navigate('/settings?tab=providers')}
+            >
               {t('settings.auxiliaryModels.health.openProviders')}
             </Button>
           ) : null}
           {onCustomize ? (
-            <Button variant="secondary" size="sm" onClick={onCustomize}>
+            <Button
+              variant="secondary"
+              size="sm"
+              data-settings-search-action="open the existing auxiliary chain editor"
+              onClick={onCustomize}
+            >
               {t('settings.auxiliaryModels.health.customize')}
             </Button>
           ) : null}

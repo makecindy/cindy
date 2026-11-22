@@ -87,8 +87,8 @@ export function pluginTaskSelectionIsOpen(selection: { agentKind?: unknown; mode
  * fallback through the auxiliary-model health notice.
  */
 export async function resolveLightestPluginTaskFallback<
-  S extends { effort?: string },
-  T extends { agentKind: string; model: string; providerId?: string | null },
+  S extends { effort?: string; fastMode?: boolean | 'ultrafast' },
+  T extends { agentKind: string; model: string; providerId?: string | null; fastMode?: boolean | 'ultrafast' },
 >(resolve: (selection: S) => Promise<T>, selection: S): Promise<T> {
   const fallback = await resolve(selection);
   for (const effort of PLUGIN_TASK_LIGHT_EFFORTS) {
@@ -99,6 +99,7 @@ export async function resolveLightestPluginTaskFallback<
         agentKind: fallback.agentKind,
         model: fallback.model,
         providerId: fallback.providerId,
+        fastMode: fallback.fastMode ?? selection.fastMode,
         effort,
       } as S);
     } catch {

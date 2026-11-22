@@ -896,6 +896,7 @@ async function requestDefaultUtilityText(
     : getEffectiveAuxiliaryModelChain();
   const chainSnapshot = initialChain ? stableSnapshot(initialChain) : null;
   const callerBeforeDispatch = opts?.beforeDispatch;
+  let callerCancelled = false;
   const requestSnapshotStillCurrent = (): boolean => {
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
     return chainSnapshot === null
@@ -904,8 +905,11 @@ async function requestDefaultUtilityText(
   const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
     ...opts,
     beforeDispatch: async (route) => {
-      if (!requestSnapshotStillCurrent()) return false;
-      if (callerBeforeDispatch && !(await callerBeforeDispatch(route))) return false;
+      if (callerCancelled || !requestSnapshotStillCurrent()) return false;
+      if (callerBeforeDispatch && !(await callerBeforeDispatch(route))) {
+        callerCancelled = true;
+        return false;
+      }
       // The caller guard may await account/database state. Re-check the
       // captured owner, session boundary, and chain after that await so a
       // concurrent account switch cannot turn a true result into permission
@@ -937,7 +941,7 @@ async function requestDefaultUtilityText(
   const attempts: UtilityTextAttempt[] = [];
   // Cancelled or superseded requests say nothing about whether the chain works.
   const settle = (result: UtilityTextResult): UtilityTextResult => {
-    if (opts?.signal?.aborted || !requestSnapshotStillCurrent()) return result;
+    if (callerCancelled || opts?.signal?.aborted || !requestSnapshotStillCurrent()) return result;
     reportAuxiliaryChainOutcome?.(
       result.ok
         ? 'success'

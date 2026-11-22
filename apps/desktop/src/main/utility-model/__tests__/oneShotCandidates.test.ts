@@ -795,6 +795,20 @@ describe('utility one-shot candidates', () => {
       expect(outcomes).toEqual([expected]);
     });
 
+    it('stays silent when the caller rejects the final LiteLLM dispatch', async () => {
+      chainState.refs = ['litellm-gpt-5.4-mini'];
+      readKey.mockReturnValue('proxy-key');
+      const beforeDispatch = vi.fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+
+      const result = await requestUtilityText(makerMock(false), 'superseded', { beforeDispatch });
+
+      expect(result.ok).toBe(false);
+      expect(beforeDispatch).toHaveBeenCalledTimes(3);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(outcomes).toEqual([]);
+    });
+
     it('stays silent when the account changes during the request', async () => {
       const maker = makerMock(true);
       vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {

@@ -56,16 +56,16 @@ describe('resolveLightestPluginTaskFallback', () => {
   // auxiliary candidate can run a plugin task, the new-task model is used at its
   // lightest accepted effort instead of the user's coding effort (xhigh made
   // subtitle passages 3x slower). tier: unit.
-  const defaultRoute = { agentKind: 'codex', model: 'gpt-6.2-astra', providerId: 'openai-1', effort: 'xhigh' };
+  const defaultRoute = { agentKind: 'codex', model: 'gpt-6.2-astra', providerId: 'openai-1', effort: 'xhigh', fastMode: 'ultrafast' as const };
   it.each([
     ['accepts low', ['low', 'medium', 'xhigh'], 'low'],
     ['only medium among the light levels', ['medium', 'xhigh'], 'medium'],
     ['no light level at all', ['xhigh'], 'xhigh'],
   ] as const)('the new-task model %s', async (_name, accepted, expected) => {
-    const resolve = async (selection: { effort?: string }) => {
+    const resolve = async (selection: { effort?: string; fastMode?: boolean | 'ultrafast' }) => {
       if (selection.effort === undefined) return defaultRoute;
       if (!(accepted as readonly string[]).includes(selection.effort)) throw new Error('effort not supported');
-      return { ...defaultRoute, effort: selection.effort };
+      return { ...defaultRoute, effort: selection.effort, fastMode: selection.fastMode ?? false };
     };
     const route = await resolveLightestPluginTaskFallback(resolve, {});
     expect(route).toEqual({ ...defaultRoute, effort: expected });

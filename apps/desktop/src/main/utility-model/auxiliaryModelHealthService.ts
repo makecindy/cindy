@@ -66,6 +66,11 @@ export function reportPluginTaskAuxiliaryFallback(
   guarded('fallback', () => tracker.reportPluginFallback(route ? describeRoute(route) : null));
 }
 
+/** Re-evaluate an observed configuration problem when the auxiliary chain is saved. */
+export function refreshAuxiliaryModelHealth(): void {
+  guarded('refresh', () => { tracker.get(); });
+}
+
 export function readAuxiliaryModelHealth(): AuxiliaryModelHealth {
   return tracker.get();
 }
