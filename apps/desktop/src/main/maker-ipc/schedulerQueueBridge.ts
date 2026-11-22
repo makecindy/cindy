@@ -48,6 +48,8 @@ export interface SchedulerQueuedPromptRequest {
   signal?: AbortSignal;
   /** Runs under the send lock before the live session is captured or a user row is written. */
   onPreparing?: () => Promise<void>;
+  /** The schedule owns its route for this run. */
+  explicitModelRoute?: boolean;
   /** Reject the queued run if preparation fails before dispatch. */
   onPreparationFailed?: (error: unknown) => void;
   /** The row exists but preparation/send failed; recovering retains this run. */
@@ -140,6 +142,7 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
     if (req.onPreparing) {
       schedulerQueuedPromptPreparations.set(clientId, {
         onPreparing: req.onPreparing,
+        explicitModelRoute: req.explicitModelRoute,
         onPreparationFailed: error => {
           awaitingAcceptance.delete(clientId);
           deps.discardAcceptedCallback?.(clientId);

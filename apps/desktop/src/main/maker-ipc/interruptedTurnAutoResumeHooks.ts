@@ -1,5 +1,5 @@
 import type { AgentInputCoordinatorDeps } from './agent-input-coordinator.js';
-import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { isAutomaticInputOriginKind, type AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { canRecoverUndeliveredOrcaReport } from '../../shared/sharedTaskRecovery.js';
 import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
 import {
@@ -9,7 +9,7 @@ import {
   type InterruptedTurnAutoResumeGuard,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
-import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { BOT_MODEL_STARTUP_ADMISSION_REASON, isBotStartupAdmissionReason, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
@@ -34,6 +34,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
   >;
   resumeQuotaWait?(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void;
   botFallbackInputs: { has(createOpts: object): boolean };
+  explicitScheduledModelInputs?: { has(createOpts: object): boolean };
   modelGroupInputs?: { has(createOpts: object): boolean };
   workerInputs?: { has(createOpts: object): boolean };
   scheduledQuotaInputs?: { has(createOpts: object): boolean };
@@ -71,7 +72,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
   inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, resumeQuotaWait, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs,
-  settlePausedResumeIntoHistory,
+  settlePausedResumeIntoHistory, explicitScheduledModelInputs,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
@@ -80,6 +81,11 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
   const canRecoverTurn = (signals: InterruptedTurnErrorSignals, item?: AgentInputQueuedMessage | null) =>
     item && scheduledQuotaInputs?.has(item.createOpts) && isAccountUsageLimitError(signals)
       ? false // Same-provider quota waiting owns this run; never enter a cross-route candidate chain.
+      : signals.reason === BOT_MODEL_STARTUP_ADMISSION_REASON
+      ? !!item && isAutomaticInputOriginKind(item.origin?.kind) && botFallbackInputs.has(item.createOpts)
+        && !explicitScheduledModelInputs?.has(item.createOpts)
+      : signals.reason === 'model_unavailable' && item && explicitScheduledModelInputs?.has(item.createOpts)
+      ? false
       : signals.reason === 'scheduler-snapshot-preparation'
       ? item?.origin?.kind === 'scheduler' && !!item.origin.runId
       : signals.reason === 'orca-report-preparation'
@@ -124,7 +130,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const requireRouteChange = configuredInput && isBotCandidateUnavailable(signals);
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
-      const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
+      const startupAdmission = isBotStartupAdmissionReason(signals.reason);
       const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals);
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);

@@ -9559,7 +9559,13 @@ assertRouteCurrent();
           if (assistantAttemptFailure && turnId) assistantReplyByTurn.delete(turnId);
           eventQueue.push({
             type: 'error',
-            data: { ...timeoutData, ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}) },
+            data: {
+              ...timeoutData,
+              // A model rejection explains the failure, but an unconfirmed
+              // interrupt cannot authorize replay on the backup model.
+              ...(isModelRejection && deferTimeoutError && !settled ? { reason: 'model_rejection_unconfirmed' } : {}),
+              ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}),
+            },
             source: 'codex',
           });
         }

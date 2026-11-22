@@ -1023,6 +1023,7 @@ describe('translateErrorNotification', () => {
     { message: 'Reconnecting... 1/5', additionalDetails: 'unexpected status 403 Forbidden: user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model',
       codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 403 } } },
     { message: 'unexpected status 403 Forbidden: user not allowed to access model' },
+    { message: 'Model "fixture" is not available for this group', codexErrorInfo: 'modelNotFound' },
     { message: 'HTTP 403: {"error":{"code":"user_model_access_denied"}}' },
     { message: 'Error running remote compact task', additionalDetails: '{"error":{"type":"user_model_access_denied"}}' },
     { message: '{"code":"user_model_access_denied"}' },

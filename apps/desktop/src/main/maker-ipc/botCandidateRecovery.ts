@@ -11,6 +11,11 @@ export function isModelGroupConnectionOutOfCredit(signals: InterruptedTurnErrorS
 
 /** Host-proven stopped bootstrap, distinct from a turn or opaque startup error. */
 export const BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON = 'bot-subscription-startup-admission';
+export const BOT_MODEL_STARTUP_ADMISSION_REASON = 'bot-model-startup-admission';
+
+export function isBotStartupAdmissionReason(reason: unknown): boolean {
+  return reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON || reason === BOT_MODEL_STARTUP_ADMISSION_REASON;
+}
 
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
@@ -24,7 +29,7 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
     'acp-agent-exited', 'acp-auth-required',
     'provider_auth_or_access', 'provider_quota_limit', 'provider_rate_limit',
     'provider_server_error', 'model_unavailable', 'user_model_access_denied', 'agent-start-failed',
-    BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON,
+    BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, BOT_MODEL_STARTUP_ADMISSION_REASON,
   ].includes(reason)) return false;
   // Exhaustion forbids retrying this account, not trying the user's configured
   // backups. The caller requires a successful route change before resuming.

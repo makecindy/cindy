@@ -1510,7 +1510,7 @@ import {
   codexCustomProviderConfigSignature,
   hasCodexAppliedCustomProviderCapability,
 } from '../maker-host/codex-custom-provider-route.js';
-import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import { runSchedulerQueuedPreparation, type SchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
 import {
   acceptSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
@@ -5313,10 +5313,7 @@ export type { SchedulerQueuedPromptRequest, SchedulerEnqueueResult } from './sch
 let schedulerQueueBridgeHolder: SchedulerQueueBridge | null = null;
 /** 排队心跳的 discard 监听(clientId → 通知 runner 收尾)。派发/丢弃后清条目。 */
 const schedulerQueuedPromptDiscardWatchers = new Map<string, SchedulerQueuedPromptObserver>();
-const schedulerQueuedPromptPreparations = new Map<string, {
-  onPreparing: () => Promise<void>;
-  onPreparationFailed?: (error: unknown) => void;
-}>();
+const schedulerQueuedPromptPreparations = new Map<string, SchedulerQueuedPreparation>();
 
 export async function ensureSchedulerQueueRestored(sessionId: string): Promise<boolean> {
   // 桥未就绪时不能把未知队列当成空闲；让 runner 沿用恢复待定的顺延路径。
@@ -18576,6 +18573,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Host-only hints belong to the dispatched input, not a persistent session cache.
   // The fallback transaction still rechecks the authoritative Bot link and chain.
   const botFallbackInputs = new WeakSet<object>();
+  const explicitScheduledModelInputs = new WeakSet<object>();
   const modelGroupInputs = new WeakSet<object>();
   const scheduledQuotaInputs = new WeakSet<object>();
   // The coordinator and the stable-session lookup are assembled below; both are read when a hook runs.
@@ -18586,7 +18584,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
     },
     resumeQuotaWait: (sessionId, item, signals) => inputCoordinator.resumeModelGroupQuotaWait(sessionId, item, signals),
-    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
+    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, explicitScheduledModelInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
     pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
@@ -18638,10 +18636,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (botInput?.source === 'bot' && isShadowedCompanionSession(botInput, isCompanionShadowed)) {
         throwIpcError('PRECONDITION_FAILED', SHADOWED_COMPANION_INPUT_MESSAGE);
       }
+      const queuedClientId = (args[3] as { persistUserMessage?: { clientId?: string } } | undefined)
+        ?.persistUserMessage?.clientId;
       if (args[2] && typeof args[2] === 'object') {
         if (botInput?.orcaRole === 'worker' || parseOrcaRemoteLead(botInput?.orcaRemoteLead)) workerInputs.add(args[2]);
         else workerInputs.delete(args[2]);
         const origin = (args[3] as { origin?: AgentInputQueuedMessage['origin'] } | undefined)?.origin;
+        if (queuedClientId && schedulerQueuedPromptPreparations.get(queuedClientId)?.explicitModelRoute) {
+          explicitScheduledModelInputs.add(args[2]);
+        }
         if (botInput?.source === 'bot' && botInput.agentDeviceId && !botInput.remoteHostId
           && ['canonical', 'thread'].includes(botInput.role ?? '')
           && ((origin?.kind === 'scheduler' && origin.runId) || ownsQuotaRoute())) {
@@ -18667,8 +18670,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (inputCoordinator.isExecutionPaused(sessionId)) {
         throwIpcError('PRECONDITION_FAILED', 'Task is paused; resume it before continuing');
       }
-      const queuedClientId = (args[3] as { persistUserMessage?: { clientId?: string } } | undefined)
-        ?.persistUserMessage?.clientId;
       await runSchedulerQueuedPreparation(queuedClientId, schedulerQueuedPromptPreparations,
         () => { if (queuedClientId) schedulerQueuedPromptDiscardWatchers.delete(queuedClientId); });
       return botInput?.remoteHostId ? sendToAgentAcceptedUnlocked(...args)

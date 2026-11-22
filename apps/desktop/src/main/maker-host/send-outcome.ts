@@ -38,8 +38,8 @@ export type HostSendOutcome = {
   message: string;
   /** CREDENTIAL_SWITCH_BUSY 专用:挡路的本地会话 ids(coordinator 用于事件驱动唤醒 + renderer 展示)。 */
   busySessionIds?: string[];
-  /** Main-only proof of stopped subscription admission, not an opaque adapter failure. */
-  startupAdmission?: 'subscription-account-limited';
+  /** Main-only rejection receipt from a bootstrap that stopped before input dispatch. */
+  startupAdmission?: 'subscription-account-limited' | 'model-unavailable';
 };
 
 export type DesktopSessionDispatchSuccess = {

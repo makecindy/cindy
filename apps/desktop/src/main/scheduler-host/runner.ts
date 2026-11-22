@@ -2885,6 +2885,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ? `${UI_ACTION_TRIGGER_PREFIX}${schedule.prompt}`
           : schedule.prompt,
       origin,
+      explicitModelRoute: hasScheduledModelOverride(schedule),
       onPreparing: async () => {
         this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {

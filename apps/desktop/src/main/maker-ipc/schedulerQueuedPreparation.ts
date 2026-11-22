@@ -1,5 +1,6 @@
 /** One-shot pre-send preparation for queued scheduler prompts. */
 export interface SchedulerQueuedPreparation {
+  explicitModelRoute?: boolean;
   onPreparing: () => Promise<void>;
   onPreparationFailed?: (error: unknown) => void;
 }
