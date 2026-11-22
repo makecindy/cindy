@@ -2068,6 +2068,41 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  // Codex P2 on #12087:若同一任务每次都在过期写入挂起时被延长到新版本,
+  // 版本门会放行下一条 UPDATE;容量上限必须在发请求前检查,不能只拒绝事后记账。
+  it('does not send newer expiry writes beyond the outstanding request cap', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 5, logger: { warn: vi.fn() } });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 3_600_000, expireAt: createdAt + 1_000,
+    });
+
+    const realUpdate = local.storage.update.bind(local.storage);
+    let expireWrites = 0;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) => {
+      if (patch.status === 'expired') {
+        expireWrites += 1;
+        return new Promise<Schedule | null>(() => {});
+      }
+      return realUpdate(id, patch, expected);
+    });
+
+    for (let revision = 0; revision < 4; revision += 1) {
+      if (revision > 0) {
+        const nextDeadline = local.clock.now() + 1_000;
+        await local.scheduler.update(schedule.id, { expireAt: nextDeadline });
+        local.clock.setTo(nextDeadline);
+      } else {
+        local.clock.setTo(schedule.expireAt!);
+      }
+      await local.scheduler.tick();
+    }
+
+    expect(expireWrites).toBe(3);
+    await local.scheduler.stop();
+  });
+
   // Codex P1 on #12087:已退役补排的在途写入不能盖掉换发出来的那次补排的结果。
   // 同一凭据的补排卡在 storage.update、listActive 随后从失败恢复时,代次前进会
   // 换发第二次补排;第二次先把按恢复时刻算出的排期写进库,第一次那条旧 RPC 随后
@@ -2241,6 +2276,14 @@ describe('Scheduler', () => {
         if (replanWrites === 1) {
           // 被退役的那次补排:它发端于故障前,带着按故障前时刻算出的排期,写卡住。
           await new Promise<void>((resolve) => { releaseOldWrite = resolve; });
+          // 另一实例只改元数据并推进 updatedAt。真实存储的补排 CAS 不比较元数据,
+          // 所以旧补排仍会落笔,返回的行修订必须成为它的收据指纹。
+          const beforeMetadataEdit = await realGet(id);
+          expect(beforeMetadataEdit).not.toBeNull();
+          await realUpdate(id, {
+            name: 'Renamed by another instance',
+            updatedAt: h.clock.now(),
+          }, beforeMetadataEdit!);
           const out = await realUpdate(id, patch, expected);
           oldWriteLanded();
           return out;

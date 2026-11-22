@@ -551,6 +551,14 @@ interface ReplanAttempt extends StalledClaimPlan {
   generation: number;
 }
 
+interface ReplanWriteReceipt {
+  value: number;
+  issueSeq: number;
+  generation: number;
+  /** 实际持久化那一版的 CAS 身份 + 行修订。 */
+  identity: string;
+}
+
 interface InflightAttempt extends SchedulerInflightRun {
   lastLongRunningLogAt?: number;
   /** 卡死判定命中并已发出 abort 的时刻；用于计算强制收回槽位的宽限。 */
@@ -791,13 +799,7 @@ export class Scheduler extends EventEmitter {
    * replanWriteIdentity):身份一致 = 行里这个值确实是我们写下的那一个,且行没有
    * 被后续更新推进过(防 ABA)。
    */
-  private readonly replanWriteReceipts = new Map<string, Array<{
-    value: number;
-    issueSeq: number;
-    generation: number;
-    /** 写入时那一版的 CAS 身份 + 行修订(见 replanWriteIdentity)。 */
-    identity: string;
-  }>>();
+  private readonly replanWriteReceipts = new Map<string, ReplanWriteReceipt[]>();
   /** 补排签发序号(单调递增,见 replanLatestIssue)。 */
   private replanIssueSeq = 0;
   /**
@@ -1433,6 +1435,10 @@ export class Scheduler extends EventEmitter {
     const budget = Math.max(1, preGateRemaining(
       preGateDeadline ?? Date.now() + this.preGateStorageTimeoutMs,
     ));
+    // Admission must happen before the UPDATE is sent. trackPendingExpireWrite only
+    // records an already-issued promise; its boolean cap cannot undo an over-cap write
+    // (Codex P2 on #12087).
+    if (!this.mayIssueStorageRequest(expireWriteKey(schedule.id))) return true;
     let updatePromise: Promise<Schedule | null> | undefined;
     let fallbackRead: Promise<Schedule | null> | undefined;
     // 生命周期代次必须在**发起** UPDATE 时取,不能在超时之后才取:等待期间宿主
@@ -4390,19 +4396,36 @@ export class Scheduler extends EventEmitter {
   /**
    * 记下这次补排写下的排期(签发收据),供后续补排识别退役写入。
    *
-   * `base` 是发起这次写入时读到的那一版:写入只改 nextFireAt,落库后那一版的 CAS
-   * 身份就是「base 换上这个值」,行修订 `updatedAt` 原样沿用(补排自己不动它)——
-   * 收据记的是这两样,不是光记一个数值。
+   * 先用发起时的快照登记,让「数据库已落笔但回包仍挂起」的恢复路径也有收据可认。
+   * 若写入成功,再用存储返回的持久行修订校准身份:CAS 不比较 name / prompt 等元数据,
+   * 另一实例可能在 UPDATE 真正执行前只推进了 `updatedAt`,但调度字段仍允许这次写入。
    */
-  private recordReplanWrite(scheduleId: string, value: number, issueSeq: number, base: Schedule): void {
+  private recordReplanWrite(
+    scheduleId: string,
+    value: number,
+    issueSeq: number,
+    base: Schedule,
+  ): ReplanWriteReceipt {
     const receipts = this.replanWriteReceipts.get(scheduleId) ?? [];
-    receipts.push({
+    const receipt: ReplanWriteReceipt = {
       value,
       issueSeq,
       generation: this.listActiveGeneration,
       identity: replanWriteIdentity({ ...base, nextFireAt: value }),
-    });
+    };
+    receipts.push(receipt);
     this.replanWriteReceipts.set(scheduleId, receipts);
+    return receipt;
+  }
+
+  /** 成功回包提供实际持久化修订;更新时仍在账本里的那一份签发收据。 */
+  private refreshReplanWriteReceipt(
+    scheduleId: string,
+    receipt: ReplanWriteReceipt,
+    persisted: Schedule,
+  ): void {
+    if (!this.replanWriteReceipts.get(scheduleId)?.includes(receipt)) return;
+    receipt.identity = replanWriteIdentity(persisted);
   }
 
   /** 这次写入落空(CAS 败 / 失败):行里不会有这个值,收据作废。 */
@@ -4549,11 +4572,13 @@ export class Scheduler extends EventEmitter {
     const next = computeNextFireAt(current, now);
     if (next === undefined) return; // manual:按语义不续命
     const write = this.storage.update(scheduleId, { nextFireAt: next }, current);
-    this.recordReplanWrite(scheduleId, next, attempt.issueSeq, current);
+    const receipt = this.recordReplanWrite(scheduleId, next, attempt.issueSeq, current);
     void write.then(
       (row) => {
-        if (row) this.settleReplanWrite(scheduleId, next, attempt.issueSeq);
-        else this.dropReplanWrite(scheduleId, next, attempt.issueSeq);
+        if (row) {
+          this.refreshReplanWriteReceipt(scheduleId, receipt, row);
+          this.settleReplanWrite(scheduleId, next, attempt.issueSeq);
+        } else this.dropReplanWrite(scheduleId, next, attempt.issueSeq);
       },
       () => this.dropReplanWrite(scheduleId, next, attempt.issueSeq),
     );
@@ -4573,11 +4598,13 @@ export class Scheduler extends EventEmitter {
         const freshNext = computeNextFireAt(fresh, now);
         if (freshNext !== undefined) {
           const takeover = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
-          this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq, fresh);
+          const receipt = this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq, fresh);
           void takeover.then(
             (row) => {
-              if (row) this.settleReplanWrite(scheduleId, freshNext, attempt.issueSeq);
-              else this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq);
+              if (row) {
+                this.refreshReplanWriteReceipt(scheduleId, receipt, row);
+                this.settleReplanWrite(scheduleId, freshNext, attempt.issueSeq);
+              } else this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq);
             },
             () => this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq),
           );
