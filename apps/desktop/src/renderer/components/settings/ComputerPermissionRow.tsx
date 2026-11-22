@@ -59,7 +59,7 @@ export function ComputerPermissionRow({
           {icon}
         </span>
       )}
-      <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-title)]">
+      <span className="min-w-0 flex-1 break-words text-13 font-medium text-[var(--settings-section-title)]">
         {label}
       </span>
       <span

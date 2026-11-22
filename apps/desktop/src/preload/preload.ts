@@ -77,6 +77,7 @@ import type {
   CustomProviderUpdateResult,
 } from '../shared/customProviderUpdate';
 import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
+import { macPermissionAppPath } from '../shared/macControlPermission';
 import {
   isWindowsBackdropMaterial,
   readWindowBackdropMaterialFromArgv,
@@ -1303,6 +1304,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }
     }),
   osRelease: ipcRenderer.sendSync('get-os-release') as string,
+  macPermissionAppName: macPermissionAppPath(process.platform, process.execPath)?.split('/').pop(),
   appVersion: ipcRenderer.sendSync('get-app-version') as string,
   getArm64Translation: (): Promise<boolean> => ipcRenderer.invoke('app:get-arm64-translation'),
   clientEndpoints: { websiteUrl: clientEndpointsInfo?.websiteUrl ?? '' },

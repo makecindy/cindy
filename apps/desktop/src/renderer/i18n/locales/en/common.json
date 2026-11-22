@@ -1177,7 +1177,7 @@
     "title": "Remote desktop",
     "allow": "Allow remote desktop",
     "allowHint": "Allow your signed-in devices to view and operate all apps on this computer. Also enable device control above.",
-    "permissionHint": "On the computer, allow screen recording and accessibility in system settings, then reconnect.",
+    "permissionHint": "On the computer, allow screen recording and accessibility in system settings, then reconnect. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
     "inputUnsupported": "This computer’s current desktop environment does not support remote keyboard and mouse control in Cindy.",
     "controlUnavailable": "Remote keyboard and mouse control is temporarily unavailable. Reconnect to try again.",
     "beingControlled": "Your desktop is being controlled",
@@ -1294,7 +1294,7 @@
     "privacyScreen": "Privacy screen while connected",
     "privacyScreenHint": "Covers this computer’s screen during remote control. If someone clicks or presses a key at the computer, it asks before disconnecting.",
     "privacyActive": "Privacy screen is on. If someone clicks or presses a key at the computer, it asks before disconnecting.",
-    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
+    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible. If the host is a Mac, check the running Cindy app’s control permission on that Mac.",
     "hostMute": "Mute controlled computer",
     "hostMuteHint": "Mute the controlled computer while connected",
     "hostMuteFailed": "Couldn’t change the controlled computer’s mute state",
@@ -1324,7 +1324,7 @@
     "credentialSigningRequired": "The Mac development build is missing its signing configuration. Restart Cindy on the Mac with signing configured, then try again.",
     "credentialPasswordRejected": "The Mac login password was not accepted. Enter it again.",
     "credentialIdentityChanged": "The computer identity could not be verified. No password was sent to an unverified device.",
-    "credentialAccessibilityRequired": "Allow Cindy in System Settings → Privacy & Security → Accessibility on the Mac, then reconnect.",
+    "credentialAccessibilityRequired": "On the Mac, check control access for the running copy of Cindy, then reconnect. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
     "credentialUnlockUnavailable": "Could not safely unlock this Mac. Select your account on its lock screen, then reconnect; if it still fails, unlock the Mac locally.",
     "disconnecting": "Disconnecting…",
     "loadingDisplayModes": "Loading resolutions…",
@@ -2501,8 +2501,8 @@
         "hint": "When AI needs the screen, this computer won't turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password. With no tasks running, the display sleeps and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
         "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
         "preview": "Try it now",
-        "previewStarting": "Let go of the mouse and keyboard. In 3 seconds the privacy screen appears; press any key to lock, then unlock to try it.",
-        "previewUnavailable": "Couldn't show the privacy screen. Restart Cindy and try again.",
+        "previewStarting": "Preparing the privacy screen. Let go of the mouse and keyboard. Once the screen is covered, press a key to test locking.",
+        "previewUnavailable": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
         "delay": {
           "30": "30 sec",
           "60": "1 min",
@@ -2513,7 +2513,10 @@
           "system": "System"
         },
         "hintWindows": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Windows Hello or your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
-        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too."
+        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
+        "permissionMissing": "The privacy screen is off. Cindy needs permission to lock the Mac when someone clicks or presses a key.",
+        "checkFailed": "Cindy couldn’t check the privacy screen permissions on this computer.",
+        "saveFailed": "Could not save the privacy screen setting."
       }
     },
     "agentIsland": {
@@ -18577,7 +18580,7 @@
       "expired": "Input handoff ended after waiting too long."
     },
     "failure": {
-      "permission": "Cindy can't read this computer's screen. Allow Cindy under Accessibility in System Settings.",
+      "permission": "Cindy can’t read the interface on this Mac. Check control access for the running copy of Cindy. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
       "target_gone": "The target window was closed.",
       "unreadable": "This screen can't be read. You can finish it on the host computer, then hand back to the agent.",
       "action_failed": "That action didn't take effect. Check the screen and try again.",
@@ -22551,5 +22554,10 @@
       "auto": "Auto-review",
       "bypassPermissions": "Full access"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "In System & App Protection Override, select {{app}} and click ⓘ. If it’s missing, use + to add the running app.",
+    "review": "$t(macControlPermission.selectApp)\nIf offered, Choose Apps limits which apps it can control. Full control gives the app access to all apps and data. If you agree, acknowledge each item, then choose Allow at the bottom."
   }
 }
