@@ -7980,6 +7980,7 @@ const registerIpcHandlers = () => {
       app.getPath('userData'),
       app.getPath('appData'),
     ),
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     getMainWindow: () => mainWindowRef,
     getLegacyMigrated: () => didMigrateLegacyDataForUser(authManager.getCurrentUserId()),
   });
