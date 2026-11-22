@@ -457,12 +457,17 @@ export function planNavRailWindow(input: {
   // 位置未知:贴尾部 —— 刚打开会话先看到最新一轮,和聊天区一致。
   if (active === null) return place(entryCount);
   const margin = Math.max(1, Math.min(8, Math.floor(capacity / 8)));
+  // 居中要按占位调整后的刻度数算:起点一旦 >0 就多一个"⋯"、少一根刻度,
+  // 按 capacity 居中会让最后那格退到窗外 —— 容量 4 时阅读位置会顶到带尾,
+  // 下一条提问没有可点的刻度。
+  const half = Math.floor((capacity - 1) / 2);
   if (input.anchorStart != null) {
-    const anchor = Math.min(Math.max(0, Math.round(input.anchorStart)), entryCount - capacity);
+    const raw = Math.max(0, Math.round(input.anchorStart));
+    const anchor = Math.min(raw, Math.max(0, entryCount - (capacity - (raw > 0 ? 1 : 0))));
     const ticks = capacity - (anchor > 0 ? 1 : 0);
     if (active >= anchor + margin && active <= anchor + ticks - 1 - margin) return place(anchor);
   }
-  return place(active - Math.floor(capacity / 2));
+  return place(active - half);
 }
 
 /**

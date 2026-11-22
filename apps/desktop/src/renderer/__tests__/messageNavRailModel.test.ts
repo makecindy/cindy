@@ -585,8 +585,8 @@ describe('planNavRailWindow', () => {
     });
     expect(plan.pitchPx).toBe(NAV_RAIL_TICK_PITCH_PX);
     expect(plan.capacity).toBe(NAV_RAIL_MAX_TICKS);
-    expect(plan.startIndex).toBe(1200 - Math.floor(NAV_RAIL_MAX_TICKS / 2));
-    expect(plan.hiddenBefore).toBe(1200 - Math.floor(NAV_RAIL_MAX_TICKS / 2));
+    expect(plan.startIndex).toBe(1200 - Math.floor((NAV_RAIL_MAX_TICKS - 1) / 2));
+    expect(plan.hiddenBefore).toBe(1200 - Math.floor((NAV_RAIL_MAX_TICKS - 1) / 2));
     // 起点 >0 要留一格给"更早还有 N 条"占位,窗内刻度比上限少一根。
     expect(plan.slotCount).toBe(NAV_RAIL_MAX_TICKS - 1);
   });
@@ -616,7 +616,7 @@ describe('planNavRailWindow', () => {
       activeIndex: 1250,
       anchorStart: 1175,
     });
-    expect(escaped.startIndex).toBe(1250 - Math.floor(NAV_RAIL_MAX_TICKS / 2));
+    expect(escaped.startIndex).toBe(1250 - Math.floor((NAV_RAIL_MAX_TICKS - 1) / 2));
   });
 
   it('贴尾部:起点夹在末尾一窗内,不越界', () => {
@@ -664,6 +664,32 @@ describe('planNavRailWindow', () => {
     });
     expect(plan.startIndex).toBe(400);
     expect(plan.hiddenBefore).toBe(400);
+  });
+
+  it('最小容量居中:阅读位置的下一条提问仍在窗内', () => {
+    // 36–44px 的窄带只放得下 4 格;起点 >0 时又要让出"⋯"一格,
+    // 按 capacity 居中会把阅读位置顶到带尾,后面那条提问就点不到了。
+    const plan = planNavRailWindow({
+      entryCount: 40,
+      availableHeightPx: 36,
+      activeIndex: 3,
+      anchorStart: null,
+    });
+    expect(plan.capacity).toBe(NAV_RAIL_MIN_ENTRIES);
+    expect(plan.startIndex).toBe(2);
+    expect(plan.slotCount).toBe(3);
+    expect(plan.startIndex + plan.slotCount - 1).toBeGreaterThan(3);
+  });
+
+  it('最小容量居中:起点仍在第一条时不出现占位', () => {
+    const plan = planNavRailWindow({
+      entryCount: 40,
+      availableHeightPx: 36,
+      activeIndex: 0,
+      anchorStart: null,
+    });
+    expect(plan.startIndex).toBe(0);
+    expect(plan.slotCount).toBe(NAV_RAIL_MIN_ENTRIES);
   });
 
   it('零条目 / 零空间不炸', () => {
