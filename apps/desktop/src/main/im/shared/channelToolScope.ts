@@ -112,7 +112,7 @@ export interface IMessageToolScope {
   channel: 'imessage';
   readDirectDelivery?: (after: number) => { text: string; createdAt: number } | null;
   readArchive?: (query: string | undefined, before: number | undefined, limit: number) => Promise<unknown>;
-  im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health'>;
+  im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health' | 'fetchAttachment'>;
   botId: string;
   laneUserId: string;
   chatId: string;

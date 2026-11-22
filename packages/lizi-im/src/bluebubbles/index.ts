@@ -10,6 +10,19 @@ import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
 import { AUTOMATION_DENIED, BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 
+/** BlueBubbles can answer before Messages has the full file; its record states the real size. */
+function isShortCopy(attachment: BlueBubblesAttachment, bytes: Uint8Array): boolean {
+  return (attachment.totalBytes ?? 0) > 0 && bytes.byteLength < attachment.totalBytes!;
+}
+/** Human-readable size for attachment notes the model reads. */
+function formatBytes(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+/** Where the original is and how to get it; shown inside the untrusted attachment data block. */
+function originalPointer(messageId: string, attachmentGuid: string): string {
+  return `message_id=${messageId}，attachment_guid=${attachmentGuid}；可用 cindy_imessage.fetch_attachment 取原件`;
+}
+
 export interface BlueBubblesConfig {
   serverUrl: string;
   ownerAddress: string;
@@ -89,6 +102,8 @@ function mentionsSelf(body: unknown, selfAddress: string | undefined): boolean {
 
 export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private status: IMStatus = { kind: 'idle' };
+  /** Wait between re-downloads while Messages finishes an incoming original. */
+  shortCopyRetryMs = 5_000;
   private readonly messages = new Set<Handler>();
   private readonly statuses = new Set<(status: IMStatus) => void>();
   private config: BlueBubblesConfig | null = null;
@@ -802,7 +817,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const name = attachment.transferName || attachment.guid;
     const kind = classifyInboundAttachment(attachment.mimeType, name);
     if (kind.kind === 'file') return this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name });
-    const params = { integration: 'imessage' as const, token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType };
+    // A short copy is never cached as the attachment itself, so a later read downloads it again.
+    const preview = isShortCopy(attachment, bytes);
+    const params = { integration: 'imessage' as const, token: `${this.botContextId}:${attachment.guid}${preview ? ':preview' : ''}`, buffer: bytes, mimeType: kind.mimeType };
     return kind.kind === 'image' ? this.host.media?.cacheImage({ ...params, staging: true }) : this.host.media?.cacheMedia?.(params);
   }
 
@@ -837,7 +854,11 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         const name = item.transferName || item.guid;
         const kind = classifyInboundAttachment(item.mimeType, name);
         const image = kind.kind === 'image';
-        if ((image ? images : files) === 0 || (item.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) {
+        if ((item.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) {
+          unavailable.push(`${name}（${formatBytes(item.totalBytes!)}，超过直接读取上限；${originalPointer(guid, item.guid)}）`);
+          continue;
+        }
+        if ((image ? images : files) === 0) {
           unavailable.push(name);
           continue;
         }
@@ -845,11 +866,15 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           const cached = image ? await this.host.media?.getCachedImage('imessage', `${this.botContextId}:${item.guid}`,
             { staging: true, shouldReuse: () => this.live(generation) }) : null;
           this.assertLive(generation);
-          let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined = cached;
+          // An earlier short copy cached under this attachment is not the attachment.
+          const cachedSize = cached && item.totalBytes ? await fs.stat(cached.absPath).then(stat => stat.size, () => 0) : 0;
+          let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined =
+            cached && !(item.totalBytes && cachedSize < item.totalBytes) ? cached : null;
           if (!stored) {
             const bytes = await api.download(item.guid);
             this.assertLive(generation);
             stored = await this.stageAttachment(item, bytes);
+            if (isShortCopy(item, bytes)) unavailable.push(`${name}（只拿到 ${formatBytes(bytes.byteLength)} 的预览，原件 ${formatBytes(item.totalBytes!)}；${originalPointer(guid, item.guid)}）`);
           }
           if (!this.live(generation)) await stored?.discard?.();
           this.assertLive(generation);
@@ -880,16 +905,29 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       for (const attachment of message.attachments ?? []) {
         const name = attachment.transferName || attachment.guid;
-        if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { event.unsupported.push({ type: 'oversize', label: name }); continue; }
+        const oversize = () => event.unsupported.push({ type: 'oversize', label:
+          `${name}（${attachment.totalBytes ? formatBytes(attachment.totalBytes) : '超过 64 MB'}，超过直接读取上限；${originalPointer(guid, attachment.guid)}）` });
+        if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { oversize(); continue; }
         let bytes: Uint8Array;
-        try { bytes = await api.download(attachment.guid); }
-        catch (error) {
+        try {
+          bytes = await api.download(attachment.guid);
+          // Messages may still be transferring the original; wait briefly for the full file.
+          for (let attempt = 0; attempt < 2 && isShortCopy(attachment, bytes); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, this.shortCopyRetryMs));
+            this.assertLive(generation);
+            bytes = await api.download(attachment.guid);
+          }
+        } catch (error) {
           this.assertLive(generation);
           if (!(error instanceof BlueBubblesApiError) || error.code !== 'BLUEBUBBLES_RESPONSE_TOO_LARGE') throw error;
-          event.unsupported.push({ type: 'oversize', label: name });
+          oversize();
           continue;
         }
         this.assertLive(generation);
+        if (isShortCopy(attachment, bytes)) {
+          event.unsupported.push({ type: 'preview', label:
+            `${name}（本轮附件只有 ${formatBytes(bytes.byteLength)}，原件 ${formatBytes(attachment.totalBytes!)}；${originalPointer(guid, attachment.guid)}）` });
+        }
         if (this.cancelledEvents.has(event)) return;
         const kind = classifyInboundAttachment(attachment.mimeType, name);
         let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined;
@@ -991,6 +1029,25 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const rows = await api.history(chatId, after, before, offset);
     this.assertLive(generation);
     return rows.filter(row => row.chats?.some(chat => chat.guid === chatId));
+  }
+  /**
+   * Download one attachment's stored original into `destDir`. The message must be in this connected
+   * chat and carry that attachment; credentials and the BlueBubbles origin never reach the caller.
+   */
+  async fetchAttachment(chatId: string, messageId: string, attachmentGuid: string, destDir: string) {
+    const { api, generation } = this.target(chatId);
+    const message = await api.message(messageId);
+    this.assertLive(generation);
+    const attachment = message?.guid === messageId && message.chats?.some(chat => chat.guid === chatId)
+      ? message.attachments?.find(item => item.guid === attachmentGuid) : undefined;
+    if (!attachment) throw new Error('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
+    const name = path.basename(attachment.transferName || attachment.guid).replace(/[\u0000-\u001f]/g, '') || attachment.guid;
+    await fs.mkdir(destDir, { recursive: true });
+    const dest = path.join(destDir, `${attachment.guid.slice(0, 8)}-${name}`);
+    const bytes = await api.downloadToFile(attachment.guid, dest);
+    this.assertLive(generation);
+    const totalBytes = attachment.totalBytes ?? null;
+    return { path: dest, name, bytes, totalBytes, complete: totalBytes === null || totalBytes === 0 || bytes >= totalBytes };
   }
   /** Reuse the already-authorized receiver. No dispose, credential write or second listener. */
   async verifyGroupHandoff(chatId: string): Promise<() => void> {

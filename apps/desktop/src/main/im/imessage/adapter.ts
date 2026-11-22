@@ -108,7 +108,7 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       requesterIsOwner: event.speaker?.isOwner === true, companion: true };
     },
     channelNoteSourceFor: event => ({
-      toolsHint: 'iMessage via local BlueBubbles. cindy_imessage tools provide connected chat history, immediate text/file sending and connection health. When asked for a report or document addressed to this private chat, use latest_direct_delivery in the current private chat. Reply with the returned original verbatim, including after a failed proactive send. Normal final replies are delivered automatically.',
+      toolsHint: 'iMessage via local BlueBubbles. cindy_imessage tools provide connected chat history, immediate text/file sending, original attachment download (fetch_attachment, for previews and files over 64 MiB) and connection health. When asked for a report or document addressed to this private chat, use latest_direct_delivery in the current private chat. Reply with the returned original verbatim, including after a failed proactive send. Normal final replies are delivered automatically.',
       chatKind: im.isGroup(event.chatId) ? 'group' : 'direct', chatId: event.chatId,
       chatName: event.interactionSource?.chatName, senderId: event.speaker?.id,
       senderName: event.speaker?.name, senderIsOwner: event.speaker?.isOwner === true,
