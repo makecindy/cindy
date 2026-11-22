@@ -177,6 +177,8 @@ export function noteLeadTurnDeclaration(
   declaration: Omit<LeadTurnDeclaration, 'at' | 'pending'> & { pending?: LeadTurnPending[] },
 ): void {
   const ledger = ledgerFor(leadSessionId);
+  // 重建会话后轮次会回到 1：先按代次丢掉旧账本再记声明，否则收口时的回退清理会把这份声明抹掉。
+  if (declaration.turnGeneration > 0) observeGeneration(ledger, declaration.turnGeneration);
   ledger.declaration = {
     assignments: declaration.assignments,
     dispatched: declaration.dispatched,

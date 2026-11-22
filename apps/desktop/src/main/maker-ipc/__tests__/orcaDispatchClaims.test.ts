@@ -214,6 +214,21 @@ describe('lead turn declaration reconciliation', () => {
     expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({ consistent: true });
   });
 
+  it('keeps a fresh declaration when the session instance restarts', () => {
+    // 旧实例的账本停在第 8 轮；重建会话后第 1 轮就交了声明，收口才发现代次回退。
+    dispatchFactsForTurn('lead-1', 8);
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
+      dispatched: [],
+      pending: [],
+      turnGeneration: 1,
+    });
+
+    const verdict = reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 1));
+    if (verdict.consistent) throw new Error('expected an inconsistent verdict');
+    expect(verdict.reason).toBe('declared-not-dispatched');
+  });
+
   it('asks once, then escalates, then stays quiet until a real dispatch resets it', () => {
     expect(settleDispatchClaimIncident('lead-1', false)).toBe('wake');
     expect(settleDispatchClaimIncident('lead-1', false)).toBe('escalate');
