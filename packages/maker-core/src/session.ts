@@ -1615,6 +1615,10 @@ export class Session {
     return this.handle.countPendingWakeContinuations?.() ?? 0;
   }
 
+  cancelPendingBackgroundWake(): void {
+    this.handle.cancelPendingBackgroundWake?.();
+  }
+
   /**
    * Resolve the provider-owned continuation claim already attached to this
    * exact `done`. Host observers must never infer this from the current task
@@ -2858,10 +2862,9 @@ export class Session {
     isBackgroundEvent: boolean,
     isCurrentGeneration: boolean,
   ): boolean {
-    // Claude knows a top-level automatic turn started even when the first
-    // response is only an API-error envelope. Ordinary running/child statuses
-    // are not evidence: they can be leftover activity from the preceding turn.
-    const providerStart = event.source === 'claude-code' && event.type === 'status' &&
+    // The adapter can mark a top-level wake before any output, including wakes
+    // that only return an error. Ordinary running/child status may be leftover.
+    const providerStart = (event.source === 'claude-code' || event.source === 'antigravity') && event.type === 'status' &&
       (event.data as { isRunning?: unknown; providerInitiatedTurn?: unknown } | null)?.isRunning === true &&
       (event.data as { providerInitiatedTurn?: unknown } | null)?.providerInitiatedTurn === true;
     if (isBackgroundEvent || !isCurrentGeneration || (!providerStart && !this.isNewTurnProgressEvent(event))) return false;

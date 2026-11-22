@@ -1915,36 +1915,40 @@ describe('Session provider-initiated turns (harness wake-ups)', () => {
     await session.close();
   });
 
-  it.each(['text', 'status'] as const)('settles a provider-initiated %s turn failure instead of the earlier success', async (start) => {
-    const h = createControllableHandle({ agentKind: 'claude-code' });
-    const session = makeSession(h.handle, 'claude-code');
-    const terminals: string[] = [];
-    session.setTurnLifecycleObserver({
-      beforeProviderStart: () => undefined,
-      onUndispatched: () => undefined,
-      onTerminal: ({ event }) => { terminals.push(event.type); },
-      onProviderInitiatedTurn: () => undefined,
-    });
-    const seen: string[] = [];
-    session.onEvent((event) => seen.push(event.type));
+  // An Antigravity wake can fail before any text arrives. Its start status
+  // must claim the terminal so the preceding done cannot hide the failure.
+  it.each([['claude-code', 'text'], ['claude-code', 'status'], ['antigravity', 'status']] as const)(
+    'settles a provider-initiated %s turn failure opened by %s', async (agentKind, start) => {
+      const h = createControllableHandle({ agentKind });
+      const session = makeSession(h.handle, agentKind);
+      const terminals: string[] = [];
+      session.setTurnLifecycleObserver({
+        beforeProviderStart: () => undefined,
+        onUndispatched: () => undefined,
+        onTerminal: ({ event }) => { terminals.push(event.type); },
+        onProviderInitiatedTurn: () => undefined,
+      });
+      const seen: string[] = [];
+      session.onEvent((event) => seen.push(event.type));
 
-    await session.send('launch background agents', { origin: SCHED_ORIGIN });
-    await h.emit({ type: 'done', data: {} });
-    // A late error right after that done is still the previous turn's leftover.
-    await h.emit({ type: 'error', data: { message: 'late' } });
-    expect(terminals).toEqual(['done']);
+      await session.send('launch background agents', { origin: SCHED_ORIGIN });
+      await h.emit({ type: 'done', data: {} });
+      // A late error right after that done is still the previous turn's leftover.
+      await h.emit({ type: 'error', data: { message: 'late' } });
+      expect(terminals).toEqual(['done']);
 
-    h.setTurnRunning(true);
-    await h.emit(start === 'text'
-      ? { type: 'text', data: { text: 'woke up' } }
-      : { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } },
-      { keepRunning: true });
-    await h.emit({ type: 'error', data: { message: 'wake failed' } });
-    await h.emit({ type: 'done', data: {} });
-    expect(terminals.slice(1, 2)).toEqual(['error']);
-    expect(seen.filter((type) => type === 'error').length).toBeGreaterThan(0);
-    await session.close();
-  });
+      h.setTurnRunning(true);
+      await h.emit(start === 'text'
+        ? { type: 'text', data: { text: 'woke up' } }
+        : { type: 'status', source: agentKind, data: { isRunning: true, providerInitiatedTurn: true } },
+        { keepRunning: true });
+      await h.emit({ type: 'error', data: { message: 'wake failed' } });
+      await h.emit({ type: 'done', data: {} });
+      expect(terminals.slice(1, 2)).toEqual(['error']);
+      expect(seen.filter((type) => type === 'error').length).toBeGreaterThan(0);
+      await session.close();
+    },
+  );
 
   it('never announces sent turns, subagent output, idle tails or claimed continuations', async () => {
     const h = createControllableHandle({ agentKind: 'claude-code' });

@@ -4963,6 +4963,15 @@ export async function ensureGoalInputReady(sessionId: string): Promise<boolean> 
     && !isGoalInputBlocked(sessionId);
 }
 
+/** The check runs in the same stack as ACP dispatch and gives existing input priority. */
+export function canWakeAntigravityTask(sessionId: string, instanceId: string): boolean {
+  const session = getMakerIfReady()?.getSession(sessionId);
+  return session?.agentKind === 'antigravity' && session.instanceId === instanceId &&
+    session.getStatus() === 'active' && !session.hasStartedClosing() &&
+    agentInputCoordinatorHolder?.isQueueRestored(sessionId) === true &&
+    !sendToSessionLocks.has(sessionId) && !isGoalInputBlocked(sessionId);
+}
+
 export function isSessionInTurn(sessionId: string): boolean {
   return sessionTurnActivityTracker.isSessionInTurn(sessionId);
 }
@@ -20028,6 +20037,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
     // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
     onUserEnqueue: (sessionId) => {
+      maker.getSession(sessionId)?.cancelPendingBackgroundWake();
       contextOverflowRolloverHolder?.cancelRecovery(sessionId);
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
       // The user turn can dispatch before the backoff callback observes that its

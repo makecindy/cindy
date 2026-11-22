@@ -73,6 +73,7 @@ function createAntigravityAgent(
   logger: AgentDeps['logger'],
   prepareTools?: (opts: import('@cindy/maker-core').StartSessionOptions) => Promise<{ mcpServers: Array<Record<string, unknown>>; dispose(): void }>,
   closeTaskSessions?: () => Promise<void>,
+  canWakeTaskSession?: (sessionId: string, instanceId: string) => boolean,
 ): AntigravityAgent | null {
   currentAccounts = null;
   setAntigravityState(null);
@@ -267,12 +268,16 @@ function createAntigravityAgent(
         } };
         transports.set(tracked, binding.id);
         void transport.whenExited?.then(() => transports.delete(tracked));
+        const { sessionId, sessionInstanceId } = opts ?? {};
         return {
           sessionScope, isCurrent: () => isCurrentBinding(binding),
           useCachedAuthentication: stableSession && !antigravityNativeResumeId(opts.resumeSessionId, sessionScope) && binding.id !== LEGACY_PROFILE,
           mcpServers: tools?.mcpServers, dispose: tools?.dispose,
           transport: tracked,
           watchCommandExits: (sessionId, onExit) => watchAntigravityCommandExits(geminiHome(binding.id), sessionId, onExit),
+          canWakeAfterCommandExit: sessionId && sessionInstanceId && canWakeTaskSession
+            ? () => canWakeTaskSession(sessionId, sessionInstanceId)
+            : undefined,
           assertSubscriptionOnly: async () => checkPolicy(binding),
           assertGenerationAllowed: async () => {
             assertCurrentBinding(binding);

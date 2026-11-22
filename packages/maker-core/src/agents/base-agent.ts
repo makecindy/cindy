@@ -2693,6 +2693,9 @@ export interface AgentSessionHandle {
    */
   countPendingWakeContinuations?(): number;
 
+  /** Withdraw an idle wake when host input arrives before the provider send. */
+  cancelPendingBackgroundWake?(): void;
+
   /**
    * 宿主发起的独占 RPC 操作(手动压缩 / rewind fork / 切模等)是否在途。
    * 这类操作不预约 turn、也不置 isStreaming；运行时回收必须能看见它们，

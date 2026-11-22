@@ -413,6 +413,180 @@ describe('AntigravityAgent native Cindy contract', () => {
     }
   });
 
+  async function openCommandWakeSession() {
+    const h = setup(false, true);
+    await h.session.close();
+    let commandExited!: (exit: AntigravityCommandExit) => void;
+    const canWakeAfterCommandExit = vi.fn(() => true);
+    const { agent } = makeAgent(h, {
+      canWakeAfterCommandExit,
+      watchCommandExits: (_id, callback) => {
+        commandExited = callback;
+        return () => {};
+      },
+    });
+    const handle = await agent.startSession({ workingDir: '/workspace', providerId: 'google-antigravity-subscription', model: 'gemini-test' });
+    const prompts = () => h.sent.filter(request => request.method === 'session/prompt');
+    const update = (update: AcpRecord) => h.inbound({ method: 'session/update', params: { sessionId: 'native-1', update } });
+    const command = (toolCallId: string, fields: AcpRecord = {}) => update({
+      sessionUpdate: 'tool_call', toolCallId, name: 'run_command', status: 'in_progress', ...fields,
+    });
+    const done = (stopReason = 'end_turn') => h.inbound({ id: prompts().at(-1)?.id, result: { stopReason } });
+    const exit = (toolUseId: string) => commandExited({ taskId: 'native-1/task-1', toolUseId });
+    const terminal = (toolCallId: string) => update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' });
+    return { h, handle, canWakeAfterCommandExit, prompts, update, command, done, exit, terminal };
+  }
+
+  // Unit: startSession/send must issue a second session/prompt to the same native
+  // session after a command exit. The activity-only test above sends a new user
+  // turn before the receipt, so it cannot reproduce the idle ACP stall.
+  it.each(['native receipt', 'ACP terminal'] as const)('wakes the original idle session on %s', async (source) => {
+    vi.useFakeTimers();
+    const { handle, command, done, exit, terminal, prompts } = await openCommandWakeSession();
+    try {
+      await handle.send({ type: 'user', content: 'start build' });
+      command('build');
+      done();
+      if (source === 'native receipt') exit('build');
+      else terminal('build');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prompts()).toHaveLength(2);
+      expect(prompts()[1]?.params).toMatchObject({
+        sessionId: 'native-1',
+        prompt: [{ type: 'text', text: expect.stringContaining('background command') }],
+      });
+      done();
+      terminal('build');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prompts()).toHaveLength(2);
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['daemon', 'late daemon', 'schedule', 'refusal', 'expired'] as const)(
+    'leaves ACP idle after %s', async (scenario) => {
+      vi.useFakeTimers();
+      const { handle, command, done, terminal, update, prompts } = await openCommandWakeSession();
+      try {
+        await handle.send({ type: 'user', content: 'start work' });
+        command('work', scenario === 'daemon' ? { rawInput: { is_daemon: true } }
+          : scenario === 'schedule' ? { name: 'schedule' } : {});
+        done(scenario === 'refusal' ? 'refusal' : 'end_turn');
+        if (scenario === 'expired') await vi.advanceTimersByTimeAsync(30 * 60_000);
+        if (scenario === 'late daemon') update({ sessionUpdate: 'tool_call_update', toolCallId: 'work', rawInput: { IsDaemon: true } });
+        terminal('work');
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(prompts()).toHaveLength(1);
+        expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      } finally {
+        await handle.close();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('preserves a confirmed command exit while native background text is still streaming', async () => {
+    vi.useFakeTimers();
+    const { handle, command, done, terminal, update, prompts } = await openCommandWakeSession();
+    try {
+      await handle.send({ type: 'user', content: 'start work' });
+      command('work');
+      done();
+      terminal('work');
+      await vi.advanceTimersByTimeAsync(1_000);
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'An unrelated schedule update.' } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(prompts()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(prompts()).toHaveLength(2);
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['stop', 'close', 'new message', 'enqueue before done', 'queued during preflight', 'new message during preflight', 'process exit'] as const)(
+    'cancels an idle wake on %s', async (scenario) => {
+      vi.useFakeTimers();
+      const { h, handle, command, done, terminal, prompts, canWakeAfterCommandExit } = await openCommandWakeSession();
+      try {
+        await handle.send({ type: 'user', content: 'start work' });
+        command('work');
+        if (scenario === 'enqueue before done') handle.cancelPendingBackgroundWake?.();
+        done();
+        terminal('work');
+        if (scenario === 'stop') await handle.abort();
+        if (scenario === 'close') await handle.close();
+        if (scenario === 'process exit') h.disconnect();
+        if (scenario === 'new message') await handle.send({ type: 'user', content: 'use the results for another task' });
+        if (scenario === 'queued during preflight') {
+          // The first idle check passes. The wire check sees the queued user turn.
+          canWakeAfterCommandExit.mockReturnValueOnce(true).mockReturnValue(false);
+        }
+        if (scenario === 'new message during preflight') {
+          // Stall just the synthetic spending check, then let a real user turn
+          // reach the wire while the wake is still waiting for that check.
+          let release!: () => void;
+          h.policy.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+          await vi.advanceTimersByTimeAsync(2_000);
+          await handle.send({ type: 'user', content: 'use the results for another task' });
+          release();
+        }
+        await vi.advanceTimersByTimeAsync(2_000);
+        const newMessage = scenario === 'new message' || scenario === 'new message during preflight';
+        expect(prompts()).toHaveLength(newMessage ? 2 : 1);
+        if (newMessage) expect(prompts()[1]?.params).toMatchObject({
+          prompt: [{ type: 'text', text: 'use the results for another task' }],
+        });
+        expect(handle.countPendingWakeContinuations?.()).toBe(0);
+      } finally {
+        await handle.close();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('keeps a parallel command through a wake and caps repeated command wakes until new input', async () => {
+    vi.useFakeTimers();
+    const { handle, command, done, terminal, prompts } = await openCommandWakeSession();
+    try {
+      await handle.send({ type: 'user', content: 'start parallel builds' });
+      command('build-1');
+      command('build-2');
+      done();
+      terminal('build-1');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prompts()).toHaveLength(2);
+
+      terminal('build-2');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prompts()).toHaveLength(2);
+      done();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prompts()).toHaveLength(3);
+
+      for (const [id, total] of [['build-3', 4], ['build-4', 4]] as const) {
+        command(id);
+        done();
+        terminal(id);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(prompts()).toHaveLength(total);
+      }
+
+      await handle.send({ type: 'user', content: 'start a new build' });
+      command('build-5');
+      done();
+      terminal('build-5');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prompts()).toHaveLength(6);
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(['cancelled', 'error'] as const)('settles a dispatched prompt on %s', async (outcome) => {
     const h = setup(false, true);
     await h.session.close();

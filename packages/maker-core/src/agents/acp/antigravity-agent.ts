@@ -19,6 +19,12 @@ import { pathToFileURL } from 'node:url';
 const BACKGROUND_IDLE_MS = 2_000;
 const CANCEL_GRACE_MS = 15_000;
 const RECENT_TOOL_RESULTS_LIMIT = 512;
+const COMMAND_WAKE_LIMIT = 3;
+const COMMAND_WAKE_WINDOW_MS = 30 * 60_000;
+// Give the CLI's background stream and Cindy's prior done time to settle.
+const COMMAND_WAKE_GRACE_MS = 2_000;
+const COMMAND_WAKE_TEXT = '[Cindy background command completed] A background command from this task has finished. Check its result and continue any remaining work from the current request.';
+const COMMAND_WAKE_NATIVE_STREAM_BUSY = Symbol('command-wake-native-stream-busy');
 
 /** Validate the selected executable's protocol without loading a user session or authenticating. */
 export async function probeAntigravityRuntime(transport: AcpTransport, cwd: string): Promise<void> {
@@ -42,6 +48,8 @@ interface AntigravityConnection {
   useCachedAuthentication?: boolean;
   mcpServers?: AcpRecord[];
   watchCommandExits?(sessionId: string, onExit: (exit: AntigravityCommandExit) => void): () => void;
+  /** Synchronous host admission check, called again immediately before dispatch. */
+  canWakeAfterCommandExit?(): boolean;
   dispose?(): void;
 }
 
@@ -50,7 +58,17 @@ interface OpenAntigravityTool {
   status?: AcpToolCallStatus;
   outputHash?: string;
   nativeCommand?: true;
+  daemon?: true;
   nativeExitTaskId?: string;
+}
+
+interface CommandWake {
+  pending: Set<string>;
+  completed: Set<string>;
+  count: number;
+  deadline: number;
+  expiry: ReturnType<typeof setTimeout>;
+  dispatchTimer?: ReturnType<typeof setTimeout>;
 }
 export interface AntigravityHost {
   connect(cwd: string, opts?: StartSessionOptions): Promise<AntigravityConnection>;
@@ -284,6 +302,67 @@ export class AntigravityAgent extends BaseAgent {
     const settledTools = new Map<string, { background: boolean; awaitingOutput: boolean }>();
     const watchedCommandCalls = new Set<string>();
     let stopWatchingCommandExits: (() => void) | undefined;
+    let commandWake: CommandWake | undefined;
+    let lastNativeBackgroundOutputAt = -Infinity;
+    let inputEpoch = 0;
+    const clearCommandWake = () => {
+      if (!commandWake) return;
+      clearTimeout(commandWake.expiry);
+      if (commandWake.dispatchTimer) clearTimeout(commandWake.dispatchTimer);
+      commandWake = undefined;
+    };
+    const clearEmptyCommandWake = () => {
+      if (!active && commandWake?.pending.size === 0 && commandWake.completed.size === 0) clearCommandWake();
+    };
+    const cancelPendingBackgroundWake = () => {
+      inputEpoch++;
+      clearCommandWake();
+    };
+    const canDispatchWake = (wake: CommandWake): boolean =>
+      commandWake === wake && wake.completed.size > 0 && wake.count < COMMAND_WAKE_LIMIT &&
+      Date.now() < wake.deadline && !active && !closed && !control && usable &&
+      !this.locallyDisconnected && connection.isCurrent?.() !== false &&
+      connection.canWakeAfterCommandExit?.() === true;
+    const nativeQuietDelay = () => lastNativeBackgroundOutputAt + COMMAND_WAKE_GRACE_MS - Date.now();
+    const assertWakeReady = (wake: CommandWake) => {
+      if (!canDispatchWake(wake)) throw new Error('ANTIGRAVITY_WAKE_SUPERSEDED');
+      if (nativeQuietDelay() > 0) throw COMMAND_WAKE_NATIVE_STREAM_BUSY;
+    };
+    const scheduleCommandWake = (delay = COMMAND_WAKE_GRACE_MS) => {
+      const wake = commandWake;
+      if (!wake || active || wake.dispatchTimer || wake.completed.size === 0) return;
+      const timer = setTimeout(() => {
+        // Keep this claim through preflight so multiple exits coalesce.
+        void send({ type: 'user', content: COMMAND_WAKE_TEXT }, undefined, wake).catch(error => {
+          if (commandWake !== wake || wake.dispatchTimer !== timer) return;
+          wake.dispatchTimer = undefined;
+          // Native output can come from another tool such as schedule. It is
+          // evidence to wait for idle, not proof that a command was handled.
+          if (error === COMMAND_WAKE_NATIVE_STREAM_BUSY) scheduleCommandWake(Math.max(0, nativeQuietDelay()));
+          else if (wake.completed.size > 0 || wake.pending.size === 0) clearCommandWake();
+        });
+      }, delay);
+      wake.dispatchTimer = timer;
+      timer.unref?.();
+    };
+    const markCommandCompleted = (toolUseId: string) => {
+      const wake = commandWake;
+      if (!wake?.pending.delete(toolUseId)) return;
+      wake.completed.add(toolUseId);
+      scheduleCommandWake();
+    };
+    const armCommandWake = (toolUseId: string) => {
+      if (!connection.canWakeAfterCommandExit) return;
+      if (!commandWake) {
+        const expiry = setTimeout(clearCommandWake, COMMAND_WAKE_WINDOW_MS);
+        expiry.unref?.();
+        commandWake = {
+          pending: new Set(), completed: new Set(), count: 0,
+          deadline: Date.now() + COMMAND_WAKE_WINDOW_MS, expiry,
+        };
+      }
+      commandWake.pending.add(toolUseId);
+    };
     const emit = (type: AgentEvent['type'], data: unknown, background = false, nativeToolName?: string) => {
       queue.push({
         type, data, source: 'antigravity',
@@ -313,6 +392,7 @@ export class AntigravityAgent extends BaseAgent {
         // call and its original turn scope until that result actually arrives.
         emitToolActivity({ kind: 'command_exited', ...exit });
         unwatchCommandCall(exit.toolUseId);
+        markCommandCompleted(exit.toolUseId);
       });
     };
     const finishTool = (toolUseId: string, fullText: string, isError: boolean, awaitingOutput = false) => {
@@ -347,6 +427,7 @@ export class AntigravityAgent extends BaseAgent {
       onClose() {
         if (current !== connection || closed) return;
         closed = true; usable = false; turnController?.abort();
+        cancelPendingBackgroundWake();
         stopCommandWatch();
         // Only release the event stream after this process has stopped. Session's
         // normal stream-end lifecycle then rebuilds on the next user send; no replay.
@@ -371,6 +452,7 @@ export class AntigravityAgent extends BaseAgent {
         } else if (type === 'agent_message_chunk' || type === 'agent_thought_chunk') {
           const content = record(update.content);
           if (content.type === 'text' && typeof content.text === 'string') {
+            if (background && content.text.trim()) lastNativeBackgroundOutputAt = Date.now();
             if (type === 'agent_message_chunk') {
               if (background) {
                 backgroundText += content.text;
@@ -415,11 +497,19 @@ export class AntigravityAgent extends BaseAgent {
             openTools.set(toolUseId, call);
             emit('tool_use', { toolUseId, ...parseMessageToolUse({ role: 'tool_use', toolUseId, content }) }, background, tool.name);
           }
+          if (tool.name === 'run_command') call.nativeCommand = true;
+          const input = record(tool.rawInput);
+          if (input.is_daemon === true || input.IsDaemon === true) {
+            call.daemon = true;
+            commandWake?.pending.delete(toolUseId);
+            commandWake?.completed.delete(toolUseId);
+            clearEmptyCommandWake();
+          }
           if (terminal) {
             finishTool(toolUseId, fullText, isError, !fullText);
+            markCommandCompleted(toolUseId);
             return;
           }
-          if (tool.name === 'run_command') call.nativeCommand = true;
           if (call.background && call.nativeCommand && !call.nativeExitTaskId) watchCommandCall(toolUseId);
           const started = tool.status === 'in_progress' && call.status !== 'in_progress';
           if (tool.status) call.status = tool.status;
@@ -521,110 +611,148 @@ export class AntigravityAgent extends BaseAgent {
     const change = async (run: () => Promise<void>): Promise<void> => {
       if (active || closed || control) throw new Error('ANTIGRAVITY_SESSION_BUSY');
       assertCurrent();
+      cancelPendingBackgroundWake();
       const pending = run(); control = pending;
       try { await pending; } finally { if (control === pending) control = undefined; }
+    };
+    const send = async (message: UserMessage, sendOpts?: SendOptions, wake?: CommandWake) => {
+      if (wake) {
+        assertWakeReady(wake);
+      } else {
+        cancelPendingBackgroundWake();
+        lastNativeBackgroundOutputAt = -Infinity;
+      }
+      if (this.locallyDisconnected) throw new Error('Google 订阅连接已断开，请先重新连接。');
+      if (active || closed || control || sendOpts?.turnPermissionPolicy) throw new Error('ANTIGRAVITY_TURN_UNSUPPORTED');
+      const controller = new AbortController();
+      const epoch = inputEpoch;
+      const claimTurn = () => {
+        turnController = controller; active = true; currentText = '';
+        cancelTurn = cancelled;
+      };
+      let cancelTimer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+      let cancelledByCaller = false;
+      const cancelled = () => {
+        if (controller.signal.aborted) return;
+        cancelledByCaller = true;
+        controller.abort();
+        try { session.cancel(); } catch { /* A closed transport cannot accept a late prompt. */ }
+        if (!promptDispatched) return;
+        const retiring = session;
+        cancelTimer = setTimeout(() => {
+          if (session !== retiring) return;
+          usable = false;
+          // Clear dead activity now. A later reconnect still owns tool-card reconciliation.
+          void retireSession(false).catch(() => {
+            thisAgent.deps.logger.warn('ACP cleanup pending after cancel', { code: 'ACP_PROCESS_EXIT_UNCONFIRMED' });
+          });
+        }, CANCEL_GRACE_MS);
+        cancelTimer.unref?.();
+      };
+      // During wake preflight, a user send can still reserve the turn.
+      if (!wake) claimTurn();
+      sendOpts?.signal?.addEventListener('abort', cancelled, { once: true });
+      const release = () => {
+        if (cancelTimer) clearTimeout(cancelTimer);
+        if (turnController === controller) {
+          active = false;
+          promptDispatched = false;
+          turnController = undefined;
+          cancelTurn = undefined;
+        }
+        sendOpts?.signal?.removeEventListener('abort', cancelled);
+      };
+      const finish = (outcome: AcpResponse) => {
+        if (settled) return;
+        settled = true;
+        const text = currentText;
+        currentText = '';
+        const result = 'result' in outcome ? outcome.result : {};
+        const cancelled = cancelledByCaller || result.stopReason === 'cancelled';
+        const mayArmWake = !closed && epoch === inputEpoch && result.stopReason === 'end_turn' &&
+          !cancelled && (!wake || commandWake === wake);
+        if (wake && !mayArmWake && commandWake === wake) clearCommandWake();
+        release();
+        if (text) emit('text', { text, isFinal: true, isFullText: true });
+        for (const [toolUseId, call] of openTools) {
+          if (call.background) continue;
+          if (cancelled || 'error' in outcome) {
+            finishTool(toolUseId, 'Interrupted before the tool finished.', true);
+          } else {
+            call.background = true;
+            if (call.nativeCommand) {
+              if (mayArmWake && call.status === 'in_progress' && !call.daemon && !call.nativeExitTaskId) {
+                armCommandWake(toolUseId);
+              }
+              watchCommandCall(toolUseId);
+            }
+          }
+        }
+        if ('error' in outcome && !cancelledByCaller) {
+          emit('error', { message: outcome.error.message, isTerminal: true });
+          return;
+        }
+        const u = record(result.usage);
+        if (typeof u.totalTokens === 'number' && Number.isFinite(u.totalTokens) && u.totalTokens >= 0) usage = { ...usage, tokenUsage: u.totalTokens };
+        emit('done', {
+          stopReason: cancelled ? 'cancelled' : result.stopReason,
+          result: text,
+          status: cancelled ? 'cancelled' : 'completed',
+          ...(cancelled ? { cancelled: true } : {}),
+          usage,
+        });
+        clearEmptyCommandWake();
+        scheduleCommandWake();
+      };
+      try {
+        sendOpts?.signal?.throwIfAborted(); controller.signal.throwIfAborted();
+        // A failed permission change never adopts the uncommitted policy. Restore
+        // the last confirmed policy before a later user send, without replaying a turn.
+        if (!usable) await reconnect(permission);
+        if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
+        if (connection.assertGenerationAllowed) await connection.assertGenerationAllowed();
+        else if (this.host.assertGenerationAllowed) await this.host.assertGenerationAllowed();
+        else throw new Error('ANTIGRAVITY_GENERATION_POLICY_UNAVAILABLE');
+        controller.signal.throwIfAborted();
+        if (!session.tier || !/^(Google AI |AI )?(Pro|Ultra)$/i.test(session.tier.name)) throw new Error('ANTIGRAVITY_PERSONAL_PLAN_UNVERIFIED');
+        if (!isAntigravitySubscriptionModel(session.currentModel ?? '')) throw new Error('ANTIGRAVITY_SUBSCRIPTION_MODEL_REQUIRED');
+        const content = await promptContent(message, { supportsImageInput: session.supportsImageInput });
+        controller.signal.throwIfAborted();
+        if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
+        const dispatched = await session.dispatchPrompt(content, controller.signal, {
+          beforeSend() {
+            if (wake) assertWakeReady(wake);
+          },
+          sent() {
+            if (wake) {
+              claimTurn();
+              wake.dispatchTimer = undefined;
+              wake.completed.clear();
+              if (++wake.count >= COMMAND_WAKE_LIMIT) clearCommandWake();
+            }
+            flushBackgroundText();
+            promptDispatched = true;
+            emit('status', { isRunning: true, status: 'Thinking...', ...(wake ? { providerInitiatedTurn: true } : {}) });
+          },
+          response: finish,
+        });
+        void dispatched.completion.catch(error => {
+          finish({ error: error instanceof Error ? error : new Error('ACP 请求失败') });
+        });
+      } catch (error) { release(); throw error; }
     };
     return {
       id: scope + id, agentKind: 'antigravity', get model() { return session.currentModel ?? opts.model; },
       setInteractionResolver(next) { resolver = next; }, events: () => queue,
       isTurnRunning: () => active,
+      countPendingWakeContinuations: () => commandWake && Date.now() < commandWake.deadline ? 1 : 0,
+      cancelPendingBackgroundWake,
       getUsageSnapshot: () => ({ ...usage }),
-      send: async (message: UserMessage, sendOpts?: SendOptions) => {
-        if (this.locallyDisconnected) throw new Error('Google 订阅连接已断开，请先重新连接。');
-        if (active || closed || control || sendOpts?.turnPermissionPolicy) throw new Error('ANTIGRAVITY_TURN_UNSUPPORTED');
-        const controller = new AbortController();
-        turnController = controller; active = true; currentText = '';
-        let cancelTimer: ReturnType<typeof setTimeout> | undefined;
-        let settled = false;
-        let cancelledByCaller = false;
-        const cancelled = () => {
-          if (controller.signal.aborted) return;
-          cancelledByCaller = true;
-          controller.abort();
-          try { session.cancel(); } catch { /* A closed transport cannot accept a late prompt. */ }
-          if (!promptDispatched) return;
-          const retiring = session;
-          cancelTimer = setTimeout(() => {
-            if (session !== retiring) return;
-            usable = false;
-            // Clear dead activity now. A later reconnect still owns tool-card reconciliation.
-            void retireSession(false).catch(() => {
-              thisAgent.deps.logger.warn('ACP cleanup pending after cancel', { code: 'ACP_PROCESS_EXIT_UNCONFIRMED' });
-            });
-          }, CANCEL_GRACE_MS);
-          cancelTimer.unref?.();
-        };
-        cancelTurn = cancelled;
-        sendOpts?.signal?.addEventListener('abort', cancelled, { once: true });
-        const release = () => {
-          active = false;
-          promptDispatched = false;
-          if (cancelTimer) clearTimeout(cancelTimer);
-          if (turnController === controller) { turnController = undefined; cancelTurn = undefined; }
-          sendOpts?.signal?.removeEventListener('abort', cancelled);
-        };
-        const finish = (outcome: AcpResponse) => {
-          if (settled) return;
-          settled = true;
-          const text = currentText;
-          currentText = '';
-          const result = 'result' in outcome ? outcome.result : {};
-          const cancelled = cancelledByCaller || result.stopReason === 'cancelled';
-          release();
-          if (text) emit('text', { text, isFinal: true, isFullText: true });
-          for (const [toolUseId, call] of openTools) {
-            if (call.background) continue;
-            if (cancelled || 'error' in outcome) {
-              finishTool(toolUseId, 'Interrupted before the tool finished.', true);
-            } else {
-              call.background = true;
-              if (call.nativeCommand) watchCommandCall(toolUseId);
-            }
-          }
-          if ('error' in outcome && !cancelledByCaller) {
-            emit('error', { message: outcome.error.message, isTerminal: true });
-            return;
-          }
-          const u = record(result.usage);
-          if (typeof u.totalTokens === 'number' && Number.isFinite(u.totalTokens) && u.totalTokens >= 0) usage = { ...usage, tokenUsage: u.totalTokens };
-          emit('done', {
-            stopReason: cancelled ? 'cancelled' : result.stopReason,
-            result: text,
-            status: cancelled ? 'cancelled' : 'completed',
-            ...(cancelled ? { cancelled: true } : {}),
-            usage,
-          });
-        };
-        try {
-          sendOpts?.signal?.throwIfAborted(); controller.signal.throwIfAborted();
-          // A failed permission change never adopts the uncommitted policy. Restore
-          // the last confirmed policy before a later user send, without replaying a turn.
-          if (!usable) await reconnect(permission);
-          if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
-          if (connection.assertGenerationAllowed) await connection.assertGenerationAllowed();
-          else if (this.host.assertGenerationAllowed) await this.host.assertGenerationAllowed();
-          else throw new Error('ANTIGRAVITY_GENERATION_POLICY_UNAVAILABLE');
-          controller.signal.throwIfAborted();
-          if (!session.tier || !/^(Google AI |AI )?(Pro|Ultra)$/i.test(session.tier.name)) throw new Error('ANTIGRAVITY_PERSONAL_PLAN_UNVERIFIED');
-          if (!isAntigravitySubscriptionModel(session.currentModel ?? '')) throw new Error('ANTIGRAVITY_SUBSCRIPTION_MODEL_REQUIRED');
-          const content = await promptContent(message, { supportsImageInput: session.supportsImageInput });
-          controller.signal.throwIfAborted();
-          if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
-          const dispatched = await session.dispatchPrompt(content, controller.signal, {
-            sent() {
-              flushBackgroundText();
-              promptDispatched = true;
-              emit('status', { isRunning: true, status: 'Thinking...' });
-            },
-            response: finish,
-          });
-          void dispatched.completion.catch(error => {
-            finish({ error: error instanceof Error ? error : new Error('ACP 请求失败') });
-          });
-        } catch (error) { release(); throw error; }
-      },
+      send: (message, sendOpts) => send(message, sendOpts),
       steer: async () => { throw new Error('ANTIGRAVITY_STEER_NOT_IMPLEMENTED'); },
       abort: async () => {
+        cancelPendingBackgroundWake();
         if (cancelTurn) cancelTurn();
         else if (!closed) session.cancel();
       },
@@ -660,6 +788,7 @@ export class AntigravityAgent extends BaseAgent {
       getPlanMode: () => plan,
       close: async () => {
         closed = true;
+        cancelPendingBackgroundWake();
         cancelTurn?.();
         await control?.catch(() => {});
         await retireSession();

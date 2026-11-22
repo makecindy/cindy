@@ -218,16 +218,19 @@ export class AcpSubscriptionSession {
   async dispatchPrompt(
     content: string | AcpRecord[],
     signal?: AbortSignal,
-    lifecycle?: { sent(): void; response(outcome: AcpResponse): void },
+    lifecycle?: { beforeSend?(): void; sent(): void; response(outcome: AcpResponse): void },
   ): Promise<{ completion: Promise<AcpRecord> }> {
     if (!this.ready || !this.authenticated || !this.sessionId || this.busy) throw new AcpError(-32000);
     const epoch = this.cancelEpoch;
+    signal?.throwIfAborted();
+    await this.options.assertSubscriptionOnly();
+    signal?.throwIfAborted();
+    if (!this.ready || epoch !== this.cancelEpoch) throw new Error('ANTIGRAVITY_CANCELLED_BEFORE_DISPATCH');
+    // Preflight must not block a real user prompt from superseding an idle wake.
+    lifecycle?.beforeSend?.();
+    if (this.busy) throw new AcpError(-32000);
     this.busy = true;
     try {
-      signal?.throwIfAborted();
-      await this.options.assertSubscriptionOnly();
-      signal?.throwIfAborted();
-      if (!this.ready || epoch !== this.cancelEpoch) throw new Error('ANTIGRAVITY_CANCELLED_BEFORE_DISPATCH');
       let sent = false;
       const completion = this.client.request(
         'session/prompt',

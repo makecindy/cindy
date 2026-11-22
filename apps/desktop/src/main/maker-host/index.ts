@@ -155,6 +155,7 @@ import {
   isActiveInputOwnerAuthored,
   isActiveInputAccountScoped,
   isSessionInTurn,
+  canWakeAntigravityTask,
   wireSessionToIpc,
   releaseSessionBindingsForOwnerBoundary,
 } from '../maker-ipc/register.js';
@@ -2467,7 +2468,7 @@ export function getMaker(): Maker {
       if (sessions.some(session => maker.getSession(session.id) === session)) {
         throw new Error(ANTIGRAVITY_ACCOUNT_BUSY);
       }
-    });
+    }, canWakeAntigravityTask);
     if (antigravityAgent) _mcpProviders.antigravity = piMcpProviders;
     if (antigravityAgent) {
       makerAgents.antigravity = antigravityAgent;
