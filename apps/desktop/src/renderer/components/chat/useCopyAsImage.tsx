@@ -110,7 +110,7 @@ export function useCopyAsImage(getPayload: () => Promise<CopyAsImagePayload>): {
         src={annotateUrl}
         autoAnnotate
         onClose={() => setAnnotateUrl(null)}
-        onSourceChangeCancelled={setAnnotateUrl}
+        onSourceChangeCancelled={(displayed) => setAnnotateUrl(displayed.src)}
       />
     ) : null;
 

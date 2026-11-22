@@ -761,7 +761,7 @@ export interface AgentActionRowProps {
 type LightboxState =
   | { kind: 'none' }
   | { kind: 'file'; path: string; name: string }
-  | { kind: 'image'; src: string }
+  | { kind: 'image'; src: string; sessionId?: string }
   | { kind: 'payload'; payload: ToolPayloadMode };
 
 function fileChangeVerbKey(descriptor: FileChangeDescriptor): string {
@@ -997,6 +997,7 @@ export function AgentActionRow({
             toLocalFileUrl(absPath),
             toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
           ),
+          sessionId: fileCtx.sessionId,
         });
       } else {
         if (!(await shouldOpenTextLightboxForOrigin(fileCtx, absPath))) return;
@@ -1255,11 +1256,14 @@ export function AgentActionRow({
         <ImageLightbox
           src={lightbox.src}
           onClose={closeLightbox}
-          onSourceChangeCancelled={(displayedSrc) =>
+          onSourceChangeCancelled={(displayed) =>
             setLightbox((current) =>
-              current.kind === 'image' ? { ...current, src: displayedSrc } : current,
+              current.kind === 'image'
+                ? { ...current, src: displayed.src, sessionId: displayed.sessionId }
+                : current,
             )
           }
+          sessionId={lightbox.sessionId}
         />
       )}
       {lightbox.kind === 'payload' && (

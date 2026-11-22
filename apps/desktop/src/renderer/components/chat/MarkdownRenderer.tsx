@@ -1545,7 +1545,7 @@ export function QuestionReferenceText({ text, onPreviewOpenChange }: { text: str
       <ImageLightbox
         src={image}
         onClose={() => setImage(null)}
-        onSourceChangeCancelled={setImage}
+        onSourceChangeCancelled={(displayed) => setImage(displayed.src)}
       />
     )}
     {file && <TextLightbox filePath={file.path} fileName={file.name} initialLine={file.line} onClose={() => setFile(null)} />}
@@ -2161,7 +2161,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         <ImageLightbox
           src={lightboxSrc}
           onClose={() => setLightboxSrc(null)}
-          onSourceChangeCancelled={setLightboxSrc}
+          onSourceChangeCancelled={(displayed) => setLightboxSrc(displayed.src)}
         />
       )}
       {/* ADR-4: triggerRef intentionally omitted — markdown links rendered by

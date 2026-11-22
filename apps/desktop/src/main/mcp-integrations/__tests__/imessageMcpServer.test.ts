@@ -16,6 +16,8 @@ it('rejects stale scopes, cross-chat guest sends and files outside the guest wor
   const inside = path.join(work, 'answer.txt'); await fs.writeFile(inside, 'answer');
   const im = { sendText: vi.fn(async () => ({ messageId: 'sent' })), sendFile: vi.fn(async () => ({ ok: true as const, messageId: 'file' })),
     readHistory: vi.fn(async () => []), listChats: () => [{ guid: 'current' }, { guid: 'other' }],
+    fetchAttachment: vi.fn(async (_chat: string, _message: string, guid: string, dir: string) =>
+      ({ path: path.join(dir, `${guid}.mov`), name: 'clip.mov', bytes: 96_000_000, totalBytes: 96_000_000, complete: true })),
     health: () => ({ lastCatchUpAt: null, lastWebhookAt: null, uncertainInputs: 0, uncertainSends: 0 }) };
   const server = createIMessageMcpServer({ getSessionContext: () => ({ agentKind: 'codex', sessionId: 's', sessionInstanceId: 'i', workingDir: work }) });
   const client = new Client({ name: 'imessage-test', version: '1' });
@@ -33,8 +35,19 @@ it('rejects stale scopes, cross-chat guest sends and files outside the guest wor
     expect(im.sendFile).not.toHaveBeenCalled();
     expect((await client.callTool({ name: 'send_file', arguments: { path: inside } })).isError).not.toBe(true);
     expect(im.sendFile).toHaveBeenCalledWith('current', await fs.realpath(inside), undefined);
+    // Originals land in the task directory, from the current chat only.
+    expect((await client.callTool({ name: 'fetch_attachment', arguments: { message_id: 'm1', attachment_guid: 'a1' } })).isError).not.toBe(true);
+    expect(im.fetchAttachment).toHaveBeenCalledWith('current', 'm1', 'a1', path.join(await fs.realpath(work), 'imessage-attachments'));
+    // Review (#12146): an output directory that links out of the task directory is refused.
+    await fs.rm(path.join(work, 'imessage-attachments'), { recursive: true });
+    await fs.mkdir(path.join(root, 'elsewhere'));
+    await fs.symlink(path.join(root, 'elsewhere'), path.join(work, 'imessage-attachments'), 'junction');
+    expect((await client.callTool({ name: 'fetch_attachment', arguments: { message_id: 'm1', attachment_guid: 'a1' } })).isError).toBe(true);
+    expect(im.fetchAttachment).toHaveBeenCalledTimes(1);
     release();
     expect((await client.callTool({ name: 'send_text', arguments: { text: 'late' } })).isError).toBe(true);
+    expect((await client.callTool({ name: 'fetch_attachment', arguments: { message_id: 'm1', attachment_guid: 'a1' } })).isError).toBe(true);
+    expect(im.fetchAttachment).toHaveBeenCalledTimes(1);
     expect(im.sendText).not.toHaveBeenCalled();
   } finally { release(); await client.close(); await server.close(); await fs.rm(root, { recursive: true, force: true }); }
 });

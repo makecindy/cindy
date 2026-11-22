@@ -27,6 +27,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
 const SRC = 'cindy-media://blobs/source.png';
 const NEXT_SRC = 'cindy-media://blobs/next.png';
+const THIRD_SRC = 'cindy-media://blobs/third.png';
 
 type Stroke = { points: Array<{ x: number; y: number }> };
 
@@ -540,22 +541,26 @@ describe('ImageLightbox annotate mode', () => {
     );
   });
 
-  it('lets the same source request retry after a cancelled leave', async () => {
+  it('restores the full displayed source snapshot after a cancelled leave', async () => {
     const onSourceChangeCancelled = vi.fn();
     function Host() {
-      const [src, setSrc] = useState(SRC);
+      const [source, setSource] = useState<{ src: string; sessionId?: string }>({
+        src: SRC,
+        sessionId: 'task-A',
+      });
       return (
         <ConfirmDialogProvider>
-          <button type="button" onClick={() => setSrc(NEXT_SRC)}>
+          <button type="button" onClick={() => setSource({ src: NEXT_SRC, sessionId: 'task-B' })}>
             open next
           </button>
           <ImageLightbox
-            src={src}
+            src={source.src}
+            sessionId={source.sessionId}
             onClose={vi.fn()}
             annotationEdit={{ onSave: vi.fn(), onDraftChange: vi.fn() }}
-            onSourceChangeCancelled={(displayedSrc) => {
-              onSourceChangeCancelled(displayedSrc);
-              setSrc(displayedSrc);
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource({ src: displayed.src, sessionId: displayed.sessionId });
             }}
           />
         </ConfirmDialogProvider>
@@ -577,13 +582,80 @@ describe('ImageLightbox annotate mode', () => {
         }),
       );
     });
-    await waitFor(() => expect(onSourceChangeCancelled).toHaveBeenCalledWith(SRC));
+    await waitFor(() =>
+      expect(onSourceChangeCancelled).toHaveBeenCalledWith(
+        expect.objectContaining({ src: SRC, sessionId: 'task-A' }),
+      ),
+    );
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'open next' }));
     });
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
+  });
+
+  it('keeps the newest source request while a save is busy', async () => {
+    let resolveSave: (() => void) | undefined;
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState<{ src: string; sessionId?: string }>({
+        src: SRC,
+        sessionId: 'task-A',
+      });
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSource({ src: NEXT_SRC, sessionId: 'task-A' })}>
+            open next
+          </button>
+          <button type="button" onClick={() => setSource({ src: THIRD_SRC, sessionId: 'task-A' })}>
+            open third
+          </button>
+          <ImageLightbox
+            src={source.src}
+            sessionId={source.sessionId}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave, onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource({ src: displayed.src, sessionId: displayed.sessionId });
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+      );
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open third' }));
+    });
+    expect(onSourceChangeCancelled).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveSave?.();
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(THIRD_SRC));
+    expect(onSourceChangeCancelled).not.toHaveBeenCalled();
   });
 });
 

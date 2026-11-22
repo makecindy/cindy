@@ -477,7 +477,7 @@ function GeneratedFileChip({
         <ImageLightbox
           src={lightboxSrc}
           onClose={() => setLightboxSrc(null)}
-          onSourceChangeCancelled={setLightboxSrc}
+          onSourceChangeCancelled={(displayed) => setLightboxSrc(displayed.src)}
         />
       )}
       {textLightboxOpen && (

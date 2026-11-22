@@ -53,8 +53,12 @@ export function GhostMediaLightboxHost({
     <ImageLightbox
       src={media.src}
       onClose={() => setMedia(null)}
-      onSourceChangeCancelled={(displayedSrc) =>
-        setMedia((current) => (current ? { ...current, src: displayedSrc } : current))
+      onSourceChangeCancelled={(displayed) =>
+        setMedia((current) =>
+          current
+            ? { ...current, src: displayed.src, originSessionId: displayed.sessionId }
+            : current,
+        )
       }
       sessionId={media.originSessionId}
     />

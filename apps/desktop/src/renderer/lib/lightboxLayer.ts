@@ -1,6 +1,9 @@
-/** Activated preview layers own shortcuts; DOM mount order is only the fallback. */
+let activationLayerCount = 0;
+
+/** Activated preview layers own shortcuts until a newer layer is mounted. */
 export function activateLightboxLayer(element: HTMLElement | null): void {
   if (!element) return;
+  activationLayerCount = document.querySelectorAll('[data-lightbox-layer]').length;
   document
     .querySelectorAll<HTMLElement>('[data-lightbox-layer][data-preview-active]')
     .forEach((layer) => {
@@ -9,11 +12,16 @@ export function activateLightboxLayer(element: HTMLElement | null): void {
   element.setAttribute('data-preview-active', '');
 }
 
-/** Lightboxes share a z-index; the activated layer, else the last mounted one, is in front. */
-export function isLightboxCovered(element: HTMLElement): boolean {
-  const layers = document.querySelectorAll<HTMLElement>('[data-lightbox-layer]');
+/** A layer mounted after the last activation supersedes the activated layer. */
+function foregroundLayer(): HTMLElement | null {
+  const layers = Array.from(document.querySelectorAll<HTMLElement>('[data-lightbox-layer]'));
   const active = document.querySelector<HTMLElement>('[data-lightbox-layer][data-preview-active]');
-  const foreground = active ?? layers.item(layers.length - 1);
+  if (active && layers.length <= activationLayerCount) return active;
+  return layers.at(-1) ?? null;
+}
+
+export function isLightboxCovered(element: HTMLElement): boolean {
+  const foreground = foregroundLayer();
   return foreground !== null && !foreground.contains(element);
 }
 

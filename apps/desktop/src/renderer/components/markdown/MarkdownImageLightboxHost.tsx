@@ -10,7 +10,7 @@
  * the editor — FileBodyView is the natural place.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 
@@ -26,24 +26,28 @@ export function MarkdownImageLightboxHost({
    *  lightbox 才能启用"发送到对话"。不传则该动作不显示。 */
   sessionId?: string;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
+  const sessionRef = useRef(sessionId);
+  sessionRef.current = sessionId;
+  const [media, setMedia] = useState<{ src: string; sessionId?: string } | null>(null);
 
   useEffect(() => {
     const onOpen = (ev: Event) => {
       const detail = (ev as CustomEvent<MdImageLightboxOpenDetail>).detail;
-      if (detail?.src) setSrc(detail.src);
+      if (detail?.src) setMedia({ src: detail.src, sessionId: sessionRef.current });
     };
     window.addEventListener(MD_IMAGE_LIGHTBOX_EVENT, onOpen);
     return () => window.removeEventListener(MD_IMAGE_LIGHTBOX_EVENT, onOpen);
   }, []);
 
-  if (src == null) return null;
+  if (media == null) return null;
   return (
     <ImageLightbox
-      src={src}
-      onClose={() => setSrc(null)}
-      onSourceChangeCancelled={setSrc}
-      sessionId={sessionId}
+      src={media.src}
+      onClose={() => setMedia(null)}
+      onSourceChangeCancelled={(displayed) =>
+        setMedia({ src: displayed.src, sessionId: displayed.sessionId })
+      }
+      sessionId={media.sessionId}
     />
   );
 }

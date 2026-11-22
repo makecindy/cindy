@@ -368,4 +368,48 @@ describe('ImageLightbox non-modal window', () => {
     await waitFor(() => expect(firstClose).toHaveBeenCalledTimes(1), { timeout: 1000 });
     expect(secondClose).not.toHaveBeenCalled();
   });
+
+  it('does not close a newer preview from an older close animation', async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const view = render(<ImageLightbox src={SRC} onClose={onClose} />);
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.lightbox.close') }));
+    view.rerender(<ImageLightbox src={NEXT_SRC} onClose={onClose} />);
+    expect(previewImage().getAttribute('src')).toBe(NEXT_SRC);
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('lets a newer mounted layer supersede an activated older preview', async () => {
+    vi.useFakeTimers();
+    const firstClose = vi.fn();
+    const secondClose = vi.fn();
+    render(
+      <>
+        <ImageLightbox src={SRC} onClose={firstClose} />
+        <ImageLightbox src={NEXT_SRC} onClose={secondClose} />
+      </>,
+    );
+    const [first] = panels();
+    const firstSurface = first.querySelector<HTMLElement>('img[alt=""]')?.parentElement;
+    expect(firstSurface).toBeTruthy();
+    fireEvent.mouseDown(firstSurface!, { button: 0, clientX: 200, clientY: 200 });
+    expect(first.hasAttribute('data-preview-active')).toBe(true);
+
+    const newer = document.createElement('div');
+    newer.setAttribute('data-lightbox-layer', '');
+    document.body.append(newer);
+    try {
+      fireEvent.keyDown(document, { key: 'Escape' });
+      await act(async () => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(firstClose).not.toHaveBeenCalled();
+      expect(secondClose).not.toHaveBeenCalled();
+    } finally {
+      newer.remove();
+    }
+  });
 });

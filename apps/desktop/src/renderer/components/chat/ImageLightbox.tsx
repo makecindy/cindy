@@ -381,8 +381,38 @@ interface ImageLightboxProps {
    * 这类"光栅化后直奔涂画"的入口用它省一次点击;默认 false 不影响既有场景。
    */
   autoAnnotate?: boolean;
-  /** Called when a source-retarget leave is rejected; hosts must restore their request to the displayed source. */
-  onSourceChangeCancelled?: (displayedSrc: string) => void;
+  /** Called when a source-retarget leave is rejected; hosts must restore their request to the displayed source snapshot. */
+  onSourceChangeCancelled?: (displayed: ImageSourceSnapshot) => void;
+}
+
+/** Source fields frozen until the mounted content accepts them. */
+export type ImageSourceSnapshot = Omit<
+  ImageLightboxProps,
+  'onClose' | 'onSourceChangeCancelled'
+>;
+
+function sourceSnapshotFromProps({
+  onClose,
+  onSourceChangeCancelled,
+  ...source
+}: ImageLightboxProps): ImageSourceSnapshot {
+  void onClose;
+  void onSourceChangeCancelled;
+  return source;
+}
+
+function imageSourceKey(source: ImageSourceSnapshot): string {
+  return JSON.stringify([
+    source.src,
+    source.sessionId ?? null,
+    source.filename ?? null,
+    source.galleryId ?? null,
+    source.enableGallery ?? false,
+    source.annotationFallbackSrc ?? null,
+    source.autoAnnotate ?? false,
+    source.initialStrokes ?? null,
+    source.annotationEdit?.initialStrokes ?? null,
+  ]);
 }
 
 /** `xdt-file://local/?path=<enc>` → 绝对路径;非该 scheme 或解析失败返回 null。 */
@@ -459,9 +489,10 @@ function isDirectCacheable(src: string): boolean {
   );
 }
 
+type LeaveOutcome = 'applied' | 'cancelled' | 'busy';
 /** The mounted content owns unsaved annotation state; every source switch goes through it. */
-type PreviewLeaveGuard = (leave: () => void) => Promise<boolean>;
-type ImageLightboxContentProps = ImageLightboxProps & {
+type PreviewLeaveGuard = (leave: () => void) => Promise<LeaveOutcome>;
+type ImageLightboxContentProps = Omit<ImageLightboxProps, 'onSourceChangeCancelled'> & {
   leaveGuardRef?: { current: PreviewLeaveGuard | null };
 };
 
@@ -472,55 +503,64 @@ type ImageLightboxContentProps = ImageLightboxProps & {
  * remounts with the accepted source so gallery, actions and annotations agree.
  */
 export function ImageLightbox(props: ImageLightboxProps) {
-  const [activeSrc, setActiveSrc] = useState(props.src);
-  const activeSrcRef = useRef(activeSrc);
-  const pendingSrcRef = useRef<string | null>(null);
+  const requestedSourceRef = useRef(sourceSnapshotFromProps(props));
+  requestedSourceRef.current = sourceSnapshotFromProps(props);
+  const requestedKey = imageSourceKey(requestedSourceRef.current);
+  const [activeSource, setActiveSource] = useState(() => sourceSnapshotFromProps(props));
+  const activeSourceRef = useRef(activeSource);
+  const pendingSourceRef = useRef<ImageSourceSnapshot | null>(null);
   const leaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
+  const [sourceToken, setSourceToken] = useState(0);
   const onSourceChangeCancelledRef = useRef(props.onSourceChangeCancelled);
   onSourceChangeCancelledRef.current = props.onSourceChangeCancelled;
   useEffect(() => {
-    if (props.src === activeSrcRef.current) {
-      pendingSrcRef.current = null;
+    const requested = requestedSourceRef.current;
+    if (imageSourceKey(requested) === imageSourceKey(activeSourceRef.current)) {
+      pendingSourceRef.current = null;
       return;
     }
-    pendingSrcRef.current = props.src;
+    pendingSourceRef.current = requested;
     const leave = () => {
-      const nextSrc = pendingSrcRef.current ?? props.src;
-      pendingSrcRef.current = null;
-      if (nextSrc === activeSrcRef.current) return;
-      activeSrcRef.current = nextSrc;
-      setActiveSrc(nextSrc);
+      const next = pendingSourceRef.current ?? requested;
+      pendingSourceRef.current = null;
+      if (imageSourceKey(next) === imageSourceKey(activeSourceRef.current)) return;
+      activeSourceRef.current = next;
+      setActiveSource(next);
+      setSourceToken((token) => token + 1);
     };
     const guard = leaveGuardRef.current;
     if (!guard) {
       leave();
       return;
     }
-    void guard(leave).then((applied) => {
-      if (applied) return;
-      pendingSrcRef.current = null;
-      onSourceChangeCancelledRef.current?.(activeSrcRef.current);
+    void guard(leave).then((outcome) => {
+      if (outcome === 'applied' || outcome === 'busy') return;
+      pendingSourceRef.current = null;
+      onSourceChangeCancelledRef.current?.(activeSourceRef.current);
     });
-  }, [props.src]);
+  }, [requestedKey]);
 
-  const items = useOpeningCollection(props.annotationFallbackSrc ?? activeSrc);
+  const items = useOpeningCollection(
+    activeSource.annotationFallbackSrc ?? activeSource.src,
+  );
   const contentProps: ImageLightboxContentProps = {
-    ...props,
-    src: activeSrc,
+    ...activeSource,
+    onClose: props.onClose,
     leaveGuardRef,
   };
+  const contentKey = `${sourceToken}:${imageSourceKey(activeSource)}`;
   return items ? (
     <AttachmentCollectionPreview
-      key={activeSrc}
+      key={contentKey}
       items={items}
-      source={props.annotationFallbackSrc ?? activeSrc}
+      source={activeSource.annotationFallbackSrc ?? activeSource.src}
       onClose={props.onClose}
       initial={
-        <ImageLightboxContent key={activeSrc} {...contentProps} enableGallery={false} />
+        <ImageLightboxContent key={contentKey} {...contentProps} enableGallery={false} />
       }
     />
   ) : (
-    <ImageLightboxContent key={activeSrc} {...contentProps} />
+    <ImageLightboxContent key={contentKey} {...contentProps} />
   );
 }
 
@@ -816,13 +856,13 @@ function ImageLightboxContent({
   // 每次渲染的值)。
   const activeCollection = useContext(ActivePreviewCollection);
   /** Single leave guard for close, collection switch, source retarget and unmount. */
-  const requestClose = async (leave = handleClose): Promise<boolean> => {
-    if (confirmPendingRef.current) return false;
+  const requestClose = async (leave = handleClose): Promise<LeaveOutcome> => {
+    if (confirmPendingRef.current) return 'busy';
     if (!hasUnsavedStrokeChanges()) {
       leave();
-      return true;
+      return 'applied';
     }
-    if (!confirmDialog) return false;
+    if (!confirmDialog) return 'cancelled';
     confirmPendingRef.current = true;
     try {
       const canSave = Boolean(annotationEdit || chatSessionId);
@@ -841,17 +881,19 @@ function ImageLightboxContent({
             }))
           ? 'tertiary'
           : 'cancel';
-      if (!mountedRef.current) return false;
+      if (!mountedRef.current) return 'cancelled';
       if (choice === 'tertiary') {
         syncAnnotationDraft([...baselineStrokesRef.current]);
         leave();
-        return true;
+        return 'applied';
       }
       if (choice === 'confirm') {
-        if (annotationEdit) return await handleAnnotationSave(leave);
-        return await handleSendToChat(leave);
+        const saved = annotationEdit
+          ? await handleAnnotationSave(leave)
+          : await handleSendToChat(leave);
+        return saved ? 'applied' : 'cancelled';
       }
-      return false;
+      return 'cancelled';
     } finally {
       setTimeout(() => {
         confirmPendingRef.current = false;
@@ -1399,7 +1441,9 @@ function ImageLightboxContent({
     if (isClosingRef.current) return;
     isClosingRef.current = true;
     setIsVisible(false);
-    setTimeout(() => onClose(), 200);
+    setTimeout(() => {
+      if (mountedRef.current) onClose();
+    }, 200);
   }
 
   const { copyImage } = useImageClipboard(currentSrc);
@@ -1629,6 +1673,7 @@ function ImageLightboxContent({
         { preserveRemoteOptimisticRecovery: true },
       );
       toast.success(t('chat.media.sentToChat'));
+      if (!mountedRef.current) return false;
       afterSave();
       return true;
     } catch (err) {
@@ -1647,6 +1692,7 @@ function ImageLightboxContent({
       await annotationEdit.onSave({
         strokes: strokesRef.current.map((stroke) => ({ points: [...stroke.points] })),
       });
+      if (!mountedRef.current) return false;
       afterSave();
       return true;
     } catch (err) {

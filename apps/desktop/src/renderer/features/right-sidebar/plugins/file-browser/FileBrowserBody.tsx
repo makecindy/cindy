@@ -171,7 +171,7 @@ function FileBrowserBodyWithWorkdir({
   const [directoryFilter, setDirectoryFilter] = useState('');
   const [grid, setGrid] = useState(false);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
-  const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
+  const [imageLightbox, setImageLightbox] = useState<{ src: string; sessionId?: string } | null>(null);
   const externalFileContent = useFileContent(externalFile?.workdir ?? workdir, externalFile?.relPath ?? null, null, null, visible);
   const fileDragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -362,9 +362,9 @@ function FileBrowserBodyWithWorkdir({
         toast.warning(t('ccAgent.workdirBrowse.unrenderable.remoteNotSupported'));
         return;
       }
-      setImageLightboxSrc(src);
+      setImageLightbox({ src, sessionId: ctx.sessionId });
     },
-    [deviceId, remoteHostId, t, workdir],
+    [ctx.sessionId, deviceId, remoteHostId, t, workdir],
   );
 
   const handleRevealInFolder = useCallback(
@@ -800,12 +800,14 @@ function FileBrowserBodyWithWorkdir({
           aria-hidden="true"
         />
       )}
-      {imageLightboxSrc ? (
+      {imageLightbox ? (
         <ImageLightbox
-          src={imageLightboxSrc}
-          sessionId={ctx.sessionId}
-          onClose={() => setImageLightboxSrc(null)}
-          onSourceChangeCancelled={setImageLightboxSrc}
+          src={imageLightbox.src}
+          sessionId={imageLightbox.sessionId}
+          onClose={() => setImageLightbox(null)}
+          onSourceChangeCancelled={(displayed) =>
+            setImageLightbox({ src: displayed.src, sessionId: displayed.sessionId })
+          }
         />
       ) : null}
     </div>

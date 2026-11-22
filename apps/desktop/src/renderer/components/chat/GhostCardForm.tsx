@@ -266,7 +266,7 @@ export function GhostCardForm({
         <ImageLightbox
           src={preview}
           onClose={() => setPreview(undefined)}
-          onSourceChangeCancelled={setPreview}
+          onSourceChangeCancelled={(displayed) => setPreview(displayed.src)}
         />
       )}
     </div>

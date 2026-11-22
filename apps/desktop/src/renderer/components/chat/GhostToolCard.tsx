@@ -354,7 +354,7 @@ function GhostCardCanvas({
       setFormBusy(false);
     }
   }, [html, mail]);
-  const [lightbox, setLightbox] = useState<{ src: string; galleryId: string } | null>(null);
+  const [lightbox, setLightbox] = useState<{ src: string; galleryId: string; sessionId?: string } | null>(null);
   // data-ghost-model 声明的 3D 预览:点击开应用内 3D 查看器(GLB 已在媒体
   // 总仓,blob 来源直读,预览图作 poster)。
   const [modelView, setModelView] = useState<{ url: string; poster: string } | null>(null);
@@ -686,7 +686,7 @@ function GhostCardCanvas({
           // GhostMediaLightboxHost 同坑同解:blur 掉 iframe,键盘立即归位)。
           iframeRef.current?.blur();
           if (modelUrl) setModelView({ url: modelUrl, poster: img.src });
-          else if (galleryId) setLightbox({ src: img.src, galleryId });
+          else if (galleryId) setLightbox({ src: img.src, galleryId, sessionId });
         });
       }
       // 右键 → 宿主图片菜单(复制图片 / 打开所在目录,与基座 ChatImageView 同
@@ -1189,10 +1189,14 @@ function GhostCardCanvas({
           galleryId={lightbox.galleryId}
           enableGallery
           onClose={() => setLightbox(null)}
-          onSourceChangeCancelled={(displayedSrc) =>
-            setLightbox((current) => (current ? { ...current, src: displayedSrc } : current))
+          onSourceChangeCancelled={(displayed) =>
+            setLightbox((current) =>
+              current
+                ? { ...current, src: displayed.src, sessionId: displayed.sessionId }
+                : current,
+            )
           }
-          sessionId={sessionId}
+          sessionId={lightbox.sessionId}
         />
       ) : null}
       {modelView ? (

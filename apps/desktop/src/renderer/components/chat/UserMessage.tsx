@@ -1884,8 +1884,8 @@ export function UserMessage({
         <ImageLightbox
           src={rewriteToRemoteMediaOrigin(lightboxSrc, remoteMediaOrigin)}
           onClose={() => setLightboxSrc(null)}
-          onSourceChangeCancelled={(displayedSrc) =>
-            setLightboxSrc(rewriteToRemoteMediaOrigin(displayedSrc, remoteMediaOrigin))
+          onSourceChangeCancelled={(displayed) =>
+            setLightboxSrc(rewriteToRemoteMediaOrigin(displayed.src, remoteMediaOrigin))
           }
         />
       )}
