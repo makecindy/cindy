@@ -389,7 +389,9 @@ export function pickVisibleNavRange(
 export interface NavRailWindowPlan {
   /** 窗内第一根刻度在 entries 里的下标。 */
   startIndex: number;
-  /** 一屏放几根刻度。 */
+  /** 窗内实际渲染的刻度数:占位刻度出现时比 capacity 少一根。 */
+  slotCount: number;
+  /** 一屏放几格(含"更早还有 N 条"占位)。 */
   capacity: number;
   /** 实际采用的纵距(px/根)。窗化后恒为标准值,不再压缩。 */
   pitchPx: number;
@@ -425,30 +427,42 @@ export function planNavRailWindow(input: {
   );
   // 纵距恒为标准值:条数上限与铺满都交给纵距以外的机制,外观和短会话一致。
   const pitchPx = NAV_RAIL_TICK_PITCH_PX;
-  if (input.entryCount <= capacity) {
-    return { startIndex: 0, capacity, pitchPx, hiddenBefore: 0 };
+  const entryCount = input.entryCount;
+  if (entryCount <= capacity) {
+    return { startIndex: 0, slotCount: Math.max(0, entryCount), capacity, pitchPx, hiddenBefore: 0 };
   }
-  const maxStart = input.entryCount - capacity;
-  const clampStart = (value: number) => Math.min(Math.max(0, Math.round(value)), maxStart);
-  if (input.frozenStart != null) {
-    const start = clampStart(input.frozenStart);
-    return { startIndex: start, capacity, pitchPx, hiddenBefore: start };
-  }
+  const active =
+    input.activeIndex === null
+      ? null
+      : Math.min(Math.max(0, Math.round(input.activeIndex)), entryCount - 1);
+  // 占位刻度吃掉的格子必须和实际刻度数、边缘推进目标共用同一口径:
+  // 起点一旦 >0 就多一个占位、少一根刻度。少算这一格会让末窗丢掉最新一条
+  // (没有刻度可点、也没有当前位置),边缘推进还会指向没渲染的条目。
+  const place = (guess: number): NavRailWindowPlan => {
+    let start = Math.max(0, Math.round(guess));
+    // 两轮足够收敛:占位出现会让窗口上界再收一格,而起点最多因此回退一格。
+    for (let pass = 0; pass < 2; pass += 1) {
+      const ticks = capacity - (start > 0 ? 1 : 0);
+      const maxStart = Math.max(0, entryCount - ticks);
+      // 冻结/拖动期间不追阅读位置:窗口由边缘推进显式平移。
+      if (input.frozenStart == null && active !== null && active > start + ticks - 1) {
+        start = active - ticks + 1;
+      }
+      start = Math.min(Math.max(0, start), maxStart);
+    }
+    const slotCount = Math.max(1, capacity - (start > 0 ? 1 : 0));
+    return { startIndex: start, slotCount, capacity, pitchPx, hiddenBefore: start };
+  };
+  if (input.frozenStart != null) return place(input.frozenStart);
   // 位置未知:贴尾部 —— 刚打开会话先看到最新一轮,和聊天区一致。
-  if (input.activeIndex === null) {
-    const start = clampStart(input.anchorStart ?? maxStart);
-    return { startIndex: start, capacity, pitchPx, hiddenBefore: start };
-  }
-  const active = Math.min(Math.max(0, Math.round(input.activeIndex)), input.entryCount - 1);
+  if (active === null) return place(entryCount);
   const margin = Math.max(1, Math.min(8, Math.floor(capacity / 8)));
   if (input.anchorStart != null) {
-    const start = clampStart(input.anchorStart);
-    if (active >= start + margin && active <= start + capacity - 1 - margin) {
-      return { startIndex: start, capacity, pitchPx, hiddenBefore: start };
-    }
+    const anchor = Math.min(Math.max(0, Math.round(input.anchorStart)), entryCount - capacity);
+    const ticks = capacity - (anchor > 0 ? 1 : 0);
+    if (active >= anchor + margin && active <= anchor + ticks - 1 - margin) return place(anchor);
   }
-  const start = clampStart(active - Math.floor(capacity / 2));
-  return { startIndex: start, capacity, pitchPx, hiddenBefore: start };
+  return place(active - Math.floor(capacity / 2));
 }
 
 /**

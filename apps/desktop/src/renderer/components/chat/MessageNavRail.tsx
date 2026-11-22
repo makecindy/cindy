@@ -157,6 +157,9 @@ export function MessageNavRail({
     raf: null,
     lastStepAt: 0,
   });
+  // 拖动结束监听挂在 window 上:推进会把按下时捕获指针的那根刻度移出窗
+  // 口一起卸掉,按钮自身的 pointerup 就再也不会到。
+  const detachScrubEndRef = useRef<(() => void) | null>(null);
   // 容器左缘缓存,给高频 mousemove 的左缘唤醒判定用,免得每次事件都
   // getBoundingClientRect 强制布局读;measure(scroll/resize 都会触发)时刷新。
   const containerLeftRef = useRef(0);
@@ -380,6 +383,7 @@ export function MessageNavRail({
       if (idleTimerRef.current !== null) {
         window.clearTimeout(idleTimerRef.current);
       }
+      detachScrubEndRef.current?.();
       stopScrubAdvance();
     };
   }, [stopScrubAdvance]);
@@ -455,11 +459,12 @@ export function MessageNavRail({
   stepScrubRef.current = (dir) => {
     const current = scrubBandRef.current;
     if (current === null) return false;
-    const maxStart = Math.max(0, entries.length - plan.capacity);
+    // 与 planNavRailWindow 同一口径:占位刻度占掉的那一格不算实际刻度。
+    const maxStart = Math.max(0, entries.length - plan.slotCount);
     const next = Math.min(Math.max(0, current + dir), maxStart);
     if (next === current) return false;
     setScrubBand(next);
-    const target = dir > 0 ? next + plan.capacity - 1 : next;
+    const target = dir > 0 ? next + plan.slotCount - 1 : next;
     jumpToScrubIndex(Math.min(target, entries.length - 1));
     return true;
   };
@@ -495,10 +500,29 @@ export function MessageNavRail({
     const start = scrubBandRef.current ?? plan.startIndex;
     if (clientY <= top + SCRUB_EDGE_ZONE_PX) return start > 0 ? -1 : 0;
     if (clientY >= bottom - SCRUB_EDGE_ZONE_PX) {
-      return start + plan.capacity < entries.length ? 1 : 0;
+      return start + plan.slotCount < entries.length ? 1 : 0;
     }
     return 0;
   };
+
+  const endScrub = useCallback(
+    (suppressFollowUpClick: boolean) => {
+      const scrub = scrubRef.current;
+      if (!scrub) return;
+      detachScrubEndRef.current?.();
+      if (scrub.button.hasPointerCapture?.(scrub.pointerId)) {
+        scrub.button.releasePointerCapture?.(scrub.pointerId);
+      }
+      suppressClickRef.current = suppressFollowUpClick && scrub.moved;
+      scrubRef.current = null;
+      setScrubId(null);
+      stopScrubAdvance();
+      setScrubBand(null);
+    },
+    [setScrubBand, stopScrubAdvance],
+  );
+  const endScrubRef = useRef(endScrub);
+  endScrubRef.current = endScrub;
 
   const handleTickPointerDown = useCallback(
     (index: number, event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -518,6 +542,28 @@ export function MessageNavRail({
       setScrubBand(plan.startIndex);
       wake();
       button.setPointerCapture?.(event.pointerId);
+      // 推进会把正在拖的那根刻度移出窗口、连带卸掉 pointer capture,
+      // 指针离开后它再收不到 pointerup。结束事件必须挂在不随窗口重排的
+      // window 上,否则拖动会一直推进到会话尾部。
+      const pointerId = event.pointerId;
+      const onEnd = (endEvent: PointerEvent) => {
+        if (endEvent.pointerId !== pointerId) return;
+        detachScrubEndRef.current?.();
+        endScrubRef.current(false);
+      };
+      const onCancel = (cancelEvent: PointerEvent) => {
+        if (cancelEvent.pointerId !== pointerId) return;
+        detachScrubEndRef.current?.();
+        endScrubRef.current(true);
+      };
+      const detach = () => {
+        window.removeEventListener('pointerup', onEnd);
+        window.removeEventListener('pointercancel', onCancel);
+      };
+      detachScrubEndRef.current?.();
+      detachScrubEndRef.current = detach;
+      window.addEventListener('pointerup', onEnd);
+      window.addEventListener('pointercancel', onCancel);
     },
     [entries, plan.startIndex, setScrubBand, stopScrubAdvance, wake],
   );
@@ -540,16 +586,9 @@ export function MessageNavRail({
     (event: ReactPointerEvent<HTMLButtonElement>, suppressFollowUpClick: boolean) => {
       const scrub = scrubRef.current;
       if (!scrub || scrub.pointerId !== event.pointerId) return;
-      if (scrub.button.hasPointerCapture?.(event.pointerId)) {
-        scrub.button.releasePointerCapture?.(event.pointerId);
-      }
-      suppressClickRef.current = suppressFollowUpClick && scrub.moved;
-      scrubRef.current = null;
-      setScrubId(null);
-      stopScrubAdvance();
-      setScrubBand(null);
+      endScrub(suppressFollowUpClick);
     },
-    [setScrubBand, stopScrubAdvance],
+    [endScrub],
   );
 
   const handleTickMouseEnter = useCallback(() => {
@@ -584,10 +623,7 @@ export function MessageNavRail({
   if (!eligible) return null;
 
   // 窗口内条目:有更早的窗外条目时让出一格给"⋯"占位,窗口本身不因此变高。
-  const shown = entries.slice(
-    plan.startIndex,
-    plan.startIndex + (plan.hiddenBefore > 0 ? plan.capacity - 1 : plan.capacity),
-  );
+  const shown = entries.slice(plan.startIndex, plan.startIndex + plan.slotCount);
   // 可见范围 id → 下标(渲染时按 id 回查,测量与渲染间 entries 变更也不会
   // 错位)。单次遍历同时定位两端,滚动高频重渲下不扫两遍数组。
   let rangeStartIdx = -1;

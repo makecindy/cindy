@@ -585,6 +585,8 @@ describe('planNavRailWindow', () => {
     expect(plan.capacity).toBe(NAV_RAIL_MAX_TICKS);
     expect(plan.startIndex).toBe(1200 - Math.floor(NAV_RAIL_MAX_TICKS / 2));
     expect(plan.hiddenBefore).toBe(1200 - Math.floor(NAV_RAIL_MAX_TICKS / 2));
+    // 起点 >0 要留一格给"更早还有 N 条"占位,窗内刻度比上限少一根。
+    expect(plan.slotCount).toBe(NAV_RAIL_MAX_TICKS - 1);
   });
 
   it('一窗上限:视口再高也不超过 50 根', () => {
@@ -622,7 +624,21 @@ describe('planNavRailWindow', () => {
       activeIndex: 2404,
       anchorStart: null,
     });
-    expect(plan.startIndex).toBe(2405 - NAV_RAIL_MAX_TICKS);
+    // 占位占掉一格后,末窗仍需盖住最后一条(否则当前轮没有刻度可点)。
+    expect(plan.startIndex).toBe(2405 - (NAV_RAIL_MAX_TICKS - 1));
+    expect(plan.startIndex + plan.slotCount).toBe(2405);
+  });
+
+  it('末窗不会被占位刻度挤掉最新一条(回归:51 条 / 窗 50)', () => {
+    const plan = planNavRailWindow({
+      entryCount: 51,
+      availableHeightPx: BAND_PX,
+      activeIndex: 50,
+      anchorStart: null,
+    });
+    expect(plan.hiddenBefore).toBe(2);
+    expect(plan.slotCount).toBe(NAV_RAIL_MAX_TICKS - 1);
+    expect(plan.startIndex + plan.slotCount).toBe(51);
   });
 
   it('位置未知:贴尾部(刚打开会话先看最新一轮)', () => {
@@ -632,7 +648,8 @@ describe('planNavRailWindow', () => {
       activeIndex: null,
       anchorStart: null,
     });
-    expect(plan.startIndex).toBe(2405 - NAV_RAIL_MAX_TICKS);
+    expect(plan.startIndex).toBe(2405 - (NAV_RAIL_MAX_TICKS - 1));
+    expect(plan.startIndex + plan.slotCount).toBe(2405);
   });
 
   it('拖动扫描:冻结窗口不跟随阅读位置', () => {
