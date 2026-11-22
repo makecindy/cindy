@@ -1804,6 +1804,8 @@
       "other": "Lainnya",
       "lowAlert": "Beri tahu saat hampir habis",
       "privacy": "Sembunyikan info pribadi",
+      "automaticCurrency": "Otomatis",
+      "usageCurrency": "Mata uang pemakaian",
       "usageScope": "Cakupan penggunaan",
       "manageFoot": "Kelola penyedia model",
       "showSource": "Tampilkan {{name}} di menu",

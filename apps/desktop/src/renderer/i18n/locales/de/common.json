@@ -1833,6 +1833,8 @@
       "other": "Sonstige",
       "lowAlert": "Bei niedrigem Rest benachrichtigen",
       "privacy": "Persönliche Informationen ausblenden",
+      "automaticCurrency": "Automatisch",
+      "usageCurrency": "Währung der Nutzung",
       "usageScope": "Erfasste Nutzung",
       "manageFoot": "Anbieter verwalten",
       "showSource": "{{name}} im Menü anzeigen",

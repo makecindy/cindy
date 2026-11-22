@@ -7138,6 +7138,7 @@ function CCAgentSessionContent({
                         sessionId={sessionId}
                         sessionInitialMoney={session?.totalMoney ?? null}
                         sessionInitialCostUsd={session?.totalCostUsd ?? null}
+                        sessionInitialUsdApproximate={session?.totalCostUsdIsApproximate}
                         sessionInitialTokens={session?.totalTokenUsage ?? null}
                         remoteHostId={session?.remoteHostId ?? null}
                         deviceLinkDeviceId={remoteDeviceId ?? null}

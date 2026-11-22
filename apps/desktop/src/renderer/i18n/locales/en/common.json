@@ -1833,6 +1833,8 @@
       "other": "Other",
       "lowAlert": "Notify when running low",
       "privacy": "Hide personal info",
+      "automaticCurrency": "Auto",
+      "usageCurrency": "Usage currency",
       "usageScope": "Usage covers",
       "manageFoot": "Manage providers",
       "showSource": "Show {{name}} in the menu",

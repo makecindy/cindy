@@ -1803,6 +1803,8 @@
       "other": "その他",
       "lowAlert": "残りわずかで通知",
       "privacy": "個人情報を隠す",
+      "automaticCurrency": "自動",
+      "usageCurrency": "使用量の表示通貨",
       "usageScope": "使用量の集計範囲",
       "manageFoot": "プロバイダーを管理",
       "showSource": "{{name}} をメニューに表示",

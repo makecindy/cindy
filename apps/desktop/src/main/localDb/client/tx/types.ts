@@ -1432,6 +1432,7 @@ export type DbTxResultByName = {
   'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
+    usdApproximate: number;
     amount: number;
     currency: 'USD' | 'CNY';
     approximate: number;
