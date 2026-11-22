@@ -2800,6 +2800,30 @@ export function ProvidersSection() {
   const [unconfirmedRemovalSnapshot, setUnconfirmedRemovalSnapshot] = useState<ProviderView | null>(null);
   const unconfirmedRemovalProviderId = unconfirmedRemovalSnapshot && providers.includes(unconfirmedRemovalSnapshot)
     ? unconfirmedRemovalSnapshot.id : null;
+  // Dialog saves precede the catalog readback. Whole-config writers must wait
+  // for it, including when a newer read supersedes this one without an error.
+  const [externalReadbacks, setExternalReadbacks] = useState<{
+    owner: ReturnType<typeof getDataOwnerGeneration>; pending: number;
+  } | null>(null);
+  const [unconfirmedExternalSnapshots, setUnconfirmedExternalSnapshots] = useState<ProviderView[]>([]);
+  const readbackSavedProvider = useCallback(async () => {
+    const owner = getDataOwnerGeneration();
+    setExternalReadbacks(current => ({ owner, pending: (current?.owner === owner ? current.pending : 0) + 1 }));
+    let confirmed = false;
+    try {
+      confirmed = await refetch();
+    } finally {
+      if (!confirmed && isDataOwnerGenerationCurrent(owner)) {
+        setUnconfirmedExternalSnapshots(latestProvidersRef.current);
+      }
+      setExternalReadbacks(current => current?.owner === owner
+        ? { ...current, pending: current.pending - 1 } : current);
+    }
+  }, [refetch]);
+  const externalReadbackPending = externalReadbacks !== null && externalReadbacks.pending > 0
+    && isDataOwnerGenerationCurrent(externalReadbacks.owner);
+  const aliasReadbackBlocked = (providerId: string) => externalReadbackPending
+    || unconfirmedExternalSnapshots.some(snapshot => snapshot.id === providerId && providers.includes(snapshot));
   // A newer refresh supersedes the previous prompt; its list may already be stale.
   const withdrawnToastIdRef = useRef<string | null>(null);
 
@@ -4098,14 +4122,14 @@ export function ProvidersSection() {
                           {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                             ? {
                                 onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
-                                refreshing: refreshingProviderId === effectiveSelected.id || unconfirmedRemovalProviderId === effectiveSelected.id,
+                                refreshing: refreshingProviderId === effectiveSelected.id || unconfirmedRemovalProviderId === effectiveSelected.id || aliasReadbackBlocked(effectiveSelected.id),
                                 refreshDisabled: refreshingProviderId !== null,
                                 refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                               }
                             : effectiveSelected.source === 'user' && effectiveSelected.id !== MANAGED_LLAMACPP_PROVIDER_ID
                               ? {
                                   onRefresh: () => void handleRefreshModels(effectiveSelected),
-                                  refreshing: refreshingProviderId === effectiveSelected.id || unconfirmedRemovalProviderId === effectiveSelected.id,
+                                  refreshing: refreshingProviderId === effectiveSelected.id || unconfirmedRemovalProviderId === effectiveSelected.id || aliasReadbackBlocked(effectiveSelected.id),
                                   refreshDisabled: refreshingProviderId !== null,
                                 }
                               : {})}
@@ -4215,7 +4239,7 @@ export function ProvidersSection() {
       {speechProvider && speechProvider.owner === dataOwnerId && speechProvider.generation === ownerGeneration && (
         <AddSpeechModelsDialog key={`${dataOwnerId}:${ownerGeneration}:${speechProvider.provider.id}`}
           provider={speechProvider.provider} onClose={() => setSpeechProvider(null)}
-          onSaved={() => { setSpeechProvider(null); void refetch(); }} />
+          onSaved={() => { setSpeechProvider(null); void readbackSavedProvider(); }} />
       )}
       {wizard && (
         <AddProviderWizard
@@ -4259,7 +4283,7 @@ export function ProvidersSection() {
           onClose={() => setDialog(null)}
           onSaved={() => {
             setDialog(null);
-            refetch();
+            void readbackSavedProvider();
           }}
         />
       )}

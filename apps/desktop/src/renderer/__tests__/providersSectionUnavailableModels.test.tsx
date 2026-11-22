@@ -226,11 +226,15 @@ vi.mock('@/state/modelVisibilityPrefs', async (importOriginal) => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
-  ProviderConnectionDialog: () => null,
-}));
+const connectionDialogFixture = vi.hoisted(() => ({ real: false }));
+vi.mock('@/components/settings/ProviderConnectionDialog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/settings/ProviderConnectionDialog')>();
+  return { ProviderConnectionDialog: (props: React.ComponentProps<typeof actual.ProviderConnectionDialog>) =>
+    connectionDialogFixture.real ? React.createElement(actual.ProviderConnectionDialog, props) : null };
+});
 
-vi.mock('@/components/settings/AddProviderWizard', () => ({
+vi.mock('@/components/settings/AddProviderWizard', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/components/settings/AddProviderWizard')>(),
   AddProviderWizard: (props: { entry?: { kind: string; providerId: string } }) => {
     wizardSpy(props.entry);
     return React.createElement('div', { 'data-testid': 'wizard-stub' });
@@ -248,6 +252,7 @@ type ScanResult = { detections: unknown[] };
 let scanResult: ScanResult;
 
 beforeEach(() => {
+  connectionDialogFixture.real = false;
   localStorage.clear();
   setDataOwnerGeneration('owner-1');
   authState.dataOwnerId = 'owner-1';
@@ -297,6 +302,82 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // #6601 PRRT_kwDOTgdRUs66eH66, component/unit: real page and both real
+  // save dialogs, then open the alias drawer while catalog readback is pending.
+  // Prior refresh/removal cases did not exercise these external onSaved paths.
+  it.each(['speech', 'connection'] as const)('keeps the %s dialog commit through an external alias readback', async source => {
+    let stored: CustomProviderConfig = { id: 'external-save', name: 'My MiniMax', runtimes: {
+      codex: { baseUrl: 'https://api.minimax.io/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'MiniMax-M3', name: 'Private chat', nameExplicit: true }] },
+    } };
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+    providerSnapshotState.order = [stored.id];
+    connectionDialogFixture.real = true;
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn<typeof window.electronAPI.maker.updateCustomProvider>(async (config, _keys, options) => {
+      stored = options?.appendSpeechModelsOnly
+        ? { ...stored, runtimes: { codex: { ...stored.runtimes.codex!,
+          models: [...stored.runtimes.codex!.models, ...config.runtimes.codex!.models],
+        } } } : structuredClone(config);
+      return { ok: true };
+    });
+    Object.assign(window.electronAPI.maker, {
+      updateCustomProvider: persist,
+      listProviderPresets: vi.fn(async () => ({ presets: [] })),
+      fetchProviderModels: vi.fn(async () => ({ ok: true, models: [] })),
+      getModelContextLimit: async () => ({ limit: null, isCustomized: false }),
+      getModelImageInputOverride: async () => ({ value: null, mixed: false }),
+    });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    const page = () => <MemoryRouter><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    refetchProvidersSpy.mockImplementation(async () => { await readback; return false; });
+    try {
+      if (source === 'speech') {
+        fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.manage.menu' }), { key: 'ArrowDown' });
+        fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.speechSetup.add' }));
+        const dialog = await screen.findByRole('dialog', { name: 'settings.providers.speechSetup.add' });
+        await waitFor(() => expect(within(dialog).queryByRole('status')).toBeNull());
+        fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.wizard.addManualModel' }));
+      } else {
+        fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+        fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.custom.editAria' }));
+        const baseUrl = await screen.findByRole('textbox', { name: 'settings.providers.custom.fields.baseUrl' });
+        fireEvent.change(baseUrl, { target: { value: 'https://api.minimax.io/custom/v1' } });
+        await act(async () => {});
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+      }
+      await waitFor(() => expect(persist).toHaveBeenCalledOnce());
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
+      const externalConfig = structuredClone(stored);
+      if (source === 'speech') expect(externalConfig.runtimes.codex!.models.length).toBeGreaterThan(1);
+      else expect(externalConfig.runtimes.codex!.baseUrl).toBe('https://api.minimax.io/custom/v1');
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      await act(async () => { fireEvent.click(save); });
+      expect(persist).toHaveBeenCalledOnce();
+      expect(save.disabled).toBe(true);
+      await act(async () => { finishReadback(); });
+      expect(save.disabled).toBe(true); // superseded read, without a catalog error
+      expect(input.value).toBe('Work alias');
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      await waitFor(() => expect(save.disabled).toBe(false));
+      refetchProvidersSpy.mockResolvedValue(true);
+      await act(async () => { fireEvent.click(save); });
+      expect(persist).toHaveBeenCalledTimes(2);
+      Object.assign(externalConfig.runtimes.codex!.models.find(model => model.id === 'MiniMax-M3')!,
+        { name: 'Work alias', nameExplicit: true });
+      expect(stored).toEqual(externalConfig);
+    } finally {
+      finishReadback(); connectionDialogFixture.real = false;
+      vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset();
+    }
+  });
   // #6601 review / #5090, unit: real ProvidersSection → list → drawer. Existing
   // discovery tests only cover completed refreshes. One pending fetch/readback
   // must block alias writes, keep the draft, then save against the refreshed config.
