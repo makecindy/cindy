@@ -58,6 +58,8 @@ it('rejects stale scopes, cross-chat guest sends and files outside the guest wor
 it('falls back to the lane scope only when no inbound turn is active', async () => {
   const im = { sendText: vi.fn(async () => ({ messageId: 'sent' })), sendFile: vi.fn(async () => ({ ok: true as const, messageId: 'file' })),
     readHistory: vi.fn(async () => []), listChats: () => [{ guid: 'lane' }, { guid: 'inbound' }],
+    fetchAttachment: vi.fn(async (_chat: string, _message: string, guid: string, dir: string) =>
+      ({ path: path.join(dir, `${guid}.mov`), name: 'clip.mov', bytes: 96_000_000, totalBytes: 96_000_000, complete: true })),
     health: () => ({ lastCatchUpAt: null, lastWebhookAt: null, uncertainInputs: 0, uncertainSends: 0 }) };
   let lane: Parameters<typeof beginChannelToolScope>[0]['scope'] | null = null;
   const laneScope = vi.fn(async () => lane as never);
