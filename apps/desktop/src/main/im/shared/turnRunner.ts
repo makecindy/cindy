@@ -328,6 +328,7 @@ interface TurnState {
   terminalErrorCode: string | null;
   /** Whether a callback-bound text response has already been reserved. */
   chunkedReplyBegun: boolean;
+  commitChunkedFinal?: ChannelToolScope['commitChunkedFinal'];
   queueMode: 'internal' | 'external';
   /**
    * 授权检查通过的「将要运行」路由(渠道默认跟随会切过去的那条; 未跟随则为 null)。
@@ -1345,6 +1346,9 @@ export function createTurnRunner(
       terminalKind: 'done',
       terminalErrorCode: null,
       chunkedReplyBegun: false,
+      commitChunkedFinal: output.kind === 'chunked-text'
+        ? (args.channelToolScope?.commitChunkedFinal ?? output.commitFinal.bind(output))
+        : undefined,
       queueMode: args.queueMode,
       followAuthRoute: followTarget ?? null,
       terminalPromise,
@@ -4111,8 +4115,8 @@ export function createTurnRunner(
       async finalize(finalText: string) {
         if (closed) return;
         closed = true;
-        if (output.kind === 'chunked-text') {
-          await output.commitFinal({
+        if (turn.commitChunkedFinal) {
+          await turn.commitChunkedFinal({
             userId: turn.userId,
             text: finalText,
             terminal: turn.terminalKind,
@@ -4249,8 +4253,8 @@ export function createTurnRunner(
       // 实现兑现)。发送失败只记脱敏日志,不阻塞 settle / 队列放行。
       try {
         const fallbackText = composeStreamingView(turn);
-        if (output.kind === 'chunked-text') {
-          await output.commitFinal({
+        if (turn.commitChunkedFinal) {
+          await turn.commitChunkedFinal({
             userId,
             text: fallbackText,
             terminal: turn.terminalKind,

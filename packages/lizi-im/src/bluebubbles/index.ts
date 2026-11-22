@@ -941,9 +941,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     }
     if (changed) void this.pump(generation).catch(error => this.fail(generation, error));
   }
-  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>): Promise<{ messageId: string }> {
+  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>, requestId?: string): Promise<{ messageId: string }> {
     const { api, receipts, generation } = this.target(chatId);
-    const id = randomUUID();
+    const id = requestId ?? randomUUID();
+    if (requestId && receipts.hasOutgoing(requestId)) {
+      const messageId = receipts.confirmedSend(requestId, chatId);
+      if (!messageId) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+      return { messageId };
+    }
     const echoSignature = text === null ? 'file' : receipts.textSignature(text);
     receipts.outgoing(id, { chatId, state: 'sending', echoSignature });
     let sent = false;
@@ -979,6 +984,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   }
   listChats(): BlueBubblesChat[] { return [...this.chats.values()].map(chat => structuredClone(chat)); }
   sendText(chatId: string, text: string): Promise<{ messageId: string }> { return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id)); }
+  sendDirectDelivery(chatId: string, text: string, requestId: string): Promise<{ messageId: string }> {
+    if (!/^(?:iMessage|any);-;/.test(chatId) || this.isGroup(chatId)) {
+      return Promise.reject(new Error('BLUEBUBBLES_DIRECT_CHAT_REQUIRED'));
+    }
+    return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id), requestId);
+  }
   sendMarkdownText(chatId: string, text: string): Promise<{ messageId: string }> { return this.sendText(chatId, text); }
   async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult & { deliveryError?: typeof AUTOMATION_DENIED | 'BLUEBUBBLES_SEND_UNKNOWN' }> {
     const { generation } = this.target(chatId);

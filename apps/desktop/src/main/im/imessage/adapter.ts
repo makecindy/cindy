@@ -13,6 +13,7 @@ import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { createImOrchestrator } from '../shared/orchestrator';
 import { channelForceConfirmToolCall } from '../shared/channelToolPolicy';
 import { handleDingTalkTextInteraction } from '../dingtalk/interaction';
+import { directDeliveryFile, readDirectDelivery } from './directDelivery';
 import { archiveDirectory, readArchive } from './archive';
 import { ui } from './uiText';
 
@@ -72,16 +73,39 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       })?.guid;
     },
     channelToolScopeFor: event => {
+      let requestedDocument: { text: string; replyId: string } | undefined;
       const origin = im.connectedOrigin;
       const directory = origin && archiveDirectory(options.connectionId, origin);
+      const directFile = origin && !im.isGroup(event.chatId) &&
+        directDeliveryFile(options.companionBotId, options.connectionId, origin, event.chatId);
       return { channel: 'imessage', im, botId: event.contextId,
       laneUserId: event.senderId, chatId: event.chatId,
+      readDirectDelivery: directFile ? after => {
+        if (im.connectedOrigin !== origin) throw new Error('Connection changed');
+        const record = readDirectDelivery(directFile);
+        if (!record || record.createdAt < after) return null;
+        // BlueBubbles uses tempGuid to correlate retries. A new inbound question gets its own reply.
+        const replyId = createHash('sha256').update(JSON.stringify([record.requestId, event.messageId])).digest('hex');
+        requestedDocument = { text: record.text, replyId };
+        return { text: record.text, createdAt: record.createdAt };
+      } : undefined,
+      commitChunkedFinal: directFile ? async output => {
+        if (output.userId !== event.chatId || im.connectedOrigin !== origin) throw new Error('IMESSAGE_CONNECTION_CHANGED');
+        // Restore Markdown hard breaks to the bytes read by this particular request.
+        const plain = (text: string) => text.replace(/[ \t]+(?=\r?\n)/g, '').trim();
+        if (requestedDocument && output.terminal === 'done' && plain(output.text) === plain(requestedDocument.text)) {
+          await im.sendDirectDelivery(event.chatId, requestedDocument.text, requestedDocument.replyId);
+          await im.commitFinal({ ...output, text: '' });
+          return;
+        }
+        await im.commitFinal(output);
+      } : undefined,
       readArchive: directory ? (query, before, limit) => readArchive(directory, event.chatId, query, before, limit) : undefined,
       chatKind: im.isGroup(event.chatId) ? 'group' : 'direct',
       requesterIsOwner: event.speaker?.isOwner === true, companion: true };
     },
     channelNoteSourceFor: event => ({
-      toolsHint: 'iMessage via local BlueBubbles. cindy_imessage tools provide connected chat history, immediate text/file sending and connection health. Normal final replies are delivered automatically.',
+      toolsHint: 'iMessage via local BlueBubbles. cindy_imessage tools provide connected chat history, immediate text/file sending and connection health. When asked for a report or document addressed to this private chat, use latest_direct_delivery in the current private chat. Reply with the returned original verbatim, including after a failed proactive send. Normal final replies are delivered automatically.',
       chatKind: im.isGroup(event.chatId) ? 'group' : 'direct', chatId: event.chatId,
       chatName: event.interactionSource?.chatName, senderId: event.speaker?.id,
       senderName: event.speaker?.name, senderIsOwner: event.speaker?.isOwner === true,

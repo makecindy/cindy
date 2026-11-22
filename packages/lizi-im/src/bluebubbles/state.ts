@@ -203,9 +203,10 @@ export class BlueBubblesReceipts {
       if (!messages.size) this.sentByChat.delete(row.chatId);
     }
   }
-  confirmedSend(id: string): string | undefined {
+  hasOutgoing(id: string): boolean { return Object.hasOwn(this.state.outbox, id); }
+  confirmedSend(id: string, chatId?: string): string | undefined {
     const row = this.state.outbox[id];
-    return row?.state === 'sent' ? row.messageId : undefined;
+    return row?.state === 'sent' && (chatId === undefined || row.chatId === chatId) ? row.messageId : undefined;
   }
   isOutgoing(chat: string, guid: string, tempGuid?: string): boolean {
     return this.outgoingChats.get(guid) === chat || (!!tempGuid && this.state.outbox[tempGuid]?.chatId === chat);
