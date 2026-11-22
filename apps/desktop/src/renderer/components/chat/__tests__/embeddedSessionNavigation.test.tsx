@@ -37,6 +37,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
   return { ...actual, useNavigate: () => mocks.navigate };
 });
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     t: (key: string, values?: { name?: string }) => values?.name ?? key,
   }),
@@ -79,7 +80,9 @@ import { AutomationOriginBadge } from '../AutomationOriginBadge';
 import { MessageSourceLabels } from '../MessageSourceLabels';
 import { SessionHandoffCard } from '../SessionHandoffCard';
 import { SessionLinkChip } from '../SessionLinkChip';
-import { BotStartedTasks, BotStartedTasksFooter, BotTaskLetterOpen } from '../BotStartedTasks';
+import { BotStartedTasks, BotStartedTasksFooter, BotTaskLetterOpen, resolveLinkedTaskStatus } from '../BotStartedTasks';
+import { makerChatStore } from '@/lib/makerChatStore';
+import { addSessionAttention, clearSessionAttention } from '@/lib/sessionAttentionStore';
 
 function embedded(children: ReactNode, sidebarTargetSessionId?: string) {
   return (
@@ -164,6 +167,39 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
     view.rerender(embedded(<BotStartedTasksFooter tasks={[task]} />));
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // 2026-11-21: the started-task line shows the task's live state so the owner and the teammate
+  // see a stalled or blocked task without opening it. Unit tier: real run and attention stores
+  // drive the production footer; a task nobody reports on shows no state rather than a guess.
+  it('shows the live state of a started task beside its link', () => {
+    const sessionId = `started-status-${Math.random().toString(36).slice(2, 8)}`;
+    const update = (isRunning: boolean) => makerChatStore.__applyStatusUpdateForTest(sessionId, {
+      sessionId, status: isRunning ? 'Working' : 'Done', tokenUsage: 1, costUsd: 0, contextTokens: 1, contextWindow: 10, isRunning,
+    });
+    const status = () => screen.queryByTestId('bot-started-task-status')?.getAttribute('data-status') ?? null;
+    try {
+      render(<BotStartedTasksFooter tasks={[{ sessionId, title: 'Fix login', created: true }]} />);
+      expect(status()).toBeNull();
+      act(() => update(true));
+      expect(status()).toBe('running');
+      expect(screen.getByText('chat.botStartedTasks.status.running')).toBeTruthy();
+      act(() => addSessionAttention(sessionId, 'awaiting'));
+      expect(status()).toBe('needs-action');
+      act(() => { clearSessionAttention(sessionId); update(false); addSessionAttention(sessionId, 'error'); });
+      expect(status()).toBe('error');
+    } finally {
+      act(() => { clearSessionAttention(sessionId, { intent: 'explicit' }); makerChatStore.purgeSession(sessionId); });
+    }
+  });
+
+  it.each([
+    { name: 'a pending approval outranks running', input: { run: { isRunning: true, hasError: false, hasPendingAskUser: false, hasPendingPermission: true, hasPendingPlanReview: false, hasPendingPluginSetup: false }, livePhase: undefined, attention: undefined, known: true }, expected: 'needs-action' },
+    { name: 'a known local task with no activity is idle', input: { run: undefined, livePhase: undefined, attention: 'done' as const, known: true }, expected: 'idle' },
+    { name: 'a remote task with a silent feed says nothing', input: { run: undefined, livePhase: undefined, attention: undefined, known: false }, expected: null },
+    { name: 'a remote completed turn is idle', input: { run: undefined, livePhase: 'completed' as const, attention: undefined, known: false }, expected: 'idle' },
+  ])('started-task state: $name', ({ input, expected }) => {
+    expect(resolveLinkedTaskStatus(input)).toBe(expected);
   });
 
   it('keeps worker content identity while targeting the visible Lead sidebar bucket', () => {

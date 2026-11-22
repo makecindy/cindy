@@ -16126,7 +16126,13 @@
       "open": "タスク「{{title}}」を開く",
       "untitled": "名称未設定のタスク",
       "startedOne": "開始したタスク",
-      "handedToOne": "引き継ぎ先"
+      "handedToOne": "引き継ぎ先",
+      "status": {
+        "running": "実行中",
+        "needsAction": "確認待ち",
+        "error": "エラー",
+        "idle": "待機中"
+      }
     },
     "botTaskLetter": {
       "replied": "からの返信",

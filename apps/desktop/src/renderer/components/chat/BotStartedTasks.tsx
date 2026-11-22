@@ -9,9 +9,18 @@ import { ChevronDown, ChevronRight, CornerDownLeft, CornerDownRight } from 'luci
 import { useTranslation } from 'react-i18next';
 
 import type { ChatMessage } from '@/hooks/useCCAgentChat';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useRemoteSessionTitle } from '@/features/device-link/remoteProjectsStore';
+import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { makerChatStore } from '@/lib/makerChatStore';
+import type { SessionStatusInfo } from '@/lib/makerChatStore';
+import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import type { AttentionKind } from '@/lib/sessionAttentionStore';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { useAgentIslandActivity } from '@/state/agentIslandActivity';
+import type { AgentIslandSessionPhase } from '../../../shared/agentIsland';
 import { cn } from '@/lib/utils';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { toast } from '@/lib/toast';
@@ -102,6 +111,74 @@ export function useOpenLinkedTask(sessionId: string | undefined, hostSessionId: 
   };
 }
 
+export type LinkedTaskStatus = 'running' | 'needs-action' | 'error' | 'idle';
+
+/**
+ * The state of a started task right now, from the stores the task list already keeps (2026-11-21):
+ * the renderer's run state, the host's live activity feed and the attention dot. A local task this
+ * computer knows reads as idle once none of them says otherwise; a remote task only shows what that
+ * computer's live feed reports, and nothing when the feed is silent. Null means "don't say".
+ */
+export function resolveLinkedTaskStatus({ run, livePhase, attention, known }: {
+  run: SessionStatusInfo | undefined;
+  livePhase: AgentIslandSessionPhase | undefined;
+  attention: AttentionKind | undefined;
+  known: boolean;
+}): LinkedTaskStatus | null {
+  const pending = run !== undefined && (run.hasPendingPermission || run.hasPendingAskUser || run.hasPendingPlanReview
+    || run.hasPendingPluginSetup || run.hasActionableInputHandoff === true);
+  if (pending || livePhase === 'needs-interaction' || attention === 'awaiting') return 'needs-action';
+  if (run?.isRunning || livePhase === 'running') return 'running';
+  if (run?.hasError || livePhase === 'error' || attention === 'error') return 'error';
+  return known || livePhase === 'completed' ? 'idle' : null;
+}
+
+export function useLinkedTaskStatus(sessionId: string, hostSessionId: string | undefined): LinkedTaskStatus | null {
+  const selfDeviceId = useOptionalAuthDeviceId();
+  const target = parseSourceSessionTarget(sessionId);
+  const id = target?.sessionId ?? sessionId;
+  const explicitDevice = target?.deviceId && target.deviceId !== selfDeviceId ? target.deviceId : undefined;
+  const deviceId = explicitDevice ?? getStickySessionDeviceId(hostSessionId);
+  const run = useSyncExternalStore(makerChatStore.subscribeAll,
+    () => (deviceId ? undefined : makerChatStore.getRunningSnapshot().get(id)));
+  const localLive = useAgentIslandActivity(deviceId ? '' : id);
+  const remoteLive = useRemoteSessionActivity(deviceId ? id : '', deviceId);
+  const attention = useSessionAttentionKind(deviceId ? '' : id);
+  const known = useSyncExternalStore(
+    (onChange) => sessionsStore.subscribe(onChange),
+    () => !deviceId && sessionsStore.findById(id) !== null,
+  );
+  return resolveLinkedTaskStatus({
+    run,
+    livePhase: deviceId ? remoteLive?.phase : localLive?.phase,
+    attention: deviceId ? undefined : attention,
+    known,
+  });
+}
+
+const STATUS_DOT: Partial<Record<LinkedTaskStatus, 'awaiting' | 'error'>> = { 'needs-action': 'awaiting', error: 'error' };
+const STATUS_LABEL = {
+  running: 'chat.botStartedTasks.status.running',
+  'needs-action': 'chat.botStartedTasks.status.needsAction',
+  error: 'chat.botStartedTasks.status.error',
+  idle: 'chat.botStartedTasks.status.idle',
+} as const satisfies Record<LinkedTaskStatus, string>;
+
+/** "· Running" after a started task's title; colour only where the owner may need to act. */
+function LinkedTaskStatusLabel({ sessionId, hostSessionId }: { sessionId: string; hostSessionId?: string }) {
+  const { t } = useTranslation();
+  const status = useLinkedTaskStatus(sessionId, hostSessionId);
+  if (!status) return null;
+  const dot = STATUS_DOT[status];
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 text-[var(--text-tertiary)]" data-testid="bot-started-task-status" data-status={status}>
+      <span aria-hidden>·</span>
+      {dot ? <AttentionDot tone={dot} /> : null}
+      <span>{t(STATUS_LABEL[status])}</span>
+    </span>
+  );
+}
+
 /** The pill every task reference in a teammate chat uses: a started task, a letter from a task. */
 export const BOT_TASK_PILL_CLASS = 'inline-flex h-7 min-w-0 max-w-full items-center gap-1.5 rounded-full bg-[var(--msg-md-inline-code-bg)] px-2.5 text-13 text-[var(--msg-assistant-text)]';
 
@@ -113,6 +190,7 @@ function TaskChip({ task, hostSessionId }: { task: BotStartedTask; hostSessionId
     <>
       <CornerDownRight size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
       <span className="min-w-0 truncate font-medium">{title}</span>
+      <LinkedTaskStatusLabel sessionId={task.sessionId} hostSessionId={hostSessionId} />
       {open ? <ChevronRight size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" /> : null}
     </>
   );
@@ -147,6 +225,7 @@ function TaskLink({ task, hostSessionId }: { task: BotStartedTask; hostSessionId
           <ChevronRight size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
         </button>
       ) : <span className="min-w-0 truncate font-medium text-[var(--msg-assistant-text)]">{title}</span>}
+      <LinkedTaskStatusLabel sessionId={task.sessionId} hostSessionId={hostSessionId} />
     </div>
   );
 }

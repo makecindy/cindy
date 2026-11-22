@@ -16200,7 +16200,13 @@
       "open": "Aufgabe „{{title}}“ öffnen",
       "untitled": "Unbenannte Aufgabe",
       "startedOne": "Gestartet",
-      "handedToOne": "Übergeben an"
+      "handedToOne": "Übergeben an",
+      "status": {
+        "running": "Läuft",
+        "needsAction": "Wartet auf dich",
+        "error": "Fehler",
+        "idle": "Inaktiv"
+      }
     },
     "botTaskLetter": {
       "replied": "hat geantwortet",

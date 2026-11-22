@@ -16200,7 +16200,13 @@
       "open": "Open task “{{title}}”",
       "untitled": "Untitled task",
       "startedOne": "Started",
-      "handedToOne": "Handed to"
+      "handedToOne": "Handed to",
+      "status": {
+        "running": "Running",
+        "needsAction": "Waiting for you",
+        "error": "Error",
+        "idle": "Idle"
+      }
     },
     "botTaskLetter": {
       "replied": "replied",

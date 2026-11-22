@@ -16126,7 +16126,13 @@
       "open": "開啟任務「{{title}}」",
       "untitled": "未命名任務",
       "startedOne": "開了任務",
-      "handedToOne": "交給任務"
+      "handedToOne": "交給任務",
+      "status": {
+        "running": "執行中",
+        "needsAction": "待確認",
+        "error": "出錯",
+        "idle": "閒置"
+      }
     },
     "botTaskLetter": {
       "replied": "回信",
