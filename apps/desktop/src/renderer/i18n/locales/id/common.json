@@ -5608,7 +5608,7 @@
       "uninstallTitle": "Hapus ekstensi Pi?",
       "uninstallDescription": "{{name}} akan dihapus dari perangkat ini. Tugas Pi yang sedang terbuka masih memakai ekstensi lama, dan baru benar-benar tercopot sesudah ditutup.",
       "confirmUninstall": "Copot",
-      "extensionDialogConfirm": "Konfirmasi",
+      "extensionDialogConfirm": "Lanjutkan",
       "cancel": "Batal",
       "resources": {
         "extension": "Kode ekstensi",
@@ -9384,7 +9384,7 @@
       "allow": "Izinkan",
       "deny": "tolak",
       "questionTitle": "Butuh jawabanmu",
-      "submit": "Kirim",
+      "submit": "Kirim jawaban",
       "planTitle": "Rencana menunggu tinjauan",
       "approve": "setujui",
       "requestChanges": "Minta perubahan",
@@ -11867,7 +11867,7 @@
           "soleOwnerHint": "Tinggal kamu seorang di grup. Grup bisa diarsipkan untuk menyimpan riwayat dan dipulihkan nanti.",
           "archive": "Arsipkan grup",
           "archiveHint": "Pengarsipan menonaktifkan grup ini untuk semua anggota, menghentikan pesan baru dan kerja Rekan. Riwayat tetap disimpan; cari grup ini untuk melihat riwayat atau membatalkan pengarsipan.",
-          "confirm": "Konfirmasi",
+          "confirm": "Izinkan alat",
           "lastOwner": "Alihkan dulu kepemilikan grup ke anggota lain sebelum keluar atau mengeluarkan pemilik grup saat ini.",
           "conflict": "Pengaturan grup sudah diperbarui anggota lain. Muat ulang lalu coba lagi.",
           "unarchive": "Batalkan pengarsipan",
@@ -12723,7 +12723,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Konfirmasi",
+      "confirm": "Lanjutkan",
       "cancel": "Batal",
       "dontShowAgain": "Jangan tampilkan lagi"
     },
@@ -14944,7 +14944,7 @@
       "back": "Kembali",
       "skip": "Lewati",
       "next": "Berikutnya",
-      "submit": "Kirim",
+      "submit": "Kirim jawaban",
       "sendAndContinue": "Kirim dan lanjutkan",
       "close": "Tutup",
       "customAnswer": "Ketik jawaban lain…",

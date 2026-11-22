@@ -499,7 +499,7 @@
       "tools": "Alat dan informasi yang diizinkan pemilik",
       "authorizeTitle": "Izinkan grup ini memakai alat dan info milik {{name}}?",
       "toolsHint": "Anggota grup ini bisa memakai alat dan info pribadi yang sudah dimiliki Rekan; hasilnya terlihat oleh seluruh grup. Aturan persetujuan yang ada tetap berlaku; pencabutan menghentikan permintaan yang sedang berjalan, tetapi tindakan yang sudah dijalankan tidak bisa dibatalkan.",
-      "confirm": "Konfirmasi"
+      "confirm": "Izinkan alat"
     }
   },
   "groupSettings": {
@@ -583,7 +583,7 @@
     "transferHint": "Dia akan menjadi pemilik grup dan kamu menjadi admin.",
     "removeTitle": "Keluarkan {{name}} dari grup?",
     "removeHint": "Anggota ini tidak bisa lagi melihat atau mengirim pesan; kalau dia pemilik Rekan, Rekan-nya juga ikut keluar.",
-    "confirm": "Konfirmasi",
+    "confirm": "Hapus",
     "inviteTitle": "Undang ke obrolan grup",
     "reusableLink": "Berlaku selamanya · bisa dipakai banyak orang",
     "singleUseUntil": "Hanya sekali pakai · kedaluwarsa {{date}}",
