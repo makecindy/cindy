@@ -493,6 +493,44 @@ export function stepNavRailWindow(input: {
   return { start: next, targetIndex };
 }
 
+/** 刻度带上下缘这么宽的区间内按住,就持续推进窗口。 */
+export const NAV_RAIL_SCRUB_EDGE_PX = 12;
+/** 指针横向离开刻度带这么多像素后,视为已经不想再扫。 */
+export const NAV_RAIL_SCRUB_ESCAPE_PX = 24;
+
+/**
+ * 拖动扫描时指针落在哪个推进方向。
+ *
+ * 推进会把正在拖的那根刻度移出窗口、连带卸掉 pointer capture:指针随后
+ * 横向离开刻度带时,再没有事件把方向改回 0,扫描会一路跑到会话尾部。
+ * 所以横向超界一律返回 0(Codex review)。
+ */
+export function pickScrubEdgeDirection(input: {
+  clientX: number;
+  clientY: number;
+  railLeft: number;
+  railRight: number;
+  bandTop: number;
+  bandBottom: number;
+  startIndex: number;
+  slotCount: number;
+  entryCount: number;
+}): -1 | 0 | 1 {
+  if (
+    input.clientX < input.railLeft - NAV_RAIL_SCRUB_ESCAPE_PX ||
+    input.clientX > input.railRight + NAV_RAIL_SCRUB_ESCAPE_PX
+  ) {
+    return 0;
+  }
+  if (input.clientY <= input.bandTop + NAV_RAIL_SCRUB_EDGE_PX) {
+    return input.startIndex > 0 ? -1 : 0;
+  }
+  if (input.clientY >= input.bandBottom - NAV_RAIL_SCRUB_EDGE_PX) {
+    return input.startIndex + input.slotCount < input.entryCount ? 1 : 0;
+  }
+  return 0;
+}
+
 /**
  * 计算刻度线宽度。悬浮或 scrub 时，以目标为中心向两侧逐级收缩 1～3 根；
  * 当前阅读位置仍保留自己的加长反馈，避免交互态覆盖阅读态。

@@ -20,6 +20,7 @@ import {
   hasNavRailRoom,
   normalizeExcerpt,
   pickActiveNavId,
+  pickScrubEdgeDirection,
   pickVisibleNavRange,
   planNavRailWindow,
   planNavRailTickWidth,
@@ -755,4 +756,45 @@ it('shows readable delegated history only on attributed task messages', () => {
   expect(resolveUserDisplayText({ content, automationOrigin: { kind: 'session' } }))
     .toContain('第一段\n\n保留 `\\n`');
   expect(resolveUserDisplayText({ content })).toBe(content);
+});
+
+describe('pickScrubEdgeDirection', () => {
+  const base = {
+    clientX: 40,
+    railLeft: 30,
+    railRight: 56,
+    bandTop: 100,
+    bandBottom: 700,
+    startIndex: 100,
+    slotCount: 50,
+    entryCount: 2405,
+  };
+
+  it('刻度带中间不推进', () => {
+    expect(pickScrubEdgeDirection({ ...base, clientY: 400 })).toBe(0);
+  });
+
+  it('上缘:只有还留着更早的条目才推进', () => {
+    expect(pickScrubEdgeDirection({ ...base, clientY: 105 })).toBe(-1);
+    expect(pickScrubEdgeDirection({ ...base, clientY: 105, startIndex: 0 })).toBe(0);
+  });
+
+  it('下缘:只有还留着后面条目才推进', () => {
+    expect(pickScrubEdgeDirection({ ...base, clientY: 695 })).toBe(1);
+    expect(
+      pickScrubEdgeDirection({ ...base, clientY: 695, startIndex: 2355 }),
+    ).toBe(0);
+  });
+
+  it('指针横向离开刻度带就停 — 抓着的刻度可能已被推进移出窗口', () => {
+    expect(
+      pickScrubEdgeDirection({ ...base, clientY: 695, clientX: base.railLeft - 25 }),
+    ).toBe(0);
+    expect(
+      pickScrubEdgeDirection({ ...base, clientY: 695, clientX: base.railRight + 25 }),
+    ).toBe(0);
+    expect(
+      pickScrubEdgeDirection({ ...base, clientY: 695, clientX: base.railLeft - 24 }),
+    ).toBe(1);
+  });
 });

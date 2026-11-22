@@ -60,6 +60,7 @@ import {
   pickVisibleNavRange,
   planNavRailWindow,
   planNavRailTickWidth,
+  pickScrubEdgeDirection,
   planNavRailTickProgress,
   stepNavRailWindow,
   type NavRailEntry,
@@ -81,8 +82,7 @@ const WAKE_GUTTER_PX = 48;
 const RAIL_TOP_PX = 28;
 const RAIL_BOTTOM_EXTRA_PX = 16;
 // 拖动指针进入窗口上下缘这么宽的区域就自动推进。留一档余量,避免贴着
-// 末根刻度慢拖时被当即顶走。
-const SCRUB_EDGE_ZONE_PX = 12;
+// 末根刻度慢拖时被当即顶走(取值在 messageNavRailModel 的 NAV_RAIL_SCRUB_EDGE_PX)。
 // 边缘推进的步频。onJump 会触发布局与滚动,按帧率 60 次/秒打过去会与
 // 平滑滚动互相抢,取 30ms 一档。
 const SCRUB_ADVANCE_INTERVAL_MS = 30;
@@ -500,14 +500,23 @@ export function MessageNavRail({
     [stopScrubAdvance],
   );
 
-  const scrubEdgeDir = (clientY: number, top: number, bottom: number): number => {
-    const start = scrubBandRef.current ?? plan.startIndex;
-    if (clientY <= top + SCRUB_EDGE_ZONE_PX) return start > 0 ? -1 : 0;
-    if (clientY >= bottom - SCRUB_EDGE_ZONE_PX) {
-      return start + plan.slotCount < entries.length ? 1 : 0;
-    }
-    return 0;
-  };
+  const scrubEdgeDir = useCallback(
+    (clientX: number, clientY: number, top: number, bottom: number): -1 | 0 | 1 => {
+      const rect = railRef.current?.getBoundingClientRect();
+      return pickScrubEdgeDirection({
+        clientX,
+        clientY,
+        railLeft: rect?.left ?? clientX,
+        railRight: rect?.right ?? clientX,
+        bandTop: top,
+        bandBottom: bottom,
+        startIndex: scrubBandRef.current ?? plan.startIndex,
+        slotCount: plan.slotCount,
+        entryCount: entries.length,
+      });
+    },
+    [entries.length, plan.slotCount, plan.startIndex],
+  );
 
   const endScrub = useCallback(
     (suppressFollowUpClick: boolean) => {
@@ -560,31 +569,41 @@ export function MessageNavRail({
         detachScrubEndRef.current?.();
         endScrubRef.current(true);
       };
+      const onMove = (moveEvent: PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
+        scrubMoveRef.current(moveEvent.clientX, moveEvent.clientY, pointerId);
+      };
       const detach = () => {
+        window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onEnd);
         window.removeEventListener('pointercancel', onCancel);
       };
       detachScrubEndRef.current?.();
       detachScrubEndRef.current = detach;
+      // 指针事件的唯一来源挂 window:抓着的刻度被推进移出窗口后,它自身
+      // 收不到 pointermove,方向就永远停在推进态。
+      window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onEnd);
       window.addEventListener('pointercancel', onCancel);
     },
     [entries, plan.startIndex, setScrubBand, stopScrubAdvance, wake],
   );
 
-  const handleTickPointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const handleScrubPointerMove = useCallback(
+    (clientX: number, clientY: number, pointerId: number) => {
       const scrub = scrubRef.current;
-      if (!scrub || scrub.pointerId !== event.pointerId) return;
-      if (!scrub.moved && Math.abs(event.clientY - scrub.startY) < 3) return;
+      if (!scrub || scrub.pointerId !== pointerId) return;
+      if (!scrub.moved && Math.abs(clientY - scrub.startY) < 3) return;
       scrub.moved = true;
-      const hit = findScrubHit(event.clientY);
+      const hit = findScrubHit(clientY);
       if (!hit) return;
       jumpToScrubIndex(hit.index);
-      driveScrubAdvance(scrubEdgeDir(event.clientY, hit.top, hit.bottom));
+      driveScrubAdvance(scrubEdgeDir(clientX, clientY, hit.top, hit.bottom));
     },
     [driveScrubAdvance, findScrubHit, jumpToScrubIndex, scrubEdgeDir],
   );
+  const scrubMoveRef = useRef(handleScrubPointerMove);
+  scrubMoveRef.current = handleScrubPointerMove;
 
   const finishScrub = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>, suppressFollowUpClick: boolean) => {
@@ -754,7 +773,6 @@ export function MessageNavRail({
                     handleTickMouseEnter();
                   }}
                   onPointerDown={(event) => handleTickPointerDown(fullIdx, event)}
-                  onPointerMove={handleTickPointerMove}
                   onPointerUp={(event) => finishScrub(event, true)}
                   onPointerCancel={(event) => finishScrub(event, false)}
                   onLostPointerCapture={(event) => finishScrub(event, false)}
