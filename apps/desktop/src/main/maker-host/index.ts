@@ -935,6 +935,7 @@ function companionToolAgentKind(kind: EngineKind): AgentKind {
 function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     listMcpServers: (input) => listBotRuntimeMcpServers({
       ...input,
       agentKind: companionToolAgentKind(input.agentKind),

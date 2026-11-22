@@ -5829,3 +5829,28 @@ it('rejects a roster read before DbClient publication instead of reporting no bu
     expect.arrayContaining([expect.objectContaining({ id: 'bot-1' })]),
   );
 });
+
+// PR #12070 review: Bot creation and settings read the Skill catalog before any Agent launches;
+// startup only warms the shared Skill preparation, so the catalog must join it first.
+describe('Bot capability Skill catalog', () => {
+  it('joins shared Skill preparation before listing Skills for creation', async () => {
+    const order: string[] = [];
+    const service = createBotCapabilityService({
+      ...capabilityDeps,
+      prepareSharedSkills: async () => { order.push('prepare'); },
+      getMaker: () => ({
+        listAgentSkills: async () => {
+          order.push('list');
+          return { skills: [{ name: 'release-check', description: 'Release checklist', enabled: true }] };
+        },
+      }) as never,
+    });
+
+    const result = await service.forCreation({
+      botId: 'bot-new', workingDir: '/bots/bot-new/workspace', agentKind: 'pi', assertOwner: () => undefined,
+    });
+
+    expect(order).toEqual(['prepare', 'list']);
+    expect(result.skill.map((entry) => entry.name)).toContain('release-check');
+  });
+});
