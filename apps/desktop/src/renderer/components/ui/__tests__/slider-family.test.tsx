@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Slider } from '../slider';
 import { MediaScrubber } from '../media-scrubber';
@@ -128,4 +128,63 @@ describe('Slider family behavior', () => {
       expect(slider.hasAttribute('data-dragging')).toBe(false);
     },
   );
+  it('holds committed effort optimistically until parent value catches up or times out', () => {
+    vi.useFakeTimers();
+    try {
+      const change = vi.fn();
+      const { rerender } = render(
+        <EffortSlider
+          stops={['low', 'medium', 'high']}
+          value="low"
+          labelOf={String}
+          onChange={change}
+        />,
+      );
+      const slider = screen.getByRole('slider');
+      slider.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect;
+      pointer(slider, 'pointerdown', 20);
+      pointer(document, 'pointerup', 100);
+      expect(change).toHaveBeenCalledExactlyOnceWith('high');
+      // Parent has not updated value yet: slider stays locked at 'high' (index 2), no flash back to 'low'.
+      expect(slider.getAttribute('aria-valuenow')).toBe('2');
+      expect(slider.getAttribute('aria-valuetext')).toBe('high');
+      // If parent never updates within timeout, fallback to prop value.
+      act(() => {
+        vi.advanceTimersByTime(1600);
+      });
+      expect(slider.getAttribute('aria-valuenow')).toBe('0');
+      // When parent updates to match committed value, it stays at the new value.
+      pointer(slider, 'pointerdown', 50);
+      pointer(document, 'pointerup', 50);
+      expect(slider.getAttribute('aria-valuenow')).toBe('1');
+      rerender(
+        <EffortSlider
+          stops={['low', 'medium', 'high']}
+          value="medium"
+          labelOf={String}
+          onChange={change}
+        />,
+      );
+      expect(slider.getAttribute('aria-valuenow')).toBe('1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('suppresses pointer focus outline while preserving keyboard focus-visible ring and compact mode', () => {
+    render(
+      <EffortSlider
+        compact
+        stops={['low', 'high']}
+        value="low"
+        labelOf={String}
+        onChange={vi.fn()}
+      />,
+    );
+    const slider = screen.getByRole('slider');
+    expect(slider.className).toContain('outline-none');
+    expect(slider.className).toContain('focus:outline-none');
+    expect(slider.className).toContain('focus-visible:ring-2');
+    expect(slider.className).toContain('h-6');
+    expect(screen.queryByText('newChat.modelSelector.unified.effortEndFast')).toBeNull();
+  });
 });

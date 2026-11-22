@@ -94,10 +94,14 @@ import {
   type PluginEngineSessionPickerProps,
   type PluginEnginesPickerProps,
 } from './PluginEnginesSection';
+import { EffortSlider } from '@/components/ui/effort-slider';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineSelectable,
   isSamePluginEngineChoice,
+  pluginEngineChoiceKey,
   pluginEngineModelName,
+  pluginEngineModelRows,
   resolvePluginEngineEffort,
   visiblePluginEngineChoices,
   type PluginEngineChoice,
@@ -3611,6 +3615,99 @@ function ModelSelectorContentView({
     </div>
   );
 
+  const footerEffortSlider = (() => {
+    if (!configurationEnabled || unifiedSelectionPolicy === 'official') return null;
+    if (pluginModels?.active || modelGroups?.active) return null;
+    if (visiblePluginEngines?.active) {
+      const activeEngine = visiblePluginEngines.engines.find((engine) =>
+        isSamePluginEngineChoice(engine, visiblePluginEngines.active),
+      );
+      const activeRow =
+        activeEngine && isPluginEngineSelectable(activeEngine)
+          ? pluginEngineModelRows(activeEngine, visiblePluginEngines.active.modelId).find(
+              (row) => row.id === visiblePluginEngines.active?.modelId,
+            )
+          : undefined;
+      if (!activeEngine || !activeRow || activeRow.efforts.length < 2) return null;
+      const activeEffort = resolvePluginEngineEffort(
+        activeEngine,
+        activeRow.id,
+        visiblePluginEngines.active.effort,
+      );
+      return (
+        <div
+          data-footer-effort-slider
+          className="ml-auto flex min-w-0 max-w-[180px] flex-1 items-center"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <EffortSlider
+            key={`plugin:${pluginEngineChoiceKey(activeEngine)}:${activeRow.id}`}
+            compact
+            stops={activeRow.efforts}
+            value={activeEffort}
+            recommended={activeRow.defaultEffort ?? null}
+            labelOf={(level) => t(`effortLevels.${level}`, { defaultValue: level })}
+            disabled={interactionDisabled}
+            onChange={(next) => {
+              void visiblePluginEngines.onSelect({
+                providerId: activeEngine.providerId,
+                modelId: activeRow.id,
+                effort: next as PluginEngineEffort,
+                ...(activeEngine.deviceId ? { deviceId: activeEngine.deviceId } : {}),
+              });
+            }}
+          />
+        </div>
+      );
+    }
+    const browsingLiveBuiltIn =
+      !remoteAgent ||
+      (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId ||
+      (remoteBrowse?.deviceId != null &&
+        remoteBrowse.deviceId === boundEntry?.deviceId &&
+        currentProviderId === boundEntry.providerId);
+    if (!browsingLiveBuiltIn || !currentAgentKind || !currentCatalogModel) return null;
+    const isThinkingToggle =
+      currentAgentKind === 'pi' && currentCatalogModel.thinkingToggle === true;
+    if (isThinkingToggle || currentCatalogModel.efforts.length < 2) return null;
+    const catalogEfforts: readonly string[] = currentCatalogModel.efforts;
+    const currentEffort = catalogEfforts.includes(effort)
+      ? effort
+      : (currentCatalogModel.defaultEffort ?? currentCatalogModel.efforts[0] ?? null);
+    const routeDisabled =
+      providersOverride || (sshCodexActive && currentAgentKind === 'codex')
+        ? false
+        : modelDisabledOf(currentModelProvider ?? null, modelId, currentAgentKind);
+    return (
+      <div
+        data-footer-effort-slider
+        className="ml-auto flex min-w-0 max-w-[180px] flex-1 items-center"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <EffortSlider
+          key={`builtin:${activeSourceId ?? ''}:${currentAgentKind}:${modelId}`}
+          compact
+          stops={currentCatalogModel.efforts}
+          value={currentEffort}
+          recommended={currentCatalogModel.defaultEffort ?? null}
+          labelOf={(level) => unifiedEffortLabel(currentAgentKind, level)}
+          disabled={interactionDisabled || routeDisabled}
+          onChange={(next) => {
+            void runLiveWrite(() => onEffortChange(next)).then((applied) => {
+              if (!applied) return;
+              bump();
+              if (selectedFavoriteUid && !onUnifiedSelect) {
+                onSessionFavoriteAnchorChange?.(null);
+              }
+            });
+          }}
+        />
+      </div>
+    );
+  })();
+
   // ── 统一模型选择器面板(opt-in,M3 / M4)────────────────────────────────────
   // 联合列表的可见性 / 排除口径必须与既有面板**逐条对齐**(否则「统一面板里能看到、
   // 切回旧面板就没了」),故这里复用同一批判定函数,只是补上 agent 维度。
@@ -4157,21 +4254,27 @@ function ModelSelectorContentView({
               : {})}
           />
           {/* 「配置模型」只对本机目录与分享来的供应商展示(见 showProvidersEntry)。 */}
-          {showProvidersEntry && (
-            <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-2">
-              <button
-                type="button"
-                disabled={interactionDisabled}
-                onClick={navigateToProviders}
-                className={cn(
-                  'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
-                  'transition-colors hover:text-[var(--text-primary)]',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                <Plus size={14} className="shrink-0" />
-                <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
-              </button>
+          {(showProvidersEntry || footerEffortSlider) && (
+            <div
+              data-model-selector-footer
+              className="flex min-h-[40px] shrink-0 items-center justify-between gap-3 border-t border-[var(--model-dropdown-border)] px-3.5 py-2"
+            >
+              {showProvidersEntry && (
+                <button
+                  type="button"
+                  disabled={interactionDisabled}
+                  onClick={navigateToProviders}
+                  className={cn(
+                    'flex h-6 min-w-0 shrink-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
+                    'transition-colors hover:text-[var(--text-primary)]',
+                    interactionDisabled && 'cursor-not-allowed opacity-50',
+                  )}
+                >
+                  <Plus size={14} className="shrink-0" />
+                  <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
+                </button>
+              )}
+              {footerEffortSlider}
             </div>
           )}
         </div>
@@ -4337,25 +4440,31 @@ function ModelSelectorContentView({
       )}
 
       {/* 「配置模型」只对本机目录与分享来的供应商展示(见 showProvidersEntry)。 */}
-      {showProvidersEntry && (
+      {(showProvidersEntry || footerEffortSlider) && (
         <>
           <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
-          <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              disabled={interactionDisabled}
-              onClick={navigateToProviders}
-              className={cn(
-                COMPOSER_MENU_ROW,
-                'flex min-w-0 items-center gap-1.5 px-3 py-2',
-                'hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover',
-              )}
-            >
-              <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-              <span className="truncate text-13 font-normal text-[var(--text-tertiary)]">
-                {t('newChat.modelSelector.source.connect')}
-              </span>
-            </button>
+          <div
+            data-model-selector-footer
+            className="flex min-h-[40px] items-center justify-between gap-3"
+          >
+            {showProvidersEntry && (
+              <button
+                type="button"
+                disabled={interactionDisabled}
+                onClick={navigateToProviders}
+                className={cn(
+                  COMPOSER_MENU_ROW,
+                  'flex min-w-0 shrink-0 items-center gap-1.5 px-3 py-2',
+                  'hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover',
+                )}
+              >
+                <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+                <span className="truncate text-13 font-normal text-[var(--text-tertiary)]">
+                  {t('newChat.modelSelector.source.connect')}
+                </span>
+              </button>
+            )}
+            {footerEffortSlider}
           </div>
         </>
       )}
