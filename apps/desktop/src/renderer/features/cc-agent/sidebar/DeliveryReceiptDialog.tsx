@@ -287,7 +287,7 @@ export function DeliveryReceiptDialog({
                   <ul className="mt-1 flex flex-col gap-1">
                     {receipt.verification.items.map((command) => (
                       <li key={`${command.command}:${command.outcome}`} className="break-all">
-                        <span>{command.command}</span>
+                        <span className="font-mono">{command.command}</span>
                         <span className={command.failed ? ' text-[var(--text-danger)]' : ' text-[var(--text-secondary)]'}>
                           {' '}{outcomeLabel(command.outcome, t)}
                         </span>
