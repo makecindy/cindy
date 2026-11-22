@@ -15885,7 +15885,7 @@
       "viewThread": "View thread context ({{count}})",
       "memberFromGroup": "{{name}} · from {{platform}} group “{{group}}”",
       "memberFromPlatform": "{{name}} · from a {{platform}} group",
-      "guestFromDm": "{{name}} · from {{platform}} DM (not the owner)",
+      "guestFromDm": "{{name}} · from {{platform}} DM",
       "unknownSender": "Group member"
     },
     "rewind": {

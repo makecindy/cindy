@@ -15989,7 +15989,7 @@
       "viewThread": "Ver contexto do tópico ({{count}})",
       "memberFromGroup": "{{name}} · do grupo “{{group}}” em {{platform}}",
       "memberFromPlatform": "{{name}} · de um grupo em {{platform}}",
-      "guestFromDm": "{{name}} · de uma mensagem direta em {{platform}} (não é o proprietário)",
+      "guestFromDm": "{{name}} · de uma mensagem direta em {{platform}}",
       "unknownSender": "Membro do grupo"
     },
     "rewind": {

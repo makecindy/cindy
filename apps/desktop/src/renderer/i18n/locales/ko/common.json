@@ -15820,7 +15820,7 @@
       "viewThread": "스레드 컨텍스트 보기 ({{count}})",
       "memberFromGroup": "{{name}} · {{platform}} 그룹 「{{group}}」에서",
       "memberFromPlatform": "{{name}} · {{platform}} 그룹에서",
-      "guestFromDm": "{{name}} · {{platform}} DM에서 (소유자 아님)",
+      "guestFromDm": "{{name}} · {{platform}} DM에서",
       "unknownSender": "그룹 구성원"
     },
     "rewind": {

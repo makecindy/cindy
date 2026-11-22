@@ -15848,7 +15848,7 @@
       "viewThread": "Thread-Kontext anzeigen ({{count}})",
       "memberFromGroup": "{{name}} · aus der {{platform}}-Gruppe „{{group}}“",
       "memberFromPlatform": "{{name}} · aus einer {{platform}}-Gruppe",
-      "guestFromDm": "{{name}} · aus einer {{platform}}-Direktnachricht (nicht der Eigentümer)",
+      "guestFromDm": "{{name}} · aus einer {{platform}}-Direktnachricht",
       "unknownSender": "Gruppenmitglied"
     },
     "rewind": {

@@ -15820,7 +15820,7 @@
       "viewThread": "スレッドのコンテキストを表示（{{count}}）",
       "memberFromGroup": "{{name}} · {{platform}} グループ「{{group}}」から",
       "memberFromPlatform": "{{name}} · {{platform}} グループから",
-      "guestFromDm": "{{name}} · {{platform}} の DM から（オーナー以外）",
+      "guestFromDm": "{{name}} · {{platform}} の DM から",
       "unknownSender": "グループメンバー"
     },
     "rewind": {
