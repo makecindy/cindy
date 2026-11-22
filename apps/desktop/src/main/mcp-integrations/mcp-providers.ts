@@ -178,6 +178,7 @@ import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
 import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
+import { asWechatIlinkError } from '@cindy/wechat-ilink';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
@@ -568,12 +569,20 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const { messageId } = await wechatIm.sendText(peerId, text);
           return { ok: true, messageId };
         } catch (error) {
+          const safe = asWechatIlinkError(error);
           createLogger('mcp/cindy_wechat').warn(
             'sendMessage failed target=...%s detail=%s',
             peerId.slice(-8),
             error instanceof Error ? error.message : String(error),
           );
-          return { ok: false, reason: 'SEND_FAIL' };
+          return {
+            ok: false,
+            reason: safe.code === 'SEND_REJECTED' && safe.ret !== undefined
+              ? `SEND_REJECTED:${safe.ret}`
+              : safe.code === 'SEND_REJECTED'
+                ? 'SEND_REJECTED'
+                : 'SEND_FAIL',
+          };
         }
       },
       sendFile: async (peerId, absPath, displayName) => {
