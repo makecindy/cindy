@@ -23,7 +23,7 @@ function setup(seed: HomeDisplayOrder | null = null) {
   const node = document.createElement('div');
   root = createRoot(node);
   let result: HomeSection[] = [];
-  let input = { sections: projects('a', 'b'), scope: 'all', revision: 0, ready: true, settled: false, visible: true,
+  let input = { collapsedGroups: [] as string[], sections: projects('a', 'b'), scope: 'all', revision: 0, ready: true, settled: false, visible: true,
     session: new HomeViewSession(), seed, onCommit: vi.fn() };
   function View() { result = useStableHomeSections(input); return null; }
   const render = (patch: Partial<typeof input> = {}) => { input = { ...input, ...patch }; act(() => root.render(<View />)); };
@@ -104,6 +104,17 @@ describe('Home display order during incremental loading', () => {
     app.remount();
     app.render({ sections: projects('a', 'b') });
     expect(app.keys()).toEqual(keys('a', 'b')); // an empty warm mount must not revive the disk seed
+  });
+
+  it('preserves settled device order while folded even when activity reorders the candidates', () => {
+    const app = setup();
+    const device = (...ids: string[]) => ({ ...projects(...ids)[0], key: 'device:mac' });
+    const other = { ...projects('c')[0], key: 'device:pc' };
+    app.render({ sections: [device('a', 'b'), other], settled: true });
+    app.render({ sections: [device('b', 'a'), other], collapsedGroups: ['device:mac'] });
+    expect(app.result().map(section => section.data.length)).toEqual([0, 1]);
+    app.render({ collapsedGroups: [] });
+    expect(app.result()[0].data.map(row => row.key)).toEqual(keys('a', 'b'));
   });
 
   it('keeps pinned sections independent and does not persist again on content-only updates', () => {

@@ -23,6 +23,7 @@ export function stabilizeHomeSections(sections: HomeSection[], previous: HomeDis
 
 export function useStableHomeSections(input: {
   sections: HomeSection[];
+  collapsedGroups?: readonly string[];
   scope: string;
   revision: number;
   ready: boolean;
@@ -73,5 +74,11 @@ export function useStableHomeSections(input: {
     input.session.write('displayOrder', order);
     input.onCommit(order);
   });
-  return sections;
+  // Folding a header changes visibility only. Commit the full stabilized order above.
+  return useMemo(() => {
+    if (!input.collapsedGroups?.length) return sections;
+    const collapsed = new Set(input.collapsedGroups);
+    return sections.map(section => section.key.startsWith('device:') && collapsed.has(section.key)
+      ? { ...section, data: [] } : section);
+  }, [sections, input.collapsedGroups]);
 }

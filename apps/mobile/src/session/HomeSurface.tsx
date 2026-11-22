@@ -235,7 +235,6 @@ import {
 } from '@/session/homeProjectChildWindow';
 import {
   projectDropIndexFromY,
-  moveVisibleProjectOrder,
   reorderVisibleProjectByDropIndex,
   resolveVirtualizedDropIndex,
   snapshotManualProjectOrder,
@@ -261,6 +260,7 @@ import {
 import {
   buildHomeSections,
   orderedPinnedItems,
+  movePinnedItem,
   homeRowsShareRenderData,
   homeRowBefore,
   isFolderHomeRow,
@@ -2490,7 +2490,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     () => {
       const regular = buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
         groupDevice: groupByDevice,
-        collapsedGroups: collapsedProjectKeys,
         pinnedSort,
         pinnedOrder,
         automationTitle: t('devices.list.menu.automationFolder'),
@@ -2507,7 +2506,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         : regular;
     },
     [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, displayedManualProjectOrder, displayedProjectOrder,
-      filteredHome, groupByDevice, collapsedProjectKeys, pinnedSort, pinnedOrder, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
+      filteredHome, groupByDevice, pinnedSort, pinnedOrder, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
       sortPriorityContext, sortBy, t],
   );
   // Sorting metadata may arrive after rows. Only user actions or a new visit release
@@ -2521,6 +2520,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [homeCacheUserId]);
   const homeSections = useStableHomeSections({
     sections: sortedHomeSections,
+    collapsedGroups: collapsedProjectKeys,
     scope: displayOrderScope,
     revision: displayOrderRevision,
     ready: homeListCacheHydrated && homeViewPreferencesHydrated && deviceIdentityCacheReady,
@@ -3384,7 +3384,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (pinnedSort === 'manual' && (action.startsWith('pin.up.') || action.startsWith('pin.down.'))) {
       const up = action.startsWith('pin.up.');
       const id = action.slice(up ? 'pin.up.'.length : 'pin.down.'.length);
-      const next = moveVisibleProjectOrder(pinnedOrder, visiblePins.map(item => item.session.id), id, up ? -1 : 1);
+      const next = movePinnedItem(pinnedOrder, visiblePins, id, up ? -1 : 1);
       if (!next) return;
       setPinnedOrder(next);
       void saveHomeViewPreferences({ pinnedOrder: { owner: preferenceOwner, keys: next } });
@@ -5730,7 +5730,6 @@ const makeStyles = (colors: ThemeColors, listSurface: string = colors.surface) =
   pinnedCardPreview: { height: 2 * lineHeight.subtitle },
   pinnedCard: {
     height: 'auto',
-    minHeight: lineHeight.listTitle + 2 * lineHeight.subtitle + 2 * spacing.md,
     marginHorizontal: spacing.md,
     marginVertical: spacing.xs,
     backgroundColor: colors.surfaceElevated,

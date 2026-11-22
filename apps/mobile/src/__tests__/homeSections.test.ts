@@ -5,6 +5,7 @@ import {
   buildHomeSections,
   buildInboxHomeSections,
   buildMixedHomeRows,
+  movePinnedItem,
   HOME_MAIN_SECTION_KEY,
   homeFolderRowsShareRenderData,
   homeRowsShareRenderData,
@@ -42,7 +43,7 @@ function presentation(over: Partial<MobileHomePresentation>): MobileHomePresenta
 }
 
 describe('buildHomeSections', () => {
-  it('collapses only the selected computer and keeps its dialogue group distinct', () => {
+  it('keeps dialogue group keys distinct across computers', () => {
     const chats = ['a', 'b'].map(id => {
       const item = listItem(id, '2026-06-02T00:00:00Z');
       return { ...item, session: { ...item.session, deviceLinkDeviceId: id } };
@@ -50,22 +51,31 @@ describe('buildHomeSections', () => {
     const home = presentation({ chats, deviceFilters: [] });
     const open = buildHomeSections(home, true, false, { groupDevice: true, groupDialogue: true });
     expect(open.map(s => s.data[0]?.key)).toEqual(['device:a:dialogue', 'device:b:dialogue']);
-    const folded = buildHomeSections(home, true, false, {
-      groupDevice: true, groupDialogue: true, collapsedGroups: ['device:a'],
-    });
-    expect(folded.map(s => [s.key, s.data.length])).toEqual([['device:a', 0], ['device:b', 1]]);
   });
 
   it('restores manual pin order after sorting the same pins by recent activity', () => {
     const home = presentation({ pinned: [
       listItem('old', '2026-06-01T00:00:00Z'), listItem('new', '2026-06-02T00:00:00Z'),
     ] });
-    const pinnedOrder = ['old', 'new'];
+    const pinnedOrder = movePinnedItem([], [...home.pinned].reverse(), 'old', -1)!;
     for (const pinnedSort of ['manual', 'activity', 'manual'] as const) {
       const [pins] = buildHomeSections(home, false, false, { pinnedSort, pinnedOrder });
       expect(pins.data.map(row => row.key)).toEqual(pinnedSort === 'activity'
         ? ['pinned:new', 'pinned:old'] : ['pinned:old', 'pinned:new']);
     }
+  });
+
+  it('moves a re-pinned task ahead of its previous manual position', () => {
+    const pin = (id: string, date: string) => {
+      const item = listItem(id, date);
+      return { ...item, session: { ...item.session, pinnedAt: date } };
+    };
+    const a = pin('a', '2026-06-01'), b = pin('b', '2026-06-02');
+    const pinnedOrder = movePinnedItem([], [b, a], 'a', -1)!;
+    const rows = (pinned: RemoteSessionListItem[]) => buildHomeSections(presentation({ pinned }),
+      false, false, { pinnedOrder })[0].data.map(row => row.key);
+    expect(rows([a, b])).toEqual(['pinned:a', 'pinned:b']);
+    expect(rows([a, pin('b', '2026-06-03')])).toEqual(['pinned:b', 'pinned:a']);
   });
 
   it('置顶收起时保留分区但清空 data(表头照常渲染,只折叠下属会话)', () => {

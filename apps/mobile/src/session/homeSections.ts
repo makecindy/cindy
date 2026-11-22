@@ -26,6 +26,7 @@ import {
   type HomeListSortBy,
 } from './homeListPriority';
 import {
+  moveVisibleProjectOrder,
   normalizeManualProjectOrder,
   type HomeProjectOrder,
 } from './homeProjectOrder';
@@ -80,7 +81,6 @@ export const HOME_MAIN_SECTION_KEY = 'main';
 
 export interface HomeSectionOptions {
   groupDevice?: boolean;
-  collapsedGroups?: readonly string[];
   pinnedSort?: HomePinnedSort;
   pinnedOrder?: readonly string[];
   groupDialogue?: boolean;
@@ -141,10 +141,6 @@ export function buildHomeSections(
       if (!contents) continue;
       const key = 'device:' + id;
       const title = labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
-      if (options.collapsedGroups?.includes(key)) {
-        sections.push({ key, title, data: [] });
-        continue;
-      }
       const rows = buildMainRows({ ...home, ...contents }, groupByProject, options).map(row => {
         if (row.kind !== 'dialogue' && row.kind !== 'automation') return row;
         const scopedKey = key + ':' + row.key;
@@ -159,11 +155,28 @@ export function buildHomeSections(
   return sections;
 }
 
+// A new pinnedAt starts a new pin, even when the task ID is unchanged.
+function pinnedOrderKey(item: RemoteSessionListItem): string {
+  return item.session.id + '\0' + (item.session.pinnedAt ?? '');
+}
+
+export function movePinnedItem(order: readonly string[], visible: readonly RemoteSessionListItem[], id: string, direction: -1 | 1) {
+  const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
+  const source = current.get(id);
+  if (!source) return null;
+  // Remove superseded generations from the visible scope. Other devices retain their slots.
+  const retained = order.filter(key => {
+    const [taskId] = key.split('\0');
+    return !current.has(taskId) || current.get(taskId) === key;
+  });
+  return moveVisibleProjectOrder(retained, [...current.values()], source, direction);
+}
+
 export function orderedPinnedItems(items: readonly RemoteSessionListItem[], sort: HomePinnedSort, keys: readonly string[]) {
   const rank = new Map(keys.map((key, index) => [key, index]));
   return [...items].sort((a, b) => {
     const activity = sort === 'activity' ? activityMsFromIso(b.lastActivityAt) - activityMsFromIso(a.lastActivityAt) : 0;
-    return activity || (rank.get(a.session.id) ?? -1) - (rank.get(b.session.id) ?? -1)
+    return activity || (rank.get(pinnedOrderKey(a)) ?? -1) - (rank.get(pinnedOrderKey(b)) ?? -1)
       || activityMsFromIso(b.session.pinnedAt ?? undefined) - activityMsFromIso(a.session.pinnedAt ?? undefined);
   });
 }
