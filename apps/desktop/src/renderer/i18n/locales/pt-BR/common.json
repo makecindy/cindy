@@ -7121,7 +7121,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso."
+      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso.",
+      "localNetwork": {
+        "label": "Rede local",
+        "deniedHint": "Sem esta permissão, computadores e celulares na mesma rede não conseguem se conectar diretamente a este computador. Eles passam pelo relay, que é mais lento.",
+        "settingsHint": "Ative o Cindy em Ajustes do Sistema › Privacidade e Segurança › Rede Local. A mudança vale assim que você voltar."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -11032,6 +11037,13 @@
         "enabled": "Ativado"
       },
       "close": "Fechar diálogo de download"
+    },
+    "localNetwork": {
+      "title": "Permitir acesso à rede local",
+      "relayOnly": "Seus outros dispositivos só conseguem acessar este computador pelo relay, que é mais lento. Permita o acesso para que os dispositivos na mesma rede se conectem diretamente.",
+      "controlEnabled": "Dispositivos na mesma rede só conseguem controlar este computador diretamente com acesso à rede local. Sem ele, passam pelo relay.",
+      "allow": "Permitir",
+      "dismiss": "Agora não"
     }
   },
   "bots": {

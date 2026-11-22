@@ -7011,7 +7011,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已含於隱私畫面：此機不眠。"
+      "keepAwakeIncluded": "已含於隱私畫面：此機不眠。",
+      "localNetwork": {
+        "label": "區域網路",
+        "deniedHint": "無此權，同網之電腦與手機不得直連此機，唯經中繼，其速遲矣。",
+        "settingsHint": "請於「系統設定 › 隱私權與安全性 › 區域網路」啟 Cindy，歸此即自生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -10907,6 +10912,13 @@
         "enabled": "已啟"
       },
       "close": "闔"
+    },
+    "localNetwork": {
+      "title": "啟區域網路之權",
+      "relayOnly": "汝他裝置今唯經中繼連此機，其速遲。啟之，則同網可直連。",
+      "controlEnabled": "同網裝置欲直控此機，須區域網路之權，否則唯經中繼。",
+      "allow": "啟之",
+      "dismiss": "暫不啟"
     }
   },
   "bots": {

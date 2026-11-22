@@ -94,7 +94,7 @@ function DragCoach() {
   return (
     <span
       aria-hidden="true"
-      className="computer-permission-drag-guide pointer-events-none absolute -top-3 right-8 z-10 inline-flex items-center gap-2 text-[var(--text-primary)]"
+      className="computer-permission-drag-guide pointer-events-none absolute -top-3 right-8 z-raised inline-flex items-center gap-2 text-[var(--text-primary)]"
     >
       <span className="inline-flex size-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]">
         <MousePointer2 size={19} strokeWidth={1.8} aria-hidden="true" />

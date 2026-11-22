@@ -1,3 +1,4 @@
+import { installCompanyUsageCapture, installExecutionReporting } from '../../usage/companyTokenFacts.js';
 import { botLearningTracker } from '../botLearningTracker.js';
 import { learningTurnIdentity } from '../botLearningFeedback.js';
 import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
@@ -2646,6 +2647,42 @@ describe('usage through the production event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // Unit regression: local billing may recognize a saved custom provider even
+  // when this Codex run explicitly used a gateway key. Only the direct run
+  // may reach the enterprise sink; its local ledger is written in both cases.
+  it.each(['provider-oauth', 'gateway-key'])('gates company usage on the executing credential (%s)', async credentialMode => {
+    const h = harness();
+    pricing(false);
+    effects.fn('getSessionProvider').mockReturnValue('custom');
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    const record = vi.fn();
+    installCompanyUsageCapture(() => record);
+    installExecutionReporting({
+      direct: provider => provider === 'custom', available: () => true, challenge: () => null,
+      issue: async () => null, redeem: async () => undefined,
+    });
+    try {
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('done', { usage: { ...usage('codex'), execution: {
+        providerId: 'custom', credentialMode, model: 'test-model',
+      } } }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalled();
+      if (credentialMode === 'gateway-key') {
+        expect(record).not.toHaveBeenCalled();
+      } else {
+        expect(record).toHaveBeenCalledTimes(1);
+        expect(record).toHaveBeenCalledWith([
+          { model: 'test-model', input: 100, output: 20, cacheRead: 10, cacheWrite: 0 },
+        ]);
+      }
+    } finally {
+      installCompanyUsageCapture(() => undefined);
+      installExecutionReporting(undefined);
+      await h.dispose();
+    }
+  });
 
   // Unit regression: another task's Gateway spawn must not take a native subscription turn.
   it('settles the executing Codex route and model when the global proxy points elsewhere', async () => {

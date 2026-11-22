@@ -180,7 +180,7 @@ function Section({
       <div className="flex items-center gap-1.5">
         <h4 className="text-12 font-medium text-[var(--text-secondary)]">{title}</h4>
         {hint && (
-          <Tip text={hint} contentClassName="z-[10002]">
+          <Tip text={hint}>
             <button data-setting-id={providersSettings.providers.id}
               type="button"
               aria-label={hint}
@@ -784,13 +784,13 @@ export function ModelAdvancedDrawer({
         <Dialog.Portal>
           <Dialog.Overlay
             className={cn(
-              'modal-scrim fixed inset-0 z-[10001]',
+              'modal-scrim fixed inset-0 z-modal-raised',
             )}
           />
           <Dialog.Content
             onPointerDownOutside={(event) => event.preventDefault()}
             className={cn(
-              'modal-panel fixed inset-0 z-[10001] m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
+              'modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
             )}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-describedby={undefined}
@@ -967,7 +967,6 @@ export function ModelAdvancedDrawer({
                                 notes.join(' · ')
                               ) : (
                                 <Tip
-                                  contentClassName="z-[10002]"
                                   text={t('settings.providers.models.advanced.engineNotConfigured')}
                                 >
                                   <button data-setting-id={providersSettings.providers.id}

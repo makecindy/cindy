@@ -187,7 +187,7 @@ export function CheckoutDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           style={WINDOW_NO_DRAG_STYLE}
           onOpenAutoFocus={(e) => {
@@ -198,7 +198,7 @@ export function CheckoutDialog({
           onEscapeKeyDown={(e) => {
             if (busy) e.preventDefault();
           }}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-2 p-4"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col gap-2 p-4"
         >
           <Dialog.Title className="break-words text-18 font-medium text-[var(--confirm-title)]">
             {t('newChat.checkout.title', vars)}

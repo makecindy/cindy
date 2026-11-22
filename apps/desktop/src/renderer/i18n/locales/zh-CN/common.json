@@ -7011,7 +7011,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已包含在隐私屏中：电脑不会休眠。"
+      "keepAwakeIncluded": "已包含在隐私屏中：电脑不会休眠。",
+      "localNetwork": {
+        "label": "本地网络",
+        "deniedHint": "没有这个权限时，同一网络下的电脑和手机无法直接连接这台电脑，只能经中转，速度会变慢。",
+        "settingsHint": "请在「系统设置 › 隐私与安全性 › 本地网络」里打开 Cindy，回到这里会自动生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -10907,6 +10912,13 @@
         "enabled": "已开启"
       },
       "close": "关闭"
+    },
+    "localNetwork": {
+      "title": "开启本地网络权限",
+      "relayOnly": "你的其他设备现在只能经中转连接这台电脑，速度较慢。开启后，同一网络下可以直接连接。",
+      "controlEnabled": "同一网络下的设备要直接控制这台电脑，需要本地网络权限，否则只能经中转。",
+      "allow": "开启",
+      "dismiss": "暂不开启"
     }
   },
   "bots": {

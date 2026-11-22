@@ -7121,7 +7121,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Inclus dans l'écran de confidentialité : cet ordinateur ne se met pas en veille."
+      "keepAwakeIncluded": "Inclus dans l'écran de confidentialité : cet ordinateur ne se met pas en veille.",
+      "localNetwork": {
+        "label": "Réseau local",
+        "deniedHint": "Sans cette autorisation, les ordinateurs et téléphones du même réseau ne peuvent pas se connecter directement à cet ordinateur. Ils passent par le relais, ce qui est plus lent.",
+        "settingsHint": "Activez Cindy dans Réglages Système › Confidentialité et sécurité › Réseau local. Le changement s’applique dès votre retour."
+      }
     },
     "imBot": {
       "beta": "Bêta",
@@ -11032,6 +11037,13 @@
         "enabled": "Activé"
       },
       "close": "Fermer la fenêtre de téléchargement"
+    },
+    "localNetwork": {
+      "title": "Autoriser l’accès au réseau local",
+      "relayOnly": "Vos autres appareils ne peuvent joindre cet ordinateur que par le relais, ce qui est plus lent. Autorisez l’accès pour que les appareils du même réseau se connectent directement.",
+      "controlEnabled": "Les appareils du même réseau ne peuvent contrôler cet ordinateur directement qu’avec l’accès au réseau local. Sinon, ils passent par le relais.",
+      "allow": "Autoriser",
+      "dismiss": "Plus tard"
     }
   },
   "bots": {
