@@ -319,49 +319,51 @@ describe('moveTeammateMemoryIntoProject', () => {
 
 /*
  * 测试价值
- * - 生产入口与可观察结果：ensureTeammateProjectIgnored（启动时 botV2Migration 对已升级伙伴调用）执行后
- *   真 `git check-ignore` / `git ls-files` 的结果、`.gitignore` 原有内容与回执。
- * - 规则依据：cindy-bots-runtime.md §4「项目的 .gitignore（2026-11-21）」：存量项目只追加缺的条目一次，不改用户的行，
- *   不动已提交的文件，不删磁盘文件；凭证文件、虚拟环境、worktree 不进版本。
- * - 现有覆盖缺口：此前只有记忆条目会补，凭证与虚拟环境条目没有补齐路径。
- * - 最小失败输入：旧默认清单 + 用户自己的一行，已提交一个 `.env`；补齐后用户删掉一条再跑。
- * - tier：unit（临时目录真实文件 I/O 与真 git）。
+ * - 生产入口与可观察结果：ensureTeammateProjectIgnored（启动时 botV2Migration 对已升级伙伴、首次升级时
+ *   prepareBotProjectWorkspace 调用）执行后 `.gitignore` 的内容、已提交文件与回执。Git 如何解读这些条目
+ *   （模板例外的顺序、已跟踪文件照旧跟踪）在 botProjectMode.git-integration.test.ts 用真 Git 核对。
+ * - 规则依据：cindy-bots-runtime.md §4「项目的 .gitignore（2026-11-21）」：存量项目只追加缺的条目一次，
+ *   不改用户的行，不删磁盘文件；凭证文件、虚拟环境、worktree 不进版本。
+ * - 现有覆盖缺口：此前只有记忆条目会补，凭证与虚拟环境条目没有补齐路径；首次升级也要在记版本前补上。
+ * - 最小失败输入：旧默认清单 + 用户自己的一行（CRLF），补齐后用户删掉一条再跑；首次升级时已有旧 `.gitignore`。
+ * - tier：unit（临时目录真实文件 I/O，无 Git）。
  */
 describe('ensureTeammateProjectIgnored', () => {
   let root = '';
   afterEach(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
-  const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
-  it.skipIf(!gitAvailable)('adds the missing entries once, keeping the owner\'s lines and committed files', async () => {
+  it('appends only the missing entries, once, keeping the owner\'s lines', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-'));
     const workspace = teammateWorkspaceDir(root, 'bot_mia');
-    await fs.mkdir(path.join(root, 'bots', 'bot_mia'), { recursive: true });
     await fs.mkdir(workspace, { recursive: true });
-    const git = (...args: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: workspace, encoding: 'utf8' });
-    expect(git('init', '-q').status).toBe(0);
-    const before = 'node_modules/\r\n*.log\r\n# mine\r\n!keep.log';
+    const before = 'node_modules/\r\n.env\r\n# mine\r\n!keep.log';
     await fs.writeFile(path.join(workspace, '.gitignore'), before);
     await fs.writeFile(path.join(workspace, '.env'), 'COMMITTED=1');
-    expect(git('add', '.env', '.gitignore').status).toBe(0);
-    expect(git('commit', '-qm', 'v1').status).toBe(0);
 
     await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(true);
     const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
-    expect(text.startsWith(`${before}\r\n`)).toBe(true);
-    expect(text.replace(/\r\n/g, '')).not.toContain('\n');
-    const ignored = (file: string) => git('check-ignore', '-q', file).status === 0;
-    for (const file of ['.env.local', 'skills/a/.env', 'token.json', '.venv/bin/python', 'venv/lib/x.py', '.cindy-worktrees/t/a.txt', 'key.pem']) {
-      expect(ignored(file), file).toBe(true);
-    }
-    for (const file of ['.env.example', 'notes.md', 'keep.log']) expect(ignored(file), file).toBe(false);
-    // Already versioned: stays versioned and on disk.
-    expect(git('ls-files', '.env').stdout.trim()).toBe('.env');
+    expect(text).toBe(`${before}\r\n${[
+      '.env.*', '!.env.example', '!.env.sample', '!.env.template',
+      'token.json', 'credentials.json', 'client_secret*.json', '*.pem', '*.p12', '*.pfx',
+      '.venv/', 'venv/', '__pycache__/', '.cindy-worktrees/', '.xdt-worktrees/',
+    ].join('\r\n')}\r\n`);
     await expect(fs.readFile(path.join(workspace, '.env'), 'utf8')).resolves.toBe('COMMITTED=1');
 
     // Once: an entry the owner removes afterwards is not put back.
     await fs.writeFile(path.join(workspace, '.gitignore'), text.replace('token.json\r\n', ''));
     await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(false);
     expect(await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).not.toContain('token.json');
+  });
+
+  it('completes an existing project\'s .gitignore during the first upgrade', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-upgrade-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, '.gitignore'), 'data/\n');
+    await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
+    const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
+    expect(text.startsWith('data/\n')).toBe(true);
+    expect(text).toContain('\n.venv/\n');
   });
 });
 

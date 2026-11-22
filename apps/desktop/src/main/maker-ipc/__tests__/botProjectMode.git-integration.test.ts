@@ -26,7 +26,7 @@ vi.mock('@cindy/maker-core', async () => {
   };
 });
 
-import { prepareBotProjectWorkspace, readWorkspaceRepositoryStatus } from '../botProjectMode.js';
+import { ensureTeammateProjectIgnored, prepareBotProjectWorkspace, readWorkspaceRepositoryStatus } from '../botProjectMode.js';
 import { teammateWorkspaceDir } from '../botProjectMemory.js';
 import { gitExec } from '../../worktree/gitExec.js';
 
@@ -113,6 +113,30 @@ describe('buddy repository initialization (#10216)', () => {
     } finally {
       vi.stubEnv('GIT_TEST_ASSUME_DIFFERENT_OWNER', previousOwnerOverride);
     }
+  });
+
+  // 2026-11-21 teammate project review: `.env`, `.venv` and worktrees entered teammate versions, and
+  // an untracked venv (15k files measured) made every automatic snapshot exceed its file limit.
+  // Unit tests check the appended text; only real Git shows how the entries are read: env templates
+  // stay versioned (their exceptions follow `.env.*`), and an already committed file stays tracked.
+  it('completes an older .gitignore so Git ignores credentials, environments and worktrees', async () => {
+    const workspace = teammateWorkspaceDir(root, 'old_ignore');
+    await fs.mkdir(workspace, { recursive: true });
+    await gitExec(['init'], workspace);
+    await gitExec(['config', '--local', 'user.name', 'Test Author'], workspace);
+    await gitExec(['config', '--local', 'user.email', 'author@example.invalid'], workspace);
+    await fs.writeFile(path.join(workspace, '.gitignore'), '!.env.example\n*.log\n!keep.log\n');
+    await fs.writeFile(path.join(workspace, '.env'), 'COMMITTED=1\n');
+    await gitExec(['add', '.gitignore', '.env'], workspace);
+    await gitExec(['commit', '-m', 'v1'], workspace);
+    await expect(ensureTeammateProjectIgnored({ botId: 'old_ignore', ownerRoot: root, workspace })).resolves.toBe(true);
+    const ignored = (file: string) => gitExec(['check-ignore', '-q', file], workspace).then(() => true, () => false);
+    for (const file of ['.env.local', 'skills/a/.env', 'token.json', '.venv/bin/python', 'venv/lib/x.py', '.cindy-worktrees/t/a.txt', 'key.pem']) {
+      expect(await ignored(file), file).toBe(true);
+    }
+    for (const file of ['.env.example', 'notes.md', 'keep.log']) expect(await ignored(file), file).toBe(false);
+    expect((await gitExec(['ls-files', '.env'], workspace)).stdout.trim()).toBe('.env');
+    expect(await fs.readFile(path.join(workspace, '.env'), 'utf8')).toBe('COMMITTED=1\n');
   });
 
   it('does not treat a branch referencing a missing commit as unborn', async () => {

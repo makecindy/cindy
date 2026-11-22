@@ -256,17 +256,18 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   const home = botProfileDir(ownerRoot, botId);
   const receiptPath = path.join(home, RECEIPT_FILE);
   if (await exists(receiptPath)) {
-    // Upgraded before its project memory moved into the project folder: move it once (idempotent).
     const workspace = teammateWorkspaceDir(ownerRoot, botId);
-    if (await exists(workspace)) await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
+    if (await exists(workspace)) {
+      // Set up before the project ignored credentials, environments and worktrees: add those once,
+      // before any version below is recorded.
+      await ensureTeammateProjectIgnored({ botId, ownerRoot, workspace });
+      // Upgraded before its project memory moved into the project folder: move it once (idempotent).
+      await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
+    }
     // A build that still had the switch may have turned it off after the upgrade: V1 is gone.
     const upgraded = await readBotSettingsProfile(botId);
     // Upgraded before the starter template existed (or an older version of it): fill it in once.
     if (await exists(workspace)) {
-      // Set up before the project ignored credentials, environments and worktrees: add those once.
-      await ensureTeammateProjectIgnored({ botId, ownerRoot, workspace }).catch((error) => {
-        log.warn('teammate project .gitignore update failed', { botId, error: String(error) });
-      });
       await ensureTeammateTemplate({ botId, displayName: upgraded.name, workspace });
       assertCurrent();
       await ensureBotProjectAutomations({ botId, displayName: upgraded.name, workingDir: workspace, addMissing: false });

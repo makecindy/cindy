@@ -289,7 +289,8 @@ const TEAMMATE_GITIGNORE_RECEIPT_FILE = 'project-gitignore.json';
  * A project set up before {@link BOT_PROJECT_LOCAL_GITIGNORE} gets the entries it lacks, once.
  * Only `.gitignore` changes: files already in the history stay versioned and nothing on disk is
  * removed. No version is recorded here: the teammate's next version includes the change, and a
- * startup snapshot has no size bound. True when the `.gitignore` changed.
+ * startup snapshot has no size bound. Runs before the upgrade records any version. Never throws:
+ * a failure is logged and retried on the next start. True when the `.gitignore` changed.
  */
 export async function ensureTeammateProjectIgnored(input: {
   botId: string;
@@ -297,11 +298,16 @@ export async function ensureTeammateProjectIgnored(input: {
   workspace: string;
 }): Promise<boolean> {
   const receipt = path.join(botProfileDir(input.ownerRoot, input.botId), TEAMMATE_GITIGNORE_RECEIPT_FILE);
-  if (await fs.lstat(receipt).then(() => true, () => false)) return false;
-  const changed = await ensureIgnored(input.workspace, BOT_PROJECT_LOCAL_GITIGNORE);
-  await fs.writeFile(receipt, `${JSON.stringify({ version: 1, at: new Date().toISOString(), changed }, null, 2)}\n`, 'utf8');
-  if (changed) log.info('teammate project .gitignore completed', { botId: input.botId });
-  return changed;
+  try {
+    if (await fs.lstat(receipt).then(() => true, () => false)) return false;
+    const changed = await ensureIgnored(input.workspace, BOT_PROJECT_LOCAL_GITIGNORE);
+    await fs.writeFile(receipt, `${JSON.stringify({ version: 1, at: new Date().toISOString(), changed }, null, 2)}\n`, 'utf8');
+    if (changed) log.info('teammate project .gitignore completed', { botId: input.botId });
+    return changed;
+  } catch (error) {
+    log.warn('teammate project .gitignore update failed', { botId: input.botId, error: String(error) });
+    return false;
+  }
 }
 
 async function isOwnRepository(workspace: string): Promise<boolean> {
@@ -566,6 +572,8 @@ export async function prepareBotProjectWorkspace(input: {
   legacyUserDataDir?: string;
 }): Promise<BotProjectPreparation> {
   const workspace = await ensureBotWorkspaceDir(input.ownerRoot, input.botId, input.legacyUserDataDir);
+  // An existing project's `.gitignore` gets the local entries before anything below records a version.
+  await ensureTeammateProjectIgnored({ botId: input.botId, ownerRoot: input.ownerRoot, workspace });
   // Memory and Skills become the project's own, before the first V2 turn reads them. A project
   // memory kept outside the folder (earlier versions) comes first: it is newer than the V1 copy.
   const moved = await moveTeammateMemoryIntoProject({ botId: input.botId, ownerRoot: input.ownerRoot, workspace });
