@@ -1194,7 +1194,7 @@
     "title": "Escritorio remoto",
     "allow": "Permitir escritorio remoto",
     "allowHint": "Permite que tus dispositivos con sesión iniciada vean y usen todas las aplicaciones de esta computadora. También activa el control del dispositivo arriba.",
-    "permissionHint": "En la computadora, permite la grabación de pantalla y la accesibilidad en la configuración del sistema y luego vuelve a conectarte.",
+    "permissionHint": "En la computadora, permite la grabación de pantalla y la accesibilidad en la configuración del sistema y luego vuelve a conectarte. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
     "inputUnsupported": "El entorno de escritorio actual de esta computadora no admite el control remoto del teclado y el ratón en Cindy.",
     "controlUnavailable": "El control remoto de teclado y mouse no está disponible temporalmente. Vuelve a conectarte para intentarlo de nuevo.",
     "beingControlled": "Tu escritorio está siendo controlado",
@@ -1311,7 +1311,7 @@
     "privacyScreen": "Pantalla de privacidad durante la conexión",
     "privacyScreenHint": "Cubre la pantalla de esta computadora durante el control remoto. Si alguien hace clic o presiona una tecla frente a la computadora, primero pregunta si quieres desconectarte.",
     "privacyActive": "La pantalla de privacidad está activada. Si alguien hace clic o presiona una tecla frente a la computadora, primero pregunta si quieres desconectarte.",
-    "privacyFailed": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible.",
+    "privacyFailed": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible. Si el equipo remoto es un Mac, comprueba allí el permiso de control de la copia de Cindy en ejecución.",
     "hostMute": "Silenciar computadora controlada",
     "hostMuteHint": "Silenciar la computadora controlada mientras está conectada",
     "hostMuteFailed": "No se puede cambiar el estado de silencio de la computadora controlada",
@@ -1341,7 +1341,7 @@
     "credentialSigningRequired": "A la versión de desarrollo de la Mac le falta la configuración de firma. Configura la firma, reinicia Cindy en la Mac y vuelve a intentarlo.",
     "credentialPasswordRejected": "No se aceptó la contraseña de inicio de sesión de la Mac. Vuelve a ingresarla.",
     "credentialIdentityChanged": "No se pudo verificar la identidad de la computadora. No se envió ninguna contraseña a un dispositivo no verificado.",
-    "credentialAccessibilityRequired": "Permite Cindy en Configuración del sistema → Privacidad y seguridad → Accesibilidad en la Mac y luego vuelve a conectarte.",
+    "credentialAccessibilityRequired": "Comprueba en el Mac el permiso de control de la copia de Cindy que está en ejecución y vuelve a conectarte. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
     "credentialUnlockUnavailable": "No se pudo desbloquear esta Mac de forma segura. Selecciona tu cuenta en su pantalla de bloqueo y luego vuelve a conectarte; si aún falla, desbloquea la Mac localmente.",
     "disconnecting": "Desconectando…",
     "loadingDisplayModes": "Cargando resoluciones…",
@@ -2539,8 +2539,8 @@
         "hint": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con Touch ID o tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
         "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre.",
         "preview": "Probar ahora",
-        "previewStarting": "Suelta el mouse y el teclado. En 3 segundos aparecerá la pantalla de privacidad; presiona cualquier tecla para bloquear y luego desbloquea para probarlo.",
-        "previewUnavailable": "No se pudo mostrar la pantalla de privacidad. Reinicia Cindy e inténtalo de nuevo.",
+        "previewStarting": "Preparando la pantalla de privacidad. Suelta el ratón y el teclado. Cuando la pantalla quede cubierta, pulsa una tecla para probar el bloqueo.",
+        "previewUnavailable": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
@@ -2551,7 +2551,10 @@
           "system": "Sistema"
         },
         "hintWindows": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con Windows Hello o tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
-        "hintLinux": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora."
+        "hintLinux": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
+        "permissionMissing": "La pantalla de privacidad está desactivada. Cindy necesita permiso para bloquear el Mac cuando alguien haga clic o pulse una tecla.",
+        "checkFailed": "Cindy no pudo comprobar los permisos de la pantalla de privacidad en este equipo.",
+        "saveFailed": "No se pudo guardar el ajuste de la pantalla de privacidad."
       }
     },
     "agentIsland": {
@@ -18746,7 +18749,7 @@
       "expired": "La entrada manual finalizó tras esperar demasiado."
     },
     "failure": {
-      "permission": "Cindy no puede leer la pantalla de esta computadora. Permite el acceso a Cindy en Accesibilidad, dentro de Configuración del sistema.",
+      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
       "target_gone": "La ventana de destino se cerró.",
       "unreadable": "No se puede leer esta pantalla. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
       "action_failed": "Esa acción no surtió efecto. Comprueba la pantalla y vuelve a intentarlo.",
@@ -22766,5 +22769,10 @@
       "auto": "Revisión automática",
       "bypassPermissions": "Acceso completo"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "En «System & App Protection Override», pulsa ⓘ junto a {{app}}. Si no aparece, añade la app en ejecución con +.",
+    "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana."
   }
 }
