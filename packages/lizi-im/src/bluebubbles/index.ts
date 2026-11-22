@@ -13,11 +13,13 @@ import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 /** BlueBubbles can answer before Messages has the full file; its record states the real size. */
 /**
  * The on-disk name of a fetched original, kept within one 255-byte file name together with the
- * `<guid8>-` prefix and the `.<uuid>.partial` download suffix (54 bytes). Keeps the extension.
+ * `<digest16>-` prefix and the `.<uuid>.partial` download suffix (62 bytes). Keeps the extension and
+ * replaces characters Windows refuses in file names.
  */
 function attachmentFileName(raw: string): string {
-  const cleaned = path.basename(raw.replace(/\\/g, '/')).replace(/[\u0000-\u001f]/g, '').replace(/^\.+/, '');
-  const limit = 200;
+  const cleaned = path.basename(raw.replace(/\\/g, '/')).replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_')
+    .replace(/^\.+/, '').replace(/[. ]+$/, '');
+  const limit = 190;
   if (Buffer.byteLength(cleaned, 'utf8') <= limit) return cleaned;
   const rawExt = path.extname(cleaned);
   const ext = Buffer.byteLength(rawExt, 'utf8') <= 16 ? rawExt : '';
@@ -1064,7 +1066,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (!attachment) throw new Error('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
     const name = attachmentFileName(attachment.transferName || attachment.guid) || attachment.guid.slice(0, 8);
     await fs.mkdir(destDir, { recursive: true });
-    const dest = path.join(destDir, `${attachment.guid.slice(0, 8)}-${name}`);
+    // The full attachment identity tells apart originals whose GUIDs share a prefix and whose names match.
+    const id = createHash('sha256').update(attachment.guid).digest('hex').slice(0, 16);
+    const dest = path.join(destDir, `${id}-${name}`);
     const bytes = await api.downloadToFile(attachment.guid, dest);
     this.assertLive(generation);
     const totalBytes = attachment.totalBytes ?? null;

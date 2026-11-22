@@ -1106,6 +1106,16 @@ describe('BlueBubbles local ingress', () => {
       expect(long).toMatchObject({ bytes: 5, complete: true });
       expect(long.name.endsWith('.mov')).toBe(true);
       expect(await fs.readFile(long.path, 'utf8')).toBe('hello');
+      // Review (#12146): GUIDs sharing a prefix with one name keep separate files; Windows-reserved characters are replaced.
+      f.message('pair', { attachments: [
+        { guid: 'AAAAAAAA-1', transferName: 'budget?.pdf', totalBytes: 5 },
+        { guid: 'AAAAAAAA-2', transferName: 'budget?.pdf', totalBytes: 5 },
+      ] });
+      const first = await f.im.fetchAttachment(chat, 'pair', 'AAAAAAAA-1', root);
+      const second = await f.im.fetchAttachment(chat, 'pair', 'AAAAAAAA-2', root);
+      expect(first.path).not.toBe(second.path);
+      expect(path.basename(first.path)).not.toMatch(/[<>:"|?*]/);
+      expect(first.name).toBe('budget_.pdf');
     } finally { await fs.rm(root, { recursive: true, force: true }); await f.im.dispose(); }
   });
 
