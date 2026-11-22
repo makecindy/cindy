@@ -70,11 +70,33 @@ export interface RelayUdpOptions {
   deliver(relayId: string, datagram: Uint8Array): void;
   /** 把主机名解析成 IPv4 地址；默认用系统 DNS。测试替换它。 */
   resolveHost?(host: string): Promise<string>;
-  /** 走中转的连接上累计重传的分片数与发出的包数（核心的连接统计之和）；连接关了计数会变小。 */
+  /** 走中转的连接上累计重传的分片数与发出的包数（RelaySendCounters）；计数变小时从头算。 */
   relayedSendCounters?(): { retransmitted: number; sent: number };
 }
 
 /** UDP 因「只通登记、不通数据」被停用时的说明，随路由一起报给日志。 */
+/**
+ * 走中转的连接上的重传与发包累计。核心的连接统计是整条连接生命周期的累计，换路径（直连 ↔ 中转）不清零：只把两次采样之间
+ * 一直在中转上的那段增长算进来，刚换到中转、第一次见到的连接只记基线（审查：长期直连切回中转时，它整个历史的重传会被当成
+ * 最近 5 秒的中转重传，误把所有中转连接切到 WebSocket）。返回值只增不减。
+ */
+export class RelaySendCounters {
+  private readonly last = new WeakMap<object, { retransmitted: number; sent: number; relay: boolean }>();
+  private retransmitted = 0;
+  private sent = 0;
+
+  sample(connections: Iterable<{ key: object; relay: boolean; retransmitted: number; sent: number }>): { retransmitted: number; sent: number } {
+    for (const connection of connections) {
+      const before = this.last.get(connection.key);
+      this.last.set(connection.key, { retransmitted: connection.retransmitted, sent: connection.sent, relay: connection.relay });
+      if (!before?.relay || !connection.relay) continue;
+      this.retransmitted += Math.max(0, connection.retransmitted - before.retransmitted);
+      this.sent += Math.max(0, connection.sent - before.sent);
+    }
+    return { retransmitted: this.retransmitted, sent: this.sent };
+  }
+}
+
 export interface RelayUdpSuspension { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends'; cooldownMs: number }
 
 export class RelayUdpPath {

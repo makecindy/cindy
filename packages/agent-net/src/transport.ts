@@ -21,7 +21,7 @@ import {
 } from '@cindy/agent-net-core/node';
 import os from 'node:os';
 import { StunClient } from './stun.js';
-import { RelayUdpPath } from './relayUdp.js';
+import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
 import {
   AGENT_NET_SESSION_V1, ChannelEvents, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES, SESSION_LANE_KINDS,
@@ -290,6 +290,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   let endpoint: Endpoint;
   // 中继给了 UDP 凭据时经中继的数据报走 UDP，否则（或 UDP 不通时）走中继 WebSocket，见 relayUdp.ts。
   let relayUdp: RelayUdpPath | null = null;
+  const relaySends = new RelaySendCounters();
   const linkFor = (relayId: string): Link => {
     let link = links.get(relayId);
     if (!link) {
@@ -349,18 +350,14 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       credentials: () => credentials(),
       peers: () => (options.admittedPeers?.() ?? []).map((peer) => peer.relayId),
       deliver: (relayId, datagram) => linkFor(relayId).deliver(datagram),
-      // 只算走中转的连接：直连的丢包与中转 UDP 无关。
-      relayedSendCounters: () => {
-        let retransmitted = 0, sent = 0;
+      // 只算一直走中转的那段：直连的丢包、刚换到中转的连接的历史都与中转 UDP 无关（RelaySendCounters）。
+      relayedSendCounters: () => relaySends.sample(function* () {
         for (const channel of channels) {
-          if (channel.addressKind() !== 'relay') continue;
           const stats = channel.stats();
-          if (!stats) continue;
-          retransmitted += stats.retransmittedSegments ?? 0;
-          sent += stats.packetsSent ?? 0;
+          if (stats) yield { key: channel, relay: channel.addressKind() === 'relay',
+            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0 };
         }
-        return { retransmitted, sent };
-      },
+      }()),
     });
   }
   const publicOnly = options.publicCandidatesOnly === true;

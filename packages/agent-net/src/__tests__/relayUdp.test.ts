@@ -15,13 +15,14 @@
  * - 最小失败输入：首字节 0xA1 的核心数据包；确认中断 4 秒；一个过期的确认；一个没认定地址的确认；一次解析失败；
  *   一次登记晚 37 毫秒确认（往返要是 37，确认断了以后不再报旧值）；登记一直被确认、数据发了 4 次跨 3 秒却一个都没回来；
  *   对端一直重发（总有数据进来）而本机发往它的请求 60 秒内超时两次；本机只被控、请求一直进得来，自己发出的结果在
- *   中转连接上 5 秒里重传 10 个分片、占发出包数一半（审查 P1：只切控制端，被控端仍沿坏掉的上行回结果）。
+ *   中转连接上 5 秒里重传 10 个分片、占发出包数一半（审查 P1：只切控制端，被控端仍沿坏掉的上行回结果）；
+ *   一条发过 1000 包、重传过 400 个分片的长期直连切到中转（审查 P2：生命周期累计不该算成最近 5 秒的中转重传）。
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
 import { encodeUdpDown, encodeUdpRegisterAck, verifyUdpRegister, verifyUdpUp, type UdpRelayCredentials } from '@cindy/agent-net-relay';
 import { UDP_RELAY_DOWN, UDP_RELAY_REGISTER_ACK, udpRelayPeerHash } from '@cindy/agent-net-relay/client';
-import { RELAY_UDP_DATA_COOLDOWNS_MS, RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
+import { RELAY_UDP_DATA_COOLDOWNS_MS, RelaySendCounters, RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
 
 const paths: RelayUdpPath[] = [];
 afterEach(() => { for (const path of paths.splice(0)) path.close(); vi.useRealTimers(); });
@@ -319,4 +320,22 @@ it('leaves relay UDP when its own relayed sends go unacknowledged, even as a con
   expect(path.send('member', new Uint8Array(100))).toBe(false);
   expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
   expect(registrations().at(-1)!.receiving).toBe(false);
+});
+
+it('counts only the growth a connection made while it stayed on the relay, not its history from a direct path', () => {
+  const counters = new RelaySendCounters();
+  const relayed = {}, direct = {};
+  // The core's per-connection stats are lifetime totals and survive a path change.
+  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 3, sent: 100 }, { key: direct, relay: false, retransmitted: 400, sent: 1_000 }]))
+    .toEqual({ retransmitted: 0, sent: 0 });
+  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 120 }, { key: direct, relay: false, retransmitted: 410, sent: 1_050 }]))
+    .toEqual({ retransmitted: 1, sent: 20 });
+  // The long-lived direct connection falls back to the relay: its 400+ past resends must not land in the window.
+  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 140 }, { key: direct, relay: true, retransmitted: 410, sent: 1_060 }]))
+    .toEqual({ retransmitted: 1, sent: 40 });
+  // From then on its growth on the relay counts; once it leaves the relay it stops counting.
+  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 160 }, { key: direct, relay: true, retransmitted: 418, sent: 1_070 }]))
+    .toEqual({ retransmitted: 9, sent: 70 });
+  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 180 }, { key: direct, relay: false, retransmitted: 500, sent: 1_200 }]))
+    .toEqual({ retransmitted: 9, sent: 90 });
 });
