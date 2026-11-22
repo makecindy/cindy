@@ -131,8 +131,11 @@ impl StreamHeader {
 pub(crate) struct SendStream {
     pub(crate) priority: Priority,
     pub(crate) pending: VecDeque<u8>,
-    /// 已经切成分片、还没确认的字节。
+    /// 已经切成分片、还没从发送缓冲里放掉的字节。全连接共用分片序号，被确认的分片要等前面的缺口补齐才放掉，所以这里
+    /// 含已经确认的。
     pub(crate) unacked: usize,
+    /// 其中还没被确认的字节（`stream_progress` 的停顿只看它：已经全部确认的流不因为别的流丢了包而算作卡住）。
+    pub(crate) outstanding: usize,
     pub(crate) next_seq: u64,
     /// 对端允许发到的流内序号（不含）。默认流不用它，看确认帧里的窗口。
     pub(crate) credit_end: u64,
@@ -140,13 +143,19 @@ pub(crate) struct SendStream {
     pub(crate) fin_sent: bool,
     /// 累计被对端确认的字节，含流头。
     pub(crate) acked: u64,
-    /// 上一次有字节被确认的时刻；之前没有字节在等时，是字节开始等的时刻（见 `Connection::stream_progress`）。
+    /// 上一次有字节被确认的时刻；之前没有字节在等时，是字节开始等的时刻：写进来的时刻，或者空闲的流只发结束标记时
+    /// 它切出的时刻（见 `Connection::stream_progress`）。
     pub(crate) progress_at: u64,
 }
 
 impl SendStream {
     pub(crate) fn new(priority: Priority, credit_end: u64) -> Self {
-        Self { priority, pending: VecDeque::new(), unacked: 0, next_seq: 0, credit_end, finishing: false, fin_sent: false, acked: 0, progress_at: 0 }
+        Self { priority, pending: VecDeque::new(), unacked: 0, outstanding: 0, next_seq: 0, credit_end, finishing: false, fin_sent: false, acked: 0, progress_at: 0 }
+    }
+
+    /// 有字节在等：写进来还没发出的，或者发出了还没被确认的。
+    pub(crate) fn waiting(&self) -> bool {
+        !self.pending.is_empty() || self.outstanding > 0
     }
 
     /// 还有东西要切成分片。

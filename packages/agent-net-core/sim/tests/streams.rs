@@ -1128,3 +1128,55 @@ fn progress_reports_stalls_and_acknowledged_bytes() {
     }
     assert_eq!(pair.a.send_progress(pair.now).stalled_us, 0);
 }
+
+/// 2026-11-22 审查（#12050）：停顿只算真正还没被确认的字节。一条流的头一个分片一直丢时，另一条流后发的字节全部被确认了，
+/// 但要等前面的缺口补齐才从缓冲里放掉：它的 `buffered` 还有，停顿是 0，不能被上层当成卡住。空闲很久的流（新开的、
+/// 或者早就全部确认了的）这时才结束，停顿从结束标记切出的时刻算起，不是从开流或上一次确认算起。
+#[test]
+fn progress_counts_only_unacknowledged_bytes_and_starts_at_a_late_end() {
+    let mut pair = Pair::new(&wide_config(), path(4_000_000, 20_000), path(4_000_000, 20_000), 7);
+    let first = pair.a.open_stream(Priority::Interactive).unwrap();
+    let second = pair.a.open_stream(Priority::Normal).unwrap();
+    while pair.now < 50_000 {
+        pair.advance();
+    }
+    assert_eq!(pair.a.send_stream(pair.now, first, &[0x77u8; 3_000]), 3_000);
+    assert_eq!(pair.a.send_stream(pair.now, second, &[0x77u8; 20_000]), 20_000);
+    // `first` 的头一个分片（流头里分片号 0）发几次丢几次，一秒内别的都照常到。
+    let head = [first.to_be_bytes(), 0u32.to_be_bytes()].concat();
+    let gap_until = pair.now + 1_000_000;
+    while pair.now < gap_until {
+        pair.pump();
+        let kept: Vec<_> = pair.packets.drain().filter(|Reverse((_, _, to_b, packet))| !(*to_b && packet.windows(8).any(|window| window == head))).collect();
+        pair.packets.extend(kept);
+        pair.advance();
+    }
+    let held = pair.a.stream_progress(pair.now, second).unwrap();
+    assert!(held.acked_bytes >= 20_000 && held.buffered > 0, "{held:?}");
+    assert_eq!(held.stalled_us, 0, "{held:?}");
+    assert!(pair.a.stream_progress(pair.now, first).unwrap().stalled_us >= 900_000);
+    while pair.a.stream_progress(pair.now, second).is_some_and(|progress| progress.buffered > 0) {
+        assert!(pair.now < gap_until + 10_000_000);
+        pair.advance();
+        drain(&mut pair.b, pair.now, first);
+        drain(&mut pair.b, pair.now, second);
+    }
+    // 空闲五秒以后：一条早就全部确认了的流、一条刚开的空流结束。
+    let idle_until = pair.now + 5_000_000;
+    while pair.now < idle_until {
+        pair.advance();
+    }
+    let fresh = pair.a.open_stream(Priority::Normal).unwrap();
+    assert!(pair.a.finish_stream(second) && pair.a.finish_stream(fresh));
+    for stream in [second, fresh] {
+        assert_eq!(pair.a.stream_progress(pair.now, stream).unwrap().stalled_us, 0);
+    }
+    assert_eq!(pair.a.send_progress(pair.now).stalled_us, 0);
+    pair.pump();
+    pair.now += 30_000;
+    for stream in [second, fresh] {
+        let progress = pair.a.stream_progress(pair.now, stream).unwrap();
+        assert!(progress.stalled_us <= 30_000, "{stream}: {progress:?}");
+    }
+    assert!(pair.a.send_progress(pair.now).stalled_us <= 30_000);
+}

@@ -1,7 +1,7 @@
 {
   "src/admission.rs": "a17b6e85c78895b2ba1875c7c651a937e7d790ab58a5c1e204a300bef171035c",
   "src/congestion.rs": "35ae123d025bf9c3e07e62f32e0ef3a5f819916d220f31f8a66ee3e63a143225",
-  "src/connection.rs": "bd6c5c5b5097e951aa0cf8c86c51ed23f07a64279e3cc500369f14ec1d3800bc",
+  "src/connection.rs": "71f33a134c468f25c1089924d1488c849b7e963de2fbbf1a96a888add8a285c2",
   "src/crypto.rs": "dffcfdcac3b995a74142f57b1181873d9112ee558bb2293f2b1cc1eb46f80af6",
   "src/endpoint.rs": "4264f9eee1c4320d1ad9501ecc2899ddffe4d169d2875a01c382d13afd94ec7f",
   "src/ids.rs": "747b2f5ac0900d19b36cac4df09bc27864d83a6eaf26685fc7bc2bfb2650bb57",
@@ -10,6 +10,6 @@
   "src/parity.rs": "578c0dc3e57f7f5dadc1e2fc349fb968cd30e5035d613728fcdc6a35fcd25b23",
   "src/rtt.rs": "082b476b9b98223bf29b22ceb0ce47c9b5366d06d98648e2a50b18446bb6455e",
   "src/secure.rs": "6d66192b2f8d3f14b7886540b256fc3f2d2b929d10782384e57c8f8cf88598cb",
-  "src/stream.rs": "51808b05a9a53ad570353930f92d40d6b2bdfe2ec30fa2ff0d0f688992fa54a7",
+  "src/stream.rs": "00af7ece81e418ce972d388869d3bcb568d940e86d4a18de4b25e24015a83380",
   "src/wire.rs": "def567ccd502dece36b87192e8ca8f46e5107bbc777492f0c66b8584d82d5916"
 }

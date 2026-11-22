@@ -704,6 +704,8 @@ impl Connection {
         for (&id, stream) in &self.send_streams {
             let unacked: usize = self.segments.iter().filter(|segment| segment.stream == id).map(|segment| segment.data.len()).sum();
             assert_eq!(stream.unacked, unacked, "stream {id} send accounting");
+            let outstanding: usize = self.segments.iter().filter(|segment| segment.stream == id && !segment.acked).map(|segment| segment.data.len()).sum();
+            assert_eq!(stream.outstanding, outstanding, "stream {id} unacknowledged accounting");
         }
         assert_eq!(self.segments.len() as u64, self.snd_sent - self.snd_una, "segment queue length");
         assert!(self.snd_una <= self.snd_sent, "send sequence order");
@@ -794,6 +796,8 @@ impl Connection {
         }
         if !self.has_unacked_data() {
             self.last_heard = now_us;
+        }
+        if !self.bytes_waiting() {
             self.progress_at = now_us;
         }
         let per_stream = self.stream_send_buffer();
@@ -807,7 +811,7 @@ impl Connection {
         let total_room = if own == 0 { total_room.max(max_segment) } else { total_room };
         let room = per_stream.saturating_sub(own).min(total_room);
         let accepted = data.len().min(room);
-        if own == 0 && accepted > 0 {
+        if !state.waiting() && accepted > 0 {
             state.progress_at = now_us;
         }
         state.pending.extend(&data[..accepted]);
@@ -823,11 +827,17 @@ impl Connection {
 
     /// 一条流的进展。流不存在时是 `None`：没开过，或者已经写完、全部被确认（结束标记也确认了）。
     /// 上层据此按进展判超时：字节一直在被确认的流再慢也不算卡住，有字节在等却很久没有一个被确认才算。
+    /// 停顿只算还没被确认的字节：别的流丢了包时，这条流被确认了的字节还要等缺口补齐才从缓冲里放掉，它们算在 `buffered`
+    /// 里，不算停顿。只等着切出结束标记的流也不算，结束标记切出以后才开始算。
     pub fn stream_progress(&self, now_us: u64, stream: u32) -> Option<StreamProgress> {
         let state = self.send_streams.get(&stream)?;
         let buffered = state.pending.len() + state.unacked;
-        let waiting = buffered > 0 || (state.finishing && !state.fin_sent);
-        Some(StreamProgress { acked_bytes: state.acked, buffered, stalled_us: if waiting { now_us.saturating_sub(state.progress_at) } else { 0 } })
+        Some(StreamProgress { acked_bytes: state.acked, buffered, stalled_us: if state.waiting() { now_us.saturating_sub(state.progress_at) } else { 0 } })
+    }
+
+    /// 某条流有字节在等（见 [`SendStream::waiting`]）：发送方向的停顿从这时算起。
+    fn bytes_waiting(&self) -> bool {
+        self.send_streams.values().any(SendStream::waiting)
     }
 
     /// 发送方向的进展：每一档还在发送缓冲里的字节（写进来还没发的，加发了还没确认的），以及有数据没被确认时距上一次有数据被确认
@@ -837,7 +847,7 @@ impl Connection {
         for state in self.send_streams.values() {
             queued[state.priority.value() as usize] += state.pending.len() + state.unacked;
         }
-        let stalled_us = if self.has_unacked_data() { now_us.saturating_sub(self.progress_at) } else { 0 };
+        let stalled_us = if self.bytes_waiting() { now_us.saturating_sub(self.progress_at) } else { 0 };
         SendProgress { queued, stalled_us }
     }
 
@@ -1671,6 +1681,7 @@ impl Connection {
         self.progress_at = self.last_heard;
         if let Some(state) = self.send_streams.get_mut(&stream) {
             state.acked += bytes as u64;
+            state.outstanding -= bytes;
             state.progress_at = self.last_heard;
         }
     }
@@ -1945,13 +1956,21 @@ impl Connection {
         if size > room {
             return None;
         }
+        // 空闲的流只切出结束标记：从这时起它（和整个发送方向，之前什么都没在等的话）在等确认。
+        if count == 0 && !self.bytes_waiting() {
+            self.progress_at = now_us;
+        }
         let mut data = self.take_buffer();
         let state = self.send_streams.get_mut(&id)?;
         if headed {
             StreamHeader { stream: id, seq: state.next_seq as u32, fin }.write(&mut data);
         }
+        if count == 0 && !state.waiting() {
+            state.progress_at = now_us;
+        }
         state.take_pending(count, &mut data);
         state.unacked += size;
+        state.outstanding += size;
         state.next_seq += 1;
         state.fin_sent |= fin;
         let (next_seq, priority) = (state.next_seq, state.priority);
