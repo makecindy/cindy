@@ -6,12 +6,14 @@ const h = vi.hoisted(() => ({
   devices: [] as any[],
   invoke: vi.fn(),
   cloudEnabled: false,
+  retired: new Set<string>(),
   copies: vi.fn(),
   status: null as any,
   push: null as any,
 }));
 vi.mock('../companionCloudStore', () => ({
   useCompanionCloud: () => ({ enabled: h.cloudEnabled, actors: [] }),
+  getRetiredCompanionBotIds: () => h.retired,
   companionCloudApi: () => ({ listCindyCopies: h.copies }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
@@ -66,6 +68,7 @@ beforeEach(async () => {
   window.localStorage.clear();
   resetBotReadStateForTests();
   h.cloudEnabled = false;
+  h.retired = new Set();
   h.copies.mockReset();
   h.owner = `owner-${Math.random()}`;
   setDataOwnerGeneration(h.owner);
@@ -384,6 +387,7 @@ it('applies cloud Cindy identity regardless of roster arrival order and rejects 
   h.owner = 'third-owner';
   setDataOwnerGeneration(h.owner);
   h.cloudEnabled = false;
+  h.retired = new Set();
   rerender();
   await act(async () => oldFinish([{ botId: 'same-bot' }]));
   expect(result.current.every(bot => bot.templateId === undefined)).toBe(true);
@@ -404,6 +408,21 @@ it('exposes known Cindy IDs before an offline home provides its roster and clear
   h.owner = 'new-empty-owner';
   setDataOwnerGeneration(h.owner);
   h.cloudEnabled = false;
+  h.retired = new Set();
   rerender();
   expect(result.current.ids.size).toBe(0);
+});
+
+// #9760, unit tier: production roster hook; old coverage had no cloud deletion.
+// Minimal input is an offline cached row followed by an authoritative retirement.
+it('evicts retired identities from the offline roster and persisted cache while keeping ordinary bots', async () => {
+  h.devices = [host('a', false)];
+  const rows = parseRemoteBots(collection(), 'a', 'a');
+  localStorage.setItem(`cindy.remoteBots.v1.${h.owner}`, JSON.stringify([...rows, { ...rows[0], id: 'ordinary' }]));
+  const view = renderHook(useRoster);
+  await waitFor(() => expect(view.result.current).toHaveLength(2));
+  h.retired = new Set(['same-bot']);
+  view.rerender();
+  await waitFor(() => expect(view.result.current.map(bot => bot.id)).toEqual(['ordinary']));
+  expect(JSON.parse(localStorage.getItem(`cindy.remoteBots.v1.${h.owner}`)!).map((bot: { id: string }) => bot.id)).toEqual(['ordinary']);
 });

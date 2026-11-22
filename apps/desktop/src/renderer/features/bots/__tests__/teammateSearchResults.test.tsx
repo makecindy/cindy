@@ -16,7 +16,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => mocks.profiles }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
-vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
+vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud, getRetiredCompanionBotIds: () => new Set<string>() }));
 vi.mock('../botGroupStore', () => ({ useBotGroupList: () => ({ groups: mocks.groups }) }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="avatar" /> }));
 
