@@ -883,11 +883,12 @@ Cindy 在返回拒绝前，通过已有 `turn/steer` 向对应 thread 和 expect
 **确认超时的说法（2026-11-21）。** 工具调用需要确认、但在时限内没人确认时（系统原因 `timeout` 或
 `*_timeout`，判据 `isPermissionConfirmationTimeoutReason`），模型收到的拒绝说明写明：没人在时限内确认、
 不是用户拒绝；不要自动重试同一个调用，改用不需要确认的方式，或告诉用户这一步需要用户确认。
-此前 Claude 只看到 `could not approve this tool call: timeout`，Codex 只看到原生的 `user rejected`，伙伴会把
-超时当成主人不同意。三个引擎共用 `PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE`：Claude 的工具结果与 Codex
+此前 Claude 只看到 `could not approve this tool call: timeout`，伙伴会把超时当成主人不同意。Codex exec/patch
+的原生结果可能仍显示用户拒绝；Cindy 已在同一轮向模型补充具体原因（上文的宿主反馈），本次改的是其中的超时说明。
+三个引擎共用 `PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE`：Claude 的工具结果与 Codex
 exec/patch 的同轮宿主反馈走 `formatPermissionDenial`，Pi 由桥接扩展按 `system-deny:<原因>` 解出同一句。
-只改文字，不改超时时长、判定和重试。**已知缺口**：Codex 的 MCP 工具审批没有同轮宿主反馈，模型仍只看到
-`user rejected MCP tool call`；补上需要为 MCP 拒绝新增一次 `turn/steer`，属于行为改动，未在本次处理。
+只改文字，不改超时时长、判定和重试。**已知缺口**：Codex MCP 工具审批没有这条同轮反馈，超时时模型仍只看到
+`user rejected MCP tool call`（面向用户的超时诊断可见，不等于模型收到了原因）；补上需要为 MCP 拒绝新增一次 `turn/steer`，属于行为改动，未在本次处理。
 
 ### Auto 模式的同范围自动跟进
 
