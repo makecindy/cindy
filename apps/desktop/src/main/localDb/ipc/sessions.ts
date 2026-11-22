@@ -2564,6 +2564,8 @@ export async function setSessionsSnoozeInDb(
   sessionIds: string[],
   snoozedUntil: string | null,
   beforeMutation?: () => Promise<void>,
+  /** Rechecked synchronously right before each row is written, after patch-meta's own waits. */
+  beforeWrite?: () => void,
 ): Promise<{ changed: SessionSnoozeChangeRow[]; error?: { sessionId: string; cause: unknown } }> {
   validateSnoozeTime(snoozedUntil);
   const rows = sessionIds.length === 0 ? [] : await getDbClient().drizzle
@@ -2579,7 +2581,7 @@ export async function setSessionsSnoozeInDb(
   for (const sessionId of sessionIds) {
     try {
       await beforeMutation?.();
-      const updated = await patchSessionMetaInDb(sessionId, { snoozedUntil });
+      const updated = await patchSessionMetaInDb(sessionId, { snoozedUntil }, { beforeWrite });
       changed.push({
         sessionId,
         title: updated.title ?? null,

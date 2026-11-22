@@ -2607,6 +2607,21 @@ describe('task snooze persistence', () => {
       expect.objectContaining({ sessionId: 'codex-local', snoozedUntil: null }),
     ] });
   });
+  // PR #12041 review: authorization revoked while patch-meta waits must stop the
+  // final write, as for deletion; the async pre-check alone is not enough.
+  it('rechecks the task action right before each snooze write', async () => {
+    const until = new Date(Date.now() + 3600000).toISOString();
+    // The async pre-check passes for both items; the second is revoked only after it.
+    let item = 0;
+    let revoked = false;
+    const result = await setSessionsSnoozeInDb(['cc-local', 'codex-local'], until, async () => {
+      if (++item === 2) queueMicrotask(() => { revoked = true; });
+    }, () => {
+      if (revoked) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    });
+    expect(result).toMatchObject({ changed: [{ sessionId: 'cc-local' }], error: { sessionId: 'codex-local' } });
+    expect(h.sqlite!.prepare("SELECT snoozed_until AS until FROM sessions WHERE id = 'codex-local'").get()).toEqual({ until: null });
+  });
   it.each(['not-a-date', '2000-01-01T00:00:00.000Z', 123])('rejects invalid deferral %s without writing', async snoozedUntil => {
     await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();
     expect(h.sqlite!.prepare('SELECT snoozed_until AS until FROM sessions WHERE id = ?').get('codex-local')).toEqual({ until: null });

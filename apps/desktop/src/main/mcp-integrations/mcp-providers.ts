@@ -1177,7 +1177,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         const codeOf = (err: unknown) => isIpcError(err) && ['NOT_FOUND', 'PRECONDITION_FAILED', 'INVALID_PARAMS'].includes(err.code)
           ? (err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : err.code) : 'INTERNAL';
         try {
-          const { changed, error } = await setSessionsSnoozeInDb(sessionIds, snoozedUntil, assertTaskActionCurrent);
+          // Like deletion: the sync guard runs inside patch-meta, right before each write.
+          const guard = captureTaskActionSyncGuard();
+          const { changed, error } = await setSessionsSnoozeInDb(sessionIds, snoozedUntil, assertTaskActionCurrent, guard);
           if (!error) return { ok: true, changed };
           const index = sessionIds.indexOf(error.sessionId);
           return {
