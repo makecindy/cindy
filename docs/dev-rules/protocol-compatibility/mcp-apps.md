@@ -188,7 +188,7 @@ Desktop Main 和 Mobile JS 复用同一个引用缓存实现；Mobile 用已有�
 初始化能力里可选声明 `cindy/composer-attachment`，不加入 device-link、relay 或手机协议。
 资源读取和落盘在执行端完成，远程查看端、手机、共享访客与 Node Host 不声明也不处理该能力。
 旧查看端忽略该可选能力，页面必须在动态导入失败或能力缺失时继续可用。
-已验证的 macOS / Electron 42 组合额外声明 `drag: {version: 1}`。本地页面通过
+macOS 与 Windows 的已验证组合（目前为 Electron 42）额外声明 `drag: {version: 1}`。本地页面通过
 `cindy/composer-attachment/drag-ticket` 为本卡已有资源申请 30 秒一次性票。每 View 每分钟
 最多申请 60 次。只有来源窗口中同任务的输入框可以兑换；挂起、关闭、文档替换和撤权均使票失效。
 兑换复用按钮的读取、校验、去重和限频。其它平台保留原按钮，旧插件无需改清单或重新批准。

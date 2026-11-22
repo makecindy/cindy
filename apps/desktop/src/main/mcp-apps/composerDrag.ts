@@ -4,9 +4,9 @@ export const DRAG_TICKET_METHOD = 'cindy/composer-attachment/drag-ticket';
 export const DRAG_TICKETS_INVALIDATED = 'cindy/composer-attachment/tickets-invalidated';
 export const invalidDragTicket = () => new Error('MCP_APP_COMPOSER_DRAG_INVALID');
 
-/** Verified with native cross-origin drags on macOS / Electron 42.11.12. */
+/** Verified with cross-origin drags on macOS and Windows running Electron 42. */
 export function supportsComposerDrag(platform: string, electronVersion?: string): boolean {
-  return platform === 'darwin' && electronVersion?.split('.')[0] === '42';
+  return (platform === 'darwin' || platform === 'win32') && electronVersion?.split('.')[0] === '42';
 }
 
 /** Owned by one live View. Dropping the document or suspending invalidates outstanding reads too. */
