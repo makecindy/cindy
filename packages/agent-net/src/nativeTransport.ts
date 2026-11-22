@@ -113,6 +113,12 @@ const IDLE_FULL_POLL_MS = 1_000;
 const ADMISSION_RECHECK_MS = 1_000;
 /** `binary-io`: per `io` call at most this many bytes of writes, and as many of relayed datagrams (lib.rs MAX_IO is 4 MiB). */
 const MAX_IO_BYTES = 1024 * 1024;
+/**
+ * `binary-io`: per `io` call at most this many writes (engine.rs refuses a call with more than MAX_IO_WRITES, 1024). Small messages
+ * queued on many connections reach it long before the byte budget: 129 connections with 8 each are 1032 writes of a few bytes, and a
+ * refused call closed the whole transport (PR #12036 review). The rest goes next turn.
+ */
+const MAX_IO_WRITES = 512;
 /** `binary-io`: relayed datagrams waiting here for the next `io` call; beyond this the oldest go (the core resends). */
 const MAX_RELAYED = 512;
 /**
@@ -465,7 +471,7 @@ export class NativeTransport implements Transport {
       const { link, bytes: data } = this.relayed.shift()!;
       datagrams.push([link, data.length]); parts.push(data); bytes += data.length;
     }
-    const writes: PlannedWrite[] = [], planned: NativeChannel[] = [], budget = { bytes: MAX_IO_BYTES };
+    const writes: PlannedWrite[] = [], planned: NativeChannel[] = [], budget = { bytes: MAX_IO_BYTES, writes: MAX_IO_WRITES };
     for (const channel of [...this.channels.values()]) {
       if (!channel.moving || !this.options.admit(channel.remoteId)) continue;
       planned.push(channel);
@@ -819,24 +825,24 @@ class NativeChannel implements PeerChannel {
   /** `bufferedAmount` when the turn's writes were planned, for `afterWrites`. */
   private plannedFrom = 0;
   /**
-   * `binary-io`: this turn's writes, in `order` and as `flushStream` would make them, at most `budget.bytes` in all. Nothing
-   * is taken from the queues here: `consume` takes what the engine answers it took, and the rest goes next turn.
+   * `binary-io`: this turn's writes, in `order` and as `flushStream` would make them, at most `budget.bytes` and `budget.writes` in
+   * all. Nothing is taken from the queues here: `consume` takes what the engine answers it took, and the rest goes next turn.
    */
-  async plan(budget: { bytes: number }): Promise<PlannedWrite[]> {
+  async plan(budget: { bytes: number; writes: number }): Promise<PlannedWrite[]> {
     if (this.disposed) return [];
     if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return []; }
     this.plannedFrom = this.bufferedAmount;
     const writes: PlannedWrite[] = [];
     for (const outgoing of this.order()) {
       while (outgoing.items.length && outgoing.items[0].offset >= outgoing.items[0].bytes.length) outgoing.items.shift();
-      if (!outgoing.items.length || budget.bytes <= 0) continue;
+      if (!outgoing.items.length || budget.bytes <= 0 || budget.writes <= 0) continue;
       if (outgoing.stream === null) outgoing.stream = await this.owner.call<number>({ op: 'openStream', id: this.id, priority: outgoing.priority });
       if (this.disposed) return [];
       let index = 0, offset = outgoing.items[0].offset;
-      for (let turn = 0; turn < (outgoing.short ? 1 : WRITES_PER_STREAM) && index < outgoing.items.length && budget.bytes > 0; turn++) {
+      for (let turn = 0; turn < (outgoing.short ? 1 : WRITES_PER_STREAM) && index < outgoing.items.length && budget.bytes > 0 && budget.writes > 0; turn++) {
         const item = outgoing.items[index];
         const bytes = item.bytes.subarray(offset, offset + Math.min(WRITE_CHUNK, budget.bytes));
-        if (bytes.length) { writes.push({ channel: this, outgoing, bytes }); budget.bytes -= bytes.length; }
+        if (bytes.length) { writes.push({ channel: this, outgoing, bytes }); budget.bytes -= bytes.length; budget.writes -= 1; }
         offset += bytes.length;
         if (offset >= item.bytes.length) { index++; offset = 0; }
       }

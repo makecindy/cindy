@@ -434,6 +434,63 @@ it('reads in the call that waited and writes beside it on a binary-io engine', a
 });
 
 /** 测试价值
+ * - 生产入口与可观察结果：手机的 NativeTransport 在原生库带 `binary-io` 时，一轮要写的条数超过原生 `io` 一次收的上限（1024 条）时
+ *   分几轮写完，连接一条都不断。
+ * - Bug／规则依据：PR #12036 审阅。原来一轮只按字节数限，129 条连接各排 8 条小消息就是 1032 条写入，原生拒收整帧，传输层随之关掉，
+ *   所有连接一起断。
+ * - 现有覆盖缺口：上面的 `binary-io` 用例只有一条连接、几次写入。
+ * - 最小失败输入：130 条已建立的连接各排 8 条 1 字节的消息；引擎替身照原生的规矩拒收超过 1024 条写入的调用。
+ * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身（没有 `native-wait`，按计时器驱动）；约 0.3 秒。
+ */
+it('splits a turn of many small writes across io calls instead of losing every connection', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native');
+  const peers = Array.from({ length: 130 }, (_, index) => generateIdentity('peer-' + index));
+  const hex = (key: string) => Buffer.from(key, 'base64url').toString('hex');
+  const writesPerCall: number[] = [];
+  let nextStream = 0, dataBytes = 0;
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null, features: ['binary-io'] };
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') value = Buffer.from(command.data as string, 'base64url').length;
+      return value as T;
+    },
+    io: async (input) => {
+      const length = new DataView(input.buffer, input.byteOffset, input.byteLength).getUint32(0, true);
+      const header = JSON.parse(Buffer.from(input.subarray(4, 4 + length)).toString()) as { writes?: number[][]; poll: boolean };
+      const writes = header.writes ?? [];
+      // As engine.rs `io`: a call with more than MAX_IO_WRITES is refused whole.
+      if (writes.length > 1024) return encodeNativeIo({ ok: false, code: 'INVALID_NATIVE_IO' });
+      writesPerCall.push(writes.length);
+      dataBytes += writes.reduce((sum, [, , size]) => sum + size, 0);
+      const connections = peers.map((peer, index) => ({ id: index + 1, established: true, dead: false, closedByPeer: false, unacked: false,
+        remoteKey: peer.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }));
+      return encodeNativeIo({ ok: true, value: { written: writes.map(([, , size]) => size), poll: header.poll ? { packets: [], connections } : null } });
+    },
+    async destroy() {},
+  };
+  const channels: PeerChannel[] = [];
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true, admissionVersion: () => 1,
+      admittedPeers: () => peers.map(peer => ({ id: hex(peer.transportKey), relayId: peer.deviceId })),
+      relayIdOf: (id) => peers.find(peer => hex(peer.transportKey) === id)?.deviceId, onIncoming: channel => { channels.push(channel); } });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(channels).toHaveLength(peers.length);
+    let closed = 0;
+    for (const channel of channels) channel.onClose(() => { closed++; });
+    writesPerCall.length = 0; dataBytes = 0;
+    for (const channel of channels) for (let message = 0; message < 8; message++) channel.send(Uint8Array.of(message));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(closed).toBe(0);
+    expect(dataBytes).toBe(peers.length * 8);
+    expect(Math.max(...writesPerCall)).toBeLessThanOrEqual(512);
+  } finally { await transport?.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
  * - 生产入口与可观察结果：手机的 NativeTransport 把要发的字节交给原生引擎的顺序（引擎收到的命令序列）。socket 没有报告准入变化时，
  *   写入排在轮询前面；每秒一次的「按时间复查准入」到期也不拦写入；socket 报告准入变了，先把新名单交给引擎再写；
  *   对端此刻已不被准入，一个字节也不写。
