@@ -247,7 +247,7 @@ async function submit(options: {
     if (options.createFailure) throw new Error('fixture create failed');
     if (options.activePluginEngine) {
       if (body.localPluginWorktree) await options.finishPluginCheckout?.(body.localPluginWorktree);
-      return { ...body, workingDir: body.localPluginWorktree ? worktreePath : body.workingDir,
+      return { ...body, workingDir: body.localPluginWorktree ? worktreePath : body.workingDir ?? '/isolated/dialogue',
         worktreePath: body.localPluginWorktree ? worktreePath : null };
     }
     return { ...body, ...admit(body), id: 'created', workingDir: '/isolated/dialogue' };
@@ -1356,6 +1356,20 @@ describe('local plugin engine worktree submission', () => {
     expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
       created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
       workingDir, [], [], expect.any(Object),
+    );
+  });
+
+  it('sends a standalone dialogue without a project even with a remembered worktree setting', async () => {
+    const result = await submit({
+      activePluginEngine: syntheticPluginEngine, workingDir: '',
+      worktree: { enabled: true, sourceBranch: 'remembered' },
+    });
+    const [[created]] = result.ipcCreate.mock.calls;
+    expect(created).toMatchObject({ workspaceKind: 'dialogue', agentKind: 'acp' });
+    expect(created).not.toHaveProperty('localPluginWorktree');
+    expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
+      '/isolated/dialogue', [], [], expect.any(Object),
     );
   });
 
