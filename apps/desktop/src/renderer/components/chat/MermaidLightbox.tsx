@@ -46,6 +46,7 @@ import {
   wheelZoomFactor,
   zoomAtPoint,
 } from './lightboxGestures';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 interface MermaidLightboxProps {
   svg: string;
@@ -272,7 +273,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
       className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
-        zIndex: 9999,
+        zIndex: Z_INDEX_LAYERS.fullscreen,
         transition: 'opacity 200ms ease',
         opacity: isVisible ? 1 : 0,
         display: 'flex',
@@ -304,7 +305,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
         <div
           ref={cardRef}
           className={cn(
-            'rounded-[12px] border border-[var(--msg-code-block-border)]',
+            'rounded-xl border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-6',
             // Force the inner mermaid <svg> (which comes with intrinsic

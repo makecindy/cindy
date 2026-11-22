@@ -1,19 +1,19 @@
 /* 伙伴待办:工作台单列里的一组(标题行同任务分组,一行标题 + 一行「到期 · 来源」)。 */
 .todo-panel {
-  padding: 0 20px 8px;
+  padding: 0 var(--space-5) var(--space-2);
   color: var(--text-primary);
 }
 .todo-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1_5);
   min-height: 22px;
-  margin: 14px 0 2px;
+  margin: var(--space-3_5) 0 var(--space-0_5);
 }
 .todo-header h2 {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1_5);
   font-size: var(--text-12);
   line-height: 1.5;
   font-weight: 400;
@@ -26,7 +26,7 @@
 .todo-header-actions {
   margin-left: auto;
   display: flex;
-  gap: 2px;
+  gap: var(--space-0_5);
 }
 .todo-icon,
 .todo-more {
@@ -36,7 +36,7 @@
   width: 24px;
   height: 24px;
   flex-shrink: 0;
-  border-radius: 8px;
+  border-radius: var(--radius);
   color: var(--text-tertiary);
   transition:
     background-color var(--motion-instant),
@@ -51,7 +51,7 @@
   color: var(--text-primary);
 }
 .todo-search {
-  margin: 4px 0 6px;
+  margin: var(--space-1) 0 var(--space-1_5);
 }
 .todo-search input,
 .todo-field input,
@@ -61,8 +61,8 @@
   background: var(--surface-elevated);
   color: var(--text-primary);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
-  padding: 5px 8px;
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
   font-size: var(--text-13);
   line-height: 1.54;
 }
@@ -74,10 +74,10 @@
 .todo-row {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
-  margin: 0 -8px;
+  gap: var(--space-1);
+  margin: 0 calc(var(--space-2) * -1);
   min-width: 0;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .todo-row:hover {
   background: var(--surface-hover);
@@ -86,11 +86,11 @@
   display: flex;
   flex: 1;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
-  padding: 6px 0 6px 8px;
+  padding: var(--space-1_5) 0 var(--space-1_5) var(--space-2);
   text-align: left;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .todo-lead {
   display: flex;
@@ -104,7 +104,7 @@
 .todo-circle {
   width: 14px;
   height: 14px;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   border: 1.5px solid var(--text-tertiary);
 }
 .todo-circle-hidden {
@@ -137,18 +137,18 @@
   color: var(--text-danger);
 }
 .todo-row .todo-more {
-  margin: 4px 6px 0 0;
+  margin: var(--space-1) var(--space-1_5) 0 0;
 }
 .todo-done-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1_5);
   min-height: 22px;
-  margin-top: 10px;
+  margin-top: var(--space-2_5);
   font-size: var(--text-12);
   line-height: 1.5;
   color: var(--text-secondary);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .todo-done-toggle:hover {
   color: var(--text-primary);
@@ -170,7 +170,7 @@
 }
 .todo-empty,
 .todo-panel > p[role='status'] {
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   font-size: var(--text-12);
   line-height: 1.5;
   color: var(--text-tertiary);
@@ -183,7 +183,7 @@
 }
 .todo-detail {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   font-size: var(--text-14);
   line-height: 1.57;
   overflow-wrap: anywhere;
@@ -200,7 +200,7 @@
 }
 .todo-field {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--text-13);
   line-height: 1.54;
 }

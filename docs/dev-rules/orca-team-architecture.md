@@ -193,7 +193,9 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
   `worker_id + worker session` 归属反查唯一 Lead，调用方不能指定任意 session；只返回
   `user/assistant`、排除 rewound、限制单页数量并保持 `(createdAt,rowid)` 游标分页。它不
   create/resume Lead，也不发送消息，所以本机与 SSH Worker 都能在不唤醒 Lead 的前提下读取
-  同一份上下文。Worker 只有在任务依赖「当前工作／继续／这个 PR」等相对范围时才查询；
+  同一份上下文。界面派单只有在「当前工作／继续／这个 PR」等信息缺失时才引导查询。
+  已有任务从最近 8 条开始；有快照的首条派单从快照时间起读 8 条。查到所需信息即可停，
+  需要更多才按同一方向使用游标。工具省略 `order` 时沿用时间正序，旧调用的分页行为不变。
   自包含任务直接执行。没有显式 Worker 任务时不会用 Lead 输入擅自起任务；该 handoff 也不
   改写 MCP `create_worker` / `create_workers` 已由 Lead 组织好的 `initial_task`。
 - device-link 只有在被控端 capability 与本次 `enableOrca` 成功响应都证明支持 deferred
@@ -260,7 +262,16 @@ doc rail 不走右侧栏 tab，也不做 route navigate。WorkdirBrowseRoute 的
 
 Worker 不出现在普通 sidebar。renderer 用 `isOrcaWorkerSession(session) => session.orcaRole === 'worker'` 识别 worker，sidebar filter 直接排除 worker，见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `isOrcaWorkerSession` 与 `apps/desktop/src/renderer/features/cc-agent/CCAgentSidebarUpper.tsx` 的 `sidebarSessions` filter。worker deep link 会解析到所属 Lead 的普通 route，并通过 `?worker=` 一次性聚焦右侧栏协同 tab，见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `resolveSessionRoute`。
 
-Worker 虽不进侧栏，它的出错与等待确认会汇总到所属 Lead 行（2026-10 用户裁决，只覆盖本机 Lead）：Lead 行的状态点、项目折叠灯、rail 瓷砖、排序钉住与 Dock 角标都按「Worker 出错（红）> Worker 等待确认（蓝）> Lead 自己的状态」取一档，红 / 蓝同样盖过运行中；Worker 的完成不汇总。汇总只是读侧派生：来源是 Worker 自己在 `sessionAttentionStore` 里的 attention 与 Worker 投影（`workerProjectionStore` 中仍被持有的 Lead；已归档 Worker、已结束协同的团队不在投影里，自然不计），生命周期完全跟随 Worker 的 attention（重试 / 关横幅、Lead 重新派活、确认被回答即消失），点开 Lead 不会清掉，正在看该 Lead 时也照常显示。汇总结果**不得写回** `sessionAttentionStore`：那份会同步到 Main（Dock / 灵动岛 / 远端），并被「导航即已读」的被动清除抹掉，会破坏 Lead 自身的 attention 生命周期与完成保持判定。Dock 角标一个 Lead 只算 1，口径与侧栏行一致。逐行组件（`SessionItem` / `SessionCard` / `SessionStatusIcon`）只能用按 id 的 primitive 订阅 `useOrcaLeadWorkerAttentionKind`，聚合视图用 `useSessionAttentionKindsWithOrcaLeads` / `useOrcaLeadWorkerAttention` 与 `mergeOrcaLeadNotifications`。实现指针：`apps/desktop/src/renderer/features/cc-agent/lib/orcaLeadWorkerAttention.ts`、`workerProjectionStore.ts` 的 `listRetainedWorkerProjections`、`lib/appAttentionCount.ts` 的 `orcaLeadWorkerAttention` 入参。
+Worker 虽不进侧栏，它的出错与等待确认会汇总到所属 Lead 行（2026-10 用户裁决；出错与通用等待确认只覆盖本机 Lead，提问另按下述规则跨设备汇总）：Lead 行的状态点、项目折叠灯、rail 瓷砖、排序钉住与 Dock 角标都按「Worker 出错（红）> Worker 等待确认（蓝）> Lead 自己的状态」取一档，红 / 蓝同样盖过运行中；Worker 的完成不汇总。汇总只是读侧派生：来源是 Worker 自己在 `sessionAttentionStore` 里的 attention 与 Worker 投影（`workerProjectionStore` 中仍被持有的 Lead；已归档 Worker、已结束协同的团队不在投影里，自然不计），生命周期完全跟随 Worker 的 attention（重试 / 关横幅、Lead 重新派活、确认被回答即消失），点开 Lead 不会清掉，正在看该 Lead 时也照常显示。汇总结果**不得写回** `sessionAttentionStore`：那份会同步到 Main（Dock / 灵动岛 / 远端），并被「导航即已读」的被动清除抹掉，会破坏 Lead 自身的 attention 生命周期与完成保持判定。Dock 角标一个 Lead 只算 1，口径与侧栏行一致。逐行组件（`SessionItem` / `SessionCard` / `SessionStatusIcon`）只能用按 id 的 primitive 订阅 `useOrcaLeadWorkerAttentionKind`，聚合视图用 `useSessionAttentionKindsWithOrcaLeads` / `useOrcaLeadWorkerAttention` 与 `mergeOrcaLeadNotifications`。实现指针：`apps/desktop/src/renderer/features/cc-agent/lib/orcaLeadWorkerAttention.ts`、`workerProjectionStore.ts` 的 `listRetainedWorkerProjections`、`lib/appAttentionCount.ts` 的 `orcaLeadWorkerAttention` 入参。
+
+待回答问题可跨设备汇总到主任务。点击时，协同面板选择 Worker 的代理 `sessionId`，
+回答面板则展开 `executionDevice.remoteSessionId`（无运行设备时使用 Worker 自身 ID）。
+真实任务的问题状态由 `makerChatStore` 或对应设备的活动镜像提供，问题出现和清除均更新主任务提示；
+在运行设备本机查看远程 Lead 时，同样订阅真实任务的本机状态，不要求本机任务进入远程活动镜像。
+主任务自己也有问题时优先回答主任务。列表补丁中的 `orcaLeadSessionId` 与
+`orcaHasPendingQuestion` 还允许未打开聊天的控制端显示提示，兼容细则见
+[手机任务列表活动快照](protocol-compatibility/mobile-home-session-activity-snapshot.md)。
+
 
 Desktop 的「开启协同」与「创建新 Worker」共用 `CreateWorkerPopover`，表单按「让 Worker 做什么 → 首条任务 → 更多设置」
 排列（2026-11-10）。预设只决定提交的角色名和任务框里带出的内容，不改变 Agent、模型、权限或能力，逻辑在
@@ -391,7 +402,7 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
 1. **Orca Worker 派单不得由原生 subagent 冒充（状态：不变量）**<br>
    用户把任务指派给已有 Worker 的 role／label、要求 Lead 向 Worker 派单，或在 active team
-   内按多个角色并行派单时，Lead 必须先读 workspace，再按场景通过
+   内按多个角色并行派单时，Lead 直接使用已知且匹配的 Worker 会话 ID；目标未知、有歧义或原映射已失效时才通过 `get_workspace_info` 核实。随后按场景通过
    `send_to_worker`（复用既有 Worker）／`create_worker`（显式新建一个 Worker）／`create_workers`（显式新建多个 Worker）进入 Orca 状态机；如果请求的 role／label 当前没有匹配的既有 Worker，Lead 必须先如实说明没有匹配项并征求是否创建，不能静默改派别的 Worker，也不能退回 native subagent。
    如果用户只泛称“Worker”且当前没有任何 Worker，Lead 同样必须先说明并询问是否创建；
    任务指派本身不等于创建授权。多角色请求必须在派发任何任务前解析全部 role／label；
@@ -403,6 +414,10 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `spawn_agent` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
    Worker 的完成。只有用户明确要求一次性 subagent／子代理且没有把任务指派给 Orca
    Worker，或明确要求不使用 Orca Worker 时，才走原生 subagent。
+
+   Lead 启动时可从本队的活跃成员恢复唯一 Worker 的会话地址。多个候选时只使用仍匹配的既有 ID，
+   启动提示只记录地址。角色和标签可在协同面板修改；按角色或标签选人时，本次派单尚未核实匹配项才查当前名单。按明确的 Worker 地址派单可直接发送。只读审阅直接回传发现和必要证据；实施任务按实际改动验证。
+   独立复核按任务要求执行。验证证据可以直接写进回报，用户要求日志或失败排查需要时再保存文件。
 
 2. **实际执行通道必须披露并按同一通道验收（状态：不变量）**<br>
    Lead 汇总前必须按执行该任务的同一通道确认真实终态，并逐项标明

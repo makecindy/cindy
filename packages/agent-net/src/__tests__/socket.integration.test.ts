@@ -25,10 +25,12 @@ import { verifyCertificate, verifyDelegation } from '@cindy/agent-net-relay';
 import { nodeRelayAuthCrypto } from '@cindy/device-link/node-relay-crypto';
 import { initializeRelay, startRelayServer, createDeviceCredential, hashSecret } from '@cindy/device-link-relay';
 import { AgentNetSocket } from '../socket.js';
+import { SessionLanes } from '../session/lanes.js';
 import { AgentNetWorkerSocket, type AgentNetAppSocket } from '../workerSocket.js';
 import { startRelayGateway } from '../gateway.js';
 import { StunClient } from '../stun.js';
 import { createCoreTransport } from '../transport.js';
+import { Endpoint, type Connection, type RecvStream } from '@cindy/agent-net-core/node';
 import type { PeerChannel } from '../types.js';
 import WebSocket from 'ws';
 
@@ -472,6 +474,77 @@ it('tells a directly connected peer right away when the transport closes', async
   await source.close();
   await vi.waitFor(() => expect(closed).toBe(true), { timeout: 2_000 });
 });
+/** 测试价值（Desktop 通道收正文流的边界）
+ * - 生产入口与可观察结果：Desktop worker 与 Node Host 用的 createCoreTransport 通道（CoreChannel）收到对端开的正文流（0x33）。
+ *   本端没宣告 agent-net-session-v2 时和旧节点一样关掉连接；宣告了、本端会话还没挂上时，先存的正文事件连只有键和结束的空流也计入
+ *   16 MiB 的预算（每个事件 64 字节加它的字节），超过就关连接。
+ * - Bug／规则依据：2026-11-22 审查 #12063：结束事件原来不计入预算，一个不挂会话的对端可以一直开空流，占着内存不放。
+ * - 现有覆盖缺口：其它用例里两端都是守规矩的节点。
+ * - 最小失败输入：没宣告时开一条正文流；宣告后开 300 条只有键和结束的流，再写正好让总数超过预算的字节。
+ * - tier：integration，真实核心与 127.0.0.1 UDP，对端是直接用核心开流的端点。 */
+it.each(['undeclared', 'budget'] as const)('closes a connection whose peer opens body streams it may not: %s', async (mode) => {
+  let accept!: (channel: PeerChannel) => void;
+  const accepted = new Promise<PeerChannel>((resolve) => { accept = resolve; });
+  const target = await createCoreTransport({ udp: true, bindAddress: '127.0.0.1', admit: () => true, onIncoming: (channel) => accept(channel) });
+  cleanup.push(() => target.close());
+  const raw = await Endpoint.create({ identity: generateIdentity('a-raw').transportPrivateKey, prologue: 'cindy/agent-net/device-link/2',
+    bind: { address: '127.0.0.1' } });
+  cleanup.push(() => raw.close());
+  const connection = raw.connect(Buffer.from(target.id, 'hex'), (target.dial as { udp: { address: string; port: number } }).udp);
+  const channel = await accepted;
+  let closed = false;
+  channel.onClose(() => { closed = true; });
+  await vi.waitFor(() => expect(connection.established).toBe(true));
+  const body = (key: number, bytes = new Uint8Array(0)) => {
+    const stream = connection.openStream('normal'), head = Buffer.alloc(5);
+    head[0] = 0x33; head.writeUInt32BE(key, 1);
+    stream.write(Buffer.concat([head, bytes]));
+    stream.finish();
+  };
+  if (mode === 'undeclared') {
+    body(1, new Uint8Array(10));
+    await vi.waitFor(() => expect(closed).toBe(true));
+    return;
+  }
+  channel.declareSessions!(['agent-net-session-v2']);
+  for (let round = 0; round < 6; round++) {
+    for (let index = 0; index < 50; index++) body(1 + round * 50 + index);
+    await vi.waitFor(() => expect(connection.drained).toBe(true), { timeout: 10_000 });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(closed).toBe(false);
+  // 300 ends (300 × 64) and one chunk event (64) of what fills the rest, plus a byte. The bytes alone stay under the budget.
+  body(1000, new Uint8Array(16 * 1024 * 1024 - 301 * 64 + 1));
+  await vi.waitFor(() => expect(closed).toBe(true), { timeout: 20_000 });
+}, 40_000);
+
+/** 测试价值（Node 驱动收回交完的流）
+ * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
+ *   都交给核心的流，以及放弃了的流，不再留在连接的表里；进度和缓冲照样按流号问核心。
+ * - Bug 依据：2026-11-22 自审会话 v2：一条大消息一条流，这张表只增不减，驱动每一轮都要遍历它，长连着的连接越用越慢。
+ * - 现有覆盖缺口：会话的测试只看结果送到，看不到驱动里留着多少条流。
+ * - 最小失败输入：同一条连接上分六批共开 300 条流，各写 1 KB 后结束（核心同时最多 64 条）；再一条写了 4 MiB 后放弃。
+ * - tier：integration，两个真实 WASM 端点经 127.0.0.1 UDP。 */
+it('lets go of streams the Node driver has handed over, so its table does not grow with every large message', async () => {
+  const server = generateIdentity('a-server'), client = generateIdentity('b-client');
+  const accepting = await Endpoint.create({ identity: server.transportPrivateKey, prologue: 'unit-streams', bind: { address: '127.0.0.1' },
+    accept: { admit: () => true } });
+  const dialing = await Endpoint.create({ identity: client.transportPrivateKey, prologue: 'unit-streams', bind: { address: '127.0.0.1' } });
+  cleanup.push(() => accepting.close()); cleanup.push(() => dialing.close());
+  let received = 0;
+  accepting.on('connection', (connection: Connection) => connection.on('stream', (stream: RecvStream) => stream.on('data', (data: Uint8Array) => { received += data.length; })));
+  const connection = dialing.connect(Buffer.from(server.transportKey, 'base64url'), accepting.address());
+  await vi.waitFor(() => expect(connection.established).toBe(true));
+  for (let round = 0; round < 6; round++) {
+    for (let index = 0; index < 50; index++) { const stream = connection.openStream('normal'); stream.write(new Uint8Array(1000)); stream.finish(); }
+    await vi.waitFor(() => expect(connection.drained).toBe(true), { timeout: 10_000 });
+  }
+  await vi.waitFor(() => expect(received).toBe(300 * 1000), { timeout: 10_000 });
+  const given = connection.openStream('normal');
+  given.write(new Uint8Array(4 << 20));
+  expect(given.abandon()).not.toBeNull();
+  expect(connection.sendStreams.size).toBe(0);
+});
 /** 测试价值
  * - 生产入口与可观察结果：Desktop worker 里会话用的 createCoreTransport 会话通道（sessionWire）。积压读数算上已经交给核心、还没发出或
  *   还没确认的字节：数据刚交给核心的那一刻读数就是它的大小，不是 0。
@@ -525,6 +598,32 @@ it('tells a directly connected peer right away when its worker socket is termina
   expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
   host.terminate();
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBeNull(), { timeout: 2_000 });
+});
+/** 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 与真实中转读目录。
+ *   目录里一台设备有新旧两个设备号、同一把传输密钥时，交给业务的目录里只有新的；旧设备号不可用（`supports` 为否），
+ *   但仍算见过的 Agent-Net 设备（`knowsPeer` 为是），Desktop 据此不让它改走 Device Link、仍要它出示关闭证明。
+ * - Bug／规则依据：PR #11899 两轮审阅。worker 线程和调用它的线程各有一份「见过的设备」，后者只从收到的目录和路径事件里填；
+ *   被顶替的设备号两样都不出现，本机没有缓存、冷启动时它就成了「没见过的设备」，防降级检查对它直接放行。
+ * - 现有覆盖缺口：`portableSocket.test.ts` 的同密钥用例只到 worker 里面那一层；没有经过 worker 的。
+ * - 最小失败输入：一台已登记的设备用同一套密钥、另一个设备号再登记一次；之后不带缓存打开另一台设备的 worker socket。
+ * - tier：integration，真实 worker、真实中转与证书，不建对端连接；约 0.3 秒。 */
+it('keeps a device id superseded for sharing a transport key known through the worker when it starts without a cache', async () => {
+  const f = await network(false, undefined, true);
+  const code = await f.a.request<{ joinCode: string }>('POST', '/join-codes');
+  const join = createJoinRequest({ ...f.b.identity, deviceId: 'c-controller-renamed' }, f.bootstrap.networkId, code.joinCode, 'Controller again', 'unit-only-pairing-secret');
+  await submitJoin(f.relay.url, join);
+  await f.a.request('POST', '/join-requests/' + join.requestId + '/approve',
+    { certificate: approveJoin(f.root, join, 'unit-only-pairing-secret', f.bootstrap.ownerCertificate.subject) });
+  f.host.stop();
+  const directories: DeviceView[][] = [];
+  const socket = await AgentNetWorkerSocket.open({ workerFile: new URL('../../dist/node-worker.mjs', import.meta.url), client: f.a,
+    userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false, bindAddress: '127.0.0.1', lanDiscovery: false,
+    onDirectory: values => { directories.push(values); } });
+  cleanup.push(() => socket.close());
+  await vi.waitFor(() => expect(directories.at(-1)?.map(view => view.certificate.deviceId).sort()).toEqual(['a-host', 'c-controller-renamed']));
+  await vi.waitFor(() => expect(socket.knowsPeer('b-controller')).toBe(true));
+  expect([socket.supports('b-controller'), socket.knowsPeer('c-controller-renamed'), socket.certificateFor('b-controller')]).toEqual([false, true, undefined]);
 });
 it('applies a member revocation immediately, rejects its cached restart and keeps another peer usable', async () => {
   const f = await network(false); serve(f.host);
@@ -638,18 +737,29 @@ it('fails frames waiting for a member the host rule then refuses, and never send
  * - Bug／规则依据：docs/agent-net-session-plan.md 第 10.1 节，Agent-Net 自建独立上层，和 Device Link 完全解耦。
  * - 现有覆盖缺口：新能力，单元测试只覆盖通道排序与会话协议，没有真实核心上的协商与收发。
  * - 最小失败输入：一次建链、一次请求、一次推送、一条 Device Link 推送；只有一端启用会话时不出现会话
- *   （对端没人读会话还先宣告的话，这一端的建链要等到超时）。
+ *   （对端没人读会话还先宣告的话，这一端的建链要等到超时）。会话 v2（两端都是新版）：推送、300 KB 结果、推送，结果走自己的流
+ *   （真实核心上流的键分片到达、流的结束），业务拿到的先后不变，结果在流上时也算在会话积压里；240 KB 文件块的 base64
+ *   按字节过线（约 240 KB，不是 320 KB），收到的字符串与原来相同。
  * - tier：integration，真实回环 WS 中转，不开 UDP。 */
 it('carries an independent session between two new nodes alongside Device Link frames', async () => {
   const f = await network(false); f.host.stop(); f.controller.stop();
-  const laneFor = (channel: string) => (channel === 'test:interactive' ? 'control' as const : 'normal' as const);
-  const pushes: unknown[] = [];
+  const laneFor = (channel: string) => (channel === 'test:interactive' ? 'control' as const : channel === 'test:bulk' ? 'background' as const : 'normal' as const);
+  const pushes: unknown[] = [], large = 'large-session-result-'.repeat(15_000);
+  const file = randomBytes(240_000).toString('base64');
+  let backlog = -1, bulkBacklog = -1;
   const a = await AgentNetSocket.open({ client: f.a, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   const b = await AgentNetSocket.open({ client: f.b, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   cleanup.push(() => a.close()); cleanup.push(() => b.close());
   a.useSessions({ laneFor, handlers: () => ({
     onOpen: (id) => { a.session('b-controller')!.accept(id, { appVersion: 'host' }); },
-    onRequest: (request) => { a.session('b-controller')!.respond(request.id, { ok: true, result: [request.channel, ...request.args] }); },
+    onRequest: (request) => {
+      const session = a.session('b-controller')!;
+      if (request.channel === 'test:large') session.push('test:before', 1);
+      session.respond(request.id, { ok: true, result: request.channel === 'test:large' || request.channel === 'test:bulk' ? large : request.channel === 'test:file' ? { data: file }
+        : [request.channel, ...request.args] });
+      if (request.channel === 'test:large') { backlog = session.bufferedAmount; session.push('test:after', 2); }
+      if (request.channel === 'test:bulk') bulkBacklog = session.bufferedAmount;
+    },
   }) });
   await vi.waitFor(() => expect(b.knowsPeer('a-host')).toBe(true));
   for (const socket of [a, b]) socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: {
@@ -668,6 +778,21 @@ it('carries an independent session between two new nodes alongside Device Link f
   await expect(session.request('test:interactive', ['x'], { timeoutMs: 5_000 })).resolves.toEqual({ ok: true, result: ['test:interactive', 'x'] });
   a.session('b-controller')!.push('test:topic', { n: 1 });
   await vi.waitFor(() => expect(pushes).toEqual([['test:topic', { n: 1 }]]));
+  const bodies = vi.spyOn(SessionLanes.prototype, 'receiveBody');
+  cleanup.push(() => bodies.mockRestore());
+  await expect(session.request('test:large', [], { timeoutMs: 10_000, onSettled: () => { pushes.push('result'); } }))
+    .resolves.toEqual({ ok: true, result: large });
+  await vi.waitFor(() => expect(pushes.slice(1)).toEqual([['test:before', 1], 'result', ['test:after', 2]]));
+  expect(bodies.mock.calls.some(([, bytes]) => bytes === null)).toBe(true);
+  // The body on its own stream still counts in the session's backlog, as it would on its lane; on the background lane too, while its
+  // bytes wait here (2026-11-22 review: background bodies were left out, so file blocks could pile up unseen).
+  expect(backlog).toBeGreaterThanOrEqual(large.length);
+  await expect(session.request('test:bulk', [], { timeoutMs: 10_000 })).resolves.toMatchObject({ ok: true });
+  expect(bulkBacklog).toBeGreaterThanOrEqual(large.length);
+  // A file block's base64 crosses as its bytes and comes back as the same string.
+  const bodyBytes = () => bodies.mock.calls.reduce((total, [, bytes]) => total + (bytes?.length ?? 0), 0), before = bodyBytes();
+  await expect(session.request('test:file', [], { timeoutMs: 10_000 })).resolves.toEqual({ ok: true, result: { data: file } });
+  expect(bodyBytes() - before).toBeLessThan(250_000);
   const delivered = new Promise<Envelope>((resolve) => b.on('message', (raw) => {
     const frame = JSON.parse(raw.toString()) as Envelope; if (frame.kind === 'push') resolve(frame);
   }));

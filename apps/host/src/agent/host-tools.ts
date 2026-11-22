@@ -1,3 +1,4 @@
+import { holdError, holdRefusal, type ProfileHold } from './profile-hold.js';
 import { createLiziMcpProviders, type ToolCallAuthorizer } from '@cindy/mcps';
 import type { Session } from '@cindy/maker-core';
 import type { DataOwnerPushStamp } from '../../../desktop/src/shared/dataOwnerPush.js';
@@ -24,7 +25,6 @@ import type { HostStorageService } from '../../../desktop/src/main/cindy-brain/s
 import { createStorageToolExecutor } from '../../../desktop/src/main/cindy-brain/storageToolAccess.js';
 import { HostServiceCatalog, createHostServiceToolExecutor } from '../../../desktop/src/main/cindy-brain/hostServiceCatalog.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
-import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { HELP_KNOWLEDGE } from '../../../desktop/src/main/maker-ipc/helpKnowledge.generated.js';
 import { activeOwnerScopeKey } from '../../../desktop/src/main/appSessionState.js';
 import { createFeishuLocalHostPort } from '../feishu-local/hostPort.js';
@@ -39,7 +39,7 @@ interface Options {
   ownerId: string;
   owner(): DataOwnerPushStamp;
   current(): boolean;
-  profileHold?(): string | null;
+  profileHold?(): ProfileHold | null;
   deviceId?(): string;
   onProjectsChanged?(catalogChanged: boolean): void;
   getGhost(id: string): InstalledGhost | null;
@@ -71,14 +71,20 @@ export function createHostToolService(options: Options) {
     const projectWrite = call.server === 'cindy_helper' && PROJECT_WRITE_TOOLS.has(call.tool);
     const projectHold = () => projectWrite ? options.profileHold?.() : null;
     let held = projectHold();
-    if (held) return { ok: false, errorCode: 'PRECONDITION_FAILED', message: held };
+    if (held) {
+      const { code: errorCode, ...detail } = holdRefusal(held);
+      return { ok: false, errorCode, ...detail };
+    }
 
     const database = getCurrentDbClientSnapshot();
     const decision = await authorizeTaskCall(call);
     if (!decision.ok) return decision;
     // Task authorization can wait for a confirmation while the desktop takes the profile.
     held = projectHold();
-    if (held) return { ok: false, errorCode: 'PRECONDITION_FAILED', message: held };
+    if (held) {
+      const { code: errorCode, ...detail } = holdRefusal(held);
+      return { ok: false, errorCode, ...detail };
+    }
     const assertCurrent = () => {
       if (!current() || !database || database !== getCurrentDbClientSnapshot()) throw new Error('OWNER_SCOPE_CHANGED');
     };
@@ -88,7 +94,7 @@ export function createHostToolService(options: Options) {
       const run = async () => {
         assertCurrent();
         const occupied = projectHold();
-        if (occupied) throwIpcError('PRECONDITION_FAILED', occupied);
+        if (occupied) throw holdError(occupied);
         const result = await operation();
         assertCurrent();
         return result;
@@ -130,7 +136,7 @@ export function createHostToolService(options: Options) {
           assertCurrent() {
             authorization.assertCurrent?.();
             const held = options.profileHold?.();
-            if (held) throwIpcError('PRECONDITION_FAILED', held);
+            if (held) throw holdError(held);
           },
         });
         if (current()) options.onProjectsChanged?.(false);
@@ -154,6 +160,9 @@ export function createHostToolService(options: Options) {
       return await updateProjectTool(request);
     } catch (error) {
       const refusal = parseTypedError(error);
+      if (refusal?.reason === 'HOST_PROFILE_RELEASE_FAILED') {
+        return { ok: false, errorCode: refusal.code, reason: refusal.reason, message: refusal.message };
+      }
       if (refusal?.code !== 'PRECONDITION_FAILED' || !refusal.message.startsWith(HOST_PROFILE_IN_USE_BY_DESKTOP)) throw error;
       return { ok: false, errorCode: refusal.code, message: refusal.message };
     }

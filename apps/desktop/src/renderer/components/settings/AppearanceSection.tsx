@@ -195,7 +195,7 @@ function ThemeCard({
     >
       <span
         className={cn(
-          'block rounded-xl border-2 p-[2px] transition-colors',
+          'block rounded-xl border-2 p-0.5 transition-colors',
           isSelected
             ? 'border-[var(--settings-theme-preview-border-active)]'
             : cn(
@@ -205,7 +205,7 @@ function ThemeCard({
         )}
       >
         <span
-          className="relative block h-[60px] w-[92px] overflow-hidden rounded-[8px] border"
+          className="relative block h-[60px] w-[92px] overflow-hidden rounded-lg border"
           style={{ borderColor: 'var(--settings-theme-preview-border)' }}
         >
           <ModeThumbnail palette={value === 'dark' ? dark : light} />
@@ -567,7 +567,7 @@ export function AppearanceSection() {
         {t('settings.appearance.title')}
       </h2>
 
-      <div className="flex flex-col gap-[36px]">
+      <div className="flex flex-col gap-9">
         <SettingsSection
           id="settings-search-target-appearance-theme"
           aria-label={t(appearanceSettings.themeLabel.titleKey)}

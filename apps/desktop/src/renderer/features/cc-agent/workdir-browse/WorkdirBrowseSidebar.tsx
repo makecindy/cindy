@@ -679,7 +679,7 @@ export function WorkdirBrowseSidebar({
           )}
         >
           <ArrowLeft size={18} className="shrink-0" />
-          <span className="leading-none mt-[2px]">{t('ccAgent.workdirBrowse.backToProjects')}</span>
+          <span className="leading-none mt-0.5">{t('ccAgent.workdirBrowse.backToProjects')}</span>
         </button>
       </div>
 

@@ -11,6 +11,7 @@
  * 只有身份(名字头像、SOUL、IM 等对外身份)留在伙伴外壳上。
  * 开启时把原来的记忆和技能**复制**进项目(不搬走、不覆盖)，关掉开关就回到原来的伙伴。
  */
+import { createHash } from 'node:crypto';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -37,7 +38,7 @@ import {
   unlinkedTeammateProjectMemoryDir,
 } from './botProjectMemory.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
-import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate } from './botProjectTemplate.js';
+import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, type ReadPreviousTemplate } from './botProjectTemplate.js';
 import { routeModelFields } from './botV2Carryover.js';
 import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
@@ -298,9 +299,27 @@ export async function moveTeammateMemoryIntoProject(input: {
   return copied;
 }
 
+/**
+ * An earlier template file, found in the project's own Git history by the hash the template record
+ * kept: what a teammate's changed copy started from. Looks back a bounded number of versions.
+ */
+export function templateFromProjectHistory(workspace: string): ReadPreviousTemplate {
+  return async (relative, sha256) => {
+    if (!await isOwnRepository(workspace)) return null;
+    const file = relative.split(path.sep).join('/');
+    const { stdout } = await gitExec(['log', '--format=%H', '-n', '50', '--', file], workspace, { timeoutMs: 10_000 });
+    for (const commit of stdout.split('\n').map(line => line.trim()).filter(Boolean)) {
+      const shown = await gitExec(['show', `${commit}:${file}`], workspace, { timeoutMs: 10_000 }).catch(() => null);
+      if (shown && createHash('sha256').update(shown.stdout).digest('hex') === sha256) return shown.stdout;
+    }
+    return null;
+  };
+}
+
 /** An upgraded teammate gets the starter template's missing files (or a newer version) once, as a version. */
 export async function ensureTeammateTemplate(input: { botId: string; displayName: string; workspace: string }): Promise<boolean> {
-  const applied = await applyTeammateTemplate(input.workspace, input.displayName);
+  const applied = await applyTeammateTemplate(input.workspace, input.displayName, undefined, undefined,
+    templateFromProjectHistory(input.workspace));
   if (applied) await snapshotTeammateProject(input.botId, input.workspace, `Apply teammate template v${TEAMMATE_TEMPLATE_VERSION}`);
   return applied;
 }

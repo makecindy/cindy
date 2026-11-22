@@ -1,3 +1,5 @@
+import { profileReleaseFixture } from './test-support/profile-release-fixture.mjs';
+import { bindHostProfileServices } from './agent/profile-services.ts';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +14,7 @@ import { writeProjectsRootDirectory } from '../../desktop/src/main/projects-root
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHostConfirmations } from './host-confirmations.ts';
+import { releaseFailure } from './agent/profile-hold.ts';
 import { createHostToolService } from './agent/host-tools.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createHostServer } from './server.mjs';
@@ -361,11 +364,12 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   };
   const changes = [];
   const confirmations = createHostConfirmations({ current: () => current });
-  const service = createHostToolService({ profileDir: profile, ownerId: 'projects-owner', current: () => current,
+  const toolOptions = { profileDir: profile, ownerId: 'projects-owner', current: () => current,
     owner: () => getActiveDataOwnerPushStamp(), deviceId: () => 'this-host', onProjectsChanged: catalogChanged => { changes.push(catalogChanged); },
-    getGhost: () => null, getSession: () => undefined, confirmations, profileHold, t: key => key,
+    getGhost: () => null, getSession: () => undefined, confirmations, t: key => key,
     taskActions: { input: () => ({ key: 'input', ownerInput: true, boundary: 'input' }) },
-  });
+  };
+  const service = createHostToolService({ ...toolOptions, profileHold });
   const runtime = service.providers.find(provider => provider.name === 'cindy_helper').toHostTools({
     agentKind: 'codex', workingDir: profile, sessionId: 'task' });
   t.after(async () => {
@@ -401,6 +405,36 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   assert.ok(list.projects.some(item => item.working_dir === created.working_dir));
   assert.equal((await call('update_project_info', { project_key: created.project_key, field: 'profile', value: { directories: [] } })).ok, true);
   assert.deepEqual((await call('get_project_info', { project_key: created.project_key })).project.directories, []);
+  // Integration: drive the same four service assemblies as serve. A boolean hold loses
+  // the drain reason here even when an outer HTTP gate would independently refuse.
+  await t.test('assembled helper and project writes see queue release and recovery', async t => {
+    const fixture = profileReleaseFixture(t);
+    const services = bindHostProfileServices(fixture.queue);
+    const tools = services.tools(toolOptions);
+    const helper = tools.providers.find(p => p.name === 'cindy_helper').toHostTools({
+      agentKind: 'codex', workingDir: profile, sessionId: 'task' });
+    t.after(async () => { await helper.close(); tools.close(); });
+    const project = services.project({ platform: () => null, changed: value => changes.push(value) });
+    const fields = { project_key: created.project_key, field: 'name', value: 'Updated' };
+    const writeHelper = async () => body(await helper.call('update_project_info', fields));
+    const writeProject = () => project({ ...getActiveDataOwnerPushStamp(), projectKey: created.project_key, field: 'name', value: 'Updated' });
+    const held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: Desktop is using this profile.';
+    await fixture.occupy(held);
+    const before = await snapshot();
+    const pushes = changes.length;
+    assert.deepEqual(await writeHelper(), { ok: false, errorCode: 'PRECONDITION_FAILED', data: { hint: held } });
+    await assert.rejects(writeProject(), { message: '[PRECONDITION_FAILED] ' + held });
+    await fixture.failRelease();
+    const { code, reason, message } = releaseFailure();
+    assert.deepEqual(await writeHelper(), { ok: false, errorCode: code, data: { reason, hint: message } });
+    await assert.rejects(writeProject(), { code, reason, message: '[PRECONDITION_FAILED] ' + message });
+    assert.deepEqual(await snapshot(), before);
+    assert.equal(changes.length, pushes);
+    await fixture.recover();
+    assert.equal((await writeHelper()).ok, true);
+    await writeProject();
+    assert.equal(changes.length, pushes + 2);
+  });
   // §3.2 integration: the MCP entry bypassed the HTTP profile hold. A running task with
   // a valid owner must get the service's refusal for each new project write. The original
   // case covered an owner change only. Use the actual profile and SQLite bytes to catch writes.
@@ -471,9 +505,10 @@ test('Node AI tools create, inspect and edit the complete project profile in the
     const beforePushes = changes.length;
     const open = fs.open;
     const lock = ownerScopedUserDataPath('project-info-write.lock');
+    let reason = holdMessage;
     const mockedOpen = t.mock.method(fs, 'open', async (file, ...args) => {
       const handle = await open(file, ...args);
-      if (file === lock && args[0] === 'wx') held = holdMessage;
+      if (file === lock && args[0] === 'wx') held = reason;
       return handle;
     });
     try {
@@ -481,6 +516,14 @@ test('Node AI tools create, inspect and edit the complete project profile in the
       assert.equal(result.errorCode, 'PRECONDITION_FAILED');
       assert.equal(result.data.hint, holdMessage);
       assert.equal(held, holdMessage);
+      const failed = { ...releaseFailure(), message: '/private/fixture.db' };
+      reason = failed;
+      held = null;
+      const retry = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Denied' });
+      assert.equal(retry.errorCode, failed.code);
+      assert.equal(retry.data.reason, failed.reason);
+      assert.equal(retry.data.hint, releaseFailure().message);
+      assert.doesNotMatch(retry.data.hint, /fixture/);
     } finally {
       mockedOpen.mock.restore();
       held = null;
@@ -488,6 +531,7 @@ test('Node AI tools create, inspect and edit the complete project profile in the
     assert.deepEqual(await snapshot(), before);
     assert.equal(changes.length, beforePushes);
   });
+  assert.equal((await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Updated' })).ok, true);
   current = false;
   const stale = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Wrong owner' });
   assert.equal(stale.ok, false);

@@ -277,6 +277,7 @@ import {
   markBotProfileRuntimeApplied,
   markBotProfileRuntimeFailed,
 } from '../../../maker-ipc/botProfileRuntime';
+import { botRuntimeRefreshNeedsReplacement } from '../../../maker-ipc/botCompactRuntimeRefresh';
 import { createBotDirectMessageService } from '../../../maker-ipc/botDirectMessageService';
 import { configureBotCanonicalReplacementCoordinator } from '../../../maker-ipc/botCanonicalReplacementCoordinator';
 import type { MakerSessionCreateOpts } from '../../../maker-ipc/sessionRequest';
@@ -309,6 +310,7 @@ function createDb(filename = ':memory:'): void {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -336,6 +338,8 @@ function createDb(filename = ':memory:'): void {
       agent_device_id TEXT,
       orca_remote_lead TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       feishu_open_id TEXT,
@@ -2282,33 +2286,21 @@ describe('Bot canonical Session lifecycle', () => {
     expect(await remoteList()).toEqual([expect.objectContaining({ id: discovered.id })]);
   });
 
-  it('freezes provider, model, effort, and Fast Mode into the canonical Session', async () => {
-    await invoke('local-db:bots:create', {
-      id: 'bot-model-profile',
-      name: 'Model Profile Bot',
-      capabilities: {
-        harness: 'codex',
-        providerId: 'openai',
-        model: 'gpt-5.6-sol',
-        effort: 'xhigh',
-        fastMode: true,
-        permissions: 'ask',
-      },
+  // The profile and SQLite-backed chat must reopen on the selected harness even without built-in credentials.
+  it.each([
+    { harness: 'codex', model: 'gpt-5.6-sol', providerId: 'openai', effort: 'xhigh', fastMode: true },
+    { harness: 'acp', model: 'chosen', providerId: 'acp-plugin:sample:engine', effort: 'high', fastMode: false },
+  ])('saves and reopens the $harness model in the canonical companion chat', async route => {
+    const bot = await invoke('local-db:bots:create', {
+      id: 'bot-model-profile', name: 'Model Profile Bot',
+      capabilities: { ...(route.harness === 'acp' ? { modelChainOverride: [route] } : route), permissions: 'ask' },
     });
-
-    const created = await invoke('local-db:bots:create-canonical-session', {
-      botId: 'bot-model-profile',
-      expectedCanonicalSessionId: null,
-      expectedProfileVersion: 1,
-    });
-
-    expect(created.session).toMatchObject({
-      agentKind: 'codex',
-      providerId: 'openai',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
-      fastMode: true,
-    });
+    const request = { botId: bot.id, expectedProfileVersion: 1 };
+    const created = await invoke('local-db:bots:create-canonical-session', { ...request, expectedCanonicalSessionId: null });
+    const reopened = await invoke('local-db:bots:create-canonical-session', { ...request, expectedCanonicalSessionId: created.session.id });
+    const { harness, ...model } = route;
+    expect(reopened.session).toMatchObject({ id: created.session.id, agentKind: harness, ...model });
+    expect((await invoke('local-db:bots:get', bot.id)).capabilities.modelChain).toEqual([route]);
   });
 
   it.each([
@@ -3170,6 +3162,35 @@ describe('Bot canonical Session lifecycle', () => {
       expect((await hydrateBotProfileRuntime(makeOpts(), deps))?.runtimeEpochChanged).toBe(false);
       updatedAt = 'v2';
       expect((await hydrateBotProfileRuntime(makeOpts(), deps))?.runtimeEpochChanged).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // PR #11992 review (P1): a refresh signal may skip the rebuild only after a
+  // real comparison. If the first runtime-applied write failed (Maker still
+  // publishes the runtime), there is no baseline: a later Profile change must
+  // still rebuild instead of being read as "unchanged".
+  it('keeps rebuilding on refresh signals until an applied baseline exists', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+    try {
+      const created = await invoke('local-db:bots:create-canonical-session', {
+        botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      });
+      const makeOpts = (): MakerSessionCreateOpts => ({
+        id: created.session.id, agentKind: 'codex', workingDir: created.session.workingDir,
+        workspaceKind: 'dialogue', model: 'gpt-5', permissionMode: 'bypassPermissions',
+      });
+      await hydrateBotProfileRuntime(makeOpts()); // started, but never marked applied
+      await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { inputHandoff: false } });
+      const noBaseline = await hydrateBotProfileRuntime(makeOpts(), {}, { persistSnapshot: false });
+      expect(noBaseline?.runtimeEpochChanged).toBe(false);
+      expect(botRuntimeRefreshNeedsReplacement(noBaseline)).toBe(true);
+
+      await markBotProfileRuntimeApplied((await hydrateBotProfileRuntime(makeOpts()))!);
+      const unchanged = await hydrateBotProfileRuntime(makeOpts(), {}, { persistSnapshot: false });
+      expect(botRuntimeRefreshNeedsReplacement(unchanged)).toBe(false);
     } finally {
       clock.mockRestore();
     }

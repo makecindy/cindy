@@ -80,6 +80,13 @@ import {
   evictDeviceGitSafetySettings,
   prefetchDeviceGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
+import {
+  evictRemotePluginEngines,
+  hasRemotePluginEngineSubscribers,
+  markRemotePluginEnginesStale,
+  prefetchRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectAliases } from './remoteProjectAliases';
 
@@ -654,6 +661,7 @@ export function useDeviceLinkRemoteProjects(
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
+      evictRemotePluginEngines(deviceId);
     };
 
     /**
@@ -746,6 +754,13 @@ export function useDeviceLinkRemoteProjects(
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
         await prefetchDeviceGitSafetySettings(deviceId);
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
+        const hasPluginEngineTasks = remoteProjectsStore
+          .getDeviceSessions(deviceId)
+          .some((session) => isPluginEngineKind(session.agentKind));
+        if (hasPluginEngineTasks || hasRemotePluginEngineSubscribers(deviceId)) {
+          await prefetchRemotePluginEngines(deviceId);
+          if (!canBootstrap(deviceId, lifecycleEpoch)) return;
+        }
         // Bootstrap follows a gap in live pushes (start, reconnect). Read changed tasks ahead
         // so opening them shows what the list already shows; one window does it for all.
         if (windowRole === 'main') void makerChatStore.prefetchRemoteHistories(deviceId);
@@ -852,6 +867,8 @@ export function useDeviceLinkRemoteProjects(
         if (action === 'disconnect') {
           remoteProjectsStore.markDeviceDisconnected(d.deviceId);
           remoteProjectAliases.suspend(d.deviceId);
+          // 离线期间保留已读到的插件引擎图标，重连后再刷新一次。
+          markRemotePluginEnginesStale(d.deviceId);
         } else {
           remoteProjectsStore.removeDevice(d.deviceId);
           remoteProjectAliases.remove(d.deviceId);
@@ -860,6 +877,7 @@ export function useDeviceLinkRemoteProjects(
           // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
           cacheHydrationBlocked.add(d.deviceId);
           clearCachedDevice(d.deviceId);
+          evictRemotePluginEngines(d.deviceId);
         }
         evictDeviceCapabilities(d.deviceId);
         evictDeviceProviders(d.deviceId);
@@ -1500,6 +1518,7 @@ export function useDeviceLinkRemoteProjects(
           evictDeviceCapabilities(p.deviceId);
           evictDeviceProviders(p.deviceId);
           evictDeviceGitSafetySettings(p.deviceId);
+          evictRemotePluginEngines(p.deviceId);
         }
         // 本机关掉「控制这台设备」→ 盘上那份镜像缓存也要清。只清内存分片的话,下次冷启动
         // hydrateFromCache 会把这台已经明确禁用控制的设备连着它的会话画回侧边栏
@@ -1518,6 +1537,7 @@ export function useDeviceLinkRemoteProjects(
     });
 
     const offRemoval = subscribeDeviceLinkDeviceRemoval((deviceId) => {
+      revokedDevicesStore.clearRevoked(deviceId);
       // Deletion is authoritative even if the directory is unavailable or a cold read is in flight.
       directoryGeneration += 1;
       cacheHydrationBlocked.add(deviceId);
@@ -1534,6 +1554,7 @@ export function useDeviceLinkRemoteProjects(
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
+      evictRemotePluginEngines(deviceId);
     });
 
     // 冷缓存回写由「分片变更」驱动,而不是只在一次成功 refresh 之后:
@@ -1582,6 +1603,7 @@ export function useDeviceLinkRemoteProjects(
         evictDeviceCapabilities(deviceId);
         evictDeviceProviders(deviceId);
         evictDeviceGitSafetySettings(deviceId);
+        evictRemotePluginEngines(deviceId);
       }
       // 卸载可能只是关了个窗口(镜像是每渲染进程一份),盘上缓存**不动** ——
       // 只作废尚未落盘的回写,免得它把正在清空的分片写回去。

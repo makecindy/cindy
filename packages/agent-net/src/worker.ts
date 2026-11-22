@@ -58,6 +58,9 @@ function reportBuffered() {
 function snapshot() {
   const current = socket;
   if (!current) return;
+  // The socket leaves a device out of the directory it reports when a later certificate has its transport key; it still
+  // counts as a device seen on Agent-Net, and this is the only way its id gets here.
+  for (const id of current.knownPeers()) ids.add(id);
   const known = [...ids];
   const peers = known.map((id) => {
     const route = current.peerSnapshot(id);
@@ -114,5 +117,6 @@ port.on('message', (message) => {
     (error) => send({ type: 'renewed', id: message.id, code: code(error) }));
   if (message.type === 'restrict' && message.rule && typeof message.rule === 'object') { socket.restrictPeers(message.rule); snapshot(); }
   if (message.type === 'network-changed') socket.networkChanged();
+  if (message.type === 'relay-stalled') socket.relayStalled();
   if (message.type === 'close') socket.close(message.code);
 });

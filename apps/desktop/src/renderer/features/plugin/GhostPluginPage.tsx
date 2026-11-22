@@ -2298,7 +2298,7 @@ function LocalGhostPluginPage({
                   onIconLoadError={handleMarketIconLoadError} />)}
               </PluginRecommendationSlots>
             </section> : null}
-            {!query.trim() ? <><div ref={secondaryTabs} className="mt-6 h-0" /><div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
+            {!query.trim() ? <><div ref={secondaryTabs} className="mt-6 h-0" /><div className="sticky top-0 z-raised flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
               <SegmentedControl role="tablist" height={38} optionHeight={32}
                 optionClassName="plugin-management-tab min-w-[88px] px-4 text-13" value={catalogTab} onValueChange={value => {
                 setCatalogTab(value);

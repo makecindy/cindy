@@ -50,7 +50,7 @@ import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDev
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
 import { CindyDeviceRow } from './CindyDeviceRow';
-import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDeviceRoster';
+import { cindyDeviceKey, cindyDeviceOptions } from './cindyDeviceRoster';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
 import { BotDeleteDialog } from './BotDeleteDialog';
@@ -278,7 +278,7 @@ export function TeammatesSection() {
   const showCindy = hasMultipleCindys && Boolean(currentCindy);
   const visibleBots = [
     ...roster.visible.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
-    ...remoteBots.filter(bot => !hasMultipleCindys || !isCindyDeviceBot(bot)),
+    ...remoteBots.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
   ];
   // 已归档的群不在段内列出,经侧栏总搜索找回(TeammateSearchResults)。
   const visibleGroups = groups.filter(group => !group.archived);
@@ -596,6 +596,7 @@ export function TeammatesSection() {
 
       {showIconStrip && iconChats.length > 0 ? (
         // 默认收起时待处理头像全部可见；主动显示所有头像时沿用单行 +N。
+        // pl-[22px] = 列表容器 pl-3 + 行 px-2.5，与列表模式头像对齐（DESIGN.md §5 悬挂缩进）。
         <div ref={setAvatarRowElement} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed && !collapsedAvatars ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
           {(() => {
             const entries = iconChats.map((entry) => {

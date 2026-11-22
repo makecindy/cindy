@@ -162,6 +162,7 @@ import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
   setSessionsStatusInDb,
+  setSessionsSnoozeInDb,
 } from '../localDb/ipc/sessions.js';
 import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
@@ -177,7 +178,7 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
-import { createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
+import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
@@ -1109,7 +1110,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return result.ok ? { ok: true as const, sessionId, status: 'deleted' as const } : result;
         }
         try {
-          await patchSessionMetaInDb(sessionId, { status: 'deleted' }, { beforeWrite: captureTaskActionSyncGuard() });
+          const guard = captureTaskActionSyncGuard();
+          const row = await getSessionRowSnapshotStrict(sessionId);
+          await assertCurrent();
+          await patchSessionMetaInDb(sessionId, {
+            status: 'deleted', ...(row?.sideChatPromoted && { deleteTarget: 'task' as const }),
+          }, { beforeWrite: guard });
           return { ok: true as const, sessionId, status: 'deleted' as const };
         } catch (error) {
           return { ok: false as const, errorCode: isIpcError(error) ? error.code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task deletion failed.' };
@@ -1168,6 +1174,30 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
+      setSessionsSnooze: async ({ sessionIds, snoozedUntil }) => {
+        if (!tryGetDbClient()) {
+          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready', changed: [] };
+        }
+        const codeOf = (err: unknown) => isIpcError(err) && ['NOT_FOUND', 'PRECONDITION_FAILED', 'INVALID_PARAMS'].includes(err.code)
+          ? (err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : err.code) : 'INTERNAL';
+        try {
+          // Like deletion: the sync guard runs inside patch-meta, right before each write.
+          const guard = captureTaskActionSyncGuard();
+          const { changed, error } = await setSessionsSnoozeInDb(sessionIds, snoozedUntil, assertTaskActionCurrent, guard);
+          if (!error) return { ok: true, changed };
+          const index = sessionIds.indexOf(error.sessionId);
+          return {
+            ok: false, errorCode: codeOf(error.cause), changed,
+            message: error.cause instanceof Error ? error.cause.message : String(error.cause),
+            failedSessionId: error.sessionId, remainingSessionIds: sessionIds.slice(index + 1),
+          };
+        } catch (err) {
+          return { ok: false, errorCode: codeOf(err), message: err instanceof Error ? err.message : String(err), changed: [] };
+        }
+      },
+      setRemoteSessionsSnooze: deps.historyRemote
+        ? createRemoteSessionsSnoozeSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })
+        : undefined,
       listAvailableModels: async params => {
         if (params.callerSessionId && isSessionSharedTaskActive(params.callerSessionId))
           return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };

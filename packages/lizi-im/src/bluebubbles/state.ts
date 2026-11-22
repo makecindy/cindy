@@ -52,6 +52,7 @@ export class BlueBubblesReceipts {
   // A missing delivery result stays visible in health after ingress has finished correlating it.
   private readonly awaitingCorrelation = new Set<string>();
   private readonly outgoingChats = new Map<string, string>();
+  private readonly sentByChat = new Map<string, Map<string, number>>();
   private readonly unresolved = new Set<string>();
   private readonly stops = new Map<string, { sentAt: number; before: Set<string> }>();
   private readonly signatureKey?: Buffer;
@@ -78,6 +79,7 @@ export class BlueBubblesReceipts {
     for (const [id, value] of Object.entries(this.state.outbox)) {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'outbox', id, value });
       if (value.messageId) this.outgoingChats.set(value.messageId, value.chatId);
+      this.indexSent(value, 1);
       if (value.state !== 'sent' && !value.failed) {
         this.unsettledSends.add(id);
         this.awaitingCorrelation.add(id);
@@ -153,6 +155,8 @@ export class BlueBubblesReceipts {
     else {
       const next = this.snapshot(); applyBlueBubblesReceiptUpdate(next, update); this.storage.write(next);
     }
+    const previousSend = update.kind === 'outbox' && Object.hasOwn(this.state.outbox, update.id)
+      ? this.state.outbox[update.id] : undefined;
     applyBlueBubblesReceiptUpdate(this.state, update);
     if (update.kind === 'inbox') {
       if (!this.arrivalOrder.has(update.id)) this.arrivalOrder.set(update.id, this.arrivalOrder.size);
@@ -162,6 +166,8 @@ export class BlueBubblesReceipts {
       else this.unresolved.delete(update.id);
       this.indexStop(update.value.stop);
     } else if (update.kind === 'outbox') {
+      this.indexSent(previousSend, -1);
+      this.indexSent(update.value, 1);
       if (update.value.messageId) this.outgoingChats.set(update.value.messageId, update.value.chatId);
       if (update.value.state === 'sent' || update.value.failed) {
         this.unsettledSends.delete(update.id);
@@ -177,6 +183,21 @@ export class BlueBubblesReceipts {
     const previous = this.state.inbox[guid];
     if (!previous) throw new Error('BLUEBUBBLES_RECEIPT_MISSING');
     this.update({ kind: 'inbox', id: guid, value: { ...previous, state } });
+  }
+  hasSentMessage(chatId: string, messageId: string): boolean {
+    return this.sentByChat.get(chatId)?.has(messageId) === true;
+  }
+  private indexSent(row: BlueBubblesState['outbox'][string] | undefined, change: 1 | -1): void {
+    if (row?.state !== 'sent' || !row.messageId) return;
+    const messages = this.sentByChat.get(row.chatId) ?? new Map<string, number>();
+    const count = (messages.get(row.messageId) ?? 0) + change;
+    if (count > 0) {
+      messages.set(row.messageId, count);
+      this.sentByChat.set(row.chatId, messages);
+    } else {
+      messages.delete(row.messageId);
+      if (!messages.size) this.sentByChat.delete(row.chatId);
+    }
   }
   confirmedSend(id: string): string | undefined {
     const row = this.state.outbox[id];

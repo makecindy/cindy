@@ -165,6 +165,7 @@ it('reconciles late attachment, composer and keyboard measurements through the p
       historyPrependTransactionRef: ref(null),
       // Companion receipt behavior is covered by the mounted MessageRenderer tests.
       acknowledgeCompanionReadRef: ref(vi.fn()),
+      messageListVisibility: { viewportChanged() {} },
       reconcileReopeningAnchor: vi.fn(), markMobileMvcpSettle: vi.fn(),
       getTailFollower: () => follower, runStickToLatestVerify: () => follower.reconcile(),
     };

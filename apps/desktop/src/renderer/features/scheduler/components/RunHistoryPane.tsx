@@ -251,7 +251,7 @@ export function RunHistoryPane({
   return (
     <section className="flex min-w-0 flex-1 flex-col">
       {/* Pane header */}
-      <header className="flex shrink-0 items-start justify-between gap-3 px-6 pt-[18px]">
+      <header className="flex shrink-0 items-start justify-between gap-3 px-6 pt-4">
         <div className="flex min-w-0 flex-col gap-1.5">
           <h2 className="truncate text-lg font-medium text-[var(--msg-assistant-text)]">
             {s.name}
