@@ -72,6 +72,7 @@
 | `openLink({url})` | 用浏览器打开链接。只在响应用户点击时调用；是否另外提示由宿主决定 |
 | `downloadFile({contents})` | 弹「另存为」。只在执行电脑可用，先查 `getHostCapabilities()?.downloadFile` |
 | `addToComposer(app, {uri, name})` | 把本卡资源加入输入框。连接后仅在 `app.getHostCapabilities()?.experimental?.['cindy/composer-attachment']` 存在且辅助模块加载成功时显示按钮。[示例](https://github.com/makecindy/cindy/blob/main/apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-interactive-pages.md#93-加入当前任务输入框) |
+| `bindComposerAttachmentDrag(app, element, {uri, name})` | 资源拖入当前任务输入框。仅在同一能力的 `drag?.version === 1` 且模块导出该函数时绑定，换项或卸载时调用返回的解绑函数；保留按钮。 |
 | `requestDisplayMode({mode:'fullscreen'})` | 请求全屏，以返回的实际模式为准；目前只有桌面端支持 |
 | `getHostContext()` / `onhostcontextchanged` | 读 `theme`、`styles.variables`，跟随深浅色 |
 | `createSamplingMessage` | 不支持。需要 AI 时用 `sendMessage` 交回对话 |

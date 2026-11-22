@@ -21466,6 +21466,9 @@
     "actionFailed": "此插件操作未完成。請重試。"
   },
   "mcpApps": {
+    "composerDragFailed": "未能加入附件，請重新拖曳或點選「加到輸入框」。",
+    "composerAttachmentFormat": "支援圖片、PDF 與純文字，單件最多 64 MiB。",
+    "composerAttachmentBusy": "請稍後再加入附件。",
     "sharedTaskReadOnly": "此卡片僅任務擁有者可操作。",
     "retry": "重新載入",
     "loadFailed": "應用程式載入失敗。請檢查連線後重新載入。",

@@ -7,6 +7,9 @@
  */
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
+import * as cindyImport from '@/cindy-brain/importCindyFile';
+import { toast } from '@/lib/toast';
 import type { ComponentProps, ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { ProviderView } from '@cindy/model-providers';
@@ -129,13 +132,16 @@ vi.mock('@/hooks/useConnectedSource', () => ({ useConnectedSource: () => ({ hasC
 vi.mock('@/hooks/useAvailableAgents', () => ({ useAvailableAgents: () => ({ agents: [], loading: false }) }));
 vi.mock('@/hooks/useAgentCapabilities', async (original) => ({ ...await original<typeof import('@/hooks/useAgentCapabilities')>(), useAgentCapabilities: () => ({ capabilities: null, loading: false }) }));
 
+const redeemDrag = vi.fn();
 const noOp = () => {};
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api: any = new Proxy({}, { get: (_obj, key) => {
+  if (key === 'takePendingInstall') return async () => ({ filePath: null });
+  if (key === 'redeemComposerAttachmentDrag') return redeemDrag;
   if (key === 'setModel') return h.setModel;
   if (key === 'uploadChatFolder') return h.uploadChatFolder;
   if (key === 'cacheImageFromBuffer') return h.cacheImageFromBuffer;
-  if (key === 'getFilePath') return () => '/controller/docs';
+  if (key === 'getFilePath') return (file: File) => file.name === 'pack.cindy' ? '/test/pack.cindy' : '/controller/docs';
   if (key === 'listAgentSkills') return h.listAgentSkills;
   if (key === 'listAgentCommands' || key === 'listDesktopCommands') return async () => ({ success: true, commands: [] });
   if (key === 'listSync') return () => ({ ghosts: [] });
@@ -208,6 +214,55 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}, t
   const view = render(taskRoster ? <TaskComposer {...props} /> : <ChatInput {...props} />);
   return { ...view, props };
 }
+
+// Unit: the editor and outer file handlers share the same drop event. A reserved
+// MIME mixed with plain text must never insert text or fall through to addFiles.
+it('consumes a composer drag ticket before the editor and reports a rejected ticket', async () => {
+  const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+  redeemDrag.mockRejectedValueOnce(new Error('MCP_APP_COMPOSER_DRAG_INVALID'));
+  const view = renderComposer({ sessionId: 'composer-regression' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const mime = 'application/x-cindy-composer-attachment-v1';
+  const ticket = 'ab'.repeat(24);
+  fireEvent.drop(h.editor!.view.dom, { dataTransfer: {
+    types: [mime, 'text/plain'], items: [], files: [],
+    getData: (type: string) => type === mime ? ticket : 'fallback',
+  } });
+  expect(redeemDrag).toHaveBeenCalledWith({ sessionId: 'composer-regression', ticket });
+  await waitFor(() => expect(error).toHaveBeenCalledWith('mcpApps.composerDragFailed'));
+  expect(h.editor!.getText()).not.toContain('fallback');
+  expect(view.props.attachmentState.addFiles).not.toHaveBeenCalled();
+});
+
+// Integration of the window capture listener with the local composer. Its package
+// handler runs before ChatInput, so a mixed drag used to select the wrong action.
+it('keeps package, file, mention and task-link drops separate from card resources', async () => {
+  supplyRangeGeometry();
+  const open = vi.spyOn(cindyImport, 'importCindyFile').mockResolvedValue(undefined);
+  redeemDrag.mockReset().mockResolvedValue(undefined);
+  render(<GlobalDropImportListener onOpenShareImport={vi.fn()} />);
+  const view = renderComposer({ sessionId: 'composer-regression' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const target = h.editor!.view.dom.closest('[data-split-group-composer-drop-target]')!;
+  const file = new File(['test'], 'pack.cindy');
+  const drop = (values: Record<string, string>, files: File[] = []) => fireEvent.drop(target, { dataTransfer: {
+    types: [...Object.keys(values), ...(files.length ? ['Files'] : [])],
+    items: files.map(() => ({ kind: 'file' })), files, getData: (type: string) => values[type] ?? '',
+  } });
+  drop({ 'application/x-cindy-composer-attachment-v1': 'ab'.repeat(24) }, [file]);
+  expect(redeemDrag).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+  drop({}, [file]);
+  expect(open).toHaveBeenCalledOnce();
+  const local = new File(['x'], 'note.txt');
+  drop({}, [local]);
+  expect(view.props.attachmentState.addFiles).toHaveBeenCalledWith([local]);
+  drop({ 'application/x-xdmaker-composer-mention': JSON.stringify({ type: 'file', relPath: 'a.md', name: 'a.md' }) });
+  await waitFor(() => expect(target.querySelector('[data-kind="file"]')?.getAttribute('data-path')).toBe('a.md'));
+  drop({ 'application/x-cindy-session-link': 'xdt-maker://session/ee59672a-5591-48a7-a44d-aa97e3808c64' });
+  await waitFor(() => expect(target.querySelector('[data-kind="session"]')).not.toBeNull());
+  expect(redeemDrag).toHaveBeenCalledTimes(1);
+});
 
 // Unit, project-settings.md: the panel-only tests cannot catch the project
 // shortcut replacing the task picker when a local task supports both.

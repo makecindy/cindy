@@ -21751,6 +21751,9 @@
     "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
   },
   "mcpApps": {
+    "composerDragFailed": "Não foi possível adicionar o anexo. Arraste-o novamente ou selecione «Adicionar à caixa de texto».",
+    "composerAttachmentFormat": "Utilize uma imagem, um PDF ou um ficheiro de texto simples até 64 MiB.",
+    "composerAttachmentBusy": "Aguarde um momento antes de adicionar outro anexo.",
     "sharedTaskReadOnly": "Só o proprietário da sessão pode interagir com este cartão.",
     "retry": "Recarregar",
     "loadFailed": "Não foi possível carregar a aplicação. Verifique a ligação e recarregue.",

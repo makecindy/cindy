@@ -7187,6 +7187,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLocalModelInstallProgress: fanOutMakerLocalModelInstallProgress,
 
     mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    redeemComposerAttachmentDrag: (input: { sessionId: string; ticket: string }): Promise<void> =>
+      ipcRenderer.invoke('maker:redeem-composer-attachment-drag', input),
     onMcpAppComposerAttachment: (cb: (input: import('../shared/mcpApps').McpAppComposerAttachment) => void) =>
       fanOutMcpAppComposerAttachment((data) => cb(data as import('../shared/mcpApps').McpAppComposerAttachment)),
     onPluginUiAction: (callback: (input: unknown) => void) => {

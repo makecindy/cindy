@@ -28,6 +28,8 @@ declare module '@cindy/ext-apps/composer-attachment' {
   export interface ComposerAttachmentInput { uri: string; name: string }
   /** Local execution-computer only. Adds a previously granted resource to the task composer. */
   export function addToComposer(app: ConnectedApp, input: ComposerAttachmentInput): Promise<void>;
+  /** Bind after drag capability detection; unbind before replacing the resource or element. */
+  export function bindComposerAttachmentDrag(app: ConnectedApp, element: HTMLElement, input: ComposerAttachmentInput): () => void;
 }
 declare module '@cindy/ext-apps/react' {
   import type { ConnectedApp, StateUpdate, ViewStateOptions } from '@cindy/ext-apps';

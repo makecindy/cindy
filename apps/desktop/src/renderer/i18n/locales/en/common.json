@@ -21553,6 +21553,9 @@
     "actionFailed": "This plugin action could not be completed. Try again."
   },
   "mcpApps": {
+    "composerDragFailed": "Couldn’t add the attachment. Drag it again or select “Add to composer”.",
+    "composerAttachmentFormat": "Use an image, PDF or plain text file up to 64 MiB.",
+    "composerAttachmentBusy": "Please wait a moment before adding another attachment.",
     "sharedTaskReadOnly": "Only the session owner can interact with this card.",
     "retry": "Reload",
     "loadFailed": "The app could not load. Check the connection and reload.",

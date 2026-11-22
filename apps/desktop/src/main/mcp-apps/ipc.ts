@@ -2,6 +2,7 @@ import { McpAppViewSlots } from '@cindy/maker-shared/mcp-app-controller';
 import { createMcpAppsService } from './service.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
+import { supportsComposerDrag } from './composerDrag.js';
 import { createPluginFileAccess } from './pluginFileAccess.js';
 import { configurePluginAppearanceFiles } from './appearance.js';
 import { mediaTypeForLibraryPath } from '../cindy-brain/runtime/ghostFiles.js';
@@ -112,6 +113,7 @@ export function registerMcpAppsIpc(
         saving = false;
       }
     },
+    composerDrag: supportsComposerDrag(process.platform, process.versions.electron),
     hasComposerAttachment: hasComposerAttachmentInWindow,
     sendComposerAttachment: async ({ caller, sessionId, viewId, resourceKey, name, mimeType, size, bytes, assertCurrent }) => {
       if (!caller.startsWith('renderer:')) throw new Error('MCP_APP_OWNER_ONLY');
@@ -182,6 +184,21 @@ export function registerMcpAppsIpc(
     providerCalls.delete(caller);
     nativePluginUi.release(caller);
     await Promise.allSettled([host.releaseCaller(caller), remoteViews.releaseCaller(caller)]);
+  });
+  const redeemChannel = 'maker:redeem-composer-attachment-drag';
+  ipcMain.removeHandler(redeemChannel);
+  ipcMain.handle(redeemChannel, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!input || typeof input !== 'object') throwIpcError('INVALID_PARAMS', 'MCP_APP_COMPOSER_DRAG_INVALID');
+    const { sessionId, ticket } = input as Record<string, unknown>;
+    if (typeof sessionId !== 'string' || !sessionId || typeof ticket !== 'string' || ticket.length !== 48)
+      throwIpcError('INVALID_PARAMS', 'MCP_APP_COMPOSER_DRAG_INVALID');
+    try {
+      await host.redeemComposerAttachmentDrag(`renderer:${event.sender.id}`, sessionId, ticket);
+    } catch (error) {
+      const code = error instanceof Error && /^MCP_APP_[A-Z_]+$/.test(error.message) ? error.message : 'MCP_APP_COMPOSER_DRAG_INVALID';
+      throwIpcError('PRECONDITION_FAILED', code);
+    }
   });
   ipcMain.removeHandler(MCP_APPS_INVOKE);
   ipcMain.handle(MCP_APPS_INVOKE, async (event, sessionId: unknown, raw: unknown) => {

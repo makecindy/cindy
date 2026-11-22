@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ComposerDragTickets, DRAG_TICKET_METHOD, DRAG_TICKETS_INVALIDATED, invalidDragTicket } from './composerDrag.js';
 import { VIEW_STATE_KEY, VIEW_STATE_METHOD, VIEW_STATE_CAPABILITY, ViewStateWriter, viewStateError, viewStateSnapshot, type ViewStateStorage } from './viewState.js';
 import { createLogger } from '../logger.js';
 import { hostAppSdkAsset } from './hostSdk.js';
@@ -138,7 +139,7 @@ export interface McpAppsHostDeps {
   /** Desktop injects an owner-scoped vault key so revisions survive restarts. */
   revisionKey?(): string;
   viewState?(owner: object, sessionId: string, clientId: string, record: McpAppRecord): ViewStateStorage;
-  readCard(sessionId: string, clientId: string): Promise<McpAppRecord>;
+  readCard(sessionId: string, clientId: string, localComposer?: boolean): Promise<McpAppRecord>;
   writeCard(sessionId: string, clientId: string, record: McpAppRecord): Promise<void>;
   authorizeTool(
     sessionId: string,
@@ -156,6 +157,7 @@ export interface McpAppsHostDeps {
   ): Promise<void>;
   downloadFile?(input: Omit<Parameters<typeof saveAppDownload>[0], 'showSaveDialog'>): Promise<{ isError?: boolean }>;
   /** Main-owned local composer handoff. Never exposed to remote callers. */
+  composerDrag?: (sessionId: string) => boolean | Promise<boolean>;
   hasComposerAttachment?(input: { caller: string; sessionId: string; viewId: string; resourceKey: string;
     signal: AbortSignal; assertCurrent(): Promise<void> }): Promise<boolean>;
   sendComposerAttachment?(input: {
@@ -328,6 +330,7 @@ interface View {
   unlisten: (() => void)[];
   stopContext?: () => void;
   links: Map<string, { url: string; claim: () => void; resolve: (success: boolean) => void }>;
+  composerDrag?: ComposerDragTickets;
   composerAttachmentResources: Set<string>;
   composerAttachmentInFlight: boolean;
   composerAttachmentTimes: number[];
@@ -616,6 +619,8 @@ export class McpAppsHost {
         }
         config.plugin.assertCurrent(sessionId ?? undefined);
       }
+      const allowComposerDrag = caller.startsWith('renderer:') && sessionId !== null && this.deps.sendComposerAttachment &&
+        await this.deps.composerDrag?.(sessionId);
       await resourceBinding?.assertCurrent();
       if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
       // Recheck after async resource loading so simultaneous opens share the limit.
@@ -722,6 +727,7 @@ export class McpAppsHost {
         initializeState: async () => {},
         restartDocument: async () => {
           // Revoke before closing the old SDK Protocol, including its error replies.
+          view.composerDrag?.invalidate();
           view.generation++;
           view.initialized = false;
           transport.discardDocumentEvents(view.generation);
@@ -731,8 +737,11 @@ export class McpAppsHost {
           const next = view.bridge = createBridge(view.context);
           const generation = view.generation;
           await old.close();
-          if (this.views.get(viewId) === view && view.generation === generation)
-            await connectDocument(next);
+          if (this.views.get(viewId) !== view || view.generation !== generation) return;
+          await connectDocument(next);
+          // A page can initialize again without replacing the DOM or its SDK bindings.
+          if (view.composerDrag && this.views.get(viewId) === view && view.generation === generation)
+            await transport.send({ jsonrpc: '2.0', method: DRAG_TICKETS_INVALIDATED });
         },
         inputSent: false,
         resultSent: false,
@@ -740,6 +749,7 @@ export class McpAppsHost {
         unlisten: [],
         stopContext,
         links: new Map(),
+        composerDrag: allowComposerDrag ? new ComposerDragTickets() : undefined,
         composerAttachmentResources: new Set(),
         composerAttachmentInFlight: false,
         composerAttachmentTimes: [],
@@ -842,7 +852,7 @@ export class McpAppsHost {
               const experimental = {
                 ...(capabilities.experimental as Record<string, unknown> | undefined),
                 ...(!remote && sessionId !== null && this.deps.sendComposerAttachment
-                  ? { [MCP_APP_COMPOSER_ATTACHMENT_KEY]: { version: 1, maxBytes: MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES } }
+                  ? { [MCP_APP_COMPOSER_ATTACHMENT_KEY]: { version: 1, maxBytes: MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES, ...(view.composerDrag ? { drag: { version: 1 } } : {}) } }
                   : {}),
               };
               message = { ...message, result: {
@@ -863,20 +873,20 @@ export class McpAppsHost {
           async close() { scopedTransport.onclose?.(); },
         };
         view.documentTransport = scopedTransport;
-        const currentClient = async (signal: AbortSignal) => {
-          await assertCurrent();
+        const currentClient = async (signal: AbortSignal, check = assertCurrent) => {
+          await check();
           signal.throwIfAborted();
           const current = await connection.getClient(signal);
           // Reconnecting can outlive a cancellation, card clear or owner change.
-          await assertCurrent();
+          await check();
           signal.throwIfAborted();
           return current;
         };
-        const currentResult = async <T>(pending: Promise<T>, signal: AbortSignal): Promise<T> => {
+        const currentResult = async <T>(pending: Promise<T>, signal: AbortSignal, check = assertCurrent): Promise<T> => {
           const result = await pending;
           // Authorization can change while the server is working. Discard the late
           // result before AppBridge can send it; never replay the upstream request.
-          await assertCurrent();
+          await check();
           signal.throwIfAborted();
           return result;
         };
@@ -1018,76 +1028,100 @@ export class McpAppsHost {
         };
         if (!remote && sessionId !== null && this.deps.sendComposerAttachment) {
           const files = view.files;
+          const resource = (params: unknown) => {
+            if (!params || typeof params !== 'object') throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID');
+            const { uri, name, requestId } = params as Record<string, unknown>;
+            if (typeof uri !== 'string' || !composerAttachmentUriAllowed(uri) ||
+                typeof name !== 'string' || !composerAttachmentNameAllowed(name) ||
+                (requestId !== undefined && (typeof requestId !== 'string' || requestId.length > 128)))
+              throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID');
+            return { uri, name, requestId };
+          };
+          const assertGranted = (uri: string) => {
+            if (!view.composerAttachmentResources.has(uri) && !files?.hasResource(uri))
+              throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
+          };
+          const addAttachment = async ({ uri, name, requestId }: ReturnType<typeof resource>, signal: AbortSignal, check: () => Promise<void>) => {
+            await check();
+            if (requestId && (view.composerAttachmentReceipts.has(requestId) || view.composerDuplicateReceipts.has(requestId))) return {};
+            if (view.composerAttachmentInFlight) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_BUSY');
+            assertGranted(uri);
+            view.composerAttachmentInFlight = true;
+            try {
+              // Keep the identity across View remounts, without copying a resource URI into the draft.
+              const resourceKey = createHash('sha256').update(JSON.stringify([sessionId, clientId, uri])).digest('hex');
+              if (this.deps.hasComposerAttachment) {
+                const present = await this.deps.hasComposerAttachment({ caller, sessionId, viewId, resourceKey, signal, assertCurrent: check });
+                await check();
+                if (present) {
+                  if (requestId) {
+                    const receipts = view.composerDuplicateReceipts;
+                    if (receipts.size >= MAX_COMPOSER_DUPLICATE_RECEIPTS) receipts.delete(receipts.values().next().value!);
+                    receipts.add(requestId);
+                  }
+                  return {};
+                }
+              }
+              const now = Date.now();
+              view.composerAttachmentTimes = view.composerAttachmentTimes.filter(at => now - at < MCP_APP_COMPOSER_ATTACHMENT_WINDOW_MS);
+              if (view.composerAttachmentTimes.length >= MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT)
+                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT');
+              view.composerAttachmentTimes.push(now);
+              let bytes: Uint8Array;
+              let mimeType: string | undefined;
+              if (files?.hasResource(uri) && /^(?:cindy-media|library|handoff):/i.test(uri)) {
+                const info = await files.describeGranted(uri);
+                mimeType = info.mimeType;
+                const response = await files.readGranted(uri, signal);
+                if (!response.ok) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_RESOURCE_NOT_FOUND');
+                if (Number(response.headers.get('content-length')) > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
+                  throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+                bytes = new Uint8Array(await response.arrayBuffer());
+              } else {
+                const client = await currentClient(signal, check);
+                const value = await currentResult(client.readResource({ uri }, { signal }), signal, check);
+                const read = await readResourceBytes(value, uri);
+                bytes = read.bytes;
+                mimeType = read.mimeType;
+              }
+              if (bytes.byteLength < 1 || bytes.byteLength > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
+                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+              const validated = validateComposerAttachment(bytes, mimeType ?? 'application/octet-stream');
+              await check();
+              await this.deps.sendComposerAttachment!({
+                caller, sessionId, viewId, resourceKey, name, mimeType: validated.mimeType,
+                size: bytes.byteLength, bytes, assertCurrent: check,
+              });
+              await check();
+              if (requestId) view.composerAttachmentReceipts.add(requestId);
+              return {};
+            } finally {
+              view.composerAttachmentInFlight = false;
+            }
+          };
           bridge.setRequestHandler(
             z.object({ method: z.literal(MCP_APP_COMPOSER_ATTACHMENT_METHOD), params: z.unknown().optional() }),
-            async (request, extra) => {
-              await assertCurrent();
-              const params = request.params;
-              if (!params || typeof params !== 'object' || Array.isArray(params))
-                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID');
-              const uri = (params as { uri?: unknown }).uri;
-              const name = (params as { name?: unknown }).name;
-              const requestId = (params as { requestId?: unknown }).requestId;
-              if (typeof uri !== 'string' || !composerAttachmentUriAllowed(uri) ||
-                  typeof name !== 'string' || !composerAttachmentNameAllowed(name) ||
-                  (requestId !== undefined && (typeof requestId !== 'string' || requestId.length > 128)))
-                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID');
-              if (requestId && (view.composerAttachmentReceipts.has(requestId) || view.composerDuplicateReceipts.has(requestId))) return {};
-              if (view.composerAttachmentInFlight) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_BUSY');
-              if (!view.composerAttachmentResources.has(uri) && !files?.hasResource(uri))
-                throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
-              view.composerAttachmentInFlight = true;
-              try {
-                // Keep the identity across View remounts, without copying a resource URI into the draft.
-                const resourceKey = createHash('sha256').update(JSON.stringify([sessionId, clientId, uri])).digest('hex');
-                if (this.deps.hasComposerAttachment) {
-                  const present = await this.deps.hasComposerAttachment({ caller, sessionId, viewId, resourceKey, signal: extra.signal, assertCurrent });
-                  await assertCurrent();
-                  if (present) {
-                    if (requestId) {
-                      const receipts = view.composerDuplicateReceipts;
-                      if (receipts.size >= MAX_COMPOSER_DUPLICATE_RECEIPTS) receipts.delete(receipts.values().next().value!);
-                      receipts.add(requestId);
-                    }
-                    return {};
-                  }
-                }
-                const now = Date.now();
-                view.composerAttachmentTimes = view.composerAttachmentTimes.filter(at => now - at < MCP_APP_COMPOSER_ATTACHMENT_WINDOW_MS);
-                if (view.composerAttachmentTimes.length >= MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT)
-                  throw new Error('MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT');
-                view.composerAttachmentTimes.push(now);
-                let bytes: Uint8Array;
-                let mimeType: string | undefined;
-                if (files?.hasResource(uri) && /^(?:cindy-media|library|handoff):/i.test(uri)) {
-                  const info = await files.describeGranted(uri);
-                  mimeType = info.mimeType;
-                  const response = await files.readGranted(uri, extra.signal);
-                  if (!response.ok) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_RESOURCE_NOT_FOUND');
-                  if (Number(response.headers.get('content-length')) > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
-                    throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
-                  bytes = new Uint8Array(await response.arrayBuffer());
-                } else {
-                  const client = await currentClient(extra.signal);
-                  const value = await currentResult(client.readResource({ uri }, { signal: extra.signal }), extra.signal);
-                  const read = await readResourceBytes(value, uri);
-                  bytes = read.bytes;
-                  mimeType = read.mimeType;
-                }
-                if (bytes.byteLength < 1 || bytes.byteLength > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
-                  throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
-                const validated = validateComposerAttachment(bytes, mimeType ?? 'application/octet-stream');
-                await assertCurrent();
-                await this.deps.sendComposerAttachment!({
-                  caller, sessionId, viewId, resourceKey, name, mimeType: validated.mimeType,
-                  size: bytes.byteLength, bytes, assertCurrent,
-                });
-                await assertCurrent();
-                if (requestId) view.composerAttachmentReceipts.add(requestId);
-                return {};
-              } finally {
-                view.composerAttachmentInFlight = false;
-              }
+            (request, extra) => addAttachment(resource(request.params), extra.signal, assertCurrent),
+          );
+          const drag = view.composerDrag;
+          if (drag) bridge.setRequestHandler(
+            z.object({ method: z.literal(DRAG_TICKET_METHOD), params: z.unknown().optional() }),
+            async request => {
+              const { uri, name } = resource(request.params);
+              const signal = drag.signal;
+              // A suspended View must fail a drop immediately, never wait for its lease to resume.
+              const check = async () => {
+                signal.throwIfAborted();
+                if (view.composerDrag !== drag || view.closing || view.suspended || view.generation !== generation)
+                  throw invalidDragTicket();
+                await this.assertCurrentView(viewId, view, true);
+                await resourceBinding?.assertOperation?.();
+                signal.throwIfAborted();
+              };
+              drag.reserve();
+              await check();
+              assertGranted(uri);
+              return { ticket: drag.issue(() => addAttachment({ uri, name, requestId: undefined }, signal, check)) };
             },
           );
         }
@@ -1344,11 +1378,23 @@ export class McpAppsHost {
     }
   }
 
+  async redeemComposerAttachmentDrag(caller: string, sessionId: string, ticket: string): Promise<void> {
+    if (!this.deps.composerDrag || !caller.startsWith('renderer:') || !/^[a-f0-9]{48}$/.test(ticket)) throw invalidDragTicket();
+    for (const view of this.views.values()) {
+      const add = view.composerDrag?.take(ticket);
+      if (!add) continue;
+      if (view.caller !== caller || view.sessionId !== sessionId || view.owner !== this.deps.owner()) throw invalidDragTicket();
+      await add();
+      return;
+    }
+    throw invalidDragTicket();
+  }
+
   async assertViewAuthorized(caller: string, sessionId: string | null, id: string): Promise<void> {
     await this.assertCurrentView(id, this.view(caller, sessionId, id));
   }
 
-  private async assertCurrentView(id: string, view: View): Promise<void> {
+  private async assertCurrentView(id: string, view: View, localComposer?: boolean): Promise<void> {
     this.view(view.caller, view.sessionId, id);
     if (view.resourceBinding) {
       await view.resourceBinding.assertCurrent();
@@ -1357,7 +1403,7 @@ export class McpAppsHost {
     }
     if (!view.record || view.sessionId === null) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
     let latest: McpAppRecord;
-    try { latest = await this.deps.readCard(view.sessionId, view.clientId); }
+    try { latest = await this.deps.readCard(view.sessionId, view.clientId, localComposer); }
     catch (error) {
       if (this.views.get(id) !== view) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
       throw error;
@@ -1451,13 +1497,15 @@ export class McpAppsHost {
     if (!caller.startsWith('renderer:')) throw new Error('MCP_APP_OWNER_ONLY');
     const view = this.ownedView(caller, sessionId, id);
     if (view.closing || view.suspended === suspended) return;
-    if (suspended) { view.suspended = true; return; }
+    if (suspended) { view.composerDrag?.invalidate(); view.suspended = true; return; }
     view.resuming = true;
     // Revalidate before releasing any queued calls. Their normal handlers still
     // enforce current owner, revision, document generation and tool approval.
     try { await this.assertCurrentView(id, view); }
     catch (error) { await this.disposeView(id, view); throw error; }
     view.suspended = false;
+    if (view.composerDrag && view.initialized)
+      await view.transport.send({ jsonrpc: '2.0', method: DRAG_TICKETS_INVALIDATED });
     view.resumeWaiters.forEach(waiter => waiter.resolve()); view.resumeWaiters.clear();
     try {
     while (!view.suspended && !view.closing && this.views.get(id) === view && view.suspendedMessages.length) {
@@ -1487,6 +1535,10 @@ export class McpAppsHost {
     let message = JSONRPCMessageSchema.parse(input);
     if (view.closing && 'method' in message && !isViewStateSave(message)) return;
     if ((view.suspended || view.resuming) && 'method' in message) {
+      if (message.method === DRAG_TICKET_METHOD && 'id' in message) {
+        await view.transport.send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'MCP_APP_COMPOSER_DRAG_INVALID' } });
+        return;
+      }
       // Queue before any card/database read or SDK handler. A hostile page cannot
       // retain an unbounded number of RPC bodies during its five-second lease.
       const serialized = JSON.stringify(message);
@@ -1646,6 +1698,8 @@ export class McpAppsHost {
     alreadyNotified = false,
   ): Promise<void> {
     const view = this.view(caller, sessionId, id);
+    view.composerDrag?.invalidate();
+    view.composerDrag = undefined;
     const deadline = Date.now() + 1_000;
     let finalSave: JSONRPCMessage | undefined;
     let saved: Promise<void> | undefined;
@@ -1709,6 +1763,8 @@ export class McpAppsHost {
 
   private async disposeView(id: string, view: View, notify?: true | 'MCP_PLUGIN_UNAVAILABLE'): Promise<void> {
     if (this.views.get(id) !== view) return;
+    view.composerDrag?.invalidate();
+    view.composerDrag = undefined;
     if (notify && view.initialized && !view.suspended) {
       try {
         await view.bridge.teardownResource({}, { timeout: 1_000 });

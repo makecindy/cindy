@@ -32,6 +32,8 @@ const state = vi.hoisted(() => ({
   broadcast: vi.fn(),
   create: vi.fn(),
   trusted: vi.fn(),
+  redeem: vi.fn(),
+  handleDrop: undefined as undefined | ((event: unknown, payload: unknown) => Promise<void>),
   invoke: vi.fn(),
   open: vi.fn(),
   dispatch: vi.fn(),
@@ -48,7 +50,8 @@ vi.mock('electron', () => ({
   ipcMain: {
     removeHandler: vi.fn(),
     handle: (_name: string, handler: typeof state.handle) => {
-      state.handle = handler;
+      if (_name === 'maker:redeem-composer-attachment-drag') state.handleDrop = handler as typeof state.handleDrop;
+      else state.handle = handler;
     },
   },
   shell: { openExternal: vi.fn() },
@@ -63,6 +66,7 @@ vi.mock('../host.js', () => ({
   appServerRevision: (config: unknown) => JSON.stringify(config),
   validateComposerAttachment: (_bytes: Uint8Array, mimeType: string) => ({ category: 'text', mimeType }),
   McpAppsHost: class {
+    redeemComposerAttachmentDrag = state.redeem;
     open = state.open;
     dispatch = state.dispatch;
     callPluginAction = state.action;
@@ -182,6 +186,18 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // Unit: the AppBridge tests bypass Electron. A subframe calling the drop IPC
+  // must fail before any ticket lookup, and only Electron supplies the window ID.
+  it('binds drag redemption to the trusted top-level IPC sender', async () => {
+    const payload = { sessionId: 'task', ticket: 'ab'.repeat(24), caller: 'renderer:9' };
+    const event = { sender: { id: 7 } };
+    state.trusted.mockImplementationOnce(() => { throw new Error('untrusted frame'); });
+    await expect(state.handleDrop!(event, payload)).rejects.toThrow('untrusted frame');
+    expect(state.redeem).not.toHaveBeenCalled();
+    await state.handleDrop!(event, payload);
+    expect(state.redeem).toHaveBeenCalledWith('renderer:7', 'task', payload.ticket);
+  });
+
   // Tier: unit at the production Main IPC boundary. A local MCP App resource
   // must be staged and delivered back to the renderer, using the same owner
   // identity as the active DB snapshot. The previous code read a nonexistent

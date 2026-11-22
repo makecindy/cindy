@@ -80,7 +80,7 @@ sendMessage 消息仍会继续发送；不要因旧页面未收到回执而重�
 | --- | --- |
 | callServerTool | 调页面可见的本插件工具；检查 isError 和 Promise 拒绝 |
 | getHostContext / onhostcontextchanged | 初始主题、样式、尺寸约束及后续变化；回调中重新读取完整 context |
-| getHostCapabilities | 连接后检查可选能力，如 `downloadFile` 和[「加到输入框」](../../plugin-interactive-pages.md#93-加入当前任务输入框)所需的 `experimental['cindy/composer-attachment']` |
+| getHostCapabilities | 连接后检查可选能力，如 `downloadFile` 和[「加到输入框」](../../plugin-interactive-pages.md#93-加入当前任务输入框)所需的 `experimental['cindy/composer-attachment']`；资源可拖还要检查其中的 `drag?.version === 1` |
 | sendMessage | 向对话发送用户可见内容；只由明确点击触发，不用来隐藏执行写操作 |
 | updateModelContext | 提交需要 AI 了解的精简上下文，不触发完整页面重新生成 |
 | openLink | 打开外部链接，只在响应用户点击时调用；是否另外提示由宿主决定；不当宿主鉴权接口 |

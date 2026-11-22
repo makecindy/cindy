@@ -1,3 +1,4 @@
+import { isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { useAlternateDraftModel } from './alternateDraftModel';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
@@ -7782,20 +7783,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         // - 纯文件夹**不消费**,留给窗口级兜底(拖文件夹 = 设为工作目录的既有行为)。
         // ChatInput 自己的 onDrop 有 stopPropagation,落在输入框上不会到这里。
         onDragEnter={(e) => {
+          if (isComposerAttachmentDrag(e.dataTransfer)) return;
           e.preventDefault();
           pageDragCounterRef.current += 1;
           if (pageDragCounterRef.current === 1) setPageDragOver(true);
         }}
         onDragLeave={(e) => {
+          if (isComposerAttachmentDrag(e.dataTransfer)) return;
           e.preventDefault();
           if (pageDragCounterRef.current > 0) pageDragCounterRef.current -= 1;
           if (pageDragCounterRef.current === 0) setPageDragOver(false);
         }}
         onDragOver={(e) => {
+          if (isComposerAttachmentDrag(e.dataTransfer)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
         }}
         onDrop={(e) => {
+          if (isComposerAttachmentDrag(e.dataTransfer)) return;
           pageDragCounterRef.current = 0;
           setPageDragOver(false);
           // .cindy / .cshare 已被窗口级 capture 接管(装入 / 导入链路),不当附件消费。

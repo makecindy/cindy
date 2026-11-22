@@ -144,6 +144,7 @@ async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p
   sendMessage?: McpAppsHostDeps['sendMessage'];
   attachments?: boolean;
   composer?: boolean;
+  composerDrag?: boolean;
   hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
   sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
   pluginFileSize?: number;
@@ -230,6 +231,7 @@ async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p
         }),
       },
     } : {}),
+    composerDrag: options.composerDrag ? () => true : undefined,
     hasComposerAttachment: options.hasComposerAttachment,
     ...(options.sendComposerAttachment ? { sendComposerAttachment: options.sendComposerAttachment } : {}),
     connection: () => connection,
@@ -370,6 +372,82 @@ describe('MCP App upstream result authorization', () => {
       await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, error: expect.anything() })));
     }
     expect(sendComposerAttachment).not.toHaveBeenCalled();
+  });
+
+  // Unit: the button tests cannot catch a drag ticket escaping its original View
+  // or being redeemed twice. Exercise AppBridge issuance and the local drop entry.
+  it('redeems a drag ticket once in its task and window and shares button deduplication', async () => {
+    let present = false;
+    const send = vi.fn(async () => { present = true; });
+    const f = await fixture('renderer:1', true, undefined, { composerDrag: true, attachments: true,
+      sendComposerAttachment: send, hasComposerAttachment: async () => present });
+    const params = { uri: 'library:fixture.txt', name: 'fixture.txt' };
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/drag-ticket', params });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({
+      id: 2, result: { ticket: expect.stringMatching(/^[a-f0-9]{32,}$/) },
+    })), { interval: 1 });
+    const reply = f.outgoing.find(m => 'id' in m && m.id === 2);
+    const ticket = (reply && 'result' in reply ? reply.result.ticket : '') as string;
+    const redeem = () => f.host.redeemComposerAttachmentDrag('renderer:1', 'task', ticket);
+    expect(send).not.toHaveBeenCalled();
+    const results = await Promise.allSettled([redeem(), redeem()]);
+    expect(results.map(r => r.status)).toEqual(['fulfilled', 'rejected']);
+    await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'cindy/composer-attachment/add', params });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 3, result: {} })), { interval: 1 });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['expired', 'wrong-window', 'wrong-task', 'suspend-resume', 'reinitialize', 'close', 'revoked', 'read-quota'] as const)(
+    'rejects a drag ticket after %s', async reason => {
+      const send = vi.fn(async () => {});
+      const f = await fixture('renderer:1', true, undefined, { composerDrag: true, attachments: true, sendComposerAttachment: send });
+      const params = { uri: 'library:fixture.txt', name: 'fixture.txt' };
+      const now = vi.spyOn(performance, 'now').mockReturnValue(100);
+      await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/drag-ticket', params });
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({
+        id: 2, result: { ticket: expect.any(String) },
+      })), { interval: 1 });
+      const reply = f.outgoing.find(m => 'id' in m && m.id === 2);
+      const ticket = (reply && 'result' in reply ? reply.result.ticket : '') as string;
+      if (reason === 'expired') now.mockReturnValue(30_100);
+      if (reason === 'wrong-window' || reason === 'wrong-task')
+        await expect(f.host.redeemComposerAttachmentDrag(reason === 'wrong-window' ? 'renderer:2' : 'renderer:1',
+          reason === 'wrong-task' ? 'other' : 'task', ticket)).rejects.toThrow();
+      if (reason === 'suspend-resume') {
+        await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+        await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+      }
+      if (reason === 'reinitialize') await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'ui/initialize',
+        params: { protocolVersion: '2026-01-26', appInfo: { name: 'next', version: '1' }, appCapabilities: {} } });
+      if (reason === 'reinitialize' || reason === 'suspend-resume')
+        expect((await f.poll(0)).map(event => event.message)).toContainEqual(expect.objectContaining({
+          method: 'cindy/composer-attachment/tickets-invalidated',
+        }));
+      if (reason === 'close') await f.host.releaseCaller('renderer:1');
+      if (reason === 'revoked') f.revoke('server');
+      if (reason === 'read-quota') {
+        for (let id = 3; id < 13; id++) {
+          await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/add', params });
+          await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, result: {} })), { interval: 1 });
+        }
+      }
+      await expect(f.host.redeemComposerAttachmentDrag('renderer:1', 'task', ticket)).rejects.toThrow();
+      expect(send).toHaveBeenCalledTimes(reason === 'read-quota' ? 10 : 0);
+    });
+
+  it('issues only previously granted resources within a separate drag preparation budget', async () => {
+    const send = vi.fn(async () => {});
+    const f = await fixture('renderer:1', true, undefined, { composerDrag: true, attachments: true, sendComposerAttachment: send });
+    const params = { uri: 'library:fixture.txt', name: 'fixture.txt' };
+    for (let id = 2; id <= 62; id++) {
+      const uri = id === 2 ? 'library:other-card' : params.uri;
+      await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/drag-ticket', params: { ...params, uri } });
+      const result = id === 2 || id === 62 ? { error: expect.anything() } : { result: { ticket: expect.any(String) } };
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, ...result })), { interval: 1 });
+    }
+    expect(send).not.toHaveBeenCalled();
+    await f.dispatch({ jsonrpc: '2.0', id: 63, method: 'cindy/composer-attachment/add', params });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { interval: 1 });
   });
 
   it('allows only one in-flight composer read per View', async () => {

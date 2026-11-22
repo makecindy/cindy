@@ -29,6 +29,7 @@ export interface McpAppsServicePorts {
   send: McpAppsHostDeps['sendMessage'];
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
+  composerDrag?: boolean;
   hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
   sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
   disposeDocument?: McpAppsHostDeps['disposeDocument'];
@@ -51,6 +52,7 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
   };
   const host = new McpAppsHost({
     downloadFile: ports.downloadFile,
+    composerDrag: ports.composerDrag ? async sessionId => !(await assertSession(sessionId)).session.remoteHostId : undefined,
     hasComposerAttachment: ports.hasComposerAttachment,
     sendComposerAttachment: ports.sendComposerAttachment,
     pluginFiles: ports.pluginFiles,
@@ -73,8 +75,9 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
         config.plugin?.assertCurrent(sessionId);
       });
     },
-    readCard: async (sessionId, clientId) => {
+    readCard: async (sessionId, clientId, localComposer) => {
       const { owner, session } = await assertSession(sessionId);
+      if (localComposer && session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
       const [row] = await owner.client.drizzle
         .select({ content: messages.content, meta: messages.agentMeta })
         .from(messages)

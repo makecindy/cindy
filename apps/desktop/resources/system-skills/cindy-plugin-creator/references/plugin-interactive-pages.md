@@ -404,9 +404,17 @@ if (app.getHostCapabilities()?.experimental?.['cindy/composer-attachment']) {
       catch { button.textContent = '添加失败，重试'; }
     });
     button.hidden = false;
+    if (app.getHostCapabilities().experimental['cindy/composer-attachment'].drag?.version === 1 &&
+        typeof helper.bindComposerAttachmentDrag === 'function') {
+      const unbind = helper.bindComposerAttachmentDrag(app, preview, { uri: link.uri, name: link.name });
+      // 换资源或卸载时解除绑定，避免继续拖出上一项。
+      cleanup.push(unbind);
+    }
   }
 }
 ```
+
+`preview` 是资源对应的元素，`cleanup` 是页面卸载时逐一调用的清理函数列表。拖到同一窗口、同一任务的可写输入框后，资源会加入附件栏。按钮同时保留，便于键盘操作或在拖拽不可用时添加。宿主按平台提供拖拽，作者应单独检查 `drag.version`。不要自己往拖动数据里写文件路径、URI 或文本回退。
 
 `link` 取自本卡片的输入、结果或本页已批准的工具结果。传资源的 URI 和文件名即可，宿主会从插件服务读取并检查内容。
 支持图片、PDF 和纯文本，单件最多 64 MiB。文件内容、本地路径及 `file:`、HTTP、`ui://` 地址均不能作为附件 URI。

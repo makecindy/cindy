@@ -402,7 +402,7 @@ import {
   type BuiltInSkillDraftIntent,
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
-import { consumeComposerMentionDrop } from '@/lib/composerDrop';
+import { consumeComposerMentionDrop, isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { hasSplitGroupSessionType } from './splitGroupDnd';
 import { splitGroupStore } from './splitGroupStore';
 import {
@@ -6307,7 +6307,7 @@ function CCAgentSessionContent({
         data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           if (cindyMakeInputLocked) return;
@@ -6315,20 +6315,20 @@ function CCAgentSessionContent({
           if (dragCounterRef.current === 1) setIsDragOver(true);
         }}
         onDragOver={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = cindyMakeInputLocked ? 'none' : 'copy';
         }}
         onDragLeave={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current -= 1;
           if (dragCounterRef.current === 0) setIsDragOver(false);
         }}
         onDrop={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current = 0;
