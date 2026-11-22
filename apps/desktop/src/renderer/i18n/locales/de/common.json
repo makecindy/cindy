@@ -1177,7 +1177,7 @@
     "title": "Remotedesktop",
     "allow": "Remotedesktop erlauben",
     "allowHint": "Erlaube deinen angemeldeten Geräten, alle Apps auf diesem Computer anzuzeigen und zu bedienen. Aktiviere oben auch die Gerätesteuerung.",
-    "permissionHint": "Erlaube auf dem Computer in den Systemeinstellungen die Bildschirmaufnahme und die Bedienungshilfen und stelle dann die Verbindung erneut her.",
+    "permissionHint": "Erlaube auf dem Computer in den Systemeinstellungen die Bildschirmaufnahme und die Bedienungshilfen und stelle dann die Verbindung erneut her. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“.",
     "inputUnsupported": "Die aktuelle Desktopumgebung dieses Computers unterstützt die Fernsteuerung von Tastatur und Maus in Cindy nicht.",
     "controlUnavailable": "Die Fernsteuerung von Tastatur und Maus ist vorübergehend nicht verfügbar. Verbinde dich erneut, um es noch einmal zu versuchen.",
     "beingControlled": "Dein Desktop wird gesteuert",
@@ -1294,7 +1294,7 @@
     "privacyScreen": "Sichtschutz während der Verbindung",
     "privacyScreenHint": "Verdeckt den Bildschirm dieses Computers während der Fernsteuerung. Klickt jemand am Computer oder drückt eine Taste, wird zuerst gefragt, ob die Verbindung getrennt werden soll.",
     "privacyActive": "Der Sichtschutz ist aktiv. Klickt jemand am Computer oder drückt eine Taste, wird zuerst gefragt, ob die Verbindung getrennt werden soll.",
-    "privacyFailed": "Der Sichtschutz konnte nicht aktiviert werden. Der Bildschirm des Computers ist möglicherweise noch sichtbar.",
+    "privacyFailed": "Der Sichtschutz konnte nicht aktiviert werden. Der Bildschirm des Computers ist möglicherweise noch sichtbar. Ist der ferngesteuerte Computer ein Mac, prüfe dort die Steuerungsberechtigung der laufenden Cindy-App.",
     "hostMute": "Gesteuerten Computer stummschalten",
     "hostMuteHint": "Gesteuerten Computer während der Verbindung stummschalten",
     "hostMuteFailed": "Stummschaltung des gesteuerten Computers konnte nicht geändert werden",
@@ -1324,7 +1324,7 @@
     "credentialSigningRequired": "Dem Mac-Entwicklungsbuild fehlt die Signaturkonfiguration. Starte Cindy auf dem Mac mit eingerichteter Signatur neu und versuche es erneut.",
     "credentialPasswordRejected": "Das Mac-Anmeldepasswort wurde nicht akzeptiert. Gib es erneut ein.",
     "credentialIdentityChanged": "Die Computeridentität konnte nicht überprüft werden. An ein nicht verifiziertes Gerät wurde kein Passwort gesendet.",
-    "credentialAccessibilityRequired": "Erlaube Cindy auf dem Mac unter Systemeinstellungen → Datenschutz & Sicherheit → Bedienungshilfen den Zugriff und verbinde dich erneut.",
+    "credentialAccessibilityRequired": "Prüfe auf dem Mac die Steuerungsberechtigung für die laufende Cindy-App und stelle die Verbindung erneut her. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“.",
     "credentialUnlockUnavailable": "Dieser Mac konnte nicht sicher entsperrt werden. Wähle dein Konto auf seinem Sperrbildschirm aus und verbinde dich erneut. Falls es weiterhin fehlschlägt, entsperre den Mac vor Ort.",
     "disconnecting": "Verbindung wird getrennt…",
     "loadingDisplayModes": "Auflösungen werden geladen…",
@@ -2502,7 +2502,7 @@
         "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt.",
         "preview": "Jetzt ausprobieren",
         "previewStarting": "Lass Maus und Tastatur los. In 3 Sekunden erscheint der Sichtschutz; leg den Finger auf {{biometry}}, um zurückzukommen (solange die Systemabfrage zu sehen ist), oder drücke eine beliebige Taste zum Sperren.",
-        "previewUnavailable": "Der Sichtschutz konnte nicht angezeigt werden. Starte Cindy neu und versuche es erneut.",
+        "previewUnavailable": "Der Sichtschutz konnte nicht aktiviert werden. Der Bildschirm des Computers ist möglicherweise noch sichtbar.",
         "delay": {
           "30": "30 s",
           "60": "1 Min.",
@@ -2513,7 +2513,10 @@
           "system": "System"
         },
         "hintWindows": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Windows Hello oder deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
-        "hintLinux": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer."
+        "hintLinux": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
+        "permissionMissing": "Der Sichtschutz ist aus. Cindy benötigt die Berechtigung, den Mac bei einem Klick oder Tastendruck zu sperren.",
+        "checkFailed": "Cindy konnte die Berechtigung für den Sichtschutz auf diesem Computer nicht prüfen.",
+        "saveFailed": "Die Einstellung für den Sichtschutz konnte nicht gespeichert werden."
       }
     },
     "agentIsland": {
@@ -14373,6 +14376,8 @@
       "regionAria": "Warteschlange ausstehender Nachrichten",
       "listAria": "Nachrichten in der Warteschlange",
       "pausedFooter": "Aufgabe gestoppt, Warteschlange pausiert",
+
+      "steerUnsupportedNotice": "Diese Engine unterstützt kein Einbringen. Nachrichten in der Warteschlange werden nach der aktuellen Runde gesendet.",
       "resumeAction": "Senden fortsetzen",
       "resumeAria": "Nachrichten aus der Warteschlange weiter senden",
       "showMore_one": "{{count}} weitere",
@@ -18577,7 +18582,7 @@
       "expired": "Eingabeübergabe wegen zu langer Wartezeit beendet."
     },
     "failure": {
-      "permission": "Cindy kann den Bildschirm dieses Computers nicht lesen. Erlaube Cindy den Zugriff unter „Bedienungshilfen“ in den Systemeinstellungen.",
+      "permission": "Cindy kann die Oberfläche auf diesem Mac nicht lesen. Prüfe die Steuerungsberechtigung für die laufende Cindy-App. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“.",
       "target_gone": "Das Zielfenster wurde geschlossen.",
       "unreadable": "Dieser Bildschirm kann nicht gelesen werden. Du kannst den Schritt auf dem Host-Computer abschließen und dann an den Agent zurückgeben.",
       "action_failed": "Diese Aktion hatte keine Wirkung. Prüfe den Bildschirm und versuche es erneut.",
@@ -22551,5 +22556,10 @@
       "auto": "Automatische Prüfung",
       "bypassPermissions": "Vollzugriff"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "Wähle in „System & App Protection Override“ {{app}} und klicke rechts auf ⓘ. Fehlt die App, füge die laufende Kopie mit + hinzu.",
+    "review": "$t(macControlPermission.selectApp)\nFalls angeboten, lässt sich die Kontrolle auf ausgewählte Apps beschränken. Vollständige Kontrolle erlaubt Zugriff auf alle Apps und Daten. Wenn du zustimmst, lies und bestätige jeden Punkt und erlaube den Zugriff unten im Fenster."
   }
 }

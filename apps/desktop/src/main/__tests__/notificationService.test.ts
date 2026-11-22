@@ -488,12 +488,22 @@ describe('notificationService — channels 分发', () => {
   });
 
   it('同步并校验 renderer 持久化的桌面通知总开关', async () => {
-    const { getDesktopNotificationsEnabled, initNotificationService } = await freshService();
+    const { getDesktopNotificationsEnabled, initNotificationService, showPrivacyScreenNotification } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
     const handler = registeredHandlers.get('notification:set-desktop-enabled');
     expect(handler).toBeDefined();
 
+    // Background cover failures follow the same preference. Only a notification
+    // click opens the local privacy settings, never the automatic retry itself.
+    const openSettings = vi.fn();
+    showPrivacyScreenNotification('Privacy screen', 'Control permission required', openSettings);
+    expect(notificationCtor).toHaveBeenCalledExactlyOnceWith({ title: 'Privacy screen', body: 'Control permission required' });
+    expect(openSettings).not.toHaveBeenCalled();
+    notificationClicks[0]!();
+    expect(openSettings).toHaveBeenCalledOnce();
     await handler?.({}, false);
+    showPrivacyScreenNotification('Privacy screen', 'Cover failed', openSettings);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(getDesktopNotificationsEnabled()).toBe(false);
     expect(() => handler?.({}, 'false')).toThrow(
       'notification desktop enabled must be a boolean',

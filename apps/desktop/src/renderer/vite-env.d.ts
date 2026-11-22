@@ -1228,6 +1228,8 @@ interface ElectronAPI {
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) => () => void;
   osRelease: string;
+  /** Running application bundle name as it appears in a macOS file picker. */
+  macPermissionAppName?: string;
   appVersion: string;
   /** 当前进程是否经 ARM64 转译运行(Apple 芯片上的 Intel 包)。 */
   getArm64Translation?: () => Promise<boolean>;

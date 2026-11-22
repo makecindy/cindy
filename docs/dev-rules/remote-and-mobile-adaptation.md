@@ -7,6 +7,32 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 手机 Agent-Net 冷启动并行与前台直连快恢复（2026-11-22）
+
+手机 `openMobileAgentNetSocket` 在官方网络下将 `/api/device-link/devices` 准入列表预取（3 秒上限）
+与本机 IP 读取提前到与 Keystore 身份准备并行启动，仍在 `AgentNetSocket.openWithBindings` 接收或
+拨出任何连接前收口 `peerRule`，不放宽已移除设备的拒绝边界。后台挂起再回前台时，仅在本进程内存保留
+上一条已通过加密握手验证的对端 UDP 直连地址；当本机局域网 IP 未变且存在缓存目录时，先以
+`deferRelay: true` 和 350 毫秒短预算直拨该候选，中转 WebSocket 与中转 UDP 注册在后台并行完成。
+私网记忆地址不落盘，物理切网（`routeChanged`）、本机 IP 变化、退出账号、切换自建中转或修改偏好时立即清空。
+
+`AgentNetSocket` 在对端首拨或初始 `openingRelay` 尚未结算前，不再提前投递 `presence-changed { online: false }`
+污染 `peerOfflineGate`；确认目录离线或首拨失败后才发出离线事件。`canConnectSession` 供手机会话层识别
+正在首拨／等待初始中转握手的 V2 对端，既有 `supports()` 语义保持不变。`PortableUplink` 对齐桌面端发送队列：
+仅在运行时提供数值型 `ws.bufferedAmount` 时启用排空监测（React Native 自带 `WebSocket` 该字段为 `undefined`，按 `0` 处理避免误拦截发包），
+持续 1 秒未排空时丢弃新中转封装包，持续 45 秒未排空且无入站排空时主动关闭半开连接交由 `AgentNetSocket` 重连，
+不向旧版中转发送非 `presence` 文本心跳帧（旧中转会以 `1008 invalid control` 断开）。手机初始中转握手失败且未开「仅使用加密连接」时，
+通过一次 `/directory` 校验是否属 401/403 身份撤销（`mobileAgentNetIdentityRefused`），被拒时关闭缓存虚活连接回退到 Device Link，
+纯网络离线（`status: 0`）仍保留缓存直连模式。
+
+故障半径：① 失效记忆候选（对端重启换端口）或单条半开中转 WebSocket 属于单路径传输层陈旧状态，不等于账号或对端离线；
+② 失效记忆候选仅在 350 毫秒后退役该对端候选并回退当前中转重拨，半开 WebSocket 仅替换中转上行连接，不关闭已建立的直连加密通道、不重放业务写操作；
+③ 多对端拓扑下 `c-stale` 回退中转与 `e-fail` 首拨失败互不波及已直连的 `b-live`，未启用 Agent-Net、旧版 Device Link 与未升级自建中转行为完全不变。
+
+实现与回归：`packages/agent-net/src/{portableSocket,portableClient,nativeTransport}.ts`、
+`apps/mobile/src/device-link/agentNetRuntime.ts`，以及 `portableSocket.test.ts`、`portableClient.test.ts`、
+`nativeTransport.test.ts`、`agentNetRuntime.test.ts`。
+
 ## 手机首次建链失败与中继累计确认滞后（2026-11-21）
 
 Agent-Net 名册报告同账号设备在线时，负责先拨号的一端如果首次握手失败，复用该对端已有的退避重拨。
@@ -1426,6 +1452,26 @@ JS 线程上要做的事比 Device Link 多，CPU 一慢就显出来。沿一个
 量到、还没做的（都在手机 JS 与原生层之间，CPU 低频时）：过桥本身，写入和轮询各 3–4 毫秒（异步调用来回各切一次线程）；应答到了以后
 还要再过一次桥去取；字节以 base64 文本过桥，2 KB 的回包在 JS 里解码 3.8 毫秒，随大小线性增长（会话层方案 v2-4 的二进制桥）。
 三项都要改原生模块。
+
+2026-11-22 做了这三项（要新安装包）。原生库报告 `binary-io` 时，JS 和引擎之间多一个 `io` 调用（`cindy_agent_net_io`；Android、iOS 的
+`CindyAgentNetModule.io` 各一份），`nativeTransport.ts` 的 `exchange` 与 `restBinary` 用它：
+
+- 字节不转 base64、不进 JSON。一帧是「4 字节头长＋小 JSON 头＋原始字节」，头里只写每段多长；读回的结果也一样，流数据和要经中转
+  WebSocket 发的包原样跟在头后面（`engine.rs` 的 `io`、`take_blobs`）。
+- 一轮的写入、中转转来的包和读取合成一次调用：要发数据时过一次桥写完并读回。
+- 等待的那次调用把引擎随后读到的东西一并带回：应答到了只过一次桥，原来是等待返回、再 `poll` 一来一回，共三次。
+- 同一时刻只有一次调用在读。等待的调用在外时，写入走另一次不读的 `io`；写完引擎若有东西要给 JS（比如要经中转 WebSocket 发的包），
+  叫醒等待的那次（`kick`）。JS 还有没写完的字节或拨号在等时，同步的 `kick` 让等待的调用立刻回来，不等它的 250 毫秒。
+  等待的调用回来时若正有一轮在跑，它读到的东西先放着，那一轮在自己的调用之后、处理自己读到的东西之前先交出，顺序不乱。
+- 引擎只收下一部分时，剩下的从断点接着发；这条流之后每轮只给一块，收下一整块才恢复，满了的流不会每轮带半兆字节过桥再被拒。
+- 等待的调用失败时，引擎可能已经交出了读到的东西而 JS 没拿到：传输层直接关掉、由 socket 重连，不带着缺口继续。
+- 旧安装包（原生库没有 `binary-io`）、新安装包配旧 JS、原生库报告了 `binary-io` 而 App 模块没有 `io`，都照旧走 `command`。不改 wire。
+
+真机（Redmi K40，办公室 Wi-Fi，同一安装包同一进程里交替用新旧两种桥，4 轮，每轮每档 20 次的中位数；毫秒）：
+直连电脑 1 KB 18.7 / 21.9 / 17.6 / 18.8 → 14.6 / 15.5 / 16.7 / 16.6，16 KB 44.5 / 45.1 / 29.1 / 36.9 → 17.0 / 17.5 / 17.1 / 15.6，
+128 KB 60.5 / 69.3 / 69.6 / 65.7 → 29.2 / 33.5 / 42.9 / 31.2；经中转 1 KB 20.2 / 16.1 / 17.5 / 19.6 → 13.1 / 12.8 / 20.2 / 17.9，
+16 KB 43.1 / 32.4 / 27.7 / 36.0 → 19.1 / 17.6 / 17.2 / 18.6，128 KB 67.1 / 60.0 / 66.2 / 64.3 → 56.5 / 52.4 / 51.2 / 34.1。
+回包越大差得越多：16 KB 以上直连快一倍多，经中转的 128 KB 受中转本身限制。
 
 手机每次建立 Agent-Net 连接（冷启动、在后台超过 10 秒后回到前台）的两处等待（2026-11-21，带计时日志的真机时间线）：
 

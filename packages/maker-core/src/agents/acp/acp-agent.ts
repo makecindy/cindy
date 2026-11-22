@@ -89,6 +89,7 @@ const NO_INIT = buildAcpCapabilities(
       sessionCapabilities: { resume: false, close: false, list: false },
     },
     authMethods: [],
+    steering: false,
   },
   [],
 );

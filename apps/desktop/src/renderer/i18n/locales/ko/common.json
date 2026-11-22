@@ -1165,7 +1165,7 @@
     "title": "원격 데스크톱",
     "allow": "원격 데스크톱 허용",
     "allowHint": "같은 계정의 기기에서 이 컴퓨터의 모든 앱을 보고 조작하도록 허용합니다. 위의 기기 제어도 켜주세요.",
-    "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요.",
+    "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
     "inputUnsupported": "이 컴퓨터의 현재 데스크톱 환경에서는 Cindy를 통한 원격 키보드 및 마우스 제어가 지원되지 않습니다.",
     "controlUnavailable": "원격 키보드 및 마우스 제어를 일시적으로 사용할 수 없습니다. 다시 연결해 주세요.",
     "beingControlled": "데스크톱을 원격으로 제어 중",
@@ -1282,7 +1282,7 @@
     "privacyScreen": "연결 중 프라이버시 화면 사용",
     "privacyScreenHint": "원격 제어 중 이 컴퓨터의 화면을 가립니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
     "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
-    "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
+    "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다. 원격 컴퓨터가 Mac인 경우 해당 Mac에서 실행 중인 Cindy의 제어 권한을 확인하세요.",
     "hostMute": "원격 컴퓨터 음소거",
     "hostMuteHint": "연결 중 원격 컴퓨터의 소리를 음소거합니다",
     "hostMuteFailed": "원격 컴퓨터의 음소거 상태를 변경할 수 없습니다",
@@ -1311,7 +1311,7 @@
     "credentialSigningRequired": "Mac 개발 버전에 서명 설정이 없습니다. Mac에서 서명을 설정하고 Cindy를 다시 시작한 후 다시 시도해 주세요.",
     "credentialPasswordRejected": "Mac 로그인 암호를 확인하지 못했습니다. 다시 입력해 주세요.",
     "credentialIdentityChanged": "컴퓨터의 신원을 확인할 수 없습니다. 확인되지 않은 기기로 암호를 보내지 않습니다.",
-    "credentialAccessibilityRequired": "Mac의 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 Cindy를 허용한 후 다시 연결하세요.",
+    "credentialAccessibilityRequired": "Mac에서 실행 중인 Cindy의 제어 권한을 확인한 뒤 다시 연결하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
     "credentialUnlockUnavailable": "이 Mac의 잠금을 안전하게 해제하지 못했습니다. 잠금 화면에서 본인 계정을 선택한 후 다시 연결하세요. 계속 실패하면 Mac에서 직접 잠금을 해제하세요.",
     "disconnecting": "연결 끊는 중…",
     "loadingDisplayModes": "해상도 불러오는 중…",
@@ -2472,7 +2472,7 @@
         "permission": "누군가 이 Mac을 건드릴 때 즉시 잠그려면 '시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용'에서 Cindy를 허용하세요. 허용하기 전에는 평소처럼 화면이 꺼지고 잠깁니다.",
         "preview": "지금 사용해 보기",
         "previewStarting": "마우스와 키보드에서 손을 떼세요. 3초 뒤 프라이버시 화면이 나타납니다. 시스템 확인 창이 떠 있으면 {{biometry}}에 손가락을 대면 돌아오고, 아무 키나 누르면 잠깁니다.",
-        "previewUnavailable": "프라이버시 화면을 표시할 수 없습니다. Cindy를 다시 시작한 뒤 다시 시도하세요.",
+        "previewUnavailable": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
         "delay": {
           "30": "30초",
           "60": "1분",
@@ -2483,7 +2483,10 @@
           "system": "시스템"
         },
         "hintWindows": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, Windows Hello나 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
-        "hintLinux": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다."
+        "hintLinux": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
+        "permissionMissing": "프라이버시 화면이 꺼져 있습니다. 키를 누르거나 클릭하면 Mac을 잠글 수 있도록 Cindy에 권한을 부여해야 합니다.",
+        "checkFailed": "이 컴퓨터에서 프라이버시 화면 권한을 확인할 수 없습니다.",
+        "saveFailed": "프라이버시 화면 설정을 저장하지 못했습니다."
       }
     },
     "agentIsland": {
@@ -14319,6 +14322,8 @@
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
+
+      "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
       "resumeAction": "계속 전송",
       "resumeAria": "대기열 메시지 전송 계속",
       "showMore_one": "{{count}}개 더 있음",
@@ -18502,7 +18507,7 @@
       "expired": "대기 시간이 너무 길어 대리 입력이 종료되었습니다."
     },
     "failure": {
-      "permission": "Cindy에 이 컴퓨터 화면을 읽을 권한이 없습니다. 시스템 설정의 손쉬운 사용에서 Cindy를 허용하세요.",
+      "permission": "Cindy가 이 Mac의 화면을 읽을 수 없습니다. 실행 중인 Cindy의 제어 권한을 확인하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
       "target_gone": "대상 창이 닫혔습니다.",
       "unreadable": "이 화면을 읽을 수 없습니다. 호스트 컴퓨터에서 직접 완료한 뒤 Agent에게 넘기세요.",
       "action_failed": "방금 작업이 적용되지 않았습니다. 화면을 확인하고 다시 시도하세요.",
@@ -22462,5 +22467,10 @@
       "auto": "자동 리뷰",
       "bypassPermissions": "전체 접근"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "System & App Protection Override에서 {{app}} 오른쪽의 ⓘ를 누르세요. 목록에 없으면 ＋를 눌러 실행 중인 앱을 추가하세요.",
+    "review": "$t(macControlPermission.selectApp)\n앱 선택 옵션이 있으면 제어 대상을 지정한 앱으로 제한할 수 있습니다. Mac 전체 제어를 허용하면 모든 앱과 데이터에 접근할 수 있습니다. 동의한다면 각 항목을 읽고 확인한 뒤 창 하단에서 허용하세요."
   }
 }

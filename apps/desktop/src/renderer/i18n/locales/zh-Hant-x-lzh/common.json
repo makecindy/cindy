@@ -1165,7 +1165,7 @@
     "title": "遠端桌面",
     "allow": "許遠端桌面",
     "allowHint": "許已登門之同名籍裝置，覽並操作此機之一切應用程式。須並啟上方之裝置控制。",
-    "permissionHint": "請於此機之系統設定中許螢幕錄製與輔助使用，而後重連。",
+    "permissionHint": "請於此機之系統設定中許螢幕錄製與輔助使用，而後重連。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
     "inputUnsupported": "Cindy 暫不支援此機目前桌面環境的遠端鍵鼠控制。",
     "controlUnavailable": "遠端鍵鼠控制暫不可用，請重連。",
     "beingControlled": "桌面方受遠端控制",
@@ -1282,7 +1282,7 @@
     "privacyScreen": "連時啟隱私畫面",
     "privacyScreenHint": "遠端控制時覆此機之屏。有人於機前點按或按鍵，先問斷連與否。",
     "privacyActive": "隱私畫面已啟。有人於機前點按或按鍵，先問斷連與否。",
-    "privacyFailed": "未能啟隱私畫面，機屏或仍可見。",
+    "privacyFailed": "未能啟隱私畫面，機屏或仍可見。如果被控電腦是 Mac，請在那台電腦上檢查執行中的 Cindy 是否有控制權限。",
     "hostMute": "受控者噤聲",
     "hostMuteHint": "連線之間令被控之機靜音",
     "hostMuteFailed": "不能改被控端之靜音",
@@ -1311,7 +1311,7 @@
     "credentialSigningRequired": "Mac 上之開發版缺簽名設定。請於 Mac 上設簽名並重啟 Cindy，而後再試。",
     "credentialPasswordRejected": "Mac 登入密碼驗證未成，請重新輸入。",
     "credentialIdentityChanged": "不能確認此機之身分，不向未經驗證之裝置傳送密碼。",
-    "credentialAccessibilityRequired": "請於 Mac 之 系統設定 → 隱私權與安全性 → 輔助使用 中許 Cindy，而後重連。",
+    "credentialAccessibilityRequired": "請在被控 Mac 上檢查執行中的這份 Cindy 是否有控制權限，再重新連線。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
     "credentialUnlockUnavailable": "今不能安全解鎖此 Mac。請於鎖定畫面選君之帳號而後重連；若仍未成，請於機上手動解鎖。",
     "disconnecting": "方斷…",
     "loadingDisplayModes": "方讀解析度…",
@@ -2472,7 +2472,7 @@
         "permission": "須於「系統設定 → 隱私權與安全性 → 輔助使用」許 Cindy，方能於有人觸機時即鎖屏。未許之前，屏照常熄而鎖。",
         "preview": "即試之",
         "previewStarting": "請釋滑鼠鍵盤，三秒後覆以隱私畫面；現系統驗證框時，以指按 {{biometry}} 則逕返桌面，按任一鍵則鎖屏。",
-        "previewUnavailable": "未能啟隱私畫面，請重啟 Cindy 再試。",
+        "previewUnavailable": "未能啟隱私畫面，機屏或仍可見。",
         "delay": {
           "30": "30 秒",
           "60": "1 分",
@@ -2483,7 +2483,10 @@
           "system": "隨系統"
         },
         "hintWindows": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以 Windows Hello 或密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。",
-        "hintLinux": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。"
+        "hintLinux": "AI 需用屏時，此機不熄屏、不自鎖，以隱私畫面覆之，AI 於其後續作；有人按鍵或點按即鎖屏，以密碼解之。無事之時，熄屏鎖屏如常。遠端控制既畢，亦以隱私畫面護此機。",
+        "permissionMissing": "隱私畫面未開啟。Cindy 需要系統授權，才能在有人按鍵或點按時鎖定 Mac。",
+        "checkFailed": "目前無法確認這台電腦的隱私畫面權限。",
+        "saveFailed": "無法儲存隱私畫面設定。"
       }
     },
     "agentIsland": {
@@ -14319,6 +14322,8 @@
       "regionAria": "待遣之訊佇列",
       "listAria": "佇列之訊",
       "pausedFooter": "差事已止，佇列暫停",
+
+      "steerUnsupportedNotice": "此引擎不受插話，待遣之訊俟此輪畢乃遣。",
       "resumeAction": "續遣",
       "resumeAria": "續遣佇列之訊",
       "showMore_one": "尚有 {{count}} 條",
@@ -18502,7 +18507,7 @@
       "expired": "候時過久，代書已終。"
     },
     "failure": {
-      "permission": "Cindy 無讀此機界面之權柄。請於系統設定之輔助使用中允許 Cindy。",
+      "permission": "Cindy 無法讀取這台 Mac 的介面。請檢查執行中的這份 Cindy 是否有控制權限。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
       "target_gone": "目標視窗已闔。",
       "unreadable": "此界面不可讀。可於主機之機上徑自完成，而後交還 Agent。",
       "action_failed": "方才之操作未生效，請察界面後再試。",
@@ -22462,5 +22467,10 @@
       "auto": "自審",
       "bypassPermissions": "完全存取"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "在「System & App Protection Override」找到 {{app}}，按右側的 ⓘ。若清單中沒有，可按「＋」依路徑加入。",
+    "review": "$t(macControlPermission.selectApp)\n系統若提供「選擇 App」，可限定控制範圍。完整控制可存取所有 App 和資料。若同意，請逐項閱讀並按「OK」確認，再按視窗底部的允許按鈕。"
   }
 }

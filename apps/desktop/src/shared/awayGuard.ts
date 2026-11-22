@@ -14,9 +14,11 @@ export function biometryLabel(type: DesktopBiometry): string {
   }
 }
 
+export type AwayGuardFailure = 'permission' | 'unavailable';
+
 /** Settings → App behavior → Keep working while away (macOS). Local app renderer only. */
 export interface AwayGuardState {
-  /** macOS 14+ only; other platforms hide the setting. */
+  /** The local platform has a supported privacy screen backend. */
   available: boolean;
   enabled: boolean;
   /** Seconds of absence before the cover; null follows the system display-sleep time. */
@@ -25,6 +27,9 @@ export interface AwayGuardState {
   permission: 'granted' | 'missing' | 'unknown';
   /** Names the owner's biometry the way Apple does ("Touch ID" / "Face ID"). */
   biometry: DesktopBiometry;
+  /** Local settings only. Distinguishes installed copies with the same display name. */
+  permissionAppPath?: string;
+  backgroundFailure?: AwayGuardFailure;
 }
 
 export const AWAY_GUARD_DELAY_OPTIONS = [30, 60, 120, 300] as const;
@@ -41,4 +46,4 @@ export const AWAY_GUARD_PREVIEW_CHANNEL = 'away-guard:preview';
 /** Lets the hand that clicked "Try it" leave the mouse before physical input means "lock". */
 export const AWAY_GUARD_PREVIEW_DELAY_MS = 3_000;
 
-export type AwayGuardPreviewResult = { ok: true } | { ok: false; reason: 'permission' | 'unavailable' };
+export type AwayGuardPreviewResult = { ok: true } | { ok: false; reason: AwayGuardFailure | 'checkFailed' };

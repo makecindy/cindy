@@ -477,6 +477,13 @@ indefinitely.
   focus survives rotation and keyboard resizing.
 - The keyboard offers native text composition, modifier combinations, navigation
   keys, and a full key strip. Desktop / All windows use operating system shortcuts.
+- Tapping an editable, focused field on a Mac opens the phone keyboard when the host
+  advertises `editableClick`. Detection follows the click's native input acknowledgement
+  and returns only a boolean. Older hosts, unsupported controls and the macOS lock screen
+  retain the manual keyboard button. Both the system keyboard and the drawn computer
+  keyboard can be dragged down; the desktop fills the revealed area during dismissal.
+  The additive protocol and self-hosted relay compatibility are recorded in
+  [editable-click compatibility](dev-rules/protocol-compatibility/remote-desktop-editable-click.md).
 - Switching displays creates a new lease and retains the control/view-only choice.
   Backgrounding normally releases the lease; explicit system picture in picture
   retains viewing only. Returning to the foreground automatically reconnects. Network failures and viewer process loss also recover automatically,

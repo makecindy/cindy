@@ -210,6 +210,7 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
     excludedWindows: (ids: number[]) => {
       excluded.push([...ids]);
     },
+    notifyFailure: () => {},
     needsDisplay: () => needsDisplay,
     enabled: () => true,
     delaySeconds: () => 30,

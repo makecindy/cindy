@@ -30,8 +30,9 @@ export interface LocalNetworkAccessDeps {
   now(): number;
 }
 
+// System Settings uses this pane's lowercase identifier; Privacy_LocalNetwork opens the overview.
 export const MAC_LOCAL_NETWORK_SETTINGS_URL =
-  'x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork';
+  'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?privacy-localnetwork';
 
 /** TCP/53 is open or actively refused on almost every home router; either proves reachability. */
 const PROBE_PORT = 53;
