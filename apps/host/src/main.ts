@@ -481,7 +481,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
   currentSessionToken = sessionToken;
   if (process.platform==='linux' && endpoints.modelAccessApiBaseUrl) {
     const base=endpoints.modelAccessApiBaseUrl;
-    confirmCloudGuestWhenOnline(()=>base,()=>currentSessionToken);
+    confirmCloudGuestWhenOnline(() => base, () => currentSessionToken, hostAuthFetch);
   }
   currentDeviceId = verifiedDeviceId;
   remoteIdentityReady = canRegisterHostDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, ''));

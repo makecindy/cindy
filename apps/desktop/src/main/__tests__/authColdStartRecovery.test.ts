@@ -206,6 +206,11 @@ function setup(random = 0) {
     exchangeAccountMembership: vi.fn(async () => ok.data),
   };
   const deps = {
+    // Exercise the Linux cold-start path on every test host, with no enrollment on disk.
+    process: { platform: 'linux', env: {} },
+    readCloudGuest: vi.fn(async () => null),
+    confirmCloudGuestWhenOnline: vi.fn(),
+    getAccessToken: () => null,
     saved,
     vault,
     onStartupFallback: vi.fn(),

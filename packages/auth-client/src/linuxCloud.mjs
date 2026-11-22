@@ -121,12 +121,16 @@ async function verifierFor(guest) {
   return verifier;
 }
 class GuestSignInRefused extends Error {}
-async function authorize(guest, deviceId, authBase) {
+const directFetch = (input, init) => globalThis.fetch(input, init);
+
+async function authorize(guest, deviceId, authBase, serviceFetch) {
   const base = origin(authBase),
     verifier = await verifierFor(guest);
   const metadata = "http://169.254.169.254/latest/";
   const request = async (url, init = {}) => {
-    const response = await fetch(url, {
+    // Metadata is local to the instance. Only Cindy service requests use the Host proxy.
+    const transport = url.startsWith(metadata) ? directFetch : serviceFetch;
+    const response = await transport(url, {
       ...init,
       redirect: "error",
       signal: AbortSignal.timeout(12000),
@@ -227,11 +231,11 @@ async function authorize(guest, deviceId, authBase) {
   return { code: result.code, verifier };
 }
 
-export async function cloudGuestAuthorization(guest, deviceId, authBase) {
+export async function cloudGuestAuthorization(guest, deviceId, authBase, serviceFetch = directFetch) {
   const until = Date.now() + 600000;
   for (;;) {
     try {
-      return await authorize(guest, deviceId, authBase);
+      return await authorize(guest, deviceId, authBase, serviceFetch);
     } catch (error) {
       if (error instanceof GuestSignInRefused || Date.now() + 5000 >= until)
         throw error;
@@ -240,7 +244,7 @@ export async function cloudGuestAuthorization(guest, deviceId, authBase) {
   }
 }
 let ready;
-export function confirmCloudGuestWhenOnline(modelBase, token) {
+export function confirmCloudGuestWhenOnline(modelBase, token, serviceFetch = directFetch) {
   if (process.platform !== "linux" || ready) return;
   ready = (async () => {
     const guest = await readCloudGuest();
@@ -264,7 +268,7 @@ export function confirmCloudGuestWhenOnline(modelBase, token) {
           claims.org !== guest.organizationId
         )
           return;
-        const response = await fetch(
+        const response = await serviceFetch(
           base +
             "/api/model-access/personal/cloud-computer/requests/" +
             guest.requestId +

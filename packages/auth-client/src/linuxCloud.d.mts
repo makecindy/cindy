@@ -12,10 +12,12 @@ export function cloudGuestAuthorization(
   guest: CloudGuest,
   deviceId: string,
   authBase: string,
+  serviceFetch?: typeof fetch,
 ): Promise<{ code: string; verifier: string }>;
 export function confirmCloudGuestWhenOnline(
   modelBase: () => string,
   token: () => string | null | undefined,
+  serviceFetch?: typeof fetch,
 ): void;
 
 export function initializeCloudHostAccess(userDataDir: string): Promise<void>;

@@ -140,7 +140,7 @@ export async function runLoginCommand(argv, io = {}) {
       await markCloudGuestSaved(guest);
       return;
     }
-    cloudGuest={guest,grant:await cloudGuestAuthorization(guest,deviceId,endpoints.authApiBaseUrl)};
+    cloudGuest={guest,grant:await cloudGuestAuthorization(guest,deviceId,endpoints.authApiBaseUrl,hostAuthFetch)};
   }
   if (!cloudGuest) out(noOpen ? 'Open the following Cindy login page on a device with a browser.' : 'Opening the Cindy login page in your browser…');
   const result = await runHostLogin({
