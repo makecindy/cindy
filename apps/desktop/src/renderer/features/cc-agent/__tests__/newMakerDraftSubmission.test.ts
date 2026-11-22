@@ -195,6 +195,8 @@ async function submit(options: {
     sourceBranch: string;
     confirmedIneligible?: boolean | null;
     branchPreferenceReady?: boolean;
+    baseRepo?: string | null;
+    supportsRecoveryKeyDiscard?: boolean;
   };
   branchSaving?: boolean;
   currentBranch?: string | null;
@@ -727,6 +729,21 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.clearDraft).not.toHaveBeenCalled();
     if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.deviceStillLoading');
     else expect(String(result.errors[0])).toContain('ccAgent.draft.deviceStillLoading');
+  });
+  // #11956 / unit: exercise the real submit callback, not which source block
+  // first mentions confirmedIneligible. An explicit ON with incomplete
+  // checkout prerequisites must never fall through to ordinary creation.
+  it.each([
+    ['missing repository', undefined, { baseRepo: null }, 'ccAgent.draft.worktreeMissingRepo'],
+    ['unready branch', undefined, { branchPreferenceReady: false }, 'ccAgent.draft.deviceStillLoading'],
+    ['unavailable remote recovery', 'task-computer', { supportsRecoveryKeyDiscard: false }, 'ccAgent.draft.deviceStillLoading'],
+  ] as const)('preserves the draft and does not create a task for an explicit worktree with %s', async (_scenario, deviceId, state, notice) => {
+    const result = await submit({ deviceId, worktree: { enabled: true, sourceBranch: 'main', ...state } });
+    expect(result.toastError).toHaveBeenCalledWith(notice);
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
   });
   it.each([
     ['send', undefined], ['goal', undefined], ['send', 'task-computer'], ['goal', 'task-computer'],
