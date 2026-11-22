@@ -636,6 +636,7 @@
     "readableHistoryRecoveryDescription": "チャット履歴を引き継ぎ、元のセッションも残します。新しいセッションで直前のメッセージを再送してください。",
     "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
     "replyFailed": "返信を完了できませんでした",
+    "toolDescriptionTooLong": "ツールの説明がこの API の長さ制限を超えています。ツールの設定を確認するか、提供元にお問い合わせください。実際の長さと上限はエラーの詳細で確認できます。",
     "usageLimitReached": "モデルのアカウントは利用上限に達しました",
     "showErrorDetails": "エラーの詳細",
     "hideErrorDetails": "詳細を閉じる",

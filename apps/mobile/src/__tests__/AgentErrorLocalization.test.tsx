@@ -506,3 +506,29 @@ it.each(['live', 'tail'] as const)('renders quota guidance in the mobile %s surf
   expect(host.textContent).not.toMatch(/PRIVATE_PROVIDER_BODY|完全访问/);
   expect(normalizeRemoteMessages([row(message)])[0].body).toBe(i18n.t('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA'));
 });
+
+// #11544 review: real Mobile localization and live/tail/history surfaces, in every supported locale.
+it.each(SUPPORTED_LOCALES)('retains tool description length guidance on mobile (%s)', async locale => {
+  await i18n.changeLanguage(locale);
+  const message = "Invalid 'tools[0].description': string too long. Expected a string with maximum length 1048576, but got a string with length 1344337 instead.";
+  const key = 'session.tail.toolDescriptionTooLong';
+  const localized = i18n.getResource(locale, 'common', key);
+  expect(localized).toBeTypeOf('string');
+  expect(unclassifiedAgentErrorI18nKey(message)).toBe(key);
+  expect(localizeUnclassifiedAgentError(message)).toBe(localized);
+  const [historical] = normalizeRemoteMessages([row(message)]);
+  expect(historical.body).toBe(localized);
+  expect(historical.rawError).toBe(message);
+  const state = resolveSessionTailBanner({ messages: [row(message)], session: null,
+    projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false,
+    continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+    interruptAcked: false, hiddenErrorClientIds: new Set() });
+  for (const surface of ['live', 'tail']) {
+    await act(async () => root.render(surface === 'live'
+      ? <InlineQueueSection projection={{ error: message, errorRetryText: 'original' } as InputProjection}
+          onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />
+      : <SessionTailBanner state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} />));
+    expect(host.textContent).toContain(localized);
+  }
+  expect(unclassifiedAgentErrorI18nKey("Invalid 'messages[0].content': string too long.")).toBe('session.tail.replyFailed');
+});

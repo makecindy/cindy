@@ -124,8 +124,4 @@ export function unwrapProviderErrorDisplay(message: string): string {
   return message;
 }
 
-/** Recognize the provider's field-specific rejection, never infer a tool's identity from its index. */
-export function isToolDescriptionTooLongError(message: string): boolean {
-  if (message.length > 64_000) return false;
-  return /(?:Invalid ['"]tools\[\d+\](?:\.function)?\.description['"]:\s*string too long|\[tools\[\d+\](?:\.function)?\.description\]\s*\[string_above_max_length\])/i.test(message);
-}
+export { isToolDescriptionTooLongError } from '@cindy/maker-shared/error-redaction';

@@ -636,6 +636,7 @@
     "readableHistoryRecoveryDescription": "Behalte deinen Chatverlauf und die ursprüngliche Sitzung. Sende deine letzte Nachricht in der neuen Sitzung erneut.",
     "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
     "replyFailed": "Antwort konnte nicht abgeschlossen werden",
+    "toolDescriptionTooLong": "Eine Werkzeugbeschreibung überschreitet die für diese API zulässige Länge. Prüfe die Werkzeugkonfiguration oder kontaktiere den Anbieter. Die gemeldete Länge und das Limit stehen in den Fehlerdetails.",
     "usageLimitReached": "Das Modellkonto hat sein Nutzungslimit erreicht",
     "showErrorDetails": "Fehlerdetails",
     "hideErrorDetails": "Details ausblenden",
