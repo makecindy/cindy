@@ -37,7 +37,7 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
 vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
+import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, ensureTeammateProjectIgnored, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { OWN_RULES_HEADING } from '../botProjectTemplate.js';
 
@@ -314,6 +314,54 @@ describe('moveTeammateMemoryIntoProject', () => {
     await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBeNull();
     await expect(fs.stat(path.join(inside, 'project_launch.md'))).rejects.toThrow();
     expect(snapshot).toHaveBeenCalledOnce();
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：ensureTeammateProjectIgnored（启动时 botV2Migration 对已升级伙伴调用）执行后
+ *   真 `git check-ignore` / `git ls-files` 的结果、`.gitignore` 原有内容与回执。
+ * - 规则依据：cindy-bots-runtime.md §4「项目的 .gitignore（2026-11-21）」：存量项目只追加缺的条目一次，不改用户的行，
+ *   不动已提交的文件，不删磁盘文件；凭证文件、虚拟环境、worktree 不进版本。
+ * - 现有覆盖缺口：此前只有记忆条目会补，凭证与虚拟环境条目没有补齐路径。
+ * - 最小失败输入：旧默认清单 + 用户自己的一行，已提交一个 `.env`；补齐后用户删掉一条再跑。
+ * - tier：unit（临时目录真实文件 I/O 与真 git）。
+ */
+describe('ensureTeammateProjectIgnored', () => {
+  let root = '';
+  afterEach(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
+  const gitAvailable = spawnSync('git', ['--version']).status === 0;
+
+  it.skipIf(!gitAvailable)('adds the missing entries once, keeping the owner\'s lines and committed files', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(path.join(root, 'bots', 'bot_mia'), { recursive: true });
+    await fs.mkdir(workspace, { recursive: true });
+    const git = (...args: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: workspace, encoding: 'utf8' });
+    expect(git('init', '-q').status).toBe(0);
+    const before = 'node_modules/\r\n*.log\r\n# mine\r\n!keep.log';
+    await fs.writeFile(path.join(workspace, '.gitignore'), before);
+    await fs.writeFile(path.join(workspace, '.env'), 'COMMITTED=1');
+    expect(git('add', '.env', '.gitignore').status).toBe(0);
+    expect(git('commit', '-qm', 'v1').status).toBe(0);
+
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(true);
+    const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
+    expect(text.startsWith(`${before}\r\n`)).toBe(true);
+    expect(text.replace(/\r\n/g, '')).not.toContain('\n');
+    const ignored = (file: string) => git('check-ignore', '-q', file).status === 0;
+    for (const file of ['.env.local', 'skills/a/.env', 'token.json', '.venv/bin/python', 'venv/lib/x.py', '.cindy-worktrees/t/a.txt', 'key.pem']) {
+      expect(ignored(file), file).toBe(true);
+    }
+    for (const file of ['.env.example', 'notes.md', 'keep.log']) expect(ignored(file), file).toBe(false);
+    // Already versioned: stays versioned and on disk.
+    expect(git('ls-files', '.env').stdout.trim()).toBe('.env');
+    await expect(fs.readFile(path.join(workspace, '.env'), 'utf8')).resolves.toBe('COMMITTED=1');
+
+    // Once: an entry the owner removes afterwards is not put back.
+    await fs.writeFile(path.join(workspace, '.gitignore'), text.replace('token.json\r\n', ''));
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(false);
+    expect(await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).not.toContain('token.json');
   });
 });
 

@@ -31,6 +31,7 @@ vi.mock('../botProjectMode.js', () => ({
   prepareBotProjectWorkspace: async () => ({ workingDir: path.join(h.root, 'bots', 'import_ada', 'workspace'), skippedSkillLinks: [] }),
   ensureBotProjectAutomations: vi.fn(async () => true),
   moveTeammateMemoryIntoProject: h.moveMemory,
+  ensureTeammateProjectIgnored: async () => false,
   ensureTeammateTemplate: async () => false,
   ensureWorkspaceRepository: h.repository,
   nameBotProject: async () => {},

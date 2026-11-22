@@ -30,7 +30,7 @@ import { createLogger } from '../logger.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
-import { ensureBotProjectAutomations, ensureTeammateTemplate, ensureWorkspaceRepository, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
+import { ensureBotProjectAutomations, ensureTeammateProjectIgnored, ensureTeammateTemplate, ensureWorkspaceRepository, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
 import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
 import { readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
@@ -263,6 +263,10 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
     const upgraded = await readBotSettingsProfile(botId);
     // Upgraded before the starter template existed (or an older version of it): fill it in once.
     if (await exists(workspace)) {
+      // Set up before the project ignored credentials, environments and worktrees: add those once.
+      await ensureTeammateProjectIgnored({ botId, ownerRoot, workspace }).catch((error) => {
+        log.warn('teammate project .gitignore update failed', { botId, error: String(error) });
+      });
       await ensureTeammateTemplate({ botId, displayName: upgraded.name, workspace });
       assertCurrent();
       await ensureBotProjectAutomations({ botId, displayName: upgraded.name, workingDir: workspace, addMissing: false });

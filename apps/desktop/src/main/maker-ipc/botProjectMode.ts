@@ -235,28 +235,73 @@ export const BOT_PROJECT_MEMORY_GITIGNORE = [
   `${MEMORY_DIR}/MEMORY.md`,
 ];
 
+/**
+ * A teammate puts whatever its work needs in its project: a skill's `.env` or token file, Python
+ * environments, worktrees of the repositories it works on. Versions are for its own work, so these
+ * stay out of Git (and out of every automatic snapshot's file count). Env templates stay versioned;
+ * their exceptions follow `.env.*`, which they must, also when appended to an existing file.
+ */
+export const BOT_PROJECT_LOCAL_GITIGNORE = [
+  '.env', '.env.*', '!.env.example', '!.env.sample', '!.env.template',
+  'token.json', 'credentials.json', 'client_secret*.json', '*.pem', '*.p12', '*.pfx',
+  '.venv/', 'venv/', '__pycache__/', '.cindy-worktrees/', '.xdt-worktrees/',
+];
+const ENV_TEMPLATE_EXCEPTIONS = BOT_PROJECT_LOCAL_GITIGNORE.filter((line) => line.startsWith('!'));
+
 const BOT_PROJECT_GITIGNORE = [
   'node_modules/', 'tmp/', '.DS_Store', '*.log',
   '*.zip', '*.tar', '*.tar.gz', '*.tgz', '*.dmg', '*.iso',
   '*.db', '*.sqlite', '*.sqlite3', '*-wal', '*-shm', 'pg_wal/',
+  ...BOT_PROJECT_LOCAL_GITIGNORE,
   ...BOT_PROJECT_MEMORY_GITIGNORE,
   '',
 ].join('\n');
 
-/** Adds the memory entries to a project's `.gitignore` that lacks them; true when it changed. */
-async function ensureMemoryIgnored(workspace: string): Promise<boolean> {
+/**
+ * Appends the entries a project's `.gitignore` lacks, keeping its own lines as they are. A missing
+ * file gets the whole default list; a `.gitignore` the project made a link is left alone. True when
+ * it changed.
+ */
+async function ensureIgnored(workspace: string, entries: readonly string[]): Promise<boolean> {
   const file = path.join(workspace, '.gitignore');
-  const current = await fs.readFile(file, 'utf8').catch((error: NodeJS.ErrnoException) => {
+  const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return null;
     throw error;
   });
-  if (current === null) return writeIfMissing(file, BOT_PROJECT_GITIGNORE);
+  if (stat === null) return writeIfMissing(file, BOT_PROJECT_GITIGNORE);
+  if (!stat.isFile()) return false;
+  const current = await fs.readFile(file, 'utf8');
   const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-  const missing = BOT_PROJECT_MEMORY_GITIGNORE.filter((line) => !lines.has(line));
+  const missing = entries.filter((line) => !lines.has(line));
+  // An exception only applies below its pattern: a newly added `.env.*` is followed by them again.
+  if (missing.includes('.env.*')) missing.push(...ENV_TEMPLATE_EXCEPTIONS.filter((line) => !missing.includes(line)));
   if (!missing.length) return false;
-  const separator = current === '' || current.endsWith('\n') ? '' : '\n';
-  await fs.writeFile(file, `${current}${separator}${missing.join('\n')}\n`, 'utf8');
+  const newline = current.includes('\r\n') ? '\r\n' : '\n';
+  const separator = current === '' || current.endsWith('\n') ? '' : newline;
+  await fs.writeFile(file, `${current}${separator}${missing.join(newline)}${newline}`, 'utf8');
   return true;
+}
+
+/** Once per teammate on this computer, so an entry the owner removes afterwards stays removed. */
+const TEAMMATE_GITIGNORE_RECEIPT_FILE = 'project-gitignore.json';
+
+/**
+ * A project set up before {@link BOT_PROJECT_LOCAL_GITIGNORE} gets the entries it lacks, once.
+ * Only `.gitignore` changes: files already in the history stay versioned and nothing on disk is
+ * removed. No version is recorded here: the teammate's next version includes the change, and a
+ * startup snapshot has no size bound. True when the `.gitignore` changed.
+ */
+export async function ensureTeammateProjectIgnored(input: {
+  botId: string;
+  ownerRoot: string;
+  workspace: string;
+}): Promise<boolean> {
+  const receipt = path.join(botProfileDir(input.ownerRoot, input.botId), TEAMMATE_GITIGNORE_RECEIPT_FILE);
+  if (await fs.lstat(receipt).then(() => true, () => false)) return false;
+  const changed = await ensureIgnored(input.workspace, BOT_PROJECT_LOCAL_GITIGNORE);
+  await fs.writeFile(receipt, `${JSON.stringify({ version: 1, at: new Date().toISOString(), changed }, null, 2)}\n`, 'utf8');
+  if (changed) log.info('teammate project .gitignore completed', { botId: input.botId });
+  return changed;
 }
 
 async function isOwnRepository(workspace: string): Promise<boolean> {
@@ -292,7 +337,7 @@ export async function moveTeammateMemoryIntoProject(input: {
   await fs.mkdir(target, { recursive: true });
   await writeIfMissing(path.join(target, MEMORY_STORAGE_MIGRATION_RECEIPT),
     `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString() })}\n`);
-  const ignoreChanged = await ensureMemoryIgnored(input.workspace);
+  const ignoreChanged = await ensureIgnored(input.workspace, BOT_PROJECT_MEMORY_GITIGNORE);
   if (copied > 0 || ignoreChanged) await snapshotTeammateProject(input.botId, input.workspace, 'Move teammate memory into the project');
   await fs.writeFile(receipt, `${JSON.stringify({ version: 1, movedAt: new Date().toISOString(), copied }, null, 2)}\n`, 'utf8');
   if (copied > 0) log.info('teammate memory moved into its project', { botId: input.botId, copied });
