@@ -85,7 +85,7 @@ describe('startMainCompileCache', () => {
   const listing = async (dir: string, ...namespace: string[]) =>
     (await readdir(path.join(dir, 'main-compile-cache', ...namespace)).catch(() => [] as string[])).sort();
 
-  function fakeRuntime(status: number, launchEnvironmentDir?: string) {
+  function fakeRuntime(status: number, launchEnvironmentDir?: string, realpath: (target: string) => string = (target) => target) {
     const calls = { enabled: [] as string[], flushes: 0 };
     const runtime: MainCompileCacheRuntime = {
       enableCompileCache: (directory) => {
@@ -96,9 +96,27 @@ describe('startMainCompileCache', () => {
         calls.flushes += 1;
       },
       getCompileCacheDir: () => launchEnvironmentDir,
+      realpath,
     };
     return { calls, runtime };
   }
+
+  // PR #12070 review: a protected install launched through a junction under the profile only
+  // looks per-user by its lexical path. The decision uses canonical paths and fails closed.
+  it.each<[string, (target: string) => string, string]>([
+    ['real per-user install', (target) => target, 'enabled'],
+    ['protected install reached through a junction under the profile', (target) => target.replace('C:\\Users\\me\\Apps\\Cindy', 'C:\\Program Files\\Cindy'), 'not-allowed'],
+    ['install paths that cannot be resolved', () => { throw new Error('ENOENT'); }, 'not-allowed'],
+  ])('packaged Windows: %s', async (_name, realpath, status) => {
+    const dir = await profileWithEntries();
+    const { calls, runtime } = fakeRuntime(ENABLED, undefined, realpath);
+    const install = { isPackaged: true, platform: 'win32' as const, resourcesPath: 'C:\\Users\\me\\Apps\\Cindy\\resources', homeDir: 'C:\\Users\\me' };
+
+    const cache = startMainCompileCache({ ...install, userDataDir: dir, buildId: '1.0.0-abc' }, runtime);
+
+    expect(cache.status).toBe(status);
+    expect(calls.enabled).toHaveLength(status === 'enabled' ? 1 : 0);
+  });
 
   const devInstall = { isPackaged: false, platform: process.platform, resourcesPath: os.tmpdir(), homeDir: os.homedir() };
   const macInstall = { isPackaged: true, platform: 'darwin' as const, resourcesPath: '/Applications/Cindy.app/Contents/Resources', homeDir: '/Users/me' };

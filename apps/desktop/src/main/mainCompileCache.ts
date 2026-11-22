@@ -36,7 +36,7 @@
  * `NODE_DISABLE_COMPILE_CACHE=1` turns it off.
  */
 import { createHash } from 'node:crypto';
-import { readdirSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import { constants, enableCompileCache, flushCompileCache, getCompileCacheDir } from 'node:module';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -101,6 +101,8 @@ export interface MainCompileCacheRuntime {
   flushCompileCache(): void;
   /** Directory of a cache that is already on, e.g. from `NODE_COMPILE_CACHE` at launch. */
   getCompileCacheDir(): string | undefined;
+  /** Canonical filesystem path with junctions and links resolved; throws when it cannot be read. */
+  realpath(target: string): string;
 }
 
 /** Controls for the compile cache started at launch. */
@@ -120,6 +122,7 @@ export interface MainCompileCache {
 /**
  * Whether the cache adds nobody new who can change the code the main process runs:
  * source runs, or Windows installs whose code sits under the user's own profile.
+ * Compares the paths as given; `startMainCompileCache` passes canonical paths.
  */
 export function mainCompileCacheAllowed(install: MainCompileCacheInstall): boolean {
   if (!install.isPackaged) return true;
@@ -134,7 +137,26 @@ const nodeRuntime: MainCompileCacheRuntime = {
   enableCompileCache: (directory) => enableCompileCache(directory),
   flushCompileCache: () => flushCompileCache(),
   getCompileCacheDir: () => getCompileCacheDir(),
+  realpath: (target) => realpathSync.native(target),
 };
+
+/**
+ * The install with the paths the allow decision depends on resolved through the filesystem.
+ * A protected install launched through a junction under the profile only looks like a
+ * per-user install by its lexical path. Returns null when the paths cannot be verified, so
+ * the cache stays off.
+ */
+function canonicalInstall(
+  install: MainCompileCacheInstall,
+  runtime: MainCompileCacheRuntime,
+): MainCompileCacheInstall | null {
+  if (!install.isPackaged || install.platform !== 'win32') return install;
+  try {
+    return { ...install, resourcesPath: runtime.realpath(install.resourcesPath), homeDir: runtime.realpath(install.homeDir) };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Enables the cache for modules loaded after this call when the install allows it.
@@ -155,7 +177,8 @@ export function startMainCompileCache(
   let preEnabled = false;
   // On an allowed install a pre-enabled cache is the one in use; a disallowed install never adopts it.
   let flushable = false;
-  if (mainCompileCacheAllowed(options)) {
+  const install = canonicalInstall(options, runtime);
+  if (install && mainCompileCacheAllowed(install)) {
     try {
       const result = runtime.enableCompileCache(path.join(ownRoot, options.buildId)).status;
       status = STATUS_NAMES[result] ?? String(result);
