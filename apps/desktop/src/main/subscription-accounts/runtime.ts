@@ -4,6 +4,7 @@ import { clearCodexModelSnapshot, readSavedCodexModelAccount, restoreCodexModelS
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { isDeepStrictEqual } from 'node:util';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
@@ -144,6 +145,8 @@ type Usage = {
 interface AccountSnapshot {
   /** Non-secret equality key; never a credential or execution authorization. */
   accountKey?: string;
+  /** This login also supplied the host-only OAuth material needed by the Images adapter. */
+  codexImageAuth?: true;
   auth: AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string };
   usage?: Usage;
   unavailable?: boolean;
@@ -206,6 +209,7 @@ interface PublishedSubscriptionCatalog {
   connected?: boolean;
   displayModels?: readonly CatalogModel[] | null;
   confirmedAt?: number;
+  imageReady?: boolean;
 }
 
 interface OwnerRuntime {
@@ -289,7 +293,10 @@ function publishCodexCatalogChange(state: OwnerRuntime, refreshId?: string): voi
   const pool = readPool('openai');
   const providers = new Set(['openai', ...pool?.accounts.map(account => accountProviderId('openai', account.id)) ?? []]);
   const models = pool ? Object.fromEntries([...providers].sort().map(providerId =>
-    [providerId, subscriptionCatalogForPublication(providerId, readSubscriptionPoolCodexModels)])) : null;
+    [providerId, {
+      ...subscriptionCatalogForPublication(providerId, readSubscriptionPoolCodexModels),
+      ...(providerId !== 'openai' && { imageReady: hasCreatedOpenAiImageAuth(providerId) }),
+    }])) : null;
   if (isDeepStrictEqual(state.publishedCodexCatalog ?? null, models)) return;
   if (refreshId && models) {
     for (const [providerId, next] of Object.entries(models)) {
@@ -874,11 +881,15 @@ async function snapshot(
         // Email alone cannot distinguish ChatGPT workspaces. Reuse the host-only native
         // auth reader and publish only a digest, never the account id or credential.
         let accountKey: string | undefined;
-        if (provider === 'openai' && auth.authenticated && auth.identity) {
+        let codexImageAuth: true | undefined;
+        if (provider === 'openai' && auth.authenticated) {
           try {
             const native = await readNativeCodexTokens(directory);
-            if (native.canDispatch()) accountKey = codexAccountDisplayKey(auth.identity, native.chatgptAccountId);
-          } catch { /* Missing native identity keeps sources separate; it does not sign them out. */ }
+            if (native.canDispatch()) {
+              if (auth.identity) accountKey = codexAccountDisplayKey(auth.identity, native.chatgptAccountId);
+              if (native.accessToken?.trim() && native.chatgptAccountId?.trim()) codexImageAuth = true;
+            }
+          } catch { /* Chat can use native login even when the media bridge has no credentials. */ }
         }
         const invalidated = state.invalidated.get(key);
         if (provider === 'openai' && invalidated && auth.authenticated) {
@@ -914,6 +925,7 @@ async function snapshot(
           beforeEarly = state.cache.get(key);
           earlySnapshot = {
             ...(accountKey ? { accountKey } : {}),
+            ...(codexImageAuth ? { codexImageAuth } : {}),
             auth: { ...auth, planType: auth.planType ?? auth.plan },
             ...(known?.usage ? { usage: known.usage } : {}),
             at: Date.now(),
@@ -985,6 +997,7 @@ async function snapshot(
         }
         result = {
           ...(accountKey ? { accountKey } : {}),
+          ...(codexImageAuth ? { codexImageAuth } : {}),
           auth: earlySnapshot?.auth ?? { ...auth, plan, ...(provider === 'openai' ? { planType } : {}) },
           usage: provider === 'openai' && usage ? { ...usage, codexPlan: planType } : usage,
           at: Date.now(),
@@ -1117,6 +1130,23 @@ export function hasConnectedSubscriptionPool(
   return found.pool.accounts.filter(account => (serving.has(account.id) || historical.has(account.id))
     && !disconnectedFor(found.pool, found.kind, account.id))
     .some(account => state.cache.get(keyOf(found.kind, account.id))?.auth.authenticated === true);
+}
+
+/** Settings readiness: direct, usable members with image OAuth, not chat or historical aliases. */
+export function hasCreatedOpenAiImageAuth(providerId: string): boolean {
+  const state = runtime;
+  if (!state || !isCurrentRuntime(state)) return false;
+  const found = poolFor(providerId);
+  if (found?.kind !== 'openai' || !found.ref.created) return false;
+  const model = subscriptionImageModelId(providerId);
+  return providerAccounts('openai', found.pool.accounts, providerId).some(account => {
+    const cached = state.cache.get(keyOf('openai', account.id));
+    const legacy = readLegacyCodexProviderId(account.id);
+    return !account.paused && cached?.auth.authenticated === true && cached.codexImageAuth === true
+      && !cached.unavailable && (account.id !== 'default' || defaultAccountBound('openai'))
+      && ![...state.logins].some(([key, login]) => key.startsWith('openai:') && login.accountId === account.id)
+      && (!legacy || legacyCodexAccountCanRun(legacy, model, { remote: false, newRoute: true }));
+  });
 }
 
 /**
@@ -2471,6 +2501,9 @@ export async function acquireSubscriptionAccount(
   const ref = resolveSubscriptionPoolProvider(providerId);
   if (!ref) return null;
   const provider = ref.kind;
+  const createdImage = ref.created && provider === 'openai' && options.capability === 'image.generate';
+  if (createdImage && model !== subscriptionImageModelId(providerId))
+    throw new Error('No subscription account is available');
   const pool = readPool(provider);
   if (!pool) return null;
   const state = currentRuntime();
@@ -2491,7 +2524,7 @@ export async function acquireSubscriptionAccount(
     binding = undefined;
   }
   // A provider merged away with no accounts left keeps pinning its own account for old tasks.
-  if (!binding && !options.accountId) {
+  if (!createdImage && !binding && !options.accountId) {
     const own = pinnedOwnAccount(ref);
     if (own && (ref.providerId !== provider || options.resuming === true))
       options = { ...options, accountId: own };
@@ -2500,7 +2533,7 @@ export async function acquireSubscriptionAccount(
   // to now, or the provider this request names. A task follows its account; an account that belongs
   // to an independent connection again therefore never hands its task to another account.
   const pinnedTarget = options.accountId ?? binding?.accountId;
-  const selectionProvider = pinnedTarget ? accountProviderId(provider, pinnedTarget) : ref.providerId;
+  const selectionProvider = pinnedTarget && !createdImage ? accountProviderId(provider, pinnedTarget) : ref.providerId;
   if (pool.disconnected && selectionProvider === provider) throw new Error('Subscription provider was disconnected');
   const scoped = providerAccounts(provider, pool.accounts, selectionProvider);
   const needsModelMembership = provider === 'openai' && !control && !!model
@@ -2613,6 +2646,7 @@ export async function acquireSubscriptionAccount(
         // credits cannot establish whether this request can run. Keep quota ranking and real cooling.
         usable: !loggingIn && info?.auth.authenticated === true && (control || ((provider === 'openai' || !usage.limited)
           && !cooling))
+          && (!createdImage || (info.codexImageAuth === true && !info.unavailable))
           && (!needsModelMembership || codexAccountSupportsModel(state, a.id, model))
           && (control || !imported || legacyCodexAccountCanRun(imported, model, {
             remote: options.remote === true, ownComputer: options.ownComputer === true,
@@ -2756,12 +2790,16 @@ export async function acquireSubscriptionAccount(
     const current = readPool(provider);
     if (!current || disconnectedFor(current, provider, selected) || !current.accounts.some((a) => a.id === selected))
       throw new Error('Subscription account was disconnected');
+    if (createdImage && (accountProviderId('openai', selected) !== providerId
+      || !resolveSubscriptionPoolProvider(providerId)?.created))
+      throw new Error('Subscription image account was moved or disconnected');
     if (selected === 'default' && !defaultAccountBound(provider))
       throw new Error('Subscription account was disconnected');
     const imported = provider === 'openai' ? readLegacyCodexProviderId(selected) : undefined;
-    if (imported && (options.remote || modelSwitch)
+    if (imported && (options.remote || modelSwitch || createdImage)
       && !legacyCodexAccountCanRun(imported, targetModel, {
-        remote: options.remote === true, ownComputer: options.ownComputer === true, newRoute: false, modelSwitch,
+        remote: options.remote === true, ownComputer: options.ownComputer === true,
+        newRoute: createdImage === true, modelSwitch,
       }))
       throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };

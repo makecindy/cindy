@@ -248,6 +248,14 @@ Claude 的模型发现不新增启动、续聊、换号或切模型的准入门�
 实现与回归见 `subscription-accounts/runtime.ts`、`agent.ts`、`maker-host/subscriptionPoolCatalog.ts`
 及其现有测试。手动刷新使用供应商 ID，后台启动／前台恢复按已连接的同类供应商触发，不能只看内置来源。
 
+独立 OpenAI 订阅供应商的图像目录只投影 **GPT Image Gen**，ID 为 `<providerId>/gpt-image-2`；
+目录声明了图像默认值时也使用该 ID，不继承内置 OpenAI 的 Platform API 型号、其他媒体清单或凭证。
+设置页保留未就绪的图像行；开关按该来源账号池的媒体就绪状态判断，不用聊天连接态或发现清单替代。
+就绪使用现有账号刷新读到的图像 OAuth 材料，不发试生成请求；上游仍决定实际出图准入。
+生成与编辑只在所选供应商当前归属的账号内租用一次，发送前复核归属及鉴权，不能回落到内置 OpenAI
+或跟随已并出的账号。实现见 `active-catalog.ts`、`codexImageAuthBinding.ts` 与 `subscription-accounts/runtime.ts`；
+回归见 `providerCatalogRealmReload.test.ts` 和 `subscription-accounts/__tests__/runtime.test.ts`。
+
 Codex 订阅池成功读取完整分页后，异步原子写入当前 Cindy 账号的模型发现目录，记录已确认的型号、展示资料和时间。
 发布前再次核对账号代次。快照里的未知推理档位保持缺省，可由公共目录补充；明确声明的空档位保留。
 重启后账号读得到而模型发现失败时，仅在订阅账号槽位、邮箱与 ChatGPT 工作区的身份摘要一致时恢复；账号本身无法读取时，见下方断网启动规则。

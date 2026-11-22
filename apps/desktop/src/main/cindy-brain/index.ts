@@ -719,7 +719,6 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
-  isOrganizationManagedProvider,
   isProviderDisabled,
   type MediaCapability,
   type ProviderView,
@@ -780,7 +779,7 @@ import { isProviderRouteMutationInProgress, getProviderRouteCredentialRevision }
 import { geminiImageAgent, geminiImageConnectionId, resolveGeminiImageKey, savedGeminiRouteMatches } from '../maker-host/gemini-image-connection.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
-import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
+import { codexImageAccountKind, createAccountCodexImageChannel, getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import {
   createByokImageChannel,
@@ -5515,22 +5514,11 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registeredCustomImageAccounts,
   );
   for (const provider of imageProviders) {
-    if (
-      isOrganizationManagedProvider(provider) ||
-      provider.auth.native !== 'codex' ||
-      registeredCodexImageAccounts.has(provider.id)
-    )
-      continue;
+    if (!codexImageAccountKind(provider) || registeredCodexImageAccounts.has(provider.id)) continue;
     const providerId = provider.id;
     imageChannelRegistrySingleton.register(
       providerId,
-      createCodexImageChannel({
-        providerId,
-        hasOAuthLogin: () => getCodexImageAuthBinding().hasAuth?.(providerId) === true,
-        getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
-        onAuthFailure: async (failure) => {
-          await getCodexImageAuthBinding().onAuthFailure(failure, providerId);
-        },
+      createAccountCodexImageChannel(providerId, () => getActiveCatalog().providers.find(p => p.id === providerId), {
         fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
         beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
       }),
@@ -5803,7 +5791,7 @@ configureProviderMediaRuntime({
       }
     };
     beforeDispatch();
-    const remoteAuth = await getCodexImageAuthBinding().acquireRemoteAuth?.(providerId, model);
+    const remoteAuth = await getCodexImageAuthBinding().acquireAuth?.(providerId, model, true);
     if (!remoteAuth) throw new Error('SHARED_IMAGE_UNAVAILABLE');
     try {
       const channel = createCodexImageChannel({

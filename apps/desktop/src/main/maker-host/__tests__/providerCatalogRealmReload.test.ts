@@ -327,6 +327,7 @@ import {
 } from '@cindy/model-providers';
 import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
+import * as mediaRuntime from '../../cindy-media/providerMediaRuntime.js';
 import { listEvaluationModels } from '../../cindy-evaluate/models.js';
 import { setModelVisibilityMirror, clearModelVisibilityMirror } from '../model-visibility-mirror.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
@@ -563,6 +564,80 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+
+  // #11948 / unit: legacy Codex coverage missed created pools. The Settings
+  // list must retain the chat list and a manageable image row even with no ready media.
+  it('lists only the independent subscription image row and its own readiness in Settings', async () => {
+    const previous = getActiveCatalog();
+    const providerId = 'openai-sub-fixture';
+    const modelId = `${providerId}/gpt-image-2`;
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const parent = catalog.providers.find(provider => provider.id === 'openai')!;
+    parent.imageModels = [{ id: 'openai/platform-only', name: 'Platform only' }];
+    parent.imageDefaults = { standard: 'openai/platform-only' };
+    parent.videoModels = [{ id: 'openai/parent-video', name: 'Parent video' }];
+    parent.embeddingModels = [{ id: 'openai/parent-embedding', name: 'Parent embedding' }];
+    h.pool = { strategy: 'least', accounts: [{ id: 'test', paused: false, limit: 4, weight: 1 }] };
+    h.placement = { 'openai:test': providerId };
+    h.created = { [providerId]: { kind: 'openai', name: 'Independent', account: 'test' } };
+    h.poolConnectionByProvider = { [providerId]: { serving: true, bound: true } };
+    h.poolModelsByProvider = { [providerId]: [
+      { id: 'fixture-chat', name: 'Fixture chat', contextWindow: 272_000, efforts: [], defaultEffort: null },
+    ] };
+    // The preceding scope regression exercises the pool projection; isolate the
+    // media runtime port here. Its authentication and dispatch have their own regression.
+    const media = vi.spyOn(mediaRuntime, 'listReadyProviderMediaModels').mockReturnValue([
+      { providerId: 'openai', id: 'openai/platform-only', name: 'Platform only', mode: 'image_generation',
+        modalities: { input: ['text'], output: ['image'] } },
+    ]);
+    try {
+      setActiveCatalog(catalog);
+      activeCatalogForHostParity.setOpenAiImagesApiKeyConfigured(true);
+      setSubscriptionPoolProviders([{ id: providerId, kind: 'openai', name: 'Independent' }]);
+      const list = () => getDesktopProviderService().listProviders({ snapshotOnly: true });
+      const unready = await list();
+      const provider = unready.find(view => view.id === providerId)!;
+      expect(unready.find(view => view.id === 'openai')?.imageModels?.map(model => model.id)).toContain('openai/platform-only');
+      expect(provider).toMatchObject({ connected: true, imageDefaults: { standard: modelId }, availableMediaModelIds: [] });
+      expect(provider.models.codex?.map(model => model.id)).toEqual(['fixture-chat']);
+      expect(provider.imageModels).toEqual([expect.objectContaining({ id: modelId, name: 'GPT Image Gen' })]);
+      expect(provider.videoModels).toBeUndefined();
+      expect(provider.embeddingModels).toBeUndefined();
+
+      media.mockReturnValue([{ providerId, id: modelId, name: 'GPT Image Gen', mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] } }]);
+      expect((await list()).find(view => view.id === providerId)).toMatchObject({
+        imageModels: provider.imageModels, imageDefaults: provider.imageDefaults, availableMediaModelIds: [modelId],
+      });
+
+      // A publication that explicitly withdraws image membership must not be
+      // re-populated by the hosted capability or by stale readiness.
+      media.mockReturnValue([]);
+      const empty = structuredClone(catalog);
+      const emptyParent = empty.providers.find(view => view.id === 'openai')!;
+      emptyParent.imageModels = [];
+      delete emptyParent.imageDefaults;
+      setActiveCatalog(empty);
+      const emptyViews = await list();
+      const withdrawn = emptyViews.find(view => view.id === providerId)!;
+      expect(emptyViews.find(view => view.id === 'openai')?.imageModels).toEqual([]);
+      expect(withdrawn.imageModels ?? []).toEqual([]);
+      expect(withdrawn.imageDefaults).toBeUndefined();
+      expect(withdrawn.availableMediaModelIds).toEqual([]);
+      expect(withdrawn.models.codex?.map(model => model.id)).toEqual(['fixture-chat']);
+    } finally {
+      media.mockRestore();
+      h.created = {};
+      h.pool = null;
+      h.placement = {};
+      h.poolConnectionByProvider = {};
+      h.poolModelsByProvider = {};
+      setSubscriptionPoolProviders([]);
+      activeCatalogForHostParity.setOpenAiImagesApiKeyConfigured(false);
+      setActiveCatalog(previous);
+    }
+  });
+
   // #10405, unit: a legacy connection whose original login is signed out can still
   // run with a healthy account merged into it. Listing must refresh that target pool.
   it('refreshes legacy target pools and uses their aggregate connection state', async () => {
