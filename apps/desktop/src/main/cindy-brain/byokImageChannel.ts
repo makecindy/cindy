@@ -22,6 +22,7 @@ import {
 } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import type { ImageChannel, ImageChannelRegistry } from './imageChannelRegistry.js';
 import { isCustomImageProvider } from './customImageChannel.js';
+import { codexImageAccountKind } from './codexImageAuthBinding.js';
 
 /**
  * Consciousness aspect → gpt-image size enum. Mirrors LEGACY_SIZES in
@@ -108,11 +109,6 @@ export function createByokImageChannel(opts: CreateByokImageChannelOptions): Ima
   };
 }
 
-export function isDynamicCodexImageProvider(provider: Provider): boolean {
-  return provider.id !== 'openai' && !isOrganizationManagedProvider(provider)
-    && (provider.auth.native === 'codex' || provider.subscriptionPool === 'openai');
-}
-
 /** Release obsolete dynamic channels before registering either kind of account. */
 export function pruneDynamicImageChannels(
   registry: ImageChannelRegistry,
@@ -121,7 +117,7 @@ export function pruneDynamicImageChannels(
   registeredByok: Set<string>,
   registeredCustom: Set<string> = new Set(),
 ): void {
-  const codexIds = new Set(providers.filter(isDynamicCodexImageProvider).map(provider => provider.id));
+  const codexIds = new Set(providers.filter(provider => codexImageAccountKind(provider)).map(provider => provider.id));
   const byokIds = new Set(providers.filter((provider) =>
     isOrganizationManagedProvider(provider) && provider.imageModels?.length,
   ).map((provider) => provider.id));

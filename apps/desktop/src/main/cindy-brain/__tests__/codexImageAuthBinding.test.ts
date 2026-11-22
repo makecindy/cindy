@@ -1,7 +1,8 @@
 
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createPooledCodexImageChannel, getCodexImageAuthBinding, setCodexImageAuthBinding } from '../codexImageAuthBinding.js';
+import { createAccountCodexImageChannel, getCodexImageAuthBinding, setCodexImageAuthBinding } from '../codexImageAuthBinding.js';
 
 afterEach(() => setCodexImageAuthBinding(null));
 
@@ -29,29 +30,33 @@ describe('codexImageAuthBinding', () => {
   it('checks the selected pool and dispatches with its leased account', async () => {
     const providerId = 'openai-sub-12345678';
     const model = `${providerId}/gpt-image-2`;
+    const provider = {
+      ...BUNDLED_CATALOG.providers.find(candidate => candidate.id === 'openai')!,
+      id: providerId, subscriptionPool: 'openai' as const,
+    };
     const readLegacyAuth = vi.fn();
     let readyProvider = 'openai';
-    const hasPoolAuth = vi.fn(id => id === readyProvider);
+    const hasPoolImageAuth = vi.fn(id => id === readyProvider);
     const auth = {
       getAuth: vi.fn(async () => ({ accessToken: 'fake-pool-token', accountId: 'fake-pool-account' })),
       assertDispatchable: vi.fn(),
       onAuthFailure: vi.fn(),
       release: vi.fn(),
     };
-    const acquirePoolAuth = vi.fn(async () => auth);
+    const acquireAuth = vi.fn(async () => auth);
     const fetchImplementation = vi.fn<typeof fetch>(async () =>
       Response.json({ data: [{ b64_json: 'fixture' }] }));
-    setCodexImageAuthBinding({ hasPoolAuth, acquirePoolAuth, getAuth: readLegacyAuth, onAuthFailure: vi.fn() });
-    const channel = createPooledCodexImageChannel(providerId, { fetchImplementation });
+    setCodexImageAuthBinding({ hasPoolImageAuth, acquireAuth, getAuth: readLegacyAuth, onAuthFailure: vi.fn() });
+    const channel = createAccountCodexImageChannel(providerId, () => provider, { fetchImplementation });
 
     expect(channel.ready()).toBe(false);
-    expect(hasPoolAuth).toHaveBeenCalledWith(providerId);
+    expect(hasPoolImageAuth).toHaveBeenCalledWith(providerId);
     readyProvider = providerId;
     expect(channel.ready()).toBe(true);
     await expect(channel.generateImage({ model, prompt: 'fixture' })).resolves.toEqual({
       data: [{ b64_json: 'fixture' }],
     });
-    expect(acquirePoolAuth).toHaveBeenCalledExactlyOnceWith(providerId, model);
+    expect(acquireAuth).toHaveBeenCalledExactlyOnceWith(providerId, model, false);
     expect(fetchImplementation).toHaveBeenCalledWith(expect.stringContaining('/codex/images/generations'),
       expect.objectContaining({ headers: expect.objectContaining({
         Authorization: 'Bearer fake-pool-token', 'ChatGPT-Account-Id': 'fake-pool-account',

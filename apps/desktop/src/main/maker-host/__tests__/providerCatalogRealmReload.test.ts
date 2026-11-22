@@ -327,7 +327,7 @@ import {
 } from '@cindy/model-providers';
 import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
 import * as providerMediaRuntime from '../../cindy-media/providerMediaRuntime.js';
-import { createPooledCodexImageChannel, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
+import { createAccountCodexImageChannel, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
 import { ImageChannelRegistry } from '../../cindy-brain/imageChannelRegistry.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
 import { listEvaluationModels } from '../../cindy-evaluate/models.js';
@@ -671,11 +671,13 @@ describe('provider catalog realm reload', () => {
     const registry = new ImageChannelRegistry();
     let readyProvider = 'openai';
     setCodexImageAuthBinding({
-      hasPoolAuth: id => id === readyProvider,
+      hasPoolImageAuth: id => id === readyProvider,
       getAuth: vi.fn(),
       onAuthFailure: vi.fn(),
     });
-    registry.register(providerId, createPooledCodexImageChannel(providerId, {}));
+    registry.register(providerId, createAccountCodexImageChannel(
+      providerId, () => getActiveCatalog().providers.find(provider => provider.id === providerId), {},
+    ));
     const readyModels = vi.spyOn(providerMediaRuntime, 'listReadyProviderMediaModels').mockImplementation(() =>
       registry.isProviderReady(providerId, modelId) ? [{
         providerId, id: modelId, name: 'GPT Image Gen', mode: 'image_generation',

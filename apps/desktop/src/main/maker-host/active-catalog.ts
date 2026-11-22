@@ -1278,32 +1278,32 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
 
   // 自定义供应商先追加、再做通用发现 augment——顺序反了的话,自定义 OAuth 供应商
   // 的发现模型永远合不进目录(map 只扫过内置列表)。
-  // Use the catalog definition before per-account discovery and Platform-key overrides.
-  const openaiDefinition = providerSources.find((provider) => provider.id === 'openai');
-  const bindSubscriptionImageDefinition = (provider: Provider): Provider => {
-    const bindId = (id: string): string => id.replace(/^openai\//, `${provider.id}/`);
-    const defaults = openaiDefinition?.imageDefaults;
-    return {
-      ...provider,
-      imageModels: openaiDefinition?.imageModels?.map((model) => ({
-        ...model,
-        id: bindId(model.id),
-      })),
-      imageDefaults: defaults
-        ? {
-            standard: bindId(defaults.standard),
-            ...(defaults.draft ? { draft: bindId(defaults.draft) } : {}),
-            ...(defaults.best ? { best: bindId(defaults.best) } : {}),
-          }
-        : undefined,
-    };
-  };
   if (custom.length > 0) {
+    // Bind the public image definition before applying any account discovery or overrides.
+    // Copying the final builtin connection would leak its Platform-key membership/preferences.
+    const openaiDefinition = providerSources.find((provider) => provider.id === 'openai');
     const managedIds = new Set(managed.map((provider) => provider.id));
     const accounts = custom
       .filter((provider) => !managedIds.has(provider.id))
-      .map((provider) => isOpenAiSubscriptionProvider(provider)
-        ? bindSubscriptionImageDefinition(provider) : provider);
+      .map((provider) => {
+        if (!isOpenAiSubscriptionProvider(provider)) return provider;
+        const bindId = (id: string): string => id.replace(/^openai\//, `${provider.id}/`);
+        const defaults = openaiDefinition?.imageDefaults;
+        return {
+          ...provider,
+          imageModels: openaiDefinition?.imageModels?.map((model) => ({
+            ...model,
+            id: bindId(model.id),
+          })),
+          imageDefaults: defaults
+            ? {
+                standard: bindId(defaults.standard),
+                ...(defaults.draft ? { draft: bindId(defaults.draft) } : {}),
+                ...(defaults.best ? { best: bindId(defaults.best) } : {}),
+              }
+            : undefined,
+        };
+      });
     providers = [...providers, ...accounts];
   }
   if (managed.length > 0) providers = [...providers, ...managed];
@@ -1881,12 +1881,10 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
   );
   // Subscription image_generation is one hosted capability, not the Platform model list.
   // Keep the original ID so saved Art selections and visibility overrides still resolve.
-  const normalizeSubscriptionImage = (provider: Provider): Provider => {
-    if (!isOpenAiSubscriptionProvider(provider) ||
-        (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
-        provider.imageModels?.length === 0) return provider;
+  const projectSubscriptionImage = (
+    provider: Provider, previous?: ProviderMediaModel, hasDefault = false,
+  ): Provider => {
     const id = subscriptionImageModelId(provider.id);
-    const previous = provider.imageModels?.find((model) => model.id === id);
     const defaults: ProviderMediaModel = {
       id,
       name: 'GPT Image Gen',
@@ -1901,10 +1899,16 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
         ...defaults,
         ...userMediaMetadata(provider, id, previous ?? defaults),
       }],
-      imageDefaults: provider.imageDefaults ? { standard: id } : undefined,
+      imageDefaults: hasDefault ? { standard: id } : undefined,
     };
   };
-  providers = providers.map(normalizeSubscriptionImage);
+  providers = providers.map((provider) => {
+    if (!isOpenAiSubscriptionProvider(provider) ||
+        (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
+        provider.imageModels?.length === 0) return provider;
+    const previous = provider.imageModels?.find((model) => model.id === subscriptionImageModelId(provider.id));
+    return projectSubscriptionImage(provider, previous, !!provider.imageDefaults);
+  });
   // Execution mappings are provider data, not a guess based on a model's name.
   // Gate after every overlay so a preference cannot claim a target absent from this account.
   providers = providers.map(provider => {
@@ -2004,19 +2008,20 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
           localOverrides.patches[key].agents?.includes(agent)));
     },
   }));
-  // Providers Cindy created for subscription accounts (2026-11-13) mirror their built-in
-  // subscription's final routes and models; only the accounts behind them differ (placement.ts).
-  // Platform-key media stays with the built-in connection.
+  // Created providers mirror chat routes. Media belongs to the connection, not the parent.
+  const openAiDeclaration = providerSources.find((provider) => provider.id === 'openai');
   for (const entry of subscriptionPoolProviders) {
     const base = providers.find((provider) => provider.id === entry.kind);
     if (!base || providers.some((provider) => provider.id === entry.id)) continue;
-    const independent: Provider = {
+    const provider: Provider = {
       ...base, id: entry.id, name: entry.name, subscriptionPool: entry.kind,
       imageModels: undefined, imageDefaults: undefined, videoModels: undefined, videoDefaults: undefined,
+      audioModels: undefined, embeddingModels: undefined, embeddingDefaults: undefined, evaluationModels: undefined,
     };
-    providers = [...providers, entry.kind === 'openai'
-      ? normalizeSubscriptionImage(bindSubscriptionImageDefinition(independent))
-      : independent];
+    providers = [...providers, entry.kind === 'openai' && isOpenAiSubscriptionProvider(provider)
+      && openAiDeclaration?.imageModels?.length !== 0
+      ? projectSubscriptionImage(provider, undefined, !!openAiDeclaration?.imageDefaults)
+      : provider];
   }
   return { ...b, modelRegistry, providers };
 }
