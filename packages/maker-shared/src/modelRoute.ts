@@ -60,7 +60,7 @@ export function normalizeCompanionModelRoute(value: unknown): CompanionModelRout
   const agentDeviceId = typeof record.agentDeviceId === 'string' ? record.agentDeviceId.trim() : undefined;
   const modelGroup = modelGroupId(record.modelGroup);
   if (record.harness === 'acp') {
-    if (!isPluginEngineProviderId(providerId) || agentDeviceId) return null;
+    if (!isPluginEngineProviderId(providerId)) return null;
     return {
       harness: 'acp',
       model: record.model.trim(),
