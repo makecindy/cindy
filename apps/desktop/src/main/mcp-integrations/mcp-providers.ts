@@ -1349,9 +1349,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             },
             sshConfigProblem: () => sshConfigProblem,
             isSshKeyKnown: async (hostname, port) => (await loadRemoteSsh()).isRemoteHostKeyKnown(hostname, port),
-            readSsh: async (id) => {
+            readSsh: async (id, options) => {
               const remoteSsh = await loadRemoteSsh();
-              await remoteSsh.ensureRemoteHostReady(id);
+              await remoteSsh.ensureRemoteHostReady(id, options);
               const remote = (await remoteSsh.getRemoteSshPoolHydrated()).get(id);
               if (!remote) throw new Error('[SSH_HOST_NOT_FOUND]');
               return (await remote.exec(SSH_STATUS_COMMAND, { timeoutMs: 8_000, label: `list_machines(${id})`, maxOutputBytes: 64 * 1024 })).stdout;

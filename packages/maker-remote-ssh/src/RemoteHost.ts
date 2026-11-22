@@ -78,6 +78,15 @@ const KEEPALIVE_COUNT_MAX = 3;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1_000;
 
+/** Per-call policy. Default keeps existing explicit-connection TOFU behavior. */
+export interface ConnectOpts {
+  allowFirstTrust?: boolean;
+}
+
+function unverifiedHostError(): Error {
+  return Object.assign(new Error('[SSH_HOST_UNVERIFIED]'), { code: 'SSH_HOST_UNVERIFIED' });
+}
+
 export type StatusListener = (snapshot: HostSnapshot) => void;
 
 export interface ExecOpts {
@@ -425,6 +434,10 @@ export class RemoteHost {
   private connectionEpoch = 0;
   /** The currently running connect attempt, including reconnect attempts. */
   private inFlightConnect: Promise<void> | null = null;
+  // Captured per attempt, never loosened by a concurrent caller. Reconnects
+  // inherit the initiating policy; explicit later connects may choose anew.
+  private connectionTrust = { allowFirstTrust: true, trustedOnFirstUse: false };
+  private hostKeyUnverified = false;
   /** true = user explicitly asked to disconnect; suppress auto-reconnect. */
   private userDisconnected = false;
   /**
@@ -509,19 +522,35 @@ export class RemoteHost {
    * Open the connection. Idempotent — if already ready/connecting, returns
    * the in-flight promise. Throws on definitive failure (auth, network).
    */
-  async connect(): Promise<void> {
+  async connect(options: ConnectOpts = {}): Promise<void> {
     if (this.status === 'ready') return;
     if (this.status === 'connecting' || this.status === 'authenticating') {
       // Share the actual in-flight attempt instead of waiting only for a
       // future status event. A disconnect can invalidate an attempt after it
       // has emitted its terminal status; joining the Promise guarantees that
       // every caller still receives the cancellation/error outcome.
-      if (this.inFlightConnect) {
-        await this.inFlightConnect;
-      } else {
-        await this.waitForTerminal();
+      const trust = this.connectionTrust;
+      try {
+        if (this.inFlightConnect) {
+          await this.inFlightConnect;
+        } else {
+          await this.waitForTerminal();
+        }
+      } catch (error) {
+        // An explicit connection joining a strict probe must retain its own
+        // normal TOFU path, without upgrading the probe's in-flight verifier.
+        if (options.allowFirstTrust !== false && !trust.allowFirstTrust && !this.userDisconnected
+            && (error as { code?: string }).code === 'SSH_HOST_UNVERIFIED') {
+          return this.connect(options);
+        }
+        throw error;
       }
-      if (this.getStatus() === 'ready') return;
+      if (this.getStatus() === 'ready') {
+        // A simultaneously requested explicit connection may create trust,
+        // but an automatic reader cannot consume that first-trust handshake.
+        if (options.allowFirstTrust === false && trust.trustedOnFirstUse) throw unverifiedHostError();
+        return;
+      }
       // Prefer the last resolveAuth error so the structured `.code` survives
       // (classifyConnectFailure needs it); fall back to the string otherwise.
       if (this.lastAuthError) throw this.lastAuthError;
@@ -537,7 +566,7 @@ export class RemoteHost {
     this.networkRecoveryArmed = false;
     this.readySinceConnect = false;
     this.reconnectAttempts = 0;
-    await this.startConnectAttempt();
+    await this.startConnectAttempt(options.allowFirstTrust !== false);
   }
 
   /**
@@ -1197,6 +1226,7 @@ export class RemoteHost {
     hostKey: Buffer,
     storeKey: string,
     isCurrentAttempt: () => boolean,
+    trust: { allowFirstTrust: boolean; trustedOnFirstUse: boolean },
   ): Promise<boolean> {
     // A cancelled client must not even touch the shared TOFU store. In
     // particular, updateConfig() may already have published a new endpoint
@@ -1237,6 +1267,11 @@ export class RemoteHost {
     const decision = decideHostKey(stored, presented);
     if (decision === 'match') return true;
     if (decision === 'trust-new') {
+      if (!trust.allowFirstTrust) {
+        this.hostKeyUnverified = true;
+        this.hostKeyError = unverifiedHostError().message;
+        return false;
+      }
       if (!isCurrentAttempt()) return false;
       try {
         await store.set(storeKey, presented, isCurrentAttempt);
@@ -1257,6 +1292,7 @@ export class RemoteHost {
         return false;
       }
       if (!isCurrentAttempt()) return false;
+      trust.trustedOnFirstUse = true;
       this.log.info('ssh host key trusted on first use', {
         id: this.id,
         host: storeKey,
@@ -1302,6 +1338,7 @@ export class RemoteHost {
   }
 
   private async doConnect(): Promise<void> {
+    const trust = this.connectionTrust;
     const attemptEpoch = ++this.connectionEpoch;
     const isCurrentAttempt = (): boolean => attemptEpoch === this.connectionEpoch;
     const cancelledError = (): Error => new Error('SSH connection attempt cancelled');
@@ -1327,6 +1364,7 @@ export class RemoteHost {
     };
     this.setStatus('connecting');
     this.hostKeyError = null;
+    this.hostKeyUnverified = false;
     this.hostKeyMismatch = undefined;
     this.lastAuthError = null;
 
@@ -1371,7 +1409,7 @@ export class RemoteHost {
           verify(false);
           return;
         }
-        void this.verifyHostKey(hostKey, attemptHostKeyId, isCurrentAttempt).then(
+        void this.verifyHostKey(hostKey, attemptHostKeyId, isCurrentAttempt, trust).then(
           (valid) => verify(isCurrentAttempt() ? valid : false),
           () => verify(false),
         );
@@ -1455,6 +1493,7 @@ export class RemoteHost {
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
         const rejectErr = agentError ?? new Error(this.lastError);
+        if (this.hostKeyUnverified) Object.assign(rejectErr, { code: 'SSH_HOST_UNVERIFIED' });
         if (this.hostKeyMismatch) Object.assign(rejectErr, { code: 'SSH_HOST_KEY_MISMATCH' });
         // Preserve original for tests / debugging that key off message text.
         (rejectErr as Error & { cause?: unknown }).cause = err;
@@ -1507,7 +1546,8 @@ export class RemoteHost {
   }
 
   /** Start and register a connect attempt so concurrent callers can join it. */
-  private startConnectAttempt(): Promise<void> {
+  private startConnectAttempt(allowFirstTrust = this.connectionTrust.allowFirstTrust): Promise<void> {
+    this.connectionTrust = { allowFirstTrust, trustedOnFirstUse: false };
     const attempt = this.doConnect();
     this.inFlightConnect = attempt;
     void attempt.then(

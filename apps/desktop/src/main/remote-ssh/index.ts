@@ -48,6 +48,7 @@ import {
   hostKeyId,
   RemoteHost,
   type AddHostInput,
+  type ConnectOpts,
   type CodexAuthState,
   type HostConfig,
   type HostSnapshot,
@@ -396,7 +397,7 @@ export async function isRemoteHostKeyKnown(hostname: string, port: number): Prom
  * first message after launch because pool hydrate only happens lazily when
  * the user visits Settings → Remote.
  */
-export async function ensureRemoteHostReady(id: string): Promise<void> {
+export async function ensureRemoteHostReady(id: string, options?: ConnectOpts): Promise<void> {
   await ensureHydrated();
   const pool = getPool();
   const host = pool.get(id);
@@ -405,7 +406,7 @@ export async function ensureRemoteHostReady(id: string): Promise<void> {
   }
   if (host.getStatus() === 'ready') return;
   try {
-    await pool.connect(id);
+    await pool.connect(id, options);
   } catch (err) {
     const { code, msg } = classifyConnectFailure(err);
     throwIpcError(code, redactHostLocalPaths(host.config, msg) ?? msg);

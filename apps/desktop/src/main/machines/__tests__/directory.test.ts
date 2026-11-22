@@ -1,6 +1,29 @@
+import { EventEmitter } from 'node:events';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { ConnectionPool, FileHostKeyStore, hostKeyFingerprint } from '@cindy/maker-remote-ssh';
+
+// #8403: isolate only transport/auth; execute the real directory, pool,
+// verifier and persisted synthetic store. No real SSH endpoint or user data.
+vi.mock('ssh2', async original => ({ ...await original<typeof import('ssh2')>(),
+  Client: class extends EventEmitter {
+    connect(config: { hostVerifier(key: Buffer, verify: (valid: boolean) => void): void }) {
+      config.hostVerifier(Buffer.from('directory-synthetic-key'), valid => {
+        this.emit(valid ? 'ready' : 'error', new Error('verification failed'));
+      });
+    }
+    end() { this.emit('close'); }
+  },
+}));
+vi.mock('../../../../../../../packages/maker-remote-ssh/src/credentials.js', () => ({
+  resolveAuth: vi.fn(async () => ({ label: 'synthetic-agent' })),
+}));
 import { describe, expect, it, vi } from 'vitest';
 import type { MachineStatus } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
+import { classifyConnectFailure } from '../../remote-ssh/connect-failure.js';
+import { throwIpcError } from '../../utils/ipcValidate.js';
 import { countMachineRunningTasks, listMachines, type MachineDirectoryDeps } from '../directory.js';
 
 const status: MachineStatus = {
@@ -127,3 +150,38 @@ describe('list_machines directory', () => {
     })).toBe(2);
   });
 });
+
+// Unit, cindy-machines §3 / #8403. The existing directory tests stop at a fake
+// readSsh, so cannot detect trust creation after the outer disk precheck.
+// Minimal failure: remove the synthetic old entry between precheck and connect.
+it.each(['known', 'unknown', 'deleted', 'mismatch'] as const)(
+  'keeps automatic trust read-only through the production connection pool: %s', async mode => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-8403-directory-'));
+    const file = path.join(root, 'known-hosts.json');
+    const store = new FileHostKeyStore(file);
+    const key = 'synthetic.invalid:2222';
+    const fingerprint = hostKeyFingerprint(Buffer.from('directory-synthetic-key'));
+    if (mode !== 'unknown') await store.set(key, mode === 'known' ? fingerprint : 'SHA256:old');
+    const pool = new ConnectionPool({ hostKeys: store, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+    pool.add({ id: 'probe', hostname: 'synthetic.invalid', port: 2222, user: 'fixture', authMethod: 'agent', source: 'manual', managedByCindy: false });
+    const readSsh = vi.fn(async (id: string, options: { allowFirstTrust: false }) => {
+      if (mode === 'deleted') await fs.rm(file);
+      try { await pool.connect(id, options); }
+      catch (error) { const { code, msg } = classifyConnectFailure(error); throwIpcError(code, msg); }
+      return 'os=Linux\narch=x86_64\ncores=4\nMemTotal: 1024 kB\nMemAvailable: 512 kB\nload=0.02\ndisk=100 40\n';
+    });
+    try {
+      const result = await listMachines({ ...deps([], async () => status), probeTimeoutMs: 8000,
+        listSsh: async () => [{ kind: 'ssh', id: 'probe', hostname: 'synthetic.invalid', port: 2222, user: 'fixture', connection: 'disconnected' }],
+        isSshKeyKnown: async () => { store.reload(); return await store.get(key) !== null; }, readSsh });
+      expect(result.ssh[0].availability).toBe(mode === 'known' ? 'reachable' : mode === 'mismatch' ? 'host_key_changed' : 'unverified');
+      if (mode === 'unknown' || mode === 'deleted') {
+        await expect(fs.stat(file)).rejects.toMatchObject({ code: 'ENOENT' });
+      } else {
+        expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ [key]: mode === 'known' ? fingerprint : 'SHA256:old' });
+      }
+      if (mode === 'unknown') expect(readSsh).not.toHaveBeenCalled();
+      else expect(readSsh).toHaveBeenCalledExactlyOnceWith('probe', { allowFirstTrust: false });
+    } finally { await pool.dispose(); await fs.rm(root, { recursive: true, force: true }); }
+  },
+);
