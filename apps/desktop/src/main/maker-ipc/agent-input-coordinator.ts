@@ -768,6 +768,8 @@ interface ActiveTurn {
   controlKind?: 'compact';
   /** maker-core turn generation captured at vendor dispatch; leftover reclaim must match it. */
   vendorTurnGeneration: number | null;
+  /** Already-durable Worker input for stream failure while a steer row is still being saved. */
+  workerRecoverySource?: { runtime: object; item: AgentInputQueuedMessage };
   /**
    * `vendorTurnGeneration` before a host continuation adopted a newer one
    * (见 noteHostTurnContinuation)。续跑 send 在派发确认前失败时用它还原绑定；
@@ -3352,6 +3354,7 @@ export class AgentInputCoordinator {
       steerVendorTurnGeneration !== null &&
       this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
     const workerInputs = this.deps.workerInputs;
+    let workerRecoverySource: ActiveTurn['workerRecoverySource'];
     if (workerInputs && sameVendorTurn && steerRuntime &&
         this.deps.getTurnSessionIdentity?.(sessionId) === steerRuntime) {
       // Carry host verification across an accepted same-turn input replacement.
@@ -3359,12 +3362,13 @@ export class AgentInputCoordinator {
       const previous = accepted.activeTurn;
       const receipt = this.directWorkerReceipts.get(steerRuntime);
       const workerSource = previous
-        ? previous.vendorTurnGeneration === steerVendorTurnGeneration && !previous.stopped
+        ? previous.persisted && previous.vendorTurnGeneration === steerVendorTurnGeneration && !previous.stopped
           ? previous.item : null
         : receipt && receipt.generation === steerVendorTurnGeneration && !receipt.signal.aborted
           ? receipt.item : null;
       if (workerSource && workerInputs.has(workerSource.createOpts)) {
         workerInputs.add(item.createOpts);
+        workerRecoverySource = { runtime: steerRuntime, item: workerSource };
       }
     }
     accepted.activeTurn = {
@@ -3389,6 +3393,7 @@ export class AgentInputCoordinator {
           : null,
       vendorTurnGeneration:
         typeof steerVendorTurnGeneration === 'number' ? steerVendorTurnGeneration : null,
+      workerRecoverySource,
     };
     this.emit(sessionId);
 
@@ -4714,8 +4719,17 @@ export class AgentInputCoordinator {
         this.emit(sessionId);
         return;
       }
-      if (active?.persisted || directWorkerItem) {
-        const item = active?.item ?? directWorkerItem ?? null;
+      // Runtime EOF can be immediately followed by close. Recover from the
+      // already-durable input of this turn without waiting for the steer row.
+      const steerRecovery = active?.workerRecoverySource;
+      const pendingSteerWorkerItem =
+        active?.persisting && !active.stopped && steerRecovery && runtime === steerRecovery.runtime &&
+        meta?.sessionInstanceId && meta.sessionInstanceId === readSessionInstanceId(runtime) &&
+        meta.sessionTurnGeneration === active.vendorTurnGeneration &&
+        isUnexpectedWorkerStreamEnd({ ...signals, message })
+          ? steerRecovery.item : undefined;
+      if (active?.persisted || directWorkerItem || pendingSteerWorkerItem) {
+        const item = pendingSteerWorkerItem ?? active?.item ?? directWorkerItem ?? null;
         state.activeTurn = null;
         state.stickyError = null;
         const schedulerItem = item && isSchedulerOriginItem(item);
@@ -4726,7 +4740,8 @@ export class AgentInputCoordinator {
           allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate) || scheduledQuota,
           persistedFailure: true,
         });
-        if (active?.persisted && state.recovery?.kind === 'active-turn' && meta?.sessionInstanceId &&
+        if (active && (active.persisted || pendingSteerWorkerItem) &&
+          state.recovery?.kind === 'active-turn' && meta?.sessionInstanceId &&
           meta.sessionTurnGeneration !== undefined && active.vendorTurnGeneration === meta.sessionTurnGeneration) {
           this.terminalRecoveryOwners.set(state.recovery, {
             instanceId: meta.sessionInstanceId, generation: meta.sessionTurnGeneration,
@@ -8483,6 +8498,14 @@ export class AgentInputCoordinator {
         retainForRetry: false,
       });
       if (!this.isTurnGenerationCurrent(sessionId, active)) return 'stale';
+      if (active.workerRecoverySource && !this.isActiveTurnCurrent(sessionId, active)) {
+        // The detached steer write cannot replace the failure/recovery of the
+        // durable Worker input or that of a subsequent turn.
+        log.error('persist accepted Worker steer failed after turn settled', {
+          sessionId, clientId: item.clientId, error: errorMessage(err),
+        });
+        return 'failed';
+      }
       const state = this.getState(sessionId);
       state.error = `Failed to persist user message: ${errorMessage(err)}`;
       clearErrorProjectionSignals(state);
