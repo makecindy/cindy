@@ -10148,14 +10148,18 @@ app.on('ready', async () => {
   // Cindy-owned Skill activation and all home-level projections happen through
   // one stable-owner boundary. Passive shared-userData instances may consume the
   // active bundle but cannot switch it or its projections.
-  try {
-    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
-  } catch (error) {
+  //
+  // Warm-up only; the first window does not wait for it. Every Agent launch and
+  // Skill listing awaits the same preparation itself, and PreparationCache lets
+  // them join this run instead of starting another. Waiting here cost 0.7–3.9 s
+  // before the main window, and with a saved sign-in the owner is usually still
+  // being restored, so the owner guard rejected this pass anyway.
+  void desktopClaudeAuthAdapter.ensureSharedGlobalSkills().catch((error: unknown) => {
     // A broken optional Skill must not block the desktop from starting.
     createLogger('built-in-skills').warn('built-in Skill preparation failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-  }
+  });
 
   // macOS App Translocation fix: when the user launches the app without
   // dragging it to /Applications first, macOS runs it from a read-only
