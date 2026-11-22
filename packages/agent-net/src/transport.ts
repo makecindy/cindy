@@ -84,8 +84,11 @@ class CoreChannel implements PeerChannel {
   private earlySessionBytes = 0;
   /** Session v2: this channel reads and opens body streams (`SessionWire.openBody`). */
   readonly sessionBodies = true;
-  /** Session v2: body streams this side opened on the control and normal lanes, counted in the session's backlog until acknowledged. */
-  private readonly bodyStreams = new Set<SendStream>();
+  /**
+   * Session v2: body streams this side opened, counted in the session's backlog: those on the control and normal lanes until the core
+   * holds none of them, those on the background lane (file blocks) while bytes of them still wait here, as the lanes are counted.
+   */
+  private readonly bodyStreams = new Map<SendStream, SessionLaneName>();
   private bodyHandler: ((key: number, bytes: Uint8Array | null) => void) | null = null;
   private earlyBodies: Array<[number, Uint8Array | null]> = [];
   /** This side declared `AGENT_NET_SESSION_V2`: the peer may open body streams. */
@@ -268,13 +271,13 @@ class CoreChannel implements PeerChannel {
   }
 
   /**
-   * Session v2: bodies on the control and normal lanes count like their lanes (with what the core still buffers); a stream leaves
-   * the count once everything in it was acknowledged.
+   * Session v2: bodies count like their lanes: on the control and normal lanes with what the core still buffers, on the background
+   * lane what still waits here. A stream leaves the count once it holds nothing more.
    */
   private bodiesBuffered(): number {
     let total = 0;
-    for (const stream of this.bodyStreams) {
-      const buffered = stream.pendingBytes + stream.coreBufferedBytes;
+    for (const [stream, lane] of this.bodyStreams) {
+      const buffered = stream.pendingBytes + (lane === 'background' ? 0 : stream.coreBufferedBytes);
       if (buffered === 0 && stream.handedOver) this.bodyStreams.delete(stream); else total += buffered;
     }
     return total;
@@ -289,7 +292,7 @@ class CoreChannel implements PeerChannel {
     head[0] = SESSION_BODY_KIND;
     new DataView(head.buffer).setUint32(1, key, false);
     stream.write(head);
-    if (lane !== 'background') this.bodyStreams.add(stream);
+    this.bodyStreams.set(stream, lane);
     return {
       write: (bytes) => { if (!this.events.closed) stream.write(bytes); },
       finish: () => stream.finish(),

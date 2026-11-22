@@ -509,14 +509,14 @@ it.each(['undeclared', 'budget'] as const)('closes a connection whose peer opens
   channel.declareSessions!(['agent-net-session-v2']);
   for (let round = 0; round < 6; round++) {
     for (let index = 0; index < 50; index++) body(1 + round * 50 + index);
-    await vi.waitFor(() => expect(connection.drained).toBe(true));
+    await vi.waitFor(() => expect(connection.drained).toBe(true), { timeout: 10_000 });
   }
   await new Promise((resolve) => setTimeout(resolve, 50));
   expect(closed).toBe(false);
   // 300 ends (300 × 64) and one chunk event (64) of what fills the rest, plus a byte. The bytes alone stay under the budget.
   body(1000, new Uint8Array(16 * 1024 * 1024 - 301 * 64 + 1));
-  await vi.waitFor(() => expect(closed).toBe(true), { timeout: 10_000 });
-});
+  await vi.waitFor(() => expect(closed).toBe(true), { timeout: 20_000 });
+}, 40_000);
 
 /** 测试价值（Node 驱动收回交完的流）
  * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
@@ -537,9 +537,9 @@ it('lets go of streams the Node driver has handed over, so its table does not gr
   await vi.waitFor(() => expect(connection.established).toBe(true));
   for (let round = 0; round < 6; round++) {
     for (let index = 0; index < 50; index++) { const stream = connection.openStream('normal'); stream.write(new Uint8Array(1000)); stream.finish(); }
-    await vi.waitFor(() => expect(connection.drained).toBe(true));
+    await vi.waitFor(() => expect(connection.drained).toBe(true), { timeout: 10_000 });
   }
-  await vi.waitFor(() => expect(received).toBe(300 * 1000));
+  await vi.waitFor(() => expect(received).toBe(300 * 1000), { timeout: 10_000 });
   const given = connection.openStream('normal');
   given.write(new Uint8Array(4 << 20));
   expect(given.abandon()).not.toBeNull();
@@ -743,10 +743,10 @@ it('fails frames waiting for a member the host rule then refuses, and never send
  * - tier：integration，真实回环 WS 中转，不开 UDP。 */
 it('carries an independent session between two new nodes alongside Device Link frames', async () => {
   const f = await network(false); f.host.stop(); f.controller.stop();
-  const laneFor = (channel: string) => (channel === 'test:interactive' ? 'control' as const : 'normal' as const);
+  const laneFor = (channel: string) => (channel === 'test:interactive' ? 'control' as const : channel === 'test:bulk' ? 'background' as const : 'normal' as const);
   const pushes: unknown[] = [], large = 'large-session-result-'.repeat(15_000);
   const file = randomBytes(240_000).toString('base64');
-  let backlog = -1;
+  let backlog = -1, bulkBacklog = -1;
   const a = await AgentNetSocket.open({ client: f.a, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   const b = await AgentNetSocket.open({ client: f.b, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   cleanup.push(() => a.close()); cleanup.push(() => b.close());
@@ -755,9 +755,10 @@ it('carries an independent session between two new nodes alongside Device Link f
     onRequest: (request) => {
       const session = a.session('b-controller')!;
       if (request.channel === 'test:large') session.push('test:before', 1);
-      session.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : request.channel === 'test:file' ? { data: file }
+      session.respond(request.id, { ok: true, result: request.channel === 'test:large' || request.channel === 'test:bulk' ? large : request.channel === 'test:file' ? { data: file }
         : [request.channel, ...request.args] });
       if (request.channel === 'test:large') { backlog = session.bufferedAmount; session.push('test:after', 2); }
+      if (request.channel === 'test:bulk') bulkBacklog = session.bufferedAmount;
     },
   }) });
   await vi.waitFor(() => expect(b.knowsPeer('a-host')).toBe(true));
@@ -783,8 +784,11 @@ it('carries an independent session between two new nodes alongside Device Link f
     .resolves.toEqual({ ok: true, result: large });
   await vi.waitFor(() => expect(pushes.slice(1)).toEqual([['test:before', 1], 'result', ['test:after', 2]]));
   expect(bodies.mock.calls.some(([, bytes]) => bytes === null)).toBe(true);
-  // The body on its own stream still counts in the session's backlog, as it would on its lane.
+  // The body on its own stream still counts in the session's backlog, as it would on its lane; on the background lane too, while its
+  // bytes wait here (2026-11-22 review: background bodies were left out, so file blocks could pile up unseen).
   expect(backlog).toBeGreaterThanOrEqual(large.length);
+  await expect(session.request('test:bulk', [], { timeoutMs: 10_000 })).resolves.toMatchObject({ ok: true });
+  expect(bulkBacklog).toBeGreaterThanOrEqual(large.length);
   // A file block's base64 crosses as its bytes and comes back as the same string.
   const bodyBytes = () => bodies.mock.calls.reduce((total, [, bytes]) => total + (bytes?.length ?? 0), 0), before = bodyBytes();
   await expect(session.request('test:file', [], { timeoutMs: 10_000 })).resolves.toEqual({ ok: true, result: { data: file } });

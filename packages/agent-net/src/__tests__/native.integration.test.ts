@@ -557,6 +557,8 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
           }) } } });
         return transport;
       } } });
+    // Closed even when an assertion below fails: its relay WebSocket and polling would otherwise keep the test worker alive.
+    cleanups.push(() => phone.close());
     phone.useSessions({ laneFor: () => 'normal', handlers: () => ({
       onRequest: (request) => { phone.session(owner.deviceId)!.respond(request.id, { ok: true, result: phoneLarge }); },
     }) });
