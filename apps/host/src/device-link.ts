@@ -490,6 +490,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       transferCodec: desktopTransferCodec,
       path: (peer) => node.route(peer).path,
       rttMs: (peer) => node.route(peer).rttMs,
+      onRelayStall: (peer) => node.relayStalled(peer),
       connectedAt: node.connectedAt,
       connect: node.connect,
       agentNetPeer: node.agentNetPeer,

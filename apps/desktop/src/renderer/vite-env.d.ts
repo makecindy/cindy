@@ -5027,6 +5027,7 @@ interface ElectronAPI {
         sessionId: string;
         totalMoney: import('../shared/regionalMoney').RegionalMoney;
         totalCostUsd?: number;
+        totalCostUsdIsApproximate?: boolean;
       },
       ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
     ) => void,
@@ -7418,6 +7419,7 @@ interface ElectronAPI {
       ) => () => void;
       /** 用量历史聚合 (首页仪表盘)。wire 形态与 main/usage/usageHistory.ts 的 UsageHistoryPayload 同形。 */
       getHistory: (opts?: {
+        currency?: 'USD' | 'CNY';
         days?: number | 'all';
         modelDays?: number | 'all';
         /** 'local' (默认) / 'all' (所有设备合并) / 其它电脑的 deviceId。 */

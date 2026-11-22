@@ -21,7 +21,7 @@ import {
 } from '@cindy/agent-net-core/node';
 import os from 'node:os';
 import { StunClient } from './stun.js';
-import { RelayUdpPath } from './relayUdp.js';
+import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
 import {
   AGENT_NET_SESSION_V1, ChannelEvents, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES, SESSION_LANE_KINDS,
@@ -290,6 +290,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   let endpoint: Endpoint;
   // 中继给了 UDP 凭据时经中继的数据报走 UDP，否则（或 UDP 不通时）走中继 WebSocket，见 relayUdp.ts。
   let relayUdp: RelayUdpPath | null = null;
+  const relaySends = new RelaySendCounters();
   const linkFor = (relayId: string): Link => {
     let link = links.get(relayId);
     if (!link) {
@@ -340,7 +341,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
         }
       : {}),
   });
-  relay?.uplink.onDatagram((relayId, datagram) => linkFor(relayId).deliver(datagram));
+  relay?.uplink.onDatagram((relayId, datagram) => { relayUdp?.noteInbound(false); linkFor(relayId).deliver(datagram); });
   if (udp && relay?.udpCredentials && options.relayUdpServer) {
     const credentials = relay.udpCredentials;
     relayUdp = new RelayUdpPath({
@@ -349,6 +350,14 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       credentials: () => credentials(),
       peers: () => (options.admittedPeers?.() ?? []).map((peer) => peer.relayId),
       deliver: (relayId, datagram) => linkFor(relayId).deliver(datagram),
+      // 只算一直走中转的那段：直连的丢包、刚换到中转的连接的历史都与中转 UDP 无关（RelaySendCounters）。
+      relayedSendCounters: () => relaySends.sample(function* () {
+        for (const channel of channels) {
+          const stats = channel.stats();
+          if (stats) yield { key: channel, relay: channel.addressKind() === 'relay',
+            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0 };
+        }
+      }()),
     });
   }
   const publicOnly = options.publicCandidatesOnly === true;
@@ -407,10 +416,13 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       endpoint.localAddressChanged();
       if (udp) gather();
     },
+    relayStalled() { relayUdp?.noteStall(); },
     relayRoute() {
       if (!relay || closed) return null;
       // 和 linkFor 里发数据报的判断是同一个：UDP 通着就走 UDP，否则走中转 WebSocket。
-      return relayUdp?.up ? { via: 'udp', rttMs: relayUdp.rttMs } : { via: 'websocket', rttMs: null };
+      if (relayUdp?.up) return { via: 'udp', rttMs: relayUdp.rttMs };
+      const suspension = relayUdp?.suspension;
+      return suspension ? { via: 'websocket', rttMs: null, udpSuspension: suspension } : { via: 'websocket', rttMs: null };
     },
     async close() {
       closed = true; stun?.close();
