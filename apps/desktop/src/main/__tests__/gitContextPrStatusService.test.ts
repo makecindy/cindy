@@ -529,6 +529,33 @@ describe('GitLab MR status', () => {
     });
     expect(fetch.mock.calls[0]?.[0]).toBe('https://git.example.com/api/v4/projects/group%2Fsub%2Fproject/merge_requests/7');
   });
+  // Unit regression for #12168: an unresponsive optional endpoint withheld a valid MR badge on mobile.
+  // The schema-error case above returns immediately and cannot catch a blocked supplement.
+  it('returns REST status when the concurrent GraphQL summary exhausts its shorter deadline', async () => {
+    const rest = new AbortController();
+    const summary = new AbortController();
+    const deadline = vi.spyOn(AbortSignal, 'timeout')
+      .mockReturnValueOnce(rest.signal)
+      .mockReturnValueOnce(summary.signal);
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/api/graphql')) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        });
+      }
+      return Response.json({ iid: 7, title: 'Fix', state: 'opened', source_branch: 'feature', sha: 'head' });
+    });
+    try {
+      const status = fetchGitlabMrStatus('fake', q, fetch);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(deadline.mock.calls[1]![0]).toBeLessThan(deadline.mock.calls[0]![0]);
+      summary.abort();
+      await expect(status).resolves.toMatchObject({ state: 'open', title: 'Fix', checks: null });
+    } finally {
+      summary.abort();
+      deadline.mockRestore();
+    }
+  });
   const mr = () => ({
     state: 'opened',
     draft: false,

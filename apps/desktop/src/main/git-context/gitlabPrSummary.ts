@@ -78,11 +78,13 @@ export async function fetchGitlabMr(
   token: string,
   q: PrStatusQuery,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<PrRemoteState> {
   if (q.provider !== 'gitlab' || !isPrHost(q.host)) throw new Error('INVALID_GITLAB_IDENTITY');
   const origin = `https://${q.host.toLowerCase()}`;
   const response = await gitlabRequest(origin, '/api/graphql', token, fetchImpl, {
     method: 'POST',
+    signal,
     body: JSON.stringify({
       query: GITLAB_MR_QUERY,
       variables: { path: `${q.owner}/${q.repo}`, iid: String(q.prNumber) },
@@ -132,7 +134,7 @@ async function gitlabRequest(
     {
       ...init,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(15_000),
+      signal: init.signal ?? AbortSignal.timeout(15_000),
     },
     undefined,
     async (input, init) => {
@@ -158,13 +160,17 @@ export async function fetchGitlabMrStatus(
 ): Promise<PrRemoteState> {
   if (q.provider !== 'gitlab' || !isPrHost(q.host)) throw new Error('INVALID_GITLAB_IDENTITY');
   const project = encodeURIComponent(`${q.owner}/${q.repo}`);
-  const response = await gitlabRequest(
+  // Leave room in the mobile RPC's 15-second window for credential lookup and transport.
+  // The optional summary must finish within the same window, even on older or slow instances.
+  const rest = gitlabRequest(
     `https://${q.host.toLowerCase()}`,
     `/api/v4/projects/${project}/merge_requests/${q.prNumber}`,
     token,
     fetchImpl,
-  );
-  const mr = await response.json();
+    { signal: AbortSignal.timeout(10_000) },
+  ).then(response => response.json());
+  const summary = fetchGitlabMr(token, q, fetchImpl, AbortSignal.timeout(3_000)).catch(() => null);
+  const [mr, extra] = await Promise.all([rest, summary]);
   if (
     mr?.iid !== q.prNumber ||
     !['opened', 'closed', 'merged', 'locked'].includes(mr.state) ||
@@ -172,7 +178,6 @@ export async function fetchGitlabMrStatus(
     typeof mr.source_branch !== 'string'
   )
     throw new Error('GITLAB_STATE_UNKNOWN');
-  const extra = await fetchGitlabMr(token, q, fetchImpl).catch(() => null);
   const sameHead = !!mr.sha && extra?.head_sha === mr.sha;
   return {
     state: mr.state === 'opened' ? 'open' : 'closed',
