@@ -276,6 +276,7 @@ export interface SchedulerQueueDeps {
     text: string;
     persistedContent: string;
     inheritTargetPlanMode?: boolean;
+    explicitModelRoute?: boolean;
     origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
     /** Runs under the send lock before the queued Session is captured. */
     onPreparing?: () => Promise<void>;
