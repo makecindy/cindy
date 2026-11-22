@@ -296,7 +296,7 @@ export interface MakerSendTransactionSession {
   /** ACP plugin engines only: whether cindy_orca was mounted when opening this live session. */
   readonly pluginEngineHasOrcaMcp?: boolean;
   /** ACP plugin engines only: queue a one-shot host briefing ahead of the next prompt on a live session. */
-  queuePluginEngineBriefing?(briefing: string): void;
+  queuePluginEngineBriefing?(briefing: string, onDelivered?: () => void): void;
   setVendorOptions?(patch: Record<string, unknown>): Promise<void>;
   /** 项目资源漂移且满足回收空闲口径(仅 pi 本地根任务实现;其余会话缺省,永不回收)。 */
   hasRecyclableProjectResourceDrift?(): boolean;
@@ -370,6 +370,8 @@ export interface MakerSendTransactionDeps {
   resolveOrcaRoleInstructions?(opts: CreateOpts): Promise<string | null>;
   markOrcaMcpHydratedIfNeeded?(sessionId: string, opts: CreateOpts): void;
   markAcpLeadTeamBriefed?(sessionId: string, teamId: string): void;
+  /** The Lead's active team, or null once it has none (a team can end while a send awaits; nothing holds the send lock). */
+  getActiveOrcaTeamId?(sessionId: string): Promise<string | null>;
   buildCreateOptsWithStderr(opts: CreateOpts): CreateOpts;
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: CreateOpts): Promise<boolean>;
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
@@ -1093,19 +1095,46 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             };
           }
           // An ACP engine that cannot resume/load would lose its conversation on close+rehydrate.
-          // Resolve the active Worker route, push synthesized vendorOptions to the live bridge,
-          // queue the one-shot Lead briefing ahead of the next prompt, and mark hydrated.
-          const briefing = deps.resolveOrcaRoleInstructions
-            ? await deps.resolveOrcaRoleInstructions(co)
-            : deps.renderOrcaRoleInstructions?.(co) ?? null;
+          // Take the active team (the options rebuilt from the DB carry no team id for a Lead), resolve the
+          // Worker route of that team, and verify it is still the active one after awaiting DB (disableOrca,
+          // or a new team, does not hold the send lock). If another team took over meanwhile, redo it for that
+          // team once; if it changes again, stop rather than send the message to a Lead without instructions.
+          // Then push the synthesized vendorOptions, queue the one-shot Lead briefing, and mark hydrated.
+          const baseVendorOptions = co.vendorOptions;
+          let teamId: string | undefined;
+          let briefing: string | null = null;
+          for (let attempt = 0; ; attempt += 1) {
+            const activeTeamId = deps.getActiveOrcaTeamId ? await deps.getActiveOrcaTeamId(sessionId) : undefined;
+            if (activeTeamId === null) return null;
+            teamId = activeTeamId
+              ?? (typeof baseVendorOptions?.orcaWorkflowId === 'string' ? baseVendorOptions.orcaWorkflowId : undefined);
+            // Each read starts from the rebuilt options, without the Worker route found for a previous team.
+            if (baseVendorOptions) co.vendorOptions = teamId ? { ...baseVendorOptions, orcaWorkflowId: teamId } : { ...baseVendorOptions };
+            briefing = deps.resolveOrcaRoleInstructions
+              ? await deps.resolveOrcaRoleInstructions(co)
+              : deps.renderOrcaRoleInstructions?.(co) ?? null;
+            if (!deps.getActiveOrcaTeamId || (await deps.getActiveOrcaTeamId(sessionId)) === teamId) break;
+            if (attempt >= 1) {
+              return {
+                kind: 'failure',
+                result: toCompatibleMakerSendResult(
+                  createHostSendFailure(
+                    'REHYDRATE_FAILED',
+                    'The collaboration team changed while the Lead was being prepared; send the message again.',
+                  ),
+                ),
+              };
+            }
+          }
           if (co.vendorOptions) {
             await sess.setVendorOptions?.(co.vendorOptions);
           }
-          if (briefing) sess.queuePluginEngineBriefing?.(briefing);
-          deps.markOrcaMcpHydratedIfNeeded?.(sessionId, co);
-          if (typeof co.vendorOptions?.orcaWorkflowId === 'string') {
-            deps.markAcpLeadTeamBriefed?.(sessionId, co.vendorOptions.orcaWorkflowId);
+          if (briefing) {
+            sess.queuePluginEngineBriefing?.(briefing, () => {
+              if (teamId) deps.markAcpLeadTeamBriefed?.(sessionId, teamId);
+            });
           }
+          deps.markOrcaMcpHydratedIfNeeded?.(sessionId, co);
         }
         return null;
       }

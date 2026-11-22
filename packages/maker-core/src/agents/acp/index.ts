@@ -30,7 +30,9 @@ export {
   AcpResumeUnavailableError,
   AcpSession,
   openAcpSession,
+  probeAcpLeadSupport,
   type AcpClientInfo,
+  type AcpLeadSupport,
   type AcpResumeOutcome,
   type OpenAcpSessionOptions,
 } from './session.js';

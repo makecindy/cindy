@@ -208,6 +208,7 @@ describe('session IPC request parsing', () => {
       providerId: 'acp-plugin:dsh-acp:dsh',
       pluginEngineBriefing: 'spoofed briefing',
       pluginEngineForceBriefingOnResume: true,
+      pluginEngineOnBriefingDelivered: () => {},
       pluginEngineTrustedCaller: true,
     });
     expect(opts).toMatchObject({
@@ -217,6 +218,7 @@ describe('session IPC request parsing', () => {
     });
     expect(opts.pluginEngineBriefing).toBeUndefined();
     expect(opts.pluginEngineForceBriefingOnResume).toBeUndefined();
+    expect(opts.pluginEngineOnBriefingDelivered).toBeUndefined();
     expect(opts.pluginEngineTrustedCaller).toBeUndefined();
   });
 

@@ -3541,7 +3541,9 @@ describe('maker SEND transaction', () => {
       pluginEngineForceBriefingOnResume: true,
     }));
 
-    const queuePluginEngineBriefing = vi.fn();
+    const queuePluginEngineBriefing = vi.fn((_briefing: string, onDelivered?: () => void) => {
+      onDelivered?.();
+    });
     const setVendorOptions = vi.fn(async () => {});
     const markOrcaMcpHydratedIfNeeded = vi.fn();
     const markAcpLeadTeamBriefed = vi.fn();
@@ -3552,18 +3554,21 @@ describe('maker SEND transaction', () => {
       queuePluginEngineBriefing,
       setVendorOptions,
     });
+    const resolveOrcaRoleInstructions = vi.fn(async (co: MakerSessionCreateOpts) => {
+      co.vendorOptions = { ...(co.vendorOptions ?? {}), initialWorker: { workerId: 'w-1', sessionId: 'ws-1' } };
+      return 'Lead briefing with worker route';
+    });
     const { deps: depsLive } = createDeps({
       getSession: vi.fn(() => nonResumable),
       isOrcaMcpHydrated: vi.fn(() => false),
+      // What the DB rebuild yields for a Lead: its role and session, never the team id.
       synthesizeOrcaVendorOptionsFromDb: vi.fn(async (_id, co) => {
         co.orcaRole = 'lead';
-        co.vendorOptions = { orcaRole: 'lead', orcaWorkflowId: 'team-2', orcaLeadSessionId: 'acp-lead-2' };
+        co.vendorOptions = { orcaRole: 'lead', orcaLeadSessionId: 'acp-lead-2' };
         return true;
       }),
-      resolveOrcaRoleInstructions: vi.fn(async (co) => {
-        co.vendorOptions = { ...(co.vendorOptions ?? {}), initialWorker: { workerId: 'w-1', sessionId: 'ws-1' } };
-        return 'Lead briefing with worker route';
-      }),
+      resolveOrcaRoleInstructions,
+      getActiveOrcaTeamId: vi.fn(async () => 'team-2'),
       markOrcaMcpHydratedIfNeeded,
       markAcpLeadTeamBriefed,
     });
@@ -3573,14 +3578,49 @@ describe('maker SEND transaction', () => {
     })).resolves.toBe(false);
     expect(depsLive.closeSession).not.toHaveBeenCalled();
     expect(depsLive.bootstrapSession).not.toHaveBeenCalled();
+    // The Worker route is read for the team taken from the DB, and the live bridge learns that team.
+    expect(resolveOrcaRoleInstructions).toHaveBeenCalledWith(expect.objectContaining({
+      vendorOptions: expect.objectContaining({ orcaWorkflowId: 'team-2' }),
+    }));
     expect(setVendorOptions).toHaveBeenCalledWith(expect.objectContaining({
       orcaRole: 'lead',
       orcaWorkflowId: 'team-2',
       initialWorker: { workerId: 'w-1', sessionId: 'ws-1' },
     }));
-    expect(queuePluginEngineBriefing).toHaveBeenCalledWith('Lead briefing with worker route');
+    expect(queuePluginEngineBriefing).toHaveBeenCalledWith('Lead briefing with worker route', expect.any(Function));
     expect(markOrcaMcpHydratedIfNeeded).toHaveBeenCalledWith('acp-lead-2', expect.objectContaining({ orcaRole: 'lead' }));
     expect(markAcpLeadTeamBriefed).toHaveBeenCalledWith('acp-lead-2', 'team-2');
+
+    // Concurrent disableOrca while awaiting resolveOrcaRoleInstructions must not write stale Lead state back.
+    const staleSetVendorOptions = vi.fn(async () => {});
+    const staleQueueBriefing = vi.fn();
+    const staleMarkHydrated = vi.fn();
+    const staleSession = createSession({
+      id: 'acp-lead-stale', agentKind: 'acp', workDir: 'C:\\repo',
+      pluginEngineResumeSupported: false,
+      pluginEngineHasOrcaMcp: true,
+      setVendorOptions: staleSetVendorOptions,
+      queuePluginEngineBriefing: staleQueueBriefing,
+    });
+    const { deps: depsStale } = createDeps({
+      getSession: vi.fn(() => staleSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async (_id, co) => {
+        co.orcaRole = 'lead';
+        co.vendorOptions = { orcaRole: 'lead', orcaLeadSessionId: 'acp-lead-stale' };
+        return true;
+      }),
+      resolveOrcaRoleInstructions: vi.fn(async () => 'Stale Lead briefing'),
+      // Active when the send starts, ended by the time the briefing is ready (and still ended on the second look).
+      getActiveOrcaTeamId: vi.fn().mockResolvedValueOnce('team-stale').mockResolvedValue(null),
+      markOrcaMcpHydratedIfNeeded: staleMarkHydrated,
+    });
+    await expect(createMakerSendTransaction(depsStale).hydrateActiveOrcaSession('acp-lead-stale', {
+      id: 'acp-lead-stale', agentKind: 'claude-code', workingDir: 'C:\\repo', model: 'dsh-pro',
+    })).resolves.toBe(false);
+    expect(staleSetVendorOptions).not.toHaveBeenCalled();
+    expect(staleQueueBriefing).not.toHaveBeenCalled();
+    expect(staleMarkHydrated).not.toHaveBeenCalled();
 
     // Non-resumable live ACP Lead that started without cindy_orca must fail cleanly without closing the session.
     const missingOrcaSession = createSession({
@@ -3609,6 +3649,87 @@ describe('maker SEND transaction', () => {
     });
     expect(depsMissingOrca.closeSession).not.toHaveBeenCalled();
     expect(missingOrcaSession.send).not.toHaveBeenCalled();
+  });
+
+  // Production entry: sending to a live ACP Lead promoted after startup, on an engine that cannot resume.
+  // Basis: the Lead briefing names the Worker of the team being led, and neither disableOrca nor start_team holds the send lock.
+  // Gap: the options rebuilt from the DB carry no team id for a Lead, so the final check accepted any active team and the
+  // briefing kept the Worker route read for the team that had just ended; and when the check did fail, the send went on
+  // to deliver the first message to a Lead that had no instructions.
+  // Minimal failing input: team A is active while the route is read, team B is active at the final check.
+  // Tier: unit.
+  describe('a promoted ACP Lead whose team is replaced while its Worker route is read', () => {
+    const leadOptions = { id: 'acp-lead-replaced', agentKind: 'claude-code' as const, workingDir: 'C:\\repo', model: 'dsh-pro' };
+    const setup = (activeTeams: string[]) => {
+      const setVendorOptions = vi.fn(async () => {});
+      const queuePluginEngineBriefing = vi.fn((_briefing: string, onDelivered?: () => void) => { onDelivered?.(); });
+      const markOrcaMcpHydratedIfNeeded = vi.fn();
+      const markAcpLeadTeamBriefed = vi.fn();
+      const session = createSession({
+        id: 'acp-lead-replaced', agentKind: 'acp', workDir: 'C:\\repo',
+        pluginEngineResumeSupported: false,
+        pluginEngineHasOrcaMcp: true,
+        setVendorOptions,
+        queuePluginEngineBriefing,
+      });
+      const optionsSeen: unknown[] = [];
+      const resolveOrcaRoleInstructions = vi.fn(async (co: MakerSessionCreateOpts) => {
+        optionsSeen.push(structuredClone(co.vendorOptions));
+        const team = co.vendorOptions?.orcaWorkflowId;
+        co.vendorOptions = { ...(co.vendorOptions ?? {}), initialWorker: { workerId: `worker-of-${String(team)}`, sessionId: 'ws-1' } };
+        return `Lead briefing for ${String(team)}`;
+      });
+      const getActiveOrcaTeamId = vi.fn();
+      for (const team of activeTeams) getActiveOrcaTeamId.mockResolvedValueOnce(team);
+      const { deps } = createDeps({
+        getSession: vi.fn(() => session),
+        isOrcaMcpHydrated: vi.fn(() => false),
+        synthesizeOrcaVendorOptionsFromDb: vi.fn(async (_id, co) => {
+          co.orcaRole = 'lead';
+          co.vendorOptions = { orcaRole: 'lead', orcaLeadSessionId: 'acp-lead-replaced' };
+          return true;
+        }),
+        resolveOrcaRoleInstructions,
+        getActiveOrcaTeamId,
+        markOrcaMcpHydratedIfNeeded,
+        markAcpLeadTeamBriefed,
+      });
+      return { deps, session, setVendorOptions, queuePluginEngineBriefing, markOrcaMcpHydratedIfNeeded, markAcpLeadTeamBriefed, optionsSeen };
+    };
+
+    it('briefs the Lead for the team that took over, from a route read again for it', async () => {
+      // Read A, final check sees B, read B again, final check B.
+      const t = setup(['team-A', 'team-B', 'team-B', 'team-B']);
+      await createMakerSendTransaction(t.deps).hydrateActiveOrcaSession('acp-lead-replaced', leadOptions);
+      expect(t.optionsSeen).toEqual([
+        { orcaRole: 'lead', orcaLeadSessionId: 'acp-lead-replaced', orcaWorkflowId: 'team-A' },
+        // No Worker route of team A is carried over to the second read.
+        { orcaRole: 'lead', orcaLeadSessionId: 'acp-lead-replaced', orcaWorkflowId: 'team-B' },
+      ]);
+      expect(t.setVendorOptions).toHaveBeenCalledTimes(1);
+      expect(t.setVendorOptions).toHaveBeenCalledWith(expect.objectContaining({
+        orcaWorkflowId: 'team-B',
+        initialWorker: { workerId: 'worker-of-team-B', sessionId: 'ws-1' },
+      }));
+      expect(t.queuePluginEngineBriefing).toHaveBeenCalledOnce();
+      expect(t.queuePluginEngineBriefing).toHaveBeenCalledWith('Lead briefing for team-B', expect.any(Function));
+      expect(t.markAcpLeadTeamBriefed).toHaveBeenCalledWith('acp-lead-replaced', 'team-B');
+      expect(t.markOrcaMcpHydratedIfNeeded).toHaveBeenCalledOnce();
+    });
+
+    it('stops the send instead of delivering a message to a Lead without instructions when the team keeps changing', async () => {
+      // Read A, check B, read B, check C.
+      const t = setup(['team-A', 'team-B', 'team-B', 'team-C']);
+      await expect(createMakerSendTransaction(t.deps).sendToAgentAccepted('acp-lead-replaced', 'delegate this task', leadOptions)).resolves.toMatchObject({
+        accepted: false,
+        reason: 'REHYDRATE_FAILED',
+      });
+      expect(t.session.send).not.toHaveBeenCalled();
+      expect(t.setVendorOptions).not.toHaveBeenCalled();
+      expect(t.queuePluginEngineBriefing).not.toHaveBeenCalled();
+      expect(t.markOrcaMcpHydratedIfNeeded).not.toHaveBeenCalled();
+      expect(t.markAcpLeadTeamBriefed).not.toHaveBeenCalled();
+    });
   });
 
   it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {

@@ -2171,9 +2171,14 @@ export interface StartSessionOptions {
    */
   pluginEngineForceBriefingOnResume?: boolean;
   /**
+   * Plugin engines only: invoked once when `pluginEngineBriefing` is actually attached to a
+   * dispatched prompt (not when deferred past a native slash command or before any turn runs).
+   */
+  pluginEngineOnBriefingDelivered?: () => void;
+  /**
    * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
    * true = the host trusts the engine as a whole, so its tool calls count as the task's own
-   * (collaboration Leads and Workers). Default: caller unknown.
+   * (collaboration Workers reporting to their Lead). Default: caller unknown.
    */
   pluginEngineTrustedCaller?: boolean;
   /**
@@ -2670,7 +2675,7 @@ export interface AgentSessionHandle {
   /** ACP plugin engines only: whether the engine supports resuming or loading an existing session. */
   readonly pluginEngineResumeSupported?: boolean;
   /** ACP plugin engines only: queue a one-shot host briefing ahead of the next prompt on a live session. */
-  queuePluginEngineBriefing?(briefing: string): void;
+  queuePluginEngineBriefing?(briefing: string, onDelivered?: () => void): void;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;

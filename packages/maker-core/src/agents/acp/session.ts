@@ -62,6 +62,27 @@ const DEFAULT_CANCEL_GRACE_MS = 15_000;
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
 /** Matched by the host's no-active-turn handling, which then delivers the message as the next turn. */
 const NO_ACTIVE_TURN_TO_STEER = 'No active turn to steer';
+
+/**
+ * Before the agent announces its commands: `/compact`, `/review main`, `/user:deploy`, a command name then a space or
+ * the end. A path such as `/tmp/a.txt` is plain text.
+ */
+const NATIVE_COMMAND_HEAD = /^\/\w[\w:-]*(?:\s|$)/;
+
+/**
+ * A native agent command only works as the very start of a prompt, so nothing may be put in front of it. Until the
+ * agent has announced its commands the shape decides; once it has, only a name it announced is a command, whatever
+ * characters that name has. This is the agent's own list: the caller also keeps text shaped like a command in front
+ * (`isLeadingSlashCommand`), as an agent may run commands it never announced.
+ */
+function startsWithNativeCommand(block: AcpContentBlock | undefined, announced: ReadonlySet<string> | null): boolean {
+  if (block?.type !== 'text') return false;
+  const text = block.text.trimStart();
+  if (announced === null) return NATIVE_COMMAND_HEAD.test(text);
+  const name = /^\/(\S+)/.exec(text)?.[1];
+  return name !== undefined && announced.has(name);
+}
+
 /**
  * Work an agent does after answering a prompt (between turns) counts as live for
  * this long after its last update, so the runtime is not reclaimed mid-task.
@@ -149,6 +170,8 @@ export interface OpenAcpSessionOptions {
   expandSlashInvocation?: (text: string) => Promise<string | null>;
   /** Deliver `briefing` once even on a resumed/loaded session (mid-session Orca Lead promotion). */
   forceBriefingOnResume?: boolean;
+  /** Invoked once when `briefing` is actually prepended to a dispatched non-command prompt. */
+  onBriefingDelivered?: () => void;
   /** Called when the host mutates per-session vendor options (e.g. Orca Lead role activation/teardown). */
   onSetVendorOptions?: (patch: Record<string, unknown>) => void;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
@@ -275,6 +298,62 @@ class AcpRouter {
       session.handleNotification('session/update', params);
     }
   }
+}
+
+/** What an engine has to offer to act as a collaboration Lead. */
+export interface AcpLeadSupport {
+  /** It takes the HTTP MCP server that carries the cindy_orca tools. */
+  httpMcp: boolean;
+  /** It can reopen a stored session (`session/resume` or `session/load`). */
+  resume: boolean;
+}
+
+function leadSupportOf(init: AcpInitializeResult): AcpLeadSupport {
+  return {
+    httpMcp: init.agentCapabilities.mcpCapabilities.http === true,
+    resume: init.agentCapabilities.sessionCapabilities.resume === true || init.agentCapabilities.loadSession === true,
+  };
+}
+
+/**
+ * Asks an engine, through `initialize` alone (no session), what it offers a collaboration Lead. A probe
+ * whose endpoint cannot be confirmed stopped fails instead of answering.
+ */
+export async function probeAcpLeadSupport(opts: {
+  transport: AcpLineTransport;
+  clientInfo: AcpClientInfo;
+  logger?: Logger;
+  requestTimeoutMs?: number;
+}): Promise<AcpLeadSupport> {
+  const connection = new AcpConnection(opts.transport, {
+    ...(opts.logger ? { logger: opts.logger } : {}),
+    ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
+    onNotification: () => {},
+    onRequest: async (method) => {
+      throw methodNotFound(method);
+    },
+  });
+  let support: AcpLeadSupport;
+  try {
+    const init = normalizeInitializeResult(await connection.request('initialize', {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      clientInfo: {
+        name: opts.clientInfo.name,
+        version: opts.clientInfo.version,
+        ...(opts.clientInfo.title ? { title: opts.clientInfo.title } : {}),
+      },
+    }));
+    if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
+    support = leadSupportOf(init);
+  } catch (error) {
+    // The handshake failure is the cause worth reporting, not a shutdown failure that follows it.
+    await connection.close().catch(() => {});
+    throw error;
+  }
+  // An endpoint not confirmed stopped may still be running: that is no verified answer.
+  await connection.close();
+  return support;
 }
 
 export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSession> {
@@ -441,6 +520,18 @@ export class AcpSession {
   private pendingBriefing: string | null;
   /** Slash-command names advertised by Skills or `available_commands_update`. */
   private readonly commandNames = new Set<string>();
+  private pendingBriefingDelivered: (() => void) | undefined;
+  /** The commands the agent announced, as it announced them; null until it announces any. */
+  private announcedCommands: ReadonlySet<string> | null = null;
+  /**
+   * The briefing a queued prompt carries: Stop gives it back when it discards that prompt, and ending
+   * the team takes its block out of the prompt.
+   */
+  private readonly briefingCarriers = new WeakMap<AcpContentBlock[], {
+    briefing: string;
+    block: AcpContentBlock;
+    onDelivered: (() => void) | undefined;
+  }>();
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly permissionControllers = new Set<AbortController>();
@@ -471,10 +562,10 @@ export class AcpSession {
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
     this.initializeResult = init.init;
-    this.pluginEngineHttpMcpSupported = init.init.agentCapabilities.mcpCapabilities.http === true;
+    const leadSupport = leadSupportOf(init.init);
+    this.pluginEngineHttpMcpSupported = leadSupport.httpMcp;
     this.pluginEngineHasOrcaMcp = init.acceptedMcpServers.includes('cindy_orca');
-    this.pluginEngineResumeSupported =
-      init.init.agentCapabilities.sessionCapabilities.resume === true || init.init.agentCapabilities.loadSession === true;
+    this.pluginEngineResumeSupported = leadSupport.resume;
     this.id = init.sessionId;
     this.resumeOutcome = init.resumeOutcome;
     this.droppedMcpServers = init.droppedMcpServers;
@@ -493,6 +584,7 @@ export class AcpSession {
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
     const briefing = init.briefing;
     this.pendingBriefing = briefing.trim() ? briefing : null;
+    this.pendingBriefingDelivered = this.pendingBriefing ? init.options.onBriefingDelivered : undefined;
     for (const name of init.options.skillCommandNames ?? []) {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
       if (trimmed) this.commandNames.add(trimmed);
@@ -590,9 +682,12 @@ export class AcpSession {
     }
   }
 
-  queuePluginEngineBriefing(briefing: string): void {
+  queuePluginEngineBriefing(briefing: string, onDelivered?: () => void): void {
     if (this.ended || this.closing) return;
-    if (briefing.trim()) this.pendingBriefing = briefing;
+    if (briefing.trim()) {
+      this.pendingBriefing = briefing;
+      this.pendingBriefingDelivered = onDelivered;
+    }
   }
 
   async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
@@ -600,6 +695,8 @@ export class AcpSession {
     this.onSetVendorOptions?.(patch);
     if (patch.orcaRole === null) {
       this.pendingBriefing = null;
+      this.pendingBriefingDelivered = undefined;
+      this.revokeQueuedBriefings();
     }
   }
 
@@ -616,9 +713,16 @@ export class AcpSession {
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
       const firstText = prompt.find((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')?.text ?? '';
-      if (this.pendingBriefing && !isLeadingSlashCommand(firstText)) {
-        prompt.unshift({ type: 'text', text: defusePluginEngineSlashMentions(this.pendingBriefing, this.commandNames) });
+      // A native command has to stay at the head of the prompt, so the briefing waits for the next one. Text shaped
+      // like a command counts even when the agent never announced it (`isLeadingSlashCommand`), and so does a command
+      // it announced, whatever characters its name has (`startsWithNativeCommand`).
+      if (this.pendingBriefing && !isLeadingSlashCommand(firstText) && !startsWithNativeCommand(prompt[0], this.announcedCommands)) {
+        // The host's own text must not start a command of the agent either: its `/name` mentions are defused.
+        const block: AcpContentBlock = { type: 'text', text: defusePluginEngineSlashMentions(this.pendingBriefing, this.commandNames) };
+        prompt.unshift(block);
+        this.briefingCarriers.set(prompt, { briefing: this.pendingBriefing, block, onDelivered: this.pendingBriefingDelivered });
         this.pendingBriefing = null;
+        this.pendingBriefingDelivered = undefined;
       }
       this.pendingPrompts.push(prompt);
       this.pump();
@@ -688,7 +792,7 @@ export class AcpSession {
 
   async abort(): Promise<void> {
     this.stopGeneration += 1;
-    this.pendingPrompts.length = 0;
+    this.discardQueuedPrompts();
     const turn = this.turn;
     if (!turn) {
       // Agents that keep working after a prompt (DSH documents it) stop that work on cancel;
@@ -805,11 +909,13 @@ export class AcpSession {
         if (modeId) this.applyCurrentModeUpdate(modeId);
         return;
       }
-      case 'available_commands_update':
-        for (const name of normalizeAvailableCommandNames(update.availableCommands)) {
-          this.commandNames.add(name.toLowerCase());
-        }
+      case 'available_commands_update': {
+        const names = normalizeAvailableCommandNames(update.availableCommands);
+        for (const name of names) this.commandNames.add(name.toLowerCase());
+        // An update with no list keeps what was announced before; an explicit [] clears it.
+        if (Array.isArray(update.availableCommands)) this.announcedCommands = new Set(names);
         return;
+      }
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
@@ -860,7 +966,15 @@ export class AcpSession {
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     const usageModel = this.model;
-    this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null }).then(
+    const request = this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null });
+    // The request line is written synchronously: a failed write (or an already closed connection) leaves
+    // the connection closed, and then the briefing it carried has not reached the agent.
+    const carrier = this.briefingCarriers.get(prompt);
+    if (carrier) {
+      this.briefingCarriers.delete(prompt);
+      if (!this.connection.closed) carrier.onDelivered?.();
+    }
+    request.then(
       (result) => {
         // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
         const usage = normalizeTurnUsage(result);
@@ -868,6 +982,31 @@ export class AcpSession {
       },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );
+  }
+
+  /** The team ended: its briefing goes out of the prompts still queued, so it is neither sent nor handed back. */
+  private revokeQueuedBriefings(): void {
+    for (const prompt of this.pendingPrompts) {
+      const carrier = this.briefingCarriers.get(prompt);
+      if (!carrier) continue;
+      this.briefingCarriers.delete(prompt);
+      const at = prompt.indexOf(carrier.block);
+      if (at >= 0) prompt.splice(at, 1);
+    }
+  }
+
+  /** Stop drops the prompts still queued; a briefing one of them carried goes back to the next prompt. */
+  private discardQueuedPrompts(): void {
+    for (const prompt of this.pendingPrompts.splice(0)) {
+      const carrier = this.briefingCarriers.get(prompt);
+      if (!carrier) continue;
+      this.briefingCarriers.delete(prompt);
+      // A briefing queued after it (a newer promotion) already replaced it.
+      if (this.pendingBriefing === null) {
+        this.pendingBriefing = carrier.briefing;
+        this.pendingBriefingDelivered = carrier.onDelivered;
+      }
+    }
   }
 
   private finishTurn(token: number, outcome: AcpTurnOutcome): void {

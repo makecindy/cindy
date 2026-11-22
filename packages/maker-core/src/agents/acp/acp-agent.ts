@@ -263,7 +263,7 @@ export class AcpAgent extends BaseAgent {
           ...(botMcpPolicy ? { botMcpPolicy } : {}),
           vendorOptions: mutableVendorOptions,
           // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
-          // that trusts the engine as a whole (collaboration Leads and Workers) treats every call as the task's own.
+          // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
           mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
           mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
         });
@@ -358,6 +358,7 @@ export class AcpAgent extends BaseAgent {
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           ...(opts.pluginEngineForceBriefingOnResume ? { forceBriefingOnResume: true } : {}),
+          ...(opts.pluginEngineOnBriefingDelivered ? { onBriefingDelivered: opts.pluginEngineOnBriefingDelivered } : {}),
           onSetVendorOptions: (patch) => { Object.assign(mutableVendorOptions, patch); },
           logger,
           onEnded: disposeBridge,

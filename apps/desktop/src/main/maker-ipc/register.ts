@@ -261,6 +261,8 @@ import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, p
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { onPluginEnginePrefsChanged, readPluginEnginePrefs, updatePluginEnginePrefs } from '../maker-host/plugin-engine-prefs-store.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
+import { probePluginHarnessLeadSupport } from '../maker-host/acp-host.js';
+import { createDormantAcpLeadPreflight, revokeAcpLeadIfTeamEnded } from './acpLeadPreflight.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
 import {
   isPluginEngineKind,
@@ -1744,6 +1746,16 @@ import {
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
+const dormantAcpLeadPreflight = createDormantAcpLeadPreflight({
+  engineState: (harnessKey) => getPluginHarnessRegistry().list().find((entry) => entry.key === harnessKey)?.availability.state,
+  probe: (harnessKey) => probePluginHarnessLeadSupport(harnessKey, app.getVersion()),
+  onProbeFailed: (harnessKey, error) => {
+    log.warn('assertLeadCollabProjectEnabled: dormant ACP Lead preflight failed', {
+      harnessKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  },
+});
 const workdirLog = createLogger('workdir-diagnostics');
 const workingDirectoryRecovery = createWorkingDirectoryRecovery({
   stat: statWorkingDirectory,
@@ -9330,11 +9342,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await applyPersistedReviewMode(o);
     assertAccess?.();
     const didInjectOrcaInstructions = o.reviewMode === true ? false : await applyOrcaInstructions(o);
+    // True once an ACP Lead is briefed for its active team; the team is read again once its engine is open.
+    let acpLeadBriefed = false;
     // Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md). Collaboration
     // Leads and Workers receive their role instructions ahead of the first prompt (or once on
     // promotion/restart resume for Leads). Only Workers receive pluginEngineTrustedCaller so
     // orca_worker_bridge can authorize reports; Leads keep standard unattested caller provenance.
-    let acpLeadBriefedTeamId: string | null = null;
     if (o.agentKind === 'acp' && o.reviewMode !== true) {
       const role = o.vendorOptions?.orcaRole;
       if (role === 'worker') {
@@ -9365,10 +9378,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             orcaWorkflowId: activeTeam.id,
             ...(o.id ? { orcaLeadSessionId: o.id } : {}),
           };
+          acpLeadBriefed = true;
           const briefing = renderOrcaRoleInstructions(o);
           if (briefing) {
             o.pluginEngineBriefing = briefing;
-            acpLeadBriefedTeamId = activeTeam.id;
+            const briefedSessionId = o.id;
+            const briefedTeamId = activeTeam.id;
+            o.pluginEngineOnBriefingDelivered = () => {
+              if (briefedSessionId) markAcpLeadTeamBriefed(briefedSessionId, briefedTeamId);
+            };
             if (o.resumeSessionId && o.id && !isAcpLeadTeamBriefed(o.id, activeTeam.id)) {
               o.pluginEngineForceBriefingOnResume = true;
             }
@@ -9635,6 +9653,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await reconnectHandoff.commit();
       reconnectHandoff = undefined;
     }
+    // The Lead's team was read before the engine opened. A team that ended during the open found no runtime to
+    // clear (it is published after the open), so repeat the check made before the open instead of leaving the
+    // closed team's role and briefing to the first ordinary message. The session is already published here, so
+    // a failed read keeps the role as it is rather than fail the open.
+    if (acpLeadBriefed) {
+      const leadId = session.id;
+      let revoked = false;
+      try {
+        revoked = await revokeAcpLeadIfTeamEnded({
+          hasActiveTeam: async () => Boolean(await getActiveTeamByLead(leadId)),
+          revokeRole: () => clearLeadOrcaRoleState(leadId, undefined, false),
+        });
+      } catch (err) {
+        log.warn('acp lead: team check after open failed; keeping the Lead role', {
+          sessionId: leadId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+      assertAccess?.();
+      if (revoked) {
+        o.orcaRole = null;
+        if (o.vendorOptions) {
+          const restVendor = { ...o.vendorOptions };
+          for (const key of ['orcaRole', 'orcaWorkflowId', 'orcaLeadSessionId', 'initialWorker']) delete restVendor[key];
+          o.vendorOptions = restVendor;
+        }
+      }
+    }
     Object.assign(session, {
       sendToSessionHint: resolveAgentSendToSessionHint({
         agentKind: o.agentKind,
@@ -9645,9 +9691,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
     wireSessionToIpc(session);
     markOrcaMcpHydratedIfNeeded(session.id, o);
-    if (acpLeadBriefedTeamId) {
-      markAcpLeadTeamBriefed(session.id, acpLeadBriefedTeamId);
-    }
     try {
       const db = getDbClient().drizzle;
       // bridge 会话态(effort / fast)同点 hydrate:让 resume / 重启后的首个 bridge 请求就带上
@@ -12450,6 +12493,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           'UNSUPPORTED_CAPABILITY',
           '[PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED] this plugin engine does not support HTTP MCP collaboration tools on this session, so it cannot act as a collaboration Lead',
         );
+      }
+      if (!lead) {
+        // Dormant ACP Lead (e.g. after app restart): preflight the plugin harness before committing
+        // a team or creating a Worker so engines that cannot lead fail cleanly with zero side effects.
+        // A task that already has a native session has to be reopened to become a Lead.
+        const refusal = await dormantAcpLeadPreflight(
+          pluginEngineKeyFromProviderId(leadRow?.providerId),
+          Boolean(leadRow?.sdkSessionId),
+        );
+        if (refusal) throwIpcError(refusal.code, refusal.message);
       }
     }
     const rawWorkingDir =
@@ -18842,6 +18895,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     resolveOrcaRoleInstructions,
     markOrcaMcpHydratedIfNeeded,
     markAcpLeadTeamBriefed,
+    getActiveOrcaTeamId: async (sessionId) => (await getActiveTeamByLead(sessionId))?.id ?? null,
     buildCreateOptsWithStderr,
     synthesizeOrcaVendorOptionsFromDb,
     readSessionExtraDirsFromDb,

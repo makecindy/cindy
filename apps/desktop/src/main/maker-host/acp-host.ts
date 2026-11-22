@@ -11,7 +11,9 @@
 
 import {
   AcpAgent,
+  probeAcpLeadSupport,
   type AcpAgentDeps,
+  type AcpLeadSupport,
   type AgentDeps,
   type AuthAdapter,
   type Capabilities,
@@ -20,6 +22,7 @@ import {
 import { rememberPluginHarnessModels } from './pluginEngineModelCache.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.desktop.js';
 import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/pluginHarnesses.js';
+import { createLogger } from '../logger.js';
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
 import type { NodeWorkerProcess } from '../cindy-brain/nodeRuntimeBroker.js';
 import { createAcpProcessTransport } from './acp-transport.js';
@@ -41,6 +44,40 @@ const pluginEngineAuthAdapter: AuthAdapter = {
 
 function rememberCapabilities(key: string, capabilities: Capabilities): void {
   rememberPluginHarnessModels(key, capabilities.availableModels);
+}
+
+function createCoreLogger(scope: string): Logger {
+  const base = createLogger(scope);
+  return {
+    trace: (message, meta) => base.debug(message, meta),
+    debug: (message, meta) => base.debug(message, meta),
+    info: (message, meta) => base.info(message, meta),
+    warn: (message, meta) => base.warn(message, meta),
+    error: (message, meta) => base.error(message, meta),
+    fatal: (message, meta) => base.error(message, meta),
+    child: (childScope) => createCoreLogger(`${scope}:${childScope}`),
+  };
+}
+
+/**
+ * Preflights what a dormant local ACP plugin harness offers a collaboration Lead (HTTP MCP, reopening a
+ * stored session) from `initialize`. Every call asks the plugin as it is installed now and nothing is kept:
+ * the registry can replace a plugin under the same key without reporting a change, and an answer stored
+ * for the old plugin would then be taken for the new one.
+ */
+export async function probePluginHarnessLeadSupport(
+  harnessKey: string,
+  appVersion: string,
+): Promise<AcpLeadSupport> {
+  const proc = await getPluginHarnessRegistry().spawn(harnessKey);
+  const probeLogger = createCoreLogger(`acp-probe:${harnessKey}`);
+  const transport = createAcpProcessTransport(proc, probeLogger);
+  return probeAcpLeadSupport({
+    transport,
+    clientInfo: { name: 'cindy', title: 'Cindy', version: appVersion },
+    logger: probeLogger,
+    requestTimeoutMs: 10_000,
+  });
 }
 
 export interface BuildAcpAgentOpts {

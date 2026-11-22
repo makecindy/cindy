@@ -509,8 +509,8 @@ export class Session {
   get pluginEngineResumeSupported(): boolean | undefined {
     return this.handle.pluginEngineResumeSupported;
   }
-  queuePluginEngineBriefing(briefing: string): void {
-    this.handle.queuePluginEngineBriefing?.(briefing);
+  queuePluginEngineBriefing(briefing: string, onDelivered?: () => void): void {
+    this.handle.queuePluginEngineBriefing?.(briefing, onDelivered);
   }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;

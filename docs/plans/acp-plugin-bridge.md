@@ -337,14 +337,24 @@ export interface PluginHarnessRegistry {
   `plugin_engines` 取），并接收 Worker 回报（`send_to_lead`）。插件引擎 Worker 能收 Lead 的派活与插话（不支持同轮插话的按排队处理），
   能用 `send_to_lead` 回报、改写或撤回排队的回报。Worker 页签与手机上的团队列表显示插件引擎，不显示成 Claude Code。
 - **范围**：协同仅限本机插件引擎任务；跨电脑运行的插件引擎（`agentDeviceId` 非空）与 SSH Lead 仍拒绝当 Lead（`PLUGIN_ENGINE_CANNOT_LEAD`），
-  缺少 HTTP MCP 能力的插件引擎拒绝当 Lead（`PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED`）。插件引擎 Worker 只在 Lead 所在的这台电脑运行；
+  缺少 HTTP MCP 能力的插件引擎拒绝当 Lead（`PLUGIN_ENGINE_LEAD_TOOLS_UNSUPPORTED`）。休眠的任务（没有活会话）在建团队前先探测引擎：
+  已有原生会话而引擎既不能 `session/resume` 也不能 `session/load` 时同样拒绝，不会先建团队再唤不醒 Lead；探测拿不到引擎确认退出时按失败处理。
+  插件引擎 Worker 只在 Lead 所在的这台电脑运行；
   SSH Lead、另一台工作电脑、Agent 在另一台电脑都明确拒绝。worktree 与内置 Worker 相同（2026-11-25）。Lead 不能用
   `set_worker_runtime` 改插件引擎 Worker 的模型，需在它自己的任务窗口里改。
 - **准入与唤醒**：创建时与在插件引擎上新建任务同一准入（停用、卸载或不可用时创建失败，不回落内置引擎）；休眠后再唤醒
   按它自己的引擎与 `provider_id` 启动。活会话中途成为 Lead 时支持原地 `setVendorOptions` 同步 HTTP MCP 桥身份；下一轮前按是否支持
-  恢复决定重建（一次性 `forceBriefingOnResume`）或直接排队注入 Lead 角色说明，不重复发送。
+  恢复决定重建（一次性 `forceBriefingOnResume`）或直接排队注入 Lead 角色说明，不重复发送。Lead 的团队在引擎打开之前读取，而运行时
+  打开之后才发布：团队在打开期间结束时，关闭流程找不到运行时可清。因此打开完成后复核一次
+  （`revokeAcpLeadIfTeamEnded`）：Lead 已没有活跃团队就撤掉这次带上的 Lead 角色与说明，与打开之前的同一项检查一致，
+  下一条消息按普通任务发送；读取失败时保持原状，不让已发布的会话创建失败。团队被另一支团队替换的情形不在此处理。
 - **角色说明**：插件引擎不收 Cindy system prompt。协同 Lead 与 Worker 的角色说明（原文不改）通过 `pluginEngineBriefing` 放在
   新会话第一条消息前（或中途晋升 Lead 后的一次性恢复/排队前）一起发送；普通恢复的会话里已有，不重复。内置引擎的提示词与路径不变。
+  消息以原生命令（如 `/compact`）开头时，命令须留在消息开头，说明顺延到下一条消息。形状像 `/name` 的文本一律算命令（引擎可能
+  有没宣布的命令）；引擎在 `available_commands_update` 里宣布的名称不论含什么字符也算（含点的名称没有命令的形状），新的宣布
+  整体替换旧的，空列表清空。Lead 的说明
+  送达有记录（`onBriefingDelivered`），恢复时据此补发未送达的；新建 Worker 没有这层记录：它若先收到原生命令、运行时又在下一条
+  消息前被关闭并恢复，就收不到角色说明（已知限制，暂不处理）。
 - **调用方身份**：Cindy 分不清插件 Agent 自己与它内部的子 Agent。按用户决定（整体信任插件 Worker），只有协同 Worker 的
   插件引擎会话把工具调用视为任务本身发起（`pluginEngineTrustedCaller`，用于 `orca_worker_bridge` 回报身份校验）。协同 Lead
   与非协同的插件引擎任务仍是「来源未知」。

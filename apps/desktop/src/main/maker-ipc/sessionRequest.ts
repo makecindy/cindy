@@ -173,6 +173,7 @@ export function readCreateSessionOpts(
   // (renderer or device-link) cannot inject system briefings or elevate MCP caller trust.
   delete callerOpts.pluginEngineBriefing;
   delete callerOpts.pluginEngineForceBriefingOnResume;
+  delete callerOpts.pluginEngineOnBriefingDelivered;
   delete callerOpts.pluginEngineTrustedCaller;
   return {
     ...callerOpts,

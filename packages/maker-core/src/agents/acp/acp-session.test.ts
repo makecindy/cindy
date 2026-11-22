@@ -627,6 +627,69 @@ describe('AcpSession same-turn steering', () => {
   });
 });
 
+// Production entry: AcpSession.steer meeting a pending Lead briefing (queuePluginEngineBriefing) and its delivery callback.
+// Basis: a briefing goes in front of the next prompt written by send(), and counts as delivered when that prompt is written;
+// a same-turn steering message bypasses send(), and the host sends the message as the next turn when it gets "no active turn".
+// Gap: steering and the briefing were written separately and never exercised together.
+// Minimal failing input: a briefing queued while a turn runs, then a steering message (injected, refused as no active turn,
+// or an agent without the extension).
+// Tier: unit (in-memory ACP peer).
+describe('AcpSession same-turn steering with a pending briefing', () => {
+  const steeringInit = (): AcpRecord => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [], _meta: { steering: { supported: true } } });
+  const briefedWhileRunning = async (handlers: Record<string, () => unknown>) => {
+    const agent = createFakeAgent({ handlers: { initialize: steeringInit, ...handlers } });
+    const { session } = await open(agent);
+    const delivered = vi.fn();
+    await session.send({ type: 'user', content: 'first' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    session.queuePluginEngineBriefing('Lead rules', delivered);
+    return { agent, session, delivered };
+  };
+
+  it('leaves the briefing pending when the message is injected into the running turn, then delivers it once with the next turn', async () => {
+    const { agent, session, delivered } = await briefedWhileRunning({ '_session/steering': () => ({ outcome: 'injected' }) });
+    await session.steer({ type: 'user', content: 'use b.ts instead' });
+    const steered = agent.sent.filter((message) => message.method === '_session/steering');
+    expect(steered.map((message) => (message.params as AcpRecord).prompt)).toEqual([[{ type: 'text', text: 'use b.ts instead' }]]);
+    expect(delivered).not.toHaveBeenCalled();
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.send({ type: 'user', content: 'next' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'Lead rules' }, { type: 'text', text: 'next' }]);
+    expect(delivered).toHaveBeenCalledOnce();
+    await session.close();
+  });
+
+  it('delivers the briefing with the message the host sends as the next turn after "no active turn"', async () => {
+    const { agent, session, delivered } = await briefedWhileRunning({ '_session/steering': () => ({ outcome: 'promptRequired', reason: 'noRunningTurn' }) });
+    await expect(session.steer({ type: 'user', content: 'two' })).rejects.toThrow(/no active turn/i);
+    expect(delivered).not.toHaveBeenCalled();
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    // What the host does with that error: the same message, as a normal turn.
+    await session.send({ type: 'user', content: 'two' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'Lead rules' }, { type: 'text', text: 'two' }]);
+    expect(delivered).toHaveBeenCalledOnce();
+    await session.close();
+  });
+
+  it('delivers the briefing once with the queued next turn when the agent has no steering extension', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    const delivered = vi.fn();
+    await session.send({ type: 'user', content: 'first' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    session.queuePluginEngineBriefing('Lead rules', delivered);
+    await session.steer({ type: 'user', content: 'two' });
+    expect(delivered).not.toHaveBeenCalled();
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'Lead rules' }, { type: 'text', text: 'two' }]);
+    expect(delivered).toHaveBeenCalledOnce();
+    await session.close();
+  });
+});
+
 describe('AcpSession permissions', () => {
   it.each([
     { name: 'allow once', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'allow' }, optionId: 'yes', asked: true },
@@ -1477,17 +1540,22 @@ describe('AcpAgent (the acp engine)', () => {
     await handle.close();
   });
 
-  it('defers pending briefing past native slash commands until the next regular prompt', async () => {
+  it('defers pending briefing and its delivery callback past native slash commands until the next regular prompt', async () => {
     const agent = createFakeAgent();
+    const delivered = vi.fn();
     const session = await openAcpSession({
       transport: agent.transport,
       cwd: '/w',
       clientInfo: { name: 'cindy', version: 'test' },
       briefing: 'Orca Lead role instructions',
+      onBriefingDelivered: delivered,
     });
+    expect(delivered).not.toHaveBeenCalled();
+
     await session.send({ type: 'user', content: '/compact' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/compact' }]);
+    expect(delivered).not.toHaveBeenCalled();
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
 
     await session.send({ type: 'user', content: 'coordinate workers' });
@@ -1496,7 +1564,64 @@ describe('AcpAgent (the acp engine)', () => {
       { type: 'text', text: 'Orca Lead role instructions' },
       { type: 'text', text: 'coordinate workers' },
     ]);
+    expect(delivered).toHaveBeenCalledOnce();
     await session.close();
+  });
+
+  it('probes what ACP initialize offers a Lead (HTTP MCP, session resume) without creating a session', async () => {
+    const { probeAcpLeadSupport } = await import('./session.js');
+    const clientInfo = { name: 'cindy', version: 'test' };
+    const withHttp = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    await expect(probeAcpLeadSupport({ transport: withHttp.transport, clientInfo })).resolves.toEqual({ httpMcp: true, resume: false });
+    expect(withHttp.methods()).toEqual(['initialize']);
+    expect(withHttp.closedByClient).toBe(true);
+
+    const withoutHttp = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    await expect(probeAcpLeadSupport({ transport: withoutHttp.transport, clientInfo })).resolves.toEqual({ httpMcp: false, resume: false });
+    expect(withoutHttp.methods()).toEqual(['initialize']);
+
+    // Either resume method is enough to reopen a stored session.
+    const resumes = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } } });
+    await expect(probeAcpLeadSupport({ transport: resumes.transport, clientInfo })).resolves.toEqual({ httpMcp: true, resume: true });
+    const loads = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, loadSession: true } });
+    await expect(probeAcpLeadSupport({ transport: loads.transport, clientInfo })).resolves.toEqual({ httpMcp: true, resume: true });
+  });
+
+  // Production entry: probeAcpLeadSupport, the preflight Desktop runs before it commits a team on a dormant ACP Lead.
+  // Basis: the preflight must fail closed ("zero side effects"); a probe process that cannot be confirmed stopped is not a
+  // verified answer.
+  // Gap: the shutdown error was swallowed, so the probe still answered.
+  // Minimal failing input: initialize succeeds with http MCP and the transport rejects close().
+  // Tier: unit (in-memory ACP peer).
+  it('fails the Lead support probe when its endpoint cannot be confirmed stopped', async () => {
+    const { probeAcpLeadSupport } = await import('./session.js');
+    const clientInfo = { name: 'cindy', version: 'test' };
+    const stuck = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    vi.spyOn(stuck.transport, 'close').mockRejectedValueOnce(new Error('endpoint still running'));
+    await expect(probeAcpLeadSupport({ transport: stuck.transport, clientInfo })).rejects.toThrow('endpoint still running');
+
+    // The handshake failure stays the reported cause when the shutdown fails as well.
+    const broken = createFakeAgent({ handlers: { initialize: () => { throw new Error('handshake refused'); } } });
+    vi.spyOn(broken.transport, 'close').mockRejectedValueOnce(new Error('endpoint still running'));
+    await expect(probeAcpLeadSupport({ transport: broken.transport, clientInfo })).rejects.toThrow('handshake refused');
+  });
+
+  // Production entry: AcpAgent.startSession; the handle of a live session tells the host what its engine offered a Lead.
+  // Basis: the host refuses a live task whose engine has no HTTP MCP, and one that cannot reopen its stored session.
+  // Gap: session resume was not told apart for an engine that resumes, one that only loads, and one that does neither.
+  // Minimal failing input: an engine with HTTP MCP and neither session/resume nor session/load.
+  // Tier: unit (in-memory ACP peer).
+  it.each([
+    { name: 'resumes sessions', caps: { sessionCapabilities: { resume: {} } }, expected: { httpMcp: true, resume: true } },
+    { name: 'only loads sessions', caps: { loadSession: true }, expected: { httpMcp: true, resume: true } },
+    { name: 'cannot reopen a session', caps: {}, expected: { httpMcp: true, resume: false } },
+  ])('exposes the Lead support of an engine that $name on its live session', async ({ caps, expected }) => {
+    const fake = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, ...caps } });
+    const handle = await createAcpAgent(() => fake.transport).startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+    });
+    expect({ httpMcp: handle.pluginEngineHttpMcpSupported, resume: handle.pluginEngineResumeSupported }).toEqual(expected);
+    await handle.close();
   });
 
   it('retains cleanup responsibility when resume fails and the endpoint is still running', async () => {
@@ -1746,5 +1871,271 @@ describe('AcpAgent (the acp engine)', () => {
     expect(secondMessage!.text).toContain('/tmp/build.log 里为什么报 /learn 相关错误？');
     agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
     await handle.close();
+  });
+
+  // Production entry: AcpAgent.startSession resuming a companion chat, then the first message.
+  // Basis: after a profile edit the first prompt must carry the current companion profile (restored above);
+  // only a real native command has to stay first in the prompt, so only that one may defer the briefing.
+  // Gap: only "/compact" was covered, and any message starting with "/" (an absolute path) deferred the profile by a turn.
+  // Minimal failing input: a resumed companion session whose first message is "/tmp/report.txt ...".
+  // Tier: unit (in-memory ACP peer).
+  describe('briefing and native commands after a companion resume', () => {
+    const resumeCompanion = async (extra: Partial<Parameters<AcpAgent['startSession']>[0]> = {}) => {
+      const fake = createFakeAgent({ agentCapabilities: { sessionCapabilities: { resume: {} } }, handlers: { 'session/resume': () => ({}) } });
+      const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+      const handle = await createAcpAgent(() => fake.transport).startSession({
+        workingDir: '/w', model: 'default', providerId: 'acp-plugin:sample:engine', resumeSessionId: 'old-1',
+        botRuntimeProfile: { botId: 'research', profileVersion: 2, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+        botProfilePrompt: 'Your new name is Lantern.',
+        ...extra,
+      });
+      return { fake, handle };
+    };
+
+    it('restores the companion profile with a first message that only looks like a command', async () => {
+      const { fake, handle } = await resumeCompanion();
+      await handle.send({ type: 'user', content: '/tmp/report.txt contient quoi ?' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      expect(fake.prompts[0]!.params.prompt).toEqual([
+        { type: 'text', text: 'Your new name is Lantern.' },
+        { type: 'text', text: '/tmp/report.txt contient quoi ?' },
+      ]);
+      await handle.close();
+    });
+
+    // Gap: an announced command was only recognised when its name also matched the pre-announcement shape [\w:-]+, so
+    // "review.diff" got the briefing in front of it and lost its place at the head of the prompt (and counted as delivered).
+    // Minimal failing input: the engine announces "review.diff" and the first message is "/review.diff main".
+    it('treats an announced command as a command whatever characters its name has', async () => {
+      const { fake, handle } = await resumeCompanion();
+      fake.update({ sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'review.diff', description: 'Review a diff' }] }, 'old-1');
+      await handle.send({ type: 'user', content: '/review.diff main' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      expect(fake.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/review.diff main' }]);
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.send({ type: 'user', content: 'name?' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Your new name is Lantern.' },
+        { type: 'text', text: 'name?' },
+      ]);
+      await handle.close();
+    });
+
+    // Gap: an update with no command list wiped the commands announced before, so "/review.diff main" got the briefing in
+    // front of it and lost its place at the head of the prompt (and counted as delivered).
+    // Minimal failing input: the engine announces "review.diff" and "compact", then sends an update without a list.
+    // Three states are told apart: no list keeps the announced commands, a list replaces them, and an empty list leaves
+    // none. "review.diff" has no command shape, so it is a command only while it is announced.
+    it('keeps the announced commands when an update carries no list, and drops them for an empty one', async () => {
+      const { fake, handle } = await resumeCompanion();
+      fake.update({ sessionUpdate: 'available_commands_update', availableCommands: [
+        { name: 'review.diff', description: 'Review a diff' },
+        { name: 'compact', description: 'Compact the conversation' },
+      ] }, 'old-1');
+      fake.update({ sessionUpdate: 'available_commands_update' }, 'old-1');
+      await handle.send({ type: 'user', content: '/review.diff main' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      expect(fake.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/review.diff main' }]);
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      fake.update({ sessionUpdate: 'available_commands_update', availableCommands: [] }, 'old-1');
+      await handle.send({ type: 'user', content: '/review.diff main' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Your new name is Lantern.' },
+        { type: 'text', text: '/review.diff main' },
+      ]);
+      await handle.close();
+    });
+
+    // Gap: only an update without a list and an empty list were covered. A later announcement has to replace the commands
+    // announced before it, not add to them or be ignored once a list is held.
+    // Minimal failing input: the engine announces ["review.diff"], then ["compact"].
+    it('replaces the announced commands with each new list', async () => {
+      const { fake, handle } = await resumeCompanion();
+      fake.update({ sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'review.diff', description: 'Review a diff' }] }, 'old-1');
+      fake.update({ sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'compact', description: 'Compact the conversation' }] }, 'old-1');
+      await handle.send({ type: 'user', content: '/compact keep the open questions' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      expect(fake.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/compact keep the open questions' }]);
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.send({ type: 'user', content: '/review.diff main' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Your new name is Lantern.' },
+        { type: 'text', text: '/review.diff main' },
+      ]);
+      await handle.close();
+    });
+
+    // The promotion of a companion task to Lead resumes the native session with the full briefing; it already holds the
+    // companion profile, which must neither be sent a second time nor be replaced by the profile alone.
+    it('delivers the full briefing, companion profile included, once when the resume is forced', async () => {
+      const { fake, handle } = await resumeCompanion({ pluginEngineBriefing: 'You are Lead.', pluginEngineForceBriefingOnResume: true });
+      await handle.send({ type: 'user', content: 'start delegating' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      expect(fake.prompts[0]!.params.prompt).toEqual([
+        { type: 'text', text: 'Your new name is Lantern.\n\nYou are Lead.' },
+        { type: 'text', text: 'start delegating' },
+      ]);
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.send({ type: 'user', content: 'again' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'again' }]);
+      await handle.close();
+    });
+
+    // An engine may run commands it never announced (Antigravity's `/plan`), and the host can only tell them by their
+    // shape: text shaped like a command keeps its place at the head of the prompt even once the engine announced others.
+    // The briefing then waits for the next message, as it does before any announcement.
+    // Minimal failing input: the engine announces "compact" and the first message is "/plan check the auth flow".
+    it.each([
+      { name: 'text shaped like a command that was not announced', text: '/plan check the auth flow' },
+      { name: 'an announced command', text: '/compact keep the open questions' },
+    ])('once the engine announced its commands, keeps $name first', async ({ text }) => {
+      const { fake, handle } = await resumeCompanion();
+      fake.update({ sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'compact', description: 'Compact the conversation' }] }, 'old-1');
+      await handle.send({ type: 'user', content: text });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      expect(fake.prompts[0]!.params.prompt).toEqual([{ type: 'text', text }]);
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.send({ type: 'user', content: 'name?' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Your new name is Lantern.' },
+        { type: 'text', text: 'name?' },
+      ]);
+      await handle.close();
+    });
+
+    it('keeps a native command first and restores the companion profile with the next message', async () => {
+      const { fake, handle } = await resumeCompanion();
+      await handle.send({ type: 'user', content: '/compact keep the open questions' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      expect(fake.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/compact keep the open questions' }]);
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.send({ type: 'user', content: 'name?' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Your new name is Lantern.' },
+        { type: 'text', text: 'name?' },
+      ]);
+      await handle.close();
+    });
+  });
+
+  // Production entry: AcpSession.send with a one-shot Lead briefing and its delivery callback (the host marks the team
+  // as briefed from it, and a later resume skips the briefing for a team marked briefed).
+  // Basis: the callback is documented as "the briefing was attached to a dispatched prompt".
+  // Gap: it fired when the prompt was queued, so a prompt that was never written or was discarded by Stop left the Lead
+  // without its instructions and the team marked as briefed.
+  // Minimal failing input: the first send after a promotion fails to write; Stop discards a prompt queued behind a turn.
+  // Tier: unit (in-memory ACP peer).
+  describe('Lead briefing delivery', () => {
+    const clientInfo = { name: 'cindy', version: 'test' };
+
+    it('does not report the briefing delivered when its prompt could not be written', async () => {
+      const fake = createFakeAgent({ agentCapabilities: { sessionCapabilities: { resume: {} } }, handlers: { 'session/resume': () => ({}) } });
+      const delivered = vi.fn();
+      const session = await openAcpSession({
+        transport: fake.transport, cwd: '/w', clientInfo, resumeSessionId: 'old-1',
+        briefing: 'Lead rules', forceBriefingOnResume: true, onBriefingDelivered: delivered,
+      });
+      vi.spyOn(fake.transport, 'write').mockImplementationOnce(() => { throw new Error('EPIPE'); });
+      await session.send({ type: 'user', content: 'start delegating' });
+      expect(fake.prompts).toHaveLength(0);
+      expect(delivered).not.toHaveBeenCalled();
+    });
+
+    it('reports the briefing delivered once its prompt is written, not when it is queued', async () => {
+      const fake = createFakeAgent();
+      const delivered = vi.fn();
+      const session = await openAcpSession({ transport: fake.transport, cwd: '/w', clientInfo });
+      await session.send({ type: 'user', content: 'first' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      session.queuePluginEngineBriefing('Lead rules', delivered);
+      await session.send({ type: 'user', content: 'queued' });
+      expect(delivered).not.toHaveBeenCalled();
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Lead rules' },
+        { type: 'text', text: 'queued' },
+      ]);
+      expect(delivered).toHaveBeenCalledOnce();
+      await session.close();
+    });
+
+    it('keeps the briefing pending when Stop discards the queued prompt that carried it', async () => {
+      const fake = createFakeAgent();
+      const delivered = vi.fn();
+      const session = await openAcpSession({ transport: fake.transport, cwd: '/w', clientInfo });
+      await session.send({ type: 'user', content: 'first' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      session.queuePluginEngineBriefing('Lead rules', delivered);
+      await session.send({ type: 'user', content: 'queued' });
+      await session.abort();
+      fake.prompts[0]!.settle.resolve({ stopReason: 'cancelled' });
+      await session.send({ type: 'user', content: 'again' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Lead rules' },
+        { type: 'text', text: 'again' },
+      ]);
+      expect(delivered).toHaveBeenCalledOnce();
+      await session.close();
+    });
+
+    // The host's briefing never starts a command of the agent: Lead rules queued after a promotion get the same `/name`
+    // defusing as every other briefing, again when Stop hands them back to the next prompt. Paths stay as written.
+    // Gap: the defusing and this delivery bookkeeping were written apart; no test put the two together.
+    // Minimal failing input: Lead rules that say "never run /compact; read /learn first", discarded by Stop with their prompt.
+    it('defuses the slash mentions of a Lead briefing, also when Stop hands it back', async () => {
+      const fake = createFakeAgent();
+      const delivered = vi.fn();
+      const session = await openAcpSession({ transport: fake.transport, cwd: '/w', clientInfo });
+      await session.send({ type: 'user', content: 'first' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      session.queuePluginEngineBriefing('Lead rules: never run /compact; read /learn first, see /tmp/plan.md.', delivered);
+      await session.send({ type: 'user', content: 'queued' });
+      await session.abort();
+      fake.prompts[0]!.settle.resolve({ stopReason: 'cancelled' });
+      await session.send({ type: 'user', content: 'again' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Lead rules: never run compact; read learn first, see /tmp/plan.md.' },
+        { type: 'text', text: 'again' },
+      ]);
+      expect(delivered).toHaveBeenCalledOnce();
+      await session.close();
+    });
+
+    // Gap: ending the team only cleared the briefing still pending; one already put in front of a queued prompt was sent
+    // with it, or handed back by Stop to the next ordinary message, and reported as delivered.
+    // Minimal failing input: a prompt queued behind a running turn carries team A's briefing, then A ends.
+    it.each([
+      { name: 'Stop discards the prompt', stop: true },
+      { name: 'the prompt is dispatched', stop: false },
+    ])('does not send the briefing of an ended team when $name', async ({ stop }) => {
+      const fake = createFakeAgent();
+      const delivered = vi.fn();
+      const session = await openAcpSession({ transport: fake.transport, cwd: '/w', clientInfo });
+      await session.send({ type: 'user', content: 'first' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      session.queuePluginEngineBriefing('Lead rules of team A', delivered);
+      await session.send({ type: 'user', content: 'queued' });
+      await session.setVendorOptions({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+      if (stop) {
+        await session.abort();
+        fake.prompts[0]!.settle.resolve({ stopReason: 'cancelled' });
+        await session.send({ type: 'user', content: 'again' });
+      } else {
+        fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      }
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: stop ? 'again' : 'queued' }]);
+      expect(delivered).not.toHaveBeenCalled();
+      await session.close();
+    });
   });
 });
