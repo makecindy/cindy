@@ -1803,6 +1803,8 @@
       "other": "其餘",
       "lowAlert": "將盡時告",
       "privacy": "隱去私人資訊",
+      "automaticCurrency": "自擇",
+      "usageCurrency": "計費幣種",
       "usageScope": "耗用計算之域",
       "manageFoot": "管理模型供方",
       "showSource": "於選單中顯 {{name}}",

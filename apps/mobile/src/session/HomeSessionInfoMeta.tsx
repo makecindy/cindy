@@ -161,6 +161,7 @@ function pickDefinedUsage(usage: RemoteSessionUsage): RemoteSessionUsage {
   const out: RemoteSessionUsage = {};
   if (usage.totalMoney !== undefined) out.totalMoney = usage.totalMoney;
   if (usage.totalCostUsd !== undefined) out.totalCostUsd = usage.totalCostUsd;
+  if (usage.totalCostUsdIsApproximate !== undefined) out.totalCostUsdIsApproximate = usage.totalCostUsdIsApproximate;
   if (usage.totalTokenUsage !== undefined) out.totalTokenUsage = usage.totalTokenUsage;
   return out;
 }

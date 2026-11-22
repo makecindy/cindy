@@ -1865,6 +1865,8 @@
       "other": "Otro",
       "lowAlert": "Notificar cuando se esté agotando",
       "privacy": "Ocultar información personal",
+      "automaticCurrency": "Automático",
+      "usageCurrency": "Moneda del uso",
       "usageScope": "Alcance del uso",
       "manageFoot": "Administrar proveedores",
       "showSource": "Mostrar {{name}} en el menú",
@@ -16774,7 +16776,7 @@
       "taskInfo": {
         "harness": "Icono del harness",
         "project": "Icono y nombre del proyecto",
-        "teammate": "Avatar del compañero",
+        "teammate": "Avatar del amigo",
         "time": "Hora",
         "pr": "Estado del PR",
         "worktree": "worktree",

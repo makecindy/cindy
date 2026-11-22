@@ -1803,6 +1803,8 @@
       "other": "其他",
       "lowAlert": "快用完時通知",
       "privacy": "隱藏個人資訊",
+      "automaticCurrency": "自動",
+      "usageCurrency": "用量統計幣別",
       "usageScope": "用量統計範圍",
       "manageFoot": "管理模型供應商",
       "showSource": "在選單裡顯示 {{name}}",
