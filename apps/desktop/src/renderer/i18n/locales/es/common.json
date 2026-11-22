@@ -4645,6 +4645,22 @@
         "hideProvider": "Ocultar del selector de modelos",
         "showProvider": "Mostrar en el selector de modelos"
       },
+      "plugin": {
+        "title": "Proveedores de complementos",
+        "badge": "Complemento",
+        "rowTip": "{{provider}} · Proporcionado por un complemento",
+        "source": "Proporcionado por un complemento",
+        "declaredName": "Nombre en el complemento: {{name}}",
+        "note": "Este proveedor procede de un complemento instalado y ejecuta las tareas con el motor del propio complemento. El inicio de sesión y la conexión se gestionan en el complemento. Si desactivas o desinstalas el complemento, desaparece de esta lista.",
+        "openPlugin": "Abrir complemento",
+        "resetName": "Restaurar el nombre del complemento",
+        "suspendedBanner": "Este proveedor está deshabilitado: las tareas nuevas y las automatizaciones ya no lo usan, y tus otras computadoras y las personas con quienes compartes tampoco pueden usarlo. El complemento en sí no se ve afectado. Si solo quieres que no aparezca en el selector de modelos, ocúltalo en su lugar.",
+        "hiddenBanner": "Oculto del selector de modelos. Las tareas y las automatizaciones que ya lo usan no se ven afectadas.",
+        "unavailableBanner": "El complemento indica que este motor no puede ejecutarse en este momento. Abre el complemento para ver el motivo.",
+        "unavailableBannerReason": "No puede ejecutarse en este momento: {{reason}}",
+        "modelsEmpty": "Este motor todavía no ha indicado sus modelos, así que las tareas nuevas usan su propio modelo predeterminado. Cuando una tarea se haya ejecutado con él, sus modelos aparecerán aquí.",
+        "modelSwitchAria": "Habilitar {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "Conexión con clave API",
         "replaceKey": "Editar configuración de conexión",
@@ -8648,7 +8664,9 @@
           "unsupported": "Este complemento todavía no permite usar su motor desde otras computadoras.",
           "remoteControlOff": "Esta computadora aún no permite el control remoto, por lo que otras computadoras no pueden usar este motor.",
           "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}",
-          "descriptionShareable": "Cuando está activado, tus otras computadoras y las personas con quienes lo compartas pueden ejecutar tareas con este motor sin instalar el complemento. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea."
+          "descriptionShareable": "Cuando está activado, tus otras computadoras y las personas con quienes lo compartas pueden ejecutar tareas con este motor sin instalar el complemento. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea.",
+          "providerDisabled": "Este proveedor está deshabilitado en Proveedores, por lo que otras computadoras no pueden usar este motor.",
+          "openProviders": "Abrir configuración de proveedores"
         },
         "githubRelease": {
           "title": "Actualizaciones del complemento",

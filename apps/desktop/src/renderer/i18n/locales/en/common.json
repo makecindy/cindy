@@ -4589,6 +4589,22 @@
         "hideProvider": "Hide from Model Picker",
         "showProvider": "Show in Model Picker"
       },
+      "plugin": {
+        "title": "Providers from plugins",
+        "badge": "Plugin",
+        "rowTip": "{{provider}} · Provided by a plugin",
+        "source": "Provided by a plugin",
+        "declaredName": "Name in the plugin: {{name}}",
+        "note": "This provider comes from an installed plugin and runs tasks on the plugin’s own engine. Sign-in and connection are managed in the plugin. If you turn off or uninstall the plugin, it disappears from this list.",
+        "openPlugin": "Open plugin",
+        "resetName": "Restore name from plugin",
+        "suspendedBanner": "This provider is disabled, so new tasks and automations no longer use it, and your other computers and people you share with can’t use it either. The plugin itself is unaffected. To only keep it out of the model picker, hide it instead.",
+        "hiddenBanner": "Hidden from the model picker. Tasks and automations that already use it are unaffected.",
+        "unavailableBanner": "The plugin reports that this engine can’t run right now. Open the plugin to see why.",
+        "unavailableBannerReason": "Can’t run right now: {{reason}}",
+        "modelsEmpty": "This engine hasn’t listed its models yet, so new tasks use its own default model. After a task has run on it, its models appear here.",
+        "modelSwitchAria": "Enable {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "API key connection",
         "replaceKey": "Edit connection settings",
@@ -8576,7 +8592,9 @@
           "unsupported": "This plugin doesn’t support using its engine from other computers yet.",
           "remoteControlOff": "This computer doesn’t allow remote control yet, so other computers can’t use this engine.",
           "ariaLabel": "Allow your other computers to use {{engine}}",
-          "descriptionShareable": "When on, your other computers and people you share with can run tasks with this engine without installing the plugin. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on."
+          "descriptionShareable": "When on, your other computers and people you share with can run tasks with this engine without installing the plugin. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on.",
+          "providerDisabled": "This provider is disabled in Providers, so other computers can’t use this engine.",
+          "openProviders": "Open Provider Settings"
         },
         "githubRelease": {
           "title": "Plugin updates",

@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`9b0bbf728e`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`9e098a937a`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
@@ -10,14 +10,14 @@
 
 ## 总口径
 
-**真正要 Host 做的 = A + C-后台 + C-两段式 = 940 + 32 + 50 = 1022**；巡检实际调用到 **131** 个（666 次，其中 A 129）。
+**真正要 Host 做的 = A + C-后台 + C-两段式 = 941 + 32 + 50 = 1023**；巡检实际调用到 **131** 个（666 次，其中 A 129）。
 同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。
 
 | 分类 | 含义 | 通道数 |
 |---|---|---:|
 | contract | 已在 Host 通道合同或通用路由登记表里，窗口做客户端时转发给 Host | 84（巡检调用 35） |
 | client | 客户端模式自己的通道（连接状态、重连） | 2（巡检调用 1） |
-| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 940（巡检调用 128） |
+| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 941（巡检调用 128） |
 | **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 363（巡检调用 70） |
 | **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 5（巡检调用 1） |
 | **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
@@ -29,12 +29,12 @@
 | 　C-两段式（窗口做界面动作，数据调 Host） | | 50（巡检调用 0） |
 | 　C-窗口本地 | | 11（巡检调用 2） |
 | 　C-专项设计（安全边界） | | 4（巡检调用 0） |
-| 合计 | | 1511 |
+| 合计 | | 1512 |
 
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
 已注册 **373**（其中 10 个只有源码判定，客户端快照里还没有）、未注册 **0**（今天被拒或无人监听，见下文）、快照无法判断 14。
 
-判定依据：A:default 131、A:rule 809、B:rule 363、C:dependency 27、C:rule 70、R:rule 6、S:dependency 14、W:rule 5（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
+判定依据：A:default 131、A:rule 810、B:rule 363、C:dependency 27、C:rule 70、R:rule 6、S:dependency 14、W:rule 5（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
 
 合同一侧（`hostChannelContract.ts`、`host-delegation.ts`、客户端模式预取、Host 通用路由的登记表 `hostIpcEntries/`）的通道名全部静态解析：解析不出任何一个时脚本直接失败，不会生成本清单。
 
@@ -100,7 +100,7 @@
 | # | 领域 | 通道数 | 巡检调用到 | 调用次数 | 主要模块 |
 |---:|---|---:|---:|---:|---|
 | 1 | 伙伴与 IM | 137 | 22 | 128 | im 60、maker-ipc 40、localDb 28 |
-| 2 | 任务、消息与输入队列 | 114 | 17 | 123 | maker-ipc 70、localDb 27、bootstrap-electron 12 |
+| 2 | 任务、消息与输入队列 | 115 | 17 | 123 | maker-ipc 71、localDb 27、bootstrap-electron 12 |
 | 3 | 插件、技能与 MCP | 151 | 16 | 93 | cindy-brain 56、skillhub 41、plugin-market 19 |
 | 4 | 供应商与模型 | 80 | 14 | 79 | maker-ipc 52、local-model-runtime 19、bootstrap-electron 4 |
 | 5 | git 与工作树 | 66 | 9 | 75 | git-context 22、git-review 21、worktree 13 |
@@ -416,7 +416,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 模块 | 已代理 | A | B | W | S | R | C | 合计 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| maker-ipc | 29 | 301 | 10 | 0 | 0 | 3 | 16 | 359 |
+| maker-ipc | 29 | 302 | 10 | 0 | 0 | 3 | 16 | 360 |
 | bootstrap-electron | 5 | 128 | 61 | 0 | 1 | 0 | 21 | 216 |
 | im | 0 | 60 | 0 | 0 | 0 | 0 | 1 | 61 |
 | localDb | 30 | 58 | 1 | 0 | 0 | 0 | 4 | 93 |
@@ -1698,6 +1698,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:set-model` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/sessionSetModelHandler.ts` |
 | `maker:set-permission-mode` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:set-plan-mode` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
+| `maker:set-plugin-engine-prefs` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/pluginEnginesIpc.ts` |
 | `maker:set-plugin-engine-remote-use` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/pluginEnginesIpc.ts` |
 | `maker:set-session-model-pref` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:set-thinking-enabled` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |

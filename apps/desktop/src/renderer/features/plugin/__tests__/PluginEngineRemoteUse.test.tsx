@@ -12,6 +12,8 @@
  *   本机未允许远程控制)与「只列本插件的引擎」没有覆盖。
  * - 最小失败输入：插件不支持时开关仍可点；未允许远程控制时开关可点；点开关写成别的插件的引擎；
  *   没有引擎的插件也出现卡片。
+ * - 2026-11-22 补：引擎在「设置 → 模型供应商」里被停用时，其他电脑用不了它，这张卡片不能还显示成可开关的样子
+ *   (两处是同一个引擎的设置，要讲同一件事)。最小失败输入：停用后开关仍可点、没有说明去哪里恢复。
  * - tier：unit(jsdom，渲染真实组件)。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -113,6 +115,25 @@ describe('remote use of a plugin’s task engines', () => {
     expect(screen.getByText(reason, { exact: false })).toBeTruthy();
     fireEvent.click(toggle);
     expect(setPluginEngineRemoteUse).not.toHaveBeenCalled();
+  });
+
+  it('shows the stored switch but locks it while the provider is turned off in the provider settings', async () => {
+    const { setPluginEngineRemoteUse } = await renderCards({
+      engines: [{
+        ...engine('dsh-plugin:dsh', 'DeepSeek Harness', { supported: true, enabled: true }),
+        suspended: true as const,
+        availability: { state: 'unavailable' as const, reason: 'suspended' },
+      }],
+    });
+    const toggle = await screen.findByRole('switch');
+    // What the user set is kept and shown; it applies again once the provider is turned on.
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('settings.ghosts.detail.engineRemoteUse.providerDisabled', { exact: false })).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.detail.engineRemoteUse.description')).toBeNull();
+    fireEvent.click(toggle);
+    expect(setPluginEngineRemoteUse).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.detail.engineRemoteUse.openProviders' })).toBeTruthy();
   });
 
   it('restores the switch and says why when the plugin turned out not to support it', async () => {
