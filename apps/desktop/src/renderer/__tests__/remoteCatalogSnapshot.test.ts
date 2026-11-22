@@ -19,6 +19,51 @@ function deferred() {
 }
 
 describe('remote catalog refresh scheduling', () => {
+  // #10711 P2 / unit: both endpoints invalidate the same routed read while it is pending.
+  it.each(['task-host', 'share:burst'])(
+    'coalesces source and task-host notifications after a refresh from %s',
+    async (firstDevice) => {
+      const source = 'share:burst';
+      const host = 'task-host';
+      const target = modelCatalogKey(source, host)!;
+      const firstRead = deferred();
+      let revision = 'old';
+      const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+        const value = revision;
+        const isRouted = channel === CONTROLLED_MODEL_CATALOG_CHANNEL;
+        if (isRouted && value === 'old') await firstRead.promise;
+        const requestedChannel = isRouted ? (args[0] as { channel: string }).channel : channel;
+        return requestedChannel === 'maker:provider:list' ? { providers: [] }
+          : { availableModels: [{ id: value, displayName: value, contextWindow: 200000,
+              efforts: [], defaultEffort: null }],
+              hasFastMode: false, effortLevels: [], permissionModes: [] };
+      });
+      vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+      const off = capabilities.subscribeDeviceCapabilities(target, 'codex', () => undefined);
+      const routedReads = () => invoke.mock.calls.filter(([, channel]) => channel === CONTROLLED_MODEL_CATALOG_CHANNEL);
+      const pending = [refreshRemoteCatalogSnapshot(firstDevice)];
+      try {
+        await vi.waitFor(() => expect(routedReads()).toHaveLength(4));
+        revision = 'latest';
+        const secondDevice = firstDevice === host ? source : host;
+        for (const device of [secondDevice, firstDevice, secondDevice]) {
+          pending.push(refreshRemoteCatalogSnapshot(device));
+          await Promise.resolve(); // Let any newly scheduled reader start.
+        }
+        expect(routedReads()).toHaveLength(4);
+        firstRead.resolve();
+        await Promise.all(pending);
+        expect(routedReads()).toHaveLength(8);
+        expect(routedReads().every(([device]) => device === host)).toBe(true);
+        expect(capabilities.getCachedCapabilities('codex', target)?.availableModels[0]?.id).toBe('latest');
+      } finally {
+        firstRead.resolve();
+        await Promise.all(pending);
+        off();
+      }
+    },
+  );
+
   // A capability-only route has no provider-cache generation/history to retire.
   it('keeps a newly mounted capability-only route retired while its source refresh is queued', async () => {
     const source = deferred();

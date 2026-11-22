@@ -690,11 +690,9 @@ export function evictControlledDeviceCapabilities(taskDeviceId: string): void {
   }
 }
 
-export function refreshControlledDeviceCapabilities(taskDeviceId: string): void {
+export function getMountedControlledDeviceCapabilityTargets(taskDeviceId: string): string[] {
   const devices = new Set([...remoteListeners.keys()].map(key => key.slice(0, key.lastIndexOf(':'))));
-  for (const key of devices) {
-    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) void prefetchDeviceCapabilities(key);
-  }
+  return [...devices].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */

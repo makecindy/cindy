@@ -439,10 +439,8 @@ export function evictControlledDeviceProviders(taskDeviceId: string): void {
   }
 }
 
-export function refreshControlledDeviceProviders(taskDeviceId: string): void {
-  for (const key of listeners.keys()) {
-    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) void prefetchDeviceProviders(key);
-  }
+export function getMountedControlledDeviceProviderTargets(taskDeviceId: string): string[] {
+  return [...listeners.keys()].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其供应商缓存(只清该设备的 key + 代际自增)。 */
