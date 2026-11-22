@@ -13,13 +13,15 @@ import {
   DEFAULT_USAGE_CURRENCY,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
-import { useSessionEstimatedValue } from './useSessionEstimatedValue';
+import { useSessionEstimatedAmounts } from './useSessionEstimatedValue';
 import { useSessionSpend } from './useSessionSpend';
 
 export interface SessionUsageMoney {
   actualMoney: RegionalMoney | null;
   estimatedValueMoney: RegionalMoney | null;
   totalMoney: RegionalMoney | null;
+  actualAmounts?: RegionalMoney[];
+  estimatedAmounts?: RegionalMoney[];
 }
 
 export function combineSessionUsageMoney(
@@ -54,11 +56,17 @@ export function useSessionUsageMoney(
   initialMoney: RegionalMoney | null | undefined,
   initialCostUsd: number | null | undefined,
 ): SessionUsageMoney {
-  const actualMoney = useSessionSpend(sessionId, initialMoney, initialCostUsd);
-  const estimatedValueMoney = useSessionEstimatedValue(sessionId, Boolean(sessionId));
-
-  return useMemo(
-    () => combineSessionUsageMoney(actualMoney, estimatedValueMoney),
-    [actualMoney, estimatedValueMoney],
-  );
+  const actualAmounts = useSessionSpend(sessionId, initialMoney, initialCostUsd);
+  const estimates = useSessionEstimatedAmounts(sessionId, Boolean(sessionId));
+  return useMemo(() => {
+    const actual = actualAmounts[0] ?? null;
+    const estimatedAmounts = estimates.filter(money => combineSessionUsageMoney(actual, money).estimatedValueMoney);
+    const result = combineSessionUsageMoney(actual, estimatedAmounts[0] ?? null);
+    return {
+      ...result,
+      actualAmounts,
+      estimatedAmounts,
+      totalMoney: actualAmounts.length > 1 || estimatedAmounts.length > 1 ? null : result.totalMoney,
+    };
+  }, [actualAmounts, estimates]);
 }

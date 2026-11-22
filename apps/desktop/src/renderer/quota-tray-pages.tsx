@@ -90,6 +90,10 @@ export function Manage({ view }: { view: MenubarView }) {
       {(['lowAlert', 'privacy'] as const).map(key => <label className="setting" key={key}>{s[key]}
         <input type="checkbox" role="switch" checked={view.settings[key]}
           onChange={event => bridge.updateSettings({ [key]: event.target.checked })}/></label>)}
+      <label className="setting scope">{s.usageCurrency}
+        <select value={view.settings.currency ?? 'auto'} onChange={event => bridge.updateSettings({ currency: event.target.value as 'auto' | 'USD' | 'CNY' })}>
+          <option value="auto">{s.automaticCurrency}</option><option value="USD">USD</option><option value="CNY">CNY</option>
+        </select></label>
       <label className="setting scope">{s.usageScope}
         <select value={view.settings.scope} onChange={event => bridge.updateSettings({ scope: event.target.value as 'all' | 'local' })}>
           <option value="local">{s.scopeLocal}</option><option value="all">{s.scopeAll}</option>

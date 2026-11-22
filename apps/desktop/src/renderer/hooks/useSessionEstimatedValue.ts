@@ -19,6 +19,7 @@ import {
   normalizeRegionalMoney,
   usdMoney,
   USD_TO_CNY_FIXED_RATE,
+  sumMoneyByCurrency,
   type MoneyEstimateReason,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
@@ -233,20 +234,16 @@ export function resolveEstimatedValueTurnCostEntry(
   };
 }
 
-function sumCosts(costs: Map<string, RegionalMoney>): RegionalMoney | null {
-  const values = [...costs.values()];
-  if (values.length === 0) return null;
-  const total = addCompatibleRegionalMoney(values);
-  if (!total) return null;
-  return total.amount > 0 ? total : null;
+function sumCosts(costs: Map<string, RegionalMoney>): RegionalMoney[] {
+  return sumMoneyByCurrency([...costs.values()].filter(money => money.amount > 0));
 }
 
 const NOOP_UNSUBSCRIBE = () => {};
 
-export function useSessionEstimatedValue(
+export function useSessionEstimatedAmounts(
   sessionId: string | undefined,
   enabled: boolean,
-): RegionalMoney | null {
+): RegionalMoney[] {
   const displaySnapshot = useChatDisplaySnapshot(sessionId);
   const displaySnapshotRef = useRef(displaySnapshot);
   const shouldListenForDirectTurnCost = !displaySnapshot || displaySnapshot.chatRealtime;
@@ -254,7 +251,7 @@ export function useSessionEstimatedValue(
   const storeClientIdsRef = useRef<string[]>([]);
   const transcriptClearedRef = useRef(false);
   const removedClientIdsRef = useRef(new Set<string>());
-  const [valueMoney, setValueMoney] = useState<RegionalMoney | null>(null);
+  const [valueMoney, setValueMoney] = useState<RegionalMoney[]>([]);
   const subscribeSnapshot = useCallback(
     (cb: () => void) =>
       !enabled || !sessionId || displaySnapshot
@@ -277,7 +274,7 @@ export function useSessionEstimatedValue(
     storeClientIdsRef.current = [];
     transcriptClearedRef.current = false;
     removedClientIdsRef.current.clear();
-    setValueMoney(null);
+    setValueMoney([]);
   }, [enabled, sessionId]);
 
   useEffect(() => {
@@ -380,4 +377,8 @@ export function useSessionEstimatedValue(
   }, [enabled, sessionId, shouldListenForDirectTurnCost]);
 
   return valueMoney;
+}
+
+export function useSessionEstimatedValue(sessionId: string | undefined, enabled: boolean): RegionalMoney | null {
+  return addCompatibleRegionalMoney(useSessionEstimatedAmounts(sessionId, enabled));
 }

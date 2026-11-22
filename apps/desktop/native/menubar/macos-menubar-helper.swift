@@ -24,6 +24,7 @@ struct MBSettings: Codable, Equatable {
   var lowAlert: Bool
   var privacy: Bool
   var scope: String
+  var currency: String?
 }
 
 struct MBCell: Decodable, Identifiable, Equatable {
@@ -3636,6 +3637,15 @@ struct ManagePage: View {
           settingRow(store.s("privacy"), nil) {
             Toggle("", isOn: Binding(get: { view.settings.privacy }, set: { Bridge.emitSettings(["privacy": $0]) }))
               .toggleStyle(.switch).controlSize(.small).labelsHidden()
+          }
+          Hairline()
+          settingRow(store.s("usageCurrency"), nil) {
+            Picker("", selection: Binding(get: { view.settings.currency ?? "auto" },
+                                         set: { Bridge.emitSettings(["currency": $0]) })) {
+              Text(store.s("automaticCurrency")).tag("auto")
+              Text("USD").tag("USD")
+              Text("CNY").tag("CNY")
+            }.pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
           }
           Hairline()
           // The picker moves under its title when the two labels don't fit beside it.

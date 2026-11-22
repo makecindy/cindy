@@ -27,8 +27,7 @@ import {
 } from '../usage/turnCostCalculator.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { isCodexGatewayWireModel } from '@cindy/model-providers';
-import { addRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
-import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
+import { sumMoneyByCurrency, type RegionalMoney } from '../../shared/regionalMoney.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './turnUsagePorts.js';
 import { isClaudeSubscriptionProviderId } from '../maker-host/subscription-account-kind.js';
 import {
@@ -255,7 +254,7 @@ export function recordSessionCodexTurnUsage(
                 ? codexUsageSegments.filter(segment => (segment.model ?? turnModel) === row.model)
                 : codexUsageSegments
               : [];
-            const money = computePriceQuoteTurnMoney(row, price, currentLedgerCurrency(), segments);
+            const money = computePriceQuoteTurnMoney(row, price, segments);
             if (!money) continue;
             // Only gateway sale prices are actual API spend. Reference quotes
             // remain message-only estimates so history cannot reclassify them.
@@ -275,13 +274,14 @@ export function recordSessionCodexTurnUsage(
             }
             perModelCost.push({ ...billing, model: row.model, money });
           }
-          const money = perModelCost.length ? addRegionalMoney(perModelCost.map(row => row.money)) : null;
+          const values = perModelCost.map(row => row.money);
+          const actualAmounts = isSubscriptionValue ? [] : sumMoneyByCurrency(values.filter(m => m.kind === 'actual-cost'));
+          const money = actualAmounts[0] ?? sumMoneyByCurrency(values)[0];
           if (money && money.amount > 0) {
             if (turnUsageDetails) turnUsageDetails.perModelCost = perModelCost;
-            const isActualApiCost = !isSubscriptionValue && money.kind === 'actual-cost';
-            if (isActualApiCost) {
-              void recordTurnSpend(money);
-              void recordSessionTurnSpend(session.id, money);
+            for (const amount of actualAmounts) {
+              void recordTurnSpend(amount);
+              void recordSessionTurnSpend(session.id, amount);
             }
             const changedScheduleId = await recordSchedulerTurnCost({
               sessionId: session.id,

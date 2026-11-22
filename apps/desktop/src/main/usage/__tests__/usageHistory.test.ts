@@ -149,7 +149,6 @@ import {
 } from '../ledgerCurrency';
 import {
   DEFAULT_USAGE_CURRENCY,
-  USD_TO_CNY_FIXED_RATE,
   zeroUsageMoney,
   type ModelPriceQuote,
   type RegionalMoney,
@@ -167,10 +166,8 @@ function actual(amount: number, approximate = false): RegionalMoney {
   };
 }
 
-function regionalUsdAmount(amount: number): number {
-  return DEFAULT_USAGE_CURRENCY === 'CNY'
-    ? amount * USD_TO_CNY_FIXED_RATE
-    : amount;
+function nativeUsd(amount: number): RegionalMoney {
+  return { amount, currency: 'USD', approximate: false, kind: 'actual-cost' };
 }
 
 function subscriptionQuote(
@@ -361,7 +358,7 @@ describe('readUsageHistoryWith', () => {
     setActiveLedgerCurrency(currency);
     const paid: RegionalMoney = { amount: 3, currency, approximate: false, kind: 'actual-cost' };
     const zero = { ...paid, amount: 0 };
-    const estimate = currency === 'CNY' ? 13.4 : 2;
+    const estimate = currency === 'CNY' ? 0 : 2;
     const foreign: RegionalMoney = { ...paid, amount: 9, currency: 'CNY' };
     const result = await readUsageHistoryWith(makeDeps({
       getAllSpendDays: async () => [{ day: TODAY, monies: currency === 'USD' ? [paid, foreign] : [paid] }],
@@ -479,39 +476,39 @@ describe('readUsageHistoryWith', () => {
   });
 
   it('aggregates actual money and subscription value without double counting', async () => {
-    const estimateAmount = regionalUsdAmount(2);
+    const estimateAmount = 2;
     const result = await readUsageHistoryWith(makeDeps({
       getAllSpendDays: async () => [
-        { day: '2026-06-10', monies: [actual(3)] },
-        { day: TODAY, monies: [actual(5)] },
+        { day: '2026-06-10', monies: [nativeUsd(3)] },
+        { day: TODAY, monies: [nativeUsd(5)] },
       ],
       getModelUsageSince: async () => [
         modelRow(
           '2026-06-10',
           'claude-code',
           'claude-opus-4-8',
-          actual(2),
+          nativeUsd(2),
           { inputTokens: 10, outputTokens: 20 },
         ),
         modelRow(
           TODAY,
           'claude-code',
           'claude-opus-4-8',
-          actual(4),
+          nativeUsd(4),
           { inputTokens: 10, outputTokens: 20 },
         ),
         modelRow(
           TODAY,
           'codex',
           codexSubscriptionUsageModelKey('gpt-5.5'),
-          actual(0),
+          nativeUsd(0),
           { inputTokens: 1_000_000 },
         ),
         modelRow(
           TODAY,
           'codex',
           codexApiUsageModelKey('gpt-5.5'),
-          actual(1),
+          nativeUsd(1),
           { outputTokens: 100 },
         ),
       ],
@@ -523,8 +520,8 @@ describe('readUsageHistoryWith', () => {
     }));
 
     expect(result.estimatesPending).toBe(false);
-    expect(result.totals.today).toEqual(actual(5));
-    expect(result.totals.last30Days).toEqual(actual(8));
+    expect(result.totals.today).toEqual(nativeUsd(5));
+    expect(result.totals.last30Days).toEqual(nativeUsd(8));
     expect(result.totals.last30DaysEstimatedValue).toMatchObject({
       amount: estimateAmount,
       kind: 'value-estimate',
@@ -571,16 +568,16 @@ describe('readUsageHistoryWith', () => {
     );
 
     expect(result.modelDaily.map((row) => row.subscriptionEstimateMoney.amount)).toEqual([
-      regionalUsdAmount(2),
-      regionalUsdAmount(3),
+      2,
+      3,
     ]);
-    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(regionalUsdAmount(5));
-    expect(result.totals.last30DaysEstimatedValue.amount).toBeCloseTo(regionalUsdAmount(5));
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(5);
+    expect(result.totals.last30DaysEstimatedValue.amount).toBeCloseTo(5);
   });
 
   it('uses the request-priced subscription value stored at write time', async () => {
     const stored: RegionalMoney = {
-      amount: regionalUsdAmount(1.25),
+      amount: 1.25,
       currency: DEFAULT_USAGE_CURRENCY,
       approximate: true,
       kind: 'value-estimate',
@@ -654,33 +651,16 @@ describe('readUsageHistoryWith', () => {
       }),
     );
 
-    const projectedAmount = DEFAULT_USAGE_CURRENCY === 'CNY'
-      ? stored.amount * USD_TO_CNY_FIXED_RATE : 0;
     expect(result.estimatesPending).toBe(false);
-    if (DEFAULT_USAGE_CURRENCY === 'CNY') {
-      // 保留历史估值的换算结果，不能按上面的当前参考价重新计价。
-      expect(result.models[0].estimatedMoney).toMatchObject({
-        amount: projectedAmount, currency: 'CNY', kind: 'value-estimate',
-      });
-    } else {
-      expect(result.models[0].estimatedMoney).toBeNull();
-    }
-    expect(result.modelDaily[0]).toMatchObject({
-      subscriptionEstimateMoney: {
-        amount: projectedAmount,
-        currency: DEFAULT_USAGE_CURRENCY,
-        kind: 'value-estimate',
-      },
-    });
+    expect(result.models[0].estimatedMoney).toMatchObject(stored);
+    expect(result.modelDaily[0].subscriptionEstimateMoney).toMatchObject(stored);
   });
 
-  it('keeps active-ledger subscription estimates when history uses another currency', async () => {
-    const historicalCurrency = DEFAULT_USAGE_CURRENCY === 'CNY' ? 'USD' : 'CNY';
-    const estimateAmount = regionalUsdAmount(2);
-    const historicalCost: RegionalMoney = DEFAULT_USAGE_CURRENCY === 'CNY'
-      ? actual(33.5) : actual(0);
-    const historicalModelCost: RegionalMoney = DEFAULT_USAGE_CURRENCY === 'CNY'
-      ? actual(67) : actual(0);
+  it('selects native USD subscription estimates alongside CNY history', async () => {
+    const historicalCurrency = 'CNY';
+    const estimateAmount = 2;
+    const historicalCost = nativeUsd(0);
+    const historicalModelCost = nativeUsd(0);
     const result = await readUsageHistoryWith(
       makeDeps({
         getAllSpendDays: async () => [
@@ -717,13 +697,14 @@ describe('readUsageHistoryWith', () => {
           },
         }),
       }),
+      { currency: 'USD' },
     );
 
     expect(result.totals.today).toEqual(historicalCost);
     expect(result.totals.last30Days).toEqual(historicalCost);
     expect(result.totals.last30DaysEstimatedValue).toMatchObject({
       amount: estimateAmount,
-      currency: DEFAULT_USAGE_CURRENCY,
+      currency: 'USD',
     });
     expect(result.totals.last30DaysWithEstimatedValue.amount).toBeCloseTo(estimateAmount + historicalCost.amount);
     expect(result.days[0]).toMatchObject({
@@ -740,7 +721,7 @@ describe('readUsageHistoryWith', () => {
     expect(
       result.modelDaily.find((row) => row.model === 'legacy-mixed-currency'),
     ).toMatchObject({
-      money: { amount: historicalModelCost.amount, currency: DEFAULT_USAGE_CURRENCY },
+      money: { amount: historicalModelCost.amount, currency: 'USD' },
       apiMoney: historicalModelCost,
       tokens: 20,
     });
@@ -789,7 +770,7 @@ describe('readUsageHistoryWith', () => {
   });
 
   it('uses provider-scoped Anthropic reference pricing for Claude subscription rows', async () => {
-    const expected = regionalUsdAmount(5);
+    const expected = 5;
     const result = await readUsageHistoryWith(makeDeps({
       getModelUsageSince: async () => [
         modelRow(
@@ -862,7 +843,7 @@ describe('readUsageHistoryWith', () => {
       cacheReadTokens: 1_600_000,
     });
     // 179.3k * $2 + 9.3k * $6 + 1.6M * $0.50 = $1.2144
-    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(regionalUsdAmount(1.2144), 6);
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(1.2144, 6);
   });
 
   it('marks estimates pending only when a subscription price is missing during refresh', async () => {
@@ -911,7 +892,7 @@ describe('readUsageHistoryWith', () => {
 describe('production cache and empty payload', () => {
   // 单测：v5 曾把旧 USD 缓存为 0，升级必须重算；v6 则继续走原有磁盘复用路径。
   // 真实 readUsageHistory 读取临时磁盘文件；旧覆盖只检查写出的版本号，不能发现误复用。
-  it.each([5, 6, 7])('recomputes old caches and reuses v7 cache (version %i)', async (version) => {
+  it.each([5, 6, 7, 8])('recomputes old caches and reuses v8 cache (version %i)', async (version) => {
     setActiveLedgerCurrency('CNY');
     const usd: RegionalMoney = { amount: 10, currency: 'USD', approximate: false, kind: 'actual-cost' };
     const cached = emptyUsageHistoryPayload();
@@ -923,8 +904,8 @@ describe('production cache and empty payload', () => {
     await writeFile(file, JSON.stringify({ version, optsKey: 'user=user-a|days=30', payload: cached }));
     vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [usd] }]);
     const result = await readUsageHistory({ days: 30 });
-    expect(result.totals.today.amount).toBe(67);
-    expect(result.stale).toBe(version === 7);
+    expect(result.totals.today.amount).toBe(version === 8 ? 67 : 10);
+    expect(result.stale).toBe(version === 8);
     // 等待既有后台刷新完成，避免清理临时目录时还有写入。
     await readUsageHistory({ days: 30, forceRefresh: true });
   });
@@ -999,7 +980,7 @@ describe('production cache and empty payload', () => {
       );
       expect(raw).toMatchObject({
         // v6 作废曾丢弃旧 USD 的展示缓存。
-        version: 7,
+        version: 8,
         optsKey: 'user=user-a|days=30',
         payload: {
           totals: {
@@ -1035,7 +1016,7 @@ describe('multi-device scope', () => {
 
   // 单测：真实设备 scope 装配会调用 combineUsageDeviceRows，不能用本机行的名字冒充跨设备。
   // 最小失败输入：本机 CNY 3、另一台电脑 USD 10；全部设备与指定设备都应包含旧 USD。
-  it('converts peer USD through all-device and single-device scopes', async () => {
+  it('keeps peer USD native in all-device and single-device scopes', async () => {
     setActiveLedgerCurrency('CNY');
     const cny: RegionalMoney = Object.freeze({ amount: 3, currency: 'CNY', approximate: false, kind: 'actual-cost' });
     const usd: RegionalMoney = Object.freeze({ ...cny, amount: 10, currency: 'USD' });
@@ -1049,9 +1030,9 @@ describe('multi-device scope', () => {
       getModelUsageSince: async () => [modelRow(TODAY, 'pi', 'same-model', cny, { inputTokens: 20 })],
     });
     const snapshot = { peerRows: new Map([['mate-b13', peer]]) };
-    for (const [device, amount, tokens] of [['all', 70, 1_000_000_020], ['mate-b13', 67, 1_000_000_000], ['local', 3, 20]] as const) {
+    for (const [device, amount, tokens] of [['all', 3, 1_000_000_020], ['mate-b13', 10, 1_000_000_000], ['local', 3, 20]] as const) {
       const result = await readUsageHistoryWith(usageHistoryDepsForScope(base, device, snapshot));
-      expect(result.days[0]).toMatchObject({ money: { amount, currency: 'CNY', approximate: false }, tokens });
+      expect(result.days[0]).toMatchObject({ money: { amount, currency: device === 'mate-b13' ? 'USD' : 'CNY', approximate: false }, tokens });
       expect(result.days[0].money.estimateReasons).toBeUndefined();
       expect(result.modelDaily.reduce((sum, row) => sum + row.money.amount, 0)).toBe(amount);
       const view = usageView(result);

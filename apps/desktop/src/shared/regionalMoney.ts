@@ -163,16 +163,7 @@ export function regionalizeUsd(
 }
 
 /**
- * 把 USD 口径金额投影到目标账本币种。
- *
- * 与 regionalizeMoney 的区别：投影目标是**账号的结算币种**而不是构建区域。本地账本是
- * 单币种的，写入侧只接受该币种（见 main/usage/ledgerCurrency），所以非 Gateway 渠道
- * （订阅价值估算、第三方供应商 SDK 费用，原始口径都是 USD）必须按账本币种投影而不是按
- * 区域 —— 否则以 USD 结算的账号在 CN 构建上会拿到 CNY 金额，被账本守卫当异币种全部丢弃，
- * 这些渠道的花费就再也记不进日账本、按模型统计与「本对话」累计。
- *
- * 只支持 USD → CNY（固定汇率本就是为这个方向的展示投影设的）。已是目标币种的原样返回；
- * CNY → USD 没有反向汇率契约，不猜、原样返回交给上层的异币种处理。
+ * Legacy fixed-rate display projection. Persist the original provider amount and currency.
  */
 export function toLedgerCurrency(
   money: RegionalMoney,
@@ -229,6 +220,31 @@ export function addRegionalMoney(values: readonly RegionalMoney[]): RegionalMone
     kind: values.some((value) => value.kind === 'actual-cost') ? 'actual-cost' : 'value-estimate',
     ...(estimateReasons ? { estimateReasons } : {}),
   };
+}
+
+/** Combine the session's dedicated USD column with the amount in its tagged currency. */
+export function sessionSpendAmounts(usd: number, tagged?: RegionalMoney): {
+  totalMoney: RegionalMoney;
+  totalCostUsd?: number;
+} {
+  const dollars = legacyUsdMoney(usd);
+  if (!tagged || (usd > 0 && tagged.amount === 0)) return {totalMoney: dollars, totalCostUsd: usd};
+  if (tagged.currency === 'USD') {
+    const totalMoney = usd > 0 ? addRegionalMoney([dollars, tagged]) : tagged;
+    return {totalMoney, totalCostUsd: totalMoney.amount};
+  }
+  return usd > 0 ? {totalMoney: tagged, totalCostUsd: usd} : {totalMoney: tagged};
+}
+
+/** Sum each native currency independently, in the order it occurs in the turn. */
+export function sumMoneyByCurrency(values: readonly RegionalMoney[]): RegionalMoney[] {
+  const buckets = new Map<MoneyCurrency, RegionalMoney[]>();
+  for (const value of values) {
+    const bucket = buckets.get(value.currency);
+    if (bucket) bucket.push(value);
+    else buckets.set(value.currency, [value]);
+  }
+  return Array.from(buckets.values(), addRegionalMoney);
 }
 
 /**

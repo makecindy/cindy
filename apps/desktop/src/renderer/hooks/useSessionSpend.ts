@@ -18,19 +18,20 @@ import {
   type RegionalMoney,
 } from '../../shared/regionalMoney';
 
+function sessionAmounts(totalMoney: unknown, totalCostUsd: number | null | undefined): RegionalMoney[] {
+  const current = normalizeRegionalMoney(totalMoney);
+  const usd = typeof totalCostUsd === 'number' && totalCostUsd > 0 ? legacyUsdMoney(totalCostUsd) : null;
+  if (!current?.amount) return usd ? [usd] : [];
+  return current.currency === 'CNY' && usd ? [current, usd] : [current];
+}
+
 export function useSessionSpend(
   sessionId: string | undefined,
   initialMoney: RegionalMoney | null | undefined,
   initialCostUsd: number | null | undefined,
-): RegionalMoney | null {
-  const initial =
-    normalizeRegionalMoney(initialMoney) ??
-    (typeof initialCostUsd === 'number'
-      ? legacyUsdMoney(initialCostUsd)
-      : null);
-  const [money, setMoney] = useState<RegionalMoney | null>(
-    initial,
-  );
+): RegionalMoney[] {
+  const initial = sessionAmounts(initialMoney, initialCostUsd);
+  const [money, setMoney] = useState(initial);
 
   // 初值只是首屏快照：仅切 session 时使用。同一 session 后到的旧 snapshot
   // 不能覆盖实时事件或下方权威补拉。
@@ -48,12 +49,7 @@ export function useSessionSpend(
       totalCostUsd: number | null | undefined,
     ): void => {
       if (cancelled) return;
-      setMoney(
-        normalizeRegionalMoney(totalMoney) ??
-          (typeof totalCostUsd === 'number'
-            ? legacyUsdMoney(totalCostUsd)
-            : null),
-      );
+      setMoney(sessionAmounts(totalMoney,totalCostUsd));
     };
     const unsubscribe = window.electronAPI.onUsageSessionSpendChanged((res, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;

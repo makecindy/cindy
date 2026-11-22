@@ -17,8 +17,7 @@ import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { broadcastTurnCostPayload } from '../turnCostBroadcaster.js';
 import { broadcastSchedulerChanged } from '../maker-ipc/schedule.js';
 import {
-  addRegionalMoney,
-  legacyUsdMoney,
+  sessionSpendAmounts,
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 
@@ -105,19 +104,7 @@ export async function prepareGatewayMediaBilling(input: {
           approximate: Boolean(session.approximate),
           kind: 'actual-cost',
         };
-        const legacy = legacyUsdMoney(session.legacyUsd);
-        const totalMoney =
-          legacy.amount > 0 && legacy.currency === current.currency
-            ? addRegionalMoney([legacy, current])
-            : current;
-        broadcastSessionSpend(
-          {
-            sessionId: input.sessionId,
-            totalMoney,
-            ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
-          },
-          ownerScope,
-        );
+        broadcastSessionSpend({sessionId: input.sessionId, ...sessionSpendAmounts(session.legacyUsd, current)}, ownerScope);
       }
       await rebroadcastTodaySpend(ownerScope);
     } catch (error) {

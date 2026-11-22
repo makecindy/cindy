@@ -11,7 +11,6 @@ import { recordModelMismatchOnMessage } from './turnUsagePorts.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from './turnUsagePorts.js';
 import {
-  getGatewayAccountCurrency,
   getGatewayModelPricingForModel,
 } from './turnUsagePorts.js';
 import { getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../usage/referenceModelPricingCore.js';
@@ -42,11 +41,10 @@ import {
   isSubscriptionDirectRoute,
 } from '../../shared/subscriptionModels.js';
 import {
-  addRegionalMoney,
-  usdToLedgerCurrency,
+  sumMoneyByCurrency,
+  usdMoney,
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
-import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   triggerClaudeSubscriptionUsageRefresh,
@@ -253,7 +251,7 @@ export function recordSessionClaudeTurnUsage(
           billingRoute === 'xd-gateway'
             ? await getGatewayModelPricingForModel().catch(() => null)
             : getReferenceModelPricing();
-        const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
+        const { turnMoney, actualByCurrency, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
           deltas,
           pricing,
           {
@@ -297,7 +295,6 @@ export function recordSessionClaudeTurnUsage(
                   (sessionProviderForBilling
                     ? getCodexProviderSubscriptionValuePrice(sessionProviderForBilling, m.model, pricing, undefined, undefined, 'claude-code')
                     : undefined) ?? getSubscriptionValuePriceFor('claude-code', m.model, pricing),
-                  currentLedgerCurrency(),
                   m.segments,
                 )
               : null;
@@ -354,8 +351,10 @@ export function recordSessionClaudeTurnUsage(
             billing,
             doneData?.generationTrace,
           );
-          recordTurnSpend(turnMoney);
-          recordSessionTurnSpend(session.id, turnMoney);
+          for (const amount of actualByCurrency) {
+            recordTurnSpend(amount);
+            recordSessionTurnSpend(session.id, amount);
+          }
           // per-message 维度优先挂 assistant；纯 tool turn 则按 scheduler runId 直接归因。
           const changedScheduleId = await recordSchedulerTurnCost({
             sessionId: session.id,
@@ -379,7 +378,7 @@ export function recordSessionClaudeTurnUsage(
           const estimatedValues: RegionalMoney[] = estimatedTurnMoney ? [estimatedTurnMoney] : [];
           estimatedValues.push(...subscriptionTurnEstimates);
           const turnEstimatedValue =
-            estimatedValues.length > 0 ? addRegionalMoney(estimatedValues) : null;
+            sumMoneyByCurrency(estimatedValues)[0] ?? null;
           const turnUsageDetails = buildClaudeTurnUsageDetails(
             doneData?.usage,
             resolvedUsageDeltas,
@@ -479,8 +478,7 @@ export function recordSessionClaudeTurnUsage(
           await recordUsageOnly();
           return;
         }
-        const ledgerCurrency = (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
-        const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
+        const money = usdMoney(rawDelta);
         recordTurnSpend(money);
         recordSessionTurnSpend(session.id, money);
         const changedScheduleId = await recordSchedulerTurnCost({

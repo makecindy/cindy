@@ -174,6 +174,7 @@ export interface MenubarUsageDeviceInput {
 }
 
 export interface MenubarUsageScopeInput {
+  currency?: 'USD' | 'CNY';
   daily: MenubarUsageScopeData['daily'];
   models: MenubarUsageScopeData['models'];
   devices: MenubarUsageDeviceInput[];

@@ -697,6 +697,10 @@ function toQuotaHoverCardTurnUsage(
   };
 }
 
+function formatSessionAmounts(amounts: RegionalMoney[] | undefined, fallback: RegionalMoney): string {
+  return (amounts?.length ? amounts : [fallback]).map(money => formatTurnCostMoney(money)).join(' + ');
+}
+
 /** 把会话金额投影成卡片数据；混合合计保留实际费用与价值估算两条构成。 */
 function toQuotaHoverCardSessionUsage(
   sessionUsage: SessionUsageMoney,
@@ -720,9 +724,9 @@ function toQuotaHoverCardSessionUsage(
     costIsEstimate:
       totalMoney?.kind === 'value-estimate' ||
       Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
-    ...(actualMoney?.amount ? { actualCostText: formatTurnCostMoney(actualMoney) } : {}),
+    ...(actualMoney?.amount ? { actualCostText: formatSessionAmounts(sessionUsage.actualAmounts, actualMoney) } : {}),
     ...(estimatedValueMoney?.amount
-      ? { estimatedValueText: formatTurnCostMoney(estimatedValueMoney) }
+      ? { estimatedValueText: formatSessionAmounts(sessionUsage.estimatedAmounts, estimatedValueMoney) }
       : {}),
   };
 }
@@ -1487,12 +1491,12 @@ export function TodaySpendChip({
     : [
         sessionUsage.actualMoney?.amount
           ? t('todaySpend.tooltip.sessionUsed', {
-              cost: formatTurnCostMoney(sessionUsage.actualMoney),
+              cost: formatSessionAmounts(sessionUsage.actualAmounts, sessionUsage.actualMoney),
             })
           : null,
         sessionUsage.estimatedValueMoney?.amount
           ? t('todaySpend.codex.sessionValueLabel', {
-              cost: formatTurnCostMoney(sessionUsage.estimatedValueMoney),
+              cost: formatSessionAmounts(sessionUsage.estimatedAmounts, sessionUsage.estimatedValueMoney),
             })
           : null,
       ]
