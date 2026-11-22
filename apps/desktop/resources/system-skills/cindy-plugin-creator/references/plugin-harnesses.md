@@ -98,6 +98,17 @@ Cindy 存下最新状态,显示引擎列表时只读这份记录,**不调用插�
 「逐项确认 / 全部允许」。用户切换模式时 Cindy 让 Agent 切到对应模式(ACP 的 `mode` 配置项),Agent 请求权限时
 仍由用户逐个确认,选「全部允许」才自动同意。
 
+**插话**:ACP v1 每个会话同一时间只跑一个 prompt,没有「往正在跑的这一轮里补一句」的方法。Agent 支持生态里通行的
+`_session/steering` 扩展(claude-agent-acp、codex-acp 等已实现)时,在 `initialize` 结果的**顶层** `_meta` 里声明
+`{ "steering": { "supported": true } }`,用户就能在任务运行中插话:Cindy 发请求
+`_session/steering`,参数 `{ sessionId, prompt: ContentBlock[], _meta: { steering: { idleBehavior: "promptRequired" } } }`,
+Agent 把内容注入当前这一轮后回 `{ "outcome": "injected" }`,插话之后的回复继续走这一轮的 `session/update`,这一轮的
+`session/prompt` 等插话的工作做完再返回。Agent 这一轮已经结束时回 `{ "outcome": "promptRequired", "reason": "noRunningTurn" }`
+且不要自己开新一轮,Cindy 会把这条消息作为下一轮发送。没有声明的 Agent 照旧:运行中输入的消息排队,等这一轮结束再发。
+
+入口原样转发字节时什么都不用做,外部 Agent 自己声明、自己处理。入口会改写 `initialize` 回包时要保留 `_meta.steering`;
+外部 Agent 本身不支持时,不要替它声明,否则 Cindy 会把插话发给它而收不到 `injected`。
+
 ### 入口进程
 
 用户在任务里选了你的引擎后,Cindy 以插件 Node 运行时的「原样 stdio」模式启动 `entry`(与

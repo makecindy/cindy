@@ -473,6 +473,76 @@ describe('AcpSession turns', () => {
   });
 });
 
+// 插话：ACP v1 没有同轮输入，Agent 在 initialize 顶层 `_meta.steering.supported` 声明
+// `_session/steering` 扩展（claude-agent-acp / codex-acp 等）时才走同轮注入。
+// 缺口：此前插件引擎一律 sameTurnSteer 不支持，用户插话只能报错或等下一轮。
+// 最小失败输入：声明了扩展的 Agent 运行中插话一条；Agent 回 promptRequired / 不认识方法 / 不回答。
+describe('AcpSession same-turn steering', () => {
+  const steeringInit = (): AcpRecord => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [], _meta: { steering: { supported: true } } });
+  const finalTexts = (events: AgentEvent[]): unknown[] => events
+    .filter((event) => event.type === 'text' && (event.data as AcpRecord).isFinal === true)
+    .map((event) => (event.data as AcpRecord).text);
+
+  it('adds the message to the running turn, and the reply to it starts a new segment', async () => {
+    const agent = createFakeAgent({ handlers: { initialize: steeringInit, '_session/steering': () => ({ outcome: 'injected' }) } });
+    const { session, events } = await open(agent);
+    expect(session.capabilities.sameTurnSteer.supported).toBe(true);
+    await session.send({ type: 'user', content: 'fix the bug' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Editing a.ts.' } });
+
+    await session.steer({ type: 'user', content: 'use b.ts instead' });
+    expect(agent.sent.filter((message) => message.method === '_session/steering').map((message) => message.params)).toEqual([{
+      sessionId: 'sess-1',
+      prompt: [{ type: 'text', text: 'use b.ts instead' }],
+      _meta: { steering: { idleBehavior: 'promptRequired' } },
+    }]);
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Switching to b.ts.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+
+    expect(agent.prompts).toHaveLength(1);
+    expect(finalTexts(events)).toEqual(['Editing a.ts.', 'Switching to b.ts.']);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  it('keeps an agent without the extension as before: the message waits for the next turn', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    expect(session.capabilities.sameTurnSteer.supported).toBe(false);
+    await session.send({ type: 'user', content: 'one' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    await session.steer({ type: 'user', content: 'two' });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'two' }]);
+    expect(agent.methods()).not.toContain('_session/steering');
+  });
+
+  it.each([
+    // The agent's turn already ended: the host sends the message as the next turn instead.
+    { name: 'promptRequired', handler: () => ({ outcome: 'promptRequired', reason: 'noRunningTurn' }), error: /no active turn/i, stillOffered: true },
+    // Advertised but not handled: this message fails once, later ones wait for the next turn.
+    { name: 'method not found', handler: undefined, error: /-32601/, stillOffered: false },
+    // Sent without an answer: the agent may have it, so the host must not send it again.
+    { name: 'no answer', handler: () => new Promise(() => {}), error: /delivery uncertain/, stillOffered: true },
+  ])('reports $name to the host so the message is neither lost nor sent twice', async ({ handler, error, stillOffered }) => {
+    const agent = createFakeAgent({ handlers: { initialize: steeringInit, ...(handler ? { '_session/steering': handler } : {}) } });
+    const { session } = await open(agent, { requestTimeoutMs: 20 });
+    const offered: boolean[] = [];
+    session.onCapabilitiesChange((capabilities) => offered.push(capabilities.sameTurnSteer.supported));
+    await session.send({ type: 'user', content: 'one' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    await expect(session.steer({ type: 'user', content: 'two' })).rejects.toThrow(error);
+    expect(session.capabilities.sameTurnSteer.supported).toBe(stillOffered);
+    expect(offered).toEqual(stillOffered ? [] : [false]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await Promise.resolve();
+    expect(agent.prompts).toHaveLength(1);
+  });
+});
+
 describe('AcpSession permissions', () => {
   it.each([
     { name: 'allow once', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'allow' }, optionId: 'yes', asked: true },

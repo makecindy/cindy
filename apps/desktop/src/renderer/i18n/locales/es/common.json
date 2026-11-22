@@ -14488,6 +14488,8 @@
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",
+
+      "steerUnsupportedNotice": "Este motor no admite incorporar mensajes. Los mensajes en cola se enviarán cuando termine el turno actual.",
       "resumeAction": "Continuar enviando",
       "resumeAria": "Continuar enviando mensajes en cola",
       "showMore_one": "{{count}} más",
