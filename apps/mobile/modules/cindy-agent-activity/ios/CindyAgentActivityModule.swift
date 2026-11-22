@@ -14,6 +14,7 @@ private final class AgentActivityController {
   private let log = Logger(subsystem: "app.cindy.activity", category: "freshness")
   private var foregroundEpoch = 0
   private var foregroundContent: CindyAgentActivityAttributes.ContentState?
+  private var lastRecheckedConfirmation: Double?
   var foregroundConflict: (() -> Void)?
   private var tail: Task<Void, Never>?
   private var observed: Activity<CindyAgentActivityAttributes>?
@@ -38,6 +39,7 @@ private final class AgentActivityController {
       for await _ in NotificationCenter.default.notifications(named: UIApplication.willResignActiveNotification) {
         foregroundEpoch += 1
         foregroundContent = nil
+        lastRecheckedConfirmation = nil
       }
     })
     for activity in Activity<CindyAgentActivityAttributes>.activities { observe(activity) }
@@ -64,7 +66,13 @@ private final class AgentActivityController {
   }
 
   func configureAccount(_ next: String?) async {
-    if account != next { dismissedAccount = nil; observed = nil; foregroundContent = nil; foregroundEpoch += 1 }
+    if account != next {
+      dismissedAccount = nil
+      observed = nil
+      foregroundContent = nil
+      lastRecheckedConfirmation = nil
+      foregroundEpoch += 1
+    }
     account = next
     // Scope only, never a credential. A background cold launch can reject an
     // activity for the account used before sign-out while JS restores auth.
@@ -110,7 +118,10 @@ private final class AgentActivityController {
       return
     }
     guard watches[activity.id] == nil else { return }
-    if observed?.id != activity.id { foregroundContent = nil }
+    if observed?.id != activity.id {
+      foregroundContent = nil
+      lastRecheckedConfirmation = nil
+    }
     observed = activity
     // An activity that exists supersedes an earlier removal; keeping the flag
     // would go on reporting it and block the next local activity.
@@ -125,8 +136,7 @@ private final class AgentActivityController {
           if expected != content.state {
             // A later APNs send can still describe an older task transition. Recheck
             // the computers once; never replay a saved local snapshot over a push.
-            foregroundContent = nil
-            foregroundConflict?()
+            recheckForeground(after: content.state.confirmedAt ?? 0)
           }
         }
         // Let the phone-local diagnostic recorder observe content arrival. JS
@@ -152,6 +162,14 @@ private final class AgentActivityController {
     registrationChanged?()
   }
 
+  private func recheckForeground(after confirmedAt: Double) {
+    // A recheck may encounter the same timestamp again, for example with clock skew.
+    if let lastRecheckedConfirmation, confirmedAt <= lastRecheckedConfirmation { return }
+    foregroundContent = nil
+    lastRecheckedConfirmation = confirmedAt
+    foregroundConflict?()
+  }
+
   // Serialize end/update/request, including account switches while update is suspended.
   func enqueue(_ json: String?) {
     let previous = tail
@@ -174,8 +192,14 @@ private final class AgentActivityController {
     tail = Task {
       await previous?.value
       guard epoch == foregroundEpoch, account == scope, observed?.id == current.id, UIApplication.shared.applicationState == .active,
-            current.activityState == .active || current.activityState == .stale,
-            (current.content.state.confirmedAt ?? 0) <= observedAt.timeIntervalSince1970 else { return }
+            current.activityState == .active || current.activityState == .stale else { return }
+      let currentState = current.content.state
+      let confirmedAt = currentState.confirmedAt ?? 0
+      if confirmedAt > observedAt.timeIntervalSince1970 {
+        // An APNs update can win before the first local write has set foregroundContent.
+        if currentState != foregroundContent { recheckForeground(after: confirmedAt) }
+        return
+      }
       guard let json else {
         foregroundContent = nil
         if #available(iOS 17.2, *) {
