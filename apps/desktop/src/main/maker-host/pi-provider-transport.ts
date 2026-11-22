@@ -305,11 +305,40 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
     // Keep diagnostics local to this invocation. Adapter error messages may contain
     // response bodies, credentials or user content, so never forward those strings.
     let httpStatus: number | undefined;
+    let rejectionReason: 'context_length_exceeded' | undefined;
     const diagnosticFetch: typeof fetch = async (input, init) => {
       httpStatus = undefined;
+      rejectionReason = undefined;
       const response = await options.fetchImpl(input, init);
       httpStatus = response.status;
-      return response;
+      if (response.status !== 400 || !response.body) return response;
+      // Observe the SDK's existing read, with no tee, extra request or delayed body
+      // consumption. Only a complete bounded JSON object can supply a safe enum;
+      // arbitrary messages (including strings resembling codes) stay private.
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          size += chunk.byteLength;
+          if (chunk.byteLength && size <= NATIVE_ADAPTER_ERROR_BODY_LIMIT) chunks.push(chunk.slice());
+          else if (size > NATIVE_ADAPTER_ERROR_BODY_LIMIT) chunks.length = 0;
+          controller.enqueue(chunk);
+        },
+        flush() {
+          if (size > NATIVE_ADAPTER_ERROR_BODY_LIMIT) return;
+          try {
+            const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+            const error = (parsed as Record<string, unknown>).error;
+            if (!error || typeof error !== 'object' || Array.isArray(error)) return;
+            const { code, type } = error as Record<string, unknown>;
+            if (code === 'context_length_exceeded' || type === 'context_length_exceeded') {
+              rejectionReason = 'context_length_exceeded';
+            }
+          } catch { /* Unknown, malformed or incomplete bodies retain the safe fallback. */ }
+        },
+      }));
+      return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
     };
     const failureMessage = (phase: 'adapter-event' | 'stream-read') => {
       const category = httpStatus === 401 ? 'authentication'
@@ -320,7 +349,8 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
         : 'unknown';
       const status = httpStatus !== undefined && httpStatus >= 400 && httpStatus < 600
         ? `; HTTP ${httpStatus}` : '';
-      return `Native provider request failed [phase=${phase}${status}; category=${category}; request=${responseId}]`;
+      const reason = rejectionReason ? `; reason=${rejectionReason}` : '';
+      return `Native provider request failed [phase=${phase}${status}; category=${category}${reason}; request=${responseId}]`;
     };
     const cloudflareGateway = model.provider === 'cloudflare-ai-gateway';
     // Conversation identity is per request. OpenCode Go rejects requests without a stable

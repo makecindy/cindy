@@ -3,9 +3,9 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useContext, useImperativeHandle, useMemo, useState } from "react";
+import { act, createElement, useContext, useImperativeHandle, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 // This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
 // and English fallback without collecting the ten unused locale catalogs.
 // Window geometry is a native boundary; preview placement has its own production-hook suite.
@@ -340,8 +340,21 @@ vi.mock("@/session/CompanionMessageActions", () => ({
 vi.mock("@/session/CompanionMessageCard", () => ({
   CompanionMessageCard: () => null,
 }));
+// Only the pending-send container is replaced; MessageRenderer's own renderText
+// callback (and its selectable / long-message gates) stays production code under test.
+// The substitute forwards the real bubble's measured `longMessage` contract; the
+// bubble's own measurement and expand state machine is covered separately in
+// PendingSendBubble.touch.test.tsx.
+const pendingBubbleHarness = vi.hoisted(() => ({ longMessage: false, sentInlineText: null as string | null }));
 vi.mock("@/session/PendingSendBubble", () => ({
-  PendingSendBubble: () => null,
+  PendingSendBubble: ({ item, renderText }: {
+    item: { clientId: string; text: string };
+    renderText: (text: string, index: number, longMessage: boolean) => ReactNode;
+  }) => {
+    const body = pendingBubbleHarness.sentInlineText ?? item.text;
+    return createElement("div", { "data-testid": `pendingSend.body.${item.clientId}` },
+      body ? renderText(body, 0, pendingBubbleHarness.longMessage) : null);
+  },
 }));
 vi.mock("@/session/messageActions", async (original) => ({
   ...(await original<object>()),
@@ -351,7 +364,7 @@ vi.mock("@/session/messageActions", async (original) => ({
 
 import { i18n } from "@/i18n";
 import { MessageRenderer } from "@/session/MessageRenderer";
-import { writeClipboardText } from "@/session/messageActions";
+import { copyMessageText, writeClipboardText } from "@/session/messageActions";
 import { buildMobileMessageRenderItems } from "@/session/messageRenderModel";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
 import type { RemoteMessage } from "@/session/types";
@@ -369,6 +382,11 @@ const msg = (
   toolUseId: null,
   agentMeta,
   createdAt: "2026-01-01T00:00:00Z",
+});
+
+afterEach(() => {
+  pendingBubbleHarness.longMessage = false;
+  pendingBubbleHarness.sentInlineText = null;
 });
 
 function render(
@@ -482,6 +500,21 @@ it.each([
     meta: { turnCost: { amount: 0.25, currency: 'USD', approximate: false, kind: 'actual-cost' } },
     visible: '$0.25',
     accessible: '本轮消耗 $0.25',
+  },
+  {
+    name: 'two native costs with a same-currency media fee',
+    meta: {
+      userTurnCost: { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' },
+      turnUsageDetails: {
+        userTurnAmounts: [
+          { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' },
+          { amount: 3, currency: 'CNY', approximate: false, kind: 'actual-cost' },
+        ],
+        additionalCosts: [{ amount: 1, currency: 'CNY', approximate: false, kind: 'actual-cost' }],
+      },
+    },
+    visible: '$2.00 + ¥2.00 + ¥1.00',
+    accessible: '本轮消耗 $2.00 + ¥2.00 + ¥1.00',
   },
   {
     name: 'subscription value',
@@ -1052,6 +1085,166 @@ describe("table-heavy assistant replies", () => {
 });
 
 vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// 测试价值
+// - 生产入口与可观察结果：真实 MessageRenderer 的 pending_send 分支通过 renderText
+//   挂真实 MarkdownBody；PendingSendBubble 容器用最小替身转发该回调。用户长按排队
+//   气泡正文应能进入 iOS 原生 UITextView 选区，DOM 上表现为 data-selectable="true"
+//   的原生文本根。
+// - Bug／规则依据：手机端正文直接长按选字是优先能力
+//   (docs/product-rules/cindy-bots-runtime.md §「私聊引用回复」2026-10-25 修订)。
+//   待答 ask 卡锁住输入框时，主人排队中的消息一直是 pending_send 气泡，正文
+//   原先被显式设为不可选，复制/粘贴整条路径都不可达。
+// - 现有覆盖缺口：相邻用例只覆盖完成态消息或自定义引用菜单，没有 pending_send
+//   正文的可选性；pendingSend 触摸用例只验证分享态轻点，不验证原生长按选字。
+// - 最小失败输入：一个 queued pending_send 项 + onQuoteSelection 缺省（模拟
+//   待答 ask 卡的发送锁）；修复前正文渲染 data-selectable="false"。
+// - tier：unit（jsdom 替身验证真实生产组件的原生选择根，真实系统菜单另需设备验收）。
+// - 实测耗时：7.35s 实墙（既有 49 条用例的 RN / LegendList mock 收集约 5s，
+//   本用例只新增一条；未超过 10s 上限）。
+describe("queued message text while an ask card blocks the composer", () => {
+  it("keeps pending-send body natively selectable without quote-to-composer", () => {
+    const pendingItem = {
+      type: 'pending_send',
+      key: 'message-queued-1',
+      clientId: 'queued-1',
+      text: 'Copy this queued sentence',
+      sentInlineTokens: [],
+      phase: 'queued',
+      queueIndex: 1,
+      thumbs: [],
+      fileCount: 0,
+      fileNames: [],
+      attachmentCount: 0,
+      uploadedCount: 0,
+      errorText: null,
+      actions: null,
+      hint: null,
+    };
+    const pendingSend = {
+      selectedClientId: null,
+      onSelect: vi.fn(),
+      onRemove: vi.fn(),
+      onBeginEdit: vi.fn(),
+      onSteer: vi.fn(),
+      onMove: vi.fn(),
+      onRetryOutbox: vi.fn(),
+      onRemoveOutbox: vi.fn(),
+    };
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(<MessageRenderer items={[pendingItem as any]} pendingSend={pendingSend} />));
+    try {
+      const body = host.querySelector('[data-testid="pendingSend.body.queued-1"]');
+      expect(body).not.toBeNull();
+      const selectable = body!.querySelector('[data-selectable="true"]');
+      expect(selectable).not.toBeNull();
+      expect(selectable!.textContent).toContain('Copy this queued sentence');
+      expect(body!.querySelector('[data-native-text-view]')).not.toBeNull();
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
+  const longQueuedText = '排队长正文'.repeat(700);
+  function mountQueuedBody(
+    text: string,
+    options: { longMessage?: boolean; companion?: boolean; atoms?: boolean } = {},
+  ) {
+    pendingBubbleHarness.longMessage = options.longMessage === true;
+    pendingBubbleHarness.sentInlineText = options.atoms ? text : null;
+    const pendingItem = {
+      type: 'pending_send', key: 'message-queued-2', clientId: 'queued-2', text,
+      sentInlineTokens: options.atoms
+        ? [{ kind: 'text', text }, { kind: 'slash', text: '/compact' }]
+        : [],
+      phase: 'queued', queueIndex: 1, thumbs: [], fileCount: 0, fileNames: [],
+      attachmentCount: 0, uploadedCount: 0, errorText: null, actions: null, hint: null,
+    };
+    const pendingSend = {
+      selectedClientId: null, onSelect: vi.fn(), onRemove: vi.fn(), onBeginEdit: vi.fn(),
+      onSteer: vi.fn(), onMove: vi.fn(), onRetryOutbox: vi.fn(), onRemoveOutbox: vi.fn(),
+    };
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(<MessageRenderer items={[pendingItem as any]}
+      pendingSend={pendingSend} companion={options.companion === true} />));
+    return { host, unmount: () => act(() => root.unmount()) };
+  }
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 MessageRenderer 的 pending_send renderText 挂真实
+  //   MarkdownBody；替身容器只转发真实气泡实测的 longMessage 判定。展开长正文后，
+  //   普通任务不能出现巨型 iOS UITextView，但正文必须仍在可选中的 RN Text 里完整可读。
+  // - Bug／规则依据：iOS UITextView 在收起→展开骤增为超高复用视图时偶发只留空白；
+  //   完成态正文已用 allowIosUITextView / boundTextRuns 规避，排队正文必须同款保护。
+  // - 现有覆盖缺口：上面的短正文用例只证明可选性；完成态长消息用例走的是另一条分支；
+  //   结构化 atom 正文(没人指出的对称半边)此前没有任何长正文断言。
+  // - 最小失败输入：longMessage=true 的 queued 项；修复前 renderText 恒挂
+  //   UITextView(allowIosUITextView 默认 true)，data-native-text-view 会存在。
+  // - tier：unit（jsdom 替身只替换气泡容器，不替换被验证的 MarkdownBody 选择根）。
+  // - 实测耗时：7.26s 单独运行本文件（既有 50 条用例的 RN / LegendList mock 收集约 5s，
+  //   本组新增 4 条表驱动用例；未超过 10s 上限）。
+  it.each(['plain', 'atoms'])('keeps expanded long %s queued text readable without a giant native view', (kind) => {
+    const h = mountQueuedBody(longQueuedText, { longMessage: true, atoms: kind === 'atoms' });
+    try {
+      const body = h.host.querySelector('[data-testid="pendingSend.body.queued-2"]')!;
+      expect(body.textContent).toContain(longQueuedText);
+      expect(body.querySelector('[data-native-text-view]')).toBeNull();
+      expect(body.querySelector('[data-selectable="true"]')).not.toBeNull();
+    } finally { h.unmount(); }
+  });
+
+  // 伙伴长正文展开沿用完成态的有界原生文本分组：仍可部分选字，但每个原生文本根有上界。
+  // 与上一组共用最小失败输入；若只关掉 UITextView 而漏掉 boundTextRuns，本组会红。
+  it.each(['plain', 'atoms'])('bounds expanded long %s companion queued text into native runs', (kind) => {
+    const h = mountQueuedBody(longQueuedText, { longMessage: true, companion: true, atoms: kind === 'atoms' });
+    try {
+      const body = h.host.querySelector('[data-testid="pendingSend.body.queued-2"]')!;
+      const runs = [...body.querySelectorAll('[data-native-text-view] [data-testid="message.markdownTextRun"]')];
+      expect(runs.length).toBeGreaterThan(1);
+      expect(runs.every(node => node.getAttribute('data-selectable') === 'true')).toBe(true);
+      expect(runs.every(node => (node.textContent?.length ?? 0) <= 1800)).toBe(true);
+      expect(runs.map(node => node.textContent).join('')).toBe(longQueuedText);
+    } finally { h.unmount(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 MessageRenderer 收尾消息的 Copy 动作栏按钮。会话页在
+  //   canUseComposer=false(待答 ask 卡锁输入)时把 onQuoteSelection / onEditMessage /
+  //   onAddMessageToComposer 都置为 undefined；这里显式传入这组入参并真实点击，检查复制
+  //   请求带上正文、按钮转为 Copied 态。
+  // - Bug／规则依据：发送锁不是阅读锁；布局纯函数 + 内存 writer 的旧用例绕过了页面复制入口。
+  // - 现有覆盖缺口：sessionOperationLayout 只断言布局字段，messageActions 只覆盖 helper
+  //   写入，pluginAttachmentBubble 覆盖本地化前缀，均未在发送锁下点击真实 Copy 入口。
+  // - 最小失败输入：上面三个 composer 回调全缺省 + 一条收尾消息；若 Copy 被 composer
+  //   可用性门控，按钮不存在或点击无写入，此用例会红。
+  // - tier：unit（jsdom；原生剪贴板写入由 messageActions.test.ts 覆盖）。
+  // - 实测耗时：同上 7.26s 单独运行本文件，本用例只新增一条。
+  it('keeps the real Copy action reachable while the ask card locks the composer', async () => {
+    vi.mocked(copyMessageText).mockResolvedValue('copied' as never);
+    const text = 'Copy me while the ask card blocks the composer';
+    // 与 app/sessions/[sessionId].tsx 在 canUseComposer=false 时传给 MessageRenderer 的
+    // composer 回调一致：这些引用/编辑入口关闭，复制入口不应跟着关闭。
+    const h = mount([msg('locked-copy', text, null)], {
+      onQuoteSelection: undefined,
+      onEditMessage: undefined,
+      onAddMessageToComposer: undefined,
+    });
+    try {
+      const copy = h.host.querySelector<HTMLElement>('[data-testid="message.copyButton"]');
+      expect(copy).not.toBeNull();
+      await act(async () => copy!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      expect(copyMessageText).toHaveBeenCalledExactlyOnceWith(text);
+      expect(copy!.getAttribute('aria-label')).toBe(i18n.t('message.renderer.copyStateCopied'));
+    } finally {
+      vi.mocked(copyMessageText).mockReset();
+      h.unmount();
+    }
+  });
+});
 
 // Regression: tapping a cross-device source must reach the page's routing callback intact.
 it('opens cross-device source labels while redacted sources remain inert', () => {

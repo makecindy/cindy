@@ -258,6 +258,13 @@ describe('a task running on a plugin engine', () => {
   });
 
   // 2026-11-20 用户反馈：只安装了插件但尚未登录/不可用(unavailable)的引擎不在模型选择器里占位；仅当前已选该引擎时保留提示。
+  // An explicitly closed default is absent even with an empty catalog (unit, mobile picker).
+  it('does not recreate a default when the host has turned it off', () => {
+    const engines = normalizePluginEngines([{ ...desktopView, models: [], defaultModelAllowed: false }]);
+    expect(engines[0]).toMatchObject({ defaultModelAllowed: false, models: [] });
+    expect(buildPluginEngineGroups({ engines, active: null }, '', { ...labels, unavailable: () => '' })).toEqual([]);
+  });
+
   it('omits an unavailable engine unless it is already the active selection', () => {
     const [unavailable] = normalizePluginEngines([{ ...desktopView, providerId: 'acp-plugin:_ns__local__agy:agy',
       name: 'Antigravity', availability: { state: 'unavailable', message: 'Install agy' } }]);
@@ -277,5 +284,23 @@ describe('a task running on a plugin engine', () => {
     expect(buildPluginEngineGroups({ engines: [engine], active: null }, 'nothing matches', {
       ...labels, unavailable: () => '',
     })).toEqual([]);
+  });
+
+  // 2026-11-22：电脑上的「设置 → 模型供应商」可以把插件引擎从模型选择器中隐藏(引擎列表追加可选 hidden)。
+  // 生产入口：normalizePluginEngines(device-link 回包) + buildPluginEngineGroups(选择器分组)。
+  // 依据：隐藏只改陈列，Desktop 与 Mobile 选择器同一口径，已选着它的任务照常显示。此前的用例没有这个字段。
+  // 最小失败输入：隐藏的引擎仍列在选择器里；当前任务选着的引擎被隐藏后选不中 / 不显示；hidden 不是 true 也被隐藏。
+  it('omits an engine hidden on its computer unless the task is already on it', () => {
+    const [hidden, notHidden] = normalizePluginEngines([
+      { ...desktopView, hidden: true },
+      { ...desktopView, providerId: 'acp-plugin:_ns__local__agy:agy', name: 'Antigravity', hidden: 'yes' },
+    ]);
+    expect(hidden).toMatchObject({ providerId: DSH, hidden: true });
+    expect(notHidden).not.toHaveProperty('hidden');
+    const picker = (active: { providerId: string; modelId: string } | null) =>
+      buildPluginEngineGroups({ engines: [hidden!, notHidden!], active }, '', { ...labels, unavailable: () => '' })
+        .map((group) => group.title);
+    expect(picker(null)).toEqual(['Antigravity']);
+    expect(picker({ providerId: DSH, modelId: 'deepseek-v4' })).toEqual(['DeepSeek Harness', 'Antigravity']);
   });
 });

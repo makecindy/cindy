@@ -1017,7 +1017,7 @@ function GhostCardCanvas({
         }} /> : null}
       {/* Editable forms share a frame with their plugin-provided footer.
           Ordinary plugin posters keep their original transparent canvas. */}
-      <div className={formFields ? 'relative overflow-hidden rounded-b-xl border-t border-border' : 'relative overflow-hidden rounded-[10px]'}>
+      <div className={formFields ? 'relative overflow-hidden rounded-b-xl border-t border-border' : 'relative overflow-hidden rounded-xl'}>
         <iframe
           ref={iframeRef}
           sandbox="allow-same-origin"

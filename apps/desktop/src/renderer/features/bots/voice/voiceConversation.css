@@ -59,7 +59,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 3px;
+  gap: var(--space-0_5);
   margin-left: auto;
 }
 
@@ -75,7 +75,7 @@
 .companion-voice-meter {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-0_5);
 }
 
 .companion-voice-meter > span {
