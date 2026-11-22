@@ -512,7 +512,7 @@ V2 伙伴（伙伴 = 一个项目，见 6.1）的记忆就是它项目的记忆�
   （`canonical` / `thread`）由宿主设 `makerMemorySaveWithTool`，引擎确认本会话真的挂了 `cindy_memory`
   （Claude 以实际注册的 MCP 为准；Codex 以本机桥接了它为准；Pi 以本机桥注册了同名 server、且不是伙伴记忆门面为准；
   设备托管、SSH 远程与本机接入会话一律不算）后，项目记忆说明改为「搜索、读取用文件工具；保存、更新、删除经
-  `cindy_memory`，它报错时才直接编辑文件」，并写明这在本会话里取代项目说明中的文件写法（`memory/context.ts` 的
+  `cindy_memory`（参数错时按返回的 schema 改正重试），工具不可用或改正后仍出错才直接编辑文件」，并写明这在本会话里取代项目说明中的文件写法（`memory/context.ts` 的
   `projectMemoryRules`）。群专线、IM 专线、例行任务与交出去的任务**不变**，仍是文件写法：其他人触发的轮次不会
   因此多出一条免确认写记忆的路。`AGENTS.md` 模板与记忆 README 不改（它们也给群专线以外、在项目里跑的任务和外部 AI 用，
   已升级伙伴的 `AGENTS.md` 也收不到模板新版）。这不放宽权限：`cindy_memory` 的批准方式、可写范围与挂载条件都没变。
