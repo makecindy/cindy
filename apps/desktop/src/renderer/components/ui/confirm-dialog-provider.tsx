@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { useTranslation } from 'react-i18next';
 
 import { ConfirmDialog, type ConfirmDialogProps } from '@/components/ui/confirm-dialog';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 export interface ConfirmOptions {
   title: string;
@@ -45,6 +46,12 @@ export interface ConfirmOptions {
   };
   /** 允许确认正文与富内容被框选复制。 */
   contentSelectable?: boolean;
+  /**
+   * 全局阻断提示:画在 `modal-blocking` 层(高于所有弹窗、菜单与浮层,仅低于 Toast),
+   * 并走独立槽位立即显示,不排在普通确认后面。只给「不处理就无法继续使用应用」的
+   * 提示(如登录过期);普通确认与授权请求不得使用(DESIGN.md §6 层级刻度)。
+   */
+  blocking?: boolean;
 }
 
 const DONT_SHOW_AGAIN_PREFIX = 'confirm-dialog.skip:';
@@ -119,25 +126,36 @@ function clearStaleSkipsOnce(): void {
   }
 }
 
-export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
-  const { t } = useTranslation();
-  // 模块初始化时跑一次性清理,放进 useRef 兜底防止 React StrictMode 双跑(虽然
-  // 内部 sentinel 已经够防,这里 ref 只是让闭包语义更清晰)。
-  const cleanupOnceRef = useRef(false);
-  if (!cleanupOnceRef.current) {
-    cleanupOnceRef.current = true;
-    clearStaleSkipsOnce();
-  }
+interface ConfirmSlot {
+  currentItem: QueueItem | null;
+  open: boolean;
+  enqueue: (item: QueueItem) => void;
+  /** AbortSignal 触发:排队中的直接移出,正在显示且未作答的按取消关闭。 */
+  abort: (item: QueueItem) => void;
+  handleConfirm: (opts?: { dontShowAgain?: boolean }) => void;
+  handleTertiary: () => void;
+  handleOpenChange: (value: boolean) => void;
+  /** 当前项显示前的焦点元素;阻断提示关闭后把焦点还给它(见 renderSlot)。 */
+  returnFocusTarget: () => HTMLElement | null;
+}
+
+/**
+ * 一个确认框槽位:自己的队列、当前项与开关状态,同一时刻只显示一个,依次处理。
+ * 普通确认与阻断提示各用一个槽位,互不排队(见 ConfirmOptions.blocking)。
+ */
+function useConfirmSlot(): ConfirmSlot {
   const queueRef = useRef<QueueItem[]>([]);
   const currentItemRef = useRef<QueueItem | null>(null);
   const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
   const [open, setOpen] = useState(false);
   const isShowingRef = useRef(false);
   const resolvedRef = useRef(false);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const processNext = useCallback(() => {
     const next = queueRef.current.shift();
     if (next) {
+      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       currentItemRef.current = next;
       setCurrentItem(next);
       setOpen(true);
@@ -146,86 +164,29 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const confirm = useCallback(
-    (options: ConfirmOptions, signal?: AbortSignal): Promise<boolean> => {
-      if (signal?.aborted) return Promise.resolve(false);
-      // 用户曾勾过"下次不再提示" → 直接当成 confirm,不弹窗、不入队。
-      if (options.dontShowAgainKey && isSkipped(options.dontShowAgainKey)) {
-        return Promise.resolve(true);
+  const enqueue = useCallback(
+    (item: QueueItem) => {
+      queueRef.current.push(item);
+      if (!isShowingRef.current) {
+        processNext();
       }
-      return new Promise<boolean>((resolve) => {
-        let settled = false;
-        // 二状态调用复用同一队列:把 'confirm'→true,其它→false 透传给原 boolean 契约。
-        // 用户勾上"下次不再提示"且点 confirm 时,把 key 写入 localStorage。
-        const item: QueueItem = {
-          options,
-          resolve: (r, dontShowAgain) => {
-            if (settled) return;
-            settled = true;
-            signal?.removeEventListener('abort', abort);
-            if (r === 'confirm' && dontShowAgain && options.dontShowAgainKey) {
-              markSkipped(options.dontShowAgainKey);
-            }
-            resolve(r === 'confirm');
-          },
-        };
-        const abort = () => {
-          const queuedIndex = queueRef.current.indexOf(item);
-          if (queuedIndex >= 0) {
-            queueRef.current.splice(queuedIndex, 1);
-            item.resolve('cancel');
-            return;
-          }
-          if (currentItemRef.current === item && !resolvedRef.current) {
-            resolvedRef.current = true;
-            item.resolve('cancel');
-            setOpen(false);
-          }
-        };
-        queueRef.current.push(item);
-        signal?.addEventListener('abort', abort, { once: true });
-        if (signal?.aborted) {
-          abort();
-          return;
-        }
-        if (!isShowingRef.current) {
-          processNext();
-        }
-      });
     },
     [processNext],
   );
 
-  const confirmThree = useCallback(
-    (options: ConfirmThreeOptions): Promise<ConfirmThreeResult> => {
-      return new Promise<ConfirmThreeResult>((resolve) => {
-        const item: QueueItem = { options, resolve };
-        queueRef.current.push(item);
-        if (!isShowingRef.current) {
-          processNext();
-        }
-      });
-    },
-    [processNext],
-  );
-
-  const confirmWithCheckbox = useCallback(
-    (options: ConfirmWithCheckboxOptions): Promise<{ ok: boolean; checked: boolean }> => {
-      return new Promise((resolve) => {
-        const item: QueueItem = {
-          options,
-          // ConfirmDialog 的复选框状态经 onConfirm({dontShowAgain}) 回传,
-          // 这里只是换个语义消费;取消路径拿不到勾选态,按未勾处理。
-          resolve: (r, checked) => resolve({ ok: r === 'confirm', checked: Boolean(checked) }),
-        };
-        queueRef.current.push(item);
-        if (!isShowingRef.current) {
-          processNext();
-        }
-      });
-    },
-    [processNext],
-  );
+  const abort = useCallback((item: QueueItem) => {
+    const queuedIndex = queueRef.current.indexOf(item);
+    if (queuedIndex >= 0) {
+      queueRef.current.splice(queuedIndex, 1);
+      item.resolve('cancel');
+      return;
+    }
+    if (currentItemRef.current === item && !resolvedRef.current) {
+      resolvedRef.current = true;
+      item.resolve('cancel');
+      setOpen(false);
+    }
+  }, []);
 
   const handleConfirm = useCallback(
     (opts?: { dontShowAgain?: boolean }) => {
@@ -273,41 +234,141 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     }
   }, [open, currentItem, processNext]);
 
+  const returnFocusTarget = useCallback(() => returnFocusRef.current, []);
+
+  return { currentItem, open, enqueue, abort, handleConfirm, handleTertiary, handleOpenChange, returnFocusTarget };
+}
+
+export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  // 模块初始化时跑一次性清理,放进 useRef 兜底防止 React StrictMode 双跑(虽然
+  // 内部 sentinel 已经够防,这里 ref 只是让闭包语义更清晰)。
+  const cleanupOnceRef = useRef(false);
+  if (!cleanupOnceRef.current) {
+    cleanupOnceRef.current = true;
+    clearStaleSkipsOnce();
+  }
+  const regular = useConfirmSlot();
+  // 阻断提示独占一个槽位:不排在普通确认后面(普通确认可能正被 modal-raised 面板
+  // 压着、用户看不见也关不掉),并画在 modal-blocking 层,盖过所有弹窗与浮层。
+  const blocking = useConfirmSlot();
+  const { enqueue: enqueueRegular, abort: abortRegular } = regular;
+  const { enqueue: enqueueBlocking, abort: abortBlocking } = blocking;
+
+  const enqueue = useCallback(
+    (item: QueueItem) => (item.options.blocking ? enqueueBlocking : enqueueRegular)(item),
+    [enqueueBlocking, enqueueRegular],
+  );
+
+  const confirm = useCallback(
+    (options: ConfirmOptions, signal?: AbortSignal): Promise<boolean> => {
+      if (signal?.aborted) return Promise.resolve(false);
+      // 用户曾勾过"下次不再提示" → 直接当成 confirm,不弹窗、不入队。
+      if (options.dontShowAgainKey && isSkipped(options.dontShowAgainKey)) {
+        return Promise.resolve(true);
+      }
+      return new Promise<boolean>((resolve) => {
+        let settled = false;
+        // 二状态调用复用同一队列:把 'confirm'→true,其它→false 透传给原 boolean 契约。
+        // 用户勾上"下次不再提示"且点 confirm 时,把 key 写入 localStorage。
+        const item: QueueItem = {
+          options,
+          resolve: (r, dontShowAgain) => {
+            if (settled) return;
+            settled = true;
+            signal?.removeEventListener('abort', abort);
+            if (r === 'confirm' && dontShowAgain && options.dontShowAgainKey) {
+              markSkipped(options.dontShowAgainKey);
+            }
+            resolve(r === 'confirm');
+          },
+        };
+        const abort = () => (options.blocking ? abortBlocking : abortRegular)(item);
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) {
+          item.resolve('cancel');
+          return;
+        }
+        enqueue(item);
+      });
+    },
+    [abortBlocking, abortRegular, enqueue],
+  );
+
+  const confirmThree = useCallback(
+    (options: ConfirmThreeOptions): Promise<ConfirmThreeResult> => {
+      return new Promise<ConfirmThreeResult>((resolve) => {
+        enqueue({ options, resolve });
+      });
+    },
+    [enqueue],
+  );
+
+  const confirmWithCheckbox = useCallback(
+    (options: ConfirmWithCheckboxOptions): Promise<{ ok: boolean; checked: boolean }> => {
+      return new Promise((resolve) => {
+        enqueue({
+          options,
+          // ConfirmDialog 的复选框状态经 onConfirm({dontShowAgain}) 回传,
+          // 这里只是换个语义消费;取消路径拿不到勾选态,按未勾处理。
+          resolve: (r, checked) => resolve({ ok: r === 'confirm', checked: Boolean(checked) }),
+        });
+      });
+    },
+    [enqueue],
+  );
+
+  const renderSlot = (slot: ConfirmSlot, zIndex: number, restoreFocus: boolean) => {
+    const { currentItem } = slot;
+    if (!currentItem) return null;
+    return (
+      <ConfirmDialog
+        open={slot.open}
+        onOpenChange={slot.handleOpenChange}
+        zIndex={zIndex}
+        // 全局确认没有 Radix trigger,关闭后焦点默认落到 body。阻断提示是插进来的,
+        // 关闭后要把焦点还给它打断的那个弹窗(或普通确认),键盘用户才能接着操作。
+        restoreFocusTarget={restoreFocus ? slot.returnFocusTarget : undefined}
+        title={currentItem.options.title}
+        description={currentItem.options.description}
+        textClassName={currentItem.options.textClassName}
+        content={currentItem.options.content}
+        maxWidth={currentItem.options.maxWidth}
+        confirmText={currentItem.options.confirmText}
+        cancelText={currentItem.options.cancelText}
+        // confirmVariant 此前没有透传:GhostConfirmDialogHost 的 danger 分支
+        // 一直被静默丢掉(spread 绕过了多余属性检查),这里补上。
+        confirmVariant={currentItem.options.confirmVariant}
+        confirmIcon={currentItem.options.confirmIcon}
+        describeContent={currentItem.options.describeContent}
+        showCancel={currentItem.options.showCancel}
+        tertiaryText={currentItem.options.tertiaryText}
+        // Radix AlertDialog 开场只聚焦 Cancel;阻断提示没有 Cancel 时焦点会留在下面的
+        // 弹窗里,这里改为聚焦主按钮,保证键盘与读屏用户落在阻断提示上。
+        autoFocusConfirm={
+          currentItem.options.autoFocusConfirm ??
+          (currentItem.options.blocking && currentItem.options.showCancel === false)
+        }
+        requireTypedConfirmation={currentItem.options.requireTypedConfirmation}
+        contentSelectable={currentItem.options.contentSelectable}
+        dontShowAgainLabel={
+          currentItem.options.dontShowAgainKey
+            ? currentItem.options.dontShowAgainLabel ?? t('commonUi.confirmDialog.dontShowAgain')
+            : currentItem.options.checkboxLabel
+        }
+        checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}
+        checkedOverrides={currentItem.options.checkedOverrides}
+        onConfirm={slot.handleConfirm}
+        onTertiary={slot.handleTertiary}
+      />
+    );
+  };
+
   return (
     <ConfirmDialogContext.Provider value={{ confirm, confirmThree, confirmWithCheckbox }}>
       {children}
-      {currentItem && (
-        <ConfirmDialog
-          open={open}
-          onOpenChange={handleOpenChange}
-          title={currentItem.options.title}
-          description={currentItem.options.description}
-          textClassName={currentItem.options.textClassName}
-          content={currentItem.options.content}
-          maxWidth={currentItem.options.maxWidth}
-          confirmText={currentItem.options.confirmText}
-          cancelText={currentItem.options.cancelText}
-          // confirmVariant 此前没有透传:GhostConfirmDialogHost 的 danger 分支
-          // 一直被静默丢掉(spread 绕过了多余属性检查),这里补上。
-          confirmVariant={currentItem.options.confirmVariant}
-          confirmIcon={currentItem.options.confirmIcon}
-          describeContent={currentItem.options.describeContent}
-          showCancel={currentItem.options.showCancel}
-          tertiaryText={currentItem.options.tertiaryText}
-          autoFocusConfirm={currentItem.options.autoFocusConfirm}
-          requireTypedConfirmation={currentItem.options.requireTypedConfirmation}
-          contentSelectable={currentItem.options.contentSelectable}
-          dontShowAgainLabel={
-            currentItem.options.dontShowAgainKey
-              ? currentItem.options.dontShowAgainLabel ?? t('commonUi.confirmDialog.dontShowAgain')
-              : currentItem.options.checkboxLabel
-          }
-          checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}
-          checkedOverrides={currentItem.options.checkedOverrides}
-          onConfirm={handleConfirm}
-          onTertiary={handleTertiary}
-        />
-      )}
+      {renderSlot(regular, Z_INDEX_LAYERS.modal, false)}
+      {renderSlot(blocking, Z_INDEX_LAYERS['modal-blocking'], true)}
     </ConfirmDialogContext.Provider>
   );
 }
