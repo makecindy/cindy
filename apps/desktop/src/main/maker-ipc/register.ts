@@ -6796,6 +6796,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       update: updatePluginEnginePrefs,
       onChange: onPluginEnginePrefsChanged,
     },
+    isCurrentOwner: (stamp) => {
+      const current = getActiveDataOwnerPushStamp();
+      return !isAppSessionBoundaryPending() && stamp.dataOwnerId === current.dataOwnerId
+        && stamp.ownerGeneration === current.ownerGeneration;
+    },
   });
 
   ipcMain.handle(MAKER_INVOKE.TURN_CHANGE_SETS_LIST, async (event, sessionId: unknown) => {

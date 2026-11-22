@@ -110,6 +110,7 @@ function register(harnesses: PluginHarness[] = [dsh()]) {
     isDeviceLinkInvoke: () => deviceLink,
     remoteUse: { read: pluginEngineRemoteUse, set: setPluginEngineRemoteUse, onChange: () => () => {} },
     settings: { read: readPluginEnginePrefs, update: updatePluginEnginePrefs, onChange: onPluginEnginePrefsChanged },
+    isCurrentOwner: (stamp) => stamp.dataOwnerId === host.owner && stamp.ownerGeneration === 1,
   }));
   const invoke = (channel: string, input?: unknown) => handlers.get(channel)!({}, input);
   return {
@@ -180,7 +181,6 @@ describe('plugin engines with the settings from Settings → Model providers', (
       name: 'Work DeepSeek',
       available: true,
       models: [
-        { id: 'default', label: 'Default (the engine chooses)' },
         { id: 'deepseek-v4', label: 'DeepSeek-V4-Pro', efforts: ['low', 'high'] },
       ],
     }]);
@@ -198,6 +198,7 @@ describe('plugin engines with the settings from Settings → Model providers', (
     const ipc = register();
     await ipc.set({ key: KEY, models: { ids: ['deepseek-v4', 'deepseek-lite'], disabled: true } });
     expect(ipc.list()[0]).toMatchObject({ models: [], defaultModelAllowed: false });
+    expect(pluginEngineDescriptors()[0]).toMatchObject({ available: false, models: [] });
     expect(isPluginEngineModelTurnedOff(ipc.list()[0]!.providerId, 'default')).toBe(true);
     await ipc.set({ key: KEY, models: { ids: ['deepseek-v4', 'deepseek-lite'], disabled: false } });
     expect(ipc.list()[0]).not.toHaveProperty('defaultModelAllowed');
@@ -257,6 +258,8 @@ describe('plugin engines with the settings from Settings → Model providers', (
 
   it('refuses a change from another device, a malformed request, an unlisted model and a missing engine', async () => {
     const ipc = register();
+    await expect(ipc.set({ key: KEY, name: 'Stale', ownerStamp: { dataOwnerId: host.owner, ownerGeneration: 0 } }))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     await expect(ipc.setFromAnotherDevice({ key: KEY, suspended: true })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     for (const malformed of [
       null,

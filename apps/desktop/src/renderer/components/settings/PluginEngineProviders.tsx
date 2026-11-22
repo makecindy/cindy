@@ -93,6 +93,7 @@ function usePluginEngineRename(): (engine: PluginEngineView) => Promise<void> {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   return async (engine) => {
+    const ownerGeneration = getDataOwnerGeneration();
     let name = engine.name;
     const confirmed = await confirm({
       title: t('settings.providers.pill.rename'),
@@ -101,9 +102,13 @@ function usePluginEngineRename(): (engine: PluginEngineView) => Promise<void> {
       cancelText: t('settings.providers.custom.cancel'),
     });
     const next = name.trim();
-    if (!confirmed || !next || next === engine.name) return;
+    if (!confirmed || !isDataOwnerGenerationCurrent(ownerGeneration) || !next || next === engine.name) return;
     await writePluginEnginePrefs(
-      { key: engine.key, name: next === (engine.declaredName ?? engine.name) ? null : next },
+      {
+        key: engine.key,
+        name: next === (engine.declaredName ?? engine.name) ? null : next,
+        ownerStamp: { dataOwnerId: ownerGeneration.dataOwnerId, ownerGeneration: ownerGeneration.generation },
+      },
       t('settings.providers.custom.toast.saveFailed'),
     );
   };
@@ -293,7 +298,7 @@ function EngineUsage({ engine }: { engine: PluginEngineView }) {
       active = false;
       window.removeEventListener('focus', read);
     };
-  }, [engine.ghostId]);
+  }, [engine.key]);
   if (!reading) return null;
   return (
     <div data-testid="provider-usage-module" className="shrink-0 border-t px-1 py-2" style={DIVIDER_STYLE}>
@@ -420,7 +425,7 @@ export function PluginEngineProviderDetail({
   // 与模型选择器同一时机：打开时请插件重新上报模型(主进程按插件冷却)，新列表随推送到达。
   useEffect(() => {
     requestPluginEnginesRefresh(engine.ghostId);
-  }, [engine.key]);
+  }, [engine.ghostId]);
   const statusKey = engine.suspended
     ? 'settings.providers.pill.suspended'
     : unavailable

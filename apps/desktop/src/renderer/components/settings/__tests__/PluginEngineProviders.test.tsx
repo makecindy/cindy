@@ -36,6 +36,7 @@ vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: () => {} }));
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import type { PluginEngineView } from '../../../../shared/pluginEngines';
 import { PluginEngineProviderDetail, PluginEngineProviderRows, pluginEngineRailGroup } from '../PluginEngineProviders';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 let engineIndex = 0;
 /** A fresh key per engine: the usage reader shares a read per engine for a minute. */
@@ -205,7 +206,7 @@ describe('plugin providers in the provider list', () => {
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: '  Work DeepSeek  ' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
-    await waitFor(() => expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: declared.key, name: 'Work DeepSeek' }));
+    await waitFor(() => expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith(expect.objectContaining({ key: declared.key, name: 'Work DeepSeek' })));
     view.unmount();
 
     const renamed = engine({ name: 'Work DeepSeek', declaredName: 'DeepSeek Harness' });
@@ -216,10 +217,28 @@ describe('plugin providers in the provider list', () => {
     const again = await screen.findByRole('alertdialog');
     fireEvent.change(within(again).getByRole('textbox'), { target: { value: 'DeepSeek Harness' } });
     fireEvent.click(within(again).getByRole('button', { name: 'settings.providers.custom.save' }));
-    await waitFor(() => expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: renamed.key, name: null }));
+    await waitFor(() => expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith(expect.objectContaining({ key: renamed.key, name: null })));
     api.setPluginEnginePrefs.mockClear();
     await chooseFromMenu('settings.providers.plugin.resetName');
     expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: renamed.key, name: null });
+  });
+
+  // Owner-scoped writes must drop a pending dialog after an account switch (unit, real dialog).
+  it('drops a rename confirmed after switching accounts', async () => {
+    const originalOwner = getDataOwnerGeneration();
+    const api = stubApi();
+    renderDetail(engine());
+    await chooseFromMenu('settings.providers.pill.rename');
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Work DeepSeek' } });
+    try {
+      setDataOwnerGeneration('other-account');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+      expect(api.setPluginEnginePrefs).not.toHaveBeenCalled();
+    } finally {
+      setDataOwnerGeneration(originalOwner.dataOwnerId, originalOwner.generation);
+    }
   });
 
   it('offers the same remote-use switch and share entry as the plugin page, level by level', async () => {

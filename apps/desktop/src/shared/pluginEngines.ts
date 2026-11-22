@@ -131,6 +131,8 @@ export interface PluginEngineView {
 
 /** One change to an engine's settings; only the fields present are changed. */
 export interface PluginEnginePrefsInput {
+  /** Account that opened the rename dialog, for the main-process account boundary. */
+  ownerStamp?: import('./dataOwnerPush.js').DataOwnerPushStamp;
   /** `<pluginInstance>:<harnessId>`. */
   key: string;
   /** A display name on this computer; null goes back to the name the plugin declares. */

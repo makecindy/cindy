@@ -27,6 +27,7 @@ import {
   type PluginEngineView,
 } from '../../shared/pluginEngines.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 
 /**
  * The list the plugin publishes for its engine wins (like a provider's own model list); without
@@ -171,7 +172,7 @@ export function listPluginEngineViews(): PluginEngineView[] {
   return getPluginHarnessRegistry().list().map(toView);
 }
 
-const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models']);
+const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models', 'ownerStamp']);
 
 /** Shape and size check of a settings change; null = not a valid request. */
 function parsePluginEnginePrefsInput(input: unknown): PluginEnginePrefsInput | null {
@@ -200,7 +201,12 @@ function parsePluginEnginePrefsInput(input: unknown): PluginEnginePrefsInput | n
       || models.ids.some((id) => typeof id !== 'string' || !id || id.length > 256)) return null;
     request.models = { ids: [...new Set(models.ids as string[])], disabled: models.disabled };
   }
-  return Object.keys(request).length > 1 ? request : null;
+  if (Object.keys(request).length === 1) return null;
+  if (value.ownerStamp !== undefined) {
+    if (!isDataOwnerPushStamp(value.ownerStamp)) return null;
+    request.ownerStamp = value.ownerStamp;
+  }
+  return request;
 }
 
 /**
@@ -245,11 +251,13 @@ export function pluginEngineDescriptors(views: readonly PluginEngineView[] = lis
   return views.map((view) => ({
     providerId: view.providerId,
     name: view.name,
-    available: view.availability.state !== 'unavailable',
+    available: view.availability.state !== 'unavailable'
+      && (view.defaultModelAllowed !== false || view.models.length > 0),
     ...(view.availability.state === 'unavailable' && view.availability.message
       ? { message: view.availability.message } : {}),
     models: [
-      { id: PLUGIN_ENGINE_DEFAULT_MODEL, label: 'Default (the engine chooses)' },
+      ...(view.defaultModelAllowed === false
+        ? [] : [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, label: 'Default (the engine chooses)' }]),
       ...view.models.map((model) => ({
         id: model.id,
         label: model.displayName,
@@ -273,6 +281,7 @@ export interface RegisterPluginEnginesIpcOpts {
   remoteUse?: PluginEngineRemoteUseAccess;
   /** The user's per-engine settings; absent = engines are listed as declared and cannot be changed here. */
   settings?: PluginEngineSettingsAccess;
+  isCurrentOwner?(stamp: DataOwnerPushStamp): boolean;
 }
 
 /** Returns a disposer for the change subscriptions. */
@@ -324,7 +333,10 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     if (!request) throwIpcError('INVALID_PARAMS', 'Invalid plugin engine settings request');
     const access = settingsAccess;
     if (!access) throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin engine settings are not available here');
-    const { key, ...patch } = request;
+    const { key, ownerStamp, ...patch } = request;
+    if (ownerStamp && !opts.isCurrentOwner?.(ownerStamp)) {
+      throwIpcError('PERMISSION_DENIED', 'The account changed while editing the plugin engine');
+    }
     const harness = getPluginHarnessRegistry().list().find((item) => item.key === key);
     // Setting something needs an engine this computer lists (and models it lists); undoing always
     // works, also for an engine whose plugin was turned off meanwhile.
