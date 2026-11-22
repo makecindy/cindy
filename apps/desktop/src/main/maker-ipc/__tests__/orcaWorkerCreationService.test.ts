@@ -1198,7 +1198,8 @@ describe('OrcaWorkerCreationService', () => {
       }));
     });
 
-    it('rejects ambiguous managed canonical candidates before creating state', async () => {
+    // #7934 (unit): a saved short ID with two managed matches must also reject before bootstrap.
+    it.each(['explicit', 'defaults', 'lead'])('rejects ambiguous managed canonical candidates from %s', async (source) => {
       const otherCanonicalId = `mirror/${shortId}`;
       const { deps, service } = aliasHarness({
         providers: [managedProvider([canonicalId, otherCanonicalId])],
@@ -1206,10 +1207,14 @@ describe('OrcaWorkerCreationService', () => {
           ...modelCapabilities,
           { id: otherCanonicalId, efforts: ['high'], defaultEffort: 'high' },
         ],
+        overrides: {
+          ...(source === 'defaults' ? { getWorkerDefaults: () => ({ model: shortId, providerId: 'xd' }) } : {}),
+          ...(source === 'lead' ? { getLeadSessionRow: async () => leadWithLegacyModel('xd') } : {}),
+        },
       });
 
       await expect(service.createWorker(workerParams({
-        model: shortId,
+        model: source === 'explicit' ? shortId : undefined,
       }))).resolves.toMatchObject({
         ok: false,
         errorCode: 'INVALID_PARAMS',
@@ -1303,7 +1308,13 @@ describe('OrcaWorkerCreationService', () => {
     it('resolves an inherited legacy Worker default with the same rule as an explicit model', async () => {
       const legacyDefaults = { model: shortId, providerId: 'xd' };
       const { deps, service } = aliasHarness({
-        overrides: { getWorkerDefaults: vi.fn(() => legacyDefaults) },
+        // #7934 (unit): without the saved route, the other provider wins for the canonical ID.
+        providers: [customProvider([canonicalId]), managedProvider()],
+        availableModels: [canonicalModelCapabilities],
+        overrides: {
+          getLeadSessionRow: vi.fn(async () => leadWithLegacyModel(null)),
+          getWorkerDefaults: vi.fn(() => legacyDefaults),
+        },
       });
 
       await expect(service.createWorker(workerParams())).resolves.toMatchObject({
@@ -2282,7 +2293,7 @@ describe('OrcaWorkerCreationService', () => {
     })).toBe('oauth-bearer');
   });
 
-  it('rejects a missing Anthropic Lead route before falling back to Cindy AI', async () => {
+  it.each([undefined, 'claude-opus-5'])('rejects a missing Anthropic Lead route for worker model %s', async (model) => {
     const { deps, service } = createDeps({
       getLeadSessionRow: vi.fn(async () => ({
         id: 'lead-1',
@@ -2309,7 +2320,7 @@ describe('OrcaWorkerCreationService', () => {
       role: 'developer',
       agent: 'claude-code',
       label: 'developer',
-      model: 'claude-opus-5',
+      model,
     })).resolves.toMatchObject({
       ok: false,
       errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',

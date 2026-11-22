@@ -505,7 +505,13 @@ function selectWorkerModel(params: {
   providers: readonly OrcaWorkerProviderSnapshot[];
 }): string {
   const { input, lead, defaults, inheritLeadModel = true } = params;
-  const resolveCandidate = (model: string): string | null => {
+  if (input.model !== undefined) return input.model;
+  const preferredModels = [
+    defaults.model,
+    input.agent === lead.agentKind && inheritLeadModel ? lead.model : undefined,
+  ];
+  for (const model of preferredModels) {
+    if (model == null) continue;
     const resolution = resolveWorkerModelId({
       agent: input.agent as AgentKind,
       model,
@@ -513,25 +519,13 @@ function selectWorkerModel(params: {
       availableModels: [...params.availableModels],
       providers: [...params.providers],
     });
-    return resolution.ok ? resolution.model : null;
-  };
-  const isAvailable = (model: string | null | undefined): model is string =>
-    model !== null
-    && model !== undefined
-    && (() => {
-      const resolvedModel = resolveCandidate(model);
-      return resolvedModel !== null
-        && params.availableModels.some((candidate) => candidate.id === resolvedModel)
-        && params.providers.some((provider) => provider.models.includes(resolvedModel));
-    })();
-  const preferredModels = [
-    input.model,
-    defaults.model,
-    input.agent === lead.agentKind && inheritLeadModel ? lead.model : undefined,
-  ];
-  if (input.model !== undefined) return input.model;
-  const availablePreferredModel = preferredModels.find(isAvailable);
-  if (availablePreferredModel) return availablePreferredModel;
+    // Preserve ambiguous aliases for the route-specific resolver to adjudicate.
+    if (!resolution.ok) return model;
+    if (params.availableModels.some((candidate) => candidate.id === resolution.model)
+      && params.providers.some((provider) => provider.models.includes(resolution.model))) {
+      return model;
+    }
+  }
 
   // 新建任务草稿还没推过来时不写死型号：取目录里排第一、且有已连接来源提供的模型；
   // 一个都没有则保留最具体的候选，由后续模型解析返回准确的不可用错误。
@@ -1371,15 +1365,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       availableModels,
       providers: agentProviders,
     });
-    const defaultsModel = defaults.model;
-    const defaultsModelIsAvailable =
-      defaultsModel !== undefined
-      && defaultsModel !== null
-      && availableModels.some((model) => model.id === defaultsModel)
-      && agentProviders.some((provider) => provider.models.includes(defaultsModel));
+    // Selection preserves the raw ID so a saved alias can resolve on its saved route.
     const inheritedModelComesFromDefaults =
       params.model === undefined
-      && defaultsModelIsAvailable
       && selectedModel === defaults.model;
     const leadProviderId =
       params.agent === routeLead.agentKind && typeof routeLead.providerId === 'string' && routeLead.providerId.trim()
