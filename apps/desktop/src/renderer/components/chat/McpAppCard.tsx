@@ -227,6 +227,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const [retained, setRetained] = useState(false);
   const enabled = visible || retained;
   const updateContextRef = useRef<(() => void) | undefined>(undefined);
+  const backdropPaintRef = useRef<(() => void) | undefined>(undefined);
 
   useLayoutEffect(() => {
     if (fixed) return;
@@ -266,7 +267,12 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     observer.observe(element);
     document.addEventListener('visibilitychange', update);
     const stopWindowHidden = window.electronAPI?.onWindowHiddenChange?.((hidden) => { windowHidden = hidden; update(); });
-    const stopRegions = subscribePluginUiRegions(update);
+    const stopRegions = subscribePluginUiRegions(() => {
+      // Sidebar/panel visibility updates the document data attribute rather than
+      // the theme class. Repaint this card without observing the whole document.
+      backdropPaintRef.current?.();
+      update();
+    });
     return () => {
       observer.disconnect();
       document.removeEventListener('visibilitychange', update);
@@ -306,15 +312,10 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     heightGuard.resize(element.clientWidth);
     let frame: HTMLIFrameElement | undefined;
     let localViewId: string | undefined;
-    const backdropAncestors = () => {
-      const ancestors: Element[] = [];
-      for (let current: Element | null = element; current; current = current.parentElement) ancestors.push(current);
-      return ancestors;
-    };
-    let observedBackdropAncestors = backdropAncestors();
     const paintFrameBackdrop = () => {
       if (frame) frame.style.backgroundColor = findMcpAppBackdropColor(element);
     };
+    backdropPaintRef.current = paintFrameBackdrop;
     const invoke: AppInvoker = (id, input) =>
       window.electronAPI.maker.mcpApps(id, deviceId ? { ...input, deviceId } : input);
     const post = (message: AppRpc) => frame?.contentWindow?.postMessage(message, '*');
@@ -488,18 +489,6 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       attributes: true,
       attributeFilter: ['class', 'style'],
     });
-    const backdropObserver = new MutationObserver((mutations) => {
-      const current = backdropAncestors();
-      const ancestorsChanged = current.length !== observedBackdropAncestors.length
-        || current.some((ancestor, index) => ancestor !== observedBackdropAncestors[index]);
-      const ancestorStyleChanged = mutations.some((mutation) =>
-        mutation.type === 'attributes' && current.includes(mutation.target as Element));
-      if (ancestorsChanged || ancestorStyleChanged) {
-        observedBackdropAncestors = current;
-        paintFrameBackdrop();
-      }
-    });
-    backdropObserver.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'], childList: true, subtree: true });
     const sizeObserver = new ResizeObserver(update);
     sizeObserver.observe(element);
     function dispose() {
@@ -516,8 +505,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       unsubscribeContext?.();
       pendingContext = undefined;
       themeObserver.disconnect();
-      backdropObserver.disconnect();
       sizeObserver.disconnect();
+      if (backdropPaintRef.current === paintFrameBackdrop) backdropPaintRef.current = undefined;
       // Layout cleanup runs before React removes the ancestor message tree.
       // Keep a live frame connected for the bounded teardown, including on failure.
       if (frame) {
@@ -588,6 +577,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [mode]);
+  // The card keeps one live iframe while switching between inline and fullscreen.
+  // Repaint its fallback only after those layout-driving props change.
+  useLayoutEffect(() => { backdropPaintRef.current?.(); }, [fixed, mode, chrome, sizing]);
   useLayoutEffect(() => { updateContextRef.current?.(); }, [fixed, mode]);
   // Exit locally; the modal blocks the window.
   const exitFullscreen = () => {

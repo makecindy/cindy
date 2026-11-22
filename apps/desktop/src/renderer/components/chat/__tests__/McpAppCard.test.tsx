@@ -72,6 +72,11 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
 import { McpAppCard } from '../McpAppCard';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { applyPluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
+const allPluginUiRegions = {
+  workspace: true, sidebar: true, header: true, messages: true,
+  composer: true, tools: true, windowControls: true,
+};
 const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
 const pendingDigests: Promise<ArrayBuffer>[] = [];
 // The real presenter owns demand: no visible View means no state subscription;
@@ -151,11 +156,58 @@ it('paints the iframe backdrop from the nearest card background without recomput
     });
     expect(frame.style.backgroundColor).toBe('rgb(245, 245, 245)');
 
+    container.style.backgroundColor = 'rgb(220, 220, 220)';
+    await act(async () => applyPluginUiRegions({ ...allPluginUiRegions, sidebar: false }));
+    expect(frame.style.backgroundColor).toBe('rgb(220, 220, 220)');
+    await act(async () => applyPluginUiRegions(allPluginUiRegions));
+
     const readsBefore = computedStyle.mock.calls.filter(([element]) => element === container).length;
     await act(async () => changed.current());
     const readsAfter = computedStyle.mock.calls.filter(([element]) => element === container).length;
     expect(readsAfter).toBe(readsBefore);
   } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+it('does not walk backdrop ancestors for unrelated DOM changes', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  let dialog: Element | undefined;
+  let dialogParentReads = 0;
+  const parentPrototype = Object.getOwnPropertyDescriptor(Element.prototype, 'parentElement')?.get
+    ? Element.prototype : Node.prototype;
+  const parentGetter = Object.getOwnPropertyDescriptor(parentPrototype, 'parentElement')!.get!;
+  Object.defineProperty(parentPrototype, 'parentElement', {
+    configurable: true,
+    get() {
+      if (this === dialog) dialogParentReads++;
+      return parentGetter.call(this);
+    },
+  });
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="backdrop-unrelated" clientId="backdrop-card" title="App" />));
+    dialog = container.querySelector('dialog')!;
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    dialogParentReads = 0;
+    const unrelated = document.createElement('div');
+    document.body.appendChild(unrelated);
+    await act(async () => { await Promise.resolve(); });
+    expect(dialogParentReads).toBe(0);
+    unrelated.remove();
+  } finally {
+    Object.defineProperty(parentPrototype, 'parentElement', { configurable: true, get: parentGetter });
     await act(async () => root.unmount());
     container.remove();
   }
