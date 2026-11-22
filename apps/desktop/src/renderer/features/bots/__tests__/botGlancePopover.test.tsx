@@ -50,7 +50,7 @@ vi.mock('@/lib/sessionService', () => ({
   get: async (id: string) => ({ id, model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/w' }),
 }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="bot-avatar" /> }));
-vi.mock('../botStore', () => ({ useBotProfiles: () => h.local, useBotUnreadCounts: () => ({}) }));
+vi.mock('../botStore', () => ({ useBotProfiles: () => h.local, useBotUnreadCounts: () => ({}), ensureBotProfilesLoaded: async () => h.local }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => h.remote, useRemoteCindyIds: () => new Set<string>() }));
 vi.mock('@/features/device-link/refreshRemoteSessions', () => ({ refreshRemoteDeviceSessions: async () => 'done' }));
 vi.mock('@/hooks/useCCSessions', () => ({ useCCSessions: () => ({ sessions: h.sessions }) }));
@@ -76,6 +76,8 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
 }));
 
 const { BotGlanceButton } = await import('../BotGlancePopover');
+const { resetCompanionCloudStoreForTests } = await import('../companionCloudStore');
+const { MENU_DANGER_TEXT } = await import('@/components/ui/menu-row');
 
 const openPath = vi.fn(async () => ({ ok: true }));
 
@@ -96,6 +98,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  resetCompanionCloudStoreForTests();
 });
 
 const bot = { id: 'bot-1', name: '葫芦', sessionId: 's1' };
@@ -166,6 +169,37 @@ describe('BotGlanceButton', () => {
     expect(outputs.map((row) => row.textContent)).toEqual([expect.stringContaining('report.docx')]);
     fireEvent.click(outputs[0]);
     await waitFor(() => expect(openPath).toHaveBeenCalledWith('/w/out/report.docx'));
+  });
+
+  // cloud-companions.md §3.1 (2026-11-21, issue #12016): the 近况 popover, like the settings menu, names the
+  // forced take-over of a main computer that is listed online but does not answer, in the destructive
+  // style. Before, the clickable row read like an ordinary choice («this computer · online»).
+  it('names the forced take-over here when the main computer is listed online but does not answer', async () => {
+    const cloud = (home: string) => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [],
+      actors: [{ id: 'a-1', externalId: 'bot-1', name: '葫芦', avatar: null, homeDeviceId: home,
+        homeDevice: { deviceId: home, name: home === 'desk' ? 'Desk' : 'Laptop', online: true, isSelf: home === 'desk' } }] });
+    resetCompanionCloudStoreForTests(cloud('laptop'));
+    h.local = [{ id: 'bot-1', name: '葫芦', status: 'active', sessionId: 's1' }];
+    const switchCompanionHome = vi.fn(async () => { resetCompanionCloudStoreForTests(cloud('desk')); return { ok: true }; });
+    Object.assign((window as unknown as { electronAPI: { maker: Record<string, unknown> } }).electronAPI.maker, {
+      getCompanionCloudState: async () => cloud('laptop'),
+      onCompanionCloudChanged: () => () => undefined,
+      getCompanionHomeChoices: async () => ({ homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE',
+        targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] }),
+      switchCompanionHome,
+    });
+    render(<BotGlanceButton bot={bot} cloudHome />);
+    fireEvent.click(screen.getByTestId('bot-glance-button'));
+    expect(await screen.findByText('bots.cloud.homeUnresponsive')).toBeTruthy();
+    const force = screen.getByRole('button', { name: 'bots.cloud.forceHere' });
+    expect(screen.getByText('bots.cloud.forceHere').className).toContain(MENU_DANGER_TEXT);
+    expect(screen.queryByText('bots.glance.online')).toBeNull();
+    fireEvent.click(force);
+    expect(await screen.findByText('bots.cloud.forceDescription')).toBeTruthy();
+    expect(switchCompanionHome).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.forceAction' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/bot-1'));
+    expect(switchCompanionHome).toHaveBeenCalledWith('bot-1', 'desk', { force: true });
   });
 
   // PR + file entries share one chronology and one fold; separate lists hid newer files below older PRs.

@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { MENU_DANGER_TEXT } from '@/components/ui/menu-row';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
@@ -64,6 +65,7 @@ function Row({
   inlineMeta = false,
   trailing,
   muted = false,
+  danger = false,
   onClick,
   onContextMenu,
   onKeyDown,
@@ -75,6 +77,8 @@ function Row({
   inlineMeta?: boolean;
   trailing?: ReactNode;
   muted?: boolean;
+  /** A destructive action (same text colour as a menu's danger row). */
+  danger?: boolean;
   onClick?: () => void;
   onContextMenu?: (event: MouseEvent<HTMLButtonElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
@@ -91,7 +95,7 @@ function Row({
           className={cn(
             'block min-w-0 truncate text-13 leading-5',
             inlineMeta && 'flex-1',
-            muted ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
+            danger ? MENU_DANGER_TEXT : muted ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
           )}
         >
           {title}
@@ -151,6 +155,11 @@ interface ComputerRowModel {
   unread?: boolean;
   /** An older Cindy: still selectable, labelled so the owner knows the teammate runs there the older way. */
   outdated?: boolean;
+  /**
+   * Taking the companion over here although its home is listed online but does not answer: named as
+   * the forced action, in the destructive style, like the settings menu (cloud-companions.md §3.1).
+   */
+  force?: boolean;
   onSelect?: () => void;
 }
 
@@ -165,9 +174,10 @@ function ComputerRows({ rows }: { rows: ComputerRowModel[] }) {
       key={row.key}
       testId="bot-glance-computer"
       icon={<Monitor size={16} />}
-      title={row.name}
+      title={row.force ? t('bots.cloud.forceHere') : row.name}
       muted={!row.current && !row.online}
-      meta={row.current ? t('bots.glance.runningHere') : row.outdated ? t('bots.cloud.targetOutdatedMeta')
+      danger={row.force}
+      meta={row.force ? undefined : row.current ? t('bots.glance.runningHere') : row.outdated ? t('bots.cloud.targetOutdatedMeta')
         : row.online ? t('bots.glance.online') : t('bots.glance.offline')}
       inlineMeta
       trailing={
@@ -232,6 +242,7 @@ function CloudComputers({
         current: false,
         online: target.online,
         ...(target.outdated ? { outdated: true } : {}),
+        ...(unresponsive ? { force: true } : {}),
         onSelect: () => {
           onClose();
           state.setError(null);
