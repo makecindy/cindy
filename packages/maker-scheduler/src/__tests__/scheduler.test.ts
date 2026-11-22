@@ -2097,6 +2097,15 @@ describe('Scheduler', () => {
   // 的 due-fire 又推迟下去。改成只挂迟到收口、不当场等 —— 第一条回读失败也不能把
   // 后面几条的收口一起带崩。
   it('reconciles every dispatch guard once the shared budget is spent', async () => {
+    // 预闸门预算按**墙钟**算(Scheduler.preGateRemaining 用 Date.now())。Windows 的
+    // Date.now() 粒度约 15.6ms:1ms 预算的「预算已耗尽」在那台机器上取决于时钟有没有
+    // 跨过毫秒边界 —— 跨过去走迟到收口分支(过),没跨过去走「当场等回读」分支,而回读
+    // 被 mock 成 reject,第一条守卫的失败会把整轮守卫循环带崩,第二条守卫根本没发读
+    // (挂)。这里自己接管墙钟:listActive 被调用的那一刻(本轮 deadline 已经算完)把
+    // 墙钟推到 deadline 之后,「预算已耗尽」在所有平台上都是同一条分支。
+    const realNow = Date.now.bind(Date);
+    let wallOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + wallOffset);
     const local = makeHarness({
       preGateStorageTimeoutMs: 1,
       logger: { warn: vi.fn() },
@@ -2119,7 +2128,11 @@ describe('Scheduler', () => {
     // 回读直接失败(不是超时)—— 逐条等的话,第一次失败就会把整个循环带崩,
     // 后面几条守卫连收口都挂不上。
     const readIds: string[] = [];
-    vi.spyOn(local.storage, 'listActive').mockImplementation(() => new Promise<Schedule[]>(() => {}));
+    vi.spyOn(local.storage, 'listActive').mockImplementation(() => {
+      // 墙钟推进到本轮 deadline(轮开始时的 Date.now() + 1ms)之后:预算已耗尽。
+      wallOffset = 1_000;
+      return new Promise<Schedule[]>(() => {});
+    });
     vi.spyOn(local.storage, 'get').mockImplementation((id: string) => {
       if (id !== first.id && id !== second.id) return Promise.resolve(null);
       readIds.push(id);
@@ -2132,6 +2145,7 @@ describe('Scheduler', () => {
     // 预算耗尽后不再逐条等,但每条守卫都要挂上迟到收口。
     expect(readIds).toEqual([first.id, second.id]);
 
+    nowSpy.mockRestore();
     await local.scheduler.stop();
   });
 
