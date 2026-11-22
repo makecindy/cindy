@@ -651,6 +651,8 @@ export interface AgentInputCoordinatorDeps {
    * per-clientId turn-start bookkeeping here rather than running it.
    */
   onSteerAccepted?: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
+  /** Host-verified Worker inputs eligible for event-stream recovery. */
+  workerInputs?: WeakSet<object>;
   /**
    * Awaited only after vendor dispatch is irreversible (`accepted=true`).
    * Hosts use this for side effects that must not run on cancelled-before-dispatch
@@ -2910,6 +2912,7 @@ export class AgentInputCoordinator {
     if (state.activeTurn) state.activeTurn.latestSteeringClientId = item.clientId;
     const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
     const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
+    const steerRuntime = this.deps.getTurnSessionIdentity?.(sessionId);
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     // UI steer doubles as "resume"; an agent-chosen steer only runs when the queue is
     // not paused and must never release a pause the user owns.
@@ -3348,6 +3351,22 @@ export class AgentInputCoordinator {
     const sameVendorTurn =
       steerVendorTurnGeneration !== null &&
       this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
+    const workerInputs = this.deps.workerInputs;
+    if (workerInputs && sameVendorTurn && steerRuntime &&
+        this.deps.getTurnSessionIdentity?.(sessionId) === steerRuntime) {
+      // Carry host verification across an accepted same-turn input replacement.
+      // Direct assignments do not have an active coordinator item until steered.
+      const previous = accepted.activeTurn;
+      const receipt = this.directWorkerReceipts.get(steerRuntime);
+      const workerSource = previous
+        ? previous.vendorTurnGeneration === steerVendorTurnGeneration && !previous.stopped
+          ? previous.item : null
+        : receipt && receipt.generation === steerVendorTurnGeneration && !receipt.signal.aborted
+          ? receipt.item : null;
+      if (workerSource && workerInputs.has(workerSource.createOpts)) {
+        workerInputs.add(item.createOpts);
+      }
+    }
     accepted.activeTurn = {
       // Only accepted steering participates. Pending/rejected delivery cannot claim an unrelated final.
       replyInputClientIds: sameVendorTurn

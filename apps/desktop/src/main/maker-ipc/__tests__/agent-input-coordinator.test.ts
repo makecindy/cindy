@@ -2095,6 +2095,7 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 }
 
 function createHarness(opts?: {
+  workerInputs?: WeakSet<object>;
   isScheduledQuotaInput?: (item: AgentInputQueuedMessage) => boolean;
   canRestoreOrcaReport?: AgentInputCoordinatorDeps['canRestoreOrcaReport'];
   awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
@@ -2249,6 +2250,7 @@ function createHarness(opts?: {
   >(async () => []);
   const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    workerInputs: opts?.workerInputs,
     sendToSessionHint: opts?.sendToSessionHint,
     rewindPersistedUserMessageAfterClear,
     sendToAgent,
@@ -14495,8 +14497,7 @@ describe('Orca report durable recovery', () => {
 
   // Exercise the real host scheduling callback with its guard and bookkeeping;
   // a hand-written retry timer would miss pending-token and retry-budget bugs.
-  function wireHostReportRecovery(h: ReturnType<typeof createHarness>) {
-    const workerInputs = new WeakSet<object>();
+  function wireHostReportRecovery(h: ReturnType<typeof createHarness>, workerInputs = new WeakSet<object>()) {
     const botFallbackInputs = new WeakSet<object>();
     const scheduledQuotaInputs = new WeakSet<object>();
     const runtimeFallback = vi.fn(async () => ({ session: null, outcome: 'unchanged' as const }));
@@ -14535,11 +14536,14 @@ describe('Orca report durable recovery', () => {
 
   // 2026-11-17: a worker can lose the runtime after an irreversible tool has
   // run but before its result is persisted. Even zero observed progress must CONTINUE.
-  it.each(['direct', 'queued'] as const)('continues an unfinished %s Worker assignment on the rebuilt runtime', async mode => {
+  it.each([
+    ['direct', 0], ['queued', 0], ['direct', 2], ['queued', 2],
+  ] as const)('continues a %s Worker assignment after %i same-turn steers', async (mode, steerCount) => {
     vi.useFakeTimers();
     try {
-      const h = createHarness();
-      const { workerInputs } = wireHostReportRecovery(h);
+      const workerInputs = new WeakSet<object>();
+      const h = createHarness({ workerInputs });
+      wireHostReportRecovery(h, workerInputs);
       const runtime = { instanceId: 'worker-runtime' };
       h.setTurnSessionIdentity(runtime);
       h.setTurnGeneration(1);
@@ -14550,11 +14554,17 @@ describe('Orca report durable recovery', () => {
       if (mode === 'queued') {
         h.coordinator.enqueue('worker', item);
         await flush();
-        h.setRunning(false);
       } else {
         h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+        h.setRunning(true);
+      }
+      for (let index = 0; index < steerCount; index++) {
+        const steer = makeItem(`steer-${index}`, 'Clarify the assignment');
+        await expect(h.coordinator.steerControlInput('worker', { item: steer },
+          { session: runtime, turnGeneration: 1 })).resolves.toBe('steered');
       }
 
+      h.setRunning(false);
       h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
         { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
       expect(h.coordinator.isContinuationOnlyAutoResume('worker')).toBe(true);
@@ -14565,6 +14575,40 @@ describe('Orca report durable recovery', () => {
       expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
     } finally { vi.useRealTimers(); }
   });
+
+  it.each(['ordinary-task', 'stopped', 'replaced-runtime', 'new-turn'] as const)(
+    'does not transfer Worker recovery to an accepted steer after %s', async boundary => {
+      const workerInputs = new WeakSet<object>();
+      const h = createHarness({ workerInputs });
+      wireHostReportRecovery(h, workerInputs);
+      const runtime = { instanceId: 'worker-runtime' };
+      h.setTurnSessionIdentity(runtime);
+      h.setTurnGeneration(1);
+      h.setRunning(true);
+      const assignment = makeItem('assignment', 'Apply the approved change');
+      if (boundary !== 'ordinary-task') {
+        assignment.createOpts.orcaRole = 'worker';
+        workerInputs.add(assignment.createOpts);
+        h.coordinator.rememberDirectWorkerInput(runtime, 1, assignment, h.coordinator.getInputAbortSignal('worker'));
+      }
+      const steer = makeItem('steer', 'Clarify the assignment');
+      // Input options alone cannot establish Worker recovery eligibility.
+      steer.createOpts.orcaRole = 'worker';
+      h.steerToAgent.mockImplementationOnce(async () => {
+        if (boundary === 'stopped') h.coordinator.stop('worker');
+        if (boundary === 'replaced-runtime') h.setTurnSessionIdentity({ instanceId: 'replacement' });
+        if (boundary === 'new-turn') h.setTurnGeneration(2);
+      });
+      await expect(h.coordinator.steerControlInput('worker', { item: steer },
+        { session: runtime, turnGeneration: 1 })).resolves.toBe('steered');
+      expect(workerInputs.has(steer.createOpts)).toBe(false);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
+        { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
+      expect(h.coordinator.isAutoResumePending('worker')).toBe(false);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(['stopped', 'rejected', 'replaced', 'requested-close', 'ordinary-task'] as const)(
     'does not continue an ineligible worker EOF (%s)', async boundary => {
