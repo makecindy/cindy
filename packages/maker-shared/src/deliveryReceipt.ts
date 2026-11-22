@@ -404,15 +404,20 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
     const file = byPath.get(path)!;
     return { path, openable: !file.removed };
   });
-  const outputFiles: BotDeliverableFile[] = [];
+  const outputFiles: Array<BotDeliverableFile & { cwd?: string | null }> = [];
   for (const path of order) {
     const file = byPath.get(path)!;
     if (file.created && !file.removed) {
-      outputFiles.push({ path: file.path, name: file.name, artifact: file.artifact });
+      outputFiles.push({
+        path: file.path,
+        name: file.name,
+        artifact: file.artifact,
+        cwd: file.cwd,
+      });
     }
   }
   const outputs = outputFiles
-    .filter((file) => isBotDeliverableFile(file, input.workingDir ?? undefined))
+    .filter((file) => isBotDeliverableFile(file, file.cwd ?? input.workingDir ?? undefined))
     .map((file) => ({ path: file.path, name: file.name || fileName(file.path) }));
   const commands = recordedCommandsFromMessages(input.messages ?? []);
   const recent = commands.slice(-DELIVERY_RECEIPT_COMMAND_CAP);

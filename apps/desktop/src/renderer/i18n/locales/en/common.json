@@ -22614,7 +22614,7 @@
     "outcome": {
       "failed": "Failed",
       "testsFailed": "Tests failed",
-      "ok": "OK"
+      "ok": "Succeeded"
     },
     "phaseValue": {
       "running": "Running",

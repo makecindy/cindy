@@ -215,6 +215,16 @@ describe('buildDeliveryReceipt', () => {
     ]);
   });
 
+  it('excludes a preview file using the change set directory, not the telemetry subdirectory', () => {
+    const receipt = buildDeliveryReceipt({
+      title: 'Preview',
+      workingDir: '/repo/preview',
+      changedFiles: [{ path: '/repo/preview/report.csv', status: 'added', cwd: '/repo' }],
+    });
+    expect(receipt.outputs.shown).toBe(false);
+    expect(receipt.changes.items.map((file) => file.path)).toEqual(['/repo/preview/report.csv']);
+  });
+
   it('does not call an incomplete capture a conversation with no file changes', () => {
     const receipt = buildDeliveryReceipt({
       title: 'Edit env',
