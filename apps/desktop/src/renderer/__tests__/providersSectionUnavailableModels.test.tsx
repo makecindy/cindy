@@ -17,6 +17,7 @@ import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/m
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
 import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
@@ -33,7 +34,7 @@ const {
   requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
   setProviderOrderSpy: vi.fn(async () => ({ ok: true as const })),
   refetchProvidersSpy: vi.fn(),
-  confirmSpy: vi.fn(async () => false),
+  confirmSpy: vi.fn<(options: ConfirmOptions) => Promise<boolean>>(async () => false),
   authState: { dataOwnerId: 'owner-1' as string | null },
   providerSnapshotState: {
     dataOwnerId: 'owner-1' as string | null,
@@ -271,6 +272,8 @@ beforeEach(() => {
   ownDevicesState.catalogs = new Map();
   scanResult = { detections: [] };
   confirmSpy.mockReset().mockResolvedValue(false);
+  // A successful catalog read returns true; undefined is not a publication.
+  refetchProvidersSpy.mockReset().mockResolvedValue(true);
   vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     modelAccess: { getByokStatus: vi.fn(async () => ({ providers: [] })) },
@@ -302,6 +305,143 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // #6601 PRRT_kwDOTgdRUs66eURW, unit/component: real rename input and import
+  // review. Main's in-place import preserves config (providerHandlers), so that
+  // case checks admission, not hypothetical route/model replacement. Prior
+  // dialog cases missed mutation admission and a late old-owner completion.
+  it.each(['rename', 'import', 'owner-changed', 'disconnect', 'oauth-disconnect', 'oauth-login', 'oauth-cancel'] as const)('locks aliases through the %s mutation and superseded readback', async source => {
+    const scrollIntoView = HTMLElement.prototype.scrollIntoView;
+    // jsdom has no scrolling; the real Select still handles focus and selection.
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    let stored: CustomProviderConfig = { id: 'edit-existing', name: 'Old provider', runtimes: {
+      codex: { baseUrl: 'https://old.example.invalid/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'private', name: 'Private', nameExplicit: true }] },
+    } };
+    if (source.endsWith('disconnect') || source.startsWith('oauth-')) {
+      stored.runtimes.codex!.models[0]!.discoveredSource = { kind: 'magpie', providerId: 'Old account' };
+      if (source.startsWith('oauth-')) stored.auth = { method: 'oauth', oauth: {
+        clientId: 'test-client', scopes: '', tokenUrl: 'https://old.example.invalid/token',
+        authorizeUrl: 'https://old.example.invalid/authorize',
+      } };
+    }
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: !['oauth-login', 'oauth-cancel'].includes(source) };
+    providerSnapshotState.order = [stored.id];
+    let finishMutation!: () => void;
+    const mutation = new Promise<void>(resolve => { finishMutation = resolve; });
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn(async (config: CustomProviderConfig) => { stored = structuredClone(config); return { ok: true as const }; });
+    const rename = vi.fn(async ({ name }: { name?: string }) => { await mutation; stored.name = name!; });
+    const disconnect = vi.fn(async () => {
+      await mutation;
+      // Actual Main disconnect invalidates this metadata; the key/token stays Main-only.
+      delete stored.runtimes.codex!.models[0]!.discoveredSource;
+      return { ok: true as const };
+    });
+    const login = vi.fn(async () => {
+      await mutation;
+      if (source === 'oauth-cancel') return { ok: false as const, reason: 'login_cancelled' as const };
+      delete stored.runtimes.codex!.models[0]!.discoveredSource;
+      return { ok: true as const };
+    });
+    const confirmImport = vi.fn(async (_id: string, target?: string) => {
+      await mutation;
+      expect(target).toBe(stored.id);
+      return { ok: true as const, providerId: stored.id, authMethod: 'apiKey' as const };
+    });
+    Object.assign(window.electronAPI.maker, {
+      updateCustomProvider: persist, setProviderPresentation: rename,
+      disconnectCustomProvider: disconnect, providerOAuthLogout: disconnect,
+      providerOAuthLogin: login, providerOAuthCancel: vi.fn(async () => undefined),
+      previewProviderImport: vi.fn(async (_id: string, target?: string) => ({
+        importId: 'draft-existing', kind: 'custom', name: 'Import', authMethod: 'apiKey',
+        action: target ? 'update' : 'create', providerId: target || 'new', runtimes: [],
+        updateTargets: [{ id: stored.id, name: 'Old provider' }],
+      })),
+      confirmProviderImport: confirmImport, cancelProviderImport: vi.fn(async () => ({ ok: true })),
+      getModelContextLimit: async () => ({ limit: null, isCustomized: false }),
+      getModelImageInputOverride: async () => ({ value: null, mixed: false }),
+    });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    refetchProvidersSpy.mockImplementation(async () => { await readback; return false; });
+    const page = () => <MemoryRouter initialEntries={[source === 'import' ? '/?import=draft-existing' : '/']}><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    try {
+      if (source === 'oauth-login' || source === 'oauth-cancel') {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.authorize' }));
+        await waitFor(() => expect(login).toHaveBeenCalledOnce());
+      } else if (source.endsWith('disconnect')) {
+        confirmSpy.mockResolvedValue(true);
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.disconnect' }));
+        await waitFor(() => expect(disconnect).toHaveBeenCalledOnce());
+      } else if (source !== 'import') {
+        confirmSpy.mockImplementationOnce(async (options) => {
+          const input = render(options.content);
+          fireEvent.change(screen.getByRole('textbox', { name: 'settings.providers.pill.rename' }), { target: { value: 'New provider' } });
+          input.unmount();
+          return true;
+        });
+        fireEvent.doubleClick(screen.getByRole('button', { name: /Old provider/ }));
+        await waitFor(() => expect(rename).toHaveBeenCalledOnce());
+      } else {
+        await screen.findByRole('button', { name: 'settings.providers.import.create' });
+        fireEvent.click(screen.getByRole('combobox', { name: 'settings.providers.import.destination' }));
+        fireEvent.click(await screen.findByRole('option', { name: /Old provider/ }));
+        fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.import.replaceKey' }));
+        await waitFor(() => expect(confirmImport).toHaveBeenCalledOnce());
+      }
+      if (source !== 'import') {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+        const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' });
+        fireEvent.change(input, { target: { value: 'Work alias' } });
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }));
+        expect(persist).not.toHaveBeenCalled();
+      }
+      if (source === 'owner-changed') setDataOwnerGeneration('owner-2');
+      await act(async () => { finishMutation(); });
+      if (source === 'owner-changed') {
+        expect(refetchProvidersSpy).not.toHaveBeenCalled();
+        expect(persist).not.toHaveBeenCalled();
+        return;
+      }
+      if (source === 'oauth-cancel') {
+        expect(refetchProvidersSpy).not.toHaveBeenCalled();
+        expect(toast.error).not.toHaveBeenCalled();
+        expect((screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement).disabled).toBe(false);
+        return;
+      }
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
+      const committed = structuredClone(stored);
+      if (source === 'oauth-login') {
+        expect(screen.queryByRole('button', { name: 'settings.providers.button.cancel' })).toBeNull();
+        expect(window.electronAPI.maker.providerOAuthCancel).not.toHaveBeenCalled();
+      }
+      expect(committed.name).toBe(source === 'rename' ? 'New provider' : 'Old provider');
+      if (source.endsWith('disconnect') || source === 'oauth-login') expect(committed.runtimes.codex!.models[0]).not.toHaveProperty('discoveredSource');
+      if (source === 'import') fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      fireEvent.click(save);
+      expect(persist).not.toHaveBeenCalled();
+      await act(async () => { finishReadback(); });
+      expect(save.disabled).toBe(true);
+      expect(input.value).toBe('Work alias');
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      await waitFor(() => expect(save.disabled).toBe(false));
+      refetchProvidersSpy.mockResolvedValue(true);
+      await act(async () => { fireEvent.click(save); });
+      expect(persist).toHaveBeenCalledOnce();
+      committed.runtimes.codex!.models[0]!.name = 'Work alias';
+      expect(stored).toEqual(committed);
+    } finally {
+      finishMutation(); finishReadback();
+      HTMLElement.prototype.scrollIntoView = scrollIntoView;
+      vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset();
+    }
+  });
   // #6601 PRRT_kwDOTgdRUs66eH66, component/unit: real page and both real
   // save dialogs, then open the alias drawer while catalog readback is pending.
   // Prior refresh/removal cases did not exercise these external onSaved paths.
@@ -381,7 +521,7 @@ describe('ProvidersSection — 双栏管理', () => {
   // #6601 review / #5090, unit: real ProvidersSection → list → drawer. Existing
   // discovery tests only cover completed refreshes. One pending fetch/readback
   // must block alias writes, keep the draft, then save against the refreshed config.
-  it.each(['success', 'failed'] as const)('keeps a name draft across a %s refresh readback', async (outcome) => {
+  it.each(['success', 'failed', 'superseded', 'owner-changed'] as const)('keeps a name draft across a %s refresh readback', async (outcome) => {
     // The successful read adds the same row under Pi, changing its primary
     // engine without selecting another model. The old Codex-only input missed
     // this draft-loss branch; reuse the existing unit case, no extra I/O/waits.
@@ -400,7 +540,11 @@ describe('ProvidersSection — 双栏管理', () => {
     }));
     let finishReadback!: () => void;
     const readback = new Promise<void>(resolve => { finishReadback = resolve; });
-    const persist = vi.fn(async (config: CustomProviderConfig) => { stored = structuredClone(config); return { ok: true as const }; });
+    const persist = vi.fn(async (config: CustomProviderConfig) => {
+      stored = structuredClone(config);
+      if (outcome === 'owner-changed') setDataOwnerGeneration('owner-2');
+      return { ok: true as const };
+    });
     Object.assign(window.electronAPI.maker, { fetchProviderModels: fetchModels, updateCustomProvider: persist, getModelContextLimit: async () => ({ limit: null, isCustomized: false }) });
     const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
     vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
@@ -408,6 +552,7 @@ describe('ProvidersSection — 双栏管理', () => {
     const view = render(page());
     refetchProvidersSpy.mockImplementation(async () => {
       await readback;
+      if (outcome === 'superseded') return false;
       if (outcome === 'failed') {
         providerSnapshotState.error = { reason: 'catalog-unavailable' };
         view.rerender(page());
@@ -428,13 +573,18 @@ describe('ProvidersSection — 双栏管理', () => {
       fireEvent.click(save);
       expect(persist).not.toHaveBeenCalled();
       await act(async () => { finishFetch(); });
+      if (outcome === 'owner-changed') {
+        expect(persist).toHaveBeenCalledOnce();
+        expect(refetchProvidersSpy).not.toHaveBeenCalled();
+        return;
+      }
       await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
       expect(save.disabled).toBe(true);
       expect(persist).toHaveBeenCalledOnce();
       expect(fetchModels).toHaveBeenCalledTimes(Object.keys(initial.runtimes).length);
       const refreshed = structuredClone(stored);
       await act(async () => { finishReadback(); });
-      if (outcome === 'failed') {
+      if (outcome !== 'success') {
         expect(save.disabled).toBe(true);
         fireEvent.click(save);
         expect(persist).toHaveBeenCalledOnce();
@@ -445,7 +595,12 @@ describe('ProvidersSection — 双栏管理', () => {
           view.rerender(page());
           return true;
         });
-        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' })); });
+        if (outcome === 'failed') {
+          await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' })); });
+        } else {
+          providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+          view.rerender(page());
+        }
       }
       expect(input.value).toBe('Work Alias');
       await waitFor(() => expect(save.disabled).toBe(false));
