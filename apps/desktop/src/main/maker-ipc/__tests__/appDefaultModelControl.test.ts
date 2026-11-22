@@ -9,7 +9,7 @@ const host = vi.hoisted(() => ({ owner: 'owner:1', enabled: true, connected: tru
 vi.mock('../pluginEnginesIpc.js', () => ({ listPluginEngineViews: host.pluginEngines }));
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({
   readRemoteProviderRoute: host.remote,
-  readRemotePluginEngineRoute: host.remotePlugin,
+  readRemotePluginEngines: host.remotePlugin,
 }));
 vi.mock('../../maker-host/index.js', () => ({ getMakerIfReady: () => ({ listAvailableAgents: () => host.agents }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
@@ -60,13 +60,14 @@ it('validates remote and shared plugin engine routes against the target device c
   const badEffort = { ...shared, effort: 'max' };
   const missing = { ...shared, agentDeviceId: 'other-device', model: 'missing' };
   host.connected = false;
-  host.remotePlugin.mockImplementation(async ({ agentDeviceId, model }: { agentDeviceId: string; model: string }) => {
-    if (agentDeviceId === 'share:friend' && model === 'chosen') {
-      return { engine: { providerId: shared.providerId, availability: { state: 'available' }, models: [{ id: 'chosen', efforts: ['high'] }] }, model: { id: 'chosen', efforts: ['high'] } };
+  host.remotePlugin.mockImplementation(async (deviceId: string) => {
+    if (deviceId === 'share:friend') {
+      return [{ providerId: shared.providerId, availability: { state: 'available' }, models: [{ id: 'chosen', efforts: ['high'] }] }];
     }
     throw new Error('[REMOTE_AGENT_UNAVAILABLE] unavailable');
   });
   expect(await resolveAvailableTaskModels([shared, badEffort, missing])).toEqual([shared, null, null]);
+  expect(host.remotePlugin.mock.calls).toEqual([['share:friend'], ['other-device']]);
   expect(host.pluginEngines).not.toHaveBeenCalled();
 });
 

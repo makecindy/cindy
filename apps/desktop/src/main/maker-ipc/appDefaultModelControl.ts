@@ -1,3 +1,4 @@
+import { readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { randomUUID } from 'node:crypto';
 import { effectiveSourceIdForModel, isModelVisible, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import type { resolveNewMakerDefaultTuple } from '../../shared/newMakerDefaultTuple.js';
@@ -123,27 +124,26 @@ export async function resolveTaskModelSelection(selection: TaskModelSelection): 
 export async function resolveAvailableTaskModels(routes: readonly BotModelRoute[]): Promise<Array<BotModelRoute | null>> {
   const owner = activeOwnerScopeKey();
   const local = routes.some(route => route.harness !== 'acp' && !route.agentDeviceId) ? await readSelection() : null;
-  const engines = routes.some(route => route.harness === 'acp' && !route.agentDeviceId) ? listPluginEngineViews() : [];
-  if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Account changed during model lookup');
+  const assertOwner = () => {
+    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Account changed during model lookup');
+  };
+  const localEngines = routes.some(route => route.harness === 'acp' && !route.agentDeviceId) ? listPluginEngineViews() : [];
+  const remoteEngineCatalogs = new Map<string, Promise<typeof localEngines>>();
+  const readEngines = (deviceId: string) => {
+    let pending = remoteEngineCatalogs.get(deviceId);
+    if (!pending) {
+      assertOwner();
+      pending = readRemotePluginEngines(deviceId).catch(() => []);
+      remoteEngineCatalogs.set(deviceId, pending);
+    }
+    return pending;
+  };
+  assertOwner();
   return Promise.all(routes.map(async route => {
     if (route.harness === 'acp') {
       if (route.fastMode) return null;
-      if (route.agentDeviceId) {
-        const { readRemotePluginEngineRoute } = await import('../remote-agent/controller/deviceCatalog.js');
-        const assertOwner = () => {
-          if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('账号已变化，请重新选择');
-        };
-        assertOwner();
-        const resolved = await readRemotePluginEngineRoute({
-          agentDeviceId: route.agentDeviceId,
-          providerId: route.providerId,
-          model: route.model,
-        }).catch(() => { assertOwner(); return null; });
-        assertOwner();
-        if (!resolved) return null;
-        if (route.effort && (!isPluginEngineEffort(route.effort) || !resolved.model?.efforts?.includes(route.effort))) return null;
-        return route;
-      }
+      const engines = route.agentDeviceId ? await readEngines(route.agentDeviceId) : localEngines;
+      assertOwner();
       const engine = engines.find(item => item.providerId === route.providerId && item.availability.state !== 'unavailable');
       if (!engine) return null;
       const offered = engine.models.find(model => model.id === route.model);

@@ -12,7 +12,7 @@ import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, isMo
 
 import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
-import { PLUGIN_ENGINES_INVOKE, PLUGIN_ENGINE_DEFAULT_MODEL, parseOfferedPluginEngines } from '../../../shared/pluginEngines.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines } from '../../../shared/pluginEngines.js';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWindow.js';
 
@@ -154,26 +154,12 @@ export async function readRemoteProviderRoute(route: {
   };
 }
 
-/** 与普通任务共用远程插件引擎目录；失败不回落到本机的同名插件。 */
-export async function readRemotePluginEngineRoute(route: {
-  agentDeviceId: string;
-  providerId: string | null;
-  model: string;
-}) {
+/** Read the authorized plugin engine catalog for one execution location. */
+export async function readRemotePluginEngines(deviceId: string) {
   const { remoteBackgroundInvoke } = await import('../../device-link');
-  const reply = await remoteBackgroundInvoke(route.agentDeviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+  const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
   if (!reply.ok) {
     throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine is unavailable.');
   }
-  const engine = parseOfferedPluginEngines(reply.result).find(
-    (item) => item.providerId === route.providerId && item.availability.state !== 'unavailable',
-  );
-  if (!engine) {
-    throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine is unavailable.');
-  }
-  const model = engine.models.find((item) => item.id === route.model);
-  if (!model && (route.model !== PLUGIN_ENGINE_DEFAULT_MODEL || engine.defaultModelAllowed === false)) {
-    throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine model is unavailable.');
-  }
-  return { engine, model: model ?? null };
+  return parseOfferedPluginEngines(reply.result);
 }
