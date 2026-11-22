@@ -1,5 +1,5 @@
 import { companionLaneRouteKey } from '../shared/imBotBindingRoute';
-import { readBotImConnection } from '../shared/botImConnectionStore';
+import { authorizedIMessageRoute, readBotImConnection } from '../shared/botImConnectionStore';
 import { createHash, randomUUID } from 'node:crypto';
 import { IMESSAGE_GROUP_WINDOW, sanitizeGroupWindowName } from '../shared/channelGroupWindow';
 import { receivedHistoryScope, recordReceivedImageMessage } from '../shared/receivedImageHistory';
@@ -18,6 +18,9 @@ import { ui } from './uiText';
 
 export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestratorConfig,
   options: { instanceKey: string; companionBotId: string; connectionId: string }) {
+  const groupOwner = (chatId?: string) => chatId && im.isGroup(chatId)
+    ? authorizedIMessageRoute(readBotImConnection(options.connectionId), chatId, im.groupAuthorization(chatId))?.botId ?? options.companionBotId
+    : options.companionBotId;
   const textInteractions = new Map<string, { cancelled: boolean }>();
   const companionLane: NonNullable<ImChannelAdapter['companionLane']> = userId => im.isGroup(userId)
     ? { kind: 'group', chatId: userId, threadId: '' }
@@ -63,12 +66,12 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     },
     buildVendorOptions: userId => ({ imessageChatId: userId, source: 'imessage' }),
     companionLane,
+    requiresCompanionLane: chat => groupOwner(chat) !== options.companionBotId,
     groupHistoryAccessFor: historyScope,
     connectedChatForLane(botId, routeKey) {
-      if (botId !== options.companionBotId) return undefined;
       return im.listChats().find(chat => {
         const lane = companionLane(chat.guid);
-        return lane.kind !== 'owner-dm' && companionLaneRouteKey('imessage', im.botContextId, lane) === routeKey;
+        return botId === groupOwner(chat.guid) && lane.kind !== 'owner-dm' && companionLaneRouteKey('imessage', im.botContextId, lane) === routeKey;
       })?.guid;
     },
     channelToolScopeFor: event => {
@@ -87,7 +90,9 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       senderName: event.speaker?.name, senderIsOwner: event.speaker?.isOwner === true,
     }),
     ambientTurnGate: async event => {
-      if (readBotImConnection(options.connectionId)?.groupActivation?.[event.chatId] === 'always') return 'proceed';
+      const record = readBotImConnection(options.connectionId);
+      const route = authorizedIMessageRoute(record, event.chatId, im.groupAuthorization(event.chatId));
+      if ((route?.replyMode ?? record?.groupActivation?.[event.chatId]) === 'always') return 'proceed';
       // Preserve uninvoked group messages as context without invoking the model.
       await IMESSAGE_GROUP_WINDOW.record({ botId: event.contextId, chatId: event.chatId, threadId: '',
         messageId: event.messageId, chatName: sanitizeGroupWindowName(event.interactionSource?.chatName ?? '') || null,
@@ -168,5 +173,5 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       return false;
     },
   };
-  return createImOrchestrator(adapter, options);
+  return createImOrchestrator(adapter, { ...options, companionBotId: groupOwner });
 }

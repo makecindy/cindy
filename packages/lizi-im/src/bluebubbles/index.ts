@@ -58,6 +58,7 @@ export interface BlueBubblesOptions {
   secretPrefix: string;
   /** Host-persisted route identity survives a server address edit. */
   contextId?(): string | null;
+  delegatedGroupAlias?(chatId: string, authorization: string): Promise<string | undefined>;
   storage: BlueBubblesStateStorage;
   receiver(host: string, port: number): LocalWebhookReceiver;
   api?(origin: string, password: string): BlueBubblesApi;
@@ -158,10 +159,16 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       && chat.participants![0]!.address.toLowerCase() === this.config?.ownerAddress)?.guid ?? null;
   }
   isGroup(chatGuid: string): boolean { return /^(?:iMessage|any);\+;/.test(chatGuid) || (this.chats.get(chatGuid)?.participants?.length ?? 0) > 1; }
-  isGroupInvocation(text: string): boolean {
+  /** Identifies this chat's continuous grant on the current bridge without disclosing its address. */
+  groupAuthorization(chat: string): string | null {
+    if (!this.config || !this.receipts || !this.chats.has(chat) || !this.isGroup(chat)) return null;
+    return createHash('sha256').update(JSON.stringify([this.config.serverUrl, this.config.ownerAddress,
+      chat, this.receipts.activatedAtFor(chat)])).digest('hex');
+  }
+  isGroupInvocation(text: string, aliases = this.config?.groupAliases ?? []): boolean {
     const current = text.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
       .replace(/"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|`[^`\n]*`/g, '');
-    return (this.config?.groupAliases ?? []).some(alias => {
+    return aliases.some(alias => {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(`(^|[^\\p{L}\\p{N}_@])@${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(current);
     });
@@ -625,7 +632,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           const group = this.isGroup(chat.guid);
           // The Apple thread root can point to our message even when the direct
           // reply targets someone else. Leave it to context, never activation.
-          const invoked = group && (this.isGroupInvocation(message.text ?? '')
+          const grant = group && this.groupAuthorization(chat.guid);
+          const alias = grant && await this.options.delegatedGroupAlias?.(chat.guid, grant);
+          this.assertLive(generation);
+          const invoked = group && (this.isGroupInvocation(message.text ?? '', alias ? [alias] : undefined)
             || (typeof message.replyToGuid === 'string' && receipts.hasSentMessage(chat.guid, message.replyToGuid))
             || mentionsSelf(message.attributedBody, this.verifiedMentionAddress));
           event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
@@ -972,6 +982,32 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const rows = await api.history(chatId, after, before, offset);
     this.assertLive(generation);
     return rows.filter(row => row.chats?.some(chat => chat.guid === chatId));
+  }
+  /** Reuse the already-authorized receiver. No dispose, credential write or second listener. */
+  async verifyGroupHandoff(chatId: string): Promise<() => void> {
+    const { api, generation } = this.target(chatId);
+    const url = this.webhookUrl;
+    if (!url || !this.isGroup(chatId)) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+    let step = 'SERVER';
+    try {
+      await api.info();
+      this.assertLive(generation);
+      step = 'CHAT';
+      const chat = await api.chat(chatId);
+      if (chat.guid !== chatId || !chat.participants?.length) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+      this.assertLive(generation);
+      step = 'CALLBACK';
+      await api.registerWebhook(url);
+      this.assertLive(generation);
+    } catch (error) {
+      const reason = error instanceof BlueBubblesApiError ? error.code : 'UNAVAILABLE';
+      throw new Error(`BLUEBUBBLES_${step}_${reason}`);
+    }
+    return () => {
+      this.assertLive(generation);
+      if ([...this.activeDispatches].some(id => this.pendingInputs.get(id)?.chatId === chatId))
+        throw new Error('GROUP_BUSY');
+    };
   }
   listChats(): BlueBubblesChat[] { return [...this.chats.values()].map(chat => structuredClone(chat)); }
   sendText(chatId: string, text: string): Promise<{ messageId: string }> { return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id)); }

@@ -687,6 +687,7 @@ export interface ImTurnRunner {
   /** 接管 detach 清理(原 detachFeishuFromSession)— binding cleanup hook 调用。 */
   detachFromSession(sessionId: string): void;
   disposeAllSessions(): Promise<void>;
+  detachIdleCompanionGroup(botContextId: string, chatId: string): void;
   disposeOneSession(sessionId: string): Promise<void>;
   /** Get the live Maker Session for a given DB session id, or null. */
   getMakerSessionById(sessionId: string): MakerSession | null;
@@ -905,9 +906,9 @@ export function createTurnRunner(
   /** 只告警一次的伙伴解析失败(按连接); 恢复后清掉, 下次再失败会再记一次。 */
   const companionFallbackWarned = new Set<string>();
 
-  function companionBotIdFor(botContextId: string): string | null {
+  function companionBotIdFor(botContextId: string, chatId?: string): string | null {
     if (!deps.companion || !adapter.companionLane) return null;
-    return deps.companion.readBinding(botContextId);
+    return deps.companion.readBinding(botContextId, chatId);
   }
 
   /**
@@ -927,7 +928,7 @@ export function createTurnRunner(
     create: boolean,
   ): Promise<RouteTarget | 'absent' | null> {
     const companion = deps.companion;
-    const botId = companionBotIdFor(botContextId);
+    const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return null;
     const lane = adapter.companionLane(userId);
     const target: ImCompanionSessionTarget =
@@ -948,7 +949,10 @@ export function createTurnRunner(
         message: err instanceof Error ? err.message : String(err),
       };
     }
-    if (!resolved) return 'absent';
+    if (!resolved) {
+      if (create && adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
+      return 'absent';
+    }
     if (resolved.ok) {
       const row = await repo.peekSessionById(resolved.sessionId);
       if (row) {
@@ -963,6 +967,7 @@ export function createTurnRunner(
       }
       resolved = { ok: false, errorCode: 'SESSION_UNAVAILABLE', message: 'companion session row missing' };
     }
+    if (adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
     if (!companionFallbackWarned.has(botContextId)) {
       companionFallbackWarned.add(botContextId);
       log.warn(
@@ -986,7 +991,7 @@ export function createTurnRunner(
     userId: string,
   ): Promise<'unbound' | 'owner-dm' | 'rotated'> {
     const companion = deps.companion;
-    const botId = companionBotIdFor(botContextId);
+    const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return 'unbound';
     const lane = adapter.companionLane(userId);
     if (lane.kind === 'owner-dm') {
@@ -996,7 +1001,7 @@ export function createTurnRunner(
       return current && current !== 'absent' ? 'owner-dm' : 'unbound';
     }
     const routeKey = companionLaneRouteKey(channel, botContextId, lane);
-    const archived = await companion.archiveLane(routeKey);
+    const archived = channel === 'imessage' ? await companion.archiveLane(routeKey, botId) : await companion.archiveLane(routeKey);
     for (const sessionId of archived) await disposeOneSession(sessionId);
     const fresh = await resolveCompanionRouteTarget(botContextId, userId, undefined, true);
     return fresh && fresh !== 'absent' ? 'rotated' : 'unbound';
@@ -5043,6 +5048,13 @@ export function createTurnRunner(
     prewireAttachedSession,
     detachFromSession,
     disposeAllSessions,
+    detachIdleCompanionGroup(botContextId, chatId) {
+      if (bindingStore.get({ channel, botContextId, userId: chatId })) throw new Error('GROUP_HAS_TASK_BINDING');
+      const states = [...sessionStates.entries()].filter(([, state]) => state.botLane === 'channel' && state.userId === chatId);
+      if (states.some(([, state]) => state.queue.length || state.sendQueue.length || state.scheduledTranspond
+        || state.pendingTranspondFinals || state.makerSession.isTurnRunning())) throw new Error('GROUP_BUSY');
+      for (const [id, state] of states) detachSessionStateNow(id, state);
+    },
     disposeOneSession,
     getMakerSessionById,
     vendorOptionsForSession: (sessionId) => {

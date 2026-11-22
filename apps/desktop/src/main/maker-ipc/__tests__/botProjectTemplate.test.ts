@@ -54,6 +54,31 @@ describe('applyTeammateTemplate', () => {
     });
   });
 
+  // Tier 1: a current template receipt used to suppress repair after a role change.
+  // The disabled copy and unrelated deleted records must survive both repair and upgrade.
+  it('repairs a missing standard at the same version and respects the disabled shelf', async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'buddy-settings-'));
+    const workspace = path.join(dir, 'workspace');
+    const relative = '.agents/skills/hand-off/SKILL.md';
+    const active = path.join(workspace, relative);
+    const guide = path.join(workspace, '.cindy/settings/README.md');
+    await applyTeammateTemplate(workspace, 'Test');
+    await fs.rm(active);
+    await fs.rm(guide);
+    expect(await applyTeammateTemplate(workspace, 'Test')).toBe(true);
+    expect(await fs.readFile(active, 'utf8')).toBe(teammateTemplateFiles('Test')[relative]);
+    expect(await fs.readFile(guide, 'utf8')).toContain('profile.json');
+    expect(await applyTeammateTemplate(workspace, 'Test')).toBe(false);
+    const disabled = path.join(dir, 'disabled-skills', 'hand-off');
+    await fs.mkdir(path.dirname(disabled), { recursive: true });
+    await fs.rename(path.dirname(active), disabled);
+    await fs.appendFile(path.join(disabled, 'SKILL.md'), 'Keep my rule.\n');
+    expect(await applyTeammateTemplate(workspace, 'Test')).toBe(false);
+    await applyTeammateTemplate(workspace, 'Test', TEAMMATE_TEMPLATE_VERSION + 1);
+    await expect(fs.stat(active)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(disabled, 'SKILL.md'), 'utf8')).toContain('Keep my rule.');
+  });
+
   // 2026-11-22 owner decision: standard skills are two layers in one file. A new standard replaces
   // the standard text; the teammate's own rules stay, and what it had changed in the old standard
   // text is kept exactly (a diff against the standard it started from, or its whole earlier text)
@@ -72,7 +97,7 @@ describe('applyTeammateTemplate', () => {
       await fs.writeFile(path.join(dir, skill), current);
       await fs.writeFile(path.join(dir, TEAMMATE_TEMPLATE_RECORD), JSON.stringify({ version: 1, files: tracked ? { [skill]: sha(oldStandard) } : {} }));
     };
-    const fromHistory = async (_relative: string, hash: string) => hash === sha(oldStandard) ? oldStandard : null;
+    const fromHistory = async (_relative: string, hash?: string) => hash === sha(oldStandard) ? oldStandard : null;
     const upgrade = (version: number, standard: string) => applyTeammateTemplate(dir, 'Mimi', version, { [skill]: standard }, fromHistory);
     const read = () => fs.readFile(path.join(dir, skill), 'utf8');
     const ownOf = (text: string) => text.slice(text.indexOf(OWN_RULES_HEADING));
