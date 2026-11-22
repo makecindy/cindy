@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useRef, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   SidebarActivityClock,
@@ -11,6 +11,7 @@ import {
 import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../features/cc-agent/lib/sidebarCollapseConfig';
 import { ProjectNode, type ProjectNodeProps } from '../features/cc-agent/sidebar/sections/ProjectNode';
 import { SessionEntryList, type SessionEntryListProps } from '../features/cc-agent/sidebar/SessionEntryList';
+import { SessionShareExportDialog } from '../features/cc-agent/sidebar/SessionShareExportDialog';
 
 const translate = (key: string, options?: { count?: number }) =>
   options?.count === undefined ? key : `${key}: ${options.count}`;
@@ -205,6 +206,36 @@ describe('sidebar idle folding interactions', () => {
     expect(screen.getByText('hovered')).toBeTruthy();
     fireEvent.pointerLeave(sidebar);
     expect(screen.queryByText('hovered')).toBeNull();
+  });
+
+  // #11252: the menu coverage does not open the independent export portal.
+  // One task crossing the cutoff while its form has focus reproduces input loss. Unit/jsdom.
+  it('keeps an independent export dialog and its input open across the idle cutoff', () => {
+    function ExportableTask() {
+      const [open, setOpen] = useState(false);
+      const visible = useSidebarActivityNow() < now + 30_000;
+      if (!visible) return null;
+      return <>
+        <button onClick={() => setOpen(true)}>Export task</button>
+        {open && <SessionShareExportDialog open sessionId="export-task" onOpenChange={setOpen} />}
+      </>;
+    }
+
+    render(<ExportableTask />, { wrapper: Preview });
+    fireEvent.click(screen.getByRole('button', { name: 'Export task' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(screen.getByTestId('sidebar-clock-area').contains(dialog)).toBe(false);
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    const password = within(dialog).getByPlaceholderText('sessionShare.export.passwordPlaceholder');
+    fireEvent.change(password, { target: { value: 'example-passphrase' } });
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByRole('alertdialog')).toBe(dialog);
+    expect(within(dialog).getByDisplayValue('example-passphrase')).toBe(password);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'sessionShare.export.cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.queryByRole('button', { name: 'Export task' })).toBeNull();
   });
 
   it('keeps the default 24h behavior without scheduling a periodic refresh', () => {
