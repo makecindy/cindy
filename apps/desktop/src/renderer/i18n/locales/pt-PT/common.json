@@ -553,7 +553,7 @@
       "copied": "Copiado",
       "oneTime": "Utilização única",
       "expiresIn": "Expira dentro de {{time}}",
-      "expired": "Expirada",
+      "expired": "Expirado",
       "regenerateHint": "Pode criar uma nova depois de esta expirar",
       "generating": "A criar ligação…",
       "back": "Voltar à partilha",
@@ -4197,7 +4197,7 @@
           "heading": "Modelos que já não são disponibilizados",
           "intro": "Ao atualizar {{provider}}, o serviço não devolveu estes modelos. Selecione os que pretende remover. Os motores que ainda os listam não são afetados.",
           "suspicious": "Faltam muito mais modelos do que o habitual. O serviço pode ter devolvido uma lista incompleta. Atualize novamente mais tarde para confirmar ou selecione apenas os modelos que sabe que foram retirados.",
-          "selectAll": "Selecionar todos",
+          "selectAll": "Selecionar tudo",
           "selected": "{{count}} de {{total}} selecionados",
           "consequence": "Os modelos removidos deixam de aparecer na seleção de modelos e serão apresentados como indisponíveis onde forem utilizados. Se o serviço voltar a disponibilizá-los, atualize para os adicionar novamente.",
           "confirm": "Remover modelos ({{count}})",
@@ -6244,7 +6244,7 @@
           "copyFailed": "Não foi possível copiar a ligação. Selecione-a e copie-a manualmente.",
           "oneTime": "Utilização única",
           "expiresIn": "Expira dentro de {{time}}",
-          "expired": "Expirada",
+          "expired": "Expirado",
           "regenerateHint": "Pode criar uma nova depois de esta expirar",
           "generating": "A criar ligação…",
           "scanHint": "Se o lerem com o telemóvel, serão convidados a abri-lo primeiro no computador. Quando o computador dessa pessoa aderir, os telemóveis dela veem este relay automaticamente.",
@@ -6721,7 +6721,7 @@
             "error": {
               "load": "Não foi possível carregar o comportamento do Telegram. Verifique a ligação e tente novamente.",
               "save": "O comportamento do Telegram não foi guardado. Foram restauradas as últimas definições confirmadas.",
-              "retry": "Tentar carregar novamente"
+              "retry": "Recarregar"
             }
           },
           "groups": {
@@ -6731,7 +6731,7 @@
             "error": {
               "load": "Não foi possível carregar os grupos do Telegram. Verifique a ligação e tente novamente.",
               "save": "O modo do grupo não foi guardado. Foi restaurado o último modo confirmado.",
-              "retry": "Tentar carregar novamente"
+              "retry": "Recarregar"
             },
             "mode": {
               "mention": "Apenas @",
@@ -9998,7 +9998,7 @@
         "syncedAt": "Dados de {{time}}",
         "offline": "Offline",
         "remoteDisabled": "Controlo remoto não permitido",
-        "unsupported": "Requer uma atualização do Cindy",
+        "unsupported": "Requer atualização do Cindy",
         "error": "Não foi possível ler",
         "noData": "Ainda sem dados"
       },
@@ -10978,7 +10978,7 @@
       "title": "Está a usar a versão para Intel",
       "description": "Este Mac tem Apple silicon, e a versão para Intel fica muito mais lenta por funcionar com tradução. Instale a versão para Apple silicon; os seus dados são mantidos.",
       "dismiss": "Ocultar por agora",
-      "download": "Transferir"
+      "download": "Descarregar"
     },
     "horizontalTabbarAria": "Seletor da vista principal",
     "tabs": {
@@ -11796,7 +11796,7 @@
         "untitled": "Tarefa sem título",
         "askedBy": "Pedida por {{requester}}",
         "pr": "PR #{{number}}",
-        "open": "Abrir a tarefa “{{title}}”",
+        "open": "Abrir a tarefa «{{title}}»",
         "live": {
           "running": "Em curso",
           "waiting": "À espera de resposta",
@@ -12918,10 +12918,10 @@
           "stopDoneDropped_one": "⏹ A execução atual foi parada e a mensagem em fila também foi descartada. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
           "stopDoneDropped_other": "⏹ A execução atual foi parada e as {{count}} mensagens em fila também foram descartadas. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
           "stopDoneDropped_many": "⏹ A execução atual foi parada e as {{count}} mensagens em fila também foram descartadas. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
-          "stopDone": "⏹ A execução atual foi parada. A sessão mantém-se — envie uma nova instrução quando quiser continuar.",
+          "stopDone": "⏹ A execução atual foi interrompida. A sessão continua disponível — envie uma nova instrução quando quiser continuar.",
           "stopIdle": "🤷 De momento não há nada em execução, por isso o `!stop` não tinha nada para parar. Chame-me quando houver algo para interromper.",
           "scheduledTaskHeader": "🤖 Automatização",
-          "scheduledTaskHeaderNamed": "🤖 Automatização «{{name}}»",
+          "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{items}}\n\nO que consigo processar: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto, como código e configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, por isso deixei-o de lado:\n{{items}}\n\nO resto foi recebido e já está a ser processado.",
           "authMissing": {
@@ -12946,7 +12946,7 @@
             "resolvedDeny": "❌ Recusado"
           },
           "ask": {
-            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — responda simplesmente por texto.)_",
+            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — basta responder com texto.)_",
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
@@ -13107,14 +13107,14 @@
           "settingsCompanion": "⚙️ Definições atuais (amigo)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as definições do amigo. Altere-os nas definições do amigo no Cindy.",
           "detachedBySlash": "🚪 Controlo terminado — voltámos à conversa do Telegram. Da próxima vez que quiser controlar o computador remotamente, envie /ctr",
           "detachedByRevoke": "⚠️ O controlo foi retomado no computador. As mensagens seguintes voltam à conversa do Telegram.",
-          "notAttached": "🤷 Não está a controlar nenhuma sessão neste momento, por isso o /exctr não tem nada para fazer.",
+          "notAttached": "🤷 Não está a controlar nenhuma sessão de momento, por isso o /exctr não tem nada para fazer.",
           "companionDmNew": "🧭 Esta é a conversa principal do seu amigo: continua sempre e não abre novas sessões. Para mudar de assunto, basta dizê-lo; para trabalho à parte, o amigo abre tarefas em segundo plano por iniciativa própria.",
           "companionLaneNew": "🌱 Foi iniciada uma nova conversa para este grupo. O contexto anterior foi arrumado — vamos começar do zero!",
           "companionManagedCommand": "🧭 Esta ligação foi entregue a um amigo, por isso o modelo, as permissões e o diretório de trabalho seguem as definições dele. Altere-os nas definições do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
-          "runtimeError": "⚠️ O Agent teve um problema: {{error}}",
+          "runtimeError": "⚠️ O Agent encontrou um problema: {{error}}",
           "sendInternalError": "❌ Erro interno: {{error}}",
           "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada.\nLigue o Cindy AI no computador em Definições → Fornecedores e depois volte a chamar-me",
           "controlInProgress": "🎮 A escolha do /ctr ainda está a decorrer — termine primeiro o cartão acima (ou toque em 🚪 Sair) antes de enviar outra coisa.",
@@ -13127,7 +13127,7 @@
           "stopDoneDropped_other": "⏹ A execução atual foi interrompida e as {{count}} mensagens em fila também foram retiradas. A sessão continua disponível — envie uma nova instrução quando quiser continuar.",
           "stopIdle": "🤷 Não há nada a correr agora, por isso o `!stop` não teve nada para parar. Chame-me quando houver algo para interromper.",
           "scheduledTaskHeader": "🤖 Automatização",
-          "scheduledTaskHeaderNamed": "🤖 Automatização «{{name}}»",
+          "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{list}}\n\nO que consigo processar: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, por isso pus de lado:\n{{list}}\n\nO resto foi recebido e já está a ser processado.",
           "companionUnavailable": "⏸ O seu amigo não pode receber mensagens agora: {{reason}}",
@@ -13163,7 +13163,7 @@
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
-            "title": "📋 Eis o que tenciono fazer",
+            "title": "📋 O meu plano",
             "btnApprove": "✅ Avançar",
             "btnReject": "❌ Esperar",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
@@ -13187,7 +13187,7 @@
             "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
             "fullAccessConfirmBody": "O acesso total desativa o ambiente isolado do espaço de trabalho e dispensa as aprovações habituais. O Cindy pode modificar ficheiros fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações integradas de alto risco continuarão a exigir confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
-            "btnCancelFullAccess": "Manter permissões",
+            "btnCancelFullAccess": "Manter permissões atuais",
             "fullAccessCancelled": "Cancelado, as permissões atuais foram mantidas"
           },
           "project": {
@@ -13206,7 +13206,7 @@
           "control": {
             "title": "🎮 Escolha um projeto",
             "emptyBody": "_Ainda não há projetos para assumir. Abra ou crie uma sessão no computador e depois volte._",
-            "hint": "Toque num projeto para avançar; toque em 🚪 Sair para cancelar",
+            "hint": "Toque num projeto para continuar; toque em 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Sob controlo agora: **{{title}}**\nEscolha outra sessão para mudar diretamente; toque em 🚪 Sair para deixar como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saí. Da próxima vez que quiser controlo remoto, envie /ctr",
@@ -13217,7 +13217,7 @@
             "btnBack": "↩️ Voltar",
             "resolvedSessionPick": "🎯 Ligado a: **{{title}}** ({{workspace}})\nAs suas mensagens vão agora diretamente para esta sessão; para sair, envie `/exctr` a qualquer momento",
             "resolvedNewSession": "✨ Nova sessão criada e sob o seu controlo (em **{{workspace}}**)\nEnvie uma instrução para começar; para sair, `/exctr`",
-            "attachFailed": "❌ Não foi possível assumir: {{reason}}",
+            "attachFailed": "❌ Não foi possível assumir o controlo: {{reason}}",
             "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está a correr — há um cartão novo abaixo, escolha de novo",
             "recentSessions": {
               "title": "🕑 Sessões recentes",
@@ -13420,8 +13420,8 @@
           "stopDoneDropped_one": "⏹ A tarefa atual foi parada e {{count}} mensagem em fila foi removida.",
           "stopDoneDropped_many": "⏹ A tarefa atual foi parada e {{count}} mensagens em fila foram removidas.",
           "stopIdle": "Não há nenhuma tarefa em execução nem em fila.",
-          "scheduledTaskHeaderNamed": "🤖 Tarefa automática «{{name}}»",
-          "scheduledTaskHeader": "🤖 Tarefa automática",
+          "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
+          "scheduledTaskHeader": "🤖 Automatização",
           "unsupportedOnly": "🙏 De momento, não é possível processar esta mensagem:\n{{items}}",
           "unsupportedNotice": "ℹ️ Não foi possível processar o seguinte:\n{{items}}\n\nO restante conteúdo continuará a ser processado.",
           "authMissing": {
@@ -13475,7 +13475,7 @@
             "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
             "fullAccessConfirmBody": "O acesso total desativa a sandbox do espaço de trabalho e ignora as aprovações habituais. O Cindy poderá modificar ficheiros fora do espaço de trabalho e executar comandos com acesso à rede; as ações integradas de alto risco continuam a pedir confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
-            "btnCancelFullAccess": "Manter permissões",
+            "btnCancelFullAccess": "Manter permissões atuais",
             "fullAccessCancelled": "Cancelado. As permissões atuais foram mantidas"
           },
           "control": {
@@ -13556,7 +13556,7 @@
           "completedNoText": "✅ Concluído (o Agent não disse nada neste turno)",
           "runtimeError": "⚠️ O Agent encontrou um problema: {{error}}",
           "sendInternalError": "❌ Erro interno: {{error}}",
-          "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada~\nBasta ligar o Cindy AI na aplicação para computador, em Definições → Fornecedores, e depois enviar uma nova mensagem",
+          "apiKeyMissing": "⚠️ A Cindy AI Key ainda não está configurada~\nLigue o Cindy AI na app para computador, em Definições → Fornecedores, e volte a falar comigo",
           "controlInProgress": "🎮 A seleção de /ctr ainda está em curso — é preciso concluir primeiro o cartão acima (ou tocar em 🚪 Sair) antes de enviar outra coisa~",
           "credentialBusy": "⏳ O Agent local está ocupado com outro turno, por isso não é possível mudar o modo de credenciais agora. Basta enviar de novo quando esse turno terminar.",
           "queuedNoticeFirst": "⏳ O turno anterior ainda está em execução, por isso esta mensagem fica em fila e segue automaticamente a seguir. Para parar já, basta enviar `!stop`",
@@ -13570,7 +13570,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automatização “{{name}}”",
           "unsupportedOnly": "🙏 Não é possível processar esta mensagem:\n{{items}}\n\nFormatos suportados: texto, imagens (jpg/png/gif/webp), PDF e ficheiros de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não é possível processar o seguinte, por isso ficou de parte:\n{{items}}\n\nO resto foi recebido e já está a ser tratado~",
-          "companionUnavailable": "⏸ O amigo não pode receber mensagens neste momento: {{reason}}",
+          "companionUnavailable": "⏸ O seu amigo não pode receber mensagens agora: {{reason}}",
           "authMissing": {
             "defaultProvider": "fornecedor atual",
             "message": "⚠️ Esta conversa usa o fornecedor “{{provider}}” ({{model}}): {{reason}}.",
@@ -13607,7 +13607,7 @@
             }
           },
           "plan": {
-            "title": "📋 O plano é este",
+            "title": "📋 O meu plano",
             "btnApprove": "✅ Avançar",
             "btnReject": "❌ Esperar",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
@@ -13632,7 +13632,7 @@
             "fullAccessConfirmBody": "O Acesso total desativa a sandbox do espaço de trabalho e ignora as aprovações habituais. O Cindy pode modificar ficheiros fora do espaço de trabalho e executar comandos com acesso à rede sem perguntar; as ações de alto risco integradas continuam a pedir confirmação.",
             "btnConfirmFullAccess": "Ativar Acesso total",
             "btnCancelFullAccess": "Manter permissões atuais",
-            "fullAccessCancelled": "Cancelado — as permissões atuais foram mantidas"
+            "fullAccessCancelled": "Cancelado, as permissões atuais foram mantidas"
           },
           "permissionModeFix": {
             "title": "🛡️ Repor a sessão do grupo em “Revisão automática”",
@@ -13655,9 +13655,9 @@
             "dialogueName": "Conversa (pasta gerida)"
           },
           "control": {
-            "title": "🎮 Escolher um projeto",
+            "title": "🎮 Escolha um projeto",
             "emptyBody": "_Ainda não há projetos para controlar~ Basta abrir ou criar uma sessão na aplicação para computador e voltar_",
-            "hint": "Tocar num projeto para continuar; 🚪 Sair para cancelar",
+            "hint": "Toque num projeto para continuar; toque em 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Em controlo: **{{title}}**\nEscolher outra sessão muda diretamente; 🚪 Sair mantém tudo como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saída concluída. Para voltar a controlar remotamente, basta enviar /ctr",
@@ -13779,7 +13779,7 @@
             "failed": "❌ Não foi possível mudar de modelo: {{reason}}"
           },
           "permissionMode": {
-            "title": "🛡️ Ajustar modo de permissões",
+            "title": "🛡️ Ajustar o modo de permissões",
             "currentLine": "**Atual**: {{label}}\n_{{description}}_",
             "hint": "Toque abaixo para mudar. auto = ações habituais permitidas, ações sensíveis pedem confirmação por cartão; bypass = permitir tudo; ask/default/plan/acceptEdits = aprovação por cartão",
             "resolved": "✅ Modo de permissões mudado para {{label}}",
@@ -13848,7 +13848,7 @@
           "operationPreview": "Ação:\n{{preview}}",
           "permissionReplyHint": "Responda “{{allow}}” para executar uma vez ou “{{deny}}” para cancelar esta ação. O WeChat não suporta autorizações permanentes.",
           "planReview": "O Agent submeteu um plano de execução:\n\n{{plan}}\n\nResponda “{{approve}}” para continuar ou “{{deny}}” para cancelar.",
-          "askNoQuestion": "O Agent está à espera da sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
+          "askNoQuestion": "O Agent está à espera da sua resposta, mas não há nenhuma pergunta para mostrar. Responda «continuar».",
           "askQuestion": "O Agent precisa da sua resposta:\n{{question}}\n{{options}}\nResponda com o número de uma opção ou escreva diretamente a sua resposta."
         }
       },
@@ -15584,13 +15584,13 @@
     "agentActionRow": {
       "noContent": "Nada para mostrar",
       "fileChange": {
-        "deleted": "Eliminado",
+        "deleted": "Eliminação",
         "renamed": "Nome alterado",
         "files": "{{count}} ficheiros",
         "rawData": "Ver dados em bruto"
       },
       "verb": {
-        "edited": "Editado",
+        "edited": "Edição",
         "created": "Criado",
         "ran": "Executado",
         "read": "Lido",
@@ -16229,7 +16229,7 @@
         "running": "Em execução",
         "progress": "Em execução",
         "done": "Concluído",
-        "completed": "Concluído",
+        "completed": "Conclusão",
         "failed": "Falhou",
         "error": "Falhou",
         "stopped": "Interrompido",
@@ -16251,7 +16251,7 @@
         "mergeApproval": "A aguardar aprovação",
         "mergeChanges": "Alterações pedidas",
         "mergeWaiting": "A aguardar integração",
-        "merged": "Integrada",
+        "merged": "Integrado",
         "closed": "Fechada",
         "draft": "Rascunho"
       },
@@ -17170,7 +17170,7 @@
     "sessionHeader": {
       "untitled": "Sessão sem título",
       "moreActions": "Mais ações",
-      "agentDevice": "O Agent é executado em {{device}}",
+      "agentDevice": "Agent é executado em {{device}}",
       "agentDeviceOffline": "O Agent é executado em {{device}}, que está offline — continuará quando esse computador voltar a estar online",
       "orcaRemoteLead": "Colaboração a partir de {{device}}",
       "orcaRemoteLeadReleased": "Colaboração terminada · a partir de {{device}}",
@@ -17615,7 +17615,7 @@
   "effortLevels": {
     "off": "Desativado",
     "minimal": "Mínimo",
-    "low": "Baixo",
+    "low": "Baixa",
     "medium": "Médio",
     "high": "Alto",
     "xhigh": "Muito alto",
@@ -17754,7 +17754,7 @@
       "filterStatusHeading": "Estado",
       "status": {
         "all": "Todas",
-        "active": "Ativo",
+        "active": "Ativas",
         "paused": "Em pausa"
       },
       "section": {
@@ -18122,7 +18122,7 @@
             "pushed": "Código enviado",
             "published": "Publicação",
             "merged": "Integração",
-            "updated": "Atualização",
+            "updated": "Atualizado",
             "tagsChanged": "Etiquetas enviadas",
             "declined": "Recusa",
             "deleted": "Eliminação",
@@ -19096,7 +19096,7 @@
       },
       "uninstall": "Desinstalar Skill",
       "uninstallDialog": {
-        "title": "Desinstalar «{{name}}»?",
+        "title": "Desinstalar \"{{name}}\"?",
         "description": "Os ficheiros e as alterações locais serão movidos para o lixo e poderão ser restaurados.\n\nOs outros Agents que partilham esta Skill também serão afetados. As versões publicadas e as instalações noutros locais não serão afetadas.",
         "confirm": "Desinstalar",
         "cancel": "Cancelar"
@@ -19908,7 +19908,7 @@
       "labelPlaceholder": "Etiqueta do Worker (deixar em branco para manter)",
       "labelInvalid": "A etiqueta só pode conter letras, números, hífenes e sublinhados",
       "duplicateLabel": "A etiqueta {{label}} já é usada por outro Worker nesta equipa",
-      "saveFailed": "Falha ao guardar. Tente novamente.",
+      "saveFailed": "Não foi possível guardar. Tente novamente.",
       "labelLocked": "A etiqueta deste Worker é referenciada por um plano de equipa de plugin ativo e não pode ser alterada até o plano terminar. Altere o nome da função ou liberte primeiro o Worker."
     }
   },
@@ -21251,7 +21251,7 @@
         "all": "Todas as compilações",
         "pending": "Integração pendente",
         "integrated": "Integrado",
-        "ended": "Terminadas"
+        "ended": "Terminada"
       },
       "loadFailed": "Não foi possível carregar o histórico de criação. Tente novamente.",
       "loading": "A carregar o histórico de criação…",
