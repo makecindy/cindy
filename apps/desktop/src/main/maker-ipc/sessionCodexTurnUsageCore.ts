@@ -1,3 +1,4 @@
+import { companyModelTokens, takeCompanyTurn } from '../usage/companyTokenFacts.js';
 import { captureTurnUsageContext, tokenAttribution, turnBillingSource, type TurnUsageContext } from './turnUsageContextCore.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -26,8 +27,7 @@ import {
 } from '../usage/turnCostCalculator.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { isCodexGatewayWireModel } from '@cindy/model-providers';
-import { addRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
-import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
+import { sumMoneyByCurrency, type RegionalMoney } from '../../shared/regionalMoney.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './turnUsagePorts.js';
 import { isClaudeSubscriptionProviderId } from '../maker-host/subscription-account-kind.js';
 import {
@@ -158,6 +158,17 @@ export function recordSessionCodexTurnUsage(
           !isRemoteCodexSession &&
           !hasEffectiveGatewayRoute &&
           Boolean(sessionProvider && sessionProvider !== 'xd');
+        if (!isRemoteCodexSession && execution?.credentialMode !== 'gateway-key' &&
+            !hasEffectiveGatewayRoute && sessionProvider !== 'xd' &&
+            (isCodexSubscriptionAccessRoute || codexAuthInjection === 'oauth-bearer' || isCustomProviderRoute)) {
+          const record = takeCompanyTurn(turnContext);
+          if (record && codexSegmentsReliable) {
+            record(codexUsageSegments.flatMap(segment => segment.model
+              ? [companyModelTokens(normalizeModelIdForPricing(segment.model), segment)] : []));
+          } else if (record && execution?.model && u.segments === undefined) {
+            record([{ model: pricingModel, input: promptTokens, output: completionTokens, cacheRead: cachedTokens, cacheWrite: cacheCreationTokens }]);
+          }
+        }
         // Keep unknown remote routes token-only, without a billing suffix that
         // would classify them as API spend or trigger subscription revaluation.
         const billing = turnBillingSource(turnContext, isSubscriptionValue ? 'subscription' : hasEffectiveGatewayRoute ? 'xd-gateway' : usesReferencePriceEstimate ? 'provider-api' : 'unknown');
@@ -243,7 +254,7 @@ export function recordSessionCodexTurnUsage(
                 ? codexUsageSegments.filter(segment => (segment.model ?? turnModel) === row.model)
                 : codexUsageSegments
               : [];
-            const money = computePriceQuoteTurnMoney(row, price, currentLedgerCurrency(), segments);
+            const money = computePriceQuoteTurnMoney(row, price, segments);
             if (!money) continue;
             // Only gateway sale prices are actual API spend. Reference quotes
             // remain message-only estimates so history cannot reclassify them.
@@ -263,18 +274,22 @@ export function recordSessionCodexTurnUsage(
             }
             perModelCost.push({ ...billing, model: row.model, money });
           }
-          const money = perModelCost.length ? addRegionalMoney(perModelCost.map(row => row.money)) : null;
+          const values = perModelCost.map(row => row.money);
+          const actualAmounts = isSubscriptionValue ? [] : sumMoneyByCurrency(values.filter(m => m.kind === 'actual-cost'));
+          const estimatedAmounts = sumMoneyByCurrency(values.filter(value => value.kind === 'value-estimate'));
+          const money = actualAmounts[0] ?? estimatedAmounts[0];
           if (money && money.amount > 0) {
             if (turnUsageDetails) turnUsageDetails.perModelCost = perModelCost;
-            const isActualApiCost = !isSubscriptionValue && money.kind === 'actual-cost';
-            if (isActualApiCost) {
-              void recordTurnSpend(money);
-              void recordSessionTurnSpend(session.id, money);
+            for (const amount of actualAmounts) {
+              void recordTurnSpend(amount);
+              void recordSessionTurnSpend(session.id, amount);
             }
             const changedScheduleId = await recordSchedulerTurnCost({
               sessionId: session.id,
               clientId: turnAssistantPersistId,
               money,
+              actualAmounts,
+              estimatedAmounts,
               turnUsageDetails,
               turnOrigin: event.turnOrigin,
             });

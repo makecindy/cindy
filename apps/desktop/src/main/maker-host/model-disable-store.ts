@@ -3,7 +3,11 @@
  *
  * File: <userData>/model-disable-prefs.json
  *
- * 形态:{ disabledModels: { "<providerId>:<modelId>": true }, disabledProviders: { "<providerId>": true } }
+ * 形态:{ disabledModels: { "<providerId>:<modelId>": true }, disabledProviders: { "<providerId>": true },
+ *        hiddenProviders: { "<providerId>": true } }
+ * - hiddenProviders 是供应商级「在模型选择器中隐藏」:纯陈列,不是准入(语义见
+ *   @cindy/model-providers 的 disableOverrides.ts 头注)。与停用同文件是因为它同样要在
+ *   main 可靠可读(IM `/model`、device-link 控制端都从 ProviderView.hidden 消费)。
  * - 只存「显式停用」的条目(值恒 true);缺席 = 启用 —— 系统默认全启用,规则 20:
  *   只记 override 不快照默认,新增模型 / 供应商天然跟随「默认启用」。
  * - 恢复启用 = 删除对应条目(不是写 false),与「恢复默认」语义一致。
@@ -48,9 +52,10 @@ function notifyProviderDisableChange(providerId: string): void {
 interface ModelAccessPrefs {
   disabledModels: Record<string, true>;
   disabledProviders: Record<string, true>;
+  hiddenProviders: Record<string, true>;
 }
 
-const DEFAULTS: ModelAccessPrefs = { disabledModels: {}, disabledProviders: {} };
+const DEFAULTS: ModelAccessPrefs = { disabledModels: {}, disabledProviders: {}, hiddenProviders: {} };
 
 /**
  * 单 section 条目总量硬上限(深防线,PR #744 review):正常路径已有 IPC 边界的尺寸 +
@@ -87,10 +92,11 @@ function sanitizeSection(raw: unknown): Record<string, true> {
 }
 
 function normalize(raw: unknown): ModelAccessPrefs {
-  if (!raw || typeof raw !== 'object') return { disabledModels: {}, disabledProviders: {} };
+  if (!raw || typeof raw !== 'object') return { disabledModels: {}, disabledProviders: {}, hiddenProviders: {} };
   return {
     disabledModels: sanitizeSection((raw as { disabledModels?: unknown }).disabledModels),
     disabledProviders: sanitizeSection((raw as { disabledProviders?: unknown }).disabledProviders),
+    hiddenProviders: sanitizeSection((raw as { hiddenProviders?: unknown }).hiddenProviders),
   };
 }
 
@@ -123,10 +129,14 @@ export function copyProviderDisableOverrides(sourceId: string, targetId: string)
     if (key.startsWith(prefix)) disabledModels[modelDisableKey(targetId, key.slice(prefix.length))] = true;
   }
   if (current.disabledProviders[sourceId]) disabledProviders[targetId] = true;
+  // The split-out account inherits the picker choice too, or a hidden connection reappears.
+  const hiddenProviders = { ...current.hiddenProviders };
+  if (current.hiddenProviders[sourceId]) hiddenProviders[targetId] = true;
   if (Object.keys(disabledModels).length > MAX_ENTRIES_PER_SECTION
-    || Object.keys(disabledProviders).length > MAX_ENTRIES_PER_SECTION)
+    || Object.keys(disabledProviders).length > MAX_ENTRIES_PER_SECTION
+    || Object.keys(hiddenProviders).length > MAX_ENTRIES_PER_SECTION)
     throw new Error('Too many model access overrides');
-  store.writePatch({ disabledModels, disabledProviders });
+  store.writePatch({ disabledModels, disabledProviders, hiddenProviders });
 }
 
 /** 写/清一批 (供应商, 模型) 的停用标记。disabled=false 即删除条目(恢复启用 = 删 override)。 */
@@ -230,6 +240,32 @@ export function setProviderDisabled(providerId: string, disabled: boolean): void
 }
 
 /**
+ * 写/清供应商级「在模型选择器中隐藏」标记。hidden=false 即删除条目(恢复默认 = 显示)。
+ * 不通知 onProviderDisableChange:隐藏不是准入,账号服务不需要知道。
+ */
+export function setProviderHidden(providerId: string, hidden: boolean): void {
+  if (!providerId) return;
+  store.invalidateIfChanged();
+  const hiddenProviders = { ...store.read().hiddenProviders };
+  if (hidden && hiddenProviders[providerId] !== true) {
+    if (Object.keys(hiddenProviders).length >= MAX_ENTRIES_PER_SECTION) {
+      log.warn('provider hidden entry dropped: section at hard cap', {
+        providerId,
+        cap: MAX_ENTRIES_PER_SECTION,
+      });
+      return;
+    }
+    hiddenProviders[providerId] = true;
+  } else if (!hidden && providerId in hiddenProviders) {
+    delete hiddenProviders[providerId];
+  } else {
+    return;
+  }
+  store.writePatch({ hiddenProviders });
+  log.info('provider picker visibility override written', { providerId, hidden });
+}
+
+/**
  * 事务式清理:同步清掉该供应商全部 override 并返回恢复函数(把清理前的条目原样
  * 写回)。自定义供应商删除事务用 —— 清理进事务、失败可恢复,而不是删除成功后的
  * best-effort(清理失败会让同 id 重建复活旧停用状态,PR #744 review 第二十轮)。
@@ -244,10 +280,14 @@ export function stageProviderDisableOverridesClear(providerId: string): () => bo
   const modelIds = Object.keys(current.disabledModels)
     .filter((key) => key.startsWith(prefix))
     .map((key) => key.slice(prefix.length));
-  if (!hadProviderEntry && modelIds.length === 0) return () => true;
+  // 删除供应商时隐藏标记一并清掉:同 id 重建不该带着上一个连接的陈列选择。
+  const hadHiddenEntry = current.hiddenProviders[providerId] === true;
+  if (!hadProviderEntry && !hadHiddenEntry && modelIds.length === 0) return () => true;
   clearProviderDisableOverrides(providerId);
+  if (hadHiddenEntry) setProviderHidden(providerId, false);
   return () => {
     try {
+      if (hadHiddenEntry) setProviderHidden(providerId, true);
       if (hadProviderEntry) setProviderDisabled(providerId, true);
       if (modelIds.length > 0) setModelsDisabled(providerId, modelIds, true);
       return true;
@@ -262,8 +302,9 @@ export function stageProviderDisableOverridesClear(providerId: string): () => bo
 }
 
 /**
- * 清掉某供应商名下的**全部** override(供应商级 + 该来源全部逐模型条目)。
+ * 清掉某供应商名下的**全部停用** override(供应商级 + 该来源全部逐模型条目)。
  * 幂等;无条目即 no-op。事务式消费方走 stageProviderDisableOverridesClear。
+ * 不动 hiddenProviders:「全部启用」恢复的是准入,不该顺手把用户收起的供应商放回选择器。
  */
 export function clearProviderDisableOverrides(providerId: string): void {
   if (!providerId) return;

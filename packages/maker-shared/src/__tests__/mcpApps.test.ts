@@ -430,3 +430,13 @@ it.each([true, {}, { name: 42 }, { name: 'Team reports', serverId: 'private' }])
   const parsed = parseMcpAppHistory({ mcpAppHistory: { version: 1, title: 'Tool title', text: '', customMcp } });
   expect(parsed).toEqual({ title: 'Tool title', text: '', customMcp: typeof customMcp === 'object' && customMcp.name === 'Team reports' ? { name: 'Team reports' } : true });
 });
+
+// Unit: replay the public history a new viewer actually receives, including tolerant old/new readers.
+it('preserves a bounded declared card height through repeated public history projection', () => {
+  for (const [input, expected] of [[240, 240], [42, 80], [1000, 720], ['240', undefined]] as const) {
+    const content = { mcpAppHistory: { version: 1, title: 'Page', text: '', plugin: { name: 'Page' }, initialHeight: input } };
+    const projected = projectMcpAppContent(projectMcpAppContent(content, true), true);
+    expect(parseMcpAppHistory(projected)).toEqual({ title: 'Page', text: '', plugin: { name: 'Page' },
+      ...(expected !== undefined ? { initialHeight: expected } : {}) });
+  }
+});

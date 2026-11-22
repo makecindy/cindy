@@ -33,6 +33,7 @@ import {
   addModelFavorite,
   matchesEntry,
   mobileUnifiedEntries,
+  listedMobileEntries,
   modelKey,
   resolveMobileModelConfig,
   sameConfiguration,
@@ -673,6 +674,7 @@ export function UnifiedModelPickerSheet(
         name: provider?.name ?? entry.providerId,
         routing: provider?.routing,
         logoKind: provider?.logoKind,
+        customIcon: provider?.customIcon,
       },
       selected: !favorite && selected && !otherChoiceActive,
       disabled:
@@ -756,7 +758,11 @@ export function UnifiedModelPickerSheet(
       : undefined;
     return baseProviderId ? unavailableOn(providerName(baseProviderId), p.unified.remote?.hostDeviceName) : undefined;
   };
-  const rows = entries.map((entry) => makeRow(entry));
+  // Providers hidden from the picker stay in `entries` for favorites; only the regular list drops them.
+  const currentPick = { providerId: p.selectedProviderId, modelId: p.activeModelId };
+  const allRows = entries.map((entry) => makeRow(entry));
+  const listedLocal = new Set(listedMobileEntries(entries, p.providers, selectedDeviceId === null ? currentPick : null));
+  const rows = allRows.filter((row) => listedLocal.has(row.entry));
   const makeRemoteRow = (
     directory: (typeof remoteDirectories)[number],
     entry: UnifiedModelEntry,
@@ -799,6 +805,7 @@ export function UnifiedModelPickerSheet(
         name: provider?.name ?? entry.providerId,
         routing: provider?.routing,
         logoKind: provider?.logoKind,
+        customIcon: provider?.customIcon,
       },
       remoteDevice: { deviceId: catalog.deviceId, name: catalog.name },
       selected: selected && !modelGroupActive,
@@ -818,9 +825,18 @@ export function UnifiedModelPickerSheet(
       quotaLabel: modelQuotaLabel(entry.providerId, entry.modelId, catalog.deviceId),
     };
   };
-  const remoteRows = remoteDirectories.map((directory) => ({
+  const allRemoteRows = remoteDirectories.map((directory) => ({
     catalog: directory.catalog,
+    listed: new Set(listedMobileEntries(
+      directory.entries,
+      directory.catalog.providers,
+      directory.catalog.deviceId === selectedDeviceId ? currentPick : null,
+    )),
     rows: directory.entries.map((entry) => makeRemoteRow(directory, entry)),
+  }));
+  const remoteRows = allRemoteRows.map(({ catalog, listed, rows: deviceRows }) => ({
+    catalog,
+    rows: deviceRows.filter((row) => listed.has(row.entry)),
   }));
   // 收藏和本机收藏排在同一节里:位置编在 providerId 里的,到那台电脑的目录里找模型,
   // 点开即在那台运行。那台电脑离线(包括只因任务的 Agent 在那台、靠缓存留在列表里)或没开放远程调用时
@@ -970,9 +986,10 @@ export function UnifiedModelPickerSheet(
   }
   const sourceRow = target
     ? (target.deviceId
-        ? remoteRows.find((item) => item.catalog.deviceId === target.deviceId)
+        // A favorite may point into a provider hidden from the regular list: look it up in the full rows.
+        ? allRemoteRows.find((item) => item.catalog.deviceId === target.deviceId)
             ?.rows
-        : rows
+        : allRows
       )?.find(
         (row) =>
           row.entry.providerId === target.providerId &&
@@ -1355,9 +1372,10 @@ export function UnifiedModelPickerSheet(
       ].join(" · "),
     };
   };
-  const remoteFilters = remoteDirectories.flatMap(({ catalog, entries }) =>
+  const remoteFilters = remoteDirectories.flatMap(({ catalog }) =>
     catalog.providers
-      .filter((provider) => !hiddenSources.has(remoteFilterId(catalog.deviceId, provider.id)) && entries.some((e) => e.providerId === provider.id))
+      .filter((provider) => !hiddenSources.has(remoteFilterId(catalog.deviceId, provider.id))
+        && remoteRows.some((group) => group.catalog === catalog && group.rows.some((row) => row.entry.providerId === provider.id)))
       .map((provider) => ({
         id: remoteFilterId(catalog.deviceId, provider.id),
         label: remoteProviderLabel(catalog, provider.id),
@@ -1368,6 +1386,7 @@ export function UnifiedModelPickerSheet(
           name: provider.name,
           routing: provider.routing,
           logoKind: provider.logoKind,
+          customIcon: provider.customIcon,
         },
         remote: {
           deviceId: catalog.deviceId,
@@ -1438,7 +1457,7 @@ export function UnifiedModelPickerSheet(
           : []),
         ...p.providers
           .filter((provider) =>
-            !hiddenSources.has(provider.id) && entries.some((e) => e.providerId === provider.id),
+            !hiddenSources.has(provider.id) && rows.some((row) => row.entry.providerId === provider.id),
           )
           .map((provider) => ({
             id: provider.id,
@@ -1450,6 +1469,7 @@ export function UnifiedModelPickerSheet(
               name: provider.name,
               routing: provider.routing,
               logoKind: provider.logoKind,
+              customIcon: provider.customIcon,
             },
           })),
         ...remoteFilters,

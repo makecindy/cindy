@@ -9,7 +9,7 @@ import {
 import type { WsLike } from '@cindy/device-link';
 import { CERT_LIFETIME_MS, delegationEndpointCertificate, delegationVisibleTo, type Delegation, type DeviceView } from '@cindy/agent-net-protocol';
 import { frameMatchesDelegation, scopedFrame, delegatedPeerKey, delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
-import { DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
+import { AGENT_NET_SESSION_V2, DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
 import { SessionPeer, type SessionConfig, type SessionRole } from './session/peer.js';
 export type { SessionHandlers } from './session/peer.js';
 
@@ -30,6 +30,29 @@ const REDIAL_TAKEOVER_MS = 10_000;
  */
 const REDIAL_FIRST_MS = 1_000;
 const REDIAL_MAX_MS = 30_000;
+/**
+ * The side that does not dial from the directory (the higher id) dials after all when the other side's dial has not
+ * arrived this long after it was due, doubling like the redial. The other side dials within a moment of seeing this device
+ * online, unless it still holds its end of a connection this device no longer has: this device was killed or restarted
+ * without its close reaching the peer, the peer believes it is connected, and a core older than 2026-11-21 never declares
+ * an idle connection dead (a newer one does after 30 s of unanswered probes). It then never dials, and neither did this side. The dial from here is what tells it: it takes the new connection over once
+ * its own is older than REDIAL_TAKEOVER_MS (`adopt`), and until then drops it, which schedules the next try here.
+ * 2026-11-21, a phone killed and started again: the relay-only computer with the lower id stayed offline on the phone for
+ * 20 seconds to 15 minutes; the computers with higher ids, which the phone dials, were back at once.
+ * A socket that has only just opened does not wait at all: see `arriving`.
+ */
+const LATE_DIAL_MS = 1_000;
+/**
+ * Datagrams kept from before the transport existed (`receive`). A dial is a few packets; anything beyond this is traffic of a
+ * connection the previous process had, which the new transport would drop anyway.
+ */
+const EARLY_DATAGRAMS = 32;
+/**
+ * Budget for dialing a direct UDP address remembered from the previous socket before falling back to the relay. A live LAN
+ * peer answers in a few ms (or ~220 ms if the first packet drops); a restarted peer whose port changed falls back quickly
+ * instead of waiting out the full 3 s handshake deadline.
+ */
+const REMEMBERED_CANDIDATE_DIAL_MS = 350;
 /** Declared with session support between devices of one account: presence travels on the session (`presence` message). */
 const SESSION_PRESENCE_FEATURE = 'presence-v1';
 /**
@@ -94,6 +117,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private transport!: Transport;
   private uplink: SocketUplink | null = null;
   private receiveDatagram: ((id: string, data: Uint8Array) => void) | null = null;
+  private early: { id: string; data: Uint8Array }[] | null = [];
   private roster = new Map<string, DeviceView>();
   /** Which members of this account's directory this node accepts (restrictPeers); null: all of them. */
   private peerRule: { allowed: Set<string> | null; refused: Set<string> } = { allowed: null, refused: new Set() };
@@ -109,6 +133,16 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private sentRequests = new Map<string, { peer: string; at: number; frame: Envelope }>();
   private closed = false;
   private ready = false;
+  /**
+   * From opening until this socket has dialed from its first live directory. A socket that has just opened is the one side
+   * that knows there is no connection: the process started, or the phone came back and opened a new socket. The devices
+   * already there may still hold their end of the connection the previous socket had (LATE_DIAL_MS) and then do not dial,
+   * so this side dials every device the directory has online, whatever the ids, and waits for nobody. 2026-11-21, a phone
+   * whose id is higher than every computer's: not one of seven computers dialed it within the 0.8 to 1.2 seconds it then
+   * waited, on any cold start or return to the foreground; the same phone with a lower id was connected 0.9 seconds sooner.
+   * A device that is dialing this one at the same moment ends up on one connection as any simultaneous dial does (`adopt`).
+   */
+  private arriving = true;
   private localHello: HelloPayload | null = null;
   private reconnect: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
@@ -116,6 +150,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private rosterValidUntil = 0;
   private lan: SocketDiscovery | null = null;
   private lanCandidates = new Map<string, { address: string; port: number }>();
+  private readonly rememberedCandidates = new Set<string>();
+  private openingRelay: Promise<void> | null = null;
   private directoryRevision = 0;
   private directoryRefresh: ReturnType<typeof setInterval> | undefined;
   private refreshingDirectory = false;
@@ -131,10 +167,40 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     // A cached online bit is not current liveness. Wait for authenticated
     // discovery instead of occupying the first cold-start dial with a dead relay.
     socket.updateDirectory((options.cachedDirectory ?? []).map(view => ({ ...view, online: false })), false);
-    try { await socket.connectRelay(); }
-    catch (error) {
-      if (socket.closed || socket.roster.size === 0) { socket.close(); throw error; }
-      socket.scheduleReconnect();
+    for (const [id, address] of options.initialCandidates ?? []) {
+      if (socket.authorized(id)) {
+        socket.lanCandidates.set(id, address);
+        socket.rememberedCandidates.add(id);
+      }
+    }
+    let relayError: unknown;
+    let relayDone: Promise<void> | null = null;
+    if (!options.deferRelay || socket.roster.size === 0) {
+      try { await socket.connectRelay(); }
+      catch (error) {
+        if (socket.closed || socket.roster.size === 0) { socket.close(); throw error; }
+        socket.scheduleReconnect();
+      }
+    } else {
+      let finishOpeningRelay!: () => void;
+      socket.openingRelay = new Promise<void>(resolve => { finishOpeningRelay = resolve; });
+      relayDone = socket.connectRelay().then(() => {
+        socket.openingRelay = null;
+        finishOpeningRelay();
+      }, error => {
+        relayError = error;
+        socket.openingRelay = null;
+        finishOpeningRelay();
+        if (socket.ready && !socket.closed) {
+          for (const [id, view] of socket.roster) {
+            if (id !== socket.deviceId && !socket.peers.has(id) && !socket.dialing.has(id)
+              && !socket.lanCandidates.has(id) && !(view.online && socket.memberAccepted(id))) {
+              socket.presence(id, false);
+            }
+          }
+        }
+        if (!socket.closed && socket.roster.size > 0) socket.scheduleReconnect();
+      });
     }
     try {
       socket.transport = await options.bindings.createTransport({
@@ -149,18 +215,30 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
           .map(id => ({ id: socket.transportKeyHex(id)!, relayId: id })),
         onIncoming: (channel) => socket.adopt(channel, false),
       });
-      socket.uplink?.onDatagram((id, data) => socket.receiveDatagram?.(id, data));
+      socket.uplink?.onDatagram((id, data) => socket.receive(id, data));
+      const early = socket.early ?? []; socket.early = null;
+      for (const { id, data } of early) socket.receiveDatagram?.(id, data);
       const dial = socket.transport.dial as { udp?: { port: number } };
       if (options.bindings.createDiscovery && options.lanDiscovery !== false && dial.udp && !options.client.delegation) {
         socket.lan = options.bindings.createDiscovery({ networkId: options.client.certificate.networkId, port: dial.udp.port,
           certificateFor: (id) => socket.authorized(id) ? socket.roster.get(id)?.certificate : undefined,
           onCandidate(id, address) {
             if (!socket.authorized(id)) return;
+            socket.rememberedCandidates.delete(id);
             socket.lanCandidates.set(id, address);
+            options.onDirectAddress?.(id, address);
             if (socket.ready && !socket.peers.has(id)) void socket.dial(id).catch(() => undefined);
           },
         });
         socket.lan.start();
+      }
+      if (relayDone) {
+        if (relayError !== undefined && socket.closed) { socket.close(); throw relayError; }
+        for (const id of socket.lanCandidates.keys()) {
+          if (!socket.peers.has(id)) void socket.dial(id).catch(() => {
+            if (!socket.openingRelay && !socket.peers.has(id) && !socket.roster.get(id)?.online) socket.presence(id, false);
+          });
+        }
       }
       socket.directoryRefresh = setInterval(() => { void socket.refreshDirectory().catch(() => undefined); }, 6 * 60 * 60_000);
       unrefTimer(socket.directoryRefresh);
@@ -212,12 +290,19 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
    */
   async connectSession(key: string): Promise<boolean> {
     if (this.closed || !this.sessionConfig) return false;
+    if (!this.options.client.delegation && this.roster.has(key) && this.sessionScope(key)
+      && !this.peers.has(key) && !this.dialing.has(key) && !this.lanCandidates.has(key)
+      && this.roster.get(key)!.online !== true && this.openingRelay) {
+      await this.openingRelay;
+      if (this.closed || !this.sessionConfig) return false;
+    }
     const deviceId = this.sessions.get(key)?.deviceId
       ?? (this.options.client.delegation ? this.scopedPeerTarget(key)?.relayId
-        : this.roster.has(key) && this.sessionScope(key) && (this.peers.has(key) || this.roster.get(key)!.online === true) ? key : undefined);
+        : this.roster.has(key) && this.sessionScope(key)
+          && (this.peers.has(key) || this.dialing.has(key) || this.lanCandidates.has(key) || this.roster.get(key)!.online === true) ? key : undefined);
     if (!deviceId) return false;
     if (!this.peers.has(deviceId)) {
-      try { await this.dial(deviceId); } catch { return false; }
+      try { await this.dial(deviceId); } catch { return this.peers.has(deviceId); }
     }
     return this.peers.has(deviceId);
   }
@@ -245,7 +330,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     const scope = this.sessionConfig ? this.sessionScope(deviceId) : null;
     if (!scope) return;
     // Between devices of one account presence travels on the session too, so nothing on the connection is a Device Link frame.
-    peer.channel.declareSessions?.(scope.role === 'both' ? [SESSION_PRESENCE_FEATURE] : []);
+    // Session v2 (large messages on body streams of their own) whenever this channel reads body streams.
+    peer.channel.declareSessions?.([...(scope.role === 'both' ? [SESSION_PRESENCE_FEATURE] : []), ...(peer.channel.sessionBodies ? [AGENT_NET_SESSION_V2] : [])]);
     peer.channel.onSessionCapable?.(() => {
       const config = this.sessionConfig, wire = peer.channel.sessionWire?.();
       if (!config || !wire || this.closed || this.peers.get(deviceId) !== peer || this.sessions.has(scope.key)
@@ -259,16 +345,32 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         if (!current()) { session.dispose('UNAUTHORIZED'); return; }
         return handler(...args);
       });
+      const unauthorized = () => { queueMicrotask(() => session.dispose('UNAUTHORIZED')); return new Error('UNAUTHORIZED'); };
       const checked: SessionWire = {
         write: (lane, bytes) => {
-          if (!current()) { queueMicrotask(() => session.dispose('UNAUTHORIZED')); throw new Error('UNAUTHORIZED'); }
+          if (!current()) throw unauthorized();
           wire.write(lane, bytes);
         },
         get bufferedAmount() { return wire.bufferedAmount; },
         onData: (handler) => wire.onData(handler),
+        ...(wire.openBody ? {
+          openBody: (lane: Parameters<NonNullable<SessionWire['openBody']>>[0], key: number) => {
+            if (!current()) throw unauthorized();
+            const body = wire.openBody!(lane, key);
+            return body && {
+              write: (bytes: Uint8Array) => { if (!current()) throw unauthorized(); body.write(bytes); },
+              finish: () => body.finish(),
+              abandon: () => body.abandon(),
+            };
+          },
+        } : {}),
+        ...(wire.onBody ? { onBody: (handler: Parameters<NonNullable<SessionWire['onBody']>>[0]) => wire.onBody!(handler) } : {}),
       };
+      // Session v2 only when both ends declared it: an older node closes the connection on a body stream.
+      const bodies = !!wire.openBody && peer.channel.sessionBodies === true
+        && peer.channel.sessionFeatures?.().includes(AGENT_NET_SESSION_V2) === true;
       session = new SessionPeer({
-        wire: checked, role: scope.role, laneFor: config.laneFor,
+        wire: checked, role: scope.role, laneFor: config.laneFor, bodies,
         onOpen: guard(handlers.onOpen), onClose: guard(handlers.onClose), onRequest: guard(handlers.onRequest),
         onPush: guard(handlers.onPush),
         // This socket keeps presence for its Device Link client: a peer's session presence becomes the same local event as its frame.
@@ -316,9 +418,21 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
     try { await this.connectRelay(); } catch (error) { if (!this.closed) this.scheduleReconnect(); throw error; }
   }
-  supports(deviceId: string): boolean { return this.authorized(deviceId) && (this.peers.has(deviceId) || this.roster.get(deviceId)?.online === true); }
+  supports(deviceId: string): boolean {
+    return this.authorized(deviceId) && (this.peers.has(deviceId) || this.roster.get(deviceId)?.online === true);
+  }
+  /** True while `connectSession` has an active or pending V2 path to try (connected, online, dialing/LAN candidate, or initial relay handshake opening). */
+  canConnectSession(deviceId: string): boolean {
+    return this.supports(deviceId) || (this.authorized(deviceId)
+      && (this.dialing.has(deviceId) || this.lanCandidates.has(deviceId) || (this.openingRelay !== null && this.roster.has(deviceId))));
+  }
   /** A previously certified V2 peer must not silently downgrade when its relay session disappears. */
   knowsPeer(deviceId: string): boolean { return this.knownV2.has(deviceId); }
+  /**
+   * Every device `knowsPeer` is true for. The worker mirrors it to the thread that asks (`worker.ts` `snapshot`): a device
+   * left out of the directory for sharing a transport key (`supersedes`) reaches that thread in no directory or path event.
+   */
+  knownPeers(): string[] { return [...this.knownV2]; }
   certificateFor(deviceId: string) { return this.roster.get(deviceId)?.certificate; }
   scopedPeerTarget(peer: string): ScopedPeerTarget | null {
     if (this.options.client.delegation) {
@@ -347,14 +461,20 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     const key = this.transportKey(deviceId);
     if (!key || !this.authorized(deviceId)) throw new Error('UNAUTHORIZED_PEER');
     const lan = this.lanCandidates.get(deviceId);
-    const entry: RosterEntry = { id: keyHex(key), dial: { relayId: deviceId, ...(lan ? { udp: lan, preferUdp: true } : {}) } };
+    const remembered = lan !== undefined && this.rememberedCandidates.has(deviceId);
+    const entry: RosterEntry = { id: keyHex(key), dial: { relayId: deviceId,
+      ...(lan ? { udp: lan, preferUdp: true, ...(remembered ? { timeoutMs: REMEMBERED_CANDIDATE_DIAL_MS } : {}) } : {}) } };
     const connect = async () => {
       try { return await this.transport.connect(entry); }
       catch (error) {
+        if (lan && this.lanCandidates.get(deviceId) === lan) {
+          this.lanCandidates.delete(deviceId);
+          this.rememberedCandidates.delete(deviceId);
+        }
+        if (lan && !this.uplink && this.openingRelay) await this.openingRelay;
         if (!lan || !this.uplink || !this.authorized(deviceId) || keyHex(this.transportKey(deviceId)!) !== entry.id) throw error;
         // A remembered LAN address may belong to the previous network. Retire
         // only that candidate and retry this peer through its authenticated relay.
-        if (this.lanCandidates.get(deviceId) === lan) this.lanCandidates.delete(deviceId);
         return this.transport.connect({ id: entry.id, dial: { relayId: deviceId } });
       }
     };
@@ -362,13 +482,17 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.dialing.set(deviceId, dialing);
     try { await dialing; } finally { if (this.dialing.get(deviceId) === dialing) this.dialing.delete(deviceId); }
   }
-  /** See REDIAL_FIRST_MS. Only devices of this account the directory has online; delegations dial on demand. */
+  /**
+   * See REDIAL_FIRST_MS and LATE_DIAL_MS: the dialing side (the lower id) dials again, the other side dials when that dial
+   * does not come. Only devices of this account the directory has online; delegations dial on demand.
+   */
   private scheduleRedial(deviceId: string): void {
-    if (this.closed || this.redials.has(deviceId) || this.deviceId >= deviceId) return;
+    if (this.closed || this.redials.has(deviceId) || this.deviceId === deviceId) return;
     if (!this.roster.get(deviceId)?.online || !this.authorized(deviceId)) return;
     const step = this.redialSteps.get(deviceId) ?? 0;
     this.redialSteps.set(deviceId, step + 1);
-    const delay = Math.min(REDIAL_MAX_MS, REDIAL_FIRST_MS * 2 ** step) * (0.8 + Math.random() * 0.4);
+    const first = this.deviceId < deviceId ? REDIAL_FIRST_MS : LATE_DIAL_MS;
+    const delay = Math.min(REDIAL_MAX_MS, first * 2 ** step) * (0.8 + Math.random() * 0.4);
     const timer = setTimeout(() => {
       this.redials.delete(deviceId);
       if (this.closed || this.peers.has(deviceId) || !this.roster.get(deviceId)?.online || !this.authorized(deviceId)) return;
@@ -451,6 +575,26 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       next.set(c.deviceId, view);
       this.knownV2.add(c.deviceId);
     }
+    // One transport key is one device. A device that enrolled again under another device id keeps its key, and its earlier
+    // certificate stays in the directory: the same device twice. Only the certificate that supersedes the others is this
+    // account's device; the rest are left out here, as a device no longer listed is: not admitted, not dialed, shown
+    // offline. They stay in `knownV2` like any device this socket has seen on Agent-Net, so being left out opens no way
+    // around it over Device Link; `worker.ts` and `AgentNetWorkerSocket` keep their own add-only copy of that set, filled
+    // from the directory they are handed, so the worker also copies this one over (`knownPeers`; 2026-11-21 reviews).
+    // Kept in the directory, a connection made with that key was filed under whichever id came first, and
+    // the phone's engine, which admits by key, refused the whole list (DUPLICATE_PEER): on 2026-11-21 one such pair in
+    // an account of 26 devices kept every phone of the account from opening Agent-Net at all.
+    // This device's own key under another device id is this device as it was: never a peer. (The key of `identity`: a
+    // guest's `certificate` is the one of the computer it was let in to.)
+    const holders = new Map<string, DeviceView>(), ownKey = this.options.client.identity.transportKey;
+    for (const view of next.values()) {
+      const held = holders.get(view.certificate.transportKey);
+      if (!held || this.supersedes(view.certificate, held.certificate)) holders.set(view.certificate.transportKey, view);
+    }
+    for (const [id, view] of [...next]) {
+      const c = view.certificate;
+      if (holders.get(c.transportKey) !== view || c.transportKey === ownKey && id !== this.deviceId) next.delete(id);
+    }
     this.roster = next;
     this.keyIndex = null;
     if (grants) {
@@ -477,12 +621,21 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         deviceName: view.name, selfName: view.selfName ?? peer.info.selfName };
       if (this.ready) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
     }
+    this.transport?.admissionChanged?.();
     this.dropUnauthorizedPeers();
     if (live) this.options.onDirectory?.([...next.values()]);
     this.dialRoster();
   }
+  /** Of two certificates of this account with one transport key: this device's own, else the one issued later (then the higher device id, so every device picks the same one). */
+  private supersedes(a: DeviceView['certificate'], b: DeviceView['certificate']): boolean {
+    if (a.deviceId === this.deviceId || b.deviceId === this.deviceId) return a.deviceId === this.deviceId;
+    return a.issuedAt !== b.issuedAt ? a.issuedAt > b.issuedAt : a.deviceId > b.deviceId;
+  }
   private dropUnauthorizedPeers(): void {
-    for (const id of this.lanCandidates.keys()) if (!this.authorized(id)) this.lanCandidates.delete(id);
+    for (const id of this.lanCandidates.keys()) if (!this.authorized(id)) {
+      this.lanCandidates.delete(id);
+      this.rememberedCandidates.delete(id);
+    }
     for (const [id, peer] of this.peers) if (!this.authorized(id) || keyHex(this.transportKey(id)!) !== peer.key) {
       this.peers.delete(id); peer.channel.close({ drain: false }); this.presence(id, false);
     }
@@ -494,10 +647,35 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
   }
   private dialRoster(): void {
-    if (this.ready) for (const [id, view] of this.roster) if (!this.peers.has(id)) {
-      this.presence(id, false);
-      if (view.online && this.deviceId < id && this.memberAccepted(id)) void this.dial(id).catch(() => undefined);
+    if (!this.ready) return;
+    for (const [id, view] of this.roster) if (!this.peers.has(id)) {
+      if (!this.openingRelay && !this.dialing.has(id) && !this.lanCandidates.has(id) && !(view.online && this.memberAccepted(id))) {
+        this.presence(id, false);
+      }
+      this.dialOnline(id, view);
     }
+    this.arrived();
+  }
+  /**
+   * A device the directory has online and this side is not connected to: the lower id dials now, the other side if that
+   * dial does not come (LATE_DIAL_MS). A socket that has just opened dials now whatever the ids (`arriving`).
+   */
+  private dialOnline(id: string, view: DeviceView): void {
+    if (!view.online || id === this.deviceId || !this.memberAccepted(id)) return;
+    const offlineIfUnconnected = () => { if (!this.peers.has(id)) this.presence(id, false); };
+    if (this.deviceId < id || this.arriving) void this.dial(id).catch(() => { offlineIfUnconnected(); this.scheduleRedial(id); });
+    else this.scheduleRedial(id);
+  }
+  /** The directory just dialed from was the relay's, not the cached one a socket opens with while the relay is unreachable. */
+  private arrived(): void { if (this.uplink) this.arriving = false; }
+  /**
+   * A datagram from the relay. The relay announces this device to the others as soon as its connection is up, which is
+   * before the transport exists (about 50 ms on a phone): a device that dials on that announcement has its first handshake
+   * packet here by then. Dropped, as before 2026-11-21, its dial waited for the core to send the packet again (200 ms).
+   */
+  private receive(id: string, data: Uint8Array): void {
+    if (this.receiveDatagram) this.receiveDatagram(id, data);
+    else if (this.early && this.early.length < EARLY_DATAGRAMS) this.early.push({ id, data });
   }
   private memberAccepted(deviceId: string): boolean {
     return !this.peerRule.refused.has(deviceId) && (this.peerRule.allowed === null || this.peerRule.allowed.has(deviceId));
@@ -512,6 +690,10 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.closed) return;
     this.transport?.networkChanged?.();
     if (!this.uplink) this.reconnectRelayNow(false);
+  }
+  /** Session requests to a relayed peer timed out (see Transport.relayStalled). */
+  relayStalled(): void {
+    if (!this.closed) this.transport?.relayStalled?.();
   }
   /**
    * This device's own route changed (the phone: Wi-Fi ↔ cellular, lost and back). Besides `networkChanged`, the relay
@@ -541,6 +723,10 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   }
   /** See Transport.relayRoute (the worker reports it to the Desktop with each status snapshot). */
   relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
+  /** Whether the relay WebSocket is currently up; false while offline or after an upgrade rejection fell back to cached directory. */
+  relayConnected(): boolean { return !this.closed && this.uplink !== null; }
+  /** Resolves once the background initial relay connection attempt (`deferRelay`) finishes. */
+  whenInitialRelaySettled(): Promise<void> { return this.openingRelay ?? Promise.resolve(); }
   /**
    * Which members of this account's directory to accept although their certificates are valid: the host's own membership
    * rule on top of the relay's (the Desktop accepts only devices in the account's Device Link device list, so a device
@@ -557,6 +743,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     // Admission changed: the transport forgets handshakes it refused under the old rule (admissionVersion), so a member
     // let back in connects now instead of after the remembered refusal expires.
     this.directoryRevision++;
+    this.transport?.admissionChanged?.();
     this.dropUnauthorizedPeers();
     this.dialRoster();
   }
@@ -565,15 +752,17 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     let uplink: SocketUplink;
     try { uplink = await this.options.client.connect(); }
     catch (error) {
-      if (/^AGENT_NET_UPGRADE_(401|403)$/.test(error instanceof Error ? error.message : '')) this.close(4410);
+      const message = error instanceof Error ? error.message : '';
+      if (/^AGENT_NET_UPGRADE_(401|403)$/.test(message)) this.closeOnIdentityRefusal(message);
       throw error;
     }
     if (this.closed || generation !== this.generation) { uplink.close(); return; }
+    this.openingRelay = null;
     this.uplink = uplink; this.retryMs = 500;
     if (this.resendWhenRelayBack) { this.resendWhenRelayBack = false; this.transport?.networkChanged?.(); }
     this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
     this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
-    uplink.onDatagram((id, data) => this.receiveDatagram?.(id, data));
+    uplink.onDatagram((id, data) => this.receive(id, data));
     uplink.on('directory', () => {
       this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
       this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
@@ -581,7 +770,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     uplink.once('close', (code: number) => {
       if (this.uplink !== uplink || this.closed) return;
       this.uplink = null;
-      if ([4410, 4401, 4403].includes(code)) { this.close(4410); return; }
+      if ([4410, 4401, 4403].includes(code)) { this.closeOnIdentityRefusal('AGENT_NET_CLOSED_' + code); return; }
       this.acknowledgeHello();
       // Existing direct connections remain alive; loss of one relay does not tear down the app socket.
       this.scheduleReconnect();
@@ -621,14 +810,19 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       if (!this.options.client.delegation) this.uplink?.presence(this.localHello.remoteControlEnabled, this.localHello.capabilities ?? [], this.localHello);
       this.acknowledgeHello();
       for (const [id, view] of this.roster) if (id !== this.deviceId) {
-        this.presence(id, false);
-        if (view.online && this.deviceId < id) void this.dial(id).catch(() => undefined);
+        if (!this.openingRelay && !this.peers.has(id) && !this.dialing.has(id) && !this.lanCandidates.has(id) && !(view.online && this.memberAccepted(id))) {
+          this.presence(id, false);
+        }
+        this.dialOnline(id, view);
       }
+      this.arrived();
       for (const peer of this.peers.values()) {
         if (peer.info) this.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: peer.info });
         this.sendPresence(peer);
       }
-      for (const id of this.lanCandidates.keys()) if (!this.peers.has(id)) void this.dial(id).catch(() => undefined);
+      for (const id of this.lanCandidates.keys()) if (!this.peers.has(id)) {
+        void this.dial(id).catch(() => { if (!this.openingRelay && !this.peers.has(id) && !this.roster.get(id)?.online) this.presence(id, false); });
+      }
       return;
     }
     if (frame.kind === 'ping') { this.deliver({ v: PROTOCOL_VERSION, kind: 'pong' }); return; }
@@ -758,7 +952,16 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.attachSession(deviceId, peer);
     this.sendPresence(peer);
     for (const item of this.pending.get(deviceId) ?? []) { this.pendingBytes -= item.bytes; this.write(peer, item.frame); }
-    this.pending.delete(deviceId); this.options.onPathChanged?.(deviceId, channel.path?.() ?? null);
+    this.pending.delete(deviceId);
+    const direct = channel.directAddress?.();
+    if (direct) this.options.onDirectAddress?.(deviceId, direct);
+    this.options.onPathChanged?.(deviceId, channel.path?.() ?? null);
+    channel.onPathChange?.((path) => {
+      if (this.peers.get(deviceId) !== peer) return;
+      const updated = channel.directAddress?.();
+      if (updated) this.options.onDirectAddress?.(deviceId, updated);
+      this.options.onPathChanged?.(deviceId, path);
+    });
   }
   /**
    * Where this node's presence goes to a peer: on its session when both declared `SESSION_PRESENCE_FEATURE` (then nothing
@@ -872,13 +1075,17 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private deliver(frame: Envelope): void {
     if (!this.closed && this.ready) this.emit('message', { toString: () => JSON.stringify(frame) });
   }
+  private closeOnIdentityRefusal(reason: string): void {
+    const fallback = this.options.onIdentityRefused?.(reason) === true;
+    this.close(fallback ? 1006 : 4410);
+  }
   close(code = 1000): void {
     if (this.closed) return;
     this.closed = true; this.generation++;
     this.notificationAbort.abort(); this.notifyQueue = [];
     for (const timer of this.redials.values()) clearTimeout(timer);
     this.redials.clear();
-    this.lan?.close(); this.lan = null; this.lanCandidates.clear();
+    this.lan?.close(); this.lan = null; this.lanCandidates.clear(); this.rememberedCandidates.clear(); this.openingRelay = null;
     if (this.directoryRefresh) clearInterval(this.directoryRefresh); this.directoryRefresh = undefined;
     if (this.reconnect) clearTimeout(this.reconnect);
     this.reconnect = null; this.uplink?.close(); this.uplink = null;

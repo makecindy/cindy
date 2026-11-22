@@ -1293,6 +1293,12 @@ describe('官方渠道预设契约', () => {
         'gemini-3.8-flash',
         'gemini-3.6-flash',
       ]));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const models = gemini?.runtimes[agent]?.models;
+      expect(models?.find(model => model.id === 'gemini-3.5-flash')?.defaultEnabled).toBe(false);
+      expect(models?.filter(model => model.defaultEnabled !== false).map(model => model.id))
+        .toContain('gemini-3.6-flash');
+    }
     expect(gemini?.runtimes.pi).toEqual(expect.objectContaining({
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       wireProtocol: 'openai-chat',

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app, protocol, session, type WebContents } from 'electron';
+import { runInNewContext } from 'node:vm';
+import { McpAppController } from '@cindy/maker-shared/mcp-app-controller';
 import { EventEmitter } from 'node:events';
 import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 import { readFileSync } from 'node:fs';
@@ -38,6 +40,7 @@ import {
   clearMcpAppDocuments,
   mountRemoteAppDocument,
   registerMcpAppProtocol,
+  removeMcpAppDocument,
   isMcpAppFrameNavigationAllowed,
   isMcpAppPermissionRequest,
   supplyMcpAppDocument,
@@ -121,6 +124,38 @@ describe('MCP App local protocol isolation', () => {
     state.owner = {};
     expect((await handler(request(headers['X-Cindy-Mcp-App-Frame']))).status).toBe(404);
     expect(invoke).toHaveBeenCalledOnce();
+  });
+  // PR #11917 (unit): after a real frame is bound, revocation can reach the
+  // desktop card either through its outstanding poll or through document removal.
+  it('delivers a revoked plugin failure to the loaded card while ordinary bridge failures stay generic', async () => {
+    let handler!: (request: Request) => Promise<Response> | Response;
+    vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+    registerMcpAppProtocol();
+    const invoke = vi.fn().mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] MCP_APP_SERVER_CHANGED'))
+      .mockRejectedValueOnce(new Error('connection lost'));
+    supplyMcpAppDocument(document, 'renderer:1', invoke);
+    const onError = vi.fn();
+    const controller = new McpAppController(async () => ({ viewId: document.viewId, transport: 'sandbox' }),
+      'task', 'card', vi.fn(), vi.fn(), onError);
+    await controller.open({});
+    controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+    const frame = { url: 'cindy-mcp-app://untrusted-id/sandbox', executeJavaScript: async (script: string) =>
+      runInNewContext(script, { window: { parent: { postMessage: controller.receive.bind(controller) } } }) };
+    const url = 'cindy-mcp-app://untrusted-id/bridge';
+    const details = { url, method: 'POST', webContentsId: 1, frame, requestHeaders: {} };
+    const authorize = vi.fn();
+    state.beforeHeaders!(details as never, authorize);
+    const poll = () => handler(new Request(url, { method: 'POST', body: '{"op":"poll"}',
+      headers: authorize.mock.calls[0][0].requestHeaders }));
+    try {
+      const revokedPoll = await poll();
+      const networkFailure = await poll();
+      removeMcpAppDocument(document.viewId, 'MCP_PLUGIN_UNAVAILABLE');
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'MCP_PLUGIN_UNAVAILABLE' }));
+      expect(revokedPoll.status).toBe(410);
+      expect(await revokedPoll.json()).toEqual({ code: 'MCP_APP_SERVER_CHANGED' });
+      expect(networkFailure.status).toBe(400);
+    } finally { await controller.close(); }
   });
   it('installs both permission handlers and denies App and opaque subframe requests', () => {
     registerMcpAppProtocol();

@@ -682,6 +682,8 @@ describe('Orca model-only picker intent admission', () => {
         targetEffort: 'high', targetFastMode: true, targetContextWindow: onOtherDevice ? 200000 : undefined as number | undefined,
         confirmedContextWindow: 200000 as number | undefined,
         atomicSelection: { effort: 'high', fastMode: true },
+        // Both axes came from the user's atomic selection and were not staged.
+        credentialSelectionAxes: { effort: true, fastMode: true },
         assertRuntimeOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
         assertAgentDeviceRouteUsable: vi.fn(), supersededByOwnerBoundary: () => false,
         clearPendingCredentialSwitchForSession: vi.fn(), agentSwitchPending: pending,

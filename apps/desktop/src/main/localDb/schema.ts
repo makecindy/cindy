@@ -156,6 +156,7 @@ export const sessions = sqliteTable(
     sdkSessionId: text('sdk_session_id'),
     totalTokenUsage: integer('total_token_usage').notNull().default(0),
     totalCostUsd: real('total_cost_usd').notNull().default(0),
+    totalCostUsdIsApproximate: integer('total_cost_usd_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /** 新版区域金额；legacy total_cost_usd 仍保留为历史 USD 事实。 */
     totalCostAmount: real('total_cost_amount').notNull().default(0),
     totalCostCurrency: text('total_cost_currency', { enum: ['CNY', 'USD'] }),
@@ -256,6 +257,9 @@ export const sessions = sqliteTable(
      * 进入桌面 sidebar；feishu 仍由飞书模块独立查询，不混进桌面主列表。
      */
     source: text('source', { enum: SESSION_SOURCES }).notNull().default('desktop'),
+    /** Display an Orca lead as an independent task while retaining its side-chat provenance. */
+    sideChatPromoted: integer('side_chat_promoted', { mode: 'boolean' }).notNull().default(false),
+    sideChatClosePending: integer('side_chat_close_pending', { mode: 'boolean' }).notNull().default(false),
     /**
      * feishu-bot: 对方的飞书 open_id（仅 source='feishu' 时有值）。
      * 99% 场景是 bot owner 自己。findActiveFeishu 用 (botAppId, openId) 复合查询。
@@ -1736,6 +1740,8 @@ export const scheduleRuns = sqliteTable(
     /** 新版区域真实费用与订阅价值；旧 USD 列只做历史兼容。 */
     costAmount: real('cost_amount').notNull().default(0),
     estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
+    /** Estimate denominated in the other native currency (USD or CNY). */
+    otherEstimatedValueAmount: real('other_estimated_value_amount').notNull().default(0),
     costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
     costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /**

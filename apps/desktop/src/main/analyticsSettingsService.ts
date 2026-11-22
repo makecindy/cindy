@@ -111,6 +111,26 @@ function broadcastSettingsChange(): void {
   }
 }
 
+type PermissionListener = (allowed: boolean, explicitEnabled?: boolean) => void;
+const permissionListeners = new Set<PermissionListener>();
+export function onAnalyticsPermissionChange(listener: PermissionListener): () => void {
+  permissionListeners.add(listener);
+  return () => { permissionListeners.delete(listener); };
+}
+
+function applyPermissionChange(explicitEnabled?: boolean): void {
+  broadcastSettingsChange();
+  const allowed = isReportingAllowedNow();
+  for (const listener of permissionListeners) {
+    try {
+      listener(allowed, explicitEnabled);
+    } catch (err) {
+      log.warn('Could not apply usage statistics preference to local reporting', err);
+      if (explicitEnabled !== undefined) throwIpcError('INTERNAL', 'failed to apply analytics preference');
+    }
+  }
+}
+
 /**
  * 一次性存量迁移的唯一入口,由 `auth:initialize` 在拿到**冷启动恢复结果**后调用。
  *
@@ -144,7 +164,7 @@ function broadcastSettingsChange(): void {
  */
 function migrateOrLog(): void {
   try {
-    if (migrateExistingLoginAsConsented(true)) broadcastSettingsChange();
+    if (migrateExistingLoginAsConsented(true)) applyPermissionChange();
   } catch (err) {
     log.warn('existing-login consent migration failed (non-fatal)', err);
   }
@@ -267,7 +287,7 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
     // 那道闸在密钥链暂不可用时会保守地拒绝关窗,而此处的确定性不依赖任何探测。
     // 幂等(closeLegacyConsentMigration 自带 no-op 早返回),不写用户偏好。
     if (authManager.isLocalMode()) sealMigrationWindowOrLog();
-    broadcastSettingsChange();
+    applyPermissionChange();
   });
 
   ipcMain.handle('analytics:settings-get', (event) => {
@@ -281,7 +301,7 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
     const enabled = rawEnabled === true;
     if (!enabled) writeOrThrowIpcError(() => productTokens?.revokeAll(), 'clear token reporting grants failed');
     writeOrThrowIpcError(() => setAnalyticsEnabled(enabled), 'write analytics setting failed');
-    broadcastSettingsChange();
+    applyPermissionChange(enabled);
     return analyticsSettingsPayload();
   });
 
@@ -293,14 +313,14 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
       () => clearAnalyticsEnabledOverride(),
       'clear analytics enabled override failed',
     );
-    broadcastSettingsChange();
+    applyPermissionChange();
     return analyticsSettingsPayload();
   });
 
   ipcMain.handle('analytics:consent-accept', (event) => {
     assertTrustedAppRendererEvent(event);
     writeOrThrowIpcError(() => acceptPrivacyConsent(), 'record privacy consent failed');
-    broadcastSettingsChange();
+    applyPermissionChange();
     return analyticsSettingsPayload();
   });
 

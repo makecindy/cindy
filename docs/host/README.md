@@ -71,9 +71,12 @@ pnpm dev:host -- --mock
 CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 ```
 
+企业内测使用中国区账号体系。用开发环境的桌面渲染产物构建 Host 时，在 `--region cn` 后加 `--dev-endpoints`，并通过 `--web-dir` 指定 dev 渲染目录。构建器将发布仓提供的 `config/endpoint.dev.json` 装入中国区配置，同时核对渲染环境以及认证、设备、模型和 CDN 的独立 HTTPS 地址。
+
 ## 当前边界
 
 - Host 只监听 `127.0.0.1`，所有数据接口要求 profile bearer 或本机 cookie。
+- Device Link 的项目目录浏览复用桌面 `fsBrowse` 的纯 Node 实现，支持 `fs:list-dir`、`fs:stat-path` 和 `fs:mkdir-p`；目录始终按执行端文件系统解析。wire channel、payload 与 relay 不变，桌面占用 profile 时只允许只读浏览，拒绝新建目录。回归入口：`apps/host/src/device-link.test.mjs`。
 - 当前已完成 macOS 上真实文本任务、刷新、停止、允许一次、Host 重启续接与受控事件断线恢复；
   手机、三平台实机与真实网络切换仍待验收，见 [本地人工验收](basic-web.md#本地人工验收2026-11-10)。
 - Electron 客户端模式覆盖任务、消息、供应商、能力、Agent 命令/技能、输入队列、交互与告警；

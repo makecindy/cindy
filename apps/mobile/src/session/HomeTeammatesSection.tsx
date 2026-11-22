@@ -416,8 +416,8 @@ function sameHosts(a: readonly RemoteResourceHostTarget[], b: readonly RemoteRes
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface },
-  headerToggle: { flex: 1 },
+  header: { flexDirection: 'row', alignItems: 'center' },
+  headerToggle: { flex: 1, backgroundColor: 'transparent' },
   headerTitle: { flex: 0, flexShrink: 1 },
   count: { flex: 1 },
   // 44 target whose glyph sits on the row's 16pt right edge (36 + hitSlop 4 each side).

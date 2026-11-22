@@ -208,6 +208,10 @@
     "retryIn": "Nova tentativa automática em {{seconds}} s"
   },
   "subscriptionAccountError": {
+    "poolModelLimited": "O uso da assinatura para este modelo atingiu o limite. Você pode trocar de modelo.",
+    "poolRetryUntil": "Tente novamente após {{resetAt}}.",
+    "poolOtherSignedOut": "Outra conta de assinatura está desconectada. Entre nessa conta no computador que executa a tarefa e tente novamente.",
+    "poolUnavailable": "Nenhuma conta de assinatura está disponível para este modelo. Troque de modelo ou verifique as contas no computador que executa a tarefa.",
     "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos.",
     "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos.",
     "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",

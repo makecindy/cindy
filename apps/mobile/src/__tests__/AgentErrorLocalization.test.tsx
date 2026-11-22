@@ -436,6 +436,21 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
   });
 });
 
+// Unit: model switching on mobile can leave a failed send at the queue head.
+// Exercise the visible banner, including its retry time and optional sign-in hint.
+it('explains a mixed subscription pool failure in the mobile queue', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const until = Date.now() + 3_600_000;
+  const error = `LAZY_CREATE_FAILED: [SUBSCRIPTION_POOL_MODEL_LIMITED] diagnostic\nresetAtMs=${until}\notherAccountSignedOut=true`;
+  await act(async () => root.render(<InlineQueueSection
+    projection={{ error, errorRetryText: 'original' } as InputProjection}
+    onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+  expect(host.textContent).toContain('当前模型的订阅额度已达上限');
+  expect(host.textContent).toContain(new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(until));
+  expect(host.textContent).toContain('另有订阅账号已登出');
+  expect(host.textContent).not.toContain('LAZY_CREATE_FAILED');
+});
+
 // Unit regression: both live and historical mobile errors share this presenter.
 it('localizes bound-account exhaustion and old ambiguous startup errors', async () => {
   await i18n.changeLanguage('zh-CN');
@@ -475,4 +490,19 @@ it.each(['live', 'tail'] as const)('explains rejected shared history on mobile %
   expect(host.querySelector('[data-testid="queue.inline.retryButton"]')).toBeNull();
   expect([...host.querySelectorAll('button')].some(button => button.textContent === i18n.t('session.tail.retry'))).toBe(false);
   expect(retry).not.toHaveBeenCalled();
+});
+
+// #8706 unit: mobile live and persisted history must both choose the quota translation.
+it.each(['live', 'tail'] as const)('renders quota guidance in the mobile %s surface', async surface => {
+  await i18n.changeLanguage('zh-CN');
+  const message = '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_PROVIDER_BODY';
+  const state = resolveSessionTailBanner({ messages: [row(message)], session: null,
+    projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false,
+    sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
+  await act(async () => root.render(surface === 'live'
+    ? <InlineQueueSection projection={{ error: message } as InputProjection} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />
+    : <SessionTailBanner state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} />));
+  expect(host.textContent).toContain(i18n.t('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA'));
+  expect(host.textContent).not.toMatch(/PRIVATE_PROVIDER_BODY|完全访问/);
+  expect(normalizeRemoteMessages([row(message)])[0].body).toBe(i18n.t('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA'));
 });

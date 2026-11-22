@@ -66,6 +66,7 @@ export interface RemoteSession {
   totalMoney?: RemoteMoney;
   /** 旧 Desktop / USD 账本兼容字段。 */
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
   contextTokens?: number;
   contextWindow?: number;
   clearedAt?: string | null;
@@ -92,6 +93,7 @@ export interface RemoteSession {
   pluginEngineSwitchIntent?: import('./pluginEngines').MobilePluginEngineSwitchIntent | null;
   /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
   source?: string | null;
+  sideChatPromoted?: true;
   companion?: import("./teammateTaskSource").TaskCompanion;
   taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
   /** Owning Lead on this device, when the active team is known. */

@@ -261,11 +261,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     attempt: ReturnType<typeof registerPendingRemoteStart>, recoverLostHistoryGrant = true,
     reissuedHistory = false): Promise<AgentSessionHandle> => {
     const initialShareId = parseProviderShareAgentDeviceId(input.deviceId);
-    // 插件引擎只由自己账号的电脑提供：分享来的供应商与供应商组没有它(那台也会拒绝)，这里先拦下，不发任何请求。
-    if (input.agentKind === 'acp' && initialShareId) {
-      throw new Error('[REMOTE_AGENT_UNSUPPORTED] Plugin engines are only available from your own computers.');
-    }
-    // 下面的分享授权、直连与备用记录只认内置引擎；插件引擎不会走到那些分支，这里只是给它们一个内置种类。
+    // 下面的分享组分配、直连与备用记录只认内置引擎；插件引擎走分享者本机直连，这里给内置分支一个兜底种类。
     const agentKind: AgentKind = input.agentKind === 'acp' ? 'pi' : input.agentKind;
     const ownerScope = activeOwnerScopeKey();
     const initialOwner = initialShareId ? findReceivedShareForExecution(initialShareId) : null;
@@ -368,10 +364,22 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         log.warn('shared provider failed direct allocation release will expire', { error: String(error) });
       }
     };
-    const standbyPlacement = shareId && sessionId ? await readAgentNetStandbyPlacement(shareId, sessionId) : undefined;
+    const standbyPlacement = input.agentKind !== 'acp' && shareId && sessionId ? await readAgentNetStandbyPlacement(shareId, sessionId) : undefined;
     const handoffPlacement = switchToken ? standbyPlacement : undefined;
     requireCurrent();
-    if (shareId && (opts.resumeSessionId || (standbyPlacement && !switchToken))) {
+    if (input.agentKind === 'acp' && shareId) {
+      if (initialOwnerPeer && (initialOwner?.hostDeviceOnline ?? initialOwner?.hostOnline)) {
+        const closeEpoch = getRemoteLinkCloseEpoch(initialOwnerPeer);
+        startupOwnerPeer = initialOwnerPeer;
+        assertOwnerLinkCurrent = () => {
+          if (getRemoteLinkCloseEpoch(initialOwnerPeer) !== closeEpoch) {
+            throw new Error('[LINK_NOT_OPEN] shared owner link closed during startup');
+          }
+        };
+        await deps.renewSharedProviderLink?.(initialOwnerPeer);
+        requireCurrent();
+      }
+    } else if (shareId && (opts.resumeSessionId || (standbyPlacement && !switchToken))) {
       if (!sessionId) throw new Error('[REMOTE_AGENT_INVALID] shared history requires its task identity');
       const allocationStartedAt = Date.now();
       const allocationStartedMonotonic = performance.now();
@@ -778,6 +786,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         return {
           servers: mcpTargets(extra),
           dispose: () => extra?.disposeSessionCtx?.(),
+          closeSessionInstance: () => extra?.closeSessionInstance?.(),
         };
       },
       capture: ({ kind, opts: startOpts }): ExecutorCaptureHooks | undefined => {

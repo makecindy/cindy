@@ -36,6 +36,7 @@ const money = (amount: number, estimate = false) => ({
   approximate: estimate,
   kind: estimate ? ('value-estimate' as const) : ('actual-cost' as const),
 });
+const gatewayCharge = { ...money(2), currency: 'CNY' as const };
 const rows: UsageCostRow[] = [
   {
     category: 'conversation',
@@ -74,7 +75,9 @@ mountPage({
         estimatedSessionValue: async () => ({
           entries: [],
           totalValueUsd: 1.11,
-          ...(ctx.data.legacy ? {} : { costBreakdown: rows }),
+          ...(ctx.data.legacy ? {} : { costBreakdown: ctx.data.mixed
+            ? [...rows, { category: 'conversation', model: 'gateway-model', billingSource: 'cindy-ai', money: gatewayCharge }]
+            : rows }),
         }),
       },
     },
@@ -99,6 +102,7 @@ mountPage({
             totalTokens: 5700,
             cacheHitRate: 4000 / 5200,
             model: 'gpt-6.1',
+            ...(ctx.data.mixed ? { userTurnAmounts: [money(4.87, true), gatewayCharge] } : {}),
             ...(ctx.data.noPrice ? {} : { additionalCosts: [money(3.34)] }),
             ...(typeof ctx.data.traceRequests === 'number'
               ? { trace: fixtureTrace(ctx.data.traceRequests, ctx.data.traceShape ?? 'full') } : {}),
