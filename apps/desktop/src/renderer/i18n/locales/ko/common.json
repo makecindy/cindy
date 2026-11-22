@@ -977,7 +977,7 @@
     "captureFailed": "화면을 캡처하지 못했습니다",
     "permission": {
       "title": "화면 기록 권한이 필요합니다",
-      "detail": "스크린샷을 찍으려면 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 기록에서 {{appName}}을(를) 허용한 다음 {{appName}}을(를) 다시 여세요.",
+      "detail": "{{appName}}의 화면 기록을 허용한 뒤 다시 시도하세요. macOS에서 요청하면 앱을 다시 여세요.",
       "openSettings": "시스템 설정 열기",
       "later": "나중에"
     },
@@ -1144,12 +1144,12 @@
     "windowsError": "승인이 완료되지 않았습니다. 이 컴퓨터에서 다시 시도하세요.",
     "windowsErrorDetail": "오류 코드 {{code}}",
     "permissionsTitle": "원격 데스크톱 권한",
-    "permissionsIntro": "데스크톱을 보려면 화면 기록 권한이, 조작하려면 손쉬운 사용 권한도 필요합니다. 컴퓨터에서 허용하면 상태가 자동으로 갱신됩니다.",
+    "permissionsIntro": "제어할 Mac에서 화면 기록을 허용하면 데스크탑을 볼 수 있습니다. 키보드와 마우스를 사용하려면 Cindy에 앱 제어도 허용하세요. 권한 상태는 자동으로 확인됩니다.",
     "permissionsReady": "시스템 권한이 준비되었습니다. 다시 연결할 수 있습니다.",
     "screenRecording": "화면 기록",
-    "accessibility": "손쉬운 사용",
-    "screenRecordingHelp": "시스템 설정을 열고 현재 Cindy 앱의 화면 기록을 허용하세요. 재시작을 요청하면 Cindy를 다시 연 후 연결하세요.",
-    "accessibilityHelp": "설정을 열고 시스템 권한 안내에 표시된 앱의 손쉬운 사용을 허용하세요. 돌아오면 실제 입력 권한을 자동 확인합니다.",
+    "accessibility": "키보드 및 마우스 제어",
+    "screenRecordingHelp": "화면 기록 또는 화면 및 시스템 오디오 녹음에서 현재 실행 중인 Cindy의 화면 기록을 허용하세요. macOS에서 요청하면 Cindy를 다시 여세요.",
+    "accessibilityHelp": "개인정보 보호 및 보안에서 시스템이 안내하는 앱을 선택하세요. System & App Protection Override가 보이면 제어를 허용할 앱을 선택하고, 이전 버전에서는 손쉬운 사용을 켜세요.",
     "permissionChecking": "확인 중…",
     "permissionGranted": "허용됨",
     "permissionUnknown": "확인되지 않음",
@@ -1343,7 +1343,9 @@
       }
     },
     "lockOnExitHintPrivacy": "종료하면 프라이버시 화면을 표시하여 AI가 계속 작업할 수 있습니다. 컴퓨터를 건드리면 잠깁니다.",
-    "lockedEnablePrivacyHint": "자리를 비운 동안에도 AI가 이 컴퓨터를 계속 사용하게 하려면, 이 컴퓨터의 “설정 → 일반 → 자리를 비울 때”에서 프라이버시 화면을 켜세요."
+    "lockedEnablePrivacyHint": "자리를 비운 동안에도 AI가 이 컴퓨터를 계속 사용하게 하려면, 이 컴퓨터의 “설정 → 일반 → 자리를 비울 때”에서 프라이버시 화면을 켜세요.",
+    "revealCurrentApp": "Finder에서 {{app}} 보기",
+    "openPermissionInNewWindow": "새 윈도우에서 열기"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3144,7 +3146,7 @@
         },
         "accessibility": {
           "label": "자동 입력",
-          "tooltip": "손쉬운 사용 권한은 다른 앱에 음성 입력 결과를 자동으로 넣고, 정리용 커서 주변 텍스트를 읽고, 외부 수정 내용을 감지해 사전을 학습하는 데 사용됩니다."
+          "tooltip": "선택한 앱에 받아쓰기를 입력하고, 문장을 다듬기 위해 커서 주변의 텍스트를 읽고, 사전에 반영할 수정 내용을 감지하도록 Cindy에 허용합니다. Mac에 표시되는 손쉬운 사용 또는 System & App Protection Override에서 허용하세요."
         }
       },
       "interactionSound": {
@@ -5734,10 +5736,10 @@
         "toggleAria": "내 브라우저 로그인 사용",
         "confirmTitle": "Agent가 브라우저 로그인을 사용하도록 할까요?",
         "confirmDescription": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다.",
-        "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. Chrome 로그인 파일을 읽으려면 ‘전체 디스크 접근 권한’도 필요합니다. 언제든 끌 수 있으며, 복사본은 삭제됩니다.",
+        "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다. macOS에서 폴더를 선택하라고 하면 사용할 브라우저 프로필 폴더를 선택하세요.",
         "confirm": "내 로그인 사용",
-        "readDeniedTitle": "전체 디스크 접근 권한이 필요합니다",
-        "readDeniedDescription": "Chrome 로그인 파일을 읽으려면 시스템이 Cindy를 허용해야 합니다. 개인 정보 보호 및 보안 → 전체 디스크 접근 권한에서 Cindy를 켠 다음 다시 시도하세요.",
+        "readDeniedTitle": "브라우저 프로필을 읽을 수 없음",
+        "readDeniedDescription": "개인정보 보호 및 보안 → 전체 디스크 접근 권한에서 실행 중인 Cindy를 선택하세요. 폴더를 선택할 수 있다면 필요한 브라우저 프로필 폴더만 선택한 뒤 다시 시도하세요.",
         "openFullDiskAccess": "시스템 설정 열기",
         "readDeniedLater": "나중에",
         "toast": {
@@ -5909,7 +5911,7 @@
         "permissionIntro": {
           "title": "컴퓨터 자동 조작 활성화",
           "description": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요.",
-          "macosDescription": "다음 단계에서 {{appName}}가 Cua Driver 설치 또는 권한 부여 흐름을 열고, 필요하면 macOS 시스템 설정으로 이동합니다. 먼저 CuaDriver에 손쉬운 사용 및 화면 기록 기본 권한을 부여하세요. 이후 실제 사용 중에는 macOS가 대상 앱이나 특정 동작에 대해 추가 확인을 표시할 수 있습니다. 사용자가 직접 Computer Use 작업을 시작한 경우에만 승인하세요. 완료 후 {{appName}}로 돌아오면 자동으로 확인하고 활성화합니다.",
+          "macosDescription": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요. CuaDriver에 화면 기록을 허용하세요. System & App Protection Override에서 제어를 허용할 앱을 선택하고, 이전 macOS 버전에서는 손쉬운 사용을 켜세요.",
           "confirm": "계속",
           "cancel": "나중에"
         },
@@ -5930,8 +5932,8 @@
         },
         "permissions": {
           "title": "시스템 권한",
-          "macosHint": "Computer Use에는 손쉬운 사용 및 화면 기록 권한이 필요합니다. 실제 사용 중에는 macOS가 대상 앱이나 동작에 대해 추가 확인을 표시할 수 있습니다.",
-          "accessibilityLabel": "손쉬운 사용",
+          "macosHint": "CuaDriver에 화면 기록을 허용하세요. System & App Protection Override에서 제어를 허용할 앱을 선택하고, 이전 버전에서는 손쉬운 사용을 켜세요.",
+          "accessibilityLabel": "키보드 및 마우스 제어",
           "screenRecordingLabel": "화면 기록",
           "grant": "허용",
           "accessibility": "손쉬운 사용: {{status}}",
@@ -5977,7 +5979,7 @@
           "toggleFailed": "컴퓨터 직접 제어 전환 실패",
           "installFailed": "cua-driver 설치 실패",
           "permissionFailed": "Computer Use 권한 설정이 완료되지 않았습니다",
-          "permissionPending": "두 시스템 권한을 허용한 후 여기로 돌아와 다시 확인을 누르세요",
+          "permissionPending": "Mac에서 권한 설정을 마치세요. 상태가 바뀌지 않으면 다시 확인하세요.",
           "permissionSettingsOpened": "시스템 권한 설정을 열었습니다. 권한 부여를 마친 뒤 여기로 돌아와 \"다시 확인\"을 눌러 주세요.",
           "permissionSettingsMonitoring": "시스템 권한 설정을 열었습니다. 권한 부여를 마치면 상태가 자동으로 업데이트됩니다.",
           "openPermissionSettingsFailed": "시스템 권한 설정을 열지 못했습니다"
@@ -20389,7 +20391,7 @@
     "epermGuidance": {
       "title": "macOS 폴더 접근이 거부되었습니다",
       "message": "Cindy가 {{folder}} 폴더에 접근할 수 없습니다",
-      "detail": "macOS에서 접근을 거부했습니다. 시스템 설정을 열어 권한을 부여한 다음 Agent 명령을 다시 실행하세요.",
+      "detail": "파일 및 폴더에서 Cindy가 이 폴더에 접근하도록 허용한 뒤 다시 시도하세요.",
       "openSystemSettings": "시스템 설정 열기",
       "cancel": "취소",
       "folderNames": {
@@ -21474,6 +21476,9 @@
     "actionFailed": "플러그인 작업을 완료하지 못했습니다. 다시 시도해 주세요."
   },
   "mcpApps": {
+    "composerDragFailed": "첨부하지 못했습니다. 다시 드래그하거나 ‘입력창에 추가’를 선택하세요.",
+    "composerAttachmentFormat": "이미지, PDF, 일반 텍스트 파일을 각각 최대 64 MiB까지 첨부할 수 있습니다.",
+    "composerAttachmentBusy": "잠시 후 첨부 파일을 추가해 주세요.",
     "sharedTaskReadOnly": "이 카드는 세션 소유자만 조작할 수 있습니다.",
     "retry": "다시 불러오기",
     "loadFailed": "앱을 불러오지 못했습니다. 연결을 확인한 후 다시 불러오세요.",

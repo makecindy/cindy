@@ -1,44 +1,44 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldUseComputerPermissionGuide } from '../computerPermissionGuideEligibility.js';
+import { getComputerPermissionGuideMode } from '../computerPermissionGuideEligibility.js';
 
-describe('shouldUseComputerPermissionGuide', () => {
+describe('getComputerPermissionGuideMode', () => {
   it('uses the guide when macOS has the CuaDriver app bundle', () => {
-    expect(shouldUseComputerPermissionGuide({
+    expect(getComputerPermissionGuideMode({
       platform: 'darwin',
       showGuide: true,
       appBundlePath: '/Applications/CuaDriver.app',
-    })).toBe(true);
+    })).toBe('drag');
   });
 
-  // The 27.3 permission sheet has an app details list, with no switch to point at.
-  it.each([['27.2.1', true], ['27.3', false], ['28.0', false]])(
-    'selects the appropriate grant flow on macOS %s', (systemVersion, useCoach) => {
-      expect(shouldUseComputerPermissionGuide({
-        platform: 'darwin', showGuide: true, appBundlePath: '/Applications/CuaDriver.app',
-        systemVersion,
-      })).toBe(useCoach);
+  // The 27.3 picker cannot complete a copy drag. Pausing the driver here
+  // strands a real installation even after the user enables access in Settings.
+  it.each([['27.2.1', 'drag'], ['27.3', 'settings'], ['27.10.0', 'settings'], ['28.0', 'settings']])(
+    'selects the working authorization flow on macOS %s', (systemVersion, expected) => {
+      expect(getComputerPermissionGuideMode({
+        platform: 'darwin', systemVersion, showGuide: true, appBundlePath: '/Applications/CuaDriver.app',
+      })).toBe(expected);
     },
   );
 
   it('keeps CLI-only macOS installs on the legacy grant flow', () => {
-    expect(shouldUseComputerPermissionGuide({
+    expect(getComputerPermissionGuideMode({
       platform: 'darwin',
       showGuide: true,
       appBundlePath: null,
-    })).toBe(false);
+    })).toBe('driver');
   });
 
   it('does not show the macOS guide on other platforms or without an explicit request', () => {
-    expect(shouldUseComputerPermissionGuide({
+    expect(getComputerPermissionGuideMode({
       platform: 'win32',
       showGuide: true,
       appBundlePath: 'C:\\CuaDriver.app',
-    })).toBe(false);
-    expect(shouldUseComputerPermissionGuide({
+    })).toBe('driver');
+    expect(getComputerPermissionGuideMode({
       platform: 'darwin',
       showGuide: false,
       appBundlePath: '/Applications/CuaDriver.app',
-    })).toBe(false);
+    })).toBe('driver');
   });
 });
