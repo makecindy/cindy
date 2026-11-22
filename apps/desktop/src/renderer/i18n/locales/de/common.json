@@ -15076,7 +15076,6 @@
     "runningStatus": {
       "currentRate": "Letzte Geschwindigkeit",
       "lastRequestRate": "Durchschnitt der letzten Anfrage",
-      "recentTokenRate": "Zuletzt {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Durchschnitt dieser Runde",
       "rateHistory": "Verlauf der Generierungsgeschwindigkeit",

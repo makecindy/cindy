@@ -15048,7 +15048,6 @@
     "runningStatus": {
       "currentRate": "最近速度",
       "lastRequestRate": "上次請求均速",
-      "recentTokenRate": "最近 {{rate}} tok/s",
       "waitingSample": "取樣中",
       "averageRate": "本輪平均",
       "rateHistory": "生成速度歷史",
