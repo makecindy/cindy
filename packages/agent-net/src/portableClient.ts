@@ -70,6 +70,14 @@ export interface PortableClientOptions {
 const STORAGE_UNREACHABLE = Symbol('storage unreachable');
 /** How long a client whose network could not reach the attachment storage keeps using the relay for media. */
 const DIRECT_STORAGE_RETRY_MS = 10 * 60_000;
+/**
+ * Matches Desktop's `DatagramSendQueue` (1 s) and `AGENT_NET_UPLINK_KEEPALIVE.timeoutMs` (45 s): React Native's WebSocket
+ * exposes `bufferedAmount` without a control-frame `ping`. Once outbound bytes sit undrained past `RELAY_QUEUE_STALL_MS`,
+ * new relayed datagrams are dropped instead of piling up; if the send buffer never drains and nothing arrives for
+ * `RELAY_SEND_DEAD_MS`, the half-open WebSocket is closed so `AgentNetSocket` reconnects it.
+ */
+const RELAY_QUEUE_STALL_MS = 1_000;
+const RELAY_SEND_DEAD_MS = 45_000;
 export class PortableAgentNetClient implements SocketClient {
   readonly base: string;
   readonly identity: AgentNetSigner['identity'];
@@ -332,6 +340,10 @@ export class PortableAgentNetClient implements SocketClient {
   }
 }
 
+function bufferedBytes(ws: BinarySocket): number {
+  return typeof ws.bufferedAmount === 'number' && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > 0 ? ws.bufferedAmount : 0;
+}
+
 class PortableUplink extends SocketEvents implements SocketUplink {
   readonly kind = 'agent-net';
   devices: DeviceView[] = [];
@@ -346,14 +358,46 @@ class PortableUplink extends SocketEvents implements SocketUplink {
   private queues = new Map<string, Uint8Array[]>();
   private queuedBytes = 0;
   private scheduled: ReturnType<typeof setTimeout> | null = null;
+  private stallSince: number | null = null;
+  private deadTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private closeEmitted = false;
   private constructor(private ws: BinarySocket) { super(); }
+  private emitClose(code: number): void {
+    if (this.closeEmitted) return;
+    this.closeEmitted = true;
+    this.emit('close', code);
+  }
+  private clearStall(): void {
+    this.stallSince = null;
+    if (this.deadTimer) { clearTimeout(this.deadTimer); this.deadTimer = null; }
+  }
+  private armDeadCheck(): void {
+    if (this.deadTimer || this.closed) return;
+    this.deadTimer = setTimeout(() => {
+      this.deadTimer = null;
+      if (this.closed || this.stallSince === null) return;
+      if (bufferedBytes(this.ws) === 0) { this.stallSince = null; return; }
+      const elapsed = performance.now() - this.stallSince;
+      if (elapsed >= RELAY_SEND_DEAD_MS) {
+        this.close();
+        this.emitClose(1006);
+        return;
+      }
+      this.armDeadCheck();
+    }, Math.max(50, RELAY_SEND_DEAD_MS - (this.stallSince === null ? 0 : performance.now() - this.stallSince)));
+  }
   static open(ws: BinarySocket, client: PortableAgentNetClient, askUdp = false): Promise<PortableUplink> {
     const uplink = new PortableUplink(ws);
     return new Promise((resolve, reject) => {
       let established = false, receivedHello = false;
       const timer = setTimeout(() => fail(new Error('AGENT_NET_HANDSHAKE_TIMEOUT')), 10_000);
-      const fail = (error: Error) => { clearTimeout(timer); if (!established) reject(error); uplink.close(); };
+      const fail = (error: Error) => {
+        clearTimeout(timer);
+        if (!established) reject(error);
+        uplink.close();
+        if (established && ws.readyState === 3) queueMicrotask(() => uplink.emitClose(1006));
+      };
       let chain = Promise.resolve(), waiting = 0;
       ws.onerror = event => {
         const status = typeof event.message === 'string' ? /\b(401|403)\b/.exec(event.message)?.[1] : undefined;
@@ -362,10 +406,12 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       ws.onclose = event => {
         clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + event.code));
         uplink.closed = true;
-        uplink.emit('close', event.code);
+        uplink.clearStall();
+        if (established) uplink.emitClose(event.code);
       };
       ws.onmessage = event => {
         if (uplink.closed) return;
+        if (bufferedBytes(ws) === 0) uplink.clearStall();
         if (++waiting > 512) { fail(new Error('AGENT_NET_RECEIVE_BACKPRESSURE')); return; }
         const receive = async () => {
           if (uplink.closed) return;
@@ -428,8 +474,25 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       for (const [id, packets] of queues) {
         let batch: Uint8Array[] = [], size = 2 + id.length;
         const flush = () => {
-          if (batch.length && !this.closed && this.ws.readyState === 1 && this.ws.bufferedAmount <= 1024 * 1024) {
-            try { this.ws.send(encodeDatagrams(id, batch)); } catch { /* Core retransmits dropped datagrams. */ }
+          if (batch.length && !this.closed && this.ws.readyState === 1) {
+            const bufferedBefore = bufferedBytes(this.ws);
+            if (bufferedBefore === 0) this.clearStall();
+            else if (this.stallSince === null) { this.stallSince = performance.now(); this.armDeadCheck(); }
+            else if (performance.now() - this.stallSince >= RELAY_SEND_DEAD_MS) {
+              this.close();
+              this.emitClose(1006);
+              return;
+            }
+            const stalled = this.stallSince !== null && performance.now() - this.stallSince >= RELAY_QUEUE_STALL_MS;
+            if (!stalled && bufferedBefore <= 1024 * 1024) {
+              try {
+                this.ws.send(encodeDatagrams(id, batch));
+                if (bufferedBytes(this.ws) > 0 && this.stallSince === null) {
+                  this.stallSince = performance.now();
+                  this.armDeadCheck();
+                }
+              } catch { /* Core retransmits dropped datagrams. */ }
+            }
           }
           batch = []; size = 2 + id.length;
         };
@@ -448,6 +511,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.clearStall();
     if (this.scheduled) clearTimeout(this.scheduled); this.scheduled = null;
     this.pending = []; this.pendingBytes = 0; this.queues.clear(); this.queuedBytes = 0;
     this.ws.close();

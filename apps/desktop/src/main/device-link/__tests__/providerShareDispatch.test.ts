@@ -338,6 +338,92 @@ describe('provider share invoke', () => {
     } finally { registry.reset(); }
   });
 
+  it('projects plugin engine reads down to the shared shareSupported engine, strips reportsUsage, and filters models', async () => {
+    const engineId = 'acp-plugin:dsh-acp:dsh';
+    const { __testing: registry } = await import('../invoke-registry');
+    registry.reset();
+    const listEngines = vi.fn(async () => [
+      {
+        key: 'dsh-acp:dsh',
+        providerId: engineId,
+        ghostId: 'dsh-acp',
+        harnessId: 'dsh',
+        name: 'DeepSeek Harness',
+        availability: { state: 'available' },
+        reportsUsage: true,
+        remoteUse: { supported: true, shareSupported: true, enabled: true },
+        models: [
+          { id: 'deepseek-v4', displayName: 'DeepSeek V4' },
+          { id: 'deepseek-v4-lite', displayName: 'DeepSeek V4 Lite' },
+        ],
+        permissionModes: [{ id: 'default', displayName: 'Default' }],
+        defaultPermissionMode: 'default',
+      },
+      {
+        key: 'other:other',
+        providerId: 'acp-plugin:other:other',
+        ghostId: 'other',
+        harnessId: 'other',
+        name: 'Other Engine',
+        availability: { state: 'available' },
+        remoteUse: { supported: true, shareSupported: true, enabled: true },
+        models: [{ id: 'other-model', displayName: 'Other' }],
+        permissionModes: [],
+        defaultPermissionMode: 'default',
+      },
+    ]);
+    const refreshEngines = vi.fn(async () => null);
+    registry.register('maker:list-plugin-engines', listEngines);
+    registry.register('maker:refresh-plugin-engines', refreshEngines);
+    try {
+      // Built-in provider shares never enumerate plugin engines.
+      state.access = ACCESS;
+      await expect(runInvoke(GUEST, { channel: 'maker:list-plugin-engines', args: [] }))
+        .resolves.toEqual({ ok: true, result: [] });
+      expect(listEngines).not.toHaveBeenCalled();
+
+      let allowedModel: string | null = 'deepseek-v4-lite';
+      const refreshPluginEngine = vi.fn();
+      setProviderShareAccess({
+        guestAccess: () => ({ shareId: 'share-1', memberId: 'member-1', providerId: engineId }),
+        ensureKnown: async () => undefined,
+        hasShares: () => true,
+        modelAllowed: (_src, provider, model) => provider === engineId && allowedModel !== null && model === allowedModel,
+        refreshPluginEngine,
+      });
+      await expect(runInvoke(GUEST, { channel: 'maker:refresh-plugin-engines', args: [] }))
+        .resolves.toEqual({ ok: true, result: undefined });
+      expect(refreshPluginEngine).toHaveBeenCalledWith(engineId);
+      expect(refreshEngines).not.toHaveBeenCalled();
+
+      const res = await runInvoke(GUEST, { channel: 'maker:list-plugin-engines', args: [] });
+      expect(res).toMatchObject({
+        ok: true,
+        result: [{
+          providerId: engineId,
+          name: 'DeepSeek Harness',
+          models: [{ id: 'deepseek-v4-lite', displayName: 'DeepSeek V4 Lite' }],
+          defaultModelAllowed: false,
+        }],
+      });
+      expect((res as { result: Array<Record<string, unknown>> }).result[0]).not.toHaveProperty('reportsUsage');
+
+      // When all models are filtered out for a member, defaultModelAllowed: false prevents synthesizing default.
+      allowedModel = null;
+      const emptyRes = await runInvoke(GUEST, { channel: 'maker:list-plugin-engines', args: [] });
+      expect(emptyRes).toMatchObject({
+        ok: true,
+        result: [{
+          providerId: engineId,
+          models: [],
+          defaultModelAllowed: false,
+        }],
+      });
+    } finally {
+      registry.reset();
+    }
+  });
+
   it('never hands the sharer account identity to the guest', () => {
     const projected = __testing.projectProviderListForShare({
       providers: [{

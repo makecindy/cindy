@@ -221,3 +221,39 @@ export const NUMERIC_TEXT_CLASSES = [
   "24",
   "28"
 ];
+export const Z_INDEX_LAYERS = {
+  "below": -1,
+  "raised": 10,
+  "page-float": 20,
+  "page-overlay": 30,
+  "page-top": 40,
+  "float": 50,
+  "float-top": 60,
+  "fullscreen": 9999,
+  "modal": 10000,
+  "modal-raised": 10001,
+  "modal-nested": 10002,
+  "dropdown": 10010,
+  "tooltip": 10011,
+  "modal-popover-nested": 10020,
+  "toast": 10100,
+  "toast-top": 10101
+};
+export const Z_INDEX_CLASSES = [
+  "below",
+  "raised",
+  "page-float",
+  "page-overlay",
+  "page-top",
+  "float",
+  "float-top",
+  "fullscreen",
+  "modal",
+  "modal-raised",
+  "modal-nested",
+  "dropdown",
+  "tooltip",
+  "modal-popover-nested",
+  "toast",
+  "toast-top"
+];

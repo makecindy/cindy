@@ -1375,3 +1375,17 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
 });
+
+// Session tier: an observer can reject a reservation before the provider sees it.
+it('releases a throwing reservation observer so the next Session send can start', async () => {
+  const stub = createHandle();
+  const session = createSession(stub);
+  const release = vi.fn();
+  const reserve = vi.fn().mockImplementationOnce(() => { throw new Error('reservation failed'); }).mockReturnValue(release);
+  session.setTurnLifecycleObserver({ onTurnReserved: reserve, beforeProviderStart() {}, onUndispatched() {}, onTerminal() {} });
+  try {
+    await expect(session.send('first')).rejects.toThrow('reservation failed');
+    expect(await session.send('retry')).toEqual({ accepted: true });
+    expect(release).toHaveBeenCalledWith(true);
+  } finally { await session.close(); }
+});

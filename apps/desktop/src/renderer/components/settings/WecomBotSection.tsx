@@ -37,7 +37,7 @@ function statusColor(status: WecomBotTransportStatus): string {
 }
 
 const fieldClassName = cn(
-  'h-[42px] w-full rounded-full px-[14px]',
+  'h-[42px] w-full rounded-full px-3.5',
   'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
   'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
   'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -329,7 +329,7 @@ export function WecomBotSection({
               spellCheck={false}
               aria-label={t('settings.notifications.wecomGroupLabel')}
               className={cn(
-                'h-[42px] w-full rounded-full px-[14px]',
+                'h-[42px] w-full rounded-full px-3.5',
                 'border border-[var(--settings-input-border)]',
                 'bg-[var(--settings-input-bg)] text-13 text-[var(--settings-input-text)]',
                 'placeholder:text-[var(--settings-input-placeholder)] outline-none',

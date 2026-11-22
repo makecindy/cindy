@@ -4,7 +4,6 @@ import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
 import { InboxUnreadReporter, useTaskListMode } from '@/hooks/useTaskListMode';
 import {
-  matchesTaskCreators,
   useTaskCreatorIndex,
   useTaskCreatorOptions,
 } from '@/features/bots/botFollowScopes';
@@ -60,6 +59,7 @@ import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { isTeammateOwnInboxTask } from '@cindy/maker-shared/live-task-priority';
 
 import { cn } from '@/lib/utils';
 import { provisionalDraftTaskId, subscribeProvisionalDraftTask } from './provisionalDraftTask';
@@ -407,8 +407,8 @@ function RemoteSidebarLoadNotice({
           'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
         !quietDeviceLoading &&
           (partial
-            ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
-            : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center'),
+            ? 'mx-3 flex items-start gap-2 rounded-lg px-3 py-2'
+            : 'mx-3 flex flex-col items-center gap-3 rounded-xl px-4 py-8 text-center'),
       )}
     >
       {isError ? (
@@ -1286,6 +1286,9 @@ function ExpandedView({
       // 插件后台隐藏任务不单独通知;显示到任务列表后恢复。
       if (session && isBackgroundTaskNotificationTarget(session)) return;
       if (session) {
+        // Listed group/IM lanes must stay silent just like the hidden-lane fallback.
+        // Main independently owns their Island errors and interaction requests.
+        if (session.companion?.role === 'group' || session.companion?.role === 'channel') return;
         const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
         sendSessionEventNotification(sessionId, title, kind, {
           remoteDevice: !!session.deviceLinkDeviceId,
@@ -1653,11 +1656,9 @@ function ExpandedView({
     () => filterSidebarTasks(statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex),
     [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex],
   );
-  // The inbox counts a task as a teammate's by the same test as the teammate filter.
-  const isInboxTeammateTask = useCallback(
-    (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
-    [taskCreatorIndex],
-  );
+  // A teammate's own conversations and its project's tasks stay out of the inbox until they need the
+  // owner; a task it opened elsewhere is ordinary work (shared with the phone).
+  const isInboxTeammateTask = isTeammateOwnInboxTask;
   // Pins are shortcuts. Classify the task through its own project or dialogue in the inbox.
   const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, true,
     undefined, localPlatform, undefined, projectAliasMembers);
@@ -4146,7 +4147,7 @@ function CollapsedView({
   return (
     <div
       className={cn(
-        'flex min-h-0 flex-1 flex-col items-center gap-[3px] overflow-y-auto px-2 pt-3 pb-2',
+        'flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto px-2 pt-3 pb-2',
         // rail 太窄，原生 scrollbar 会吃掉瓷砖宽度——隐藏，滚动靠 wheel/trackpad
         '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
       )}
@@ -4189,7 +4190,7 @@ function CollapsedView({
         onClick={() => navigateToView('bots')}
       />
 
-      <div className="my-[7px] h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />
+      <div className="my-1.5 h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />
 
       {/* 置顶 / 项目 / 对话 三段导航(hover 出可交互二级面板,项目段三级级联)。 */}
       <RailNav
@@ -4272,7 +4273,7 @@ function RailPanelShell({
       className={cn(
         'fixed w-[264px] rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-1.5',
         // 阴影走主题 token(AGENTS.md #16,与菜单同语言);z 必须低于 DropdownMenu
-        // 的 z-50 —— 行内右键/移动菜单要画在面板之上(review P2)。
+        // 的 dropdown 层(10010)—— 行内右键/移动菜单要画在面板之上(review P2)。
         'shadow-[shadow:var(--shadow-menu)]',
         level === 1 ? 'z-[48]' : 'z-[49]',
       )}

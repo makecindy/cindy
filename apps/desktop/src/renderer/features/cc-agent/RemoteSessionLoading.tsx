@@ -25,7 +25,7 @@ export function RemoteSessionLoading({ compact = false }: { compact?: boolean })
     );
   }
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+    <div className="pointer-events-none absolute inset-0 z-raised flex items-center justify-center">
       <div role="status" className="flex items-center gap-2 text-13 text-[var(--text-secondary)]">
         <Spinner size={14} />
         <span>{t('ccAgent.remoteSession.loading')}</span>

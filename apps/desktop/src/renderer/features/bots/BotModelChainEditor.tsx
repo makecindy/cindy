@@ -1,26 +1,47 @@
 import { Button } from '@/components/ui/button';
-import { Fragment, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { DefaultOverrideControls } from '@/components/settings/DefaultOverrideControls';
 import { SettingsRow } from '@/components/ui/settings-rows';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
+import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import {
+  findPluginEngine,
+  requestPluginEnginesRefresh,
+  useDevicesPluginEngines,
+  usePluginEngines,
+  useRemotePluginEngines,
+} from '@/hooks/usePluginEngines';
+import { deviceDisplayName } from '@/lib/deviceName';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineSelectable,
+  remotePluginEngineChoices,
+  type PluginEngineChoice,
+  type PluginEngineSelection,
+} from '@/lib/pluginEngineSelection';
 import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
 import { toast } from '@/lib/toast';
 import { ModelRouteSelector } from '@/components/new-chat/ModelRouteSelector';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import {
   BOT_MODEL_CHAIN_MAX,
   type BotHarness,
   type BotModelRoute,
 } from '../../../shared/botModelChain';
 import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection, type ModelGroupsConfig } from '../../../shared/modelGroups';
+import { isPluginEngineEffort } from '../../../shared/pluginEngines';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useBotTranslation } from './botPronounContext';
 
 function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
-  return harness === 'claude' ? 'cc' : harness;
+  return harness === 'claude' ? 'cc' : harness === 'acp' ? 'pi' : harness;
 }
 
 function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
@@ -83,6 +104,120 @@ export function BotModelChainEditor({
   const visibleVendors = (['pi', 'codex', 'cc'] as const)
     .filter((vendor) => !hiddenVendors.includes(vendor));
   const unifiedAgents = visibleVendors.map(agentKindFor);
+  const selfDeviceId = useOptionalAuthDeviceId();
+  const { devices: selectableDevices } = useSelectableDevices();
+  const rememberedPluginEngineDeviceIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const route of pendingRoute ? [...routes, pendingRoute] : routes) {
+      if (route.harness === 'acp' && route.agentDeviceId && !ids.includes(route.agentDeviceId)) {
+        ids.push(route.agentDeviceId);
+      }
+    }
+    return ids;
+  }, [routes, pendingRoute]);
+  const {
+    pluginEngineDevices: sharedPluginEngineDevices = [],
+    nameFor: providerShareDeviceName,
+  } = useProviderShareAgentDevices(rememberedPluginEngineDeviceIds, deviceId);
+
+  const pluginEnginesAllowed = !remote;
+  const localPluginEnginesNeeded = pluginEnginesAllowed
+    && (!deviceId || (!!selfDeviceId && rememberedPluginEngineDeviceIds.includes(selfDeviceId)));
+  const localPluginEngines = usePluginEngines(localPluginEnginesNeeded);
+  const {
+    engines: remoteHostPluginEngines,
+    refresh: refreshRemoteHostPluginEngines,
+  } = useRemotePluginEngines(
+    pluginEnginesAllowed && deviceId ? deviceId : undefined,
+    pluginEnginesAllowed && deviceId ? 'once' : false,
+  );
+  // 与新任务草稿 / 会话模型列表一致：本机伙伴免装列出同账号其他电脑与已收到插件引擎分享；
+  // 远程控制的伙伴除宿主电脑的插件引擎外，也保留已保存的远程/分享插件引擎回显。
+  const pluginEngineDevicesKey = pluginEnginesAllowed
+    ? JSON.stringify(
+        !deviceId
+          ? [
+              ...selectableDevices
+                .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
+                  && (device.online || rememberedPluginEngineDeviceIds.includes(device.deviceId)))
+                .map(({ deviceId: id, name }): [string, string | null] => [id, name ?? null]),
+              ...sharedPluginEngineDevices
+                .map(({ deviceId: id, name }): [string, string | null] => [id, name || null]),
+              ...rememberedPluginEngineDeviceIds
+                .filter((id) => isProviderShareAgentDeviceId(id)
+                  && !sharedPluginEngineDevices.some((item) => item.deviceId === id))
+                .map((id): [string, string | null] => [id, providerShareDeviceName?.(id) ?? null]),
+            ]
+          : rememberedPluginEngineDeviceIds
+              .filter((id) => id !== deviceId && id !== selfDeviceId && !isSharedTaskPeer(id))
+              .map((id): [string, string | null] => [
+                id,
+                selectableDevices.find((item) => item.deviceId === id)?.name
+                  ?? providerShareDeviceName?.(id)
+                  ?? null,
+              ]),
+      )
+    : '[]';
+  const pluginEngineDevices = useMemo(
+    () => (JSON.parse(pluginEngineDevicesKey) as Array<[string, string | null]>).map(([id, name]) => ({ deviceId: id, name })),
+    [pluginEngineDevicesKey],
+  );
+  const pluginEngineDeviceIds = useMemo(() => pluginEngineDevices.map((device) => device.deviceId), [pluginEngineDevices]);
+  const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(pluginEngineDeviceIds);
+  const rememberedPluginEngineDevicesKey = useMemo(
+    () => rememberedPluginEngineDeviceIds.filter((id) => pluginEngineDeviceIds.includes(id)).join('\n'),
+    [rememberedPluginEngineDeviceIds, pluginEngineDeviceIds],
+  );
+  useEffect(() => {
+    if (!rememberedPluginEngineDevicesKey) return;
+    for (const id of rememberedPluginEngineDevicesKey.split('\n')) readDevicePluginEngines(id);
+  }, [rememberedPluginEngineDevicesKey, readDevicePluginEngines]);
+
+  const pluginEngineChoices = useMemo<readonly PluginEngineChoice[]>(() => {
+    if (!pluginEnginesAllowed) return [];
+    if (deviceId) {
+      const base: PluginEngineChoice[] = [...(remoteHostPluginEngines ?? [])];
+      for (const route of pendingRoute ? [...routes, pendingRoute] : routes) {
+        if (route.harness !== 'acp' || !route.providerId || !route.agentDeviceId) continue;
+        if (base.some((item) => item.providerId === route.providerId && item.deviceId === route.agentDeviceId)) continue;
+        const source = route.agentDeviceId === selfDeviceId
+          ? localPluginEngines
+          : devicePluginEngines.get(route.agentDeviceId) ?? [];
+        const engine = findPluginEngine(source, route.providerId);
+        if (!engine) continue;
+        const name = selectableDevices.find((item) => item.deviceId === route.agentDeviceId)?.name
+          ?? providerShareDeviceName?.(route.agentDeviceId)
+          ?? undefined;
+        base.push({ ...engine, deviceId: route.agentDeviceId, deviceName: deviceDisplayName(route.agentDeviceId, name) });
+      }
+      return base;
+    }
+    const remoteChoices = remotePluginEngineChoices(pluginEngineDevices, devicePluginEngines, deviceDisplayName, localPluginEngines);
+    return remoteChoices.length ? [...localPluginEngines, ...remoteChoices] : localPluginEngines;
+  }, [
+    pluginEnginesAllowed,
+    deviceId,
+    remoteHostPluginEngines,
+    pendingRoute,
+    routes,
+    selfDeviceId,
+    localPluginEngines,
+    devicePluginEngines,
+    selectableDevices,
+    providerShareDeviceName,
+    pluginEngineDevices,
+  ]);
+  const hasLocalPluginEnginesRef = useRef(false);
+  hasLocalPluginEnginesRef.current = localPluginEngines.length > 0;
+  const readPluginEngineCatalogues = useCallback(() => {
+    if (deviceId) {
+      refreshRemoteHostPluginEngines();
+      readDevicePluginEngines();
+      return;
+    }
+    if (hasLocalPluginEnginesRef.current) requestPluginEnginesRefresh();
+    readDevicePluginEngines();
+  }, [deviceId, refreshRemoteHostPluginEngines, readDevicePluginEngines]);
 
   // 模型组属于伙伴所在的电脑：本机伙伴读本机的组；远程控制另一台电脑时用那台随设置带来的组；SSH 不提供。
   const localGroups = !remote && !deviceId;
@@ -183,83 +318,126 @@ export function BotModelChainEditor({
     [next[index], next[target]] = [next[target]!, next[index]!];
     onChange(next);
   };
+  const selectablePluginEngine = pluginEngineChoices.find(isPluginEngineSelectable);
   const add = () => {
     if (disabled || pendingRoute || routes.length >= BOT_MODEL_CHAIN_MAX) return;
     const unused = visibleVendors.find(
-      (vendor) => !routes.some((route) => vendorFor(route.harness) === vendor),
+      (vendor) => !routes.some((route) => route.harness !== 'acp' && vendorFor(route.harness) === vendor),
     );
     const vendor = unused ?? visibleVendors[0];
-    if (!vendor) return;
-    setPendingRoute({ harness: harnessFor(vendor), model: '', providerId: null, effort: '', fastMode: false });
+    if (vendor) {
+      setPendingRoute({ harness: harnessFor(vendor), model: '', providerId: null, effort: '', fastMode: false });
+      return;
+    }
+    if (selectablePluginEngine) {
+      setPendingRoute({
+        harness: 'acp',
+        model: '',
+        providerId: selectablePluginEngine.providerId,
+        ...(selectablePluginEngine.deviceId ? { agentDeviceId: selectablePluginEngine.deviceId } : {}),
+        effort: '',
+        fastMode: false,
+      });
+    } else if (pluginEngineDevices.length > 0) {
+      setPendingRoute({ harness: 'pi', model: '', providerId: null, effort: '', fastMode: false });
+    }
   };
 
-  const picker = (route: BotModelRoute, index: number, wrapperClassName = 'min-w-0 flex-1') => (
-    <div className={wrapperClassName}>
-      <ModelRouteSelector
-        disabled={disabled}
-        deviceId={deviceId}
-        agentDeviceId={route.agentDeviceId}
-        sshRemote={remote && !deviceId}
-        vendorKey={vendorFor(route.harness)}
-        modelId={route.model}
-        effort={route.effort}
-        currentProviderId={route.providerId}
-        agentIdentity={{ vendorKey: vendorFor(route.harness), state: 'current' }}
-        triggerVariant="settings"
-        popoverSide="bottom"
-        ariaContext={t('bots.modelChain.routeLabel', { index: index + 1 })}
-        excludeSubscriptionDirect={remote && !deviceId}
-        excludeChatBridgedCodex={remote && !deviceId}
-        fastMode={route.fastMode}
-        onModelChange={(model) => replace(index, { model, modelGroup: undefined })}
-        onEffortChange={(effort) => replace(index, { effort })}
-        onFastModeChange={(fastMode) => replace(index, { fastMode })}
-        onNavigateToProviders={remote || deviceId ? undefined : onNavigateToProviders}
-        configurationEnabled
-        unifiedPanel
-        unifiedAgents={unifiedAgents}
-        onUnifiedSelect={(selection) => {
-          if (!visibleVendors.includes(selection.engine)) return;
-          replace(index, {
-            harness: harnessFor(selection.engine),
-            ...(route.agentDeviceId || selection.agentDevice ? { agentDeviceId: selection.agentDevice?.deviceId ?? null } : {}),
-            providerId: selection.providerId,
-            model: selection.modelId,
-            effort: selection.effort ?? '',
-            fastMode: selection.fast,
-            modelGroup: undefined,
-          });
-        }}
-        {...(groupsAllowed ? {
-          modelGroups: {
-            config: groupsConfig,
-            active: route.modelGroup && groupsConfig.routes.some((item) => item.id === route.modelGroup)
-              ? { type: 'route' as const, id: route.modelGroup }
+  const picker = (route: BotModelRoute, index: number, wrapperClassName = 'min-w-0 flex-1') => {
+    const routeIsPluginEngine = route.harness === 'acp' && !!route.providerId;
+    const showPluginEngines = pluginEnginesAllowed
+      && (pluginEngineChoices.length > 0 || pluginEngineDevices.length > 0 || routeIsPluginEngine);
+    return (
+      <div className={wrapperClassName}>
+        <ModelRouteSelector
+          disabled={disabled}
+          deviceId={deviceId}
+          agentDeviceId={routeIsPluginEngine ? undefined : route.agentDeviceId}
+          sshRemote={remote && !deviceId}
+          vendorKey={vendorFor(route.harness)}
+          modelId={route.model}
+          effort={route.effort}
+          currentProviderId={routeIsPluginEngine ? null : route.providerId}
+          agentIdentity={{ vendorKey: vendorFor(route.harness), state: 'current' }}
+          triggerVariant="settings"
+          popoverSide="bottom"
+          ariaContext={t('bots.modelChain.routeLabel', { index: index + 1 })}
+          excludeSubscriptionDirect={remote && !deviceId}
+          excludeChatBridgedCodex={remote && !deviceId}
+          fastMode={routeIsPluginEngine ? false : route.fastMode}
+          onModelChange={(model) => replace(index, { model, modelGroup: undefined })}
+          onEffortChange={(effort) => replace(index, { effort })}
+          onFastModeChange={(fastMode) => replace(index, { fastMode: routeIsPluginEngine ? false : fastMode })}
+          onNavigateToProviders={remote || deviceId ? undefined : onNavigateToProviders}
+          configurationEnabled
+          unifiedPanel
+          unifiedAgents={unifiedAgents}
+          pluginEngines={showPluginEngines ? {
+            engines: pluginEngineChoices,
+            active: routeIsPluginEngine && route.model
+              ? {
+                  providerId: route.providerId!,
+                  ...(route.agentDeviceId ? { deviceId: route.agentDeviceId } : {}),
+                  modelId: route.model,
+                  ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
+                }
               : null,
-            onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
-            // The editor also renders outside a router (tests, settings drawers); the app routes by hash.
-            ...(localGroups ? { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } } : {}),
-          },
-        } : {})}
-        unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
-        unknownModelDescription={t('settings.auxiliaryModels.unavailable')}
-      />
-      {deviceId && !route.agentDeviceId && route.providerId
-        ? (() => {
-            const provider = catalog.providers.find((item) => item.id === route.providerId);
-            return provider ? (
-              <p className="mt-1 break-words px-2 text-12 text-[var(--text-secondary)]">
-                {providerAccountLabel(
-                  providerDisplayName(provider, t),
-                  provider.openAiAccount?.identity?.trim() ||
-                    provider.subscriptionAccount?.identity?.trim(),
-                )}
-              </p>
-            ) : null;
-          })()
-        : null}
-    </div>
-  );
+            readCatalogue: readPluginEngineCatalogues,
+            onSelect: (selection: PluginEngineSelection) => {
+              replace(index, {
+                harness: 'acp',
+                ...(route.agentDeviceId || selection.deviceId ? { agentDeviceId: selection.deviceId ?? null } : {}),
+                providerId: selection.providerId,
+                model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                effort: selection.effort ?? '',
+                fastMode: false,
+                modelGroup: undefined,
+              });
+            },
+          } : undefined}
+          onUnifiedSelect={(selection) => {
+            if (!visibleVendors.includes(selection.engine)) return;
+            replace(index, {
+              harness: harnessFor(selection.engine),
+              ...(route.agentDeviceId || selection.agentDevice ? { agentDeviceId: selection.agentDevice?.deviceId ?? null } : {}),
+              providerId: selection.providerId,
+              model: selection.modelId,
+              effort: selection.effort ?? '',
+              fastMode: selection.fast,
+              modelGroup: undefined,
+            });
+          }}
+          {...(groupsAllowed ? {
+            modelGroups: {
+              config: groupsConfig,
+              active: route.modelGroup && groupsConfig.routes.some((item) => item.id === route.modelGroup)
+                ? { type: 'route' as const, id: route.modelGroup }
+                : null,
+              onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
+              // The editor also renders outside a router (tests, settings drawers); the app routes by hash.
+              ...(localGroups ? { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } } : {}),
+            },
+          } : {})}
+          unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
+          unknownModelDescription={t('settings.auxiliaryModels.unavailable')}
+        />
+        {deviceId && !routeIsPluginEngine && !route.agentDeviceId && route.providerId
+          ? (() => {
+              const provider = catalog.providers.find((item) => item.id === route.providerId);
+              return provider ? (
+                <p className="mt-1 break-words px-2 text-12 text-[var(--text-secondary)]">
+                  {providerAccountLabel(
+                    providerDisplayName(provider, t),
+                    provider.openAiAccount?.identity?.trim() ||
+                      provider.subscriptionAccount?.identity?.trim(),
+                  )}
+                </p>
+              ) : null;
+            })()
+          : null}
+      </div>
+    );
+  };
   const fallbackRows = routes.slice(1).map((route, fallbackIndex) => {
     const index = fallbackIndex + 1;
     return (
@@ -321,7 +499,7 @@ export function BotModelChainEditor({
     disabled ||
     pendingRoute !== null ||
     routes.length >= BOT_MODEL_CHAIN_MAX ||
-    visibleVendors.length === 0;
+    (visibleVendors.length === 0 && !selectablePluginEngine && pluginEngineDevices.length === 0);
   const primaryRoute =
     routes[0] ?? { harness: 'pi' as const, model: '', providerId: null, effort: '', fastMode: false };
 

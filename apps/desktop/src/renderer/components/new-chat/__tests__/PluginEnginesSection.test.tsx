@@ -491,6 +491,36 @@ describe('plugin engines in the new-task picker', () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-11-22(插件引擎进入「设置 → 模型供应商」)：用户在那里隐藏的引擎不在选择器里占位，已选着它的任务照常显示；
+  // 另一台电脑把自己的引擎隐藏，是那台电脑选择器的事，开放给本机任务用的那一份照常列出。
+  // 依据：configuration-and-overrides.md「隐藏只改陈列」。最小失败输入：隐藏的引擎仍占一格；当前任务选着的引擎被
+  // 隐藏后从选择器里消失；主人隐藏后借用方也看不到。tier：unit(jsdom)。
+  it('keeps an engine the user hid out of the picker, except for the task already on it or a borrowing computer', () => {
+    const hiddenDsh = { ...dsh, hidden: true as const };
+    const view = renderDraftPicker({ engines: [hiddenDsh, known], active: null, onSelect: vi.fn() });
+    expect(screen.queryByRole('button', { name: 'DeepSeek Harness' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'OpenCode' })).toBeTruthy();
+    view.unmount();
+
+    const active = renderDraftPicker({
+      engines: [hiddenDsh, known],
+      active: { providerId: dsh.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL },
+      onSelect: vi.fn(),
+    });
+    expect(screen.getByRole('button', { name: 'DeepSeek Harness' })).toBeTruthy();
+    active.unmount();
+
+    const borrowed = remotePluginEngineChoices(
+      [{ deviceId: 'computer-b', name: 'Studio Mac' }],
+      new Map([['computer-b', [{ ...hiddenDsh, remoteUse: { supported: true, enabled: true } }]]]),
+      (id, name) => name ?? id,
+    );
+    expect(borrowed).toHaveLength(1);
+    expect(borrowed[0]).not.toHaveProperty('hidden');
+    renderDraftPicker({ engines: borrowed, active: null, onSelect: vi.fn() });
+    expect(screen.getByRole('button', { name: 'DeepSeek Harness · Studio Mac' })).toBeTruthy();
+  });
+
   // 第三期(2026-11-20)：自己另一台电脑上的引擎。同一个插件两台都装时 providerId 相同，只有所在电脑不同。
   it('lists an engine of another computer under that computer and keeps it apart from this computer’s engine of the same plugin', () => {
     const onSelect = vi.fn();
@@ -632,49 +662,62 @@ describe('plugin engines in the new-task picker', () => {
     }));
   });
 
-  // 生产入口与可观察结果：remotePluginEngineChoices + ModelSelectorContent；本机未装该插件时不展示远端共享插件引擎；
-  // 本机装了但未登录(unavailable)时隐藏本机置灰项、只展示远端可用项；组织命名空间与其它组织隔离。
-  // 依据：2026-11-20 用户实机反馈第 2、3 条。
-  // 覆盖缺口：此前 remotePluginEngineChoices 未过滤本机未安装插件，且本机未登录项在列表冗余占位。
-  // 最小失败输入与 tier：unit（jsdom），本机未装插件返回空；本机装 _ns__local__dsh-plugin(未登录) + 远端 _root__dsh-plugin(可用)。
-  it('offers another computer’s engine only when its plugin is installed here, hides an unauthenticated local copy, and never falls back to this computer’s engine', () => {
+  // 生产入口与可观察结果：remotePluginEngineChoices + ModelSelectorContent；使用端无需安装插件即可展示并选择同账号远程电脑
+  // 与朋友分享(`share:<id>`)开放的插件引擎；若本机装了但未登录(unavailable)则隐藏本机置灰项、只展示远端可用项；永不回落到本机引擎。
+  // 依据：2026-11-21 用户决定「同账号与朋友分享的远程插件引擎全面免装插件」。
+  // 最小失败输入与 tier：unit（jsdom），本机 installedEngines=[] 时仍展示远端与分享项；远端停供时 resolveActivePluginEngine 返回 null。
+  it('offers another computer’s and a friend’s shared plugin engines install-free, hides an unauthenticated local copy, and never falls back to this computer’s engine', () => {
     const offered = { supported: true, enabled: true };
     const remoteCatalogues = new Map<string, readonly PluginEngineView[] | null>([
       ['computer-b', [
         { ...engine('_root__dsh-plugin:dsh', 'DeepSeek Harness'), remoteUse: offered },
-        // Not installed on this computer: hidden even though opened on computer-b.
         { ...engine('cursor-plugin:cursor', 'Cursor'), remoteUse: offered },
-        // Different organization namespace: never matched to a local non-org install.
-        { ...engine('_ns__acme__dsh-plugin:dsh', 'Acme DSH'), remoteUse: offered },
         // Not opened for remote use, plugin without the mode, reported unavailable, an older Cindy: none is offered.
         { ...known, remoteUse: { supported: true, enabled: false } },
         { ...agy, remoteUse: { supported: false, enabled: false } },
         { ...gemini, remoteUse: offered },
         engine('old-plugin:old', 'Older Cindy'),
       ]],
+      ['share:s1', [
+        { ...engine('dsh-acp:dsh', 'DeepSeek Harness'), remoteUse: { supported: true, shareSupported: true, enabled: true } },
+      ]],
+      // Share with all models filtered out by permissions: must not synthesize a default model or appear selectable.
+      ['share:empty', [
+        { ...engine('agy-acp:agy', 'Antigravity'), models: [], defaultModelAllowed: false, remoteUse: { supported: true, shareSupported: true, enabled: true } },
+      ]],
       // Not answered yet: offers nothing for now.
       ['computer-c', null],
     ]);
-    const devices = [{ deviceId: 'computer-b', name: 'Studio Mac' }, { deviceId: 'computer-c', name: null }];
+    const devices = [
+      { deviceId: 'computer-b', name: 'Studio Mac' },
+      { deviceId: 'share:s1', name: '来自 Magi 的分享' },
+      { deviceId: 'share:empty', name: '来自 Lizi 的分享' },
+      { deviceId: 'computer-c', name: null },
+    ];
 
-    // Without the plugin installed on this computer, nothing from computer-b is shown.
-    expect(remotePluginEngineChoices(devices, remoteCatalogues, (id, name) => name ?? id, [])).toEqual([]);
-    expect(remotePluginEngineChoices(devices, remoteCatalogues, (id, name) => name ?? id, [known])).toEqual([]);
+    // Install-free: even with zero local plugins installed, all offered remote and shared engines appear.
+    const choices = remotePluginEngineChoices(devices, remoteCatalogues, (id, name) => name ?? id, []);
+    expect(choices.map((choice) => [choice.providerId, choice.deviceId, choice.deviceName])).toEqual([
+      ['acp-plugin:_root__dsh-plugin:dsh', 'computer-b', 'Studio Mac'],
+      ['acp-plugin:cursor-plugin:cursor', 'computer-b', 'Studio Mac'],
+      ['acp-plugin:dsh-acp:dsh', 'share:s1', '来自 Magi 的分享'],
+    ]);
 
-    // Installed locally (even unauthenticated / unavailable, and via .cindy `_ns__local__`): remote engine is offered.
+    // If a local copy is installed but unauthenticated / unavailable, the picker hides it and shows the usable remote/shared choices.
     const localUnauthenticatedDsh = engine('_ns__local__dsh-plugin:dsh', 'DeepSeek Harness', {
       availability: { state: 'unavailable', reason: 'not-signed-in', message: 'Please sign in' },
     });
-    const choices = remotePluginEngineChoices(devices, remoteCatalogues, (id, name) => name ?? id, [localUnauthenticatedDsh, known, agy, gemini]);
-    expect(choices.map((choice) => [choice.providerId, choice.deviceId, choice.deviceName])).toEqual([
-      ['acp-plugin:_root__dsh-plugin:dsh', 'computer-b', 'Studio Mac'],
-    ]);
-
-    // Rendering [localUnauthenticatedDsh, ...choices] hides the unauthenticated local engine and shows only Studio Mac's engine.
     renderDraftPicker({ engines: [localUnauthenticatedDsh, ...choices], active: null, onSelect: vi.fn() });
     expect(screen.queryByRole('button', { name: 'DeepSeek Harness' })).toBeNull();
     expect(screen.getByRole('button', { name: 'DeepSeek Harness · Studio Mac' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'DeepSeek Harness · 来自 Magi 的分享' })).toBeTruthy();
 
+    const shared = resolveActivePluginEngine([dsh, ...choices], {
+      providerId: 'acp-plugin:dsh-acp:dsh', deviceId: 'share:s1', modelId: 'default',
+    });
+    expect(pluginEngineSessionCreateFields(shared!)).toEqual({
+      agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'default', effort: '', agentDeviceId: 'share:s1',
+    });
     const remote = resolveActivePluginEngine([dsh, ...choices], {
       providerId: 'acp-plugin:_root__dsh-plugin:dsh', deviceId: 'computer-b', modelId: 'default',
     });

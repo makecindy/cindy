@@ -28,9 +28,13 @@ const colorsSource = readFileSync(
 /** 裸色字面量：hex、带数值入参的 rgb()/rgba()/hsl()/hsla()。 */
 const RAW_COLOR_RE = /#[0-9a-fA-F]{3,8}\b|rgba?\(\s*\d|hsla?\(\s*\d/g;
 const TOKEN_REF_RE = /var\(--([a-z0-9-]+)\)/g;
+/** Spacing / radius are generated dimension tokens (tokens.css, Tailwind scale), not colour slots. */
+const DIMENSION_TOKEN_RE = /^(?:space-|radius(?:-|$))/;
 
 function referencedTokens(): string[] {
-  return [...viewSource.matchAll(TOKEN_REF_RE)].map((match) => match[1]);
+  return [...viewSource.matchAll(TOKEN_REF_RE)]
+    .map((match) => match[1])
+    .filter((id) => !DIMENSION_TOKEN_RE.test(id));
 }
 
 describe('MakerExperimentalView 主题契约（语义 token，双模式）', () => {

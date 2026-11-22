@@ -1,3 +1,4 @@
+import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
 import { usePluginInPlace } from '@/features/plugin/lib/pluginInPlace';
 import { computerUseSettings } from './ComputerUseSection.settings-search';
 /**
@@ -197,6 +198,7 @@ function ConfigurationReadStatus({
 
 export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const { t, i18n } = useTranslation();
+  const modernPermissions = usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease);
   const browserRead = useAutomationSettingsRead(
     'browser enable state',
     useCallback(
@@ -400,8 +402,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       log.debug('computer permission grant requested', { reason });
       try {
         const result = await window.electronAPI.maker.computer.grantPermissions({
-          // The native coach presents the drag/enable steps beside System Settings.
-          // Permission status itself advances only after explicit user actions.
+          // Main chooses the guide for the installed macOS. Only its probe can confirm a grant.
           showGuide: window.electronAPI.platform === 'darwin',
           ...(openedPaneUrl ? { openedPaneUrl } : {}),
         });
@@ -973,7 +974,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     [setComputerEnabled, t],
   );
 
-  // CLI-only CuaDriver installs use the legacy `permissions grant` process and
+  // CLI-only installs and macOS's app-details consent sheet use the driver's grant process and
   // have no native-guide broadcasts. Keep checking that live permission state
   // while the shared pending UI is visible. The completion ref also prevents a
   // native broadcast and this fallback poll from enabling the plugin twice.
@@ -1231,6 +1232,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         if (shouldStartComputerPermissionGuide(next, nextStatus)) {
           if (!isCurrentFlow()) return;
           setComputerPermissionPending(true);
+          if (modernPermissions) {
+            const url = isComputerAccessibilityPermissionReady(nextStatus)
+              ? MAC_SCREEN_RECORDING_SETTINGS_URL
+              : MAC_ACCESSIBILITY_SETTINGS_URL;
+            await openComputerPermissionSettings(url, 'toggle-missing');
+            if (!isCurrentFlow()) return;
+          }
           nextStatus = await requestComputerPermissionGrant('toggle');
           // 用户在 grant 等待期间点了引导弹窗的「取消」:整个流程已终止,
           // 不再打开系统设置/弹提示。
@@ -1285,6 +1293,8 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     [
       computerStatus,
       cancelNativeComputerPermissionGrant,
+      modernPermissions,
+      openComputerPermissionSettings,
       persistComputerEnabled,
       refreshComputerPermissionStatus,
       requestComputerPermissionGrant,
@@ -1697,9 +1707,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   action={computerInstallPending || computerPermissionPending ? (
                     <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
                       <Spinner size={12} />
-                      {computerInstallPending
-                        ? t('settings.computerUse.directControl.installing')
-                        : t('settings.computerUse.directControl.authorizing')}
+                      {t(computerInstallPending
+                        ? 'settings.computerUse.directControl.installing'
+                        : modernPermissions
+                          ? 'settings.computerUse.directControl.permissionGuide.waiting'
+                          : 'settings.computerUse.directControl.authorizing')}
                     </span>
                   ) : (
                     <Button data-setting-id={computerUseSettings.directControlPermissionsTitle.id}
@@ -1716,12 +1728,15 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                     </Button>
                   )}
                 >
+                  {modernPermissions && !computerAccessibilityGranted && (
+                    <p className={`${SETTINGS_HINT} whitespace-pre-line`}>{t('macControlPermission.review', { app: 'CuaDriver' })}</p>
+                  )}
                   <div
                     id={computerUseSettings.directControlPermissionsAccessibilityLabel.targetId}
                     className="grid gap-2.5 sm:grid-cols-2"
                   >
                     <ComputerPermissionRow
-                      label={t(computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)}
+                      label={t(modernPermissions ? 'macControlPermission.pane' : computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)}
                       iconSrc={accessibilityPermissionIcon}
                       granted={computerAccessibilityGranted}
                       pending={computerAccessibilityPending}

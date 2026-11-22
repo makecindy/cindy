@@ -26,7 +26,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { GhostNodeChildToWorkerMessage } from '../../shared/ghost.js';
-import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
+import { GHOST_NODE_CHILD_MODE_FLAG, GHOST_NODE_STDIO_B64_MAX_CHARS } from '../../shared/ghost.js';
 import { installVirtualStdin } from './nodeRuntimeVirtualStdin.js';
 import { NodeRequestScopes } from './nodeRequestScope.js';
 import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.js';
@@ -216,7 +216,7 @@ parentPort.on('message', (event) => {
   }
   // 子进程原样模式的字节口(base64,防多字节字符被 chunk 边界切坏)。
   if (data.type === 'stdin-b64' && typeof data.chunk === 'string') {
-    if (data.chunk.length <= 2 * 1024 * 1024) virtualStdin.feed(Buffer.from(data.chunk, 'base64'));
+    if (data.chunk.length <= GHOST_NODE_STDIO_B64_MAX_CHARS) virtualStdin.feed(Buffer.from(data.chunk, 'base64'));
     return;
   }
   if (data.type === 'stdin-end') {
