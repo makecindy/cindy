@@ -5,7 +5,7 @@ import { createLogger } from '../logger.js';
 import { hostAppSdkAsset } from './hostSdk.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS } from '../../shared/ghost.js';
 import { pagePermissionGrants } from './pagePermissions.js';
-import { PluginAppFiles, type PluginFileAccess } from './pluginFiles.js';
+import { PluginAppFiles, grantViewResource, type PluginFileAccess } from './pluginFiles.js';
 import { withPluginPageTicket, createPageProgressRelay } from './pluginPageCall.js';
 import type { saveAppDownload } from './downloadFile.js';
 import type { AgentInputSerializedFile } from '../../shared/agentInputQueue.js';
@@ -99,7 +99,7 @@ function collectComposerAttachmentResources(value: unknown, grants: Set<string>,
   } else {
     const object = value as Record<string, unknown>;
     if (object.type === 'resource_link' && typeof object.uri === 'string' && composerAttachmentUriAllowed(object.uri))
-      grants.add(object.uri);
+      grantViewResource(grants, object.uri);
     for (const item of Object.values(object)) collectComposerAttachmentResources(item, grants, depth + 1, seen);
   }
   seen.delete(value);

@@ -70,6 +70,7 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   },
 }));
 import { McpAppCard } from '../McpAppCard';
+import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
@@ -618,6 +619,49 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
     }
   },
 );
+
+// Unit through the real card lifecycle. Main can deliver an attachment the user
+// requested while teardown is in flight; the listener used to stop at unmount,
+// so the staged file reached no composer. Minimal failing input: one delivery
+// after unmount and before close() settles.
+it('keeps a composer delivery that crosses card teardown', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let deliver!: (payload: unknown) => void;
+  const stop = vi.fn();
+  vi.stubGlobal('electronAPI', { maker: { mcpApps: vi.fn(async () => ({})),
+    onMcpAppComposerAttachment: (callback: typeof deliver) => { deliver = callback; return stop; } } });
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="teardown-task" clientId="card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const viewId = (controller as unknown as { document: { viewId: string } }).document.viewId;
+    controller.close.mockReturnValue(closed);
+    await act(async () => root.render(null));
+    expect(stop).not.toHaveBeenCalled();
+    deliver({ sessionId: 'teardown-task', viewId, attachment: { id: 'late', mcpAppResourceKey: 'resource', name: 'late.txt',
+      path: '/staged/late.txt', ext: '.txt', size: 1, category: 'text', mimeType: 'text/plain' } });
+    expect(getDraft('teardown-task')?.attachments.map(file => file.name)).toEqual(['late.txt']);
+    await act(async () => { finish(); await closed; });
+    expect(stop).toHaveBeenCalledOnce();
+  } finally {
+    finish();
+    clearDraft('teardown-task');
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
 
 it('reopens when device ownership is restored but ignores unchanged ownership', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);

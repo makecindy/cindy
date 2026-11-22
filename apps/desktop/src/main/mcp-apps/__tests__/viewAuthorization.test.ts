@@ -347,6 +347,28 @@ describe('MCP App upstream result authorization', () => {
     expect(sendComposerAttachment).not.toHaveBeenCalled();
   });
 
+  // Unit through the production AppBridge tools/call entry, for both result
+  // branches. Each returned resource_link stays addable until the View closes,
+  // so a page returning fresh links grew Main memory without bound.
+  // Minimal failing input: 257 distinct links; the oldest must be dropped.
+  it.each([false, true])('keeps only the newest resource grants per View (plugin: %s)', async plugin => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:1', plugin, '<p>Composer</p>', { composer: true, sendComposerAttachment });
+    const uri = (index: number) => `report://${index}.txt`;
+    f.methods.callTool.mockResolvedValueOnce({
+      content: Array.from({ length: 257 }, (_, index) => ({ type: 'resource_link', uri: uri(index), name: `r${index}` })),
+    });
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: {} } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: expect.anything() })));
+    f.methods.readResource.mockResolvedValue({ contents: [{ uri: uri(256), mimeType: 'text/plain', text: 'x' }] });
+    await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'cindy/composer-attachment/add', params: { uri: uri(0), name: 'old.txt' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({
+      id: 3, error: expect.objectContaining({ message: expect.stringContaining('MCP_APP_FILE_NOT_AUTHORIZED') }),
+    })));
+    await f.dispatch({ jsonrpc: '2.0', id: 4, method: 'cindy/composer-attachment/add', params: { uri: uri(256), name: 'new.txt' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 4, result: {} })));
+  });
+
   // Unit through the production AppBridge tools/call entry. External MCP cards
   // return results on their own branch; a resource shown only in such a result
   // was rejected as MCP_APP_FILE_NOT_AUTHORIZED. Minimal failing input: one

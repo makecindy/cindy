@@ -9,6 +9,14 @@ export interface PluginFileAccess {
   read(instance: string, uri: string, request: Request): Promise<Response>;
 }
 
+/** Resources a View may hand to the composer, newest kept. Bounds a page that keeps returning new links. */
+export const MAX_VIEW_RESOURCE_GRANTS = 256;
+export function grantViewResource(grants: Set<string>, uri: string): void {
+  grants.delete(uri);
+  grants.add(uri);
+  if (grants.size > MAX_VIEW_RESOURCE_GRANTS) grants.delete(grants.values().next().value!);
+}
+
 /** View-local capabilities. No arbitrary URI lookup endpoint is exposed to a page. */
 export class PluginAppFiles {
   private readonly grants = new Map<string, string>();
@@ -49,7 +57,7 @@ export class PluginAppFiles {
           return { ...object, _meta: meta };
         }
         if (!info) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
-        this.resourceGrants.add(object.uri);
+        grantViewResource(this.resourceGrants, object.uri);
         let token = [...this.grants].find(([, uri]) => uri === object.uri)?.[0];
         if (!token) {
           if (this.grants.size >= 256) throw new Error('MCP_APP_FILE_LIMIT');
@@ -69,7 +77,7 @@ export class PluginAppFiles {
       }
       if (object.type === 'resource_link' && typeof object.uri === 'string' &&
           this.isReadableResourceUri(object.uri)) {
-        this.resourceGrants.add(object.uri);
+        grantViewResource(this.resourceGrants, object.uri);
         return object;
       }
       return Object.fromEntries(

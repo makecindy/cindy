@@ -312,7 +312,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const draftResourceKey = (key: string) => composerPlacement ? JSON.stringify([composerPlacement, key]) : key;
     const stopComposerAttachment = deviceId === undefined && sessionId !== null
       ? window.electronAPI?.maker?.onMcpAppComposerAttachment?.((payload) => {
-          if (disposed || payload.sessionId !== sessionId || payload.viewId !== localViewId) return;
+          // Accept a delivery that crosses teardown: the listener lives until close()
+          // settles, after which Main can no longer send for this View.
+          if (payload.sessionId !== sessionId || payload.viewId !== localViewId) return;
           if ('requestId' in payload) {
             const key = draftResourceKey(payload.resourceKey);
             const present = !!getDraft(sessionId)?.attachments.some(file => file.mcpAppResourceKey === key);
@@ -577,11 +579,11 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           }
         }
       }
-      stopComposerAttachment?.();
       void controller
         .close()
         .catch(() => {})
         .finally(() => {
+          stopComposerAttachment?.();
           frame?.remove();
           frame = undefined;
           window.removeEventListener('message', receive);
