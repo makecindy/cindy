@@ -15,6 +15,7 @@ import { resolveGhostAttachmentUrl } from '../mcp-integrations/ghostAttachmentRe
 import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
 
 let singleton: FeishuLocalHostPort | null = null;
+const CREDENTIAL_KEY = 'feishu_local_cli_profile_v1';
 
 interface CredentialBinding {
   file: string;
@@ -32,7 +33,7 @@ function credentialBinding(): CredentialBinding | null {
     if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) return null;
     const scope = activeOwnerScopeKey();
     return {
-      file: ownerScopedUserDataPath('feishu-local-cli', 'credentials.enc'),
+      file: ownerScopedUserDataPath('feishu-local-cli', 'safe-storage', `${CREDENTIAL_KEY}.enc`),
       assertCurrent: () => {
         if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
           throw new Error('Credential owner scope changed');

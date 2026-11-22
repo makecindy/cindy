@@ -44,7 +44,7 @@ test('imports an existing terminal login through one owner-bound confirmation', 
   assert.equal(JSON.stringify(result).includes('device_code'), false);
 });
 
-test('opens the native login card without returning the verification URL or device code', async () => {
+test('waits for native login completion and returns the final result', async () => {
   const url = 'https://open.feishu.cn/verify?user_code=ABC';
   const { adapter, bodies, state } = setup({
     port: fakePort({
@@ -56,12 +56,28 @@ test('opens the native login card without returning the verification URL or devi
     }),
   });
   const result = await adapter({});
-  assert.equal(result.reasonCode, 'SETUP_REQUIRED');
+  assert.equal(result.ok, true);
   assert.equal(state.connectCalls.length, 1);
   assert.equal(state.connectCalls[0].mode, 'login');
   assert.ok(bodies[0].includes(url));
   assert.equal(JSON.stringify(result).includes(url), false);
   assert.equal(JSON.stringify(result).includes('device_code'), false);
+});
+
+test('returns the final login failure reason instead of leaving setup pending', async () => {
+  const { adapter, state } = setup({
+    port: fakePort({
+      connect: async input => {
+        state.connectCalls.push(input);
+        await input.onAuthorizationUrl('https://open.feishu.cn/verify?user_code=ABC');
+        return { ok: false, reasonCode: 'NOT_AUTHORIZED', message: 'Authorization failed.' };
+      },
+    }),
+  });
+  const result = await adapter({});
+  assert.equal(result.ok, false);
+  assert.equal(result.reasonCode, 'NOT_AUTHORIZED');
+  assert.equal(state.connectCalls.length, 1);
 });
 
 test('rejects unsafe verification URLs before showing a card', async () => {

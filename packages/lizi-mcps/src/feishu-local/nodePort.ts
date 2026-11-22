@@ -473,35 +473,40 @@ export function createNodeFeishuLocalPort(options: NodeFeishuLocalPortOptions): 
           }
           return { ok: true as const };
         }
-        const env = baseEnv(options.homeDir, platform);
-        const start = await spawnCli(resolved.path,
-          ['auth', 'login', '--domain', 'sheets,drive', '--no-wait', '--json'],
-          env, options.profileDir, 30_000);
-        if (!start.ok) return cliFailure(start);
-        const payload = parseJsonObject(start.stdout);
-        const url = typeof payload?.verification_url === 'string' ? payload.verification_url : null;
-        const deviceCode = typeof payload?.device_code === 'string' ? payload.device_code : null;
-        if (!url || !deviceCode || !isValidVerificationUrl(url)) {
-          return { ok: false as const, reasonCode: 'CLI_FAILED' as const, message: 'Feishu CLI did not return a valid device authorization URL.' };
-        }
+        const loginHome = await fs.mkdtemp(path.join(options.profileDir, 'feishu-local-login-'));
         try {
-          if (input.onAuthorizationUrl) await input.onAuthorizationUrl(url);
-        } catch {
-          return { ok: false as const, reasonCode: 'SETUP_UNAVAILABLE' as const, message: 'Feishu Local CLI setup was cancelled or unavailable.' };
+          const env = baseEnv(loginHome, platform);
+          const start = await spawnCli(resolved.path,
+            ['auth', 'login', '--domain', 'sheets,drive', '--no-wait', '--json'],
+            env, options.profileDir, 30_000);
+          if (!start.ok) return cliFailure(start);
+          const payload = parseJsonObject(start.stdout);
+          const url = typeof payload?.verification_url === 'string' ? payload.verification_url : null;
+          const deviceCode = typeof payload?.device_code === 'string' ? payload.device_code : null;
+          if (!url || !deviceCode || !isValidVerificationUrl(url)) {
+            return { ok: false as const, reasonCode: 'CLI_FAILED' as const, message: 'Feishu CLI did not return a valid device authorization URL.' };
+          }
+          try {
+            if (input.onAuthorizationUrl) await input.onAuthorizationUrl(url);
+          } catch {
+            return { ok: false as const, reasonCode: 'SETUP_UNAVAILABLE' as const, message: 'Feishu Local CLI setup was cancelled or unavailable.' };
+          }
+          input.assertCurrent?.();
+          const complete = await spawnCli(resolved.path,
+            ['auth', 'login', '--device-code', deviceCode, '--json'],
+            env, options.profileDir, 10 * 60_000);
+          if (!complete.ok) return cliFailure(complete);
+          input.assertCurrent?.();
+          if (input.beforeCommit) await input.beforeCommit();
+          const archive = await archiveDir(configDir(loginHome, platform));
+          if (!archive) return { ok: false as const, reasonCode: 'NOT_AUTHORIZED' as const, message: 'Feishu CLI profile was not created.' };
+          if (!await commitCredentialArchive(bound, expected, archive)) {
+            return { ok: false as const, reasonCode: 'SETUP_REQUIRED' as const, message: 'Feishu CLI credentials changed; retry setup.' };
+          }
+          return { ok: true as const };
+        } finally {
+          await fs.rm(loginHome, { recursive: true, force: true }).catch(() => {});
         }
-        input.assertCurrent?.();
-        const complete = await spawnCli(resolved.path,
-          ['auth', 'login', '--device-code', deviceCode, '--json'],
-          env, options.profileDir, 10 * 60_000);
-        if (!complete.ok) return cliFailure(complete);
-        input.assertCurrent?.();
-        if (input.beforeCommit) await input.beforeCommit();
-        const archive = await archiveDir(configDir(options.homeDir, platform));
-        if (!archive) return { ok: false as const, reasonCode: 'NOT_AUTHORIZED' as const, message: 'Feishu CLI profile was not created.' };
-        if (!await commitCredentialArchive(bound, expected, archive)) {
-          return { ok: false as const, reasonCode: 'SETUP_REQUIRED' as const, message: 'Feishu CLI credentials changed; retry setup.' };
-        }
-        return { ok: true as const };
       } catch {
         return { ok: false as const, reasonCode: 'SETUP_UNAVAILABLE' as const, message: 'Feishu Local CLI setup could not be completed.' };
       }

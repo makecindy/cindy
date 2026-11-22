@@ -63,6 +63,9 @@ async function createPort(options: { spawnFn: ReturnType<typeof fakeSpawn>; init
   });
   return {
     port,
+    root,
+    homeDir,
+    configDir,
     credentials: {
       get value() { return value; },
       writes,
@@ -129,18 +132,27 @@ describe('Feishu local CLI Node port', () => {
   });
 
   it('passes only a validated verification URL to the setup callback', async () => {
-    const spawnFn = fakeSpawn((argv, _env, child) => {
-      setImmediate(() => {
+    const spawnFn = fakeSpawn((argv, env, child) => {
+      void (async () => {
         if (argv.includes('--no-wait')) {
-          child.stdout.emit('data', Buffer.from(JSON.stringify({
+          const payload = JSON.stringify({
             verification_url: 'https://open.feishu.cn/verify?user_code=ABC',
             device_code: 'fixture-device-code',
-          })));
+          });
+          setImmediate(() => {
+            child.stdout.emit('data', Buffer.from(payload));
+            child.emit('close', 0);
+          });
         } else {
-          child.stdout.emit('data', Buffer.from('{"ok":true}'));
+          const dir = path.join(env.HOME ?? '', '.config', 'lark-cli');
+          await fs.mkdir(dir, { recursive: true });
+          await fs.writeFile(path.join(dir, 'auth.json'), 'fixture-new-login-profile');
+          setImmediate(() => {
+            child.stdout.emit('data', Buffer.from('{"ok":true}'));
+            child.emit('close', 0);
+          });
         }
-        child.emit('close', 0);
-      });
+      })().catch(() => setImmediate(() => child.emit('error', new Error('fake spawn failed'))));
     });
     const { port } = await createPort({ spawnFn, initial: null });
     let seen = '';
@@ -179,18 +191,27 @@ describe('Feishu local CLI Node port', () => {
   });
 
   function loginSpawn(url: string) {
-    return fakeSpawn((argv, _env, child) => {
-      setImmediate(() => {
+    return fakeSpawn((argv, env, child) => {
+      void (async () => {
         if (argv.includes('--no-wait')) {
-          child.stdout.emit('data', Buffer.from(JSON.stringify({
+          const payload = JSON.stringify({
             verification_url: url,
             device_code: 'fixture-device-code',
-          })));
+          });
+          setImmediate(() => {
+            child.stdout.emit('data', Buffer.from(payload));
+            child.emit('close', 0);
+          });
         } else {
-          child.stdout.emit('data', Buffer.from('{"ok":true}'));
+          const dir = path.join(env.HOME ?? '', '.config', 'lark-cli');
+          await fs.mkdir(dir, { recursive: true });
+          await fs.writeFile(path.join(dir, 'auth.json'), 'fixture-new-login-profile');
+          setImmediate(() => {
+            child.stdout.emit('data', Buffer.from('{"ok":true}'));
+            child.emit('close', 0);
+          });
         }
-        child.emit('close', 0);
-      });
+      })().catch(() => setImmediate(() => child.emit('error', new Error('fake spawn failed'))));
     });
   }
 
@@ -224,5 +245,17 @@ describe('Feishu local CLI Node port', () => {
     expect(result.reasonCode).toBe('SETUP_UNAVAILABLE');
     expect(credentials.value).toBeNull();
     expect(credentials.writes).toEqual([]);
+  });
+
+  it('keeps new login profiles out of the shared terminal config and cleans the temp home', async () => {
+    const spawnFn = loginSpawn('https://open.feishu.cn/verify?user_code=ABC');
+    const { port, root, configDir, credentials } = await createPort({ spawnFn, initial: null });
+    const before = await fs.readFile(path.join(configDir, 'auth.json'), 'utf8');
+    const result = await port.connect({ mode: 'login', onAuthorizationUrl: () => {} });
+    expect(result.ok).toBe(true);
+    expect(await fs.readFile(path.join(configDir, 'auth.json'), 'utf8')).toBe(before);
+    expect(credentials.value).toBe(archive('fixture-new-login-profile'));
+    const tempHomes = (await fs.readdir(root)).filter(name => name.startsWith('feishu-local-login-'));
+    expect(tempHomes).toHaveLength(0);
   });
 });

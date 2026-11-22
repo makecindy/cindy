@@ -93,28 +93,26 @@ export function createFeishuLocalHostSetupAdapter(options: SetupAdapterOptions) 
     } catch {
       return setupUnavailable();
     }
-    let markCardAccepted!: () => void;
-    let cardAccepted = false;
-    const cardPromise = new Promise<void>(resolve => { markCardAccepted = resolve; });
-    const login = options.port.connect({
-      mode: 'login',
-      onAuthorizationUrl: async (url) => {
-        assertCurrent();
-        if (!isValidVerificationUrl(url)) throw new Error('INVALID_VERIFICATION_URL');
-        const accepted = await confirm(`Open this verified HTTPS link on the computer running the Feishu CLI, approve the request, then return here: ${url}`);
-        if (!accepted) throw new Error('USER_CANCELLED');
-        cardAccepted = true;
-        markCardAccepted();
-      },
-      assertCurrent,
-      beforeCommit: async () => assertCurrent(),
-    }).catch(() => ({ ok: false as const, reasonCode: 'SETUP_UNAVAILABLE' as const }));
-    await Promise.race([cardPromise, login.then(() => undefined)]);
-    if (!cardAccepted) return setupUnavailable();
-    return {
-      ok: false,
-      reasonCode: 'SETUP_REQUIRED',
-      message: 'Authorization card sent. Complete it in Cindy; no device code or token is exposed in chat.',
-    };
+    try {
+      const login = await options.port.connect({
+        mode: 'login',
+        onAuthorizationUrl: async (url) => {
+          assertCurrent();
+          if (!isValidVerificationUrl(url)) throw new Error('INVALID_VERIFICATION_URL');
+          const accepted = await confirm(`Open this verified HTTPS link on the computer running the Feishu CLI, approve the request, then return here: ${url}`);
+          if (!accepted) throw new Error('USER_CANCELLED');
+        },
+        assertCurrent,
+        beforeCommit: async () => assertCurrent(),
+      });
+      if (login.ok) return { ok: true };
+      return {
+        ok: false,
+        reasonCode: login.reasonCode ?? 'SETUP_UNAVAILABLE',
+        message: login.message ?? 'Feishu Local CLI setup could not be completed.',
+      };
+    } catch {
+      return setupUnavailable();
+    }
   };
 }

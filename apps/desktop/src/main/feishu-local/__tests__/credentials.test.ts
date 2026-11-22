@@ -65,7 +65,7 @@ vi.mock('../../maker-ipc/botAuthorizationService.js', () => ({ getBotAuthorizati
 import { getFeishuLocalDesktopPort } from '../desktopPort.js';
 
 function credentialFile(owner: string): string {
-  return path.join(mocks.root, 'owners', `key-${owner}`, 'feishu-local-cli', 'credentials.enc');
+  return path.join(mocks.root, 'owners', `key-${owner}`, 'feishu-local-cli', 'safe-storage', 'feishu_local_cli_profile_v1.enc');
 }
 
 afterAll(() => {
@@ -82,7 +82,7 @@ describe('Feishu local CLI Desktop credentials', () => {
 
     const fileA = credentialFile('owner-a');
     expect(fs.existsSync(fileA)).toBe(true);
-    expect(fs.existsSync(path.join(mocks.root, 'feishu-local-cli', 'credentials.enc'))).toBe(false);
+    expect(fs.existsSync(path.join(mocks.root, 'feishu-local-cli', 'safe-storage', 'feishu_local_cli_profile_v1.enc'))).toBe(false);
     expect(fs.readFileSync(fileA, 'utf8')).not.toContain('fixture-archive-A');
     expect(await credentials.read()).toBe('fixture-archive-A');
 
@@ -105,6 +105,6 @@ describe('Feishu local CLI Desktop credentials', () => {
     mocks.session = { mode: 'signed-out', dataOwnerId: null, generation: 4 };
     mocks.boundaryPending = false;
     expect(credentials.bind!()).toBeNull();
-    expect(fs.existsSync(path.join(mocks.root, 'no-owner', 'feishu-local-cli', 'credentials.enc'))).toBe(false);
+    expect(fs.existsSync(path.join(mocks.root, 'no-owner', 'feishu-local-cli', 'safe-storage', 'feishu_local_cli_profile_v1.enc'))).toBe(false);
   });
 });
