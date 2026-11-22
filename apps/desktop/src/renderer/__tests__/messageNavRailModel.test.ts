@@ -12,15 +12,16 @@ import {
   NAV_RAIL_BACKFILL_TARGET_ENTRIES,
   NAV_RAIL_EXCERPT_MAX_CHARS,
   NAV_RAIL_JUMP_TOP_OFFSET_PX,
+  NAV_RAIL_MAX_TICKS,
+  NAV_RAIL_MIN_ENTRIES,
   NAV_RAIL_MIN_GUTTER_PX,
-  NAV_RAIL_TICK_MIN_PITCH_PX,
   NAV_RAIL_TICK_PITCH_PX,
   deriveNavRailEntries,
   hasNavRailRoom,
   normalizeExcerpt,
   pickActiveNavId,
   pickVisibleNavRange,
-  planNavRailTicks,
+  planNavRailWindow,
   planNavRailTickWidth,
   planNavRailTickProgress,
   promptPreviewLine,
@@ -557,33 +558,102 @@ describe('pickVisibleNavRange', () => {
   });
 });
 
-describe('planNavRailTicks', () => {
-  it('空间充裕:标准纵距,全量展示', () => {
-    const plan = planNavRailTicks(10, 10 * NAV_RAIL_TICK_PITCH_PX);
-    expect(plan).toEqual({ startIndex: 0, pitchPx: NAV_RAIL_TICK_PITCH_PX, hiddenCount: 0 });
-  });
+describe('planNavRailWindow', () => {
+  // 1,030px 的带子按 9px 纵距本可放 114 根,一窗上限压到 50 根。
+  const BAND_PX = 1030;
 
-  it('略挤:压缩纵距但不截断', () => {
-    const plan = planNavRailTicks(20, 20 * 7);
+  it('空间充裕、条目不足一窗:从头铺满,不截断', () => {
+    const plan = planNavRailWindow({
+      entryCount: 10,
+      availableHeightPx: BAND_PX,
+      activeIndex: 4,
+      anchorStart: null,
+    });
     expect(plan.startIndex).toBe(0);
-    expect(plan.hiddenCount).toBe(0);
-    expect(plan.pitchPx).toBe(7);
-    expect(plan.pitchPx).toBeGreaterThanOrEqual(NAV_RAIL_TICK_MIN_PITCH_PX);
+    expect(plan.hiddenBefore).toBe(0);
+    expect(plan.pitchPx).toBe(NAV_RAIL_TICK_PITCH_PX);
   });
 
-  it('最小纵距也放不下:截掉最早的一段,预留占位刻度', () => {
-    const availableHeight = 100; // 最小纵距 5px → 20 格,留 1 格占位 → 展示 19 条
-    const plan = planNavRailTicks(50, availableHeight);
-    expect(plan.pitchPx).toBe(NAV_RAIL_TICK_MIN_PITCH_PX);
-    expect(plan.hiddenCount).toBe(50 - 19);
-    expect(plan.startIndex).toBe(plan.hiddenCount);
-    // 展示条数 + 占位 1 格不超过可用空间
-    expect((50 - plan.startIndex + 1) * plan.pitchPx).toBeLessThanOrEqual(availableHeight);
+  it('条目超过一窗:纵距恒为标准值,窗口在阅读位置居中', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 1200,
+      anchorStart: null,
+    });
+    expect(plan.pitchPx).toBe(NAV_RAIL_TICK_PITCH_PX);
+    expect(plan.capacity).toBe(NAV_RAIL_MAX_TICKS);
+    expect(plan.startIndex).toBe(1200 - Math.floor(NAV_RAIL_MAX_TICKS / 2));
+    expect(plan.hiddenBefore).toBe(1200 - Math.floor(NAV_RAIL_MAX_TICKS / 2));
+  });
+
+  it('一窗上限:视口再高也不超过 50 根', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: 4000,
+      activeIndex: 1200,
+      anchorStart: null,
+    });
+    expect(plan.capacity).toBe(NAV_RAIL_MAX_TICKS);
+  });
+
+  it('滞回:阅读位置留在窗内就不搬窗口', () => {
+    const anchored = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 1200,
+      anchorStart: 1175,
+    });
+    expect(anchored.startIndex).toBe(1175);
+    // 逼近上边距则重新居中,不让人贴在窗口边缘
+    const escaped = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 1250,
+      anchorStart: 1175,
+    });
+    expect(escaped.startIndex).toBe(1250 - Math.floor(NAV_RAIL_MAX_TICKS / 2));
+  });
+
+  it('贴尾部:起点夹在末尾一窗内,不越界', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 2404,
+      anchorStart: null,
+    });
+    expect(plan.startIndex).toBe(2405 - NAV_RAIL_MAX_TICKS);
+  });
+
+  it('位置未知:贴尾部(刚打开会话先看最新一轮)', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: null,
+      anchorStart: null,
+    });
+    expect(plan.startIndex).toBe(2405 - NAV_RAIL_MAX_TICKS);
+  });
+
+  it('拖动扫描:冻结窗口不跟随阅读位置', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 2000,
+      anchorStart: 1175,
+      frozenStart: 400,
+    });
+    expect(plan.startIndex).toBe(400);
+    expect(plan.hiddenBefore).toBe(400);
   });
 
   it('零条目 / 零空间不炸', () => {
-    expect(planNavRailTicks(0, 500).hiddenCount).toBe(0);
-    expect(planNavRailTicks(10, 0).hiddenCount).toBe(0);
+    expect(planNavRailWindow({ entryCount: 0, availableHeightPx: 0, activeIndex: null }).capacity).toBe(
+      NAV_RAIL_MIN_ENTRIES,
+    );
+    expect(
+      planNavRailWindow({ entryCount: 10, availableHeightPx: 0, activeIndex: 0 }).startIndex,
+    ).toBe(0);
   });
 });
 

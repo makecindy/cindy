@@ -2,7 +2,7 @@
  * messageNavRailModel
  * ---------------------------------------------------------------------------
  * MessageNavRail(左缘"提问导航条")的纯逻辑层:条目派生 / 当前提问判定 /
- * 空间与截断规划。全部为无 DOM 依赖的纯函数,按 scrollAnchoringDetect /
+ * 空间与窗口规划。全部为无 DOM 依赖的纯函数,按 scrollAnchoringDetect /
  * viewportFillDetect 的既有惯例拆出,在 node 环境直接单测。
  *
  * 组件侧(MessageNavRail.tsx)只负责测量与渲染:把 DOM 几何量喂进来,拿结果画。
@@ -106,10 +106,13 @@ export function shouldBackfillForNavRail(input: {
 export const NAV_RAIL_MIN_GUTTER_PX = 44;
 
 /** 每根刻度占用的纵向空间(2px 线 + 7px 间距)。实测验收结论:9px 紧凑但
- *  单根可辨认;14px 被否(松散难看)。调整前先实机看效果再动。 */
+ *  单根可辨认;14px 被否(松散难看)。调整前先实机看效果再动。
+ *  窗化后恒用这个纵距,不再压缩:更小的间距刻度粘连不可点,压缩本身就是墙。 */
 export const NAV_RAIL_TICK_PITCH_PX = 9;
-/** 空间不足时允许压缩到的最小纵距;再小刻度就粘连不可点了。 */
-export const NAV_RAIL_TICK_MIN_PITCH_PX = 5;
+
+/** 一窗最多几根刻度。超过这个数,即便视口很高也不再增加 —— 导航条是
+ *  "附近的几句",不是全量索引;50 根以内才能一眼扫完并逐个点到。 */
+export const NAV_RAIL_MAX_TICKS = 50;
 
 /**
  * 刻度带可用高度低于这个值时导航条不出场(与横向留白门槛同级的纵向门槛)。
@@ -383,38 +386,69 @@ export function pickVisibleNavRange(
   return { startIndex, endIndex };
 }
 
-export interface NavRailPlan {
-  /** 从这个下标开始渲染(之前的条目被截断,只保留最近的一段)。 */
+export interface NavRailWindowPlan {
+  /** 窗内第一根刻度在 entries 里的下标。 */
   startIndex: number;
-  /** 实际采用的纵距(px/根)。 */
+  /** 一屏放几根刻度。 */
+  capacity: number;
+  /** 实际采用的纵距(px/根)。窗化后恒为标准值,不再压缩。 */
   pitchPx: number;
-  /** 被截掉的更早条目数;>0 时组件渲染"更早还有 N 条"占位刻度。 */
-  hiddenCount: number;
+  /** 窗外更早的条目数;≤0 时不存在。>0 时组件渲染"更早还有 N 条"占位刻度。 */
+  hiddenBefore: number;
 }
 
 /**
- * 纵向空间规划:先压缩间距,还放不下就截断只保留最近的一段。
- * 截断时预留一根刻度的位置给"更早还有 N 条"占位。
+ * 纵向空间规划:恒定标准纵距的可滑动窗口。
+ *
+ * 刻度是导航入口,不是密度图 —— 5px 纵距、2px 高的线既扫不清也点不准,
+ * 压缩本身就是墙。所以可用高度只决定"一窗放几根"(上限 NAV_RAIL_MAX_TICKS),
+ * 放不下的靠窗口滑动;纵距恒为标准值,不缩、也不撑开(撑开是另一种松散难看)。
+ * 窗口在滞回区内不搬动,避免点击/滚动时整条带抖动;
+ * 拖动扫描期间用 frozenStart 冻结窗口,由边缘推进逐格平移。
  */
-export function planNavRailTicks(entryCount: number, availableHeightPx: number): NavRailPlan {
-  if (entryCount <= 0 || availableHeightPx <= 0) {
-    return { startIndex: 0, pitchPx: NAV_RAIL_TICK_PITCH_PX, hiddenCount: 0 };
+export function planNavRailWindow(input: {
+  entryCount: number;
+  availableHeightPx: number;
+  /** 当前阅读位置的条目下标;null 表示还没测出来。 */
+  activeIndex: number | null;
+  /** 上一帧的窗口起点(滞回用);null 表示没有历史,重新居中。 */
+  anchorStart?: number | null;
+  /** 拖动扫描期间的冻结起点:不滞回、不跟随阅读位置。 */
+  frozenStart?: number | null;
+}): NavRailWindowPlan {
+  const capacity = Math.min(
+    NAV_RAIL_MAX_TICKS,
+    Math.max(
+      NAV_RAIL_MIN_ENTRIES,
+      Math.floor(Math.max(0, input.availableHeightPx) / NAV_RAIL_TICK_PITCH_PX),
+    ),
+  );
+  // 纵距恒为标准值:条数上限与铺满都交给纵距以外的机制,外观和短会话一致。
+  const pitchPx = NAV_RAIL_TICK_PITCH_PX;
+  if (input.entryCount <= capacity) {
+    return { startIndex: 0, capacity, pitchPx, hiddenBefore: 0 };
   }
-  if (entryCount * NAV_RAIL_TICK_PITCH_PX <= availableHeightPx) {
-    return { startIndex: 0, pitchPx: NAV_RAIL_TICK_PITCH_PX, hiddenCount: 0 };
+  const maxStart = input.entryCount - capacity;
+  const clampStart = (value: number) => Math.min(Math.max(0, Math.round(value)), maxStart);
+  if (input.frozenStart != null) {
+    const start = clampStart(input.frozenStart);
+    return { startIndex: start, capacity, pitchPx, hiddenBefore: start };
   }
-  const compressed = Math.floor(availableHeightPx / entryCount);
-  if (compressed >= NAV_RAIL_TICK_MIN_PITCH_PX) {
-    return { startIndex: 0, pitchPx: compressed, hiddenCount: 0 };
+  // 位置未知:贴尾部 —— 刚打开会话先看到最新一轮,和聊天区一致。
+  if (input.activeIndex === null) {
+    const start = clampStart(input.anchorStart ?? maxStart);
+    return { startIndex: start, capacity, pitchPx, hiddenBefore: start };
   }
-  // 最小纵距也放不下:截断。留一格给"更早还有 N 条"占位刻度。
-  const slots = Math.max(2, Math.floor(availableHeightPx / NAV_RAIL_TICK_MIN_PITCH_PX));
-  const shown = Math.min(entryCount, slots - 1);
-  return {
-    startIndex: entryCount - shown,
-    pitchPx: NAV_RAIL_TICK_MIN_PITCH_PX,
-    hiddenCount: entryCount - shown,
-  };
+  const active = Math.min(Math.max(0, Math.round(input.activeIndex)), input.entryCount - 1);
+  const margin = Math.max(1, Math.min(8, Math.floor(capacity / 8)));
+  if (input.anchorStart != null) {
+    const start = clampStart(input.anchorStart);
+    if (active >= start + margin && active <= start + capacity - 1 - margin) {
+      return { startIndex: start, capacity, pitchPx, hiddenBefore: start };
+    }
+  }
+  const start = clampStart(active - Math.floor(capacity / 2));
+  return { startIndex: start, capacity, pitchPx, hiddenBefore: start };
 }
 
 /**
