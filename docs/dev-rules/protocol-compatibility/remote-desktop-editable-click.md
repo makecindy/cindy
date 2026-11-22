@@ -17,7 +17,11 @@
 
 主机辅助程序只判断命中的控件是否可编辑、可用且已获得焦点。macOS 锁屏、
 辅助功能不可用或旧原生辅助程序不支持检测时降级为手动键盘按钮。
-窗口代输入与插件实时画面不声明此能力，也不开放该请求。
+`capabilities` 描述主机支持的能力，具体请求另受当前 lease 的权限约束。窗口代输入与插件实时画面
+会话不开放该请求：主机在 `leaseRequest` 进入具体处理分支前，分别通过
+`HANDOFF_WINDOW_OPS` / `LIVE_SCREEN_OPS` 允许列表拒绝 `editableClick`，返回
+`DESKTOP_HANDOFF_WINDOW_ONLY` / `DESKTOP_SCREEN_ONLY`。relay 与媒体通道都走此入口，
+不会调用桌面 AX 检测。手机端的会话类型判断仅用于隐藏入口。
 
 ## 新旧端和发布顺序
 
