@@ -2116,11 +2116,11 @@ export function TodaySpendChip({
       </Popover>
       <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage} onOpenChange={setResetListOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+          <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
           <Dialog.Content
             aria-describedby={undefined}
             onPointerDownOutside={(event) => event.preventDefault()}
-            className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
+            className="modal-panel fixed left-1/2 top-1/2 z-modal w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               // The confirmation owns focus when it opens after this dialog closes.
@@ -2144,7 +2144,7 @@ export function TodaySpendChip({
                 }} />
             </div>
             <Dialog.Close asChild>
-              <Tip text={t('common.dismiss')} contentClassName="z-[10001]">
+              <Tip text={t('common.dismiss')}>
                 <button type="button" aria-label={t('common.dismiss')}
                   className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-[var(--confirm-desc)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                   <X className="h-4 w-4" aria-hidden="true" />

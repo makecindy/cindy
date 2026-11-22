@@ -3653,16 +3653,35 @@ describe('Scheduler preRunHook results', () => {
     expect(after?.nextFireAt).toBe(before?.nextFireAt);
   });
 
-  it('one-shot skipped: 与 success 一致,消费掉本次触发并 expired', async () => {
+  // #8351, unit: real tick/persistence/runNow. Existing once-skip coverage did
+  // not assert the retained reason, zero cost, or recovery after expiry.
+  it('one-shot undispatched skip retains its reason and permits manual recovery after expiry', async () => {
+    const reason = '[QUEUE_WAIT_TIMEOUT] queued heartbeat was not dispatched within 30min';
+    let recovered = false;
     const h = makeHarness({
-      runnerImpl: async () => ({ sessionId: '', skipped: true }),
+      runnerImpl: async () => recovered
+        ? { sessionId: 'bound-session', resultText: 'Recovered prompt' }
+        : { sessionId: 'bound-session', skipped: true, resultText: reason },
     });
-    const sch = await h.scheduler.create({ ...baseInput, recurring: false });
+    const sch = await h.scheduler.create({ ...baseInput, recurring: false, targetSessionId: 'bound-session' });
     h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
     await h.scheduler.tick();
     const after = await h.storage.get(sch.id);
     expect(after?.status).toBe('expired');
     expect(after?.nextFireAt).toBeUndefined();
+    expect(await h.scheduler.listRuns(sch.id)).toMatchObject([{
+      status: 'skipped', resultText: reason, sessionId: 'bound-session',
+      costAttribution: 'zero', readAt: h.clock.now(),
+    }]);
+    expect((await h.scheduler.listRuns(sch.id))[0]?.errorMsg).toBeUndefined();
+    // Expiry consumes the automatic fire, but the existing Run now remains usable.
+    recovered = true;
+    h.clock.advance(60_000);
+    await h.scheduler.runNow(sch.id);
+    const runs = await h.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(2);
+    expect(runs.find(run => run.status === 'success')?.resultText).toBe('Recovered prompt');
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
   });
 
   it.each([

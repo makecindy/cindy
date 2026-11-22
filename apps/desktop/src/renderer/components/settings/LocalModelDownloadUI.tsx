@@ -108,7 +108,7 @@ export function LocalModelCard({
 }) {
   return (
     <article
-      className="flex flex-col gap-3 rounded-[12px] border px-4 py-3.5"
+      className="flex flex-col gap-3 rounded-xl border px-4 py-3.5"
       style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-elevated)' }}
     >
       <div className="flex items-start justify-between gap-3">

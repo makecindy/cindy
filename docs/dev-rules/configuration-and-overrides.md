@@ -107,6 +107,51 @@ Host 启动时没有主题包投影；renderer 按当前选择先同步应用配
 - 收藏、历史选择、引擎偏好不能当成开关。
 - 桌面、IM 与远端用同一套 override；没 override 的路线由各端按当时目录 defaultEnabled 计算。
 
+#### 隐藏与停用是两根轴（2026-11-19）
+
+供应商和单款模型各有两个互不牵连的设置，两级用同一组词：
+
+| | 在模型选择器中显示 | 停用 |
+| --- | --- | --- |
+| 管什么 | 只管给人挑的清单里列不列 | 新任务和后台功能能不能用它 |
+| 供应商 | `model-disable-prefs.json` 的 `hiddenProviders`，投影为 `ProviderView.hidden` | 同文件的 `disabledProviders`，投影为 `suspended` |
+| 对话模型 | 上文的显示开关（renderer 可见性 override） | 同文件的 `disabledModels` |
+| 功能型模型（图片、视频、语音、向量、决策、重排等） | 不提供，它们本来就不进模型选择器 | 唯一的「启用」开关 |
+
+- 隐藏不是准入。被隐藏的供应商或模型，已在用它的任务、辅助模型链、后台功能、收藏和显式点名
+  照常使用；路由、来源解析和准入守卫一律不读隐藏标记。只有带可见性过滤的清单派生
+  （`deriveModelList` 传了 `isVisible`）把隐藏的供应商当作未显示。
+- 供应商隐藏单独存一个标记，不改写名下逐模型的显示开关：取消隐藏后原样恢复，目录新增的模型
+  也不会绕过隐藏重新出现。
+- 隐藏不影响分享：写入隐藏不走「先撤销云端备用分享」那一步（那一步只属于收窄调用权限的停用），
+  服务器不可达时也能隐藏和取消隐藏。
+- 存下来的东西照常解析：收藏和最近按「常规清单 ∪ 被隐藏的模型」解析，隐藏只决定常规分组里列不列。
+  Desktop 选择器、其他电脑的目录和 Mobile 选择器同一口径。
+- 功能型模型的恢复不看聊天登录：只配了图片 API 密钥、没登录聊天订阅时图片通道照常可用，被停用的
+  功能型模型只要供应商没有被整体停用就能重新启用。对话模型仍要求聊天连接。
+- 隐藏的东西必须找得到：模型选择器在列表末尾有可展开的「已隐藏」，搜索也覆盖它，见
+  [统一模型选择器 §1.2](../product-rules/model-selector-unified.md)。
+- 「全部启用」只清停用，不动隐藏；删除供应商时两者一并清除。
+- 功能型模型的开关写停用轴。升级前被旧显示开关关掉的功能型模型继续显示为关，打开时把旧记录
+  一并拨回，不做批量迁移。
+- 其他电脑上的供应商同样两项，按 `remote:[设备, 供应商]` 记在本机，只影响这台电脑。
+- 已有的停用记录升级后保持停用，不自动改成隐藏。停用条带上的「改为隐藏」一步完成两项修改。
+- 设置页左栏把已隐藏和已停用的供应商各收进一个分组，排在列表末尾，标题带数量，默认折叠且每次打开
+  设置页都从折叠开始。常规列表因此只剩模型选择器里会出现的来源。正在看的供应商被隐藏或停用后保持
+  选中，所在分组自动展开一次；默认选中优先落在还在用的供应商上。「我分享的供应商」保持原样，不拆进
+  这两个分组。分组内的行不再重复「已隐藏／已停用」注记，仍可在组内拖动排序。
+
+实现见 `packages/model-providers/src/disableOverrides.ts`、`modelList.ts`，
+`apps/desktop/src/main/maker-host/model-disable-store.ts`，以及设置页的 `ProvidersSection.tsx`、
+`UnifiedModelList.tsx`、`OwnRemoteProviders.tsx`。回归见 `disableOverrides.test.ts`、
+`model-disable-store.test.ts`、`providerHandlers.test.ts`、`modelManagementActions.test.tsx`、
+`unifiedModelPanelRendering.test.tsx`，界面核对用 `pnpm ui:check --page model-categories --case two-axes`
+与 `--page provider-listing-consistency --case hidden-provider,hidden-provider-settings`。
+
+已知范围：「已隐藏」展开区目前只在 Desktop 的统一选择器里有。Mobile 选择器、IM `/model` 卡片与旧版
+分段列表按同一规则收起隐藏的供应商，但还没有展开入口；Mobile 上以及其他电脑上被隐藏的供应商，
+在选择器里通过收藏和当前任务保留。
+
 实现核对须区分上游原始目录与执行端活动目录：当前仍有客户端精简陈列投影，见
 [已知实现差异](model-catalog-maintenance.md#visibility)。该说明不是对本节合同的豁免；
 不得仅因代码仍在筛选就反向修改产品规则，也不能未验证便声称两者已一致。

@@ -39,6 +39,17 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLoginUnbound: () => authState.loggedIn,
 }));
 
+// Unit, #11880 review: prior probe tests only exercised successful wrapping; the pool
+// must receive a typed network failure rather than null. Capture the real wrapper's port.
+const poolProbe = vi.hoisted(() => ({ set: vi.fn() }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({
+  hasConnectedSubscriptionPool: () => false,
+  refreshSubscriptionPoolClaudeModels: vi.fn(async () => false),
+  resetDefaultSubscriptionClaudeDiscovery: vi.fn(),
+  setSubscriptionPoolClaudeModelProbe: poolProbe.set,
+}));
+import { AccountServiceUnreachableError } from '../../subscription-accounts/accountServiceError.js';
+
 import {
   isDegenerateModelListShrink,
   mapAnthropicSdkModels,
@@ -428,6 +439,20 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
 
   // unit 回归：2.1.321 实报 resolvedModel，description 不再带版本；旧用例只有带版本说明。
   // 经主动发现入口验证活动目录，避免内核支持 5.2 而选择器仍只显示 5.1。
+  it.each([
+    ['Connection error', true],
+    ['Request timed out: supportedModels probe', true],
+    ['cli exited', false],
+  ])('preserves the pool probe failure category: %s', async (message, unreachable) => {
+    const failure = new Error(message);
+    setAnthropicModelProbe(async () => { throw failure; });
+    const wrapped = poolProbe.set.mock.calls.at(-1)![0];
+    const result = wrapped({}, []);
+    if (unreachable) await expect(result).rejects.toBeInstanceOf(AccountServiceUnreachableError);
+    else await expect(result).rejects.toBe(failure);
+    setAnthropicModelProbe(null);
+  });
+
   it('主动探测接受 SDK resolvedModel 并保留 Fable 5.2 的 Fast 能力', async () => {
     setAnthropicModelProbe(async (onModels) => {
       onModels([

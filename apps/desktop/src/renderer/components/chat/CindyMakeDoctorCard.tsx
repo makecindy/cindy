@@ -405,7 +405,7 @@ export function MakeDoctorReportCard({
   }
   return (
     <section
-      className="min-w-0 w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      className="min-w-0 w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
       aria-label={t(title)}
     >
       <div className="flex items-center gap-2 px-4 py-3">
@@ -841,7 +841,7 @@ function CompactMakePreparationCard({
   const source = report.source;
   return (
     <section
-      className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
       aria-label={t('cindyMake.code.taskName')}
     >
       <div className="flex items-center gap-2 px-4 py-3">

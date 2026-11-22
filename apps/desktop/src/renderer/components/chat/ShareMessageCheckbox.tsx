@@ -36,7 +36,7 @@ export function ShareMessageCheckbox({ clientId }: { clientId: string }) {
       className={cn(
         // 落在 MessageStream 让出的 40px 缩进里(左 8px / 右 12px,20px 框居中偏左);
         // top 微调让圆心对齐消息首行的视觉中线。
-        'absolute -left-8 top-[2px] z-10 flex h-5 w-5 shrink-0 items-center justify-center',
+        'absolute -left-8 top-[2px] z-raised flex h-5 w-5 shrink-0 items-center justify-center',
         'rounded-full transition-colors cursor-pointer',
         'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] outline-none',
         selected

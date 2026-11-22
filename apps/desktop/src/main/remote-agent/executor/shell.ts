@@ -333,12 +333,11 @@ export class ShellSession {
   }
 
   /** 执行一条命令；命令结束后记下它所在的目录，下一条命令从那里开始。 */
-  async run(command: string, timeoutMs: number | undefined, signal?: AbortSignal): Promise<ShellCommandResult> {
+  async run(command: string, startCwd: string, timeoutMs: number | undefined, signal?: AbortSignal): Promise<ShellCommandResult> {
     if (this.closed) return { text: 'The shell session has ended.', isError: true };
     const timeout = Math.min(Math.max(1, Math.floor(timeoutMs ?? CC_BASH_DEFAULT_TIMEOUT_MS)), CC_BASH_MAX_TIMEOUT_MS);
     await fsp.mkdir(this.tempDir, { recursive: true });
     const cwdFile = path.join(this.tempDir, `cwd-${randomUUID()}`);
-    const startCwd = await this.validCwd();
     const shell = resolveExecutorShell();
     // 开头的 `cd` 到命令目录由 runOnce 按方言包装；cmd 没有 eval 也没有 /dev/null
     // 重定向，脚本体按方言分别生成(cmd 不跟踪 cwd，与 cmd 回退路径的既有行为一致)。
@@ -382,7 +381,7 @@ export class ShellSession {
   }
 
   /** 后台执行：立即返回编号与输出文件位置。 */
-  async startBackground(command: string): Promise<ShellCommandResult> {
+  async startBackground(command: string, startCwd: string): Promise<ShellCommandResult> {
     if (this.closed) return { text: 'The shell session has ended.', isError: true };
     this.pruneJobs();
     if ([...this.jobs.values()].filter((job) => !job.done).length >= MAX_BACKGROUND_JOBS) {
@@ -391,7 +390,6 @@ export class ShellSession {
     await fsp.mkdir(this.tempDir, { recursive: true });
     const id = `bash_${randomUUID().slice(0, 8)}`;
     const outputPath = path.join(this.tempDir, `${id}.output`);
-    const startCwd = await this.validCwd();
     const shell = resolveExecutorShell();
     // 后台命令同样按方言生成脚本(cmd 没有 eval / /dev/null)：脚本写临时文件，
     // 命令行只带固定脚本文件名，脚本内容与路径都不进命令行。
@@ -504,14 +502,16 @@ export class ShellSession {
     }
   }
 
-  private async validCwd(): Promise<string> {
+  /** 批准前确定目录，执行时沿用同一路径，即使其他命令中途切换目录。 */
+  async resolveCwd(): Promise<string> {
+    const cwd = this.cwd;
     try {
-      const stat = await fsp.stat(this.cwd);
-      if (stat.isDirectory()) return this.cwd;
+      const stat = await fsp.stat(cwd);
+      if (stat.isDirectory()) return cwd;
     } catch {
       // 目录被删时退回工作目录。
     }
-    this.cwd = this.opts.workingDir;
-    return this.cwd;
+    if (this.cwd === cwd) this.cwd = this.opts.workingDir;
+    return this.opts.workingDir;
   }
 }

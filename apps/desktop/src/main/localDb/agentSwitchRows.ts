@@ -70,8 +70,11 @@ export async function applyAgentSwitchToSessionRowWithPorts<OwnerScope>(
   if (patch.agentDeviceId !== undefined) setObj.agentDeviceId = patch.agentDeviceId;
   // effort 值域由 renderer 按目标引擎 capabilities 解析(schema 列是字面量联合,
   // 跨层传输后此处以 string 到达;非法值与直改 DB 同级,运行时由引擎侧收敛)。
-  // 固定 effort 模型运行时为 null；sessions.effort NOT NULL，省略该字段。
-  const persistableEffort = persistableSessionEffort(patch.effort);
+  // 固定 effort 的内置模型运行时为 null；sessions.effort NOT NULL，省略该字段保留记忆。
+  // 插件引擎用空串表示「模型不提供思考档位 / 由引擎自己决定」，必须显式写回 '' 清掉旧档位。
+  const persistableEffort = isPluginEngineKind(patch.agentKind) && patch.effort === ''
+    ? ('' as typeof sessions.$inferInsert['effort'])
+    : persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) {
     setObj.effort = persistableEffort;
   }

@@ -207,6 +207,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
       ctx.scheduleBridge().onPersistedSendRejected(id, message, item, recovering);
       executor.onPersistedSendRejected(id, message);
     },
+    // The Host does not capture supplier-sharing reconnect offers.
+    getSchedulerRunSignal: undefined,
     onAcceptedQueuedMessage: async (id, item) => {
       ctx.schedulePreparations.delete(item.clientId);
       ctx.scheduleDiscardWatchers.delete(item.clientId);
@@ -284,6 +286,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // ── Not bound on the Host, and why ─────────────────────────────────────────────────────────
     // Orca tasks are refused at Host admission: no saved report is restored, so none is revalidated.
     canRestoreOrcaReport: undefined,
+    // Host sessions are not stamped with a reconciled send_to_session route, so no hint is projected.
+    sendToSessionHint: undefined,
     // The usage-limit resume arrives with the third batch (release table).
     onUsageLimitedTurnError: undefined,
     isScheduledQuotaInput: undefined,

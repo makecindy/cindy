@@ -1015,7 +1015,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
       <section
         ref={projectsSectionRef}
         aria-labelledby="cindy-im-projects-heading"
-        className="mt-3 flex scroll-mt-4 flex-col gap-[14px]"
+        className="mt-3 flex scroll-mt-4 flex-col gap-3.5"
       >
         <div className="flex flex-col gap-1">
           <h4

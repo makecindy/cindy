@@ -205,7 +205,7 @@ export function RunningTokenRatePopover({
                   setMode((current) => (current === 'dismissed' ? 'idle' : current))
                 }
                 onBlur={() => setMode((current) => (current === 'dismissed' ? 'idle' : current))}
-                className="inline-flex min-h-6 min-w-6 items-center justify-center gap-[6px] whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
+                className="inline-flex min-h-6 min-w-6 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
                 aria-label={
                   [elapsedText, rateText && (isTokenCount ? rateText : `${readingLabel}: ${rateText}`)]
                     .filter(Boolean).join(' · ') || readingLabel

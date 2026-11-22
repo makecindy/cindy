@@ -1,5 +1,5 @@
 import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
-import { normalizeBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
+import { parseRemoteBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
 import type { ModelGroupsConfig } from '../../../shared/modelGroups.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { RemoteActionDescriptor, RemoteActionInvokeRequest, RemoteActionInvokeResponse, RemoteLocalizedText, RemoteResource } from '@cindy/device-link';
@@ -235,8 +235,9 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       if ('modelChain' in input) {
         let value: unknown;
         try { value = JSON.parse(string('modelChain')); } catch { throwIpcError('INVALID_PARAMS', 'Invalid model chain'); }
-        chain = normalizeBotModelChain(value);
-        if (!Array.isArray(value) || !chain.length || chain.length !== value.length || value.some(route => !['claude', 'codex', 'pi'].includes(route?.harness))) throwIpcError('INVALID_PARAMS', 'Invalid model chain');
+        const submitted = parseRemoteBotModelChain(value);
+        if (!submitted) throwIpcError('INVALID_PARAMS', 'Invalid model chain');
+        chain = submitted;
         if (deps.fillModelGroups) { chain = await deps.fillModelGroups(chain); deps.assertOwner(grant.owner); }
       }
       // The retired task model fields (`taskFollowsPrimary`, `taskModel`) of an older controller are

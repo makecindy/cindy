@@ -110,6 +110,8 @@ export interface OpenAcpSessionOptions {
   /** ACP session id persisted for this task; resumes instead of creating a session. */
   resumeSessionId?: string;
   model?: string;
+  /** An explicit companion model must be accepted by this engine before it can receive a message. */
+  requireSelectedModel?: boolean;
   effort?: Effort;
   permissionMode?: PermissionMode;
   logger?: Logger;
@@ -123,6 +125,8 @@ export interface OpenAcpSessionOptions {
    * loaded session already has it in its own history, so it is not repeated.
    */
   briefing?: string;
+  /** Current companion settings for the first prompt after restoring the native conversation. */
+  resumedCompanionBriefing?: string;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
@@ -365,6 +369,8 @@ export class AcpSession {
   private readonly permissionControllers = new Set<AbortController>();
   private readonly capabilityListeners = new Set<(capabilities: Capabilities) => void>();
   private configOptions: AcpConfigOption[];
+  private readonly requireSelectedModel: boolean;
+  private readonly initialModel: string;
   private capabilitiesSnapshot: Capabilities;
   private permissionMode: 'ask' | 'bypassPermissions' = 'ask';
   private resolver: InteractionResolver | null = null;
@@ -390,6 +396,8 @@ export class AcpSession {
     this.resumeOutcome = init.resumeOutcome;
     this.droppedMcpServers = init.droppedMcpServers;
     this.configOptions = init.configOptions;
+    this.requireSelectedModel = init.options.requireSelectedModel === true;
+    this.initialModel = this.model;
     this.capabilitiesSnapshot = buildAcpCapabilities(init.init, init.configOptions);
     this.logger = init.options.logger;
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
@@ -397,7 +405,8 @@ export class AcpSession {
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
-    this.pendingBriefing = init.resumeOutcome === 'new' && init.options.briefing?.trim() ? init.options.briefing : null;
+    const briefing = init.resumeOutcome === 'new' ? init.options.briefing : init.options.resumedCompanionBriefing;
+    this.pendingBriefing = briefing?.trim() ? briefing : null;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -523,10 +532,7 @@ export class AcpSession {
   }
 
   async setModel(model: string, opts?: { effort?: Effort }): Promise<void> {
-    const option = findModelOption(this.configOptions);
-    if (!option) throw new NotSupportedError('switchModel', { supported: false, reason: 'sdk-missing' });
-    if (!option.options.some((entry) => entry.value === model)) throw new Error(`The agent does not offer model "${model}"`);
-    if (option.currentValue !== model) await this.setConfigValue(option.id, model);
+    await this.selectModel(model);
     if (opts?.effort) {
       try {
         await this.setEffort(opts.effort);
@@ -535,6 +541,19 @@ export class AcpSession {
         this.logger?.debug('acp: effort not applied after model switch', { error: String(error) });
       }
     }
+  }
+
+  private async selectModel(model: string): Promise<void> {
+    const option = findModelOption(this.configOptions);
+    if (this.requireSelectedModel && model === 'default' && !option?.options.some(entry => entry.value === model)) {
+      // This host choice delegates back to the model the endpoint selected when the session opened.
+      if (!option || !this.initialModel) return;
+      model = this.initialModel;
+    }
+    if (!option) throw new NotSupportedError('switchModel', { supported: false, reason: 'sdk-missing' });
+    if (!option.options.some((entry) => entry.value === model)) throw new Error(`The agent does not offer model "${model}"`);
+    if (option.currentValue !== model) await this.setConfigValue(option.id, model);
+    if (this.requireSelectedModel && this.model !== model) throw new Error(`The agent did not select model "${model}"`);
   }
 
   async setEffort(effort: Effort): Promise<void> {
@@ -557,12 +576,13 @@ export class AcpSession {
     await this.setConfigValue(option.id, mapped.value);
   }
 
-  /** @internal Applies the host's stored model / effort after the handshake; never fails the task. */
+  /** @internal Apply the host selections after the engine handshake and before the first prompt. */
   async applyInitialSelection(model: string | undefined, effort: Effort | undefined, permissionMode?: PermissionMode): Promise<void> {
     if (model && model !== this.model) {
       try {
         await this.setModel(model);
       } catch (error) {
+        if (this.requireSelectedModel) throw error;
         this.logger?.warn('acp: stored model not applied; keeping the agent default', { error: String(error) });
       }
     }

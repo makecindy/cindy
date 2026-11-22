@@ -195,7 +195,7 @@ export function VoiceSpeakerEnrollmentDialog({
     >
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-50"
+          className="modal-scrim fixed inset-0 z-modal"
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
@@ -211,7 +211,7 @@ export function VoiceSpeakerEnrollmentDialog({
             if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-50 w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2',
             'flex flex-col gap-4 p-5 outline-none',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}

@@ -285,7 +285,7 @@ function UserFileChip({
           if (event.button === 1) ctxMenu.onActivate(event, () => onClick(event));
         }}
         onContextMenu={ctxMenu.onContextMenu}
-        className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+        className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
       />
       {ctxMenu.menu}
     </>
@@ -449,7 +449,7 @@ function renderContentWithoutPastedText(
           key={`s-${li}`}
           label={slashLabel}
           tooltip={slashLabel}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />,
       );
       line = line.slice(slashMatch[0].length);
@@ -506,7 +506,7 @@ function renderContentWithoutPastedText(
               label={name}
               icon={<Sparkles aria-hidden />}
               tooltip={name}
-              className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+              className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
             />,
           );
         } else if (ref.endsWith('/')) {
@@ -521,7 +521,7 @@ function renderContentWithoutPastedText(
               icon={<FolderIcon aria-hidden />}
               tooltip={ref}
               tooltipMono
-              className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+              className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
             />,
           );
         } else {
@@ -571,7 +571,7 @@ function renderContentWithoutPastedText(
                 tooltip={ref}
                 tooltipMono
                 ariaLabel={fileName}
-                className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+                className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
               />
             ),
           );
@@ -777,7 +777,7 @@ export function renderContent(
           key={`slash-chip-${index}`}
           label={slashLabel}
           tooltip={slashLabel}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />
       );
     }
@@ -791,7 +791,7 @@ export function renderContent(
           tooltipMono
           tooltipContentClassName="max-h-64 w-80 max-w-[70vw] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
           ariaLabel={token.display}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
           // 点击打开只读全文(与 composer 侧 pastedTextChip → ToolPayloadLightbox
           // 对齐)。hover tooltip 是 320×256 的小浮层,几百行日志在里面读不了,
           // 也无法选中复制,不能当作查看全文的唯一出口(issue #946)。
@@ -1444,7 +1444,7 @@ export function UserMessage({
             />
             <div
               className={cn(
-                'w-full rounded-[8px] border border-[var(--msg-tool-card-border)]',
+                'w-full rounded-lg border border-[var(--msg-tool-card-border)]',
                 'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-card-text)]',
                 'overflow-hidden',
               )}

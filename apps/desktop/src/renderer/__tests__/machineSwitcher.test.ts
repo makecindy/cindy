@@ -388,9 +388,10 @@ describe('buildSwitcherDevices', () => {
     ]);
   });
 
-  it('被拒设备即使不在全量列表也列出(名字回退到可读提示)', () => {
+  it('尚未拿到完整目录时保留被拒设备，名字回退到可读提示', () => {
     const result = buildSwitcherDevices({
       fullList: [],
+      registeredDeviceIds: null,
       syncedDevices: [],
       revoked: new Set(['gone-dev']),
     });
@@ -408,9 +409,10 @@ describe('buildSwitcherDevices', () => {
     expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connected', online: true }]);
   });
 
-  it('仅有断线缓存的设备仍显示,但状态为 connecting', () => {
+  it('尚未拿到完整目录时仍显示断线缓存，状态为 connecting', () => {
     const result = buildSwitcherDevices({
       fullList: [],
+      registeredDeviceIds: null,
       syncedDevices: [
         { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: false },
       ],
