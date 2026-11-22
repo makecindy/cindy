@@ -15,6 +15,27 @@ import { mobileBuddySetCopy } from './buddySetCopy';
 type CreateKind = 'bot' | 'group';
 type Choice = { kind: CreateKind; host: RemoteResourceHostTarget };
 
+/**
+ * The compatibility chooser owns exactly one deferred action per close: its native
+ * Modal stays mounted through the close animation, so the next sheet waits for
+ * `onClosed`. Independent flags let two presses schedule two actions and present
+ * two sheets on top of each other. A single slot makes "last press wins" decidable.
+ */
+type DeferredAction =
+  | { kind: 'create'; choice: Choice }
+  | { kind: 'invite' }
+  | { kind: 'buddySet' };
+
+/** Single owner: set replaces, take reads-and-clears, clear is the only cleanup. */
+type DeferredSlot = { current: DeferredAction | null };
+function setDeferred(slot: DeferredSlot, action: DeferredAction) { slot.current = action; }
+function clearDeferred(slot: DeferredSlot) { slot.current = null; }
+function takeDeferred(slot: DeferredSlot): DeferredAction | null {
+  const action = slot.current;
+  clearDeferred(slot);
+  return action;
+}
+
 type CreateOptions = {
   targets: readonly RemoteResourceHostTarget[];
   /** Online computers that support group chats; empty keeps the single-purpose button. */
@@ -46,16 +67,16 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
   const [open, setOpen] = useState<Choice | null>(null);
   const [visible, setVisible] = useState(false);
   const [choosing, setChoosing] = useState(false);
-  const pendingChoice = useRef<Choice | null>(null);
-  const pendingInvite = useRef(false);
-  const pendingBuddySet = useRef(false);
+  const pendingAction = useRef<DeferredAction | null>(null);
   const receipt = useRef<RemoteResourceRef | null>(null);
   const groupReceipt = useRef<string | null>(null);
+  /** One fence for every entry point: a late callback never serves a replaced account. */
+  const isCurrent = () => mounted.current && currentAccount.current === account;
   // Callbacks already handed out keep the old account and stay fenced; new ones serve the new account.
   if (account !== accountGeneration) {
     setAccount(accountGeneration); setOpen(null); setVisible(false); setChoosing(false);
   }
-  useEffect(() => { pendingChoice.current = null; pendingInvite.current = false; pendingBuddySet.current = false; receipt.current = null; groupReceipt.current = null; }, [accountGeneration]);
+  useEffect(() => { clearDeferred(pendingAction); receipt.current = null; groupReceipt.current = null; }, [accountGeneration]);
   const withGroups = groupTargets.length > 0 && !!onGroupCreated;
   const order = (hosts: readonly RemoteResourceHostTarget[]) => [...hosts]
     .sort((a, b) => Number(b.deviceId === preferredDeviceId) - Number(a.deviceId === preferredDeviceId));
@@ -63,7 +84,7 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
   const orderedGroups = order(groupTargets);
   const start = (kind: CreateKind, deviceId: string) => {
     const target = (kind === 'bot' ? targets : groupTargets).find((item) => item.deviceId === deviceId);
-    if (!mounted.current || currentAccount.current !== account || !target) return;
+    if (!isCurrent() || !target) return;
     setOpen({ kind, host: target }); setVisible(true);
   };
   const botLabel = t(withGroups ? 'devices.companions.createTeammate' : 'devices.companionProfile.create');
@@ -82,7 +103,9 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
   if (onInvite) menuActions.push({ id: 'invitation-section', title: '', displayInline: true,
     subactions: [{ id: 'invite', title: t('groupChat.invitation.entry'), image: 'link' }] });
   const onMenu = (id: string) => {
-    if (!mounted.current || currentAccount.current !== account) return;
+    if (!isCurrent()) return;
+    // The native MenuView is system-owned: it closes before the action runs, so
+    // this path needs no deferred slot. The compatibility chooser below does.
     if (id === 'buddy-set') { onNewBuddySet?.(); return; }
     if (id === 'invite') { onInvite?.(); return; }
     if (!withMenu) { start('bot', id); return; }
@@ -113,23 +136,27 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
     ? <NativePullDownMenu actions={menuActions} onAction={onMenu} testID="teammates.createMenu">{button}</NativePullDownMenu>
     : button;
   const sheets = <>
-    <CompanionSheet visible={choosing} title={label} testID="teammates.createChooser" onClose={() => { pendingChoice.current = null; pendingInvite.current = false; pendingBuddySet.current = false; setChoosing(false); }}
-      onClosed={() => { if (!mounted.current || currentAccount.current !== account) return;
-        const choice = pendingChoice.current; pendingChoice.current = null; if (choice) start(choice.kind, choice.host.deviceId);
-        const invite = pendingInvite.current; pendingInvite.current = false;
-        if (invite && mounted.current && currentAccount.current === account) onInvite?.();
-        // The compatibility chooser is a native Modal that stays mounted through
-        // the close animation; open the next sheet only after it has fully closed.
-        const buddySet = pendingBuddySet.current; pendingBuddySet.current = false;
-        if (buddySet && mounted.current && currentAccount.current === account) onNewBuddySet?.(); }}>
+    <CompanionSheet visible={choosing} title={label} testID="teammates.createChooser"
+      onClose={() => { clearDeferred(pendingAction); setChoosing(false); }}
+      onClosed={() => {
+        // Read-and-clear is the one merge predicate: at most one deferred action
+        // runs per close, a later press replaces an earlier one, and a duplicate,
+        // late or post-account-switch close cannot replay it. Every kind shares
+        // the same mount/account fence at this settle point.
+        const action = takeDeferred(pendingAction);
+        if (!action || !isCurrent()) return;
+        if (action.kind === 'create') start(action.choice.kind, action.choice.host.deviceId);
+        else if (action.kind === 'invite') onInvite?.();
+        else onNewBuddySet?.();
+      }}>
       {/* Same choice as the header's native menu: one plain row per choice, not full-width buttons. */}
       {fallbackChoices.map((choice) => <CompanionSettingsRow key={`${choice.kind}:${choice.host.deviceId}`} icon={null} label={choiceLabel(choice)}
         testID={`teammates.createChooser.${choice.kind}.${choice.host.deviceId}`}
-        onPress={() => { pendingChoice.current = choice; setChoosing(false); }} />)}
+        onPress={() => { setDeferred(pendingAction, { kind: 'create', choice }); setChoosing(false); }} />)}
       {onNewBuddySet ? <CompanionSettingsRow icon={null} label={mobileBuddySetCopy(t).new} testID="teammates.createChooser.buddySet"
-        onPress={() => { pendingBuddySet.current = true; setChoosing(false); }} /> : null}
+        onPress={() => { setDeferred(pendingAction, { kind: 'buddySet' }); setChoosing(false); }} /> : null}
       {onInvite ? <CompanionSettingsRow icon={null} label={t('groupChat.invitation.entry')} testID="teammates.invite"
-        onPress={() => { if (mounted.current && currentAccount.current === account) { pendingInvite.current = true; setChoosing(false); } }} /> : null}
+        onPress={() => { if (isCurrent()) { setDeferred(pendingAction, { kind: 'invite' }); setChoosing(false); } }} /> : null}
     </CompanionSheet>
     {open?.kind === 'bot' ? <CompanionCreateSheet visible={visible} deviceId={open.host.deviceId} deviceName={open.host.deviceName}
       collectionId={TEAMMATE_COLLECTION_ID} online={targets.some((target) => target.deviceId === open.host.deviceId)}

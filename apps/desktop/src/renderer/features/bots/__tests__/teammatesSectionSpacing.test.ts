@@ -163,14 +163,24 @@ describe('伙伴集菜单在最小窗口内的可达性', () => {
     expect(addToGroupSource).toContain(`<DropdownMenuSubContent ${BOUNDED_SUBMENU}>`);
   });
 
-  // DESIGN.md §14.6:每个只有图标的控件都要有本地化可访问名称 + 可见 Tip,
-  // 悬停才出现的控件也不例外。失效后果:铅笔图标不提供可见提示,鼠标用户
-  // 点开前无法辨认这是「添加伙伴 / 重命名 / 删除」入口;集头 aria-label 若不带
-  // 集名,屏幕阅读器会把多个集头都读成同一句「展开 / 收起伙伴集」。
-  it('集头动作图标带可见 Tip,折叠按钮的可访问名称保留集名', () => {
-    expect(buddySetGroupsSource).toContain('<Tip text={copy.actions} side="bottom">');
+  // §2 checkpoint, family B (DESIGN.md §14.6): every control scoped to a named
+  // set must carry the set name in its accessible name, and icon-only controls
+  // also need a visible Tip. Failure consequence: with several sets, every pencil
+  // is announced as the same "Buddy set actions", so a screen-reader user cannot
+  // tell which set the action menu will rename or delete — the same ambiguity the
+  // fold button had before the last round. jsdom cannot measure an accessible name
+  // through Radix's Tip/DropdownMenuTrigger, so this cross-file contract stays in
+  // guard tier (this file is in scripts/test-workspaces.config.mjs's allowlist).
+  it('集头动作图标带可见 Tip,折叠按钮与动作入口的可访问名称都保留集名', () => {
+    expect(buddySetGroupsSource).toContain('const actionsLabel = `${set.name}, ${copy.actions}`;');
+    expect(buddySetGroupsSource).toContain('<Tip text={actionsLabel} side="bottom">');
+    expect(buddySetGroupsSource).toContain('aria-label={actionsLabel}');
+    expect(buddySetGroupsSource).not.toContain('aria-label={copy.actions}');
     expect(buddySetGroupsSource).toContain('aria-label={`${set.name}, ${collapsed ? copy.expand : copy.collapse}`}');
     expect(buddySetGroupsSource).not.toContain('aria-label={collapsed ? copy.expand : copy.collapse}');
+    // Symmetric half on mobile: the section header must name its set too.
+    const mobileSource = readFileSync(resolve(__dirname, '..', '..', '..', '..', '..', '..', 'mobile', 'src', 'session', 'BuddySetGroups.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    expect(mobileSource).toContain('accessibilityLabel={`${set.name}, ${collapsed ? copy.expand : copy.collapse}`}');
   });
 });
 

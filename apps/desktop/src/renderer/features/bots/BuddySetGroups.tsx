@@ -111,6 +111,10 @@ export function BuddySetGroups<T extends BuddySetChatEntry>({
       {groups.map(({ set, rows }) => {
         const collapsed = set.collapsed === true;
         const Chevron = collapsed ? ChevronRight : ChevronDown;
+        // One set-scoped label feeds both the accessible name and the visible Tip:
+        // with several sets, a generic "Buddy set actions" cannot tell a screen
+        // reader user which set the fold or the action menu belongs to.
+        const actionsLabel = `${set.name}, ${copy.actions}`;
         return (
           <div key={`buddy-set:${set.buddySetId}`} data-buddy-set-id={set.buddySetId}>
             <div className="group/buddy-set flex h-6 items-center gap-1 pr-1 pl-3">
@@ -127,10 +131,10 @@ export function BuddySetGroups<T extends BuddySetChatEntry>({
               </button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Tip text={copy.actions} side="bottom">
+                  <Tip text={actionsLabel} side="bottom">
                     <button
                       type="button"
-                      aria-label={copy.actions}
+                      aria-label={actionsLabel}
                       className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] opacity-0 transition-colors hover:text-[var(--sidebar-nav-text)] focus:opacity-100 group-hover/buddy-set:opacity-100 data-[state=open]:opacity-100"
                     >
                       <Pencil size={12} strokeWidth={2} />
