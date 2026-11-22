@@ -24,7 +24,7 @@ describe('Pi request usage transaction', () => {
       CREATE TABLE daily_spend(day TEXT, cost_currency TEXT, cost_amount REAL DEFAULT 0,
         cost_is_approximate INTEGER DEFAULT 0, updated_at INTEGER, PRIMARY KEY(day, cost_currency));
       CREATE TABLE sessions(id TEXT PRIMARY KEY, total_token_usage INTEGER DEFAULT 0,
-        total_cost_usd REAL DEFAULT 0, total_cost_amount REAL DEFAULT 0, total_cost_currency TEXT, total_cost_is_approximate INTEGER DEFAULT 0);
+        total_cost_usd REAL DEFAULT 0, total_cost_usd_is_approximate INTEGER DEFAULT 0, total_cost_amount REAL DEFAULT 0, total_cost_currency TEXT, total_cost_is_approximate INTEGER DEFAULT 0);
       INSERT INTO sessions(id) VALUES ('task');
     `);
   });
@@ -38,13 +38,13 @@ describe('Pi request usage transaction', () => {
   const total = () => db.prepare('SELECT total_token_usage AS tokens, total_cost_amount AS cost FROM sessions').get();
 
   // DB tier: two native currencies on one session must survive an interleaved receipt replay.
-  it('retains both original amounts when the next receipt uses another currency', () => {
-    const first = receipt({ amount: 2.5, currency: 'USD', actualCost: true });
+  it.each([true, false])('keeps both currencies when the approximate USD receipt arrives first: %s', approximateFirst => {
+    const first = receipt({ amount: 2.5, currency: 'USD', actualCost: true, approximate: approximateFirst });
     const second = receipt({ receiptId: 'pi:2', amount: 7, currency: 'CNY', actualCost: true });
-    const third = receipt({ receiptId: 'pi:3', amount: 1, currency: 'USD', actualCost: true });
+    const third = receipt({ receiptId: 'pi:3', amount: 1, currency: 'USD', actualCost: true, approximate: !approximateFirst });
     write(first, second, third, second);
-    expect(db.prepare('SELECT total_cost_usd,total_cost_currency,total_cost_amount FROM sessions').get())
-      .toEqual({total_cost_usd: 3.5,total_cost_currency: 'CNY',total_cost_amount: 7});
+    expect(db.prepare('SELECT total_cost_usd,total_cost_usd_is_approximate,total_cost_is_approximate,total_cost_currency,total_cost_amount FROM sessions').get())
+      .toEqual({total_cost_usd: 3.5,total_cost_usd_is_approximate: 1,total_cost_is_approximate: 0,total_cost_currency: 'CNY',total_cost_amount: 7});
     expect(db.prepare('SELECT cost_currency,cost_amount FROM daily_spend ORDER BY cost_currency').all())
       .toEqual([{cost_currency: 'CNY',cost_amount: 7},{cost_currency: 'USD',cost_amount: 3.5}]);
   });

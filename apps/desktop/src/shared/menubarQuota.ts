@@ -210,6 +210,7 @@ export interface MenubarView {
   locale: string;
   /** Symbol of the selected native usage currency. */
   moneySymbol: string;
+  taskMoneySymbol?: string;
   strings: MenubarStrings;
   /** Text after the menu bar icon for each mode; the active one is `settings.statusText`. */
   statusTextByMode: Record<MenubarStatusTextMode, string | null>;

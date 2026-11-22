@@ -68,6 +68,9 @@ export function recordPiUsage(db: Database.Database, args: PiUsageWrite[], write
           updated_at = MAX(updated_at, excluded.updated_at)`)
           .run(r.day, r.currency, amount, Number(r.approximate), r.recordedAt);
         db.prepare(`UPDATE sessions SET
+      total_cost_usd_is_approximate = total_cost_usd_is_approximate OR CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @approximate
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_is_approximate ELSE 0 END,
       total_cost_usd = total_cost_usd + CASE
         WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @amount
         WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_amount ELSE 0 END,

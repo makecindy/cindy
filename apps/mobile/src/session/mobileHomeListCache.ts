@@ -247,6 +247,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   }
   if (typeof item.totalCostUsd === 'number' && Number.isFinite(item.totalCostUsd)) {
     session.totalCostUsd = item.totalCostUsd;
+    if (item.totalCostUsdIsApproximate === true) session.totalCostUsdIsApproximate = true;
   }
   const totalMoney = normalizeRemoteMoney(item.totalMoney);
   if (totalMoney) session.totalMoney = totalMoney;

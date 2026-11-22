@@ -656,7 +656,7 @@ export interface MobileMakerTransport {
   getSessionEstimatedValue(
     sessionId: string,
     options?: { includeBreakdown?: boolean; clientId?: string },
-  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number; costBreakdown?: unknown }>;
+  ): Promise<{ totalValueMoney?: unknown; totalValueAmounts?: unknown[]; totalValueUsd?: number; costBreakdown?: unknown }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   setCodexResetAutoUse(patch: Partial<CodexResetAutoUseSettings> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;

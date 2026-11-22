@@ -94,6 +94,9 @@ export function recordMediaSpend(db: Database.Database, args: MediaSpendArgs) {
     }
     db.prepare(
       `UPDATE sessions SET
+      total_cost_usd_is_approximate = total_cost_usd_is_approximate OR CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @approximate
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_is_approximate ELSE 0 END,
       total_cost_usd = total_cost_usd + CASE
         WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @amount
         WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_amount ELSE 0 END,
@@ -108,13 +111,14 @@ export function recordMediaSpend(db: Database.Database, args: MediaSpendArgs) {
     return (
       (db
         .prepare(
-          `SELECT total_cost_usd AS legacyUsd, total_cost_amount AS amount,
+          `SELECT total_cost_usd AS legacyUsd, total_cost_usd_is_approximate AS usdApproximate, total_cost_amount AS amount,
       total_cost_currency AS currency, total_cost_is_approximate AS approximate
       FROM sessions WHERE id = ?`,
         )
         .get(sessionId) as
         | {
             legacyUsd: number;
+            usdApproximate: number;
             amount: number;
             currency: 'USD' | 'CNY';
             approximate: number;

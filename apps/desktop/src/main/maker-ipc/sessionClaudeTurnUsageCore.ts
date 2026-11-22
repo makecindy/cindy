@@ -277,7 +277,6 @@ export function recordSessionClaudeTurnUsage(
         // 订阅分类复用计费解析结果，覆盖显式 Token Plan 与 bridge 订阅路由。
         // 同一判据驱动估值、模型行标记与首页仪表盘刷新。
         const modelUsageWrites: Promise<unknown>[] = [];
-        const subscriptionTurnEstimates: RegionalMoney[] = [];
         let hasSubscriptionValueRow = false;
         const companyUsage = !session.remoteHostId && !session.agentDeviceId && sessionProviderForBilling !== 'xd' &&
           (turnContext.subscriptionKind === 'claude' || observedClaudeRoute === 'subscription' ||
@@ -299,7 +298,6 @@ export function recordSessionClaudeTurnUsage(
                 )
               : null;
           if (subscriptionEstimate?.amount) {
-            subscriptionTurnEstimates.push(subscriptionEstimate);
             m.money = subscriptionEstimate;
           }
           if (isSubscriptionValueRow)
@@ -337,6 +335,8 @@ export function recordSessionClaudeTurnUsage(
         if ((hasSubscriptionValueRow || estimatedTurnMoney) && !turnMoney) {
           void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());
         }
+        const estimatedAmounts = sumMoneyByCurrency(perModel.flatMap(item =>
+          item.money?.kind === 'value-estimate' ? [item.money] : []));
         if (turnMoney && turnMoney.amount > 0) {
           // 保留 #216 的 token/cache 明细随费用落库 (MessageActionBar tooltip)。
           // deltas 非空 → buildClaudeTurnUsageDetails 用 deltas 里的 model, fallbackModel 不取用。
@@ -360,11 +360,12 @@ export function recordSessionClaudeTurnUsage(
             sessionId: session.id,
             clientId: turnAssistantPersistId,
             money: turnMoney,
+            estimatedAmounts,
             turnUsageDetails,
             turnOrigin: event.turnOrigin,
           });
           if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
-        } else if (turnAssistantPersistId) {
+        } else if (turnAssistantPersistId || event.turnOrigin?.kind === 'scheduler') {
           // 无真实计费轮的「本轮价值」估算,挂到消息(isEstimate:true,chip 的
           // "本会话价值"由 useSessionEstimatedValue 汇总),不进 daily_spend /
           // sessions.total_cost_usd(那些是真实账单)。provider 参考价与两类订阅估值
@@ -373,12 +374,8 @@ export function recordSessionClaudeTurnUsage(
           //   - bridge 订阅模型(chatgpt/ / xai/,source==='subscription'):静态参考价折算;
           //   - Claude 订阅会话(显式选 Anthropic,SDK 自报 cost=0):Anthropic 牌价折算
           //     (纯 Anthropic 轮 pricing 为 null → 家族牌价兜底表,不为估值发起网络请求)。
-          // 混合轮(真实计费 > 0)走上面的真实分支,订阅部分不另挂估算 —— 一条消息只有一个
-          // cost 字段,真实计费优先;订阅 token 明细仍在 turnUsageDetails.perModelCost 里。
-          const estimatedValues: RegionalMoney[] = estimatedTurnMoney ? [estimatedTurnMoney] : [];
-          estimatedValues.push(...subscriptionTurnEstimates);
-          const turnEstimatedValue =
-            sumMoneyByCurrency(estimatedValues)[0] ?? null;
+          // 混合轮在上面的分支同时保存真实费用和按原币拆分的订阅估值。
+          const turnEstimatedValue = estimatedAmounts[0] ?? estimatedTurnMoney;
           const turnUsageDetails = buildClaudeTurnUsageDetails(
             doneData?.usage,
             resolvedUsageDeltas,
@@ -394,11 +391,12 @@ export function recordSessionClaudeTurnUsage(
               sessionId: session.id,
               clientId: turnAssistantPersistId,
               money: turnEstimatedValue,
+              estimatedAmounts,
               turnUsageDetails,
               turnOrigin: event.turnOrigin,
             });
             if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
-          } else {
+          } else if (turnAssistantPersistId) {
             // 真实计费与订阅估值都拿不到(典型:网关目录整体不下发价格、模型不在价表)
             // —— 钱没有,但 token 明细是算好的,落下来让 UI 退回显示本轮 token。
             await recordTurnUsageOnMessage({

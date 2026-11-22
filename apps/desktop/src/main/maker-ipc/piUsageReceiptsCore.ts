@@ -163,13 +163,13 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
 async function broadcastPersistedPiSpend(owner: PiUsageOwner, sessionId: string): Promise<void> {
   const { db, scope } = owner;
   if (isDataOwnerBroadcastScopeCurrent(scope)) {
-    const row = await db.queryOne<{ legacy: number; amount: number; currency: string | null; approximate: number }>(
-      `SELECT total_cost_usd AS legacy, total_cost_amount AS amount, total_cost_currency AS currency,
+    const row = await db.queryOne<{ legacy: number; usdApproximate: number; amount: number; currency: string | null; approximate: number }>(
+      `SELECT total_cost_usd AS legacy, total_cost_usd_is_approximate AS usdApproximate, total_cost_amount AS amount, total_cost_currency AS currency,
         total_cost_is_approximate AS approximate FROM sessions WHERE id = ?`, [sessionId]);
     if (row) {
       const current = normalizeRegionalMoney({ amount: row.amount, currency: row.currency ?? owner.currency ?? LEDGER_CURRENCY_FALLBACK,
         approximate: Boolean(row.approximate), kind: 'actual-cost' });
-      broadcastSessionSpend({sessionId, ...sessionSpendAmounts(row.legacy ?? 0, current)}, scope);
+      broadcastSessionSpend({sessionId, ...sessionSpendAmounts(row.legacy ?? 0, current, Boolean(row.usdApproximate))}, scope);
     }
   }
 }

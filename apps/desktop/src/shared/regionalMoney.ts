@@ -223,17 +223,23 @@ export function addRegionalMoney(values: readonly RegionalMoney[]): RegionalMone
 }
 
 /** Combine the session's dedicated USD column with the amount in its tagged currency. */
-export function sessionSpendAmounts(usd: number, tagged?: RegionalMoney): {
+export function sessionSpendAmounts(usd: number, tagged?: RegionalMoney, usdApproximate = false): {
   totalMoney: RegionalMoney;
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
 } {
-  const dollars = legacyUsdMoney(usd);
+  const dollars = { ...legacyUsdMoney(usd), approximate: usdApproximate };
   if (!tagged || (usd > 0 && tagged.amount === 0)) return {totalMoney: dollars, totalCostUsd: usd};
   if (tagged.currency === 'USD') {
     const totalMoney = usd > 0 ? addRegionalMoney([dollars, tagged]) : tagged;
     return {totalMoney, totalCostUsd: totalMoney.amount};
   }
-  return usd > 0 ? {totalMoney: tagged, totalCostUsd: usd} : {totalMoney: tagged};
+  return usd > 0 ? {totalMoney: tagged, totalCostUsd: usd, ...(usdApproximate && { totalCostUsdIsApproximate: true })} : {totalMoney: tagged};
+}
+
+export function mixedEstimateAmounts(values: readonly RegionalMoney[]): { estimatedValueAmounts?: RegionalMoney[] } {
+  const amounts = sumMoneyByCurrency(values.filter(value => value.amount > 0));
+  return amounts.length > 1 ? { estimatedValueAmounts: amounts } : {};
 }
 
 /** Sum each native currency independently, in the order it occurs in the turn. */

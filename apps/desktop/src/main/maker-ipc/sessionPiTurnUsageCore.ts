@@ -320,7 +320,8 @@ export function recordSessionPiTurnUsage(
           await Promise.allSettled(modelWrites);
           void rebroadcastTodaySpend();
           const actualAmounts = sumMoneyByCurrency(actualMonies);
-          const messageMoney = actualAmounts[0] ?? sumMoneyByCurrency(estimatedMonies)[0];
+          const estimatedAmounts = sumMoneyByCurrency(estimatedMonies);
+          const messageMoney = actualAmounts[0] ?? estimatedAmounts[0];
           const turnUsageDetails = buildTurnUsageDetails({
             ...billing,
             perModelTokens,
@@ -345,6 +346,7 @@ export function recordSessionPiTurnUsage(
               sessionId: session.id,
               clientId: turnAssistantPersistId,
               money: messageMoney,
+              estimatedAmounts,
               turnUsageDetails,
               turnOrigin: event.turnOrigin,
             });

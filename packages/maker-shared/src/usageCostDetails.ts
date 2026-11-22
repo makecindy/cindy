@@ -157,13 +157,16 @@ export function supplementalConversationEstimates(
   metaValue: unknown,
 ): UsageCostMoney[] {
   const meta = record(metaValue);
-  if (
-    meta.turnCostIsEstimate === true ||
-    normalizeUsageCostMoney(meta.turnCost)?.kind === "value-estimate"
-  )
-    return [];
+  const primary = normalizeUsageCostMoney(meta.turnCost);
+  const includedCurrency = primary?.kind === "value-estimate" || meta.turnCostIsEstimate === true
+    ? primary?.currency ?? (typeof meta.turnCostUsd === "number" ? "USD" : undefined)
+    : undefined;
   const usage = record(meta.turnUsageDetails);
-  return usageCostTotals(
+  const recorded = Array.isArray(usage.estimatedAmounts)
+    ? usage.estimatedAmounts.map(normalizeUsageCostMoney).filter((money): money is UsageCostMoney =>
+        money?.kind === "value-estimate" && money.amount > 0)
+    : [];
+  const totals = recorded.length ? recorded : usageCostTotals(
     normalizeUsageCostRows(
       Array.isArray(usage.perModelCost)
         ? usage.perModelCost.map((item) => ({
@@ -173,6 +176,7 @@ export function supplementalConversationEstimates(
         : [],
     ).filter((row) => row.money.kind === "value-estimate"),
   );
+  return totals.filter((money) => money.currency !== includedCurrency);
 }
 
 /** Reconstruct only recorded facts. Never infer a historical channel from today's selection. */

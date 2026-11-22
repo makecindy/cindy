@@ -52,8 +52,9 @@ export const USAGE_SESSION_CONTEXT_CHANGED = 'usage:session-context-changed';
 export interface SessionSpendPayload {
   sessionId: string;
   totalMoney: RegionalMoney;
-  /** 仅当累计金额仍是 USD 时给旧 renderer 的兼容投影。 */
+  /** All USD spend, including the USD portion of a mixed session. */
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
 }
 
 export interface SessionTokensPayload {
@@ -101,6 +102,7 @@ export async function recordSessionTurnSpend(
     await db
       .update(sessions)
       .set({
+        totalCostUsdIsApproximate: sql`${sessions.totalCostUsdIsApproximate} OR CASE WHEN ${keepCny} THEN ${Number(normalized.approximate)} WHEN ${moveUsd} THEN ${sessions.totalCostIsApproximate} ELSE 0 END`,
         totalCostUsd: sql`${sessions.totalCostUsd} + CASE WHEN ${keepCny} THEN ${normalized.amount} WHEN ${moveUsd} THEN ${sessions.totalCostAmount} ELSE 0 END`,
         totalCostAmount: sql`CASE WHEN ${keepCny} THEN ${sessions.totalCostAmount} WHEN ${moveUsd} THEN ${normalized.amount} ELSE ${sessions.totalCostAmount} + ${normalized.amount} END`,
         totalCostCurrency: sql`CASE WHEN ${keepCny} THEN 'CNY' ELSE ${normalized.currency} END`,
@@ -111,6 +113,7 @@ export async function recordSessionTurnSpend(
     const row = await db
       .select({
         totalCostUsd: sessions.totalCostUsd,
+        usdApproximate: sessions.totalCostUsdIsApproximate,
         totalCostAmount: sessions.totalCostAmount,
         totalCostCurrency: sessions.totalCostCurrency,
         totalCostIsApproximate: sessions.totalCostIsApproximate,
@@ -124,7 +127,7 @@ export async function recordSessionTurnSpend(
       approximate: row?.totalCostIsApproximate ?? false,
       kind: 'actual-cost',
     });
-    broadcastSessionSpend({sessionId, ...sessionSpendAmounts(row?.totalCostUsd ?? 0, current)}, ownerScope);
+    broadcastSessionSpend({sessionId, ...sessionSpendAmounts(row?.totalCostUsd ?? 0, current, row?.usdApproximate)}, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnSpend failed:', err instanceof Error ? err.message : String(err));
   }

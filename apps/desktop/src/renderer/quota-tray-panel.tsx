@@ -91,7 +91,7 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     return () => window.removeEventListener('keydown', key);
   }, []);
   const rows = tab === 'tabUsage' ? view.tasks.map(row => ({
-    ...row, preview: [row.idleStatus, row.meta].filter(Boolean).join(' · '), time: money(view, row.value), pulse: false,
+    ...row, preview: [row.idleStatus, row.meta].filter(Boolean).join(' · '), time: money(view, row.value, view.taskMoneySymbol), pulse: false,
   })) : (tab === 'tabUnread' ? unread : ongoing).map(row => ({
     ...row, preview: row.status ? row.status + ' · ' + row.preview : row.preview,
     time: relative(view, row.lastActivityAtMs, now), pulse: row.phase === 'running',
@@ -123,7 +123,7 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
         }}>{s[key]}{count > 0 && <small>{count}</small>}</button>;
       })}</nav>
       {tab === 'tabUsage' && <div className="section-caption task-summary"><small>{view.taskSummary}</small>
-        <b className="metric">{money(view, view.tasks.reduce((total, row) => total + row.value, 0))}</b></div>}
+        <b className="metric">{money(view, view.tasks.reduce((total, row) => total + row.value, 0), view.taskMoneySymbol)}</b></div>}
       <section className="rows">{(expanded ? rows : rows.slice(0, limit)).map(row =>
         <button key={row.sessionId} className="task-row" onClick={() => window.quotaTray.openSession(row.sessionId)}>
           <span className="task-icon" data-running={row.pulse}><Logo svg={row.logoSvg}/></span>

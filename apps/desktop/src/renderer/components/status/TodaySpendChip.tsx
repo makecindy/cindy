@@ -698,7 +698,9 @@ function toQuotaHoverCardTurnUsage(
 }
 
 function formatSessionAmounts(amounts: RegionalMoney[] | undefined, fallback: RegionalMoney): string {
-  return (amounts?.length ? amounts : [fallback]).map(money => formatTurnCostMoney(money)).join(' + ');
+  return (amounts?.length ? amounts : [fallback]).map(money =>
+    money.kind === 'actual-cost' && money.approximate ? `≈${formatTurnCostMoney(money)}` : formatTurnCostMoney(money),
+  ).join(' + ');
 }
 
 /** 把会话金额投影成卡片数据；混合合计保留实际费用与价值估算两条构成。 */
@@ -890,6 +892,7 @@ interface TodaySpendChipProps {
   /** 来自 session.totalCostUsd（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialMoney?: RegionalMoney | null;
   sessionInitialCostUsd?: number | null;
+  sessionInitialUsdApproximate?: boolean;
   /** 来自 session.totalTokenUsage（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialTokens?: number | null;
   /** 远端 Codex 由远端 daemon 路由,本机不能拿本地 app-server route / 账号快照来归类。 */
@@ -914,6 +917,7 @@ export function TodaySpendChip({
   sessionId,
   sessionInitialMoney,
   sessionInitialCostUsd,
+  sessionInitialUsdApproximate,
   sessionInitialTokens,
   remoteHostId,
   deviceLinkDeviceId,
@@ -1161,7 +1165,7 @@ export function TodaySpendChip({
     usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
   // session ledger 读取，订阅价值从消息明细重建，再统一汇总成“本对话”投影。
-  const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd);
+  const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd, sessionInitialUsdApproximate);
   const sessionTokens = useSessionTokens(
     vendorKey === 'pi' ||
       isCodexApi ||

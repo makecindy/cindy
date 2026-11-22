@@ -9748,6 +9748,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             sessionId?: string;
             totalMoney?: unknown;
             totalCostUsd?: number;
+            totalCostUsdIsApproximate?: boolean;
           } | null;
           const totalMoney =
             normalizeRegionalMoney(p?.totalMoney) ??
@@ -9760,6 +9761,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
               totalMoney,
               ...(typeof p.totalCostUsd === 'number' ? { totalCostUsd: p.totalCostUsd } : {}),
+              ...(p.totalCostUsdIsApproximate !== undefined && { totalCostUsdIsApproximate: p.totalCostUsdIsApproximate }),
             });
           }
           break;

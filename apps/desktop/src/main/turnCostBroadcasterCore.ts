@@ -27,6 +27,7 @@ import type { SendOrigin } from '@cindy/maker-core';
 
 import type { MessageTurnCostPayload } from '../shared/turnCostPayload.js';
 import {
+  buildTurnUsageDetails,
   mergeTurnUsageDetailsForMessage,
   normalizeTurnUsageDetails,
   type TurnUsageDetails,
@@ -418,15 +419,21 @@ export async function recordSchedulerTurnCost(
     sessionId: string;
     clientId?: string;
     money: RegionalMoney;
+    estimatedAmounts?: RegionalMoney[];
     turnUsageDetails?: TurnUsageDetails | null;
     turnOrigin?: SendOrigin;
   },
   deps: SchedulerTurnCostFallbackDeps = defaultSchedulerTurnCostFallbackDeps,
 ): Promise<string | null> {
-  const { clientId, turnOrigin } = args;
+  const { clientId, turnOrigin, estimatedAmounts, ...segment } = args;
+  const details = estimatedAmounts?.length && (estimatedAmounts.length > 1 || args.money.kind === 'actual-cost')
+    ? buildTurnUsageDetails({ ...args.turnUsageDetails, estimatedAmounts })
+    : args.turnUsageDetails;
   if (clientId) {
     const recorded = await deps.recordOnMessage({
-      ...args,
+      ...segment,
+      turnOrigin,
+      turnUsageDetails: details,
       clientId,
     });
     if (recorded) return null;
@@ -443,6 +450,7 @@ export async function recordSchedulerTurnCost(
     return await deps.recordDirect({
       runId: turnOrigin.runId,
       money: args.money,
+      ...((estimatedAmounts?.length ?? 0) > 0 && { estimatedAmounts }),
     });
   } catch (err) {
     log.warn('recordSchedulerTurnCost fallback failed:', err instanceof Error ? err.message : String(err));

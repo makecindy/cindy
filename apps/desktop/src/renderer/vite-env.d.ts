@@ -5024,6 +5024,7 @@ interface ElectronAPI {
         sessionId: string;
         totalMoney: import('../shared/regionalMoney').RegionalMoney;
         totalCostUsd?: number;
+        totalCostUsdIsApproximate?: boolean;
       },
       ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
     ) => void,

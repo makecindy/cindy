@@ -18,6 +18,8 @@ const tokenFields = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCre
 export interface TurnUsageDetails extends UsageBillingSource {
   /** Snapshot for this user round; not an incremental segment charge. */
   additionalCosts?: RegionalMoney[];
+  /** Native estimate totals for this segment when it has more than one currency. */
+  estimatedAmounts?: RegionalMoney[];
   /** 新输入 token：未命中缓存、按输入价计费的部分。 */
   inputTokens: number;
   /** 输出 token：Codex 路径沿用现有口径，包含 reasoning 合并量。 */
@@ -70,6 +72,8 @@ export interface TurnUsageDetails extends UsageBillingSource {
 
 export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
   additionalCosts?: RegionalMoney[];
+  /** Native estimate totals for this segment when it has more than one currency. */
+  estimatedAmounts?: RegionalMoney[];
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -282,8 +286,10 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens;
   const durationMs = sanitizeDuration(input.durationMs);
   const turnDurationMs = sanitizeDuration(input.turnDurationMs);
+  const estimatedAmounts = input.estimatedAmounts?.map(normalizeRegionalMoney)
+    .filter((value): value is RegionalMoney => value?.kind === 'value-estimate' && value.amount > 0);
   const additionalCosts = input.additionalCosts?.map(normalizeRegionalMoney).filter((money): money is RegionalMoney => !!money);
-  if (totalTokens <= 0 && turnDurationMs === undefined && !additionalCosts?.length) return null;
+  if (totalTokens <= 0 && turnDurationMs === undefined && !additionalCosts?.length && !estimatedAmounts?.length) return null;
 
   const cacheDenominator = inputTokens + cacheReadTokens + cacheCreateTokens;
   const cacheHitRate = cacheDenominator > 0 ? cacheReadTokens / cacheDenominator : null;
@@ -296,6 +302,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   return {
     ...normalizeUsageBillingSource(input),
     ...(additionalCosts?.length ? { additionalCosts } : {}),
+    ...(estimatedAmounts?.length ? { estimatedAmounts } : {}),
     inputTokens,
     outputTokens,
     cacheReadTokens,
@@ -321,6 +328,7 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
   return (
     buildTurnUsageDetails({
       ...normalizeUsageBillingSource(raw),
+      estimatedAmounts: Array.isArray(raw.estimatedAmounts) ? raw.estimatedAmounts : undefined,
       additionalCosts: Array.isArray(raw.additionalCosts) ? raw.additionalCosts as RegionalMoney[] : undefined,
       inputTokens: typeof raw.inputTokens === 'number' ? raw.inputTokens : undefined,
       outputTokens: typeof raw.outputTokens === 'number' ? raw.outputTokens : undefined,

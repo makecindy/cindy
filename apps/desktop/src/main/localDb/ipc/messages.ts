@@ -62,14 +62,11 @@ import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
 } from '../../../shared/interruptedTurn.js';
-import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/codexSubscriptionValue.js';
-import { normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
+import { turnEstimateAmounts } from '../../../shared/turnEstimateAmounts.js';
 import { readSessionCostDetails } from '../../usage/sessionCostDetails.js';
 import {
   addCompatibleRegionalMoney,
-  asValueEstimateMoney,
-  normalizeRegionalMoney,
-  usdMoney,
+  sumMoneyByCurrency,
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
@@ -260,6 +257,7 @@ function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
 export interface EstimatedSessionValueEntry {
   clientId: string;
   money: RegionalMoney;
+  additionalEstimates?: RegionalMoney[];
   costUsd?: number;
 }
 
@@ -553,13 +551,15 @@ export function registerMessageIpc(
         ),
       );
     const entries = extractEstimatedSessionValueEntries(rows);
-    const totalValueMoney = addCompatibleRegionalMoney(entries.map((entry) => entry.money));
+    const totalValueAmounts = sumMoneyByCurrency(entries.flatMap(entry => [entry.money, ...(entry.additionalEstimates ?? [])]));
+    const totalValueMoney = addCompatibleRegionalMoney(totalValueAmounts);
     const hasCompleteUsdProjection = entries.every((entry) => typeof entry.costUsd === 'number');
     return {
       ...(options?.includeBreakdown === true ? { costBreakdown: await readSessionCostDetails(
         getDbClient(), sid, options.clientId === undefined ? undefined : requireString(options.clientId, 'clientId'),
       ) } : {}),
       totalValueMoney,
+      ...(totalValueAmounts.length > 1 && { totalValueAmounts }),
       ...(hasCompleteUsdProjection
         ? {
             totalValueUsd: entries.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
@@ -1458,51 +1458,14 @@ export function extractEstimatedSessionValueEntries(
     } catch {
       continue;
     }
-    if (meta?.turnCostIsEstimate !== true) {
-      const estimate = addCompatibleRegionalMoney((normalizeTurnUsageDetails(meta?.turnUsageDetails)?.perModelCost ?? [])
-        .filter(item => item.money.kind === 'value-estimate').map(item => item.money));
-      if (estimate?.amount) entries.push({ clientId: row.clientId, money: estimate,
-        ...(estimate.currency === 'USD' ? { costUsd: estimate.amount } : {}) });
-      continue;
-    }
-    const structured = normalizeRegionalMoney(meta.turnCost);
-    if (structured && structured.amount > 0) {
-      const recomputed =
-        structured.currency === 'USD'
-          ? resolveStaleCodexSubscriptionValueEstimate(
-              structured.amount,
-              normalizeTurnUsageDetails(meta.turnUsageDetails),
-              meta.model,
-            )
-          : null;
-      const money = asValueEstimateMoney({
-        ...structured,
-        amount: recomputed ?? structured.amount,
-      });
-      entries.push({
-        clientId: row.clientId,
-        money,
-        ...(money.currency === 'USD' ? { costUsd: money.amount } : {}),
-      });
-      continue;
-    }
-    if (
-      typeof meta.turnCostUsd !== 'number' ||
-      !Number.isFinite(meta.turnCostUsd) ||
-      meta.turnCostUsd <= 0
-    ) {
-      continue;
-    }
-    const recomputed = resolveStaleCodexSubscriptionValueEstimate(
-      meta.turnCostUsd,
-      normalizeTurnUsageDetails(meta.turnUsageDetails),
-      meta.model,
-    );
-    const costUsd = recomputed ?? meta.turnCostUsd;
+    if (!meta) continue;
+    const [money, ...additionalEstimates] = turnEstimateAmounts(meta);
+    if (!money) continue;
     entries.push({
       clientId: row.clientId,
-      money: usdMoney(costUsd, 'value-estimate', 'legacy-usd'),
-      costUsd,
+      money,
+      ...(additionalEstimates.length ? { additionalEstimates } : {}),
+      ...(money.currency === 'USD' && !additionalEstimates.length ? { costUsd: money.amount } : {}),
     });
   }
   return entries;

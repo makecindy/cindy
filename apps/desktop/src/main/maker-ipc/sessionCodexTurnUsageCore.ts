@@ -276,7 +276,8 @@ export function recordSessionCodexTurnUsage(
           }
           const values = perModelCost.map(row => row.money);
           const actualAmounts = isSubscriptionValue ? [] : sumMoneyByCurrency(values.filter(m => m.kind === 'actual-cost'));
-          const money = actualAmounts[0] ?? sumMoneyByCurrency(values)[0];
+          const estimatedAmounts = sumMoneyByCurrency(values.filter(value => value.kind === 'value-estimate'));
+          const money = actualAmounts[0] ?? estimatedAmounts[0];
           if (money && money.amount > 0) {
             if (turnUsageDetails) turnUsageDetails.perModelCost = perModelCost;
             for (const amount of actualAmounts) {
@@ -287,6 +288,7 @@ export function recordSessionCodexTurnUsage(
               sessionId: session.id,
               clientId: turnAssistantPersistId,
               money,
+              estimatedAmounts,
               turnUsageDetails,
               turnOrigin: event.turnOrigin,
             });

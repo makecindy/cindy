@@ -104,7 +104,7 @@ export async function prepareGatewayMediaBilling(input: {
           approximate: Boolean(session.approximate),
           kind: 'actual-cost',
         };
-        broadcastSessionSpend({sessionId: input.sessionId, ...sessionSpendAmounts(session.legacyUsd, current)}, ownerScope);
+        broadcastSessionSpend({sessionId: input.sessionId, ...sessionSpendAmounts(session.legacyUsd, current, Boolean(session.usdApproximate))}, ownerScope);
       }
       await rebroadcastTodaySpend(ownerScope);
     } catch (error) {

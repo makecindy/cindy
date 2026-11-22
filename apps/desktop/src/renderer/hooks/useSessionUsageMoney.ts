@@ -55,8 +55,9 @@ export function useSessionUsageMoney(
   sessionId: string | undefined,
   initialMoney: RegionalMoney | null | undefined,
   initialCostUsd: number | null | undefined,
+  initialUsdApproximate = false,
 ): SessionUsageMoney {
-  const actualAmounts = useSessionSpend(sessionId, initialMoney, initialCostUsd);
+  const actualAmounts = useSessionSpend(sessionId, initialMoney, initialCostUsd, initialUsdApproximate);
   const estimates = useSessionEstimatedAmounts(sessionId, Boolean(sessionId));
   return useMemo(() => {
     const actual = actualAmounts[0] ?? null;
