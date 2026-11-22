@@ -147,14 +147,14 @@ it.each(['abort', 'release'])('clears the matching question waiter on host %s', 
 it('recovers the saved direct document verbatim only for its recipient and date', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-addressed-document-'));
   const privatePath = vi.spyOn(storage, 'ownerScopedImUserDataPath').mockImplementation((...parts) => path.join(root, ...parts));
-  const send = vi.fn(async () => ({ messageId: 'accepted' }));
+  const send = vi.fn(async (_chat: string, _text: string, _requestId: string) => ({ messageId: 'accepted' }));
   const origin = 'http://127.0.0.1:1234', connectionId = '123456abcdef';
   const target = 'any;-;one@example.test';
   const im = { connectedOrigin: origin, isGroup: (id: string) => id.includes(';+;'), sendDirectDelivery: send, commitFinal: vi.fn() };
   const adapter = wireIMessageOrchestrator(im as never, {} as never,
     { instanceKey: 'test', companionBotId: 'bot', connectionId }) as unknown as ImChannelAdapter;
-  const reader = (chatId: string) => {
-    const scope = adapter.channelToolScopeFor!({ chatId, messageId: 'request' } as IMMessageEvent);
+  const reader = (chatId: string, messageId = 'request') => {
+    const scope = adapter.channelToolScopeFor!({ chatId, messageId } as IMMessageEvent);
     return scope?.channel === 'imessage' ? scope.readDirectDelivery : undefined;
   };
   try {
@@ -168,7 +168,14 @@ it('recovers the saved direct document verbatim only for its recipient and date'
     expect(send).not.toHaveBeenCalled();
     if (adapter.output.kind !== 'chunked-text') throw new Error('Expected a chunked reply');
     await adapter.output.commitFinal({ userId: target, text: text.replace('\n', '  \n'), inputMessageId: 'request', terminal: 'done' });
-    expect(send).toHaveBeenCalledWith(target, text, record.replyId);
+    const firstReply = send.mock.calls[0][2];
+    expect(send).toHaveBeenCalledWith(target, text, expect.any(String));
+    await adapter.output.commitFinal({ userId: target, text, inputMessageId: 'request', terminal: 'done' });
+    expect(send).toHaveBeenLastCalledWith(target, text, firstReply);
+    expect(reader(target, 'explicit-second-request')!(record.createdAt)).toEqual({ text, createdAt: record.createdAt });
+    await adapter.output.commitFinal({ userId: target, text, inputMessageId: 'explicit-second-request', terminal: 'done' });
+    expect(send).toHaveBeenLastCalledWith(target, text, expect.any(String));
+    expect(send.mock.calls[2][2]).not.toBe(firstReply);
   } finally {
     privatePath.mockRestore();
     await fs.rm(root, { recursive: true, force: true });

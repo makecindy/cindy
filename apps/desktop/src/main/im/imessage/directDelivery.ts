@@ -8,7 +8,6 @@ interface DirectDelivery {
   text: string;
   createdAt: number;
   requestId: string;
-  replyId: string;
 }
 
 export function directDeliveryDirectory(connection: string): string {
@@ -31,7 +30,7 @@ export function readDirectDelivery(file: string): DirectDelivery | null {
   if (content === null) return null;
   const record = JSON.parse(content);
   if (typeof record?.text !== 'string' || !Number.isSafeInteger(record.createdAt) ||
-      ![record.requestId, record.replyId].every(id => typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id))) {
+      typeof record.requestId !== 'string' || !/^[0-9a-f-]{36}$/.test(record.requestId)) {
     throw new Error('Invalid direct delivery');
   }
   return record;
@@ -40,7 +39,7 @@ export function readDirectDelivery(file: string): DirectDelivery | null {
 export function prepareDirectDelivery(file: string, text: string): DirectDelivery {
   const latest = readDirectDelivery(file);
   if (latest?.text === text) return latest;
-  const record = { text, createdAt: Date.now(), requestId: randomUUID(), replyId: randomUUID() };
+  const record = { text, createdAt: Date.now(), requestId: randomUUID() };
   atomicWriteFileSync(file, JSON.stringify(record));
   return record;
 }

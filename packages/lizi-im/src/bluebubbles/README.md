@@ -89,4 +89,4 @@ REST 参考：[官方文档](https://docs.bluebubbles.app/server/developer-guide
 
 家庭任务沿用 Codex 自动化的 `[SILENT]` 和 heartbeat 通知格式；只有当前连接中已绑定的专用群聊或访客私聊任务可恢复后台投递，伙伴共用的主对话不会自动选择收件人。
 
-伙伴主对话中，主人明确指定已有 iMessage 私聊任务后，`send_to_private_chat` 核对本次输入、伙伴与私聊绑定，再把正文交给该连接。返回的消息 GUID 表示桥接已受理。已送达设备、已读分别需要设备侧证据。每个私聊在当前账号的 `imessage/direct-deliveries/<connectionId>/` 下仅保留最近一次定向正文与请求标识，移除连接时清理。收件人在该私聊请求原文时，`latest_direct_delivery` 可限定起始时间读取正文，终态回复沿原聊天发送。主动发送和按需取回各自复用对应回执，结果不明时不会自动重试。
+伙伴主对话中，主人明确指定已有 iMessage 私聊任务后，`send_to_private_chat` 核对本次输入、伙伴与私聊绑定，再把正文交给该连接。返回的消息 GUID 表示桥接已受理。已送达设备、已读分别需要设备侧证据。每个私聊在当前账号的 `imessage/direct-deliveries/<connectionId>/` 下仅保留最近一次定向正文与请求标识，移除连接时清理。收件人在该私聊请求原文时，`latest_direct_delivery` 可限定起始时间读取正文，终态回复沿原聊天发送。同一份正文的重复主动投递复用发送回执。同一条入站请求的重复处理复用取回回执；收件人用新消息明确再问，会收到一次新的回复。发送结果不明时不会自动重试。

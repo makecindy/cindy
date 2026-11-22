@@ -48,7 +48,6 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     output: { kind: 'chunked-text', includeInputMessageId: true, im, commitFinal: async output => {
       const document = requestedDocuments.get(output.userId);
       if (document && document.inputMessageId === output.inputMessageId) {
-        requestedDocuments.delete(output.userId);
         if (im.connectedOrigin !== document.origin) throw new Error('IMESSAGE_CONNECTION_CHANGED');
         // The normal reply may contain Markdown hard breaks. Restore original bytes
         // only when the assistant replied with this document on this same input.
@@ -87,6 +86,7 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       })?.guid;
     },
     channelToolScopeFor: event => {
+      if (requestedDocuments.get(event.chatId)?.inputMessageId !== event.messageId) requestedDocuments.delete(event.chatId);
       const origin = im.connectedOrigin;
       const directory = origin && archiveDirectory(options.connectionId, origin);
       const directFile = origin && !im.isGroup(event.chatId) &&
@@ -97,7 +97,9 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
         if (im.connectedOrigin !== origin) throw new Error('Connection changed');
         const record = readDirectDelivery(directFile);
         if (!record || record.createdAt < after) return null;
-        requestedDocuments.set(event.chatId, { inputMessageId: event.messageId, origin, text: record.text, replyId: record.replyId });
+        // BlueBubbles uses tempGuid to correlate retries. A new inbound question gets its own reply.
+        const replyId = createHash('sha256').update(JSON.stringify([record.requestId, event.messageId])).digest('hex');
+        requestedDocuments.set(event.chatId, { inputMessageId: event.messageId, origin, text: record.text, replyId });
         return { text: record.text, createdAt: record.createdAt };
       } : undefined,
       readArchive: directory ? (query, before, limit) => readArchive(directory, event.chatId, query, before, limit) : undefined,
