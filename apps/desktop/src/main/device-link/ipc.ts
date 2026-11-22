@@ -41,7 +41,8 @@ import {
   type LinkAcceptPayload,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import { ServerApiError } from '../serverApiClient.desktop';
+import { ServerApiError, serverApiFetch } from '../serverApiClient.desktop';
+import { getClientEndpoint } from '../clientEndpointsService.js';
 import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import {
   __resetDirectoryThrottleForTests,
@@ -1974,6 +1975,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; enabled?: unknown };
     return handleSetDeviceControlEnabled(deps, p.deviceId, p.enabled);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.CLOUD_COMPUTER_ENTRY, async event => {
+    assertTrustedAppRendererEvent(event);
+    return serverApiFetch<unknown>('/api/model-access/personal/cloud-computer/entry', {
+      baseUrl:() => getClientEndpoint('modelAccessApiBaseUrl'), cache:'no-store',
+      timeoutMs:5000, redactErrorDetails:true, expectedErrors:[{status:403},{status:404}],
+    });
   });
   ipcMain.handle(
     DEVICE_LINK_INVOKE.LIST_DEVICES,

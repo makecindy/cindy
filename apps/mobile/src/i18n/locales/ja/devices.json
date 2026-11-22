@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "パソコンの Cindy をアップデートしてください",
   "usageUpdateDesktopCopy": "パソコンの Cindy が古いため、使用量をスマートフォンに送れません。アップデートすると自動で表示されます。",
   "management": {
+    "addCloud": "クラウドマシンを追加",
+    "preparingCloud": "クラウドマシンを準備中",
+    "manageCloud": "クラウドマシンを管理",
     "title": "デバイス管理",
     "openDevice": "{{name}} のデバイス詳細を表示",
     "details": "デバイスの詳細",

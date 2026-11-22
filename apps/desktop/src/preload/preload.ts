@@ -55,7 +55,7 @@ import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { LOCAL_NETWORK_LOCAL, type LocalNetworkApi, type LocalNetworkState } from '../shared/localNetwork';
 import { SELF_HOSTED_RELAY_IPC, type SelfHostedRelayApi } from '../shared/selfHostedRelay';
-import { DEVICE_LINK_PUSH, type DeviceLinkPeerLinksSnapshot } from '../shared/deviceLinkIpc';
+import { DEVICE_LINK_INVOKE, DEVICE_LINK_PUSH, type DeviceLinkPeerLinksSnapshot } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
 import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
 import {
@@ -5285,6 +5285,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutProviderGroupChanged,
   },
   deviceLink: {
+    cloudComputerEntry: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.CLOUD_COMPUTER_ENTRY),
     confirmSkillMutation: (deviceId: string, operationId: string): Promise<import('../shared/remoteSkills').RemoteSkillReceipt> => ipcRenderer.invoke('device-link:confirm-skill-mutation', { deviceId, operationId }),
     pickPluginPackage: (deviceId: string): Promise<{ attachment: string } | null> => ipcRenderer.invoke('device-link:pick-plugin-package', deviceId),
     taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest): Promise<import('@cindy/device-link').TaskMigrationView> =>
@@ -6814,10 +6815,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPluginEngineUsage: (key: string): Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null> =>
       ipcRenderer.invoke('maker:get-plugin-engine-usage', key),
     /** Asks engine plugins to republish their models (cooldown in main); results arrive as a change push. */
-    refreshPluginEngines: (): Promise<void> => ipcRenderer.invoke('maker:refresh-plugin-engines'),
+    refreshPluginEngines: (targetGhostId?: string): Promise<void> => ipcRenderer.invoke('maker:refresh-plugin-engines', targetGhostId),
     /** Opens or closes one engine of this computer for the owner's other computers. */
     setPluginEngineRemoteUse: (key: string, enabled: boolean): Promise<{ supported: boolean; enabled: boolean }> =>
       ipcRenderer.invoke('maker:set-plugin-engine-remote-use', { key, enabled }),
+    /** Renames, hides or turns off one engine of this computer, or turns some of its models off. */
+    setPluginEnginePrefs: (
+      input: import('../shared/pluginEngines.js').PluginEnginePrefsInput,
+    ): Promise<import('../shared/pluginEngines.js').PluginEngineView | null> =>
+      ipcRenderer.invoke('maker:set-plugin-engine-prefs', input),
     onPluginEnginesChanged: fanOutPluginEnginesChanged,
     onAgentsChanged: fanOutMakerAgentsChanged,
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>

@@ -625,9 +625,9 @@ import { ConnectionTokenProvider, type IssuedConnectionToken } from './connectio
 import { GhostFsSlot } from './fsSlot.js';
 import { HostStorageService } from './storageService.js';
 import { createHostStorageProviders } from './storageProviders.js';
-import { GhostLibrarySlot } from './librarySlot.js';
+import { GhostLibrarySlot, registerLibraryQuit } from './librarySlot.js';
 import { LibraryBindingStore, assertLibraryMetaOwner, relocateLibraryMetaOwner, validateLibraryCandidateLocation } from './libraryBinding.js';
-import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
+import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS, readLibraryUsageSnapshot } from './libraryVault.js';
 import { getGhostHandoffStore, isGhostHandoffBusy } from './handoffStore.desktop.js';
 export { getGhostHandoffStore } from './handoffStore.desktop.js';
 import { LibraryStagingStore, relocateLibraryStagingOwner } from './libraryStaging.js';
@@ -7290,16 +7290,17 @@ export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLib
       if (meta?.ghostId !== storagePart) throw new Error('Library owner mismatch');
       orphaned = meta.orphaned !== undefined;
       try {
-        const usage = JSON.parse(
-          await fs.promises.readFile(path.join(root, '.cindy-library', 'usage.json'), 'utf8'),
-        ) as {
-          files?: number;
-          bytes?: number;
-        };
-        usedBytes = Number(usage.bytes ?? 0);
-        fileCount = Number(usage.files ?? 0);
+        const live = librarySlotSingleton?.getLiveUsageSnapshot(storagePart, root);
+        if (live) {
+          ({ usedBytes, fileCount } = live);
+        } else {
+          const usage = await readLibraryUsageSnapshot(root);
+          usedBytes = usage?.bytes ?? 0;
+          fileCount = usage?.files ?? 0;
+          if (usage?.checkpoint === 'dirty') reason = 'usage-checkpoint-dirty';
+        }
       } catch {
-        /* 账本缺失按 0 计;设置页可触发重扫 */
+        /* 暂无可展示的账本。 */
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || fs.existsSync(root)) {
@@ -7417,11 +7418,9 @@ async function findLegacyLibraryCandidate(
   let usedBytes = 0;
   let fileCount = 0;
   try {
-    const usage = JSON.parse(
-      await fs.promises.readFile(path.join(hostDir, 'usage.json'), 'utf8'),
-    ) as { files?: number; bytes?: number };
-    usedBytes = Number(usage.bytes ?? 0);
-    fileCount = Number(usage.files ?? 0);
+    const usage = await readLibraryUsageSnapshot(root);
+    usedBytes = usage?.bytes ?? 0;
+    fileCount = usage?.files ?? 0;
   } catch {
     /* 账本缺失按 0 计 */
   }
@@ -9729,6 +9728,7 @@ export function registerGhostIpc(): void {
   const suspendPluginApps = () => { void revokePluginAppServers().catch(() => log.warn('plugin page revocation on suspend failed')); };
   powerMonitor.on('suspend', suspendPluginApps);
   onQuit('plugin-ui', async () => { powerMonitor.removeListener('suspend', suspendPluginApps); await revokePluginAppServers(); }, 'async');
+  registerLibraryQuit(onQuit, () => librarySlotSingleton);
   onQuit('plugin-downloads', async () => {
     await pluginDownloads.stopAndWait();
     await Promise.all([...anonymousDownloadRoots].map(async ([id, { root, scope }]) => {

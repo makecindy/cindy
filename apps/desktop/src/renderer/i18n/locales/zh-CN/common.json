@@ -4546,6 +4546,22 @@
         "hideProvider": "在模型选择器中隐藏",
         "showProvider": "在模型选择器中显示"
       },
+      "plugin": {
+        "title": "插件提供的供应商",
+        "badge": "插件",
+        "rowTip": "{{provider}} · 由插件提供",
+        "source": "由插件提供",
+        "declaredName": "插件里的名称：{{name}}",
+        "note": "这个供应商由已安装的插件提供，用插件自己的引擎运行任务。登录和连接在插件里管理；停用或卸载插件后，它会从这里消失。",
+        "openPlugin": "打开插件",
+        "resetName": "恢复插件里的名称",
+        "suspendedBanner": "该供应商已停用，新任务和自动化都不会再使用它，你的其他电脑和分享的人也不能调用。插件本身不受影响。如果只是不想在模型选择器里看到它，可以改为隐藏。",
+        "hiddenBanner": "已从模型选择器中隐藏。正在使用它的任务和自动化不受影响。",
+        "unavailableBanner": "插件报告这个引擎暂时不能运行。打开插件可以查看原因。",
+        "unavailableBannerReason": "暂时不能运行：{{reason}}",
+        "modelsEmpty": "这个引擎还没有列出模型，新任务会使用它自己的默认模型。运行过一次任务后，这里会列出具体的模型。",
+        "modelSwitchAria": "启用 {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "API key 连接",
         "replaceKey": "编辑连接设置",
@@ -8533,7 +8549,9 @@
           "unsupported": "这个插件还不支持让其他电脑使用它的引擎。",
           "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，其他电脑不能使用这个引擎。",
           "ariaLabel": "允许你的其他电脑使用 {{engine}}",
-          "descriptionShareable": "开启后，你的其他电脑和分享的好友无需安装插件即可用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。"
+          "descriptionShareable": "开启后，你的其他电脑和分享的好友无需安装插件即可用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。",
+          "providerDisabled": "这个供应商已在模型供应商里停用，其他电脑不能使用这个引擎。",
+          "openProviders": "前往「模型供应商」设置"
         },
         "githubRelease": {
           "title": "插件更新",
@@ -16410,6 +16428,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "添加云主机",
+        "preparingCloud": "云主机 · 准备中",
+        "manageCloud": "管理云主机",
         "allMachines": "全部",
         "localMachine": "本机",
         "connecting": "连接中…",
@@ -16545,6 +16566,9 @@
       "taskInfoSummaryNone": "无",
       "taskInfoSummarySeparator": "、",
       "taskInfo": {
+        "harness": "Harness 图标",
+        "project": "项目图标和名称",
+        "teammate": "伙伴头像",
         "time": "时间",
         "pr": "PR 状态",
         "worktree": "worktree",

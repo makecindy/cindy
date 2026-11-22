@@ -779,7 +779,7 @@ export function MainLayout() {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -878,7 +878,10 @@ export function MainLayout() {
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
         // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
         const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
+        const device = payload.tab === 'remote-control' && payload.focusDeviceId
+          ? '&section=devices&device=' + encodeURIComponent(payload.focusDeviceId)
+          : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}${device}`);
       }
     },
     [navigate, navigateToSession, openShareImport],

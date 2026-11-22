@@ -4645,6 +4645,22 @@
         "hideProvider": "Ocultar do seletor de modelos",
         "showProvider": "Mostrar no seletor de modelos"
       },
+      "plugin": {
+        "title": "Fornecedores de plugins",
+        "badge": "Plugin",
+        "rowTip": "{{provider}} · Fornecido por um plugin",
+        "source": "Fornecido por um plugin",
+        "declaredName": "Nome no plugin: {{name}}",
+        "note": "Este fornecedor vem de um plugin instalado e executa tarefas com o motor do próprio plugin. O início de sessão e a ligação são geridos no plugin. Se desativar ou desinstalar o plugin, ele desaparece desta lista.",
+        "openPlugin": "Abrir plugin",
+        "resetName": "Repor o nome do plugin",
+        "suspendedBanner": "Este fornecedor está desativado: as novas tarefas e as automatizações deixam de o usar, e os seus outros computadores e as pessoas com quem partilha também não o podem usar. O plugin em si não é afetado. Se apenas não o quiser ver no seletor de modelos, oculte-o em vez disso.",
+        "hiddenBanner": "Oculto do seletor de modelos. As tarefas e as automatizações que já o usam não são afetadas.",
+        "unavailableBanner": "O plugin indica que este motor não pode ser executado neste momento. Abra o plugin para ver o motivo.",
+        "unavailableBannerReason": "Não pode ser executado neste momento: {{reason}}",
+        "modelsEmpty": "Este motor ainda não listou os seus modelos, pelo que as novas tarefas usam o modelo predefinido dele. Depois de uma tarefa ser executada nele, os modelos aparecem aqui.",
+        "modelSwitchAria": "Ativar {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "Ligação por chave de API",
         "replaceKey": "Editar definições da ligação",
@@ -8648,7 +8664,9 @@
           "unsupported": "Este plugin ainda não permite usar o motor dele a partir de outros computadores.",
           "remoteControlOff": "Este computador ainda não permite controlo remoto, pelo que outros computadores não podem utilizar este motor.",
           "ariaLabel": "Permitir que os seus outros computadores usem {{engine}}",
-          "descriptionShareable": "Quando ativo, os seus outros computadores e as pessoas com quem o partilha podem executar tarefas com este motor sem instalar o plugin. O Agent é executado neste computador, usando a sessão e a quota deste computador. Os ficheiros e os comandos permanecem no computador onde a tarefa está."
+          "descriptionShareable": "Quando ativo, os seus outros computadores e as pessoas com quem o partilha podem executar tarefas com este motor sem instalar o plugin. O Agent é executado neste computador, usando a sessão e a quota deste computador. Os ficheiros e os comandos permanecem no computador onde a tarefa está.",
+          "providerDisabled": "Este fornecedor está desativado em Fornecedores, pelo que outros computadores não podem utilizar este motor.",
+          "openProviders": "Abrir definições de fornecedores"
         },
         "githubRelease": {
           "title": "Atualizações do plugin",
@@ -16639,6 +16657,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "Adicionar computador na nuvem",
+        "preparingCloud": "A preparar computador na nuvem",
+        "manageCloud": "Gerir computador na nuvem",
         "allMachines": "Todas",
         "localMachine": "Locais",
         "connecting": "A ligar…",
@@ -16775,6 +16796,9 @@
       "taskInfoSummaryNone": "Nenhum",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Ícone do harness",
+        "project": "Ícone e nome do projeto",
+        "teammate": "Avatar do colega",
         "time": "Tempo",
         "pr": "Estado do PR",
         "worktree": "worktree",

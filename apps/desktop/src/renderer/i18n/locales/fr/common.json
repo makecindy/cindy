@@ -4645,6 +4645,22 @@
         "hideProvider": "Masquer dans le sélecteur de modèles",
         "showProvider": "Afficher dans le sélecteur de modèles"
       },
+      "plugin": {
+        "title": "Fournisseurs issus de plugins",
+        "badge": "Plugin",
+        "rowTip": "{{provider}} · Fourni par un plugin",
+        "source": "Fourni par un plugin",
+        "declaredName": "Nom dans le plugin : {{name}}",
+        "note": "Ce fournisseur provient d’un plugin installé et exécute les tâches avec le moteur du plugin. La connexion se gère dans le plugin. Si vous désactivez ou désinstallez le plugin, il disparaît de cette liste.",
+        "openPlugin": "Ouvrir le plugin",
+        "resetName": "Rétablir le nom du plugin",
+        "suspendedBanner": "Ce fournisseur est désactivé : les nouvelles tâches et les automatisations ne l’utilisent plus, et vos autres ordinateurs comme les personnes avec qui vous partagez ne peuvent plus l’utiliser. Le plugin lui-même n’est pas affecté. Pour simplement le retirer du sélecteur de modèles, masquez-le à la place.",
+        "hiddenBanner": "Masqué dans le sélecteur de modèles. Les tâches et les automatisations qui l’utilisent déjà ne sont pas affectées.",
+        "unavailableBanner": "Le plugin signale que ce moteur ne peut pas s’exécuter pour le moment. Ouvrez le plugin pour en voir la raison.",
+        "unavailableBannerReason": "Ne peut pas s’exécuter pour le moment : {{reason}}",
+        "modelsEmpty": "Ce moteur n’a pas encore indiqué ses modèles ; les nouvelles tâches utilisent donc son propre modèle par défaut. Après l’exécution d’une tâche, ses modèles apparaîtront ici.",
+        "modelSwitchAria": "Activer {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "Connexion par clé API",
         "replaceKey": "Modifier les paramètres de connexion",
@@ -8648,7 +8664,9 @@
           "unsupported": "Ce plugin ne permet pas encore d’utiliser son moteur depuis d’autres ordinateurs.",
           "remoteControlOff": "Cet ordinateur n’autorise pas encore le contrôle à distance : les autres ordinateurs ne peuvent donc pas utiliser ce moteur.",
           "ariaLabel": "Autoriser vos autres ordinateurs à utiliser {{engine}}",
-          "descriptionShareable": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous le partagez peuvent exécuter des tâches avec ce moteur sans installer le plugin. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche."
+          "descriptionShareable": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous le partagez peuvent exécuter des tâches avec ce moteur sans installer le plugin. L’Agent s’exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur. Les fichiers et les commandes restent sur l’ordinateur où se trouve la tâche.",
+          "providerDisabled": "Ce fournisseur est désactivé dans Fournisseurs : les autres ordinateurs ne peuvent donc pas utiliser ce moteur.",
+          "openProviders": "Ouvrir les paramètres des fournisseurs"
         },
         "githubRelease": {
           "title": "Mises à jour du plugin",
@@ -16639,6 +16657,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "Ajouter un ordinateur cloud",
+        "preparingCloud": "Ordinateur cloud en préparation",
+        "manageCloud": "Gérer l’ordinateur cloud",
         "allMachines": "Tous",
         "localMachine": "Local",
         "connecting": "Connexion…",
@@ -16775,6 +16796,9 @@
       "taskInfoSummaryNone": "Aucune",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Icône du harness",
+        "project": "Icône et nom du projet",
+        "teammate": "Avatar du coéquipier",
         "time": "Date",
         "pr": "Statut de la PR",
         "worktree": "worktree",

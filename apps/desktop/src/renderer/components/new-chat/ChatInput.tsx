@@ -445,6 +445,7 @@ import {
 } from '../../../shared/modelSwitchAssessment';
 import { ComposerRecordingBars, type RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
+import { retainDictationInputContext } from '@/voice-input/retainDictationInputContext';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
@@ -3545,9 +3546,19 @@ export function ChatInput({
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
-  const composerTypingLocked =
-    disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend) || voiceBusyOnCurrentComposer;
+  const typingLockedOutsideDictation =
+    disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend);
+  const composerTypingLocked = typingLockedOutsideDictation || voiceBusyOnCurrentComposer;
+  const retainVoiceInputContext =
+    voiceBusyOnCurrentComposer && !typingLockedOutsideDictation && window.electronAPI?.platform === 'darwin';
   composerMutationLockedRef.current = composerTypingLocked;
+  // Attach before the effect that makes the focused editor read-only. A change
+  // in lock ownership alone must not emit another Tiptap document update.
+  useEffect(() => {
+    if (retainVoiceInputContext && editor && !editor.isDestroyed) {
+      return retainDictationInputContext(editor);
+    }
+  }, [editor, retainVoiceInputContext]);
   useEffect(() => {
     editor?.setEditable(!composerTypingLocked);
   }, [composerTypingLocked, editor]);
