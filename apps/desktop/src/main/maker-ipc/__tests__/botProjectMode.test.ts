@@ -39,7 +39,8 @@ vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ 
 
 import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
-import { OWN_RULES_HEADING } from '../botProjectTemplate.js';
+import { importBotSkillFiles } from '../botSkillStore.js';
+import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
 
 // Evaluate the actual generated check with real SQLite, in-process. The hook
 // protocol has its own process tests; retain one real spawn below. Repeated
@@ -492,6 +493,32 @@ describe('prepareBotProjectWorkspace', () => {
     const text = await fs.readFile(path.join(skill, 'SKILL.md'), 'utf8');
     expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('Owner-specific handover');
     await expect(fs.readFile(path.join(skill, 'checklist.md'), 'utf8')).resolves.toBe('company checklist');
+  });
+
+  // Unit, real project preparation and importer publication. A same-named imported skill used to
+  // be rejected by its freshly installed starter. A completed migration must also honor deletions.
+  it.each([true, false])('adopts imported hand-off rules and keeps its enabled=%s choice on restart', async enabled => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-import-settings-'));
+    const botId = 'imported';
+    const profile = path.join(root, 'bots', botId);
+    const args = { botId, ownerRoot: root, displayName: 'Fixture' };
+    const { workingDir } = await prepareBotProjectWorkspace(args);
+    const files = [{ name: 'SKILL.md', bytes: Buffer.from('---\nname: hand-off\n---\nInclude the project reference.'), executable: false },
+      { name: 'example.txt', bytes: Buffer.from('Example'), executable: false }];
+    const publish = () => importBotSkillFiles(root, botId, 'hand-off', files, () => {}, enabled, importedStandardSkill('hand-off'));
+    await publish();
+    await publish();
+    const folder = path.join(enabled ? path.join(workingDir, '.agents/skills') : path.join(profile, 'disabled-skills'), 'hand-off');
+    const content = await fs.readFile(path.join(folder, 'SKILL.md'), 'utf8');
+    expect(content.slice(content.indexOf(OWN_RULES_HEADING))).toContain('Include the project reference.');
+    expect(await fs.readFile(path.join(folder, 'example.txt'), 'utf8')).toBe('Example');
+    await fs.mkdir(path.join(profile, 'memories'), { recursive: true });
+    await fs.writeFile(path.join(profile, 'memories', 'project_previous.md'), 'Removed in the project');
+    await fs.writeFile(path.join(profile, 'v2-migration.json'), '{}');
+    await prepareBotProjectWorkspace(args);
+    await expect(fs.stat(path.join(teammateProjectMemoryDir(workingDir), 'project_previous.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(folder, 'SKILL.md'), 'utf8')).toBe(content);
+    if (!enabled) await expect(fs.stat(path.join(workingDir, '.agents/skills/hand-off'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   // QA recheck: with the project's Skills folder linked elsewhere, the starter template wrote through the link.

@@ -151,6 +151,7 @@ import {
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
+  confirmTaskAction,
   isActiveInputAccountScoped,
   isSessionInTurn,
   wireSessionToIpc,
@@ -696,11 +697,14 @@ export async function refreshCodexGatewayHost(
 let _resolveBotCapabilityAgentKind: BotCapabilityServiceDeps['resolveBotAgentKind'] | null = null;
 // Bootstrap owns IM/hook modules that depend back on this host. Bind their reader
 // once, but read the current owner's stores on each call (including after resetMaker).
+let _iMessageGroup: BotCapabilityServiceDeps['iMessageGroup'];
 let _readBotConversationConnections: BotCapabilityServiceDeps['readConversationConnections'];
 export function setBotConversationConnectionsReader(
   reader: NonNullable<BotCapabilityServiceDeps['readConversationConnections']>,
+  iMessageGroup?: BotCapabilityServiceDeps['iMessageGroup'],
 ): void {
   _readBotConversationConnections = reader;
+  _iMessageGroup = iMessageGroup;
 }
 
 export function setBotCapabilityAgentKindResolver(
@@ -940,6 +944,12 @@ function createDesktopBotCapabilityService() {
       agentKind: companionToolAgentKind(input.agentKind),
     }),
     markOfficialSkills: markCindyOfficialSkills,
+    isOwnerInput: isActiveInputOwnerAuthored,
+    confirmGroupAccess: (sessionId, input) => confirmTaskAction(sessionId, 'configure_teammate_imessage_group', input),
+    iMessageGroup: async (...args) => {
+      if (!_iMessageGroup) throw new Error('HOST_NOT_READY');
+      return _iMessageGroup(...args);
+    },
     readConversationConnections: async (botId) => {
       if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
       return _readBotConversationConnections(botId);

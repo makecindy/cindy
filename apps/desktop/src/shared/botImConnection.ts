@@ -88,6 +88,8 @@ export interface BotImConnectionRecord {
    * 个人 bot 的同名配置互不相干 —— 每条连接自己一份。
    */
   groupActivation?: Record<string, 'always'>;
+  /** An approved group can use another teammate on this same local transport. */
+  iMessageGroupRoutes?: Record<string, { botId: string; revision: string; authorization: string; replyMode: 'always' | 'mention' }>;
   /**
    * 服务器频道白名单（Discord 连接）：缺省 / 空 = 不开放任何频道。每条连接独立一份，随连接记录
    * 删除而消失；`allowMembers` 缺省 = 只有主人能在该频道召唤，显式开启后成员沿用该伙伴既有的权限与
