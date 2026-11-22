@@ -25,6 +25,7 @@ export function ProviderShareDialog({
   busy = false,
   role = 'dialog',
   testId,
+  nested = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -39,17 +40,20 @@ export function ProviderShareDialog({
   busy?: boolean;
   role?: 'dialog' | 'alertdialog';
   testId?: string;
+  /** 叠在另一个弹窗上打开(DESIGN §6 `modal-nested`):遮罩与面板都抬到二级弹窗层。 */
+  nested?: boolean;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next && busy) return; onOpenChange(next); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE}>
+        <Dialog.Overlay className={cn('modal-scrim fixed inset-0', nested ? 'z-modal-nested' : 'z-modal')} style={WINDOW_DRAG_STYLE}>
           <Dialog.Content
             role={role}
             data-testid={testId}
             aria-describedby={undefined}
             className={cn(
-              'modal-panel fixed inset-0 z-modal m-auto h-fit',
+              'modal-panel fixed inset-0 m-auto h-fit',
+              nested ? 'z-modal-nested' : 'z-modal',
               'flex max-h-[85vh] w-full flex-col overflow-y-auto overscroll-contain p-4',
               'text-[var(--text-primary)]',
             )}
