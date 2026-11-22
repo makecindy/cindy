@@ -123,6 +123,7 @@ function AgentDeviceVendorIcon({
 export interface SessionStatusIconProps {
   /** Inbox rows use project identity while retaining draft/attention badges. */
   identityIcon?: ReactNode;
+  hideHarness?: boolean;
   session: Session;
   isRunning: boolean;
   /** /ctr 接管中:图标切 RadioTower。 */
@@ -151,6 +152,7 @@ export interface SessionStatusIconProps {
 
 export function SessionStatusIcon({
   identityIcon,
+  hideHarness = false,
   session,
   isRunning: isAgentRunning,
   isAttached,
@@ -202,6 +204,9 @@ export function SessionStatusIcon({
     ? t('ccAgent.sidebar.hasDraft')
     : t('ccAgent.sidebar.hasPausedQueue');
 
+  const hideVendor = hideHarness && !identityIcon && !isArchived && !isOrcaLead && !isAttached;
+  if (hideVendor && !showDraftIndicator && !(showAttentionDot && hasAttentionDot)) return null;
+
   return (
     <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden>
       {identityIcon ?? (isArchived ? (
@@ -246,7 +251,7 @@ export function SessionStatusIcon({
         >
           <RadioTower size={size ?? 12} strokeWidth={1.75} className="shrink-0" />
         </span>
-      ) : vendor === 'acp' ? (
+      ) : hideVendor ? null : vendor === 'acp' ? (
         <PluginEngineVendorIcon
           providerId={session.providerId}
           // 引擎在自己的另一台电脑上(Agent 在那台，任务在这台)：名称与图标读那台的列表。别人分享的

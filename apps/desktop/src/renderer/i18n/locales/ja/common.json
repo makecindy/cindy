@@ -16540,6 +16540,9 @@
       "taskInfoSummaryNone": "なし",
       "taskInfoSummarySeparator": "、",
       "taskInfo": {
+        "harness": "Harness アイコン",
+        "project": "プロジェクトのアイコンと名前",
+        "teammate": "仲間のアバター",
         "time": "時間",
         "pr": "PR ステータス",
         "worktree": "worktree",

@@ -355,6 +355,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const prRefs = usePrRefsForSession(session.id);
   // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
+  const showProject = taskInfoFields.includes('project');
+  const showTeammate = taskInfoFields.includes('teammate');
+  const inboxProject = inboxMode ? sessionTaskProjectIconDirectory(session) : null;
   // 勾选 pr 且行渲染时注册为 PR 消费者:注册即拉取(远程会话含引用补拉),
   // 此后 Provider 周期/聚焦统一刷新,失败自愈(usePrActions 的 value 恒定)。
   const { registerPrConsumer } = usePrActions();
@@ -1035,10 +1038,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           保证两处完全一致。
           外包 15px 定宽槽:状态图标本体 12px,槽宽与顶部导航/文件夹图标(15)一致,
           让会话标题与其它行落在同一文字列(见文件头注释)。 */}
-      <span className={cn("flex shrink-0 items-center justify-center", inboxMode ? "w-[18px]" : "w-[15px]")}>
+      <span className={cn("flex shrink-0 items-center justify-center empty:hidden", inboxMode ? "w-[18px]" : "w-[15px]")}>
         <SessionStatusIcon
-          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
-            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+          hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
+          identityIcon={showProject && inboxProject ? (
+            <ResolvedProjectIcon directory={inboxProject}
               remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
               name={sourceLabel} size={18} />
           ) : undefined}
@@ -1112,7 +1116,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           {/* 任务标签常显、紧跟标题，不属于任务信息复选；标题过长时标题截断让位。 */}
           <TaskTagDots tags={session.tags} />
           {/* 这件任务所在的项目交给了伙伴时，显示伙伴头像（伙伴在跟进）。 */}
-          <BotFollowMark followers={followers} />
+          {showTeammate && <BotFollowMark followers={followers} />}
           {remoteIconKind && (
             <RemoteProjectIcon
               kind={remoteIconKind}
@@ -1125,7 +1129,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             />
           )}
           {/* Agent 在另一台电脑运行(任务在本机)的标识在左侧 Agent 图标上(信号波纹)。 */}
-          {sourceLabel && !inboxMode ? (
+          {showProject && sourceLabel && !inboxMode ? (
             <span
               title={sourceLabel}
               data-project-source

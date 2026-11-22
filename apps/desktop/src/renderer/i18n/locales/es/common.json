@@ -16770,6 +16770,9 @@
       "taskInfoSummaryNone": "Ninguno",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Icono del harness",
+        "project": "Icono y nombre del proyecto",
+        "teammate": "Avatar del compañero",
         "time": "Hora",
         "pr": "Estado del PR",
         "worktree": "worktree",
