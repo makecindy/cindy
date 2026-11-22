@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { useTranslation } from 'react-i18next';
 
 import { ConfirmDialog, type ConfirmDialogProps } from '@/components/ui/confirm-dialog';
+import { BlockingPromptActiveContext } from '@/components/ui/blocking-prompt-hold';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 export interface ConfirmOptions {
@@ -395,7 +396,11 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
 
   return (
     <ConfirmDialogContext.Provider value={{ confirm, confirmThree, confirmWithCheckbox }}>
-      {children}
+      {/* 阻断提示显示或退场中时,界面里独立挂载的 ConfirmDialog 暂缓新打开(见 useHeldWhileBlockingPrompt)。
+          阻断槽位不会只排队不显示,currentItem 即可代表它是否有项。下面两个槽位不在此范围内。 */}
+      <BlockingPromptActiveContext.Provider value={blocking.currentItem !== null}>
+        {children}
+      </BlockingPromptActiveContext.Provider>
       {renderSlot(regular, Z_INDEX_LAYERS.modal, false)}
       {renderSlot(blocking, Z_INDEX_LAYERS['modal-blocking'], true)}
     </ConfirmDialogContext.Provider>

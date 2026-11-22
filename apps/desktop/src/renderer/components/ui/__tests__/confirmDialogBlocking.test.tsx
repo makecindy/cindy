@@ -9,12 +9,15 @@
  *   确认在队头时它只能排队；DESIGN.md §6 层级刻度 `modal-blocking`（2026-11-22 维护者裁决）。
  * - 现有覆盖缺口：confirmDialogA11y / confirmDialogScroll 只测单个确认框，没有多个确认并存的时序。
  * - 最小失败输入：普通 confirm 显示中再调 confirm({ blocking: true })——修复前第二个排在队列里不出现。
+ *   阻断提示显示中再把独立挂载的 ConfirmDialog 置 open（如关窗确认）——修复前它后挂载、抢走焦点与 Esc。
  * - tier：unit（jsdom 内渲染真实 Radix AlertDialog / Dialog，无外部资源）。
  */
 import * as Dialog from '@radix-ui/react-dialog';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { ConfirmDialog } from '../confirm-dialog';
 import { ConfirmDialogProvider, useConfirmDialog } from '../confirm-dialog-provider';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
@@ -59,6 +62,35 @@ const dialogByTitle = (title: string) =>
   screen.queryAllByRole('alertdialog').find((node) => within(node).queryByText(title)) ?? null;
 
 const EXPIRED = { title: '登录已过期', confirmText: '重新登录', showCancel: false, blocking: true } as const;
+
+const STANDALONE = '关闭窗口时要怎么做？';
+
+/** 含被上层模态设为 aria-hidden 的确认框:判断它是否挂载在 DOM 上,而不只是能否被读屏访问。 */
+const mountedDialogByTitle = (title: string) =>
+  screen.queryAllByRole('alertdialog', { hidden: true }).find((node) => within(node).queryByText(title)) ?? null;
+
+/** 自己挂载 ConfirmDialog、由外部事件置 open 的组件（如 WindowControls 的关窗确认）。 */
+function renderStandalone(): { confirm: Confirm; setOpen: (open: boolean) => void; onOpenChange: ReturnType<typeof vi.fn> } {
+  const ctl = { onOpenChange: vi.fn() } as { setOpen: (open: boolean) => void; onOpenChange: ReturnType<typeof vi.fn> };
+  function Standalone() {
+    const [open, setOpen] = useState(false);
+    ctl.setOpen = setOpen;
+    return (
+      <ConfirmDialog
+        open={open}
+        onOpenChange={(next) => {
+          ctl.onOpenChange(next);
+          setOpen(next);
+        }}
+        title={STANDALONE}
+        confirmText="最小化到托盘"
+        cancelText="退出"
+      />
+    );
+  }
+  const { confirm } = renderProvider(<Standalone />);
+  return { confirm, ...ctl };
+}
 
 describe('confirm({ blocking: true })', () => {
   it('普通确认在队头时立即显示，画在 modal-blocking 层；关闭后普通确认仍在且焦点回到它', async () => {
@@ -198,6 +230,56 @@ describe('confirm({ blocking: true })', () => {
     await expect(expired).resolves.toBe(true);
     passExitTimer();
     expect(screen.queryAllByRole('alertdialog')).toHaveLength(0);
+  });
+
+  // 独立挂载的 ConfirmDialog 不经过普通槽位，同样会因后挂载抢走焦点和 Esc（#12118 review）。
+  it('阻断显示中再打开独立 ConfirmDialog：暂缓不挂载，焦点与 Esc 留在阻断提示；阻断关闭后它出现并拿到焦点', async () => {
+    const { confirm, setOpen, onOpenChange } = renderStandalone();
+    let expired!: Promise<boolean>;
+    act(() => {
+      expired = confirm(EXPIRED);
+    });
+    const blockingDialog = dialogByTitle(EXPIRED.title)!;
+    await waitFor(() => expect(blockingDialog.contains(document.activeElement)).toBe(true));
+
+    act(() => setOpen(true));
+    expect(mountedDialogByTitle(STANDALONE)).toBeNull();
+    expect(blockingDialog.contains(document.activeElement)).toBe(true);
+
+    // Esc 只关阻断提示，不结算暂缓中的确认框；越过阻断提示的退场计时后它才出现。
+    vi.useFakeTimers();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await expect(expired).resolves.toBe(false);
+    expect(mountedDialogByTitle(STANDALONE)).toBeNull();
+    passExitTimer();
+    vi.useRealTimers();
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(mountedDialogByTitle(STANDALONE)).not.toBeNull());
+    const standalone = mountedDialogByTitle(STANDALONE)!;
+    await waitFor(() => expect(standalone.contains(document.activeElement)).toBe(true));
+  });
+
+  it('阻断提示打开前已在显示的独立 ConfirmDialog 原地保留，阻断关闭后焦点回到它', async () => {
+    const { confirm, setOpen, onOpenChange } = renderStandalone();
+    act(() => setOpen(true));
+    await waitFor(() => expect(mountedDialogByTitle(STANDALONE)).not.toBeNull());
+    const standalone = mountedDialogByTitle(STANDALONE)!;
+    await waitFor(() => expect(standalone.contains(document.activeElement)).toBe(true));
+
+    let expired!: Promise<boolean>;
+    act(() => {
+      expired = confirm(EXPIRED);
+    });
+    const blockingDialog = dialogByTitle(EXPIRED.title)!;
+    await waitFor(() => expect(blockingDialog.contains(document.activeElement)).toBe(true));
+    expect(mountedDialogByTitle(STANDALONE)).toBe(standalone);
+
+    fireEvent.click(within(blockingDialog).getByRole('button', { name: '重新登录' }));
+    await expect(expired).resolves.toBe(true);
+    await waitFor(() => expect(standalone.contains(document.activeElement)).toBe(true));
+    expect(mountedDialogByTitle(STANDALONE)).toBe(standalone);
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   it('盖在打开的 Radix 面板上时按钮能点；Esc 只关阻断提示，不顺带关掉下面的面板', async () => {
