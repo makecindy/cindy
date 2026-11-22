@@ -1185,7 +1185,8 @@ export function createTurnRunner(
           log.warn(`companion unavailable notice failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+      // 有界等待: 回执表情请求卡住时不能拖住同一会话后面的消息。
+      await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
       return { kind: 'rejected', reason: 'companion_unavailable', notice };
     }
     let target: RouteTarget | null = routed;

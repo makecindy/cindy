@@ -822,6 +822,26 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(warnings).toHaveLength(1);
   });
 
+  // A stalled processing-reaction request must not hold the rejected turn (and the lane's
+  // later input queued behind it) open: cleanup is bounded like the other pre-dispatch rejections.
+  it('settles a companion-unavailable rejection even when the ack reaction never resolves', async () => {
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      let settled = false;
+      const turn = runner.runAgentTurn({
+        botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: 'stalled-ack', text: 'hello', attachments: [],
+        requesterIsOwner: true, ackReactionIdPromise: new Promise<string | null>(() => undefined),
+      }).then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(settled).toBe(true);
+      await turn;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mocks.im.sendText).toHaveBeenCalledWith(OWNER, expect.stringContaining('Bot 当前未启用'), expect.anything());
+  });
+
   it.each([
     { name: 'recovers once the canonical task settles', recovers: true },
     { name: 'rejects when it stays unavailable', recovers: false },
