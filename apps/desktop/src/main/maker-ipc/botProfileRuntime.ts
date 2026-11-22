@@ -63,8 +63,8 @@ interface BotToolsetCatalogItem {
   version?: string;
 }
 
-/** An owner-access group lane or its Thread lane (not a 分工, queue, AI reply or digest lane). */
-const OWNER_GROUP_LANE = /^group:[^:]+:access:owner:[1-9][0-9]*(?::thread:[^:]+)?$/;
+/** A group conversation lane with tools (owner or member access) or its Thread lane (not a 分工, queue, AI reply or digest lane). */
+const GROUP_CONVERSATION_LANE = /^group:[^:]+:access:(?:owner|tools):[1-9][0-9]*(?::mask:[^:]+)?(?::thread:[^:]+)?$/;
 
 export interface BotProfileRuntimeSnapshot {
   snapshotId: string;
@@ -623,19 +623,21 @@ export async function hydrateBotProfileRuntime(
     伙伴身份和它自己的技能。群分工等在别的目录干活的会话按普通任务走那个目录。
   */
   const workspaceDir = botHomeDir ? path.join(path.resolve(botHomeDir), 'workspace') : '';
-  // Only the owner's own chats run as an ordinary project task. IM lanes (other people, groups,
-  // topics) and group lanes keep the existing channel isolation: they never load the owner's
-  // personal instructions, settings, Skills or native memories, only the teammate's project memory.
-  // A V2 teammate answering its owner in a group whose project folder is on this computer works
-  // there like an ordinary task in that folder (bot-group-chat.md §7.5). Other members' requests
-  // keep the isolated lane in Home.
-  const ownerGroupProjectLane = row.role === 'group' && OWNER_GROUP_LANE.test(row.routeKey ?? '')
-    && !!workspaceDir && path.resolve(opts.workingDir) !== workspaceDir
+  const inTeammateWorkspace = !!workspaceDir && path.resolve(opts.workingDir) === workspaceDir;
+  // A group lane working in the group's project folder on this computer (bot-group-chat.md §7.5).
+  // A lane without a project runs in its own dialogue workspace, also outside Home: that is not a
+  // project, so it keeps the teammate's project memory.
+  const groupProjectLane = row.role === 'group' && GROUP_CONVERSATION_LANE.test(row.routeKey ?? '')
+    && opts.workspaceKind !== 'dialogue'
+    && !!workspaceDir && !inTeammateWorkspace
     && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);
-  const projectContext = !!workspaceDir && readBotProjectMode(config)
-    && (ownerChat ? path.resolve(opts.workingDir) === workspaceDir : ownerGroupProjectLane);
+  // Every session of a V2 teammate runs as an ordinary project task wherever it works: the owner's
+  // chats, IM channel lanes, group lanes (whoever spoke), topics and 分工 (owner 2026-11-22: there is
+  // no "isolated lane"; cindy-bots-runtime.md §6). Who may do what is the permission tier's job
+  // (channelToolPolicy for non-owner turns), not a narrower context. A chat-only group has no tools.
+  const projectContext = !!workspaceDir && readBotProjectMode(config) && !chatOnly;
   // Only the teammate's own working directory discovers its skills and memory natively.
-  const nativeTeammateProject = projectContext && !ownerGroupProjectLane;
+  const nativeTeammateProject = projectContext && inTeammateWorkspace;
   const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
@@ -646,9 +648,9 @@ export async function hydrateBotProfileRuntime(
   if (projectMode && opts.id) await botLearningTracker.prepareProjectTeammate(opts.id,
     fullLane && config.memory !== false ? () => createProjectMemoryReceipts(workspaceDir) : undefined);
   // V2 (2026-11-10, owner): one capability set in every session of the teammate — its own chats,
-  // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Its Skills
-  // are the project's own; lanes still never take the owner's personal Skills, and a chat-only
-  // group stays without tools (that is the group's authorization, not a capability choice).
+  // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Skills load
+  // as for any ordinary task there, and a chat-only group stays without tools (that is the group's
+  // authorization, not a capability choice).
   if (projectMode && !chatOnly) {
     skillMode = 'inherit';
     mcpMode = 'inherit';
@@ -660,7 +662,9 @@ export async function hydrateBotProfileRuntime(
   if (projectMode) opts.makerMemorySwitchOwned = true;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
   if (memoryEngineEnabled) opts.makerMemoryScopeKey = botMemoryScopeKey;
-  else if (projectMode && !projectContext && opts.makerMemoryEnabled) {
+  // 分工 and other work outside the teammate's project keep the teammate's one project memory.
+  // A group project lane uses that folder's memory natively and reaches the teammate's by file tools.
+  else if (projectMode && !inTeammateWorkspace && !groupProjectLane && opts.makerMemoryEnabled) {
     opts.makerMemoryScopeKey = await resolveMemoryScopeKey(workspaceDir);
   }
   const memoryActive = memoryEngineEnabled;
@@ -1073,7 +1077,7 @@ export async function hydrateBotProfileRuntime(
     ...(projectContext ? { projectMode: true } : {}),
     ...(teammates.length > 0 ? { teammates } : {}),
     contextSections: [
-      ...(ownerGroupProjectLane && projectContext && opts.makerMemoryEnabled ? [
+      ...(groupProjectLane && projectContext && opts.makerMemoryEnabled ? [
         `Use the current project's memory tools for group project decisions. For this teammate's own preferences and reusable experience, read or update the Markdown records in ${JSON.stringify(unlinkedTeammateProjectMemoryDir(workspaceDir))} with file tools. Read its README.md before maintaining it.`,
       ] : []),
       ...(projectMode && config.memory === false ? [
