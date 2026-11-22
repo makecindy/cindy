@@ -731,7 +731,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     let uplink: SocketUplink;
     try { uplink = await this.options.client.connect(); }
     catch (error) {
-      if (/^AGENT_NET_UPGRADE_(401|403)$/.test(error instanceof Error ? error.message : '')) this.close(4410);
+      const message = error instanceof Error ? error.message : '';
+      if (/^AGENT_NET_UPGRADE_(401|403)$/.test(message)) this.closeOnIdentityRefusal(message);
       throw error;
     }
     if (this.closed || generation !== this.generation) { uplink.close(); return; }
@@ -748,7 +749,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     uplink.once('close', (code: number) => {
       if (this.uplink !== uplink || this.closed) return;
       this.uplink = null;
-      if ([4410, 4401, 4403].includes(code)) { this.close(4410); return; }
+      if ([4410, 4401, 4403].includes(code)) { this.closeOnIdentityRefusal('AGENT_NET_CLOSED_' + code); return; }
       this.acknowledgeHello();
       // Existing direct connections remain alive; loss of one relay does not tear down the app socket.
       this.scheduleReconnect();
@@ -1052,6 +1053,10 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   }
   private deliver(frame: Envelope): void {
     if (!this.closed && this.ready) this.emit('message', { toString: () => JSON.stringify(frame) });
+  }
+  private closeOnIdentityRefusal(reason: string): void {
+    const fallback = this.options.onIdentityRefused?.(reason) === true;
+    this.close(fallback ? 1006 : 4410);
   }
   close(code = 1000): void {
     if (this.closed) return;

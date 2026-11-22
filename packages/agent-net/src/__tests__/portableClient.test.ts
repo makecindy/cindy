@@ -347,17 +347,23 @@ it.each([
   ['closes the half-open socket after 45 s', 'dead'],
   ['recovers once bufferedAmount drains', 'drains'],
   ['keeps sending when bufferedAmount is undefined (React Native)', 'undefined'],
+  ['still emits close once when ws.onerror fires after handshake', 'onerror'],
 ] as const)(
   'handles WebSocket send-buffer tracking: %s', async (_label, mode) => {
     vi.useFakeTimers();
     const identity = generateIdentity('uplink-stall'), { bootstrap } = createPrivateNetwork('Uplink stall', identity);
     let receive: BinarySocket['onmessage'] = null, ready!: () => void;
     const listening = new Promise<void>(resolve => { ready = resolve; });
-    let stalled = mode !== 'undefined';
+    let stalled = mode !== 'undefined' && mode !== 'onerror';
     const send = vi.fn((payload: string | Uint8Array) => {
       if (stalled && payload instanceof Uint8Array) ws.bufferedAmount += payload.byteLength;
     });
-    const close = vi.fn();
+    const close = vi.fn(() => {
+      if (mode === 'onerror') {
+        ws.readyState = 3;
+        ws.onclose?.({ code: 1006 });
+      }
+    });
     const ws: BinarySocket = { readyState: 1, bufferedAmount: (mode === 'undefined' ? undefined : 0) as unknown as number,
       binaryType: '', onerror: null, onclose: null,
       get onmessage() { return receive; }, set onmessage(callback) { receive = callback; ready(); }, send, close };
@@ -370,12 +376,20 @@ it.each([
     ws.onmessage!({ data: JSON.stringify({ type: 'hello', deviceId: identity.deviceId, protocolVersion: 2,
       devices: [{ certificate: bootstrap.ownerCertificate, name: 'Phone', online: true, remoteControlEnabled: false, capabilities: [] }], delegations: [] }) });
     const uplink = await connected;
-    const closed = vi.fn();
+    const closed = vi.fn(() => uplink.once('close', closed));
     uplink.once('close', closed);
     try {
       uplink.send('peer-a', Uint8Array.of(1, 2, 3));
       await vi.advanceTimersByTimeAsync(0);
       expect(send).toHaveBeenCalledTimes(1);
+
+      if (mode === 'onerror') {
+        ws.onerror!({ message: 'socket reset' });
+        await Promise.resolve();
+        expect(close).toHaveBeenCalledOnce();
+        expect(closed).toHaveBeenCalledExactlyOnceWith(1006);
+        return;
+      }
 
       if (mode === 'undefined') {
         await vi.advanceTimersByTimeAsync(60_000);

@@ -255,9 +255,11 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
   const attempt = ++openAttempt;
   const owner = getMobileAuthOwner(), route = getSelfHostedRelayRouteGeneration();
   const preferences = getMobileAgentNetPreferences();
+  const scopeCurrent = () => attempt === openAttempt && isMobileAuthOwnerCurrent(owner)
+    && getSelfHostedRelayRouteGeneration() === route
+    && getMobileAgentNetPreferences().generation === preferences.generation;
   const guard = () => {
-    if (attempt !== openAttempt || !isMobileAuthOwnerCurrent(owner) || getSelfHostedRelayRouteGeneration() !== route
-      || getMobileAgentNetPreferences().generation !== preferences.generation || !isMobileAgentNetActive()) {
+    if (!scopeCurrent() || !isMobileAgentNetActive()) {
       throw new Error('AGENT_NET_OWNER_CHANGED');
     }
   };
@@ -366,6 +368,7 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         if (attempt !== openAttempt) return;
         rememberDirectAddress(deviceId, address, lastKnownLocalIp);
       },
+      onIdentityRefused: () => scopeCurrent() && noteMobileIdentityRefused(),
       bindings: {
         verifyCertificate: verifyMobileAgentNetCertificate,
         verifyDelegation: verifyMobileAgentNetDelegation,
@@ -436,12 +439,13 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
     if (!mobileAgentNetRequiresEncryption() && typeof identity.api.directory === 'function') {
       // On React Native / server.ts `!active(principal)` (`socket.destroy()`), a revoked identity fails the WS upgrade as a
       // generic socket error and `cachedDirectory` keeps `openWithBindings` alive, hiding Device Link's 4410 removal state or
-      // stranding a re-signed-in phone. Confirm once via `/directory` only when the initial WS relay attempt failed.
+      // stranding a re-signed-in phone. Confirm once via `/directory` only when the initial WS relay attempt failed without an
+      // explicit 401/403 status (explicit 401/403/4410 refusals are already converted to 1006 by `onIdentityRefused` above).
       void (socket.whenInitialRelaySettled?.() ?? Promise.resolve()).then(async () => {
-        if (current?.socket !== socket || socket.relayConnected?.() !== false) return;
-        try { await identity.api.directory(); }
+        if (!scopeCurrent() || current?.socket !== socket || mobileAgentNetIdentityRefused() || socket.relayConnected?.() !== false) return;
+        try { await identity.api.directory!(); }
         catch (error) {
-          if (current?.socket === socket && isMobileIdentityRefusal(error) && noteMobileIdentityRefused()) socket.close(1006);
+          if (scopeCurrent() && current?.socket === socket && isMobileIdentityRefusal(error) && noteMobileIdentityRefused()) socket.close(1006);
         }
       });
     }

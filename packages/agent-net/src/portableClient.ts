@@ -361,7 +361,13 @@ class PortableUplink extends SocketEvents implements SocketUplink {
   private stallSince: number | null = null;
   private deadTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private closeEmitted = false;
   private constructor(private ws: BinarySocket) { super(); }
+  private emitClose(code: number): void {
+    if (this.closeEmitted) return;
+    this.closeEmitted = true;
+    this.emit('close', code);
+  }
   private clearStall(): void {
     this.stallSince = null;
     if (this.deadTimer) { clearTimeout(this.deadTimer); this.deadTimer = null; }
@@ -374,11 +380,8 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       if (bufferedBytes(this.ws) === 0) { this.stallSince = null; return; }
       const elapsed = performance.now() - this.stallSince;
       if (elapsed >= RELAY_SEND_DEAD_MS) {
-        this.closed = true;
-        if (this.scheduled) { clearTimeout(this.scheduled); this.scheduled = null; }
-        this.pending = []; this.pendingBytes = 0; this.queues.clear(); this.queuedBytes = 0;
-        try { this.ws.close(); } catch { /* Socket may already be closing. */ }
-        this.emit('close', 1006);
+        this.close();
+        this.emitClose(1006);
         return;
       }
       this.armDeadCheck();
@@ -389,7 +392,12 @@ class PortableUplink extends SocketEvents implements SocketUplink {
     return new Promise((resolve, reject) => {
       let established = false, receivedHello = false;
       const timer = setTimeout(() => fail(new Error('AGENT_NET_HANDSHAKE_TIMEOUT')), 10_000);
-      const fail = (error: Error) => { clearTimeout(timer); if (!established) reject(error); uplink.close(); };
+      const fail = (error: Error) => {
+        clearTimeout(timer);
+        if (!established) reject(error);
+        uplink.close();
+        if (established && ws.readyState === 3) queueMicrotask(() => uplink.emitClose(1006));
+      };
       let chain = Promise.resolve(), waiting = 0;
       ws.onerror = event => {
         const status = typeof event.message === 'string' ? /\b(401|403)\b/.exec(event.message)?.[1] : undefined;
@@ -397,11 +405,9 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       };
       ws.onclose = event => {
         clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + event.code));
+        uplink.closed = true;
         uplink.clearStall();
-        if (!uplink.closed) {
-          uplink.closed = true;
-          uplink.emit('close', event.code);
-        }
+        if (established) uplink.emitClose(event.code);
       };
       ws.onmessage = event => {
         if (uplink.closed) return;
@@ -473,11 +479,8 @@ class PortableUplink extends SocketEvents implements SocketUplink {
             if (bufferedBefore === 0) this.clearStall();
             else if (this.stallSince === null) { this.stallSince = performance.now(); this.armDeadCheck(); }
             else if (performance.now() - this.stallSince >= RELAY_SEND_DEAD_MS) {
-              this.clearStall();
-              this.closed = true;
-              this.pending = []; this.pendingBytes = 0; this.queues.clear(); this.queuedBytes = 0;
-              try { this.ws.close(); } catch { /* Socket may already be closing. */ }
-              this.emit('close', 1006);
+              this.close();
+              this.emitClose(1006);
               return;
             }
             const stalled = this.stallSince !== null && performance.now() - this.stallSince >= RELAY_QUEUE_STALL_MS;

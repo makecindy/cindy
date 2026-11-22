@@ -297,32 +297,62 @@ it('starts the official device-list check in parallel with identity setup and sc
  * - 最小失败输入：1 次离线（`status: 0`）保持 Agent-Net 开启 + 1 次被拒（`status: 403`）关闭虚活连接并切回 Device Link。
  * - tier：unit，真实 `AgentNetSocket.openWithBindings`，内存传输，无计时器等待；约 15 毫秒。 */
 it.each([
-  ['keeps offline cache mode when the directory check fails transiently', 0, false],
-  ['closes the cached socket and falls back to Device Link when the identity is revoked (403)', 403, true],
-] as const)('verifies a failed initial relay handshake once via directory: %s', async (_label, status, shouldRefuse) => {
+  ['keeps offline cache mode when the directory check fails transiently', 'socket-error-0', false],
+  ['closes the cached socket and falls back to Device Link when the identity is revoked (403)', 'socket-error-403', true],
+  ['converts a deferred-relay explicit 403 upgrade rejection into 1006 Device Link fallback instead of terminal 4410', 'deferred-403', true],
+] as const)('verifies a failed initial relay handshake once via directory: %s', async (_label, mode, shouldRefuse) => {
   fake.enabled = true;
-  const identity = generateIdentity('phone'), { bootstrap } = createPrivateNetwork('Revoked mobile', identity);
+  const identity = generateIdentity('phone'), desktop = generateIdentity('desktop-lan');
+  const { bootstrap } = createPrivateNetwork('Revoked mobile', identity);
+  const desktopCert = { ...bootstrap.ownerCertificate, deviceId: desktop.deviceId, signingKey: desktop.signingKey, transportKey: desktop.transportKey };
   const { AgentNetSocket: RealSocket } = await vi.importActual<typeof import('@cindy/agent-net/portable')>('@cindy/agent-net/portable');
   fake.open.mockImplementation(RealSocket.openWithBindings.bind(RealSocket));
-  fake.createTransport.mockResolvedValue({ id: 'phone', dial: {}, connect: vi.fn(), supports: () => false, close: async () => undefined });
+  fake.createTransport.mockResolvedValue({ id: 'phone', dial: {}, connect: vi.fn(async () => new Promise(() => {})), supports: () => false, close: async () => undefined });
+  vi.mocked(Network.getIpAddressAsync).mockResolvedValue('192.168.1.50');
+  if (mode === 'deferred-403') {
+    fake.readDirectory.mockResolvedValue({
+      devices: [{ certificate: desktopCert, name: 'Desktop', online: false, remoteControlEnabled: true, capabilities: [] }],
+      expiresAt: Date.now() + 60_000,
+    });
+  }
+  let rejectDeferred!: (error: Error) => void;
+  let useDeferred = false;
+  const directory = vi.fn(async () => {
+    const status = mode === 'socket-error-403' ? 403 : 0;
+    throw Object.assign(new Error(status === 403 ? 'DEVICE_REVOKED' : 'AGENT_NET_NETWORK_ERROR'), { status });
+  });
   fake.identity.mockResolvedValue({
     api: {
       base: 'https://agent-net.example.test', rootPublicKey: bootstrap.rootPublicKey,
       identity, certificate: bootstrap.ownerCertificate,
-      connect: async () => { throw new Error('AGENT_NET_SOCKET_ERROR'); },
-      directory: async () => { throw Object.assign(new Error(status === 403 ? 'DEVICE_REVOKED' : 'AGENT_NET_NETWORK_ERROR'), { status }); },
+      connect: async () => {
+        if (useDeferred) return new Promise((_resolve, reject) => { rejectDeferred = reject; });
+        throw new Error('AGENT_NET_SOCKET_ERROR');
+      },
+      directory,
     },
     signer: {},
     newTransportEngine: async () => ({ destroy: vi.fn() }),
   });
   try {
+    if (mode === 'deferred-403') {
+      const seed = await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null });
+      // Seed a remembered direct LAN candidate on the same IP so the next open uses `deferRelay: true`.
+      fake.open.mock.calls.at(-1)![0].onDirectAddress?.('desktop-lan', { address: '192.168.1.10', port: 41000 });
+      seed?.close();
+      directory.mockClear();
+      useDeferred = true;
+    }
     const socket = await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null });
     expect(socket).not.toBeNull();
+    if (mode === 'deferred-403') expect(fake.open.mock.calls.at(-1)![0].deferRelay).toBe(true);
     const closedCode = new Promise<number>(resolve => socket!.once('close', code => resolve(code)));
+    if (mode === 'deferred-403') rejectDeferred(new Error('AGENT_NET_UPGRADE_403'));
     if (shouldRefuse) {
       await expect(closedCode).resolves.toBe(1006);
       expect(mobileAgentNetIdentityRefused()).toBe(true);
       expect(isMobileAgentNetActive()).toBe(false);
+      if (mode === 'deferred-403') expect(directory).not.toHaveBeenCalled();
     } else {
       await Promise.resolve();
       await Promise.resolve();

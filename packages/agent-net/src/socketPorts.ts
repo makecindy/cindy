@@ -59,6 +59,8 @@ export interface PortableSocketOptions {
   onDelegations?(delegations: Delegation[]): void;
   onPathChanged?(deviceId: string, path: 'direct' | 'relay' | null): void;
   onDirectAddress?(deviceId: string, address: { address: string; port: number }): void;
+  /** Called before closing with 4410 when the Agent-Net relay refuses this identity; true closes with retryable 1006 for Device Link fallback. */
+  onIdentityRefused?(reason: string): boolean;
   bindings: {
     notify?(recipient: DeviceView, payload: import('@cindy/device-link-protocol').NotifyPayload, signal: AbortSignal, client: SocketClient): Promise<void>;
     verifyCertificate(rootPublicKey: string, certificate: DeviceCertificate, now?: number): boolean;
