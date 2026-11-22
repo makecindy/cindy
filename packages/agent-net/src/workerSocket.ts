@@ -16,6 +16,8 @@ import { WorkerSessions } from './session/workerSessions.js';
 export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
   'send' | 'close' | 'terminate' | 'bufferedAmount' | 'onDrain' | 'deviceId' |
   'replaceClient' | 'supports' | 'knowsPeer' | 'certificateFor' | 'scopedPeerTarget' | 'pathTo' | 'peerSnapshot'> & {
+    /** Session requests to a relayed peer timed out (AgentNetWorkerSocket.relayStalled). */
+    relayStalled?(): void;
     on(event: string, listener: (...args: any[]) => void): void;
     once(event: string, listener: (...args: any[]) => void): void;
     removeListener(event: string, listener: (...args: any[]) => void): void;
@@ -188,6 +190,10 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     for (const ws of this.network.values()) this.probeRelayConnection(ws);
     this.worker.postMessage({ type: 'network-changed' });
   }
+  /** Session requests to a relayed peer timed out: let the transport judge whether relay UDP carries data (relayUdp.ts). */
+  relayStalled(): void {
+    if (!this.closed) this.worker.postMessage({ type: 'relay-stalled' });
+  }
   private readonly probing = new WeakSet<WebSocket>();
   /** Relay connections open now. The socket stays open without one (direct peers keep working); `relay` reports the change. */
   private relayOpen = 0;
@@ -224,8 +230,10 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (via === this.relayVia) return;
     this.relayVia = via;
     const suspension = via === 'websocket' ? reported?.udpSuspension : undefined;
-    const why = suspension?.reason === 'data-silence' && typeof suspension.cooldownMs === 'number'
-      ? ` (relay UDP answered registrations but carried no data back; retrying UDP in ${Math.round(suspension.cooldownMs / 1000)}s)`
+    const cause = suspension?.reason === 'data-silence' ? 'carried no data back'
+      : suspension?.reason === 'request-timeouts' ? 'session requests over it timed out' : null;
+    const why = cause && typeof suspension?.cooldownMs === 'number'
+      ? ` (relay UDP answered registrations but ${cause}; retrying UDP in ${Math.round(suspension.cooldownMs / 1000)}s)`
       : '';
     this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}${why}`);
     this.emit('relay-route', via);

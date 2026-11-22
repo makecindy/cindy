@@ -600,6 +600,10 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.transport?.networkChanged?.();
     if (!this.uplink) this.reconnectRelayNow(false);
   }
+  /** Session requests to a relayed peer timed out (see Transport.relayStalled). */
+  relayStalled(): void {
+    if (!this.closed) this.transport?.relayStalled?.();
+  }
   /**
    * This device's own route changed (the phone: Wi-Fi ↔ cellular, lost and back). Besides `networkChanged`, the relay
    * connection is replaced: it may sit half-open on the old route without ever erroring (React Native's WebSocket cannot

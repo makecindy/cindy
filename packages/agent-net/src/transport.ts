@@ -407,6 +407,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       endpoint.localAddressChanged();
       if (udp) gather();
     },
+    relayStalled() { relayUdp?.noteStall(); },
     relayRoute() {
       if (!relay || closed) return null;
       // 和 linkFor 里发数据报的判断是同一个：UDP 通着就走 UDP，否则走中转 WebSocket。

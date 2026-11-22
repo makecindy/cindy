@@ -13,6 +13,8 @@
  * 3 次、跨过 1 秒；单个不需要回应的确认包不算），说明这条 UDP 只通登记、不通数据（2026-11-22：VPN 的透明代理接管了
  * 到中继 UDP 端口的流量，登记照常确认，会话数据几个小时一个都没回来）。这时按「不通」处理：两个方向退回 WebSocket，
  * 登记照常发并告诉中继「收不到」，冷却 30 秒、5 分钟、30 分钟后再试 UDP；经 UDP 收到数据后冷却档位清零。
+ * 本机还收得到、只是发出去的丢了时（对端一直在重发，所以总有数据进来），上面的判断看不出来；会话层发往走中转的对端的请求
+ * 60 秒内超时两次（noteStall）也按同样处理。
  * 和 STUN、直连共用核心的 UDP 端口；核心照常负责丢包重发和拥塞控制，这里不限速。
  */
 import { lookup } from 'node:dns/promises';
@@ -46,6 +48,9 @@ const MAX_PENDING_REGISTRATIONS = 16;
 const DATA_SILENCE_MS = 4_000;
 const DATA_SILENCE_MIN_RESENDS = 3;
 const DATA_SILENCE_MIN_SPAN_MS = 1_000;
+/** 走 UDP 时，会话层发往走中转的对端的请求在这段时间里超时这么多次，同样判定 UDP 不通数据。 */
+const STALL_WINDOW_MS = 60_000;
+const STALL_COUNT = 2;
 /** 判定不通数据后停用 UDP 的时长，逐次加长；经 UDP 收到数据后回到第一档。 */
 export const RELAY_UDP_DATA_COOLDOWNS_MS = [30_000, 5 * 60_000, 30 * 60_000] as const;
 
@@ -63,7 +68,7 @@ export interface RelayUdpOptions {
 }
 
 /** UDP 因「只通登记、不通数据」被停用时的说明，随路由一起报给日志。 */
-export interface RelayUdpSuspension { reason: 'data-silence'; cooldownMs: number }
+export interface RelayUdpSuspension { reason: 'data-silence' | 'request-timeouts'; cooldownMs: number }
 
 export class RelayUdpPath {
   private server: Address | null = null;
@@ -97,7 +102,10 @@ export class RelayUdpPath {
   /** 判定只通登记、不通数据后，在这个时刻之前不走 UDP。 */
   private suspendedUntil = Number.NEGATIVE_INFINITY;
   private suspendedFor = 0;
+  private suspensionReason: RelayUdpSuspension['reason'] = 'data-silence';
   private suspensions = 0;
+  /** 走 UDP 期间会话请求超时的时刻（只记最近 STALL_WINDOW_MS 内的）。 */
+  private stalls: number[] = [];
 
   constructor(private readonly options: RelayUdpOptions) {
     void this.resolve();
@@ -115,7 +123,19 @@ export class RelayUdpPath {
 
   /** 正在因「只通登记、不通数据」停用 UDP 时给出原因与本次冷却时长，否则为 null。 */
   get suspension(): RelayUdpSuspension | null {
-    return performance.now() < this.suspendedUntil ? { reason: 'data-silence', cooldownMs: this.suspendedFor } : null;
+    return performance.now() < this.suspendedUntil ? { reason: this.suspensionReason, cooldownMs: this.suspendedFor } : null;
+  }
+
+  /**
+   * 会话层发往一个走中转的对端的请求超时了。走 UDP 时 60 秒内第二次，就和数据不回来一样停用 UDP：这能抓住「收得到、
+   * 发不出去」——对端一直重发，本机总有数据进来，单看收不收得到判断不出来。
+   */
+  noteStall(): void {
+    if (!this.up) return;
+    const now = performance.now();
+    this.stalls = this.stalls.filter((at) => now - at < STALL_WINDOW_MS);
+    this.stalls.push(now);
+    if (this.stalls.length >= STALL_COUNT) this.suspend('request-timeouts', now);
   }
 
   /**
@@ -251,13 +271,7 @@ export class RelayUdpPath {
     const suspended = now < this.suspendedUntil;
     if (!suspended && this.silentSince !== null && this.up && now - this.silentSince >= DATA_SILENCE_MS
       && this.silentResends >= DATA_SILENCE_MIN_RESENDS && this.silentLastSend - this.silentSince >= DATA_SILENCE_MIN_SPAN_MS) {
-      // 只通登记、不通数据：停用 UDP，并马上告诉中继收不到，让发给本机的数据报也改走 WebSocket。
-      this.suspendedFor = RELAY_UDP_DATA_COOLDOWNS_MS[Math.min(this.suspensions, RELAY_UDP_DATA_COOLDOWNS_MS.length - 1)];
-      this.suspensions += 1;
-      this.suspendedUntil = now + this.suspendedFor;
-      this.silentSince = null;
-      this.silentResends = 0;
-      this.register();
+      this.suspend('data-silence', now);
       return;
     }
     if (suspended) {
@@ -273,6 +287,18 @@ export class RelayUdpPath {
       ? (this.unackedSince !== null && now - this.unackedSince >= SLOW_RETRY_AFTER_MS ? REGISTER_SLOW_RETRY_MS : REGISTER_RETRY_MS)
       : now - this.sentAt < ACTIVE_WINDOW_MS ? ACTIVE_REFRESH_MS : KEEPALIVE_MS;
     if (now - this.registeredAt >= interval) this.register();
+  }
+
+  /** 只通登记、不通数据：停用 UDP，并马上告诉中继收不到，让发给本机的数据报也改走 WebSocket。 */
+  private suspend(reason: RelayUdpSuspension['reason'], now: number): void {
+    this.suspendedFor = RELAY_UDP_DATA_COOLDOWNS_MS[Math.min(this.suspensions, RELAY_UDP_DATA_COOLDOWNS_MS.length - 1)];
+    this.suspensionReason = reason;
+    this.suspensions += 1;
+    this.suspendedUntil = now + this.suspendedFor;
+    this.silentSince = null;
+    this.silentResends = 0;
+    this.stalls = [];
+    this.register();
   }
 
   private register(): void {

@@ -49,8 +49,13 @@
     UDP 只通登记、不通数据：两个方向退回 WebSocket，登记照常低频发（每 15 秒，带「收不到」），冷却 30 秒、5 分钟、30 分钟
     后再试，经 UDP 收到数据后冷却回到第一档。停用期间的确认不触发立即重新登记。只改设备一侧，包格式、中继和自建中转都不变。
     日志写作 `agent-net relayed datagrams now go over the relay WebSocket (relay UDP answered registrations but carried no data back; retrying UDP in 30s)`。
-    事故：一台 Mac 上的 VPN 透明代理接管了到中继 UDP 端口（`:3479`）的流量，登记照常确认，会话数据几个小时一个都没回来；
-    这台电脑与同账号所有设备的会话都超时，界面只显示「正在自动重试」，关掉 VPN 立即恢复。
+  - **收得到、发不出去也要退回。** 对端一直在重发时本机总有数据进来，上一条看不出来。会话层（`AgentNetSessionLinks`）发往一个
+    此刻走中转的对端的请求超时，就报给承载它的连接（Desktop `agentNetRelayStalled`，Host `node.relayStalled`，经 worker 的
+    `relay-stalled` 消息到传输层）；走 UDP 时 60 秒内两次，按同样的冷却退回 WebSocket，日志原因写作
+    `session requests over it timed out`。直连的对端超时不报，UDP 没在用时报了也不算。
+    事故：一台 Mac 上的 VPN 透明代理接管了到中继 UDP 端口（`:3479`）的流量，登记照常确认；13 分钟里这条 UDP 流收了约 30 MB、
+    只发出约 2.6 MB，这台电脑与同账号所有设备的会话都超时（另一台电脑发给它的请求 3 次有回复、15 次超时），界面只显示
+    「正在自动重试」；关掉 VPN、改走 WebSocket 后同一时段 85 次有回复、0 次超时。
   - 中继地址解析失败（离线启动、DNS 暂时不通）时先走 WebSocket，从 2 秒起按倍数退避重试到每分钟一次；解析成功后每 5 分钟重新解析，
     UDP 连续 30 秒不通时可提前重新解析，失败后仍遵守 DNS 退避。地址变了就清理旧地址证明并重新登记；凭据未变时，两种计数器都继续递增。
 - **转发限额**（2026-11-17 审查 P1：每个数据报一次 MAC、一次发送都在 WebSocket 消息回调里同步做，一台设备上传每秒约 1.3 MB

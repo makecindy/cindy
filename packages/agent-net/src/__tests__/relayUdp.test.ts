@@ -13,7 +13,8 @@
  *   WebSocket，与同账号所有设备的会话都超时；关掉 VPN 立即恢复。
  * - 覆盖缺口：中转集成测试只验证中转一侧；压测只交换公网地址，不会出现直连包；连接号随机，集成测试不一定撞上。
  * - 最小失败输入：首字节 0xA1 的核心数据包；确认中断 4 秒；一个过期的确认；一个没认定地址的确认；一次解析失败；
- *   一次登记晚 37 毫秒确认（往返要是 37，确认断了以后不再报旧值）；登记一直被确认、数据发了 4 次跨 3 秒却一个都没回来。
+ *   一次登记晚 37 毫秒确认（往返要是 37，确认断了以后不再报旧值）；登记一直被确认、数据发了 4 次跨 3 秒却一个都没回来；
+ *   对端一直重发（总有数据进来）而本机发往它的请求 60 秒内超时两次。
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
@@ -272,4 +273,25 @@ it('stays on relay UDP for an unanswered pure ACK, and while replies keep arrivi
   step(1_000);
   expect(path.send('member', new Uint8Array(100))).toBe(true);
   expect(path.suspension).toBeNull();
+});
+
+it('leaves relay UDP after two session request timeouts within a minute even while data keeps arriving', async () => {
+  const { path, registrations, step, reply } = await upWithAckingRelay(7);
+  // Peers keep resending, so data arrives; only this side's requests go unanswered (2026-11-22: rx 30 MB, tx 2.6 MB).
+  const arriving = () => { for (let i = 0; i < 4; i++) { step(1_000); path.send('member', new Uint8Array(1_350)); reply(); } };
+  arriving();
+  path.noteStall();
+  arriving();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  // Two timeouts more than a minute apart do not count together.
+  step(60_000);
+  path.noteStall();
+  expect(path.suspension).toBeNull();
+  path.noteStall();
+  expect(path.send('member', new Uint8Array(100))).toBe(false);
+  expect(path.suspension).toEqual({ reason: 'request-timeouts', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
+  expect(registrations().at(-1)!.receiving).toBe(false);
+  // A timeout reported while UDP is not in use is not about UDP.
+  path.noteStall();
+  expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
 });
