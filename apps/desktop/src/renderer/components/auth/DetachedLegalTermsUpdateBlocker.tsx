@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -15,6 +15,9 @@ const BLOCKER_Z_INDEX = 10030;
  * 这些窗口用专用 preload,刻意不带登录与设置能力,所以这里不提供「同意」「退出登录」,只挡住
  * 界面并提示回主窗口确认;主窗口确认后经设置广播自动解除。判定口径与 LegalTermsUpdateGate
  * 一致:只对已登录的个人账号生效。
+ *
+ * 模态语义与 LoginConsentDialog 一致(DESIGN.md §14.2):打开时把焦点收进遮挡层、背景兄弟节点
+ * inert,Tab 不会落回被盖住的终端 / 浏览器等控件;关闭后焦点归还。交互锁另外挡住全局快捷键。
  */
 export function DetachedLegalTermsUpdateBlocker() {
   const { t } = useTranslation();
@@ -43,12 +46,39 @@ export function DetachedLegalTermsUpdateBlocker() {
 
   const open = required && mode === 'cloud' && user?.membershipKind === 'personal';
 
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     if (!open) return undefined;
-    return acquireAppInteractionLock();
+    const releaseLock = acquireAppInteractionLock();
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const root = containerRef.current;
+    root?.focus();
+    const inerted: HTMLElement[] = [];
+    if (root?.parentElement) {
+      for (const child of Array.from(root.parentElement.children)) {
+        if (child !== root && child instanceof HTMLElement && !child.inert) {
+          child.inert = true;
+          inerted.push(child);
+        }
+      }
+    }
+    return () => {
+      for (const el of inerted) el.inert = false;
+      releaseLock();
+      opener?.focus();
+    };
   }, [open]);
 
   if (!open) return null;
+
+  // 遮挡层内没有可操作控件:Tab 一律留在容器上,不让焦点回到被盖住的界面。
+  const keepFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      containerRef.current?.focus();
+    }
+  };
 
   return createPortal(
     <div
@@ -57,7 +87,13 @@ export function DetachedLegalTermsUpdateBlocker() {
       aria-modal="true"
       aria-labelledby="detached-legal-terms-title"
       aria-describedby="detached-legal-terms-body"
-      className="fixed inset-0 grid place-items-center p-6"
+      ref={containerRef}
+      tabIndex={-1}
+      onKeyDown={keepFocus}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) event.currentTarget.focus();
+      }}
+      className="fixed inset-0 grid place-items-center p-6 outline-none"
       style={{ background: LOGIN_COLORS.consentOverlay, zIndex: BLOCKER_Z_INDEX }}
     >
       <div

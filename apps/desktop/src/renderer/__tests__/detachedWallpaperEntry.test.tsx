@@ -35,6 +35,7 @@ vi.mock('../contexts/AuthContext', () => ({
 vi.mock('../cindy-brain/ghostPanels', () => ({ ensureGhostPanelsRegistered: vi.fn() }));
 // Model UI is unrelated to the real entry's palette/font/wallpaper synchronization.
 vi.mock('../cindy-brain/PluginModelPickerHost', () => ({ PluginModelPickerHost: () => null }));
+vi.mock('../components/auth/DetachedLegalTermsUpdateBlocker', () => ({ DetachedLegalTermsUpdateBlocker: () => null }));
 vi.mock('../components/layout/SidebarWindowLayout', () => ({
   SidebarWindowLayout: () => <div>sidebar host</div>,
 }));

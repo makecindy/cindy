@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -53,6 +53,29 @@ describe('DetachedLegalTermsUpdateBlocker', () => {
     act(() => push?.(false));
     expect(screen.queryByTestId('detached-legal-terms-blocker')).toBeNull();
     expect(isAppInteractionLocked()).toBe(false);
+  });
+
+  // 依据:交互锁只挡全局快捷键,已聚焦的终端 / 浏览器输入框仍能收到按键;焦点必须收进遮挡层,
+  // 背景不可再聚焦,关闭后归还焦点。
+  it('moves focus into the blocker, makes the background inert, and restores focus afterwards', async () => {
+    const background = document.createElement('div');
+    const input = document.createElement('input');
+    background.appendChild(input);
+    document.body.appendChild(background);
+    input.focus();
+
+    render(<DetachedLegalTermsUpdateBlocker />);
+    const blocker = await screen.findByTestId('detached-legal-terms-blocker');
+    expect(document.activeElement).toBe(blocker);
+    expect(background.inert).toBe(true);
+
+    fireEvent.keyDown(blocker, { key: 'Tab' });
+    expect(document.activeElement).toBe(blocker);
+
+    act(() => push?.(false));
+    expect(background.inert).toBe(false);
+    expect(document.activeElement).toBe(input);
+    background.remove();
   });
 
   it('never blocks an organization (enterprise SSO) account', async () => {
