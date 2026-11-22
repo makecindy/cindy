@@ -290,10 +290,16 @@ function createAntigravityAgent(
       writeConnection(setDisconnected(config, id, true));
       clearState();
     },
-    modelsChanged(models, tier) {
+    modelsChanged(models, tier, capabilities) {
       assertOwner();
       const admitted = models.filter(m => isAntigravitySubscriptionModel(m.id));
-      setAntigravityState({ isCurrent: isOwner, connected: true, models: admitted, tier: tier && { ...tier } });
+      setAntigravityState({
+        isCurrent: isOwner,
+        connected: true,
+        models: admitted,
+        tier: tier && { ...tier },
+        ...(capabilities?.supportsImageInput !== undefined ? { supportsImageInput: capabilities.supportsImageInput } : {}),
+      });
       notifyAntigravityQuotaChanged();
       void currentAccounts?.usage().catch(() => undefined);
     },

@@ -19,9 +19,14 @@ describe('native Google subscription metadata', () => {
       { id: 'gemini-pro-orchestrator-g1-pro', name: 'Orchestrator', efforts: [], defaultEffort: null },
     ] });
     const provider = antigravityProvider()!;
-    expect(provider.models.antigravity?.[0]).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', effortDisplayNames: { xhigh: 'Extra' }, supportsFastMode: false });
+    expect(provider.models.antigravity?.[0]).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', effortDisplayNames: { xhigh: 'Extra' }, supportsFastMode: false, supportsImageInput: false });
     expect(provider.models.antigravity?.[1]).toMatchObject({ efforts: [], defaultEffort: null });
     expect(provider.access?.kind).toBe('subscription'); expect(provider.routing.antigravity?.transport).toBe('acp');
+
+    setAntigravityState({ connected: true, tier: { id: 'g1-pro-tier', name: 'Google AI Pro' }, supportsImageInput: true, models: [
+      { id: 'gemini-4-hydrogen', name: 'Hydrogen', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+    ] });
+    expect(antigravityProvider()?.models.antigravity?.[0]).toMatchObject({ supportsImageInput: true });
   });
   it('does not publish another owner or an unconfigured engine into the existing catalog', () => {
     expect(antigravityProvider()).toBeNull();

@@ -117,6 +117,9 @@ export class AcpSubscriptionSession {
     const value = this.configOptions.find(option => option.category === 'thought_level')?.currentValue;
     return effortIds.includes(value as Effort) ? value as Effort : undefined;
   }
+  get supportsImageInput(): boolean {
+    return record(this.capabilities.promptCapabilities).image === true;
+  }
   async initialize(): Promise<void> {
     const reply = await this.client.request('initialize', {
       protocolVersion: 1, clientInfo: { name: 'cindy', title: 'Cindy', version: '0.1.136' },

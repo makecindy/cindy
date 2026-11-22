@@ -11,6 +11,7 @@ import { record, type AcpRecord, type AcpResponse, type AcpTransport } from './c
 import { normalizeToolCallFields, type AcpToolCallStatus } from './protocol.js';
 import { acpToolDisplayName } from './translator.js';
 import { createHash } from 'node:crypto';
+import { readFile as fsReadFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -57,7 +58,7 @@ export interface AntigravityHost {
   assertSessionAllowed?(): Promise<void>;
   authenticated?(): Promise<void>;
   disconnected?(): void;
-  modelsChanged(models: AcpDiscoveredModel[], tier?: { id: string; name: string }): void;
+  modelsChanged(models: AcpDiscoveredModel[], tier?: { id: string; name: string }, capabilities?: { supportsImageInput?: boolean }): void;
 }
 export function antigravityNativeResumeId(id: string | undefined, scope: string): string | undefined {
   if (scope) return id?.startsWith(scope) ? id.slice(scope.length) || undefined : undefined;
@@ -74,24 +75,80 @@ function nativeMode(permission: PermissionMode | undefined, plan: boolean): stri
 function assertPermission(permission: PermissionMode | undefined): void {
   if (permission && !['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].includes(permission)) throw new Error('ANTIGRAVITY_PERMISSION_UNSUPPORTED');
 }
-function promptContent(message: UserMessage): AcpRecord[] {
+const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+const SUPPORTED_IMAGE_MIME_TYPES = new Set<string>([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+function resolveImageMimeType(filePath: string, explicitMimeType?: string): string | undefined {
+  const raw = explicitMimeType?.trim().toLowerCase() || IMAGE_MIME_BY_EXTENSION[path.extname(filePath).toLowerCase()];
+  if (!raw) return undefined;
+  return raw === 'image/jpg' ? 'image/jpeg' : raw;
+}
+async function promptContent(
+  message: UserMessage,
+  opts: { supportsImageInput: boolean },
+): Promise<AcpRecord[]> {
   if (typeof message.content === 'string') return [{ type: 'text', text: message.content }];
-  return message.content.map(block => {
-    if (block.type === 'text') return { type: 'text', text: block.text };
+  const blocks: AcpRecord[] = [];
+  for (const block of message.content) {
+    if (block.type === 'text') {
+      blocks.push({ type: 'text', text: block.text });
+      continue;
+    }
     if (block.type === 'file' || block.type === 'mention') {
       if (!path.isAbsolute(block.path)) throw new Error('ANTIGRAVITY_ATTACHMENT_PATH_INVALID');
-      return { type: 'resource_link', uri: pathToFileURL(block.path).href, name: block.type === 'mention' ? block.name : path.basename(block.path),
-        ...(block.type === 'file' && block.mimeType ? { mimeType: block.mimeType } : {}) };
+      blocks.push({
+        type: 'resource_link',
+        uri: pathToFileURL(block.path).href,
+        name: block.type === 'mention' ? block.name : path.basename(block.path),
+        ...(block.type === 'file' && block.mimeType ? { mimeType: block.mimeType } : {}),
+      });
+      continue;
+    }
+    if (block.type === 'image') {
+      if (!path.isAbsolute(block.path)) throw new Error('ANTIGRAVITY_ATTACHMENT_PATH_INVALID');
+      const mimeType = resolveImageMimeType(block.path, block.mimeType);
+      if (opts.supportsImageInput && mimeType && SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) {
+        let bytes: Buffer;
+        try {
+          bytes = await fsReadFile(block.path);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(`ANTIGRAVITY_IMAGE_READ_FAILED: ${detail}`);
+        }
+        if (bytes.length === 0) {
+          throw new Error(`ANTIGRAVITY_IMAGE_READ_FAILED: empty image file ${block.path}`);
+        }
+        blocks.push({ type: 'image', data: bytes.toString('base64'), mimeType });
+        continue;
+      }
+      blocks.push({
+        type: 'resource_link',
+        uri: pathToFileURL(block.path).href,
+        name: path.basename(block.path),
+        ...(mimeType ? { mimeType } : {}),
+      });
+      continue;
     }
     throw new Error('ANTIGRAVITY_IMAGE_INPUT_UNSUPPORTED');
-  });
+  }
+  return blocks;
 }
 export class AntigravityAgent extends BaseAgent {
   readonly kind = 'antigravity' as const;
   readonly capabilities: Capabilities = {
     switchModel: yes, availableModels: [], hasFastMode: false, effort: no, effortLevels: [], reasoningDisplay: ['off'],
     permissionModes: [{ id: 'ask', displayName: 'Ask' }, { id: 'acceptEdits', displayName: 'Accept edits' }, { id: 'auto', displayName: 'Auto' }, { id: 'bypassPermissions', displayName: 'Full access' }], setPermissionModeMidSession: yes, planMode: yes,
-    multimodal: { text: yes, image: no, file: yes }, fork: no, rewind: no, abort: yes,
+    multimodal: { text: yes, image: yes, file: yes }, fork: no, rewind: no, abort: yes,
     sameTurnSteer: no, extraDirs: no, memory: { supported: no },
   };
   private loginSession?: AcpSubscriptionSession;
@@ -116,6 +173,7 @@ export class AntigravityAgent extends BaseAgent {
     this.cachedProbe = undefined;
     this.retryProbeAt = 0;
     this.authState = { authenticated: false, authSource: 'oauth' };
+    this.capabilities.multimodal.image = yes;
     this.updateModels([], { allowEmpty: true });
   }
   /** Discover cached native credentials without creating a login flow. */
@@ -172,6 +230,7 @@ export class AntigravityAgent extends BaseAgent {
     this.cachedProbe = undefined;
     this.locallyDisconnected = true;
     this.authState = { authenticated: false, authSource: 'oauth' };
+    this.capabilities.multimodal.image = yes;
     this.updateModels([], { allowEmpty: true }); this.host.disconnected?.();
   }
   private updateModels(models: AcpDiscoveredModel[], { allowEmpty = false }: { allowEmpty?: boolean } = {}): void {
@@ -189,7 +248,9 @@ export class AntigravityAgent extends BaseAgent {
     this.capabilities.effortLevels = efforts.map(id => ({ id, displayName: id === 'xhigh' ? 'Extra' : id[0].toUpperCase() + id.slice(1) }));
   }
   private publishModels(session: AcpSubscriptionSession): void {
-    this.updateModels(session.models); this.host.modelsChanged(this.nativeModels, session.tier);
+    this.updateModels(session.models);
+    this.capabilities.multimodal.image = session.supportsImageInput ? yes : no;
+    this.host.modelsChanged(this.nativeModels, session.tier, { supportsImageInput: session.supportsImageInput });
   }
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
     // No silent downgrade of profile, device, review or permission semantics.
@@ -436,7 +497,6 @@ export class AntigravityAgent extends BaseAgent {
       send: async (message: UserMessage, sendOpts?: SendOptions) => {
         if (this.locallyDisconnected) throw new Error('Google 订阅连接已断开，请先重新连接。');
         if (active || closed || control || sendOpts?.turnPermissionPolicy) throw new Error('ANTIGRAVITY_TURN_UNSUPPORTED');
-        const content = promptContent(message);
         const controller = new AbortController();
         turnController = controller; active = true; currentText = '';
         let cancelTimer: ReturnType<typeof setTimeout> | undefined;
@@ -510,6 +570,9 @@ export class AntigravityAgent extends BaseAgent {
           controller.signal.throwIfAborted();
           if (!session.tier || !/^(Google AI |AI )?(Pro|Ultra)$/i.test(session.tier.name)) throw new Error('ANTIGRAVITY_PERSONAL_PLAN_UNVERIFIED');
           if (!isAntigravitySubscriptionModel(session.currentModel ?? '')) throw new Error('ANTIGRAVITY_SUBSCRIPTION_MODEL_REQUIRED');
+          const content = await promptContent(message, { supportsImageInput: session.supportsImageInput });
+          controller.signal.throwIfAborted();
+          if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
           const dispatched = await session.dispatchPrompt(content, controller.signal, {
             sent() {
               flushBackgroundText();
