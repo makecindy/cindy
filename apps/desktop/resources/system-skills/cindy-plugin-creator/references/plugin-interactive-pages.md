@@ -389,6 +389,36 @@ React 的 `app` 在连接前传 null，已连接后传 App；连接前用户已�
 JS 可用 `// @ts-check` 和 `/// <reference path="./types/cindy-ext-apps.d.ts" />`（按文件位置调整）。
 它只提供编辑器类型，不是模块实现，也不能让旧宿主获得新能力。React 项目沿用已有的 JSX 类型。
 
+### 9.3 加入当前任务输入框
+
+`addToComposer(app, { uri, name })` 将附件加入当前任务的输入框，由用户决定何时发送。
+按钮默认隐藏（HTML 中加 `hidden`）。在 `await app.connect()` 成功后检查宿主能力。
+只有执行电脑上的本机可写卡片支持这个操作。同一卡片的同一 URI 已在输入框里时，重复添加会保留已有附件；用户移除后可重新添加。
+
+```js
+if (app.getHostCapabilities()?.experimental?.['cindy/composer-attachment']) {
+  const helper = await import('@cindy/ext-apps/composer-attachment').catch(() => null);
+  if (helper) {
+    button.addEventListener('click', async () => {
+      try { await helper.addToComposer(app, { uri: link.uri, name: link.name }); }
+      catch { button.textContent = '添加失败，重试'; }
+    });
+    button.hidden = false;
+    if (app.getHostCapabilities().experimental['cindy/composer-attachment'].drag?.version === 1 &&
+        typeof helper.bindComposerAttachmentDrag === 'function') {
+      const unbind = helper.bindComposerAttachmentDrag(app, preview, { uri: link.uri, name: link.name });
+      // 换资源或卸载时解除绑定，避免继续拖出上一项。
+      cleanup.push(unbind);
+    }
+  }
+}
+```
+
+`preview` 是资源对应的元素，`cleanup` 是页面卸载时逐一调用的清理函数列表。拖到同一窗口、同一任务的可写输入框后，资源会加入附件栏。按钮同时保留，便于键盘操作或在拖拽不可用时添加。目前 macOS 与 Windows 在 Electron 42 上支持拖拽，页面按宿主声明的 `drag?.version === 1` 启用。不要自己往拖动数据里写文件路径、URI 或文本回退。
+
+`link` 取自本卡片的输入、结果或本页已批准的工具结果。传资源的 URI 和文件名即可，宿主会从插件服务读取并检查内容。
+支持图片、PDF 和纯文本，单件最多 64 MiB。文件内容、本地路径及 `file:`、HTTP、`ui://` 地址均不能作为附件 URI。
+
 ### 10. 硬性规则与验收
 
 | 必须做到 | 原因和写法 |

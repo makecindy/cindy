@@ -17,7 +17,7 @@ import { canonicalJson, COMPANION_VALUE_MAX_BYTES } from '../companion-cloud/upl
 import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile } from './botSkillStore.js';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
-export const TEAMMATE_TEMPLATE_VERSION = 9;
+export const TEAMMATE_TEMPLATE_VERSION = 10;
 /** What the project started from and which template files it still has untouched. */
 export const TEAMMATE_TEMPLATE_RECORD = path.join('.cindy', 'template.json');
 const PENDING_DIR = path.join('.cindy', 'template');
@@ -233,7 +233,7 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
     '.agents/skills/hand-off/SKILL.md': [
       '---',
       'name: hand-off',
-      'description: Use to coordinate teammates in a group, hand off longer work to a project task, handle the report a task sends back, or check its progress.',
+      'description: Use to coordinate teammates in a group, hand off longer work to a project task, handle the report a task sends back, check its progress, or set up work that runs on a schedule for the user.',
       '---',
       '',
       '# Hand-off',
@@ -259,6 +259,15 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       '- Ask for this shape: the outcome in one line; what changed (files, pull request links); how it was checked; what is left or risky; what the user has to decide.',
       '- When a report comes back, read it against what was asked. If something is missing or wrong, ask that task to fix it; do not redo the work yourself. Then tell the user in a few lines, with the links.',
       '- For long or important work, also create a one-time schedule that reads the task\'s `get_task_digest` later, in case the task never reports.',
+      '',
+      '## Scheduled work',
+      '',
+      'When the user asks for something on a schedule (check the mail every morning, a weekly summary, a reminder at a time), first decide who reads the result.',
+      '',
+      '- Results the user wants to see come back to this conversation: create the schedule from here with `schedule_create` and `bindToCurrentSession=true`, so every run reports here, also over a message channel. When it is unclear whether they want each result, ask once: "Should each result be sent to me here?"',
+      '- Only background work the user does not need to hear about runs on its own in this buddy\'s project. Its results stay in that task and do not come back here; say so when you set it up.',
+      '- When the user only wants to hear when something matters, set `silentWhenIdle=true` and write in the instructions what counts.',
+      '- Read the schedule back (name, time, enabled, where results go) before saying it is set, and tell the user where the results will appear.',
       '',
       '## While it runs',
       '',

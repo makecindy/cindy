@@ -393,6 +393,7 @@
       "showDeviceTasks": "觀差事",
       "openDevice": "啟",
       "renameDevice": "易名",
+      "groupDevice": "機",
       "groupProject": "案",
       "sortBy": {
         "priority": "緩急",
@@ -434,11 +435,15 @@
       "showCollapsedTeammateAvatars": "收時示頭像",
       "displayHeading": "示",
       "view": {
+        "card": "卡",
         "text": "文",
         "list": "列"
       },
       "taskInfoHeading": "差事資訊",
       "taskInfo": {
+        "teammate": "同伴像",
+        "project": "案徽與名",
+        "harness": "Harness 圖標",
         "time": "時",
         "pr": "PR 狀",
         "tokens": "Token",
