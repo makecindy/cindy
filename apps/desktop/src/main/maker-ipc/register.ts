@@ -17046,7 +17046,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const currentDeviceId = await readSessionAgentDeviceId(sessionId);
     if (route.agentDeviceId === undefined && currentDeviceId) return;
     const pluginEngineChanges = route.agentKind === 'acp' && currentProviderId !== undefined && currentProviderId !== route.providerId;
-    if (route.agentKind !== currentAgentKind || pluginEngineChanges || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId) {
+    const samePluginEngine = route.agentKind === 'acp' && currentAgentKind === 'acp'
+      && !pluginEngineChanges && currentDeviceId === (route.agentDeviceId ?? null);
+    if (!samePluginEngine && (route.agentKind !== currentAgentKind || pluginEngineChanges || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId)) {
       await performSessionAgentSwitch(agentSwitchDeps, {
         sessionId, targetAgentKind: route.agentKind, model: route.model,
         providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,

@@ -313,11 +313,14 @@ describe('switching a plugin-engine task back to a built-in engine', () => {
     expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
   });
 
-  // A saved companion model must switch the existing chat and discard the previous engine's SDK session.
-  it('runs the chosen host plugin and hands the same companion chat to a second plugin', async () => {
+  // A saved companion model must switch the existing chat across host, remote and shared plugin engines, discarding the previous SDK session.
+  it('runs the chosen host, remote and shared plugins on a companion chat', async () => {
     const OTHER_ENGINE = 'acp-plugin:alternate:engine';
     const botRow = makeRow({ source: 'bot', agentKind: 'pi', model: 'glm-5', providerId: 'xd' });
-    const { deps } = makeDeps(botRow);
+    const admitRemotePluginEngineTarget = vi.fn(async (_deviceId: string, target: { model: string }) => ({
+      model: target.model, effort: '', permissionMode: 'default', engineName: 'Remote Engine',
+    }));
+    const { deps } = makeDeps(botRow, { admitRemotePluginEngineTarget });
 
     await performSessionAgentSwitch(deps, {
       sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, applyNow: true,
@@ -327,14 +330,22 @@ describe('switching a plugin-engine task back to a built-in engine', () => {
     }));
 
     Object.assign(botRow, { agentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, sdkSessionId: 'acp-1' });
-    await expect(performSessionAgentSwitch(deps, {
-      sessionId: 's1', targetAgentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: 'other-device',
-    })).rejects.toThrow('UNSUPPORTED_CAPABILITY');
     await performSessionAgentSwitch(deps, {
-      sessionId: 's1', targetAgentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, applyNow: true,
+      sessionId: 's1', targetAgentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: 'share:friend', applyNow: true,
+    });
+    expect(deps.admitRemotePluginEngineTarget).toHaveBeenCalledWith('share:friend', expect.objectContaining({
+      providerId: OTHER_ENGINE, model: 'second-model',
+    }));
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: 'share:friend', sdkSessionId: null,
+    }));
+
+    Object.assign(botRow, { agentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: 'share:friend', sdkSessionId: 'acp-2' });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: null, applyNow: true,
     });
     expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
-      agentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, sdkSessionId: null,
+      agentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: null, sdkSessionId: null,
     }));
   });
 });
