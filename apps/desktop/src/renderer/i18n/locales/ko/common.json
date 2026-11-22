@@ -5911,7 +5911,7 @@
         "permissionIntro": {
           "title": "컴퓨터 자동 조작 활성화",
           "description": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요.",
-          "macosDescription": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요. CuaDriver에 화면 기록을 허용하세요. System & App Protection Override에서 제어를 허용할 앱을 선택하고, 이전 버전에서는 손쉬운 사용을 켜세요.",
+          "macosDescription": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요. CuaDriver에 화면 기록을 허용하세요. System & App Protection Override에서 제어를 허용할 앱을 선택하고, 이전 macOS 버전에서는 손쉬운 사용을 켜세요.",
           "confirm": "계속",
           "cancel": "나중에"
         },

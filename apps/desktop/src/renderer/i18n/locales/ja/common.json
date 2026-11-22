@@ -5911,7 +5911,7 @@
         "permissionIntro": {
           "title": "コンピュータ自動操作を有効化",
           "description": "{{appName}} は Cua Driver をローカルにインストールまたは起動し、画面の読み取りやクリック、入力などを行います。自分でコンピュータ自動操作タスクを開始した場合にのみ有効にしてください。",
-          "macosDescription": "{{appName}} は Cua Driver をローカルにインストールまたは起動し、画面の読み取りやクリック、入力などを行います。自分でコンピュータ自動操作タスクを開始した場合にのみ有効にしてください。 CuaDriver に画面収録を許可してください。「System & App Protection Override」で操作を許可するアプリを選びます。以前のバージョンでは「アクセシビリティ」を有効にしてください。",
+          "macosDescription": "{{appName}} は Cua Driver をローカルにインストールまたは起動し、画面の読み取りやクリック、入力などを行います。自分でコンピュータ自動操作タスクを開始した場合にのみ有効にしてください。 CuaDriver に画面収録を許可してください。「System & App Protection Override」で操作を許可するアプリを選びます。以前の macOS では「アクセシビリティ」を有効にしてください。",
           "confirm": "続行",
           "cancel": "後で"
         },

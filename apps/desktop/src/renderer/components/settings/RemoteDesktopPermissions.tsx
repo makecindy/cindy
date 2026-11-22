@@ -115,6 +115,7 @@ export function RemoteDesktopPermissions() {
           tone="quiet"
           type="button"
           className="max-w-full self-start"
+          data-settings-search-action="Reveals the running Cindy application in Finder"
           title={bundle}
           onClick={async () => {
             try {

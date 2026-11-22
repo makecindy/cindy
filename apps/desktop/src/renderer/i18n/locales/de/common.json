@@ -5954,7 +5954,7 @@
         "permissionIntro": {
           "title": "Computerautomatisierung aktivieren",
           "description": "{{appName}} installiert oder startet Cua Driver lokal, um den Bildschirm zu lesen und Aktionen wie Klicken und Tippen auszuführen. Aktiviere dies nur, wenn du bewusst eine Aufgabe zur Computerautomatisierung gestartet hast.",
-          "macosDescription": "{{appName}} installiert oder startet Cua Driver lokal, um den Bildschirm zu lesen und Aktionen wie Klicken und Tippen auszuführen. Aktiviere dies nur, wenn du bewusst eine Aufgabe zur Computerautomatisierung gestartet hast. Erlaube CuaDriver die Bildschirmaufnahme. Wähle unter „System & App Protection Override“ die Apps, die es steuern darf. Aktiviere bei älteren Versionen die Bedienungshilfen.",
+          "macosDescription": "{{appName}} installiert oder startet Cua Driver lokal, um den Bildschirm zu lesen und Aktionen wie Klicken und Tippen auszuführen. Aktiviere dies nur, wenn du bewusst eine Aufgabe zur Computerautomatisierung gestartet hast. Erlaube CuaDriver die Bildschirmaufnahme. Wähle unter „System & App Protection Override“ die Apps, die es steuern darf. Aktiviere bei älteren macOS-Versionen die Bedienungshilfen.",
           "confirm": "Weiter",
           "cancel": "Nicht jetzt"
         },

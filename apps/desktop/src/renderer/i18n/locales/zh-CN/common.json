@@ -5911,7 +5911,7 @@
         "permissionIntro": {
           "title": "启用自动操作电脑",
           "description": "{{appName}} 将在本机安装或启动 Cua Driver，用于读取屏幕并执行点击、输入等操作。请仅在你主动发起自动操作电脑任务时启用。",
-          "macosDescription": "{{appName}} 将在本机安装或启动 Cua Driver，用于读取屏幕并执行点击、输入等操作。请仅在你主动发起自动操作电脑任务时启用。 为 CuaDriver 开启屏幕录制。在「System & App Protection Override」选择允许它控制的 App；较早版本在「辅助功能」中开启。",
+          "macosDescription": "{{appName}} 将在本机安装或启动 Cua Driver，用于读取屏幕并执行点击、输入等操作。请仅在你主动发起自动操作电脑任务时启用。为 CuaDriver 开启屏幕录制。在「System & App Protection Override」选择允许它控制的 App；较早版本的 macOS 在「辅助功能」中开启。",
           "confirm": "继续",
           "cancel": "稍后再说"
         },

@@ -5954,7 +5954,7 @@
         "permissionIntro": {
           "title": "Enable computer automation",
           "description": "{{appName}} will install or start Cua Driver locally to read the screen and perform actions such as clicking and typing. Enable it only when you intentionally started a computer automation task.",
-          "macosDescription": "{{appName}} will install or start Cua Driver locally to read the screen and perform actions such as clicking and typing. Enable it only when you intentionally started a computer automation task. Allow Screen Recording for CuaDriver. In System & App Protection Override, choose the apps it may control. On earlier versions, enable Accessibility.",
+          "macosDescription": "{{appName}} will install or start Cua Driver on this Mac to read the screen and perform actions such as clicking and typing. Enable it only when you intentionally started a computer automation task. Allow Screen Recording for CuaDriver. In System & App Protection Override, choose the apps it may control. On earlier macOS versions, enable Accessibility.",
           "confirm": "Continue",
           "cancel": "Not now"
         },

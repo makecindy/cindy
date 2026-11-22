@@ -6012,7 +6012,7 @@
         "permissionIntro": {
           "title": "Activer l'automatisation de l'ordinateur",
           "description": "{{appName}} va installer ou démarrer Cua Driver localement pour lire l'écran et effectuer des actions comme cliquer et saisir du texte. Ne l'activez que si vous avez volontairement lancé une tâche d'automatisation de l'ordinateur.",
-          "macosDescription": "{{appName}} va installer ou démarrer Cua Driver localement pour lire l'écran et effectuer des actions comme cliquer et saisir du texte. Ne l'activez que si vous avez volontairement lancé une tâche d'automatisation de l'ordinateur. Autorisez CuaDriver à enregistrer l’écran. Dans System & App Protection Override, choisissez les apps qu’il peut contrôler. Sur les versions antérieures, activez Accessibilité.",
+          "macosDescription": "{{appName}} va installer ou démarrer Cua Driver localement pour lire l'écran et effectuer des actions comme cliquer et saisir du texte. Ne l'activez que si vous avez volontairement lancé une tâche d'automatisation de l'ordinateur. Autorisez CuaDriver à enregistrer l’écran. Dans System & App Protection Override, choisissez les apps qu’il peut contrôler. Sur les versions antérieures de macOS, activez Accessibilité.",
           "confirm": "Continuer",
           "cancel": "Plus tard"
         },

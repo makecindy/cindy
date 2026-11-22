@@ -6012,7 +6012,7 @@
         "permissionIntro": {
           "title": "Ativar automação do computador",
           "description": "{{appName}} instalará ou iniciará Cua Driver localmente para ler a tela e realizar ações como clicar e digitar. Ative apenas quando você tiver iniciado intencionalmente uma tarefa de automação do computador.",
-          "macosDescription": "{{appName}} instalará ou iniciará Cua Driver localmente para ler a tela e realizar ações como clicar e digitar. Ative apenas quando você tiver iniciado intencionalmente uma tarefa de automação do computador. Permita a gravação da tela para o CuaDriver. Em System & App Protection Override, escolha os apps que ele pode controlar. Em versões anteriores, ative Acessibilidade.",
+          "macosDescription": "{{appName}} instalará ou iniciará Cua Driver localmente para ler a tela e realizar ações como clicar e digitar. Ative apenas quando você tiver iniciado intencionalmente uma tarefa de automação do computador. Permita a gravação da tela para o CuaDriver. Em System & App Protection Override, escolha os apps que ele pode controlar. Em versões anteriores do macOS, ative Acessibilidade.",
           "confirm": "Continuar",
           "cancel": "Agora não"
         },

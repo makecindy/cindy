@@ -5911,7 +5911,7 @@
         "permissionIntro": {
           "title": "启代操此机",
           "description": "{{appName}} 将于此机安装或启动 Cua Driver，用以读屏幕并行点击、输入等操作。请仅于君亲自发起代操此机之差事时启用。",
-          "macosDescription": "{{appName}} 将于此机安装或启动 Cua Driver，用以读屏幕并行点击、输入等操作。请仅于君亲自发起代操此机之差事时启用。 为 CuaDriver 开录屏。若见「System & App Protection Override」，选其可控之应用；旧版于「辅助功能」开启。",
+          "macosDescription": "{{appName}} 将于此机安装或启动 Cua Driver，用以读屏幕并行点击、输入等操作。请仅于君亲自发起代操此机之差事时启用。为 CuaDriver 开录屏。若见「System & App Protection Override」，选其可控之应用；macOS 旧版于「辅助功能」开启。",
           "confirm": "续",
           "cancel": "容后"
         },

@@ -6012,7 +6012,7 @@
         "permissionIntro": {
           "title": "Activar la automatización de la computadora",
           "description": "{{appName}} instalará o iniciará Cua Driver localmente para leer la pantalla y realizar acciones como hacer clic y escribir. Actívalo solo si iniciaste intencionalmente una tarea de automatización de la computadora.",
-          "macosDescription": "{{appName}} instalará o iniciará Cua Driver localmente para leer la pantalla y realizar acciones como hacer clic y escribir. Actívalo solo si iniciaste intencionalmente una tarea de automatización de la computadora. Permite la grabación de pantalla a CuaDriver. En System & App Protection Override, elige las apps que puede controlar. En versiones anteriores, activa Accesibilidad.",
+          "macosDescription": "{{appName}} instalará o iniciará Cua Driver localmente para leer la pantalla y realizar acciones como hacer clic y escribir. Actívalo solo si iniciaste intencionalmente una tarea de automatización de la computadora. Permite la grabación de pantalla a CuaDriver. En System & App Protection Override, elige las apps que puede controlar. En versiones anteriores de macOS, activa Accesibilidad.",
           "confirm": "Continuar",
           "cancel": "Ahora no"
         },
