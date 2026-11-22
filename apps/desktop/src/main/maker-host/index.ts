@@ -939,6 +939,7 @@ function companionToolAgentKind(kind: EngineKind): AgentKind {
 function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     listMcpServers: (input) => listBotRuntimeMcpServers({
       ...input,
       agentKind: companionToolAgentKind(input.agentKind),
@@ -2457,6 +2458,7 @@ export function getMaker(): Maker {
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
       getUserName: () => getAuthState().user?.name,
+      prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
       listSkills: async ({ agentKind: engineKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
         const agentKind = companionToolAgentKind(engineKind);

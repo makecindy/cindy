@@ -33,6 +33,7 @@ import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { botLearningTracker } from './botLearningTracker.js';
 import { unlinkedTeammateProjectMemoryDir } from './botProjectMemory.js';
 import { createProjectMemoryReceipts } from './botProjectLearning.js';
+import { joinSharedSkillPreparation } from '../skillhub/sharedSkillPreparation.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -107,6 +108,11 @@ export type BotRuntimeFailureStage = 'prepare' | 'agent-start' | 'storage';
 
 export interface BotProfileRuntimeDeps {
   getUserName?: () => string | null | undefined;
+  /**
+   * Joins the shared Skill preparation before `listSkills`. The snapshot is frozen for the
+   * session and is taken before the Agent launch prepares; startup only warms it up.
+   */
+  prepareSharedSkills?: () => Promise<void>;
   listSkills?: (input: {
     agentKind: MakerSessionCreateOpts['agentKind'];
     workingDir: string;
@@ -716,6 +722,7 @@ export async function hydrateBotProfileRuntime(
     resolvedSkills = [];
   } else if (deps.listSkills) {
     try {
+      await joinSharedSkillPreparation(deps.prepareSharedSkills, 'bot-runtime');
       catalog = await deps.listSkills({
         agentKind: opts.agentKind,
         workingDir: opts.workingDir,
