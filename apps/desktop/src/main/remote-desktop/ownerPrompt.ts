@@ -36,6 +36,12 @@ export async function watchOwnerPrompt(
    * filter; `null` once the prompt is gone, since the id names a window that must exist.
    */
   onPanel?: (windowId: number | null) => void,
+  /**
+   * The helper process this call spawned, by its `close`. A start that is cancelled never
+   * yields a prompt object, yet its panel can stay on screen until this settles — the
+   * caller keeps that panel out of captures until then.
+   */
+  onHelperClosed?: (closed: Promise<void>) => void,
 ): Promise<OwnerPrompt> {
   if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   // Resolving the helper can take a while (a cold build of the native source, a slow
@@ -46,6 +52,7 @@ export async function watchOwnerPrompt(
   if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   const child = runtime.spawn(binary, ['--owner-prompt', reason]);
   const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  onHelperClosed?.(closed);
   let buffer = '';
   let started = false;
   let done = false;

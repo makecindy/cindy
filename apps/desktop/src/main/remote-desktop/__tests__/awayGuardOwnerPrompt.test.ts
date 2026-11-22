@@ -68,14 +68,28 @@ vi.mock('../ownerPrompt', () => ({
     prompt.signals.push(
       rest[0] instanceof AbortSignal ? rest[0] : (rest[1] as AbortSignal),
     );
-    const onPanel = rest.find((value) => typeof value === 'function') as
-      | ((windowId: number | null) => void)
-      | undefined;
+    const callbacks = rest.filter((value) => typeof value === 'function') as Array<
+      (...args: never[]) => void
+    >;
+    const onPanel = callbacks[0] as ((windowId: number | null) => void) | undefined;
+    const onHelperClosed = callbacks[1] as ((closed: Promise<void>) => void) | undefined;
     if (onPanel) prompt.panels.push(onPanel);
-    prompt.watch(onAnswer, reason);
-    return new Promise((resolve) => {
-      prompt.resolve = resolve;
+    // The helper's process ends when its `stop` settles: that `close` is what lets the
+    // panel id leave the capture exclusion list.
+    let helperClosed: () => void = () => {};
+    const closed = new Promise<void>((resolve) => {
+      helperClosed = resolve;
     });
+    onHelperClosed?.(closed);
+    prompt.watch(onAnswer, reason);
+    return new Promise<{ stop: () => Promise<void> }>((resolve) => {
+      prompt.resolve = (value) => resolve(value as { stop: () => Promise<void> });
+    }).then((value) => ({
+      stop: async () => {
+        await value.stop();
+        helperClosed();
+      },
+    }));
   },
 }));
 vi.mock('electron', () => ({
@@ -155,7 +169,7 @@ vi.mock('electron', () => ({
 }));
 
 import { powerMonitor } from 'electron';
-import { startAwayGuard } from '../awayGuardService';
+import { ownerPromptTeardownSettled, startAwayGuard } from '../awayGuardService';
 
 const settle = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
@@ -296,10 +310,22 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   expect(prompt.stop).toHaveBeenCalledTimes(3);
   expect(mask.level).toBe('screen-saver');
   // Still closing: a restarted ScreenCaptureKit must not catch the visible control, so the
-  // id stays excluded until `stop` settles.
+  // id stays excluded until the helper is gone.
   expect(excluded.at(-1)).toContain(4242);
+  // A second disarm on the next tick must not take the id away either.
+  await vi.advanceTimersByTimeAsync(2_000);
+  await settle();
+  expect(excluded.at(-1)).toContain(4242);
+  // Computer Use captures through its own path, so it waits this teardown out instead.
+  let barrierSettled = false;
+  void ownerPromptTeardownSettled().then(() => {
+    barrierSettled = true;
+  });
+  await settle();
+  expect(barrierSettled).toBe(false);
   releaseStop?.();
   await settle();
+  expect(barrierSettled).toBe(true);
   // A closed panel's id is dropped once the helper is gone: window numbers get reused.
   expect(excluded.at(-1)).not.toContain(4242);
 });

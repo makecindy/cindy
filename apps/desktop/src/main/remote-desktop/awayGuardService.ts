@@ -44,6 +44,20 @@ const DISPLAY_SLEEP_REFRESH_MS = 60_000;
 const LOCK_SCREEN_SETTLE_MS = 1500;
 
 /**
+ * Helper processes that have not closed yet. The system prompt's panel can still be on
+ * screen until its helper is gone, and the exclusion list only reaches the remote viewer's
+ * capture: Computer Use reads the same display through its own MCP session, so it waits on
+ * this barrier before it touches the desktop.
+ */
+const pendingOwnerPromptHelpers = new Set<Promise<void>>();
+
+/** Resolves once no Touch ID helper can still be drawing a panel on this display. */
+export function ownerPromptTeardownSettled(): Promise<void> {
+  if (pendingOwnerPromptHelpers.size === 0) return Promise.resolve();
+  return Promise.allSettled([...pendingOwnerPromptHelpers]).then(() => undefined);
+}
+
+/**
  * Copy names the owner's biometry the way Apple does (Touch ID / Face ID / Optic ID).
  * Read once per run; until then the wording stays on today's Touch ID.
  */
@@ -323,6 +337,9 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   // lease between two ticks cannot catch the control in its first frames.
   let coverWindowIds: number[] = [];
   let ownerPromptWindowId: number | null = null;
+  // Helper processes that have not closed yet; each can still be drawing the very panel
+  // whose id is published above, so the id stays excluded until every one of them is gone.
+  const ownerPromptHelpers = pendingOwnerPromptHelpers;
   const publishExcludedWindows = () =>
     deps.excludedWindows(
       ownerPromptWindowId === null ? coverWindowIds : [...coverWindowIds, ownerPromptWindowId],
@@ -334,8 +351,23 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     ownerPromptLowered = false;
     masks.lowerForSystemPrompt(false);
   };
+  /**
+   * Retire the panel's id from the capture exclusion list.
+   * Only once no helper can still be drawing it: a start is in flight, the panel object is
+   * live, or a teardown has not settled. A repeated tick must not take the id away while the
+   * helper is still closing (`stop` waits for its `close`, with a 2s kill fallback) —
+   * restarting ScreenCaptureKit without it would put the visible control into a viewer's
+   * frames.
+   */
+  const retireOwnerPromptPanelId = () => {
+    if (ownerPromptWindowId === null) return;
+    if (ownerPrompt !== null || ownerPromptStart !== null || ownerPromptBusy) return;
+    if (ownerPromptHelpers.size > 0) return;
+    ownerPromptWindowId = null;
+    publishExcludedWindows();
+  };
   const disarmOwnerPrompt = () => {
-    const generation = ++ownerPromptGeneration;
+    ownerPromptGeneration++;
     const prompt = ownerPrompt;
     const start = ownerPromptStart;
     ownerPrompt = null;
@@ -345,28 +377,14 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     // for its `ready` (the cover would otherwise stay below the Dock and menu bar).
     raiseOwnerPrompt();
     start?.abort();
-    const dropPanelFromCapture = () => {
-      if (ownerPromptWindowId === null) return;
-      ownerPromptWindowId = null;
-      publishExcludedWindows();
-    };
     if (!prompt) {
-      // Nothing to stop: the panel, if it ever reported one, is already gone with it.
-      dropPanelFromCapture();
+      // A helper may still be starting or shutting down after an earlier disarm: keep its
+      // panel excluded until it is really gone (the start's own settle retries this).
+      retireOwnerPromptPanelId();
       return;
     }
-    // The panel can still be on screen while the helper shuts down (`stop` waits for its
-    // `close`, with a 2s kill fallback). Dropping the id now would restart ScreenCaptureKit
-    // without it and put the visible control into a remote viewer's frames.
-    void prompt
-      .stop()
-      .catch(() => undefined)
-      .then(() => {
-        // A newer panel owns the id by now: the arm and its `panel` report bumped the
-        // generation, so its exclusion must stay.
-        if (generation !== ownerPromptGeneration) return;
-        dropPanelFromCapture();
-      });
+    // The helper's own `close` (tracked when it spawned) retires the panel id.
+    void prompt.stop().catch(() => undefined);
   };
   const armOwnerPrompt = () => {
     if (
@@ -411,11 +429,24 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         ownerPromptWindowId = windowId;
         publishExcludedWindows();
       },
+      (closed) => {
+        ownerPromptHelpers.add(closed);
+        void closed.then(() => {
+          ownerPromptHelpers.delete(closed);
+          retireOwnerPromptPanelId();
+        });
+      },
     )
       .then((prompt) => {
         if (ownerPromptStart === start) ownerPromptStart = null;
-        if (generation === ownerPromptGeneration) ownerPrompt = prompt;
-        else void prompt.stop();
+        if (generation === ownerPromptGeneration) {
+          ownerPrompt = prompt;
+          return;
+        }
+        // The cover let go while the helper was coming up: stop it like any other teardown
+        // so its panel id survives until `close`.
+        ownerPrompt = prompt;
+        disarmOwnerPrompt();
       })
       .catch(() => {
         if (ownerPromptStart === start) ownerPromptStart = null;
@@ -429,6 +460,9 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       })
       .finally(() => {
         ownerPromptBusy = false;
+        // An aborted start leaves no prompt object; its panel id is retired here once the
+        // helper has been told to stop.
+        retireOwnerPromptPanelId();
       });
   };
   const syncOwnerPrompt = (awake: boolean) => {

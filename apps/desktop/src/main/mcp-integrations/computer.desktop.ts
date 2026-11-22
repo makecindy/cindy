@@ -5,6 +5,7 @@ import { createComputerRuntime } from './computer.js';
 export type { ComputerDriverInstallResult, ComputerDriverUpdateCheck, ComputerDriverPermissionGrantResult, ComputerMcpDepsOptions, ActivityTimeoutOptions, CuaDriverReleaseAsset, ComputerDriverUpdateProgress } from './computer.js';
 export const {
   openComputerUseSessions,
+  setCaptureBarrier,
   onComputerUseSessionsChange,
   getComputerDriverAppBundlePath,
   resetComputerDriverPermissionProbeCacheForTests,

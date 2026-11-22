@@ -265,6 +265,12 @@ const resolveDesktopOutboundProxy = ports.resolveOutboundProxy;
 
 
 const logger = createLogger('mcp/cindy_computer');
+/**
+ * Something else on this desktop is still clearing its own overlay (the away cover's system
+ * Touch ID panel). Computer Use screenshots the whole display, so it waits that out before
+ * the first native read; the remote viewer's exclusion list does not cover this path.
+ */
+let captureBarrier: (() => Promise<void>) | null = null;
 const DRIVER_COMMAND = 'cua-driver';
 const STATUS_TIMEOUT_MS = 3_000;
 const DOCTOR_TIMEOUT_MS = 10_000;
@@ -4126,6 +4132,10 @@ async function cleanupAllComputerDriverSessions(): Promise<void> {
   cuaMcpSessionCloseVersions.clear();
 }
 
+function setCaptureBarrier(barrier: (() => Promise<void>) | null): void {
+  captureBarrier = barrier;
+}
+
 function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDeps {
   let runtimePreparation: Promise<void> | null = null;
   const ensureRuntime = async (): Promise<void> => {
@@ -4159,11 +4169,13 @@ function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDe
           'COMPUTER_USE_DISABLED',
         );
       }
+      if (captureBarrier) await captureBarrier();
       await ensureRuntime();
       plugin?.assertCurrent();
       return callComputerDriverTool(name, args, context);
     },
     isSecureTarget: async target => { await ensureRuntime(); return ports.isSecureTarget(target); },
+
     describeDesktop: async () => { await ensureRuntime(); return { screen_locked: isDesktopScreenLocked() }; },
     logger,
   };
@@ -4178,5 +4190,5 @@ async function dispose(): Promise<void> {
   powerMonitorHooked = false;
   await cleanupAllComputerDriverSessions();
 }
-return { dispose, openComputerUseSessions, onComputerUseSessionsChange, getComputerDriverAppBundlePath, resetComputerDriverPermissionProbeCacheForTests, isComputerDriverPermissionProbePaused, pauseComputerDriverPermissionProbe, resumeComputerDriverPermissionProbe, isInstallLockHolderAlive, clearStaleCuaInstallLock, sampleInstallProcessTree, runProcessWithActivityTimeout, installIdleTimeoutForPlatform, buildCuaInstallerProxyEnv, listComputerWindowsForAtMention, resetAtMentionWindowCacheForTests, getComputerDriverStatus, installComputerDriver, extractDriverSemver, compareSemver, resolveCuaDriverHostArch, getCuaDriverReleaseAssetName, resetComputerDriverUpdateStateForTests, checkComputerDriverUpdate, extractCurlOutputPath, matchAssetSizeByFilename, updateComputerDriver, getComputerDriverAppIcon, resetComputerDriverAppIconCacheForTests, cancelComputerDriverPermissionGrant, grantComputerDriverPermissions, USER_INPUT_ACTIVE_WINDOW_MS, resetDesktopInputGuardStateForTests, seedDesktopScreenLocked, isDesktopScreenLocked, msSinceForeignDesktopInput, setPhysicalInputShielded, assertNoRecentUserInput, callComputerDriverTool, cleanupComputerDriverSession, cleanupAllComputerDriverSessions, getComputerMcpDeps };
+return { dispose, openComputerUseSessions, setCaptureBarrier, onComputerUseSessionsChange, getComputerDriverAppBundlePath, resetComputerDriverPermissionProbeCacheForTests, isComputerDriverPermissionProbePaused, pauseComputerDriverPermissionProbe, resumeComputerDriverPermissionProbe, isInstallLockHolderAlive, clearStaleCuaInstallLock, sampleInstallProcessTree, runProcessWithActivityTimeout, installIdleTimeoutForPlatform, buildCuaInstallerProxyEnv, listComputerWindowsForAtMention, resetAtMentionWindowCacheForTests, getComputerDriverStatus, installComputerDriver, extractDriverSemver, compareSemver, resolveCuaDriverHostArch, getCuaDriverReleaseAssetName, resetComputerDriverUpdateStateForTests, checkComputerDriverUpdate, extractCurlOutputPath, matchAssetSizeByFilename, updateComputerDriver, getComputerDriverAppIcon, resetComputerDriverAppIconCacheForTests, cancelComputerDriverPermissionGrant, grantComputerDriverPermissions, USER_INPUT_ACTIVE_WINDOW_MS, resetDesktopInputGuardStateForTests, seedDesktopScreenLocked, isDesktopScreenLocked, msSinceForeignDesktopInput, setPhysicalInputShielded, assertNoRecentUserInput, callComputerDriverTool, cleanupComputerDriverSession, cleanupAllComputerDriverSessions, getComputerMcpDeps };
 }

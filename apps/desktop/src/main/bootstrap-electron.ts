@@ -674,7 +674,7 @@ import {
   startLinuxAwayCover,
 } from './remote-desktop';
 import { registerLocalNetworkIpc } from './local-network/index.js';
-import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
+import { isAwayCoverUp, ownerPromptTeardownSettled, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import { DisplayDemand } from './remote-desktop/displayDemand';
 import {
   isDesktopScreenLocked,
@@ -683,6 +683,7 @@ import {
   setPhysicalInputShielded,
   openComputerUseSessions,
   onComputerUseSessionsChange,
+  setCaptureBarrier,
 } from './mcp-integrations/computer.desktop.js';
 import * as usageReporting from './product-token-usage/reporting.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState, onAnalyticsPermissionChange } from './analyticsSettingsService';
@@ -5360,6 +5361,10 @@ const registerIpcHandlers = () => {
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });
+    // Computer Use captures the same display through its own MCP session: the exclusion list
+    // that keeps the panel out of a remote viewer's frames does not reach it, so its calls
+    // wait for the Touch ID helper to close.
+    setCaptureBarrier(ownerPromptTeardownSettled);
     // Hyprland draws its privacy screen in the compositor; same policy, own loop.
     startLinuxAwayCover();
     setPhysicalInputShielded(() => isAwayCoverUp() || isLinuxAwayCoverUp());
