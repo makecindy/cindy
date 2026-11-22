@@ -276,7 +276,7 @@ import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { nativeAutoReviewContinuationConfig } from './native-auto-review-policy.js';
 import { sendCodexApprovalFeedback } from './approval-feedback.js';
-import { loadMemoryContext } from '../../memory/context.js';
+import { loadMemoryContext, projectMemoryRules } from '../../memory/context.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { CODEX_AGENT_COMMANDS } from './commands.js';
@@ -3850,6 +3850,12 @@ assertRouteCurrent();
           snapshot: opts.makerMemoryIndexSnapshot, projectDirectory: opts.makerMemoryProjectDir,
         });
         makerMemoryRules = memoryContext.rules;
+        // A teammate's owner conversation saves through cindy_memory: this host bridged it and
+        // the thread keeps it enabled while memory is on (hosted and SSH threads keep files).
+        if (memoryContext.projectDirectory && opts.makerMemorySaveWithTool === true && memoryBridgeAvailable
+          && !hosted && !opts.remoteHostId && !opts[LOCAL_AGENT_CLIENT]) {
+          makerMemoryRules = projectMemoryRules(memoryContext.projectDirectory, true);
+        }
         makerMemoryIndex = memoryContext.index;
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),

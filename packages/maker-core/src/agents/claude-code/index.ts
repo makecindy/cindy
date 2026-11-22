@@ -87,7 +87,7 @@ import {
 import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js';
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
-import { loadMemoryContext } from '../../memory/context.js';
+import { loadMemoryContext, projectMemoryRules } from '../../memory/context.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import type {
@@ -1818,6 +1818,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 失败 (manager 没注入 / store init 抛错) 静默跳过, agent 仍能跑。
     let makerMemoryRules = '';
     let makerMemoryIndex = '';
+    let makerMemoryProjectDirectory: string | undefined;
     let memoryFlushController: MemoryFlushController | null = null;
     let mutableModel = opts.model;
     let mutableProviderId = opts.providerId ?? null;
@@ -1861,6 +1862,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         });
         makerMemoryRules = memoryContext.rules;
         makerMemoryIndex = memoryContext.index;
+        makerMemoryProjectDirectory = memoryContext.projectDirectory;
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),
           workdir: memoryScopeKey,
@@ -3842,6 +3844,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       // File diagnostics cannot establish effective managed policy. Start with all
       // host connections, then honor a native choice only after the CLI confirms it.
       const mcpServers = buildMcpServers();
+      // A teammate's owner conversation saves project memory through cindy_memory, only when
+      // this session actually registered it (memory switches, Bot MCP policy, provider gate).
+      if (makerMemoryProjectDirectory && opts.makerMemorySaveWithTool === true && !hosted && !opts.remoteHostId
+        && mcpServers && Object.prototype.hasOwnProperty.call(mcpServers, 'cindy_memory')) {
+        makerMemoryRules = projectMemoryRules(makerMemoryProjectDirectory, true);
+      }
       // A prebound request id is not a resume source until its input is accepted.
       let resumeSdkSid = durableSdkSessionId ?? configuredResumeSessionId;
       let modelUsageCumulativeStartsAtZero = !resumeSdkSid;

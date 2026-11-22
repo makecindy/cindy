@@ -584,3 +584,29 @@ describe('companion scope invalidated while flag settings are written', () => {
     expect(scopeChecks).toBe(3);
   });
 });
+
+// 2026-11-21 teammate review: a V2 teammate's Edit of its own project memory was stopped by the
+// automatic review while cindy_memory (host-trusted) was mounted. Basis: the rule may name the tool
+// only when this session registered it (cindy-bots-runtime.md「提示词承诺必须等于工具面」).
+// Smallest failing input: save requested, cindy_memory provider present. Real SDK start options; unit.
+it.each([
+  { saveWithTool: true, mounted: true, routed: true },
+  { saveWithTool: true, mounted: false, routed: false },
+  { saveWithTool: false, mounted: true, routed: false },
+])('names cindy_memory for project-memory saves only when it is mounted ($saveWithTool, $mounted)', async ({ saveWithTool, mounted, routed }) => {
+  process.env.CLAUDE_CONFIG_DIR = await makeTempDir();
+  const workingDir = await makeTempDir();
+  sdkMock.query.mockReturnValue(createFakeQuery());
+  const deps = createDeps();
+  deps.makerMemory = { getProjectMemoryDirectory: () => path.join(workingDir, '.cindy', 'memory') } as never;
+  if (mounted) deps.mcpProviders = [{ name: 'cindy_memory', toClaudeSdkConfig: () => ({ type: 'http', url: 'http://localhost:3425/mcp' }) }];
+  const handle = await new ClaudeCodeAgent(deps).startSession({
+    sessionId: `project-memory-${saveWithTool}-${mounted}`, model: 'claude-opus-4-6', workingDir,
+    makerMemoryEnabled: true, makerMemoryScopeKey: workingDir, ...(saveWithTool ? { makerMemorySaveWithTool: true } : {}),
+  });
+  liveHandles.push(handle);
+  const prompt = (sdkMock.query.mock.calls.at(-1)?.[0]?.options as { systemPrompt?: { append?: string } }).systemPrompt?.append ?? '';
+  expect(prompt).toContain(JSON.stringify(path.join(workingDir, '.cindy', 'memory')));
+  expect(prompt.includes('"name": "memory_write"')).toBe(routed);
+  expect(prompt.includes('no dedicated memory service')).toBe(!routed);
+});

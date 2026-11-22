@@ -359,6 +359,8 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     // Project memory, switched by the teammate's own memory setting, not the global one.
     expect(main.makerMemoryEnabled).toBe(true);
     expect(main.makerMemorySwitchOwned).toBe(true);
+    // Its conversation with its owner saves through cindy_memory (2026-11-21 teammate review).
+    expect(main.makerMemorySaveWithTool).toBe(true);
     expect(deps.readMemoryIndex).not.toHaveBeenCalled();
     expect(snapshot?.disabledToolsets).toEqual([]);
     expect(main.extraDirs).toEqual(['/code/app']);
@@ -382,6 +384,8 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(group.botRuntimeProfile?.toolsetPolicy.configured).toEqual(['browser', 'docs']);
     // ...but shares the teammate's one project memory, not the old teammate store.
     expect(group.makerMemoryEnabled).toBe(true);
+    // Other members' turns keep the file route: no new unreviewed way to write the memory.
+    expect(group.makerMemorySaveWithTool).toBeUndefined();
     expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
     expect(deps.readMemoryIndex).not.toHaveBeenCalled();
 
@@ -393,12 +397,14 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(lane.botRuntimeProfile?.projectContext).toBeUndefined();
     expect(laneSnapshot?.disabledToolsets).toEqual([]);
     expect(lane.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
+    expect(lane.makerMemorySaveWithTool).toBeUndefined();
 
     // A chat-only group still gets no tools.
     seed('group', 'group:g1:access:chat:1', { ...narrow, projectMode: true });
     const chatOnly = { id: 'chat', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
     await hydrateBotProfileRuntime(chatOnly, deps, { persistSnapshot: false });
     expect(chatOnly.botRuntimeProfile?.toolsetPolicy.configured).toEqual([]);
+    expect(chatOnly.makerMemorySaveWithTool).toBeUndefined();
 
     seed('canonical', null, narrow);
     const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
@@ -406,6 +412,7 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(classic.botRuntimeProfile?.projectContext).toBeUndefined();
     expect(classic.makerMemoryScopeKey).toBe('bot:bot');
     expect(classic.extraDirs).toBeUndefined();
+    expect(classic.makerMemorySaveWithTool).toBeUndefined();
   });
 
   it('still refuses read-only history links', async () => {

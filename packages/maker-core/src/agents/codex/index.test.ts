@@ -5892,6 +5892,35 @@ describe('CodexAgent.startSession developerInstructions', () => {
     }
     expect(instructions[1]).toBe(instructions[0] + '\n\nSTATIC FRAGMENT');
   });
+  // 2026-11-21 teammate review: a teammate's file edit of its own project memory was stopped by the
+  // automatic review while cindy_memory (host-trusted) was mounted. The owner's conversation now
+  // saves through the tool, and only a thread that really has the bridge is told so (unit, real
+  // thread/start projection).
+  it('routes project-memory saves through cindy_memory only when asked and bridged', async () => {
+    const instructionsFor = async (saveWithTool: boolean, bridged: boolean) => {
+      const agent = new CodexAgent(createDeps({}, {
+        makerMemory: { getProjectMemoryDirectory: () => '/repo/.cindy/memory' } as never,
+        ...(bridged ? { mcpProviders: [{ name: 'cindy_memory' } as never] } : {}),
+      }));
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({ sessionId: `project-memory-${saveWithTool}-${bridged}`, model: 'gpt-5.4',
+        workingDir: '/repo', makerMemoryEnabled: true, makerMemoryScopeKey: '/repo',
+        ...(saveWithTool ? { makerMemorySaveWithTool: true } : {}) });
+      const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as { developerInstructions: string };
+      await handle.close();
+      await agent.dispose();
+      return params.developerInstructions;
+    };
+    const routed = await instructionsFor(true, true);
+    expect(routed).toContain('"/repo/.cindy/memory"');
+    expect(routed).toContain('"name": "memory_write"');
+    expect(routed).not.toContain('no dedicated memory service');
+    for (const [saveWithTool, bridged] of [[false, true], [true, false]] as const) {
+      const files = await instructionsFor(saveWithTool, bridged);
+      expect(files).toContain('no dedicated memory service');
+      expect(files).not.toContain('cindy_memory');
+    }
+  });
   it.each([
     { action: 'start', resumeSessionId: undefined, expectedProvider: 'cindy_gateway' },
     {

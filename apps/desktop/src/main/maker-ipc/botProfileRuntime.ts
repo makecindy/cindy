@@ -649,6 +649,14 @@ export async function hydrateBotProfileRuntime(
   opts.makerMemoryEnabled = projectMode ? config.memory !== false : memoryEngineEnabled;
   // The teammate's memory switch decides, as before the upgrade, not an engine's own memory setting.
   if (projectMode) opts.makerMemorySwitchOwned = true;
+  // In its conversations with its owner (the main chat and private topics) a V2 teammate saves its
+  // project memory through cindy_memory, which the host already runs without a confirmation; a file
+  // edit there could be stopped by the automatic review (2026-11-21 teammate review). Group, IM,
+  // routine and hand-off sessions keep the file route, so other people's turns gain no new path.
+  // The engine still names the tool only when this session mounted it.
+  if (projectMode && opts.makerMemoryEnabled && (row.role === 'canonical' || row.role === 'thread'))
+    opts.makerMemorySaveWithTool = true;
+  else delete opts.makerMemorySaveWithTool;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
   if (memoryEngineEnabled) opts.makerMemoryScopeKey = botMemoryScopeKey;
   else if (projectMode && !projectContext && opts.makerMemoryEnabled) {

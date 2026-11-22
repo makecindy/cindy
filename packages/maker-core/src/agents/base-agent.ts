@@ -2175,6 +2175,12 @@ export interface StartSessionOptions {
   /** Project-local Markdown memory on the task's computer; load on demand, never as an index snapshot. */
   makerMemoryProjectDir?: string;
   /**
+   * Project memory: save through `cindy_memory` instead of editing the files, when this session
+   * really mounts it (each engine checks; hosted and remote sessions keep the file route). Set by
+   * the host only for a teammate's own conversations with its owner. Not sent to other computers.
+   */
+  makerMemorySaveWithTool?: boolean;
+  /**
    * 设备托管：任务所在电脑在打开任务时按真实工作目录生成的插件花名册段。插件工具经隧道
    * 回到那台电脑，花名册也必须来自那台；Agent 所在电脑不读自己的已装插件。
    */

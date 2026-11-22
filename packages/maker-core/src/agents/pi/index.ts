@@ -176,7 +176,7 @@ import {
 import { applyPiDisabledSkillSettings, filterPiDisabledProjectSkills, piDisabledDiscoveryPaths } from './skill-activation.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
-import { loadMemoryContext } from '../../memory/context.js';
+import { loadMemoryContext, projectMemoryRules } from '../../memory/context.js';
 import type {
   Capabilities,
   ManualCompactResult,
@@ -3946,6 +3946,12 @@ export class PiAgent extends BaseAgent {
         });
         makerMemoryIndex = memoryContext.index;
         makerMemoryRules = memoryContext.rules;
+        // A teammate's owner conversation saves through cindy_memory, only when this session's
+        // local bridge registered it under that name (not the Bot facade, a hosted or remote run).
+        if (memoryContext.projectDirectory && opts.makerMemorySaveWithTool === true && !hosted && !opts.remoteHostId
+          && !opts[LOCAL_AGENT_CLIENT] && !mcpBridge?.botMemoryFacade && registeredMcpServerNames.has('cindy_memory')) {
+          makerMemoryRules = projectMemoryRules(memoryContext.projectDirectory, true);
+        }
       } catch (err) {
         this.deps.logger.warn('pi maker memory load failed at session start (skipping injection)', {
           message: err instanceof Error ? err.message : String(err),
