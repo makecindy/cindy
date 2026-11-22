@@ -153,29 +153,38 @@ it('recovers the saved direct document verbatim only for its recipient and date'
   const im = { connectedOrigin: origin, isGroup: (id: string) => id.includes(';+;'), sendDirectDelivery: send, commitFinal: vi.fn() };
   const adapter = wireIMessageOrchestrator(im as never, {} as never,
     { instanceKey: 'test', companionBotId: 'bot', connectionId }) as unknown as ImChannelAdapter;
-  const reader = (chatId: string, messageId = 'request') => {
+  const scopeFor = (chatId: string, messageId = 'request') => {
     const scope = adapter.channelToolScopeFor!({ chatId, messageId } as IMMessageEvent);
-    return scope?.channel === 'imessage' ? scope.readDirectDelivery : undefined;
+    if (scope?.channel !== 'imessage') throw new Error('Expected an iMessage scope');
+    return scope;
   };
   try {
     const text = 'QA morning report\nWeather: 17°C';
-    const record = prepareDirectDelivery(directDeliveryFile('bot', connectionId, origin, target), text);
-    expect(reader('any;+;group')).toBeUndefined();
-    expect(reader('any;-;two@example.test')!(0)).toBeNull();
-    expect(reader(target)!(record.createdAt + 1)).toBeNull();
+    const file = directDeliveryFile('bot', connectionId, origin, target);
+    const record = prepareDirectDelivery(file, text);
+    expect(scopeFor('any;+;group').readDirectDelivery).toBeUndefined();
+    expect(scopeFor('any;-;two@example.test').readDirectDelivery!(0)).toBeNull();
+    const first = scopeFor(target);
+    expect(first.readDirectDelivery!(record.createdAt + 1)).toBeNull();
+    expect(first.readDirectDelivery!(record.createdAt)).toEqual({ text, createdAt: record.createdAt });
+    const second = scopeFor(target, 'explicit-second-request');
+    expect(second.readDirectDelivery!(0)?.text).toBe(text);
+    const updatedText = 'New document for the same recipient';
+    prepareDirectDelivery(file, updatedText);
+    const third = scopeFor(target, 'third-request');
+    expect(third.readDirectDelivery!(0)?.text).toBe(updatedText);
     expect(send).not.toHaveBeenCalled();
-    expect(reader(target)!(record.createdAt)).toEqual({ text, createdAt: record.createdAt });
-    expect(send).not.toHaveBeenCalled();
-    if (adapter.output.kind !== 'chunked-text') throw new Error('Expected a chunked reply');
-    await adapter.output.commitFinal({ userId: target, text: text.replace('\n', '  \n'), inputMessageId: 'request', terminal: 'done' });
+
+    await first.commitChunkedFinal!({ userId: target, text: text.replace('\n', '  \n'), terminal: 'done' });
+    expect(send).toHaveBeenLastCalledWith(target, text, expect.any(String));
     const firstReply = send.mock.calls[0][2];
-    expect(send).toHaveBeenCalledWith(target, text, expect.any(String));
-    await adapter.output.commitFinal({ userId: target, text, inputMessageId: 'request', terminal: 'done' });
+    await first.commitChunkedFinal!({ userId: target, text, terminal: 'done' });
     expect(send).toHaveBeenLastCalledWith(target, text, firstReply);
-    expect(reader(target, 'explicit-second-request')!(record.createdAt)).toEqual({ text, createdAt: record.createdAt });
-    await adapter.output.commitFinal({ userId: target, text, inputMessageId: 'explicit-second-request', terminal: 'done' });
+    await second.commitChunkedFinal!({ userId: target, text, terminal: 'done' });
     expect(send).toHaveBeenLastCalledWith(target, text, expect.any(String));
     expect(send.mock.calls[2][2]).not.toBe(firstReply);
+    await third.commitChunkedFinal!({ userId: target, text: updatedText, terminal: 'done' });
+    expect(send).toHaveBeenLastCalledWith(target, updatedText, expect.any(String));
   } finally {
     privatePath.mockRestore();
     await fs.rm(root, { recursive: true, force: true });

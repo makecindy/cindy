@@ -19,7 +19,6 @@ import { ui } from './uiText';
 
 export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestratorConfig,
   options: { instanceKey: string; companionBotId: string; connectionId: string }) {
-  const requestedDocuments = new Map<string, { inputMessageId: string; origin: string; text: string; replyId: string }>();
   const textInteractions = new Map<string, { cancelled: boolean }>();
   const companionLane: NonNullable<ImChannelAdapter['companionLane']> = userId => im.isGroup(userId)
     ? { kind: 'group', chatId: userId, threadId: '' }
@@ -45,19 +44,7 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       return envelope[1] === 'NOTIFY' ? envelope[2].trim() : null;
     },
     processingEmoji: '', silentQueue: true,
-    output: { kind: 'chunked-text', includeInputMessageId: true, im, commitFinal: async output => {
-      const document = requestedDocuments.get(output.userId);
-      if (document && document.inputMessageId === output.inputMessageId) {
-        if (im.connectedOrigin !== document.origin) throw new Error('IMESSAGE_CONNECTION_CHANGED');
-        // The normal reply may contain Markdown hard breaks. Restore original bytes
-        // only when the assistant replied with this document on this same input.
-        const plain = (text: string) => text.replace(/[ \t]+(?=\r?\n)/g, '').trim();
-        if (output.terminal === 'done' && plain(output.text) === plain(document.text)) {
-          await im.sendDirectDelivery(output.userId, document.text, document.replyId);
-          await im.commitFinal({ ...output, text: '' });
-          return;
-        }
-      }
+    output: { kind: 'chunked-text', im, commitFinal: async output => {
       await im.commitFinal(output);
       if (!im.isGroup(output.userId) || output.terminal === 'error' || !output.text.trim()) return;
       await IMESSAGE_GROUP_WINDOW.record({ botId: im.botContextId, chatId: output.userId, threadId: '',
@@ -86,7 +73,7 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       })?.guid;
     },
     channelToolScopeFor: event => {
-      if (requestedDocuments.get(event.chatId)?.inputMessageId !== event.messageId) requestedDocuments.delete(event.chatId);
+      let requestedDocument: { text: string; replyId: string } | undefined;
       const origin = im.connectedOrigin;
       const directory = origin && archiveDirectory(options.connectionId, origin);
       const directFile = origin && !im.isGroup(event.chatId) &&
@@ -99,8 +86,19 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
         if (!record || record.createdAt < after) return null;
         // BlueBubbles uses tempGuid to correlate retries. A new inbound question gets its own reply.
         const replyId = createHash('sha256').update(JSON.stringify([record.requestId, event.messageId])).digest('hex');
-        requestedDocuments.set(event.chatId, { inputMessageId: event.messageId, origin, text: record.text, replyId });
+        requestedDocument = { text: record.text, replyId };
         return { text: record.text, createdAt: record.createdAt };
+      } : undefined,
+      commitChunkedFinal: directFile ? async output => {
+        if (output.userId !== event.chatId || im.connectedOrigin !== origin) throw new Error('IMESSAGE_CONNECTION_CHANGED');
+        // Restore Markdown hard breaks to the bytes read by this particular request.
+        const plain = (text: string) => text.replace(/[ \t]+(?=\r?\n)/g, '').trim();
+        if (requestedDocument && output.terminal === 'done' && plain(output.text) === plain(requestedDocument.text)) {
+          await im.sendDirectDelivery(event.chatId, requestedDocument.text, requestedDocument.replyId);
+          await im.commitFinal({ ...output, text: '' });
+          return;
+        }
+        await im.commitFinal(output);
       } : undefined,
       readArchive: directory ? (query, before, limit) => readArchive(directory, event.chatId, query, before, limit) : undefined,
       chatKind: im.isGroup(event.chatId) ? 'group' : 'direct',
