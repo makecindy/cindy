@@ -1226,6 +1226,8 @@ export function ModelEffortChip({
           // 本 chip 在 ScheduleFormDialog 内:共享 PopoverContent 默认在 dropdown 层
           // (10010),已盖过对话框;不要再局部降层,否则会渲染在对话框下层、点了"没反应"。
           'overflow-hidden rounded-xl p-0 shadow-[shadow:var(--shadow-menu)]',
+          // 高度不超过窗口可用高度(与聊天选择器同口径)：矮窗口里弹层顶到窗口外，最上面的模型组点不到。
+          'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
           'w-auto',
