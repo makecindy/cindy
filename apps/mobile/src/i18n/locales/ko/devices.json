@@ -393,6 +393,7 @@
       "showDeviceTasks": "작업 보기",
       "openDevice": "열기",
       "renameDevice": "이름 변경",
+      "groupDevice": "기기",
       "groupProject": "프로젝트",
       "sortBy": {
         "priority": "우선순위",
@@ -434,11 +435,15 @@
       "showCollapsedTeammateAvatars": "접었을 때 아바타 표시",
       "displayHeading": "표시",
       "view": {
+        "card": "카드",
         "text": "텍스트",
         "list": "리스트"
       },
       "taskInfoHeading": "작업 정보",
       "taskInfo": {
+        "teammate": "동반자 아바타",
+        "project": "프로젝트 아이콘 및 이름",
+        "harness": "Harness 아이콘",
         "time": "시간",
         "pr": "PR 상태",
         "tokens": "토큰",

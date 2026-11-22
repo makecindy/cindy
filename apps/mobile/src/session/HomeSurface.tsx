@@ -141,6 +141,8 @@ import {
   activeContentFilterCount,
   DEFAULT_HOME_TASK_INFO_FIELDS,
   type HomeContentFilters,
+  type HomePinnedView,
+  type HomePinnedSort,
   DEFAULT_HOME_FILTERS,
   type HomeModeDisplayPreferences,
   type HomeProjectFilter,
@@ -233,6 +235,7 @@ import {
 } from '@/session/homeProjectChildWindow';
 import {
   projectDropIndexFromY,
+  moveVisibleProjectOrder,
   reorderVisibleProjectByDropIndex,
   resolveVirtualizedDropIndex,
   snapshotManualProjectOrder,
@@ -257,6 +260,7 @@ import {
 } from '@cindy/maker-shared/project-order-sync';
 import {
   buildHomeSections,
+  orderedPinnedItems,
   homeRowsShareRenderData,
   homeRowBefore,
   isFolderHomeRow,
@@ -425,6 +429,7 @@ type ProjectDragSession = {
   hoverIndex: number;
   key: string;
   layouts: ProjectHeaderLayout[];
+  visibleKeys: string[];
   originY: number;
   rootY: number;
   title: string;
@@ -794,6 +799,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [headerFrosted, setHeaderFrosted] = useState(false);
   const [inboxCollapsed, setInboxCollapsed] = useRetainedHomeState<ReadonlySet<string>>(viewSession, 'inboxCollapsed', () => new Set(['inbox-working', 'inbox-snoozed', 'inbox-archived']));
   const [inboxNow, setInboxNow] = useState(Date.now);
+  const [groupDevice, setGroupDevice] = useRetainedHomeState(viewSession, 'groupDevice', true);
+  const [pinnedView, setPinnedView] = useRetainedHomeState<HomePinnedView>(viewSession, 'pinnedView', 'list');
+  const [pinnedSort, setPinnedSort] = useRetainedHomeState<HomePinnedSort>(viewSession, 'pinnedSort', 'manual');
+  const [pinnedOrder, setPinnedOrder] = useRetainedHomeState<string[]>(viewSession, 'pinnedOrder', []);
   const [groupByProject, setGroupByProject] = useRetainedHomeState(viewSession, 'groupByProject', true);
   const [groupDialogue, setGroupDialogue] = useRetainedHomeState(viewSession, 'groupDialogue', false);
   const [groupAutomation, setGroupAutomation] = useRetainedHomeState(viewSession, 'groupAutomation', false);
@@ -1634,6 +1643,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       setInboxFilters(current => ({ ...preferences.inboxFilters, ...current }));
       if (viewPrefsTouchedRef.current) return;
       setGroupByProject(preferences.groupByProject);
+      setGroupDevice(preferences.groupDevice);
+      setPinnedView(preferences.pinnedView);
+      setPinnedSort(preferences.pinnedSort);
+      setPinnedOrder(preferences.pinnedOrder);
       setGroupDialogue(preferences.groupDialogue);
       setGroupAutomation(preferences.groupAutomation);
       setSortBy(preferences.sortBy);
@@ -2355,13 +2368,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }),
     [deviceModels, scheduleIndex, selectedDeviceId, homeSessions, t, projectAliases, taskListMode],
   );
+  const hasDeviceGroups = home.deviceFilters.some(device => device.deviceId && canBrowseMobileHomeDevice(device));
+  const groupByDevice = taskListMode === 'tasks' && groupDevice && hasDeviceGroups;
   const projectMachineIdentities = useMemo(
     () => buildHomeProjectMachineIdentities(home, {
       getPresenceAvailability, unresponsiveDevices, revokedDevices,
-    }),
+    }, groupByDevice),
     // Presence is read through a stable getter; its version/connection epoch must
     // refresh icons even when the page-local device list has not changed.
-    [home, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
+    [home, groupByDevice, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
   );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -2474,6 +2489,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const sortedHomeSections = useMemo(
     () => {
       const regular = buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
+        groupDevice: groupByDevice,
+        collapsedGroups: collapsedProjectKeys,
+        pinnedSort,
+        pinnedOrder,
         automationTitle: t('devices.list.menu.automationFolder'),
         dialogueTitle: t('devices.list.menu.dialogueFolder'),
         groupAutomation,
@@ -2488,12 +2507,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         : regular;
     },
     [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, displayedManualProjectOrder, displayedProjectOrder,
-      filteredHome, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
+      filteredHome, groupByDevice, collapsedProjectKeys, pinnedSort, pinnedOrder, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
       sortPriorityContext, sortBy, t],
   );
   // Sorting metadata may arrive after rows. Only user actions or a new visit release
   // the displayed order; live activity, priority and host-order pushes update content.
-  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupByProject, groupDialogue, groupAutomation,
+  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupDevice, groupByProject, groupDialogue, groupAutomation,
     sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations, searchQuery]);
   displayOrderScopeRef.current = displayOrderScope;
   const commitDisplayOrder = useCallback((order: HomeDisplayOrder) => {
@@ -2650,7 +2669,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 引导态下首页没有可筛选的对话:表头「所有对话 ▾」退化为纯品牌标题、新建 FAB 隐藏,
   // 避免在产品说明页上摆一堆无意义的入口。
   const homeListItemCount = sharedRows.length + sections.reduce((count, section) => count + section.data.length, 0);
-  const showRemoteGuide = homeListItemCount === 0
+  const hasDeviceSections = sections.some(section => section.key.startsWith('device:'));
+  const showRemoteGuide = homeListItemCount === 0 && !hasDeviceSections
     && !initialHomeLoading
     && !initialHomeError
     && home.pinned.length === 0
@@ -2834,6 +2854,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         ),
       };
     }
+    if (nextPatch.groupDevice !== undefined) setGroupDevice(nextPatch.groupDevice);
     if (nextPatch.groupByProject !== undefined) setGroupByProject(nextPatch.groupByProject);
     if (nextPatch.groupDialogue !== undefined) setGroupDialogue(nextPatch.groupDialogue);
     if (nextPatch.groupAutomation !== undefined) setGroupAutomation(nextPatch.groupAutomation);
@@ -2917,7 +2938,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const expectedAccountGeneration = accountGeneration;
     const epoch = projectDragEpochRef.current + 1;
     projectDragEpochRef.current = epoch;
-    const keys = visibleProjectKeys;
+    const deviceSection = sections.find(section => section.key.startsWith('device:')
+      && section.data.some(row => row.key === input.key));
+    const keys = deviceSection
+      ? deviceSection.data.filter(row => row.kind === 'project').map(row => row.key)
+      : visibleProjectKeys;
     const layouts: ProjectHeaderLayout[] = [];
     let pending = keys.length;
     const finish = () => {
@@ -2935,6 +2960,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         hoverIndex: projectDropIndexFromY(layouts.filter((item) => item.key !== input.key), input.absoluteY),
         key: input.key,
         layouts,
+        visibleKeys: keys,
         originY: self.y,
         rootY: 0,
         title: input.title,
@@ -2971,7 +2997,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         if (pending === 0) finish();
       });
     }
-  }, [accountGeneration, projectDragY, visibleProjectKeys, swipeRegistry]);
+  }, [accountGeneration, projectDragY, sections, visibleProjectKeys, swipeRegistry]);
 
   const moveProjectDrag = useCallback((absoluteY: number) => {
     const session = projectDragRef.current;
@@ -3065,7 +3091,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       return;
     }
     const dropIndex = resolveVirtualizedDropIndex(
-      visibleProjectKeys,
+      session.visibleKeys,
       mountedKeysByY,
       session.key,
       session.hoverIndex,
@@ -3073,7 +3099,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (dropIndex === null) return;
     const next = reorderVisibleProjectByDropIndex(
       manualProjectOrder,
-      visibleProjectKeys,
+      session.visibleKeys,
       session.key,
       dropIndex,
     );
@@ -3280,6 +3306,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const displayMenuState = useMemo<HomeDisplayMenuState>(() => ({
     taskListMode,
     hideAutomations,
+    groupDevice,
+    hasDeviceGroups,
     groupAutomation,
     groupByProject,
     groupDialogue,
@@ -3293,7 +3321,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     taskInfoFields,
     vendorFilter,
     viewMode,
-  }), [taskListMode, hideAutomations, showCollapsedTeammateAvatars, displayedProjectOrder, groupAutomation, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
+  }), [taskListMode, groupDevice, hasDeviceGroups, hideAutomations, showCollapsedTeammateAvatars, displayedProjectOrder, groupAutomation, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   // 在看已归档任务时,顶栏「⋯」带提醒点(iOS 系统顶栏 / 自绘按钮两条路径共用这一个判据),
   // 同时把状态写进无障碍名称,读屏用户不用打开菜单也知道列表不是平常的进行中任务。
   const archivedReminder = taskListMode === 'tasks' && statusFilter === 'archived';
@@ -3332,9 +3360,48 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const handleDisplayActionRef = useRef(handleDisplayAction);
   handleDisplayActionRef.current = handleDisplayAction;
   const stableDisplayAction = useCallback((id: string) => handleDisplayActionRef.current(id), []);
+  const visiblePins = useMemo(() => orderedPinnedItems(filteredHome.pinned, pinnedSort, pinnedOrder),
+    [filteredHome.pinned, pinnedSort, pinnedOrder]);
+  const pinnedActions = useMemo<NativePullDownAction[]>(() => [
+    { id: 'pin.view', title: t('devices.list.menu.displayHeading'), subactions:
+      (['text', 'list', 'card'] as const).map(mode => ({ id: 'pin.view.' + mode,
+        title: t('devices.list.menu.view.' + mode), state: pinnedView === mode ? 'on' : 'off' })) },
+    { id: 'pin.sort', title: t('devices.list.menu.sortHeading'), subactions:
+      (['manual', 'activity'] as const).map(sort => ({ id: 'pin.sort.' + sort,
+        title: t(sort === 'manual' ? 'devices.list.menu.projectOrder.custom' : 'devices.list.menu.sortBy.recency'),
+        state: pinnedSort === sort ? 'on' : 'off' })) },
+    ...(pinnedSort === 'manual' && visiblePins.length > 1 ? (['up', 'down'] as const).map(direction => ({
+      id: 'pin.' + direction,
+      title: t(direction === 'up' ? 'message.queue.moveUp' : 'message.queue.moveDown'),
+      subactions: (direction === 'up' ? visiblePins.slice(1) : visiblePins.slice(0, -1)).map(item => ({
+        id: 'pin.' + direction + '.' + item.session.id,
+        title: item.title,
+      })),
+    })) : []),
+  ], [pinnedView, pinnedSort, visiblePins, t]);
+  const changePinnedDisplay = useCallback((action: string) => {
+    viewPrefsTouchedRef.current = true;
+    if (pinnedSort === 'manual' && (action.startsWith('pin.up.') || action.startsWith('pin.down.'))) {
+      const up = action.startsWith('pin.up.');
+      const id = action.slice(up ? 'pin.up.'.length : 'pin.down.'.length);
+      const next = moveVisibleProjectOrder(pinnedOrder, visiblePins.map(item => item.session.id), id, up ? -1 : 1);
+      if (!next) return;
+      setPinnedOrder(next);
+      void saveHomeViewPreferences({ pinnedOrder: { owner: preferenceOwner, keys: next } });
+    } else if (action === 'pin.sort.manual' || action === 'pin.sort.activity') {
+      const sort = action === 'pin.sort.manual' ? 'manual' : 'activity';
+      setPinnedSort(sort);
+      void saveHomeViewPreferences({ pinnedSort: sort });
+    } else if (action.startsWith('pin.view.')) {
+      const mode = action.slice('pin.view.'.length);
+      if (mode !== 'text' && mode !== 'list' && mode !== 'card') return;
+      setPinnedView(mode);
+      void saveHomeViewPreferences({ pinnedView: mode });
+    }
+  }, [pinnedSort, pinnedOrder, visiblePins, preferenceOwner, saveHomeViewPreferences, setPinnedOrder, setPinnedSort, setPinnedView]);
   const rowDisplay = useMemo<HomeRowDisplay>(
-    () => ({ taskInfoFields, viewMode }),
-    [taskInfoFields, viewMode],
+    () => ({ taskInfoFields, viewMode, pinnedView }),
+    [taskInfoFields, viewMode, pinnedView],
   );
   const openSelectedRemoteDesktop = useCallback(() => {
     if (!selectedDeviceId) return;
@@ -3478,6 +3545,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }}
         testID="devices.list"
         renderSectionHeader={({ section }) => {
+          if (section.key.startsWith('device:')) {
+            const closed = collapsedProjectKeys.includes(section.key);
+            const Chevron = closed ? ChevronRight : ChevronDown;
+            return <Pressable accessibilityRole="button" accessibilityState={{ expanded: !closed }}
+              onPress={() => toggleProject(section.key)} style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}>
+              <Chevron color={colors.textSecondary} size={iconSize.xl} />
+              <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
+            </Pressable>;
+          }
           if (section.key.startsWith('inbox-')) {
             const closed = inboxCollapsed.has(section.key);
             return <Pressable testID={`home.${section.key}`} accessibilityRole="button" accessibilityState={{ expanded: !closed }}
@@ -3492,24 +3568,30 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           }
           if (section.key !== 'pinned' || !section.title) return null;
           return (
-            <Pressable
-              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: filteredHome.pinned.length })}
-              accessibilityRole="button"
-              accessibilityState={{ expanded: !pinnedCollapsed }}
-              onPress={togglePinned}
-              onPressIn={prepareListDisclosure}
-              style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
-              testID="home.pinnedHeader"
-            >
-              {pinnedCollapsed ? (
-                <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-              ) : (
-                <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-              )}
-              <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
-              <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
-              <Text style={styles.projectCount} numberOfLines={1}>{filteredHome.pinned.length}</Text>
-            </Pressable>
+            <View style={styles.pinnedHeaderRow}>
+              <Pressable
+                accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: filteredHome.pinned.length })}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: !pinnedCollapsed }}
+                onPress={togglePinned}
+                onPressIn={prepareListDisclosure}
+                style={({ pressed }) => [styles.projectRow, styles.pinnedHeaderLabel, pressed && styles.pressed]}
+                testID="home.pinnedHeader"
+              >
+                {pinnedCollapsed ? (
+                  <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+                ) : (
+                  <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+                )}
+                <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
+                <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
+                <Text style={styles.projectCount} numberOfLines={1}>{filteredHome.pinned.length}</Text>
+              </Pressable>
+              <HomeDisplayMenu actions={pinnedActions} onAction={changePinnedDisplay} testID="home.pinnedSettings"
+                accessibilityLabel={t('session.row.pinnedSection') + ' · ' + t('devices.list.menu.displayHeading')}>
+                <Ellipsis color={colors.textSecondary} size={iconSize.action} />
+              </HomeDisplayMenu>
+            </View>
           );
         }}
         renderSectionFooter={({ section }) => section.key === 'pinned' && sections.length > 1
@@ -3527,7 +3609,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) && filteredHome.pinned.length > 0 ? (
+          ) : !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) && (filteredHome.pinned.length > 0 || hasDeviceSections) ? (
             // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
             // 搜索列表的空态只认搜索结果,不能被普通列表里的置顶任务遮掉。
             null
@@ -4712,6 +4794,8 @@ function HomeListRowInner({
   showAllDialogue: boolean;
   swipe: SessionSwipeControls;
 }) {
+  const { pinnedView, taskInfoFields } = useHomeRowDisplay();
+  const showProjectLabel = taskInfoFields.includes('project');
   if (isFolderHomeRow(item)) {
     return (
       <ProjectRow
@@ -4753,6 +4837,8 @@ function HomeListRowInner({
       onOpenAutomationGroup={onOpenAutomationGroup}
       onOpenSession={onOpenSession}
       onToggleAutomationGroup={onToggleAutomationGroup}
+      pinnedView={item.source === 'pinned' ? pinnedView : undefined}
+      projectLabel={showProjectLabel && !item.sourceLabel ? item.projectLabel : undefined}
       sourceLabel={item.sourceLabel}
       suppressBlockTopBorder={prevIsBlock}
       swipe={swipe}
@@ -4806,7 +4892,9 @@ function HomeSessionRowInner({
   selectionMarkTestID,
   selectionMode = false,
   sharedRole,
-  sourceLabel,
+  projectLabel,
+  sourceLabel: extraLabel,
+  pinnedView,
   suppressBlockTopBorder = false,
   swipe,
   testID,
@@ -4841,8 +4929,10 @@ function HomeSessionRowInner({
   selectionMode?: boolean;
   /** Shared-group identity mark. Only owners show a crown; joined tasks match ordinary rows. */
   sharedRole?: SharedHomeRole;
-  /** 平铺时标题旁的来源标签(项目名 /「对话」);分组模式下不传。 */
+  projectLabel?: string;
+  /** Device or snooze information alongside the title. */
   sourceLabel?: string;
+  pinnedView?: HomePinnedView;
   /** 块模式下,前一行也是块时不画自己的顶线(前块的底线已经是这根线)。 */
   suppressBlockTopBorder?: boolean;
   /** 提供时透传给展开的自动化组子行(子行挂与顶层同款滑动操作);组行自身不消费。 */
@@ -4862,7 +4952,9 @@ function HomeSessionRowInner({
   // 伙伴开的或接手的任务:标题后带第一位伙伴的头像(与桌面侧栏「在跟进」同口径)。
   const followers = useTaskFollowers(latestItem.session);
   const taskTeammate = (latestItem.session as RemoteSession).taskTeammate;
-  const projectDirectory = inboxMode ? sessionTaskProjectIconDirectory(latestItem.session) : null;
+  const { taskInfoFields, viewMode } = useHomeRowDisplay();
+  const sourceLabel = extraLabel ?? projectLabel;
+  const projectDirectory = inboxMode || projectLabel ? sessionTaskProjectIconDirectory(latestItem.session) : null;
   const projectDeviceId = (latestItem.session as RemoteSession).deviceLinkDeviceId;
   const sessionIsRunning = useSessionRunning(latestItem.session.id);
   // 已加载消息的预览按 session 订阅。普通流式 token 只让对应的可见行更新，首页根层、
@@ -4888,7 +4980,7 @@ function HomeSessionRowInner({
   const scheduleStopped = item.scheduleInfo?.allSchedulesStopped === true;
   const showPinned = !!item.session.pinnedAt;
   // 显示形态(显示菜单「文字 / 列表」):文字形态不画预览行,定时 / 置顶标记并到标题行尾。
-  const textMode = useHomeRowDisplay().viewMode === 'text';
+  const textMode = (pinnedView ?? viewMode) === 'text';
   // 自动化组行:同一任务的多次运行折叠而成(共享层 groupAutomationListItems 产出)。
   // 没接展开回调的调用点退化为普通行为(点击打开 primary 会话)。
   // 块模式:组行 + 展开的子行整体包在一个上下全宽线的块里;组行自身不再画缩进分割线
@@ -4903,7 +4995,7 @@ function HomeSessionRowInner({
         loadedMessagePreview === undefined || loadedMessagePreview === item.messagePreview
           ? item
           : { ...item, messagePreview: loadedMessagePreview },
-        { running },
+        { running, pinnedCard: pinnedView === 'card' },
       );
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。共享身份位于标题左侧。
@@ -4959,6 +5051,7 @@ function HomeSessionRowInner({
         onPressIn={group && !groupRowOpensPrimary && !selectionMode ? () => prepareDisclosure(true) : undefined}
         style={({ pressed }) => [
           styles.sessionListRow,
+          pinnedView === 'card' && styles.pinnedCard,
           active && { backgroundColor: wallpaper === 'none' ? colors.surfaceChip : wallpaperRaisedFill(colors.surfaceChip, mode) },
           !showPreviewLine && styles.sessionListRowSingleLine,
           pressed && styles.pressed,
@@ -4970,20 +5063,17 @@ function HomeSessionRowInner({
             {selected ? <Text style={styles.selectionMarkText}>✓</Text> : null}
           </View>
         ) : null}
-        <View style={[
-          styles.sessionIconCell,
-          !showPreviewLine && styles.sessionIconCellSingleLine,
-        ]}>
-          <SessionStatusMark
-            identityIcon={projectDirectory && projectDeviceId ? (
-              <ProjectPickerIcon deviceId={projectDeviceId} workingDir={projectDirectory}
-                remoteHostId={latestItem.session.remoteHostId} size={iconSize.xl} />
-            ) : undefined}
-            item={item}
-            running={running}
-            showDraftIndicator={showDraftIndicator}
-          />
-        </View>
+        <SessionStatusMark
+          singleLine={!showPreviewLine}
+          hideIdentity={!taskInfoFields.includes(inboxMode && projectDirectory && projectDeviceId ? 'project' : 'harness')}
+          identityIcon={inboxMode && taskInfoFields.includes('project') && projectDirectory && projectDeviceId ? (
+            <ProjectPickerIcon deviceId={projectDeviceId} workingDir={projectDirectory}
+              remoteHostId={latestItem.session.remoteHostId} size={iconSize.xl} />
+          ) : undefined}
+          item={item}
+          running={running}
+          showDraftIndicator={showDraftIndicator}
+        />
         {sharedRole === 'owned' ? (
           <View
             style={[styles.sharedRoleSlot, !showPreviewLine && styles.sharedRoleSlotSingleLine]}
@@ -4999,7 +5089,7 @@ function HomeSessionRowInner({
         ) : null}
         <View style={[
           styles.sessionListContent,
-          (hideDivider || blockMode || (!!group && groupExpanded)) && styles.sessionListContentNoDivider,
+          (pinnedView === 'card' || hideDivider || blockMode || (!!group && groupExpanded)) && styles.sessionListContentNoDivider,
         ]}>
           <View style={[styles.sessionTitleRow, groupChevronVisible && styles.sessionTitleRowGroupHit]}>
             <View style={[styles.sessionTitleCluster, groupChevronVisible && styles.sessionTitleClusterGroupHit]}>
@@ -5042,6 +5132,10 @@ function HomeSessionRowInner({
               </Pressable>
             ) : null}
             {groupChevronVisible ? <View style={styles.sessionTitleSpacer} /> : null}
+            {projectLabel && !inboxMode && projectDirectory && projectDeviceId ? (
+              <ProjectPickerIcon deviceId={projectDeviceId} workingDir={projectDirectory} title={projectLabel}
+                remoteHostId={latestItem.session.remoteHostId} size={iconSize.md} />
+            ) : null}
             {sourceLabel ? (
               <Text
                 ellipsizeMode="tail"
@@ -5064,10 +5158,10 @@ function HomeSessionRowInner({
                 {showPinned ? <Pin color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.thin} /> : null}
               </View>
             ) : null}
-            {!group && taskTeammate ? (
+            {taskInfoFields.includes('teammate') && !group && taskTeammate ? (
               <TaskCreatorMark teammate={taskTeammate} deviceId={item.session.deviceLinkDeviceId ?? ''}
                 testID={`home.sessionCreatorMark.${item.session.id}`} />
-            ) : !group && followers[0] ? (
+            ) : taskInfoFields.includes('teammate') && !group && followers[0] ? (
               <TaskFollowMark follower={followers[0]} testID={`home.sessionFollowMark.${item.session.id}`} />
             ) : null}
             {rightStatus === 'time' ? (
@@ -5103,7 +5197,7 @@ function HomeSessionRowInner({
           {showPreviewLine ? (
             // 组行的标题行向下撑进预览行 7pt 给箭头热区;预览行只有文字和图标,不接触摸,
             // 让重叠处的点击落到箭头,其余位置照常落到整行。
-            <View pointerEvents={groupChevronVisible ? 'none' : 'auto'} style={styles.sessionPreviewRow}>
+            <View pointerEvents={groupChevronVisible ? 'none' : 'auto'} style={[styles.sessionPreviewRow, pinnedView === 'card' && styles.pinnedCardPreview]}>
               {group ? (
                 <AutomationGroupPreviewText
                   item={item}
@@ -5114,7 +5208,7 @@ function HomeSessionRowInner({
               ) : (
                 <Text
                   ellipsizeMode="tail"
-                  numberOfLines={1}
+                  numberOfLines={pinnedView === 'card' ? 2 : 1}
                   style={styles.sessionPreview}
                   testID={`home.sessionRowPreview.${item.session.id}`}
                 >
@@ -5631,6 +5725,19 @@ const makeStyles = (colors: ThemeColors, listSurface: string = colors.surface) =
     paddingTop: 0,
   },
   // 置顶区收尾线:回 XD-Maker 原版 hairline(换肤卡片化曾置 0,通栏回退一并恢复)。
+  pinnedHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingRight: spacing.sm },
+  pinnedHeaderLabel: { flex: 1 },
+  pinnedCardPreview: { height: 2 * lineHeight.subtitle },
+  pinnedCard: {
+    height: 'auto',
+    minHeight: lineHeight.listTitle + 2 * lineHeight.subtitle + 2 * spacing.md,
+    marginHorizontal: spacing.md,
+    marginVertical: spacing.xs,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: radius.container,
+  },
   pinnedFooter: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
   initialLoadingState: {
     alignItems: 'center',

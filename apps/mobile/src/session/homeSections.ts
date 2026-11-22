@@ -1,5 +1,6 @@
 import { isTeammateOwnInboxTask, taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
+import type { HomePinnedSort } from './homeDisplaySettings';
 import { i18n } from '@/i18n';
 import {
   automationGroupKey,
@@ -47,7 +48,8 @@ export type HomeTaskRow =
       kind: 'session';
       item: RemoteSessionListItem;
       source: 'chat' | 'pinned' | 'project' | 'search';
-      /** 仅平铺(未按项目分组)的顶层会话行:项目名或「对话」。 */
+      /** Project identity can be hidden independently of search and snooze information. */
+      projectLabel?: string;
       sourceLabel?: string;
     };
 
@@ -77,6 +79,10 @@ export type HomeSection<Row extends HomeRow = HomeRow> = { data: Row[]; key: str
 export const HOME_MAIN_SECTION_KEY = 'main';
 
 export interface HomeSectionOptions {
+  groupDevice?: boolean;
+  collapsedGroups?: readonly string[];
+  pinnedSort?: HomePinnedSort;
+  pinnedOrder?: readonly string[];
   groupDialogue?: boolean;
   /** 自动化运行的任务收进「自动化」目录(与桌面「分组 → 自动化」同口径)。 */
   groupAutomation?: boolean;
@@ -110,12 +116,59 @@ export function buildHomeSections(
     sections.push({
       data: pinnedCollapsed
         ? []
-        : home.pinned.map((item) => ({ item, key: `pinned:${item.session.id}`, kind: 'session', source: 'pinned' })),
+        : orderedPinnedItems(home.pinned, options.pinnedSort ?? 'manual', options.pinnedOrder ?? []).map((item) => ({ item, key: `pinned:${item.session.id}`, kind: 'session', source: 'pinned' })),
       key: 'pinned',
       title: i18n.t('session.row.pinnedSection'),
     });
   }
 
+  if (options.groupDevice) {
+    const devices = new Map<string, { chats: RemoteSessionListItem[]; projects: MobileHomeProjectGroup[] }>();
+    const bucket = (id: string) => {
+      let value = devices.get(id);
+      if (!value) {
+        value = { chats: [], projects: [] };
+        devices.set(id, value);
+      }
+      return value;
+    };
+    for (const project of home.projects) bucket(project.deviceId ?? '').projects.push(project);
+    for (const chat of home.chats) bucket(homeRowDeviceKey(chat)).chats.push(chat);
+    const labels = new Map(home.deviceFilters.map(device => [device.deviceId, device.label]));
+    for (const id of new Set([...labels.keys(), ...devices.keys()])) {
+      if (id === null) continue;
+      const contents = devices.get(id);
+      if (!contents) continue;
+      const key = 'device:' + id;
+      const title = labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
+      if (options.collapsedGroups?.includes(key)) {
+        sections.push({ key, title, data: [] });
+        continue;
+      }
+      const rows = buildMainRows({ ...home, ...contents }, groupByProject, options).map(row => {
+        if (row.kind !== 'dialogue' && row.kind !== 'automation') return row;
+        const scopedKey = key + ':' + row.key;
+        return { ...row, key: scopedKey, project: { ...row.project, key: scopedKey, deviceId: id || null } };
+      });
+      sections.push({ key, title, data: rows });
+    }
+  } else {
+    const rows = buildMainRows(home, groupByProject, options);
+    if (rows.length) sections.push({ key: HOME_MAIN_SECTION_KEY, title: null, data: rows });
+  }
+  return sections;
+}
+
+export function orderedPinnedItems(items: readonly RemoteSessionListItem[], sort: HomePinnedSort, keys: readonly string[]) {
+  const rank = new Map(keys.map((key, index) => [key, index]));
+  return [...items].sort((a, b) => {
+    const activity = sort === 'activity' ? activityMsFromIso(b.lastActivityAt) - activityMsFromIso(a.lastActivityAt) : 0;
+    return activity || (rank.get(a.session.id) ?? -1) - (rank.get(b.session.id) ?? -1)
+      || activityMsFromIso(b.session.pinnedAt ?? undefined) - activityMsFromIso(a.session.pinnedAt ?? undefined);
+  });
+}
+
+function buildMainRows(home: MobileHomePresentation, groupByProject: boolean, options: HomeSectionOptions) {
   const partitioned = options.groupAutomation ? partitionAutomationItems(home) : null;
   const listHome = partitioned?.home ?? home;
   const automations = partitioned ? mergeAutomationItems(partitioned.automations) : [];
@@ -127,14 +180,7 @@ export function buildHomeSections(
   if (automations.length > 0) {
     rows.push(buildAutomationGroupRow(automations, rowOptions));
   }
-  if (rows.length > 0) {
-    sections.push({
-      data: partitioned ? sortHomeRows(rows, rowOptions) : rows,
-      key: HOME_MAIN_SECTION_KEY,
-      title: null,
-    });
-  }
-  return sections;
+  return partitioned ? sortHomeRows(rows, rowOptions) : rows;
 }
 
 /**
@@ -203,7 +249,7 @@ export function partitionAutomationItems(home: MobileHomePresentation): {
   return { home: { ...home, chats, projects }, automations };
 }
 
-function automationDeviceKey(item: RemoteSessionListItem): string {
+function homeRowDeviceKey(item: RemoteSessionListItem): string {
   const session = item.session as { canonicalDeviceId?: string | null; deviceLinkDeviceId?: string | null };
   return session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? '';
 }
@@ -220,7 +266,7 @@ export function mergeAutomationItems(
   const buckets = new Map<string, RemoteSessionListItem[]>();
   for (const item of items) {
     const baseKey = item.automationGroup?.baseKey ?? automationGroupKey(item) ?? `session:${item.session.id}`;
-    const key = `${automationDeviceKey(item)}|${baseKey}`;
+    const key = `${homeRowDeviceKey(item)}|${baseKey}`;
     const bucket = buckets.get(key);
     if (bucket) bucket.push(item);
     else buckets.set(key, [item]);
@@ -237,7 +283,7 @@ export function mergeAutomationItems(
       .flatMap((item) => item.automationGroup?.items ?? [item])
       .sort((a, b) => compareSessionsByStatusThenActivityDesc(a.session as MobileHomeSessionLike, b.session as MobileHomeSessionLike));
     // 与 buildMobileHomePresentation 同一流水线:先折叠再本地化(组内成员已本地化)。
-    const rows = groupAutomationListItems(runs, nowMs, true, automationDeviceKey, mobilePresentationLocalizer);
+    const rows = groupAutomationListItems(runs, nowMs, true, homeRowDeviceKey, mobilePresentationLocalizer);
     if (rows.length !== 1 || !rows[0].automationGroup) {
       merged.push(...bucket);
       continue;
@@ -350,6 +396,7 @@ export function homeRowsShareRenderData(previous: HomeRow, next: HomeRow): boole
     return previous.key === next.key
       && previous.source === next.source
       && previous.sourceLabel === next.sourceLabel
+      && previous.projectLabel === next.projectLabel
       && previous.item === next.item;
   }
   return homeFolderRowsShareRenderData(previous, next);
@@ -411,7 +458,6 @@ export function buildMixedHomeRows(
   home: MobileHomePresentation,
   options: HomeSectionOptions = {},
 ): HomeTaskRow[] {
-  const dialogueTitle = options.dialogueTitle ?? i18n.t('devices.list.menu.dialogueFolder');
   const rows: HomeTaskRow[] = home.projects.flatMap((project): HomeTaskRow[] => {
     if (project.kind === 'cindy-make' && options.groupCindyMake !== false) {
       return [{ key: project.key, kind: 'cindy-make', project: withSortedProjectSessions(project, options) }];
@@ -421,14 +467,14 @@ export function buildMixedHomeRows(
       key: `project:${project.key}:${item.automationGroup?.key ?? item.session.id}`,
       kind: 'session' as const,
       source: 'project' as const,
-      sourceLabel: project.title,
+      projectLabel: project.title,
     }));
   });
   if (options.groupDialogue) {
-    const folder = buildDialogueGroupRow(home, { ...options, dialogueTitle });
+    const folder = buildDialogueGroupRow(home, options);
     if (folder) rows.push(folder);
   } else {
-    rows.push(...buildDialogueHomeRows(home, { ...options, sourceLabel: dialogueTitle }));
+    rows.push(...buildDialogueHomeRows(home, options));
   }
   return sortHomeRows(rows, options);
 }

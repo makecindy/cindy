@@ -8,7 +8,7 @@ export type { HomeDisplayOrder } from './homeProjectOrder';
 export function stabilizeHomeSections(sections: HomeSection[], previous: HomeDisplayOrder | null, scope: string): HomeSection[] {
   if (!previous || previous.scope !== scope) return sections;
   const next = sections.map(section => {
-    if (section.key !== HOME_MAIN_SECTION_KEY) return section;
+    if (section.key !== HOME_MAIN_SECTION_KEY && !section.key.startsWith('device:')) return section;
     const remaining = new Map(section.data.map(row => [row.key, row]));
     const data = [];
     for (const key of previous.keys) {
@@ -48,7 +48,8 @@ export function useStableHomeSections(input: {
   [input.ready, input.sections, baseline, input.scope]);
   useLayoutEffect(() => {
     if (!input.ready) return;
-    const keys = sections.find(section => section.key === HOME_MAIN_SECTION_KEY)?.data.map(row => row.key) ?? [];
+    const keys = sections.flatMap(section => section.key === HOME_MAIN_SECTION_KEY || section.key.startsWith('device:')
+      ? section.data.map(row => row.key) : []);
     // Local cache and identity reads settle independently. An empty projection before
     // the first network result must not erase the restored order.
     if (keys.length === 0 && !input.settled) {
