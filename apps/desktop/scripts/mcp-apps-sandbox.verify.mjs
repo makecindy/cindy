@@ -224,6 +224,7 @@ try {
       }
       const tool=(await connection.tools()).find(tool=>tool.name===(handoffMode?'open_import':authorMode==='loader'?'open_view':authorMode==='files'?'open_showcase':authorMode?'open_view':independent?'open_metrics':'draft_form'));
       if(process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1' && process.env.CINDY_MCP_APP_TEST_REMOTE!=='1') tool._meta['cindy/attachments']=[{type:'resource_link',name:'fixture.txt',uri:'library:fixture.txt'}];
+      if(process.env.CINDY_MCP_APP_TEST_COMPOSER_DRAG==='1') tool._meta['cindy/attachments'].push({type:'resource_link',name:'fixture.png',uri:loaderImageUri,mimeType:'image/png'});
       // A conversation image handed over with ghost_call.attachments; the generated page reads it from hostContext.
       if(authorMode==='loader') tool._meta['cindy/attachments']=[{type:'resource_link',name:'fixture.png',uri:loaderImageUri,mimeType:'image/png'}];
       const args=authorMode==='loader'?{intent:'请打开一个可以查看和编辑记录的页面'}:independent?{threshold:75}:{title:'AI draft',body:'Review before creating'};
@@ -233,10 +234,14 @@ try {
       if(authorMode==='loader'){assert.ok(result._meta.view.html.includes('<style>'));assert.deepEqual(Object.keys(pluginModelResult(result)),['content']);}
       let turns=0, receivedImages=[], pageApprovals=0, approvalGate, sdkApprovalSignal, sdkReleaseApproval;
       const composerDrag = process.env.CINDY_MCP_APP_TEST_COMPOSER_DRAG === '1';
-      const dragAttachments = [];
+      const dragAttachments = [], dragTray = new Map();
       host=new McpAppsHost({
         composerDrag: composerDrag ? () => supportsComposerDrag(process.platform, process.versions.electron) : undefined,
-        sendComposerAttachment: composerDrag ? async attachment => dragAttachments.push(Buffer.from(attachment.bytes).toString()) : undefined,
+        hasComposerAttachment: composerDrag ? async ({resourceKey}) => dragTray.has(resourceKey) : undefined,
+        sendComposerAttachment: composerDrag ? async ({name,resourceKey,bytes}) => {
+          dragTray.set(resourceKey,name);
+          dragAttachments.push([name,Buffer.from(bytes)]);
+        } : undefined,
         viewState:viewStateMode?()=>({
           read:async()=>{if(readFails)throw new Error('fixture storage unavailable');return structuredClone(savedState);},
           save:async snapshot=>{savedState=snapshot.json===null?null:JSON.parse(snapshot.json);},
@@ -396,10 +401,15 @@ try {
         if (composerDrag) {
           if (supportsComposerDrag(process.platform, process.versions.electron)) {
             stage='native composer drag';
-            await verifyComposerDrag(window.webContents, inner(), wait);
-            assert.deepEqual(dragAttachments,['host-only-file']);
+            await verifyComposerDrag(window.webContents,inner(),wait,loaderImageUri,name=>{
+              const entry=[...dragTray].find(([,value])=>value===name);
+              assert.ok(entry,'attachment is present before removal');
+              dragTray.delete(entry[0]);
+            });
+            const png=['fixture.png',loaderImage], text=['fixture.txt',Buffer.from('host-only-file')];
+            assert.deepEqual(dragAttachments,[png,text,png,text]);
             assert.equal(turns,0);
-            console.log('COMPOSER_DRAG_VERDICT=passed (Chromium dragstart, captured native payload, trusted drop, one attachment, zero turns)');
+            console.log('COMPOSER_DRAG_VERDICT=passed (four trusted cross-frame drops, PNG/text bytes, removal and re-add, rebuilt controls, zero turns)');
           } else {
             assert.equal(await inner().executeJavaScript('!!sdkApp.getHostCapabilities().experimental["cindy/composer-attachment"].drag'),false);
             console.log('COMPOSER_DRAG_VERDICT=button-only (unverified platform)');
