@@ -118,6 +118,17 @@ export interface CodexRuntimeState {
   /** Native-turn output for speed, independent of the billing ledger lifecycle. */
   generationOutputTokens: number;
   generationTurnId: string | null;
+  /**
+   * Set once Codex has reported the end of a model response (`turn/moderationMetadata`):
+   * from then on the clock runs from a response's first byte until that end, through
+   * output that arrives whole such as a tool call, instead of stopping when its last
+   * streamed item does. Never reset: it describes the app-server, not a turn.
+   */
+  responseEndSignals: boolean;
+  /** Provider-reported generation times not yet matched to a finished response. */
+  pendingServerTimings: Array<{ turnId: string; sampledTokensTotal: number; samplingMs: number }>;
+  /** The newest finished response, for a generation time that arrives after its usage. */
+  lastSettledResponse: { turnId: string; outputTokensTotal: number; requestIndex: number } | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
   /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
@@ -176,6 +187,9 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationOutputDurationMs: 0,
     generationOutputTokens: 0,
     generationTurnId: null,
+    responseEndSignals: false,
+    pendingServerTimings: [],
+    lastSettledResponse: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
     generationHeartbeatTimer: null,
@@ -275,7 +289,54 @@ export function settleCodexSpeedUsage(
     return undefined;
   }
   rt.speedOutputTokens += last.outputTokens;
-  return rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs);
+  // The provider counts sampled tokens per native turn, so its running total names the response.
+  const turnId = rt.generationTurnId;
+  const total = rt.generationOutputTokens;
+  const timing = rt.pendingServerTimings.find((entry) => entry.turnId === turnId && entry.sampledTokensTotal === total);
+  rt.pendingServerTimings = rt.pendingServerTimings.filter((entry) => entry.turnId === turnId && entry.sampledTokensTotal > total);
+  const report = rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs,
+    timing ? { tokens: last.outputTokens, ms: timing.samplingMs } : undefined);
+  rt.lastSettledResponse = turnId && report
+    ? { turnId, outputTokensTotal: total, requestIndex: rt.tokenSpeed.lastRequestIndex }
+    : null;
+  return report;
+}
+
+/**
+ * A model response ended (Codex sends `turn/moderationMetadata` as the response
+ * completes, before any tool it asked for runs): its generation time ends here,
+ * not when its last streamed item did.
+ */
+export function noteCodexResponseEnded(rt: CodexRuntimeState, turnId: string, endedAt = Date.now()): void {
+  if (rt.generationTurnId !== turnId) return;
+  rt.responseEndSignals = true;
+  rt.generationStreamItemIds.clear();
+  rt.tokenSpeed.pause(endedAt);
+}
+
+const MAX_PENDING_SERVER_TIMINGS = 16;
+
+/**
+ * The provider's own generation time for one response (see app-server/response-timing.ts).
+ * Usually it arrives before the response's usage and waits for it; when it arrives
+ * after, it replaces the client's measurement of that response. Returns whether the
+ * displayed speed changed.
+ */
+export function noteCodexResponseTiming(
+  rt: CodexRuntimeState,
+  timing: { turnId: string; sampledTokensTotal: number; samplingMs: number },
+): boolean {
+  if (!rt.generationTimingReliable || rt.generationTurnId !== timing.turnId) return false;
+  const settled = rt.lastSettledResponse;
+  if (settled && settled.turnId === timing.turnId && settled.outputTokensTotal === timing.sampledTokensTotal) {
+    rt.lastSettledResponse = null;
+    return rt.tokenSpeed.applyServerTiming(settled.requestIndex, timing.samplingMs);
+  }
+  // Already settled without it, or not ours: only a total ahead of what has settled can still match.
+  if (timing.sampledTokensTotal <= rt.generationOutputTokens) return false;
+  rt.pendingServerTimings.push({ ...timing });
+  if (rt.pendingServerTimings.length > MAX_PENDING_SERVER_TIMINGS) rt.pendingServerTimings.shift();
+  return false;
 }
 
 /** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
@@ -293,6 +354,8 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed 
   rt.generationOutputDurationMs = 0;
   rt.generationOutputTokens = 0;
   rt.generationTurnId = null;
+  rt.pendingServerTimings = [];
+  rt.lastSettledResponse = null;
   rt.generationTimingReliable = true;
 }
 
@@ -610,8 +673,10 @@ export function translateItemNotification(
       else handleReasoning(phase, item as ReasoningItem, queue, ctx);
       // A usage report or tool start may arrive well after the last model byte.
       // Count any final text in this item before closing the last open stream.
+      // Once Codex reports where a response ends, output after the last streamed item (a
+      // tool call arrives whole) is still generation: the clock stops at that end instead.
       if (!ctx.background && phase === 'completed' && ctx.rt.generationStreamItemIds.delete(item.id) &&
-          ctx.rt.generationStreamItemIds.size === 0) ctx.rt.tokenSpeed.pause();
+          ctx.rt.generationStreamItemIds.size === 0 && !ctx.rt.responseEndSignals) ctx.rt.tokenSpeed.pause();
       return;
     }
     case 'commandExecution':

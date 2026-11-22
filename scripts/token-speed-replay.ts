@@ -28,6 +28,8 @@ import {
   codexUsageRefreshDue,
   finalizeCodexGenerationTurn,
   newCodexRuntimeState,
+  noteCodexResponseEnded,
+  noteCodexResponseTiming,
   settleCodexSpeedUsage,
   translateAgentMessageDelta,
   translateReasoningSummaryTextDelta,
@@ -213,6 +215,12 @@ const codex: Harness = {
             settleCodexSpeedUsage(rt, { outputTokens: last.outputTokens ?? 0, reasoningOutputTokens: last.reasoningOutputTokens }, t);
             break;
           }
+          case 'turn/moderationMetadata':
+            noteCodexResponseEnded(rt, turnId, t);
+            return false;
+          case 'cindy/response/timing':
+            if (!useServerTiming) return false;
+            return noteCodexResponseTiming(rt, { ...(params as { sampledTokensTotal: number; samplingMs: number }), turnId });
           case 'turn/completed':
             finalizeCodexGenerationTurn(rt, turnId, t);
             rt.tokenSpeed.stop(undefined, t);
@@ -298,7 +306,30 @@ export interface ReplayResult {
   final: TokenSpeedSnapshot | undefined;
   chart: number[];
   peak: number;
+  /** Requests that produced a settled reading of their own. */
+  requestReadings: number;
+  /**
+   * Each settled reading divided by the generation speed the provider reported for that
+   * request (Codex recordings with server timing): the truth the client cannot see.
+   */
+  vsServer: number[];
 }
+
+/** Codex: the provider's own speed of each response, in order, from recorded timing lines. */
+function serverRates(lines: CaptureLine[]): number[] {
+  const rates: number[] = [];
+  let previous = 0;
+  for (const line of lines) {
+    if (line.msg.method !== 'cindy/response/timing') continue;
+    const { sampledTokensTotal, samplingMs } = line.msg.params as { sampledTokensTotal: number; samplingMs: number };
+    rates.push(((sampledTokensTotal - previous) * 1_000) / samplingMs);
+    previous = sampledTokensTotal;
+  }
+  return rates;
+}
+
+/** Replays without the provider's timing, to see what the client measures on its own. */
+const useServerTiming = !process.argv.includes('--no-server-timing');
 
 export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult {
   const harness = harnessOf(lines);
@@ -322,10 +353,13 @@ export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult
     timedTokens: timed.reduce((sum, request) => sum + request.output, 0),
     streamMs: timed.reduce((sum, request) => sum + (request.end - request.start), 0),
     rate: [], tokens: [], average: [], firstReadingMs: null, final: undefined, chart: [], peak: 0,
+    requestReadings: 0, vsServer: [],
   };
+  const truthByRequest = serverRates(lines);
   let history = emptyRateHistory(null);
   let lastMeasurementTime: number | undefined;
   let lastRequestIndex = 0;
+  let lastRequestReadingAt: number | undefined;
   const firstStart = requests[0]?.start ?? 0;
   // The Codex translator reads the clock itself: let it read the recording's.
   const realNow = Date.now;
@@ -347,6 +381,13 @@ export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult
         if (reference) result.average.push(shown.measurement.average / reference);
       }
       lastRequestIndex = index;
+      if (latest?.kind === 'request' && latest.measuredAt !== lastRequestReadingAt) {
+        // Every settled reading counts, however short the request or the output so far.
+        lastRequestReadingAt = latest.measuredAt;
+        result.requestReadings += 1;
+        const server = truthByRequest[index - 1];
+        if (server > 0) result.vsServer.push(latest.rate / server);
+      }
       const real = truth.at(line.t);
       if (real.clockMs < 1_000 || real.tokens < 20) continue;
       const untimedOutput = requests.filter(request => request.start === request.end && request.end <= line.t)
@@ -388,6 +429,8 @@ export function printReport(name: string, result: ReplayResult): void {
     (result.firstReadingMs !== null ? `, first reading after ${(result.firstReadingMs / 1_000).toFixed(1)}s` : ''));
   console.log(`    output so far  ${quantiles(result.tokens)}`);
   console.log(`    settled average ${quantiles(result.average)}`);
+  console.log(`  requests with a reading of their own: ${result.requestReadings} of ${result.requests}` +
+    (result.vsServer.length > 0 ? `; reading / provider-reported speed ${quantiles(result.vsServer)}` : ''));
   const final = result.final;
   console.log(final
     ? `  when the turn ended: ${final.totalOutputTokens ?? final.tokens} tokens (reported ${result.realTokens}), average ${final.measurement?.average?.toFixed(1) ?? '—'} tok/s ` +
@@ -401,7 +444,8 @@ export function printReport(name: string, result: ReplayResult): void {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const fixtures = ['claude-code', 'codex'].map((agent) =>
     fileURLToPath(new URL(`../packages/maker-core/src/agents/${agent}/fixtures`, import.meta.url)));
-  const paths = process.argv.length > 2 ? process.argv.slice(2) : fixtures.flatMap((dir) => {
+  const args = process.argv.slice(2).filter((arg) => arg !== '--no-server-timing');
+  const paths = args.length > 0 ? args : fixtures.flatMap((dir) => {
     try {
       return readdirSync(dir).filter((name) => name.endsWith('.json')).map((name) => join(dir, name));
     } catch {

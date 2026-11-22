@@ -37,6 +37,8 @@ import {
   resumeCodexGeneration,
   codexSpeedSnapshot,
   codexUsageRefreshDue,
+  noteCodexResponseEnded,
+  noteCodexResponseTiming,
   settleCodexSpeedUsage,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
@@ -48,6 +50,8 @@ import { makeGhostManual64KiBFixture } from '../shared/ghost-manual-fixture.js';
 import { expandCodexStream, type RecordedCodexStream } from './recorded-stream-fixture.js';
 import recordedAnswer from './fixtures/recorded-stream-answer.json';
 import recordedToolLoop from './fixtures/recorded-stream-tool-loop.json';
+import recordedToolCallsTimed from './fixtures/recorded-stream-tool-calls-timed.json';
+import recordedHeldAnswerTimed from './fixtures/recorded-stream-held-answer-timed.json';
 
 function noopLog(): {
   info: () => void;
@@ -3095,6 +3099,92 @@ it.each([
     expect(Math.min(...readings)).toBeGreaterThan(40);
     // The recorded answer itself speeds up to about 150 words a second near its end.
     expect(Math.max(...readings)).toBeLessThan(170);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Recorded Codex turn with each response's end and the provider's own generation time
+// (scripts/token-speed-capture.ts). Before, the six responses that were only a tool call
+// streamed nothing and got no reading: the panel showed one value when the turn ended, and
+// the answer released at once behind its reasoning summary read up to five times its real
+// speed. Unit tier, through the translator entry points the agent calls; the smallest
+// failing input is one tool call that streams nothing, then its timing and usage.
+it.each([
+  ['tool calls, then an answer', recordedToolCallsTimed as RecordedCodexStream, 9],
+  ['tool calls, then an answer held behind its summary', recordedHeldAnswerTimed as RecordedCodexStream, 7],
+])('reads every response of %s at the speed the provider reports, held-back output aside', (_name, recorded, responses) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  try {
+    const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+    const provider: number[] = [];
+    const settled: number[] = [];
+    const live: number[] = [];
+    let previousTotal = 0;
+    for (const { t, msg } of expandCodexStream(recorded)) {
+      vi.advanceTimersByTime(Math.max(0, t - Date.now()));
+      const params = msg.params as never;
+      if (msg.method === 'turn/started') beginCodexGenerationTurn(rt, 'recorded-turn', t);
+      else if (msg.method === 'item/started') translateItemNotification('started', params, q, ctx);
+      else if (msg.method === 'item/completed') translateItemNotification('completed', params, q, ctx);
+      else if (msg.method === 'item/agentMessage/delta') {
+        translateAgentMessageDelta(params, q, ctx);
+        const latest = codexSpeedSnapshot(rt)?.measurement?.latest;
+        if (latest?.kind === 'stream') live.push(latest.rate);
+      } else if (msg.method === 'item/reasoning/summaryTextDelta') translateReasoningSummaryTextDelta(params, q, ctx);
+      else if (msg.method === 'turn/moderationMetadata') noteCodexResponseEnded(rt, 'recorded-turn');
+      else if (msg.method === 'cindy/response/timing') {
+        const { sampledTokensTotal, samplingMs } = msg.params as { sampledTokensTotal: number; samplingMs: number };
+        provider.push(((sampledTokensTotal - previousTotal) * 1_000) / samplingMs);
+        previousTotal = sampledTokensTotal;
+        noteCodexResponseTiming(rt, { turnId: 'recorded-turn', sampledTokensTotal, samplingMs });
+      } else if (msg.method === 'thread/tokenUsage/updated') {
+        settleCodexSpeedUsage(rt, (msg.params as { tokenUsage: { last: { outputTokens: number; reasoningOutputTokens: number } } }).tokenUsage.last);
+        const latest = codexSpeedSnapshot(rt)?.measurement?.latest;
+        if (latest?.kind === 'request') settled.push(latest.rate);
+      } else if (msg.method === 'turn/completed') {
+        finalizeCodexGenerationTurn(rt, 'recorded-turn');
+        rt.tokenSpeed.stop();
+      }
+    }
+    expect(provider).toHaveLength(responses);
+    expect(settled.map((rate) => Math.round(rate))).toEqual(provider.map((rate) => Math.round(rate)));
+    // The whole turn: the provider's sampled tokens over its sampling time.
+    const timings = recorded.events.filter((event) => event[1] === 's') as Array<[number, 's', number, number]>;
+    expect(codexSpeedSnapshot(rt)?.measurement?.average)
+      .toBeCloseTo((timings.at(-1)![2] * 1_000) / timings.reduce((sum, event) => sum + event[3], 0), 0);
+    // Hundreds of words can arrive within 100 ms when a summary ends; the answer then streams
+    // near its real speed. A window that took in the release read up to 5.7 times that (276 tok/s).
+    expect(live.length).toBeGreaterThan(0);
+    expect(Math.max(...live)).toBeLessThan(provider.at(-1)! * 1.8);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// A response's timing can reach Cindy after its usage (stderr and stdout are separate
+// pipes): it must still replace what the client measured. Unit tier, translator entry points.
+it('applies a provider generation time that arrives after the usage it belongs to', () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(0);
+    const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+    const ids = { threadId: 't', turnId: 'turn' };
+    beginCodexGenerationTurn(rt, 'turn', 0);
+    vi.setSystemTime(2_000);
+    noteCodexResponseEnded(rt, 'turn');
+    translateItemNotification('started', { ...ids, item: { type: 'commandExecution', id: 'c', command: 'ls' } }, q, ctx);
+    vi.setSystemTime(2_100);
+    translateItemNotification('completed', { ...ids, item: { type: 'commandExecution', id: 'c', command: 'ls', status: 'completed' } }, q, ctx);
+    settleCodexSpeedUsage(rt, { outputTokens: 120, reasoningOutputTokens: 0 });
+    // A tool call that streamed nothing has no speed the client could measure.
+    expect(codexSpeedSnapshot(rt)?.measurement?.latest).toBeNull();
+    vi.setSystemTime(2_120);
+    expect(noteCodexResponseTiming(rt, { turnId: 'turn', sampledTokensTotal: 120, samplingMs: 1_500 })).toBe(true);
+    expect(codexSpeedSnapshot(rt)?.measurement).toMatchObject({ average: 80, latest: { kind: 'request', rate: 80 } });
+    // A timing for a response that is not the newest settled one changes nothing.
+    expect(noteCodexResponseTiming(rt, { turnId: 'turn', sampledTokensTotal: 120, samplingMs: 1_000 })).toBe(false);
   } finally {
     vi.useRealTimers();
   }

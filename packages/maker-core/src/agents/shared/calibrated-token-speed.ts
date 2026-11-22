@@ -35,6 +35,8 @@ export interface SpeedCalibrationReport {
   requestMs: number;
   /** Real speed of this request, first byte excluded; undefined when too short to measure. */
   requestTps?: number;
+  /** Generation time the provider reported for this request, when it did. */
+  serverMs?: number;
   thinkingTokens?: number;
   estimatedVisible: number;
   estimatedThinking: number;
@@ -60,7 +62,16 @@ const MAX_VALID_TPS = 10_000;
 /** Below one second a rate is a handful of tokens over a few hundred ms. */
 const MIN_VALID_DURATION_MS = 1_000;
 /** A request shorter than this is mostly start-up: its speed is not shown as a reading. */
-const MIN_READING_REQUEST_MS = 3_000;
+const MIN_READING_REQUEST_MS = 1_000;
+/** A provider-reported generation time shorter than this is too coarse to divide by. */
+const MIN_SERVER_SAMPLING_MS = 100;
+/**
+ * Output released all at once rather than generated: this many tokens inside
+ * FLUSH_SPAN_MS (2,000 tok/s and up). Codex holds an answer back while its reasoning
+ * summary is written, then sends hundreds of words within 100 ms as many small deltas.
+ */
+const FLUSH_SPAN_MS = 100;
+const FLUSH_TOKENS = 200;
 const MIN_LEARN_TOKENS = 40;
 /** How much of what earlier requests taught survives each new one. */
 const SCALE_MEMORY = 0.6;
@@ -226,6 +237,22 @@ export class CalibratedTokenSpeedMeter {
   private boundaryIndex = -1;
   private boundaryUntil = -Infinity;
   private lastEventAt: number | null = null;
+  /** Measured output that arrived within the current FLUSH_SPAN_MS. */
+  private flushStartAt = -Infinity;
+  private flushTokens = 0;
+  /**
+   * The newest finished request, so a generation time the provider reports a moment
+   * after its usage can still replace what the client measured for it.
+   */
+  private lastSettle: {
+    index: number;
+    tokens: number;
+    /** What the request added to the chart axis. */
+    axisMs: number;
+    /** What it added to the measured average, if anything. */
+    measured?: { tokens: number; ms: number };
+    server: boolean;
+  } | undefined;
   private tps = 0;
   private peak = 0;
   private latestReading: SpeedReading | null = null;
@@ -277,6 +304,9 @@ export class CalibratedTokenSpeedMeter {
     this.boundaryIndex = -1;
     this.boundaryUntil = -Infinity;
     this.lastEventAt = null;
+    this.flushStartAt = -Infinity;
+    this.flushTokens = 0;
+    this.lastSettle = undefined;
     this.tps = 0;
     this.peak = 0;
     this.latestReading = null;
@@ -367,6 +397,8 @@ export class CalibratedTokenSpeedMeter {
     now = Date.now(),
     thinkingTokens?: number,
     requestWallMs?: number,
+    /** Tokens and generation time the provider itself reported for this request. */
+    server?: { tokens: number; ms: number },
   ): SpeedCalibrationReport | undefined {
     if (this.stopped) return undefined;
     if (this.started) {
@@ -414,7 +446,13 @@ export class CalibratedTokenSpeedMeter {
       ? Math.min(requestTokens, this.backlogTokens + unseenThinking) : requestTokens;
     const paced = requestTokens - head;
     let requestTps: number | undefined;
-    if (requestMs >= MIN_VALID_DURATION_MS && paced >= MIN_WINDOW_TOKENS) {
+    // The provider's own sampling time covers what the client cannot see: output that
+    // arrived whole (a tool call) and the wait before the first byte, which it excludes.
+    const serverTps = server && Number.isFinite(server.ms) && server.ms >= MIN_SERVER_SAMPLING_MS &&
+      Number.isFinite(server.tokens) && server.tokens > 0 && (server.tokens * 1_000) / server.ms <= MAX_VALID_TPS
+      ? (server.tokens * 1_000) / server.ms : undefined;
+    if (serverTps !== undefined) requestTps = serverTps;
+    else if (requestMs >= MIN_VALID_DURATION_MS && paced >= MIN_WINDOW_TOKENS) {
       const rate = (paced * 1_000) / requestMs;
       if (rate <= MAX_VALID_TPS) requestTps = rate;
     }
@@ -428,12 +466,14 @@ export class CalibratedTokenSpeedMeter {
     const waitMs = requestWallMs !== undefined && Number.isFinite(requestWallMs)
       ? Math.max(0, requestWallMs - requestMs) : undefined;
     let creditMs: number;
-    if (requestTps !== undefined) creditMs = (head * 1_000) / requestTps;
+    // The provider's time is the request's whole generation time: it replaces the client's.
+    if (serverTps !== undefined) creditMs = server!.ms - requestMs;
+    else if (requestTps !== undefined) creditMs = (head * 1_000) / requestTps;
     // Too short to time, or never streamed: assume the speed measured so far.
     else if (knownTps > 0) creditMs = Math.max(0, (requestTokens * 1_000) / knownTps - requestMs);
     // Nothing measured yet: the wait is the only time there is to go by, for now.
     else creditMs = waitMs ?? 0;
-    if (waitMs !== undefined) creditMs = Math.min(creditMs, waitMs);
+    if (waitMs !== undefined && serverTps === undefined) creditMs = Math.min(creditMs, waitMs);
     if (knownTps <= 0 && creditMs > 0) {
       this.provisionalTokens += requestTokens;
       this.provisionalOwnMs += requestMs;
@@ -450,6 +490,7 @@ export class CalibratedTokenSpeedMeter {
       requestTokens,
       requestMs,
       ...(requestTps !== undefined ? { requestTps } : {}),
+      ...(serverTps !== undefined ? { serverMs: server!.ms } : {}),
       ...(reportedThinking !== undefined ? { thinkingTokens: reportedThinking } : {}),
       estimatedVisible: this.rawVisible,
       estimatedThinking,
@@ -460,20 +501,70 @@ export class CalibratedTokenSpeedMeter {
     this.settledMs += requestMs + creditMs;
     this.clockAtSettle = this.clockMs;
     this.clearLive();
-    if (requestTps !== undefined) {
+    const measured = serverTps !== undefined
+      ? { tokens: requestTokens, ms: server!.ms }
+      : requestTps !== undefined ? { tokens: paced, ms: requestMs } : undefined;
+    if (requestTps !== undefined && measured) {
       this.lastRequestTps = requestTps;
-      this.measuredTokens += paced;
-      this.measuredMs += requestMs;
-      if (requestMs >= MIN_READING_REQUEST_MS) {
+      this.measuredTokens += measured.tokens;
+      this.measuredMs += measured.ms;
+      if (serverTps !== undefined || requestMs >= MIN_READING_REQUEST_MS) {
         // The exact speed of the request that just ended is the freshest reading there is.
+        // A request that streamed nothing never moved the clock: its reading is from now,
+        // not from where the previous request stopped.
         this.tps = requestTps;
-        this.rememberReading(requestTps, 'request', this.pausedAt);
+        this.rememberReading(requestTps, 'request', requestMs > 0 ? this.pausedAt : now);
       }
     }
     // A reported zero is a fact (the request answered without thinking); no report is not.
     this.markRequest(typeof thinkingTokens === 'number' && Number.isFinite(thinkingTokens) && thinkingTokens >= 0
       ? Math.min(requestTokens, Math.floor(thinkingTokens)) : undefined, requestTokens);
+    this.lastSettle = {
+      index: this.requests,
+      tokens: requestTokens,
+      axisMs: requestMs + creditMs,
+      ...(requestTps !== undefined && measured ? { measured } : {}),
+      server: serverTps !== undefined,
+    };
     return report;
+  }
+
+  /** Position of the newest finished request in this turn; 0 before the first. */
+  get lastRequestIndex(): number {
+    return this.requests;
+  }
+
+  /**
+   * The provider reported the generation time of the newest finished request after
+   * its usage arrived: replace what the client measured for it. Returns whether the
+   * displayed speed changed. Older requests have been superseded and are left alone.
+   */
+  applyServerTiming(index: number, ms: number): boolean {
+    const last = this.lastSettle;
+    if (!last || last.index !== index || last.server || this.invalid) return false;
+    if (!Number.isFinite(ms) || ms < MIN_SERVER_SAMPLING_MS) return false;
+    const rate = (last.tokens * 1_000) / ms;
+    if (!(rate <= MAX_VALID_TPS)) return false;
+    if (last.measured) {
+      this.measuredTokens -= last.measured.tokens;
+      this.measuredMs -= last.measured.ms;
+    }
+    this.measuredTokens += last.tokens;
+    this.measuredMs += ms;
+    // Requests timed by their wait ran at this speed too.
+    if (this.provisionalTokens > 0) {
+      const credit = Math.max(0, (this.provisionalTokens * 1_000) / rate - this.provisionalOwnMs);
+      this.settledMs -= Math.max(0, this.provisionalCreditMs - credit);
+      this.provisionalTokens = 0;
+      this.provisionalOwnMs = 0;
+      this.provisionalCreditMs = 0;
+    }
+    this.settledMs = Math.max(0, this.settledMs + ms - last.axisMs);
+    this.lastSettle = { ...last, axisMs: ms, measured: { tokens: last.tokens, ms }, server: true };
+    this.lastRequestTps = rate;
+    if (!this.hasLiveRate) this.tps = rate;
+    this.rememberReading(rate, 'request', Date.now());
+    return true;
   }
 
   /** Turn end. `realOutputTokens` replaces the estimate when the provider reported it. */
@@ -711,6 +802,19 @@ export class CalibratedTokenSpeedMeter {
       return this.publishDue(now);
     }
     this.liveTokens += tokens;
+    // Counts the provider reports carry their own pacing; only text can arrive held back.
+    if (!summary && !counted) {
+      if (at - this.flushStartAt > FLUSH_SPAN_MS) {
+        this.flushStartAt = at;
+        this.flushTokens = 0;
+      }
+      this.flushTokens += tokens;
+      if (this.flushTokens >= FLUSH_TOKENS) {
+        // Held-back output let go at once: no pace, and the window starts after it.
+        this.bound(at);
+        return this.publishDue(now);
+      }
+    }
     // A burst faster than any provider generates is output held back and released at once
     // (a summary always arrives that way): it is no pace, and must not join the window or
     // dilute the deltas that follow it.
