@@ -12,7 +12,7 @@
  * 只登记不带 transport 的 `LaneTurnScope`,供伙伴技能等按「这一轮是不是主人触发」授权。
  */
 
-import type { BlueBubblesIM, DiscordIM, FeishuIM, TelegramIM } from '@cindy/im';
+import type { BlueBubblesIM, DiscordIM, FeishuIM, ImFinalOutput, TelegramIM } from '@cindy/im';
 
 /** MCP 侧用到的 TelegramIM 子集(结构类型, 测试可用假对象)。 */
 export type TelegramToolTransport = Pick<
@@ -110,6 +110,7 @@ export function isLaneTurnScopeChannel(channel: string): channel is LaneTurnScop
 
 export interface IMessageToolScope {
   channel: 'imessage';
+  readDirectDelivery?: (after: number) => { text: string; createdAt: number } | null;
   readArchive?: (query: string | undefined, before: number | undefined, limit: number) => Promise<unknown>;
   im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health'>;
   botId: string;
@@ -137,6 +138,8 @@ export interface DiscordToolScope {
 export type ChannelToolScope = (TelegramToolScope | FeishuToolScope | IMessageToolScope | DiscordToolScope | LaneTurnScope) & {
   /** Local durable input, stamped by the IM runner after persistence succeeds. */
   inputClientId?: string;
+  /** Optional terminal reply bound to the same inbound scope as the channel tools. */
+  commitChunkedFinal?: (output: ImFinalOutput) => Promise<void>;
 };
 
 interface ActiveScope {

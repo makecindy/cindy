@@ -1149,6 +1149,59 @@ describe('remote agent round trip', () => {
       host.dispose();
     }
   });
+  it('asks on this computer when the Agent computer forwards a gated operation it did not ask about', async () => {
+    // 回归(2026-11-20)：同账号的远程供应商在「自动」档下由对方的自动审查放行、没有发确认；本机执行器
+    // 拦下后不弹卡直接拒绝，用户找不到任何可点的确认。现在经同一条确认通道在本机补问。
+    const env = path.join(project, '.env');
+    const production = path.join(project, '.env.production');
+    fs.writeFileSync(env, 'TOKEN=one');
+    fs.writeFileSync(production, 'TOKEN=two');
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input, [env, production]),
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const opts = { sessionId: 'gated-auto', workingDir: project, model: 'm', permissionMode: 'auto' as const };
+    const asked: InteractionRequest[] = [];
+    const handle = await startRemoteAgentSession('pi', opts, makeDeps(host));
+    const run = async () => {
+      const reader = (async () => {
+        const results: string[] = [];
+        for await (const event of handle.events()) {
+          if (event.type === 'text') results.push((event.data as { text: string }).text);
+          if (event.type === 'done') return results;
+        }
+        return results;
+      })();
+      await handle.send({ type: 'user', content: 'read it' });
+      return reader;
+    };
+    try {
+      // 允许第一个文件，不允许第二个。
+      handle.setInteractionResolver(async (request) => {
+        if (request.requestId === 'forged') return { kind: 'permission', behavior: 'deny' };
+        asked.push(request);
+        return { kind: 'permission', behavior: asked.length === 1 ? 'allow' : 'deny' };
+      });
+      const results = await run();
+      expect(results[0]).toBe('credential:200');
+      expect(results[1]).not.toBe('credential:200');
+      expect(asked).toMatchObject([
+        { kind: 'permission', toolName: 'Read', input: { file_path: env } },
+        { kind: 'permission', toolName: 'Read', input: { file_path: production } },
+      ]);
+      // 普通确认卡：不是分享凭证卡，也不带会话级授权。
+      expect(asked[0]).toHaveProperty('metadata.permissionScope', 'once');
+      expect(asked[0]).not.toHaveProperty('metadata.hostOwnedConfirmation');
+      expect(asked[0]).not.toHaveProperty('suggestions');
+    } finally {
+      await handle.close({ reason: 'navigation' });
+      host.dispose();
+    }
+  });
   it('keeps a shared-provider credential grant on this computer across turns and resets it on reopen', async () => {
     const env = path.join(project, '.env');
     const production = path.join(project, '.env.production');
@@ -1295,7 +1348,10 @@ describe('remote agent round trip', () => {
       const handle = await startRemoteAgentSession('pi', opts, depsFor(deviceId));
       try {
         handle.setInteractionResolver(async (request) => {
-          if (request.requestId !== 'forged') localConfirmations += 1;
+          // 只数分享凭证卡：普通档下 .env 另要普通批准，那张卡与任务级凭证授权无关。
+          if (request.requestId !== 'forged'
+            && request.kind === 'permission'
+            && request.metadata?.hostOwnedConfirmation === 'shared_provider_credential') localConfirmations += 1;
           return { kind: 'permission', behavior: 'allow', permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL] };
         });
         const reader = (async () => {
@@ -1372,7 +1428,8 @@ describe('remote agent round trip', () => {
     const requests: InteractionRequest[] = [];
     handle.setInteractionResolver(async (request): Promise<InteractionDecision> => {
       requests.push(request);
-      return { kind: 'permission', behavior: 'allow' };
+      // 对方没问就发来的危险命令由本机补问；这里不允许它，只允许对方随后正式发来的确认。
+      return { kind: 'permission', behavior: request.requestId === 'r1' ? 'allow' : 'deny' };
     });
     const entries: string[] = [];
     const png = path.join(project, 'shot.png');
@@ -1404,7 +1461,10 @@ describe('remote agent round trip', () => {
       expect(execExits.at(-1)).toBe(0);
       expect(fs.existsSync(path.join(root, 'victim'))).toBe(false);
     }
-    expect(requests).toHaveLength(1);
+    expect(requests).toMatchObject([
+      { kind: 'permission', toolName: 'Bash', input: { command: `rm -rf ${path.join(root, 'victim')}` } },
+      { kind: 'permission', requestId: 'r1' },
+    ]);
     expect(entries).toEqual(['entry-42']);
 
     // 图片字节随消息带到对方，换成对方本机路径；Symbol 证明在对方重新附上。

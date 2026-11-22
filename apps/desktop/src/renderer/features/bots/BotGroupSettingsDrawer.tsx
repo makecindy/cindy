@@ -87,7 +87,7 @@ export function BotGroupSettingsDrawer() {
     <Dialog.Root open={open} onOpenChange={(next) => !next && close()}>
       <Dialog.Portal>
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal">
           <Dialog.Content
             aria-describedby={undefined}
             // CJK IME: Escape during composition only cancels the candidate.
@@ -95,7 +95,7 @@ export function BotGroupSettingsDrawer() {
               if (event.isComposing || event.keyCode === 229) event.preventDefault();
               else if (subpage) { event.preventDefault(); back(); }
             }}
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
+            className="fixed inset-y-0 right-0 z-float flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
             // The header shares the window title strip; without no-drag the page's drag
             // regions underneath swallow the close button's clicks (see windowDrag.tsx).
             style={WINDOW_NO_DRAG_STYLE}

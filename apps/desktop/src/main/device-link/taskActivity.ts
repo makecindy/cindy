@@ -1,7 +1,8 @@
+import type { HostTaskActivity } from '@cindy/device-link';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 
 /** Full execution-host projection, independent of Home pagination and island UI visibility. */
-export function projectHostTaskActivity(snapshots: readonly AgentIslandSessionSnapshot[]) {
+export function projectHostTaskActivity(snapshots: readonly AgentIslandSessionSnapshot[]): HostTaskActivity {
   const candidates = snapshots.filter(
     (row) =>
       !row.groupChat &&

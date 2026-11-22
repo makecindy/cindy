@@ -109,7 +109,7 @@ export function PluginDetailTopBar({
     <div
       data-testid="plugin-detail-top-bar"
       className={cn(
-        'sticky top-0 z-20 w-full',
+        'sticky top-0 z-page-float w-full',
         'transition-[background-color] duration-[var(--motion-fast,150ms)] motion-reduce:transition-none',
         scrolled ? 'bg-[var(--surface)]' : 'bg-transparent',
         isMac && [

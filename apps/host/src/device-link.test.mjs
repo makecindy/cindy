@@ -1,3 +1,4 @@
+import { holdError, releaseFailure } from './agent/profile-hold.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,7 +8,7 @@ import { EventEmitter, once } from 'node:events';
 import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { getTableColumns, getTableName } from 'drizzle-orm';
+import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
@@ -21,11 +22,15 @@ import { createEventHub } from './events.mjs';
 import { configureHostOwner } from './agent/claude-auth.mjs';
 import { configureAppDataDir } from '../../desktop/src/main/userDataPath.ts';
 import { commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
-import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
+import { getCurrentDbClientSnapshot, setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
+import { messageToCamel } from '../../desktop/src/main/localDb/mapper.ts';
+import { startHostEventBridge } from '../../desktop/src/main/host-delegation.ts';
 import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
+import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
+import { readMessagesList } from './agent/history.ts';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
 import { PHASE1_UNFORWARDED_USAGE_CHANNELS } from './agent/usage-push-channels.ts';
 import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
@@ -116,7 +121,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     } }),
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
+    messagesList: (id, limit) => readMessagesList(id, { limit }),
     setSessionModel: async (id, model) => {
+      if (model === 'release-refusal') throw holdError(releaseFailure());
+
       modelChoices.push({ id, model, origin: readDeviceLinkModelSelectionOrigin() });
       return { deferred: true };
     },
@@ -190,6 +198,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.ok(listing.result.entries.some(entry => entry.name === 'mobile-created-project' && entry.kind === 'dir'));
   const stat = await clients[0].invoke('host', { channel: 'fs:stat-path', args: [{ path: createdDir }] });
   assert.deepEqual(stat.result, { kind: 'dir', resolvedPath: createdDir });
+  const refused = await clients[2].invoke('host', { channel: 'maker:set-model', args: ['task', 'release-refusal'] });
+  assert.deepEqual(refused, { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] ' + releaseFailure().message } });
   // A full round trip from the desktop controller must preview and mutate the Host's project.
   const projectArchive = input => clients[2].invoke('host', { channel: 'local-db:sessions:project-archive',
     args: [{ directory: '/project', ...input }] });
@@ -343,6 +353,96 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // Released, a remote plugin authorization reaches the plugin OAuth entry again.
   assert.equal((await clients[0].invoke('host', { channel: PLUGIN_OAUTH_CHANNEL, args: [{}] })).ok, true);
   assert.equal(oauthCalls, 1);
+  // L343 / integration: a metadata refresh reaches the attached window through
+  // SSE. A detail subscriber gets the original and next rows without the
+  // refresh, which older Mobile code can mistake for a delayed input.
+  await t.test('keeps a context recovery notice off Device Link and in attached windows and history', async t => {
+    const [ios, android] = clients;
+    const subscribe = (client, topics) => client.invoke('host', {
+      channel: 'device-link:subscribe', args: [{ topics }],
+    });
+    assert.equal((await subscribe(ios, ['session:task'])).ok, true);
+    assert.equal((await subscribe(android, ['session:other-task'])).ok, true);
+    const events = [[], []];
+    const readers = [ios, android].map((client, index) => client.onFrame(env => {
+      if (env.kind === 'push' && env.src === 'host') events[index].push(env.payload);
+    }));
+    t.after(() => readers.forEach(off => off()));
+
+    const attached = [];
+    let connected = false;
+    const server = createHostServer({ instanceId: 'fixture', token: 'synthetic-stream', events: hub, service });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const stop = startHostEventBridge({
+      baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'synthetic-stream',
+      onConnectionState: state => { connected = state.status === 'connected'; },
+      broadcast() {},
+      onMessageCreated: event => attached.push(event),
+    });
+    t.after(async () => {
+      stop();
+      server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+    });
+    await waitFor(() => connected);
+
+    sqlite.prepare(`INSERT INTO messages
+      (id, session_id, client_id, role, content, agent_meta, created_at)
+        VALUES ('fixed-row', 'task', 'original', 'user', '"继续"', '{}', ?)`)
+      .run(Date.parse('2026-01-01T00:00:01.000Z'));
+    const [stored] = await db.drizzle.select().from(messages).where(eq(messages.id, 'fixed-row'));
+    const original = messageToCamel(stored);
+    const publish = (row) => hub.publish({ type: 'message_created', sessionId: row.sessionId, messageId: row.id, message: row });
+    publish(original);
+    const writes = [];
+    const logger = { info() {}, warn() {} };
+    const recovery = createHostContextRecoveryRollover({ publish: hub.publish, log: logger }, {
+      assertCurrent: () => assert.equal(getCurrentDbClientSnapshot()?.client, db),
+      drainHistories: () => assert.fail('the pending queue owns recovery'),
+      behindDurableWrites: (_id, _label, write) => {
+        const pending = Promise.resolve().then(write);
+        writes.push(pending);
+        return pending;
+      },
+      coordinator: {
+        hasPendingQueuedWork: () => true,
+        skippedOversizedInputClientId: (_id, claim) => claim.inputClientId,
+        clearError() {},
+      },
+    });
+    const claim = { instanceId: 'fixture', generation: 3, inputClientId: 'original' };
+    assert.equal(recovery.claim('task', claim), 'claimed');
+    assert.equal(await recovery.tryRecover('task', { reason: 'context-overflow' }, claim), true);
+    await Promise.all(writes);
+
+    // Later rows on both subscribed topics are barriers, including for the
+    // mobile diagnostic replay of these exact frames.
+    const next = { ...original, id: 'next-row', clientId: 'next', content: 'the actual question',
+      createdAt: '2026-01-01T00:00:03.000Z' };
+    publish(next);
+    publish({ ...original, id: 'other-row', clientId: 'other-input', sessionId: 'other-task' });
+    await waitFor(() => events[0].some(event => event.payload?.message?.id === next.id)
+      && events[1].some(event => event.payload?.sessionId === 'other-task')
+      && attached.some(event => event.messageId === next.id));
+    const forSessions = list => list.filter(event => ['task', 'other-task'].includes(event.payload?.sessionId));
+    const mobileFrames = forSessions(events[0]);
+    t.diagnostic('L343 Device Link rows ' + JSON.stringify(mobileFrames));
+    const attachedRows = attached.filter(event => event.sessionId === 'task');
+    const refreshed = { ...original, agentMeta: { inputNotice: 'oversized-input-skipped' } };
+    assert.deepEqual(attachedRows.map(({ messageId, message }) => [messageId, message]),
+      [[original.id, original], [original.id, refreshed], [next.id, next]]);
+    assert.deepEqual(Object.keys(attachedRows[1]).sort(), ['message', 'messageId', 'seq', 'sessionId', 'type']);
+    const history = await ios.invoke('host', { channel: 'local-db:messages:list', args: ['task'] });
+    assert.equal(history.ok, true);
+    assert.deepEqual(history.result.map(({ id, clientId, agentMeta }) => [id, clientId, agentMeta]),
+      [[original.id, original.clientId, refreshed.agentMeta]]);
+    assert.deepEqual(mobileFrames.map(({ channel, payload }) => [channel, payload.message]), [
+      ['local-db:messages:created', original], ['local-db:messages:created', next],
+    ]);
+    assert.deepEqual(forSessions(events[1]).map(({ channel, payload }) => [channel, payload.sessionId]), [
+      ['local-db:messages:created', 'other-task'],
+    ]);
+  });
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);

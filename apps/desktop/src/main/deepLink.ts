@@ -116,6 +116,7 @@ export type DeepLinkPayload =
       type: 'settings';
       tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot';
       connect?: string;
+      focusDeviceId?: string;
       intent?: 'topup';
       /** 仅 im-bot:定位到「官方」(cindy) 或「个人」(personal) 分区。 */
       imGroup?: 'cindy' | 'personal';
@@ -214,6 +215,10 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
     return null;
   }
   if (!decoded) return null;
+  if (type === 'devices') {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(rawValue)) return null;
+    return { type: 'settings', tab: 'remote-control', focusDeviceId: rawValue };
+  }
   if (type === 'session') {
     const messageClientId = parseSessionQueryParam(rawValue, 'message');
     const deviceId = parseSessionQueryParam(rawValue, 'device');

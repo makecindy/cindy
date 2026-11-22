@@ -307,7 +307,6 @@
     "tokenRate": "{{rate}} tok/s",
     "currentRate": "Velocidade mais recente",
     "lastRequestRate": "Média do último pedido",
-    "recentTokenRate": "Recente {{rate}} tok/s",
     "averageRate": "Média do turno",
     "rateHistory": "Histórico de velocidade de geração",
     "outputTotal": "Saída",

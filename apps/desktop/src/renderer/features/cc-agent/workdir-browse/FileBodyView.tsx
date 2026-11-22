@@ -1009,7 +1009,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
           - alwaysEdit (code/text):没有按钮,只在 dirty 时挂 amber "未保存" chip。
             保存通过 Ctrl+S 或右键菜单,UI 更干净。
           z-10 确保浮在内容上。 */}
-      <div className="absolute right-[18px] top-[14px] z-10 flex items-center gap-2">
+      <div className="absolute right-[18px] top-[14px] z-raised flex items-center gap-2">
         {!barVisible && canEdit && !isMarkdown && (alwaysEdit ? dirty || saving : editMode) && (
           <EditingChip dirty={dirty} compact={alwaysEdit} saving={saving} />
         )}
@@ -1049,7 +1049,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
       {saveError && (
         <ErrorNotice
           role="alert"
-          className="absolute right-[18px] top-[54px] z-10 max-w-[360px]"
+          className="absolute right-[18px] top-[54px] z-raised max-w-[360px]"
           message={t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: saveError })}
         />
       )}
@@ -1089,6 +1089,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
             {content.truncated && (
               // editContainerCls 现在不带 px(为了让 cm-scroller 拉满到右边沿),
               // 这里 banner 自己补 px-[30px] 让左右内边距和 .cm-content 对齐。
+              // 30px 跟随编辑器主题（DESIGN.md §5 登记），改其一须两边同改。
               <div className="flex-none px-[30px] py-3">
                 <div
                   className={cn(
@@ -1165,7 +1166,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
             aria-orientation="vertical"
             onPointerDown={(e) => e.stopPropagation()}
             className={cn(
-              'fixed z-[9999] w-[168px] rounded-xl p-0.5 overflow-hidden',
+              'fixed z-fullscreen w-[168px] rounded-xl p-0.5 overflow-hidden',
               'bg-[var(--cmd-palette-bg)]',
               'border border-[var(--cmd-palette-border)]',
               'shadow-[shadow:var(--shadow-menu)]',

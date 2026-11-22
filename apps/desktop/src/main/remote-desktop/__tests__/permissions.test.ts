@@ -6,9 +6,9 @@ function harness() {
     screen: vi.fn(() => 'missing' as const),
     accessibility: vi.fn(async () => 'granted' as const),
     request: vi.fn(
-      async (_permission: string, _isCurrent: () => boolean, _signal: AbortSignal) => {},
+      async (_permission: string, _isCurrent: () => boolean, _signal: AbortSignal) => false,
     ),
-    openSettings: vi.fn(async () => {}),
+    openSettings: vi.fn(async (_permission: string, _separateWindow: boolean) => {}),
     showGuide: vi.fn(),
   };
   return { deps, service: new RemoteDesktopPermissionsService(deps) };
@@ -50,8 +50,8 @@ describe('remote desktop OS permissions', () => {
     deps.request.mockImplementation((_permission, current, abortSignal) => {
       isCurrent = current;
       signal = abortSignal;
-      return new Promise<void>((resolve) => {
-        finish = resolve;
+      return new Promise<boolean>((resolve) => {
+        finish = () => resolve(false);
       });
     });
     const open = service.open('accessibility');
@@ -66,8 +66,60 @@ describe('remote desktop OS permissions', () => {
     const { service, deps } = harness();
     deps.request.mockRejectedValue(new Error('request failed'));
     await service.open('screenRecording');
-    expect(deps.openSettings).toHaveBeenCalledWith('screenRecording');
+    expect(deps.openSettings).toHaveBeenCalledWith('screenRecording', false);
     expect((await service.read()).screenRecording).toBe('missing');
+  });
+  // A first-use system dialog can finish the grant without a trip to Settings.
+  it('keeps the user in Cindy if the explicit native request confirms access', async () => {
+    const { service, deps } = harness();
+    deps.request.mockResolvedValue(true);
+    await service.open('accessibility');
+    expect(deps.request).toHaveBeenCalledOnce();
+    expect(deps.openSettings).not.toHaveBeenCalled();
+  });
+  it('recovers a blocked settings window once per pane on an explicit retry', async () => {
+    const { service, deps } = harness();
+    await service.open('screenRecording');
+    await service.open('accessibility');
+    expect(service.separateWindowRetries).toEqual(['screenRecording', 'accessibility']);
+    await service.open('screenRecording');
+    expect(deps.request).toHaveBeenCalledTimes(2);
+    expect(service.separateWindowRetries).toEqual(['accessibility']);
+    await service.open('screenRecording');
+    service.dismiss();
+    await service.open('screenRecording');
+    expect(deps.openSettings.mock.calls).toEqual([
+      ['screenRecording', false], ['accessibility', false],
+      ['screenRecording', true], ['screenRecording', false], ['screenRecording', false],
+    ]);
+  });
+  // Some versions of System Settings refuse a second instance. Both cases
+  // exercise the real guide action with the same failed Launch Services call.
+  it('falls back to the usual settings pane if a separate window cannot open', async () => {
+    const { service, deps } = harness();
+    await service.open('screenRecording');
+    deps.openSettings.mockRejectedValueOnce(new Error('second instance unavailable'));
+    await service.open('screenRecording');
+    expect(deps.openSettings.mock.calls).toEqual([
+      ['screenRecording', false], ['screenRecording', true], ['screenRecording', false],
+    ]);
+    expect(deps.request).toHaveBeenCalledOnce();
+    expect(service.separateWindowRetries).toEqual([]);
+  });
+  it('does not open another pane if the user closes the guide during the retry', async () => {
+    const { service, deps } = harness();
+    await service.open('screenRecording');
+    let fail!: (error: Error) => void;
+    deps.openSettings.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+      fail = reject;
+    }));
+    const retry = service.open('screenRecording');
+    service.dismiss();
+    fail(new Error('second instance unavailable'));
+    await retry;
+    expect(deps.openSettings.mock.calls).toEqual([
+      ['screenRecording', false], ['screenRecording', true],
+    ]);
   });
   it('does not reopen a dismissed guide when an old enable preflight resolves', async () => {
     const { service, deps } = harness();

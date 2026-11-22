@@ -23,7 +23,7 @@ export function HomeZeroModelAction({
     <div data-testid="home-zero-model" className="mt-4 w-full">
       <div
         className={cn(
-          'flex w-full items-center gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-[18px] py-4',
+          'flex w-full items-center gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-4',
           narrow && 'flex-col items-stretch',
         )}
       >

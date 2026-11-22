@@ -977,7 +977,7 @@
     "captureFailed": "未能截取屏幕",
     "permission": {
       "title": "需要屏幕录制权限",
-      "detail": "截图需要在「系统设置 > 隐私与安全性 > 录屏与系统录音」中允许 {{appName}}，开启后重新打开 {{appName}}。",
+      "detail": "允许 {{appName}} 录制屏幕，然后重试。如果 macOS 提示，请重新打开应用。",
       "openSettings": "打开系统设置",
       "later": "暂不开启"
     },
@@ -1144,12 +1144,12 @@
     "windowsError": "未完成授权，请在这台电脑上重试。",
     "windowsErrorDetail": "错误码 {{code}}",
     "permissionsTitle": "远程桌面权限",
-    "permissionsIntro": "查看桌面需要屏幕录制权限；操作桌面还需要辅助功能权限。请在电脑上完成授权，结果会自动更新。",
+    "permissionsIntro": "在被控 Mac 上完成授权。查看桌面需要录屏，使用键盘和鼠标还需要允许 Cindy 控制 App。授权后会自动检测。",
     "permissionsReady": "系统权限已就绪，可以重新连接。",
     "screenRecording": "屏幕录制",
-    "accessibility": "辅助功能",
-    "screenRecordingHelp": "打开系统设置，为当前 Cindy 开启屏幕录制。若系统要求重新启动，请重新打开 Cindy 后连接。",
-    "accessibilityHelp": "点击打开设置后，为系统授权提示中的应用开启辅助功能。返回后会自动检测实际输入权限。",
+    "accessibility": "键鼠控制",
+    "screenRecordingHelp": "在「屏幕录制」或「录屏与系统录音」中，允许正在运行的 Cindy 录屏。如果 macOS 提示，请重新打开 Cindy。",
+    "accessibilityHelp": "在「隐私与安全性」选择系统提示的应用。若看到「System & App Protection Override」，选择允许它控制的 App；较早版本在「辅助功能」中开启。",
     "permissionChecking": "检测中…",
     "permissionGranted": "已授权",
     "permissionUnknown": "未确认",
@@ -1165,7 +1165,7 @@
     "title": "远程桌面",
     "allow": "允许远程桌面",
     "allowHint": "允许已登录的同账号设备查看和操作这台电脑的所有应用。需同时开启上方的设备控制。",
-    "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。",
+    "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
     "inputUnsupported": "Cindy 暂不支持这台电脑当前桌面环境的远程键鼠控制。",
     "controlUnavailable": "远程键鼠控制暂时不可用，请重新连接。",
     "beingControlled": "桌面正在被远程控制",
@@ -1282,7 +1282,7 @@
     "privacyScreen": "连接时打开隐私屏",
     "privacyScreenHint": "远程控制时遮住这台电脑的屏幕。有人在电脑前点按或按键时，会先询问是否断开连接。",
     "privacyActive": "隐私屏已打开。有人在电脑前点按或按键时，会先询问是否断开连接。",
-    "privacyFailed": "未能打开隐私屏，电脑屏幕可能仍可见。",
+    "privacyFailed": "未能打开隐私屏，电脑屏幕可能仍可见。如果被控电脑是 Mac，请在那台电脑上检查正在运行的 Cindy 是否有控制权限。",
     "hostMute": "被控端静音",
     "hostMuteHint": "连接期间将被控电脑静音",
     "hostMuteFailed": "无法修改被控端静音状态",
@@ -1311,7 +1311,7 @@
     "credentialSigningRequired": "Mac 上的开发版缺少签名配置。请在 Mac 上配置签名并重新启动 Cindy，然后重试。",
     "credentialPasswordRejected": "Mac 登录密码验证失败，请重新输入。",
     "credentialIdentityChanged": "无法确认电脑身份，不会向未经验证的设备发送密码。",
-    "credentialAccessibilityRequired": "请在 Mac 的系统设置 → 隐私与安全性 → 辅助功能中允许 Cindy，然后重新连接。",
+    "credentialAccessibilityRequired": "请在被控 Mac 上检查正在运行的这份 Cindy 的控制权限，然后重新连接。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
     "credentialUnlockUnavailable": "暂时无法安全解锁这台 Mac。请在锁屏界面选中你的账户后重连；若仍失败，请在电脑上手动解锁。",
     "disconnecting": "正在断开…",
     "loadingDisplayModes": "正在读取分辨率…",
@@ -1343,7 +1343,9 @@
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后盖上隐私屏，AI 可以继续工作；有人碰电脑就会锁屏。",
-    "lockedEnablePrivacyHint": "想让 AI 在你离开时继续用这台电脑，可以在它的「设置 → 通用 → 离开电脑时」里开启隐私屏。"
+    "lockedEnablePrivacyHint": "想让 AI 在你离开时继续用这台电脑，可以在它的「设置 → 通用 → 离开电脑时」里开启隐私屏。",
+    "revealCurrentApp": "在访达中显示 {{app}}",
+    "openPermissionInNewWindow": "在新窗口打开"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1803,6 +1805,8 @@
       "other": "其他",
       "lowAlert": "快用完时通知",
       "privacy": "隐藏个人信息",
+      "automaticCurrency": "自动",
+      "usageCurrency": "用量统计币种",
       "usageScope": "用量统计范围",
       "manageFoot": "管理模型供应商",
       "showSource": "在菜单里显示 {{name}}",
@@ -2471,8 +2475,8 @@
         "hint": "AI 需要用屏幕时，电脑不熄屏、不锁屏，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁屏，用 Touch ID 或密码解锁。没有任务时照常熄屏锁屏。远程控制结束后，也用隐私屏保护这台电脑。",
         "permission": "需要在「系统设置 → 隐私与安全性 → 辅助功能」中允许 Cindy，才能在有人碰电脑时立即锁屏。允许之前，电脑会照常熄屏、锁屏。",
         "preview": "立即试一下",
-        "previewStarting": "请松开鼠标和键盘，3 秒后会盖上隐私屏；按任意键即可锁屏，再解锁试试。",
-        "previewUnavailable": "无法打开隐私屏，请重启 Cindy 后再试。",
+        "previewStarting": "正在准备隐私屏。请松开鼠标和键盘，等屏幕被遮住后，再按键测试锁屏。",
+        "previewUnavailable": "未能打开隐私屏，电脑屏幕可能仍可见。",
         "delay": {
           "30": "30 秒",
           "60": "1 分钟",
@@ -2483,7 +2487,10 @@
           "system": "跟随系统"
         },
         "hintWindows": "AI 需要用屏幕时，电脑不关屏、不锁定，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁定，用 Windows Hello 或密码解锁。没有任务时照常关屏锁定。远程控制结束后，也用隐私屏保护这台电脑。",
-        "hintLinux": "AI 需要用屏幕时，电脑不关屏、不锁定，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁定，用密码解锁。没有任务时照常关屏锁定。远程控制结束后，也用隐私屏保护这台电脑。"
+        "hintLinux": "AI 需要用屏幕时，电脑不关屏、不锁定，由隐私屏遮住屏幕，AI 在后面继续工作；有人按键或点按就立即锁定，用密码解锁。没有任务时照常关屏锁定。远程控制结束后，也用隐私屏保护这台电脑。",
+        "permissionMissing": "隐私屏未开启。Cindy 需要系统授权，才能在有人按键或点击时锁定 Mac。",
+        "checkFailed": "暂时无法确认这台电脑的隐私屏权限。",
+        "saveFailed": "未能保存隐私屏设置。"
       }
     },
     "agentIsland": {
@@ -3139,7 +3146,7 @@
         },
         "accessibility": {
           "label": "自动输入",
-          "tooltip": "辅助功能权限用于在其他 App 中自动输入语音结果、读取光标附近文本作为润色上下文，并识别外部修改以改进词典。"
+          "tooltip": "允许 Cindy 向选定的 App 输入语音结果、读取光标附近文字并识别修改。在 Mac 显示的「辅助功能」或「System & App Protection Override」中授权。"
         }
       },
       "interactionSound": {
@@ -4543,6 +4550,22 @@
         "hideProvider": "在模型选择器中隐藏",
         "showProvider": "在模型选择器中显示"
       },
+      "plugin": {
+        "title": "插件提供的供应商",
+        "badge": "插件",
+        "rowTip": "{{provider}} · 由插件提供",
+        "source": "由插件提供",
+        "declaredName": "插件里的名称：{{name}}",
+        "note": "这个供应商由已安装的插件提供，用插件自己的引擎运行任务。登录和连接在插件里管理；停用或卸载插件后，它会从这里消失。",
+        "openPlugin": "打开插件",
+        "resetName": "恢复插件里的名称",
+        "suspendedBanner": "该供应商已停用，新任务和自动化都不会再使用它，你的其他电脑和分享的人也不能调用。插件本身不受影响。如果只是不想在模型选择器里看到它，可以改为隐藏。",
+        "hiddenBanner": "已从模型选择器中隐藏。正在使用它的任务和自动化不受影响。",
+        "unavailableBanner": "插件报告这个引擎暂时不能运行。打开插件可以查看原因。",
+        "unavailableBannerReason": "暂时不能运行：{{reason}}",
+        "modelsEmpty": "这个引擎还没有列出模型，新任务会使用它自己的默认模型。运行过一次任务后，这里会列出具体的模型。",
+        "modelSwitchAria": "启用 {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "API key 连接",
         "replaceKey": "编辑连接设置",
@@ -5713,10 +5736,10 @@
         "toggleAria": "使用我的浏览器登录态",
         "confirmTitle": "允许 Agent 使用你的浏览器登录态？",
         "confirmDescription": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。可随时关闭，关闭后会删除拷贝的登录数据。",
-        "confirmDescriptionMac": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。读取 Chrome 登录文件还需要「完全磁盘访问权限」。可随时关闭，关闭后会删除拷贝的登录数据。",
+        "confirmDescriptionMac": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。可随时关闭，关闭后会删除拷贝的登录数据。 如果系统询问文件夹权限，选择需要读取的浏览器资料文件夹。",
         "confirm": "使用我的登录态",
-        "readDeniedTitle": "需要完全磁盘访问权限",
-        "readDeniedDescription": "读取 Chrome 登录文件需要系统允许 Cindy。请在「隐私与安全性 → 完全磁盘访问权限」中打开 Cindy，然后回到这里再试。",
+        "readDeniedTitle": "无法读取浏览器资料",
+        "readDeniedDescription": "请在「隐私与安全性 → 完全磁盘访问权限」选择正在运行的 Cindy。如果系统提供「选择文件夹」，请只选所需的浏览器资料文件夹，然后重试。",
         "openFullDiskAccess": "打开系统设置",
         "readDeniedLater": "稍后再说",
         "toast": {
@@ -5888,7 +5911,7 @@
         "permissionIntro": {
           "title": "启用自动操作电脑",
           "description": "{{appName}} 将在本机安装或启动 Cua Driver，用于读取屏幕并执行点击、输入等操作。请仅在你主动发起自动操作电脑任务时启用。",
-          "macosDescription": "接下来 {{appName}} 会安装或打开 Cua Driver 的授权流程，并可能跳转到 macOS 系统设置。请先为 CuaDriver 授予「辅助功能」和「屏幕录制」核心权限；之后在使用过程中，macOS 可能还会按目标 App 或具体动作弹出额外确认。只有在你主动发起 Computer Use 任务时才应确认这些请求。完成后回到 {{appName}}，它会自动检查并启用。",
+          "macosDescription": "{{appName}} 将在本机安装或启动 Cua Driver，用于读取屏幕并执行点击、输入等操作。请仅在你主动发起自动操作电脑任务时启用。为 CuaDriver 开启屏幕录制。在「System & App Protection Override」选择允许它控制的 App；较早版本的 macOS 在「辅助功能」中开启。",
           "confirm": "继续",
           "cancel": "稍后再说"
         },
@@ -5909,8 +5932,8 @@
         },
         "permissions": {
           "title": "系统授权",
-          "macosHint": "Computer Use 需要「辅助功能」和「屏幕录制」。实际使用时，macOS 仍可能按目标 App 或具体动作弹出额外确认。",
-          "accessibilityLabel": "辅助功能",
+          "macosHint": "为 CuaDriver 开启屏幕录制。在「System & App Protection Override」选择允许它控制的 App；较早版本在「辅助功能」中开启。",
+          "accessibilityLabel": "键鼠控制",
           "screenRecordingLabel": "屏幕录制",
           "grant": "去授权",
           "accessibility": "辅助功能：{{status}}",
@@ -5956,7 +5979,7 @@
           "toggleFailed": "切换直接电脑控制失败",
           "installFailed": "cua-driver 安装失败",
           "permissionFailed": "Computer Use 权限未完成",
-          "permissionPending": "请完成这两项系统权限，然后回到这里点击“重新检查”",
+          "permissionPending": "在 Mac 上完成授权。若状态仍未更新，点「重新检查」。",
           "permissionSettingsOpened": "已打开系统权限设置。完成授权后，请回到这里点“重新检查”。",
           "permissionSettingsMonitoring": "已打开系统权限设置。完成授权后，状态会自动更新。",
           "openPermissionSettingsFailed": "无法打开系统权限设置"
@@ -7008,7 +7031,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已包含在隐私屏中：电脑不会休眠。"
+      "keepAwakeIncluded": "已包含在隐私屏中：电脑不会休眠。",
+      "localNetwork": {
+        "label": "本地网络",
+        "deniedHint": "没有这个权限时，同一网络下的电脑和手机无法直接连接这台电脑，只能经中转，速度会变慢。",
+        "settingsHint": "请在「系统设置 › 隐私与安全性 › 本地网络」里打开 Cindy，回到这里会自动生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8525,7 +8553,9 @@
           "unsupported": "这个插件还不支持让其他电脑使用它的引擎。",
           "remoteControlOff": "这台电脑还没有允许同账号设备远程控制，其他电脑不能使用这个引擎。",
           "ariaLabel": "允许你的其他电脑使用 {{engine}}",
-          "descriptionShareable": "开启后，你的其他电脑和分享的好友无需安装插件即可用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。"
+          "descriptionShareable": "开启后，你的其他电脑和分享的好友无需安装插件即可用这个引擎运行任务。Agent 在这台电脑上运行，使用这台电脑的登录和配额；文件和命令仍留在任务所在的电脑上。",
+          "providerDisabled": "这个供应商已在模型供应商里停用，其他电脑不能使用这个引擎。",
+          "openProviders": "前往「模型供应商」设置"
         },
         "githubRelease": {
           "title": "插件更新",
@@ -10904,6 +10934,13 @@
         "enabled": "已开启"
       },
       "close": "关闭"
+    },
+    "localNetwork": {
+      "title": "开启本地网络权限",
+      "relayOnly": "你的其他设备现在只能经中转连接这台电脑，速度较慢。开启后，同一网络下可以直接连接。",
+      "controlEnabled": "同一网络下的设备要直接控制这台电脑，需要本地网络权限，否则只能经中转。",
+      "allow": "开启",
+      "dismiss": "暂不开启"
     }
   },
   "bots": {
@@ -11030,6 +11067,11 @@
       "pinned": "已置顶",
       "needsAttention": "需要处理",
       "duplicate": "复制伙伴",
+      "duplicating": "正在复制伙伴…",
+      "duplicateFailed": "未能复制伙伴",
+      "duplicateModelRequired": "复制前请先在设置中为伙伴选择默认模型",
+      "pinFailed": "未能更改伙伴的置顶状态",
+      "hideFailed": "未能更改伙伴的隐藏状态",
       "moreActions": "{{name}} 的更多操作",
       "viewIcons": "图标",
       "showCollapsedTeammateAvatars": "收起时显示头像",
@@ -12064,46 +12106,15 @@
     },
     "guided": {
       "title": "创建伙伴",
-      "reviewTitle": "你的新伙伴",
-      "question": "简单描述一下你的期待",
-      "placeholder": "比如，陪我练英语，能聊生活，也能认真纠正我的表达。",
       "generate": "生成伙伴",
-      "generating": "正在构思伙伴…",
-      "generationFailed": "没能生成伙伴。你的想法还在，可以再试一次。",
       "modelRequired": "请在上方选择可用模型后继续。",
       "modelFollowsDefault": "跟随伙伴默认模型。",
       "modelForThisBot": "此选择仅用于这位伙伴。",
-      "cindyDescription": "我会帮你使用 Cindy、连接工具，也会和你一起把事情做完。",
-      "cindySummary": "打理 Cindy，连接工具，把事情做完。",
-      "openCindy": "打开 Cindy",
-      "addCindy": "添加 Cindy",
-      "done": "完成",
-      "editName": "编辑名字",
       "duplicateName": "已有同名伙伴，换一个更容易分辨的名字吧。",
-      "introduction": "自我介绍",
-      "editIntroduction": "编辑自我介绍",
-      "refine": "调整伙伴",
-      "refinePlaceholder": "还想改哪里？比如，少一点客套，多一点幽默。",
-      "back": "返回",
-      "invite": "邀请伙伴",
       "portrait": "头像 {{number}}",
       "upload": "上传图片",
       "generateAvatar": "生成头像",
-      "useAvatar": "使用这张",
-      "examples": {
-        "english": {
-          "label": "练习英语",
-          "prompt": "陪我练英语，从日常话题开始，耐心但不敷衍，认真纠正不自然的表达。"
-        },
-        "ideas": {
-          "label": "一起想点子",
-          "prompt": "一个有想象力也有主见的创作伙伴，陪我讨论写作和产品点子，帮我把想法变成具体方案。"
-        },
-        "life": {
-          "label": "聊聊生活",
-          "prompt": "一个温暖、幽默的伙伴，愿意听我说生活中的小事，不急着给建议。"
-        }
-      }
+      "useAvatar": "使用这张"
     },
     "import": {
       "title": "导入伙伴",
@@ -12467,6 +12478,7 @@
           "listenPortLabel": "本机监听端口",
           "listenPortPlaceholder": "18747",
           "hint": "在本地网络连接 BlueBubbles，只处理所选对话。连接前，请先停止这些对话里的其他自动回复程序。",
+          "automationDenied": "发送时，macOS 拒绝了 BlueBubbles 控制“信息”的请求。请在运行 BlueBubbles 的 Mac 上查看“系统设置 → 隐私与安全性 → 自动化”。",
           "uncertain": "有 {{count}} 条消息的处理结果待核对。请先查看对话记录，再决定是否重试，避免重复回复。"
         }
       },
@@ -14310,6 +14322,8 @@
       "regionAria": "待发送消息队列",
       "listAria": "队列消息",
       "pausedFooter": "任务已停止，队列暂停",
+
+      "steerUnsupportedNotice": "当前引擎不支持插话，排队的消息会在当前这一轮结束后发送。",
       "resumeAction": "继续发送",
       "resumeAria": "继续发送队列消息",
       "showMore_one": "还有 {{count}} 条",
@@ -14457,6 +14471,7 @@
       "steerNotSent": "未发送，暂时无法插话，草稿已保留",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
+      "credentialSwitchKeptSettings": "本次切换未完成，任务会继续使用原来的设置。",
       "modelSwitchContextGuard": {
         "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
         "condensedToast": "为了适应新模型，较早的对话会压缩，完整的对话记录仍可查看。",
@@ -15038,7 +15053,6 @@
     "runningStatus": {
       "currentRate": "最近速度",
       "lastRequestRate": "上次请求均速",
-      "recentTokenRate": "最近 {{rate}} tok/s",
       "waitingSample": "采样中",
       "averageRate": "本轮平均",
       "rateHistory": "生成速度历史",
@@ -15732,6 +15746,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "上下文已满，这条消息未能处理。后面的消息会继续按顺序处理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",
@@ -15808,7 +15823,7 @@
       "viewThread": "查看 thread 上下文（{{count}}）",
       "memberFromGroup": "{{name}} · 来自 {{platform}} 群「{{group}}」",
       "memberFromPlatform": "{{name}} · 来自 {{platform}} 群聊",
-      "guestFromDm": "{{name}} · 来自 {{platform}} 私聊（非主人）",
+      "guestFromDm": "{{name}} · 来自 {{platform}} 私聊",
       "unknownSender": "群成员"
     },
     "rewind": {
@@ -16396,6 +16411,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "添加云主机",
+        "preparingCloud": "云主机 · 准备中",
+        "manageCloud": "管理云主机",
         "allMachines": "全部",
         "localMachine": "本机",
         "connecting": "连接中…",
@@ -16531,6 +16549,9 @@
       "taskInfoSummaryNone": "无",
       "taskInfoSummarySeparator": "、",
       "taskInfo": {
+        "harness": "Harness 图标",
+        "project": "项目图标和名称",
+        "teammate": "伙伴头像",
         "time": "时间",
         "pr": "PR 状态",
         "worktree": "worktree",
@@ -18493,7 +18514,7 @@
       "expired": "等待时间过长，代输入已结束。"
     },
     "failure": {
-      "permission": "Cindy 没有读取这台电脑界面的权限。请在系统设置的辅助功能中允许 Cindy。",
+      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
       "target_gone": "目标窗口已关闭。",
       "unreadable": "无法读取这个界面。可以在宿主电脑上直接完成，然后交还给 Agent。",
       "action_failed": "刚才的操作没有生效，请检查界面后重试。",
@@ -20372,7 +20393,7 @@
     "epermGuidance": {
       "title": "macOS 文件夹访问被拒绝",
       "message": "Cindy 无法访问你的“{{folder}}”文件夹",
-      "detail": "macOS 拒绝了访问。请打开“系统设置”授予权限，然后重新运行 Agent 命令。",
+      "detail": "在「文件与文件夹」中为 Cindy 打开这个文件夹的权限，然后重试。",
       "openSystemSettings": "打开系统设置",
       "cancel": "取消",
       "folderNames": {
@@ -21457,6 +21478,9 @@
     "actionFailed": "未能完成这项插件操作，请重试。"
   },
   "mcpApps": {
+    "composerDragFailed": "未能添加附件，请重新拖动或点击『加到输入框』",
+    "composerAttachmentFormat": "支持图片、PDF 和纯文本，单件最多 64 MiB。",
+    "composerAttachmentBusy": "请稍后再添加附件。",
     "sharedTaskReadOnly": "此卡片仅任务主人可操作。",
     "retry": "重新加载",
     "loadFailed": "应用加载失败。请检查连接后重新加载。",
@@ -22453,5 +22477,10 @@
       "auto": "自动审批",
       "bypassPermissions": "完全访问"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "在「System & App Protection Override」里找到 {{app}}，点右侧 ⓘ。找不到时可点「＋」，按路径添加。",
+    "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。"
   }
 }

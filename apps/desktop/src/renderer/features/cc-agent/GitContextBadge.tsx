@@ -672,11 +672,11 @@ function PrChip({
       {settingsOpen && prCard && (
         <Dialog.Root open onOpenChange={setSettingsOpen}>
           <Dialog.Portal>
-            <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+            <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
             <Dialog.Content aria-describedby={undefined}
               onPointerDownOutside={(event) => event.preventDefault()}
               onCloseAutoFocus={(event) => { event.preventDefault(); pointerFocus.current = true; triggerRef.current?.focus(); }}
-              className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[min(420px,calc(100vw-32px))] max-h-[85vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-4 outline-none">
+              className="modal-panel fixed left-1/2 top-1/2 z-modal w-[min(420px,calc(100vw-32px))] max-h-[85vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-4 outline-none">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div>
                   <Dialog.Title className="text-14 font-medium text-[var(--text-primary)]">{prCard.settingsLabel}</Dialog.Title>
@@ -685,7 +685,7 @@ function PrChip({
                 <Dialog.Close asChild><ChromeIconButton aria-label={t('common.dismiss')}><X size={14} /></ChromeIconButton></Dialog.Close>
               </div>
               {prCard.settingsHtml && <Suspense fallback={null}>
-                <GhostCardPreview inDialog {...prCard} html={prCard.settingsHtml} sessionId={session.id}
+                <GhostCardPreview {...prCard} html={prCard.settingsHtml} sessionId={session.id}
                   onEscape={() => setSettingsOpen(false)} />
               </Suspense>}
             </Dialog.Content>

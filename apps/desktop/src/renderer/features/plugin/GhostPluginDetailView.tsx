@@ -973,7 +973,7 @@ export function ToolDescriptionChip({ tool }: { tool: Pick<GhostToolDecl, 'name'
         sideOffset={8}
         className={cn(
           DETAIL_SURFACE_CLASS,
-          'z-[10000] w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
+          'w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
         )}
       >
         <p className="text-13 leading-5 text-[var(--text-secondary)]">
@@ -1376,12 +1376,12 @@ function DialogFrame({ children }: { children: ReactNode }) {
   return (
     <Dialog.Portal>
       <Dialog.Overlay
-        className="modal-scrim fixed inset-0 z-[10000]"
+        className="modal-scrim fixed inset-0 z-modal"
         style={WINDOW_NO_DRAG_STYLE}
       />
       <Dialog.Content
         onPointerDownOutside={(event) => event.preventDefault()}
-        className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none"
+        className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none"
         style={WINDOW_NO_DRAG_STYLE}
       >
         {children}

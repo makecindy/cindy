@@ -792,7 +792,7 @@ export function ScheduleFormDialog({
     <Dialog.Root open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className={cn('modal-scrim fixed inset-0 z-[10000]')}
+          className={cn('modal-scrim fixed inset-0 z-modal')}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
@@ -808,7 +808,7 @@ export function ScheduleFormDialog({
             }
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'flex h-[640px] max-h-[88vh] w-[760px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -816,7 +816,7 @@ export function ScheduleFormDialog({
           {/* 展开编辑时这些内容被盖在下面:inert 让 Tab 与读屏都停在展开层里。 */}
           <header
             inert={promptExpanded || undefined}
-            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-3.5 pl-6"
+            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-4 pr-4 pb-3.5 pl-6"
           >
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <Dialog.Title className="text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
@@ -875,7 +875,7 @@ export function ScheduleFormDialog({
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
             <div
               inert={promptExpanded || undefined}
-              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]"
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-5"
             >
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
@@ -1266,7 +1266,7 @@ export function ScheduleFormDialog({
                               align="end"
                               sideOffset={8}
                               collisionPadding={16}
-                              className="z-[10010] w-[320px] max-w-[calc(100vw-32px)]"
+                              className="w-[320px] max-w-[calc(100vw-32px)]"
                             >
                               <FormField
                                 label={t('scheduler.deadline.label')}
@@ -1387,7 +1387,7 @@ export function ScheduleFormDialog({
                                   : 'scheduler.editor.preRunHook.tooltip',
                               )}
                               side="top"
-                              contentClassName="z-[10020]"
+                              contentClassName="z-modal-popover-nested"
                             >
                               <span
                                 tabIndex={0}
@@ -1783,9 +1783,9 @@ export function ScheduleFormDialog({
             <div
               role="group"
               aria-label={t('scheduler.editor.fields.prompt')}
-              className="absolute inset-0 z-10 flex flex-col bg-[var(--confirm-bg)]"
+              className="absolute inset-0 z-raised flex flex-col bg-[var(--confirm-bg)]"
             >
-              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-[18px] pb-3.5">
+              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-4 pb-3.5">
                 <p className="min-w-0 flex-1 text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
                   {t('scheduler.editor.fields.prompt')}
                 </p>

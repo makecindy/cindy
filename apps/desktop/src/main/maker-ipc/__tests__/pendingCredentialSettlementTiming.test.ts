@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { getTableConfig } from 'drizzle-orm/sqlite-core';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
+import { createDbClient } from '../../localDb/client/DbClient.js';
+import { sessions } from '../../localDb/schema.js';
+import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store.js';
+import { MAKER_PUSH } from '../channels.js';
+import { createPendingCredentialSwitchService } from '../pendingCredentialSwitchAssembly.js';
 import { clearSessionProvider, getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store.js';
 import { PendingCredentialSwitchService } from '../pendingCredentialSwitch.js';
 
@@ -18,7 +25,11 @@ describe('desktop credential settlement without a permit', () => {
         maker: { listActiveSessions: () => { record('sessions'); return []; }, closeSession: async () => {} },
         ...(path === 'persist' || path === 'pi' ? {
           resolveRoute: async () => { record('resolve'); return { model: 'model', providerId: 'after', degraded: false }; },
-          persistRoute: async () => { record('persist'); },
+          persistRoute: async () => {
+            record('persist');
+            await Promise.resolve();
+            record('persist-ready');
+          },
         } : {}),
         applyPiPending: async () => { record('pi'); return 'applied'; },
         onApplied: () => record('wake'),
@@ -34,7 +45,9 @@ describe('desktop credential settlement without a permit', () => {
           timer: ['0 sessions before', '0 wake after', '0 applied after'],
           close: ['0 wake after', '0 applied after'],
           pi: ['0 sessions before', '0 resolve before', '2 pi before', '3 wake before', '3 applied before'],
-          persist: ['0 sessions before', '0 resolve before', '2 persist after', '3 wake after', '3 applied after'],
+          // The writer still sees the old provider on entry and at the end of its async work.
+          // The queue wake and applied event both see the new provider on the next tick.
+          persist: ['0 sessions before', '0 resolve before', '2 persist before', '3 persist-ready before', '4 wake after', '4 applied after'],
           applied: ['0 sessions before', '0 wake after', '0 applied after'],
         };
         expect(calls).toEqual(expected[path]);
@@ -110,5 +123,64 @@ it('a closed permit prevents timer and close callbacks from even starting settle
   } finally {
     service.clear('held');
     vi.useRealTimers();
+  }
+});
+
+// §3.2, unit. The timing fixture above substitutes persistRoute. Exercise the
+// desktop assembly and SQLite worker too: an old effective provider and model
+// must not overwrite an explicitly selected route when publication follows SQL.
+it('writes the selected model and provider in desktop settlement without a permit', async () => {
+  const sessionId = 'desktop-credential-sqlite';
+  const previous = { model: 'old-model', providerId: 'old-connection' };
+  const selected = { model: 'chosen-model', providerId: 'chosen-connection' };
+  const client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
+  const readRoute = () => client.queryOne(
+    'SELECT model, provider_id AS providerId FROM sessions WHERE id = ?', [sessionId],
+  );
+  const events: string[] = [];
+  const noop = () => {};
+  const service = createPendingCredentialSwitchService({
+    maker: { listActiveSessions: () => [], closeSession: async () => {} },
+    isSessionInTurn: () => false,
+    applyPiPendingSelection: async () => { throw new Error('unexpected Pi settlement'); },
+    resolveLenientSessionRoute: async (_agent, model, providerId) => ({ model, providerId, degraded: false }),
+    getSessionDbAgentKind: () => 'codex',
+    getDesktopProviderService: () => ({ listProviders: async () => [] }),
+    resolveConfiguredContextWindow: () => null,
+    agentInputCoordinatorHolder: null,
+    broadcastSessionPatched: noop,
+    inputCoordinator: { wakeSession: id => events.push(`wake:${getSessionProvider(id)}`) },
+    broadcastToAllWindows: channel => {
+      if (channel === MAKER_PUSH.SESSION_CREDENTIAL_SWITCH_APPLIED) {
+        events.push(`applied:${getSessionProvider(sessionId)}`);
+      }
+    },
+    log: { trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop },
+  });
+  try {
+    const { name, columns } = getTableConfig(sessions);
+    const definitions = columns.map(column => `"${column.name}" ${column.getSQLType()}`);
+    await client.exec(`CREATE TABLE "${name}" (${definitions.join(', ')})`);
+    await client.drizzle.insert(sessions).values({
+      id: sessionId, agentKind: 'codex', ...previous, createdAt: 1, updatedAt: 1,
+    });
+    setCurrentDbClient(client, 'desktop-credential-owner');
+    setSessionProvider(sessionId, previous.providerId);
+    expect(await readRoute()).toEqual(previous);
+    expect(getSessionProvider(sessionId)).toBe(previous.providerId);
+
+    service.register(sessionId, { ...selected, agentKind: 'codex' });
+    await service.onTurnSettled(sessionId);
+
+    expect(await readRoute()).toEqual(selected);
+    expect(service.has(sessionId)).toBe(false);
+    expect(events).toEqual([`wake:${selected.providerId}`, `applied:${selected.providerId}`]);
+  } finally {
+    service.clear(sessionId);
+    clearSessionProvider(sessionId);
+    setSessionEffort(sessionId, null);
+    setSessionFastMode(sessionId, false);
+    clearCurrentDbClient(client);
+    await client.dispose();
   }
 });

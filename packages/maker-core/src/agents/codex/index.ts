@@ -158,6 +158,7 @@ import {
 import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { listCodexModels } from './app-server/list-models.js';
 import { buildCodexEnv } from './env-builder.js';
+import { codexCommandRustLogExclusion } from './app-server/response-timing.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
 import {
   buildCodexBotSkillConfigOverrides,
@@ -224,6 +225,8 @@ import {
   codexUsageRefreshDue,
   resetCodexSpeed,
   settleCodexSpeedUsage,
+  noteCodexResponseEnded,
+  noteCodexResponseTiming,
   resumeCodexGeneration,
   translateAgentMessageDelta,
   translateReasoningSummaryTextDelta,
@@ -5957,6 +5960,30 @@ assertRouteCurrent();
         log.warn('Native auto-review continuation policy unavailable; preserving native policy');
       }
     }
+    // Cindy's local app-server gets RUST_LOG only to emit the response timing trace
+    // (env-builder). Codex hands its own environment to the commands it runs, so give
+    // them the user's own value back, or keep the variable out when there was none.
+    let commandRustLogConfig: Record<string, unknown> = {};
+    if (!opts.remoteHostId) {
+      const userRustLog = process.env.RUST_LOG;
+      if (userRustLog?.trim()) {
+        commandRustLogConfig = { 'shell_environment_policy.set.RUST_LOG': userRustLog };
+      } else {
+        try {
+          const response = await host.request<{ config?: Record<string, unknown> }>(
+            Method.ConfigRead, { cwd: opts.workingDir, includeLayers: false },
+            { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+          );
+          assertCurrentHost('Command environment policy');
+          commandRustLogConfig = codexCommandRustLogExclusion(response.config?.shell_environment_policy) ?? {};
+        } catch (error) {
+          if (error instanceof CodexRouteSelectionChangedError) throw error;
+          // Replacing an exclusion list that could not be read might expose a variable the
+          // user keeps from commands; a stray log filter is the lesser harm.
+          log.warn('Codex command environment policy unavailable; RUST_LOG may reach commands');
+        }
+      }
+    }
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
     // Verified with 0.156.0: features.view_image removes the native reader.
@@ -6882,6 +6909,7 @@ assertRouteCurrent();
         // and lose the Host origin after the first terminal event.
         'features.goals': false,
         ...taskShellEnvConfig,
+        ...commandRustLogConfig,
         // Keep companion memory in its own Home. Native delegation uses the
         // same feature settings and permissions as an ordinary task.
         ...(isolatedBotProfile(opts.botRuntimeProfile) ? {
@@ -13113,12 +13141,15 @@ assertRouteCurrent();
           });
           // Input/cache-only segments still belong in the ledger, but cannot
           // pair already reported output with a later generation denominator.
+          let settledReading = false;
           if (last.outputTokens > 0) {
             const calibration = settleCodexSpeedUsage(translatorRt, last);
             if (calibration) log.debug('SDK ▷ token speed calibration', { turnId: params.turnId, ...calibration });
+            settledReading = calibration?.requestTps !== undefined;
           }
-          // The tool can run for minutes with no further delta to flush this settlement.
-          if (last.outputTokens > 0 && translatorRt.generationPendingToolIds.size > 0) pushStatus(lastStatusText);
+          // The tool can run for minutes with no further delta to flush this settlement, and a
+          // request's own reading must not wait for the next request's events (at most one a request).
+          if (last.outputTokens > 0 && (translatorRt.generationPendingToolIds.size > 0 || settledReading)) pushStatus(lastStatusText);
           else maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
           if (memoryFlushController) {
@@ -13415,6 +13446,17 @@ assertRouteCurrent();
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         // 迟到的旧 turn 收口只允许发 background 结果,不能给当前 turn 注入前台状态。
         if (isTurnInFlight && !isLateCollabTerminal) pushStatus('Generating...');
+      },
+      responseCompleted: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.responseCompleted?.(params))) return;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        noteCodexResponseEnded(translatorRt, params.turnId);
+      },
+      responseTiming: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.responseTiming?.(params))) return;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        // A generation time that arrived after its usage replaces the reading just shown.
+        if (noteCodexResponseTiming(translatorRt, params) && lastUsageRefreshAt !== 0) pushStatus(lastStatusText);
       },
       itemOmitted: (params) => {
         // 正文超限被宿主丢弃的条目不再展示, 但它仍是这一轮真实发生过的工作 (常见是写过大文件):
