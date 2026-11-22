@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
+import { hasProxyEnvConfig } from '@cindy/anthropic-compat-proxy';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 import { AntigravityAgent, antigravityNativeResumeId, isAntigravitySubscriptionModel, probeAntigravityRuntime } from '@cindy/maker-core/agents/antigravity';
 import { spawnAcp } from '@cindy/maker-core/agents/antigravity-transport';
@@ -11,6 +12,8 @@ import { ANTIGRAVITY_ACCOUNT_BUSY, type AntigravityAccountsView } from '../../sh
 import type { SubscriptionCodexUsageBucket } from '../../shared/subscriptionAccounts.js';
 import { readAntigravityToken, createAntigravityUsageReader } from './antigravity-usage.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
+import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
+import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
 import { antigravityConnected, setAntigravityState } from './antigravity-state.js';
 
 import { assertVerifiedAntigravityBinary, supportsAntigravityRuntime } from './antigravity-runtime.js';
@@ -22,6 +25,13 @@ const LEGACY_PROFILE = 'default';
 const PROFILE_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const MAX_PROFILES = 32;
 type Connection = Record<string, unknown>;
+
+async function resolveAntigravityHttpsProxy(): Promise<string | undefined> {
+  if (hasProxyEnvConfig()) return undefined;
+  // The CLI uses HTTPS for Google OAuth and generation. Resolve the system
+  // route for each CONNECT destination so PAC can route those hosts separately.
+  return ensureCliProxyBridge(resolveDesktopOutboundProxy).catch(() => undefined);
+}
 
 interface AntigravityAccounts {
   assertOwner(): void;
@@ -231,15 +241,14 @@ function createAntigravityAgent(
       checkPolicy(binding);
       const tools = opts && prepareTools ? await prepareTools(opts) : undefined;
       try {
-        // Preparing the MCP bridge yields. Recheck the owner and profile before spawning.
-        if (tools) {
-          assertAccountIdle();
-          checkPolicy(binding);
-          assertProfileIdentity(readConnection(), binding.id);
-        }
+        const httpsProxy = await resolveAntigravityHttpsProxy();
+        // MCP and proxy preparation yield. Recheck the owner and profile before spawning.
+        assertAccountIdle();
+        checkPolicy(binding);
+        if (stableSession) assertProfileIdentity(readConnection(), binding.id);
         assertVerifiedAntigravityBinary(binding.binary);
         const transport = spawnAcp(binding.binary, antigravitySubscriptionArgs(geminiHome(binding.id), opts?.permissionMode, !!tools?.mcpServers.length),
-          cwd, { profileStorage: binding.id !== LEGACY_PROFILE });
+          cwd, { profileStorage: binding.id !== LEGACY_PROFILE, httpsProxy });
         const tracked = { ...transport, async close() {
           await transport.close();
           transports.delete(tracked);
@@ -403,11 +412,13 @@ function createAntigravityAgent(
     };
     const probeDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-agy-probe-'));
     try {
+      const httpsProxy = await resolveAntigravityHttpsProxy();
       assertOwner();
       assertSameBinary();
       await probeAntigravityRuntime(spawnAcp(binary, antigravitySubscriptionArgs(probeDir), probeDir, {
         isolatedHome: probeDir,
         profileStorage: true,
+        httpsProxy,
       }), probeDir);
     } finally {
       await fs.promises.rm(probeDir, { recursive: true, force: true });

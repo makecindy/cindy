@@ -104,6 +104,41 @@ describe('Antigravity subscription ACP', () => {
     const env = personalSubscriptionEnv({ PATH: '/bin', HOME: '/home/user', GEMINI_API_KEY: 'secret', GOOGLE_APPLICATION_CREDENTIALS: '/secret', AGY_ADC_AUTH: 'true', GOOGLE_GEMINI_BASE_URL: 'https://other' });
     expect(env).toEqual({ PATH: '/bin', HOME: '/home/user', AGY_CLI_DISABLE_AUTO_UPDATE: 'true' });
   });
+  // Unit: the existing env allowlist test cannot catch a proxy inherited via
+  // lowercase-only env or an OAuth callback routed to that proxy.
+  it('passes the desktop CONNECT bridge for HTTPS and leaves local HTTP callbacks direct', () => {
+    const bridge = 'http://127.0.0.1:17893';
+    expect(personalSubscriptionEnv({}, bridge)).toEqual({
+      AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
+      HTTPS_PROXY: bridge, https_proxy: bridge,
+      NO_PROXY: 'localhost,127.0.0.1,::1', no_proxy: 'localhost,127.0.0.1,::1',
+    });
+  });
+  it('passes lowercase proxy settings to Go and preserves direct OAuth callbacks', () => {
+    const env = personalSubscriptionEnv({
+      all_proxy: 'socks5://proxy.example:1080',
+      https_proxy: 'http://proxy.example:8080',
+      http_proxy: ' ',
+      no_proxy: 'internal.example, LOCALHOST',
+    });
+    expect(env).toMatchObject({
+      HTTPS_PROXY: 'http://proxy.example:8080', https_proxy: 'http://proxy.example:8080',
+      HTTP_PROXY: 'socks5://proxy.example:1080', http_proxy: 'socks5://proxy.example:1080',
+      ALL_PROXY: 'socks5://proxy.example:1080', all_proxy: 'socks5://proxy.example:1080',
+      NO_PROXY: 'internal.example,LOCALHOST,127.0.0.1,::1',
+      no_proxy: 'internal.example,LOCALHOST,127.0.0.1,::1',
+    });
+  });
+  it('keeps wildcard bypass and uses the desktop precedence when proxy spellings conflict', () => {
+    const env = personalSubscriptionEnv({
+      HTTPS_PROXY: 'http://proxy.example:8080', https_proxy: 'http://other.example:8080',
+      NO_PROXY: '*', no_proxy: 'internal.example',
+    });
+    expect(env).toMatchObject({
+      HTTPS_PROXY: 'http://proxy.example:8080', https_proxy: 'http://proxy.example:8080',
+      NO_PROXY: '*', no_proxy: '*',
+    });
+  });
 });
 
 describe('AntigravityAgent native Cindy contract', () => {

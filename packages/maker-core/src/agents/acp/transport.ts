@@ -3,16 +3,37 @@ import { StringDecoder } from 'node:string_decoder';
 import type { AcpTransport } from './client.js';
 
 /** An allowlist avoids inheriting any provider API/ADC or routing credentials. */
-export function personalSubscriptionEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function personalSubscriptionEnv(source: NodeJS.ProcessEnv, httpsProxy?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const key of ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY']) {
+  for (const key of ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR']) {
     if (source[key]) env[key] = source[key];
+  }
+  // Match the desktop resolver's precedence and give both spellings the same
+  // value. Go and other CLI clients differ, and Windows collapses aliases.
+  const readProxyEnv = (key: string) => source[key]?.trim() || source[key.toLowerCase()]?.trim() || undefined;
+  const allProxy = readProxyEnv('ALL_PROXY');
+  // Go's HTTP transport consults the scheme-specific variables, not ALL_PROXY.
+  const https = httpsProxy ?? readProxyEnv('HTTPS_PROXY') ?? allProxy;
+  const http = readProxyEnv('HTTP_PROXY') ?? allProxy;
+  if (https) env.HTTPS_PROXY = env.https_proxy = https;
+  if (http) env.HTTP_PROXY = env.http_proxy = http;
+  if (allProxy) env.ALL_PROXY = env.all_proxy = allProxy;
+
+  const noProxy = readProxyEnv('NO_PROXY');
+  if (https || http || noProxy) {
+    const entries = new Set(noProxy?.split(',').map(entry => entry.trim()).filter(Boolean));
+    const existing = new Set([...entries].map(entry => entry.toLowerCase()));
+    for (const host of ['localhost', '127.0.0.1', '::1']) {
+      if (!existing.has(host)) entries.add(host);
+    }
+    // Some clients only honor the wildcard when it stands alone.
+    env.NO_PROXY = env.no_proxy = entries.has('*') ? '*' : [...entries].join(',');
   }
   env.AGY_CLI_DISABLE_AUTO_UPDATE = 'true';
   return env;
 }
-export function spawnAcp(binary: string, args: string[], cwd: string, options: { profileStorage?: boolean; isolatedHome?: string } = {}): AcpTransport {
-  const env = personalSubscriptionEnv(globalThis.process.env);
+export function spawnAcp(binary: string, args: string[], cwd: string, options: { profileStorage?: boolean; isolatedHome?: string; httpsProxy?: string } = {}): AcpTransport {
+  const env = personalSubscriptionEnv(globalThis.process.env, options.httpsProxy);
   if (options.isolatedHome) {
     for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) env[key] = options.isolatedHome;
   }
