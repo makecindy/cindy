@@ -67,7 +67,7 @@ export interface McpAppsHostDeps {
     files?: AgentInputSerializedFile[],
   ): Promise<void>;
   downloadFile?(input: Omit<Parameters<typeof saveAppDownload>[0], 'showSaveDialog'>): Promise<{ isError?: boolean }>;
-  disposeDocument?(viewId: string): void;
+  disposeDocument?(viewId: string, reason?: 'MCP_PLUGIN_UNAVAILABLE'): void;
   connection?(config: AppServerConfig): AppConnection;
   audit?(method: string): void;
 }
@@ -1501,7 +1501,7 @@ export class McpAppsHost {
     }
   }
 
-  private async disposeView(id: string, view: View, notify = false): Promise<void> {
+  private async disposeView(id: string, view: View, notify?: true | 'MCP_PLUGIN_UNAVAILABLE'): Promise<void> {
     if (this.views.get(id) !== view) return;
     if (notify && view.initialized && !view.suspended) {
       try {
@@ -1522,7 +1522,8 @@ export class McpAppsHost {
       this.sweepTimer = undefined;
     }
     view.links.forEach((link) => link.resolve(false));
-    this.deps.disposeDocument?.(id);
+    if (notify === 'MCP_PLUGIN_UNAVAILABLE') this.deps.disposeDocument?.(id, notify);
+    else this.deps.disposeDocument?.(id);
     view.unlisten.forEach((remove) => remove());
     await view.bridge.close();
     await view.transport.close();
@@ -1623,7 +1624,7 @@ export class McpAppsHost {
   async revokePluginServers(ids: ReadonlySet<string>): Promise<void> {
     pagePermissionGrants.clearServers(ids);
     const closing: Promise<unknown>[] = [];
-    for (const [id, view] of this.views) if (ids.has(view.serverId)) closing.push(this.disposeView(id, view, true));
+    for (const [id, view] of this.views) if (ids.has(view.serverId)) closing.push(this.disposeView(id, view, 'MCP_PLUGIN_UNAVAILABLE'));
     for (const [id, entry] of this.connections) if (ids.has(entry.connection.config.id)) {
       closing.push(entry.connection.close().then(() => { this.connections.delete(id); }));
     }
@@ -1667,13 +1668,12 @@ export class McpAppsHost {
         current?.plugin?.assertCurrent(view.sessionId ?? undefined);
         config = current;
       } catch { /* Reclaim resources whose installed instance has been revoked. */ }
-      if (
-        view.owner !== this.deps.owner() ||
-        !config ||
-        this.serverRevision(config) !== view.serverRevision ||
-        Date.now() - view.lastUsed > 60_000
-      )
-        await this.disposeView(id, view, true);
+      const sameOwner = view.owner === this.deps.owner();
+      const serverChanged = !config || this.serverRevision(config) !== view.serverRevision;
+      if (!sameOwner || serverChanged || Date.now() - view.lastUsed > 60_000) {
+        const pluginRevoked = sameOwner && serverChanged && view.connection.config.plugin;
+        await this.disposeView(id, view, pluginRevoked ? 'MCP_PLUGIN_UNAVAILABLE' : true);
+      }
     }
     for (const [id, entry] of this.connections)
       if (entry.owner !== this.deps.owner() || entry.connection.isClosed) {

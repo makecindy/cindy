@@ -14,6 +14,12 @@
   "usageOnlyDevice": "Solo {{name}}",
   "usagePlans": "Cuotas disponibles",
   "usageBudget": "Presupuesto restante del período",
+  "usageWaiting": "Las cuotas y el uso de hoy aparecerán cuando tu computadora se conecte",
+  "usageUpdateDesktop": "Actualiza Cindy en tu computadora para ver el uso",
+  "usageWaitingTitle": "Tu uso aparecerá aquí",
+  "usageWaitingCopy": "Cuando tu móvil se conecte a tu computadora, las cuotas y el uso diario de cada cuenta se sincronizarán automáticamente, normalmente en unos segundos.",
+  "usageUpdateDesktopTitle": "Actualiza Cindy en tu computadora",
+  "usageUpdateDesktopCopy": "La versión de Cindy en tu computadora es demasiado antigua para enviar el uso a tu móvil. Aparecerá aquí automáticamente después de actualizar.",
   "management": {
     "title": "Gestión de dispositivos",
     "openDevice": "Ver detalles de {{name}}",

@@ -53,6 +53,7 @@ import {
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
+import { LOCAL_NETWORK_LOCAL, type LocalNetworkApi, type LocalNetworkState } from '../shared/localNetwork';
 import { SELF_HOSTED_RELAY_IPC, type SelfHostedRelayApi } from '../shared/selfHostedRelay';
 import { DEVICE_LINK_PUSH, type DeviceLinkPeerLinksSnapshot } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
@@ -966,6 +967,7 @@ const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoke
 const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
 const fanOutDeviceLinkControlEnabledChanged = createIpcFanOut('device-link:control-enabled-changed');
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
+const fanOutLocalNetworkChanged = createIpcFanOut(LOCAL_NETWORK_LOCAL.CHANGED);
 const fanOutProviderShareOwnedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.OWNED_CHANGED);
 const fanOutProviderGroupChanged = createIpcFanOut(PROVIDER_GROUP_IPC.CHANGED);
 const fanOutSubscriptionAccountsChanged = createIpcFanOut('subscription-accounts:changed');
@@ -5235,6 +5237,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     windowsSupport: (enabled) => ipcRenderer.invoke(DESKTOP_LOCAL.WINDOWS_SUPPORT, enabled),
     stop: () => ipcRenderer.invoke(DESKTOP_LOCAL.STOP),
   } satisfies RemoteDesktopApi,
+  // macOS「本地网络」权限：只读本机状态与请求授权，不进入 device-link 远程白名单。
+  localNetwork: {
+    status: (options) => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.STATUS, options),
+    request: () => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.REQUEST),
+    onChanged: (callback) => fanOutLocalNetworkChanged((data) => callback(data as LocalNetworkState)),
+  } satisfies LocalNetworkApi,
   // 自建中转服务:本机中转与加入别的中转(只接受本机应用窗口)。
   selfHostedRelay: {
     command: (command) => ipcRenderer.invoke(SELF_HOSTED_RELAY_IPC.COMMAND, command),
@@ -6998,6 +7006,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
       disabledProviders?: Record<string, boolean>;
+      hiddenProviders?: Record<string, boolean>;
     }> => ipcRenderer.invoke('maker:provider:list'),
     setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
       ipcRenderer.invoke('maker:provider:remote-access:set', input),
@@ -7329,6 +7338,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       input:
         | { kind: 'model'; providerId: string; modelIds: string[]; disabled: boolean }
         | { kind: 'provider'; providerId: string; disabled: boolean; remoteDeviceId?: string }
+        // provider-hidden = 只从模型选择器里收起,不是准入(见 disableOverrides.ts)。
+        | { kind: 'provider-hidden'; providerId: string; hidden: boolean; remoteDeviceId?: string }
         // reset = 恢复默认:删除该供应商整组停用 override(含陈旧条目),遵循
         // configuration-and-overrides.md §4 的「删 override 跟随默认」语义。
         | { kind: 'reset'; providerId: string },

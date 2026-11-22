@@ -162,7 +162,7 @@ async function followMovedCindyAuto(
   providers: readonly ProviderView[] | undefined,
 ): Promise<BotModelRoute[]> {
   // 预设 auto 只在 Cindy AI 上、不会被挪动；只有模型组 Auto 才值得为此读一次目录。
-  if (!chain.some((route) => !route.agentDeviceId && route.model !== 'auto' && isCindyAutoModelId(route.model)))
+  if (!chain.some((route) => route.harness !== 'acp' && !route.agentDeviceId && route.model !== 'auto' && isCindyAutoModelId(route.model)))
     return chain;
   let views = providers;
   if (!views) {
@@ -180,7 +180,7 @@ async function followMovedCindyAuto(
   }
   const catalog = views;
   return chain.map((route) => {
-    if (route.agentDeviceId) return route;
+    if (route.agentDeviceId || route.harness === 'acp') return route;
     const providerId = movedCindyAutoSourceId(catalog, {
       agent: route.harness === 'claude' ? 'claude-code' : route.harness,
       model: route.model,

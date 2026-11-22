@@ -129,9 +129,9 @@ export function EditWorkerPopover({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-50 flex items-center justify-center" style={WINDOW_DRAG_STYLE}>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal flex items-center justify-center" style={WINDOW_DRAG_STYLE}>
           <Dialog.Content
-            className="modal-panel relative z-10 w-[460px] max-w-[calc(100vw-32px)] p-6 outline-none"
+            className="modal-panel relative z-raised w-[460px] max-w-[calc(100vw-32px)] p-6 outline-none"
             aria-describedby={undefined}
             onPointerDownOutside={(event) => event.preventDefault()}
             onOpenAutoFocus={(event) => {

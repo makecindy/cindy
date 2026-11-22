@@ -460,6 +460,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   let recoveryWrites = 0;
   const recoveryCalls: string[] = [];
   const recoveryHandshakes: Array<string | string[] | undefined> = [];
+  let recoveryDeletes = 0;
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-mcp-int-'));
@@ -482,6 +483,11 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       const auth = req.headers.authorization ?? '';
       if (req.url?.includes('/recovery')) {
         if (auth !== `Bearer ${MCP_TOKEN}`) { res.writeHead(401).end(); return; }
+        if (req.method === 'DELETE') {
+          recoveryDeletes += 1;
+          res.writeHead(204).end();
+          return;
+        }
         const body = JSON.parse(await readBody(req));
         if (body.id === undefined) { res.writeHead(202).end(); return; }
         let result: unknown = {};
@@ -1238,6 +1244,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     recoveryWrites = 0;
     recoveryCalls.length = 0;
     recoveryHandshakes.length = 0;
+    recoveryDeletes = 0;
     const approvals: string[] = [];
     const { requestBodies } = await runOneTurn('ask', async (req) => {
       if (req.kind === 'permission') approvals.push(req.toolName);
@@ -1246,6 +1253,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     expect(recoveryCalls).toEqual(['write', 'inspect']);
     expect(recoveryHandshakes).toEqual([undefined, undefined]);
     expect(recoveryWrites).toBe(mode === 'expired' ? 0 : 1);
+    expect(recoveryDeletes).toBe(1);
     expect(approvals.filter(name => name === 'mcp__recovery__echo')).toHaveLength(2);
     expect(requestBodies.at(-1)).toContain('not replayed');
     expect(requestBodies.at(-1)).toContain('writes=' + recoveryWrites);

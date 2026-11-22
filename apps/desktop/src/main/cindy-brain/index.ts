@@ -8233,7 +8233,10 @@ export async function updatePersonalLocalPlugins() {
           if (createHash('sha256').update(await fs.promises.readFile(backupFile)).digest('hex') !== backupHash)
             throw new Error('Previous personal plugin backup verification failed');
           const backupInspection = await manager.inspect(backupFile);
-          if ('rejection' in backupInspection) throwInstallError(backupInspection.rejection);
+          if ('rejection' in backupInspection) throwInstallError({
+            ...backupInspection.rejection,
+            reason: `Previous plugin backup cannot be imported; keeping the current installation: ${backupInspection.rejection.reason}`,
+          });
           if (!isCurrent()) throw new Error('Personal plugin owner changed');
           assertGhostRelocationIdle(instance);
           const updated = await updateLocalGhostPackageLocked(manager, file, inspected, inspected.packageSha256,

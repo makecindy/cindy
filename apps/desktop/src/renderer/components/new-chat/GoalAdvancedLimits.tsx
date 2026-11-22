@@ -42,7 +42,7 @@ function LimitItem({ value, label }: { value: string; label: string }): React.Re
   return (
     <Select.Item
       value={value}
-      className="flex cursor-pointer items-center justify-between gap-3 rounded-[8px] px-2.5 py-1.5 text-12 outline-none"
+      className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-12 outline-none"
       style={{ color: 'var(--model-item-text)' }}
     >
       <Select.ItemText>{label}</Select.ItemText>
@@ -88,7 +88,7 @@ function LimitSelect({
         <Select.Content
           position="popper"
           sideOffset={4}
-          className="z-[10002] overflow-hidden rounded-[12px] border p-1.5"
+          className="z-modal-nested overflow-hidden rounded-xl border p-1.5"
           style={{
             // 宽度严格跟随 trigger(radix popper 暴露的变量),避免 popup 按内容宽度自适应。
             width: 'var(--radix-select-trigger-width)',

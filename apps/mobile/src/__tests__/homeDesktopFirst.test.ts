@@ -732,8 +732,10 @@ describe('mobile home desktop-first surface', () => {
     expect(stylesSource).toContain('height: HOME_SESSION_ROW_HEIGHT');
     expect(stylesSource).toContain('height: HOME_SESSION_SINGLE_LINE_ROW_HEIGHT');
     expect(stylesSource).not.toContain('height: CINDY_LIST_ROW_HEIGHT');
-    // 通栏:项目子行回 surface 全宽底(用户改稿 2026-07-21)。
-    expect(stylesSource).toContain('projectChildren: {\n    backgroundColor: colors.surface,');
+    // 项目子行沿用通栏列表底色；开启壁纸时同一块背景要透出壁纸。
+    expect(source).toContain('const makeStyles = (colors: ThemeColors, listSurface: string = colors.surface)');
+    expect(source).toContain("makeStyles(colors, 'transparent')");
+    expect(stylesSource).toContain('projectChildren: {\n    backgroundColor: listSurface,');
     expect(stylesSource).not.toContain('sessionListRowIndentedCindy');
     expect(stylesSource).not.toContain('sessionListRowDeepIndentedCindy');
     expect(stylesSource).not.toContain('automationGroupChildrenCindy');

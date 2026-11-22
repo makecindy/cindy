@@ -308,13 +308,13 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                 {(control) => (
                   <SettingsTextInput
                     {...control}
+                    data-settings-search-action="Enter the bearer token of this MCP server draft"
                     surface="ivory"
                     data-setting-id={mcpFields.token.id}
                     value={token}
                     onChange={setToken}
                     placeholder={tokenPlaceholder}
                     secret
-                    secretTipContentClassName="z-[10001]"
                   />
                 )}
               </FormField>
@@ -370,7 +370,6 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                     </FormField>
                     <Tip
                       text={t('settings.mcp.fields.removeRow')}
-                      contentClassName="z-[10001]"
                     >
                       <Button
                         data-settings-search-action="Remove this header row"
@@ -453,10 +452,10 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           className={cn(
-            'modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
+            'modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
             '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
           )}
           onOpenAutoFocus={(event) => {

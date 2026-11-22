@@ -1773,7 +1773,7 @@ export function VoiceInputOverlay() {
             <div className="flex h-full flex-col items-center justify-center gap-3">
               <VoiceInputStatusNotice
                 message={error!}
-                className="w-full justify-start rounded-[12px] shadow-none"
+                className="w-full justify-start rounded-xl shadow-none"
                 maxWidthClassName="max-w-none"
               />
               <Button

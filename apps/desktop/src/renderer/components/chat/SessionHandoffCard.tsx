@@ -101,7 +101,7 @@ export function SessionHandoffCard({
       data-split-pane-route-action={interactive ? '' : undefined}
       {...(interactive ? { type: 'button' as const, onClick: handleClick } : {})}
       className={cn(
-        'my-2 flex w-full min-w-0 items-center gap-[14px] rounded-[12px]',
+        'my-2 flex w-full min-w-0 items-center gap-3.5 rounded-xl',
         'border border-[var(--msg-tool-card-border)] bg-[var(--msg-tool-card-bg)] p-4 text-left',
         interactive &&
           'group transition-colors duration-150 hover:border-[var(--msg-assistant-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2',
@@ -127,7 +127,7 @@ export function SessionHandoffCard({
           </span>
           <span
             className={cn(
-              'shrink-0 rounded-full px-2 py-[2px] text-10 font-medium uppercase leading-4 tracking-[0.4px]',
+              'shrink-0 rounded-full px-2 py-0.5 text-10 font-medium uppercase leading-4 tracking-[0.4px]',
               solidBadge
                 ? 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]'
                 : 'border border-[var(--send-btn-bg)] bg-[var(--cmd-palette-bg)] text-[var(--send-btn-bg)]',
@@ -137,7 +137,7 @@ export function SessionHandoffCard({
           </span>
         </span>
 
-        <span className="flex min-w-0 items-center gap-[6px]">
+        <span className="flex min-w-0 items-center gap-1.5">
           {lastActive ? (
             <>
               <History

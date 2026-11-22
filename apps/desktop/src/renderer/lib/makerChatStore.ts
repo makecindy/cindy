@@ -20073,7 +20073,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp, initialHeight: mcpApp.initialHeight },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =

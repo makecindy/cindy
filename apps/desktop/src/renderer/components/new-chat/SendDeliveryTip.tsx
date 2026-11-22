@@ -435,7 +435,7 @@ export function SendDeliveryTip({
         collisionPadding={8}
         data-touch={touch ? '' : undefined}
         data-preview={swapPreview ? '' : undefined}
-        className="send-delivery-tip z-[60] w-max border-0 bg-[var(--tooltip-bg)] p-1 text-13 text-[var(--tooltip-text)]"
+        className="send-delivery-tip z-tooltip w-max border-0 bg-[var(--tooltip-bg)] p-1 text-13 text-[var(--tooltip-text)]"
         // 打开、关闭都不动焦点：光标留在输入框里，发完可以接着打字。
         onOpenAutoFocus={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => event.preventDefault()}
