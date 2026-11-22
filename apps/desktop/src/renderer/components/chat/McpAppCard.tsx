@@ -3,6 +3,7 @@ import { Maximize2 } from 'lucide-react';
 import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { McpAppPermissionPrompt } from './McpAppPermissionPrompt';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
+import { observeHostTheme } from '@/cindy-brain/ghostPanelTheme';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -549,13 +550,11 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       .catch((error) => {
         fail(error);
       });
-    const themeObserver = new MutationObserver(() => {
+    // Same-mode theme switches change only data-theme and the token stylesheet,
+    // so watch the full host theme surface, as plugin panels do.
+    const stopThemeObserver = observeHostTheme(() => {
       paintFrameBackdrop();
       update();
-    });
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
     });
     const sizeObserver = new ResizeObserver(update);
     sizeObserver.observe(element);
@@ -574,7 +573,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       controller.prepareNativeClose();
       unsubscribeContext?.();
       pendingContext = undefined;
-      themeObserver.disconnect();
+      stopThemeObserver();
       sizeObserver.disconnect();
       if (backdropPaintRef.current === paintFrameBackdrop) backdropPaintRef.current = undefined;
       // Layout cleanup runs before React removes the ancestor message tree.

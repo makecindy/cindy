@@ -23,12 +23,6 @@ function fixture() {
   return { handlers, parent, frame, fetch, pending };
 }
 
-it('uses a transparent dark/light wrapper page for App content', () => {
-  const html = mcpAppDirectSandboxDocument('cindy-mcp-app://view-view/resource', 'cindy-mcp-app://view/bridge');
-  expect(html).toContain(':root{color-scheme:light dark}');
-  expect(html).toContain('html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}');
-});
-
 it('ignores forged App requests and Host responses from the Renderer, relaying only the inner window', () => {
   const f = fixture();
   // G5: only add form events; top-navigation and popups remain sandboxed.

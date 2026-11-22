@@ -157,6 +157,14 @@ it('paints the iframe backdrop from the nearest card background without recomput
     });
     expect(frame.style.backgroundColor).toBe('rgb(245, 245, 245)');
 
+    // A same-mode theme switch changes only data-theme (ThemeService.applyTheme).
+    container.style.backgroundColor = 'rgb(240, 236, 228)';
+    await act(async () => {
+      document.documentElement.dataset.theme = 'warm-light';
+      await Promise.resolve();
+    });
+    expect(frame.style.backgroundColor).toBe('rgb(240, 236, 228)');
+
     container.style.backgroundColor = 'rgb(220, 220, 220)';
     await act(async () => applyPluginUiRegions({ ...allPluginUiRegions, sidebar: false }));
     expect(frame.style.backgroundColor).toBe('rgb(220, 220, 220)');
@@ -167,6 +175,7 @@ it('paints the iframe backdrop from the nearest card background without recomput
     const readsAfter = computedStyle.mock.calls.filter(([element]) => element === container).length;
     expect(readsAfter).toBe(readsBefore);
   } finally {
+    delete document.documentElement.dataset.theme;
     await act(async () => root.unmount());
     container.remove();
   }
