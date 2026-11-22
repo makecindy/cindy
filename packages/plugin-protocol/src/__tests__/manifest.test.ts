@@ -9,6 +9,7 @@ import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MANIFEST_SCHEMA_VERSION,
   GHOST_MAIN_VIEW_ICONS,
+  GHOST_NETWORK_MAX_SECRETS,
   GHOST_OAUTH_SCOPES_MAX,
   GHOST_TOOLS_MAX,
   LEGACY_GHOST_SLOTS,
@@ -425,8 +426,34 @@ describe('Ghost manifest contract', () => {
     }
   });
 
-  it('accepts an oidc-token secret without a settings page and normalizes its exact host', () => {
-    const result = validateGhostManifest({
+  // 测试价值
+  // - 生产入口与可观察结果：validateGhostManifest 接受/拒绝 network.secrets 条数，安装与发布校验直接可见。
+  // - 规则依据：plugin-security-and-authoring §4/§6 的声明面边界与网络凭证预算。
+  // - 现有覆盖缺口：既有用例只覆盖 secret 字段形状，没有条数上限的边界。
+  // - 最小失败输入：第 7 条 secret；tier=unit，纯内存解析。
+  it('accepts up to GHOST_NETWORK_MAX_SECRETS user secrets and rejects more', () => {
+    const secrets = (count: number) => Array.from({ length: count }, (_, index) => ({
+      key: `provider_key_${index}`,
+      label: `Provider ${index}`,
+      inject: { header: 'X-Api-Key', format: '{value}', hosts: ['api.example.com'] },
+    }));
+    const manifest = (count: number) => ({
+      ...validManifest,
+      settingsHtml: 'settings.html',
+      tools: undefined,
+      slots: ['network'],
+      network: { hosts: ['api.example.com'], secrets: secrets(count) },
+    });
+
+    expect(GHOST_NETWORK_MAX_SECRETS).toBe(6);
+    expect(validateGhostManifest(manifest(GHOST_NETWORK_MAX_SECRETS)).ok).toBe(true);
+    expect(validateGhostManifest(manifest(GHOST_NETWORK_MAX_SECRETS + 1))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining(`1–${GHOST_NETWORK_MAX_SECRETS} 条`),
+    });
+  });
+
+  it('accepts an oidc-token secret without a settings page and normalizes its exact host', () => {    const result = validateGhostManifest({
       ...validManifest,
       tools: undefined,
       slots: ['network'],

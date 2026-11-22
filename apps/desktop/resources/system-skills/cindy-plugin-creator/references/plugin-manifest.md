@@ -341,7 +341,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 ```json
 "network": {
   "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条；普通域名仅 HTTPS:443；完整 origin 可声明端口；HTTP/WS 只限字面量私网/回环与 localhost，且不注入凭证
-  "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
+  "secrets": [{                                     // 可选 0–6 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/详情页)
     "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"gh-cli"=已批准且身份已确认的实例可声明,优先复用本机 gh 登录、不可用时回落同 key 的设置页 PAT;"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)

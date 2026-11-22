@@ -935,7 +935,7 @@ export interface GhostSubscribeNeeds {
 /** network 槽:域名白名单条数上限(声明面越小越好,超了说明设计有问题)。 */
 export const GHOST_NETWORK_MAX_HOSTS = 8;
 /** network 槽:凭证声明条数上限。 */
-export const GHOST_NETWORK_MAX_SECRETS = 4;
+export const GHOST_NETWORK_MAX_SECRETS = 6;
 /** network 槽:多连接(connections)声明条数上限(一段意识通常只对接一种自建服务)。 */
 export const GHOST_NETWORK_MAX_CONNECTION_DECLS = 2;
 /** network 槽:每条连接声明下用户可添加的连接数上限(同时是 maxConnections 缺省值)。 */
