@@ -204,6 +204,26 @@ describe('applyTeammateTemplate', () => {
       expect(own).toContain('````markdown\n# Hand-off\n\n- Design reviews go straight to the owner.\n````');
     });
 
+    // User feedback 2026-11-22: automations a teammate set up for the owner never reported back.
+    // The rule lives in this layered skill so teammates already on template 9 get it too (unit, the
+    // real v9 hand-off as installed, with an own rule the owner gave).
+    it('gives a teammate on template 9 the scheduled-work standard and keeps its own rules', async () => {
+      const v9 = await fs.readFile(new URL('./fixtures/hand-off-v9.md', import.meta.url), 'utf8');
+      const installed = `${v9}- Always copy Bob on summaries.\n`;
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-layered-'));
+      await fs.mkdir(path.join(dir, '.agents/skills/hand-off'), { recursive: true });
+      await fs.mkdir(path.join(dir, '.cindy'), { recursive: true });
+      await fs.writeFile(path.join(dir, skill), installed);
+      await fs.writeFile(path.join(dir, TEAMMATE_TEMPLATE_RECORD), JSON.stringify({ version: 9, files: { [skill]: sha(v9) } }));
+      await expect(applyTeammateTemplate(dir, 'Mimi', TEAMMATE_TEMPLATE_VERSION,
+        { [skill]: teammateTemplateFiles('Mimi')[skill]! }, async (_relative, hash) => hash === sha(v9) ? v9 : null)).resolves.toBe(true);
+      const text = await read();
+      expect(text).toContain('## Scheduled work');
+      expect(text).toContain('`bindToCurrentSession=true`');
+      expect(text.match(/Always copy Bob on summaries\./g)).toHaveLength(1);
+      expect(text.indexOf('Always copy Bob')).toBeGreaterThan(text.indexOf(OWN_RULES_HEADING));
+    });
+
     it('carries the own rules through later standards without repeating them', async () => {
       await setUp(oldStandard.replace('- Answer whoever asked.\n', '- Answer whoever asked.\n- Never create a task.\n'), true);
       await upgrade(2, newStandard());

@@ -437,6 +437,7 @@ it('serves the executor SDK and importmap without widening CSP', async () => {
   for (const [path, bytes] of [
     ['__cindy/sdk/cindy/view-state.js', sdk.addons['cindy/view-state'].source],
     ['__cindy/sdk/cindy/view-state-react.js', sdk.addons['cindy/view-state'].reactSource],
+    ['__cindy/sdk/cindy/composer-attachment.js', sdk.addons['cindy/composer-attachment'].source],
   ]) {
     expect(await (await request(path)).text()).toBe(bytes);
     expect((await request(path + '?invalid=1')).status).toBe(404);

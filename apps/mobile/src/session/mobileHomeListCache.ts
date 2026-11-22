@@ -264,6 +264,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     session[field] = typeof item[field] === 'string' && Number.isFinite(Date.parse(item[field]))
       ? item[field] : null;
   }
+  if (session.pinnedAt && typeof item.summary === 'string') session.summary = truncateText(item.summary);
   if (typeof item.preview === 'string') session.preview = truncateText(item.preview);
 
   // interface 之外的草稿类布尔标记(HomeSessionRow 用 readBooleanField 读取),只保留 true 值。

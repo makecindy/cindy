@@ -11065,6 +11065,11 @@
       "pinned": "已置首",
       "needsAttention": "待处置",
       "duplicate": "拷贝同伴",
+      "duplicating": "正拷贝同伴…",
+      "duplicateFailed": "未能拷贝同伴",
+      "duplicateModelRequired": "拷贝之前，请先于规制中为同伴择常例模型",
+      "pinFailed": "同伴置首未能更易",
+      "hideFailed": "同伴隐显未能更易",
       "moreActions": "{{name}} 之余事",
       "viewIcons": "图标",
       "showCollapsedTeammateAvatars": "收时示头像",
@@ -12099,46 +12104,15 @@
     },
     "guided": {
       "title": "立同伴",
-      "reviewTitle": "君之新同伴",
-      "question": "略述君之所期",
-      "placeholder": "如：伴吾习英语，可话家常，亦能认真纠吾措辞。",
       "generate": "造同伴",
-      "generating": "方构思同伴…",
-      "generationFailed": "暂不能成，君之所想已留，请再试。",
       "modelRequired": "请于上方择可用模型，乃续。",
       "modelFollowsDefault": "从同伴预设模型。",
       "modelForThisBot": "此择仅用于此同伴。",
-      "cindyDescription": "吾可助君用 Cindy、接器具，亦与君共成其事。",
-      "cindySummary": "掌 Cindy，接器具，成其事。",
-      "openCindy": "启 Cindy",
-      "addCindy": "纳 Cindy",
-      "done": "毕",
-      "editName": "修名",
       "duplicateName": "已有同名同伴，易一易辨之名可也。",
-      "introduction": "自述",
-      "editIntroduction": "修自述",
-      "refine": "调同伴",
-      "refinePlaceholder": "尚欲改何处？如：少些客套，多些诙谐。",
-      "back": "归",
-      "invite": "邀同伴",
       "portrait": "像 {{number}}",
       "upload": "上呈图",
       "generateAvatar": "造像",
-      "useAvatar": "用此",
-      "examples": {
-        "english": {
-          "label": "习英语",
-          "prompt": "伴吾习英语，自日常话题始，耐心而不敷衍，认真纠不自然之措辞。"
-        },
-        "ideas": {
-          "label": "共思妙策",
-          "prompt": "一富想像亦有主见之创作同伴，伴吾论文章与产品之思，助吾化想法为实策。"
-        },
-        "life": {
-          "label": "闲话生活",
-          "prompt": "一温厚诙谐之同伴，愿听吾生活琐事，不急于献策。"
-        }
-      }
+      "useAvatar": "用此"
     },
     "import": {
       "title": "纳同伴",
@@ -21499,6 +21473,9 @@
     "actionFailed": "此法器操作未成，请重试。"
   },
   "mcpApps": {
+    "composerDragFailed": "附件未入，请再拖之，或按「加到输入框」。",
+    "composerAttachmentFormat": "可纳图、PDF 及纯文，每件以 64 MiB 为限。",
+    "composerAttachmentBusy": "请稍候再添附件。",
     "sharedTaskReadOnly": "此卡唯差事之主可操作。",
     "retry": "重载",
     "loadFailed": "应用程序加载未成。请察连接后重载。",
