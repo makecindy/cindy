@@ -360,6 +360,7 @@ export function recordSessionClaudeTurnUsage(
             sessionId: session.id,
             clientId: turnAssistantPersistId,
             money: turnMoney,
+            actualAmounts: actualByCurrency,
             estimatedAmounts,
             turnUsageDetails,
             turnOrigin: event.turnOrigin,

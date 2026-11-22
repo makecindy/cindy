@@ -148,7 +148,7 @@ import {
 } from '@/platform/chrome';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { MessageUsageCost } from '@/session/MessageUsageCost';
-import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
+import { messageCostParts } from '@cindy/maker-shared/usage-cost-details';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
 import {
@@ -3739,11 +3739,11 @@ function MessageBubble({
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   // Locale-independent (fixed yyyy-MM-dd HH:mm:ss), so the timestamp alone is the key.
   const absoluteTime = useMemo(() => formatMessageAbsoluteTime(item.message.createdAt), [item.message.createdAt]);
-  const moneySplit = item.message.turnMoney ? splitUsageCost(item.message.turnMoney,
-    (item.message.source.agentMeta?.turnUsageDetails as { additionalCosts?: unknown } | undefined)?.additionalCosts) : null;
-  const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
-    ? moneySplit ? [moneySplit.conversation.amount > 1e-9 ? formatMessageTurnCost(moneySplit.conversation) : '',
-        ...moneySplit.additional.map(formatMessageTurnCost)].filter(Boolean).join(' + ') : ''
+  const costParts = showCompletedActionBar && item.message.kind === 'assistant' && item.message.turnMoney
+    ? messageCostParts(item.message.turnMoney, item.message.source.agentMeta?.turnUsageDetails)
+    : null;
+  const turnCost = costParts
+    ? [...costParts.conversation, ...costParts.additional].map(formatMessageTurnCost).join(' + ')
     : '';
   // 金额缺席时退回显示本轮 token(桌面算不出模型报价的轮次):这一格不留空。
   const turnTokens = !turnCost && showCompletedActionBar && item.message.kind === 'assistant'

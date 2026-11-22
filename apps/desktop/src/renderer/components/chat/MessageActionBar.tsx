@@ -68,7 +68,7 @@ import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
 import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
-import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
+import { messageCostParts } from '@cindy/maker-shared/usage-cost-details';
 import { UsageCostPopover } from '@/components/status/UsageCostPopover';
 import { TurnGenerationTrace } from '@/components/status/TurnGenerationTrace';
 import { traceHasChart } from '@cindy/maker-shared/usage-format';
@@ -554,12 +554,16 @@ export function MessageActionBar({
       ? userTurnCostIsEstimate
       : turnCostIsEstimate;
     const isUserTurnTotal = effectiveUserTurnMoney != null;
-    const splitCost = displayedMoney ? splitUsageCost(displayedMoney, turnUsageDetails?.additionalCosts) : null;
-    const conversationText = splitCost && splitCost.conversation.amount > 1e-9
-      ? displayedCostIsEstimate
-        ? t('chat.messageActionBar.turnCostEstimatedValue', { cost: formatTurnCostMoney(splitCost.conversation) })
-        : formatTurnCostMoney(splitCost.conversation) : '';
-    const costLabel = [conversationText, ...(splitCost?.additional.map(formatTurnCostMoney) ?? [])].filter(Boolean).join(' + ');
+    const parts = displayedMoney ? messageCostParts(
+      displayedCostIsEstimate ? { ...displayedMoney, kind: 'value-estimate' } : displayedMoney,
+      turnUsageDetails,
+    ) : null;
+    const costLabel = parts ? [
+      ...parts.conversation.map(money => money.kind === 'value-estimate'
+        ? t('chat.messageActionBar.turnCostEstimatedValue', { cost: formatTurnCostMoney(money) })
+        : formatTurnCostMoney(money)),
+      ...parts.additional.map(formatTurnCostMoney),
+    ].join(' + ') : '';
 
     // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
     // 仅 assistant(align='left')会拿到值;估算值(Codex 折算)表达为 token 价值。

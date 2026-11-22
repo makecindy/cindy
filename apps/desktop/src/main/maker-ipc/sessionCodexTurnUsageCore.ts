@@ -288,6 +288,7 @@ export function recordSessionCodexTurnUsage(
               sessionId: session.id,
               clientId: turnAssistantPersistId,
               money,
+              actualAmounts,
               estimatedAmounts,
               turnUsageDetails,
               turnOrigin: event.turnOrigin,

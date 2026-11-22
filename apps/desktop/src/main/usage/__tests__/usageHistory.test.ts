@@ -352,6 +352,20 @@ describe('getSubscriptionValuePriceFor', () => {
 });
 
 describe('readUsageHistoryWith', () => {
+  // Unit: an XD account switches from a USD key to a CNY gateway. The historical
+  // USD day must reappear unchanged when switching the mixed window back to USD.
+  it('selects the only source currency, then the settlement currency in a mixed window', async () => {
+    setActiveLedgerCurrency('CNY');
+    const usd = nativeUsd(2);
+    const cny = { ...usd, currency: 'CNY' as const, amount: 3 };
+    const before = { day: '2026-06-10', monies: [usd] };
+    const deps = makeDeps({ getAllSpendDays: async () => [before] });
+    expect((await readUsageHistoryWith(deps)).totals.last30Days).toEqual(usd);
+    deps.getAllSpendDays = async () => [before, { day: TODAY, monies: [cny] }];
+    expect((await readUsageHistoryWith(deps)).totals.last30Days).toEqual(cny);
+    expect((await readUsageHistoryWith(deps, { currency: 'USD' })).totals.last30Days).toEqual(usd);
+  });
+
   // 单测：纯 CNY 的订阅估值、海外 USD 的原有金额与展示不能因迁移修复改变。
   // 现有用例只校验聚合值，没有经过菜单栏和 iPhone 小组件投影；最小输入是 API 3 + 订阅估值 2 USD。
   it.each(['CNY', 'USD'] as const)('keeps %s account and subscription presentation unchanged', async (currency) => {

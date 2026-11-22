@@ -22,7 +22,6 @@ import { mayRecordTurnUsage, turnUsageBroadcastScope } from './usage/turnUsageAd
  */
 
 import { BrowserWindow } from './usageBroadcastPorts.js';
-import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import type { SendOrigin } from '@cindy/maker-core';
 
 import type { MessageTurnCostPayload } from '../shared/turnCostPayload.js';
@@ -45,7 +44,7 @@ import {
   recordScheduleRunCostDirect,
 } from './scheduler-host/runCostLedger.js';
 import {
-  addCompatibleRegionalMoney,
+  userRoundCostProjection,
   normalizeRegionalMoney,
   type RegionalMoney,
 } from '../shared/regionalMoney.js';
@@ -73,6 +72,7 @@ export interface TurnCostDeps {
     next: Record<string, unknown>,
   ): Promise<void>;
   readPriorUserRoundCost(sessionId: string, clientId: string): Promise<{
+    amounts?: RegionalMoney[];
     additionalCosts?: RegionalMoney[];
     money: RegionalMoney | null;
     costUsd: number;
@@ -203,17 +203,15 @@ export async function recordTurnCostOnMessage(
       // This runs in the durable FIFO after prior assistant cost patches, so
       // the query sees every earlier segment of this user round.
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
+      const round = userRoundCostProjection(prior, normalized, turnUsageDetails);
+      const roundDetails = round?.userTurnAmounts
+        ? buildTurnUsageDetails({ ...turnUsageDetails, userTurnAmounts: round.userTurnAmounts }) : turnUsageDetails;
       const detailsWithAdditional = withFirstUserRound(prior.additionalCosts?.length
-        ? { ...(turnUsageDetails ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
+        ? { ...(roundDetails ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
             cacheCreateTokens: 0, totalTokens: 0, cacheHitRate: null }), additionalCosts: prior.additionalCosts }
-        : turnUsageDetails, prior.isFirstUserRound);
-      userTurnMoney = addCompatibleRegionalMoney([
-        ...(prior.money ? [prior.money] : []), normalized,
-        ...supplementalConversationEstimates({ turnCost: normalized, turnUsageDetails }),
-      ], normalized.currency) ?? normalized;
-      userTurnCostIsEstimate = userTurnMoney.kind === 'value-estimate' ||
-        supplementalConversationEstimates({ turnCost: normalized, turnUsageDetails }).some(value => value.currency === userTurnMoney.currency) ||
-        (prior.money?.currency === userTurnMoney.currency && prior.hasEstimatedValue);
+        : roundDetails, prior.isFirstUserRound);
+      userTurnMoney = round?.money ?? normalized;
+      userTurnCostIsEstimate = round?.isEstimate ?? (normalized.kind === 'value-estimate');
       const patch: Record<string, unknown> = {
         // Keep the raw segment immutable: daily/session/model accounting and
         // scheduler summaries consume this field and must never see a running
@@ -333,8 +331,11 @@ export async function recordTurnUsageOnMessage(
       // 与 recordTurnCostOnMessage 同一条 durable FIFO,所以这里看得到本用户轮此前
       // 每个 segment 已落库的费用。
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
-      const detailsWithAdditional = withFirstUserRound(prior.additionalCosts?.length
-        ? { ...turnUsageDetails, additionalCosts: prior.additionalCosts } : turnUsageDetails,
+      const detailsWithAdditional = withFirstUserRound({
+        ...turnUsageDetails,
+        ...(prior.additionalCosts?.length && { additionalCosts: prior.additionalCosts }),
+        ...(prior.amounts && { userTurnAmounts: prior.amounts }),
+      },
       prior.isFirstUserRound) ?? turnUsageDetails;
       const userTurnMoney =
         prior.money && prior.money.amount > 0 ? prior.money : null;
@@ -419,15 +420,19 @@ export async function recordSchedulerTurnCost(
     sessionId: string;
     clientId?: string;
     money: RegionalMoney;
+    actualAmounts?: RegionalMoney[];
     estimatedAmounts?: RegionalMoney[];
     turnUsageDetails?: TurnUsageDetails | null;
     turnOrigin?: SendOrigin;
   },
   deps: SchedulerTurnCostFallbackDeps = defaultSchedulerTurnCostFallbackDeps,
 ): Promise<string | null> {
-  const { clientId, turnOrigin, estimatedAmounts, ...segment } = args;
-  const details = estimatedAmounts?.length && (estimatedAmounts.length > 1 || args.money.kind === 'actual-cost')
-    ? buildTurnUsageDetails({ ...args.turnUsageDetails, estimatedAmounts })
+  const { clientId, turnOrigin, actualAmounts, estimatedAmounts, ...segment } = args;
+  const mixedActuals = actualAmounts && actualAmounts.length > 1;
+  const includeEstimates = estimatedAmounts?.length && (estimatedAmounts.length > 1 || args.money.kind === 'actual-cost');
+  const details = mixedActuals || includeEstimates
+    ? buildTurnUsageDetails({ ...args.turnUsageDetails, ...(mixedActuals && { actualAmounts }),
+        ...(includeEstimates && { estimatedAmounts }) })
     : args.turnUsageDetails;
   if (clientId) {
     const recorded = await deps.recordOnMessage({

@@ -1,3 +1,4 @@
+import { sumUsageAmounts, supplementalConversationAmounts } from '@cindy/maker-shared/usage-cost-details';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { CURRENT_CINDY_REGION } from './brandRegion.js';
@@ -274,6 +275,27 @@ export function addCompatibleRegionalMoney(
     currencyCandidates[0].currency;
   const compatible = values.filter((value) => value.currency === currency);
   return compatible.length > 0 ? addRegionalMoney(compatible) : null;
+}
+
+/** Build the display snapshot for one user round, including its single-currency compatibility field. */
+export function userRoundCostProjection(
+  prior: { money: RegionalMoney | null; hasEstimatedValue: boolean; amounts?: RegionalMoney[] },
+  current: RegionalMoney | null,
+  details: unknown,
+) {
+  const supplemental = supplementalConversationAmounts({ turnCost: current, turnUsageDetails: details });
+  const segment = current ? [current, ...supplemental] : supplemental;
+  const primary = addCompatibleRegionalMoney([...(prior.money ? [prior.money] : []), ...segment], current?.currency);
+  if (!primary) return null;
+  const priorDisplay = prior.money && prior.hasEstimatedValue
+    ? { ...prior.money, kind: 'value-estimate' as const } : prior.money;
+  const amounts = sumUsageAmounts([...(prior.amounts ?? (priorDisplay ? [priorDisplay] : [])), ...segment]);
+  const selected = amounts.find(value => value.currency === primary.currency) ?? primary;
+  return {
+    money: { ...primary, amount: selected.amount, approximate: selected.approximate || primary.approximate },
+    isEstimate: selected.kind === 'value-estimate',
+    ...(amounts.length > 1 && { userTurnAmounts: amounts }),
+  };
 }
 
 export function asValueEstimateMoney(money: RegionalMoney): RegionalMoney {

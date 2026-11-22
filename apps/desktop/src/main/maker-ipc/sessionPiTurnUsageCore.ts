@@ -346,6 +346,7 @@ export function recordSessionPiTurnUsage(
               sessionId: session.id,
               clientId: turnAssistantPersistId,
               money: messageMoney,
+              actualAmounts,
               estimatedAmounts,
               turnUsageDetails,
               turnOrigin: event.turnOrigin,

@@ -131,8 +131,12 @@ export function groupUsageCostRows(
 export function usageCostTotals(
   rows: readonly UsageCostRow[],
 ): UsageCostMoney[] {
+  return sumUsageAmounts(rows.map(row => row.money));
+}
+
+export function sumUsageAmounts(amounts: readonly UsageCostMoney[]): UsageCostMoney[] {
   const totals = new Map<string, UsageCostMoney>();
-  for (const { money } of rows) {
+  for (const money of amounts) {
     const prior = totals.get(money.currency);
     totals.set(
       money.currency,
@@ -177,6 +181,42 @@ export function supplementalConversationEstimates(
     ).filter((row) => row.money.kind === "value-estimate"),
   );
   return totals.filter((money) => money.currency !== includedCurrency);
+}
+
+function segmentActualAmounts(usage: Record<string, unknown>): UsageCostMoney[] {
+  const raw = Array.isArray(usage.actualAmounts) ? usage.actualAmounts :
+    Array.isArray(usage.perModelCost) ? usage.perModelCost.map(item => record(item).money) : [];
+  return raw.map(normalizeUsageCostMoney).filter((money): money is UsageCostMoney =>
+    money?.kind === "actual-cost" && money.amount > 0);
+}
+
+/** Other segment amounts omitted from the scalar compatibility field. */
+export function supplementalConversationAmounts(metaValue: unknown): UsageCostMoney[] {
+  const meta = record(metaValue);
+  const primary = normalizeUsageCostMoney(meta.turnCost);
+  const estimates = supplementalConversationEstimates(meta);
+  if (!primary || primary.kind !== "actual-cost" || meta.turnCostIsEstimate === true) return estimates;
+  const otherActuals = segmentActualAmounts(record(meta.turnUsageDetails))
+    .filter(value => value.currency !== primary.currency);
+  return [...sumUsageAmounts(otherActuals), ...estimates];
+}
+
+/** A round total includes media; subtract each media fee only in its own currency. */
+export function messageCostParts(total: UsageCostMoney, detailsValue: unknown) {
+  const details = record(detailsValue);
+  const { conversation, additional } = splitUsageCost(total, details.additionalCosts);
+  const snapshot = Array.isArray(details.userTurnAmounts)
+    ? details.userTurnAmounts.map(normalizeUsageCostMoney).filter((v): v is UsageCostMoney => v !== null)
+    : [];
+  // A legacy scalar already covers its currency. Recover only other currencies
+  // from the segment facts, even if a same-currency estimate marked that scalar.
+  const amounts = snapshot.length > 1
+    ? snapshot.map(value => splitUsageCost(value, additional).conversation)
+    : [conversation, ...sumUsageAmounts([
+        ...segmentActualAmounts(details),
+        ...supplementalConversationEstimates({ turnCost: total, turnUsageDetails: details }),
+      ].filter(value => value.currency !== total.currency))];
+  return { conversation: amounts.filter(value => value.amount > 1e-9), additional };
 }
 
 /** Reconstruct only recorded facts. Never infer a historical channel from today's selection. */

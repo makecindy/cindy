@@ -16,6 +16,10 @@ type ModelTokenUsage = TokenCounts & UsageBillingSource & { model: string };
 const tokenFields = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreateTokens'] as const;
 
 export interface TurnUsageDetails extends UsageBillingSource {
+  /** Actual charges for a mixed-currency segment. */
+  actualAmounts?: RegionalMoney[];
+  /** Cumulative display snapshot, including media, when the user round has two currencies. */
+  userTurnAmounts?: RegionalMoney[];
   /** Snapshot for this user round; not an incremental segment charge. */
   additionalCosts?: RegionalMoney[];
   /** Native estimate totals for this segment when it has more than one currency. */
@@ -71,6 +75,10 @@ export interface TurnUsageDetails extends UsageBillingSource {
 }
 
 export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
+  /** Actual charges for a mixed-currency segment. */
+  actualAmounts?: RegionalMoney[];
+  /** Cumulative display snapshot, including media, when the user round has two currencies. */
+  userTurnAmounts?: RegionalMoney[];
   additionalCosts?: RegionalMoney[];
   /** Native estimate totals for this segment when it has more than one currency. */
   estimatedAmounts?: RegionalMoney[];
@@ -182,7 +190,7 @@ export function aggregateTurnUsageDetails(
 ): TurnUsageDetails | null {
   const details = detailsList.filter(
     (item): item is TurnUsageDetails =>
-      Boolean(item && (item.totalTokens > 0 || item.turnDurationMs !== undefined || item.additionalCosts?.length)),
+      Boolean(item && (item.totalTokens > 0 || item.turnDurationMs !== undefined || item.additionalCosts?.length || item.userTurnAmounts?.length || item.actualAmounts?.length || item.perModelCost?.length)),
   );
   if (details.length === 0) return null;
 
@@ -240,6 +248,7 @@ export function aggregateTurnUsageDetails(
     models: modelNames,
     perModelTokens: details.flatMap(item => item.perModelTokens ?? []),
     perModelCost: perModel,
+    userTurnAmounts: details.at(-1)?.userTurnAmounts,
     additionalCosts: [...details].reverse().find(detail => detail.additionalCosts)?.additionalCosts,
     firstUserRound: details.some((detail) => detail.firstUserRound === true),
     // 各段各有自己的时间轴，无法拼接：保留最近一段的图。
@@ -262,12 +271,17 @@ export function mergeTurnUsageDetailsForMessage(
   // must extend the existing user-turn aggregate rather than replace the
   // output tokens and generation duration already attached to that message.
   if (incoming.outputTokens <= 0 && existing.outputTokens > 0) {
-    return aggregateTurnUsageDetails([existing, incoming]) ?? incoming;
+    const merged = aggregateTurnUsageDetails([existing, incoming]) ?? incoming;
+    return { ...merged,
+      ...(incoming.actualAmounts && { actualAmounts: incoming.actualAmounts }),
+      ...(incoming.estimatedAmounts && { estimatedAmounts: incoming.estimatedAmounts }),
+    };
   }
   const turnDurationMs = Math.max(existing.turnDurationMs ?? 0, incoming.turnDurationMs ?? 0);
   const base = incoming.totalTokens > 0 ? incoming : existing.totalTokens > 0 ? existing : incoming;
   return {
     ...base,
+    ...(incoming.userTurnAmounts && { userTurnAmounts: incoming.userTurnAmounts }),
     ...(turnDurationMs > 0 ? { turnDurationMs } : {}),
   };
 }
@@ -286,22 +300,28 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens;
   const durationMs = sanitizeDuration(input.durationMs);
   const turnDurationMs = sanitizeDuration(input.turnDurationMs);
+  const actualAmounts = input.actualAmounts?.map(normalizeRegionalMoney)
+    .filter((value): value is RegionalMoney => value?.kind === 'actual-cost' && value.amount > 0);
+  const userTurnAmounts = input.userTurnAmounts?.map(normalizeRegionalMoney)
+    .filter((value): value is RegionalMoney => !!value && value.amount > 0);
   const estimatedAmounts = input.estimatedAmounts?.map(normalizeRegionalMoney)
     .filter((value): value is RegionalMoney => value?.kind === 'value-estimate' && value.amount > 0);
+  const perModelCost = sanitizePerModelCost(input.perModelCost);
   const additionalCosts = input.additionalCosts?.map(normalizeRegionalMoney).filter((money): money is RegionalMoney => !!money);
-  if (totalTokens <= 0 && turnDurationMs === undefined && !additionalCosts?.length && !estimatedAmounts?.length) return null;
+  if (totalTokens <= 0 && turnDurationMs === undefined && !additionalCosts?.length && !estimatedAmounts?.length && !actualAmounts?.length && !userTurnAmounts?.length && !perModelCost?.length) return null;
 
   const cacheDenominator = inputTokens + cacheReadTokens + cacheCreateTokens;
   const cacheHitRate = cacheDenominator > 0 ? cacheReadTokens / cacheDenominator : null;
   const model = sanitizeModel(input.model);
   const models = uniqueModels(input.models);
-  const perModelCost = sanitizePerModelCost(input.perModelCost);
   const perModelTokens = normalizeModelTokenRows(input.perModelTokens, { inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens });
   const trace = normalizeGenerationTrace(input.trace);
 
   return {
     ...normalizeUsageBillingSource(input),
     ...(additionalCosts?.length ? { additionalCosts } : {}),
+    ...(actualAmounts?.length && { actualAmounts }),
+    ...(userTurnAmounts?.length && { userTurnAmounts }),
     ...(estimatedAmounts?.length ? { estimatedAmounts } : {}),
     inputTokens,
     outputTokens,
@@ -328,6 +348,8 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
   return (
     buildTurnUsageDetails({
       ...normalizeUsageBillingSource(raw),
+      actualAmounts: Array.isArray(raw.actualAmounts) ? raw.actualAmounts : undefined,
+      userTurnAmounts: Array.isArray(raw.userTurnAmounts) ? raw.userTurnAmounts : undefined,
       estimatedAmounts: Array.isArray(raw.estimatedAmounts) ? raw.estimatedAmounts : undefined,
       additionalCosts: Array.isArray(raw.additionalCosts) ? raw.additionalCosts as RegionalMoney[] : undefined,
       inputTokens: typeof raw.inputTokens === 'number' ? raw.inputTokens : undefined,

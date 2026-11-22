@@ -665,7 +665,9 @@ function toQuotaHoverCardTurnUsage(
 ): QuotaHoverCardTurnUsage | null {
   if (!summary) return null;
   const { details } = summary;
-  const costText = summary.money
+  const costText = details.userTurnAmounts?.length
+    ? details.userTurnAmounts.map(formatTurnCostMoney).join(' + ')
+    : summary.money
     ? formatTurnCostMoney(summary.money)
     : summary.costUsd != null
       ? formatTurnCostUsd(summary.costUsd)
