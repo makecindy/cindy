@@ -276,7 +276,7 @@ import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/cod
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
-import { getSessionSubscriptionAccount } from '../session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from '../session.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
 import { getActiveCatalogWithCodexModels } from '../../maker-host/active-catalog.js';
 import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
@@ -2521,6 +2521,73 @@ describe('tasks using imported Codex connections', () => {
     h.pools.openai.accounts = [account('default')];
     await expect(agent.startSession({ providerId: 'openai-old', sessionId: 'old-task' } as StartSessionOptions)).rejects.toThrow();
     expect(start).toHaveBeenCalledOnce();
+  });
+
+  // Regression (2026-11-22): the writer check must compare against the host the session actually runs on,
+  // which carries its subscription account; a route onto another account still compares without it.
+  it('checks the thread writer host with the account the session runs on, only for that account', async () => {
+    h.pools.openai = {
+      strategy: 'round', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = { id: 'imported', configDir: 'openai/imported', assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      h.pools.openai.legacyCodexAccounts = { 'openai-old': 'default' };
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[2][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'other', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[3][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
+  // Review (#12144): a created provider can hold several accounts; its first account is only one of them.
+  // A session running on another account of that same provider keeps its own host.
+  it('keeps the running account when it is a later account of the target provider', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('second'), account('third'), account('elsewhere')] };
+    h.created.cprov = { kind: 'openai', name: 'Team', account: 'second' };
+    h.placement['openai:second'] = 'cprov';
+    h.placement['openai:third'] = 'cprov';
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = (id: string) => ({ id, configDir: `openai/${id}`, assertCurrent() {}, readState: async () => ({ authenticated: true }) });
+    const third = running('third');
+    let release = registerSessionSubscriptionAccount('lane', third);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(third);
+    } finally { release(); }
+    release = registerSessionSubscriptionAccount('lane', running('elsewhere'));
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
+  // Review (#12144): once the running account is removed, switching the idle task to another source must
+  // still reach the target's writer check instead of failing on the stale account.
+  it('checks another target normally when the running account was removed', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('default')] };
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => true);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    let removed = false;
+    const running = { id: 'gone', configDir: 'openai/gone', readState: async () => ({ authenticated: true }),
+      assertCurrent() { if (removed) throw new Error('Subscription account was disconnected'); } };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    removed = true;
+    try {
+      await expect(agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'anthropic-api', model: 'm', threadId: 't' }))
+        .resolves.toBe(true);
+      await expect(agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' }))
+        .resolves.toBe(true);
+      expect(check.mock.calls.map(([options]) => options[NATIVE_SUBSCRIPTION_ACCOUNT])).toEqual([undefined, undefined]);
+    } finally { release(); }
   });
 
   it('forks old history through the same imported account and reconnects through its old login', async () => {
