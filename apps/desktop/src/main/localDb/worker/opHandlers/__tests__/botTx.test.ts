@@ -601,15 +601,16 @@ describe('Bot named worker transactions', () => {
   // Test value: the startup cleanup (`bots.pruneEmptyLegacyRoutineHistory`) deletes user data, so it pins
   // exactly what goes: an archived V1 routine run in teammate history with no message and no other
   // reference. A real account had 102 such shells; the 18 runs with messages must stay. Minimal failure:
-  // a rewound message, a non-routine history task, or a reference found only by column name or only by foreign key.
+  // a rewound message, a non-routine history task, a run record, or an attachment ref (`media_refs.ref_id`) that the
+  // predicate overlooks.
   // Unit tier, isolated SQLite.
   it('removes only empty archived V1 routine runs from teammate history, once', () => {
     db.exec(`
       CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         rewind_at INTEGER);
-      -- One reference found only by its column name, one only by its foreign key.
-      CREATE TABLE schedule_runs (id TEXT PRIMARY KEY, session_id TEXT);
-      CREATE TABLE shared_links (id TEXT PRIMARY KEY, target TEXT REFERENCES sessions(id) ON DELETE CASCADE);
+      CREATE TABLE schedule_runs (id TEXT PRIMARY KEY, session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL);
+      -- A polymorphic reference: no foreign key, and a column name that says nothing about tasks.
+      CREATE TABLE media_refs (id TEXT PRIMARY KEY, ref_kind TEXT NOT NULL, ref_id TEXT NOT NULL);
       CREATE VIRTUAL TABLE messages_fts USING fts5(content);
     `);
     tx(db, { name: 'bots.createProfile', args: {
@@ -629,7 +630,7 @@ describe('Bot named worker transactions', () => {
       ['with-message', 'history', `routine:r1:${uuid.replace('0f', '1f')}`, 'archived'],
       ['with-rewound', 'history', `routine:r1:${uuid.replace('0f', '2f')}`, 'archived'],
       ['with-run', 'history', `routine:r1:${uuid.replace('0f', '3f')}`, 'archived'],
-      ['with-share', 'history', `routine:r1:${uuid.replace('0f', '5f')}`, 'archived'],
+      ['with-media', 'history', `routine:r1:${uuid.replace('0f', '5f')}`, 'archived'],
       ['old-canonical', 'history', null, 'archived'],
       ['delegated', 'history', 'delegation:d1', 'archived'],
       ['restored', 'history', `routine:r1:${uuid.replace('0f', '4f')}`, 'active'],
@@ -645,9 +646,9 @@ describe('Bot named worker transactions', () => {
     }
     db.prepare("INSERT INTO messages (id, session_id, rewind_at) VALUES ('m1', 'with-message', NULL), ('m2', 'with-rewound', 5)").run();
     db.prepare("INSERT INTO schedule_runs (id, session_id) VALUES ('run-1', 'with-run')").run();
-    db.prepare("INSERT INTO shared_links (id, target) VALUES ('share-1', 'with-share')").run();
+    db.prepare("INSERT INTO media_refs (id, ref_kind, ref_id) VALUES ('ref-1', 'session-attachment', 'with-media')").run();
     const remaining = () => db.prepare('SELECT id FROM sessions ORDER BY id').pluck().all();
-    const kept = ['delegated', 'main', 'old-canonical', 'restored', 'routine-lane', 'with-message', 'with-rewound', 'with-run', 'with-share'];
+    const kept = ['delegated', 'main', 'old-canonical', 'restored', 'routine-lane', 'with-media', 'with-message', 'with-rewound', 'with-run'];
 
     expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args: {} })).toEqual({ removed: 2 });
     expect(remaining()).toEqual(kept);

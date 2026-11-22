@@ -6,8 +6,8 @@ import type Database from 'better-sqlite3';
  * read or search, yet every teammate profile read still walks their links. Delete only those.
  *
  * A candidate is kept when anything at all points at it: any message (rewound ones included), or any
- * column elsewhere in the database that references a task (found from the live schema, so a table
- * added later is checked too). One transaction, safe to repeat: a second run finds nothing.
+ * value anywhere else in the database equal to its id (read from the live schema, so a table added
+ * later is checked too). One transaction, safe to repeat: a second run finds nothing.
  */
 const CANDIDATES_SQL = `SELECT l.session_id FROM bot_session_links l
   JOIN sessions s ON s.id = l.session_id
@@ -15,33 +15,34 @@ const CANDIDATES_SQL = `SELECT l.session_id FROM bot_session_links l
     AND s.source = 'bot' AND s.status = 'archived'
     AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.session_id = l.session_id)`;
 
-/** Columns that are, or may be, a task id. Names are matched broadly: a false match only keeps more. */
+/** In `messages`, the columns that are, or may be, a task id (a false match only keeps more). */
 const TASK_REFERENCE_COLUMN = /session|task_id|lead/i;
-const CHUNK = 500;
 
 function quote(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
 
-function taskReferenceColumns(db: Database.Database): Array<{ table: string; column: string }> {
-  const tables = db.prepare(`SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name NOT GLOB 'sqlite_*' AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL TABLE%')`)
-    .pluck().all() as string[];
-  const found: Array<{ table: string; column: string }> = [];
+/**
+ * Every column of every ordinary table is compared, so references without a foreign key or a telling
+ * name (such as `media_refs.ref_id`) count too. Not compared: the candidates' own rows (`sessions.id`,
+ * their `bot_session_links`), search and vector indexes (virtual tables and their shadow tables, derived
+ * from other rows), and in `messages`, which can be very large, the columns that cannot name a task.
+ */
+function referenceColumns(db: Database.Database): Array<{ table: string; columns: string[] }> {
+  // `type = 'table'` leaves out views, virtual tables and the shadow tables behind them.
+  const tables = db.prepare(`SELECT name FROM pragma_table_list
+    WHERE schema = 'main' AND type = 'table' AND name NOT GLOB 'sqlite_*'`).pluck().all() as string[];
+  const found: Array<{ table: string; columns: string[] }> = [];
   for (const table of tables) {
-    const columns = new Set<string>();
-    for (const { name } of db.prepare('SELECT name FROM pragma_table_info(?)').all(table) as Array<{ name: string }>) {
-      if (TASK_REFERENCE_COLUMN.test(name)) columns.add(name);
+    let columns = (db.prepare('SELECT name FROM pragma_table_info(?)').pluck().all(table) as string[]);
+    if (table === 'messages') {
+      const keys = (db.prepare('SELECT "from" FROM pragma_foreign_key_list(?) WHERE "table" = \'sessions\'')
+        .pluck().all(table) as string[]);
+      columns = columns.filter((column) => TASK_REFERENCE_COLUMN.test(column) || keys.includes(column));
     }
-    for (const fk of db.prepare('SELECT "table" AS target, "from" AS source FROM pragma_foreign_key_list(?)')
-      .all(table) as Array<{ target: string; source: string }>) {
-      if (fk.target === 'sessions') columns.add(fk.source);
-    }
-    for (const column of columns) {
-      // The candidate's own link is what this cleanup removes.
-      if (table === 'bot_session_links' && column === 'session_id') continue;
-      found.push({ table, column });
-    }
+    if (table === 'sessions') columns = columns.filter((column) => column !== 'id');
+    if (table === 'bot_session_links') columns = columns.filter((column) => column !== 'id' && column !== 'session_id');
+    if (columns.length > 0) found.push({ table, columns });
   }
   return found;
 }
@@ -50,13 +51,16 @@ export function botsPruneEmptyLegacyRoutineHistory(db: Database.Database): { rem
   return db.transaction(() => {
     const candidates = db.prepare(CANDIDATES_SQL).pluck().all() as string[];
     if (candidates.length === 0) return { removed: 0 };
+    const pending = new Set(candidates);
     const referenced = new Set<string>();
-    for (const { table, column } of taskReferenceColumns(db)) {
-      for (let start = 0; start < candidates.length; start += CHUNK) {
-        const chunk = candidates.slice(start, start + CHUNK);
-        const rows = db.prepare(`SELECT DISTINCT ${quote(column)} FROM ${quote(table)}
-          WHERE ${quote(column)} IN (${chunk.map(() => '?').join(', ')})`).pluck().all(...chunk) as unknown[];
-        for (const id of rows) if (typeof id === 'string') referenced.add(id);
+    const ids = JSON.stringify(candidates);
+    // One scan per table, and only when there is something to delete.
+    for (const { table, columns } of referenceColumns(db)) {
+      const rows = db.prepare(`SELECT ${columns.map(quote).join(', ')} FROM ${quote(table)}
+        WHERE ${columns.map((column) => `${quote(column)} IN (SELECT value FROM json_each(@ids))`).join(' OR ')}`)
+        .raw().all({ ids }) as unknown[][];
+      for (const row of rows) {
+        for (const value of row) if (typeof value === 'string' && pending.has(value)) referenced.add(value);
       }
     }
     // The delete repeats the whole condition on the row itself, not only the earlier read.
