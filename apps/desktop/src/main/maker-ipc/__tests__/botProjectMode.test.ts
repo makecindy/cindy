@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import nodeFs, { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -44,18 +44,23 @@ import { OWN_RULES_HEADING } from '../botProjectTemplate.js';
 // Evaluate the actual generated check with real SQLite, in-process. The hook
 // protocol has its own process tests; retain one real spawn below. Repeated
 // cold Node startups made the activity matrix exceed 60s on CI (#10413).
-async function runMemoryCheck(workingDir: string, firedAt: number): Promise<number> {
+async function runMemoryCheck(workingDir: string, firedAt: number,
+  event: { lastFinishedAt?: number; scheduleId?: string; log?: string[] } = {}): Promise<number> {
   let exitCode = 0;
   const output = { write: (_text: string, done?: () => void) => { done?.(); } };
   const script = await fs.readFile(path.join(workingDir, '..', '.memory-review-check-v1.cjs'), 'utf8');
+  const { log, ...fields } = event;
   await new Script(script).runInNewContext({
     require: (name: string) => {
-      if (name !== 'node:sqlite') throw new Error(`Unexpected check dependency: ${name}`);
-      return { DatabaseSync };
+      if (name === 'node:sqlite') return { DatabaseSync };
+      if (name === 'node:fs') return nodeFs;
+      if (name === 'node:path') return path;
+      throw new Error(`Unexpected check dependency: ${name}`);
     },
-    console: { log() {}, error() {} },
+    console: { log: (text: string) => { log?.push(text); }, error() {} },
     process: {
-      stdin: Readable.from([JSON.stringify({ event: 'schedule-pre-run', firedAt })]),
+      pid: process.pid,
+      stdin: Readable.from([JSON.stringify({ event: 'schedule-pre-run', firedAt, ...fields })]),
       stdout: output, stderr: output,
       get exitCode() { return exitCode; },
       set exitCode(value: number) { exitCode = value; },
@@ -206,6 +211,72 @@ describe('ensureBotProjectAutomations', () => {
       await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
       expect(await fs.readFile(checkFile, 'utf8')).toBe(edited);
     } finally { db.close(); }
+  });
+
+  // User report 2026-11-22: owners who send fewer than 20 messages a day never got their
+  // teammate reviewed, so its saved memories only piled up. Unit, real generated check with
+  // SQLite and files: changed memory or skills admit a review at most weekly; the review's own
+  // edits, the supplied memory guide, the search index and self-tests do not count.
+  it('reviews a quiet teammate whose memory or skills changed, at most once a week', async () => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);`);
+    db.close();
+    const day = 86_400_000;
+    const start = Date.now();
+    const touch = async (relative: string, at: number) => {
+      const file = path.join(workingDir, relative);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, relative);
+      await fs.utimes(file, at / 1000, at / 1000);
+    };
+    expect(await runMemoryCheck(workingDir, start)).toBe(2); // Nothing saved yet.
+    await touch('.cindy/memory/README.md', start + 1);
+    await touch('.cindy/memory/fts.db', start + 1);
+    await touch('.cindy/memory/.cindy-memory-migration-v1.json', start + 1);
+    expect(await runMemoryCheck(workingDir, start + 2)).toBe(2);
+    await touch('.cindy/memory/coffee.md', start + 3);
+    await touch('.agents/skills/brew/SKILL.md', start + 3);
+    expect(await runMemoryCheck(workingDir, start + 4, { scheduleId: 'self-test' })).toBe(0);
+    const first: string[] = [];
+    expect(await runMemoryCheck(workingDir, start + day, { log: first })).toBe(0);
+    expect(first.join('\n')).toContain('.cindy/memory/coffee.md');
+    expect(first.join('\n')).toContain('.agents/skills/brew/SKILL.md');
+    expect(first.join('\n')).not.toMatch(/README|fts\.db|migration/);
+    await touch('.cindy/memory/coffee.md', start + day + 60_000); // The review tidied it.
+    expect(await runMemoryCheck(workingDir, start + 2 * day, { lastFinishedAt: start + day + 120_000 })).toBe(2);
+    await touch('.cindy/memory/tea.md', start + 3 * day);
+    expect(await runMemoryCheck(workingDir, start + 4 * day, { lastFinishedAt: start + 2 * day })).toBe(2);
+    const second: string[] = [];
+    expect(await runMemoryCheck(workingDir, start + 8 * day, { lastFinishedAt: start + 4 * day, log: second })).toBe(0);
+    expect(second.join('\n')).toContain('.cindy/memory/tea.md');
+    expect(second.join('\n')).not.toContain('coffee.md');
+    expect(await runMemoryCheck(workingDir, start + 16 * day, { lastFinishedAt: start + 8 * day + 60_000 })).toBe(2);
+  });
+
+  // The check installed before 2026-11-22 (dff1c6e5) only counted messages. Unit, real
+  // installed body + SQLite: upgrading it in place lets a quiet teammate's memory be reviewed.
+  it('upgrades the installed message-only check so saved memory of a quiet teammate is reviewed', async () => {
+    loader.loadProjectSchedules.mockResolvedValueOnce(null);
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const supplied = loader.upsertSchedule.mock.calls[0]![1];
+    const checkFile = path.join(root, '.memory-review-check-v1.cjs');
+    const old = await fs.readFile(new URL('./fixtures/memory-review-dff1c6e5.cjs.txt', import.meta.url), 'utf8');
+    await fs.writeFile(checkFile, `const source = ${JSON.stringify({ databasePath: database.path,
+      botId: 'bot-1', syntheticPrefix: '[UI_ACTION_TRIGGER]' })};\n${old.slice(old.indexOf('\n') + 1)}`);
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);`);
+    db.close();
+    await fs.mkdir(path.join(workingDir, '.cindy', 'memory'), { recursive: true });
+    await fs.writeFile(path.join(workingDir, '.cindy', 'memory', 'coffee.md'), 'Oat milk');
+    const firedAt = Date.now();
+    expect(await runMemoryCheck(workingDir, firedAt)).toBe(2); // Actual installed behavior.
+    loader.loadProjectSchedules.mockResolvedValue([supplied]);
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+    expect(await runMemoryCheck(workingDir, firedAt)).toBe(0);
+    expect(loader.upsertSchedule).toHaveBeenCalledOnce();
   });
 
   it('upgrades the supplied review while retaining choices, custom checks and removal', async () => {
