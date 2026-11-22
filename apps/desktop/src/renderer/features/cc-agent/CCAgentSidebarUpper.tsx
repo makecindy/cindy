@@ -407,8 +407,8 @@ function RemoteSidebarLoadNotice({
           'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
         !quietDeviceLoading &&
           (partial
-            ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
-            : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center'),
+            ? 'mx-3 flex items-start gap-2 rounded-lg px-3 py-2'
+            : 'mx-3 flex flex-col items-center gap-3 rounded-xl px-4 py-8 text-center'),
       )}
     >
       {isError ? (
@@ -4272,7 +4272,7 @@ function RailPanelShell({
       className={cn(
         'fixed w-[264px] rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-1.5',
         // 阴影走主题 token(AGENTS.md #16,与菜单同语言);z 必须低于 DropdownMenu
-        // 的 z-50 —— 行内右键/移动菜单要画在面板之上(review P2)。
+        // 的 dropdown 层(10010)—— 行内右键/移动菜单要画在面板之上(review P2)。
         'shadow-[shadow:var(--shadow-menu)]',
         level === 1 ? 'z-[48]' : 'z-[49]',
       )}

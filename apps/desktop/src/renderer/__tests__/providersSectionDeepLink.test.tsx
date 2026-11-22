@@ -465,6 +465,7 @@ describe('ProvidersSection — 深链定位', () => {
         .map((item) => item.textContent),
     ).toEqual([
       'settings.providers.pill.rename',
+      'settings.providers.menu.hideProvider',
       'settings.providers.menu.disableProvider',
       'settings.providers.custom.deleteAria',
     ]);

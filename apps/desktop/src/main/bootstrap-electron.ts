@@ -1,3 +1,4 @@
+import { createCompanyTokenReporting } from './usage/companyTokenReporting.desktop.js';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor, createPersonalRendererProbe, personalMonitorEnvironment } from './personalBuildMonitor.js';
@@ -671,6 +672,7 @@ import {
   setAwayCaptureExcludedWindows,
   startLinuxAwayCover,
 } from './remote-desktop';
+import { registerLocalNetworkIpc } from './local-network/index.js';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import { DisplayDemand } from './remote-desktop/displayDemand';
 import {
@@ -680,7 +682,7 @@ import {
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.desktop.js';
 import * as usageReporting from './product-token-usage/reporting.js';
-import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initAnalyticsSettingsService, noteAuthColdStartState, onAnalyticsPermissionChange } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
@@ -6899,6 +6901,8 @@ const registerIpcHandlers = () => {
 
   // ── Auth IPC handlers (delegated to authManager) ──
 
+  const companyReporting = !hostClientMode ? createCompanyTokenReporting(onAnalyticsPermissionChange) : null;
+  app.once('will-quit', () => companyReporting?.dispose());
   ipcMain.handle('auth:initialize', async () => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;
@@ -6914,6 +6918,7 @@ const registerIpcHandlers = () => {
       // 以后台完成的那次登录为准。
       const markAuthMilestone = (s: authManager.AuthState) => {
         if (s.isAuthenticated) markStartupMilestone('auth-initialized');
+        if (s.canEnterApp || !pendingCompletion) companyReporting?.refresh();
       };
       markAuthMilestone(state);
       void (pendingCompletion as Promise<authManager.AuthState> | null)?.then(markAuthMilestone, () => undefined);
@@ -10903,6 +10908,7 @@ app.on('ready', async () => {
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
+  registerLocalNetworkIpc();
   registerRemoteDesktopIpc(
     isGlobalVoiceInputOverlaySender,
     { name: getControllerName, revoke: revokeController },

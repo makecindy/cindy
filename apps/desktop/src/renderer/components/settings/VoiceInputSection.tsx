@@ -584,7 +584,7 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
             ) : null}
 
             {customAsrSelected ? (
-              <div className="flex flex-col gap-3 rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3.5">
+              <div className="flex flex-col gap-3 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3.5">
                 <p className="text-12 leading-[1.45] text-[var(--settings-section-sublabel)]">
                   {t('settings.voiceInput.serviceSource.customAsr.notice')}
                 </p>
@@ -2065,7 +2065,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
             >
               {customDictionaryExpanded ? (
                 <div id="voice-input-custom-dictionary" className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-4 rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <p className="text-13 font-medium text-[var(--settings-section-title)]">
                         {t('settings.voiceInput.refinement.dictionary.autoLearning.label')}
@@ -2087,7 +2087,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-4 rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-4 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <p className="text-13 font-medium text-[var(--settings-section-title)]">
                         {t('settings.voiceInput.refinement.dictionary.deviceSync.label')}
@@ -2214,14 +2214,14 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     <Dialog.Portal>
                       <Dialog.Overlay
                         className={cn(
-                          'modal-scrim fixed inset-0 z-50',
+                          'modal-scrim fixed inset-0 z-modal',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       />
                       <Dialog.Content
                         onPointerDownOutside={(event) => event.preventDefault()}
                         className={cn(
-                          'modal-panel fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
+                          'modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
                           'p-5 outline-none',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
@@ -2248,7 +2248,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                           aria-label={t('settings.voiceInput.refinement.dictionary.newAriaLabel')}
                           placeholder={t('settings.voiceInput.refinement.dictionary.newPlaceholder')}
                           className={cn(
-                            'mt-5 h-12 w-full rounded-[12px] px-4',
+                            'mt-5 h-12 w-full rounded-xl px-4',
                             'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
                             'text-15 text-[var(--settings-input-text)] outline-none transition-colors',
                             'placeholder:text-[var(--settings-input-placeholder)]',
@@ -2310,7 +2310,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                           <div
                             key={entry.id}
                             className={cn(
-                              'group min-w-0 rounded-[12px] border border-[var(--settings-input-border)]',
+                              'group min-w-0 rounded-xl border border-[var(--settings-input-border)]',
                               'bg-[var(--settings-input-bg)] px-3 py-2.5 transition-colors',
                               'hover:bg-[var(--settings-menu-bg-hover)]',
                               editing && 'md:col-span-2',
@@ -2511,7 +2511,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                       })}
                     </div>
                   ) : (
-                    <p className="rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
+                    <p className="rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
                       {t(
                         dictionaryFilter === 'automatic'
                           ? 'settings.voiceInput.refinement.dictionary.emptyAutomatic'
@@ -2683,7 +2683,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     <div
                       key={entry.id}
                       className={cn(
-                        'flex items-start gap-3 rounded-[12px] p-3',
+                        'flex items-start gap-3 rounded-xl p-3',
                         'border border-[var(--settings-theme-card-border)]',
                         'bg-[var(--settings-input-bg)]',
                       )}
@@ -2735,7 +2735,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                   ))}
                 </div>
               ) : (
-                <p className="rounded-[12px] border border-[var(--settings-theme-card-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
+                <p className="rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-input-bg)] px-4 py-3 text-12 leading-[1.4] text-[var(--text-secondary)]">
                   {t('settings.voiceInput.history.empty')}
                 </p>
               )}

@@ -545,6 +545,11 @@ export interface UnifiedListSection {
    * 合并组 —— 分组名必须直接回答"这是哪家的",不引入第二套口径)。
    */
   group?: { type: 'provider'; providerId: string };
+  /**
+   * 该小节属于「已隐藏」区:用户在设置里从选择器收起的供应商 / 模型。面板把它们排在
+   * 常规小节之后、默认折叠,搜索时自动展开 —— 隐藏只是收起,不是不能选。
+   */
+  hidden?: true;
   rows: UnifiedListRow[];
 }
 
@@ -685,6 +690,12 @@ export function buildUnifiedListSections(args: {
    * 不因收起而消失。
    */
   listHiddenProviderIds?: ReadonlySet<string>;
+  /**
+   * 收藏与最近的解析目录；缺省 = `entries`。`entries` 决定常规分组里列什么，这里决定
+   * 「用户存下来的东西还能不能解析回一行」：被隐藏的模型不进常规分组，但它仍然可调用，
+   * 存过的收藏和最近必须还在。调用方传入「常规清单 ∪ 被隐藏的模型」。
+   */
+  resolveEntries?: readonly UnifiedModelEntry[];
 }): UnifiedListSection[] {
   const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
@@ -700,7 +711,7 @@ export function buildUnifiedListSections(args: {
    * 连回来就该回来,静默删掉用户存过的东西是不可逆的。
    */
   const resolveStoredEntry = (providerId: string, modelId: string) =>
-    resolveStoredModelEntry(entries, providerId, modelId);
+    resolveStoredModelEntry(args.resolveEntries ?? entries, providerId, modelId);
 
   const sections: UnifiedListSection[] = [];
 

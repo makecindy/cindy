@@ -1,3 +1,4 @@
+import { companyModelTokens, takeCompanyTurn } from '../usage/companyTokenFacts.js';
 import { captureTurnUsageContext, tokenAttribution, turnBillingSource, type TurnUsageContext } from './turnUsageContextCore.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -158,6 +159,17 @@ export function recordSessionCodexTurnUsage(
           !isRemoteCodexSession &&
           !hasEffectiveGatewayRoute &&
           Boolean(sessionProvider && sessionProvider !== 'xd');
+        if (!isRemoteCodexSession && execution?.credentialMode !== 'gateway-key' &&
+            !hasEffectiveGatewayRoute && sessionProvider !== 'xd' &&
+            (isCodexSubscriptionAccessRoute || codexAuthInjection === 'oauth-bearer' || isCustomProviderRoute)) {
+          const record = takeCompanyTurn(turnContext);
+          if (record && codexSegmentsReliable) {
+            record(codexUsageSegments.flatMap(segment => segment.model
+              ? [companyModelTokens(normalizeModelIdForPricing(segment.model), segment)] : []));
+          } else if (record && execution?.model && u.segments === undefined) {
+            record([{ model: pricingModel, input: promptTokens, output: completionTokens, cacheRead: cachedTokens, cacheWrite: cacheCreationTokens }]);
+          }
+        }
         // Keep unknown remote routes token-only, without a billing suffix that
         // would classify them as API spend or trigger subscription revaluation.
         const billing = turnBillingSource(turnContext, isSubscriptionValue ? 'subscription' : hasEffectiveGatewayRoute ? 'xd-gateway' : usesReferencePriceEstimate ? 'provider-api' : 'unknown');

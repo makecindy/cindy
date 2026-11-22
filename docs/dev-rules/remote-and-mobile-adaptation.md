@@ -893,6 +893,21 @@ mDNS 名，解析要靠双方都能收发组播；跨网段、组播被过滤或
   缺 `NSLocalNetworkUsageDescription` 时系统不弹授权、直接拒绝；正式包由 `forge.config.ts`
   声明，个人版由 `scripts/personal-build/native-capabilities.mjs` 写入运行时，改动后要用
   更新过的构建工具重新生成运行时才生效。
+- **应用内检测与提醒（2026-11-22）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
+  与「已拒绝」。Main 的 [`local-network/access.ts`](../../apps/desktop/src/main/local-network/access.ts)
+  向物理网卡的默认网关（默认路由在 VPN 上时取 `route -n get -ifscope <en*> default`）发一次
+  TCP/53 连接：立即 `EHOSTUNREACH` 判为 `denied`，连通、拒绝或超时判为 `granted`，没有局域网网关
+  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测本身也是未决定的 App 触发系统询问的
+  方式；系统已有决定（含缺 `NSLocalNetworkUsageDescription` 时被静默拒绝的旧安装）就不会再询问，
+  所以「去授权」在约 1.2 秒后仍被拒时打开「系统设置 › 隐私与安全性 › 本地网络」，并在 3 分钟内
+  每 2 秒复查一次。由拒绝变为允许时，Device Link 调用与网卡变化相同的 `notifyNetworkChanged()` /
+  `agentNetNetworkChanged()`，立即重试直连，不需要重启。缺许可时 LAN 信标收发都被拦住，「对端是否
+  在同一局域网」无从观察，所以侧边栏只在两种可观察的代价出现时提醒
+  （[`local-network/reminder.ts`](../../apps/desktop/src/main/local-network/reminder.ts)）：用户刚打开
+  「允许同账号设备控制本机」（10 分钟内），或 Agent-Net 显示同账号设备已连上却只走中转。关闭提醒
+  后，只有再次打开被控开关或出现新的只走中转的设备才会重新出现。设置页「本机」卡片常驻显示该
+  许可的状态。IPC `local-network:*` 只给本机窗口，不在远程调用白名单里。Host 客户端模式下 Device
+  Link 跑在 Host 进程，本次只接了桌面 Main 的提醒与重试，设置页状态仍可用。
 - **故障记录。** 2026-11 两台同一局域网的电脑，控制通道直连，文件却走 TURN（往返 430–580 ms，
   每秒 5–8 KB）。文件连接的统计里本端有 4 个 host 候选，对端一个也没有；其中一台的 App 没有
   本地网络许可，既发不出组播，也不能主动连对端。两处都要修：文件窗口公布真实地址，该 App

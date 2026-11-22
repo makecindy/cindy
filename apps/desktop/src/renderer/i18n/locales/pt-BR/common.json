@@ -3807,6 +3807,7 @@
         "connecting": "Conectando…",
         "rename": "Renomear",
         "suspended": "Desativado",
+        "hidden": "Oculto",
         "unconfigured": "Não configurado"
       },
       "button": {
@@ -3817,7 +3818,9 @@
         "cancel": "Cancelar",
         "retry": "Descobrir modelos novamente",
         "retrying": "Tentando descobrir novamente…",
-        "enableProvider": "Ativar provedor"
+        "enableProvider": "Ativar provedor",
+        "showProvider": "Mostrar",
+        "hideInstead": "Ocultar em vez disso"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4203,7 +4206,7 @@
         "paymentRequired": "Pago",
         "paymentUnlock": "Pague para desbloquear",
         "enableModel": "Ativar este modelo",
-        "capabilityGroupHint": "Não exibido no seletor de modelos da conversa. A opção controla a visibilidade no recurso correspondente.",
+        "capabilityGroupHint": "Não exibido no seletor de modelos. A opção define se o recurso correspondente pode usar o modelo.",
         "accessWriteFailed": "Não foi possível salvar a alteração. Tente novamente.",
         "visibilityWriteFailed": "Não foi possível salvar a configuração de visibilidade do modelo. Tente novamente ou reinicie a Cindy se o problema persistir.",
         "disabledGroup": "Desativado",
@@ -4347,22 +4350,22 @@
           "aria": "Filtrar por tipo de modelo",
           "chat": "Conversa"
         },
-        "hiddenGroup": "Não exibido",
+        "hiddenGroup": "Ocultos",
         "management": {
           "brand": "Fabricante"
         },
         "manage": {
           "title": "Modelos",
-          "selected": "{{count}} selecionados",
-          "hint": "Use as opções para escolher seus modelos de conversa.",
+          "selected": "{{count}} exibidos",
+          "hint": "As opções definem quais modelos aparecem no seletor de modelos. Desativar uma apenas oculta o modelo; você ainda pode escolhê-lo em \"Ocultos\", no fim do seletor.",
           "menu": "Gerenciar",
           "arrange": "Organizar lista",
           "byBrand": "Agrupar por fabricante",
           "byName": "Ordenar por nome do modelo",
-          "selection": "Seleção de modelos",
-          "showAll": "Selecionar todos os modelos",
-          "hideAll": "Limpar seleção",
-          "reset": "Restaurar seleção padrão",
+          "selection": "Mostrar no seletor de modelos",
+          "showAll": "Mostrar todos os modelos",
+          "hideAll": "Ocultar todos os modelos",
+          "reset": "Restaurar visibilidade padrão",
           "connectionRequired": "Conecte-se para usar estes modelos. Suas seleções são salvas."
         },
         "modelCount_many": "{{count}} modelos"
@@ -4379,7 +4382,8 @@
         "groupNote": "{{device}} transformou este provedor em um grupo de provedores. Ao iniciar uma tarefa com ele, {{device}} atribui a tarefa a um dos computadores abaixo conforme a estratégia do grupo e a transfere para outro se esse computador tiver algum problema. Enquanto {{device}} estiver online, use Acesso remoto e compartilhamento aqui para gerenciar o grupo e seus compartilhamentos.",
         "groupMembersTitle": "Computadores do grupo",
         "groupMembersFailed": "Não foi possível obter o status dos computadores do grupo agora.",
-        "groupBadge_many": "Grupo de provedores · {{count}} computadores"
+        "groupBadge_many": "Grupo de provedores · {{count}} computadores",
+        "hiddenBanner": "Oculto do seletor de modelos neste computador. Os favoritos e as sessões que o usam não são afetados."
       },
       "genericOAuth": {
         "subtitle": "Conta de assinatura",
@@ -4423,7 +4427,8 @@
           "rejected": "Este provedor recusou a solicitação. A lista abaixo é da última atualização bem-sucedida. Tente novamente mais tarde ou use outro provedor.",
           "empty": "Este provedor não retornou modelos utilizáveis desta vez. A lista abaixo é da última atualização bem-sucedida. Verifique as permissões de acesso da sua conta e tente novamente."
         },
-        "suspendedBanner": "Este provedor está desativado. As credenciais foram mantidas; ative-o para usar seus modelos novamente.",
+        "suspendedBanner": "Este provedor está desativado: novas sessões e recursos em segundo plano não o usam mais. As credenciais foram mantidas. Se você só não quer vê-lo no seletor de modelos, oculte-o em vez disso.",
+        "hiddenBanner": "Oculto do seletor de modelos. As sessões e os recursos em segundo plano que o usam não são afetados, e você ainda pode escolhê-lo em \"Ocultos\", no fim do seletor.",
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O Agent é executado neste computador, usando o login e a cota dele.",
@@ -4633,7 +4638,9 @@
       },
       "menu": {
         "disableProvider": "Desativar este provedor",
-        "enableProvider": "Ativar este provedor"
+        "enableProvider": "Ativar este provedor",
+        "hideProvider": "Ocultar do seletor de modelos",
+        "showProvider": "Mostrar no seletor de modelos"
       },
       "builtinApiKey": {
         "subtitle": "Conexão por chave de API",
@@ -7111,7 +7118,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso."
+      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso.",
+      "localNetwork": {
+        "label": "Rede local",
+        "deniedHint": "Sem esta permissão, computadores e celulares na mesma rede não conseguem se conectar diretamente a este computador. Eles passam pelo relay, que é mais lento.",
+        "settingsHint": "Ative o Cindy em Ajustes do Sistema › Privacidade e Segurança › Rede Local. A mudança vale assim que você voltar."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -11022,6 +11034,13 @@
         "enabled": "Ativado"
       },
       "close": "Fechar diálogo de download"
+    },
+    "localNetwork": {
+      "title": "Permitir acesso à rede local",
+      "relayOnly": "Seus outros dispositivos só conseguem acessar este computador pelo relay, que é mais lento. Permita o acesso para que os dispositivos na mesma rede se conectem diretamente.",
+      "controlEnabled": "Dispositivos na mesma rede só conseguem controlar este computador diretamente com acesso à rede local. Sem ele, passam pelo relay.",
+      "allow": "Permitir",
+      "dismiss": "Agora não"
     }
   },
   "bots": {
@@ -14290,6 +14309,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Não é possível ler os modelos daquele computador agora",
         "favoritesGroup": "Favoritos",
         "recentGroup": "Recentes",
+        "hiddenGroup": "Ocultos ({{count}})",
+        "hiddenGroupHint": "Provedores e modelos ocultos ainda podem ser escolhidos",
         "recentEmpty": "Ainda não há modelos recentes — escolha um modelo e ele aparecerá aqui",
         "favoritesSaveFailed": "Não foi possível salvar as alterações nos favoritos",
         "favoritesCleanupFailed": "Não foi possível remover os favoritos de compartilhamentos de provedores revogados",
