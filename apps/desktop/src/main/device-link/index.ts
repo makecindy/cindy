@@ -224,7 +224,7 @@ import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute } from '
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
-  agentNetPeerRoute, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute } from './agentNetRuntime.js';
+  agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute } from './agentNetRuntime.js';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery, requiresSessionLink } from './linkRecovery';
 import { noteLocalNetworkControlEnabled, noteLocalNetworkRelayOnlyPeers, onLocalNetworkGranted } from '../local-network/index.js';
@@ -1139,6 +1139,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     transferCodec: desktopTransferCodec,
     path: (deviceId) => agentNetPeerRoute(deviceId).path,
     rttMs: (deviceId) => agentNetPeerRoute(deviceId).rttMs,
+    onRelayStall: agentNetRelayStalled,
     connectedAt: agentNetPeerConnectedAt,
     // 文件直传搭在会话上的连接随会话收掉（被控端那边没有空闲计时器）。
     onSessionClosed: (deviceId) => stopFilePeerStreams(deviceId),

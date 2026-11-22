@@ -396,6 +396,7 @@ export interface Session {
   sdkSessionId: string | null;
   totalTokenUsage: number;
   totalCostUsd: number;
+  totalCostUsdIsApproximate?: boolean;
   /** 新版区域累计金额；旧会话仍只带 totalCostUsd。 */
   totalMoney?: RegionalMoney;
   contextTokens: number;

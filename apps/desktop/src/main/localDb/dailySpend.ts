@@ -5,17 +5,14 @@ import {
   addRegionalMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
-  toLedgerCurrency,
   zeroUsageMoney,
   type MoneyCurrency,
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { dailySpend } from './schema.js';
 import { getDbClient } from './client/current.js';
-import { createLogger } from '../logger.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 
-const log = createLogger('localDb/dailySpend');
 
 export function localDayKey(ts: number = Date.now()): string {
   const date = new Date(ts);
@@ -60,9 +57,6 @@ function dayMonies(rows: readonly SpendRow[]): RegionalMoney[] {
  * 一天可能有多个币种行(换号 / 跨租户 / 上游漏发币种)。展示侧仍是单币种，按账本币种
  * 挑那一行；账本币种缺席时 addCompatibleRegionalMoney 会挑真实计费里的第一种。
  *
- * 函数本身仍不做跨币种求和。getSpendForDay 和 usageHistory 都在折叠前通过
- * toLedgerCurrency 换算，保持今日展示、写入回执与历史汇总一致；原始币种行不变。
- *
  * **币种参数必须由调用方显式传入**：折叠是一个依赖账本币种的决定，而账本币种在冷启动
  * 期间要等报价快照恢复才确定。此前这里直接读 currentLedgerCurrency()，于是
  * getAllSpendDays() 与 getGatewayModelPricing() 并发时会先按兜底币种把 CNY 行全丢掉，
@@ -98,12 +92,12 @@ async function getSpendMoniesForDay(day: string): Promise<RegionalMoney[]> {
 
 /**
  * 今日展示与写入回执共用：调用方须保证账本币种已就绪。
- * 换算只作用于返回值，不回写库里的金额或币种。
+ * 保留选中币种的原始金额。
  */
 async function getSpendForDay(day: string): Promise<RegionalMoney> {
   const monies = await getSpendMoniesForDay(day);
   const ledgerCurrency = currentLedgerCurrency();
-  return collapseDayMonies(monies.map((money) => toLedgerCurrency(money, ledgerCurrency)), ledgerCurrency);
+  return collapseDayMonies(monies, ledgerCurrency);
 }
 
 export async function incrementDailySpend(
@@ -115,17 +109,7 @@ export async function incrementDailySpend(
   if (!normalized || normalized.amount < 1e-10) {
     return { day, money: await getSpendForDay(day) };
   }
-  // 每天每币种一行，各自累加。异币种不再拒收，也不再覆盖当天累计 —— 那两种做法一个
-  // 丢当笔、一个丢全天，而账本币种会因为完全正常的原因(换号、跨租户、上游漏发币种)
-  // 发生切换。如实入到它自己的币种行，展示侧再按当前账本币种折叠。
-  const ledgerCurrency = currentLedgerCurrency();
-  if (normalized.currency !== ledgerCurrency) {
-    // 不是错误，但值得留痕:出现异币种通常意味着账本币种刚切换过，或上游报价口径变了。
-    log.warn(
-      `daily spend currency differs from ledger: ${normalized.currency} != ${ledgerCurrency}; ` +
-        'recording into its own currency row',
-    );
-  }
+  // A provider can charge either currency on the same day.
   const db = getDbClient().drizzle;
   await db
     .insert(dailySpend)

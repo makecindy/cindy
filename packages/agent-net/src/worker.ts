@@ -117,5 +117,6 @@ port.on('message', (message) => {
     (error) => send({ type: 'renewed', id: message.id, code: code(error) }));
   if (message.type === 'restrict' && message.rule && typeof message.rule === 'object') { socket.restrictPeers(message.rule); snapshot(); }
   if (message.type === 'network-changed') socket.networkChanged();
+  if (message.type === 'relay-stalled') socket.relayStalled();
   if (message.type === 'close') socket.close(message.code);
 });

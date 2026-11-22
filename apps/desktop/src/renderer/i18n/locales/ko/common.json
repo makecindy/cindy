@@ -1803,6 +1803,8 @@
       "other": "기타",
       "lowAlert": "곧 소진될 때 알림",
       "privacy": "개인 정보 숨기기",
+      "automaticCurrency": "자동",
+      "usageCurrency": "사용량 표시 통화",
       "usageScope": "사용량 집계 범위",
       "manageFoot": "제공자 관리",
       "showSource": "메뉴에 {{name}} 표시",

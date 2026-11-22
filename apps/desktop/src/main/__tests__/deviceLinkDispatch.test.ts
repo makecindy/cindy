@@ -524,6 +524,7 @@ import {
   dropAllControllers,
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   remoteInvokeEpoch,
 } from '../device-link/dispatch.desktop';
@@ -532,11 +533,13 @@ import {
   applyControllerDisplayNamePresence,
   createControllerDisplayNameFreshnessTracker,
 } from '../device-link/controllerDisplayNameFreshness';
+import { setRemoteBotSessionLookup } from '../device-link/remoteBotSessionBoundary';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DeviceLinkError,
   PROVIDER_GROUP_REMOTE_CHANNEL,
+  TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT,
   SESSION_ACTIVITY_CHANNEL,
   type Envelope,
 } from '@cindy/device-link';
@@ -2459,6 +2462,35 @@ describe('被控端订阅 registry + topic 转发', () => {
           },
         ]);
       } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // Unit: an opted-in iPhone receives the whole-host change through the real sessions
+    // delivery queue. Older subscriptions never receive it, and a now-hidden title is removed.
+    it('delivers authorized task summaries only to capable subscribers', async () => {
+      vi.useFakeTimers();
+      remoteControlEnabled = true;
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      let hidden = false;
+      setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'ordinary');
+      try {
+        feed(subFrame('phone', SUB, ['sessions'], 'iPhone', [TASK_ACTIVITY_CAPABILITY]));
+        feed(subFrame('legacy', SUB, ['sessions'], 'Mac'));
+        const summary = { schemaVersion: 1, revision: 1, waitingCount: 1, runningCount: 0, unreadCount: 0,
+          selected: { sessionId: 'task', title: 'Task', status: 'attention' } } as const;
+        publishHostTaskActivity(() => summary);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(calls.push.filter(item => item.channel === TASK_ACTIVITY_SNAPSHOT)).toEqual([
+          { dst: 'phone', channel: TASK_ACTIVITY_SNAPSHOT, payload: summary },
+        ]);
+        hidden = true;
+        publishHostTaskActivity(() => summary, 'phone');
+        await vi.advanceTimersByTimeAsync(500);
+        expect(calls.push.at(-1)).toEqual({ dst: 'phone', channel: TASK_ACTIVITY_SNAPSHOT, payload: { unavailable: true } });
+      } finally {
+        setRemoteBotSessionLookup(null);
         vi.useRealTimers();
       }
     });
