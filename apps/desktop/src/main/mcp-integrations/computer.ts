@@ -4029,6 +4029,10 @@ async function callComputerDriverToolImpl(
           throw err;
         }
         const freshEntry = await getCuaMcpSession(sessionId, signal);
+        // The failed generation closed with a zero-session notification, so the away cover can
+        // be re-arming its panel right now: wait it out again before this generation's first
+        // native I/O, exactly like the first dispatch above.
+        if (captureBarrier) await captureBarrier();
         let retryResult: unknown;
         try {
           assertActive();
