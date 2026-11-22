@@ -19003,7 +19003,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }, (sessionId, requestId) => {
     const session = pageApprovalSessions.get(requestId);
     if (session?.id === sessionId) allowHostPagePermission(session, requestId);
-  });
+  }, (win) => win === getDeepLinkMainWindow() || isSecondaryAppWindow(win));
   registerMakerSessionSendHandler(
     {
       handle(channel, handler) {

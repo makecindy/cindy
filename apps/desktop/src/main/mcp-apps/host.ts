@@ -158,6 +158,8 @@ export interface McpAppsHostDeps {
   downloadFile?(input: Omit<Parameters<typeof saveAppDownload>[0], 'showSaveDialog'>): Promise<{ isError?: boolean }>;
   /** Main-owned local composer handoff. Never exposed to remote callers. */
   composerDrag?: (sessionId: string) => boolean | Promise<boolean>;
+  /** Whether the opening renderer shows the task composer that receives attachments. */
+  composerCaller?: (caller: string) => boolean;
   hasComposerAttachment?(input: { caller: string; sessionId: string; viewId: string; resourceKey: string;
     signal: AbortSignal; assertCurrent(): Promise<void> }): Promise<boolean>;
   sendComposerAttachment?(input: {
@@ -619,8 +621,9 @@ export class McpAppsHost {
         }
         config.plugin.assertCurrent(sessionId ?? undefined);
       }
-      const allowComposerDrag = caller.startsWith('renderer:') && sessionId !== null && this.deps.sendComposerAttachment &&
-        await this.deps.composerDrag?.(sessionId);
+      const composerAttachment = caller.startsWith('renderer:') && sessionId !== null &&
+        !!this.deps.sendComposerAttachment && (this.deps.composerCaller?.(caller) ?? true);
+      const allowComposerDrag = composerAttachment && sessionId !== null && await this.deps.composerDrag?.(sessionId);
       await resourceBinding?.assertCurrent();
       if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
       // Recheck after async resource loading so simultaneous opens share the limit.
@@ -851,7 +854,7 @@ export class McpAppsHost {
               const capabilities = result.hostCapabilities as Record<string, unknown>;
               const experimental = {
                 ...(capabilities.experimental as Record<string, unknown> | undefined),
-                ...(!remote && sessionId !== null && this.deps.sendComposerAttachment
+                ...(composerAttachment
                   ? { [MCP_APP_COMPOSER_ATTACHMENT_KEY]: { version: 1, maxBytes: MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES, ...(view.composerDrag ? { drag: { version: 1 } } : {}) } }
                   : {}),
               };
@@ -953,7 +956,7 @@ export class McpAppsHost {
             let forwarding = false;
             let pendingProgress: Progress | undefined;
             try {
-              return (await currentResult(
+              const result = (await currentResult(
                 client.callTool(params, CallToolResultSchema, {
                   signal: extra.signal,
                   timeout: MCP_APP_TOOL_TIMEOUT_MS,
@@ -994,6 +997,8 @@ export class McpAppsHost {
                 }),
                 extra.signal,
               )) as CallToolResult;
+              collectComposerAttachmentResources(result, view.composerAttachmentResources);
+              return result;
             } finally {
               active = false;
               pendingProgress = undefined;
@@ -1026,7 +1031,7 @@ export class McpAppsHost {
             progress.close();
           }
         };
-        if (!remote && sessionId !== null && this.deps.sendComposerAttachment) {
+        if (composerAttachment && sessionId !== null) {
           const files = view.files;
           const resource = (params: unknown) => {
             if (!params || typeof params !== 'object') throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID');
@@ -1073,9 +1078,13 @@ export class McpAppsHost {
                 const info = await files.describeGranted(uri);
                 mimeType = info.mimeType;
                 const response = await files.readGranted(uri, signal);
-                if (!response.ok) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_RESOURCE_NOT_FOUND');
-                if (Number(response.headers.get('content-length')) > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
-                  throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+                const rejected = !response.ok ? 'MCP_APP_COMPOSER_ATTACHMENT_RESOURCE_NOT_FOUND'
+                  : Number(response.headers.get('content-length')) > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES ? 'MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE' : undefined;
+                if (rejected) {
+                  // Release the file stream that an unread body would keep open.
+                  await response.body?.cancel().catch(() => {});
+                  throw new Error(rejected);
+                }
                 bytes = new Uint8Array(await response.arrayBuffer());
               } else {
                 const client = await currentClient(signal, check);

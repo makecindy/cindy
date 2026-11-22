@@ -47,6 +47,7 @@ const state = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   app: { getPath: () => state.userData },
   webContents: { fromId: vi.fn() },
+  BrowserWindow: { fromWebContents: vi.fn() },
   ipcMain: {
     removeHandler: vi.fn(),
     handle: (_name: string, handler: typeof state.handle) => {
@@ -196,6 +197,22 @@ describe('MCP App persistence and IPC wiring', () => {
     expect(state.redeem).not.toHaveBeenCalled();
     await state.handleDrop!(event, payload);
     expect(state.redeem).toHaveBeenCalledWith('renderer:7', 'task', payload.ticket);
+  });
+
+  // Unit at the Main IPC boundary. Only Main can map a renderer to its window.
+  // A card in the detached sidebar was offered the composer and staged files into
+  // a renderer without ChatInput. Minimal failing input: a sidebar window caller.
+  it('offers the composer only to renderers in a task composer window', async () => {
+    const { webContents, BrowserWindow } = await import('electron');
+    const main = { isDestroyed: () => false };
+    const sidebar = { isDestroyed: () => false };
+    vi.mocked(webContents.fromId).mockImplementation(id => ({ isDestroyed: () => false, id }) as never);
+    vi.mocked(BrowserWindow.fromWebContents).mockImplementation(contents =>
+      ((contents as unknown as { id: number }).id === 1 ? main : sidebar) as never);
+    registerMcpAppsIpc(async () => {}, vi.fn(), undefined, undefined, window => window === (main as never));
+    expect(state.deps!.composerCaller!('renderer:1')).toBe(true);
+    expect(state.deps!.composerCaller!('renderer:2')).toBe(false);
+    expect(state.deps!.composerCaller!('device:phone')).toBe(false);
   });
 
   // Tier: unit at the production Main IPC boundary. A local MCP App resource

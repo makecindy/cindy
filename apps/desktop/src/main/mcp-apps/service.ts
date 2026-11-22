@@ -30,6 +30,7 @@ export interface McpAppsServicePorts {
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
   composerDrag?: boolean;
+  composerCaller?: McpAppsHostDeps['composerCaller'];
   hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
   sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
   disposeDocument?: McpAppsHostDeps['disposeDocument'];
@@ -53,6 +54,7 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
   const host = new McpAppsHost({
     downloadFile: ports.downloadFile,
     composerDrag: ports.composerDrag ? async sessionId => !(await assertSession(sessionId)).session.remoteHostId : undefined,
+    composerCaller: ports.composerCaller,
     hasComposerAttachment: ports.hasComposerAttachment,
     sendComposerAttachment: ports.sendComposerAttachment,
     pluginFiles: ports.pluginFiles,

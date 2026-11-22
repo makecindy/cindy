@@ -70,6 +70,8 @@ export function registerMcpAppsIpc(
     toolDefinition?: Pick<Tool, 'name' | 'description' | 'inputSchema'>,
   ) => Promise<AutoReviewDecision>,
   allowPendingPage?: (sessionId: string, requestId: string) => void,
+  /** Windows that render a task composer. A detached sidebar has none of its own. */
+  isComposerWindow?: (window: BrowserWindow) => boolean,
 ): void {
   let saving = false;
   const slots = new McpAppViewSlots();
@@ -114,6 +116,12 @@ export function registerMcpAppsIpc(
       }
     },
     composerDrag: supportsComposerDrag(process.platform, process.versions.electron),
+    composerCaller: (caller) => {
+      const match = /^renderer:(\d+)$/.exec(caller);
+      const contents = match ? webContents.fromId(Number(match[1])) : undefined;
+      const window = contents && !contents.isDestroyed() ? BrowserWindow.fromWebContents(contents) : null;
+      return !!window && !window.isDestroyed() && !!isComposerWindow?.(window);
+    },
     hasComposerAttachment: hasComposerAttachmentInWindow,
     sendComposerAttachment: async ({ caller, sessionId, viewId, resourceKey, name, mimeType, size, bytes, assertCurrent }) => {
       if (!caller.startsWith('renderer:')) throw new Error('MCP_APP_OWNER_ONLY');

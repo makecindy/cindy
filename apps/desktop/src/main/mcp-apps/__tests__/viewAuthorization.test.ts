@@ -145,6 +145,7 @@ async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p
   attachments?: boolean;
   composer?: boolean;
   composerDrag?: boolean;
+  composerCaller?: McpAppsHostDeps['composerCaller'];
   hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
   sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
   pluginFileSize?: number;
@@ -232,6 +233,7 @@ async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p
       },
     } : {}),
     composerDrag: options.composerDrag ? () => true : undefined,
+    composerCaller: options.composerCaller,
     hasComposerAttachment: options.hasComposerAttachment,
     ...(options.sendComposerAttachment ? { sendComposerAttachment: options.sendComposerAttachment } : {}),
     connection: () => connection,
@@ -323,6 +325,43 @@ describe('MCP App upstream result authorization', () => {
     const remoteInit = (await remote.poll(0)).find(event => event.message && 'id' in event.message && event.message.id === 1)?.message;
     expect(remoteInit && 'result' in remoteInit ? (remoteInit.result as { hostCapabilities?: { experimental?: Record<string, unknown> } }).hostCapabilities?.experimental?.['cindy/composer-attachment'] : undefined)
       .toBeUndefined();
+  });
+
+  // Unit through the production Host entry. A detached sidebar renderer has no
+  // composer, so an advertised button would stage a file nobody can see.
+  // Minimal failing input: a local View opened by a renderer outside a task window.
+  it('withholds composer attachments from a window without a task composer', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const sidebar = await fixture('renderer:sidebar', true, '<p>Composer</p>', {
+      attachments: true,
+      composerDrag: true,
+      composerCaller: caller => caller !== 'renderer:sidebar',
+      sendComposerAttachment,
+    });
+    const init = (await sidebar.poll(0)).find(event => event.message && 'id' in event.message && event.message.id === 1)?.message;
+    expect(init && 'result' in init ? (init.result as { hostCapabilities?: { experimental?: Record<string, unknown> } }).hostCapabilities?.experimental?.['cindy/composer-attachment'] : undefined)
+      .toBeUndefined();
+    await sidebar.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'fixture.txt', requestId: 'sidebar-1' } });
+    await vi.waitFor(() => expect(sidebar.outgoing).toContainEqual(expect.objectContaining({ id: 2, error: expect.anything() })));
+    expect(sendComposerAttachment).not.toHaveBeenCalled();
+  });
+
+  // Unit through the production AppBridge tools/call entry. External MCP cards
+  // return results on their own branch; a resource shown only in such a result
+  // was rejected as MCP_APP_FILE_NOT_AUTHORIZED. Minimal failing input: one
+  // resource_link returned by callServerTool, then added to the composer.
+  it('accepts a resource returned by an external card tool call', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:1', false, '<p>Composer</p>', { composer: true, sendComposerAttachment });
+    const uri = 'report://latest.txt';
+    f.methods.callTool.mockResolvedValueOnce({ content: [{ type: 'resource_link', uri, name: 'latest' }] });
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: {} } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: expect.anything() })));
+    f.methods.readResource.mockResolvedValueOnce({ contents: [{ uri, mimeType: 'text/plain', text: 'x' }] });
+    await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'cindy/composer-attachment/add', params: { uri, name: 'latest.txt' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 3, result: {} })));
+    expect(sendComposerAttachment).toHaveBeenCalledWith(expect.objectContaining({ name: 'latest.txt', size: 1 }));
   });
 
   it('reads a card-granted resource and ignores a duplicate receipt', async () => {
@@ -504,17 +543,20 @@ describe('MCP App upstream result authorization', () => {
     expect(mismatched).not.toHaveBeenCalled();
 
     const tooLarge = vi.fn(async () => {});
+    // A rejected file body must be cancelled: an unread file stream keeps its handle open.
+    const cancelled = vi.fn();
     const large = await fixture('renderer:21', true, '<p>Composer</p>', {
       attachments: true,
       sendComposerAttachment: tooLarge,
       pluginFileSize: 64 * 1024 * 1024 + 1,
       pluginFileMimeType: 'text/plain',
-      pluginFileBody: 'x',
+      pluginFileBody: new ReadableStream({ pull: () => {}, cancel: cancelled }),
     });
     await large.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
       params: { uri: 'library:fixture.txt', name: 'large.txt', requestId: 'too-large' } });
     await vi.waitFor(() => expect(large.outgoing).toContainEqual(expect.objectContaining({ id: 2, error: expect.anything() })));
     expect(tooLarge).not.toHaveBeenCalled();
+    expect(cancelled).toHaveBeenCalledOnce();
   });
 
   // Unit, via the AppBridge composer request. Content-Length tests cover the plugin file
