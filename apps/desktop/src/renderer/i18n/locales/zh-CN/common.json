@@ -15844,7 +15844,7 @@
       "viewThread": "查看 thread 上下文（{{count}}）",
       "memberFromGroup": "{{name}} · 来自 {{platform}} 群「{{group}}」",
       "memberFromPlatform": "{{name}} · 来自 {{platform}} 群聊",
-      "guestFromDm": "{{name}} · 来自 {{platform}} 私聊（非主人）",
+      "guestFromDm": "{{name}} · 来自 {{platform}} 私聊",
       "unknownSender": "群成员"
     },
     "rewind": {

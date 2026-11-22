@@ -15843,7 +15843,7 @@
       "viewThread": "檢視 thread 上下文（{{count}}）",
       "memberFromGroup": "{{name}} · 來自 {{platform}} 群組「{{group}}」",
       "memberFromPlatform": "{{name}} · 來自 {{platform}} 群組",
-      "guestFromDm": "{{name}} · 來自 {{platform}} 私訊（非主人）",
+      "guestFromDm": "{{name}} · 來自 {{platform}} 私訊",
       "unknownSender": "群組成員"
     },
     "rewind": {

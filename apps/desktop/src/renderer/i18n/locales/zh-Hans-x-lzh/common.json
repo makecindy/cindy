@@ -15835,7 +15835,7 @@
       "viewThread": "览 thread 上下文 ({{count}})",
       "memberFromGroup": "{{name}} · 自 {{platform}} 群议「{{group}}」来",
       "memberFromPlatform": "{{name}} · 自 {{platform}} 群议来",
-      "guestFromDm": "{{name}} · 自 {{platform}} 私讯来（非主人）",
+      "guestFromDm": "{{name}} · 自 {{platform}} 私讯来",
       "unknownSender": "群议中人"
     },
     "rewind": {

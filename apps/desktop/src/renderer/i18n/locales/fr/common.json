@@ -16013,7 +16013,7 @@
       "viewThread": "Voir le contexte du fil ({{count}})",
       "memberFromGroup": "{{name}} · depuis le groupe {{platform}} « {{group}} »",
       "memberFromPlatform": "{{name}} · depuis un groupe {{platform}}",
-      "guestFromDm": "{{name}} · depuis un message privé {{platform}} (pas le propriétaire)",
+      "guestFromDm": "{{name}} · depuis un message privé {{platform}}",
       "unknownSender": "Membre du groupe"
     },
     "rewind": {

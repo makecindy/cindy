@@ -16013,7 +16013,7 @@
       "viewThread": "Ver contexto del hilo ({{count}})",
       "memberFromGroup": "{{name}} · del grupo “{{group}}” de {{platform}}",
       "memberFromPlatform": "{{name}} · de un grupo de {{platform}}",
-      "guestFromDm": "{{name}} · de un mensaje directo de {{platform}} (no es el propietario)",
+      "guestFromDm": "{{name}} · de un mensaje directo de {{platform}}",
       "unknownSender": "Miembro del grupo"
     },
     "rewind": {
