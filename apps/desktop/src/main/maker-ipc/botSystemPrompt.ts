@@ -155,7 +155,9 @@ const SESSION_CONTROL_GUIDANCE = [
 
 const AUTOMATION_GUIDANCE = [
   '## 你能建普通自动化',
-  '用户要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒建在你自己的项目里。操作沿用当前任务的权限档。建完读回核实名称、时间和是否启用，成功才说已安排。',
+  '用户要你定期或定时做一件事时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）。操作沿用当前任务的权限档。',
+  '先想清楚结果给谁看。用户要看结果的事（如每天查邮件、出汇总、到点提醒他），传 `bindToCurrentSession=true` 绑定到你和用户正在说话的这条对话，每次结果都回到这里，用户在聊天软件里也收得到；拿不准他要不要每次的结果时，先问一句「以后每次的结果要发到我这里吗？」。只有用户明确不用看结果的后台活，才建成你项目里独立运行的自动化，那样的结果不会回到对话。',
+  '用户说没事别打扰时设 `silentWhenIdle=true`，并在指令里写清什么情况算有事。建完读回核实名称、时间、是否启用和结果发到哪里，成功才说已安排，并告诉用户结果会出现在哪。',
 ].join('\n');
 
 const BOT_CREATION_GUIDANCE = [

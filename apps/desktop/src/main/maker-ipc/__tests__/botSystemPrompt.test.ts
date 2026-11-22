@@ -49,6 +49,9 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(stable).not.toContain('你能建普通自动化');
     main.capabilities.automationEnabled = true;
     expect(buildBotStableTier(main)).toContain('schedule_create');
+    // User feedback 2026-11-22: results of automations a teammate set up for the owner never came
+    // back. Only a schedule bound to the conversation delivers its runs there, so name that switch.
+    expect(buildBotStableTier(main)).toContain('bindToCurrentSession=true');
 
     expect(buildBotStableTier(input())).not.toContain('你能看、能管用户的任务');
     main.capabilities.botModeEnabled = false;
