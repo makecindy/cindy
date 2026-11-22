@@ -31,7 +31,7 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  *                  list_sessions / list_session_queue / get_chat_history /
  *                  search_chat_history / get_task_digest)
  *    - 'control' : 会话状态控制 (set_current_session_title / rename_sessions /
- *                  archive_sessions / unarchive_sessions)
+ *                  archive_sessions / unarchive_sessions / snooze_sessions)
  *    - 'feedback': 官方反馈提交 (submit_github_issue)
  *    - 'handoff' : session 间 handoff 原语 (send_to_session),供 skill 跨会话路由
  *    - 'skills'  : Cindy 宿主管理的 Skill 工作流
@@ -85,6 +85,7 @@ import {
   registerRenameSessionsTool,
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerSnoozeSessionsTool,
   registerSendToSessionTool,
   registerListWorkdirsTool,
   registerHistoryDevicesTool,
@@ -110,7 +111,7 @@ import type { AppUpdateCallbacks } from './xdt-helper/app_update.js';
 import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
-import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
+import type { ArchiveSessionsDeps, SnoozeSessionsDeps } from './xdt-helper/archive_sessions.js';
 import { registerSessionImportTools, type SessionImportCallbacks } from './xdt-helper/session_import.js';
 import { projectMembershipNote, type SendToRemoteSessionCallback, type SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import type {
@@ -603,6 +604,12 @@ export interface XdtHelperMcpDeps {
   sessionShare?: SessionShareCallbacks;
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
   /**
+   * 稍后处理 / 取回回调。host 注入后, control 类工具 snooze_sessions 会被注册;
+   * 与收件箱同一写入口(snoozedUntil),host 负责校验、写库并广播 sessions:patched。
+   */
+  setSessionsSnooze?: SnoozeSessionsDeps['setSessionsSnooze'];
+  setRemoteSessionsSnooze?: SnoozeSessionsDeps['setRemoteSessionsSnooze'];
+  /**
    * 任务导入（与设置 → 任务导入同一实现）。host 注入后, control 类工具
    * scan_importable_sessions / import_sessions / get_session_import_status 会被注册。
    */
@@ -743,6 +750,13 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.setSessionsSnooze) {
+    registerSnoozeSessionsTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setSessionsSnooze: deps.setSessionsSnooze,
+      setRemoteSessionsSnooze: deps.setRemoteSessionsSnooze,
+    });
   }
   if (deps.deleteSession) registerDeleteSessionTool(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), deleteSession: deps.deleteSession,

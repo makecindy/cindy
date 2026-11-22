@@ -2548,6 +2548,51 @@ export async function setSessionsStatusInDb(
   }));
 }
 
+export interface SessionSnoozeChangeRow {
+  sessionId: string;
+  title: string | null;
+  workingDir: string | null;
+  snoozedUntil: string | null;
+}
+
+/**
+ * Agent 的「稍后处理 / 取回」（snooze_sessions）：逐个走界面同一入口 patchSessionMetaInDb，
+ * 校验唤回时间、写库并广播 sessions:patched，收件箱与手机即时收敛。先确认整批存在且未删除
+ * 再写；中途失败即停，`changed` 带回已写入的项，调用方据此报告，不重试。
+ */
+export async function setSessionsSnoozeInDb(
+  sessionIds: string[],
+  snoozedUntil: string | null,
+  beforeMutation?: () => Promise<void>,
+): Promise<{ changed: SessionSnoozeChangeRow[]; error?: { sessionId: string; cause: unknown } }> {
+  validateSnoozeTime(snoozedUntil);
+  const rows = sessionIds.length === 0 ? [] : await getDbClient().drizzle
+    .select({ id: sessions.id, status: sessions.status })
+    .from(sessions)
+    .where(inArray(sessions.id, sessionIds));
+  for (const id of sessionIds) {
+    const row = rows.find((item) => item.id === id);
+    if (!row) throwIpcError('NOT_FOUND', `Session 不存在: ${id}`);
+    if (row.status === 'deleted') throwIpcError('PRECONDITION_FAILED', `已删除的任务不能稍后处理: ${id}`);
+  }
+  const changed: SessionSnoozeChangeRow[] = [];
+  for (const sessionId of sessionIds) {
+    try {
+      await beforeMutation?.();
+      const updated = await patchSessionMetaInDb(sessionId, { snoozedUntil });
+      changed.push({
+        sessionId,
+        title: updated.title ?? null,
+        workingDir: updated.workingDir ?? null,
+        snoozedUntil: updated.snoozedUntil ?? null,
+      });
+    } catch (cause) {
+      return { changed, error: { sessionId, cause } };
+    }
+  }
+  return { changed };
+}
+
 const piSubagentCleanupTimers = new Map<string, NodeJS.Timeout>();
 const piSubagentCleanupEpoch = new Map<string, number>();
 /** Longer than the adapter's own close budget, so a normal close is never cut short. */

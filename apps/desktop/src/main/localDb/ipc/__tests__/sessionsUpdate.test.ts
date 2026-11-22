@@ -208,6 +208,7 @@ import {
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
   setSessionRuntimeCleanup,
+  setSessionsSnoozeInDb,
   setSessionWorktreeBindingLookup,
   setSessionWorktreeRecycle,
   updateSessionInDb,
@@ -2580,6 +2581,31 @@ describe('task snooze persistence', () => {
     });
     await invoke('codex-local', { status: 'archived' });
     await expect(invoke('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', snoozedUntil: null, snoozedAt: null });
+  });
+  // Agent snooze_sessions (2026-11-22 parity): the batch writes through the UI's
+  // patch-meta path, checks every id first, and reports what a mid-batch failure left written.
+  it('snoozes an Agent batch only after every task is present and not deleted', async () => {
+    const until = new Date(Date.now() + 3600000).toISOString();
+    const snoozed = () => h.sqlite!.prepare("SELECT id, snoozed_until AS until FROM sessions WHERE id IN ('cc-local','codex-local') ORDER BY id").all();
+    await expect(setSessionsSnoozeInDb(['cc-local', 'missing'], until)).rejects.toThrow(/NOT_FOUND|不存在/);
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = 'pi-local'").run();
+    await expect(setSessionsSnoozeInDb(['cc-local', 'pi-local'], until)).rejects.toThrow(/PRECONDITION_FAILED|已删除/);
+    expect(snoozed()).toEqual([{ id: 'cc-local', until: null }, { id: 'codex-local', until: null }]);
+
+    let calls = 0;
+    const result = await setSessionsSnoozeInDb(['cc-local', 'codex-local'], until, async () => {
+      if (++calls === 2) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    });
+    expect(result).toMatchObject({ changed: [{ sessionId: 'cc-local', snoozedUntil: until }], error: { sessionId: 'codex-local' } });
+    expect(snoozed()).toEqual([{ id: 'cc-local', until: Date.parse(until) }, { id: 'codex-local', until: null }]);
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+      sessionId: 'cc-local', patch: expect.objectContaining({ snoozedUntil: until }),
+    }));
+
+    await expect(setSessionsSnoozeInDb(['cc-local', 'codex-local'], null)).resolves.toEqual({ changed: [
+      expect.objectContaining({ sessionId: 'cc-local', snoozedUntil: null }),
+      expect.objectContaining({ sessionId: 'codex-local', snoozedUntil: null }),
+    ] });
   });
   it.each(['not-a-date', '2000-01-01T00:00:00.000Z', 123])('rejects invalid deferral %s without writing', async snoozedUntil => {
     await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();
