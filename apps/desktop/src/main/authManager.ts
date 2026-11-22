@@ -5129,11 +5129,6 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
       persistedSession = { version: 1, realm: AUTH_REGION, refreshToken: legacyToken };
     }
   }
-  if (persistedSession && process.platform === 'linux') {
-    confirmCloudGuestWhenOnline(
-      () => getClientEndpointForRealm(activeAuthRealm, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
-    );
-  }
   if (!persistedSession) {
     if (process.platform === 'linux' && !isPassiveSharedUserDataInstance()) {
       const guest=await readCloudGuest();
@@ -5605,6 +5600,14 @@ async function runColdStartRefreshFlow(
         clearReplacementIntegrationReloadTimers();
       },
     });
+    if (process.platform === 'linux' && refreshData.membership.kind === 'org' &&
+      activeAuthRealm === storedRealm && currentUser?.id === refreshData.membership.id) {
+      confirmCloudGuestWhenOnline(
+        () => getClientEndpointForRealm(storedRealm, 'modelAccessApiBaseUrl'),
+        () => activeAuthRealm === storedRealm ? getAccessToken() : null,
+        desktopAuthFetch,
+      );
+    }
     await migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
     // Schedule with the epoch this flow actually commits under (flowAuthEpoch, which
     // moves forward when the flow accepts its own startup-gate fallback) — passing the

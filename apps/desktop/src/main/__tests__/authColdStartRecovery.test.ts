@@ -216,7 +216,9 @@ function setup(random = 0) {
     cloudGuestAuthorization: vi.fn<() => Promise<{ code: string; verifier: string }>>(),
     isAtomicPersistedSecretAbsent: () => true,
     writeAtomicSafe: () => true,
-    confirmCloudGuestWhenOnline: vi.fn(),
+    confirmCloudGuestWhenOnline: vi.fn<(base: () => string, token: () => string | null, transport: typeof fetch) => void>(),
+    activateClientEndpointRealm: vi.fn(),
+    getClientEndpointForRealm: (realm: string) => 'https://model-access.' + realm + '.example.invalid',
     getAccessToken: () => null,
     saved,
     vault,
@@ -344,9 +346,7 @@ describe('saved login recovery after startup network failure', () => {
     const h = setup();
     const pending = h.start();
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(h.deps.confirmCloudGuestWhenOnline).toHaveBeenCalledExactlyOnceWith(
-      expect.any(Function), h.deps.getAccessToken, h.deps.desktopAuthFetch,
-    );
+    expect(h.deps.confirmCloudGuestWhenOnline).not.toHaveBeenCalled();
     await expect(pending).resolves.toMatchObject({ isAuthenticated: false });
     await vi.advanceTimersByTimeAsync(400_000);
     expect(h.request.mock.calls.length).toBeGreaterThan(3);
@@ -357,6 +357,26 @@ describe('saved login recovery after startup network failure', () => {
     expect(h.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
     expect(h.saved.session.refreshToken).toBe('test-rotated');
     expect(h.deps.notifyAuthListeners).toHaveBeenCalled();
+  });
+
+  // Standard tier: a saved enterprise session in another realm must confirm against that realm after recovery.
+  it('confirms registration only after restoring the stored enterprise realm', async () => {
+    const h = setup();
+    h.saved.session.realm = 'cn';
+    const memberKey = accountVaultKey('cn', 'original');
+    h.vault.activeAccountKey = memberKey;
+    h.vault.resources = { [memberKey]: { realm: 'cn', refreshToken: 'test-refresh' } };
+    const startup = h.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await startup;
+    expect(h.deps.confirmCloudGuestWhenOnline).not.toHaveBeenCalled();
+    h.request.mockResolvedValue({ ...h.ok, data: { ...h.ok.data, membership: { ...h.ok.data.membership, kind: 'org' } } });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.deps.activateClientEndpointRealm).toHaveBeenCalledWith('cn');
+    expect(h.deps.confirmCloudGuestWhenOnline).toHaveBeenCalledTimes(1);
+    const [base, , transport] = h.deps.confirmCloudGuestWhenOnline.mock.calls[0];
+    expect(base()).toBe('https://model-access.cn.example.invalid');
+    expect(transport).toBe(h.deps.desktopAuthFetch);
   });
 
   it('retry restores the saved login instead of fetching fresh login providers', async () => {
