@@ -40,7 +40,9 @@ function hostPage(host) {
     .card{box-sizing:border-box;padding:4px;height:40px;background:light-dark(#f5f5f5,#1f1f1e)}
     .wallpaper{background-image:linear-gradient(to right,#787878 50%,#999 50%)}
     iframe{border:0;display:block;width:100%;height:100%}
-    </style><body>${cards.join('')}</body></html>`;
+    </style><body>${cards.join('')}
+    <div id="opaque-reference" style="position:absolute;left:0;top:${pages.indexOf('opaque') * 40}px;width:4px;height:4px;background:#535353"></div>
+    </body></html>`;
 }
 
 async function verify(directory) {
@@ -140,7 +142,14 @@ async function verify(directory) {
             assert.deepEqual(after, before, `${host}/${system} must preserve the App's ${page} background`);
             assert.notDeepEqual(before, card, 'Canvas control must paint its own background');
           } else {
-            if (page === 'opaque') assert.deepEqual(before, [83, 83, 83], 'opaque App must be painted');
+            // Display profiles shift sampled values (#535353 can read as 73,73,73), and
+            // the host and App surfaces may convert slightly differently. Compare with
+            // a same-capture reference, with the tolerance the red probe also allows.
+            if (page === 'opaque') {
+              const reference = pixel(1, index * 40 + 1);
+              assert.ok(!equalRgb(before, card) && before.every((value, channel) => Math.abs(value - reference[channel]) <= 16),
+                `${host}/${system}: opaque App must paint its own background (${before} vs reference ${reference})`);
+            }
             assert.ok(equalRgb(after, before) || (page !== 'opaque' && equalRgb(after, card)),
               `${host}/${system} page ${page}: ${before} -> ${after}, card ${card}`);
           }
