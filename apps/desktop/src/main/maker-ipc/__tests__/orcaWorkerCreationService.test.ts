@@ -1399,12 +1399,9 @@ describe('OrcaWorkerCreationService', () => {
       });
 
       await expect(service.createWorker(workerParams())).resolves.toMatchObject({
-        ok: false,
-        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
-        message: expect.stringContaining(`"${shortId}"`),
+        ok: true,
+        resolved: { model: 'other-model', providerId: 'other' },
       });
-
-      expectNoCreationState(deps);
     });
   });
 
@@ -1548,8 +1545,8 @@ describe('OrcaWorkerCreationService', () => {
       label: 'reviewer',
     })).resolves.toMatchObject({
       ok: false,
-      errorCode: 'BUDGET_MODEL_REQUIRES_API_MODE',
-      message: expect.stringContaining('codex/budget'),
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: expect.stringContaining('"xd"'),
     });
 
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
@@ -2599,7 +2596,7 @@ describe('OrcaWorkerCreationService', () => {
     })).resolves.toMatchObject({
       ok: false,
       errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
-      message: expect.stringContaining('没有已连接的供应商提供模型 "gpt-5.4"'),
+      message: expect.stringContaining('"xd"'),
     });
 
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
@@ -3490,6 +3487,53 @@ describe('Worker tool defaults follow the submitted panel route atomically', () 
         effortMetaByModel: { 'no-effort': { efforts: [], defaultEffort: null } } }] }),
     });
     expect(await service.createWorker(request)).toMatchObject({ ok: true, defaults: { source: 'memory' }, resolved: { model: 'no-effort', effort: null } });
+  });
+  it('falls back from an unavailable Pi default to a model offered by the connected provider', async () => {
+    const { service, deps } = createDeps({
+      getWorkerDefaults: vi.fn(() => ({ model: 'claude-sonnet-5', providerId: 'openai' })),
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1', agentKind: 'pi' as const, workspaceKind: 'project' as const,
+        workingDir: 'C:\\repo', model: 'claude-sonnet-5', effort: 'medium',
+        permissionMode: 'default', fastMode: false, providerId: null, remoteHostId: null,
+      })),
+      getAvailableModels: vi.fn((agent: AgentKind) => agent === 'pi'
+        ? [{ id: 'chatgpt/gpt-6.1-sol', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium', supportsFastMode: true }]
+        : []),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        pi: [{ id: 'openai', name: 'OpenAI', models: ['chatgpt/gpt-6.1-sol'] }],
+      })),
+    });
+
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'pi-worker', agent: 'pi',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      resolved: { model: 'chatgpt/gpt-6.1-sol', providerId: 'openai' },
+    });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'pi', model: 'chatgpt/gpt-6.1-sol', providerId: 'openai',
+    }));
+  });
+  it('keeps the unavailable default in the error when no connected provider offers any candidate', async () => {
+    const { service, deps } = createDeps({
+      getWorkerDefaults: vi.fn(() => ({ model: 'gpt-5.4', providerId: 'openai' })),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        codex: [{ id: 'openai', name: 'OpenAI', models: ['unrelated-model'] }],
+      })),
+    });
+
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'unroutable', agent: 'codex',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: expect.stringContaining('gpt-5.4'),
+    });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
   it.each([{}, { agent: 'codex' as const }, { model: 'gpt-5.4' }])('restores the entire route for %j', async explicit => {
     const { service, deps } = createDeps({ getCreationSelection: () => saved });
