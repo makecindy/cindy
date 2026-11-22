@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { formatAsyncQuestionSupplement } from '@cindy/maker-shared';
-import type { AskUserQuestionItem, InteractionDecision, InteractionRequest } from '../../types/events.js';
+import { formatAsyncQuestionReplyDisplay, formatAsyncQuestionSupplement } from '@cindy/maker-shared';
+import type { AskUserQuestionItem, SendOrigin, InteractionDecision, InteractionRequest } from '../../types/events.js';
 
 interface PendingQuestion {
+  origin: SendOrigin | null;
   abort: AbortController;
   answered: boolean;
   generation: number;
@@ -10,7 +11,7 @@ interface PendingQuestion {
   submission?: Promise<void>;
   delivered?: boolean;
   submissionText?: string;
-  deliveryMessage?: { answerText: string; text: string };
+  deliveryMessage?: { answerText: string; text: string; displayText: string };
 }
 
 /** Session-owned questions outlive provider turns; each question is independently answerable. */
@@ -19,10 +20,12 @@ export class AsyncUserQuestions {
   private sendTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: {
+    currentOrigin(): SendOrigin | null;
     isActive(generation: number): boolean;
     isLateAnswer(generation: number): boolean;
     resolve(request: InteractionRequest): Promise<InteractionDecision>;
-    deliver(text: string, signal: AbortSignal, requestId: string): Promise<void>;
+    /** `text` goes to the model; `displayText` is the same answer as people read it. */
+    deliver(text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null): Promise<void>;
     dismiss(requestId: string, reason: string, withdrawalReason?: string): void;
     reportError(error: unknown): void;
   }) {}
@@ -35,7 +38,7 @@ export class AsyncUserQuestions {
       const requestId = questions.length === 1 ? batchId : `${batchId}:${index}`;
       receipts.push({ request_id: requestId, question: question.question });
       if (this.pending.has(requestId)) return;
-      const entry: PendingQuestion = { abort: new AbortController(), answered: false, generation, question: { ...question, id: question.id ?? requestId } };
+      const entry: PendingQuestion = { origin: this.deps.currentOrigin(), abort: new AbortController(), answered: false, generation, question: { ...question, id: question.id ?? requestId } };
       this.pending.set(requestId, entry);
       void this.waitForAnswer(requestId, entry, entry.question);
     });
@@ -60,8 +63,9 @@ export class AsyncUserQuestions {
         if (entry.deliveryMessage?.answerText !== text) entry.deliveryMessage = {
           answerText: text, text: formatAsyncQuestionSupplement([entry.question], answers,
             { late: this.deps.isLateAnswer(entry.generation) }),
+          displayText: formatAsyncQuestionReplyDisplay([entry.question], answers),
         };
-        await this.deps.deliver(entry.deliveryMessage.text, entry.abort.signal, requestId);
+        await this.deps.deliver(entry.deliveryMessage.text, entry.abort.signal, requestId, entry.deliveryMessage.displayText, entry.origin);
         entry.delivered = true;
       });
       this.sendTail = entry.submission.catch(() => undefined);

@@ -121,7 +121,7 @@ export function WebhookEventSelect({ preset, value, onChange }: Props) {
               sideOffset={8}
               collisionPadding={16}
               aria-label={t(`${key}.choose`)}
-              className="z-[10010] flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] min-w-0 max-w-[calc(100vw-32px)] flex-col gap-3 p-3"
+              className="flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] min-w-0 max-w-[calc(100vw-32px)] flex-col gap-3 p-3"
             >
               <Input
                 size="md"
@@ -292,7 +292,7 @@ function Choice({
       aria-checked={checked}
       aria-label={label}
       onClick={onClick}
-      className="flex min-h-9 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+      className="flex min-h-9 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
     >
       <span
         aria-hidden

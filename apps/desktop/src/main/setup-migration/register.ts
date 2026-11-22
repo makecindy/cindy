@@ -82,6 +82,7 @@ import { setCindySkillEnabled } from '../skillhub/activationPreferences.js';
 import * as skillInstallService from '../skillhub/installService.js';
 import { tryAcquireSkillInstallLock } from '../skillhub/installLock.js';
 import { scanAllSkills, type Skill } from '../skillhub/scanner.js';
+import { joinSharedSkillPreparation } from '../skillhub/sharedSkillPreparation.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { registerSetupMigrationRendererHost } from './rendererPrefsHost.js';
 import {
@@ -102,8 +103,15 @@ export interface RegisterSetupMigrationOptions {
   getMaker(): Maker;
   getManagedSkillRoots(): readonly string[];
   getBuiltInSkills(): readonly BuiltInSkillDescriptor[];
+  /**
+   * Joins the shared Skill preparation before installed Skills are scanned, for both the
+   * snapshot this computer sends and the plan it builds. Startup only warms it up.
+   */
+  prepareSharedSkills?(): Promise<void>;
   /** Window the keys/SSH question is shown over on this computer. */
   getMainWindow(): BrowserWindow | null;
+  /** Earlier-version data was brought over during this process's sign-in. */
+  getLegacyMigrated(): boolean;
 }
 
 const IM_CHANNEL_SECRETS: ReadonlyArray<[string, string]> = [
@@ -336,6 +344,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
   const market = () => getPluginMarketService();
 
   const globalSkills = async (): Promise<Skill[]> => {
+    await joinSharedSkillPreparation(options.prepareSharedSkills, 'setup-migration');
     const result = await scanAllSkills(
       { projects: [] },
       options.getMaker(),
@@ -553,6 +562,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
           return null;
       }
     },
+    legacyMigrated: () => options.getLegacyMigrated(),
     looksNew: async () => {
       const ghosts = listGhosts().filter((ghost) => ghost.builtin !== true);
       if (ghosts.length > 0) {
@@ -711,6 +721,10 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
     assertTrustedAppRendererEvent(event);
     return service.dismiss(parseDismissRequest(raw));
   });
+  ipcMain.handle(SETUP_MIGRATION_IPC.FIRST_RUN_GUIDE, (event) => {
+    assertTrustedAppRendererEvent(event);
+    return service.firstRunGuide();
+  });
 }
 
 function stringList(value: unknown, max: number): string[] {
@@ -735,7 +749,7 @@ export function parseApplyRequest(raw: unknown): SetupMigrationApplyRequest {
 
 export function parseDismissRequest(raw: unknown): SetupMigrationDismissRequest {
   const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  if (value.kind === 'suggestion' || value.kind === 'checklist') return { kind: value.kind };
+  if (value.kind === 'checklist') return { kind: 'checklist' };
   if (value.kind === 'checklist-item' && typeof value.id === 'string' && value.id.length <= 600) {
     return { kind: 'checklist-item', id: value.id };
   }

@@ -7,7 +7,7 @@ import {
   type AttachmentOssRef,
   type PeerAttachment,
 } from '@cindy/device-link';
-import { downloadToFile } from './mediaTransfer';
+import { downloadToFile } from './mediaTransfer.desktop';
 import { copyPeerAttachment } from './peerAttachmentStore';
 
 export type RemoteAttachment = AttachmentOssRef & { peer?: PeerAttachment };

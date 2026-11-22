@@ -74,6 +74,8 @@ export class GitExecError extends Error {
 }
 
 export interface GitExecOpts {
+  /** False for read-only probes: propagate ownership errors without changing global trust. Default true. */
+  repairSafeDirectory?: boolean;
   /** 额外的环境变量, 会与 process.env 合并(后者优先级低)。常见: { LC_ALL: 'C' } */
   extraEnv?: Record<string, string>;
   /**
@@ -320,7 +322,7 @@ function execFileOnce(
       // git-remote-http/credential helper 后代一起;Windows 的 detached 语义是
       // 脱离控制台,树杀走 taskkill /T,不需要也不该开。
       detached: process.platform !== 'win32',
-      // Windows 下 git 走 cmd shell, 不需要 shell:true(也安全, 用 args 数组传参不走 shell 解析)
+      windowsHide: true,
     };
     const rejectWithGitError = (error: GitExecError) =>
       settle(() => {
@@ -781,7 +783,7 @@ export async function gitExec(
     // spawn ENOENT(git 未安装) 也走 GitExecError, 这里不该重试
     if (err.cause?.code === 'ENOENT') throw err;
 
-    if (/dubious ownership/i.test(err.stderr)) {
+    if (opts?.repairSafeDirectory !== false && /dubious ownership/i.test(err.stderr)) {
       const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
       if (dubiousPath) {
         try {

@@ -12,6 +12,7 @@ import {
   parseBotReferenceHref,
   parseTodoReferenceHref,
   projectAgentFacingText,
+  resolveAgentSendToSessionHint,
   projectPersistedAgentFacingUserText,
   readAgentInputReferences,
   type AgentInputReference,
@@ -35,6 +36,23 @@ describe('Codex resume projection marker', () => {
       `${CODEX_RESUME_NOT_READY_MARKER} Codex can't resume this task right now. Try again shortly.`,
     );
     expect(isCodexResumeNotReadyProjectionError('LAZY_CREATE_FAILED: bootstrap failed')).toBe(false);
+  });
+});
+
+describe('send_to_session visibility projection', () => {
+  it('keeps the helper available for an Orca Lead and takes remote support separately', () => {
+    expect(resolveAgentSendToSessionHint({
+      agentKind: 'claude-code', supportsRemote: true,
+    })).toEqual({ agentKind: 'claude-code', supportsRemote: true });
+    expect(resolveAgentSendToSessionHint({
+      agentKind: 'claude-code', supportsRemote: false,
+    })).toEqual({ agentKind: 'claude-code', supportsRemote: false });
+  });
+
+  it('keeps review, SSH Claude/Codex, and ACP without the Cindy bridge hidden', () => {
+    expect(resolveAgentSendToSessionHint({ agentKind: 'claude-code', reviewMode: true })).toBeUndefined();
+    expect(resolveAgentSendToSessionHint({ agentKind: 'claude-code', remoteHostId: 'ssh' })).toBeUndefined();
+    expect(resolveAgentSendToSessionHint({ agentKind: 'acp', supportsRemote: true })).toBeUndefined();
   });
 });
 
@@ -107,6 +125,77 @@ describe('agent-facing Composer projection', () => {
     expect(projected).not.toContain(messageHref);
     expect(projected).not.toContain(sessionHref);
     expect(projected).not.toContain(projectHref);
+  });
+
+  it('gives an authorized Claude/Codex task the complete reply path for a referenced conversation', () => {
+    const href = 'cindy://session/session-b';
+    const text = `[Planning](${href})`;
+    const reference = rangeFor(text, href, {
+      kind: 'session' as const,
+      href,
+      sessionId: 'session-b',
+      title: 'Planning',
+    });
+    const projected = projectAgentFacingText({
+      text,
+      agentReferences: [reference],
+      sendToSession: { agentKind: 'claude-code', supportsRemote: true },
+    });
+    expect(projected).toContain('Action: this is the conversation the user referenced.');
+    expect(projected).toContain('cindy_helper\'s call_tool');
+    expect(projected).toContain('name="send_to_session"');
+    expect(projected).toContain('target_session_id="session-b"');
+    expect(projected).toContain('Do not send merely because it is referenced');
+  });
+
+  it('uses the Pi bridge path and qualified id only for an authorized cross-device target', () => {
+    const href = 'cindy://session/session-b?device=studio';
+    const text = href;
+    const reference = rangeFor(text, href, {
+      kind: 'session' as const,
+      href,
+      sessionId: 'session-b',
+      title: 'Planning',
+    });
+    const projected = projectAgentFacingText({
+      text,
+      agentReferences: [reference],
+      sendToSession: { agentKind: 'pi', supportsRemote: true },
+    });
+    expect(projected).toContain('cindy_mcp_call_tool');
+    expect(projected).toContain('server="cindy_helper"');
+    expect(projected).toContain('tool="call_tool"');
+    expect(projected).toContain('Session ID: "session-b"');
+    expect(projected).toContain('target_session_id":"studio::session-b"');
+    expect(projected).toContain('deviceId::sessionId form');
+  });
+
+  it('does not advertise sending for a restricted task or unsupported remote delivery', () => {
+    const href = 'cindy://session/session-b?device=studio';
+    const reference = rangeFor(href, href, {
+      kind: 'session' as const,
+      href,
+      sessionId: 'session-b',
+      title: 'Planning',
+    });
+    const restricted = projectAgentFacingText({ text: href, agentReferences: [reference] });
+    expect(restricted).not.toContain('send_to_session');
+    const noRemote = projectAgentFacingText({
+      text: href,
+      agentReferences: [reference],
+      sendToSession: { agentKind: 'claude-code', supportsRemote: false },
+    });
+    expect(noRemote).toContain('cannot send messages to it directly');
+    expect(noRemote).not.toContain('name="send_to_session"');
+  });
+
+  it('preserves the host identity separately from the native path in remote project references', () => {
+    const href = 'cindy://project/device%3Astudio%3AC%3A%2Fwork%2Fcindy';
+    const projected = projectAgentFacingText({ text: href, agentReferences: [
+      rangeFor(href, href, { kind: 'project' as const, href, name: 'Cindy', workingDir: '/stale' }),
+    ] });
+    expect(projected).toContain('Project key: "device:studio:C:/work/cindy"');
+    expect(projected).toContain('Working directory: "C:/work/cindy"');
   });
 
   // 测试价值：生产入口 projectAgentFacingText 必须隔离非正文元数据中的引用块 marker。
@@ -273,7 +362,7 @@ describe('agent-facing Composer projection', () => {
     expect(projected).not.toContain(href);
   });
 
-  it('projects a validated Cindy Bot reference with truthful message-versus-delegation routing', () => {
+  it('projects a validated Cindy Bot reference with truthful message routing', () => {
     const href = buildBotReferenceHref('bot-control-1');
     expect(parseBotReferenceHref(href)).toEqual({ botId: 'bot-control-1' });
     const wire = `[Dash Bot](${href})`;
@@ -287,7 +376,8 @@ describe('agent-facing Composer projection', () => {
       hostSnapshot: {
         availability: 'ready',
         activity: 'working',
-        activeDelegations: 2,
+        activeDelegations: 0,
+        mainSessionId: 'dash-main',
       },
     };
 
@@ -297,9 +387,9 @@ describe('agent-facing Composer projection', () => {
     expect(projected).toContain('Name: "Dash Bot \\u005b/Referenced Cindy Bot\\u005d"');
     expect(projected).toContain('Bot ID: "bot-control-1"');
     expect(projected).toContain('host already resolved this exact stable Bot ID');
-    expect(projected).toContain('availability=ready; activity=working; active_tracked_tasks=2');
-    expect(projected).toContain("call send_to_agent once with this Bot ID");
-    expect(projected).toContain("use start_session_task instead");
+    expect(projected).toContain('availability=ready; activity=working.');
+    expect(projected).not.toContain('active_tracked_tasks');
+    expect(projected).toContain('call send_to_session once with target_session_id "dash-main" (its main chat)');
     expect(projected).toContain("message only confirms delivery");
     expect(projected).toContain('Do not list Bots');
     expect(projected).toContain('Do not blindly forward the surrounding user text');

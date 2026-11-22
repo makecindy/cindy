@@ -85,6 +85,8 @@ export type BrowserBackendHealthReason =
   | 'extension-disconnected'
   /** user-browser:没有已安装并启用的页面控制插件。 */
   | 'plugin-missing'
+  /** user-browser:尚未连接,且这台电脑上找不到 Chrome / Edge 等可装扩展的浏览器。 */
+  | 'browser-missing'
   | 'plugin-updating'
   | 'plugin-selection-required';
 

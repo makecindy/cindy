@@ -29,8 +29,8 @@ import { Button } from '@/components/ui/button';
  *   - 只在 ready 态出现。superseding 态顶部刻意不显示版本号(新版还在下),没有可信的
  *     版本可查,confirming 态则要保持中断警告的干净,两者都不给入口。
  *   - CDN 上没有该版本公告(或内容不可渲染)时不显示入口 —— 用挂载时的 fetch 探测,
- *     宁可没有入口,也不给一个点了报错的链接。探测结果被 release-notes 双层缓存复用,
- *     真正点开时不会再打一次网。
+ *     宁可没有入口,也不给一个点了报错的链接。重新展开提示时重试失败的探测；成功结果
+ *     和在途请求由 release-notes 复用，真正点开时不会再打一次网。
  *   - 收起 / rail 态放不下文字链,因此**没有入口**;那两态里 UserInfoSection 的火焰按钮
  *     也只能看 <= 当前已装版本的历史,看不到待装版本。这是本方案已知的取舍。
  *
@@ -74,13 +74,22 @@ interface UpdateBannerProps {
    * 提供;未传时文字链整体不渲染。
    */
   onOpenVersionNotice?: (version: string) => void;
+  /**
+   * 状态进入安装前置条件错误时是否自动弹出提示。侧栏实例负责自动弹出；
+   * 浮窗副本关闭它，避免同一个提示叠开两次（点击操作触发的弹窗不受影响）。
+   */
+  autoOpenPrerequisiteDialogs?: boolean;
 }
 
 // 状态写法与 Button 的 variant 相同的修饰符才能替换它；只写 enabled:hover 优先级更低，不生效。
 export const UPDATE_BUTTON_TREATMENT =
   '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--update-btn-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--update-btn-border)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--update-btn-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--update-btn-border)]';
 
-export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
+export function UpdateBanner({
+  isCollapsed,
+  onOpenVersionNotice,
+  autoOpenPrerequisiteDialogs = true,
+}: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();
   const { effectiveLocale } = useLocale();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
@@ -138,20 +147,20 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const isPreparing = status === 'superseding';
 
   useEffect(() => {
-    if (isLinuxInstallationUnsupported) setShowLinuxInstallationDialog(true);
-  }, [isLinuxInstallationUnsupported]);
+    if (autoOpenPrerequisiteDialogs && isLinuxInstallationUnsupported) setShowLinuxInstallationDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isLinuxInstallationUnsupported]);
 
   useEffect(() => {
-    if (isWindowsRuntimeMissing) setShowWindowsRuntimeDialog(true);
-  }, [isWindowsRuntimeMissing]);
+    if (autoOpenPrerequisiteDialogs && isWindowsRuntimeMissing) setShowWindowsRuntimeDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isWindowsRuntimeMissing]);
 
   useEffect(() => {
-    if (isSpawnFailed) setShowSpawnFailedDialog(true);
-  }, [isSpawnFailed]);
+    if (autoOpenPrerequisiteDialogs && isSpawnFailed) setShowSpawnFailedDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isSpawnFailed]);
 
   useEffect(() => {
-    if (isTranslocated) setShowTranslocatedDialog(true);
-  }, [isTranslocated]);
+    if (autoOpenPrerequisiteDialogs && isTranslocated) setShowTranslocatedDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isTranslocated]);
 
   // 一旦不再是 ready(如被 superseding 顶掉 / 出错),复位确认态,避免残留一个
   // 指向旧补丁的「仍要重启」;同时作废在飞的探针 —— 它的结论建立在「当前补丁可装」之上。
@@ -197,12 +206,15 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
       setHasNotes(false);
       return;
     }
+    // 关闭提示不发请求；火焰唤回时重新探测，以恢复此前 404 / 网络失败的公告入口。
+    // 成功结果与在途请求由 fetchReleaseNotes 复用，反复开关不重复联网。
+    if (dismissed) return;
     let cancelled = false;
     fetchReleaseNotes(version, effectiveLocale)
       .then((notes) => { if (!cancelled) setHasNotes(notes !== null); })
       .catch(() => { if (!cancelled) setHasNotes(false); });
     return () => { cancelled = true; };
-  }, [status, version, canOpenNotice, isCollapsed, effectiveLocale]);
+  }, [status, version, canOpenNotice, isCollapsed, effectiveLocale, dismissed]);
 
   // 取消:先打标记再复位,让上面的 effect 在入口按钮重新挂载后把焦点还回去。
   const handleCancelConfirm = () => {
@@ -535,7 +547,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // ── Expanded state: full banner ──
   return withPrerequisiteDialogs(
     <div className="flex select-none flex-col border-t border-sidebar-border">
-      <div className="relative flex flex-col items-center gap-[10px] px-4 py-3">
+      <div className="relative flex flex-col items-center gap-2.5 px-4 py-3">
         {/* X dismiss —— 右上角。error 态 body 本就隐藏,superseding 允许 dismiss。
             hover 前 muted、hover 后主色,不抢主视觉;绝对定位保证不影响居中主内容。 */}
         <Tip text={t('update.banner.dismiss')} side="left">
@@ -558,7 +570,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
         }
 
         {/* Title */}
-        <p className="text-sm font-semibold text-foreground">
+        <p className="text-sm font-medium text-foreground">
           {isPreparing
             ? t('update.banner.preparingTitle')
             : confirming
@@ -657,5 +669,28 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
         )}
       </div>
     </div>,
+  );
+}
+
+/** 原侧栏不可见时，显式请求的更新提醒仍在窗口左下角显示。 */
+export function FloatingUpdateBanner({
+  enabled,
+  ownsPrerequisiteDialogs = false,
+  onOpenVersionNotice,
+}: {
+  enabled: boolean;
+  /** 没有侧栏实例（设置页）时由浮窗负责自动弹出安装提示；否则交给侧栏，避免叠开两次。 */
+  ownsPrerequisiteDialogs?: boolean;
+} & Pick<UpdateBannerProps, 'onOpenVersionNotice'>) {
+  const { revealRequested, pinnedByUser, dismissed } = useUpdateBannerDismiss();
+  if (!enabled || (!revealRequested && (!pinnedByUser || dismissed))) return null;
+  return (
+    <div className="fixed bottom-4 left-4 z-float w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
+      <UpdateBanner
+        isCollapsed={false}
+        onOpenVersionNotice={onOpenVersionNotice}
+        autoOpenPrerequisiteDialogs={ownsPrerequisiteDialogs}
+      />
+    </div>
   );
 }

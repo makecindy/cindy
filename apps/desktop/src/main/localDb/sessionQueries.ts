@@ -20,10 +20,11 @@ const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.ide
 export function ordinaryTaskListFilter(): SQL | undefined {
   return and(
     or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+      and(eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, true)),
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id
-        WHERE task_link.session_id = ${OUTER_SESSION_ID_SQL} AND task_link.role IN ('routine', 'channel')
+        WHERE task_link.session_id = ${OUTER_SESSION_ID_SQL} AND task_link.role IN ('routine', 'channel', 'group')
           AND task_bot.status <> 'deleting' AND (task_bot.hidden_at IS NULL OR task_bot.hidden_at = 0)
       )`)),
     isNull(sessions.hiddenAt),
@@ -62,10 +63,11 @@ const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
  * sidebar-card-mode：最近一条可见 user/assistant 的预览抽出 / role。
  * list_preview 已回填时 CASE 短路，不碰 messages。否则 SQL 侧 json_extract 纯文本，
  * 不把整段 content 跨 worker RPC。autoResume 只检查 user 行的 agent_meta。
+ * 空串等同未回填（见 SESSION_LIST_PROJECTION_BACKFILL_SQL），连带存下的旧 role 也不可信。
  */
 const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
   CASE
-    WHEN ${sessions.listPreview} IS NOT NULL THEN NULL
+    WHEN NULLIF(${sessions.listPreview}, '') IS NOT NULL THEN NULL
     ELSE (
       SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
       WHERE m.session_id = ${OUTER_SESSION_ID_SQL}
@@ -77,7 +79,7 @@ const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
 )`.as('latest_message_extract');
 const LATEST_MSG_ROLE_SQL = sql<string | null>`(
   CASE
-    WHEN ${sessions.listPreviewRole} IS NOT NULL THEN ${sessions.listPreviewRole}
+    WHEN ${sessions.listPreviewRole} IS NOT NULL AND ${sessions.listPreview} IS NOT '' THEN ${sessions.listPreviewRole}
     ELSE (
       SELECT m.role FROM messages m
       WHERE m.session_id = ${OUTER_SESSION_ID_SQL}
@@ -94,6 +96,7 @@ export interface SessionListRow {
   messageCount: number;
   latestMessageExtract: string | null;
   latestMessageRole: string | null;
+  orcaLeadSessionId?: string | null;
   tagsJson?: string;
   companionJson?: string | null;
 }
@@ -114,6 +117,7 @@ function sessionReadSelection() {
 
 export function flattenSessionReadRow(row: SessionListRow): SessionRowWithCount {
   return { ...row.session,
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     companion: parseHistoryCompanion(row.companionJson),
     tags: normalizeTaskTags(JSON.parse(row.tagsJson ?? '[]')), messageCount: row.messageCount,
     latestMessageExtract: row.latestMessageExtract, latestMessageRole: row.latestMessageRole };
@@ -124,6 +128,21 @@ export function projectSessionReadResult(
   resolve?: (session: ContextWindowSession) => number | null,
 ) {
   return sessionToCamel(projectSessionContextWindow(row, resolve));
+}
+
+/** Single-session reads sample the execution device's clock at response time. */
+export function projectSessionDetail(
+  row: SessionRowWithCount,
+  resolve?: (session: ContextWindowSession) => number | null,
+  productStartedAt = row.activeTurnStartedAt,
+  settledProductEndedAt?: number | null,
+) {
+  const start = settledProductEndedAt === undefined ? row.activeTurnStartedAt : productStartedAt;
+  const end = settledProductEndedAt === undefined ? row.lastTurnEndedAt : settledProductEndedAt;
+  const turnElapsedMs = start != null && start > (row.clearedAt ?? 0)
+    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - (productStartedAt ?? start))
+    : null;
+  return { ...projectSessionReadResult(row, resolve), turnElapsedMs };
 }
 
 /** No settled cache: every read observes the database and uses the same projection. */
@@ -215,7 +234,13 @@ export function selectSessionListRows(
     );
   return db
     .with(picked)
-    .select(sessionReadSelection())
+    .select({
+      ...sessionReadSelection(),
+      orcaLeadSessionId: sql<string | null>`CASE WHEN sessions.orca_role = 'worker' THEN (
+        SELECT t.lead_session_id FROM orca_workers w JOIN orca_teams t ON t.id = w.team_id
+        WHERE w.session_id = ${OUTER_SESSION_ID_SQL} AND t.status = 'active'
+      ) END`.as('orca_lead_session_id'),
+    })
     .from(sessions)
     .innerJoin(picked, eq(picked.id, sessions.id))
     .where(where)

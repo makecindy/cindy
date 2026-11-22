@@ -134,6 +134,18 @@ describe('usage limit recovery detection', () => {
     ).toEqual({ resetAtMs: Date.parse('2026-01-24T13:10:00.000Z') });
   });
 
+  // Unit regression: the screenshot's text-only five-hour error was not recognized,
+  // so its explicit timezone/reset was lost. Existing cases only covered session/weekly.
+  it.each(["You've hit your 5-hour limit", 'You’ve hit your 5-hour limit'])(
+    'parses the five-hour deadline without SDK metadata: %s', (message) => {
+      expect(extractUsageLimitRecoveryHint(
+        { message: `${message} · resets 2:30am (Pacific/Auckland)` },
+        Date.parse('2026-11-11T10:00:00Z'),
+        { localTimeZoneTrusted: false },
+      )).toEqual({ resetAtMs: Date.parse('2026-11-11T13:30:00Z') });
+    },
+  );
+
   it('normalizes Intl midnight hour 24 while parsing a time-of-day reset', () => {
     const originalFormatToParts = Intl.DateTimeFormat.prototype.formatToParts;
     vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts').mockImplementation(function (

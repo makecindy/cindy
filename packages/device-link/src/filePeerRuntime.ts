@@ -3,9 +3,13 @@
 export type FilePeerCloseReason = "failed" | "closed" | "disconnect-timeout";
 
 export interface FilePeerRuntimeBridge {
+  /** A local observer returns a disposer that takes the final reading and closes the peer connection. */
+  observePeerConnection?(pc: RTCPeerConnection): () => void;
   /** Local lifecycle event, never a wire message. */
   closed?(connection: string, reason?: FilePeerCloseReason): void;
   read(connection: string, ticket: string, offset: number): Promise<string>;
+  /** Local read batching only; wire frames and receive credit stay unchanged. */
+  readBatch?(connection: string, ticket: string, offset: number, maxBytes: number): Promise<string>;
   write(sink: string, offset: number, base64: string): Promise<void>;
   /** Local bridge capability only; coalesces already-arrived frames up to 256 KiB. */
   writeBatch?(sink: string, offset: number, base64: string): Promise<void>;
@@ -51,6 +55,7 @@ interface SendProgress {
 }
 interface PeerState {
   pc: RTCPeerConnection;
+  closePeer: () => void;
   dc: RTCDataChannel | null;
   busy: boolean;
   recv?: ReceiveProgress;
@@ -271,15 +276,16 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     });
   }
   function close(id: string, reason?: FilePeerCloseReason) {
+    const p = peers.get(id);
     const rpc = rpcPeers.get(id);
     rpcPeers.delete(id);
     rpc?.close();
-    const p = peers.get(id);
     peers.delete(id);
     clearTimeout(p?.disconnectTimer);
     p?.dc?.close();
-    p?.pc.close();
     if (p) {
+      p.pc.ondatachannel = null;
+      p.closePeer();
       if (reason) bridge.closed?.(id, reason);
       else bridge.closed?.(id);
     }
@@ -287,7 +293,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
   function create(id: string, servers: RTCIceServer[]) {
     if (peers.has(id) || peers.size >= 4) throw new Error("FILE_PEER_BUSY");
     const pc = new RTCPeerConnection({ iceServers: servers });
-    const p: PeerState = { pc, dc: null, busy: false };
+    const p: PeerState = { pc, dc: null, busy: false, closePeer: bridge.observePeerConnection?.(pc) ?? (() => pc.close()) };
     peers.set(id, p);
     pc.onconnectionstatechange = () => {
       if (peers.get(id) !== p) return;
@@ -331,16 +337,16 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       throw new Error("FILE_PEER_CLOSED");
     return pc.localDescription.sdp;
   }
-  function decode(text: string) {
+  function decode(text: string, limit = chunkBytes) {
     if (
-      text.length > 22000 ||
+      text.length > Math.ceil(limit / 3) * 4 ||
       !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
         text,
       )
     )
       throw new Error("FILE_PEER_BLOCK");
     const s = atob(text);
-    if (s.length > chunkBytes) throw new Error("FILE_PEER_BLOCK");
+    if (s.length > limit) throw new Error("FILE_PEER_BLOCK");
     return Uint8Array.from(s, (c) => c.charCodeAt(0));
   }
   async function offer(id: string, servers: RTCIceServer[], streaming = false) {
@@ -381,13 +387,17 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
           try {
             while (source && source.credit > 0) {
               const current = source;
-              current.credit--;
+              const limit = bridge.readBatch ? Math.min(current.credit, 16) * chunkBytes : chunkBytes;
               const readStartedAt = Date.now();
-              const bytes = decode(
-                await bridge.read(id, current.ticket, current.offset),
-              );
+              const bytes = decode(bridge.readBatch
+                ? await bridge.readBatch(id, current.ticket, current.offset, limit)
+                : await bridge.read(id, current.ticket, current.offset), limit);
               if (peers.get(id) !== p || channel.readyState !== "open") return;
-              channel.send(bytes.buffer);
+              if (bytes.length > limit) throw new Error('FILE_PEER_BLOCK');
+              for (let at = 0; at < Math.max(1, bytes.length); at += chunkBytes) {
+                channel.send(bytes.slice(at, at + chunkBytes).buffer);
+                current.credit--;
+              }
               current.offset += bytes.length;
               if (p.send) {
                 const ms = Date.now() - readStartedAt;

@@ -42,6 +42,18 @@ export function normalizeAutoTitle(text: string): string {
   return title.trimEnd();
 }
 
+/** Keep the source visible when a narrow task list truncates the title. */
+export function formatTaskTopicTitle(topic: string, channel: string, detail?: { participant: string } | { context: string }): string {
+  const label = (value: string) => Array.from(normalizeAutoTitle(value)).slice(0, 12).join('').trim();
+  const member = detail && 'participant' in detail ? label(detail.participant) : '';
+  const source = [label(channel), member].filter(Boolean).join('·');
+  const context = detail && 'context' in detail ? label(detail.context) : '';
+  const budget = AUTO_TITLE_MAX_CHARS - [source, context].reduce((used, part) =>
+    used + (part ? Array.from(part).length + 3 : 0), 0);
+  const subject = Array.from(normalizeAutoTitle(topic)).slice(0, budget).join('').trim();
+  return [source, subject, context].filter(Boolean).join(' · ');
+}
+
 /**
  * 标题是否仍是建会话时的裸默认哨兵 —— 即「既没被自动起名、也没被用户改名」。
  *

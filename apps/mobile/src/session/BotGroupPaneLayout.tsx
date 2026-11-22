@@ -9,9 +9,9 @@ import { sharedStatusRowTrailingReserve, sharedStatusRowDrawerTop } from '@/plat
 import { MessageHistoryOverlay } from './RecentMessageHistories';
 import { useSessionPaneLayout, useSessionSidebarWidthPreference } from './ResidentHomeList';
 import { SessionListDrawer } from './SessionListDrawer';
-import { SessionPaneDivider } from './SessionPaneDivider';
 import { useConversationTaskDrawer } from './useConversationTaskDrawer';
 import { buildWideSessionNavLayout } from './wideSessionNav';
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
 
 /** Group chats use the same drawer lifecycle and retained Home as task chats. */
 export function BotGroupPaneLayout({ children }: { children: ReactNode }) {
@@ -33,6 +33,7 @@ export function BotGroupPaneLayout({ children }: { children: ReactNode }) {
   const retainedHeight = useRef(Math.max(1, height - (drawerTop ?? geometry.insets.top)));
   if (focused) retainedHeight.current = Math.max(1, height - (drawerTop ?? geometry.insets.top));
   return <View style={styles.root}>
+    <WallpaperBackdrop />
     <GestureDetector gesture={drawer.sessionListDrawerPullGesture}>
       <View style={[styles.root, persistent && {
         marginLeft: detail.x, marginRight: Math.max(0, width - detail.x - detail.width),
@@ -55,9 +56,8 @@ export function BotGroupPaneLayout({ children }: { children: ReactNode }) {
         motion={drawer.sessionListDrawerMotion}
         resize={layout.resizeBounds ? { bounds: layout.resizeBounds, onResize: preference.setWidth } : undefined} />
     </MessageHistoryOverlay>
-    {persistent && paneLayout.resizeBounds ? <SessionPaneDivider width={paneLayout.sidebarWidth}
-      left={detail.x} top={geometry.insets.top} bottom={geometry.insets.bottom}
-      bounds={paneLayout.resizeBounds} onResize={preference.setWidth} /> : null}
+    {/* The side-by-side edge belongs to ResidentHomeListProvider, which also
+        holds this route: its drag band must cover both panes. */}
   </View>;
 }
 

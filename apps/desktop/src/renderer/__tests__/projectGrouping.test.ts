@@ -311,7 +311,6 @@ describe('groupSessions', () => {
     expect(groupSessions([])).toEqual({
       pinned: [],
       dialogues: [],
-      bots: [],
       unclassified: [],
       projects: [],
     });
@@ -1301,4 +1300,16 @@ describe('pinnedSessionIdsInDisplayOrder（拖拽 baseline:与置顶段同序 st
   it('无置顶 → 空数组', () => {
     expect(pinnedSessionIdsInDisplayOrder([s({ pinnedAt: null })])).toEqual([]);
   });
+});
+
+// Group-lane visibility: zero-message failures must stay in the owner's project (unit).
+// Existing cases only cover tasks whose execution directory also defines membership.
+it('groups a group lane under its buddy before the first message without changing its cwd', () => {
+  const lane = { ...s({ workingDir: '/group/repo', projectDir: '/group/repo', workspaceKind: 'dialogue', userSendAt: null }),
+    source: 'bot' as const, companion: { id: 'buddy', role: 'group', taskProjectDir: '/buddy/workspace' }, _count: { messages: 0 } };
+  const result = groupSessions([lane]);
+  expect(result.dialogues).toHaveLength(0);
+  expect(result.unclassified).toHaveLength(0);
+  expect(result.projects[0].workingDir).toBe('/buddy/workspace');
+  expect(result.projects[0].sessions[0].workingDir).toBe('/group/repo');
 });

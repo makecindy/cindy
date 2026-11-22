@@ -2,6 +2,8 @@
  * Input —— DESIGN.md §4 单行输入标准控件，升格自 SettingsTextInput。
  *
  * 尺寸：sm/md/lg = 32/36/40px（DS-4 G1；输入框保留三档，按钮不设 40）。
+ * 默认 md（36px），与默认 Select、Button lg 同高；lg 只给需要宽松的字段显式选用
+ * （2026-11-11 维护者裁决 C-08）。
  * 圆角：单行一律胶囊（§5）；textarea 变体一律 8px。
  * placeholder 一律 `--text-placeholder`（§4 G3）。
  *
@@ -96,6 +98,7 @@ export interface InputProps extends Omit<
   inputRef?: Ref<HTMLInputElement>;
   /** 兼容 SettingsTextInput 的可读名称别名，映射为原生 aria-label。 */
   ariaLabel?: string;
+  /** 默认 `md`（36px）；`lg`（40px）只给需要宽松的字段。 */
   size?: InputSize;
   /** 底色档:默认 §4 规定的 `--surface-elevated`;`ivory` 见 SURFACE_STYLES 注释。 */
   surface?: InputSurface;
@@ -108,9 +111,8 @@ export interface InputProps extends Omit<
   /** 错误态：边框 / focus 环切到 `--error-*` 族。 */
   error?: boolean;
   /**
-   * secret 眼睛按钮 Tip 的内容样式。Tip 经 Portal 渲染到 body,默认 `z-[60]` 会被
-   * `z-[10000]` 的模态层盖住;输入位于手写模态内时传 `z-[10001]` 盖过宿主弹窗
-   * (与本仓其它模态内 Tip 的既有做法一致)。
+   * secret 眼睛按钮 Tip 的内容样式。Tip 默认在 tooltip 层(10011),已高于弹窗与菜单,
+   * 不需要为弹窗再抬层级(DESIGN.md §6 层级刻度)。
    */
   secretTipContentClassName?: string;
   /** 附加到**外层容器**（内层 input 恒为 w-full），供 flex 行传 `flex-1 min-w-0`。 */
@@ -125,7 +127,7 @@ export function Input({
   onBlur,
   placeholder,
   type = 'text',
-  size = 'lg',
+  size = 'md',
   surface = 'elevated',
   mono = false,
   secret = false,

@@ -36,6 +36,7 @@ export function adaptComputerDriverArgs(
   name: string,
   input: Record<string, unknown>,
   schemas: ReadonlyMap<string, ComputerDriverToolSchema>,
+  options: { desktopCaptureValidated?: boolean } = {},
 ): Record<string, unknown> {
   const schema = schemas.get(name);
   if (!schema)
@@ -44,6 +45,19 @@ export function adaptComputerDriverArgs(
     );
   const props = schema.properties ?? {};
   const args = { ...input };
+  if ((args.target as { kind?: unknown } | undefined)?.kind === 'desktop') {
+    if (!('target' in props))
+      throw new ComputerContractError('Installed driver does not advertise capture-bound desktop input; no action was dispatched.');
+    if (!('capture_id' in props)) {
+      // 0.47 drag uses the session's latest desktop capture but has no capture_id
+      // field. Only the serialized host path that checked our latest, unused
+      // credential may adapt it; never weaken target scope or window guards.
+      if (name !== 'drag' || !options.desktopCaptureValidated || !('session' in props)
+        || !schemas.has('get_desktop_state'))
+        throw new ComputerContractError('Installed driver does not advertise capture-bound desktop input; no action was dispatched.');
+      delete args.capture_id;
+    }
+  }
   if (name === 'get_window_state') {
     const screenshot =
       typeof args.include_screenshot === 'boolean'

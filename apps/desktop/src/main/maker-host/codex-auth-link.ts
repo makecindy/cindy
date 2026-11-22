@@ -18,6 +18,7 @@
  *   1. 每次调用用**唯一** sidecar 名 (pid + 自增计数), 同进程内并发调用各用各的, 从根上消除撞名。
  *   2. rename 失败且 myAuth 已不在时, 尽力用 symlink 把 myAuth 从 systemAuth 重建回来 ——
  *      不能建共享链接时由调用方进入独立登录, 不复制 refresh token。
+ *   3. Windows 同一目标的 relink 在进程内串行到恢复/清理结束，避免另一轮删除刚建好的链接。
  *
  * 注意: 本模块只管"安全替换"这一件事, 不做账号比对 / inode 短路 / suppress 标记等判定 ——
  * 那些仍由 auth-adapters 的 reconcile 主流程负责。
@@ -130,6 +131,8 @@ export type CodexAuthSnapshotKind =
 
 export interface CodexAuthSnapshotOutcome {
   kind: CodexAuthSnapshotKind;
+  /** A freshly verified independent snapshot already contained these exact bytes. */
+  unchanged?: true;
   error?: Error;
 }
 
@@ -143,17 +146,49 @@ export interface CodexAuthLinkDiagnostics {
 /** 同进程内自增, 保证并发调用拿到互不相同的 sidecar 路径。 */
 let sidecarCounter = 0;
 
+/** Pending Windows relinks only; entries are released after the final waiter. */
+const windowsRelinks = new Map<string, Promise<void>>();
+
 /**
- * 原子地把 myAuth 替换成指向 systemAuth 的共享链接。
+ * 把 myAuth 替换成指向 systemAuth 的共享链接。
  *
  * 调用方需自行保证 systemAuth 存在、且两边是同账号 (本函数不做账号比对)。
- * 并发安全: 每次调用使用唯一 sidecar, 不会和同进程内其它调用撞同名临时文件。
+ * POSIX 原子覆盖；Windows 按目标目录项串行到恢复结束（不阻塞其它 home）。
+ * 这是进程内 relink 的协调，不是跨进程锁；本机 Codex 仍可独立刷新凭证。
  */
 export async function relinkSharedCodexAuth(
   systemAuth: string,
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
+): Promise<RelinkOutcome> {
+  if (platform !== 'win32') {
+    return relinkSharedCodexAuthUnlocked(systemAuth, myAuth, platform, execFileImpl);
+  }
+
+  // Resolve the parent, never auth.json itself: a file symlink is the entry we
+  // replace, while directory junctions and case aliases must share the queue.
+  const parent = path.dirname(path.resolve(myAuth));
+  const realParent = await fsp.realpath(parent).catch(() => parent);
+  const key = path.join(realParent, path.basename(myAuth)).toLowerCase();
+  const previous = windowsRelinks.get(key) ?? Promise.resolve();
+  const result = previous.then(() =>
+    relinkSharedCodexAuthUnlocked(systemAuth, myAuth, platform, execFileImpl),
+  );
+  const settled = result.then(() => undefined, () => undefined);
+  windowsRelinks.set(key, settled);
+  try {
+    return await result;
+  } finally {
+    if (windowsRelinks.get(key) === settled) windowsRelinks.delete(key);
+  }
+}
+
+async function relinkSharedCodexAuthUnlocked(
+  systemAuth: string,
+  myAuth: string,
+  platform: NodeJS.Platform,
+  execFileImpl: typeof execFileP,
 ): Promise<RelinkOutcome> {
   // 唯一 sidecar 名 (pid + 自增计数): 同进程内并发 reconcile 各用各的, 不再撞 EEXIST / ENOENT。
   const sidecar = `${myAuth}.${process.pid}.${sidecarCounter++}.linktmp`;
@@ -238,7 +273,7 @@ export async function recoverCodexAuth(
  * No asynchronous work separates the identity check from unlink. Independent files and
  * symlinks are preserved, including a native credential that already rotated away.
  */
-function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean {
+export function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean {
   try {
     if (codexAuthPathsShareEntry(systemAuth, myAuth)) return false;
     const local = fs.lstatSync(myAuth, { bigint: true });
@@ -258,12 +293,64 @@ function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean
   }
 }
 
-/** One-way snapshot for read-only Dev use. Never called to publish a system credential. */
+function sameSnapshotFile(a: BigIntStats, b: BigIntStats): boolean {
+  return a.isFile() && b.isFile() && a.ino !== 0n && a.dev === b.dev && a.ino === b.ino
+    && a.mode === b.mode && a.nlink === b.nlink && a.size === b.size
+    && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+}
+
+/** Bounded, invocation-local comparison. Never cache credentials or file identities. */
+async function readMatchingSnapshot(systemAuth: string, myAuth: string): Promise<{
+  source: BigIntStats; target: BigIntStats;
+} | null> {
+  let sourceHandle: Awaited<ReturnType<typeof fsp.open>> | undefined;
+  let targetHandle: Awaited<ReturnType<typeof fsp.open>> | undefined;
+  let sourceBytes: Buffer | undefined;
+  let targetBytes: Buffer | undefined;
+  try {
+    const source = await fsp.stat(systemAuth, { bigint: true });
+    const target = await fsp.lstat(myAuth, { bigint: true });
+    // Shared aliases must still be detached. Large/unusual files use the existing
+    // copy path rather than allocating an unbounded credential buffer.
+    if (!source.isFile() || !target.isFile() || target.nlink !== 1n
+      || source.ino === 0n || target.ino === 0n
+      || (source.dev === target.dev && source.ino === target.ino)
+      || source.size !== target.size || source.size > 1_048_576n
+      || (source.mode & 0o777n) !== (target.mode & 0o777n)) return null;
+    sourceHandle = await fsp.open(systemAuth, 'r');
+    targetHandle = await fsp.open(myAuth, 'r');
+    if (!sameSnapshotFile(source, await sourceHandle.stat({ bigint: true }))
+      || !sameSnapshotFile(target, await targetHandle.stat({ bigint: true }))) return null;
+    const size = Number(source.size);
+    sourceBytes = Buffer.alloc(size + 1);
+    targetBytes = Buffer.alloc(size + 1);
+    const [sourceRead, targetRead] = await Promise.allSettled([
+      sourceHandle.read(sourceBytes, 0, size + 1, 0),
+      targetHandle.read(targetBytes, 0, size + 1, 0),
+    ]);
+    if (sourceRead.status !== 'fulfilled' || targetRead.status !== 'fulfilled'
+      || sourceRead.value.bytesRead !== size || targetRead.value.bytesRead !== size
+      || !sourceBytes.equals(targetBytes)) return null;
+    return { source, target };
+  } catch {
+    return null;
+  } finally {
+    sourceBytes?.fill(0);
+    targetBytes?.fill(0);
+    await Promise.all([sourceHandle?.close(), targetHandle?.close()]);
+  }
+}
+
+/** One-way snapshot for read-only Dev use. Never called to publish a system credential.
+ * An optional current-authorization guard enables exact-content reuse; other callers
+ * retain the original copy behavior. The guard must be synchronous and fail closed.
+ */
 export async function copyCodexAuthSnapshot(
   systemAuth: string,
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
+  assertCurrent?: () => void,
 ): Promise<CodexAuthSnapshotOutcome> {
   const token = `${process.pid}.${randomUUID()}`;
   const sidecar = `${myAuth}.${token}.copytmp`;
@@ -271,6 +358,17 @@ export async function copyCodexAuthSnapshot(
   try {
     if (codexAuthPathsShareEntry(systemAuth, myAuth)) {
       throw new Error('Cannot snapshot a Codex credential onto its own directory entry');
+    }
+    if (assertCurrent) {
+      assertCurrent();
+      const matching = await readMatchingSnapshot(systemAuth, myAuth);
+      assertCurrent();
+      // No await between the final path/identity checks and reuse. Atime is not
+      // compared because the reads themselves may update it; ctime is compared.
+      if (matching && sameSnapshotFile(matching.source, fs.statSync(systemAuth, { bigint: true }))
+        && sameSnapshotFile(matching.target, fs.lstatSync(myAuth, { bigint: true }))) {
+        return { kind: 'copied', unchanged: true };
+      }
     }
     // 身份比较必须用 bigint:NTFS 的 file id 可能超出安全整数范围,四舍五入后
     // 两个不同的 inode 会比较成相等 —— 撕裂代次的字节会被当成稳定代次发布,
@@ -302,6 +400,7 @@ export async function copyCodexAuthSnapshot(
         codexAuthTimestampSeconds(sourceStat.mtimeNs),
       )
       .catch(() => undefined);
+    assertCurrent?.();
     if (platform === 'win32') {
       try {
         await fsp.rm(myAuth, { force: true });
@@ -335,10 +434,11 @@ export async function copyCodexAuthSnapshotWithRetry(
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
+  assertCurrent?: () => void,
 ): Promise<CodexAuthSnapshotOutcome> {
   let last: CodexAuthSnapshotOutcome = { kind: 'source-changed' };
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    last = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl);
+    last = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl, assertCurrent);
     if (last.kind !== 'source-changed') return last;
   }
   return last;

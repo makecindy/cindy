@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -27,7 +27,7 @@ export interface OllamaRuntimeDeps {
   env?: NodeJS.ProcessEnv;
   appExists?: (path: string) => boolean;
   openApp?: () => Promise<void>;
-  spawnSidecar?: (binary: string) => void;
+  spawnSidecar?: (binary: string) => ChildProcess | void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   signal?: AbortSignal;
@@ -114,10 +114,17 @@ function localRuntimeAvailable(deps: OllamaRuntimeDeps): boolean {
 }
 
 export async function probeOllamaStatus(deps: OllamaRuntimeDeps): Promise<LocalRuntimeStatus> {
+  deps.signal?.throwIfAborted();
   const appInstalled = localRuntimeAvailable(deps);
   const canInstallRuntime = canInstall(deps);
   try {
-    const info = await fetchOllamaVersion(deps.fetchImpl);
+    const info = await fetchOllamaVersion((url, init) => deps.fetchImpl(url, {
+      ...init,
+      // Keep the probe timeout while allowing only this caller's HTTP request
+      // to be interrupted. Cancellation never stops the shared Ollama process.
+      signal: deps.signal ? AbortSignal.any([init.signal, deps.signal]) : init.signal,
+    }));
+    deps.signal?.throwIfAborted();
     return {
       runtime: 'ollama',
       kind: 'ready',
@@ -126,6 +133,7 @@ export async function probeOllamaStatus(deps: OllamaRuntimeDeps): Promise<LocalR
       version: info.version,
     };
   } catch (error) {
+    deps.signal?.throwIfAborted();
     if (error instanceof OllamaHttpError) {
       if (error.kind === 'conflict') {
         return {
@@ -167,6 +175,7 @@ export async function probeOllamaStatus(deps: OllamaRuntimeDeps): Promise<LocalR
 
 export async function startOfficialOllamaApp(deps: OllamaRuntimeDeps): Promise<LocalRuntimeStatus> {
   const current = await probeOllamaStatus(deps);
+  deps.signal?.throwIfAborted();
   if (
     current.kind === 'ready' ||
     current.kind === 'port-conflict' ||
@@ -174,6 +183,10 @@ export async function startOfficialOllamaApp(deps: OllamaRuntimeDeps): Promise<L
   ) {
     return current;
   }
+  const spawnSidecar = deps.spawnSidecar ?? spawnManagedSidecar;
+  let sidecar: ChildProcess | void = undefined;
+  let sidecarBinary: string | undefined;
+  let retriedExitedSidecar = false;
   if (macOllamaAppInstalled(deps.platform, deps.appExists ?? existsSync)) {
     const openApp = deps.openApp ?? defaultOpenOfficialOllamaApp;
     try {
@@ -203,7 +216,8 @@ export async function startOfficialOllamaApp(deps: OllamaRuntimeDeps): Promise<L
       };
     }
     try {
-      (deps.spawnSidecar ?? spawnManagedSidecar)(binary);
+      sidecarBinary = binary;
+      sidecar = spawnSidecar(binary);
     } catch (error) {
       return {
         runtime: 'ollama',
@@ -223,6 +237,26 @@ export async function startOfficialOllamaApp(deps: OllamaRuntimeDeps): Promise<L
     if (deps.signal?.aborted) throw new Error('aborted');
     const next = await probeOllamaStatus(deps);
     if (next.kind === 'ready' || next.kind === 'port-conflict') return next;
+    // A reused process may finish exiting after the initial failed probe.
+    // Recover once within this caller's original budget, without replacing a
+    // live child, undoing an explicit stop, or creating an unbounded crash loop.
+    deps.signal?.throwIfAborted();
+    if (
+      !retriedExitedSidecar && sidecar && sidecarBinary && !sidecar.killed
+      && (sidecar.exitCode !== null || sidecar.signalCode !== null)
+      && now() < deadline
+    ) {
+      retriedExitedSidecar = true;
+      try {
+        sidecar = spawnSidecar(sidecarBinary);
+      } catch (error) {
+        return {
+          runtime: 'ollama', kind: 'error', appInstalled: true,
+          canInstallRuntime: canInstall(deps),
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
   }
   return {
     runtime: 'ollama',

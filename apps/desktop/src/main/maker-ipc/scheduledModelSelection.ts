@@ -30,9 +30,9 @@ export function createScheduledModelScope(deps: {
     baseline: string | null;
     profileRevision?: string | null;
   } | null>;
-  write: (sessionId: string, baseline: ScheduledModelBaseline | null, profileRevision?: string | null, expectedBaseline?: string | null) => Promise<void | boolean>;
+  write: (sessionId: string, baseline: ScheduledModelBaseline | null, profileRevision?: string | null, expectedBaseline?: string | null, restoredProfile?: ScheduledModelSelection) => Promise<void | boolean>;
   isBusy: (sessionId: string) => boolean;
-  apply: (sessionId: string, profile: ScheduledModelSelection) => Promise<void>;
+  apply: (sessionId: string, profile: ScheduledModelSelection) => Promise<void | ScheduledModelSelection>;
   createId: () => string;
   ownerEpoch?: () => string;
   prepareBaseline?: (sessionId: string) => Promise<void>;
@@ -99,8 +99,9 @@ export function createScheduledModelScope(deps: {
       // A permanent save owns the next selection, including across restart.
       // Keep its old baseline for retries until reconciliation accepts the save.
       if (baseline.pendingBotProfileVersion) return;
+      let restoredProfile: void | ScheduledModelSelection;
       try {
-        await deps.apply(sessionId, baseline);
+        restoredProfile = await deps.apply(sessionId, baseline);
       } catch (error) {
         assertOwner(owner);
         // Only catalog/route validation marks a selection unavailable. Network,
@@ -113,7 +114,7 @@ export function createScheduledModelScope(deps: {
         throw error;
       }
       assertOwner(owner);
-      const written = await deps.write(sessionId, null, row!.profileRevision, row!.baseline);
+      const written = await deps.write(sessionId, null, row!.profileRevision, row!.baseline, restoredProfile || undefined);
       assertOwner(owner);
       if (written === false) throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before scope cleanup');
     },
@@ -143,6 +144,30 @@ export async function writeScheduledModelBaselineIfProfileCurrent(
 
 export class ScheduledModelSelectionBusyError extends Error {}
 
+/** Settle a registered route under the caller's send lease before capturing its baseline.
+ * Reuses the pending-switch path from PR #9680; unresolved state uses the runner's
+ * existing deferred outcome rather than failing a run on a normal transition.
+ */
+export async function reconcileScheduledModelRouteBeforeBaseline(deps: {
+  reconcile: () => Promise<void>;
+  hasPendingRoute: () => boolean;
+  hasPendingSwitch: () => boolean;
+  isIdle: () => boolean;
+  applyPendingSwitch: () => Promise<'applied' | 'staged' | 'failed'>;
+}): Promise<void> {
+  await deps.reconcile();
+  if (!deps.hasPendingRoute()) return;
+  if (!deps.isIdle()) {
+    throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the saved companion route');
+  }
+  if (deps.hasPendingSwitch() && await deps.applyPendingSwitch() === 'failed') {
+    throwIpcError('HARNESS_SWITCH_NOT_READY', 'Saved companion route could not be applied');
+  }
+  if (deps.hasPendingRoute()) {
+    throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the saved companion route');
+  }
+}
+
 interface ScheduledModelTarget {
   agentKind: AgentKind;
   agentDeviceId?: string | null;
@@ -168,23 +193,36 @@ export function assertScheduledHarnessSupported(
   }
 }
 
+function scheduledModelProviderId(
+  selection: ScheduledModelSelection,
+  providers: ProviderView[],
+): string | null {
+  return selection.providerId ??
+    // If admission removed every implicit source, retain the existing source only
+    // for rejection classification; the selectable-model check below still applies.
+    effectiveSourceIdForModel(providers, null, selection.model, selection.agentKind) ??
+    actualSourceIdForModel(providers, null, selection.model, selection.agentKind);
+}
+
 /** Saved selections may outlive catalog effort/Fast support; resolve the actual route first. */
 export function resolveScheduledModelSelection(
   selection: ScheduledModelSelection,
   providers: ProviderView[],
 ): ScheduledModelSelection {
-  const providerId = selection.providerId ??
-    // If admission removed every implicit source, retain the existing source only
-    // for rejection classification; the selectable-model check below still applies.
-    effectiveSourceIdForModel(providers, null, selection.model, selection.agentKind) ??
-    actualSourceIdForModel(providers, null, selection.model, selection.agentKind);
-  const provider = connectedProvidersForAgent(providers, selection.agentKind)
-    .find((candidate) => candidate.id === providerId);
+  const providerId = scheduledModelProviderId(selection, providers);
+  const connected = connectedProvidersForAgent(providers, selection.agentKind);
+  const provider = connected.find((candidate) => candidate.id === providerId);
   const model = findCatalogModel(provider, selection.model, selection.agentKind, { exact: true });
   // Payment admission is not evidence that a saved model has been removed.
   // Preserve the local guard's error class so restoration cannot replace it.
   if (model?.availability === 'requires_payment') {
     throwIpcError('INVALID_PARAMS', `Scheduled model "${selection.model}" requires payment from provider "${providerId ?? 'default'}"`);
+  }
+  // A legacy implicit choice has no source to classify until a catalog contains it.
+  // Unknown eligible catalogs cannot prove removal; never guess a replacement source.
+  const candidates = provider ? [provider] : providerId === null ? connected : [];
+  if (!model && candidates.some(candidate => candidate.subscriptionReadUnavailable && !candidate.removed)) {
+    throwIpcError('MODEL_CATALOG_UNCONFIRMED', 'The model list could not be confirmed. The saved model selection has been kept.');
   }
   if (!provider || !model ||
     !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
@@ -196,6 +234,37 @@ export function resolveScheduledModelSelection(
     effort: resolveCompatibleSessionRuntimeEffort(model, selection.effort),
     fastMode: model.supportsFastMode === true && (selection.fastMode !== 'ultrafast' || (selection.agentKind === 'codex' && model.supportsUltrafastMode === true)) ? selection.fastMode : false,
   };
+}
+
+/** One read-only recovery attempt, shared with the provider's existing discovery flight.
+ * Never change the saved route or replay a send; only resolve the same selection again.
+ */
+export async function resolveScheduledModelSelectionWithRefresh(
+  selection: ScheduledModelSelection,
+  deps: {
+    readProviders: () => Promise<ProviderView[]>;
+    refreshProvider: (providerId: string) => Promise<unknown>;
+    assertCurrent: () => void;
+  },
+): Promise<ScheduledModelSelection> {
+  let providers = await deps.readProviders();
+  deps.assertCurrent();
+  const providerId = scheduledModelProviderId(selection, providers);
+  const candidates = connectedProvidersForAgent(providers, selection.agentKind).filter(provider =>
+    (providerId === null || provider.id === providerId) && !provider.removed &&
+    provider.subscriptionAccountPool === 'openai' &&
+    !findCatalogModel(provider, selection.model, selection.agentKind, { exact: true }));
+  if (candidates.length) {
+    // The native discovery routine retains the last success and marks failed reads.
+    // If recovery itself throws, re-read that state rather than treating it as removal.
+    await Promise.all(candidates.map(async provider => {
+      try { await deps.refreshProvider(provider.id); } catch { deps.assertCurrent(); }
+    }));
+    deps.assertCurrent();
+    providers = await deps.readProviders();
+    deps.assertCurrent();
+  }
+  return resolveScheduledModelSelection(selection, providers);
 }
 
 /** Resolve against the bound execution computer; the runner owns inactive-target recovery. */

@@ -76,6 +76,7 @@ export function createTaskWorktreeHost(): CreateTaskWorktree {
           baseRepo: result.meta.baseRepo,
           sourceBranch: result.meta.sourceBranch,
           created: result.created,
+          ...(result.staleBaseReason ? { staleBaseReason: result.staleBaseReason } : {}),
         };
       },
     ).finally(() => inFlight.delete(callerSessionId));

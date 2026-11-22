@@ -714,6 +714,51 @@ describe('PluginMarketService 自定义市场聚合', () => {
     expect(h.ledger.installationForGhost('alpha')).toMatchObject({ version: '1.0.0' });
   });
 
+  // Unit regression: the same snapshot auto-update path must preserve custom
+  // installations when a source rolls back; the adjacent test only covered upgrades.
+  it('does not automatically downgrade a tracked custom plugin', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/alpha', id: 'alpha', version: '0.9.0' },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    // 已装插件目录里放**原始** ghost.json;运行时 manifest 用"本地化后"的变体
+    // (name 被翻译)——摘要比对必须 locale 无关,切语言不得把自装插件判成 conflict。
+    const installedDir = path.join(root, 'installed-alpha');
+    fs.mkdirSync(installedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(installedDir, 'ghost.json'),
+      JSON.stringify(ghostManifest('alpha', '1.0.0')),
+    );
+    runtime.ghosts = [
+      {
+        manifest: { ...ghostManifest('alpha', '1.0.0'), name: 'アルファ(localized)' },
+        dir: installedDir,
+        enabled: true,
+      },
+    ];
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'alpha'),
+      ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-07-30T02:00:00.000Z',
+      // 自动更新路由 = pluginId + 来源指纹 + 安装时 manifest 摘要。
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')),
+    });
+    await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(runtime.ghosts[0]?.manifest.version).toBe('1.0.0');
+    expect(h.ledger.installationForGhost('alpha')?.version).toBe('1.0.0');
+  });
+
   it('silently updates a tracked custom plugin when the marketplace version advances', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

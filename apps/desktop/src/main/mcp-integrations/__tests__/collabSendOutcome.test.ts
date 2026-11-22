@@ -1,4 +1,10 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { SessionSendResult } from '@cindy/maker-core';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockState = vi.hoisted(() => ({
@@ -25,6 +31,7 @@ const mockState = vi.hoisted(() => ({
   invitationSession: null as null | { instanceId: string; stablePermissionModeState: { mode: string; generation: number } },
   invitationInput: null as null | { key: string; boundary: string; permission: { isCurrent(): boolean; planModeEnabled: boolean; permissionMode: string } },
   invitationOwner: true,
+  directSend: vi.fn(async () => ({ messageId: 'bridge-guid' })),
   personalFeishu: {
     getOwnerOpenId: () => 'ou_personal',
     sendMarkdownText: vi.fn(async () => ({ messageId: 'om_personal_text' })),
@@ -50,34 +57,30 @@ vi.mock('../../logger.js', () => ({
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
   isSessionInTurn: () => false,
-  getTaskActionInputState: () => mockState.invitationInput ?? ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
+  getTaskActionInputState: () => mockState.invitationInput ?? ({ key: 'owner-input', ownerInput: mockState.invitationOwner, boundary: 'runtime-1' }),
   getTaskActionSession: () => mockState.invitationSession ?? undefined,
   isActiveInputAccountScoped: () => mockState.invitationOwner,
   confirmTaskAction: vi.fn(async () => true),
   captureTaskActionPermissionRequest: vi.fn(async () => null),
 }));
 
-vi.mock('@cindy/mcps', () => ({
+vi.mock('@cindy/mcps', async (importOriginal) => ({
+  resolveLiziMcpSessionContext: (await importOriginal<typeof import('@cindy/mcps')>()).resolveLiziMcpSessionContext,
   setSessionPathAuthorizer: vi.fn(),
   createLiziMcpProviders: vi.fn((config: Record<string, unknown>) => {
     mockState.capturedProvidersConfig = config;
-    return [
+    return ['cindy_orca', 'cindy_computer', 'cindy_android'].map((name) => (
       {
-        name: 'cindy_orca',
+        name,
         isEnabled: () => true,
         toClaudeSdkConfig: () => null,
-      },
-    ];
+      }
+    ));
   }),
 }));
 
-vi.mock('../../maker-host/plugins/builtin-plugins.js', () => ({
-  BUILTIN_LIZI_MCP_IDS: ['cindy_orca', 'cindy_helper'],
-  pluginIdForProviderName: (name: string) =>
-    name === 'cindy_orca'
-      ? 'collab'
-      : name,
-}));
+vi.mock('../computer.desktop.js', () => ({ getComputerMcpDeps: vi.fn(() => ({})) }));
+vi.mock('../android.js', () => ({ getAndroidMcpDeps: vi.fn(() => ({})) }));
 
 vi.mock('../../maker-host/index.js', () => ({
   getPluginRegistry: () => ({
@@ -88,12 +91,18 @@ vi.mock('../../maker-host/index.js', () => ({
 vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduler: () => null,
 }));
+// This collaboration fixture exercises provider wiring without Desktop history/IPC setup.
+vi.mock('../historyAttachment.desktop.js', () => ({ readDesktopHistoryAttachment: vi.fn() }));
+vi.mock('../../maker-ipc/fork.js', () => ({ forkTaskAtMessage: vi.fn() }));
+vi.mock('../../maker-ipc/rewind.js', () => ({ commitTaskRewind: vi.fn() }));
 
 vi.mock('../../im/index.js', () => ({
   feishuIm: mockState.personalFeishu,
 }));
 
 vi.mock('../../im/shared/botImConnectionRuntime', () => ({
+  getBotIMessageDirectTarget: (botId: string, route: string) => botId === 'brief-bot' && route === 'dm-route'
+    ? { im: { sendDirectDelivery: mockState.directSend }, connection: '123456abcdef', origin: 'http://127.0.0.1:1', chat: 'recipient' } : null,
   getBotFeishuTransport: (botId: string) => {
     if (mockState.afterSelectCompanion) queueMicrotask(mockState.afterSelectCompanion);
     return botId === 'bot-feishu' ? mockState.companionFeishu : null;
@@ -143,12 +152,103 @@ import { createDesktopMcpProviders } from '../mcp-providers.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
-import { beginAppSessionBoundary, commitVolatileAppSession } from '../../appSessionState.js';
+import { beginAppSessionBoundary, commitVolatileAppSession, ownerScopedUserDataPath } from '../../appSessionState.js';
+import * as userDataPath from '../../userDataPath.js';
+import { createPluginRegistry, resetPluginRegistry } from '../../maker-host/plugins/index.js';
+import { getComputerMcpDeps } from '../computer.desktop.js';
+import { getAndroidMcpDeps } from '../android.js';
+import {
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+} from '../codexBuiltinToolPolicy.js';
 
 const botCapabilities = {
   list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
   select: vi.fn(async () => ({ ok: true as const, joined: true, effective: 'next-turn' as const })),
 };
+
+// #9940, unit: exercise the real Desktop provider gate, registry factory and
+// settings reader across owner commits. Existing registry tests only wrap a
+// fixed registry, so they miss providers constructed before login. Driver
+// factories are isolated; their injected call-time gates are also checked.
+describe('Desktop providers across account changes', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    'reads the current owner for %s without widening frozen or bridge policy',
+    async (agentKind) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-provider-owner-'));
+      const userData = vi.spyOn(userDataPath, 'getUserDataDir').mockReturnValue(root);
+      try {
+        commitVolatileAppSession('cloud', 'enabled-owner');
+        const enabledPath = ownerScopedUserDataPath();
+        fs.mkdirSync(enabledPath, { recursive: true });
+        fs.writeFileSync(path.join(enabledPath, 'builtin-tools-settings.json'), JSON.stringify({
+          builtinTools: { computer: { enabled: true }, android: { enabled: true } },
+        }));
+        commitVolatileAppSession('cloud', 'disabled-owner');
+        const disabledPath = ownerScopedUserDataPath();
+        fs.mkdirSync(disabledPath, { recursive: true });
+        fs.writeFileSync(path.join(disabledPath, 'builtin-tools-settings.json'), JSON.stringify({
+          builtinTools: { computer: { enabled: false }, android: { enabled: false } },
+        }));
+        commitVolatileAppSession('signed-out');
+        resetPluginRegistry();
+        const providers = createDesktopMcpProviders({
+          botCapabilities,
+          getMakerMemoryManager: vi.fn(),
+          lspPool: {} as never,
+          get pluginRegistry() { return createPluginRegistry(); },
+          invokeRemote: vi.fn(),
+        });
+        const machines = providers.filter((p) => ['cindy_computer', 'cindy_android'].includes(p.name));
+        expect(machines).toHaveLength(2);
+        const context = { agentKind, workingDir: path.join(root, 'project') };
+        const enabled = () => machines.map((p) => p.isEnabled?.(context));
+        const callContext = { agentKind };
+        const computerGate = vi.mocked(getComputerMcpDeps).mock.calls.at(-1)![0]!.isComputerUseEnabled!;
+        const androidGate = vi.mocked(getAndroidMcpDeps).mock.calls.at(-1)![0]!.isAndroidAutomationEnabled!;
+        const callable = () => [computerGate(callContext), androidGate(callContext)];
+        // Codex keeps its bridge-creation snapshot for busy turns; its outer
+        // provider gate still excludes disabled machine tools when rebuilt.
+        const disabledCalls = agentKind === 'codex' ? [true, true] : [false, false];
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+
+        commitVolatileAppSession('cloud', 'enabled-owner');
+        expect(enabled()).toEqual([true, true]);
+        expect(callable()).toEqual([true, true]);
+        for (const provider of machines) {
+          expect(provider.isEnabled?.({ ...context, workingDir: '' })).toBe(true);
+          expect(provider.isEnabled?.({ ...context, vendorOptions: {
+            [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['memory'],
+          } })).toBe(false);
+          expect(provider.isEnabled?.({ ...context, vendorOptions: {
+            [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['computer', 'android'],
+          } })).toBe(false);
+        }
+        await createPluginRegistry().setEnabled('computer', false);
+        await createPluginRegistry().setEnabled('android', false);
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+        await createPluginRegistry().setEnabled('computer', true);
+        await createPluginRegistry().setEnabled('android', true);
+        expect(enabled()).toEqual([true, true]);
+
+        commitVolatileAppSession('cloud', 'disabled-owner');
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+        expect(machines.map((p) => p.isEnabled?.({ ...context, workingDir: '' }))).toEqual([false, false]);
+        commitVolatileAppSession('signed-out');
+        expect(enabled()).toEqual([false, false]);
+        expect(callable()).toEqual(disabledCalls);
+      } finally {
+        commitVolatileAppSession('signed-out');
+        resetPluginRegistry();
+        userData.mockRestore();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
 function collabMeta(overrides: Record<string, unknown> = {}) {
   return {
@@ -920,4 +1020,70 @@ describe('collab send outcome semantics', () => {
       xdtHelper.sessionControl.getSessionRuntime({ targetSessionId: 'session-1' }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
   });
+});
+
+// Tier 1, PR #12115: invoke the wired tool with a real SQLite link table.
+// The transport's receipt tests cannot deny a stale caller or another bot's DM.
+it('admits only a live owner input targeting its own active private lane', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-imessage-owner-'));
+  const userData = vi.spyOn(userDataPath, 'getUserDataDir').mockReturnValue(root);
+  const db = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
+  const client = new Client({ name: 'owner-check', version: '1' });
+  let server: McpServer | undefined;
+  try {
+    commitVolatileAppSession('cloud', 'test-owner');
+    setCurrentDbClient(db, 'test-owner');
+    await db.exec("CREATE TABLE sessions(id TEXT PRIMARY KEY, status TEXT, source TEXT)");
+    await db.exec("CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT, archived_at INTEGER)");
+    await db.exec("CREATE TABLE bot_profiles(id TEXT PRIMARY KEY, status TEXT)");
+    await db.exec("INSERT INTO sessions VALUES ('main','active','bot'),('dm','active','bot'),('foreign','active','bot'),('old','archived','bot')");
+    await db.exec("INSERT INTO bot_profiles VALUES ('brief-bot','active'),('other-bot','active')");
+    await db.exec(`INSERT INTO bot_session_links VALUES ('main','brief-bot','canonical',NULL,NULL),
+      ('dm','brief-bot','channel','dm-route',NULL), ('foreign','other-bot','channel','dm-route',NULL), ('old','brief-bot','channel','dm-route',NULL)`);
+    const provider = createDesktopMcpProviders({
+      botCapabilities,
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never,
+      invokeRemote: vi.fn(),
+    }).find(p => p.name === 'cindy_imessage')!;
+    const caller = { sessionId: 'main', sessionInstanceId: 'instance', agentKind: 'codex', workingDir: root };
+    server = (provider.toClaudeSdkConfig(caller) as { instance: McpServer }).instance;
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+    mockState.invitationSession = { instanceId: 'instance', stablePermissionModeState: { mode: 'auto', generation: 1 } };
+    const deliver = (id: string) => client.callTool({ name: 'send_to_private_chat', arguments: { target_session_id: id, text: 'QA report' } });
+    const expectDenied = async (id: string, error: string) => {
+      expect(await deliver(id)).toMatchObject({
+        isError: true,
+        content: [{ type: 'text', text: JSON.stringify({ error }) }],
+      });
+      expect(mockState.directSend).not.toHaveBeenCalled();
+    };
+    mockState.directSend.mockClear();
+    mockState.invitationOwner = false;
+    await expectDenied('dm', 'OWNER_INPUT_REQUIRED');
+    mockState.invitationOwner = true;
+    caller.sessionInstanceId = 'stale';
+    await expectDenied('dm', 'OWNER_INPUT_REQUIRED');
+    caller.sessionInstanceId = 'instance';
+    await expectDenied('foreign', 'PRIVATE_CHAT_NOT_CONNECTED');
+    await expectDenied('old', 'PRIVATE_CHAT_NOT_CONNECTED');
+    await db.exec("UPDATE bot_session_links SET archived_at = 1 WHERE session_id = 'dm'");
+    await expectDenied('dm', 'PRIVATE_CHAT_NOT_CONNECTED');
+    await db.exec("UPDATE bot_session_links SET archived_at = NULL WHERE session_id = 'dm'");
+    expect((await deliver('dm')).content).toEqual([{ type: 'text',
+      text: JSON.stringify({ target_session_id: 'dm', messageId: 'bridge-guid', status: 'accepted_by_bridge' }) }]);
+    expect(mockState.directSend).toHaveBeenCalledOnce();
+  } finally {
+    await client.close();
+    await server?.close();
+    mockState.invitationOwner = true;
+    mockState.invitationSession = null;
+    clearCurrentDbClient(db);
+    await db.dispose();
+    commitVolatileAppSession('signed-out');
+    userData.mockRestore();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

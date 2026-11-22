@@ -1,3 +1,7 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
+import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
+import { SettingsLinkChip } from './SettingsLinkChip';
+import '@/styles/chatContentDirection.css';
 import { VideoSitePreview } from './VideoSitePreview';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
@@ -32,6 +36,7 @@ import rehypeSlug from 'rehype-slug';
 import 'katex/dist/katex.min.css';
 import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
 import remarkStrictInlineMath from './remarkStrictInlineMath';
+import { normalizeDisplayMathFences } from './normalizeDisplayMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
@@ -55,6 +60,7 @@ import {
   STREAMING_MARKDOWN_THROTTLE_BASE_MS,
 } from './streamingMarkdownChunks';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { isHomePath, resolveRemoteHomePath, useRemoteHomePath } from '@/hooks/useRemoteHomePath';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
@@ -64,6 +70,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
 import {
+  isFileUrlHostHref,
   looksLikeFilePath,
   MODEL_EXT_RE,
   normalizeMarkdownImageSrc,
@@ -135,9 +142,9 @@ import {
   isHtmlFilePath,
   openHtmlFileByPreference,
   activateMessageUrl,
-  useOpenWithMenu,
-} from './useOpenWithMenu';
-import { activateInlineLinkFromKeyboard } from './linkInteraction';
+} from './messageLinkActions';
+import { useOpenWithMenu } from './useOpenWithMenu';
+import { activateInlineLinkFromKeyboard, isSeparateLinkActivation } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
 /**
@@ -166,13 +173,14 @@ function omitMarkdownInternalProps(props: Record<string, unknown>): Record<strin
 
 /**
  * Detect whether a `pre` child element is a `<code className="language-diff">`.
- * Matches both the canonical `language-diff` token and a bare `diff` class
- * for defensive parity.
+ * Matches the canonical `language-diff` / `language-patch` tokens and a bare
+ * `diff` / `patch` class for defensive parity — a ```patch fence is the same
+ * unified diff and renders identically (DESIGN.md §2 diff colours).
  */
 function isDiffCodeChild(child: ReactNode): boolean {
   if (!isValidElement(child)) return false;
   const className = (child.props as { className?: string })?.className ?? '';
-  return /\b(language-)?diff\b/.test(className);
+  return /\b(language-)?(diff|patch)\b/.test(className);
 }
 
 /**
@@ -273,7 +281,8 @@ export function normalizeMarkdownRendererContent(
   content: string,
   preserveLineCount = false,
 ): string {
-  return normalizeMathDelimiters(content, { preserveLineCount });
+  const normalized = normalizeMathDelimiters(content, { preserveLineCount });
+  return preserveLineCount ? normalized : normalizeDisplayMathFences(normalized);
 }
 /**
  * 聊天正文里一切「可点」的行内元素共用这一套外观:**正文色 + 常显下划线**。
@@ -306,8 +315,23 @@ const MARKDOWN_LINK_CLASS = 'underline underline-offset-2 cursor-pointer [overfl
  *
  * 移动端**刻意不同形态**(零底色 + 文字压暗):那边聊天流是 RN 嵌套 Text,不认
  * borderRadius,淡底只能是直角方块。这里是 CSS,按 GitHub 原样实现。
+ *
+ * 折行(#11312):行内 code 默认 `white-space: normal`,有空格时本来就会断行;但**无空格
+ * 的超长 token**(长路径、长类名、base64 片段)没有任何断点,会把气泡顶宽、溢出气泡
+ * 边界(见 issue 截图里的 `JudgeAttributeField.tsx` 一行)。折行 class 单独放在
+ * `INLINE_CODE_WRAP_CLASS`,在两条生产 `<code>` 路径上与几何常量一并套用,允许在
+ * 任意字符间断行,与 MARKDOWN_LINK_CLASS 的既有做法一致;`overflow-wrap` 可继承,
+ * 但链接、行内 code 各自声明一份,不依赖外层容器。几何字面量保持原样,避免改动
+ * 既有 `rounded-[6px]` 行被设计门禁当成新增 off-scale radius,也避免拆行破坏
+ * markdownFencedCodeInline 对 `INLINE_CODE_CLASS` 的常量提取。
+ *
+ * 不用 `text-ellipsis`/`truncate` 而是让它折行:行内 code 是路径、标识符这类
+ * **逐字符都有意义**的内容,中段省略会截掉用户真正要看的部分(哪个文件、哪个字段),
+ * 而折行后全文仍在,复制也不受影响。气泡自身的 `max-w` 已经限住上限,无需再写
+ * `max-w-full`——它用在 inline 元素上本就不生效。
  */
 const INLINE_CODE_CLASS = 'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em] bg-[var(--msg-md-inline-code-bg)]';
+const INLINE_CODE_WRAP_CLASS = '[overflow-wrap:anywhere]';
 
 const WINDOWS_ABSOLUTE_HREF_RE = /^[A-Za-z]:[\\/]/;
 
@@ -591,7 +615,7 @@ const baseComponents: Components = {
   // simpler renderer there. See line ~310 for the implementation.
 
   pre({ children, ...props }) {
-    // Intercept ```diff fenced blocks before they fall through to highlight.js
+    // Intercept ```diff / ```patch fenced blocks before they fall through to highlight.js
     // — we render them with our own row/gutter/symbol layout (MarkdownDiffBlock)
     // so the visual matches the Edit-tool DiffView card and the GitHub red/green
     // tokens (`--diff-add-fg` / `--diff-del-fg`) get applied predictably.
@@ -683,7 +707,7 @@ const baseComponents: Components = {
   // Lists
   ul({ children, ...props }) {
     return (
-      <ul className="my-2 ml-6 list-disc space-y-1" {...props}>
+      <ul className="my-2 list-disc space-y-1" {...props}>
         {children}
       </ul>
     );
@@ -691,10 +715,14 @@ const baseComponents: Components = {
 
   ol({ children, ...props }) {
     return (
-      <ol className="my-2 ml-6 list-decimal space-y-1" {...props}>
+      <ol className="my-2 list-decimal space-y-1" {...props}>
         {children}
       </ol>
     );
+  },
+
+  li({ children, ...props }) {
+    return <li dir="auto" {...props}>{children}</li>;
   },
 
   // Paragraphs
@@ -781,7 +809,7 @@ const baseComponents: Components = {
  *   - 已有 base renderer (h1-h6 / p / pre / table / ul / ol / blockquote / hr):
  *     把 lineAttr merge 进 props 后透传给 base 函数。base 内部 spread props 时
  *     data-source-line 自然落到对应 DOM 节点上。
- *   - base 没有的 (li): 直接 createElement 渲染原生 tag。
+ *   - base 没有的: 直接 createElement 渲染原生 tag。
  */
 type BlockTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'p' | 'pre' | 'table' | 'ul' | 'ol' | 'li' | 'blockquote' | 'hr';
 
@@ -867,6 +895,18 @@ function InlineXdtAudioPlayer({ src }: { src: string }) {
       src={src}
     />
   );
+}
+
+/**
+ * 远程会话里嵌入媒体的取件来源。file://host 指向另一台机器的共享:改写成远程媒体会在渲染时把
+ * 该路径交给被控端取件,因此不改写,留在本机 xdt-file / xdt-audio 协议(不接受这类路径,不触盘)。
+ */
+function markdownMediaOrigin(
+  src: string | undefined,
+  origin: RemoteMediaOrigin | undefined,
+  workingDir: string,
+): RemoteMediaOrigin | undefined {
+  return src && isFileUrlHostHref(src, workingDir) ? undefined : origin;
 }
 
 /**
@@ -971,6 +1011,7 @@ function LightboxImage({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            {src && <DownloadImageMenuItem src={src} />}
             {canCopy && (
               <DropdownMenuItem onClick={handleCopyImage}>
                 <Copy className="mr-2 h-4 w-4" />
@@ -1303,15 +1344,18 @@ function useResolvedMarkdownTarget(
   workingDir: string,
   isStreaming: boolean,
 ): MarkdownTarget {
-  // remote 会话:`fs:resolve-path`(存在性 + 本地 BFS)打的是**本机**文件系统,
-  // 对远程 workingDir 结果不可靠(远端文件本机必然不存在 → 永远 none → chip
-  // 永不点亮)。改为:按 workdir 分隔符风格 join 出远端绝对路径,再经
+  // Remote ~ paths resolve on their owning device through its existing
+  // fs:resolve-path handler. Other paths retain exact joining (no remote BFS).
+  // 按 workdir 分隔符风格 join 出远端绝对路径,再经
   // chat-file:stat **远端精确 stat 验证后**才点亮——目录 / 不存在 / SSH workdir
   // 外保持纯文本(与本机"存在且唯一才点亮"的语义对齐);链路断等无法判定时
   // 乐观点亮,点击链路自带 NOT_FOUND / stale 兜底。不做远程 BFS(monorepo 裸
   // 文件名自动搜子包是本机专属能力,远程按 join 结果判定)。
   const { origin: fileOrigin } = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileOrigin) ? fileOrigin : null;
+  const remoteHomePath = useRemoteHomePath(
+    fileOrigin, workingDir, !isStreaming && target.kind === 'local-candidate' ? target.href : null,
+  );
 
   // 远程点亮态**只有一个真值来源:模块缓存**;本组件不自己存任何结论,只存「缓存的
   // 哪一版」。原来是 syncResolved(useMemo)?? asyncResolved(useState)两处并存 —— memo
@@ -1323,8 +1367,11 @@ function useResolvedMarkdownTarget(
   // 任何一条边都只有 resolveFromCache 一个地方需要改对(PR #1144 第 10 轮止损重构)。
   const remoteAbsPath = useMemo(() => {
     if (isStreaming || target.kind !== 'local-candidate' || !remoteOrigin) return '';
+    // file://host 指向另一台机器的共享:与本机渲染期解析一样不预检、不点亮,只在点击时 stat。
+    if (isFileUrlHostHref(target.href, workingDir)) return '';
+    if (isHomePath(target.href)) return remoteHomePath?.absPath ?? '';
     return resolveLocalPath(target.href, workingDir) || '';
-  }, [isStreaming, target, workingDir, remoteOrigin]);
+  }, [isStreaming, target, workingDir, remoteOrigin, remoteHomePath]);
 
   // 缓存里**本 key** 的状态变了(确定态落库 / unknown 负缓存到期)→ 递增 → 重新派生。
   // 按 key 过滤:一屏几十个引用,全量通知会让首屏 N 次 stat 引发 N×N 次重渲染。
@@ -1346,7 +1393,9 @@ function useResolvedMarkdownTarget(
       // ForRender 版会把 TTL 未过期的负缓存回成 'unknown',于是「断链期间的乐观点亮」
       // 也是缓存的派生,不需要组件自己记住(见 remoteFileOpen 里两个 peek 的分工)。
       const verdict = peekRemotePathVerdictForRender(remoteOrigin, workingDir, remoteAbsPath);
-      const decision = decideRemoteLit(verdict, candidate.href, candidate.originalHref);
+      const decision = decideRemoteLit(
+        verdict, candidate.href, candidate.originalHref, remoteHomePath?.kind,
+      );
       if (!decision.lit) return null;
       return resolvedLocalFromResult(candidate, {
         status: 'unique',
@@ -1356,33 +1405,23 @@ function useResolvedMarkdownTarget(
     }
     const cached = peekResolveLocalPathSmart(candidate.href, workingDir);
     return cached ? resolvedLocalFromResult(candidate, cached) : null;
-  }, [isStreaming, target, workingDir, remoteOrigin, remoteAbsPath]);
-
-  // 惰性初值:上次已解析过的引用第一帧就画成 chip,不闪纯文本(这是原 syncResolved
-  // memo 的唯一职责,合并进初值即可)。
-  const [resolved, setResolved] = useState<MarkdownTarget | null>(resolveFromCache);
+  }, [isStreaming, target, workingDir, remoteOrigin, remoteAbsPath, remoteHomePath]);
 
   useEffect(() => {
-    // **无条件**按当前缓存重新派生。缓存说什么就是什么,不存在「保留旧结论」的分支 ——
-    // 那正是前三轮漏边的形状。
-    setResolved(resolveFromCache());
     if (isStreaming || target.kind !== 'local-candidate') return;
     const candidate = target;
     let cancelled = false;
     if (remoteOrigin) {
       // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 内部的负缓存承担。
       if (!remoteAbsPath || peekRemotePathVerdict(remoteOrigin, workingDir, remoteAbsPath)) return;
-      void verifyRemotePathCached(remoteOrigin, workingDir, remoteAbsPath).then(() => {
-        // 不看返回值:结论已落缓存,统一重新派生(降级 / 升级都走同一条路)。
-        if (!cancelled) setResolved(resolveFromCache());
-      });
-      return () => {
-        cancelled = true;
-      };
+      // Cache notifications drive rendering; a cached unknown must not trigger
+      // a promise -> state -> effect loop while its retry TTL is active.
+      void verifyRemotePathCached(remoteOrigin, workingDir, remoteAbsPath);
+      return;
     }
     if (peekResolveLocalPathSmart(candidate.href, workingDir)) return;
     void resolveLocalPathSmartCached(candidate.href, workingDir).then(() => {
-      if (!cancelled) setResolved(resolveFromCache());
+      if (!cancelled) setCacheGen((n) => n + 1);
     });
     return () => {
       cancelled = true;
@@ -1390,6 +1429,9 @@ function useResolvedMarkdownTarget(
     // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生。
   }, [isStreaming, remoteOrigin, target, workingDir, remoteAbsPath, resolveFromCache, cacheGen]);
 
+  // A reused component can switch device/workdir with the same authored href.
+  // Never expose the previous owner's resolved path while its effect catches up.
+  const resolved = resolveFromCache();
   return isResolvedForTarget(resolved, target) ? resolved : target;
 }
 
@@ -1555,7 +1597,7 @@ function MarkdownTargetLink({
     return allowPrivilegedLinks ? target : stripPrivilegedMarkdownTarget(target);
   }, [href, localFileRefs, allowPrivilegedLinks]);
   const target = useResolvedMarkdownTarget(initialTarget, workingDir, isStreaming);
-  const openInlineTarget = async () => {
+  const openInlineTarget = async (browserTarget?: 'external') => {
     if (target.kind === 'anchor') {
       if (!target.id) return;
       const element = document.getElementById(target.id);
@@ -1569,7 +1611,16 @@ function MarkdownTargetLink({
       try {
         let result: SmartResolveResult;
         if (isRemoteFileOrigin(fileCtx.origin)) {
-          const absPath = resolveLocalPath(target.href, workingDir);
+          const homeResult = isHomePath(target.href) && fileCtx.origin.kind === 'device'
+            ? await resolveRemoteHomePath(fileCtx.origin.deviceId, workingDir, target.href)
+            : null;
+          const absPath = isHomePath(target.href)
+            ? homeResult?.absPath
+            : resolveLocalPath(target.href, workingDir);
+          if (!absPath) {
+            toast.error(t('chat.markdownRenderer.fileUnavailable'));
+            return;
+          }
           const { verdict } = await window.electronAPI.fileBrowser.chatStat({
             origin: fileCtx.origin,
             workdir: workingDir,
@@ -1581,7 +1632,10 @@ function MarkdownTargetLink({
           }
           // Unknown may mean offline: the existing preview can still serve a
           // cached copy or explain the connection failure. Never open locally.
-          result = { status: 'unique', absPath, kind: verdict === 'directory' ? 'directory' : 'file' };
+          result = {
+            status: 'unique', absPath,
+            kind: verdict === 'unknown' ? homeResult?.kind ?? 'file' : verdict === 'directory' ? 'directory' : 'file',
+          };
         } else {
           result = await resolveLocalPathSmart(target.href, workingDir, { refresh: true });
         }
@@ -1595,7 +1649,9 @@ function MarkdownTargetLink({
           return;
         }
         if (resolved.localKind !== 'directory' && isHtmlFilePath(resolved.absPath) && sidebarTargetSessionId) {
-          await openHtmlFileByPreference(sidebarTargetSessionId, resolved.absPath, t, fileCtx);
+          await openHtmlFileByPreference(
+            sidebarTargetSessionId, resolved.absPath, t, fileCtx, browserTarget,
+          );
         } else {
           await activateResolvedLocalTarget(
             resolved, { ...fileCtx, sidebarTargetSessionId },
@@ -1607,6 +1663,14 @@ function MarkdownTargetLink({
       }
     }
   };
+  const activate = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (target.kind === 'external') {
+      return activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
+    }
+    event.preventDefault();
+    // Preserve the browser choice while an authored file link retries path resolution.
+    return openInlineTarget(isSeparateLinkActivation(event) ? 'external' : undefined);
+  };
   const inlineMenu = useLinkContextMenu(href ?? '', [{
     label: t('chat.markdownRenderer.openLink'),
     icon: <ArrowUpRight className="mr-2 h-4 w-4" />,
@@ -1614,7 +1678,9 @@ function MarkdownTargetLink({
   }]);
 
   if (target.kind === 'audio') {
-    return <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin)} />;
+    const normalized = normalizeMarkdownImageSrc(target.href, workingDir, allowPrivilegedLinks,
+      remoteMediaOrigin ?? (sessionId && fileCtx.localConfirmed !== true ? null : undefined));
+    return normalized ? <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)} /> : null;
   }
 
   if (target.kind === 'plain-text') {
@@ -1683,24 +1749,9 @@ function MarkdownTargetLink({
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
-      onClick={async (e) => {
-        e.preventDefault();
-
-        if (target.kind === 'external') {
-          // 有会话上下文:左键按用户偏好直开(内置侧边栏 / 系统浏览器,设置 →
-          // 个性化 → 链接打开方式);右键弹"打开方式"菜单临时选另一种。
-          // 修饰键点击(macOS ⌘ / Windows Ctrl)临时强制走系统浏览器,不改偏好。
-          // 无会话上下文(Market 预览等)保持原有直开默认浏览器。
-          await activateMessageUrl(e, sidebarTargetSessionId, target.href, t);
-          return;
-        }
-        openInlineTarget();
-      }}
+      onClick={activate}
       onAuxClick={(event) => {
-        if (event.button !== 1) return;
-        event.preventDefault();
-        if (target.kind === 'external') void activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
-        else openInlineTarget();
+        if (event.button === 1) void activate(event);
       }}
       onContextMenu={(e) => {
         if (target.kind === 'external') openWith.onContextMenu(e, target.href);
@@ -1754,7 +1805,7 @@ function InlineCodeWithTarget({
   // inline <code> — same as before the markdown-target system existed.
   if (target.kind !== 'resolved-local') {
     return (
-      <code className={cn(INLINE_CODE_CLASS)} {...props}>
+      <code className={cn(INLINE_CODE_CLASS, INLINE_CODE_WRAP_CLASS)} {...props}>
         {children}
       </code>
     );
@@ -1899,13 +1950,15 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             streaming={embeddedMediaStreaming}
           >
             {(localSrc) => {
-              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks);
+              const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin, workingDir);
+              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks,
+                mediaOrigin ?? (currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
                 return (
                   <ChatVideoView
-                    src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
+                    src={rewriteToRemoteMediaOrigin(normalized, mediaOrigin)}
                     filename={markdownMediaFilename(normalized, alt)}
                     variant="tool-output"
                     sessionId={currentSessionId}
@@ -1915,7 +1968,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
               return (
                 <LightboxImage
                   streaming={isStreaming}
-                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
+                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : normalized}
                   alt={alt}
                   onZoom={setLightboxSrc}
                   {...imageProps}
@@ -1950,7 +2003,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
         if (!allowPrivilegedLinks) {
           return (
-            <code className={cn(INLINE_CODE_CLASS)} {...safeProps}>
+            <code className={cn(INLINE_CODE_CLASS, INLINE_CODE_WRAP_CLASS)} {...safeProps}>
               {children}
             </code>
           );
@@ -2006,6 +2059,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             );
           }
         }
+        const settingsTarget = allowPrivilegedLinks && href ? parseSettingsNavigationUrl(href) : null;
+        if (settingsTarget) return <SettingsLinkChip target={settingsTarget} />;
         if (allowPrivilegedLinks && href != null && hasDeepLinkPathPrefix(href, 'session/')) {
           // 深链 → 会话 chip:显示会话标题(查不到降级短 ID),点击跳转;
           // 带 ?message= 锚点时进一步定位并高亮目标消息。作者显式写的
@@ -2137,14 +2192,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     return (
       <WorkspaceMediaSrc src={raw} workingDir={props.workingDir} enabled={resolveInWorkspace} streaming={props.isStreaming ?? false}>
         {(localSrc = raw) => {
-          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks);
+          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
+          const normalized = normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks,
+            mediaOrigin ?? (props.currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
           if (!normalized) return null;
           // Local audio has its own extension-checked protocol; xdt-file serves
           // images/documents/video and rejects MP3. Preserve the encoded path and
           // select the handler before wrapping the URL for a remote source device.
           const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
-          const src = rewriteToRemoteMediaOrigin(playable, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
-          return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
+          const src = rewriteToRemoteMediaOrigin(playable, mediaOrigin);
+          // ChatVideoView 会按 sessionId 再改写一次;不改写的来源(file://host)不能让它补上。
+          return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={mediaOrigin ? props.currentSessionId : undefined} />;
         }}
       </WorkspaceMediaSrc>
     );

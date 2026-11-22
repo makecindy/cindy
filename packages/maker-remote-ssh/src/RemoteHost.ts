@@ -22,6 +22,7 @@ import { Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetai
 
 import type { HostConfig, HostSnapshot, RemoteStatus } from './types.js';
 import { resolveAuth } from './credentials.js';
+import type { AgentUnavailableReason } from './sshAuthentication.js';
 import { type HostKeyStore, hostKeyFingerprint, hostKeyId, decideHostKey } from './hostKeys.js';
 
 export interface RemoteHostDeps {
@@ -37,6 +38,38 @@ export interface RemoteHostDeps {
    * ConnectionPool injects one built from its `knownHostsPath`.
    */
   hostKeys?: HostKeyStore;
+  /** Localized host-key diagnostics; the standalone package defaults to English. */
+  formatHostKeyError?: (details: HostKeyErrorDetails) => string;
+  /** Local SSH key-agent diagnostics, shared by status rows and connect errors. */
+  formatAgentUnavailableError?: (reason?: AgentUnavailableReason) => string;
+}
+
+function agentUnavailableError(
+  cause: Error,
+  format?: RemoteHostDeps['formatAgentUnavailableError'],
+  reason?: AgentUnavailableReason,
+): Error {
+  const defaultMessage = reason === 'environment-unset'
+    ? 'The environment variable referenced by IdentityAgent is not set for Cindy. Set it or correct IdentityAgent in your SSH config.'
+    : reason === 'endpoint-empty'
+      ? 'IdentityAgent resolves to an empty endpoint. Correct IdentityAgent in your SSH config.'
+      : reason === 'endpoint-unavailable'
+        ? 'The SSH key agent endpoint configured by IdentityAgent is unavailable. Check that endpoint and its agent; the default ssh-agent may use a different endpoint.'
+        : 'The local SSH key agent (ssh-agent) is unavailable. Check that it is running and that ssh-add -l lists the required key, then retry. See Manage keys for troubleshooting.';
+  const message = format?.(reason) ?? defaultMessage;
+  return Object.assign(new Error(message), {
+    code: 'SSH_AGENT_UNAVAILABLE',
+    agentUnavailableReason: reason,
+    cause,
+  });
+}
+
+export interface HostKeyErrorDetails {
+  kind: 'missing' | 'read' | 'write' | 'mismatch';
+  host: string;
+  filePath?: string;
+  fingerprint?: string;
+  reason?: string;
 }
 
 const READY_TIMEOUT_MS = 20_000;
@@ -196,6 +229,40 @@ export interface ExecStreamHandle {
    * which sends SIGHUP via SSH session teardown.
    */
   kill(signal?: string): void;
+}
+
+function errnoFields(err: unknown): { code?: string; address?: string } {
+  for (let current: unknown = err, depth = 0; current && typeof current === 'object' && depth < 3; depth += 1) {
+    const row = current as { code?: unknown; address?: unknown; cause?: unknown };
+    if (typeof row.code === 'string') {
+      return { code: row.code, ...(typeof row.address === 'string' ? { address: row.address } : {}) };
+    }
+    current = row.cause;
+  }
+  return {};
+}
+
+function isPrivateLanAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  if (/^(10\.|192\.168\.|169\.254\.)/.test(address)) return true;
+  const second = /^172\.(\d+)\./.exec(address);
+  if (second && Number(second[1]) >= 16 && Number(second[1]) <= 31) return true;
+  return /^(fe80|fc|fd)/i.test(address);
+}
+
+/**
+ * Log-only classification (no user-facing text). macOS reports both an
+ * asleep/powered-off LAN host and a denied Local Network privacy permission as
+ * EHOSTUNREACH ("No route to host"); when even the gateway fails the same way,
+ * the app's Local Network permission is the likely cause.
+ */
+export function connectFailureHint(err: unknown): { hint?: string } {
+  const { code, address } = errnoFields(err);
+  if ((code === 'EHOSTUNREACH' || code === 'ENETUNREACH') && process.platform === 'darwin'
+    && (address === undefined || isPrivateLanAddress(address))) {
+    return { hint: 'lan-unreachable: host asleep/offline, or macOS Local Network permission denied for this app' };
+  }
+  return {};
 }
 
 /**
@@ -360,9 +427,19 @@ export class RemoteHost {
   private inFlightConnect: Promise<void> | null = null;
   /** true = user explicitly asked to disconnect; suppress auto-reconnect. */
   private userDisconnected = false;
+  /**
+   * A previously ready connection exhausted its bounded automatic reconnect.
+   * It stays failed (no background loop) until the next use, or one more
+   * bounded round after the system network changes / the machine wakes.
+   */
+  private networkRecoveryArmed = false;
+  /** This connect cycle reached ready at least once (a probe that never connected is not recovered). */
+  private readySinceConnect = false;
   private events = new EventEmitter();
   private readonly log: RemoteHostDeps['logger'];
   private readonly hostKeys?: HostKeyStore;
+  private readonly formatHostKeyError?: RemoteHostDeps['formatHostKeyError'];
+  private readonly formatAgentUnavailableError?: RemoteHostDeps['formatAgentUnavailableError'];
   /**
    * Set by the host-key verifier when it rejects a connect, so onError can
    * surface an actionable message instead of ssh2's opaque handshake error.
@@ -383,6 +460,8 @@ export class RemoteHost {
     this.cfg = config;
     this.log = deps.logger;
     this.hostKeys = deps.hostKeys;
+    this.formatHostKeyError = deps.formatHostKeyError;
+    this.formatAgentUnavailableError = deps.formatAgentUnavailableError;
   }
 
   get config(): HostConfig {
@@ -455,8 +534,27 @@ export class RemoteHost {
     // status/channel 事件。必须在 doConnect() 前显式清掉 timer 才安全。
     this.clearReconnectTimer();
     this.userDisconnected = false;
+    this.networkRecoveryArmed = false;
+    this.readySinceConnect = false;
     this.reconnectAttempts = 0;
     await this.startConnectAttempt();
+  }
+
+  /**
+   * One more bounded reconnect round for a connection that was ready, dropped
+   * and exhausted its automatic retries. Called on a system network change or
+   * wake; never for user-disconnected, auth or host-key failures, and at most
+   * once per exhaustion (a new exhaustion re-arms it). Returns true if started.
+   */
+  retryAfterNetworkChange(): boolean {
+    if (!this.networkRecoveryArmed || this.status !== 'failed' || this.userDisconnected || this.hostKeyError) {
+      return false;
+    }
+    this.networkRecoveryArmed = false;
+    this.reconnectAttempts = 0;
+    this.log.info('ssh retrying after network change', { id: this.id });
+    this.scheduleReconnect();
+    return true;
   }
 
   /**
@@ -465,6 +563,7 @@ export class RemoteHost {
    */
   async disconnect(): Promise<void> {
     this.userDisconnected = true;
+    this.networkRecoveryArmed = false;
     this.connectionEpoch += 1;
     this.clearReconnectTimer();
     this.markForwardsDisarmed();
@@ -1106,8 +1205,7 @@ export class RemoteHost {
     const store = this.hostKeys;
     if (!store) {
       if (isCurrentAttempt()) {
-        this.hostKeyError =
-          'SSH host key verification is not configured; refusing to connect without it.';
+        this.hostKeyError = this.hostKeyFailure({ kind: 'missing', host: storeKey });
       }
       this.log.error('ssh host key store missing — refusing connect', { id: this.id });
       return false;
@@ -1123,7 +1221,10 @@ export class RemoteHost {
       stored = await store.get(storeKey);
     } catch (err) {
       if (isCurrentAttempt()) {
-        this.hostKeyError = `failed to read trusted host keys: ${(err as Error).message}`;
+        this.hostKeyError = this.hostKeyFailure({
+          kind: 'read', host: storeKey, filePath: store.filePath,
+          reason: err instanceof Error ? err.message : String(err),
+        });
       }
       this.log.error('ssh known-hosts read failed — refusing connect', {
         id: this.id,
@@ -1144,7 +1245,10 @@ export class RemoteHost {
         // Proceeding without persistence means the next reconnect would
         // re-enter trust-new and silently accept any key, defeating TOFU.
         if (isCurrentAttempt()) {
-          this.hostKeyError = `failed to persist trusted host key: ${(err as Error).message}`;
+          this.hostKeyError = this.hostKeyFailure({
+            kind: 'write', host: storeKey, filePath: store.filePath,
+            reason: err instanceof Error ? err.message : String(err),
+          });
         }
         this.log.error('ssh known-hosts write failed — refusing connect', {
           id: this.id,
@@ -1163,13 +1267,9 @@ export class RemoteHost {
     // mismatch
     if (isCurrentAttempt()) {
       this.hostKeyMismatch = { host: storeKey, trusted: stored!, presented };
-      this.hostKeyError =
-        `SSH host key changed for ${storeKey}. Connection refused.\n` +
-        `Previously trusted: ${stored}\nPresented: ${presented}\n` +
-        `This may be a server reinstall or an intercepted connection. Verify the new fingerprint ` +
-        `with the server administrator through a trusted channel, then review the host key in ` +
-        `Cindy Settings > Remote. Cindy uses its own remote-ssh/known-hosts.json, not ` +
-        `~/.ssh/known_hosts. Changing your login key will not fix this error.`;
+      this.hostKeyError = this.hostKeyFailure({
+        kind: 'mismatch', host: storeKey, filePath: store.filePath, fingerprint: presented,
+      });
     }
     this.log.error('ssh host key mismatch — refusing connect', {
       id: this.id,
@@ -1178,6 +1278,27 @@ export class RemoteHost {
       trusted: stored,
     });
     return false;
+  }
+
+  private hostKeyFailure(details: HostKeyErrorDetails): string {
+    if (this.formatHostKeyError) return this.formatHostKeyError(details);
+    if (details.kind === 'missing') {
+      return 'SSH host key verification is not configured; refusing to connect without it.';
+    }
+    const location = details.filePath ? `\nTrusted host keys file:\n${details.filePath}` : '';
+    if (details.kind === 'read' || details.kind === 'write') {
+      const action = details.kind === 'read' ? 'read trusted host keys' : 'persist trusted host key';
+      return `Failed to ${action}: ${details.reason}. Connection refused.${location}`;
+    }
+    const recovery = details.filePath
+      ? `\nCindy does not read ~/.ssh/known_hosts. The old fingerprint is stored in:\n${details.filePath}` +
+        `\nThe entry key is "${details.host}".\nIf you have verified that this change is trustworthy, quit Cindy, ` +
+        `remove only this entry, keep the file and all other hosts, then reconnect. ` +
+        `The new fingerprint will be saved on first connection. Do not delete the entire file.`
+      : '\nCindy does not read ~/.ssh/known_hosts. Verify the change with the server administrator before updating the trusted host key store.';
+    return `SSH host key changed for ${details.host} (${details.fingerprint}) and no longer matches the ` +
+      `key previously trusted by Cindy. This may mean the server was reinstalled or a man-in-the-middle attack. ` +
+      `Connection refused.${recovery}`;
   }
 
   private async doConnect(): Promise<void> {
@@ -1214,13 +1335,17 @@ export class RemoteHost {
       auth = await resolveAuth(attemptConfig);
     } catch (err) {
       if (!isCurrentAttempt()) throw cancelledError();
-      const msg = (err as Error).message;
+      const authError = (err as { code?: string }).code === 'SSH_AGENT_UNAVAILABLE'
+        ? agentUnavailableError(err as Error, this.formatAgentUnavailableError,
+          (err as Error & { agentUnavailableReason?: AgentUnavailableReason }).agentUnavailableReason)
+        : err;
+      const msg = (authError as Error).message;
       this.lastError = msg;
       // Keep the full error so concurrent connect() joiners can rethrow it
       // with its structured `.code` intact (see lastAuthError + connect()).
-      this.lastAuthError = err instanceof Error ? err : new Error(msg);
+      this.lastAuthError = authError instanceof Error ? authError : new Error(msg);
       this.setStatus('failed');
-      throw err;
+      throw authError;
     }
 
     // disconnect() may have run while local credentials were being resolved.
@@ -1265,6 +1390,7 @@ export class RemoteHost {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      let agentError: Error | undefined;
 
       const onReady = () => {
         if (settled) return;
@@ -1278,6 +1404,8 @@ export class RemoteHost {
         this.lastError = undefined;
         this.lastAuthLabel = auth.label;
         this.reconnectAttempts = 0;
+        this.networkRecoveryArmed = false;
+        this.readySinceConnect = true;
         this.setStatus('ready');
         this.log.info('ssh ready', { id: this.id, auth: auth.label });
         // 后台重挂已登记的 remote forwards; 不阻塞 connect 返回 (session
@@ -1295,6 +1423,9 @@ export class RemoteHost {
           return;
         }
         if (settled) {
+          // ssh2 may emit a generic authentication failure after its local
+          // agent error. Keep the actionable diagnosis for this failed attempt.
+          if (agentError) return;
           // Post-ready error — feed into reconnect path, not the connect promise.
           this.handlePostReadyError(err);
           return;
@@ -1305,17 +1436,25 @@ export class RemoteHost {
         // Otherwise swap opaque "All configured authentication methods failed"
         // for a hint pointing at ssh-copy-id / identity file. The host row
         // subtitle + connect-failure toast both surface this verbatim.
+        // ssh2 tags local agent initialization/signing errors itself. Do not
+        // infer this from message text, which may also come from the server.
+        agentError = !this.hostKeyError && (err as Error & { level?: string }).level === 'agent'
+          ? agentUnavailableError(err, this.formatAgentUnavailableError,
+            attemptConfig.sshAuthentication?.identityAgent !== undefined ? 'endpoint-unavailable' : undefined)
+          : undefined;
         this.lastError = this.hostKeyError
           ? this.hostKeyError
-          : isAuthFailure(err.message)
-            ? authFailureHint(attemptConfig)
-            : err.message;
+          : agentError
+            ? agentError.message
+            : isAuthFailure(err.message)
+              ? authFailureHint(attemptConfig)
+              : err.message;
         this.client = null;
         this.setStatus('failed');
-        this.log.warn('ssh connect failed', { id: this.id, error: err.message });
+        this.log.warn('ssh connect failed', { id: this.id, error: err.message, ...connectFailureHint(err) });
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
-        const rejectErr = new Error(this.lastError);
+        const rejectErr = agentError ?? new Error(this.lastError);
         if (this.hostKeyMismatch) Object.assign(rejectErr, { code: 'SSH_HOST_KEY_MISMATCH' });
         // Preserve original for tests / debugging that key off message text.
         (rejectErr as Error & { cause?: unknown }).cause = err;
@@ -1340,6 +1479,9 @@ export class RemoteHost {
           return;
         }
         // Post-ready close — schedule reconnect unless user-initiated.
+        // A local agent failure has already failed this connect attempt; do
+        // not treat its subsequent close as a lost established connection.
+        if (agentError) return;
         this.handlePostReadyClose();
       };
 
@@ -1410,6 +1552,7 @@ export class RemoteHost {
       return;
     }
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.networkRecoveryArmed = this.readySinceConnect;
       this.setStatus('failed');
       return;
     }
@@ -1438,8 +1581,17 @@ export class RemoteHost {
         if (this.userDisconnected || this.hostKeyError) return;
         if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           this.scheduleReconnect();
+        } else if (!(this.lastError && isAuthFailure(this.lastError))) {
+          // Stay failed without a background loop; the next use, a network
+          // change or wake gets one more bounded round.
+          this.networkRecoveryArmed = this.readySinceConnect;
+          this.log.warn('ssh reconnect exhausted', {
+            id: this.id,
+            error: (err as Error).message,
+            ...connectFailureHint(err),
+          });
         } else {
-          this.log.error('ssh reconnect exhausted', { id: this.id, error: (err as Error).message });
+          this.log.warn('ssh reconnect exhausted', { id: this.id, error: (err as Error).message });
         }
       });
     }, delay);

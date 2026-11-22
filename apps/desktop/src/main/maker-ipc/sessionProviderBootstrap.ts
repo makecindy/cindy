@@ -1,3 +1,18 @@
+/** Restore a saved source before any default routing or Agent startup. */
+export async function hydrateProviderIdBeforeSessionStart(
+  options: { id?: string; providerId?: string | null },
+  readProviderId: (sessionId: string) => Promise<string | null | undefined>,
+): Promise<void> {
+  if (options.providerId !== undefined) {
+    if (typeof options.providerId === 'string') options.providerId = options.providerId.trim() || null;
+    return;
+  }
+  if (!options.id) return;
+  // A missing row is a new task; a failed read is not evidence of a default route.
+  const providerId = await readProviderId(options.id);
+  if (providerId !== undefined) options.providerId = providerId?.trim() || null;
+}
+
 export interface PersistAndHydrateSessionProviderInput {
   sessionId: string;
   providerId: string | null | undefined;

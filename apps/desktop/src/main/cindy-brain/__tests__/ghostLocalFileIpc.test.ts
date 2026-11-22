@@ -34,6 +34,7 @@ const createCallbacks = createGhostProductionCallbacks<Record<keyof typeof callb
     'readLocalGhostUpdateSource', 'updateLocalGhostPackageLocked', 'rejectUnauthorizedTokenBroker',
     'assertGhostRelocationIdle', 'findGhostForInstanceId',
   ],
+  variables: ['updateLocalFile'],
   callbacks: Object.fromEntries(Object.entries(callbackChannels).map(([name, channel]) =>
     [name, ['ipcMain.handle', channel] as const],
   )),
@@ -282,7 +283,7 @@ function harness(
     hasRunningGhostCindyWork: () => false,
     fsSlotSingleton: { hasInFlightRequests: () => options.fsBusy === true },
     networkSlotSingleton: { hasInFlightRequests: () => options.networkBusy === true },
-    handoffStoreSingleton: null,
+    isGhostHandoffBusy: () => false,
     stopPluginAppInstance: vi.fn(async () => {}),
     getGhostNodeRuntimeBroker: () => ({ stopAndWait: vi.fn() }),
     getGhostAgentSlot: () => ({ clearGhost: vi.fn() }),

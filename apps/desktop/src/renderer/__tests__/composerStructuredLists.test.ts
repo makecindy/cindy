@@ -1,6 +1,4 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Editor, Node } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
@@ -13,6 +11,7 @@ import {
   ComposerBulletList,
   ComposerListItem,
   ComposerOrderedList,
+  handleComposerListEnter,
   handleStructuredListBackspace,
   handleStructuredListBreak,
   isTopLevelBlockSelection,
@@ -181,7 +180,7 @@ describe('composer structured list input rules', () => {
     expect(editor.state.doc.firstChild?.textContent).toBe('  - ');
   });
 
-  it.each(['0. ', '0001. '])('keeps %s as plain text', (typed) => {
+  it.each(['0. ', '0001. ', '123、', '324325、'])('keeps %s as plain text', (typed) => {
     const editor = makeEditor();
 
     typeThroughInputRules(editor, typed);
@@ -211,29 +210,6 @@ describe('composer structured list input rules', () => {
     expect(editor.state.doc.firstChild?.childCount).toBe(1);
     expect(editor.state.doc.lastChild?.type.name).toBe('orderedList');
     expect(editor.state.doc.lastChild?.attrs.start).toBe(3);
-  });
-
-  it('reserves the full-width CJK marker separately from the ordinal digits', () => {
-    const editor = makeEditor();
-
-    typeThroughInputRules(editor, '2、');
-
-    const list = editor.view.dom.querySelector('ol');
-    expect(list?.getAttribute('data-marker')).toBe('、');
-    expect(list?.getAttribute('data-marker-digits')).toBe('1');
-
-    const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
-    const baseListRule = css.match(
-      /\[data-chat-input-root\]\s+\.ProseMirror\s+:is\(ul,\s*ol\)\s*\{([\s\S]*?)\r?\n\s*\}/,
-    )?.[1];
-    const cjkMarkerRule = css.match(
-      /\[data-chat-input-root\]\s+\.ProseMirror\s+ol\[data-marker='、'\]\s*\{([\s\S]*?)\r?\n\s*\}/,
-    )?.[1];
-    expect(baseListRule).toContain('--composer-list-marker-extra: 0em;');
-    expect(baseListRule).toContain(
-      'var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)',
-    );
-    expect(cjkMarkerRule).toContain('--composer-list-marker-extra: 0.7em;');
   });
 
   it('reserves enough marker width for long ordered-list numbers', () => {
@@ -295,6 +271,62 @@ describe('composer structured list input rules', () => {
       ]);
     },
   );
+
+  // User report: typing a marker before a soft line break moved the following
+  // line into the list, so Shift+Enter on an empty third item added a fourth.
+  // Existing input-rule tests only type at the end. Unit: real input rules and
+  // newline handler, with one break after the line being converted.
+  it.each([
+    { afterIntro: false, existingItemText: '', followingText: '后面的正文' },
+    { afterIntro: true, existingItemText: '第一项', followingText: '后面的正文' },
+    { afterIntro: true, existingItemText: '', followingText: '' },
+  ])('keeps the following line outside a list (afterIntro=$afterIntro, text=$followingText)', ({
+    afterIntro,
+    existingItemText,
+    followingText,
+  }) => {
+    const intro = '说明';
+    const firstItem = '第一项';
+    const editor = makeEditor({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [
+          ...(afterIntro ? [{ type: 'text', text: intro }, { type: 'hardBreak' }] : []),
+          ...(existingItemText ? [{ type: 'text', text: existingItemText }] : []),
+          { type: 'hardBreak' },
+          ...(followingText ? [{ type: 'text', text: followingText }] : []),
+        ],
+      }],
+    });
+    editor.commands.setTextSelection(afterIntro ? 2 + intro.length : 1);
+    typeThroughInputRules(editor, '1、');
+    if (existingItemText) {
+      editor.commands.setTextSelection(editor.state.selection.from + existingItemText.length);
+    } else {
+      typeThroughInputRules(editor, firstItem);
+    }
+    const newline = () => handleComposerListEnter(
+      editor.view,
+      new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true }),
+      'enter',
+    );
+    expect(newline()).toBe(true);
+    typeThroughInputRules(editor, '第二项');
+    expect(newline()).toBe(true);
+    expect(newline()).toBe(true);
+
+    const { doc, selection } = editor.state;
+    const listIndex = afterIntro ? 1 : 0;
+    expect(doc.child(listIndex).type.name).toBe('orderedList');
+    expect(doc.child(listIndex).childCount).toBe(2);
+    expect(doc.child(listIndex).firstChild?.textContent).toBe(firstItem);
+    expect(selection.$from.depth).toBe(1);
+    expect(selection.$from.parent.textContent).toBe('');
+    expect(doc.lastChild?.type.name).toBe('paragraph');
+    expect(doc.lastChild?.textContent).toBe(followingText);
+    expect(doc.childCount).toBe(listIndex + 3);
+  });
 
   it('turns a marker after an empty hard-break paragraph following a list into structure', () => {
     const editor = makeEditor({
@@ -775,7 +807,7 @@ describe('composer live plain-list promotion', () => {
     expect(editor.state.doc.lastChild?.type.name).toBe('paragraph');
   });
 
-  it('keeps optional CJK spacing during live promotion', () => {
+  it('leaves a CJK ordinal row literal when it lands outside input rules', () => {
     const editor = makeEditor({
       type: 'doc',
       content: [
@@ -787,8 +819,8 @@ describe('composer live plain-list promotion', () => {
     });
     selectDocumentEnd(editor);
 
-    expect(promoteTrailingPlainListParagraph(editor.view)).toBe(true);
-    expect(serializeEditorContent(editor).text).toBe('3、 项目');
+    expect(promoteTrailingPlainListParagraph(editor.view)).toBe(false);
+    expect(editor.state.doc.firstChild?.type.name).toBe('paragraph');
   });
 
   it('does not promote a multiline paragraph as one list item', () => {

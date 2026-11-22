@@ -255,6 +255,9 @@ describe('ask_user 与 done 的时序', () => {
     expect(queued.text.split('\n\n<cindy_question_context>')[0]).toBe('> Original?\n\nFinished');
     expect(queued.text).toContain('This is a delayed answer');
     expect(queued.text).toContain('do not repeat work already completed');
+    // The note is for the model only: the message people see is the question and the answer.
+    expect(queued.chatMessage.content).toBe('> Original?\n\nFinished');
+    expect(queued.persistedContent).not.toContain('cindy_question_context');
     expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('async-2');
   });
 

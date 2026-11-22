@@ -196,14 +196,14 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
     const info = plugins[id] ?? (bundledPluginNames[id] ? { name: bundledPluginNames[id] } : undefined);
     return info ? [[id, info]] : [];
   }));
-  const closeButton = <Dialog.Close aria-label={t('bots.close')} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"><X size={18} /></Dialog.Close>;
+  const closeButton = <Dialog.Close aria-label={t('bots.close')} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><X size={18} /></Dialog.Close>;
   const lastRowStart = entries.length - (entries.length % 2 || 2);
   return <>
     <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[60]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content onPointerDownOutside={event => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[61] flex max-h-[min(760px,calc(100vh-32px))] w-[min(960px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none">
+          className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[min(760px,calc(100vh-32px))] w-[min(960px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none">
           <header className={cn('flex shrink-0 items-center justify-between gap-4 px-8 transition-colors', selection
             ? cn('border-b py-3', stuck ? 'border-[var(--border-default)]' : 'border-transparent') : 'pb-2 pt-6')}>
             {selection ? <>
@@ -243,7 +243,7 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
                     <h2 className="text-24 font-medium text-[var(--text-primary)]">{selection.name}</h2>
                     <button type="button" disabled={!!busyId}
                       onClick={() => { if (selection.installation?.saved) void openBot(selection.installation.botId); else void invite(selection); }}
-                      className="group relative mt-2 flex max-w-full cursor-pointer rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] active:opacity-80 disabled:cursor-default disabled:opacity-60">
+                      className="group relative mt-2 flex max-w-full cursor-pointer rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] active:opacity-80 disabled:cursor-default disabled:opacity-60">
                       {/* Same recipe as the user's message bubble; hover and focus step up to --surface-hover so it reads as tappable without borrowing the CTA fill. */}
                       <span className="flex min-w-0 items-center gap-2 rounded-xl rounded-bl-none border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-14 leading-6 text-[var(--text-primary)] transition-colors group-hover:bg-[var(--surface-hover)] group-focus-visible:bg-[var(--surface-hover)]">
                         <span className="min-w-0">{selection.bubble}</span>
@@ -288,8 +288,8 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
                   <img src={entry.avatar} alt="" className="h-14 w-14 shrink-0 rounded-full object-cover" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3">
-                      <button type="button" data-open-detail onClick={() => setSelectedId(entry.packageId)} className="min-w-0 cursor-pointer text-left text-16 font-medium text-[var(--text-primary)] after:absolute after:inset-0 after:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] after:focus-visible:rounded-lg">{entry.name}</button>
-                      <div className="relative z-10 shrink-0">{action(entry, false)}</div>
+                      <button type="button" data-open-detail onClick={() => setSelectedId(entry.packageId)} className="min-w-0 cursor-pointer text-left text-16 font-medium text-[var(--text-primary)] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none focus-visible:after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-[var(--focus-ring)]">{entry.name}</button>
+                      <div className="relative z-raised shrink-0">{action(entry, false)}</div>
                     </div>
                     <p className="mt-2 text-13 leading-5 text-[var(--text-secondary)]">{entry.description}</p>
                   </div>

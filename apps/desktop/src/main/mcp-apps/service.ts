@@ -1,3 +1,4 @@
+import { createViewStateStorage } from './viewStateStore.js';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -28,6 +29,10 @@ export interface McpAppsServicePorts {
   send: McpAppsHostDeps['sendMessage'];
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
+  composerDrag?: boolean;
+  composerCaller?: McpAppsHostDeps['composerCaller'];
+  hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
+  sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
   disposeDocument?: McpAppsHostDeps['disposeDocument'];
 }
 
@@ -48,12 +53,33 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
   };
   const host = new McpAppsHost({
     downloadFile: ports.downloadFile,
+    composerDrag: ports.composerDrag ? async sessionId => !(await assertSession(sessionId)).session.remoteHostId : undefined,
+    composerCaller: ports.composerCaller,
+    hasComposerAttachment: ports.hasComposerAttachment,
+    sendComposerAttachment: ports.sendComposerAttachment,
     pluginFiles: ports.pluginFiles,
     owner: currentOwner,
     config: readAppServer,
     revisionKey: getMcpAppRevisionKey,
-    readCard: async (sessionId, clientId) => {
+    viewState: (captured, sessionId, clientId, record) => {
+      const owner = currentOwner();
+      if (!owner || owner !== captured) throw new Error('MCP_APP_OWNER_CHANGED');
+      const pluginInstance = readAppServer(record.serverId)?.plugin?.instance ?? null;
+      return createViewStateStorage(owner.client, {
+        sessionId, clientId, serverId: record.serverId, serverRevision: record.serverRevision,
+        resourceUri: record.resourceUri, toolName: record.tool.name, pluginInstance,
+      }, () => {
+        const config = readAppServer(record.serverId);
+        if (currentOwner() !== owner || !config ||
+            appServerRevision(config, getMcpAppRevisionKey()) !== record.serverRevision ||
+            (config.plugin?.instance ?? null) !== pluginInstance)
+          throw Object.assign(new Error('MCP_APP_CARD_UNAVAILABLE'), { code: 'MCP_APP_CARD_UNAVAILABLE' });
+        config.plugin?.assertCurrent(sessionId);
+      });
+    },
+    readCard: async (sessionId, clientId, localComposer) => {
       const { owner, session } = await assertSession(sessionId);
+      if (localComposer && session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
       const [row] = await owner.client.drizzle
         .select({ content: messages.content, meta: messages.agentMeta })
         .from(messages)
@@ -235,6 +261,8 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
               ...(assessment
                 ? {
                     autoReviewUnavailable: assessment.unavailable === true,
+                    ...(assessment.unavailable === true && assessment.unavailableReason === 'quota_exhausted'
+                      ? { autoReviewUnavailableReason: 'quota_exhausted' } : {}),
                     autoReviewReason: assessment.reason,
                   }
                 : {}),

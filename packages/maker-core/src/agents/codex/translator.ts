@@ -43,6 +43,7 @@ import {
 import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData, GeneratedImageEventData } from '../../types/events.js';
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import type { CodexDownshiftModelRejection } from '../base-agent.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import {
@@ -57,6 +58,7 @@ import {
 import { isRemoteCompactEncryptedContentError, REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON } from '../shared/remote-compact-encrypted-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
+import { codexResponseSampledTokens } from './app-server/response-timing.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import {
   formatTerminalRateLimitRetryMessage,
@@ -82,26 +84,34 @@ import type {
 // 但因为 reasoning text 现在是数组 join 出来的, reasoningTextLen 跟踪 join 后总长。
 
 export interface CodexRuntimeState {
+  /** Live collab identity only; never retain its prompt or agent output bodies. */
+  collabToolItems: Map<string, CollabAgentToolCallItem>;
   /** Text since the last completed tool belongs to the current sampling request. */
   samplingSegments: Map<string, { threadId: string; turnId: string; attempt: number; itemIds: Set<string> }>;
   /** item.id → reasoning 第一次 emit 'start' 的时间 (Date.now ms)。 */
   reasoningStartedAt: Map<string, number>;
   /** item.id → reasoning 已 emit 文本字符长度 (上次 join 后总长)。 */
   reasoningTextLen: Map<string, number>;
+  /** Reasoning can arrive as both incremental text and cumulative snapshots, in two representations. */
+  reasoningSpeedParts: Map<string, {
+    source: 'summary' | 'content';
+    parts: Map<number, { deltaLength: number; measuredLength: number }>;
+  }>;
   /** item.id → agentMessage 已 emit 文本字符长度(citation 归一化后的空间,见 handleAgentMessage)。 */
   itemTextLen: Map<string, number>;
   /** Live tok/s: the streamed answer, corrected by the usage each response reports. */
   tokenSpeed: CalibratedTokenSpeedMeter;
   /** Real output of the product turn so far, across native continuations; the meter's numerator. */
   speedOutputTokens: number;
+  /** Output reported without a matching generation interval, for the displayed total only. */
+  unpairedOutputTokens: number;
   /** False once output arrived while tools owned the turn: it has no generation time of its own. */
   generationSegmentComplete: boolean;
-  /** False from such output until the next response the generation clock can pair. */
-  speedPaired: boolean;
   /** Current model-active interval start; null while tools/approvals own the turn. */
   generationStartedAt: number | null;
   /** Tool/approval boundaries currently owning the turn. Generation resumes after all finish. */
   generationPendingToolIds: Set<string>;
+  generationStreamItemIds: Set<string>;
   /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
   generationDurationMs: number;
   /** Model time sampled with the latest accepted output usage. */
@@ -109,6 +119,22 @@ export interface CodexRuntimeState {
   /** Native-turn output for speed, independent of the billing ledger lifecycle. */
   generationOutputTokens: number;
   generationTurnId: string | null;
+  /**
+   * Set once Codex has reported the end of a model response (`turn/moderationMetadata`):
+   * from then on the clock runs from a response's first byte until that end, through
+   * output that arrives whole such as a tool call, instead of stopping when its last
+   * streamed item does. Never reset: it describes the app-server, not a turn.
+   */
+  responseEndSignals: boolean;
+  /**
+   * Provider-reported generation times not yet matched to a finished response, with the
+   * tokens of that one response (the provider reports a running total).
+   */
+  pendingServerTimings: Array<{ turnId: string; tokens: number; samplingMs: number }>;
+  /** The provider's running total last seen in this native turn; it restarts on a new scope. */
+  serverTimingTotal: number;
+  /** The newest finished response, for a generation time that arrives after its usage. */
+  lastSettledResponse: { turnId: string; outputTokens: number; requestIndex: number } | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
   /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
@@ -150,20 +176,27 @@ export interface CodexRuntimeState {
 
 export function newCodexRuntimeState(): CodexRuntimeState {
   return {
+    collabToolItems: new Map(),
     samplingSegments: new Map(),
     reasoningStartedAt: new Map(),
     reasoningTextLen: new Map(),
+    reasoningSpeedParts: new Map(),
     itemTextLen: new Map(),
-    tokenSpeed: new CalibratedTokenSpeedMeter({ estimate: estimateWordTokens }),
+    tokenSpeed: new CalibratedTokenSpeedMeter({ estimate: estimateWordTokens, thinkingScale: 1, summarizedThinking: true }),
     speedOutputTokens: 0,
+    unpairedOutputTokens: 0,
     generationSegmentComplete: true,
-    speedPaired: true,
     generationStartedAt: null,
     generationPendingToolIds: new Set(),
+    generationStreamItemIds: new Set(),
     generationDurationMs: 0,
     generationOutputDurationMs: 0,
     generationOutputTokens: 0,
     generationTurnId: null,
+    responseEndSignals: false,
+    pendingServerTimings: [],
+    serverTimingTotal: 0,
+    lastSettledResponse: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
     generationHeartbeatTimer: null,
@@ -215,12 +248,23 @@ function startCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
 export function resetCodexSpeed(rt: CodexRuntimeState): void {
   rt.tokenSpeed.reset();
   rt.speedOutputTokens = 0;
-  rt.speedPaired = true;
+  rt.unpairedOutputTokens = 0;
 }
 
-/** The speed to publish: none while the clock is unreliable or the latest output is unpaired. */
+/** The first live reading can be the last one before a tool takes over. */
+export function codexUsageRefreshDue(
+  rt: CodexRuntimeState, lastRefreshAt: number, hadLiveRate: boolean, now = Date.now(),
+): boolean {
+  return now - lastRefreshAt >= 500 || (!hadLiveRate && rt.generationTimingReliable && rt.tokenSpeed.hasLiveRate);
+}
+
+/** A paused meter still describes the already paired part of this turn. */
 export function codexSpeedSnapshot(rt: CodexRuntimeState, now = Date.now()): TokenSpeedSnapshot | undefined {
-  return rt.generationTimingReliable && rt.speedPaired ? rt.tokenSpeed.snapshot(now) : undefined;
+  if (!rt.generationTimingReliable) return undefined;
+  const speed = rt.tokenSpeed.snapshot(now);
+  return speed && rt.unpairedOutputTokens > 0
+    ? { ...speed, totalOutputTokens: speed.tokens + rt.unpairedOutputTokens }
+    : speed;
 }
 
 /**
@@ -228,13 +272,14 @@ export function codexSpeedSnapshot(rt: CodexRuntimeState, now = Date.now()): Tok
  * took, wait for the first byte included, and replace what the stream could only
  * estimate. Output that arrives while tools own the turn (code mode, background
  * tools) has no model time of its own: it stays out of the speed, and no speed is
- * shown until a response is paired again.
+ * attributed to it. The already paired average remains available.
  */
 export function settleCodexSpeedUsage(
   rt: CodexRuntimeState,
   last: { outputTokens: number; reasoningOutputTokens?: number },
   now = Date.now(),
 ): SpeedCalibrationReport | undefined {
+  rt.generationStreamItemIds.clear();
   rt.generationOutputTokens += last.outputTokens;
   const pairedDurationMs = sampleGenerationDuration(rt.generationDurationMs, rt.generationStartedAt, now);
   const responseWallMs = pairedDurationMs - rt.generationOutputDurationMs;
@@ -244,30 +289,84 @@ export function settleCodexSpeedUsage(
     rt.tokenSpeed.invalidate();
     return undefined;
   }
-  rt.speedPaired = responseWallMs > 0;
-  if (!rt.speedPaired) {
+  if (responseWallMs <= 0) {
+    rt.unpairedOutputTokens += last.outputTokens;
     // Whatever streamed meanwhile and the tool wait in between stay out of the next response.
     rt.tokenSpeed.discardRequest(now);
     return undefined;
   }
   rt.speedOutputTokens += last.outputTokens;
-  return rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs);
+  // Timings arrive in response order; one names its response by that response's own tokens.
+  // Earlier unmatched ones belong to responses already settled without them.
+  const turnId = rt.generationTurnId;
+  const index = rt.pendingServerTimings.findIndex((entry) => entry.turnId === turnId && entry.tokens === last.outputTokens);
+  const timing = index >= 0 ? rt.pendingServerTimings[index] : undefined;
+  if (index >= 0) rt.pendingServerTimings.splice(0, index + 1);
+  const report = rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs,
+    timing ? { tokens: last.outputTokens, ms: timing.samplingMs } : undefined);
+  rt.lastSettledResponse = turnId && report && !timing
+    ? { turnId, outputTokens: last.outputTokens, requestIndex: rt.tokenSpeed.lastRequestIndex }
+    : null;
+  return report;
+}
+
+/**
+ * A model response ended (Codex sends `turn/moderationMetadata` as the response
+ * completes, before any tool it asked for runs): its generation time ends here,
+ * not when its last streamed item did.
+ */
+export function noteCodexResponseEnded(rt: CodexRuntimeState, turnId: string, endedAt = Date.now()): void {
+  if (rt.generationTurnId !== turnId) return;
+  rt.responseEndSignals = true;
+  rt.generationStreamItemIds.clear();
+  rt.tokenSpeed.pause(endedAt);
+}
+
+const MAX_PENDING_SERVER_TIMINGS = 16;
+
+/**
+ * The provider's own generation time for one response (see app-server/response-timing.ts).
+ * Usually it arrives before the response's usage and waits for it; when it arrives
+ * after, it replaces the client's measurement of that response. Returns whether the
+ * displayed speed changed.
+ */
+export function noteCodexResponseTiming(
+  rt: CodexRuntimeState,
+  timing: { turnId: string; sampledTokensTotal: number; samplingMs: number },
+): boolean {
+  if (!rt.generationTimingReliable || rt.generationTurnId !== timing.turnId) return false;
+  // A total below the last one means the provider started counting again (a new connection or
+  // retried response): this response's tokens are then the whole total.
+  const tokens = codexResponseSampledTokens(timing.sampledTokensTotal, rt.serverTimingTotal);
+  rt.serverTimingTotal = timing.sampledTokensTotal;
+  const settled = rt.lastSettledResponse;
+  if (settled && settled.turnId === timing.turnId && settled.outputTokens === tokens && rt.pendingServerTimings.length === 0) {
+    rt.lastSettledResponse = null;
+    return rt.tokenSpeed.applyServerTiming(settled.requestIndex, timing.samplingMs);
+  }
+  rt.pendingServerTimings.push({ turnId: timing.turnId, tokens, samplingMs: timing.samplingMs });
+  if (rt.pendingServerTimings.length > MAX_PENDING_SERVER_TIMINGS) rt.pendingServerTimings.shift();
+  return false;
 }
 
 /** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
 export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed = false): void {
   stopCodexGenerationHeartbeat(rt);
+  rt.reasoningSpeedParts.clear();
   // A native continuation keeps measuring the same product turn.
   if (preserveSpeed) rt.tokenSpeed.reopen();
   else resetCodexSpeed(rt);
   rt.generationSegmentComplete = true;
-  rt.speedPaired = true;
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
+  rt.generationStreamItemIds.clear();
   rt.generationDurationMs = 0;
   rt.generationOutputDurationMs = 0;
   rt.generationOutputTokens = 0;
   rt.generationTurnId = null;
+  rt.pendingServerTimings = [];
+  rt.serverTimingTotal = 0;
+  rt.lastSettledResponse = null;
   rt.generationTimingReliable = true;
 }
 
@@ -396,8 +495,12 @@ function noteCodexGenerationBoundary(
     rt.generationTimingReliable = false;
   }
   // The speed clock runs from the response's first streamed item, not from the request.
-  if (phase === 'started' && item.type === 'reasoning') rt.tokenSpeed.start(receivedAt, 'thinking');
-  else if (phase === 'started' && item.type === 'agentMessage') rt.tokenSpeed.start(receivedAt, 'visible');
+  if (phase === 'started' && rt.generationPendingToolIds.size === 0) {
+    if (item.type === 'reasoning' || item.type === 'agentMessage') {
+      if (typeof item.id === 'string') rt.generationStreamItemIds.add(item.id);
+      rt.tokenSpeed.start(receivedAt, item.type === 'reasoning' ? 'thinking' : 'visible');
+    }
+  }
   if (
     typeof item.type !== 'string' ||
     !CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type)
@@ -429,8 +532,11 @@ interface TranslatorLog {
 export interface CodexTranslateContext {
   rt: CodexRuntimeState;
   log: TranslatorLog;
+  /** Late tool results belong to an ended turn, not the foreground speed clock. */
+  background?: boolean;
   /** Host denial paired by thread, turn and item; never inferred from empty output. */
   approvalDenialReason?: string;
+  previousCompactionModelRejection?: CodexDownshiftModelRejection;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
   onSamplingAttemptFailed?: () => void;
   /**
@@ -439,6 +545,9 @@ export interface CodexTranslateContext {
    * 缺省 = 不回调 (makerMemoryEnabled 关时 agent 不注入)。
    */
   onCompactBoundary?: () => void;
+  /** Emit the item's status after its clock boundary and before its content events. */
+  onItemBoundary?: () => void;
+  compactTrigger?: 'auto' | 'manual';
   /**
    * 服务过载错误的重投接管钩子 (由 agent 层注入)。
    *
@@ -558,20 +667,29 @@ export function translateItemNotification(
     }
     ctx.rt.samplingSegments.delete(key);
   }
-  noteCodexGenerationBoundary(
-    ctx.rt,
-    phase,
-    item as { id?: unknown; type?: unknown },
-    notification as { turnId?: unknown },
-  );
+  if (!ctx.background) {
+    noteCodexGenerationBoundary(
+      ctx.rt,
+      phase,
+      item as { id?: unknown; type?: unknown },
+      notification as { turnId?: unknown },
+    );
+  }
 
+  ctx.onItemBoundary?.();
   switch (itemType) {
     case 'agentMessage':
-      handleAgentMessage(phase, item as unknown as AgentMessageItem, queue, ctx);
+    case 'reasoning': {
+      if (itemType === 'agentMessage') handleAgentMessage(phase, item as unknown as AgentMessageItem, queue, ctx);
+      else handleReasoning(phase, item as ReasoningItem, queue, ctx);
+      // A usage report or tool start may arrive well after the last model byte.
+      // Count any final text in this item before closing the last open stream.
+      // Once Codex reports where a response ends, output after the last streamed item (a
+      // tool call arrives whole) is still generation: the clock stops at that end instead.
+      if (!ctx.background && phase === 'completed' && ctx.rt.generationStreamItemIds.delete(item.id) &&
+          ctx.rt.generationStreamItemIds.size === 0 && !ctx.rt.responseEndSignals) ctx.rt.tokenSpeed.pause();
       return;
-    case 'reasoning':
-      handleReasoning(phase, item as unknown as ReasoningItem, queue, ctx);
-      return;
+    }
     case 'commandExecution':
       handleCommandExecution(phase, item as unknown as CommandExecutionItem, queue, ctx);
       return;
@@ -618,6 +736,72 @@ export function translateItemNotification(
       ctx.log.warn('unhandled item type', { phase, itemType });
       return;
   }
+}
+
+const OMITTED_ITEM_RESULT = 'Result omitted: too large to display.';
+
+/**
+ * item/* 通知超过单行上限、正文已被宿主丢弃时的翻译收尾 (见 AppServerHost 的
+ * ITEM_OMITTED_METHOD)。生成计时照常按 started / completed 暂停与恢复。completed 时,
+ * started 已 emit 过 tool_use 的工具要配一个不含正文的 tool_result: 否则 Session 会一直
+ * 把它算作在跑, 优雅停止卡在 waiting-for-safe-point。completion-only 的类型 (fileChange 等)
+ * 从未 emit 过 tool_use, 不凭空补卡。按 item.id 记的翻译状态一并清掉。
+ */
+export function translateOmittedItem(
+  phase: ItemPhase,
+  notification: { threadId: string; turnId: string; item: { id?: string; type?: string; status?: string } },
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): CollabAgentToolCallItem | undefined {
+  const { item } = notification;
+  if (!ctx.background) noteCodexGenerationBoundary(ctx.rt, phase, item, notification);
+  if (phase !== 'completed' || !item.id) return;
+  const id = item.id;
+  // Same acceptance rule as translateItemNotification: a completed tool proves
+  // the earlier sampling output was accepted, even when its body was omitted.
+  let accepted: string[] | undefined;
+  if (item.type && SAMPLING_ACCEPTED_TOOL_TYPES.has(item.type)) {
+    const key = JSON.stringify([notification.threadId, notification.turnId]);
+    const segment = ctx.rt.samplingSegments.get(key);
+    if (segment?.itemIds.size) accepted = [...segment.itemIds];
+    ctx.rt.samplingSegments.delete(key);
+  }
+  for (const byItem of [
+    ctx.rt.itemTextLen,
+    ctx.rt.itemRawText,
+    ctx.rt.itemDeltaText,
+    ctx.rt.itemSnapshotText,
+    ctx.rt.itemMessagePhase,
+    ctx.rt.reasoningStartedAt,
+    ctx.rt.reasoningTextLen,
+    ctx.rt.reasoningSpeedParts,
+    ctx.rt.pendingWebSearchInput,
+    ctx.rt.emittedWebSearchInput,
+  ]) {
+    byItem.delete(id);
+  }
+  const collab = ctx.rt.collabToolItems.get(id);
+  ctx.rt.collabToolItems.delete(id);
+  if (!ctx.rt.emittedToolUse.delete(id)) return;
+  const terminalCollab: CollabAgentToolCallItem | undefined = collab && (item.status === 'completed' || item.status === 'failed')
+    ? { ...collab, status: item.status } : undefined;
+  queue.push({
+    type: 'tool_result_full',
+    data: { toolUseId: id, fullText: OMITTED_ITEM_RESULT, outputOmitted: 'oversized',
+      isError: item.status === 'failed',
+      ...(accepted ? { assistantSamplingAccepted: { agentMessageIds: accepted } } : {}) },
+    source: 'codex',
+  });
+  queue.push({
+    type: 'tool_result',
+    data: { summary: OMITTED_ITEM_RESULT, toolUseIds: [id] },
+    source: 'codex',
+  });
+  if (terminalCollab && isSpawnCollabTool(terminalCollab.tool)) {
+    queue.push({ type: 'agent_task_update', source: 'codex',
+      data: toCodexTaskUpdate(terminalCollab, terminalCollab.status === 'failed' ? 'failed' : 'completed', OMITTED_ITEM_RESULT) });
+  }
+  return terminalCollab;
 }
 
 /**
@@ -668,28 +852,89 @@ type CodexErrorInput = {
   codexErrorInfo?: CodexErrorInfo | null;
 };
 
+export const CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON = 'codex_compaction_model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_REASON = 'model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
   '[MODEL_SELECTION_UNAVAILABLE] The selected model is unavailable for this connection. Choose another available model and retry.';
 
-function hasModelRejection(text: string): boolean {
-  if (/\bThe '[^'\r\n]{1,128}' model is not supported when using Codex with a ChatGPT account\b/i.test(text)) return true;
+export const CODEX_ACCOUNT_ACCESS_DENIED_REASON = 'account_access_denied';
+
+/** Only traverse provider error envelopes, never arbitrary metadata or quoted prose. */
+function accountAccessDenial(value: unknown, depth = 0): { message: string } | null {
+  if (depth > 8) return null;
+  if (typeof value === 'string') {
+    if (value.length > 8192) return null;
+    const start = value.indexOf('{');
+    const end = value.lastIndexOf('}');
+    if (start < 0 || end < start) return null;
+    try { return accountAccessDenial(JSON.parse(value.slice(start, end + 1)), depth + 1); }
+    catch { return null; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (body.code === 'ACCOUNT_SHARING_ACCESS_DENIED') {
+    // Promote only the bounded, redacted explanation. Transport details, sibling
+    // fields and credentials must not enter persisted events or logs.
+    const message = typeof body.message === 'string' && body.message.length <= 1500
+      ? redactSensitiveText(body.message) : 'The upstream account does not have access to this model.';
+    return { message };
+  }
+  return accountAccessDenial(body.error, depth + 1) ?? accountAccessDenial(body.message, depth + 1);
+}
+
+function codexAccountAccessDenial(error: CodexErrorInput | null | undefined): { message: string } | null {
+  const tag = codexErrorInfoTag(error?.codexErrorInfo);
+  if (tag && !['other', 'httpConnectionFailed', 'responseStreamConnectionFailed',
+    'responseStreamDisconnected', 'responseTooManyFailedAttempts'].includes(tag)) return null;
+  const info = error?.codexErrorInfo;
+  const status = info && typeof info === 'object'
+    ? (Object.values(info)[0] as { httpStatusCode?: number | null })?.httpStatusCode : undefined;
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const textStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i;
+  const match = textStatus.exec(message.slice(0, 8192)) ?? textStatus.exec(details.slice(0, 8192));
+  const effectiveStatus = status ?? (match ? Number(match[1]) : undefined);
+  if (effectiveStatus !== undefined && ![400, 403, 407].includes(effectiveStatus)) return null;
+  if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return null;
+  return accountAccessDenial(message) ?? accountAccessDenial(details);
+}
+
+/** Both denials reuse the current-turn interrupt and exclude automatic replay. */
+export function isCodexAccessRejectedError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): boolean {
+  return codexAccountAccessDenial(error) !== null
+    || isCodexModelUnavailableError(error, previousCompactionModelRejection);
+}
+
+function hasModelRejection(text: string, status: number | undefined): boolean {
+  // Native reconnect notifications flatten gateway JSON into this exact phrase.
+  // It is a model denial only with 403, never evidence for a generic auth failure.
+  if (status === 403 && /\buser not allowed to access model\b/i.test(text)) return true;
+  if (status !== 403 && /\bThe '[^'\r\n]{1,128}' model is not supported when using Codex with a ChatGPT account\b/i.test(text)) return true;
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start < 0 || end < start) return false;
   try {
-    const body = JSON.parse(text.slice(start, end + 1)) as { code?: unknown; error?: { code?: unknown } } | null;
-    return body?.error?.code === 'model_not_found' || body?.code === 'model_not_found';
+    const body = JSON.parse(text.slice(start, end + 1)) as {
+      code?: unknown; type?: unknown; error?: { code?: unknown; type?: unknown };
+    } | null;
+    const error = body?.error ?? body;
+    if (error?.code === 'user_model_access_denied' || error?.type === 'user_model_access_denied') return true;
+    return status !== 403 && (body?.error?.code === 'model_not_found' || body?.code === 'model_not_found');
   } catch {
     return false;
   }
 }
 
 /** Require an explicit model rejection. A generic reconnect or HTTP 404 is ambiguous. */
-export function isCodexModelUnavailableError(error: CodexErrorInput | null | undefined): boolean {
+export function isCodexModelUnavailableError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): boolean {
   const message = typeof error?.message === 'string' ? error.message.slice(0, 8192) : '';
   const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails.slice(0, 8192) : '';
-  if (!hasModelRejection(message) && !hasModelRejection(details)) return false;
 
   const info = error?.codexErrorInfo;
   const tag = codexErrorInfoTag(info);
@@ -703,7 +948,14 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
   const textStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i;
   const match = textStatus.exec(message) ?? textStatus.exec(details);
   const status = httpInfo?.httpStatusCode ?? (match ? Number(match[1]) : undefined);
-  return status === undefined || status === 400 || status === 404;
+  if (status !== undefined && status !== 400 && status !== 403 && status !== 404) return false;
+  // Bridges can wrap the body's code or omit it entirely. Only the matching
+  // bridge receipt can refine those generic errors into a model denial.
+  const wrappedBridgeError = /\bupstream_error\b|\bNative provider request failed \[phase=(?:adapter-event|stream-read); HTTP (?:400|403|404);/;
+  if (previousCompactionModelRejection?.transport === 'bridge'
+    && (wrappedBridgeError.test(message) || wrappedBridgeError.test(details))) return true;
+  if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return false;
+  return hasModelRejection(message, status) || hasModelRejection(details, status);
 }
 
 /**
@@ -711,18 +963,35 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
  * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
  * 模型拒绝和远端 compact 密文 400 也识别 additionalDetails 中明确的错误信号。
  */
-export function classifyCodexError(error: CodexErrorInput | null | undefined): ClassifiedCodexError {
+export function classifyCodexError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): ClassifiedCodexError {
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
-  if (isCodexModelUnavailableError(error)) {
+  const accountDenial = codexAccountAccessDenial(error);
+  if (accountDenial) {
+    // Keep the existing provider-explanation renderer and its actionable links.
+    const message = JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: accountDenial.message } });
     return {
-      message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+      message, usageLimit: false, isCapacityError: false,
+      reason: CODEX_ACCOUNT_ACCESS_DENIED_REASON,
+      data: { message, reason: CODEX_ACCOUNT_ACCESS_DENIED_REASON, willRetry: false },
+    };
+  }
+  if (isCodexModelUnavailableError(error, previousCompactionModelRejection)) {
+    const reason = previousCompactionModelRejection ? CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON : CODEX_MODEL_UNAVAILABLE_REASON;
+    const message = previousCompactionModelRejection
+      ? '[CONTEXT_COMPACTION_MODEL_UNAVAILABLE] Context compaction failed during the switch because this connection cannot use the previous model.'
+      : CODEX_MODEL_UNAVAILABLE_MESSAGE;
+    return {
+      message,
       ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
       usageLimit: false,
       isCapacityError: false,
-      reason: CODEX_MODEL_UNAVAILABLE_REASON,
+      reason,
       data: {
-        message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
-        reason: CODEX_MODEL_UNAVAILABLE_REASON,
+        message,
+        reason,
         ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
       },
     };
@@ -733,10 +1002,25 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
     /\bauthentication_(?:error|failed)\b|\binvalid[\s_-]*api[\s_-]*key\b|\bapi key not valid\b/i.test(
       rawMessage,
     );
-  const message = redactSensitiveText(rawMessage);
+  // Preserve gateway diagnostics from native's typed transport errors. Do not
+  // forward additionalDetails (URLs, response bodies or credentials), or promote
+  // structured auth/quota/capacity signals into new retry/control decisions.
+  const info = error?.codexErrorInfo;
+  const httpInfo = info && typeof info === 'object' &&
+    (errorInfoTag === 'httpConnectionFailed' || errorInfoTag === 'responseStreamConnectionFailed' ||
+      errorInfoTag === 'responseStreamDisconnected' || errorInfoTag === 'responseTooManyFailedAttempts')
+    ? Object.values(info)[0] as { httpStatusCode?: unknown } | undefined : undefined;
+  const gatewayStatus = httpInfo?.httpStatusCode;
+  const upstreamStatus = gatewayStatus === 502 || gatewayStatus === 503 || gatewayStatus === 504
+    ? gatewayStatus : undefined;
+  const safeMessage = redactSensitiveText(rawMessage);
+  // message is also the existing persistence/older-consumer fallback; keep the
+  // bounded status there, without changing reason or terminal/retry semantics.
+  const message = upstreamStatus !== undefined && !new RegExp(`\\b${upstreamStatus}\\b`).test(safeMessage)
+    ? `${safeMessage} (HTTP ${upstreamStatus})` : safeMessage;
   const signals = extractNonSecretErrorSignals(rawMessage);
   const errorStatus =
-    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+    signals.errorStatus ?? upstreamStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
   const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
   const isCapacityError = overload?.kind === 'capacity';
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
@@ -752,7 +1036,16 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
       ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
       : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
         ? CONTEXT_OVERFLOW_REASON
-        : undefined;
+        // Preserve a diagnosis that native only provided inside its exhausted
+        // transport wrapper. This reason is presentation-only: upstream-overload
+        // and errorStatus=529 also authorize host/goal retries. Do not promote
+        // nested diagnostics into those control signals or expose the body.
+        // Restrict this to the confirmed opaque stream wrapper; recognized
+        // timeout/network messages retain their existing recovery policy.
+        : rawMessage === 'stream disconnected before completion' && errorInfoTag === 'responseTooManyFailedAttempts' && gatewayStatus === 529
+          && errorStatus === undefined && !usageLimit && !hasMissingBearer && !hasAuthErrorMarker
+          ? 'UPSTREAM_OVERLOADED'
+          : undefined;
   return {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
@@ -776,7 +1069,7 @@ export function translateErrorNotification(
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  const classified = classifyCodexError(params.error);
+  const classified = classifyCodexError(params.error, ctx.previousCompactionModelRejection);
   const safeMessage = classified.message;
   const errorStatus = classified.errorStatus;
   const isCapacityError = classified.isCapacityError;
@@ -1348,7 +1641,11 @@ function emitAgentMessageProgress(
   const prevLen = ctx.rt.itemTextLen.get(itemId) ?? 0;
   const progress = ctx.rt.itemTextProgress.get(itemId)
     ?? { rawOffset: 0, pending: '', fullScan: false };
-  progress.pending += appendedText ?? rawText.slice(previousRawText.length);
+  const newlyReceived = appendedText ?? rawText.slice(previousRawText.length);
+  if (!ctx.background && ctx.rt.generationPendingToolIds.size === 0) {
+    ctx.rt.tokenSpeed.recordDelta(newlyReceived);
+  }
+  progress.pending += newlyReceived;
 
   // File attributes and opaque web payloads may contain each other's syntax.
   // The legacy transforms can then rewrite an earlier prefix, so keep their
@@ -1445,7 +1742,6 @@ export function translateAgentMessageDelta(
   ctx: CodexTranslateContext,
 ): void {
   if (!params.delta) return;
-  ctx.rt.tokenSpeed.recordDelta(params.delta);
   samplingSegment(ctx.rt, params.threadId, params.turnId).itemIds.add(params.itemId);
   const currentText = ctx.rt.itemRawText.get(params.itemId) ?? '';
   const previousDeltaText = ctx.rt.itemDeltaText.get(params.itemId) ?? '';
@@ -1535,12 +1831,50 @@ function joinReasoningText(item: ReasoningItem): string {
 // 不 emit start / delta / final 任何一项, renderer 也就不显示空卡片。
 // reasoningStartedAt.has(item.id) 即等价于 "已 emit start", 用作"是否已建块"标志。
 
+/** Measure each character once, even if a snapshot arrives ahead of its deltas.
+ * Summary and raw text describe the same reasoning. Use the first representation
+ * seen for the item and keep independent offsets for each of its parts. */
+function recordReasoningProgress(
+  ctx: CodexTranslateContext, itemId: string, source: 'summary' | 'content',
+  index: number, text: string, cumulative: boolean,
+): void {
+  if (!text || ctx.background) return;
+  let item = ctx.rt.reasoningSpeedParts.get(itemId);
+  if (!item) {
+    item = { source, parts: new Map() };
+    ctx.rt.reasoningSpeedParts.set(itemId, item);
+  }
+  if (item.source !== source) return;
+  let part = item.parts.get(index);
+  if (!part) {
+    part = { deltaLength: 0, measuredLength: 0 };
+    item.parts.set(index, part);
+  }
+  const start = cumulative ? 0 : part.deltaLength;
+  const end = start + text.length;
+  if (!cumulative) part.deltaLength = end;
+  if (end <= part.measuredLength) return;
+  const previousLength = part.measuredLength;
+  part.measuredLength = end;
+  // Consume overlaps even while paused so a later snapshot cannot charge tool output.
+  if (ctx.rt.generationPendingToolIds.size > 0) return;
+  const delta = text.slice(Math.max(0, previousLength - start));
+  if (source === 'summary') ctx.rt.tokenSpeed.recordDelta(delta, Date.now(), 'thinking');
+  else ctx.rt.tokenSpeed.recordTokens(estimateWordTokens(delta), Date.now(), 'thinking');
+}
+
 function handleReasoning(
   phase: ItemPhase,
   item: ReasoningItem,
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
+  if (phase === 'completed') {
+    ctx.rt.reasoningSpeedParts.delete(item.id);
+  } else {
+    const source = item.summary?.some(Boolean) ? 'summary' : 'content';
+    item[source]?.forEach((part, index) => recordReasoningProgress(ctx, item.id, source, index, part, true));
+  }
   const text = joinReasoningText(item);
 
   if (phase === 'started') {
@@ -1625,6 +1959,7 @@ export function translateReasoningSummaryTextDelta(
   ctx: CodexTranslateContext,
 ): void {
   if (!params.delta) return;
+  recordReasoningProgress(ctx, params.itemId, 'summary', params.summaryIndex, params.delta, false);
   ensureReasoningStarted(params.itemId, queue, ctx);
   const prevLen = ctx.rt.reasoningTextLen.get(params.itemId) ?? 0;
   ctx.rt.reasoningTextLen.set(params.itemId, prevLen + params.delta.length);
@@ -1659,6 +1994,7 @@ export function translateReasoningTextDelta(
   ctx: CodexTranslateContext,
 ): void {
   if (!params.delta) return;
+  recordReasoningProgress(ctx, params.itemId, 'content', params.contentIndex, params.delta, false);
   ensureReasoningStarted(params.itemId, queue, ctx);
   const prevLen = ctx.rt.reasoningTextLen.get(params.itemId) ?? 0;
   ctx.rt.reasoningTextLen.set(params.itemId, prevLen + params.delta.length);
@@ -2140,6 +2476,13 @@ function handleDynamicToolCall(
 // codex 多 agent 协作 (spawn/sendInput/resume/wait/closeAgent)。
 // toolName=collab:${tool}; input 透传 prompt / receivers / model / effort 让 UI 详情面板看到调度参数;
 // completed 时把 agentsStates 压成线程状态摘要,避免子任务卡片展开后直接展示原始 JSON。
+// 只有 spawn 类调用发 agent_task_update(子代理卡 + 持久 Subagent run 的来源);
+// sendInput/resume/wait/close 是对别人子线程的控制,只留普通工具步骤。
+
+/** spawn 类 collab 工具(`spawnAgent` / `spawn` 等)：真正诞生子线程的调用。 */
+function isSpawnCollabTool(tool: string): boolean {
+  return tool.toLowerCase().startsWith('spawn');
+}
 
 function formatCodexAgentStateLabel(state: unknown): string | undefined {
   if (typeof state === 'string') {
@@ -2180,8 +2523,16 @@ function handleCollabAgentToolCall(
   ctx: CodexTranslateContext,
 ): void {
   const toolName = `collab:${item.tool}`;
-  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const isSpawn = isSpawnCollabTool(item.tool);
   const hasSpawnReceiver = !isSpawn || item.receiverThreadIds.length > 0;
+  if (phase !== 'completed' && hasSpawnReceiver) {
+    ctx.rt.collabToolItems.set(item.id, {
+      type: item.type, id: item.id, tool: item.tool, status: item.status,
+      senderThreadId: item.senderThreadId, receiverThreadIds: [...item.receiverThreadIds], agentsStates: {},
+    });
+  } else if (phase === 'completed') {
+    ctx.rt.collabToolItems.delete(item.id);
+  }
   const input: Record<string, unknown> = {
     senderThreadId: item.senderThreadId,
     receiverThreadIds: item.receiverThreadIds,
@@ -2205,6 +2556,7 @@ function handleCollabAgentToolCall(
       data: { toolUseId: item.id, toolName, input },
       source: 'codex',
     });
+    if (!isSpawn) return;
     queue.push({
       type: 'agent_task_update',
       data: toCodexTaskUpdate(item, 'running'),
@@ -2223,6 +2575,7 @@ function handleCollabAgentToolCall(
         source: 'codex',
       });
     }
+    if (!isSpawn) return;
     queue.push({
       type: 'agent_task_update',
       data: toCodexTaskUpdate(item, 'running'),
@@ -2257,6 +2610,11 @@ function handleCollabAgentToolCall(
     data: { summary: isError ? 'failed' : item.status, toolUseIds: [item.id] },
     source: 'codex',
   });
+  // 控制调用(wait / sendInput / resumeAgent / closeAgent)不是子代理的诞生:
+  // 它们只调度别人已有的子线程,没有自己的卡片与持久 Subagent run。发成
+  // agent_task_update 会让每轮等待都长出一张 "Subagent wait" 卡和一条后台任务
+  // 行。控制调用只保留上面的 tool_use / tool_result 边界,按普通工具步骤展示。
+  if (!isSpawn) return;
   queue.push({
     type: 'agent_task_update',
     data: toCodexTaskUpdate(
@@ -2423,7 +2781,7 @@ function toCodexTaskUpdate(
   summary?: string,
   completedOnly = false,
 ): AgentTaskUpdateEventData {
-  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const isSpawn = isSpawnCollabTool(item.tool);
   const subagentObservation = isSpawn
     && item.receiverThreadIds.length > 0
     && (status !== 'completed' || completedOnly)
@@ -2506,7 +2864,7 @@ function handleImageGeneration(
 
 // ── contextCompaction → compact_boundary ─────────────────────────────────────
 // codex auto-compact 边界 — 协议只给 id, 没有 trigger / pre/post tokens / duration。
-// trigger 一律 'auto' (codex 没暴露手动 compact 入口给 UI), 其他字段 0 占位。
+// 手动请求由 adapter 标记 trigger，其他字段由原生协议决定，缺省以 0 占位。
 // 与 claude-code translator handleSystem (subtype=compact_boundary) 形状对齐。
 
 function handleContextCompaction(
@@ -2519,9 +2877,10 @@ function handleContextCompaction(
   ctx.log.info('codex ◾ contextCompaction', { id: item.id });
   queue.push({
     type: 'compact_boundary',
+    ...(ctx.compactTrigger === 'manual' ? { turnScope: 'background' as const } : {}),
     data: {
       boundaryId: item.id,
-      trigger: 'auto',
+      trigger: ctx.compactTrigger ?? 'auto',
       preTokens: 0,
       postTokens: 0,
       durationMs: 0,

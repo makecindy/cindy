@@ -37,7 +37,11 @@ export {
 export {
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerSnoozeSessionsTool,
   type ArchiveSessionsDeps,
+  type SnoozeSessionsDeps,
+  type SessionSnoozeChangeItem,
+  type SetSessionsSnoozeResult,
   type SessionStatus,
   type SessionStatusChangeItem,
   type SetSessionsStatusResult,
@@ -48,6 +52,7 @@ export {
   type SessionImportCallbacks,
   type SessionImportDeps,
 } from './session_import.js';
+export type { SessionShareCallbacks } from './session_share.js';
 // multi-worker Phase 1 control tools
 export {
   registerStartTeamTool,
@@ -72,6 +77,7 @@ export {
   type OrcaMessageDelivery,
   type SendToWorkerDeps,
   type SteerFallbackReason,
+  type SupersededFailureNotice,
 } from './send_to_worker.js';
 export {
   registerGetWorkerQueueStatusTool,
@@ -116,6 +122,10 @@ export {
   registerUpdateWorkerTool,
   type UpdateWorkerDeps,
 } from './update_worker.js';
+export {
+  registerSetWorkerRuntimeTool,
+  type SetWorkerRuntimeDeps,
+} from './set_worker_runtime.js';
 export {
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,
@@ -169,16 +179,10 @@ export {
   type BotSkillToolDeps,
 } from './bot_skills.js';
 export {
-  registerBotWorkbenchTools,
-  glanceForModel,
-  WORKBENCH_MESSAGE_MAX_CHARS,
-  type BotGlanceWire,
-  type BotWorkbenchCallbacks,
-  type BotWorkbenchToolDeps,
-  type GlanceKindWire,
-  type GlanceRowWire,
-  type WorkbenchTranscriptWire,
-} from './bot_workbench.js';
+  registerTeammateProjectTools,
+  type TeammateProjectsCallback,
+  type TeammateProjectToolDeps,
+} from './teammate_projects.js';
 export {
   registerGetTaskDigestTool,
   boundTaskDigest,

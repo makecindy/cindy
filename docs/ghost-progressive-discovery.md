@@ -1,8 +1,12 @@
 # 插件渐进式发现与花名册注入（Ghost Progressive Discovery）
 
-> **适用**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
-> 插件运行期可见性门禁、FORGE_GUIDE 作者契约前先读本文。插件基座红线、沙箱与
-> 权限规则的正本仍是 `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
+> **读取时机**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
+> 插件运行期可见性门禁、FORGE_GUIDE 作者契约之前
+> **适用路径**：`apps/desktop/src/main/mcp-integrations/**/ghost*`、
+> `apps/desktop/src/main/cindy-brain/**/{ghostVisibility,ghostManual,forgeGuide}*`、
+> `apps/desktop/src/main/plugin-market/**/agentTools*`、`packages/cindy-tools/src/ghost/**`
+> **关系**：插件基座红线、沙箱与权限规则的正本仍是
+> `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
 
 ## 1. 目标
 
@@ -166,6 +170,22 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 工具时如实说明并引导可信桌面插件页。实现见 `plugin-market/agentTools.ts`，回归覆盖
 `agentTools.test.ts`、市场 service 测试与 `ghostWorkdirGate.test.ts`。
 
+#### 插件安装提示入口
+
+| 用户在哪里遇到提示 | 安装目标和后续动作 |
+| --- | --- |
+| 任务查询插件、读手册、调用工具或连接插件账号 | 网关先分类当前任务可见性。确实缺失时返回精确身份和恢复指引，由 Agent 按需调用既有市场搜索工具，核对来源完整且唯一的条目后调用安装工具，在任务内呈现宿主确认卡。桌面和手机首装卡标明执行电脑、市场提供的作者（如有）、版本和来源。点击「安装」即确认本次首装；「查看详情」可单独展开权限清单。安装后重新检查并继续中断的步骤。 |
+| 首页任务建议、插件技能入口（包括 `/pr`） | 用户点击后由 `usePluginInPlace` 安装或启用。原请求仍有效时填回输入框，由用户发送。 |
+| 「我的浏览器」设置 | 同一入口安装或启用 root 身份的浏览器插件，然后重新读取连接状态。浏览器本体和扩展分别使用各自的安装入口。 |
+| 远程任务的实时设备侧栏 | 同一入口处理**查看端**插件，保留远程查看能力和兼容更新的检查。任务执行端的插件安装确认始终指向**执行端**。 |
+| 定时检查失败横幅 | 本机任务复用同一入口处理检查脚本所属插件，下轮检查自然恢复。手机和远程历史横幅说明执行端缺少的依赖。 |
+| 定时任务编辑器、伙伴市场的工具说明 | 展示预期依赖或当前可用性。选择脚本权限、浏览或导入伙伴时不会连带安装一批插件。 |
+| 插件市场详情、文件导入、迁移助理和更新 | 用户已选定安装来源或迁移范围，使用相应宿主安装事务与权限确认；更新仍检查权限变化。 |
+
+`GHOST_NOT_FOUND` 也可能来自账号不可用、插件未暴露工具或未声明手册。仅在实际安装清单中缺失的合法插件 ID 才返回市场搜索指引；任务页面的工具票据不能触发该查询。来源冲突、查询不完整或宿主没有市场工具时，引导到任务电脑的插件设置。查询插件可见性自身不读取市场；并发 info/manual/call 没有额外市场请求。就地安装遇到来源异常时，已知市场条目打开其详情，否则进入插件页查看来源。不会根据展示名选择一个同名来源。
+
+同一账号、同一电脑上同时请求同一市场版本时只保留一个进行中的安装。重复请求收到进行中状态，仍需重查插件可用性；确认成功不会代表业务操作已经完成。拒绝后结束此次安装，用户明确再次请求时可重新发起。
+
 ### 3.3 快照语义
 
 - 花名册在**会话装配时求值一次，会话内恒定**——这是 prompt 前缀缓存安全的前提，
@@ -188,7 +208,8 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   工作目录调用同一个 `getGhostRosterPrompt` 生成，经远程 Agent 启动选项
   `ghostRosterSnapshot` 带过去；Agent 所在电脑只在隧道确实提供 `cindy` 时原样注入，
   从不读自己的已装插件（受邀者场景下那是分享者的插件）。空串同样要带到并按空注入，
-  否则对方会回退到它自己的插件。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
+  否则对方会回退到它自己的插件；隔离运行的伙伴（本机同样不注入）带空串，V2 伙伴在自己项目里的
+  对话按普通任务生成。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
   Agent 所在电脑的花名册。实现见 `remote-agent/controller/service.ts`、`host/service.ts`
   与 `maker-core/src/agents/shared/device-hosted.ts` 的 `deviceHostedGhostRoster`；
   回归见三 harness 的 `device-hosted-guest` 测试与 `remote-agent/__tests__/roundtrip.test.ts`。

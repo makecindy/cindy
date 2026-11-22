@@ -1,6 +1,7 @@
-import type { MediaCapability } from '@cindy/model-providers';
+import type { AgentKind, MediaCapability, ProviderVideoApi } from '@cindy/model-providers';
 import type { ImageParameters, ImageProtocol } from './imageParameters.js';
 import { supportsMediaCapability } from './mediaCapabilities.js';
+import type { SharedImageStart } from './sharedImageClient.js';
 
 export interface ProviderMediaRuntimeModel {
   id: string;
@@ -10,7 +11,10 @@ export interface ProviderMediaRuntimeModel {
   modalities: { input: string[]; output: string[] };
   officialDocs?: string;
   imageProtocol?: ImageProtocol;
-  videoProtocol?: 'xai-videos';
+  videoProtocol?: ProviderVideoApi;
+  guideDriven?: boolean;
+  sourceAgent?: AgentKind;
+  sourceAgents?: AgentKind[];
 }
 
 export interface ProviderVideoConnection {
@@ -18,6 +22,9 @@ export interface ProviderVideoConnection {
   headers: Record<string, string>;
   /** Opaque binding revision; never contains the source's credentials. */
   revision: string;
+  /** Native account adapters may resolve a namespaced catalog id at the wire boundary. */
+  requestModelId?: string;
+  onAuthRejected?(failure: { status: number; body: string }): Promise<unknown>;
   assertCurrent(): void;
 }
 
@@ -36,30 +43,70 @@ export type ProviderMediaRuntimeResult = {
 } | { url: string };
 
 interface ProviderMediaRuntime {
-  listModels(): ProviderMediaRuntimeModel[];
-  listVideoModels?(): ProviderMediaRuntimeModel[];
+  generateSharedSubscriptionImage?(request: SharedImageStart, assertAllowed: () => void, signal: AbortSignal): Promise<{ buffer: Buffer; mimeType: string }>;
+  guideTarget?(target: { providerId: string; agent: AgentKind; modelId: string }): { providerId: string; agent: AgentKind; modelId: string };
+  guideScope?(target: { providerId: string; agent: AgentKind; modelId: string }): string | null;
+  guideProtocol?(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined;
+  resolveHttpConnection?(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
+  listModels(capabilities?: readonly MediaCapability[]): ProviderMediaRuntimeModel[];
+  listVideoModels?(capabilities?: readonly MediaCapability[]): ProviderMediaRuntimeModel[];
   /** Settings readiness; must include hidden models so the display switch stays togglable. */
   listExecutableModels?(): ProviderMediaRuntimeModel[];
   listExecutableVideoModels?(): ProviderMediaRuntimeModel[];
-  resolveVideoConnection?(providerId: string, modelId: string): ProviderVideoConnection | null;
+  resolveVideoConnection?(providerId: string, modelId: string, agent?: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
   invoke(request: ProviderMediaRuntimeRequest): Promise<ProviderMediaRuntimeResult>;
 }
 
 let runtime: ProviderMediaRuntime | null = null;
 
+export function providerMediaGuideTarget(target: { providerId: string; agent: AgentKind; modelId: string }) {
+  return runtime?.guideTarget?.(target) ?? target;
+}
+
+export function providerMediaGuideScope(target: { providerId: string; agent: AgentKind; modelId: string }): string | null {
+  return runtime?.guideScope?.(target) ?? null;
+}
+
+export function providerMediaGuideProtocol(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined {
+  return runtime?.guideProtocol?.(target);
+}
+
+/** Compare normalized URLs before attaching a connection's managed credentials. */
+export function isMediaUrlWithinBase(url: string, baseUrl: string): boolean {
+  try {
+    const base = new URL(baseUrl);
+    const resolved = new URL(url);
+    const prefix = base.pathname.replace(/\/+$/, '');
+    return resolved.origin === base.origin &&
+      (resolved.pathname === prefix || resolved.pathname.startsWith(`${prefix}/`)) &&
+      (!prefix || !decodeURIComponent(resolved.pathname).split(/[\\/]/).some(segment => segment === '.' || segment === '..'));
+  } catch {
+    return false;
+  }
+}
+
+export function resolveProviderHttpConnection(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind) {
+  return runtime?.resolveHttpConnection?.(providerId, modelId, capability, agent) ?? null;
+}
+
 export function configureProviderMediaRuntime(next: ProviderMediaRuntime): void {
   runtime = next;
 }
 
-export function listProviderMediaModels(): ProviderMediaRuntimeModel[] {
+export async function generateSharedSubscriptionImage(request: SharedImageStart, assertAllowed: () => void, signal: AbortSignal) {
+  if (!runtime?.generateSharedSubscriptionImage) throw new Error('SHARED_IMAGE_UNAVAILABLE');
+  return runtime.generateSharedSubscriptionImage(request, assertAllowed, signal);
+}
+
+export function listProviderMediaModels(capabilities: readonly MediaCapability[] = []): ProviderMediaRuntimeModel[] {
   return [
-    ...(runtime?.listModels() ?? []),
-    ...(runtime?.listVideoModels?.().filter(model => model.videoProtocol) ?? []),
+    ...(runtime?.listModels(capabilities) ?? []),
+    ...(runtime?.listVideoModels?.(capabilities).filter(model => model.videoProtocol || model.guideDriven) ?? []),
   ];
 }
 
-export function resolveProviderVideoConnection(providerId: string, modelId: string): ProviderVideoConnection | null {
-  return runtime?.resolveVideoConnection?.(providerId, modelId) ?? null;
+export function resolveProviderVideoConnection(providerId: string, modelId: string, agent?: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null> {
+  return runtime?.resolveVideoConnection?.(providerId, modelId, agent) ?? null;
 }
 
 /** Readiness only; dispatch still belongs to the image/video execution registries. */
@@ -76,7 +123,7 @@ export function resolveProviderMediaModel(
   capability: MediaCapability,
 ): ProviderMediaRuntimeModel | null {
   return (
-    listProviderMediaModels().find(
+    listProviderMediaModels([capability]).find(
       (model) =>
         model.providerId === providerId &&
         model.id === modelId &&

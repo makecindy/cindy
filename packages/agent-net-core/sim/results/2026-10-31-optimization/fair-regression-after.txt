@@ -1,0 +1,11 @@
+
+running 1 test
+test link_tests::burst_calendar_is_independent_of_packet_count ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling agent-net-sim v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/fair/sim)
+    Finished `sim` profile [optimized] target(s) in 0.17s
+     Running unittests src/lib.rs (/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/fair-target/sim/deps/agent_net_sim-99383d70840e21a3)
+
+EXIT 0

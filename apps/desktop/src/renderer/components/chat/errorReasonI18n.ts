@@ -18,6 +18,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'empty-response': 'logic.errors.emptyResponse',
   'turn-failed': 'logic.errors.turnFailed',
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
+  'unexecuted-tool-markup': 'logic.errors.unexecutedToolMarkup',
   'yield-continuation-incomplete': 'logic.errors.executionResultUnavailable',
   'output-limit': 'logic.errors.outputLimit',
   tool_use_loop_detected: 'logic.errors.toolUseLoopDetected',
@@ -44,6 +45,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'context-overflow': 'chat.errorBanner.contextOverflow',
   [REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON]: 'chat.errorBanner.remoteCompactEncryptedContent',
   [UPSTREAM_OVERLOAD_REASON]: 'chat.errorBanner.overloadBusyNoRetry',
+  'UPSTREAM_OVERLOADED': 'chat.errorBanner.overloadBusyNoRetry',
   [UPSTREAM_STREAM_INTERRUPTED_REASON]: 'chat.errorBanner.streamInterruptedNoRetry',
   [CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON]: 'chat.errorBanner.claudeGatewayOpusPlanMismatch',
   [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:

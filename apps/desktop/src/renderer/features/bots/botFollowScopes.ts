@@ -1,7 +1,9 @@
-/** Window-shared exact task responsibility IDs. Project discovery never implies ownership.
+/** Window-shared exact task responsibility IDs. Only a teammate's own project implies ownership.
  * Older hosts without task IDs produce no marks; changes and owner switches reload the snapshot.
  */
 import { useMemo, useSyncExternalStore } from 'react';
+import { teammateFolderName, teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
@@ -90,8 +92,7 @@ function subscribe(listener: () => void): () => void {
   if (!changeSubscribed) {
     // 窗口级订阅,不随任务行挂载 / 卸载反复增删(侧栏滚动时行会频繁重建)。
     const off = window.electronAPI?.maker?.onBotWorkbenchChanged?.(() => load());
-    const offDelegation = window.electronAPI?.maker?.onBotDelegationChanged?.(() => load());
-    changeSubscribed = off !== undefined || offDelegation !== undefined;
+    changeSubscribed = off !== undefined;
   }
   ensureOwner();
   if (!requested) {
@@ -200,6 +201,7 @@ export function useTaskCreatorIndex(): ReadonlyMap<string, ReadonlySet<string>> 
     };
     for (const bot of [...profiles, ...remote]) {
       index.set(`creator:${taskBotKey(bot)}`, new Set([filterKey(bot)]));
+      index.set(taskCreatorProjectKey(teammateFolderName(bot.id), 'deviceId' in bot ? bot.deviceId : null), new Set([filterKey(bot)]));
     }
     const localById = new Map(profiles.map(bot => [bot.id, bot]));
     for (const scope of scopes) add(localById.get(scope.botId) ?? { id: scope.botId }, scope.delegatedSessionIds);
@@ -212,16 +214,24 @@ function taskCreatorSessionKey(id: string, deviceId?: string): string {
   return JSON.stringify([deviceId ?? null, id]);
 }
 
+function taskCreatorProjectKey(folder: string, deviceId?: string | null): string {
+  return JSON.stringify(['project', deviceId ?? null, folder]);
+}
+
 export function matchesTaskCreators(
   session: Session,
   selected: 'all' | 'none' | readonly string[],
   index: ReadonlyMap<string, ReadonlySet<string>>,
 ): boolean {
   if (selected === 'all') return true;
+  // A task belongs to a teammate when it runs in the teammate's project or the teammate opened it.
+  const folder = teammateFolderOfProjectPath(sessionProjectDirectory(session));
   const creators = isTeammateTaskSession(session) && session.companion
     ? index.get(`creator:${taskBotKey({ id: session.companion.id, deviceId: session.deviceLinkDeviceId })}`)
-    : index.get(taskCreatorSessionKey(session.id, session.deviceLinkDeviceId));
-  if (selected === 'none') return !isTeammateTaskSession(session) && !creators?.size;
+    : folder !== null
+      ? index.get(taskCreatorProjectKey(folder, session.deviceLinkDeviceId))
+      : index.get(taskCreatorSessionKey(session.id, session.deviceLinkDeviceId));
+  if (selected === 'none') return !isTeammateTaskSession(session) && folder === null && !creators?.size;
   return selected.some(key => creators?.has(key));
 }
 

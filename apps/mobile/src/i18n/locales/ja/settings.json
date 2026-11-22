@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "プッシュ通知の診断",
+    "read": "通知の状態を読み取る",
+    "busy": "読み取り中…",
+    "failed": "通知の状態を読み取れません。もう一度お試しください。",
+    "copyFailed": "トークンをコピーできません。",
+    "copied": "トークンをコピーしました。",
+    "bundle": "アプリ ID",
+    "build": "ビルド",
+    "environment": "APNs 環境",
+    "permission": "システムの許可",
+    "alerts": "バナー通知",
+    "lockScreen": "ロック画面",
+    "notificationCenter": "通知センター",
+    "copy": "APNs トークンをコピー",
+    "hide": "結果を非表示",
+    "unknown": "不明",
+    "on": "オン",
+    "off": "オフ",
+    "hint": "操作したときだけ読み取ります。APNs トークンはこの画面にのみ表示され、診断に保存もアップロードもされません。画面を離れるかバックグラウンドにすると非表示になります。Apple のプッシュ通知コンソール用にのみコピーしてください。コピーした内容はクリップボードに残ります。",
+    "permissions": {
+      "granted": "許可済み",
+      "denied": "拒否",
+      "undetermined": "未要求",
+      "provisional": "目立たない形で配信"
+    }
+  },
   "localLogs": {
     "upload": "ログを送信",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "ログはスマホに最大 7 日間・8 MB まで保存され、自動ではアップロードされません。書き出したログに会話本文や認証情報は含まれず、アップロードではフィルタ済みの実行記録とバージョン情報のみを送信します。"
   },
   "title": "設定",
+  "promptRecommendation": {
+    "label": "次の入力候補",
+    "description": "返信後に次の入力候補を表示します。このスマートフォンにのみ適用されます。",
+    "saveFailed": "設定は今回の利用中は有効ですが、保存できませんでした。",
+    "reset": "初期設定に戻す"
+  },
   "appearance": {
     "title": "外観",
     "modeLabel": "表示モード",
@@ -29,6 +62,28 @@
       "dark": "ダーク"
     },
     "saveFailed": "表示モードを保存できませんでした。再起動すると以前の設定に戻ります。",
+    "wallpaper": {
+      "title": "壁紙",
+      "choose": "写真またはビデオを選択",
+      "replace": "壁紙を変更",
+      "remove": "壁紙を削除",
+      "importing": "処理中…",
+      "tooLarge": "20 MB 以下の写真、または 100 MB 以下のビデオを選んでください。",
+      "importFailed": "この写真またはビデオを読み込めませんでした。",
+      "saveFailed": "壁紙の設定を保存できませんでした。",
+      "static": "静止画",
+      "dynamic": "動画",
+      "motionLabel": "表示方法",
+      "options": {
+        "none": "なし",
+        "custom": "カスタム壁紙",
+        "cindy-whisper": "ささやき",
+        "cindy-night-glance": "夜のまなざし",
+        "cindy-scarlet-stroll": "赤い夜の散歩",
+        "cindy-neon": "ネオンの横顔",
+        "cindy-prism": "プリズムのかけら"
+      }
+    },
     "userBubble": {
       "title": "自分のメッセージの吹き出しの色",
       "presets": "カラー",
@@ -52,6 +107,16 @@
       "reset": "デフォルトに戻す",
       "apply": "適用",
       "hex": "カラーコード"
+    },
+    "appIcon": {
+      "label": "アプリアイコン",
+      "saveFailed": "アプリアイコンを変更できませんでした。もう一度お試しください",
+      "options": {
+        "default": "デフォルト",
+        "cat": "黒猫",
+        "wordmark": "Cindy ロゴタイプ",
+        "mark": "Cindy シンボル"
+      }
     }
   },
   "language": {
@@ -81,7 +146,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "文言文（既定）",
+        "prose": "文言文",
         "tang-poetry": "唐詩",
         "song-ci": "宋詞",
         "yuan-qu": "元曲",
@@ -135,11 +200,20 @@
     "permissionDenied": "システム設定で Cindy の通知を許可してください。",
     "unregisterQueued": "オフにしました。オンラインになると登録解除が完了します。",
     "preview": "チャット内容をプレビュー",
-    "background": "バックグラウンドで接続を維持",
+    "background": "バックグラウンド通知",
     "backgroundActive": "バックグラウンドでメッセージを受信中",
     "backgroundStop": "受信を停止",
-    "backgroundHint": "Google を使わずに接続し、常駐通知を表示します。通知からいつでも停止できます。",
-    "googleUnavailable": "Google プッシュ通知を利用できません。バックグラウンド接続で受信できます。"
+    "backgroundHint": "Google のプッシュ通知が利用できない可能性がある場合、Cindy が自動で接続を維持します。接続中は常駐通知が表示されます。",
+    "googleUnavailable": "Google のプッシュ通知を利用できません。通知設定に従ってバックグラウンド接続を使用します。",
+    "backgroundModes": {
+      "auto": "自動",
+      "on": "常にオン",
+      "off": "オフ"
+    },
+    "actionReplyPlaceholder": "返信を入力",
+    "actionNotDelivered": "コンピューターに届きませんでした。Cindy を開いて対応してください。",
+    "actionReplyNotDelivered": "返信を送信できませんでした。Cindy を開いて再送してください：{{text}}",
+    "actionRequestEnded": "このリクエストはすでに処理済みか、期限切れです。"
   },
   "about": {
     "sectionTitle": "このスマートフォンについて",
@@ -172,14 +246,14 @@
   },
   "devServerEnvironment": {
     "title": "サーバー環境",
-    "description": "CindyDev が接続する業務サーバーにのみ影響します",
+    "description": "CindyDev が接続するバックエンドにのみ影響します",
     "accessibility": "サーバー環境を切り替える",
     "options": {
       "dev": "Dev",
       "release": "Release"
     },
     "confirmTitle": "{{environment}} に切り替えますか？",
-    "confirmBody": "切り替えると現在のアカウントからログアウトし、App を再起動します。",
+    "confirmBody": "切り替えると現在のアカウントからログアウトし、アプリを再起動します。",
     "cancel": "キャンセル",
     "switchAction": "切り替える",
     "switching": "切り替え中",
@@ -211,7 +285,7 @@
     "openUserAgreement": "利用規約を開く",
     "appFilingNumber": "アプリ届出番号",
     "analytics": "利用統計",
-    "analyticsHint": "起動状況や継続利用の把握に使います。機種名、OS とアプリのバージョン、デバイス識別子などの情報と、ログイン後はアカウント ID を送信します。会話・ファイル・プロンプトは含みません。",
+    "analyticsHint": "オンにすると、アカウント ID の代わりに仮名を使い、端末の識別子と合わせて起動や再訪の状況を把握し、製品の改善に役立てます。決済には別の仮名を使います。会話、ファイル、プロンプトはこれらの統計に含まれません。\n旧版の記録には元のアカウント ID が含まれます。その記録を閲覧できる人は、同じ端末識別子から新しい仮名と元のアカウントを結び付けられる場合があります。",
     "analyticsSaveFailed": "設定を保存できませんでした。再起動すると元に戻る場合があります。",
     "analyticsReset": "デフォルトに戻す",
     "analyticsResetAction": "戻す"
@@ -298,7 +372,7 @@
     },
     "enroll": {
       "description": "以下の {{clips}} つの文章を普段の声で読み上げてください。各録音は最大 {{seconds}} 秒です。読み終えたら録音を終了してください。普段音声入力を使う場所で、ほかの人が同時に話さないように録音してください。",
-      "step": "{{current}} / {{total}} つ目",
+      "step": "文章 {{current}} / {{total}}",
       "record": "読み上げを開始",
       "stop": "録音を終了",
       "rerecord": "この文章を録り直す",
@@ -388,7 +462,92 @@
       "voice": "長押しで話す",
       "scrollKeys": "右スティック",
       "scroll": "スクロール",
-      "page": "ページ送り"
+      "page": "ページ送り",
+      "triggerScrollKeys": "L2 / R2 ＋ 十字キー上下",
+      "triggerScroll": "表示中の内容をスクロール",
+      "sendText": "入力した文字を送信",
+      "taskHint": "これらの操作はセッション画面で使えます。音声キーに設定したボタンは音声入力が優先され、離すと文字が入力欄に残ります。"
     }
+  },
+  "projectInfo": {
+    "automatic": "プロジェクトのアイコンを使用",
+    "autoLoading": "アイコンを検索中…",
+    "autoNone": "プロジェクト名から生成した文字アイコンを使用します。",
+    "autoSource": "取得元",
+    "githubAvatar": "GitHub アカウントの画像を使用",
+    "title": "プロジェクト設定",
+    "name": "表示名",
+    "saveName": "名前を保存",
+    "reset": "既定値に戻す",
+    "icon": "アイコン",
+    "directory": "プロジェクトフォルダー",
+    "done": "完了",
+    "failed": "保存できませんでした。再試行してください。",
+    "unavailable": "設定を利用できません。更新済みのコンピューターに接続して再試行してください。",
+    "back": "戻る",
+    "cancel": "キャンセル",
+    "changeIcon": "アイコンを変更",
+    "chooseIcon": "アイコンを選択",
+    "save": "保存",
+    "symbols": "アイコン",
+    "emoji": "絵文字",
+    "letters": "文字",
+    "image": "画像",
+    "upload": "画像をアップロード",
+    "imageHint": "PNG・JPG・WebP · 正方形に切り抜き",
+    "imageError": "画像を読み込めません。小さい PNG または JPG をお試しください。",
+    "search": "アイコンを検索",
+    "customEmoji": "絵文字を貼り付ける",
+    "lettersHint": "文字または数字を1〜2文字入力。",
+    "thisComputer": "このコンピューター",
+    "nameHint": "プロジェクト一覧の表示名です。フォルダー名は変わりません。",
+    "copy": "パスをコピー",
+    "copied": "コピー済み",
+    "applyIcon": "このアイコンを使用",
+    "noResults": "一致するアイコンがありません",
+    "discardHint": "未保存の変更を破棄しますか？",
+    "keepEditing": "編集を続ける",
+    "discard": "破棄",
+    "colors": {
+      "default": "標準色（テーマに合わせる）"
+    },
+    "directories": "プロジェクトのディレクトリ",
+    "directoriesHint": "このプロジェクトの全タスクに次のターンから適用されます。タスク固有の既存ディレクトリは保持されます。",
+    "removeDirectory": "ディレクトリを削除",
+    "directoryPath": "ディレクトリのフルパス",
+    "addDirectory": "ディレクトリを追加",
+    "browseDirectory": "ディレクトリを参照",
+    "mainDirectory": "メインディレクトリ",
+    "createTitle": "新規プロジェクト",
+    "createAction": "プロジェクトを作成",
+    "repository": "リポジトリURL",
+    "repositoryHint": "GitHub、GitLab、その他の Git リポジトリの HTTPS / SSH リンクに対応しています。",
+    "autoDirectory": "ディレクトリ未選択時は {{path}} に作成します。同名の場合は番号を付けます。",
+    "cloning": "リポジトリをクローン中…",
+    "invalidRepository": "有効なGitHub、GitLab、GitリポジトリのURLを入力してください。",
+    "createFailed": "作成できませんでした。書き込み権限、URL、このコンピュータのGitアクセス権を確認してください。クローン先は空の必要があります。",
+    "createNamePlaceholder": "プロジェクト名",
+    "createNameHint": "プロジェクトに名前を付けて始めましょう。",
+    "createFromRepository": "コードリポジトリから作成",
+    "createBlank": "空のプロジェクトに切り替え",
+    "source_blank": "空のプロジェクト",
+    "source_existing": "既存フォルダを開く",
+    "source_repository": "リポジトリからインポート",
+    "sourceHint_blank": "名前を入力するとフォルダが自動作成されます。",
+    "sourceHint_existing": "このコンピュータの既存フォルダを選択します。",
+    "sourceHint_repository": "リンクを貼り付けてこのコンピュータにダウンロードします。",
+    "source": "作成方法",
+    "sourceShort_blank": "新規",
+    "sourceShort_existing": "フォルダ",
+    "sourceShort_repository": "リポジトリ",
+    "automaticMain": "メイン · 自動作成",
+    "source_local": "ローカルフォルダ",
+    "sourceShort_local": "ローカルフォルダ",
+    "sourceHint_local": "名前を入力して作成するか、既存のフォルダを選択します。",
+    "chooseExistingFolder": "既存フォルダを選択",
+    "changeMainDirectory": "変更"
+  },
+  "navigation": {
+    "unavailable": "対象のパソコンの設定を開けませんでした。オンラインでリモート操作が許可されているか確認し、古いバージョンの場合は Cindy を更新してください。"
   }
 }

@@ -173,7 +173,6 @@ function makeEditorTheme(c: typeof githubLightColors, isDark: boolean) {
         // 左侧 padding 为 0 —— 行号 gutter 自己控制 padding-left 30px,
         // 文字距离行号有 14px 间距(gutter padding-right + cm-content padding-left)。
         padding: '28px 30px 28px 14px',
-        caretColor: c.text,
       },
       '.cm-focused': { outline: 'none' },
       '.cm-line': {
@@ -219,7 +218,7 @@ function makeEditorTheme(c: typeof githubLightColors, isDark: boolean) {
         //   - 右 16px = 数字到代码内容的视觉间距(再加上 cm-content padding-left
         //     14px,实际间距 30px,视觉上数字和代码"分得开但不远")。
         //   - 左 0 让数字严格右对齐到 padding-left 30px 之后的列。
-        padding: '0 16px 0 0',
+        padding: '0 var(--space-4) 0 0',
         minWidth: '2ch',
         textAlign: 'right',
         color: c.comment,
@@ -269,8 +268,7 @@ function makePlainEditorTheme(isDark: boolean) {
         fontFamily: PLAIN_FONT_STACK,
         lineHeight: '1.6',
         // 等价之前 textarea 的 px-10 py-7。
-        padding: '28px 40px',
-        caretColor: text,
+        padding: 'var(--space-7) var(--space-10)',
       },
       '.cm-focused': { outline: 'none' },
       '.cm-line': {
@@ -318,7 +316,6 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         fontFamily: PLAIN_FONT_STACK,
         lineHeight: '1.68',
         padding: '34px 72px 48px',
-        caretColor: text,
         maxWidth: '920px',
         margin: '0 auto',
         width: '100%',
@@ -345,10 +342,10 @@ function makeMarkdownEditorTheme(isDark: boolean) {
       '.cm-md-quote-line': {
         color: muted,
         borderLeft: `3px solid ${board}`,
-        paddingLeft: '14px',
+        paddingLeft: 'var(--space-3_5)',
       },
       '.cm-md-list-line': {
-        paddingLeft: '4px',
+        paddingLeft: 'var(--space-1)',
       },
       '.cm-md-task-line': {
         color: text,
@@ -407,8 +404,8 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         position: 'absolute',
         display: 'none',
         width: '168px',
-        padding: '6px',
-        borderRadius: '12px',
+        padding: 'var(--space-1_5)',
+        borderRadius: 'var(--radius-xl)',
         border: `1px solid ${board}`,
         backgroundColor: 'var(--cmd-palette-bg)',
         zIndex: '4',
@@ -427,7 +424,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         display: 'block',
         width: '100%',
         border: '0',
-        borderRadius: '9999px',
+        borderRadius: 'var(--radius-full)',
         backgroundColor: 'transparent',
         color: text,
         cursor: 'pointer',
@@ -456,7 +453,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
       },
       '.cm-md-table-widget th, .cm-md-table-widget td': {
         border: `1px solid ${board}`,
-        padding: '8px 10px',
+        padding: 'var(--space-2) var(--space-2_5)',
         textAlign: 'left',
         verticalAlign: 'top',
         wordBreak: 'break-word',
@@ -496,15 +493,15 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         fontSize: '0.875em',
         lineHeight: '1.7',
         backgroundColor: 'var(--msg-code-block-bg)',
-        paddingLeft: '16px',
-        paddingRight: '16px',
+        paddingLeft: 'var(--space-4)',
+        paddingRight: 'var(--space-4)',
       },
       // 内容行用正文色;``` 标记行(first/last)保持 muted,视觉上退后。
       '.cm-md-fence-body': {
         color: text,
       },
       '.cm-md-fence-first': {
-        paddingTop: '10px',
+        paddingTop: 'var(--space-2_5)',
         borderTop: '0.65em solid transparent',
         backgroundClip: 'padding-box',
         // 椭圆半径补偿:外圈纵向半径 = 12px + border 宽,灰底(padding box)的
@@ -513,7 +510,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         borderTopRightRadius: '12px calc(12px + 0.65em)',
       },
       '.cm-md-fence-last': {
-        paddingBottom: '10px',
+        paddingBottom: 'var(--space-2_5)',
         borderBottom: '0.65em solid transparent',
         backgroundClip: 'padding-box',
         borderBottomLeftRadius: '12px calc(12px + 0.65em)',
@@ -526,7 +523,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'flex-start',
-        gap: '10px',
+        gap: 'var(--space-2_5)',
       },
       // <p align="center"> blocks center their images (README hero shots).
       '.cm-md-image-widget.cm-md-image-center': {
@@ -541,7 +538,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         maxHeight: '60vh',
         height: 'auto',
         width: 'auto',
-        borderRadius: '8px',
+        borderRadius: 'var(--radius)',
       },
       '.cm-md-image-item.cm-md-image-clickable': {
         cursor: 'zoom-in',
@@ -553,8 +550,8 @@ function makeMarkdownEditorTheme(isDark: boolean) {
       // Load-failure / unresolvable-path card: keeps the raw src visible so
       // the user can spot the typo without un-collapsing anything.
       '.cm-md-image-error': {
-        padding: '10px 14px',
-        borderRadius: '8px',
+        padding: 'var(--space-2_5) var(--space-3_5)',
+        borderRadius: 'var(--radius)',
         border: `1px dashed ${board}`,
         color: muted,
         fontSize: '13px',
@@ -576,9 +573,9 @@ function makeMarkdownEditorTheme(isDark: boolean) {
       '.cm-md-mermaid-card': {
         // position:relative anchors the absolute-positioned toolbar.
         position: 'relative',
-        padding: '16px',
+        padding: 'var(--space-4)',
         minHeight: '40px',
-        borderRadius: '12px',
+        borderRadius: 'var(--radius-xl)',
         border: `1px solid var(--msg-code-block-border)`,
         backgroundColor: 'var(--msg-code-block-bg)',
         display: 'flex',
@@ -601,7 +598,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         top: '8px',
         right: '8px',
         display: 'flex',
-        gap: '4px',
+        gap: 'var(--space-1)',
         opacity: '0',
         transition: 'opacity 150ms ease',
         zIndex: '1',
@@ -647,9 +644,9 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         opacity: '0.6',
       },
       '.cm-md-mermaid-error-banner': {
-        marginBottom: '10px',
-        padding: '8px 12px',
-        borderRadius: '8px',
+        marginBottom: 'var(--space-2_5)',
+        padding: 'var(--space-2) var(--space-3)',
+        borderRadius: 'var(--radius)',
         border: `1px solid ${board}`,
         backgroundColor: tableBg,
         color: muted,

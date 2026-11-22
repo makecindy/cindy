@@ -6,6 +6,21 @@
  */
 
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
+
+/**
+ * Engines a local task can run on: the three built-in harnesses plus the
+ * plugin-provided ACP engine (docs/plans/acp-plugin-bridge.md). Only task
+ * lifecycle paths accept `EngineKind`; everything that crosses devices, feeds
+ * model-facing tool schemas or picks providers keeps the built-in `AgentKind`.
+ */
+export type EngineKind = AgentKind | 'acp';
+
+const BUILTIN_AGENT_KINDS: ReadonlySet<string> = new Set<AgentKind>(['claude-code', 'codex', 'pi']);
+
+export function isBuiltinAgentKind(kind: unknown): kind is AgentKind {
+  return typeof kind === 'string' && BUILTIN_AGENT_KINDS.has(kind);
+}
+
 export type WorkspaceKind = 'project' | 'dialogue';
 
 /**

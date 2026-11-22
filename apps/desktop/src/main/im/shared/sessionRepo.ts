@@ -1,3 +1,4 @@
+import { mayRefineTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
 /**
  * main/im/shared/sessionRepo.ts
  * ---------------------------------------------------------------------------
@@ -49,6 +50,8 @@ function toDbAgentKind(kind: AgentKind): string {
 }
 
 export interface ImSessionRow {
+  /** Title assigned by this creation, including a resolved group or topic name. */
+  initialTitle?: string;
   agentDeviceId?: string | null;
   id: string;
   agentKind: AgentKind;
@@ -276,7 +279,7 @@ export function createImSessionRepo(
       return {
         id: row.id,
         agentKind: toCoreAgentKind(row.agentKind),
-        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
@@ -355,7 +358,7 @@ export function createImSessionRepo(
       return {
         id: row.id,
         agentKind: toCoreAgentKind(row.agentKind),
-        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
@@ -394,7 +397,7 @@ export function createImSessionRepo(
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const assertAccount = captureChannelAccount();
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const workingDir = ns.ensureWorkingDir(botContextId);
+      const workingDir = ns.ensureWorkingDir(botContextId, userId);
       const row = rowFromDefaults(
         id,
         workingDir,
@@ -424,6 +427,7 @@ export function createImSessionRepo(
       assertAccount();
       const db = getDbClient().drizzle;
       const now = Date.now();
+      const initialTitle = ns.defaultTitle(userId);
       // 新任务经公共入口 openSession(与桌面新建任务同一套模型准入 / Git 初始化 / 账号代次
       // 校验); 建行仍是下面这段确定性 id 的 upsert。准入可能规范化来源 / 推理强度 / Fast,
       // 新插入的行写准入后的路由; 冲突分支(并发建出 / 残留行)照旧不碰路由列。
@@ -440,7 +444,7 @@ export function createImSessionRepo(
         ...((defaults.workspaceKind ?? ns.workspaceKind)
           ? { workspaceKind: (defaults.workspaceKind ?? ns.workspaceKind) as 'project' | 'dialogue' }
           : {}),
-        title: ns.defaultTitle(userId),
+        title: initialTitle,
       }, (admitted, assertCurrent) => {
         row = { ...defaults, ...admitted };
         return withSessionRouteLock(row.id, async () => {
@@ -459,7 +463,7 @@ export function createImSessionRepo(
             .insert(sessions)
             .values({
               id: row.id,
-              title: ns.defaultTitle(userId),
+              title: initialTitle,
               ...(row.workspaceKind ?? ns.workspaceKind
                 ? { workspaceKind: row.workspaceKind ?? ns.workspaceKind }
                 : {}),
@@ -528,19 +532,22 @@ export function createImSessionRepo(
       );
       // 通知 renderer sidebar / device-link 控制端有新会话行,否则要手动刷新才出现
       broadcastSessionCreated(result.id);
-      // 渠道可异步解析正式标题(飞书群/话题 lane → 拉群名拼 [飞书·群/话题] {群名}),
-      // 只对**新建行**生效 — 复活行保留自己的历史标题(首条消息 oneshot 会把
-      // 话题会话升级成 [飞书·群名·简介] 格式, 不能回刷)。失败/无结果保持
-      // defaultTitle, 不阻塞建行。
+      // Native group/channel names are authoritative only while this fresh row still has its draft title.
       if (ns.resolveSessionTitle && persisted?.isFreshInsert) {
         try {
           const resolved = await ns.resolveSessionTitle(userId, scopeKey);
-          if (resolved) {
-            await db
+          assertAccount();
+          if (resolved && mayRefineTaskTitle(result.id)) {
+            const updated = await db
               .update(sessions)
               .set({ title: resolved })
-              .where(eq(sessions.id, result.id));
-            broadcastSessionPatched(result.id, { title: resolved });
+              .where(and(eq(sessions.id, result.id), eq(sessions.title, initialTitle)))
+              .returning({ id: sessions.id });
+            assertAccount();
+            if (updated.length) {
+              result.initialTitle = resolved;
+              broadcastSessionPatched(result.id, { title: resolved });
+            }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

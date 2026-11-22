@@ -20,6 +20,7 @@ import {
   AgentNotAuthenticatedError,
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
   LOCAL_AGENT_CLIENT,
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
@@ -85,6 +86,28 @@ function createLogger() {
   return logger;
 }
 
+describe('Maker atomic idle close', () => {
+  it('records runtime refresh only after an idle close is accepted', async () => {
+    let busy = true;
+    const handle = createHandle({ id: 'idle-thread' });
+    handle.hasPendingHostOperation = () => busy;
+    const close = vi.spyOn(handle, 'close');
+    const maker = new Maker({ agents: { codex: createAgent(async () => handle) },
+      storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'idle-task', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+    const closed = vi.fn();
+    maker.on(event => { if (event.type === 'session:closed') closed(event); });
+    try {
+      expect(await maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true })).toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+      expect(maker.getSessionCloseReason(session)).toBe('unexpected');
+      busy = false;
+      expect(await maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true })).toBe('closed');
+      expect(closed).toHaveBeenCalledWith(expect.objectContaining({ session, reason: 'runtime-refresh' }));
+    } finally { await maker.shutdown(); }
+  });
+});
+
 describe('Maker agent status', () => {
   it('represents an optional unregistered runtime as binary-missing', async () => {
     const maker = new Maker({
@@ -99,6 +122,23 @@ describe('Maker agent status', () => {
     });
   });
 
+  // Unit regression: offline startup registers agents with a lazy runtime getter.
+  // Status must report the missing install instead of rejecting the IPC.
+  it('reports a registered agent whose lazy runtime is not installed as binary-missing', async () => {
+    const agent = createAgent(async () => undefined, 'claude-code');
+    Object.assign(agent, {
+      getBinaryPath: () => { throw new Error('Claude Code is not installed'); },
+      getAuthState: async () => ({ authenticated: true }),
+    });
+    const maker = new Maker({ agents: { 'claude-code': agent }, storage: createStorage(), logger: createLogger() });
+    await expect(maker.getAgentStatus('claude-code')).resolves.toEqual({
+      binaryReady: false,
+      binaryPath: null,
+      authReady: true,
+      identity: undefined,
+    });
+  });
+
   it('registers an optional agent after construction idempotently', () => {
     const maker = new Maker({
       agents: {},
@@ -109,6 +149,15 @@ describe('Maker agent status', () => {
 
     expect(maker.registerAgent('pi', pi)).toBe(true);
     expect(maker.registerAgent('pi', pi)).toBe(false);
+    expect(maker.listAvailableAgents()).toEqual(['pi']);
+  });
+
+  // The engine roster crosses devices and feeds Agent tools; a plugin engine must never appear in it
+  // (docs/plans/acp-plugin-bridge.md). Built-in kinds keep their exact listing.
+  it('keeps a registered plugin engine out of the built-in engine roster', () => {
+    const maker = new Maker({ agents: {}, storage: createStorage(), logger: createLogger() });
+    maker.registerAgent('pi', createAgent(async () => undefined, 'pi'));
+    expect(maker.registerAgent('acp', { ...createAgent(async () => undefined), kind: 'acp' } as BaseAgent)).toBe(true);
     expect(maker.listAvailableAgents()).toEqual(['pi']);
   });
 });
@@ -139,6 +188,29 @@ function createAgent(
 }
 
 describe('Maker Pi managed-package skill boundary', () => {
+  // PB97, unit: preview listings must consume the Host's async verified paths
+  // without calling the synchronous fallback; active tasks retain their snapshot.
+  it('uses async activation facts for previews, but preserves live and SSH filtering', async () => {
+    const source = '/fixture/disabled-skill';
+    const fallback = vi.fn(() => { throw new Error('blocking fallback'); });
+    const readDisabled = vi.fn(async () => [source]);
+    const agent = createAgent(async (opts) => ({ ...createHandle({ id: opts.sessionId! }), disabledSkillPaths: [] }));
+    agent.listAgentSkills = vi.fn(async () => ({ skills: [{ kind: 'agent-skill' as const,
+      name: 'demo', source: 'skill' as const, path: source }] }));
+    agent.filterActiveSkillCommands = (result, remote, snapshot, current) => BaseAgent.prototype.filterActiveSkillCommands.call(
+      { deps: { getDisabledSkillPaths: fallback } } as unknown as BaseAgent, result, remote, snapshot, current,
+    );
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo' }, readDisabled)).skills).toEqual([]);
+      expect(readDisabled).toHaveBeenCalledTimes(1);
+      await maker.createSession({ id: 'live', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo', sessionId: 'live' }, readDisabled)).skills).toHaveLength(1);
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo', remoteHostId: 'ssh' }, readDisabled)).skills).toHaveLength(1);
+      expect(readDisabled).toHaveBeenCalledTimes(1);
+      expect(fallback).not.toHaveBeenCalled();
+    } finally { await maker.shutdown(); }
+  });
   it('uses the runtime Skill view for host authorization checks', async () => {
     const agent = createAgent(async () => {
       throw new Error('not used');
@@ -643,6 +715,18 @@ describe('Maker local Pi package generation fence', () => {
 });
 
 describe('Maker initial plan persistence', () => {
+  // A second, best-effort provider write could leave a valid task with a default
+  // route after a crash. Creation must hand storage the same identity as startup.
+  it.each(['xd', null, undefined])('stores initial provider %s with the new task', async (providerId) => {
+    const storage = createStorage();
+    const handle = createHandle({ id: 'provider-handle' });
+    const maker = new Maker({ agents: { codex: createAgent(async () => handle) }, storage, logger: createLogger() });
+    try {
+      const session = await maker.createSession({ agentKind: 'codex', workingDir: '/repo', model: 'm', providerId });
+      expect(await storage.get(session.id)).toMatchObject({ providerId });
+    } finally { await maker.shutdown(); }
+  });
+
   it.each([true, false, undefined])('stores initial plan mode %s with the new task', async (planMode) => {
     const storage = createStorage();
     const create = vi.spyOn(storage, 'create');
@@ -676,7 +760,7 @@ describe('Maker initial plan persistence', () => {
         .mockRejectedValueOnce(new Error('storage unavailable'))
         .mockImplementation(create);
       const maker = new Maker({ agents: { [agentKind]: createAgent(start, agentKind) }, storage, logger: createLogger() });
-      const opts: CreateSessionOptions = { agentKind, workingDir: '/repo', model: 'm', planMode: true };
+      const opts: CreateSessionOptions = { agentKind, workingDir: '/repo', model: 'm', planMode: true, providerId: 'xd' };
       try {
         await expect(maker.createSession(opts)).rejects.toThrow('storage unavailable');
         expect(insert.mock.calls[0][0].planMode).toBe(true);
@@ -684,7 +768,7 @@ describe('Maker initial plan persistence', () => {
         expect(maker.listActiveSessions()).toEqual([]);
         expect(await storage.list()).toEqual([]);
         const session = await maker.createSession(opts);
-        expect(await storage.list()).toEqual([expect.objectContaining({ id: session.id, planMode: true })]);
+        expect(await storage.list()).toEqual([expect.objectContaining({ id: session.id, planMode: true, providerId: 'xd' })]);
         expect(maker.listActiveSessions()).toHaveLength(1);
       } finally {
         await maker.shutdown();
@@ -1392,6 +1476,49 @@ describe('Maker session close events', () => {
     queue.end();
   });
 
+  // Unit #11060: send-time drift recycling must retain background work just as
+  // closeIfIdle does. Earlier coverage only recycled an already-empty runtime.
+  it.each(['none', 'task', 'continuation', 'unavailable'] as const)('recycles drifted pi runtimes after background %s settles', async (kind) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const handle = createHandle({ id: 'drifted', agentKind: 'pi' });
+    handle.hasProjectResourceDrift = () => true;
+    let busy = kind !== 'none';
+    handle.listBackgroundTasks = () => {
+      if (busy && kind === 'unavailable') throw new Error('snapshot unavailable');
+      return busy && kind === 'task' ? [{ taskId: 'subagent', taskType: 'local_agent' }] : [];
+    };
+    handle.countPendingWakeContinuations = () => busy && kind === 'continuation' ? 1 : 0;
+    handle.events = () => queue;
+    const start = vi.fn().mockResolvedValue(handle);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'drifted', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
+    try {
+      if (busy) {
+        expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(false);
+        expect(maker.getSession(session.id)).toBe(session);
+        expect(session.hasStartedClosing()).toBe(false);
+      }
+      busy = false;
+      expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(true);
+      expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
+      expect(maker.getSession(session.id)).toBeUndefined();
+    } finally {
+      queue.end();
+      await session.close();
+    }
+  });
+
+  it('recycle is a no-op when project resources have not drifted', async () => {
+    const handle = createHandle({ id: 'fresh', agentKind: 'pi' });
+    handle.hasProjectResourceDrift = () => false;
+    const start = vi.fn().mockResolvedValue(handle);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'fresh', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
+    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(false);
+    expect(maker.getSession(session.id)).toBe(session);
+    await session.close();
+  });
+
   it.each([
     { initial: 'runtime-refresh', begun: false, next: 'agent-switch', expected: 'agent-switch' },
     { initial: 'runtime-refresh', begun: false, next: 'requested', expected: 'requested' },
@@ -1465,6 +1592,35 @@ describe('Maker session close events', () => {
       sessionId: 'session-1',
       session,
       reason: 'agent-switch',
+    });
+  });
+
+  it('hands the close facts sampled at close request to onClose, not a post-close query', async () => {
+    const hookGate = createDeferred();
+    const onClose = vi.fn(async () => { await hookGate.promise; });
+    const transientSamples: boolean[] = [];
+    let transient = true;
+    const maker = new Maker({
+      agents: { pi: createAgent(async () => createHandle({ id: 'transient-thread', agentKind: 'pi' }), 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        isTransientCloseRequest: () => { transientSamples.push(transient); return transient; },
+        onClose,
+      },
+    });
+    const session = await maker.createSession({ id: 'transient-thread', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+
+    await maker.closeSession(session.id, 'runtime-refresh');
+    // 请求入口只问一次：调用方的抑制窗口在 close 返回后即释放，到钩子里再问必然错过。
+    expect(transientSamples).toEqual([true]);
+    transient = false;
+    hookGate.resolve();
+
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onClose).toHaveBeenCalledWith(session.id, expect.anything(), {
+      reason: 'runtime-refresh',
+      transient: true,
     });
   });
 
@@ -1878,6 +2034,41 @@ describe('Maker start-option lifecycle hooks', () => {
     await vi.waitFor(() => expect(leased.size).toBe(0));
   });
 
+  // Unit: a failed native unsubscribe leaves the workdir guarded before an adapter
+  // can be entered again. Retry must drain captured cleanup before prepareStartOptions.
+  it('retries unpublished adapter cleanup before reopening a guarded task', async () => {
+    const stopped = createDeferred();
+    let guarded = false;
+    const retryCleanup = vi.fn().mockRejectedValueOnce(new Error('still unconfirmed'))
+      .mockImplementation(async () => { stopped.resolve(); });
+    const pending = new AgentStartupCleanupPendingError('startup cleanup pending', {
+      cause: new Error('native unsubscribe failed'), whenStopped: stopped.promise, retryCleanup,
+    });
+    const startSession = vi.fn().mockRejectedValueOnce(pending)
+      .mockResolvedValueOnce(createHandle({ id: 'reopened-thread' }));
+    const onStartCleanupSucceeded = vi.fn(async () => { guarded = false; });
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: () => { if (guarded) throw new Error('workdir still guarded'); },
+        onStartFailed: ({ runtimeMayBeAlive }) => { guarded = runtimeMayBeAlive === true; },
+        onStartCleanupSucceeded,
+      },
+    });
+    const options: CreateSessionOptions = { id: 'guarded-reopen', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4' };
+    await expect(maker.createSession(options)).rejects.toBe(pending);
+    expect(guarded).toBe(true);
+    await expect(maker.createSession(options)).rejects.toThrow('Previous session startup cleanup is still pending');
+    expect(guarded).toBe(true);
+    expect(startSession).toHaveBeenCalledOnce();
+    const reopened = await maker.createSession(options);
+    expect(retryCleanup).toHaveBeenCalledTimes(2);
+    expect(onStartCleanupSucceeded).toHaveBeenCalledOnce();
+    expect(guarded).toBe(false);
+    expect(startSession).toHaveBeenCalledTimes(2);
+    await reopened.close();
+  });
+
   it('does not release adapter startup resources when exit confirmation fails', async () => {
     let rejectStopped!: (error: unknown) => void;
     const whenStopped = new Promise<void>((_resolve, reject) => { rejectStopped = reject; });
@@ -1903,17 +2094,24 @@ describe('Maker start-option lifecycle hooks', () => {
     expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
   });
 
-  it.each((['codex', 'claude-code', 'pi'] as const).flatMap((kind) =>
-    [new TypeError('startup RPC failed'), 'non-Error startup failure'].map((error) => ({ kind, error }))))(
-    'releases only the confirmed-stopped $kind startup and permits a fresh task: $error', async ({ kind, error: startupError }) => {
+  // Unit #10271: the scheduler needs actual exit evidence for one admitted-account retry.
+  // Existing cases only checked cause unwrapping; opt-in must retain the real wrapper
+  // without forwarding the host setting to adapters or changing ordinary callers.
+  it.each([
+    ...(['codex', 'claude-code', 'pi'] as const).flatMap((kind) =>
+      [new TypeError('startup RPC failed'), 'non-Error startup failure'].map((error) => ({ kind, error, preserve: false }))),
+    ...[new TypeError('startup RPC failed'), 'non-Error startup failure'].map(error => ({ kind: 'codex' as const, error, preserve: true })),
+  ])(
+    'releases only the confirmed-stopped $kind startup and permits a fresh task (preserve: $preserve): $error', async ({ kind, error: startupError, preserve }) => {
       const otherStartup = {} as CreateSessionOptions;
       const leased = new Set<CreateSessionOptions>([otherStartup]);
       const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
         if (!runtimeMayBeAlive) leased.delete(options);
       });
       const onStartCleanupSucceeded = vi.fn();
+      const stoppedError = new AgentStartupStoppedError(startupError);
       const startSession = vi.fn()
-        .mockRejectedValueOnce(new AgentStartupStoppedError(startupError))
+        .mockRejectedValueOnce(stoppedError)
         .mockResolvedValueOnce(createHandle({ id: 'fresh-sdk-session' }));
       const maker = new Maker({
         agents: { [kind]: createAgent(startSession, kind) },
@@ -1925,7 +2123,9 @@ describe('Maker start-option lifecycle hooks', () => {
       });
       await expect(maker.createSession({
         id: 'confirmed-exit', agentKind: kind, workingDir: '/repo', model: 'test-model',
-      })).rejects.toBe(startupError);
+        preserveStartupStoppedError: preserve,
+      })).rejects.toBe(preserve ? stoppedError : startupError);
+      expect(startSession.mock.calls[0]![0]).not.toHaveProperty('preserveStartupStoppedError');
       expect(onStartFailed).toHaveBeenCalledOnce();
       expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
         stage: 'agent-start', error: startupError, runtimeMayBeAlive: false,
@@ -1960,6 +2160,20 @@ describe('Maker start-option lifecycle hooks', () => {
       sessionId: 'unknown-startup-exit', stage: 'agent-start', runtimeMayBeAlive: true,
     }));
     expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+  });
+
+  // #11380: a shared Codex process can keep healthy tasks while the unpublished
+  // thread is confirmed released. Unit, real Maker entry: release only its lease
+  // and do not turn that thread proof into process-exit proof for scheduler retry.
+  it.each([false, true])('releases task resources without claiming shared-process exit (preserve: %s)', async preserve => {
+    const cause = new Error('post-resume startup failed');
+    const onStartFailed = vi.fn();
+    const agent = createAgent(vi.fn().mockRejectedValue(new AgentStartupResourcesReleasedError(cause)));
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: { onStartFailed } });
+    await expect(maker.createSession({ id: 'released-thread', agentKind: 'codex', workingDir: '/repo',
+      model: 'gpt-5.4', preserveStartupStoppedError: preserve })).rejects.toBe(cause);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({ runtimeMayBeAlive: false, error: cause }));
   });
 
   it('does not run the success hook when agent startup fails', async () => {
@@ -2279,7 +2493,10 @@ describe('Maker Pi runtime skill status', () => {
         generation: 1,
         status: 'loaded',
         source: 'pi:get_commands',
-        commands: [],
+        commands: [{
+          name: 'skill:poteto-mode', source: 'skill',
+          sourceInfo: { path: '/pstack/skills/poteto-mode/SKILL.md', scope: 'user', origin: 'package' },
+        }],
         managedPackageSkills: [
           {
             sourcePath: managedPath,
@@ -2347,6 +2564,9 @@ describe('Maker Pi runtime skill status', () => {
         name: 'unproven-at-launch',
         runtimeStatus: 'unknown',
         origin: 'package',
+      }),
+      expect.objectContaining({
+        name: 'poteto-mode', runtimeCommandName: 'skill:poteto-mode', runtimeStatus: 'loaded',
       }),
     ]);
     expect(active.skills.some((skill) => skill.name === 'installed-after-start')).toBe(false);
@@ -4378,6 +4598,41 @@ describe('Maker invalid-resume persistence bridge', () => {
     expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
   });
 
+  // Unit regression for PR #11549. The actual Maker error path keeps the native
+  // identity on resume failure so a later send cannot silently start a fresh conversation.
+  it('keeps the native identity and returns the failure when a plugin resume is unavailable', async () => {
+    const storage = createStorage();
+    await storage.create({
+      id: 'session-1',
+      agentKind: 'acp',
+      workDir: '/repo',
+      title: 'Resume me',
+      model: 'default',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      sdkSessionId: 'sdk-old',
+    });
+    const failure = new Error('[PLUGIN_ENGINE_RESUME_UNAVAILABLE] The plugin engine could not restore the previous conversation.');
+    const startSession = vi.fn(async (opts: CreateSessionOptions) => {
+      expect(opts.onInvalidResumeSession).toBeUndefined();
+      throw new AgentStartupStoppedError(failure);
+    });
+    const maker = new Maker({
+      agents: { acp: { ...createAgent(startSession), kind: 'acp' } as BaseAgent },
+      storage,
+      logger: createLogger(),
+    });
+    await expect(maker.createSession({
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: '/repo',
+      model: 'default',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      resumeSessionId: 'sdk-old',
+    })).rejects.toBe(failure);
+    expect(startSession).toHaveBeenCalledOnce();
+    expect((await storage.get('session-1'))?.sdkSessionId).toBe('sdk-old');
+  });
+
   it('injects a compare-and-clear callback for fresh (non-resume) Claude sessions too', async () => {
     // 全新会话(无 resumeSessionId)也可能把首个 turn 崩溃前落库的 fresh sdk id 变成幽灵 id,
     // 需要同一把 CAS 才能清掉。之前该回调只对 resume 会话装配,全新会话会漏。
@@ -4679,3 +4934,42 @@ it.each(['unpublished', 'published'] as const)(
     await maker.shutdown();
   },
 );
+
+// #9323: the sync quit hook must fence persistent tasks and application
+// sessions while leaving every transport untouched for the Windows tree reaper.
+describe('Maker synchronous app quit reservation', () => {
+  it.each(['claude-code', 'codex'] as const)('fences both %s registries and preserves adapter shutdown terminals', async (agentKind) => {
+    const handles: AgentSessionHandle[] = [];
+    const maker = new Maker({ storage: createStorage(), logger: createLogger(),
+      agents: { [agentKind]: createAgent(async () => {
+        const handle = createHandle({ id: `quit-${handles.length}`, agentKind });
+        handle.close = vi.fn(async () => {});
+        handle.abort = vi.fn(async () => {});
+        handles.push(handle);
+        return handle;
+      }, agentKind) } });
+    const task = await maker.createSession({ id: 'quit-task', agentKind, workingDir: '/repo', model: 'm' });
+    const client = await maker.startLocalAgentSession(agentKind, { sessionId: 'quit-client', workingDir: '/repo', model: 'm',
+      [LOCAL_AGENT_CLIENT]: { url: 'http://127.0.0.1:1', token: 'fixture', hostToolsOnly: true } });
+    const seen: AgentEvent[] = [];
+    task.onEvent(event => seen.push(event));
+    client.onEvent(event => seen.push(event));
+    await task.send('task');
+    await client.send('client');
+    maker.prepareForAppQuit();
+    maker.prepareForAppQuit();
+    expect(seen).toEqual([]);
+    for (const handle of handles) {
+      expect(handle.close).not.toHaveBeenCalled();
+      expect(handle.abort).not.toHaveBeenCalled();
+    }
+    await expect(maker.createSession({ id: 'too-late', agentKind, workingDir: '/repo', model: 'm' }))
+      .rejects.toThrow('shutting down');
+    await maker.shutdown({ reason: 'app-quit' });
+    for (const handle of handles) expect(handle.close).toHaveBeenCalledOnce();
+    expect(seen.map(event => [event.type, event.data])).toEqual(agentKind === 'claude-code' ? [
+      ['done', { status: 'cancelled' }], ['done', { status: 'cancelled' }],
+    ] : []);
+    expect(maker.listActiveSessions()).toEqual([]);
+  });
+});

@@ -38,6 +38,7 @@ import {
   importCustomWallpaper,
   removeCustomWallpaper,
   prepareWallpaperImage,
+  savePluginWallpaper,
 } from '../custom-wallpaper';
 import {
   customWallpaperStore,
@@ -78,6 +79,19 @@ async function selectImage(color = 'blue') {
 const parent = {} as never;
 
 describe('client-owned custom wallpaper lifecycle', () => {
+  // PR #9496: media publication preceded the appearance CAS. Use real stores,
+  // media and recycler; failed commits must retain the original reference/bytes. tier: unit.
+  it.each([false, true])('retains the old wallpaper when the combined appearance commit fails (published=%s)', async published => {
+    await selectImage('blue'); await importCustomWallpaper(parent);
+    const oldUrl = readCustomWallpaperUrl();
+    const replacement = await prepareWallpaperImage(await selectImage('red'));
+    await expect(savePluginWallpaper(replacement, {
+      pluginSource: { instanceId: 'example', key: 'a'.repeat(64) }, assertCurrent() {},
+      async commit(publish) { if (published) publish(); throw new Error('APPEARANCE_CHANGED'); },
+    })).rejects.toThrow('APPEARANCE_CHANGED');
+    expect(readCustomWallpaperUrl()).toBe(oldUrl);
+    await expect(readClientWallpaperFile(oldUrl)).resolves.toBeDefined();
+  });
   it('rejects a 20–100 MB image after only the header, even with an MP4 filename', async () => {
     const png = await selectImage();
     const file = path.join(h.dir, 'oversized.mp4');

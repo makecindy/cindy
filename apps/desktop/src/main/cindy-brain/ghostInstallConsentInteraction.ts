@@ -13,10 +13,12 @@ import { randomUUID } from 'node:crypto';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 
 import type { GhostPermissionItem } from '../../shared/ghost.js';
+import { permissionItemDetail } from '../../shared/ghostPermissionDetail.js';
 import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
+import { deviceName } from '../device-link/deviceName.js';
 import { t as mainTranslate } from '../i18n.desktop.js';
 import {
   trackGhostInstallConsentPrompt,
@@ -27,10 +29,10 @@ export const GHOST_INSTALL_CONSENT_HOST_CONFIRMATION = 'plugin_install';
 
 type Translate = (key: string) => string;
 
-function interpolate(template: string, args: Record<string, string> | undefined): string {
+function interpolate(template: string, args: Record<string, unknown> | undefined): string {
   if (!args) return template;
   return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, name: string) =>
-    Object.prototype.hasOwnProperty.call(args, name) ? args[name]! : match,
+    Object.prototype.hasOwnProperty.call(args, name) ? String(args[name]) : match,
   );
 }
 
@@ -74,7 +76,7 @@ function permissionLine(translate: Translate, item: GhostPermissionItem): string
   ];
   if (item.detailKey) {
     lines.push(
-      `  ${interpolate(translate(`settings.ghosts.perm.${item.detailKey}`), item.detailArgs)}`,
+      `  ${permissionItemDetail(item, (key, args) => interpolate(translate(key), args))}`,
     );
   }
   if (item.detail) {
@@ -137,15 +139,16 @@ export function buildGhostInstallConsentInteraction(
   requestId: string,
   request: Omit<GhostInstallConsentRequest, 'requestId'>,
   translate: Translate = mainTranslate,
+  publisher?: string | null,
 ): Extract<InteractionRequest, { kind: 'permission' }> {
   const text = renderGhostInstallConsentText(request, translate);
   return {
     kind: 'permission',
     requestId,
     toolName: GHOST_INSTALL_CONSENT_TOOL_NAME,
-    input: { ghost_id: request.facts.ghostId, version: request.facts.version },
+    input: { ghost_id: request.facts.ghostId, version: request.facts.version, operation: request.facts.kind },
     title: text.title,
-    description: text.description,
+    description: [deviceName(), publisher?.replace(/[\r\n]+/g, ' '), text.description].filter(Boolean).join(' · '),
     metadata: { hostOwnedConfirmation: GHOST_INSTALL_CONSENT_HOST_CONFIRMATION },
   };
 }
@@ -172,8 +175,9 @@ const INSTALL_CONSENT_UNDELIVERED_REASONS = new Set([
 export function createTaskInstallConsentPrompt(
   task: { sessionId: string; sessionInstanceId: string } | null,
   requestHostPermission: HostPermissionRequester | undefined,
+  publisher?: string | null,
 ): GhostInstallConsentPrompt {
-  return async (request) => {
+  const prompt: GhostInstallConsentPrompt = async (request) => {
     if (!task || !requestHostPermission) {
       throw new Error('Plugin install confirmation requires the calling task');
     }
@@ -183,7 +187,7 @@ export function createTaskInstallConsentPrompt(
       const decision = await requestHostPermission(
         task.sessionId,
         task.sessionInstanceId,
-        buildGhostInstallConsentInteraction(randomUUID(), request),
+        buildGhostInstallConsentInteraction(randomUUID(), request, mainTranslate, publisher),
         controller.signal,
       );
       if (!decision || decision.kind !== 'permission') {
@@ -198,4 +202,5 @@ export function createTaskInstallConsentPrompt(
       untrack();
     }
   };
+  return prompt;
 }

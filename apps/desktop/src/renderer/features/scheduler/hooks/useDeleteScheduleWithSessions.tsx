@@ -202,7 +202,8 @@ async function applyGeneratedSessionDisposition(
         void window.electronAPI.cleanupSessionImages(sessionId).catch(() => undefined);
       }
       makerChatStore.purgeSession(sessionId);
-      discardComposerDraft(sessionId);
+      // 归档可恢复，未发送草稿保留；只有删除才丢弃草稿与附件暂存副本。
+      if (disposition === 'delete') discardComposerDraft(sessionId);
     } catch {
       failed.push(sessionId);
     }
@@ -268,13 +269,13 @@ function DeleteScheduleWithSessionsDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[460px] p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -354,6 +355,17 @@ function DeleteScheduleWithSessionsDialog({
           </div>
 
           <div className="mt-6 flex justify-end gap-2.5">
+            <AlertDialog.Cancel asChild>
+              <Button
+                variant="secondary"
+                size="lg"
+                type="button"
+                disabled={loading}
+                onClick={onCancel}
+              >
+                {t('scheduler.confirm.delete.cancel')}
+              </Button>
+            </AlertDialog.Cancel>
             <Button
               variant="cta"
               size="lg"
@@ -366,17 +378,6 @@ function DeleteScheduleWithSessionsDialog({
                 ? t('scheduler.deleteDialog.confirmDeleteSessions')
                 : t('scheduler.deleteDialog.confirm')}
             </Button>
-            <AlertDialog.Cancel asChild>
-              <Button
-                variant="secondary"
-                size="lg"
-                type="button"
-                disabled={loading}
-                onClick={onCancel}
-              >
-                {t('scheduler.confirm.delete.cancel')}
-              </Button>
-            </AlertDialog.Cancel>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

@@ -1,0 +1,201 @@
+== core 1
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.39,"p95":0.88,"max":2.54})
+PASS  3 MiB 结果经可靠分片完整送达  (271ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.34,"p95":2.05,"max":2.39})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3496 个包，3.4 MiB)
+
+方式：core。12/12 通过，附加 1/1
+== relay 1
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.66,"p95":1.72,"max":4.16})
+PASS  3 MiB 结果经可靠分片完整送达  (611ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.71,"p95":17.96,"max":56.51})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1285 入 1278)
+PASS  附加：抓到的包里没有业务明文  (3695 个包，3.5 MiB)
+PASS  附加：UDP 全被挡时所有数据报都经中转（443 上的 WebSocket）  (经中转 3695 个包，UDP 0 个)
+
+方式：relay。12/12 通过，附加 2/2
+== push 1
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.63,"p95":1.6,"max":3.02})
+PASS  3 MiB 结果经可靠分片完整送达  (292ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.16,"p95":2.11,"max":2.54})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3541 个包，3.4 MiB)
+PASS  附加：UDP 全被挡时所有数据报都经中转（443 上的 WebSocket）  (经中转 3541 个包，UDP 0 个)
+
+方式：push。12/12 通过，附加 2/2
+== punch 1
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.41,"p95":1.21,"max":3.04})
+PASS  3 MiB 结果经可靠分片完整送达  (237ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.04,"p95":1.97,"max":2.75})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3430 个包，3.5 MiB)
+PASS  附加：先经中转连上，交换地址后换到直连  (经中转 26 个包，直连 3404 个)
+
+方式：punch。12/12 通过，附加 2/2
+== core 2
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.47,"p95":1.23,"max":2.68})
+PASS  3 MiB 结果经可靠分片完整送达  (286ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.01,"p95":2.19,"max":3.7})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3506 个包，3.4 MiB)
+
+方式：core。12/12 通过，附加 1/1
+== relay 2
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.62,"p95":1.36,"max":3.17})
+PASS  3 MiB 结果经可靠分片完整送达  (295ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.4,"p95":2.7,"max":3.96})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3473 个包，3.4 MiB)
+PASS  附加：UDP 全被挡时所有数据报都经中转（443 上的 WebSocket）  (经中转 3473 个包，UDP 0 个)
+
+方式：relay。12/12 通过，附加 2/2
+== push 2
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.63,"p95":1.58,"max":3.19})
+PASS  3 MiB 结果经可靠分片完整送达  (348ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.14,"p95":2.14,"max":3.69})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1285 入 1279)
+PASS  附加：抓到的包里没有业务明文  (3938 个包，3.5 MiB)
+PASS  附加：UDP 全被挡时所有数据报都经中转（443 上的 WebSocket）  (经中转 3938 个包，UDP 0 个)
+
+方式：push。12/12 通过，附加 2/2
+== punch 2
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.4,"p95":0.95,"max":4.28})
+PASS  3 MiB 结果经可靠分片完整送达  (230ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":0.98,"p95":2.12,"max":2.88})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3518 个包，3.5 MiB)
+PASS  附加：先经中转连上，交换地址后换到直连  (经中转 27 个包，直连 3491 个)
+
+方式：punch。12/12 通过，附加 2/2
+== core 3
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.83,"p95":2.19,"max":8.35})
+PASS  3 MiB 结果经可靠分片完整送达  (529ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":2.17,"p95":11.48,"max":35.65})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1285 入 1278)
+PASS  附加：抓到的包里没有业务明文  (3529 个包，3.4 MiB)
+
+方式：core。12/12 通过，附加 1/1
+== relay 3
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":1.7,"p95":10.1,"max":48.91})
+PASS  3 MiB 结果经可靠分片完整送达  (906ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.1,"p95":2.03,"max":3.15})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1285 入 1279)
+PASS  附加：抓到的包里没有业务明文  (4084 个包，3.5 MiB)
+PASS  附加：UDP 全被挡时所有数据报都经中转（443 上的 WebSocket）  (经中转 4084 个包，UDP 0 个)
+
+方式：relay。12/12 通过，附加 2/2
+== push 3
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.59,"p95":1.26,"max":3.28})
+PASS  3 MiB 结果经可靠分片完整送达  (287ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.27,"p95":2.01,"max":3.42})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3482 个包，3.4 MiB)
+PASS  附加：UDP 全被挡时所有数据报都经中转（443 上的 WebSocket）  (经中转 3482 个包，UDP 0 个)
+
+方式：push。12/12 通过，附加 2/2
+== punch 3
+PASS  真实 DeviceLinkClient 在没有中转时进入 online  (selfId=a-phone)
+PASS  在线状态由点对点连接合成
+PASS  link-open / link-accept 与可靠传输协商
+PASS  invoke 往返  (ms {"n":200,"p50":0.45,"p95":1.15,"max":3.73})
+PASS  3 MiB 结果经可靠分片完整送达  (241ms)
+PASS  push 经可靠链路到达控制端
+PASS  名册外的节点被传输层拒绝
+PASS  伪造帧内 src 无效，来源取自已认证连接  (src=c-laptop)
+PASS  远控开关关闭时由目标节点拒绝 invoke  (REMOTE_DISABLED)
+PASS  故障半径：一台控制端静默，另一台零感知  (另一台 invoke ms {"n":100,"p50":1.2,"p95":2.37,"max":5.15})
+PASS  点对点连接断开后重连，请求不重复执行  (总执行 302 次，全部恰好一次)
+PASS  全程没有任何中转连接  (路由帧 出 1283 入 1277)
+PASS  附加：抓到的包里没有业务明文  (3521 个包，3.5 MiB)
+PASS  附加：先经中转连上，交换地址后换到直连  (经中转 29 个包，直连 3492 个)
+
+方式：punch。12/12 通过，附加 2/2

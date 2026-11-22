@@ -1,7 +1,10 @@
+import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../device-link/notificationDismissalHost.js';
 import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
+import { TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
+import { projectHostTaskActivity } from '../device-link/taskActivity.js';
 import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
 import {
   isTerminalAgentErrorEvent,
@@ -141,6 +144,7 @@ import {
   setAgentIslandLayoutDragActive,
   setAgentIslandMeasuredContentHeight,
   setAgentIslandPointerZones,
+  setAgentIslandSessionBackgroundWork,
   setAgentIslandSessionDisplaySuppressed,
   setAgentIslandStrings,
   setAgentIslandToolWording,
@@ -173,7 +177,8 @@ import { getActiveAppSession } from '../appSessionState.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
+import { hasTaskChangeListener, publishTaskChange } from '../localDb/taskEvents.js';
 import {
   beginProtectedFolderCheck,
   detectProtectedFolderEperm,
@@ -232,7 +237,6 @@ interface AgentIslandUserPromptDebugMeta {
 }
 
 export interface AgentIslandServiceDeps {
-  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   getMainWindow: () => BrowserWindow | null;
   nativeHost?: AgentIslandNativeRenderer;
   /** macOS Live Activity mirror of the island state; production passes one on macOS. */
@@ -498,7 +502,7 @@ export class AgentIslandService {
   constructor(private readonly deps: AgentIslandServiceDeps) {
     this.sessionActivityRelay = new SessionActivityRelay((payload) => {
       tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
-    }, { isCompletionHandledByTeammate: deps.isCompletionHandledByTeammate });
+    });
     // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
@@ -641,6 +645,10 @@ export class AgentIslandService {
       this.setCompanionChats(chats);
       return { ok: true };
     });
+    ipcMain.handle(TASK_ACTIVITY_SNAPSHOT, event => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+      return this.getForegroundTaskActivity();
+    });
     ipcMain.handle('agent-island:completion-action', (event, sessionId: unknown, action: unknown, token: unknown) => {
       if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       if (typeof sessionId !== 'string' || !sessionId || (action !== 'archive' && action !== 'mark-read')
@@ -666,6 +674,13 @@ export class AgentIslandService {
   }
 
   registerIpc(): void {
+    // The native helper has no panel observing screen changes while the target is absent.
+    const refreshDisplays = () => {
+      if (this.isEnabled()) this.publish();
+    };
+    screen.on('display-added', refreshDisplays);
+    screen.on('display-removed', refreshDisplays);
+
     ipcMain.handle(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL, (event, sessionId: unknown) => {
       const sourceWindow = BrowserWindow.fromWebContents(event.sender);
       if (!sourceWindow || sourceWindow.isDestroyed()) {
@@ -680,7 +695,10 @@ export class AgentIslandService {
       for (const visibleSessionId of getVisibleSessionIdsForReadAck(nextSessionId)) {
         // passive:仅凭「路由停在该会话 + 窗口聚焦」不足以证明用户看到了报错,
         // 未读 error 会话在 state 层对被动 ack 免疫(见 acknowledgeAgentIslandSessionRead)。
-        changed = acknowledgeAgentIslandSessionRead(this.state, visibleSessionId, now, { source: 'passive' }) === 'cleared' || changed;
+        if (acknowledgeAgentIslandSessionRead(this.state, visibleSessionId, now, { source: 'passive' }) === 'cleared') {
+          if (!isAgentIslandDeviceSession(this.state, visibleSessionId)) retireReadMobileNotifications(visibleSessionId);
+          changed = true;
+        }
       }
       if (changed) {
         this.publish();
@@ -864,7 +882,7 @@ export class AgentIslandService {
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
     // Keep the OS notification when this event has no enabled Cindy sound.
     if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
-    if (this.isEnabled()) return true;
+    if (this.hasIslandDisplay()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
   }
 
@@ -990,7 +1008,7 @@ export class AgentIslandService {
 
   /** True means this surface owns the alert; otherwise the caller uses the OS notification. */
   notifyGroupChat(groupId: string): boolean {
-    if (!this.isEnabled() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
+    if (!this.hasIslandDisplay() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
     const chat = this.state.sessions.get(groupChatIslandId(groupId))?.groupChat;
     if (!chat) return false;
     const window = this.deps.getMainWindow();
@@ -1053,10 +1071,6 @@ export class AgentIslandService {
       this.remoteCompanions.set(key, { snapshot: { ...base, imageJpeg }, retryAt: null });
       this.setDeviceSessions(this.lastDeviceSessionInputs);
     });
-  }
-
-  waitForCompletionNotification(sessionId: string): Promise<boolean> | undefined {
-    return this.sessionActivityRelay.waitForCompletionNotification(sessionId);
   }
 
   resetRuntimeState(): void {
@@ -1134,6 +1148,16 @@ export class AgentIslandService {
       setAgentIslandVisibleSession(this.state, null, now);
     }
     setAgentIslandAppFocused(this.state, focused, now);
+  }
+
+  /** A plugin engine started or stopped working after its turn (see setAgentIslandSessionBackgroundWork). */
+  setSessionBackgroundWork(
+    meta: AgentIslandSessionMeta,
+    active: boolean,
+    options: { turnStarting?: boolean } = {},
+  ): void {
+    const hydrated = this.hydrateMeta(meta);
+    if (setAgentIslandSessionBackgroundWork(this.state, hydrated, active, Date.now(), options)) this.publish();
   }
 
   handleAgentEvent(
@@ -1231,9 +1255,6 @@ export class AgentIslandService {
       }
     }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
-    if (isCompletionDoneEvent(event) && event.type === 'status') {
-      this.sessionActivityRelay.awaitCompletionTerminal(hydrated.sessionId);
-    }
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
       // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
@@ -1249,9 +1270,6 @@ export class AgentIslandService {
     });
     if (suppressCompletionAttention) {
       this.mutedCompletionSoundSessionIds.add(hydrated.sessionId);
-    }
-    if (isCompletionDoneEvent(event) && event.type === 'done') {
-      this.sessionActivityRelay.completeTerminal(hydrated.sessionId);
     }
     if (!changed) return;
     this.ensureMetadata(hydrated.sessionId);
@@ -1301,7 +1319,7 @@ export class AgentIslandService {
       if (changed) this.publish();
       return;
     }
-    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred') {
+    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred' || event.type === 'skipped') {
       this.clearSilencedScheduleRun(event.runId);
     }
   }
@@ -1462,6 +1480,7 @@ export class AgentIslandService {
   }
 
   handleInteractionDismissed(sessionId: string, requestId: string): void {
+    retireAnsweredMobileNotifications(sessionId, requestId);
     this.permissionRequests.delete(requestId);
     const now = Date.now();
     applyAgentIslandInteractionDismissed(this.state, sessionId, requestId, now);
@@ -1528,6 +1547,7 @@ export class AgentIslandService {
     for (const requestId of permissionRequestIdsFromAgentEvent(event)) {
       const entry = this.permissionRequests.get(requestId);
       if (entry?.sessionId === sessionId) {
+        retireAnsweredMobileNotifications(sessionId, requestId);
         this.permissionRequests.delete(requestId);
       }
     }
@@ -1680,6 +1700,7 @@ export class AgentIslandService {
             log.debug(`session read ack: session=${sessionId} source=${source} state=not-found; no local row, withheld`);
             return;
           }
+          retireReadMobileNotifications(sessionId);
           this.sessionActivityRelay.ensureSessionTerminalClear(sessionId);
           log.debug(`session read ack: session=${sessionId} source=${source} state=not-found; local row found, terminal clear ensured`);
         })
@@ -1693,7 +1714,7 @@ export class AgentIslandService {
     // 收尾包兜底必须在 publish() **之前**。ensure 只在 relay 没有该会话条目时补发;
     // 已有 entry(live 或刚发出的未读终态)不动,由 publish() 把账本投影出去。
     this.sessionActivityRelay.ensureSessionTerminalClear(sessionId);
-    if (ack === 'cleared') this.publish();
+    if (ack === 'cleared') { retireReadMobileNotifications(sessionId); this.publish(); }
     log.debug(`session read ack: session=${sessionId} source=${source} state=${ack}`);
   }
 
@@ -2083,6 +2104,32 @@ export class AgentIslandService {
   }
 
   /** Complete owned-host list, including unread results past the island's display TTL. */
+  getNotificationRequestIds(sessionId: string): string[] {
+    return [...(this.state.sessions.get(sessionId)?.pendingInteractionIds ?? [])];
+  }
+
+  /** Display demand counts execution, including muted and group-chat tasks. */
+  getLocalRunningTaskCount(): number {
+    let count = 0;
+    for (const task of this.state.sessions.values()) {
+      if (task.sourceDeviceId === null && task.running && task.phase === 'running') count++;
+    }
+    return count;
+  }
+
+  private foregroundSummaryKey = '';
+  private foregroundRevision = 0;
+
+  getForegroundTaskActivity() {
+    const summary = projectHostTaskActivity(this.getLocalTaskActivitySnapshots());
+    const key = JSON.stringify(summary);
+    if (key !== this.foregroundSummaryKey) {
+      this.foregroundSummaryKey = key;
+      this.foregroundRevision++;
+    }
+    return { ...summary, revision: this.foregroundRevision };
+  }
+
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
   }
@@ -2174,6 +2221,17 @@ export class AgentIslandService {
       const previous = this.sessionActivitySubscriptionCursor.get(sessionId) ?? null;
       const current = next.get(sessionId) ?? null;
       if (previous && current && sessionActivitySnapshotsEqual(previous, current)) continue;
+      // The plugin topic contains lifecycle edges only. Activity/progress and
+      // display changes stay on existing consumers, without plugin timers.
+      if (hasTaskChangeListener('state') && (!previous || !current
+        || previous.phase !== current.phase || previous.currentTurnActive !== current.currentTurnActive
+        || previous.turnGeneration !== current.turnGeneration || previous.startedAtMs !== current.startedAtMs
+        || previous.recordStatus !== current.recordStatus || previous.gracefulStopState !== current.gracefulStopState
+        || previous.interactionKind !== current.interactionKind)) {
+        publishTaskChange({ kind: 'state', sessionId, state: {
+          activity: current ? canonicalSessionActivity(current) : null, changedAtMs,
+        } }, getSafeDataOwnerPushStamp());
+      }
       for (const listener of this.sessionActivityListeners) {
         try {
           listener({
@@ -2269,7 +2327,19 @@ export class AgentIslandService {
       pillSnapshot,
       this.mascotSkin,
       {
-        needsInput: t('agentIsland.native.needsInput'),
+        countLabels: {
+          attention: t('agentIsland.native.summaryAttention'),
+          inProgress: t('agentIsland.native.summaryInProgress'),
+          pending: t('agentIsland.native.summaryPending'),
+          unread: t('agentIsland.native.summaryUnread'),
+        },
+        needsInput: t(prioritySession?.interactionKind === 'permission'
+          ? 'agentIsland.native.awaitingPermission'
+          : prioritySession?.interactionKind === 'ask_user_question'
+            ? 'agentIsland.native.awaitingQuestion'
+            : prioritySession?.interactionKind === 'plan_review'
+              ? 'agentIsland.native.awaitingPlan'
+              : 'agentIsland.native.needsInput'),
         running: t('agentIsland.native.running'),
         completed: t('agentIsland.native.completed'),
         error: t('agentIsland.native.error'),
@@ -2667,13 +2737,16 @@ export class AgentIslandService {
     ).contentWidth;
   }
 
+  /** Notification ownership requires a connected display that can show the island. */
+  private hasIslandDisplay(): boolean {
+    return this.isEnabled() && this.getTargetDisplays().length > 0;
+  }
+
   private getTargetDisplays(displays = this.getAvailableDisplays()): Display[] {
     if (this.displayTarget.mode === 'display') {
       const selectedDisplay = this.resolveSelectedDisplay(displays);
       if (!selectedDisplay) {
-        // A temporary disconnect uses the current fallback for rendering only;
-        // keep the saved identity so reconnecting restores the user's choice.
-        return [this.getTargetDisplay(displays)];
+        return [];
       }
       const resolvedTarget = this.displayTargetForDisplay(displays, selectedDisplay);
       if (!sameAgentIslandDisplayTarget(this.displayTarget, resolvedTarget)) {

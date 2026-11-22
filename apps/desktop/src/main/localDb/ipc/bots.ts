@@ -1,11 +1,10 @@
+import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
-import type { RoutineModel } from '@cindy/maker-scheduler';
+import { readBotProfileSource } from '../../../shared/botProfileSources.js';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
-import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
 import { loadBotReadState, loadAcknowledgedBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { registerBotReadStateIpc } from '../../maker-ipc/botReadStateIpc.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
-import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 /** Cindy Bots 的 main-side 权威数据边界。
  *
  * Bot profile 与 Session 归属只在这里写入 SQLite；renderer 只读取投影，
@@ -14,6 +13,7 @@ import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
+import { companionHomes, inactiveCompanionCopyIds } from '../../companion-cloud/homes.js';
 import fs from 'node:fs/promises';
 import { chooseAvatarSource } from '../../profileEdit.js';
 import { toSdrAvatarImage } from '../../hdrAvatarToSdr.js';
@@ -28,12 +28,10 @@ import { getDbClient, tryGetDbClient } from '../client/current';
 import { flushAssistantSamplingMetadata } from '../../messagePersistBroadcaster.desktop.js';
 import { notifyAgentIslandCompanionChanged } from '../agentIslandSessionPatch.js';
 import type {
-  BotsReparentDelegationsResult,
   BotsReplaceCanonicalSessionResult,
   BotGroupsCreateLaneResult,
 } from '../client/tx/types.js';
 import {
-  botDelegations,
   botProfileVersions,
   botProfiles,
   botRuntimeSnapshots,
@@ -49,18 +47,17 @@ import { isIpcError } from '../../../shared/ipc-errors.js';
 import { isBotVisibleRemotely } from './botRemoteVisibility.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from './botRemoteSessionAccess.js';
 import { setRemoteBotSessionLookup } from '../../device-link/remoteBotSessionBoundary.js';
+import { openSession, type OpenedSessionRow } from '../sessionOpening.js';
 import { resolveBusinessSessionId } from '../../sessionIds.js';
-import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap.js';
-import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store.js';
 import {
   readBotModelChainSettingsState,
   resetBotModelChainSettings,
   readEffectiveBotModelChain,
+  readEffectiveBotPrimaryRoute,
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
-import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
+import { extractMessagePreview, sessionToCamel } from '../mapper.js';
 import { normalizeBotToolCapabilities } from '../../../shared/botCapabilitySelection.js';
-import type { BotWorkbench } from '../../../shared/botWorkbench.js';
 import {
   botProfileContentChanged,
   botProfileModelSelectionChanged,
@@ -69,8 +66,8 @@ import {
 } from './botProfileVersioning.js';
 import {
   botProfileDir,
-  ensureBotChatOnlyWorkspaceDir,
   ensureBotWorkspaceDir,
+  ensureBotChatOnlyWorkspaceDir,
   migrateBotProfileFolder,
   readBotProfileFolder,
   writeBotProfileFolder,
@@ -79,17 +76,17 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
-import {
-  readBotWorkbenchTaskForOwner,
-  readBotResponsibilityScope,
-  readBotResponsibleSessionIds,
-} from '../../maker-ipc/botWorkbenchTools.js';
+import { ensureBotProjectAutomations, ensureWorkspaceRepository, readWorkspaceRepositoryStatus, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
+import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
+import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
+import { readBotProjectMode } from '../../../shared/botProjectMode.js';
+import { readBotResponsibilityScope } from '../../maker-ipc/botTaskCreation.js';
 import {
   NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults.js';
-import { normalizeBotModelChain, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
+import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
 import { validateTaskModel } from '../../maker-ipc/appDefaultModelControl.js';
 import {
   activeOwnerScopeKey,
@@ -108,18 +105,16 @@ import {
   inferBotTemplatePresetId,
   isBotTemplatePresetId,
 } from '../../../shared/botTemplatePreset.js';
-import { createMessage } from './messages.js';
 import { syncBotLanePermission, syncBotLinkedLanePermissions, syncBotPermissionsByBotId } from '../../maker-ipc/botPermissionSync.js';
 import { withSessionPermissionChange } from '../../maker-ipc/sessionPermissionChange.js';
 import { withBotPermissionChangeForBot } from '../../maker-ipc/botPermissionDispatch.js';
 import { broadcastSessionPatched, restoreArchivedSessionForSend } from './sessions.js';
-import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvatar } from '../../maker-ipc/botCreationDraft.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation.js';
 import type { BotPackageOpening } from '../../../shared/botMarket.js';
 import { botDmThreadRouteKey, parseBotDmThreadRouteKey, type BotDmThreadSummary } from '../../../shared/botDmThread.js';
-import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, chatGroupTalkRouteKey, chatGroupThreadRouteKey, groupLaneOfRouteKey, parseBotGroupIdFromRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
+import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, chatGroupTalkRouteKey, chatGroupThreadRouteKey, groupLaneOfRouteKey, groupLaneUsesChatWorkspace, parseBotGroupIdFromRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
@@ -127,8 +122,9 @@ import { getResolvedMainLocale } from '../../i18n.desktop.js';
 import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../shared/locale.js';
 import { normalizeBotWelcomeContext, type BotWelcomeContext } from '../../../shared/botWelcomeContext';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
-import { routineTools } from '../../routines/service.js';
 import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
+import { privateBotWorkspace, readTeammateProjectMode } from '../../maker-ipc/botWorkspaceRuntime.js';
+import { resolveMemoryScopeKey } from '@cindy/maker-core';
 
 const log = createLogger('bots');
 
@@ -174,9 +170,12 @@ export function getBotMemoryService(): ReturnType<typeof createBotMemoryService>
         .where(eq(botProfiles.id, botId))
         .limit(1);
       owner.assertCurrent();
-      return row && row.status !== 'deleting'
-        ? { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent }
-        : null;
+      if (!row || row.status === 'deleting') return null;
+      const scopeKey = await readTeammateProjectMode(botId)
+        ? await resolveMemoryScopeKey(path.join(botProfileDir(owner.userDataDir, botId), 'workspace'))
+        : undefined;
+      owner.assertCurrent();
+      return { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent, ...(scopeKey ? { scopeKey } : {}) };
     },
     requestRefresh: (sessionId) => requestBotRuntimeEpochRefresh(sessionId, 'resource'),
   });
@@ -238,9 +237,7 @@ import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
 import { coordinateBotCanonicalReplacement } from '../../maker-ipc/botCanonicalReplacementCoordinator.js';
 import { coordinateBotModelSelection } from '../../maker-ipc/botModelSelectionCoordinator.js';
 import { searchConversations } from '../conversationSearch.js';
-import { registerBotAutonomyIpc } from '../../bot-autonomy/ipc.js';
-import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
-import { readBotSystemSkillsOff } from '../../../shared/botSystemSkills.js';
+import { signalBotProfilesChanged } from '../../maker-ipc/botProfilesChangedSignal.js';
 import {
   BOT_FAILURE_REASONS,
   isBotFailureAttentionWorthy,
@@ -316,13 +313,35 @@ export async function createBotCanonicalSession(
 }
 
 export type EnsureBotGroupLaneResult =
-  | { ok: true; sessionId: string; created: boolean }
+  | { ok: true; sessionId: string; created: boolean; replacedSessionId?: string }
   | { ok: false; errorCode: 'MEMBER_UNAVAILABLE' | 'NO_MODEL'; message: string };
 
+function botSessionPayload(row: OpenedSessionRow) {
+  return {
+    id: row.id,
+    title: row.title,
+    workingDir: row.workingDir ?? null,
+    ...(row.projectDir ? { projectDir: row.projectDir } : {}),
+    workspaceKind: row.workspaceKind,
+    model: row.model,
+    effort: row.effort,
+    fastMode: row.fastMode,
+    permissionMode: row.permissionMode,
+    agentKind: row.agentKind,
+    remoteHostId: row.remoteHostId ?? null,
+    providerId: row.providerId ?? null,
+    agentDeviceId: row.agentDeviceId ?? null,
+    extraDirs: row.extraDirs,
+    source: row.source,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 /**
- * The Bot's hidden lane for one group chat (docs/product-rules/bot-group-chat.md).
+ * The Bot's isolated lane for one group chat (docs/product-rules/bot-group-chat.md).
  * Same Profile, Home workspace and model chain as the canonical Chat; never a
- * second canonical Session and never visible in the task list.
+ * second canonical Session. Group work is listed under its companion project.
  *
  * With `plan`, the Bot's 分工 Session for that plan instead (§7.4): same Profile and
  * model chain, but it works in the plan's recorded work directory. A worktree plan
@@ -333,6 +352,11 @@ export type EnsureBotGroupLaneResult =
  *
  * With `talkPlanId` (server groups only), the Bot's own lane for that queue: like a Thread
  * lane, it talks in the group lane's place with its own context; no project folder.
+ *
+ * With `projectDir` (the group's project folder on this computer), a V2 teammate's group and
+ * Thread lanes that answer its owner work in that folder instead of the Home workspace, like an
+ * ordinary task there (bot-group-chat.md §7.5). The lane follows the folder: one created
+ * elsewhere is archived and replaced.
  */
 export async function ensureBotGroupLaneSession(input: {
   botId: string;
@@ -343,7 +367,9 @@ export async function ensureBotGroupLaneSession(input: {
   threadRootId?: string;
   talkPlanId?: string;
   personalDigest?: boolean;
-}): Promise<EnsureBotGroupLaneResult> {
+  projectDir?: string;
+  continueConversation?: boolean;
+}, registeredProject?: (dir: string) => Promise<string | null>): Promise<EnsureBotGroupLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -355,7 +381,7 @@ export async function ensureBotGroupLaneSession(input: {
     : input.chatAccess && input.threadRootId ? chatGroupThreadRouteKey(input.groupId, input.chatAccess, input.threadRootId)
     : input.chatAccess ? chatGroupLaneRouteKey(input.groupId, input.chatAccess) : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
-    .select({ sessionId: botSessionLinks.sessionId })
+    .select({ sessionId: botSessionLinks.sessionId, workingDir: sessions.workingDir, projectDir: sessions.projectDir, workspaceKind: sessions.workspaceKind })
     .from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(
@@ -367,7 +393,18 @@ export async function ensureBotGroupLaneSession(input: {
       eq(sessions.status, 'active'),
     ))
     .limit(1);
-  if (existing) {
+  let wantedProject = input.projectDir ?? null;
+  if (input.continueConversation && existing?.projectDir && registeredProject)
+    wantedProject = await registeredProject(existing.projectDir) ?? wantedProject;
+  const conversationOnly = groupLaneUsesChatWorkspace(routeKey);
+  const chatDir = conversationOnly ? await ensureBotChatOnlyWorkspaceDir(owner.userDataDir, input.botId, groupLaneOfRouteKey(routeKey)) : null;
+  owner.assertCurrent();
+  const priorProject = existing?.projectDir ?? (existing?.workspaceKind === 'project' ? existing.workingDir : null);
+  const legacyHome = !wantedProject && existing?.workingDir === path.join(botProfileDir(owner.userDataDir, input.botId), 'workspace');
+  const moves = !!existing && (chatDir
+    ? existing.workingDir !== chatDir || priorProject !== wantedProject
+    : !input.plan && (priorProject !== wantedProject || legacyHome));
+  if (existing && !moves) {
     await syncBotLanePermission(existing.sessionId);
     owner.assertCurrent();
     return { ok: true, sessionId: existing.sessionId, created: false };
@@ -386,68 +423,30 @@ export async function ensureBotGroupLaneSession(input: {
     .limit(1);
   if (!profileVersion) return { ok: false, errorCode: 'MEMBER_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
-  const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+  const primaryRoute = await readEffectiveBotPrimaryRoute(config);
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = input.plan && input.chatAccess?.mode !== 'chat' ? ('project' as const) : ('dialogue' as const);
-  const workingDir = input.chatAccess?.mode === 'chat'
-    ? await ensureBotChatOnlyWorkspaceDir(owner.userDataDir, input.botId, groupLaneOfRouteKey(routeKey))
-    : input.plan ? input.plan.workDir : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspaceKind = wantedProject && !conversationOnly ? ('project' as const) : ('dialogue' as const);
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(input.plan?.sessionId);
-  const row = {
-    ...sessionCreateToRow(
-      sessionId,
-      {
-        workspaceKind,
-        workingDir,
-        ...botSessionRouteFields(config, primaryRoute),
-        remoteHostId: undefined,
-        source: 'bot',
-      },
-      now,
-    ),
-    title: input.title,
-  };
-  const gitSafety = readGitSafetySettings();
-  await ensureProjectGitInitialized({
-    workingDir,
-    workspaceKind,
-    remoteHostId: null,
-    sessionId,
-    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-    autoInitProjectGit: gitSafety.autoInitProjectGit,
-    source: 'local-db:bots:create-group-lane',
-  });
-  owner.assertCurrent();
-  const result = await client.tx<BotGroupsCreateLaneResult>('bots.createGroupLane', {
+  const { value: result } = await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+    body: { title: input.title, workspaceKind, projectDir: wantedProject,
+      workingDir: chatDir || input.plan?.workDir || wantedProject || undefined, ...botSessionRouteFields(config, primaryRoute) },
+  }, async row => client.tx<BotGroupsCreateLaneResult>('bots.createGroupLane', {
     botId: input.botId,
     groupId: input.groupId,
     routeKey,
-    session: {
-      id: row.id,
-      title: row.title,
-      workingDir: row.workingDir ?? null,
-      workspaceKind: row.workspaceKind,
-      model: row.model,
-      effort: row.effort,
-      fastMode: row.fastMode,
-      permissionMode: row.permissionMode,
-      agentKind: row.agentKind,
-      remoteHostId: null,
-      providerId: row.providerId ?? null,
-      agentDeviceId: row.agentDeviceId ?? null,
-      extraDirs: row.extraDirs,
-      source: row.source,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    },
-  });
+    ...(moves ? { replaceSessionId: existing.sessionId } : {}),
+    session: botSessionPayload(row),
+  }));
   owner.assertCurrent();
   if (result.permissionRepairCanonicalSessionId) {
     await syncBotLinkedLanePermissions(result.permissionRepairCanonicalSessionId);
     owner.assertCurrent();
   }
-  return { ok: true, sessionId: result.sessionId, created: result.created };
+  if (result.created) emitSessionCreated(result.sessionId);
+  if (result.replacedSessionId) broadcastSessionPatched(result.replacedSessionId, { status: 'archived' });
+  return { ok: true, sessionId: result.sessionId, created: result.created,
+    ...(result.replacedSessionId ? { replacedSessionId: result.replacedSessionId } : {}) };
 }
 
 export type EnsureBotChannelLaneResult =
@@ -462,7 +461,7 @@ export async function findBotChannelLaneSession(botId: string, routeKey: string)
 async function findBotOwnedLaneSession(
   botId: string,
   routeKey: string,
-  role: 'channel' | 'routine',
+  role: 'channel',
   status: 'active' | 'archived' = 'active',
 ): Promise<string | null> {
   const [existing] = await getDbClient()
@@ -491,7 +490,7 @@ async function findBotOwnedLaneSession(
 async function resumeArchivedBotOwnedLaneSession(
   botId: string,
   routeKey: string,
-  role: 'channel' | 'routine',
+  role: 'channel',
 ): Promise<string | null> {
   const archived = await findBotOwnedLaneSession(botId, routeKey, role, 'archived');
   if (!archived) return null;
@@ -509,7 +508,7 @@ async function resumeArchivedBotOwnedLaneSession(
  * The Bot's hidden lane for one personal-IM group / topic (or an admitted guest
  * DM) once the whole connection is handed to the Bot. Same Profile, Home
  * workspace, model chain and permission profile as the canonical Chat; never a
- * second canonical Session and never visible in the task list. Route keys:
+ * second canonical Session. Channel work retains its ordinary task-list entry. Route keys:
  * `im:<channel>:<botContextId>:g:<chatId>[:t:<threadId>]` / `…:dm:<userId>`.
  */
 export async function ensureBotChannelLaneSession(input: {
@@ -520,12 +519,7 @@ export async function ensureBotChannelLaneSession(input: {
   return ensureBotOwnedLaneSession(input, 'channel');
 }
 
-/** A persistent execution context for one standing instruction, sharing its companion's Home. */
-export async function ensureBotRoutineLaneSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<EnsureBotChannelLaneResult> {
-  return ensureBotOwnedLaneSession({ ...input, routeKey: `routine:${input.routineId}` }, 'routine');
-}
-
-async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: string; title: string; modelOverride?: RoutineModel | null }, role: 'channel' | 'routine'): Promise<EnsureBotChannelLaneResult> {
+async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: string; title: string }, role: 'channel'): Promise<EnsureBotChannelLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -550,65 +544,21 @@ async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: strin
     .limit(1);
   if (!profileVersion) return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
-  const override = input.modelOverride;
-  const primaryRoute = override ? { harness: override.agentKind === 'claude-code' ? 'claude' as const : override.agentKind,
-    model: override.model, providerId: override.providerId ?? null, effort: override.effort ?? '',
-    fastMode: override.fastMode ?? false, agentDeviceId: override.agentDeviceId ?? null }
-    : (await readEffectiveBotModelChain(config))[0] ?? null;
+  const primaryRoute = await readEffectiveBotPrimaryRoute(config);
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = 'dialogue' as const;
-  const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspace = await privateBotWorkspace(input.botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(undefined);
-  const row = {
-    ...sessionCreateToRow(
-      sessionId,
-      {
-        workspaceKind,
-        workingDir,
-        ...botSessionRouteFields(override ? { ...config, providerId: null, effort: undefined } : config, primaryRoute),
-        remoteHostId: undefined,
-        source: 'bot',
-      },
-      now,
-    ),
-    title: input.title,
-  };
-  const gitSafety = readGitSafetySettings();
-  await ensureProjectGitInitialized({
-    workingDir,
-    workspaceKind,
-    remoteHostId: null,
-    sessionId,
-    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-    autoInitProjectGit: gitSafety.autoInitProjectGit,
-    source: 'local-db:bots:create-channel-lane',
-  });
-  owner.assertCurrent();
   let result: BotGroupsCreateLaneResult;
   try {
-    result = await client.tx<BotGroupsCreateLaneResult>(role === 'routine' ? 'bots.createRoutineLane' : 'bots.createChannelLane', {
+    ({ value: result } = await openSession({
+      id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+      body: { title: input.title, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+    }, row => client.tx<BotGroupsCreateLaneResult>('bots.createChannelLane', {
       botId: input.botId,
       routeKey: input.routeKey,
-      session: {
-        id: row.id,
-        title: row.title,
-        workingDir: row.workingDir ?? null,
-        workspaceKind: row.workspaceKind,
-        model: row.model,
-        effort: row.effort,
-        fastMode: row.fastMode,
-        permissionMode: row.permissionMode,
-        agentKind: row.agentKind,
-        remoteHostId: null,
-        providerId: row.providerId ?? null,
-        agentDeviceId: row.agentDeviceId ?? null,
-        extraDirs: row.extraDirs,
-        source: row.source,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      },
-    });
+      session: botSessionPayload(row),
+    })));
   } catch (cause) {
     if ((cause as { code?: unknown } | null)?.code === 'BOT_UNAVAILABLE'
       || (cause instanceof Error && cause.message.includes('伙伴当前不可用'))) {
@@ -640,8 +590,7 @@ export async function ensureBotDmThreadSession(input: {
   botId: string;
   rootSessionId: string;
   rootClientId: string;
-  title: string;
-}): Promise<EnsureBotDmThreadResult> {
+}, onCreated?: (id: string, subject: string, initialTitle: string) => void): Promise<EnsureBotDmThreadResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -678,7 +627,7 @@ export async function ensureBotDmThreadSession(input: {
     .limit(1);
   if (!profileVersion) return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
-  const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+  const primaryRoute = await readEffectiveBotPrimaryRoute(config);
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
   // The canonical Chat's permission profile, not the default of a new Bot session.
   const [canonical] = await db
@@ -686,61 +635,29 @@ export async function ensureBotDmThreadSession(input: {
     .from(sessions)
     .where(eq(sessions.id, input.rootSessionId))
     .limit(1);
-  const workspaceKind = 'dialogue' as const;
-  const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspace = await privateBotWorkspace(input.botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
   const now = Date.now();
-  const sessionId = resolveBusinessSessionId(undefined);
-  const row = {
-    ...sessionCreateToRow(
-      sessionId,
-      {
-        workspaceKind,
-        workingDir,
-        ...botSessionRouteFields(config, primaryRoute),
-        remoteHostId: undefined,
-        source: 'bot',
-      },
-      now,
-    ),
-    title: input.title,
-  };
-  const gitSafety = readGitSafetySettings();
-  await ensureProjectGitInitialized({
-    workingDir,
-    workspaceKind,
-    remoteHostId: null,
-    sessionId,
-    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-    autoInitProjectGit: gitSafety.autoInitProjectGit,
-    source: 'local-db:bots:create-thread-lane',
-  });
+  // Both phone and desktop send a display excerpt. Read the original visible text on
+  // the owning device so attachment labels and stale client previews never reach a title model.
+  const [root] = await db.select({ role: messages.role, content: messages.content })
+    .from(messages).where(and(eq(messages.sessionId, input.rootSessionId),
+      eq(messages.clientId, input.rootClientId), isNull(messages.rewindAt))).limit(1);
+  const subject = root ? extractMessagePreview(root.content, root.role) ?? '' : '';
+  const title = normalizeAutoTitle(subject) || DEFAULT_DRAFT_SESSION_TITLE;
   owner.assertCurrent();
+  const sessionId = resolveBusinessSessionId(undefined);
   let result: BotGroupsCreateLaneResult;
   try {
-    result = await client.tx<BotGroupsCreateLaneResult>('bots.createThreadLane', {
+    ({ value: result } = await openSession({
+      id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+      body: { title, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+    }, row => client.tx<BotGroupsCreateLaneResult>('bots.createThreadLane', {
       botId: input.botId,
       routeKey,
       rootSessionId: input.rootSessionId,
       rootClientId: input.rootClientId,
-      session: {
-        id: row.id,
-        title: row.title,
-        workingDir: row.workingDir ?? null,
-        workspaceKind: row.workspaceKind,
-        model: row.model,
-        effort: row.effort,
-        fastMode: row.fastMode,
-        permissionMode: canonical?.permissionMode ?? row.permissionMode,
-        agentKind: row.agentKind,
-        remoteHostId: null,
-        providerId: row.providerId ?? null,
-        agentDeviceId: row.agentDeviceId ?? null,
-        extraDirs: row.extraDirs,
-        source: row.source,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      },
-    });
+      session: { ...botSessionPayload(row), permissionMode: canonical?.permissionMode ?? row.permissionMode },
+    })));
   } catch (cause) {
     const code = (cause as { code?: unknown } | null)?.code;
     const message = cause instanceof Error ? cause.message : '';
@@ -757,6 +674,7 @@ export async function ensureBotDmThreadSession(input: {
     await syncBotLinkedLanePermissions(result.permissionRepairCanonicalSessionId);
     owner.assertCurrent();
   }
+  if (result.created && subject) onCreated?.(result.sessionId, subject, title);
   return { ok: true, sessionId: result.sessionId, created: result.created };
 }
 
@@ -842,6 +760,7 @@ export async function listBotDmThreads(botId: string, rootSessionId: string): Pr
  * release their live runtimes.
  */
 export async function archiveBotChannelLanes(input: {
+  botId?: string;
   routeKey?: string;
   routeKeyPrefix?: string;
   exceptBotId?: string | null;
@@ -849,6 +768,7 @@ export async function archiveBotChannelLanes(input: {
   const owner = captureBotOperationOwner();
   const result = await getDbClient().tx<{ archivedSessionIds: string[] }>('bots.archiveChannelLanes', {
     routeKey: input.routeKey ?? null,
+    botId: input.botId,
     routeKeyPrefix: input.routeKeyPrefix ?? null,
     exceptBotId: input.exceptBotId ?? null,
     now: Date.now(),
@@ -946,12 +866,13 @@ export async function reconcileBotProfileFolder(
   return derived;
 }
 
-function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' {
-  return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : 'cc';
+function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' | 'acp' {
+  return config.harness === 'codex' || config.harness === 'pi' || config.harness === 'acp' ? config.harness : 'cc';
 }
 
 function defaultBotModelForConfig(config: Record<string, unknown>): string {
-  return botSessionAgentKind(config) === 'pi' ? NEW_BOT_DEFAULT_PI_MODEL : 'claude-sonnet-4-6';
+  const kind = botSessionAgentKind(config);
+  return kind === 'pi' ? NEW_BOT_DEFAULT_PI_MODEL : kind === 'acp' ? 'default' : 'claude-sonnet-4-6';
 }
 
 function botSessionPermissionMode(config: Record<string, unknown>): 'ask' | 'auto' | 'bypassPermissions' {
@@ -962,10 +883,11 @@ type BotPrimaryRoute = Awaited<ReturnType<typeof readEffectiveBotModelChain>>[nu
 
 /** Session runtime fields every Bot-owned Chat (canonical or group lane) starts from. */
 function botSessionRouteFields(config: Record<string, unknown>, primaryRoute: BotPrimaryRoute | null) {
+  const agentKind = botSessionAgentKind(primaryRoute ?? config);
   return {
     model:
       primaryRoute?.model ??
-      (typeof config.model === 'string'
+      (typeof config.model === 'string' && config.model.trim()
         ? config.model.trim()
         : defaultBotModelForConfig(config)),
     providerId:
@@ -974,19 +896,19 @@ function botSessionRouteFields(config: Record<string, unknown>, primaryRoute: Bo
         ? config.providerId.trim()
         : config.providerId === null
           ? null
-          : botSessionAgentKind(primaryRoute ?? config) === 'pi'
+          : agentKind === 'pi'
             ? NEW_BOT_DEFAULT_PI_PROVIDER
             : undefined),
     effort:
       primaryRoute?.effort ||
       (typeof config.effort === 'string' && config.effort.trim()
         ? config.effort.trim()
-        : botSessionAgentKind(primaryRoute ?? config) === 'pi'
+        : agentKind === 'pi'
           ? NEW_BOT_DEFAULT_PI_EFFORT
           : undefined),
-    fastMode: primaryRoute?.fastMode ?? config.fastMode === true,
+    fastMode: agentKind === 'acp' ? false : (primaryRoute?.fastMode ?? config.fastMode === true),
     agentDeviceId: primaryRoute?.agentDeviceId ?? null,
-    agentKind: botSessionAgentKind(primaryRoute ?? config),
+    agentKind,
     permissionMode: botSessionPermissionMode(config),
   };
 }
@@ -1243,15 +1165,23 @@ async function readProfile(
         )
     : [];
   const byId = new Map(sessionRows.map((row) => [row.id, row]));
-  // Runtime snapshots are durable history. The list needs only the latest per
-  // task; fetching every frozen capability JSON grows with months of restarts.
+  // Each batch returns at most one snapshot per linked task. The correlated
+  // lookup uses the session/prepared index inside SQLite; historical capability JSON
+  // stays in the worker instead of crossing one RPC per link (or all at once).
   const runtimeRows: (typeof botRuntimeSnapshots.$inferSelect)[] = [];
-  for (const link of links) {
+  const runtimeSessionIds = [...new Set(links.map(link => link.sessionId))];
+  for (let offset = 0; offset < runtimeSessionIds.length; offset += 100) {
     owner.assertCurrent();
+    const batch = runtimeSessionIds.slice(offset, offset + 100);
     runtimeRows.push(...await db.select().from(botRuntimeSnapshots)
-      .where(eq(botRuntimeSnapshots.sessionId, link.sessionId))
-      .orderBy(desc(botRuntimeSnapshots.preparedAt), desc(botRuntimeSnapshots.appliedAt))
-      .limit(1));
+      .where(inArray(botRuntimeSnapshots.id, db.select({
+        // Keep the outer column qualified: Drizzle strips column qualifiers in
+        // single-table projections, which would otherwise bind to latest.id.
+        id: sql<string>`(SELECT latest.id FROM bot_runtime_snapshots AS latest
+          WHERE latest.session_id = "sessions"."id"
+          ORDER BY latest.prepared_at DESC, latest.applied_at DESC, latest.id DESC LIMIT 1)`,
+      }).from(sessions).where(inArray(sessions.id, batch)))));
+    owner.assertCurrent();
   }
   const runtimeBySession = new Map<string, (typeof runtimeRows)[number]>();
   for (const row of runtimeRows) {
@@ -1279,6 +1209,7 @@ async function readProfile(
     lastReadAt,
   );
   const config = normalizeBotToolCapabilities(parseJson(version?.capabilitiesJson ?? '{}'));
+  setBotProjectSkillsDir(owner.userDataDir, profile.id, readBotProjectMode(config));
   const modelChain = await readEffectiveBotModelChain(config);
   const primaryModelRoute = modelChain[0];
   const invitation = botInvitationProgress(config.invitation);
@@ -1325,6 +1256,7 @@ async function readProfile(
     lastMessageAt: latestMessage.createdAt,
     lastMessageRole: latestMessage.role,
     unreadCount,
+    ...(byId.get(canonicalSessionId ?? '') ? { inboxSnooze: botInboxSnooze(byId.get(canonicalSessionId ?? '')!, latestMessage) } : {}),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
     skills: Array.isArray(config.skills)
@@ -1352,12 +1284,11 @@ async function readProfile(
       fastMode: primaryModelRoute?.fastMode ?? config.fastMode === true,
       harness:
         primaryModelRoute?.harness ??
-        (config.harness === 'codex' || config.harness === 'pi' ? config.harness : 'claude'),
+        (config.harness === 'codex' || config.harness === 'pi' || config.harness === 'acp' ? config.harness : 'claude'),
       modelChain,
       modelChainOverride: Array.isArray(config.modelChainOverride)
         ? normalizeBotModelChain(config.modelChainOverride)
         : null,
-      ...(config.taskModelOverride !== undefined ? { taskModelOverride: readBotTaskModelOverride(config.taskModelOverride) } : {}),
       skillMode: config.skillMode === 'allowlist' ? 'allowlist' : 'inherit',
       // 跟随全局时被单独关掉的那几项(见 botProfileRuntime 的 excludedSkills)。
       skillsExcluded: Array.isArray(config.skillsExcluded)
@@ -1380,9 +1311,7 @@ async function readProfile(
       // back from here, so an explicit choice must survive a reload. Absent keeps the defaults.
       ...(config.inputHandoff === false ? { inputHandoff: false } : {}),
       ...(config.allowSchedulerFollow === true ? { allowSchedulerFollow: true } : {}),
-      // Absent = every system Skill on (shared/botSystemSkills.ts).
-      ...(readBotSystemSkillsOff(config.systemSkillsOff).length
-        ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
+      ...(readBotProjectMode(config) ? { projectMode: true } : {}),
     },
     sessions: links.flatMap((link) => {
       const row = byId.get(link.sessionId);
@@ -1440,6 +1369,28 @@ async function readProfile(
 /** Full profile read for the teammate settings pages (the remote Desktop projects it before sending). */
 export async function readBotSettingsProfile(botId: string) {
   return readProfile(getDbClient(), botId);
+}
+
+/** Same service for local settings and authorized same-account remote settings. */
+export async function botProjectRepository(botId: string, retry: boolean, assertExternal: () => void = () => {}) {
+  const owner = captureBotOperationOwner();
+  const [profile] = await getDbClient().drizzle.select({ id: botProfiles.id })
+    .from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+  owner.assertCurrent();
+  assertExternal();
+  if (!profile) throwIpcError('NOT_FOUND', 'Bot does not exist');
+  const workspace = path.join(botProfileDir(owner.userDataDir, botId), 'workspace');
+  if (retry) {
+    await ensureWorkspaceRepository(workspace).catch((error) => {
+      log.warn('buddy project repository retry failed', { botId, error: String(error) });
+    });
+    owner.assertCurrent();
+    assertExternal();
+  }
+  const status = await readWorkspaceRepositoryStatus(workspace);
+  owner.assertCurrent();
+  assertExternal();
+  return status;
 }
 
 /**
@@ -1521,6 +1472,8 @@ export interface BotRemoteResourceSource {
   lastReplyAt?: number;
   /** Host read position of this conversation (botReadStateStore); 0 when none is known. */
   lastReadAt?: number;
+  /** Inbox snooze of the main conversation's Session; absent while there is no conversation. */
+  inboxSnooze?: BotInboxSnooze;
   needsAttention: boolean;
   hiddenAt: number | null;
   pinnedAt: number | null;
@@ -1529,6 +1482,32 @@ export interface BotRemoteResourceSource {
   updatedAt: number;
   /** Open tasks this Bot looks after, for the follow mark on remote task rows. Absent = none. */
   followingSessionIds?: string[];
+}
+
+/**
+ * The inbox snooze of a teammate's main conversation, in the Session's own ISO fields so
+ * controllers reuse the task rule (new input after `snoozedAt` wakes it). `userSendAt` is the
+ * latest input: the Session's own value or the newest visible message, whichever is later. A
+ * message another task sends with a tool does not move the Session's `userSendAt`, and a
+ * teammate asked to get a decision must not stay hidden behind an earlier snooze.
+ */
+export interface BotInboxSnooze {
+  snoozedUntil: string | null;
+  snoozedAt: string | null;
+  userSendAt: string | null;
+}
+
+function botInboxSnooze(
+  row: { snoozedUntil: number | null; snoozedAt: number | null; userSendAt: number | null; activeTurnStartedAt: number | null; lastTurnEndedAt: number | null },
+  latest: { role: BotChatRole | null; createdAt: number | null },
+): BotInboxSnooze {
+  const iso = (ms: number | null) => ms == null ? null : new Date(ms).toISOString();
+  // Streamed text keeps its start timestamp. Use the terminal timestamp only when
+  // the visible reply belongs to that turn, so old replies cannot wake a later snooze.
+  const replyEndedAt = latest.role === 'assistant' && row.activeTurnStartedAt != null
+    && (latest.createdAt ?? 0) >= row.activeTurnStartedAt ? row.lastTurnEndedAt ?? 0 : 0;
+  const inputAt = Math.max(row.userSendAt ?? 0, latest.createdAt ?? 0, replyEndedAt);
+  return { snoozedUntil: iso(row.snoozedUntil), snoozedAt: iso(row.snoozedAt), userSendAt: iso(inputAt || null) };
 }
 
 const MAX_FOLLOWED_TASK_LINKS = 200;
@@ -1580,7 +1559,9 @@ async function readBotRemoteResourceSource(
   const { canonicalSessionId } = await reconcileCanonicalLink(botId, client);
   owner.assertCurrent();
   const [canonical] = canonicalSessionId ? await db
-    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
+    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt,
+      snoozedUntil: sessions.snoozedUntil, snoozedAt: sessions.snoozedAt, userSendAt: sessions.userSendAt,
+      activeTurnStartedAt: sessions.activeTurnStartedAt, lastTurnEndedAt: sessions.lastTurnEndedAt })
     .from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1) : [];
   owner.assertCurrent();
   if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
@@ -1607,6 +1588,7 @@ async function readBotRemoteResourceSource(
     lastMessageRole: latest.role,
     lastReplyAt: reply.createdAt ?? 0,
     lastReadAt: hostReadPosition(profile.id),
+    ...(canonical ? { inboxSnooze: botInboxSnooze(canonical, latest) } : {}),
     needsAttention: profile.attentionAt !== null &&
       BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason) &&
       isBotFailureAttentionWorthy(profile.attentionReason as BotFailureReason),
@@ -1699,12 +1681,11 @@ export async function getBotRemoteSettingsSource(botId: string) {
     followsDefault: !(Array.isArray(config.modelChainOverride) && config.modelChainOverride.length > 0)
       && (config.modelChainOverride === null || config.modelOverride === null
         || (!Array.isArray(config.modelChainOverride) && !Array.isArray(config.modelChain) && typeof config.model !== 'string')),
-    ...(config.taskModelOverride !== undefined ? { taskModelOverride: readBotTaskModelOverride(config.taskModelOverride) } : {}),
     skills: strings(config.skills),
     connections: strings(config.mcpServers),
     toolsets: strings(config.toolsets),
-    // Absent = every system Skill on (shared/botSystemSkills.ts).
-    ...(readBotSystemSkillsOff(config.systemSkillsOff).length ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
+    // V2: every session has everything here, so there is no selection to show.
+    ...(readBotProjectMode(config) ? { projectMode: true as const } : {}),
   };
 }
 
@@ -1736,7 +1717,7 @@ function hostReadPosition(botId: string): number {
 }
 
 /** Positions advanced on the phone or another Mac live only in the host ledger. */
-function mergeHostReadPositions(fromRenderer: Map<string, number>): Map<string, number> {
+export function mergeHostReadPositions(fromRenderer: Map<string, number>): Map<string, number> {
   let host: Record<string, number> = {};
   let acknowledged: Record<string, number> = {};
   try {
@@ -1760,6 +1741,13 @@ async function fileExists(candidate: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+type NewTeammateSetup = (botId: string, ownerRoot: string, assertCurrent: () => void) => Promise<unknown>;
+let newTeammateSetup: NewTeammateSetup | null = null;
+/** Registered by botV2Migration.ts: every new teammate is set up as a project (V2) right away. */
+export function setNewTeammateSetup(setup: NewTeammateSetup | null): void {
+  newTeammateSetup = setup;
 }
 
 async function defaultNewBotCapabilities(): Promise<Record<string, unknown>> {
@@ -1796,8 +1784,8 @@ export function broadcastBotProfileChanged(payload: {
   change: 'created' | 'updated';
 }): void {
   broadcastBotRemoteResourceChanged(payload.botId);
-  // 伙伴自主跟进：新建伙伴、改「它开的任务也交给总调度跟」立即生效。
-  signalBotAutonomyBotsChanged();
+  // Readers of teammate profiles (Chat Server companion sync) re-read without waiting for their timers.
+  signalBotProfilesChanged();
   if (payload.change === 'updated') notifyAgentIslandCompanionChanged(payload.botId);
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -1823,7 +1811,7 @@ export async function recoverActiveTeammateInvitations(): Promise<void> {
     owner.assertCurrent();
     for (const { id } of profiles) queueBotInvitation(id);
   } catch (cause) {
-    log.warn('recover pending teammate invitations failed', {
+    log.warn('recover pending buddy invitations failed', {
       error: cause instanceof Error ? cause.name : typeof cause,
     });
   }
@@ -1837,7 +1825,7 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
   const db = client.drizzle;
     const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
     if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) throwIpcError('PRECONDITION_FAILED', 'Teammate changed');
+    if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) throwIpcError('PRECONDITION_FAILED', 'Buddy changed');
     if (current.status === 'archived') {
       throwIpcError('PRECONDITION_FAILED', '已停止的 Bot 不能修改头像');
     }
@@ -1912,7 +1900,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const avatarImage = decodeBotAvatarImage(body.avatarImageBase64);
   const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
   const identitySource =
-    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readText(body.identitySource, 'identitySource', 12000)) || buildDefaultBotIdentity(name, description);
+    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readBotProfileSource(body.identitySource, 'identitySource')) || buildDefaultBotIdentity(name, description);
   const skills = draftEntry ? draftEntry.draft.skillRefs : Array.isArray(body.skills)
     ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
     : [];
@@ -1923,7 +1911,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const requestedCapabilities = hasRequestedCapabilities
     ? (body.capabilities as Record<string, unknown>)
     : {};
-  const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+  const userContextSource = readBotProfileSource(body.userContextSource, 'userContextSource');
   const gender = readBotGender(body.gender);
   // Old clients may still submit retired template ids with a complete profile.
   // Accept those as ordinary teammates, without installing or reconstructing a template.
@@ -2008,6 +1996,8 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     identitySource,
     capabilitiesJson: safeJson(persistedCapabilities),
     ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
+    // Main-owned projection, never read from the renderer/model request body.
+    inactiveCindyIds: inactiveCompanionCopyIds(companionHomes.snapshot()),
     now,
   });
   } catch (error) {
@@ -2019,6 +2009,14 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     }
     if ((error as { code?: string }).code === 'ALREADY_EXISTS') throwIpcError('ALREADY_EXISTS', '已有同名伙伴，请换一个名字');
     throw error;
+  }
+  assertCreationOwnerStillCurrent();
+  // Every teammate is a project (V2) from the start, before its first chat; a failure retries on
+  // the next start like the upgrade of an existing teammate.
+  try {
+    await newTeammateSetup?.(id, creationOwnerBoundary.userDataDir, assertCreationOwnerStillCurrent);
+  } catch (error) {
+    log.warn('new buddy V2 setup failed; retries on next start', { botId: id, error: String(error) });
   }
   assertCreationOwnerStillCurrent();
   if (prepareInvitation) {
@@ -2191,7 +2189,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   if (restored?.avatarFallback ?? (previous.cloudAvatarFallback === true)) nextConfig.cloudAvatarFallback = true;
   else delete nextConfig.cloudAvatarFallback;
   if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
-    nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+    nextConfig.userContextSource = readBotProfileSource(body.userContextSource, 'userContextSource');
   }
   // 没显式传就保持原值(mergeBotProfileCapabilities 已经把 previous 整份带过来了),
   // 显式传脏值则清掉 —— 与 readBotGender 的口径一致。
@@ -2200,6 +2198,8 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (nextGender) nextConfig.gender = nextGender;
     else delete nextConfig.gender;
   }
+  // A V2 teammate stays a project: V1's own engines are gone, so there is nothing to go back to.
+  if (readBotProjectMode(previous)) nextConfig.projectMode = true;
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
   // Legacy chain-only profiles gain mirrored fields during normalization.
   // Compare the same representation so unrelated edits do not validate stale routes.
@@ -2213,16 +2213,9 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     }
     owner.assertCurrent();
   }
-  if (JSON.stringify(previous.taskModelOverride ?? null) !== JSON.stringify(normalizedNextConfig.taskModelOverride ?? null)) {
-    const taskModel = readBotTaskModelOverride(normalizedNextConfig.taskModelOverride);
-    if (taskModel && !await validateTaskModel(taskModel)) {
-      throwIpcError('INVALID_PARAMS', '任务模型不可用，请重新选择模型、来源与引擎');
-    }
-    owner.assertCurrent();
-  }
   const nextIdentitySource =
     body.identitySource !== undefined
-      ? readText(body.identitySource, 'identitySource', 12000) ||
+      ? readBotProfileSource(body.identitySource, 'identitySource') ||
         buildDefaultBotIdentity(patch.displayName ?? current.displayName, patch.description ?? current.description)
       : (version?.identitySource ?? '');
   const profileContentChanged = botProfileContentChanged({
@@ -2253,6 +2246,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
         ...(acceptsModelSelection ? { clearScheduledModelBaseline: true } : {}),
         ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
         ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
+        ...(restored?.templateId === 'cindy' ? { inactiveCindyIds: inactiveCompanionCopyIds(companionHomes.snapshot()) } : {}),
         ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
         ...(patch.description !== undefined ? { description: patch.description } : {}),
         ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
@@ -2324,6 +2318,36 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
     owner.assertCurrent();
   }
+  // Project mode (experimental): turning it on makes the workspace a registered,
+  // versioned project before the refreshed chat loads its AGENTS.md.
+  if (readBotProjectMode(normalizedNextConfig) && !readBotProjectMode(previous)) {
+    const displayName = patch.displayName ?? current.displayName;
+    const prepared = await prepareBotProjectWorkspace({
+      botId: id,
+      displayName,
+      ownerRoot: owner.userDataDir,
+      legacyUserDataDir: app.getPath('userData'),
+    }).catch((error) => {
+      log.warn('buddy project preparation failed', { botId: id, error: String(error) });
+      return null;
+    });
+    owner.assertCurrent();
+    // The nightly review becomes the project's own automation.
+    if (prepared) {
+      const [route] = await readEffectiveBotModelChain(normalizedNextConfig).catch(() => []);
+      await ensureBotProjectAutomations({ botId: id, displayName, workingDir: prepared.workingDir, route })
+        .catch((error) => log.warn('buddy project automations failed', { botId: id, error: String(error) }));
+      owner.assertCurrent();
+    }
+  } else if (readBotProjectMode(normalizedNextConfig) && patch.displayName !== undefined
+    && patch.displayName !== current.displayName) {
+    // The project carries the teammate's standard name; a name the user gave it is kept.
+    const projectDir = normalizeRecentWorkdirPath(
+      await ensureBotWorkspaceDir(owner.userDataDir, id, app.getPath('userData')),
+    );
+    if (projectDir) await nameBotProject(id, projectDir, patch.displayName, current.displayName);
+    owner.assertCurrent();
+  }
   if (profileContentChanged || acceptsSavedModel) {
     const [canonical] = await db
       .select({ sessionId: botSessionLinks.sessionId })
@@ -2347,8 +2371,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
 }
 
 async function findExistingCindy(client: ReturnType<typeof getDbClient>) {
-  const rows = await client.drizzle.select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource }).from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion))).where(ne(botProfiles.status, 'archived')).orderBy(botProfiles.createdAt);
-  const existing = rows.find(row => parseJson(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy');
+  const rows = await client.drizzle.select({ id: botProfiles.id, status: botProfiles.status, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource }).from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion))).where(ne(botProfiles.status, 'archived')).orderBy(botProfiles.createdAt);
+  const inactive = new Set(inactiveCompanionCopyIds(companionHomes.snapshot()));
+  const existing = rows.find(row => (row.status === 'deleting' || !inactive.has(row.id))
+    && (parseJson(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'));
   return existing ? readProfile(client, existing.id) : null;
 }
 
@@ -2361,14 +2387,13 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
     .where(eq(botProfiles.id, botId))
     .limit(1);
   if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
-  // Group / IM channel lanes only hold hidden channel turns; the group chat or
-  // the IM conversation itself is the user's record.
+  // All group work, including private catch-up reports, belongs in the owner's
+  // history. IM channel history keeps its existing dedicated entry.
   const links = await db
     .select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks)
     .where(and(
       eq(botSessionLinks.botId, botId),
-      ne(botSessionLinks.role, 'group'),
       ne(botSessionLinks.role, 'channel'),
     ));
   return searchConversations(
@@ -2388,7 +2413,7 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
   );
 }
 
-export function registerBotIpc(): void {
+export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, initialTitle: string) => void): void {
   registerBotReadStateIpc();
   ipcMain.handle('local-db:bots:generate-avatar', async (event, token: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -2436,7 +2461,7 @@ export function registerBotIpc(): void {
     const remote = isDeviceLinkInvoke();
     if (!remote) assertTrustedAppRendererEvent(event);
     const client = tryGetDbClient();
-    if (!client) return [];
+    if (!client) throwIpcError('PRECONDITION_FAILED', 'DbClient not ready');
     const owner = captureBotOperationOwner();
     const welcomeContext = !remote && raw && typeof raw === 'object'
       ? normalizeBotWelcomeContext((raw as Record<string, unknown>).welcomeContext) : undefined;
@@ -2477,6 +2502,12 @@ export function registerBotIpc(): void {
     const profile = await readRemoteBotProfile(client, botId);
     if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
     return profile;
+  });
+
+  ipcMain.handle('local-db:bots:project-repository', async (event, rawId: unknown, retry: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof retry !== 'boolean') throwIpcError('INVALID_PARAMS', 'Retry must be a boolean');
+    return botProjectRepository(requireString(rawId, 'botId'), retry);
   });
 
   // Source preparation is local-only and account-independent, including for a
@@ -2643,128 +2674,32 @@ export function registerBotIpc(): void {
     const invitation = botInvitationProgress(config.invitation);
     if (invitation && invitation.stage !== 'ready' && invitation.stage !== 'welcome')
       throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
-    const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+    const primaryRoute = await readEffectiveBotPrimaryRoute(config);
     if (!primaryRoute) throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
-    const workspaceKind = 'dialogue' as const;
-    const workingDir = await ensureBotWorkspaceDir(
-      owner.userDataDir,
-      botId,
-      app.getPath('userData'),
-    );
-    const insertRow = {
-      ...sessionCreateToRow(
-        sessionId,
-        {
-          workspaceKind,
-          workingDir,
-          ...botSessionRouteFields(config, primaryRoute),
-          remoteHostId: undefined,
-          source: 'bot',
-        },
-        now,
-      ),
-      title: profile.displayName,
-    };
-    const gitSafety = readGitSafetySettings();
-    await ensureProjectGitInitialized({
-      workingDir,
-      workspaceKind,
-      remoteHostId: null,
-      sessionId,
-      autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-      autoInitProjectGit: gitSafety.autoInitProjectGit,
-      source: 'local-db:bots:create-canonical-session',
-    });
-
-    let canonicalSessionId: string | null = null;
-    let archivedCanonicalSessionId: string | null = null;
-    let created = false;
-    // Profile/model/workspace preparation can outlive the originating group
-    // grant. Revalidate immediately before committing the Session/link CAS.
-    await beforeCommit?.();
-    owner.assertCurrent();
-    const result = await client.tx<BotsReplaceCanonicalSessionResult>(
-      'bots.replaceCanonicalSession',
-      {
+    const workspace = await privateBotWorkspace(botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
+    const { value: result } = await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
+      body: { title: profile.displayName, ...workspace, ...botSessionRouteFields(config, primaryRoute) },
+    }, async (insertRow, assertCurrent) => {
+      await beforeCommit?.();
+      assertCurrent();
+      return client.tx<BotsReplaceCanonicalSessionResult>('bots.replaceCanonicalSession', {
         botId,
-        expectedCanonicalSessionId: recoverableCompatibilityMirror
-          ? null
-          : expectedCanonicalSessionId,
-        compatibilityMissingCanonicalSessionId: recoverableCompatibilityMirror
-          ? expectedCanonicalSessionId
-          : null,
+        expectedCanonicalSessionId: recoverableCompatibilityMirror ? null : expectedCanonicalSessionId,
+        compatibilityMissingCanonicalSessionId: recoverableCompatibilityMirror ? expectedCanonicalSessionId : null,
         expectedProfileVersion,
-        session: {
-          id: insertRow.id,
-          title: insertRow.title,
-          workingDir: insertRow.workingDir ?? null,
-          workspaceKind: insertRow.workspaceKind,
-          model: insertRow.model,
-          effort: insertRow.effort,
-          fastMode: insertRow.fastMode,
-          permissionMode: insertRow.permissionMode,
-          agentKind: insertRow.agentKind,
-          remoteHostId: insertRow.remoteHostId ?? null,
-          providerId: insertRow.providerId ?? null,
-          agentDeviceId: insertRow.agentDeviceId ?? null,
-          extraDirs: insertRow.extraDirs,
-          source: insertRow.source,
-          createdAt: insertRow.createdAt,
-          updatedAt: insertRow.updatedAt,
-        },
+        session: botSessionPayload(insertRow),
         now,
-      },
-    );
-    canonicalSessionId = result.canonicalSessionId;
-    archivedCanonicalSessionId = result.archivedCanonicalSessionId;
-    created = result.created;
+      });
+    });
+    const canonicalSessionId = result.canonicalSessionId;
+    const archivedCanonicalSessionId = result.archivedCanonicalSessionId;
+    const created = result.created;
 
     owner.assertCurrent();
     if (!canonicalSessionId) {
       throwIpcError('PRECONDITION_FAILED', 'Bot 主任务创建失败');
     }
     if (archivedCanonicalSessionId) {
-      // A missing/deleted canonical is infrastructure recovery, not a user cancellation.
-      // Keep its active Session tasks alive, move their ownership to the replacement, and
-      // recreate idempotent card anchors there. Explicit archive/delete paths still cancel.
-      const reparented = await client.tx<BotsReparentDelegationsResult>(
-        'bots.reparentDelegations',
-        {
-          botId,
-          previousParentSessionId: archivedCanonicalSessionId,
-          nextParentSessionId: canonicalSessionId,
-          now: Date.now(),
-        },
-      );
-      if (reparented.delegationIds.length > 0) {
-        const rows = await db
-          .select()
-          .from(botDelegations)
-          .where(inArray(botDelegations.id, reparented.delegationIds));
-        for (const row of rows) {
-          await createMessage(canonicalSessionId, {
-            clientId: BOT_DELEGATION_CLIENT_ID.parentRequest(row.id),
-            role: 'assistant',
-            content: '',
-            createdAt: row.createdAt,
-            agentKind: null,
-            agentMeta: {
-              botCollaboration: {
-                v: 1,
-                role: 'delegation-request',
-                delegationId: row.id,
-                fromBotId: botId,
-                fromBotName: profile.displayName,
-                toBotId: null,
-                toBotName: 'Cindy',
-                parentSessionId: canonicalSessionId,
-                childSessionId: row.childSessionId,
-                objective: row.objective.slice(0, 400),
-              },
-            },
-          });
-        }
-      }
       await getMakerIfReady()
         ?.closeSession(archivedCanonicalSessionId)
         .catch(() => undefined);
@@ -2859,15 +2794,6 @@ export function registerBotIpc(): void {
     owner.assertCurrent();
     return result;
   };
-  ipcMain.handle('local-db:bots:workbench:get', async (event, rawBotId: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const botId = readText(rawBotId, 'botId', 128, true);
-    const owner = captureBotOperationOwner();
-    const responsibleSessionIds = await readBotResponsibleSessionIds(owner.userDataDir, botId);
-    owner.assertCurrent();
-    const workbench: BotWorkbench = { responsibleSessionIds };
-    return workbench;
-  });
   for (const operation of ['list', 'set'] as const) {
     ipcMain.handle(`local-db:bots:projects:${operation}`, async (event, rawBotId: unknown, rawId?: unknown, rawLinked?: unknown) => {
       assertTrustedAppRendererEvent(event);
@@ -2879,28 +2805,6 @@ export function registerBotIpc(): void {
       return access.set(id, rawLinked);
     });
   }
-  for (const operation of ['list', 'update', 'act'] as const) {
-    ipcMain.handle(`local-db:bots:todos:${operation}`, async (event, rawBotId: unknown, input: unknown) => {
-      assertTrustedAppRendererEvent(event);
-      const owner = captureBotOperationOwner();
-      const access = await todoAccess(readText(rawBotId, 'botId', 128, true));
-      owner.assertCurrent();
-      const result = operation === 'list' ? await access.list() : operation === 'update' ? await access.patch(input as TodoPatch)
-        : await access.act((input as {id:string}).id, (input as {revision:number}).revision, (input as {requestId:string}).requestId,(input as {locale?:string}).locale);
-      owner.assertCurrent();return result;
-    });
-  }
-  // 近况「每天帮我查一次」：不传 enabled 只读，传了就开 / 关「每天查待办」例行任务（没有就按默认内容新建）。返回当前是否开着。
-  ipcMain.handle('local-db:bots:todos:daily-check', async (event, rawBotId: unknown, rawEnabled: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const botId = readText(rawBotId, 'botId', 128, true);
-    if (rawEnabled !== undefined && typeof rawEnabled !== 'boolean') throw new Error('Invalid enabled');
-    const owner = captureBotOperationOwner();
-    const result = rawEnabled === undefined ? await routineTools.todoCheckEnabled(botId) : await routineTools.setTodoCheck(botId, rawEnabled);
-    owner.assertCurrent();
-    if (rawEnabled !== undefined) broadcastBotRemoteResourceChanged(botId);
-    return result;
-  });
   // Exact per-task responsibility IDs from the current owner, without message bodies.
   ipcMain.handle('local-db:bots:workbench:follow-scopes', async (event) => {
     assertTrustedAppRendererEvent(event);
@@ -2916,17 +2820,6 @@ export function registerBotIpc(): void {
     );
     owner.assertCurrent();
     return scopes;
-  });
-  // 工作台详情视图:只读一件任务的最近内容(有界)。范围限于该伙伴已接手的项目,
-  // 外部会话只读转录尾部,不写库、不导入。
-  ipcMain.handle('local-db:bots:workbench:read-task', async (event, rawBotId: unknown, rawTaskId: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const botId = readText(rawBotId, 'botId', 128, true);
-    const taskId = readText(rawTaskId, 'taskId', 256, true);
-    const owner = captureBotOperationOwner();
-    const result = await readBotWorkbenchTaskForOwner(botId, taskId);
-    owner.assertCurrent();
-    return result;
   });
   // Local settings read; remote clients already use settings:<botId>/skills.
   ipcMain.handle('local-db:bots:skills:list', async (event, rawBotId: unknown) => {
@@ -2992,8 +2885,7 @@ export function registerBotIpc(): void {
     if (!parseBotDmThreadRouteKey(`dm-thread:${rootSessionId}:${rootClientId}`)) {
       throwIpcError('INVALID_PARAMS', '话题的原消息无效');
     }
-    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 120) : '';
-    return ensureBotDmThreadSession({ botId, rootSessionId, rootClientId, title: title || '话题' });
+    return ensureBotDmThreadSession({ botId, rootSessionId, rootClientId }, onCreatedTopic);
   });
   ipcMain.handle('local-db:bots:dm-thread:list', async (event, raw: unknown) => {
     const remote = isDeviceLinkInvoke();
@@ -3034,5 +2926,4 @@ export function registerBotIpc(): void {
     return result;
   });
   // 伙伴自主跟进：工作台「一眼」与「自动跟进所有任务」设置。
-  registerBotAutonomyIpc();
 }

@@ -41,6 +41,16 @@ it('ignores forged App requests and Host responses from the Renderer, relaying o
   receive({ source: f.frame.contentWindow, data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-escape' } });
   expect(f.parent.postMessage).not.toHaveBeenCalled();
 });
+// PR #11917, unit: an authenticated poll can report revocation before the
+// document-removal notice arrives. Exercise the script that runs in the frame.
+it.each(['MCP_PLUGIN_UNAVAILABLE', 'MCP_APP_SERVER_CHANGED'])('preserves %s from an outstanding sandbox poll', async code => {
+  const f = fixture();
+  f.pending[0](Response.json({ code }, { status: 410 }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.parent.postMessage).toHaveBeenCalledWith({
+    jsonrpc: '2.0', method: 'ui/notifications/sandbox-failed', params: { code },
+  }, '*');
+});
 it('gives the UI only display state while keeping Host results on the direct App transport', async () => {
   const f = fixture();
   const result = { jsonrpc: '2.0', id: 1, result: { private: 'tool-result' } };
@@ -80,6 +90,22 @@ it('still relays App readiness and size notifications to the Renderer and Host',
   }
   expect(f.parent.postMessage).toHaveBeenCalledTimes(2);
 });
+it('emits host-owned handshake and result markers, while rejecting page-forged markers', async () => {
+  const f = fixture();
+  const receive = f.handlers.get('message')!;
+  receive({ source: f.frame.contentWindow, data: { jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {} } });
+  expect(f.parent.postMessage).toHaveBeenCalledExactlyOnceWith(
+    { jsonrpc: '2.0', method: 'ui/notifications/sandbox-handshake-started' }, '*');
+  f.parent.postMessage.mockClear();
+  receive({ source: f.frame.contentWindow, data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-result-delivered' } });
+  expect(f.parent.postMessage).not.toHaveBeenCalled();
+  f.pending[0]({ ok: true, json: async () => [{ seq: 1, message: {
+    jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { private: true } },
+  } }] });
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  expect(f.parent.postMessage).toHaveBeenCalledExactlyOnceWith(
+    { jsonrpc: '2.0', method: 'ui/notifications/sandbox-result-delivered' }, '*');
+});
 
 // Greptile 4427568732: a poll already on the wire can arrive after initialize.
 // Real emitted bridge script, deferred network response, reused request ID.
@@ -108,8 +134,10 @@ it('bounds replacement initialization without extending the deadline for retries
   receive('ui/notifications/initialized');
   f.parent.postMessage.mockClear();
   receive('ui/initialize');
+  f.parent.postMessage.mockClear();
   vi.advanceTimersByTime(44_000);
   receive('ui/initialize');
+  f.parent.postMessage.mockClear();
   expect(f.parent.postMessage).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1_000);
   expect(f.parent.postMessage).toHaveBeenCalledExactlyOnceWith(

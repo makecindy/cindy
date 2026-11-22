@@ -1,4 +1,5 @@
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { autoBridgeReportCount } from './orcaAutoBridgeBatch.js';
 import { rebuildQueuedOrcaWorkerMessage } from './orcaInterAgentDispatcher.js';
 import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 import type { WorkerReportWithdrawalStanding } from './orcaTeamService.js';
@@ -137,10 +138,14 @@ export function createOrcaWorkerReportQueue(deps: OrcaWorkerReportQueueDeps): Or
   /**
    * 老快照没有 senderSessionId：无法证明是这个 Worker 发的，一律不开放。失败轮的续跑／重发
    * 副本沿用了原回报的来源，但那是 Lead 自己的恢复输入，不算 Worker 的回报。
+   * 多 Worker 合批是系统产物：首条 senderSessionId 仅作团队授权证据，不代表整批所有权，
+   * 任何单个 Worker 都不得查看／改写／撤回／合并整批，避免首个 Worker 覆盖其他 Worker 的报告。
    */
   function isOwnReport(item: AgentInputQueuedMessage, identity: WorkerReportQueueIdentity): boolean {
     return (
-      isOrcaCollaborationMessage(item) && item.origin.senderSessionId === identity.workerSessionId
+      isOrcaCollaborationMessage(item) &&
+      autoBridgeReportCount(item) === 1 &&
+      item.origin.senderSessionId === identity.workerSessionId
     );
   }
 

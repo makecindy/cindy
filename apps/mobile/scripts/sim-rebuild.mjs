@@ -366,7 +366,9 @@ if (!app) {
     '-configuration', 'Debug',
     '-destination', simulatorDestination,
     '-derivedDataPath', buildDir,
-    '-quiet',
+    // Generic destinations otherwise request both simulator architectures. The local
+    // Agent-Net XCFramework and this cache entry are built for simArch only.
+    `ARCHS=${simArch}`,
     'build',
   ]);
 

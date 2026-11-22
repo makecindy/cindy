@@ -9,6 +9,8 @@ import { MessageBodyText } from '@/session/ShareMessageCheckbox';
 import { buildQueueRowPresentation, EMPTY_INPUT_PROJECTION } from '@/session/inputProjection';
 import type { MobilePendingSendItem } from '@/session/pendingSendItems';
 import { collectMobileMessageGalleryImages, lightboxImagesForPayload } from '@/session/messageGallery';
+import { useWaitingComputerRecovery } from '@/session/useWaitingComputerRecovery';
+import type { DeviceView } from '@cindy/device-link';
 import { usePendingOutboxActions, usePendingSendActions } from '@/session/usePendingSendActions';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
@@ -25,6 +27,10 @@ const { handlers, frames, durableThumbs } = vi.hoisted(() => ({
   frames: new Map<number, FrameRequestCallback>(),
   durableThumbs: new Map<string, string>(),
 }));
+vi.mock('expo-router', async () => {
+  const { useEffect } = await import('react');
+  return { useFocusEffect: (work: () => void | (() => void)) => useEffect(work, [work]) };
+});
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
   const view = (tag: string) => (props: Record<string, unknown> & { children?: ReactNode }) => {
@@ -32,7 +38,7 @@ vi.mock('react-native', async () => {
     return createElement(tag, { 'data-testid': props.testID, onClick: props.disabled ? undefined : props.onPress }, props.children);
   };
   class AnimatedValue { setValue() {} interpolate() { return 0; } }
-  return { View: view('div'), Text: view('span'), Pressable: view('button'), ActivityIndicator: () => null,
+  return { AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) }, View: view('div'), Text: view('span'), Pressable: view('button'), ActivityIndicator: () => null,
     Platform: { OS: 'ios' }, NativeModules: {}, UIManager: { getViewManagerConfig: () => ({}) },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     Animated: { View: view('div'), Value: AnimatedValue, timing: () => ({ start() {}, stop() {} }) },
@@ -52,7 +58,21 @@ vi.mock('lucide-react-native', () => ({ Check: () => null, AlertCircle: () => nu
   ListEnd: () => null, Paperclip: () => null, Pencil: () => null, RotateCcw: () => null, Trash2: () => null,
   Bot: () => null, Ghost: () => null, Send: () => null, Timer: () => null,
   Monitor: () => null, Smartphone: () => null, Clock: () => null, ChevronDown: () => null }));
-vi.mock('@/session/SentInlineAtomBody', () => ({ SentInlineAtomBody: () => null }));
+// The shared atom shell is replaced by a minimal forwarder: it keeps the real
+// bubble's per-text-token renderText call (the symmetric path being verified),
+// while native chips have their own suites.
+vi.mock('@/session/SentInlineAtomBody', async () => {
+  const { createElement, Fragment } = await import('react');
+  return {
+    SentInlineAtomBody: ({ renderText, tokens }: {
+      renderText?: (text: string, index: number) => ReactNode;
+      tokens: readonly { kind: string; text?: string }[];
+    }) => createElement('div', { 'data-testid': 'pendingSend.sentInlineAtoms' },
+      renderText ? createElement(Fragment, null, ...tokens.map((token, index) =>
+        token.kind === 'text' && token.text
+          ? createElement('span', { key: index }, renderText(token.text, index)) : null)) : null),
+  };
+});
 vi.mock('@/session/sentAttachmentThumbStore', () => ({ getSentAttachmentThumbUri: (ref: string) => durableThumbs.get(ref) ?? null,
   useSentAttachmentThumbsVersion: () => 0 }));
 vi.mock('react-i18next', () => ({ initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -137,6 +157,36 @@ it.each(['move', 'end', 'cancel', 'long', 'multi', 'disabled', 'unmount', 'recyc
     flush(); expect(select).not.toHaveBeenCalled();
   },
 );
+// Foreground regression: a missed presence edge used to leave a pending send inert.
+// The real recovery hook and bubble must share one roster read for taps during retry.
+it('rechecks the waiting computer once, backs off, and never resubmits the message', async () => {
+  let finish!: (value: { devices: DeviceView[] }) => void;
+  const read = vi.fn(() => new Promise<{ devices: DeviceView[] }>(resolve => { finish = resolve; }));
+  const recover = vi.fn(async () => true);
+  const actions = { selectedClientId: null, onSelect: select, onRemove: remove, onBeginEdit: edit,
+    onSteer: steer, onMove: move, onRetryOutbox: retryOutbox, onRemoveOutbox: removeOutbox };
+  function Screen() {
+    const reconnect = useWaitingComputerRecovery('pc', 'message-a', read, recover);
+    return <PendingSendBubble item={{ ...item, phase: 'waiting', waitingFor: 'computer', actions: null }}
+      actions={{ ...actions, onReconnectComputer: reconnect, waitingComputerName: 'Mac' }}
+      renderImage={() => null} renderText={() => null} renderFile={() => null} />;
+  }
+  await act(async () => root.render(<Screen />));
+  const button = host.querySelector<HTMLElement>('[data-testid="pendingSend.reconnect.a"]')!;
+  act(() => button.click());
+  expect(read).toHaveBeenCalledTimes(1);
+  await act(async () => finish({ devices: [] }));
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(recover).not.toHaveBeenCalled();
+  await act(async () => finish({ devices: [{ deviceId: 'pc', online: true, remoteControlEnabled: true } as DeviceView] }));
+  expect(recover.mock.calls).toEqual([['pc']]);
+  expect(retryOutbox).not.toHaveBeenCalled();
+  act(() => root.render(null));
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
 it('lets an in-flight local outbox message open its cancel action', () => {
   show({ actions: null, phase: 'sending', queueIndex: null });
   touch('Start'); touch('End'); flush();
@@ -361,4 +411,47 @@ it('labels queued input from another device, hides it on the sending device, and
   expect(handlers.get('pendingSend.sourceDevice.a')?.accessibilityHint).toBe('message.renderer.sourceDeviceId');
   show({ sourceDevice }, null, 'phone-a');
   expect(host.querySelector('[data-testid="pendingSend.sourceDevice.a"]')).toBeNull();
+});
+
+// 测试价值
+// - 生产入口与可观察结果：真实 PendingSendBubble 的 measureBody / collapseLatched /
+//   expanded 状态机走一遍收起→点击真实展开按钮，renderText 收到的 longMessage 是
+//   整条 displayBody 的实测判定；普通正文与结构化 atom 两条路径共用同一状态。
+// - Bug／规则依据：iOS 巨型 UITextView 展开后偶发只留空白；完成态正文用
+//   allowIosUITextView / boundTextRuns 规避，排队正文展开必须拿到同样的判定。
+// - 现有覆盖缺口：messageSourceLabelsRender 用替身容器验证 MarkdownBody 的选择根，
+//   不能证明真实气泡展开时透传了判定；本文件既有触摸用例正文恒为 hello。
+// - 最小失败输入：长正文 + queued + 真实展开；若只在普通正文路径透传判定，atoms
+//   分支仍收到 false / undefined，本用例会红。
+// - tier：unit（jsdom，替换的只是原生 chip 壳，状态机与展开按钮均为生产代码）。
+// - 实测耗时：4.84s 单独运行本文件（38 条用例），未超过 5s 预算。
+it.each(['plain', 'atoms'])('forwards the measured long-body state through the real expanded %s path', async (kind) => {
+  const text = '排队长正文'.repeat(700);
+  const renderText = vi.fn((body: string, _index: number, longMessage: boolean) =>
+    <span data-long-message={String(longMessage)}>{body}</span>);
+  const actions: PendingSendBubbleActions = { selectedClientId: null, onSelect: select, onRemove: remove,
+    onBeginEdit: edit, onSteer: steer, onMove: move, onRetryOutbox: retryOutbox, onRemoveOutbox: removeOutbox };
+  const tokens = kind === 'atoms' ? [{ kind: 'text', text }, { kind: 'slash', text: '/compact' }] : [];
+  await act(async () => root.render(<PendingSendBubble item={{ ...item, text, sentInlineTokens: tokens as any }}
+    actions={actions} onOpenImage={openImage} renderImage={() => null} renderFile={() => null}
+    renderText={renderText} />));
+  // 收起态是有界 RN Text，宿主的可选中正文根根本不该挂载。
+  expect(renderText).not.toHaveBeenCalled();
+  expect(host.textContent).toContain(text);
+  const toggle = [...host.querySelectorAll('span')].find(node => node.textContent === 'message.renderer.expand');
+  expect(toggle).toBeDefined();
+  await act(async () => (toggle as HTMLElement).click());
+  expect(renderText).toHaveBeenCalledWith(text, 0, true);
+  expect(renderText.mock.calls.every(([, , longMessage]) => longMessage === true)).toBe(true);
+});
+
+it('forwards a short body as non-long text through the real bubble plain path', () => {
+  const renderText = vi.fn((body: string, _index: number, longMessage: boolean) =>
+    <span data-long-message={String(longMessage)}>{body}</span>);
+  const actions: PendingSendBubbleActions = { selectedClientId: null, onSelect: select, onRemove: remove,
+    onBeginEdit: edit, onSteer: steer, onMove: move, onRetryOutbox: retryOutbox, onRemoveOutbox: removeOutbox };
+  act(() => root.render(<PendingSendBubble item={item} actions={actions}
+    onOpenImage={openImage} renderImage={() => null} renderFile={() => null} renderText={renderText} />));
+  expect(renderText).toHaveBeenCalledExactlyOnceWith('hello', 0, false);
+  expect(host.querySelector('[data-long-message="true"]')).toBeNull();
 });

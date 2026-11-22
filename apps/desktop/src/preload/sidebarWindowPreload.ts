@@ -296,6 +296,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url: string): Promise<unknown> => ipcRenderer.invoke('shell:open-external', url),
   openFileInBrowser: (pathOrUrl: string): Promise<unknown> => ipcRenderer.invoke('shell:open-file-in-browser', pathOrUrl),
   openPath: (pathOrUrl: string) => invokeOpenPath(ipcRenderer.invoke.bind(ipcRenderer), pathOrUrl),
+  openSystemPreview: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('file:system-preview', filePath),
+  getFileThumbnail: (params: { path: string; size: number; revalidate?: boolean }): Promise<{
+    dataUrl: string | null; byteSize: number;
+  } | null> => ipcRenderer.invoke('file:thumbnail', params),
   showItemInFolder: (params: unknown): Promise<unknown> => ipcRenderer.invoke('shell:show-item-in-folder', params),
   copyPngToClipboard: (params: CopyPngToClipboardParams): Promise<void> =>
     ipcRenderer.invoke(COPY_PNG_TO_CLIPBOARD_CHANNEL, params),
@@ -480,6 +485,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 鈹€鈹€ RSB browser bridge(WebView 鎵胯浇) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload): Promise<unknown> =>
+      ipcRenderer.invoke('rsb-browser-bridge:report-file-preview-opener', input),
     report: (input: {
       sessionId: string;
       tabId: string;
@@ -514,12 +521,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // The renderer's durable-tab consumers use the canonical localDb namespace.
   // Keep the legacy top-level alias above for compatibility with older builds.
   localDb: {
-    bots: {
-      autonomy: {
-        glance: (botId: string): Promise<import('../shared/botAutonomy').BotGlance> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:glance', botId),
-      },
-    },
     // Minimal read-only chat hydration bridge used by BackgroundTasks and the
     // shared makerChatStore. Do not expose the primary window's full DB API.
     sessions: {
@@ -642,6 +643,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     push: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:push', params),
   },
   maker: {
+    mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    onPluginUiAction: (cb: (input: unknown) => void) => onPayload('plugin-ui:action', cb),
+    onPluginUiState: (cb: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => onPayload('plugin-ui:state', cb),
     // Read-only catalogs needed by the same model selector used in the main window.
     listProviders: () => ipcRenderer.invoke('maker:provider:list'),
     // The shared catalog reader needs the same owner lease even when legacy migration is deferred.
@@ -681,14 +685,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onXaiSubscriptionChanged: (cb: (payload: unknown) => void, providerId?: string) =>
         onProviderUsage('usage:xai-subscription-changed', 'xai', cb, providerId),
     },
-    onBotAutonomyChanged: (cb: (payload: { botIds?: string[] }) => void): (() => void) =>
-      onPayload('maker:bot-autonomy:changed', cb),
-    allowBotWorkbenchPermission: (
-      botId: string,
-      sessionId: string,
-      requestId: string,
-    ): Promise<{ accepted: boolean }> =>
-      ipcRenderer.invoke('maker:rsb-window:allow-bot-workbench-permission', { botId, sessionId, requestId }),
     // Live event subset consumed by makerChatStore in the detached renderer.
     onEvent: (cb: (payload: unknown) => void): (() => void) => onPayload('maker:event', cb),
     onStatusChanged: (cb: (payload: unknown) => void): (() => void) =>

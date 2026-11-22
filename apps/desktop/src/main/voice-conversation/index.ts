@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { CompanionCallDialogue } from './dialogue.js';
 import { ipcMain, webContents, type IpcMainInvokeEvent } from 'electron';
 import type { AsrProvider, AudioGate } from '@cindy/voice-input-core';
@@ -8,7 +9,7 @@ import {
   type VoiceConversationPreference,
 } from '../../shared/voiceConversation.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
+import { readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
 import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -27,7 +28,7 @@ import type {
 } from '../../shared/voiceConversation.js';
 import { VoiceConversationService } from './service.js';
 import { SpeechError } from './speechError.js';
-import { resolveSpeechConnection, speechModels, type SpeechCatalogDeps } from './models.js';
+import { resolveSpeechConnection, resolveSpeechConnectionForRequest, speechModels, type SpeechCatalogDeps } from './models.js';
 import {
   companionVoicePreference,
   updateCompanionVoicePreference,
@@ -42,11 +43,22 @@ const log = createLogger('voice-conversation');
 
 /** What a remote Desktop's voice settings page needs; the IPC channels stay local to this window. */
 export interface VoiceSettingsHostApi {
+  selfPreference(botId: string): Promise<ReturnType<typeof selfVoicePreference>>;
   models(): ReturnType<VoiceConversationService['models']>;
   voices(selection: unknown): ReturnType<VoiceConversationService['voices']>;
   preference(botId: unknown): Promise<VoiceConversationPreference>;
-  setPreference(botId: unknown, value: unknown, sentencePlayback: unknown): Promise<VoiceConversationPreference>;
+  setPreference(botId: unknown, value: unknown, sentencePlayback: unknown, expectedRevision?: string): Promise<VoiceConversationPreference>;
 }
+function selfVoicePreference(settings: VoiceInputSettings, botId: string) {
+  const value = companionVoicePreference(settings, botId);
+  const sources = {
+    selection: Object.hasOwn(settings.conversationSelections ?? {}, botId) ? 'teammate' : 'device',
+    sentencePlayback: Object.hasOwn(settings.conversationSentencePlayback ?? {}, botId) ? 'teammate' : 'device',
+  };
+  const revision = createHash('sha256').update(JSON.stringify([value, sources])).digest('hex');
+  return { ...value, sources, revision };
+}
+
 let settingsApi: VoiceSettingsHostApi | null = null;
 export function getVoiceSettingsHostApi(): VoiceSettingsHostApi | null {
   return settingsApi;
@@ -122,6 +134,7 @@ export function registerVoiceConversationIpc(deps: {
       visibilityOverride: getModelVisibilityOverride,
       readKey: readCustomProviderKey,
       readOAuthToken: (providerId, oauth) => readCachedGenericOAuthAccessToken(storedCustomProviderId(providerId), oauth),
+      readOAuthTokenForRequest: (providerId, oauth) => readGenericOAuthAccessToken(storedCustomProviderId(providerId), oauth),
       gatewayConnection: () => ({
         baseUrl: effectiveXdGatewayBaseUrl(),
         apiKey: getProviderSecretStore().get('xd') ?? '',
@@ -140,6 +153,7 @@ export function registerVoiceConversationIpc(deps: {
     },
     models: () => speechModels(catalogDeps()),
     connection: (selection) => resolveSpeechConnection(catalogDeps(), selection),
+    prepareConnection: (selection) => resolveSpeechConnectionForRequest(catalogDeps(), selection),
     fetch: outboundFetch,
     hasReplyHook: hasEnabledGhostAssistantHook,
     classifyExit: classifyVoiceExit,
@@ -213,10 +227,10 @@ export function registerVoiceConversationIpc(deps: {
   handle('stop-preview', (event, id) =>
     service.stopPreview(event.sender.id, boundedString(id, 'previewId', 64)),
   );
-  const preferenceBot = async (
+  const preferenceBot = async <T>(
     raw: unknown,
-    action: (botId: string) => VoiceConversationPreference,
-  ): Promise<VoiceConversationPreference> => {
+    action: (botId: string) => T,
+  ): Promise<T> => {
     if (isAppSessionBoundaryPending()) throw new Error('changing_account');
     const owner = activeOwnerScopeKey();
     const botId = boundedString(raw, 'botId', 256);
@@ -227,9 +241,11 @@ export function registerVoiceConversationIpc(deps: {
   };
   const readPreference = (raw: unknown) =>
     preferenceBot(raw, (botId) => companionVoicePreference(deps.getSettings(), botId));
-  const writePreference = (raw: unknown, value: unknown, sentencePlayback: unknown) =>
+  const writePreference = (raw: unknown, value: unknown, sentencePlayback: unknown, expectedRevision?: string) =>
     preferenceBot(raw, (botId) => {
       const settings = deps.getSettings();
+      if (expectedRevision !== undefined && expectedRevision !== selfVoicePreference(settings, botId).revision)
+        throw new Error('VOICE_PREFERENCE_CHANGED');
       const patch: Partial<VoiceInputSettings> = {};
       if (value !== undefined) {
         const selection = value === null ? null : normalizeVoiceConversationSelection(value);
@@ -263,6 +279,7 @@ export function registerVoiceConversationIpc(deps: {
       return service.voices(selection!);
     },
     preference: readPreference,
+    selfPreference: raw => preferenceBot(raw, botId => selfVoicePreference(deps.getSettings(), botId)),
     setPreference: writePreference,
   };
   for (const operation of ['start', 'start-playback'] as const) {

@@ -88,6 +88,14 @@ export interface BotImConnectionRecord {
    * 个人 bot 的同名配置互不相干 —— 每条连接自己一份。
    */
   groupActivation?: Record<string, 'always'>;
+  /** An approved group can use another teammate on this same local transport. */
+  iMessageGroupRoutes?: Record<string, { botId: string; revision: string; authorization: string; replyMode: 'always' | 'mention' }>;
+  /**
+   * 服务器频道白名单（Discord 连接）：缺省 / 空 = 不开放任何频道。每条连接独立一份，随连接记录
+   * 删除而消失；`allowMembers` 缺省 = 只有主人能在该频道召唤，显式开启后成员沿用该伙伴既有的权限与
+   * 共享记忆。与 设置 → IM 机器人 里那份个人 bot 的白名单互不相干。
+   */
+  discordChannelAccess?: BotImDiscordChannelAccess;
   /** List-only archive cutoffs. Never changes the referenced session or its routing. */
   archivedTaskRows?: Record<string, number>;
   /** Optional anchors for the same archived rows; older clients retain numeric cutoffs. */
@@ -103,6 +111,55 @@ export interface BotImConnectionGroup {
   activation: BotImGroupActivationMode;
 }
 
+export interface BotImDiscordChannelEntry {
+  guildId: string;
+  channelId: string;
+  allowMembers?: boolean;
+}
+/** 一个服务器的准入：见 packages/lizi-im 的 DiscordGuildAccessEntry（同一形状，渲染端不依赖传输包）。 */
+export interface BotImDiscordGuildAccess {
+  guildId: string;
+  enabled: boolean;
+  mode: 'all' | 'selected';
+  allowMembers?: boolean;
+  savedChannels?: Array<{ channelId: string; allowMembers?: boolean }>;
+}
+export interface BotImDiscordChannelAccess {
+  /** 当前生效的显式频道选择（旧版本只认这一项）。 */
+  channels: BotImDiscordChannelEntry[];
+  /** 服务器级设置；没有这一项的服务器按 `channels` 里是否有它的频道判定（存量含义）。 */
+  guilds?: BotImDiscordGuildAccess[];
+}
+
+/** 白名单形状版本：2 = 含服务器级设置。读到别的版本的电脑（更旧）一律拒绝编辑，避免写丢 / 误放大。 */
+export const BOT_IM_DISCORD_ACCESS_VERSION = 2;
+
+/** 伙伴页「服务器频道」小节：机器人当前连接里的服务器 / 频道（含机器人权限）+ 这条连接的白名单。 */
+export interface BotImDiscordChannelsPayload {
+  connectionId: string;
+  /** 白名单形状版本（见 BOT_IM_DISCORD_ACCESS_VERSION）；缺失 = 更旧的电脑。 */
+  accessVersion?: number;
+  /** 机器人当前是否连着（没连着时 guilds 为空，白名单照常返回）。 */
+  online: boolean;
+  guilds: Array<{
+    id: string;
+    name: string;
+    channels: Array<{
+      id: string;
+      name: string;
+      permissions: {
+        view: boolean;
+        send: boolean;
+        readHistory: boolean;
+        embed: boolean;
+        attachFiles: boolean;
+        sendInThreads: boolean;
+      };
+    }>;
+  }>;
+  access: BotImDiscordChannelAccess;
+}
+
 export interface BotImConnectionGroupsPayload {
   connectionId: string;
   groups: BotImConnectionGroup[];
@@ -110,7 +167,7 @@ export interface BotImConnectionGroupsPayload {
 
 export interface BotImConnectionView extends BotImConnectionRecord {
   /** Optional local bridge health; older clients ignore it. Never contains credentials or message text. */
-  health?: { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number };
+  health?: { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number; automationDenied?: boolean };
   status: BotImConnectionStatus;
   identity: {
     /** Telegram bot 用户名 / Discord bot 标签(连上后才有); 其它渠道为 null。 */
@@ -125,7 +182,7 @@ export interface BotImConnectionListPayload {
 }
 
 export type BotImConnectionAddInput =
-  | { botId: string; channel: 'imessage'; groupAliases?: string[]; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
+  | { botId: string; channel: 'imessage'; groupAliases?: string[]; mentionAddress?: string; selfAccountAddresses?: Record<string, string>; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
   | { botId: string; channel: 'telegram'; token: string; ownerUserId: string }
   | {
       botId: string;
@@ -200,3 +257,7 @@ export interface BotImConnectionLanesPayload {
 }
 
 export const BOT_IM_CONNECTION_CHANGED_EVENT = 'botImConnection:changed';
+
+/** Local-only settings: passwords are write-only and an empty value retains the saved password. */
+export type BotIMessageConfig = Omit<Extract<BotImConnectionAddInput, { channel: 'imessage' }>, 'botId' | 'channel' | 'password'>;
+export type BotIMessageUpdateInput = BotIMessageConfig & { password?: string };

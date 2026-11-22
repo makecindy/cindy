@@ -46,7 +46,7 @@
  * 颜色全走主题 token(规则 16),文案全走 i18n(规则 18)。
  */
 
-import { useRef, type ReactNode } from 'react';
+import { useEffect, useState, useRef, type ReactNode } from 'react';
 import {
   Ban,
   Check,
@@ -72,7 +72,9 @@ import {
   DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
-import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { useOptionalAuthUser, useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { cloudComputerEntry, isMobilePlatform } from '@cindy/maker-shared/device-list';
 import {
   isMachineSelected,
   MACHINE_ALL,
@@ -83,6 +85,35 @@ import {
   useRemoteSessionBootstrapLoading,
 } from '@/features/device-link/useMachineSwitcher';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
+
+function CloudComputerMenuEntry() {
+  const user = useOptionalAuthUser();
+  const generation = useOptionalDataOwnerGeneration();
+  const { t } = useTranslation();
+  const member = user?.membershipKind === 'org' ? user.id : undefined;
+  const org = user?.orgId;
+  const owner = JSON.stringify([member,org,generation]);
+  const [result,setResult] = useState<{owner:string; entry:ReturnType<typeof cloudComputerEntry>} | null>(null);
+  useEffect(() => {
+    if (!member || !org) return;
+    let current = true;
+    // Radix mounts the content only while the menu is open.
+    const read = window.electronAPI?.deviceLink?.cloudComputerEntry;
+    if (read) void read().then(value => {
+      if (current) setResult({owner,entry:cloudComputerEntry(value,member,org)});
+    }).catch(() => { if (current) setResult(null); });
+    return () => { current = false; };
+  },[member,org,owner]);
+  const entry = result?.owner === owner ? result.entry : null;
+  if (!entry) return null;
+  const actions = 'canAdd' in entry && entry.canAdd ? [entry.action,'addCloud' as const] : [entry.action];
+  return <>{actions.map(action=><DropdownMenuItem key={action} className={MENU_ITEM_CLASS} onSelect={() => {
+    const url = new URL(entry.url);
+    url.searchParams.set('app', BRAND_IDENTITY.primaryScheme);
+    if (action==='addCloud') url.searchParams.set('add','1');
+    void window.electronAPI.openExternal(url.href).catch(() => toast.error(t('remoteDesktop.connectionError')));
+  }}><Monitor size={14}/><span>{t('ccAgent.sidebar.machineSwitcher.' + action)}</span></DropdownMenuItem>)}</>;
+}
 
 /** 段头标题共用样式:与原「全部任务」标题一致(淡灰、hover 加深)。 */
 const SCOPE_TITLE_CLASS =
@@ -134,6 +165,7 @@ export function MachineSwitcherMenu({
   const triggerLabel = t('ccAgent.sidebar.machineSwitcher.menuTrigger');
   const settingsItems = (
     <>
+      <CloudComputerMenuEntry />
       {desktopTargets.length>0 && <DropdownMenuSub>
         <DropdownMenuSubTrigger className={MENU_ROW_CLASS}><Monitor size={14}/><span>{t('remoteDesktop.title')}</span></DropdownMenuSubTrigger>
         <DropdownMenuSubContent>{desktopTargets.map(device=><DropdownMenuItem

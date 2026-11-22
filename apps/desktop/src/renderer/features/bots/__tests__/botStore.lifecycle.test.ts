@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+const startup = vi.hoisted(() => {
+  const list = vi.fn(async () => []);
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { localDb: { bots: { list } } } });
+  return { list };
+});
+
 import * as store from '../botStore';
 import * as owner from '@/contexts/dataOwnerGeneration';
 
@@ -120,21 +126,89 @@ describe('Bot lifecycle deletion during database hydration', () => {
 
 
 describe('Bot profile snapshot ownership', () => {
-  it('ignores an older list response after a newer refresh has completed', async () => {
+  // #9706 / unit: importing the real store before LocalDbGate must not read a
+  // database that has not been published. Existing tests only loaded on demand.
+  it('defers module-import hydration to the ready-window consumer', () => {
+    expect(startup.list).not.toHaveBeenCalled();
+  });
+
+  // Unit regression: profile/message/turn-stop events can arrive during one slow
+  // list. Previous ownership tests allowed overlapping reads and missed the IPC
+  // amplification. Keep one read and one successor, never publish the stale page.
+  it('coalesces refresh bursts into one successor and publishes the final profile', async () => {
     let release!: (rows: typeof bot[]) => void;
+    let releaseNext!: (rows: typeof bot[]) => void;
     const list = vi.fn()
       .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
-      .mockResolvedValueOnce([{ ...bot, name: 'Newer profile' }]);
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseNext = resolve; }))
+      .mockResolvedValueOnce([{ ...bot, name: 'Final profile' }]);
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: { localDb: { bots: { list } } },
     });
     const hydrating = store.ensureBotProfilesLoaded();
-    store.refreshBotProfiles();
-    await vi.waitFor(() => expect(store.getBotProfiles()[0]?.name).toBe('Newer profile'));
+    await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+    for (let i = 0; i < 20; i++) store.refreshBotProfiles();
+    expect(list).toHaveBeenCalledOnce();
     release([bot]);
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(store.getBotProfiles()).toEqual([]);
+    // Continued events during the successor still retain at most one next read.
+    for (let i = 0; i < 20; i++) store.refreshBotProfiles();
+    expect(list).toHaveBeenCalledTimes(2);
+    releaseNext([{ ...bot, name: 'Intermediate profile' }]);
     await hydrating;
-    expect(store.getBotProfiles()[0]?.name).toBe('Newer profile');
+    expect(list).toHaveBeenCalledTimes(3);
+    expect(store.getBotProfiles()[0]?.name).toBe('Final profile');
+  });
+
+  it('does not retry a failed read without a new refresh', async () => {
+    const list = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([bot]);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true, value: { localDb: { bots: { list } } },
+    });
+    await store.ensureBotProfilesLoaded();
+    await Promise.resolve();
+    expect(list).toHaveBeenCalledOnce();
+    expect(store.getBotProfiles()).toEqual([]);
+    expect(store.hasLoadedBotProfiles()).toBe(false);
+    await store.ensureBotProfilesLoaded(true);
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(store.getBotProfiles()[0]?.id).toBe(bot.id);
+  });
+
+  // #9978: a refresh failure must retain the known roster and its loaded truth.
+  it('preserves a successful snapshot when a later refresh fails', async () => {
+    const list = vi.fn().mockResolvedValueOnce([bot]).mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce([]);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true, value: { localDb: { bots: { list } } },
+    });
+    await store.ensureBotProfilesLoaded();
+    await store.ensureBotProfilesLoaded(true);
+    expect(store.hasLoadedBotProfiles()).toBe(true);
+    expect(store.getBotProfiles().map(row => row.id)).toEqual([bot.id]);
+    await store.ensureBotProfilesLoaded(true);
+    expect(store.getBotProfiles()).toEqual([]);
+    expect(store.hasLoadedBotProfiles()).toBe(true);
+  });
+
+  it('ignores a late failure from the previous owner after the new roster is loaded', async () => {
+    let reject!: (error: Error) => void;
+    const list = vi.fn().mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }))
+      .mockResolvedValueOnce([bot]);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true, value: { localDb: { bots: { list } } },
+    });
+    const oldRead = store.ensureBotProfilesLoaded();
+    owner.setDataOwnerGeneration('new-owner');
+    expect(store.hasLoadedBotProfiles()).toBe(false);
+    await store.ensureBotProfilesLoaded();
+    reject(new Error('old owner failed'));
+    await oldRead;
+    expect(store.hasLoadedBotProfiles()).toBe(true);
+    expect(store.getBotProfiles().map(row => row.id)).toEqual([bot.id]);
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it('clears prior-owner data immediately and ignores its late list response', async () => {
@@ -151,12 +225,16 @@ describe('Bot profile snapshot ownership', () => {
     await store.ensureBotProfilesLoaded();
     expect(store.getBotProfiles()).toHaveLength(1);
     const previousHydration = store.ensureBotProfilesLoaded(true);
+    // A pending old-owner successor must be discarded at the boundary too.
+    store.refreshBotProfiles();
+    expect(list).toHaveBeenCalledTimes(2);
     owner.setDataOwnerGeneration('owner-b');
     expect(store.getBotProfiles()).toEqual([]);
     store.refreshBotProfiles();
     await vi.waitFor(() => expect(store.getBotProfiles()[0]?.name).toBe('Owner B'));
     release([bot]);
     await previousHydration;
+    expect(list).toHaveBeenCalledTimes(3);
     expect(store.getBotProfiles().map((row) => row.id)).toEqual(['bot-b']);
   });
 

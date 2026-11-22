@@ -90,7 +90,7 @@ it('rejects oversized aggregate, deeply nested and excessively numerous host dat
     Array.from({ length: 14 }).reduce<unknown>((value) => ({ value }), null),
   ])
     expect(() => parseRemoteBotSettings({ ...raw, extra }, raw.ref)).toThrow(
-      'Invalid teammate settings',
+      "Invalid buddy settings",
     );
 });
 it('filters malformed list identities and titles', () => {
@@ -142,4 +142,17 @@ it('retains bounded host avatar metadata and drops malformed avatar descriptions
   ]) {
     expect(parse(value)).toBeUndefined();
   }
+});
+// model-groups.md §6.2: the host computer's model groups ride on its models form so another computer can pick one.
+// Host data is untrusted: normalized like the local config, malformed groups dropped; an older host sends none.
+// Production entry: parseRemoteBotSettings. Minimal input: one valid and one malformed group. tier: unit.
+it('reads the host computer\'s model groups from the models form, dropping malformed ones', () => {
+  const block = (data: Record<string, unknown>) => ({ ...resource(), blocks: [{ id: 'models', title: 'Models', primitive: 'form', fallbackMarkdown: '', data }] });
+  const groups = { routes: [
+    { id: 'night', name: 'Night', strategy: 'order', candidates: [{ agentKind: 'pi', providerId: 'xd', model: 'a' }] },
+    { id: '', name: 'Broken', strategy: 'order', candidates: [] },
+  ] };
+  const parsed = parseRemoteBotSettings(block({ modelGroups: groups }), botSettingsRef('bot'));
+  expect(parsed.panels[0].modelGroups?.routes.map((route) => route.id)).toEqual(['night']);
+  expect(parseRemoteBotSettings(block({}), botSettingsRef('bot')).panels[0]).not.toHaveProperty('modelGroups');
 });

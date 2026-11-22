@@ -13,7 +13,10 @@
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import {
   declaredAutoApproveTools,
+  declaredGhostCindyModelActions,
+  type GhostCindyModelsAction,
   declaredGhostControlPoints,
+  declaredGhostHarnesses,
   GHOST_CONTROL_POINTS,
   type GhostControlPointId,
   type GhostManifest,
@@ -64,6 +67,15 @@ export type GhostInstallConsentDecision =
 
 const pendingPromptAborts = new Set<AbortController>();
 
+/** Follow the control-point consent path: unknown declarations never become grants on upgrade. */
+export function confirmedCindyModelActions(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostCindyModelsAction[] {
+  const declared = declaredGhostCindyModelActions(next);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declared.filter(action => shown?.some(item => item.key === `cindy:models.${action}`));
+}
 /** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */
 export function confirmedTaskCapability(
   decision: GhostInstallConsentDecision,
@@ -92,6 +104,24 @@ export function confirmedControlPoints(
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = new Set((facts?.kind === 'install' ? facts.permissions : facts?.added ?? []).map(item => item.key));
   return declared.filter(point => shown.has(GHOST_CONTROL_POINTS[point].permissionKey));
+}
+
+/**
+ * 本次确认里用户看到过的任务执行引擎。确认卡显示了 `harnesses` 权限行即批准当前声明的
+ * 全部引擎；服务端默认安装(exempt)由下发方负责，视为已批准；未确认/无需确认时返回空，
+ * 已批准项由 update 延续(按新 manifest 过滤)。
+ */
+export function confirmedHarnesses(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string[] {
+  const declared = declaredGhostHarnesses(next).map((harness) => harness.id);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'harnesses') ? declared : [];
 }
 
 /**
@@ -169,6 +199,10 @@ export async function obtainGhostInstallConsent(
     confirmed = await policy.prompt({
       initiator: policy.initiator,
       origin: policy.origin,
+      installationSource: policy.origin === 'custom-market' ? { kind: 'third-party' }
+        : policy.origin === 'local-file' || policy.origin === 'forge' ? { kind: 'local' }
+        : policy.target?.namespace && policy.target.namespace !== 'local' ? { kind: 'organization', namespace: policy.target.namespace }
+        : { kind: policy.trust === 'cindy-official' ? 'official' : 'market' },
       ...(policy.trust ? { trust: policy.trust } : {}),
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
       ...(policy.target ? { target: { ...policy.target, ...(policy.target.namespace === 'local' && manifest.network?.secrets?.some(secret => secret.source === 'oidc-token') ? { organizationIdentityUnavailable: true as const } : {}) } } : {}),

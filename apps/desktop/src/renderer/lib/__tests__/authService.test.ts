@@ -99,6 +99,32 @@ describe('renderer auth service', () => {
     expect(service.getSnapshot()).toEqual(local);
   });
 
+  // Unit: isolated mock startup broadcasts pending generation 0, then returns
+  // committed generation 1 without another push. The old version-only guard
+  // discarded that completion forever; the existing tests only use older replies.
+  it.each(['local', 'signed-out'] as const)('accepts a newer committed %s generation after a pending push', async (mode) => {
+    const service = createAuthService();
+    const pending = service.initialize();
+    const listener = vi.fn();
+    service.onAuthStateChange(listener);
+    push({ ...signedOut, ownerBoundaryPending: true });
+    const committed = mode === 'local' ? local : { ...signedOut, ownerGeneration: 1 };
+    resolve(committed);
+    await expect(pending).resolves.toEqual(committed);
+    expect(service.getSnapshot()).toEqual(committed);
+    expect(listener).toHaveBeenLastCalledWith(committed, 'initialize');
+  });
+
+  it('does not replace a newer pending transition with a reply from its outgoing generation', async () => {
+    const service = createAuthService();
+    const pending = service.initialize();
+    const boundary = { ...signedOut, ownerGeneration: local.ownerGeneration, ownerBoundaryPending: true };
+    push(boundary);
+    resolve(local);
+    await expect(pending).resolves.toEqual(boundary);
+    expect(service.getSnapshot()).toEqual(boundary);
+  });
+
   it('only removes the departing observer; renderer disposal releases IPC and the cache', () => {
     const service = createAuthService();
     const first = vi.fn();
@@ -113,6 +139,23 @@ describe('renderer auth service', () => {
     service.dispose();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(createAuthService().getSnapshot()).toBeNull();
+  });
+
+  // 甲 (2026-11-17), unit on the real service: the Host's start-failure reason survives normalization; a code
+  // this build does not know reads as HOST_START_FAILED (a newer Host); every other state keeps its exact shape.
+  it('keeps the Host start-failure reason, and only that, across normalization', async () => {
+    const service = createAuthService();
+    const listener = vi.fn();
+    service.onAuthStateChange(listener);
+    push({ ...signedOut, hostUnavailable: { reason: 'HOST_DATABASE_LOCKED' } });
+    push({ ...signedOut, hostUnavailable: { reason: 'HOST_SOME_FUTURE_CODE' } } as unknown as AuthState);
+    push(signedOut);
+    expect(listener.mock.calls.map(([state]) => state.hostUnavailable)).toEqual([
+      { reason: 'HOST_DATABASE_LOCKED' },
+      { reason: 'HOST_START_FAILED' },
+      undefined,
+    ]);
+    expect(listener.mock.calls[2][0]).toStrictEqual(signedOut);
   });
 
   it('propagates a real initialization failure without inventing an auth snapshot', async () => {

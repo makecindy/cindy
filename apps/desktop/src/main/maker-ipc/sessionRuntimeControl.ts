@@ -1,7 +1,9 @@
 import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { clearAllSessionProviders } from '../maker-host/session-provider-store.js';
+import { clearAllSessionRuntimeAxes } from '../maker-host/session-effort-store.js';
 import {
   connectedProvidersForAgent,
   isModelSelectableForNewRoute,
@@ -21,6 +23,9 @@ export interface SessionRuntimeProfile {
   fastMode: boolean | 'ultrafast';
 }
 
+/** Plugin routes persist on the session row; only built-in engines use a temporary runtime override. */
+export type FallbackRouteProfile = SessionRuntimeProfile | (Omit<SessionRuntimeProfile, 'agentKind'> & { agentKind: 'acp' });
+
 export interface PendingSessionRuntimeMutation {
   generation: number;
   source: SessionRuntimeMutationSource;
@@ -38,6 +43,16 @@ export interface SessionRuntimeControlSnapshot {
   pending: PendingSessionRuntimeMutation | null;
   fallbackHop: number;
   visitedRoutes: string[];
+}
+
+/** Startup-only projection; persisted preferences and native-history identity stay on the row. */
+export function getSessionRuntimeStartOverride(sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) {
+  if (agentKind === 'acp') return {};
+  const profile = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
+  if (!profile || profile.agentKind !== agentKind
+    || (profile.agentDeviceId ?? null) !== (agentDeviceId ?? null)) return {};
+  return { model: profile.model, providerId: profile.providerId,
+    effort: profile.effort ?? undefined, fastMode: profile.fastMode };
 }
 
 /** Shared by full session reads and route-change pushes; all axes come from one profile. */
@@ -97,7 +112,7 @@ const states = new Map<string, SessionRuntimeControlState>();
 let ownerEpoch = 0;
 
 function routeKey(
-  profile: Pick<SessionRuntimeProfile, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>,
+  profile: Pick<SessionRuntimeProfile, 'providerId' | 'model' | 'agentDeviceId'> & { agentKind: EngineKind },
 ): string {
   return `${profile.agentKind}\u0000${profile.providerId ?? ''}\u0000${profile.model}${modelRouteLocationKey(profile.agentDeviceId)}`;
 }
@@ -125,14 +140,43 @@ export function sessionRuntimeGenerationMatches(
   return expectedGeneration === undefined || (states.get(sessionId)?.generation ?? 0) === expectedGeneration;
 }
 
-export function recordUserSessionRuntimeMutation(sessionId: string): number {
+export function recordUserSessionRuntimeMutation(
+  sessionId: string,
+  options?: { preserveEffective?: boolean },
+): number {
   const state = stateFor(sessionId);
   state.generation += 1;
-  state.effectiveOverride = null;
+  if (!options?.preserveEffective) state.effectiveOverride = null;
   state.pending = null;
   state.pendingRouteExplicit = true;
   state.fallbackHop = 0;
   state.visitedRoutes.clear();
+  return state.generation;
+}
+
+/** Account handoff changes only the admitted source, preserving temporary model/axis intent. */
+export function remapSessionRuntimeProvider(params: {
+  sessionId: string;
+  fromProviderId: string;
+  toProviderId: string;
+  expectedOwnerEpoch: string;
+  expectedGeneration: number;
+}): number | null {
+  if (!sessionRuntimeControlOwnerEpochMatches(params.expectedOwnerEpoch)) return null;
+  const existing = states.get(params.sessionId);
+  const generation = existing?.generation ?? 0;
+  if (generation !== params.expectedGeneration) return null;
+  const state = existing ?? stateFor(params.sessionId);
+  const effective = state.effectiveOverride;
+  // The admitted route changed even without an override; fence every old Agent snapshot.
+  state.generation += 1;
+  if (effective?.providerId === params.fromProviderId)
+    state.effectiveOverride = { ...effective, providerId: params.toProviderId };
+  if (state.pending) {
+    state.pending = { ...state.pending, generation: state.generation,
+      profile: effective?.providerId === params.fromProviderId && routeKey(state.pending.profile) === routeKey(effective)
+        ? { ...state.pending.profile, providerId: params.toProviderId } : state.pending.profile };
+  }
   return state.generation;
 }
 
@@ -284,12 +328,12 @@ export function resolveCompatibleSessionRuntimeAxisPatch(params: {
 
 export function acceptSessionRuntimeMutation(params: {
   sessionId: string;
-  source: SessionRuntimeMutationSource;
-  profile: SessionRuntimeProfile;
-  previousProfile?: SessionRuntimeProfile;
-  deferred: boolean;
+  previousProfile?: FallbackRouteProfile;
   thinking?: boolean;
-}): number {
+} & (
+  | { source: SessionRuntimeMutationSource; profile: SessionRuntimeProfile; deferred: boolean }
+  | { source: 'fallback'; profile: FallbackRouteProfile; deferred: false }
+)): number {
   const state = stateFor(params.sessionId);
   const previousPending = state.pending;
   state.generation += 1;
@@ -304,7 +348,7 @@ export function acceptSessionRuntimeMutation(params: {
   const acceptedThinking =
     params.thinking ??
     (params.deferred && samePendingTarget ? previousPending?.thinking : undefined);
-  const accepted: PendingSessionRuntimeMutation = {
+  const accepted: PendingSessionRuntimeMutation | null = params.profile.agentKind === 'acp' ? null : {
     generation: state.generation,
     source: params.source,
     profile: params.profile,
@@ -312,7 +356,7 @@ export function acceptSessionRuntimeMutation(params: {
   };
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;
-  if (!params.deferred) state.effectiveOverride = params.profile;
+  if (!params.deferred) state.effectiveOverride = accepted?.profile ?? null;
   if (params.source === 'fallback') {
     state.fallbackHop += 1;
     if (params.previousProfile) state.visitedRoutes.add(routeKey(params.previousProfile));
@@ -327,7 +371,7 @@ export function acceptSessionRuntimeMutation(params: {
 export function recordFailedSessionRuntimeFallbackCandidate(
   sessionId: string,
   expectedGeneration: number,
-  profile: SessionRuntimeProfile,
+  profile: Pick<SessionRuntimeProfile, 'providerId' | 'model' | 'agentDeviceId'> & { agentKind: EngineKind },
 ): boolean {
   const state = stateFor(sessionId);
   if (state.generation !== expectedGeneration) return false;
@@ -378,6 +422,30 @@ export function getPendingSessionRuntimeMutation(
   return states.get(sessionId)?.pending ?? null;
 }
 
+/**
+ * A task runtime starts on its accepted, not deferred runtime mutation (an automatic route fallback,
+ * a change applied to a live runtime) rather than the stored route; the provider stays the caller's
+ * when a provider group decides the source. Called before the start admission (the desktop's
+ * bootstrapSession; the Node Host's runtime starts, which pass false: it refuses provider-group tasks).
+ * Returns the task's accepted built-in route override, which the start then reads again: a
+ * started runtime keeps the saved provider baseline and takes its effort and Fast axes from it.
+ */
+export function applySessionRuntimeOverrideForStart(
+  o: { id?: string; agentKind: EngineKind; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
+  groupDecidesSource: boolean,
+): SessionRuntimeProfile | null {
+  if (o.agentKind === 'acp') return null;
+  const runtimeOverride =
+    typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
+  if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
+    o.model = runtimeOverride.model;
+    if (!groupDecidesSource) o.providerId = runtimeOverride.providerId;
+    o.effort = runtimeOverride.effort ?? undefined;
+    o.fastMode = runtimeOverride.fastMode;
+  }
+  return runtimeOverride;
+}
+
 export function getSessionRuntimeControlSnapshot(sessionId: string): SessionRuntimeControlSnapshot {
   const state = states.get(sessionId);
   if (!state) {
@@ -405,6 +473,17 @@ export function clearSessionRuntimeControlState(sessionId: string): void {
 export function clearAllSessionRuntimeControlStates(): void {
   ownerEpoch += 1;
   states.clear();
+}
+
+/**
+ * The owner-scoped runtime selection a committed account change drops (the app session commit
+ * boundary): every task's provider, its runtime axes, and the runtime control states (which also
+ * advance the owner epoch). The desktop's boundary hook and the Node Host's both call it.
+ */
+export function clearOwnerScopedSessionRuntimeSelection(): void {
+  clearAllSessionProviders();
+  clearAllSessionRuntimeAxes();
+  clearAllSessionRuntimeControlStates();
 }
 
 export function captureSessionRuntimeControlOwnerEpoch(): string {

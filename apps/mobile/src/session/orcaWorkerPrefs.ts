@@ -1,11 +1,12 @@
 /**
- * 「创建 Worker」偏好记忆(与桌面 renderer workerCreationPrefs 同一套规则):
- *  - 记住上次选的 Agent,以及每个 Agent 各自的模型 / 推理强度 / Fast;
- *  - 记住 Worker 权限;初始任务不记(避免把旧任务带到下一次创建);
- *  - 没有记忆时用共享首次默认值(Codex `codex/gpt-5.5`、high、完全访问)。
+ * 「创建 Worker」不分角色的「上次选择」在手机本地的旧记忆：上次选的 Agent、每个 Agent 各自的
+ * 模型 / 推理强度 / Fast、Worker 权限，以及按任务所在电脑隔离的完整模型路线。
  *
- * 与桌面控制端一样存在发起创建的这一端(手机本地,按登录账号隔离),不读写被控端的偏好。
- * 手动提交的完整模型选择按任务所在电脑隔离，远程模型不覆盖旧版逐 Agent 记忆。
+ * 这份记忆现在记在任务所在的电脑上(见 orcaWorkerRoles、useOrcaWorkerForm；用户裁决：不记在手机上)。
+ * 这里只给版本太旧、没有那组通道的电脑兜底：那台电脑能读到时，手机不读也不写这份本地记忆。
+ * 表单内部仍用这里的 OrcaWorkerCreationPrefs 形状承载从电脑读回的内容。
+ *
+ * 没有记忆时用共享首次默认值(Codex `codex/gpt-5.5`、high、完全访问)；初始任务不在这里记。
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -25,6 +26,8 @@ export interface OrcaWorkerAgentPrefs {
   model: string;
   effort: string;
   fast: boolean | 'ultrafast';
+  /** 任务所在电脑记的来源；手机本地的旧记忆没有这一项(缺省 = 不指定来源)。 */
+  providerId?: string | null;
 }
 
 export interface OrcaWorkerModelSelection {

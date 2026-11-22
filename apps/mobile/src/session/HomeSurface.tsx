@@ -1,9 +1,21 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
+import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
+import { useOrcaQuestionRows } from './orcaQuestionRows';
+import { sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
+import { ProjectPickerIcon } from './ProjectPickerIcon';
+import { ProjectSettingsSheet } from './ProjectSettingsSheet';
+import { Settings as ProjectSettingsIcon } from 'lucide-react-native';
+import { useStableHomeSections, type HomeDisplayOrder } from './homeStableOrder';
+import { playHaptic } from '@/platform/haptics';
+import { TaskSnoozeSheet } from './TaskSnoozeSheet';
+import { taskSnoozeUntil, type TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
+import { buildInboxHomeSections } from './homeSections';
 import { taskListSessionTarget } from './sessionDrawerNavigation';
 import type { ViewInstance } from 'react-native';
 import { useTaskListNavigation } from './useTaskListNavigation';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { cloudCompanionRows } from '@/chat/cloudCompanion';
-import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
+import { normalizeTaskTeammateSelection, taskTeammateId, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
 import { readTeammateTasks } from './readTeammateTasks';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { MountOnFirstOpen } from './MountOnFirstOpen';
@@ -69,6 +81,7 @@ import {
   Pin,
   RefreshCw,
   SquarePen,
+  Timer,
   UsersRound,
   X,
 } from 'lucide-react-native';
@@ -79,6 +92,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { HomeTeammatesSection, useHomeTeammatesSectionContext } from './HomeTeammatesSection';
+import { InboxTeammateRow, InboxTeammatesProvider, nextInboxTeammateWake, useInboxTeammates } from './InboxTeammates';
 import { HomeRosterProvider } from './HomeRosterContext';
 import { createDisclosureListCell, DisclosureGroupView, DisclosureItem, ListDisclosureScope, useDisclosurePrepare, useListDisclosureTransition } from './listDisclosureTransition';
 import { useHomeMenuFadeTiming } from '@/session/homeMenuFadeTiming';
@@ -89,6 +103,7 @@ import {
   StatusDot,
 } from '@/components/MobilePrimitives';
 import { RemoteAccessGuide } from '@/components/RemoteAccessGuide';
+import { DrawerUsage } from '@/widgets/UsageDashboard';
 import { HomeChromeDrawer } from '@/session/HomeChromeDrawer';
 import { TEAMMATE_COLLECTION_ID } from '@/session/useTeammateRoster';
 import { AccountSwitcherSheet } from '@/session/AccountSwitcherSheet';
@@ -126,12 +141,12 @@ import {
   activeContentFilterCount,
   DEFAULT_HOME_TASK_INFO_FIELDS,
   type HomeContentFilters,
-  type HomeLastActivityFilter,
-  type HomeListViewMode,
+  type HomePinnedView,
+  type HomePinnedSort,
+  DEFAULT_HOME_FILTERS,
+  type HomeModeDisplayPreferences,
   type HomeProjectFilter,
   type HomeTeammateFilter,
-  type HomeTaskInfoField,
-  type HomeVendorFilter,
 } from '@/session/homeDisplaySettings';
 import { applyHomeContentFilters, filterSharedHomeRows } from '@/session/homeContentFilters';
 import {
@@ -144,8 +159,11 @@ import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { isPluginEngineSessionKind, prefetchPluginEngineIcons } from './pluginEngines';
 import {
   discoverRemoteHomeCollections,
+  remoteResourceDiscoveryKey,
   remoteResourceDiscoveryTargets,
   type RemoteHomeCollection,
 } from '@/device-link/remoteResources';
@@ -195,6 +213,7 @@ import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
 import {
   buildMobileHomePresentation,
   excludeOrcaWorkerSessions,
+  mobileHomeSessionItems,
   type MobileHomeDeviceFilterItem,
   type MobileHomeProjectGroup,
 } from '@/session/mobileHome';
@@ -202,6 +221,7 @@ import {
   advanceCurrentViewedPriorityHold,
   advanceViewedPriorityHold,
   collectHomePriorityContext,
+  collectInboxHomePriorityContext,
   holdViewedPriorityRank,
   homeViewedPriorityHold,
   type HomeListSortBy,
@@ -226,6 +246,7 @@ import {
   fetchHostProjectOrder,
   rememberRemoteProjectOrderStamp,
   subscribeRemoteProjectOrderChanged,
+  startHostProjectOrderLoad,
 } from '@/session/remoteProjectOrder';
 import {
   createProjectOrderFetchFence,
@@ -238,6 +259,8 @@ import {
 } from '@cindy/maker-shared/project-order-sync';
 import {
   buildHomeSections,
+  orderedPinnedItems,
+  movePinnedItem,
   homeRowsShareRenderData,
   homeRowBefore,
   isFolderHomeRow,
@@ -255,13 +278,15 @@ import {
 } from '@/session/homeViewPreferenceStore';
 import { homeNavigationOwner, useHomeMode } from '@/session/useHomeMode';
 import {
-  getCachedHomeListSnapshot,
+  getCachedHomeListState,
+  rememberHomeDisplayOrder,
   scheduleHomeListSnapshotPersist,
 } from '@/session/mobileHomeListCache';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 import {
   diffHomeDeviceSyncScope,
   HomeDeviceSyncLimiter,
+  readHomeSessionList,
   resolveHomeDeviceSyncIds,
   runHomeDeviceSyncBatch,
 } from '@/session/homeDeviceSync';
@@ -353,8 +378,8 @@ const HOME_HEADER_MIN_HEIGHT = 48;
  * 沿用历史取值 83,最后一行与圆钮之间留约 20pt。
  */
 const LEGACY_HOME_LIST_BOTTOM_RESERVE = 83;
-/** 项目块「查看全部」行的左缩进(历史取值,与项目内任务文字列大致对齐,保持布局不变)。 */
-const HOME_PROJECT_VIEW_ALL_INSET = 48;
+/** 「查看全部」对齐会话标题（行内边距 + 图标位 + 间距）。 */
+const HOME_VIEW_ALL_INSET = 48;
 /** 连接提示条同步按钮的视觉尺寸;命中区用 hitSlop 补到 navigationChrome.target(44)。 */
 const CONNECTION_ICON_BUTTON_SIZE = 28;
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -404,6 +429,7 @@ type ProjectDragSession = {
   hoverIndex: number;
   key: string;
   layouts: ProjectHeaderLayout[];
+  visibleKeys: string[];
   originY: number;
   rootY: number;
   title: string;
@@ -497,7 +523,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const residentList = useResidentHomeList(embedded);
   // Captured here: Android draws the list above the route, outside its roster and navigation context.
   const teammatesSectionContext = useHomeTeammatesSectionContext();
-  const { showCollapsedTeammateAvatars, setShowCollapsedTeammateAvatars } = useHomeMode();
   // Bumped by a manual home refresh so the teammate section also re-reads its cloud companions.
   const [teammatesRefreshKey, setTeammatesRefreshKey] = useState(0);
   const activeHomeSession = useContext(ActiveHomeSession);
@@ -510,7 +535,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const screenFocused = routeFocused;
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
-  const styles = useThemedStyles(makeStyles);
+  const styles = useHomeStyles();
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
   // 项目筛选按账号身份存取(项目 key 跨账号无效);其余视图偏好仍按设备共用。
@@ -520,6 +545,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   preferenceOwnerRef.current = preferenceOwner;
   const saveHomeViewPreferences = useCallback((
     patch: Omit<HomeViewPreferencePatch, 'projectFilter' | 'teammateFilter'> & { projectFilter?: HomeProjectFilter; teammateFilter?: HomeTeammateFilter },
+    filterMode: 'tasks' | 'inbox' = 'tasks',
   ) => {
     const owner = getMobileAuthOwner();
     const { projectFilter, teammateFilter, ...rest } = patch;
@@ -527,7 +553,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ...(projectFilter === undefined ? {} : { projectFilter: { owner: preferenceOwnerRef.current, value: projectFilter } }),
       ...(teammateFilter === undefined ? {} : { teammateFilter: { owner: preferenceOwnerRef.current, value: teammateFilter } }),
     };
-    return persistHomeViewPreferences(stored).catch(() => {
+    return persistHomeViewPreferences(stored, filterMode).catch(() => {
       if (isMobileAuthOwnerCurrent(owner)) {
         Alert.alert(t('devices.list.alert.actionFailed'), t('models.unified.saveFailed'));
       }
@@ -577,7 +603,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
   const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
-  const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
   const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
   const directoryBudgetRef = useRef<{
@@ -661,6 +686,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 首次网络同步必须等设备筛选偏好恢复，否则单机用户会先按默认“全部”拉一轮所有电脑。
   const [homeViewPreferencesHydrated, setHomeViewPreferencesHydrated] = useState(restoredView);
   const [refreshing, setRefreshing] = useState(false);
+  const [homeAppActive, setHomeAppActive] = useState(AppState.currentState === 'active');
+  const displayOrderScopeRef = useRef('');
+  const [displayOrderSeed, setDisplayOrderSeed] = useState<HomeDisplayOrder | null>(null);
+  const [displayOrderRevision, setDisplayOrderRevision] = useRetainedHomeState(viewSession, 'displayOrderRevision', 0);
+  const resetDisplayOrder = useCallback(() => setDisplayOrderRevision(value => value + 1), [setDisplayOrderRevision]);
   const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const clearDirectoryBudget = useCallback(() => {
@@ -742,7 +772,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const runDisclosure = disclosure.run;
   const prepareListDisclosure = disclosure.prepare;
   const animateListChange = useCallback((apply: () => void) => runDisclosure(apply, { nested: true }), [runDisclosure]);
+  // Read by inbox Done, which runs after render; the index is declared further below.
+  const scheduleIndexRef = useRef<ReadonlyMap<string, RemoteSessionScheduleInfo>>(new Map());
   const {
+    snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     actionSheetSession,
     archiveSession,
     closeRenameSession,
@@ -757,22 +790,34 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     showSessionOptions,
     swipeRegistry,
     toggleSessionPinned,
-  } = useSessionListActions({ animateListChange });
+  } = useSessionListActions({
+    animateListChange,
+    hasActiveAutomation: (session) => scheduleIndexRef.current.get(session.id)?.hasActiveFollowUp === true,
+  });
   // 实测 header 高度(onLayout),用于下拉菜单定位;字体放大等导致 header 超过 HOME_HEADER_MIN_HEIGHT 时不再错位。
   const [headerHeight, setHeaderHeight] = useState<number | null>(null);
   const [headerFrosted, setHeaderFrosted] = useState(false);
+  const [inboxCollapsed, setInboxCollapsed] = useRetainedHomeState<ReadonlySet<string>>(viewSession, 'inboxCollapsed', () => new Set(['inbox-working', 'inbox-snoozed', 'inbox-archived']));
+  const [inboxNow, setInboxNow] = useState(Date.now);
+  const [groupDevice, setGroupDevice] = useRetainedHomeState(viewSession, 'groupDevice', true);
+  const [pinnedView, setPinnedView] = useRetainedHomeState<HomePinnedView>(viewSession, 'pinnedView', 'list');
+  const [pinnedSort, setPinnedSort] = useRetainedHomeState<HomePinnedSort>(viewSession, 'pinnedSort', 'manual');
+  const [pinnedOrder, setPinnedOrder] = useRetainedHomeState<string[]>(viewSession, 'pinnedOrder', []);
   const [groupByProject, setGroupByProject] = useRetainedHomeState(viewSession, 'groupByProject', true);
   const [groupDialogue, setGroupDialogue] = useRetainedHomeState(viewSession, 'groupDialogue', false);
+  const [groupAutomation, setGroupAutomation] = useRetainedHomeState(viewSession, 'groupAutomation', false);
   const [sortBy, setSortBy] = useRetainedHomeState<HomeListSortBy>(viewSession, 'sortBy', 'recency');
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
-  const [teammateFilter, setTeammateFilter] = useRetainedHomeState<HomeTeammateFilter>(viewSession, 'teammateFilter', 'all');
-  const [projectFilter, setProjectFilter] = useRetainedHomeState<HomeProjectFilter>(viewSession, 'projectFilter', 'all');
-  const [vendorFilter, setVendorFilter] = useRetainedHomeState<HomeVendorFilter>(viewSession, 'vendorFilter', 'all');
-  const [lastActivityFilter, setLastActivityFilter] = useRetainedHomeState<HomeLastActivityFilter>(viewSession, 'lastActivityFilter', 'all');
-  const [viewMode, setViewMode] = useRetainedHomeState<HomeListViewMode>(viewSession, 'viewMode', 'list');
-  const [taskInfoFields, setTaskInfoFields] = useRetainedHomeState<readonly HomeTaskInfoField[]>(viewSession, 'taskInfoFields', DEFAULT_HOME_TASK_INFO_FIELDS);
+  const [taskListMode, setTaskListMode] = useRetainedHomeState<'tasks' | 'inbox'>(viewSession, 'taskListMode', 'tasks');
+  const [taskFilters, setTaskFilters] = useRetainedHomeState<Partial<HomeModeDisplayPreferences>>(viewSession, 'taskFilters', {});
+  const [inboxFilters, setInboxFilters] = useRetainedHomeState<Partial<HomeModeDisplayPreferences>>(viewSession, 'inboxFilters', {});
+  const { projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations = false,
+    viewMode = 'list', taskInfoFields = DEFAULT_HOME_TASK_INFO_FIELDS } =
+    { ...DEFAULT_HOME_FILTERS, ...(taskListMode === 'inbox' ? inboxFilters : taskFilters) };
+  const { showCollapsedTeammateAvatars, setShowCollapsedTeammateAvatars } = useHomeMode(taskListMode);
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
+  const reloadHostProjectOrderRef = useRef<(() => Promise<void>) | null>(null);
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
   const visualProjectKeysRef = useRef<string[]>([]);
   const homeRootRef = useRef<ViewInstance>(null);
@@ -803,7 +848,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [retryingDeviceIds, setRetryingDeviceIds] = useState<ReadonlySet<string>>(new Set());
   const retryingDeviceIdsRef = useRef<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useRetainedHomeState<HomeStatusFilter>(viewSession, 'statusFilter', 'active');
-  const requestedListFilter = active ? remoteListStatusFilter(statusFilter) : 'active';
+  const requestedListFilter: RemoteListStatusFilter = active
+    ? taskListMode === 'inbox' ? 'all' : remoteListStatusFilter(statusFilter)
+    : 'active';
   const homeListFilterRef = useRef(requestedListFilter);
   const homeListFilterChanged = homeListFilterRef.current !== requestedListFilter;
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useRetainedHomeState<string[]>(viewSession, 'collapsedProjectKeys', [],
@@ -824,6 +871,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return merged;
   }, [rawDeviceConnectionStates, unresponsiveDevices]);
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(() => new Map());
+  scheduleIndexRef.current = scheduleIndex;
   const scheduleMirrorInvalidations = useRemoteScheduleMirrorInvalidations();
 
   // Clear the entire account-owned Home projection before paint. The generation ref is already
@@ -853,6 +901,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
 
     setDevices([]);
     setHomeListCacheHydrated(false);
+    setDisplayOrderSeed(null);
     setRefreshing(false);
     setError(null);
     setLastSyncedAt(null);
@@ -1062,11 +1111,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           async () => {
             assertCurrentScope();
             const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId);
-            const list = await invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
-              LIST_LIMIT,
-              requestedListFilter,
-              { includePinned: true, fresh: true },
-            ]);
+            const list = await readHomeSessionList(requestedListFilter, status => {
+              assertCurrentScope();
+              return invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
+                LIST_LIMIT,
+                status,
+                { includePinned: true, fresh: true },
+              ]);
+            });
+            assertCurrentScope();
             const enriched = await readTeammateTasks({ invoke, deviceId: device.deviceId, deviceName: device.name,
               scope: JSON.stringify([expectedAccountGeneration, expectedHomeSyncGeneration, device.deviceId]),
               sessions: Array.isArray(list) ? list : [], previous: remoteSessionStore.getHomeSessions(),
@@ -1461,12 +1514,22 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // A manual refresh also recovers the teammate section: roster, group chats and cloud companions.
   const homeRoster = teammatesSectionContext.shared;
   const refreshHome = useCallback(() => {
-    void loadHome({ visible: true });
+    const owner = accountGeneration;
+    const scope = displayOrderScopeRef.current;
+    void loadHome({ visible: true }).then(async () => {
+      // A refresh queued behind startup must wait for that queued batch too.
+      while (syncInFlightRef.current) await syncInFlightRef.current;
+      if (homeAccountGenerationRef.current !== owner || displayOrderScopeRef.current !== scope) return;
+      // A settled startup load cannot satisfy a manual refresh. Join a live
+      // load for the current scope or start a fresh one after the list batch.
+      await reloadHostProjectOrderRef.current?.();
+      if (homeAccountGenerationRef.current === owner && displayOrderScopeRef.current === scope) resetDisplayOrder();
+    });
     if (!homeRoster) return;
     void homeRoster.roster.refresh();
     if (homeRoster.groups.supported) void homeRoster.groups.refresh();
     setTeammatesRefreshKey(key => key + 1);
-  }, [homeRoster, loadHome]);
+  }, [accountGeneration, homeRoster, loadHome, resetDisplayOrder]);
   loadHomeRef.current = loadHome;
 
   // 冷启动先画缓存:上次 loadHome 成功的设备+会话快照种入 store,先把列表画出来(消除首屏强制
@@ -1482,23 +1545,24 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }
     let cancelled = false;
     const read = startBoundedStartupRead(
-      getCachedHomeListSnapshot(homeCacheUserId),
-      [],
+      getCachedHomeListState(homeCacheUserId),
+      { devices: [], displayOrder: null },
     );
-    const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListSnapshot>>) => {
+    const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListState>>) => {
       await syncInFlightRef.current;
       if (
         cancelled
         || homeAccountGenerationRef.current !== expectedAccountGeneration
         || lastSyncedAtRef.current !== null
       ) return;
-      for (const device of snapshot) {
+      setDisplayOrderSeed(snapshot.displayOrder);
+      for (const device of snapshot.devices) {
         remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
       }
     };
     void read.initial
-      .then((initial) => {
-        void applySnapshot(initial.value);
+      .then(async (initial) => {
+        await applySnapshot(initial.value);
         if (initial.timedOut) void read.completion.then((late) => {
           if (late.ok) void applySnapshot(late.value);
         });
@@ -1571,23 +1635,25 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     };
     const applyPreferences = (preferences: HomeViewPreferences | null) => {
       if (!preferences || restoredView) return;
-      if (
-        cancelled
-        || homeAccountGenerationRef.current !== expectedAccountGeneration
-        || viewPrefsTouchedRef.current
-      ) return;
+      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+      // A late read still restores the other mode and any display preference the user hasn't changed.
+      const { projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations } = preferences;
+      setTaskFilters(current => ({ projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations,
+        viewMode: preferences.viewMode, taskInfoFields: preferences.taskInfoFields, ...current }));
+      setInboxFilters(current => ({ ...preferences.inboxFilters, ...current }));
+      if (viewPrefsTouchedRef.current) return;
       setGroupByProject(preferences.groupByProject);
+      setGroupDevice(preferences.groupDevice);
+      setPinnedView(preferences.pinnedView);
+      setPinnedSort(preferences.pinnedSort);
+      setPinnedOrder(preferences.pinnedOrder);
       setGroupDialogue(preferences.groupDialogue);
+      setGroupAutomation(preferences.groupAutomation);
       setSortBy(preferences.sortBy);
       setStatusFilter(preferences.statusFilter);
       setProjectOrder(preferences.projectOrder);
       setManualProjectOrder(preferences.manualProjectOrder);
-      setProjectFilter(preferences.projectFilter);
-      setTeammateFilter(preferences.teammateFilter);
-      setVendorFilter(preferences.vendorFilter);
-      setLastActivityFilter(preferences.lastActivityFilter);
-      setViewMode(preferences.viewMode);
-      setTaskInfoFields(preferences.taskInfoFields);
+      setTaskListMode(preferences.taskListMode ?? 'tasks');
       if (preferences.selectedDevice) {
         setSelectedDeviceId(preferences.selectedDevice.deviceId);
         setRestoredDeviceName(preferences.selectedDevice.name);
@@ -1785,6 +1851,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   useEffect(() => {
     startSilentHomeSync();
     const subscription = AppState.addEventListener('change', (nextState) => {
+      setHomeAppActive(nextState === 'active');
       // 退后台后连接会在宽限期后停掉，期间的推送无从补齐：回前台一律按需重拉。
       if (nextState === 'background') homeListFreshnessRef.current.invalidateAll();
       if (nextState === 'active') startSilentHomeSync();
@@ -1887,10 +1954,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, []);
 
   const openChromeMenu = useCallback(() => {
+    if (chromeMenuOpen) return;
+    playHaptic('commit');
     pendingMenuActionRef.current = null;
     setDeviceMenuOpen(false);
     setChromeMenuOpen(true);
-  }, []);
+  }, [chromeMenuOpen]);
 
   const onListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     homeScrollY.value = event.nativeEvent.contentOffset.y;
@@ -1987,47 +2056,71 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
     return () => { cancelled = true; };
   }, [accountGeneration, homeCacheUserId]);
+  // Busy state and last-seen time arrive with every presence message and do not change
+  // which computers are asked; rerun discovery only for what it actually reads.
+  const discoveryDevicesRef = useRef(deviceModels);
+  discoveryDevicesRef.current = deviceModels;
+  const discoveryDevicesKey = remoteResourceDiscoveryKey(deviceModels);
   useEffect(() => {
-    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
-    let cancelled = false;
-    const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
+    const discoveryDevices = discoveryDevicesRef.current;
+    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (discoveryDevices.length === 0 && lastSyncedAt === null)) return;
+    if (!screenFocused || !active) return;
+    const targets = remoteResourceDiscoveryTargets(discoveryDevices, remoteHomeCollectionsRef.current);
     if (targets.length === 0) {
       remoteHomeCollectionsRef.current = [];
       setRemoteHomeCollections([]);
-      return () => { cancelled = true; };
+      return;
     }
-    void discoverRemoteHomeCollections(
-      (deviceId, channel, args) => invoke(deviceId, channel, args, {
-        background: true,
-        preSend: () => {
-          if (cancelled || homeAccountGenerationRef.current !== accountGeneration)
-            throw new Error('Remote discovery superseded');
-        },
-      }),
-      targets,
-      i18nInstance.language,
-      remoteHomeCollectionsRef.current,
-    )
-      .then((collections) => {
-        if (!cancelled && homeAccountGenerationRef.current === accountGeneration) {
-          remoteHomeCollectionsRef.current = collections;
-          setRemoteHomeCollections(collections);
-          void cacheRemoteResourceHome(homeCacheUserId, collections);
-        }
-      })
-      .catch(() => {
-        // Optional capability discovery must not turn a healthy Sessions home into an error page.
-        // Keep the last same-account manifest during transient link failures.
+    let controller: AbortController | undefined;
+    const discover = () => {
+      if (AppState.currentState !== 'active' || (controller && !controller.signal.aborted)) return;
+      const current = new AbortController();
+      controller = current;
+      const isCurrent = () => !current.signal.aborted && homeAccountGenerationRef.current === accountGeneration;
+      const publish = (collections: RemoteHomeCollection[]) => {
+        if (!isCurrent()) return;
+        remoteHomeCollectionsRef.current = collections;
+        setRemoteHomeCollections(collections);
+        void cacheRemoteResourceHome(homeCacheUserId, collections);
+      };
+      void discoverRemoteHomeCollections(
+        (deviceId, channel, args) => invoke(deviceId, channel, args, {
+          background: true,
+          preSend: () => {
+            if (!isCurrent() || !screenFocusedRef.current || AppState.currentState !== 'active'
+              || !discoveryDevicesRef.current.some((device) => device.deviceId === deviceId && device.canOpen))
+              throw new Error('Remote discovery superseded');
+          },
+        }),
+        targets,
+        i18nInstance.language,
+        remoteHomeCollectionsRef.current,
+        publish,
+        current.signal,
+      ).catch(() => {
+        // Optional discovery keeps the same-account snapshot on failure; healthy
+        // hosts publish immediately while only failed hosts consume the retry budget.
       });
-    return () => { cancelled = true; };
+    };
+    discover();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') discover();
+      else controller?.abort();
+    });
+    return () => {
+      controller?.abort();
+      subscription.remove();
+    };
   }, [
+    screenFocused,
+    active,
     accountGeneration,
     connectionEpoch,
     resourceCacheAccount,
     lastSyncedAt,
     homeListCacheHydrated,
     homeCacheUserId,
-    deviceModels,
+    discoveryDevicesKey,
     i18nInstance.language,
     invoke,
   ]);
@@ -2090,55 +2183,68 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     sortBy: indexedSearch.sortBy,
     status: indexedSearch.statusFilter,
   });
+  // Directory refreshes can reorder the same computers. Ordering reads depend only on
+  // membership and connection generation, not on row identity or display order.
+  const projectOrderDeviceIds = useStableValue([...homeSyncDeviceIds].sort(),
+    (a, b) => a.length === b.length && a.every((id, index) => id === b[index]));
   useEffect(() => {
     const expectedAccountGeneration = accountGeneration;
-    const ids = homeSyncDeviceIds;
+    const ids = projectOrderDeviceIds;
     if (ids.length === 0) return undefined;
     let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const fence = createProjectOrderFetchFence();
     projectOrderFetchFenceRef.current = fence;
-    const load = async (attempt: number) => {
-      // Project ordering is secondary Home metadata. Let the bounded sessions-list batch
-      // finish first so cold start/reconnect does not create a second overlapping six-device
-      // fan-out. A queued refresh is included as well; live pushes remain fenced below.
-      while (syncInFlightRef.current) {
-        await syncInFlightRef.current;
-        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
-      }
-      const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
-      const entries = await runHomeDeviceSyncBatch(ids, async (deviceId) => {
-        const result = await homeDeviceSyncLimiterRef.current.run(async () => {
-          if (
-            cancelled
-            || homeAccountGenerationRef.current !== expectedAccountGeneration
-            || !homeSyncTargetDeviceIdsRef.current.has(deviceId)
-          ) return { kind: 'transient' } as const;
-          return fetchHostProjectOrder(invoke, deviceId);
+    const startLoad = () => {
+      if (load) return load.completion;
+      let pendingIds = ids;
+      const loadAttempt = async () => {
+        // Project ordering is secondary Home metadata. Let the bounded sessions-list batch
+        // finish first so cold start/reconnect does not create a second overlapping six-device
+        // fan-out. A queued refresh is included as well; live pushes remain fenced below.
+        while (syncInFlightRef.current) {
+          await syncInFlightRef.current;
+          if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
+        }
+        const tokens = new Map(pendingIds.map((deviceId) => [deviceId, fence.begin(deviceId)]));
+        const entries = await runHomeDeviceSyncBatch(pendingIds, async (deviceId) => {
+          const result = await homeDeviceSyncLimiterRef.current.run(async () => {
+            if (
+              cancelled
+              || homeAccountGenerationRef.current !== expectedAccountGeneration
+              || !homeSyncTargetDeviceIdsRef.current.has(deviceId)
+            ) return { kind: 'transient' } as const;
+            return fetchHostProjectOrder(invoke, deviceId, expectedAccountGeneration, connectionEpoch);
+          });
+          return [deviceId, result] as const;
         });
-        return [deviceId, result] as const;
-      });
-      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
-      for (const [deviceId, result] of entries) {
-        if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
-        if (result.kind === 'ok') rememberRemoteProjectOrderStamp(deviceId, result.snapshot.ownerStamp);
-      }
-      setHostProjectOrders((current) => {
-        const next = new Map(current);
+        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
         for (const [deviceId, result] of entries) {
           if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
-          if (result.kind === 'ok') next.set(deviceId, result.snapshot);
-          else if (result.kind === 'unavailable') next.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
+          if (result.kind === 'ok') rememberRemoteProjectOrderStamp(deviceId, result.snapshot.ownerStamp);
         }
-        return next;
-      });
-      if (attempt < 3 && entries.some(([, result]) => result.kind === 'transient')) {
-        retryTimer = setTimeout(() => {
-          void load(attempt + 1);
-        }, 2000);
-      }
+        setHostProjectOrders((current) => {
+          const next = new Map(current);
+          for (const [deviceId, result] of entries) {
+            if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
+            if (result.kind === 'ok') next.set(deviceId, result.snapshot);
+            else if (result.kind === 'unavailable') next.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
+          }
+          return next;
+        });
+        pendingIds = entries.filter(([, result]) => result.kind === 'transient').map(([id]) => id);
+        return pendingIds.length > 0;
+      };
+      const started = startHostProjectOrderLoad(loadAttempt);
+      load = started;
+      const settled = () => {
+        if (load === started) load = null;
+      };
+      void started.completion.then(settled, settled);
+      return started.completion;
     };
-    void load(1);
+    let load: ReturnType<typeof startHostProjectOrderLoad> | null = null;
+    reloadHostProjectOrderRef.current = startLoad;
+    void startLoad();
     const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
       if (
         cancelled
@@ -2154,10 +2260,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
     return () => {
       cancelled = true;
-      if (retryTimer) clearTimeout(retryTimer);
+      load?.cancel();
+      if (reloadHostProjectOrderRef.current === startLoad) reloadHostProjectOrderRef.current = null;
       unsubscribe();
     };
-  }, [accountGeneration, homeSyncDeviceIds, invoke]);
+  }, [accountGeneration, connectionEpoch, projectOrderDeviceIds, invoke]);
   const revokedTipDeviceName = useMemo(
     () => revokedTipDeviceId
       ? deviceModels.find((item) => item.deviceId === revokedTipDeviceId)?.name ?? t('devices.list.thisComputer')
@@ -2172,23 +2279,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return remoteSessionStore.getSessionListMessagePreviewIndex(sessions);
   }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
-  const pendingInteractionIndexRaw = useMemo(() => {
-    const next = new Map<string, number>();
-    const activeIds = new Set<string>();
-    for (const session of sessions) {
-      activeIds.add(session.id);
-      const pending = remoteSessionStore.getPendingInteractions(session.id);
-      const cached = homePendingCacheRef.current.get(session.id);
-      const count = cached?.pending === pending ? cached.count : pending.length;
-      if (!cached || cached.pending !== pending) homePendingCacheRef.current.set(session.id, { pending, count });
-      if (count > 0) next.set(session.id, count);
-    }
-    for (const sessionId of homePendingCacheRef.current.keys()) {
-      if (!activeIds.has(sessionId)) homePendingCacheRef.current.delete(sessionId);
-    }
-    return next;
-  }, [homeStatusVersion, sessions]);
-  const pendingInteractionIndex = useStableValue(pendingInteractionIndexRaw, mapContentEqual);
+  const { pendingInteractionIndex, visibleWorkerIds, workerTargets } = useOrcaQuestionRows(sessions, homeStatusVersion);
   const liveActivityIndexRaw = useMemo(() => {
     const next = new Map<string, RemoteSessionLiveActivity>();
     for (const session of sessions) {
@@ -2210,8 +2301,31 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return next;
   }, [homeStatusVersion, sessions]);
   const liveActivityIndex = useStableValue(liveActivityIndexRaw, mapContentEqual);
-  // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
-  const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions), [sessions]);
+  // 已知归属的问题在 Lead 行提示，缺少归属时保留提问的 Worker。
+  const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions, visibleWorkerIds), [sessions, visibleWorkerIds]);
+  const pluginIconDevices = useMemo(() => {
+    const ids = new Set<string>();
+    for (const session of homeSessions) {
+      const deviceId = session.deviceLinkDeviceId;
+      if (deviceId && session.status === 'active' && isPluginEngineSessionKind(session.agentKind)
+        && homeSyncDeviceIdSet.has(deviceId)) {
+        ids.add(deviceId);
+      }
+    }
+    return [...ids].sort();
+  }, [homeSessions, homeSyncDeviceIdSet]);
+  const stablePluginIconDevices = useStableValue(pluginIconDevices,
+    (before, after) => before.length === after.length && before.every((id, index) => id === after[index]));
+  useEffect(() => {
+    if (!screenFocused || !active || !homeAppActive || status !== 'online') return;
+    const owner = getMobileAuthOwner();
+    let cancelled = false;
+    void runHomeDeviceSyncBatch(stablePluginIconDevices, async (deviceId) => {
+      if (cancelled || !isMobileAuthOwnerCurrent(owner)) return;
+      await prefetchPluginEngineIcons(deviceId, createMobileMakerTransport({ deviceId, invoke }));
+    });
+    return () => { cancelled = true; };
+  }, [stablePluginIconDevices, screenFocused, active, homeAppActive, status, invoke, accountGeneration, connectionEpoch]);
   const home = useMemo(
     () => buildMobileHomePresentation({
       projectAliases,
@@ -2229,10 +2343,21 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }),
     [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId, homeSessions, statusFilter, t, projectAliases],
   );
+  const inboxHome = useMemo(
+    () => buildMobileHomePresentation({
+      inboxMode: true,
+      projectAliases, devices: deviceModels, liveActivityIndex, messagePreviewIndex,
+      pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId,
+      sessions: homeSessions, statusFilter: 'all', unnamedLabel: t('session.menu.unnamedTitle'),
+    }),
+    [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex,
+      searchQuery, selectedDeviceId, homeSessions, t, projectAliases],
+  );
   // 「筛选 › 项目」的候选:设备范围内的项目全集,不受搜索与任务状态影响——否则已选中的项目
   // 会因搜索没命中或当前状态下没有任务而从菜单里消失,用户无法单独取消它。
   const projectFilterUniverse = useMemo(
     () => buildMobileHomePresentation({
+      inboxMode: taskListMode === 'inbox',
       projectAliases,
       devices: deviceModels,
       scheduleIndex,
@@ -2241,15 +2366,17 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       statusFilter: 'all',
       unnamedLabel: t('session.menu.unnamedTitle'),
     }),
-    [deviceModels, scheduleIndex, selectedDeviceId, homeSessions, t, projectAliases],
+    [deviceModels, scheduleIndex, selectedDeviceId, homeSessions, t, projectAliases, taskListMode],
   );
+  const hasDeviceGroups = home.deviceFilters.some(device => device.deviceId && canBrowseMobileHomeDevice(device));
+  const groupByDevice = taskListMode === 'tasks' && groupDevice && hasDeviceGroups;
   const projectMachineIdentities = useMemo(
     () => buildHomeProjectMachineIdentities(home, {
-      status, getPresenceAvailability, unresponsiveDevices, revokedDevices,
-    }),
+      getPresenceAvailability, unresponsiveDevices, revokedDevices,
+    }, groupByDevice),
     // Presence is read through a stable getter; its version/connection epoch must
     // refresh icons even when the page-local device list has not changed.
-    [home, status, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
+    [home, groupByDevice, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
   );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -2261,12 +2388,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return ids;
   }, [homeSessions, homeStatusVersion, liveActivityIndex, scheduleIndex]);
   const homePriorityItems = useMemo(
-    () => [...home.pinned, ...home.chats, ...home.projects.flatMap((project) => project.sessions)],
-    [home],
+    () => mobileHomeSessionItems(taskListMode === 'inbox' ? inboxHome : home),
+    [home, inboxHome, taskListMode],
   );
   const priorityContext = useMemo(
-    () => collectHomePriorityContext(homePriorityItems, runningSessionIds, homeViewedPriorityHold),
-    [homePriorityItems, priorityHoldEpoch, runningSessionIds],
+    () => (taskListMode === 'inbox' ? collectInboxHomePriorityContext : collectHomePriorityContext)(
+      homePriorityItems, runningSessionIds, homeViewedPriorityHold),
+    [homePriorityItems, priorityHoldEpoch, runningSessionIds, taskListMode],
   );
   const priorityContextRef = useRef(priorityContext);
   priorityContextRef.current = priorityContext;
@@ -2300,9 +2428,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const displayedProjectOrder = displayed.projectOrder;
   const displayedManualProjectOrder = displayed.manualProjectOrder;
-  const sharedGroup = useMemo(() => splitSharedHomeGroup(home, ownedSharedTasks, {
-    sessions: homeSessions, searchQuery, statusFilter,
-  }), [home, ownedSharedTasks, homeSessions, searchQuery, statusFilter]);
+  const displayedHome = taskListMode === 'inbox' ? inboxHome : home;
+  const displayedStatus = taskListMode === 'inbox' ? 'all' : statusFilter;
+  const sharedGroup = useMemo(() => splitSharedHomeGroup(displayedHome, ownedSharedTasks, {
+    sessions: homeSessions, searchQuery, statusFilter: displayedStatus,
+  }), [displayedHome, ownedSharedTasks, homeSessions, searchQuery, displayedStatus]);
   const cloudTeammates = useCloudCompanionHome(false);
   const cloudTeammateIds = useMemo(() => new Set(cloudTeammates.actors.filter(actor => actor.kind === 'bot').map(actor => actor.externalId)), [cloudTeammates.actors]);
   const cindyTeammateIds = useMemo(() => new Set(cloudTeammates.cindyIds), [cloudTeammates.cindyIds]);
@@ -2312,16 +2442,17 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     cloudTeammateIds, i18nInstance.language, cindyTeammateIds,
   ), [teammatesSectionContext.shared?.roster.items, cloudTeammates.actors, cloudTeammates.deviceNames, cloudTeammateIds, i18nInstance.language, cindyTeammateIds]);
   const contentFilters = useMemo<HomeContentFilters>(() => ({
+    hideAutomations,
     lastActivity: lastActivityFilter,
     projects: projectFilter,
     teammates: effectiveTeammateFilter,
     teammateKey: item => {
       const session = item.session as RemoteSession;
-      const id = session.taskTeammate?.id ?? session.companion?.id;
+      const id = taskTeammateId(session);
       return id ? taskTeammateKey(id, session.deviceLinkDeviceId ?? '', cloudTeammateIds, cindyTeammateIds) : undefined;
     },
     vendor: vendorFilter,
-  }), [lastActivityFilter, projectFilter, effectiveTeammateFilter, cloudTeammateIds, cindyTeammateIds, vendorFilter]);
+  }), [hideAutomations, lastActivityFilter, projectFilter, effectiveTeammateFilter, cloudTeammateIds, cindyTeammateIds, vendorFilter]);
   // 「最近活跃」按当前时间截断:列表没有新数据时也要让越过截止线的任务按时移出。
   const filterTick = useHomeFilterClock(lastActivityFilter !== 'all' && screenFocused);
   const filteredSharedRows = useMemo(
@@ -2330,23 +2461,80 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : filteredSharedRows;
   const contentFilterCount = activeContentFilterCount(contentFilters);
+  // Teammates' main conversations join the inbox wherever the teammate section itself is shown:
+  // not while a filter narrows the tasks, and only the matching ones while searching.
+  const inboxTeammates = useInboxTeammates({
+    context: teammatesSectionContext, cloud: cloudTeammates, push: guardedPush, registry: swipeRegistry, query: searchQuery,
+    enabled: taskListMode === 'inbox' && indexedSearch.activeFilterCount === 0 && contentFilterCount === 0,
+  });
+  const inboxTeammateEntries = inboxTeammates.entries;
   const filteredHome = useMemo(
     () => applyHomeContentFilters(sharedGroup.home, contentFilters, filterTick || Date.now()),
     [contentFilters, filterTick, sharedGroup.home],
   );
-  const homeSections = useMemo(
-    () => buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
-      dialogueTitle: t('devices.list.menu.dialogueFolder'),
-      groupDialogue,
-      manualProjectOrder: displayedManualProjectOrder,
-      priorityContext: sortPriorityContext,
-      projectOrder: displayedProjectOrder,
-      sortBy,
-    }),
-    [displayedManualProjectOrder, displayedProjectOrder, filteredHome, groupByProject, groupDialogue, pinnedCollapsed, sortPriorityContext, sortBy, t],
+  useEffect(() => {
+    if (!screenFocused) return;
+    const now = Date.now();
+    const next = Math.min(nextInboxTeammateWake(inboxTeammateEntries, inboxNow),
+      ...homeSessions.map(taskSnoozeUntil).filter(at => at > inboxNow));
+    const timer = Number.isFinite(next) ? setTimeout(() => setInboxNow(Date.now()), Math.min(2_147_483_647, Math.max(1, next - now))) : undefined;
+    return () => clearTimeout(timer);
+  }, [homeSessions, inboxTeammateEntries, screenFocused, inboxNow]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') setInboxNow(Date.now());
+    });
+    return () => subscription.remove();
+  }, []);
+  const sortedHomeSections = useMemo(
+    () => {
+      const regular = buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
+        groupDevice: groupByDevice,
+        pinnedSort,
+        pinnedOrder,
+        automationTitle: t('devices.list.menu.automationFolder'),
+        dialogueTitle: t('devices.list.menu.dialogueFolder'),
+        groupAutomation,
+        groupDialogue,
+        manualProjectOrder: displayedManualProjectOrder,
+        priorityContext: sortPriorityContext,
+        projectOrder: displayedProjectOrder,
+        sortBy,
+      });
+      return taskListMode === 'inbox'
+        ? [...regular.filter(section => section.key === 'pinned'), ...buildInboxHomeSections(filteredHome, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries)]
+        : regular;
+    },
+    [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, displayedManualProjectOrder, displayedProjectOrder,
+      filteredHome, groupByDevice, pinnedSort, pinnedOrder, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
+      sortPriorityContext, sortBy, t],
   );
+  // Sorting metadata may arrive after rows. Only user actions or a new visit release
+  // the displayed order; live activity, priority and host-order pushes update content.
+  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupDevice, groupByProject, groupDialogue, groupAutomation,
+    sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations, searchQuery]);
+  displayOrderScopeRef.current = displayOrderScope;
+  const commitDisplayOrder = useCallback((order: HomeDisplayOrder) => {
+    rememberHomeDisplayOrder(homeCacheUserId, order);
+    scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
+  }, [homeCacheUserId]);
+  const homeSections = useStableHomeSections({
+    sections: sortedHomeSections,
+    collapsedGroups: collapsedProjectKeys,
+    scope: displayOrderScope,
+    revision: displayOrderRevision,
+    ready: homeListCacheHydrated && homeViewPreferencesHydrated && deviceIdentityCacheReady,
+    settled: lastSyncedAt !== null,
+    visible: screenFocused && active && homeAppActive,
+    session: viewSession,
+    seed: displayOrderSeed,
+    onCommit: commitDisplayOrder,
+  });
   const sections = useMemo(() => {
     if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
+    // SectionList counts section headers/footers even with no rows, suppressing
+    // ListEmptyComponent. Leave the list truly empty while searching or on no hits.
+    if (indexedSearch.results.length === 0) return [];
     return [{
       data: indexedSearch.results.map((item) => ({
         item,
@@ -2481,7 +2669,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 引导态下首页没有可筛选的对话:表头「所有对话 ▾」退化为纯品牌标题、新建 FAB 隐藏,
   // 避免在产品说明页上摆一堆无意义的入口。
   const homeListItemCount = sharedRows.length + sections.reduce((count, section) => count + section.data.length, 0);
-  const showRemoteGuide = homeListItemCount === 0
+  const hasDeviceSections = sections.some(section => section.key.startsWith('device:'));
+  const showRemoteGuide = homeListItemCount === 0 && !hasDeviceSections
     && !initialHomeLoading
     && !initialHomeError
     && home.pinned.length === 0
@@ -2500,10 +2689,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     homeSyncDeviceIds, homeListOwnedDeviceIdsRef.current, rawDeviceConnectionStates,
   );
   const taskSuggestionsCandidateMode = remoteTaskSuggestionsMode({
-    sessionCount: countHomeSuggestionSessions(home,
+    sessionCount: countHomeSuggestionSessions(displayedHome,
       shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? indexedSearch.results : undefined),
-    totalSessionCount: home.overview.all,
-    hasSearchOrFilter: !!searchQuery.trim() || indexedSearch.activeFilterCount > 0 || statusFilter !== 'active'
+    totalSessionCount: displayedHome.overview.all,
+    hasSearchOrFilter: !!searchQuery.trim() || indexedSearch.activeFilterCount > 0 || (taskListMode === 'tasks' && statusFilter !== 'active')
       || contentFilterCount > 0,
     // Cached/offline lists and in-flight searches must not look ready to start work.
     ready: status === 'online' && !activeConnectionIssue && !initialHomeLoading && !initialHomeError && !connectionError
@@ -2559,6 +2748,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     advanceViewedPriorityHold(homeViewedPriorityHold, item.session.id, priorityContextRef.current, Date.now());
     leftHomeForSessionRef.current = true;
     setPriorityHoldEpoch((epoch) => epoch + 1);
+    const worker = workerTargets.current.get(item.session.id);
+    if (worker && !('searchFocusClientId' in item) && !('searchLocallyCached' in item)) {
+      item = { ...item, session: worker };
+    }
     if (navigationHost.current.onSelectSession) {
       navigationHost.current.onSelectSession(item);
       return;
@@ -2571,7 +2764,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const href = { pathname: '/sessions/[sessionId]', params: { ...target } } as const;
     rememberTask(href);
     guardedPush(href);
-  }, [guardedPush, rememberTask, swipeRegistry, t]);
+  }, [guardedPush, rememberTask, swipeRegistry, t, workerTargets]);
 
   // Every visible row receives this callback, and the list presentation is rebuilt on each
   // task update. Read the latest target on tap so updates do not re-render every row.
@@ -2645,6 +2838,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const applyDisplayView = useCallback((patch: HomeDisplayPatch & { manualProjectOrder?: string[] }) => {
     const expectedAccountGeneration = accountGeneration;
     viewPrefsTouchedRef.current = true;
+    resetDisplayOrder();
     let nextPatch = patch;
     if (
       !selectedDeviceId
@@ -2660,21 +2854,33 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         ),
       };
     }
+    if (nextPatch.groupDevice !== undefined) setGroupDevice(nextPatch.groupDevice);
     if (nextPatch.groupByProject !== undefined) setGroupByProject(nextPatch.groupByProject);
     if (nextPatch.groupDialogue !== undefined) setGroupDialogue(nextPatch.groupDialogue);
+    if (nextPatch.groupAutomation !== undefined) setGroupAutomation(nextPatch.groupAutomation);
     if (nextPatch.sortBy !== undefined) setSortBy(nextPatch.sortBy);
     if (nextPatch.statusFilter !== undefined) setStatusFilter(nextPatch.statusFilter);
-    if (nextPatch.teammateFilter !== undefined) setTeammateFilter(nextPatch.teammateFilter);
-    if (nextPatch.projectFilter !== undefined) setProjectFilter(nextPatch.projectFilter);
-    if (nextPatch.vendorFilter !== undefined) setVendorFilter(nextPatch.vendorFilter);
-    if (nextPatch.lastActivityFilter !== undefined) setLastActivityFilter(nextPatch.lastActivityFilter);
-    if (nextPatch.viewMode !== undefined) setViewMode(nextPatch.viewMode);
-    if (nextPatch.taskInfoFields !== undefined) setTaskInfoFields(nextPatch.taskInfoFields);
+    const modePatch: Partial<HomeModeDisplayPreferences> = {};
+    if (nextPatch.projectFilter !== undefined) modePatch.projectFilter = nextPatch.projectFilter;
+    if (nextPatch.teammateFilter !== undefined) modePatch.teammateFilter = nextPatch.teammateFilter;
+    if (nextPatch.vendorFilter !== undefined) modePatch.vendorFilter = nextPatch.vendorFilter;
+    if (nextPatch.lastActivityFilter !== undefined) modePatch.lastActivityFilter = nextPatch.lastActivityFilter;
+    if (nextPatch.hideAutomations !== undefined) modePatch.hideAutomations = nextPatch.hideAutomations;
+    if (nextPatch.viewMode !== undefined) modePatch.viewMode = nextPatch.viewMode;
+    if (nextPatch.taskInfoFields !== undefined) modePatch.taskInfoFields = nextPatch.taskInfoFields;
+    if (Object.keys(modePatch).length > 0) {
+      const setPreferences = taskListMode === 'inbox' ? setInboxFilters : setTaskFilters;
+      setPreferences(current => ({ ...current, ...modePatch }));
+    }
+    if (nextPatch.taskListMode !== undefined) {
+      setTaskListMode(nextPatch.taskListMode);
+      homeListRef.current?.getScrollResponder()?.scrollTo({ y: 0, animated: false });
+    }
     if (selectedDeviceId && nextPatch.projectOrder) {
       if (!isHostProjectOrderReachable(hostProjectOrders.get(selectedDeviceId))) {
         if (nextPatch.projectOrder !== undefined) setProjectOrder(nextPatch.projectOrder);
         if (nextPatch.manualProjectOrder !== undefined) setManualProjectOrder(nextPatch.manualProjectOrder);
-        void saveHomeViewPreferences(nextPatch);
+        void saveHomeViewPreferences(nextPatch, taskListMode);
         return;
       }
       void applyHostProjectOrder(invoke, selectedDeviceId, {
@@ -2690,6 +2896,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       }).then((result) => {
         if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
         if (result.kind === 'unavailable') {
+          resetDisplayOrder();
           projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
           setHostProjectOrders((current) => {
             const next = new Map(current);
@@ -2700,10 +2907,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           if (nextPatch.manualProjectOrder !== undefined) {
             setManualProjectOrder(nextPatch.manualProjectOrder);
           }
-          void saveHomeViewPreferences(nextPatch);
+          void saveHomeViewPreferences(nextPatch, taskListMode);
           return;
         }
         if (result.kind !== 'ok') return;
+        resetDisplayOrder();
         projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
         setHostProjectOrders((current) => {
           const next = new Map(current);
@@ -2712,13 +2920,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         });
       });
       const { projectOrder: _hostOrder, manualProjectOrder: _hostKeys, ...viewerPatch } = nextPatch;
-      if (Object.keys(viewerPatch).length > 0) void saveHomeViewPreferences(viewerPatch);
+      if (Object.keys(viewerPatch).length > 0) void saveHomeViewPreferences(viewerPatch, taskListMode);
       return;
     }
     if (nextPatch.projectOrder !== undefined) setProjectOrder(nextPatch.projectOrder);
     if (nextPatch.manualProjectOrder !== undefined) setManualProjectOrder(nextPatch.manualProjectOrder);
-    void saveHomeViewPreferences(nextPatch);
-  }, [accountGeneration, home.projects, hostManualProjectOrder, hostProjectOrders, invoke, manualProjectOrder.length, projectOrder, selectedDeviceId]);
+    void saveHomeViewPreferences(nextPatch, taskListMode);
+  }, [accountGeneration, home.projects, hostManualProjectOrder, hostProjectOrders, invoke, manualProjectOrder.length, projectOrder, selectedDeviceId, resetDisplayOrder, saveHomeViewPreferences, taskListMode, setTaskFilters, setInboxFilters]);
 
   const beginProjectDrag = useCallback((input: {
     absoluteY: number;
@@ -2730,7 +2938,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const expectedAccountGeneration = accountGeneration;
     const epoch = projectDragEpochRef.current + 1;
     projectDragEpochRef.current = epoch;
-    const keys = visibleProjectKeys;
+    const deviceSection = sections.find(section => section.key.startsWith('device:')
+      && section.data.some(row => row.key === input.key));
+    const keys = deviceSection
+      ? deviceSection.data.filter(row => row.kind === 'project').map(row => row.key)
+      : visibleProjectKeys;
     const layouts: ProjectHeaderLayout[] = [];
     let pending = keys.length;
     const finish = () => {
@@ -2748,6 +2960,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         hoverIndex: projectDropIndexFromY(layouts.filter((item) => item.key !== input.key), input.absoluteY),
         key: input.key,
         layouts,
+        visibleKeys: keys,
         originY: self.y,
         rootY: 0,
         title: input.title,
@@ -2784,7 +2997,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         if (pending === 0) finish();
       });
     }
-  }, [accountGeneration, projectDragY, visibleProjectKeys, swipeRegistry]);
+  }, [accountGeneration, projectDragY, sections, visibleProjectKeys, swipeRegistry]);
 
   const moveProjectDrag = useCallback((absoluteY: number) => {
     const session = projectDragRef.current;
@@ -2816,6 +3029,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const persistViewer = (next: string[]) => {
       if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
       viewPrefsTouchedRef.current = true;
+      resetDisplayOrder();
       setProjectOrder('custom');
       setManualProjectOrder(next);
       void saveHomeViewPreferences({ projectOrder: 'custom', manualProjectOrder: next });
@@ -2866,6 +3080,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           return;
         }
         if (result.kind !== 'ok') return;
+        resetDisplayOrder();
         projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
         setHostProjectOrders((current) => {
           const nextOrders = new Map(current);
@@ -2876,7 +3091,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       return;
     }
     const dropIndex = resolveVirtualizedDropIndex(
-      visibleProjectKeys,
+      session.visibleKeys,
       mountedKeysByY,
       session.key,
       session.hoverIndex,
@@ -2884,13 +3099,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (dropIndex === null) return;
     const next = reorderVisibleProjectByDropIndex(
       manualProjectOrder,
-      visibleProjectKeys,
+      session.visibleKeys,
       session.key,
       dropIndex,
     );
     if (!next) return;
     persistViewer(next);
-  }, [accountGeneration, home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys]);
+  }, [accountGeneration, home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys, resetDisplayOrder]);
   useEffect(() => {
     if (!groupDialogue) setDialogueShowAll(false);
   }, [groupDialogue]);
@@ -2904,7 +3119,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
 
   // 自动化组「查看全部 N 次运行」:与项目组「查看全部」一致,进入该任务的专属列表页
   // (设备详情页的自动化任务作用域模式),不在列表里原地铺开。
-  const openAutomationGroup = useCallback((group: RemoteAutomationSessionGroup) => {
+  const openAutomationGroup = useCallback((group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }) => {
     const session = group.items[0]?.session as RemoteSession | undefined;
     if (!session) return;
     // 设备解析与 openSession 同口径:可达优先(canonicalDeviceId),回退物理 id / store 索引。
@@ -2914,8 +3129,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       return;
     }
     // 项目组内的组行(有 workingDir)带上项目维度:baseKey 不含项目 scope,同一任务跨
-    // 项目时目标页只该显示本项目的 run(与组行标称的 N 一致)。dialogue 组无目录,不带。
-    const workingDir = session.workingDir?.trim();
+    // 项目时目标页只该显示本项目的 run(与组行标称的 N 一致)。dialogue 组无目录,不带;
+    // 总「自动化」目录已跨项目合并,也不带,否则看不到其它目录的运行。
+    const workingDir = options?.allProjects ? undefined : session.workingDir?.trim();
     guardedPush({
       pathname: '/devices/[deviceId]',
       params: {
@@ -2966,8 +3182,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     item: HomeRow;
     index: number;
     section: HomeSection;
-  }) => (
+  }) => item.kind === 'teammate' ? (
+    // Drawn from the live roster (InboxTeammatesProvider), outside the task row's memo.
+    <InboxTeammateRow rowKey={item.teammate.key} section={section.key.slice('inbox-'.length) as TaskInboxSection}
+      last={isBlockHomeRow(section.data[index + 1])} timeLabel={item.sourceLabel} />
+  ) : (
     <HomeListRow
+      inboxMode={section.key.startsWith('inbox-')}
       expandedAutomationGroups={expandedAutomationGroups}
       isLastPinnedRow={section.key === 'pinned' && index === section.data.length - 1 && sections.length > 1}
       item={item}
@@ -3083,6 +3304,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (item) selectHomeScope(item);
   }, [home.deviceFilters, openRemoteCollection, scopeCollections, selectHomeScope]);
   const displayMenuState = useMemo<HomeDisplayMenuState>(() => ({
+    taskListMode,
+    hideAutomations,
+    groupDevice,
+    hasDeviceGroups,
+    groupAutomation,
     groupByProject,
     groupDialogue,
     lastActivityFilter,
@@ -3095,10 +3321,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     taskInfoFields,
     vendorFilter,
     viewMode,
-  }), [showCollapsedTeammateAvatars, displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
+  }), [taskListMode, groupDevice, hasDeviceGroups, hideAutomations, showCollapsedTeammateAvatars, displayedProjectOrder, groupAutomation, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   // 在看已归档任务时,顶栏「⋯」带提醒点(iOS 系统顶栏 / 自绘按钮两条路径共用这一个判据),
   // 同时把状态写进无障碍名称,读屏用户不用打开菜单也知道列表不是平常的进行中任务。
-  const archivedReminder = statusFilter === 'archived';
+  const archivedReminder = taskListMode === 'tasks' && statusFilter === 'archived';
+  const displayFilterReminder = archivedReminder || (taskListMode === 'inbox' && contentFilterCount > 0);
   const displayA11y = archivedReminder
     ? t('devices.list.a11y.openDisplaySettingsWithStatus', { status: t('devices.list.search.filter.status.archived') })
     : t('devices.list.a11y.openDisplaySettings');
@@ -3133,9 +3360,48 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const handleDisplayActionRef = useRef(handleDisplayAction);
   handleDisplayActionRef.current = handleDisplayAction;
   const stableDisplayAction = useCallback((id: string) => handleDisplayActionRef.current(id), []);
+  const visiblePins = useMemo(() => orderedPinnedItems(filteredHome.pinned, pinnedSort, pinnedOrder),
+    [filteredHome.pinned, pinnedSort, pinnedOrder]);
+  const pinnedActions = useMemo<NativePullDownAction[]>(() => [
+    { id: 'pin.view', title: t('devices.list.menu.displayHeading'), subactions:
+      (['text', 'list', 'card'] as const).map(mode => ({ id: 'pin.view.' + mode,
+        title: t('devices.list.menu.view.' + mode), state: pinnedView === mode ? 'on' : 'off' })) },
+    { id: 'pin.sort', title: t('devices.list.menu.sortHeading'), subactions:
+      (['manual', 'activity'] as const).map(sort => ({ id: 'pin.sort.' + sort,
+        title: t(sort === 'manual' ? 'devices.list.menu.projectOrder.custom' : 'devices.list.menu.sortBy.recency'),
+        state: pinnedSort === sort ? 'on' : 'off' })) },
+    ...(pinnedSort === 'manual' && visiblePins.length > 1 ? (['up', 'down'] as const).map(direction => ({
+      id: 'pin.' + direction,
+      title: t(direction === 'up' ? 'message.queue.moveUp' : 'message.queue.moveDown'),
+      subactions: (direction === 'up' ? visiblePins.slice(1) : visiblePins.slice(0, -1)).map(item => ({
+        id: 'pin.' + direction + '.' + item.session.id,
+        title: item.title,
+      })),
+    })) : []),
+  ], [pinnedView, pinnedSort, visiblePins, t]);
+  const changePinnedDisplay = useCallback((action: string) => {
+    viewPrefsTouchedRef.current = true;
+    if (pinnedSort === 'manual' && (action.startsWith('pin.up.') || action.startsWith('pin.down.'))) {
+      const up = action.startsWith('pin.up.');
+      const id = action.slice(up ? 'pin.up.'.length : 'pin.down.'.length);
+      const next = movePinnedItem(pinnedOrder, visiblePins, id, up ? -1 : 1);
+      if (!next) return;
+      setPinnedOrder(next);
+      void saveHomeViewPreferences({ pinnedOrder: { owner: preferenceOwner, keys: next } });
+    } else if (action === 'pin.sort.manual' || action === 'pin.sort.activity') {
+      const sort = action === 'pin.sort.manual' ? 'manual' : 'activity';
+      setPinnedSort(sort);
+      void saveHomeViewPreferences({ pinnedSort: sort });
+    } else if (action.startsWith('pin.view.')) {
+      const mode = action.slice('pin.view.'.length);
+      if (mode !== 'text' && mode !== 'list' && mode !== 'card') return;
+      setPinnedView(mode);
+      void saveHomeViewPreferences({ pinnedView: mode });
+    }
+  }, [pinnedSort, pinnedOrder, visiblePins, preferenceOwner, saveHomeViewPreferences, setPinnedOrder, setPinnedSort, setPinnedView]);
   const rowDisplay = useMemo<HomeRowDisplay>(
-    () => ({ taskInfoFields, viewMode }),
-    [taskInfoFields, viewMode],
+    () => ({ taskInfoFields, viewMode, pinnedView }),
+    [taskInfoFields, viewMode, pinnedView],
   );
   const openSelectedRemoteDesktop = useCallback(() => {
     if (!selectedDeviceId) return;
@@ -3155,6 +3421,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     : (headerHeight ?? (embedded ? spacing.lg : edgePadding.paddingTop)
       + Math.max(HOME_HEADER_MIN_HEIGHT, navigationChrome.target + spacing.md));
   const homeListNode = (
+    <InboxTeammatesProvider value={inboxTeammates.value}>
     <HomeRowDisplayContext.Provider value={rowDisplay}>
     <HomeListViewportContext.Provider value={childViewport}>
     <ListDisclosureScope controller={disclosure.controller}>
@@ -3171,10 +3438,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }}
         sections={sections}
         ListHeaderComponent={<>
-        <HomeTeammatesSection context={teammatesSectionContext} active={active} refreshKey={teammatesRefreshKey}
+        <HomeTeammatesSection showCollapsedAvatars={showCollapsedTeammateAvatars} context={teammatesSectionContext} active={active} refreshKey={teammatesRefreshKey}
           push={guardedPush}
           // Independent of the computer-connection guide: server group chats and cloud companions need no computer.
-          visible={indexedSearch.activeFilterCount === 0 && statusFilter !== 'archived'}
+          visible={indexedSearch.activeFilterCount === 0 && displayedStatus !== 'archived'}
           query={searchQuery}
           // Shared group and project blocks draw their own full-width top line.
           showFooter={sharedRows.length === 0 && !isBlockHomeRow(sections[0]?.data[0])}
@@ -3199,7 +3466,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             if (row.item) {
               const content = <HomeSessionRow
                 key={row.key}
-                indented
                 hideDivider={index === sharedRows.length - 1}
                 item={row.item}
                 sharedRole={row.role}
@@ -3220,7 +3486,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             accessibilityRole="button"
             accessibilityLabel={row.task.title + ', ' + t('sharedTask.roleHost')}
             onPress={() => guardedPush({ pathname: '/shared-session', params: { sharedTaskId: row.task.sharedTaskId } })}
-            style={({ pressed }) => [styles.sessionListRow, styles.sessionListRowSingleLine, styles.sessionListRowIndented, pressed && styles.pressed]}
+            style={({ pressed }) => [styles.sessionListRow, styles.sessionListRowSingleLine, pressed && styles.pressed]}
             testID="home.sharedOwnerRow"
           >
             <View style={[styles.sessionIconCell, styles.sessionIconCellSingleLine]}>
@@ -3279,26 +3545,53 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }}
         testID="devices.list"
         renderSectionHeader={({ section }) => {
+          if (section.key.startsWith('device:')) {
+            const closed = collapsedProjectKeys.includes(section.key);
+            const Chevron = closed ? ChevronRight : ChevronDown;
+            return <Pressable accessibilityRole="button" accessibilityState={{ expanded: !closed }}
+              onPress={() => toggleProject(section.key)} style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}>
+              <Chevron color={colors.textSecondary} size={iconSize.xl} />
+              <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
+            </Pressable>;
+          }
+          if (section.key.startsWith('inbox-')) {
+            const closed = inboxCollapsed.has(section.key);
+            return <Pressable testID={`home.${section.key}`} accessibilityRole="button" accessibilityState={{ expanded: !closed }}
+              onPress={() => animateListChange(() => setInboxCollapsed(previous => {
+                const next = new Set(previous); if (next.has(section.key)) next.delete(section.key); else next.add(section.key); return next;
+              }))}
+              style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}>
+              {closed ? <ChevronRight color={colors.textSecondary} size={iconSize.xl} /> : <ChevronDown color={colors.textSecondary} size={iconSize.xl} />}
+              <Text style={styles.projectTitle}>{section.title}</Text>
+              <Text style={styles.projectCount}>{section.count}</Text>
+            </Pressable>;
+          }
           if (section.key !== 'pinned' || !section.title) return null;
           return (
-            <Pressable
-              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: filteredHome.pinned.length })}
-              accessibilityRole="button"
-              accessibilityState={{ expanded: !pinnedCollapsed }}
-              onPress={togglePinned}
-              onPressIn={prepareListDisclosure}
-              style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
-              testID="home.pinnedHeader"
-            >
-              {pinnedCollapsed ? (
-                <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-              ) : (
-                <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-              )}
-              <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
-              <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
-              <Text style={styles.projectCount} numberOfLines={1}>{filteredHome.pinned.length}</Text>
-            </Pressable>
+            <View style={styles.pinnedHeaderRow}>
+              <Pressable
+                accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: filteredHome.pinned.length })}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: !pinnedCollapsed }}
+                onPress={togglePinned}
+                onPressIn={prepareListDisclosure}
+                style={({ pressed }) => [styles.projectRow, styles.pinnedHeaderLabel, pressed && styles.pressed]}
+                testID="home.pinnedHeader"
+              >
+                {pinnedCollapsed ? (
+                  <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+                ) : (
+                  <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+                )}
+                <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
+                <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
+                <Text style={styles.projectCount} numberOfLines={1}>{filteredHome.pinned.length}</Text>
+              </Pressable>
+              <HomeDisplayMenu actions={pinnedActions} onAction={changePinnedDisplay} testID="home.pinnedSettings"
+                accessibilityLabel={t('session.row.pinnedSection') + ' · ' + t('devices.list.menu.displayHeading')}>
+                <Ellipsis color={colors.textSecondary} size={iconSize.action} />
+              </HomeDisplayMenu>
+            </View>
           );
         }}
         renderSectionFooter={({ section }) => section.key === 'pinned' && sections.length > 1
@@ -3316,8 +3609,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : filteredHome.pinned.length > 0 ? (
+          ) : !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) && (filteredHome.pinned.length > 0 || hasDeviceSections) ? (
             // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
+            // 搜索列表的空态只认搜索结果,不能被普通列表里的置顶任务遮掉。
             null
           ) : showRemoteGuide && home.emptyNoDevice ? (
             // 无可控制电脑是「首次使用 / 产品模式说明」级空态:按 reason 渲染远程访问引导
@@ -3376,6 +3670,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     </ListDisclosureScope>
     </HomeListViewportContext.Provider>
     </HomeRowDisplayContext.Provider>
+    </InboxTeammatesProvider>
   );
   const homeListOverlays = (<>
 
@@ -3408,6 +3703,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       style={[styles.safeArea, { paddingLeft: embedded ? 0 : edgePadding.paddingLeft, paddingRight: embedded ? 0 : edgePadding.paddingRight }]}
       testID="devices.screen"
     >
+      {!embedded && <WallpaperBackdrop />}
       {nativeHomeHeader && active ? (
         <HomeNativeStackHeader
           keepMenuTopLeft={keepMenuTopLeft}
@@ -3415,7 +3711,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           syncing={quietSyncing}
           displayA11y={displayA11y}
           displayActions={stableDisplayActions}
-          displayBadge={archivedReminder}
+          displayBadge={displayFilterReminder}
           menuA11y={t('devices.list.a11y.openMenu')}
           onDisplayAction={stableDisplayAction}
           onOpenDeviceMenu={openDeviceMenu}
@@ -3431,7 +3727,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ) : null}
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
-        style={[styles.homeChrome, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
+        style={[styles.homeChrome, {
+          // Absolute positioning ignores the root's padding. Keep the search and
+          // connection controls inside the same safe edges as the task list.
+          left: embedded ? 0 : edgePadding.paddingLeft,
+          right: embedded ? 0 : edgePadding.paddingRight,
+        }, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
       >
         <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>
@@ -3504,7 +3805,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
               <View>
                 <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
                 {/* 在看已归档任务时标一个点,提醒列表不是平常的进行中任务。 */}
-                {archivedReminder ? <FilterReminderDot offset={styles.displayFilterDotOffset} testID="home.displayFilterDot" /> : null}
+                {displayFilterReminder ? <FilterReminderDot offset={styles.displayFilterDotOffset} testID="home.displayFilterDot" /> : null}
               </View>
             </HomeDisplayMenu>
           </View>
@@ -3614,6 +3915,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         visible={deviceMenuOpen}
       />}</MountOnFirstOpen>
       <MountOnFirstOpen open={chromeMenuOpen}>{() => <HomeChromeDrawer
+        footer={chromeMenuOpen ? <DrawerUsage
+          onOpen={() => {
+            pendingMenuActionRef.current = null;
+            setChromeMenuOpen(false);
+            guardedPush('/usage');
+          }}
+        /> : null}
         loggingOut={loggingOut}
         onClose={() => {
           pendingMenuActionRef.current = null;
@@ -3689,6 +3997,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         visible={searchFilterOpen}
       />}</MountOnFirstOpen>
       <MountOnFirstOpen open={actionSheetSession !== null}>{() => <SessionOptionsPresenter
+        inboxMode={taskListMode === 'inbox'}
         session={actionSheetSession}
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
@@ -3697,6 +4006,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         status={actionSheetSession?.status}
         visible={actionSheetSession !== null}
       />}</MountOnFirstOpen>
+      <MountOnFirstOpen open={snoozeSessionTarget !== null}>{() => <TaskSnoozeSheet visible={snoozeSessionTarget !== null}
+        onClose={closeSnooze} onClosed={handleSnoozeClosed} onConfirm={confirmSnooze} />}</MountOnFirstOpen>
+      {inboxTeammates.sheet}
       <MountOnFirstOpen open={renameSessionTarget !== null}>{() => <RenameSessionModal
         draft={renameSessionDraft}
         onCancel={closeRenameSession}
@@ -4043,12 +4355,12 @@ function ProjectRow({
   dragging?: boolean;
   expandedAutomationGroups: readonly string[];
   headerRefs?: MutableRefObject<Map<string, ViewInstance>>;
-  kind?: 'project' | 'dialogue' | 'cindy-make';
+  kind?: 'project' | 'dialogue' | 'cindy-make' | 'automation';
   machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
   onDragMove?: (absoluteY: number) => void;
   onDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
-  onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
+  onOpenAutomationGroup(group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }): void;
   onOpenProject(): void;
   onNewTask(): void;
   onSearchProject(): void;
@@ -4065,13 +4377,21 @@ function ProjectRow({
   /** 项目标题与子任务共用同一滑动互斥注册表。 */
   swipe?: SessionSwipeControls;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const hostKeys = new Set(project.sessions.map(item => item.session.remoteHostId
+    ? `remote:${encodeURIComponent(item.session.remoteHostId)}:${project.workingDir}` : `local:${project.workingDir}`));
+  const hostKey = hostKeys.size === 1 ? Array.from(hostKeys)[0]! : null;
+  const styles = useHomeStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读会话运行态,而派生链稳定化后本组件不再逐 emit 重渲染(cell 经
   // PureComponent bail)——以低频首页状态版本兜底感知运行态变化,与 AutomationGroup-
   // Children 同款(否则折叠线以下转入 running 的会话不会被豁免展开,review P1)。
   const homeStatusVersion = useRemoteHomeStatusVersion();
+  const openRowAutomationGroup = useCallback(
+    (group: RemoteAutomationSessionGroup) => onOpenAutomationGroup(group, kind === 'automation' ? { allProjects: true } : undefined),
+    [kind, onOpenAutomationGroup],
+  );
   // 与桌面侧栏项目组同一套折叠策略:前 N 条之外豁免最近 24h 活动 / 需关注 / 运行中的条目
   // (豁免语义见共享层 getRemoteSessionPreviewCollapse 注释)。
   // 自动化折叠后 sessions 是"行"(组行代表多条会话):按钮显隐看隐藏行数(hiddenCount),
@@ -4147,9 +4467,12 @@ function ProjectRow({
   const renderedSessions = windowingEnabled ? visibleSessions.slice(windowStart, windowEnd) : visibleSessions;
   const leadingSpacerHeight = childWindow.leadingSpacerHeight;
   const trailingSpacerHeight = childWindow.trailingSpacerHeight;
-  const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
-  const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
-  const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
+  const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup'
+    : kind === 'automation' ? 'home.automationGroup' : 'home.projectGroup';
+  const rowTestID = kind === 'dialogue' ? 'home.dialogueRow'
+    : kind === 'automation' ? 'home.automationRow' : 'home.projectRow';
+  const childTestID = kind === 'dialogue' ? 'home.chatRow'
+    : kind === 'automation' ? 'home.automationSessionRow' : 'home.projectSessionRow';
   const displayTitle = machineIdentity && !machineIdentity.hideLabel
     ? `${project.title} (${machineIdentity.displayLabel})`
     : project.title;
@@ -4164,7 +4487,8 @@ function ProjectRow({
     // fields here so registering a drag never copies all project task data.
     const { key: projectKey, sessionCount } = project;
     return Gesture.Pan()
-      .activateAfterLongPress(600)
+      // Require a deliberate hold so pauses while scrolling do not start reordering.
+      .activateAfterLongPress(1000)
       .activeOffsetY([-8, 8])
       .failOffsetX([-12, 12])
       .onStart((event) => {
@@ -4187,12 +4511,15 @@ function ProjectRow({
       accessibilityHint={reorderable ? t('devices.list.menu.projectOrderManualTip') : undefined}
       accessibilityLabel={kind === 'dialogue'
         ? t('devices.list.a11y.dialogue')
-        : t('devices.list.a11y.project', { title: displayTitle })}
+        : kind === 'automation'
+          ? t('devices.list.a11y.automation')
+          : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityActions={actionable ? [
         { name: 'newTask', label: t('devices.list.projectActions.newTask') },
         { name: 'allTasks', label: t('devices.list.projectActions.allTasks') },
         { name: 'search', label: t('devices.list.projectActions.search') },
+        ...(hostKey ? [{name:'settings', label:t('settings.projectInfo.title')}] : []),
       ] : undefined}
       onAccessibilityAction={actionable ? (event) => {
         swipe?.registry.closeOpenRow();
@@ -4200,6 +4527,7 @@ function ProjectRow({
           case 'newTask': onNewTask(); break;
           case 'allTasks': onOpenProject(); break;
           case 'search': onSearchProject(); break;
+          case 'settings': if (hostKey) setSettingsOpen(true); break;
         }
       } : undefined}
       accessibilityState={{ expanded: !collapsed }}
@@ -4232,6 +4560,8 @@ function ProjectRow({
           <MessagesSquare color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : kind === 'cindy-make' ? (
           <Hammer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : kind === 'automation' ? (
+          <Timer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : collapsed ? (
           <Folder color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : (
@@ -4242,6 +4572,10 @@ function ProjectRow({
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
         {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
+      {kind === 'project' && hostKey && project.deviceId && <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
+        hitSlop={8} onPress={event => {event.stopPropagation(); setSettingsOpen(true);}} style={{padding:8}}>
+        <ProjectSettingsIcon size={iconSize.lg} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+      </Pressable>}
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
       {collapsedStatus?.dot ? (
         // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
@@ -4271,6 +4605,8 @@ function ProjectRow({
       style={[styles.projectGroup, suppressTopBorder && styles.projectGroupNoTop]}
       testID={groupTestID}
     >
+      {settingsOpen && hostKey && project.deviceId && <ProjectSettingsSheet deviceId={project.deviceId} projectKey={hostKey}
+        title={project.title} deviceName={project.deviceName} directory={project.workingDir} visible={settingsOpen} onClose={() => setSettingsOpen(false)} />}
       {windowingEnabled && scrollY ? (
         <HomeProjectWindowAnchorTracker
           childOffsets={estimatedChildOffsets}
@@ -4312,9 +4648,8 @@ function ProjectRow({
                 expandedAutomationGroups={expandedAutomationGroups}
                 // 项目块内最后一个元素不画自己的缩进线:项目块底部的全宽线就是分割线。
                 hideDivider={hiddenRowCount === 0 && index === visibleSessions.length - 1}
-                indented
                 item={item}
-                onOpenAutomationGroup={onOpenAutomationGroup}
+                onOpenAutomationGroup={openRowAutomationGroup}
                 onOpenSession={onOpenSession}
                 onToggleAutomationGroup={onToggleAutomationGroup}
                 swipe={swipe}
@@ -4353,7 +4688,7 @@ function ProjectRow({
               disabled={kind !== 'dialogue' && !project.deviceId}
               onPress={onOpenProject}
               style={({ pressed }) => [
-                styles.projectViewAllRow,
+                styles.viewAllRow,
                 pressed && styles.pressed,
                 kind !== 'dialogue' && !project.deviceId && styles.disabled,
               ]}
@@ -4402,6 +4737,7 @@ function HomeListRowInner({
   expandedAutomationGroups,
   isLastPinnedRow,
   item,
+  inboxMode,
   machineIdentity,
   nextIsBlock,
   onArchive,
@@ -4427,14 +4763,16 @@ function HomeListRowInner({
   showAllDialogue,
   swipe,
 }: {
+  inboxMode: boolean;
   expandedAutomationGroups: readonly string[];
-  /** 置顶组展开态:行进入置顶卡片内的缩进/描边形态(CINDY list 视觉)。 */
+  /** 置顶段的末行与下一段共用分隔线。 */
   isLastPinnedRow: boolean;
-  item: HomeRow;
+  /** Teammate conversations of the inbox are drawn by InboxTeammateRow. */
+  item: Exclude<HomeRow, { kind: 'teammate' }>;
   machineIdentity?: HomeProjectMachineIdentity;
   nextIsBlock: boolean;
   onArchive(session: RemoteSession): void;
-  onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
+  onOpenAutomationGroup(group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }): void;
   onOpenProjectSessions(project: MobileHomeProjectGroup, search?: boolean): void;
   onNewProjectTask(project: MobileHomeProjectGroup): void;
   onOpenSession(item: RemoteSessionListItem): void;
@@ -4456,6 +4794,8 @@ function HomeListRowInner({
   showAllDialogue: boolean;
   swipe: SessionSwipeControls;
 }) {
+  const { pinnedView, taskInfoFields } = useHomeRowDisplay();
+  const showProjectLabel = taskInfoFields.includes('project');
   if (isFolderHomeRow(item)) {
     return (
       <ProjectRow
@@ -4478,8 +4818,10 @@ function HomeListRowInner({
         project={item.project}
         homeScrollY={homeScrollY}
         viewportHeight={viewportHeight}
-        // Cindy Make spans separate workdirs; all tasks stay in this folder.
-        showAll={item.kind === 'cindy-make' || (item.kind === 'dialogue' && showAllDialogue)}
+        // Cindy Make and Automations span separate workdirs; all tasks stay in the folder
+        // (runs of one automation are already one row).
+        showAll={item.kind === 'cindy-make' || item.kind === 'automation'
+          || (item.kind === 'dialogue' && showAllDialogue)}
         suppressTopBorder={prevIsBlock}
         swipe={swipe}
       />
@@ -4488,12 +4830,15 @@ function HomeListRowInner({
   const row = (
     <HomeSessionRow
       asBlock
+      inboxMode={inboxMode}
       expandedAutomationGroups={expandedAutomationGroups}
       hideDivider={nextIsBlock || isLastPinnedRow}
       item={item.item}
       onOpenAutomationGroup={onOpenAutomationGroup}
       onOpenSession={onOpenSession}
       onToggleAutomationGroup={onToggleAutomationGroup}
+      pinnedView={item.source === 'pinned' ? pinnedView : undefined}
+      projectLabel={showProjectLabel && !item.sourceLabel ? item.projectLabel : undefined}
       sourceLabel={item.sourceLabel}
       suppressBlockTopBorder={prevIsBlock}
       swipe={swipe}
@@ -4506,6 +4851,9 @@ function HomeListRowInner({
   if (item.item.automationGroup || !conversationSearchAllowsLocalWrites(item.item)) return row;
   return (
     <SwipeableSessionRow
+      inboxMode={inboxMode}
+      onSnooze={swipe.onSnooze}
+      onComplete={swipe.onComplete}
       onArchive={onArchive}
       onShowOptions={onShowOptions}
       onTogglePin={onTogglePin}
@@ -4527,14 +4875,13 @@ function HomeListRowInner({
 export const HomeSessionRow = memo(HomeSessionRowInner, homeRowPropsEqual);
 
 function HomeSessionRowInner({
+  inboxMode = false,
   asBlock = false,
   automationChildTestID,
   automationChildrenTestID,
-  deepIndented = false,
   expandedAutomationGroups,
   groupRowTestID,
   hideDivider = false,
-  indented = false,
   item,
   onLongPress,
   onOpenAutomationGroup,
@@ -4545,7 +4892,9 @@ function HomeSessionRowInner({
   selectionMarkTestID,
   selectionMode = false,
   sharedRole,
-  sourceLabel,
+  projectLabel,
+  sourceLabel: extraLabel,
+  pinnedView,
   suppressBlockTopBorder = false,
   swipe,
   testID,
@@ -4553,16 +4902,12 @@ function HomeSessionRowInner({
 }: {
   /**
    * 自动化组行以「块」呈现:上下各一根全宽分割线,与项目组同款,把任务块和普通对话区分开。
-   * 仅顶层列表传 true;项目组内部的自动化组行保持缩进行样式(已有项目块包裹,不再嵌套块)。
+   * 仅顶层列表传 true;项目内已有项目块包裹其运行记录。
    */
   asBlock?: boolean;
+  inboxMode?: boolean;
   automationChildTestID?: string;
   automationChildrenTestID?: string;
-  /**
-   * 自动化组子行的深缩进档(缩进全部收在行内 padding,滑动包装才能全宽):
-   * 在 indented 基础上再深一档,保证子行始终比组行(无论组行在 chats 还是项目组内)更深。
-   */
-  deepIndented?: boolean;
   /** 已展开的自动化组 key 列表(页面级 state,列表虚拟化回收行组件也不丢展开态)。 */
   expandedAutomationGroups?: readonly string[];
   groupRowTestID?: string;
@@ -4571,7 +4916,6 @@ function HomeSessionRowInner({
    * 一个元素 —— 块的全宽 border 已经画了线,行内缩进线再画会两根 hairline 叠成一根粗线。
    */
   hideDivider?: boolean;
-  indented?: boolean;
   item: RemoteSessionListItem;
   onLongPress?: () => void;
   /** 组展开后子运行超过限量时,点「查看全部 N 次运行」进入该任务的专属列表页(与项目组一致)。 */
@@ -4585,8 +4929,10 @@ function HomeSessionRowInner({
   selectionMode?: boolean;
   /** Shared-group identity mark. Only owners show a crown; joined tasks match ordinary rows. */
   sharedRole?: SharedHomeRole;
-  /** 平铺时标题旁的来源标签(项目名 /「对话」);分组模式下不传。 */
+  projectLabel?: string;
+  /** Device or snooze information alongside the title. */
   sourceLabel?: string;
+  pinnedView?: HomePinnedView;
   /** 块模式下,前一行也是块时不画自己的顶线(前块的底线已经是这根线)。 */
   suppressBlockTopBorder?: boolean;
   /** 提供时透传给展开的自动化组子行(子行挂与顶层同款滑动操作);组行自身不消费。 */
@@ -4597,14 +4943,19 @@ function HomeSessionRowInner({
   const activeSessionId = useContext(ActiveHomeSession);
   const active = item.session.id === activeSessionId || !!(activeSessionId && item.automationGroup?.sessionIds.includes(activeSessionId));
   const prepareDisclosure = useDisclosurePrepare();
-  const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
+  const styles = useHomeStyles();
+  const { colors, mode } = useTheme();
+  const { selected: wallpaper } = useWallpaper();
   const { t, i18n } = useTranslation();
   // 运行态走订阅而非命令式读取:行已 memo 化,父层不再逐 emit 重渲染,命令式读取会 stale。
   const latestItem = latestMobileSessionRow(item);
   // 伙伴开的或接手的任务:标题后带第一位伙伴的头像(与桌面侧栏「在跟进」同口径)。
   const followers = useTaskFollowers(latestItem.session);
   const taskTeammate = (latestItem.session as RemoteSession).taskTeammate;
+  const { taskInfoFields, viewMode } = useHomeRowDisplay();
+  const sourceLabel = extraLabel ?? projectLabel;
+  const projectDirectory = inboxMode || projectLabel ? sessionTaskProjectIconDirectory(latestItem.session) : null;
+  const projectDeviceId = (latestItem.session as RemoteSession).deviceLinkDeviceId;
   const sessionIsRunning = useSessionRunning(latestItem.session.id);
   // 已加载消息的预览按 session 订阅。普通流式 token 只让对应的可见行更新，首页根层、
   // sections 和其它任务行都保持原引用。
@@ -4629,7 +4980,7 @@ function HomeSessionRowInner({
   const scheduleStopped = item.scheduleInfo?.allSchedulesStopped === true;
   const showPinned = !!item.session.pinnedAt;
   // 显示形态(显示菜单「文字 / 列表」):文字形态不画预览行,定时 / 置顶标记并到标题行尾。
-  const textMode = useHomeRowDisplay().viewMode === 'text';
+  const textMode = (pinnedView ?? viewMode) === 'text';
   // 自动化组行:同一任务的多次运行折叠而成(共享层 groupAutomationListItems 产出)。
   // 没接展开回调的调用点退化为普通行为(点击打开 primary 会话)。
   // 块模式:组行 + 展开的子行整体包在一个上下全宽线的块里;组行自身不再画缩进分割线
@@ -4644,7 +4995,7 @@ function HomeSessionRowInner({
         loadedMessagePreview === undefined || loadedMessagePreview === item.messagePreview
           ? item
           : { ...item, messagePreview: loadedMessagePreview },
-        { running },
+        { running, pinnedCard: pinnedView === 'card' },
       );
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。共享身份位于标题左侧。
@@ -4700,10 +5051,9 @@ function HomeSessionRowInner({
         onPressIn={group && !groupRowOpensPrimary && !selectionMode ? () => prepareDisclosure(true) : undefined}
         style={({ pressed }) => [
           styles.sessionListRow,
-          active && { backgroundColor: colors.surfaceChip },
+          pinnedView === 'card' && styles.pinnedCard,
+          active && { backgroundColor: wallpaper === 'none' ? colors.surfaceChip : wallpaperRaisedFill(colors.surfaceChip, mode) },
           !showPreviewLine && styles.sessionListRowSingleLine,
-          indented && styles.sessionListRowIndented,
-          deepIndented && styles.sessionListRowDeepIndented,
           pressed && styles.pressed,
         ]}
         testID={group ? (groupRowTestID ?? `${testID}.automationGroup`) : testID}
@@ -4713,16 +5063,17 @@ function HomeSessionRowInner({
             {selected ? <Text style={styles.selectionMarkText}>✓</Text> : null}
           </View>
         ) : null}
-        <View style={[
-          styles.sessionIconCell,
-          !showPreviewLine && styles.sessionIconCellSingleLine,
-        ]}>
-          <SessionStatusMark
-            item={item}
-            running={running}
-            showDraftIndicator={showDraftIndicator}
-          />
-        </View>
+        <SessionStatusMark
+          singleLine={!showPreviewLine}
+          hideIdentity={!taskInfoFields.includes(inboxMode && projectDirectory && projectDeviceId ? 'project' : 'harness')}
+          identityIcon={inboxMode && taskInfoFields.includes('project') && projectDirectory && projectDeviceId ? (
+            <ProjectPickerIcon deviceId={projectDeviceId} workingDir={projectDirectory}
+              remoteHostId={latestItem.session.remoteHostId} size={iconSize.xl} />
+          ) : undefined}
+          item={item}
+          running={running}
+          showDraftIndicator={showDraftIndicator}
+        />
         {sharedRole === 'owned' ? (
           <View
             style={[styles.sharedRoleSlot, !showPreviewLine && styles.sharedRoleSlotSingleLine]}
@@ -4738,7 +5089,7 @@ function HomeSessionRowInner({
         ) : null}
         <View style={[
           styles.sessionListContent,
-          (hideDivider || blockMode || (!!group && groupExpanded)) && styles.sessionListContentNoDivider,
+          (pinnedView === 'card' || hideDivider || blockMode || (!!group && groupExpanded)) && styles.sessionListContentNoDivider,
         ]}>
           <View style={[styles.sessionTitleRow, groupChevronVisible && styles.sessionTitleRowGroupHit]}>
             <View style={[styles.sessionTitleCluster, groupChevronVisible && styles.sessionTitleClusterGroupHit]}>
@@ -4755,8 +5106,7 @@ function HomeSessionRowInner({
               <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
             </View>
             {group && groupChevronVisible ? (
-              // 展开箭头紧跟标题(对齐桌面 AutomationSessionGroupItem):不占行首,组行的图标 /
-              // 标题与同级普通任务对齐,展开后的子行(deepIndented)才能稳定比组行深一档。
+              // 展开箭头紧跟标题，组行和运行记录共用普通会话的图标列。
               // 独立热区:即使组行点击直开会话(有需关注内容时),点箭头仍然是展开 / 收起。
               // 热区 44×44 由箭头自身尺寸承担,不靠 hitSlop(会被父容器边界截掉)。箭头不放进
               // 标题组:标题组里的标签色球不收缩(最多 32 个),会把组内箭头挤出边界被截掉;
@@ -4782,6 +5132,10 @@ function HomeSessionRowInner({
               </Pressable>
             ) : null}
             {groupChevronVisible ? <View style={styles.sessionTitleSpacer} /> : null}
+            {projectLabel && !inboxMode && projectDirectory && projectDeviceId ? (
+              <ProjectPickerIcon deviceId={projectDeviceId} workingDir={projectDirectory} title={projectLabel}
+                remoteHostId={latestItem.session.remoteHostId} size={iconSize.md} />
+            ) : null}
             {sourceLabel ? (
               <Text
                 ellipsizeMode="tail"
@@ -4804,10 +5158,10 @@ function HomeSessionRowInner({
                 {showPinned ? <Pin color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.thin} /> : null}
               </View>
             ) : null}
-            {!group && taskTeammate ? (
+            {taskInfoFields.includes('teammate') && !group && taskTeammate ? (
               <TaskCreatorMark teammate={taskTeammate} deviceId={item.session.deviceLinkDeviceId ?? ''}
                 testID={`home.sessionCreatorMark.${item.session.id}`} />
-            ) : !group && followers[0] ? (
+            ) : taskInfoFields.includes('teammate') && !group && followers[0] ? (
               <TaskFollowMark follower={followers[0]} testID={`home.sessionFollowMark.${item.session.id}`} />
             ) : null}
             {rightStatus === 'time' ? (
@@ -4843,7 +5197,7 @@ function HomeSessionRowInner({
           {showPreviewLine ? (
             // 组行的标题行向下撑进预览行 7pt 给箭头热区;预览行只有文字和图标,不接触摸,
             // 让重叠处的点击落到箭头,其余位置照常落到整行。
-            <View pointerEvents={groupChevronVisible ? 'none' : 'auto'} style={styles.sessionPreviewRow}>
+            <View pointerEvents={groupChevronVisible ? 'none' : 'auto'} style={[styles.sessionPreviewRow, pinnedView === 'card' && styles.pinnedCardPreview]}>
               {group ? (
                 <AutomationGroupPreviewText
                   item={item}
@@ -4854,7 +5208,7 @@ function HomeSessionRowInner({
               ) : (
                 <Text
                   ellipsizeMode="tail"
-                  numberOfLines={1}
+                  numberOfLines={pinnedView === 'card' ? 2 : 1}
                   style={styles.sessionPreview}
                   testID={`home.sessionRowPreview.${item.session.id}`}
                 >
@@ -4939,7 +5293,7 @@ function AutomationGroupChildren({
   testID: string;
   titleTestIDPrefix?: string;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useHomeStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读子会话运行态,而父行(HomeSessionRow)已 memo 化、不再逐 emit
@@ -4986,7 +5340,6 @@ function AutomationGroupChildren({
         const key = windowingEnabled ? `${group.key}:window:${renderedIndex}` : child.session.id;
         const row = (
           <HomeSessionRow
-            deepIndented
             hideDivider={(inBlock || suppressTrailingDivider) && !hasViewAllRow && index === visibleItems.length - 1}
             item={child}
             onOpenSession={onOpenSession}
@@ -5017,7 +5370,7 @@ function AutomationGroupChildren({
           accessibilityRole="button"
           onPress={() => onOpenGroup?.(group)}
           style={({ pressed }) => [
-            styles.automationViewAllRow,
+            styles.viewAllRow,
             !inBlock && !suppressTrailingDivider && styles.automationViewAllRowDivider,
             pressed && styles.pressed,
           ]}
@@ -5149,9 +5502,15 @@ function pruneHomeDeviceConnectionStates(
   return changed ? next : current;
 }
 
-const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  ...homeListStyles(colors),
-  safeArea: { flex: 1, backgroundColor: colors.surface },
+function useHomeStyles() {
+  const { selected } = useWallpaper();
+  return useThemedStyles(selected === 'none' ? makeStyles : makeWallpaperStyles);
+}
+
+const makeWallpaperStyles = (colors: ThemeColors) => makeStyles(colors, 'transparent');
+const makeStyles = (colors: ThemeColors, listSurface: string = colors.surface) => StyleSheet.create({
+  ...homeListStyles(colors, listSurface),
+  safeArea: { flex: 1, backgroundColor: listSurface },
   pressed: mobileInteractionStyles.pressed,
   disabled: { opacity: 0.45 },
   homeChrome: {
@@ -5356,16 +5715,28 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     marginTop: spacing.sm,
   },
   homeList: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flex: 1,
   },
   listContent: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flexGrow: 1,
     paddingBottom: LEGACY_HOME_LIST_BOTTOM_RESERVE,
     paddingTop: 0,
   },
   // 置顶区收尾线:回 XD-Maker 原版 hairline(换肤卡片化曾置 0,通栏回退一并恢复)。
+  pinnedHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingRight: spacing.sm },
+  pinnedHeaderLabel: { flex: 1 },
+  pinnedCardPreview: { height: 2 * lineHeight.subtitle },
+  pinnedCard: {
+    height: 'auto',
+    marginHorizontal: spacing.md,
+    marginVertical: spacing.xs,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: radius.container,
+  },
   pinnedFooter: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
   initialLoadingState: {
     alignItems: 'center',
@@ -5379,7 +5750,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
   },
   projectGroup: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     // 全宽分割线挂在项目组的顶部与底部:把整个项目块与上方/下方的普通对话分开,
     // 而非分隔项目头与其下属会话(项目头 → 内容之间保持连续无线)。
     borderBottomColor: colors.border,
@@ -5417,16 +5788,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     right: spacing.lg,
   },
   projectChildren: {
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
   },
-  projectViewAllRow: {
-    // 永远是项目块的最后一个元素:不画自己的下线,块底部的全宽线就是分割线
-    // (再画会两根 hairline 叠成一根粗线)。
+  viewAllRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: spacing.sm,
     minHeight: HOME_AUTOMATION_VIEW_ALL_ROW_HEIGHT,
-    paddingLeft: HOME_PROJECT_VIEW_ALL_INSET,
+    paddingLeft: HOME_VIEW_ALL_INSET,
     paddingRight: spacing.lg,
   },
   projectViewAllText: {
@@ -5440,7 +5809,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   automationGroupBlock: {
     // 自动化组(组行 + 展开的子行)整体成块:上下各一根全宽分割线,与项目组(projectGroup)
     // 同款,把任务块和普通对话在视觉上区分开。
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
@@ -5451,19 +5820,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderTopWidth: 0,
   },
   automationGroupChildren: {
-    // 自动化组展开的子运行容器:不再用容器 padding 做缩进(会把子行的滑动包装挤离屏边),
-    // 深一档的缩进由子行自身的 sessionListRowDeepIndented 承担,视觉层级不变。
-    backgroundColor: colors.surface,
-  },
-  automationViewAllRow: {
-    // 「查看全部 N 次运行」:与项目组「查看全部 N 条对话」同款行样式,
-    // 左缩进对齐组内子行文字(deepIndented 行的缩进 + 行首图标位)。
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 54,
-    paddingLeft: spacing.md + spacing.lg * 2 + 24 + spacing.md,
-    paddingRight: spacing.lg,
+    backgroundColor: listSurface,
   },
   automationViewAllRowDivider: {
     // 仅非块模式(项目组内部的自动化组)画自己的下线;块模式下块底线负责,不再叠一根。

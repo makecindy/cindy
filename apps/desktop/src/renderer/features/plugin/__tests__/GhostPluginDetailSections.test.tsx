@@ -4,7 +4,7 @@
  * @vitest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import path from 'node:path';
@@ -12,6 +12,11 @@ import type { InstalledGhost } from '../../../../shared/ghost';
 import type { PreparedPluginContribution } from '../../../../shared/pluginContributions';
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+
+// This section fixture has no auth/device-link host. Source discovery has dedicated hook coverage.
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: undefined }),
+}));
 
 vi.mock('@/hooks/useModelPricing', () => ({
   useGatewayModelPricing: () => null,
@@ -55,7 +60,12 @@ vi.mock('../PluginReadmeSection', () => ({
   usePluginReadme: () => null,
 }));
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async () => {
+  const { createInstance } = await import('i18next');
+  const { default: common } = await import('../../../i18n/locales/en/common.json');
+  const localized = createInstance();
+  await localized.init({ lng: 'en', interpolation: { escapeValue: false }, resources: { en: { translation: common } } });
+  return ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
       const labels: Record<string, string> = {
@@ -97,11 +107,13 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
-      return labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
+      return key.startsWith('settings.ghosts.perm.hostUi.') ? localized.t(key, options) :
+        labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
     },
     i18n: { language: 'en' },
   }),
-}));
+  });
+});
 
 import type { GhostPermissionItem } from '../../../../shared/ghost';
 import {
@@ -114,6 +126,7 @@ import {
 } from '../GhostPluginDetailView';
 import { toGhostPluginDetail, type GhostPluginDetail } from '../lib/ghostPluginViewModel';
 import { RemotePluginReadOnlyDetail } from '../RemotePluginReadOnlyDetail';
+import { GhostAccountReuseSection } from '../GhostAccountReuseSection';
 
 const permissions: GhostPermissionItem[] = [
   {
@@ -190,6 +203,188 @@ beforeEach(() => {
   });
 });
 
+// Tier 1: the real Host account controls must submit an exact chosen reference,
+// revoke only the consuming account, and discard another owner's late reply.
+// #10130: an ordinary credential declaration must not add an empty section to
+// an existing plugin. Prior cases only exercised controls with usable sources.
+it.each(['empty', 'available', 'in-use'] as const)('shows account reuse controls only for %s groups', async state => {
+  const source = { instanceKey: 'source', secretKey: 'google', accountId: 'original',
+    pluginName: 'Source', label: 'Saved account', scopes: ['read'] };
+  const reusableAccounts = vi.fn(async () => [
+    { key: 'unused', label: 'Unused credential', options: [], accounts: [] },
+    { key: 'google', label: 'Google', options: state === 'available' ? [source] : [],
+      accounts: state === 'in-use' ? [{ id: 'reference', label: 'Used account', status: 'connected' as const }] : [] },
+  ]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const { container } = render(<GhostAccountReuseSection ghostId="consumer" declared enabled={state !== 'in-use'} />);
+  await act(async () => {});
+  expect(reusableAccounts).toHaveBeenCalledOnce();
+  expect(screen.queryByText('Unused credential')).toBeNull();
+  if (state === 'empty') {
+    expect(container.childElementCount).toBe(0);
+  } else {
+    expect(screen.getByText('settings.ghosts.detail.reuseAccountTitle')).toBeTruthy();
+    if (state === 'available') expect(screen.getByRole('combobox')).toBeTruthy();
+    else expect((screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' }) as HTMLButtonElement).disabled).toBe(false);
+  }
+});
+
+// #10130 / 4560156890: backend revocation must project through the existing
+// Refresh action, without inventing another UI state or reconnecting a source.
+it.each(['archived', 'removed', 'replacement'] as const)('refreshes revoked source reuse as %s', async state => {
+  const source = { kind: 'secret' as const, instanceKey: 'source', secretKey: 'token', accountId: 'saved',
+    pluginName: 'Source', label: 'PAT', scopes: [] };
+  let groups = [{ key: 'token', label: 'PAT', options: [source],
+    accounts: [{ id: 'saved', label: 'PAT', status: 'connected' as 'connected' | 'expired' }] }];
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts: vi.fn(async () => groups), reuseAccount: vi.fn() } });
+  const view = render(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  expect(await screen.findByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeTruthy();
+  groups = [{ key: 'token', label: 'PAT', options: state === 'replacement' ? [source] : [],
+    accounts: state === 'archived' ? [{ id: 'saved', label: 'PAT', status: 'expired' }] : [] }];
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountRefresh' }));
+  await waitFor(() => {
+    if (state === 'removed') expect(view.container.childElementCount).toBe(0);
+    else if (state === 'archived') {
+      expect(screen.getByText('settings.ghosts.detail.reuseAccountUnavailable')).toBeTruthy();
+      expect((screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' }) as HTMLButtonElement).disabled).toBe(false);
+    } else {
+      expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeNull();
+      expect((screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountUse' }) as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+});
+
+// A failed catalogue read is not a successful empty result: preserve the
+// existing error and refresh path, then hide only after an empty read succeeds.
+it('keeps the account catalogue error and refresh until a successful empty read', async () => {
+  const reusableAccounts = vi.fn().mockRejectedValueOnce(new Error('PRECONDITION_FAILED')).mockResolvedValue([]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const { container } = render(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  expect(await screen.findByText('settings.ghosts.detail.reuseAccountLoadFailed')).toBeTruthy();
+  const refresh = screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountRefresh' }) as HTMLButtonElement;
+  expect(refresh.disabled).toBe(false);
+  fireEvent.click(refresh);
+  await waitFor(() => expect(container.childElementCount).toBe(0));
+  expect(reusableAccounts).toHaveBeenCalledTimes(2);
+});
+
+// #10130 / 5c89: initial-state cases miss an enabled flip after empty hiding.
+// Unit tier: use the real section to expose newly available choices and discard
+// a disabled catalogue reply, while retaining the existing Stop action.
+it.each(['empty', 'pending'] as const)('reloads the account catalogue when enabling from %s', async initial => {
+  let finish!: (value: unknown) => void;
+  const reusableAccounts = vi.fn().mockImplementationOnce(() => initial === 'empty' ? Promise.resolve([])
+    : new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue([{ key: 'google', label: 'Google', accounts: [], options: [
+      { instanceKey: 'source', secretKey: 'google', accountId: 'original', pluginName: 'Source', scopes: ['read'] },
+    ] }]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const { container, rerender } = render(<GhostAccountReuseSection ghostId="consumer" declared enabled={false} />);
+  await act(async () => {});
+  expect(container.childElementCount).toBe(0);
+  rerender(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  await act(async () => {});
+  expect(reusableAccounts).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('combobox')).toBeTruthy();
+  if (initial === 'pending') {
+    await act(async () => { finish([]); });
+    expect(screen.getByRole('combobox')).toBeTruthy();
+  }
+});
+
+// #10130 / 4577503125: updating an enabled plugin can change its compatible
+// sources without changing id, enabled or the presence of credential declarations.
+// Unit tier: exercise the actual detail parent and existing unmount cleanup.
+it.each(['empty', 'pending'] as const)('reloads a hidden account catalogue after an install revision changes from %s', async initial => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  let finish!: (value: unknown) => void;
+  const reusableAccounts = vi.fn().mockImplementationOnce(() => initial === 'empty' ? Promise.resolve([])
+    : new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue([{ key: 'token', label: 'PAT', accounts: [], options: [
+      { kind: 'secret', instanceKey: 'source', secretKey: 'token', accountId: 'saved', pluginName: 'Source', scopes: [] },
+    ] }]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const detailAt = (revision: string) => <GhostPluginDetailView
+    ghost={{ manifest: { schemaVersion: 2, id: detail.id, name: detail.name, version: detail.version,
+      kind: 'chip', entry: 'main.js', network: { hosts: ['api.example.test'], secrets: [
+        { key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } },
+      ] } },
+      dir: detail.installDir!, enabled: true, approval: { state: 'approved', revision } }}
+    detail={detail} panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()}
+    onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+  const { rerender } = render(detailAt('first-install'));
+  await act(async () => {});
+  expect(screen.queryByText('settings.ghosts.detail.reuseAccountTitle')).toBeNull();
+  rerender(detailAt('updated-install'));
+  await act(async () => {});
+  expect(reusableAccounts).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('combobox')).toBeTruthy();
+  if (initial === 'pending') {
+    await act(async () => { finish([]); });
+    expect(screen.getByRole('combobox')).toBeTruthy();
+  }
+});
+
+it('keeps Stop using functional after disabling with an existing reference', async () => {
+  let connected = true;
+  const reusableAccounts = vi.fn(async () => [{ key: 'google', label: 'Google', options: [],
+    accounts: connected ? [{ id: 'reference', label: 'Used account', status: 'connected' as const }] : [] }]);
+  const reuseAccount = vi.fn(async () => { connected = false; return { ok: true }; });
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount } });
+  const { rerender } = render(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  await act(async () => {});
+  rerender(<GhostAccountReuseSection ghostId="consumer" declared enabled={false} />);
+  await act(async () => {});
+  const stop = screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' }) as HTMLButtonElement;
+  expect(stop.disabled).toBe(false);
+  await act(async () => { fireEvent.click(stop); });
+  expect(reuseAccount).toHaveBeenCalledWith('consumer', { kind: 'disconnect', secretKey: 'google', accountId: 'reference' });
+  expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeNull();
+});
+
+it.each([undefined, 'secret', 'connection'] as const)('selects an existing Host account or %s credential and stops only its consumer reference', async (kind) => {
+  const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  try {
+  const source = { ...(kind ? { kind } : {}), instanceKey: 'source', secretKey: 'google', accountId: 'original', pluginName: 'Source', label: 'account@example.test', scopes: ['read'] };
+  let connected = false;
+  const reusableAccounts = vi.fn(async () => [{ key: 'google', label: 'Google', options: [source],
+    accounts: connected ? [{ id: 'consumer-reference', label: 'account@example.test', status: 'connected' as const }] : [] }]);
+  const reuseAccount = vi.fn(async (_id: string, request: { kind: string }) => { connected = request.kind === 'connect'; return { ok: true }; });
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount } });
+  render(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  fireEvent.click(await screen.findByRole('combobox'));
+  fireEvent.click(await screen.findByRole('option', { name: 'Source · account@example.test' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountUse' }));
+  await screen.findByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' });
+  expect(reuseAccount).toHaveBeenCalledWith('consumer', { kind: 'connect', secretKey: 'google', source: { ...(kind ? { kind } : {}), instanceKey: 'source', secretKey: 'google', accountId: 'original' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeNull());
+  expect(reuseAccount).toHaveBeenLastCalledWith('consumer', { kind: 'disconnect', secretKey: 'google', accountId: 'consumer-reference' });
+  } finally {
+    if (scroll) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', scroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+  }
+});
+
+it('discards a late account catalogue after switching data owners', async () => {
+  let finish!: (value: unknown) => void;
+  const reusableAccounts = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue([{ key: 'new', label: 'Current owner credential', options: [],
+      accounts: [{ id: 'new-reference', label: 'Current owner account', status: 'connected' }] }]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const view = <GhostAccountReuseSection ghostId="consumer" declared enabled />;
+  const { rerender } = render(view);
+  await waitFor(() => expect(reusableAccounts).toHaveBeenCalledOnce());
+  ownerGeneration.value += 1;
+  rerender(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  await waitFor(() => expect(reusableAccounts).toHaveBeenCalledTimes(2));
+  await act(async () => { finish([{ key: 'old', label: 'Old owner credential', options: [],
+    accounts: [{ id: 'old-reference', label: 'Old owner account', status: 'connected' }] }]); });
+  expect(screen.queryByText('Old owner account')).toBeNull();
+  expect(await screen.findByText('Current owner account')).toBeTruthy();
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -199,7 +394,33 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
-  it('shows target shared counts without reading local personal usage for a remote installation', () => {
+  // Unit: the installed Host declarations previously added a supplementary
+  // consent button. Only the pre-existing legacy page confirmation may remain.
+  it.each([true, undefined] as const)('keeps Host UI out of the legacy page confirmation (%s)', uiCapabilityApproved => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved,
+      approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'board', name: 'Board',
+        version: '1', kind: 'chip', entry: 'main.js', tools: [], mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }], capabilities: ['draft'] },
+        } } };
+    render(<GhostPluginDetailView ghost={ghost} detail={toGhostPluginDetail(ghost)} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.installConsent.updateNeedsConsent' }) !== null).toBe(uiCapabilityApproved !== true);
+  });
+
+  // Unit: the real permission summary previously interpolated raw Host subjects.
+  it('renders readable host capability details in the plugin permission summary', () => {
+    const view = render(<PermissionSummary items={[{ key: 'ui:host:capability:draft', kind: 'panel',
+      labelKey: 'uiHost', detailKey: 'uiHostAccess', detailArgs: { subject: 'capability:draft', access: 'draft' } }]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Permissions: settings.ghosts.perm.uiHost/ }));
+    expect(screen.getByText('Read and edit the message draft')).toBeTruthy();
+    expect(view.container.textContent).not.toContain('capability:draft');
+  });
+  // Unit / round-4: installed detail no longer exposes personal call history.
+  // Extend the remote-only regression to local detail; retain shared header metrics.
+  it.each([false, true])('shows shared counts without personal usage for an installation (remote=%s)', remote => {
     vi.stubGlobal(
       'ResizeObserver',
       class {
@@ -211,7 +432,7 @@ describe('Ghost plugin detail sections', () => {
     Object.assign(window.electronAPI, { ghosts: { usageSummary } });
     render(
       <GhostPluginDetailView
-        remote
+        remote={remote}
         ghost={{ manifest: { id: detail.ghostId }, enabled: true } as InstalledGhost}
         detail={detail}
         marketItem={
@@ -491,6 +712,21 @@ describe('Ghost plugin detail sections', () => {
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentCompanionsRequest' })).toBeNull();
   });
+  // Unit: accepted installation grants the manifest's Host declarations. The old
+  // detail actions created a second grant; existing tasks/observe actions stay separate.
+  it.each([
+    { name: 'tool groups', manifest: { agent: { hostTools: ['history', 'future-group'] } } },
+    { name: 'event topics', manifest: { subscribe: { topics: ['message', 'task-state'] } } },
+  ])('shows no supplementary approval for installed host declarations: $name', ({ manifest }) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest, enabled: true, approval: { state: 'approved', revision: 'r1' } } as InstalledGhost;
+    render(<GhostPluginDetailView ghost={ghost} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(screen.queryAllByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })).toHaveLength(0);
+    expect(requestTaskApproval).not.toHaveBeenCalled();
+  });
+
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
       'ResizeObserver',

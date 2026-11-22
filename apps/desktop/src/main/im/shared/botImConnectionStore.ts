@@ -10,15 +10,19 @@
 
 import { randomBytes } from 'node:crypto';
 
+import { normalizeDiscordChannelAccess } from '@cindy/im';
+
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { desktopMakerLogger } from '../../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../../maker-host/override-settings-file.js';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage.js';
+import { discordFinalTextGrantStamp, discordGrantHash, discordGrantTarget, discordGrantTargets, discordGrantValue, reconcileDiscordFinalTextGrants, type DiscordFinalTextGrants } from '../discord/authorizationGrants';
 import {
   BOT_IM_CHANNELS,
   isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionRecord,
+  type BotImDiscordChannelAccess,
   type BotImFeishuService,
   type BotImTaskArchiveActivity,
 } from '../../../shared/botImConnection.js';
@@ -31,6 +35,8 @@ export function isBotImChannel(value: unknown): value is BotImChannel {
 
 interface BotImConnectionDocument {
   connections: Record<string, Omit<BotImConnectionRecord, 'id'>>;
+  /** Host-local recovery generations; not part of BotImConnectionRecord or any remote projection. */
+  discordFinalTextGrants?: DiscordFinalTextGrants;
 }
 
 const ID_PATTERN = /^[a-f0-9]{12}$/;
@@ -62,6 +68,15 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
       ? r.botContextId
       : null;
   const groupActivation = normalizeGroupActivation(r.groupActivation);
+  const iMessageGroupRoutes = r.channel === 'imessage' && r.iMessageGroupRoutes && typeof r.iMessageGroupRoutes === 'object'
+    ? Object.fromEntries(Object.entries(r.iMessageGroupRoutes).filter(([chat, route]) =>
+        /^(?:iMessage|any);\+;[^\r\n]{1,480}$/.test(chat)
+        && route && typeof route.botId === 'string' && route.botId.length > 0 && route.botId.length <= 256
+        && typeof route.revision === 'string' && ID_PATTERN.test(route.revision)
+        && typeof route.authorization === 'string' && /^[0-9a-f]{64}$/.test(route.authorization))
+      .map(([chat, route]) => [chat, { botId: route.botId, revision: route.revision, authorization: route.authorization,
+        replyMode: route.replyMode === 'always' ? 'always' as const : 'mention' as const }])) : {};
+  const discordChannelAccess = r.channel === 'discord' ? normalizeDiscordAccess(r.discordChannelAccess) : undefined;
   const archivedTaskRows = normalizeArchivedTaskRows(r.archivedTaskRows);
   const archivedTaskActivity = normalizeArchivedTaskActivity(r.archivedTaskActivity, archivedTaskRows);
   return {
@@ -69,8 +84,10 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
     channel: r.channel,
     createdAt,
     ...(service ? { service } : {}),
+    ...(Object.keys(iMessageGroupRoutes).length ? { iMessageGroupRoutes } : {}),
     botContextId,
     ...(groupActivation ? { groupActivation } : {}),
+    ...(discordChannelAccess ? { discordChannelAccess } : {}),
     ...(archivedTaskRows ? { archivedTaskRows } : {}),
     ...(archivedTaskActivity ? { archivedTaskActivity } : {}),
   };
@@ -124,6 +141,12 @@ function normalizeGroupActivation(raw: unknown): Record<string, 'always'> | unde
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/** 只认 Discord 连接上合法的 guild / channel id；空白名单不落盘（缺省就是不开放）。 */
+export function normalizeDiscordAccess(raw: unknown): BotImDiscordChannelAccess | undefined {
+  const access = normalizeDiscordChannelAccess(raw);
+  return access.channels.length > 0 || (access.guilds?.length ?? 0) > 0 ? access : undefined;
+}
+
 function normalizeDocument(raw: unknown): BotImConnectionDocument {
   const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const rawConnections =
@@ -135,13 +158,28 @@ function normalizeDocument(raw: unknown): BotImConnectionDocument {
     const record = normalizeRecord(id, value);
     if (record) connections[id] = record;
   }
-  return { connections };
+  const keys = Object.entries(connections).flatMap(([id, record]) => record.channel === 'discord'
+    ? discordGrantTargets(record.discordChannelAccess ?? { channels: [] }).map(target => `${id}:${target}`) : []);
+  const grants = reconcileDiscordFinalTextGrants(r.discordFinalTextGrants as DiscordFinalTextGrants | undefined, keys,
+    key => connectionGrantValue(connections, key));
+  return { connections, discordFinalTextGrants: grants };
+}
+
+function connectionGrantValue(connections: BotImConnectionDocument['connections'], key: string): string {
+  const [id, target] = key.split(':');
+  const record = connections[id];
+  if (!record || record.channel !== 'discord') return discordGrantHash('missing');
+  // botContextId is hydrated after READY; the transport/credential generation owns the actual Discord identity.
+  const binding = discordGrantHash(JSON.stringify([id, record.botId, record.channel, record.createdAt]));
+  return discordGrantValue(record.discordChannelAccess ?? { channels: [] }, target, binding);
 }
 
 const file = createOverrideSettingsFile<BotImConnectionDocument>({
   filePath: () => ownerScopedImUserDataPath('bot-im-connections.json'),
   defaults: () => ({ connections: {} }),
   normalize: normalizeDocument,
+  mergeOverrides: ({ next, overrides }) => ({ ...overrides, connections: next.connections,
+    ...(Object.keys(next.discordFinalTextGrants!.targets).length ? { discordFinalTextGrants: next.discordFinalTextGrants } : {}) }),
   log,
   label: 'bot-im-connections',
   scopeKey: activeOwnerScopeKey,
@@ -164,6 +202,15 @@ export function readBotImConnection(id: string): BotImConnectionRecord | null {
   if (!isBotImConnectionId(id)) return null;
   const record = readDocument().connections[id];
   return record ? { id, ...record } : null;
+}
+
+export function botDiscordFinalTextAuthorization(id: string, lane: string): string {
+  const document = readDocument();
+  const record = document.connections[id];
+  const target = discordGrantTarget(record?.discordChannelAccess ?? { channels: [] }, lane);
+  const key = `${id}:${target}`;
+  const value = connectionGrantValue(document.connections, key);
+  return discordFinalTextGrantStamp(document.discordFinalTextGrants ?? reconcileDiscordFinalTextGrants(undefined, [], () => value), key, value);
 }
 
 export function listBotImConnectionsForBot(botId: string): BotImConnectionRecord[] {
@@ -190,9 +237,47 @@ export async function addBotImConnectionRecord(
   return { id, ...record };
 }
 
+export function authorizedIMessageRoute(record: Pick<BotImConnectionRecord, 'iMessageGroupRoutes'> | null, chat: string,
+  authorization: string | null) {
+  const route = record?.iMessageGroupRoutes?.[chat];
+  return route?.authorization === authorization ? route : undefined;
+}
+
+/** A deleted recipient stops receiving on shared transports. Their source connections stay intact. */
+export async function removeDelegatedIMessageGroups(botId: string): Promise<void> {
+  if (!listBotImConnections().some(row => Object.values(row.iMessageGroupRoutes ?? {}).some(route => route.botId === botId))) return;
+  await file.updateAtomic(({ value }) => {
+    const connections = { ...value.connections };
+    for (const [id, row] of Object.entries(connections)) {
+      if (row.iMessageGroupRoutes) connections[id] = { ...row, iMessageGroupRoutes:
+        Object.fromEntries(Object.entries(row.iMessageGroupRoutes).filter(([, route]) => route.botId !== botId)) };
+    }
+    return { connections };
+  }, { preserveDefaults: true });
+}
+
+/** Compare and switch a single group inside the same atomic write as its reply policy. */
+export async function claimIMessageGroup(id: string, chat: string, botId: string, revision: string,
+  mode: 'mention' | 'always', authorization: string, assertCurrent: () => void, detachPrevious: () => void): Promise<void> {
+  await file.updateAtomic(current => {
+    assertCurrent();
+    const existing = current.value.connections[id];
+    if (existing?.channel !== 'imessage') throw new Error('CONNECTION_CHANGED');
+    const route = authorizedIMessageRoute(existing, chat, authorization);
+    const previousMode = route?.replyMode ?? existing.groupActivation?.[chat] ?? 'mention';
+    if ((route?.botId ?? existing.botId) === botId && mode === previousMode) return null;
+    if (`${authorization}.${route?.revision ?? id}.${previousMode}` !== revision) throw new Error('GROUP_ROUTE_CHANGED');
+    if ((route?.botId ?? existing.botId) !== botId) detachPrevious();
+    return { ...current.value, connections: { ...current.value.connections, [id]: {
+      ...existing, iMessageGroupRoutes: { ...existing.iMessageGroupRoutes,
+        [chat]: { botId, revision: randomBytes(6).toString('hex'), authorization, replyMode: mode } },
+    } } };
+  }, { preserveDefaults: true });
+}
+
 export async function updateBotImConnectionRecord(
   id: string,
-  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation'>>,
+  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation' | 'discordChannelAccess'>>,
 ): Promise<BotImConnectionRecord | null> {
   if (!isBotImConnectionId(id)) return null;
   let next: BotImConnectionRecord | null = null;
@@ -293,15 +378,33 @@ export async function setBotImConnectionGroupActivation(
   id: string,
   chatId: string,
   mode: 'mention' | 'always',
+  authorization?: string | null,
+): Promise<BotImConnectionRecord | null> {
+  const document = await file.updateAtomic(({ value }) => {
+    const record = value.connections[id];
+    if (!record) return null;
+    const route = authorizedIMessageRoute(record, chatId, authorization ?? null);
+    if (route) {
+      if (route.replyMode === mode) return null;
+      const routes = { ...record.iMessageGroupRoutes, [chatId]: { ...route, replyMode: mode, revision: randomBytes(6).toString('hex') } };
+      return { connections: { ...value.connections, [id]: { ...record, iMessageGroupRoutes: routes } } };
+    }
+    const next = { ...record.groupActivation };
+    if (mode === 'always') next[chatId] = mode;
+    else delete next[chatId];
+    return { connections: { ...value.connections, [id]: { ...record, groupActivation: next } } };
+  }, { preserveDefaults: true });
+  return document.connections[id] ? { id, ...document.connections[id] } : null;
+}
+
+/** Discord 连接的服务器频道白名单（整份替换；非 Discord 连接 / 不存在返回 null）。 */
+export async function setBotImConnectionDiscordChannelAccess(
+  id: string,
+  access: unknown,
 ): Promise<BotImConnectionRecord | null> {
   const current = readBotImConnection(id);
-  if (!current) return null;
-  const next: Record<string, 'always'> = { ...(current.groupActivation ?? {}) };
-  if (mode === 'always') next[chatId] = 'always';
-  else delete next[chatId];
-  return updateBotImConnectionRecord(id, {
-    groupActivation: Object.keys(next).length > 0 ? next : undefined,
-  });
+  if (!current || current.channel !== 'discord') return null;
+  return updateBotImConnectionRecord(id, { discordChannelAccess: normalizeDiscordAccess(access) });
 }
 
 export async function removeBotImConnectionRecord(id: string): Promise<BotImConnectionRecord | null> {

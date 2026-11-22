@@ -5,6 +5,10 @@ import { getAccessToken, getActiveAuthRealm, getAuthState, getCurrentUserId } fr
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { agentNetSelectionKey, isAgentNetActive, agentNetAllowsLegacy } from './agentNetRuntime.js';
+import { agentNetSharingInvitation, agentNetSharingRoute, joinAgentNetSharedTask, listAgentNetSharedTasks,
+  rememberAgentNetSharingHost, rememberAgentNetSharingService, requestAgentNetSharing, selectedAgentNetSharingRoute,
+  captureAgentNetSharingBoundaryClose, retireAgentNetSharingGuest } from './agentNetSharing.js';
 
 // Agent management must keep the input/permission boundary through queued work
 // and auth refresh retries. Native UI and background reconciliation have no caller guard.
@@ -35,16 +39,20 @@ const accountApi = createSharedTaskApi({
   captureScope() {
     const key = activeOwnerScopeKey();
     const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+    const selection = agentNetSelectionKey();
     const assertCallerCurrent = callerGuard.getStore();
     return { isCurrent: () => {
       assertCallerCurrent?.();
       return getAuthState().isAuthenticated && !isAppSessionBoundaryPending() &&
-        activeOwnerScopeKey() === key && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint;
+        activeOwnerScopeKey() === key && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint && agentNetSelectionKey() === selection;
     } };
   },
   async request(path, options) {
     try {
-      return await trackListWrite(options.method, () => serverApiFetch<unknown>(path, {
+      return await trackListWrite(options.method, async () => {
+        const legacy = (timeoutMs = 15_000) => {
+          if (!agentNetAllowsLegacy()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Encrypted sharing route required');
+          return serverApiFetch<unknown>(path, {
         method: options.method,
         body: options.body,
         // Executed before EACH physical attempt, including automatic token refresh.
@@ -53,13 +61,33 @@ const accountApi = createSharedTaskApi({
           if (!options.isCurrent()) throw new SharedTaskScopeChangedError();
           return getClientEndpoint('deviceLinkApiBaseUrl');
         },
-        timeoutMs: 15_000,
+        timeoutMs,
         cache: 'no-store',
         logLabel: '/api/device-link/shared-tasks',
         redactErrorDetails: true,
         allowedRedactedErrorCodes: ['NOT_FOUND', 'CONFLICT', 'PERMISSION_DENIED', 'INVALID_PARAMS', 'RATE_LIMITED',
           'SHARED_TASK_HOST_LIMIT', 'SHARED_TASK_JOIN_LIMIT', 'SHARED_TASK_GUEST_LIMIT', 'SHARED_TASK_SELF_JOIN'],
-      }));
+        }); };
+        if (path === '/api/device-link/shared-tasks') {
+          if (options.method === 'GET') {
+            const value = await listAgentNetSharedTasks(() => legacy(1500)); return value ?? legacy();
+          }
+          const selected = selectedAgentNetSharingRoute('shared-task');
+          if (selected) {
+            rememberAgentNetSharingService(selected);
+            const value = await requestAgentNetSharing(selected, path, options) as { sharedTaskId?: unknown };
+            if (options.isCurrent() && typeof value.sharedTaskId === 'string') rememberAgentNetSharingHost('shared-task', value.sharedTaskId, selected);
+            return value;
+          }
+          if (isAgentNetActive()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Agent-Net is not ready');
+        }
+        const match = /^\/api\/device-link\/shared-tasks\/([^/]+)/.exec(path);
+        const route = match && match[1] !== 'join' ? agentNetSharingRoute('shared-task', decodeURIComponent(match[1])) : null;
+        if (!route) return legacy();
+        const value = await requestAgentNetSharing(route, path, options);
+        if (path.endsWith('/leave')) retireAgentNetSharingGuest('shared-task', route.resourceId);
+        return value;
+      });
     } catch (error) {
       const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
       if (code === 'SHARED_TASK_HOST_LIMIT' || code === 'SHARED_TASK_JOIN_LIMIT' || code === 'SHARED_TASK_GUEST_LIMIT') {
@@ -83,7 +111,7 @@ export const sharedTaskApi = {
     if (callerGuard.getStore()) return accountApi.list();
     // Signed-out or boundary callers fail inside the adapter, never from cache.
     if (!getAuthState().isAuthenticated || isAppSessionBoundaryPending()) return accountApi.list();
-    const key = [activeOwnerScopeKey(), getActiveAuthRealm(), getClientEndpoint('deviceLinkApiBaseUrl')].join('\n');
+    const key = [activeOwnerScopeKey(), getActiveAuthRealm(), getClientEndpoint('deviceLinkApiBaseUrl'), agentNetSelectionKey()].join('\n');
     const cached = listCache;
     // A negative age means the clock moved backwards; treat that list as stale.
     const age = cached?.settledAt == null ? 0 : Date.now() - cached.settledAt;
@@ -99,9 +127,12 @@ export const sharedTaskApi = {
     // Keep the bare token for older controlling clients; new clients copy the link.
     const region = import.meta.env.VITE_CINDY_AUTH_REGION;
     const app = region === 'cn' ? 'cindycn' : region === 'dev' ? 'cindydev' : 'cindy';
-    return { ...result, invitationLink: buildSharedTaskInvitationLink(result.invitation, endpoint, app) };
+    return { ...result, invitationLink: agentNetSharingInvitation('shared-task', sharedTaskId, result.invitation, app)
+      ?? buildSharedTaskInvitationLink(result.invitation, endpoint, app) };
   },
   async join(input: string, _displayName: string) {
+    const value = await joinAgentNetSharedTask(input, sharedTaskAccountName(getAuthState().user?.name));
+    if (value) { forgetSharedTaskList(); return value; }
     const parsed = parseSharedTaskInvitation(input, getClientEndpoint('deviceLinkApiBaseUrl'));
     if (!parsed.ok) throwIpcError(parsed.reason === 'different-server' ? 'REGION_MISMATCH' : 'INVALID_PARAMS', 'Invalid shared task invitation or service mismatch');
     return accountApi.join(parsed.invitation, sharedTaskAccountName(getAuthState().user?.name));
@@ -116,6 +147,11 @@ export function captureSharedTaskBoundaryClose(ownerAccountId: string, region: R
   const token = getAccessToken();
   if (!token) return null;
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+  // Agent-Net close is an extra route, never a precondition for the handover:
+  // a failure to capture it falls back to the legacy close and the journal retry.
+  let closeV2: (sharedTaskId: string) => Promise<unknown> | null = () => null;
+  try { closeV2 = captureAgentNetSharingBoundaryClose(token, getClientEndpoint('authApiBaseUrl')); }
+  catch { /* The durable local-close journal still records the closure. */ }
   const api = createSharedTaskApi({
     captureScope: () => ({ isCurrent: () => true }),
     request: (path, options) => trackListWrite(options.method, () => serverApiFetch<unknown>(path, {
@@ -124,5 +160,5 @@ export function captureSharedTaskBoundaryClose(ownerAccountId: string, region: R
       cache: 'no-store', redactErrorDetails: true, logLabel: '/api/device-link/shared-tasks',
     })),
   });
-  return (sharedTaskId: string) => api.close(sharedTaskId);
+  return (sharedTaskId: string) => closeV2(sharedTaskId) ?? api.close(sharedTaskId);
 }

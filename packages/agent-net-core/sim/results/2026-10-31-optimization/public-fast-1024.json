@@ -1,0 +1,28 @@
+{
+  "policy": "fast",
+  "command": [
+    "./target/release/netperf",
+    "client",
+    "--bind",
+    "0.0.0.0:47812",
+    "--server",
+    "47.101.195.26:47811",
+    "--windows",
+    "1024",
+    "--modes",
+    "0,1,2",
+    "--rounds",
+    "3",
+    "--mib",
+    "8",
+    "--limit",
+    "60",
+    "--label",
+    "公网 Fast"
+  ],
+  "exit": 0,
+  "seconds": 445.59,
+  "core_fingerprint": "bc94b7e56a6d26a8264d0eb5629b032fb7035806",
+  "rounds": 3,
+  "note": "both peers Fast; same rotating protocol order as Auto; sequential strategy runs, single path, insufficient for stable tail claims"
+}

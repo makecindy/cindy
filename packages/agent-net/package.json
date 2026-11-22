@@ -1,0 +1,36 @@
+{
+  "name": "@cindy/agent-net",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./portable": "./src/portable.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs",
+    "prepare-core": "node ../agent-net-core/build.mjs && node build.mjs",
+    "test": "pnpm prepare-core && vitest run"
+  },
+  "dependencies": {
+    "@cindy/agent-net-core": "workspace:*",
+    "@cindy/agent-net-protocol": "workspace:*",
+    "@cindy/agent-net-relay": "workspace:*",
+    "@cindy/device-link": "workspace:*",
+    "@cindy/device-link-protocol": "workspace:*",
+    "bonjour-service": "^1.4.4"
+  },
+  "devDependencies": {
+    "jose": "^6.2.2",
+    "@cindy/device-link-relay": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4",
+    "ws": "^8.18.3"
+  }
+}

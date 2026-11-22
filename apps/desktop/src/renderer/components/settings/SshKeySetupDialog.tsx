@@ -208,11 +208,11 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-50"
+          className="modal-scrim fixed inset-0 z-modal"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
         >
           {/* Header */}
           <div
@@ -639,11 +639,11 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[60]"
+          className="modal-scrim fixed inset-0 z-modal-nested"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[60] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-nested w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
         >
           <div className="flex items-center justify-between px-5 py-3"
                style={{ borderBottom: '1px solid var(--border-default, #d4d4d4)' }}>
@@ -921,9 +921,8 @@ function CodeBlock({
 //   - Windows: enabling the ssh-agent service needs admin (UAC).
 //
 // Instead we surface platform-specific commands the user can run themselves,
-// plus an explicit "fallback" note telling them they can skip the agent flow
-// entirely and just use ~/.ssh/config with `IdentityFile` (security is then
-// their responsibility — passphrase will be prompted on each connect).
+// plus an explanation of the explicit "Identity file" option when adding a
+// host in Cindy. That mode reads an unencrypted private key into the process.
 
 interface AgentTroubleDialogProps {
   state: AgentTroubleState | null;
@@ -995,11 +994,11 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[60]"
+          className="modal-scrim fixed inset-0 z-modal-nested"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[60] w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-nested w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
         >
           <div
             className="flex items-center justify-between px-5 py-3"
@@ -1073,9 +1072,8 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
               </p>
             )}
 
-            {/* Fallback: skip the agent entirely and rely on ~/.ssh/config +
-                IdentityFile. Spelled out so the user knows they're explicitly
-                opting into "no agent, type passphrase per connect" mode. */}
+            {/* Direct-key mode reads an unencrypted private key into Cindy.
+                It does not prompt for encrypted-key passphrases. */}
             <div
               className="rounded-lg p-3 text-12 leading-relaxed flex flex-col gap-1"
               style={{

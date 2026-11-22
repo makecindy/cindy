@@ -1,10 +1,14 @@
+import type { PluginMediaRequestContext } from '../model-access/pluginMediaRequest.js';
+import { EvaluationError } from '../cindy-evaluate/errors.js';
+import type { EvaluationContext } from '../cindy-evaluate/service.js';
+import type { CindyEvaluateToolRequest } from 'cindy-tools';
 /**
  * cindySlot.ts — cindy 槽代办(卡槽⑤,原名模型槽)。
  * ---------------------------------------------------------------------------
  * 意识沙箱零网络零文件,
  * 想用 AI 只能经管子请主机代办。本模块处理存量上行 cindy-request
- * (旧名 model-request 兼容)。新的通用媒体模型调用由当前 Agent 使用 Cindy Core
- * media 工具发起，不再从插件沙箱或面板进入本链：
+ * (旧名 model-request 兼容)。获准的 media_request 直接调用 Cindy AI 网关；
+ * 以下是存量媒体生成代办：
  *
  *   电子脑 cindy.send({type:'cindy-request', kind:'gen_image'|'edit_image'|'gen_video'|'edit_video', …})
  *     → 资格审(声明了 'cindy' 卡槽 + 能力详单?按类目.动作粒度)
@@ -70,6 +74,7 @@ import {
   GHOST_VIDEO_REF_MODES,
   GHOST_VIDEO_RESOLUTIONS,
   type GhostCindyEmbedInputType,
+  type GhostDirectMediaResponse,
   type GhostImageAspectRatio,
   type GhostModelTier,
   type GhostPipeModelResult,
@@ -78,9 +83,10 @@ import {
   type GhostVideoResolution,
   type GhostVideoResultParams,
   type InstalledGhost,
+  ghostCindyModelActionApproved,
 } from '../../shared/ghost.js';
 import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
-import { probeImageSize } from './imageProbe.js';
+import type { LegacyMediaKind, LegacyMediaResult } from '../cindy-media/legacyMediaInvocation.js';
 import { isLibraryBlobRelPath, isLibrarySidecarRelPath } from './librarySlot.js';
 import { assertLibraryEditImageSource } from './imageChannelRegistry.js';
 import type { OneshotRoute } from '../utility-model/textOneshotPinOptions.js';
@@ -137,57 +143,32 @@ export interface CindyImageCapabilities {
 }
 
 export interface CindySlotDeps {
+  evaluate?(request: CindyEvaluateToolRequest, context: EvaluationContext): Promise<Record<string, unknown>>;
+  readEvaluationImage?(path: string): Promise<Buffer>;
   getGhost(id: string): InstalledGhost | null;
   /** 当前账号作用域；跨 await 的媒体任务必须捕获并持续复核。 */
   getOwnerScopeKey(): string;
   /** true 表示账号运行时正在 teardown / replacement，所有新旧任务均 fail closed。 */
   isOwnerBoundaryPending(): boolean;
-  /** 主机统一图片通道(art 底层客户端);返回图片字节与 mime。
-   *  aspectRatio 是意识的画幅意图,注入实现负责翻译成后端具体尺寸。 */
-  generateImage(params: {
-    prompt: string;
-    model: string;
-    providerId?: string;
-    aspectRatio?: GhostImageAspectRatio;
-  }): Promise<{ buffer: Uint8Array; mimeType: string }>;
-  /** 主机统一图片通道·改图;源图以磁盘路径喂给网关(意识摸不到路径)。
-   *  aspectRatio 语义同 generateImage:不传 = 跟随源图画幅(后端 auto)。 */
-  editImage(params: {
+  dispatchMediaRequest?(request: unknown, context: PluginMediaRequestContext): Promise<GhostDirectMediaResponse | { ok: false; errorCode: string; message: string }>;
+  /** 原校验通过后，宿主把旧入参适配到 Core；只返回已入仓的媒体。 */
+  invokeMedia(params: {
+    kind: LegacyMediaKind;
     prompt: string;
     model: string;
     providerId?: string;
     imagePaths: string[];
+    imageRefs: string[];
     aspectRatio?: GhostImageAspectRatio;
-  }): Promise<{ buffer: Uint8Array; mimeType: string }>;
+    refMode?: GhostVideoRefMode;
+    sessionId?: string;
+    assertCurrent(): void;
+  } & CindyVideoParams): Promise<LegacyMediaResult>;
   /**
    * 该图像型号的 provider 实际能力。缺席/查无 = 只执行通用 1–4 图粗筛；
    * provider 上限更低时，slot 在读源图与出网前给出型号级明确拒绝。
    */
   imageCapabilities?(model: string, providerId?: string): CindyImageCapabilities | null;
-  /**
-   * 主机统一视频通道·文生视频(art 视频 provider 层复用,submit→
-   * 轮询→下载一条龙在注入实现里完成);返回视频字节与 mime,外加实际
-   * 生效的画面参数回执(上游上报值优先,缺项回落提交值)。长任务:
-   * 分钟级才 resolve,在途名额在整个等待期占用。
-   */
-  generateVideo(
-    params: { prompt: string; model: string; providerId?: string } & CindyVideoParams,
-  ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
-  /**
-   * 主机统一视频通道·参考图生视频(源图以磁盘路径注入)。`refMode` 决定这
-   * 几张图怎么用:`first_and_last_frame` = 1 张首帧 / 2 张首尾帧,
-   * `reference_image` = 多张参考图锁主体。imagePaths 顺序有意义,注入实现
-   * 不得重排。
-   */
-  editVideo(
-    params: {
-      prompt: string;
-      model: string;
-      providerId?: string;
-      imagePaths: string[];
-      refMode: GhostVideoRefMode;
-    } & CindyVideoParams,
-  ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
   /**
    * 该视频型号的画面参数支持集(provider capabilities;registry 缺席或查无
    * 该型号 → null)。可选依赖:不注入 = 跳过按型号校验,只做协议层粗筛
@@ -201,7 +182,7 @@ export interface CindySlotDeps {
    * 每个查询 await 边界复核，禁止通过动态 defaultDb 跨到新账号。
    * editImage 消费口:正本只认 assets/<2>/<hash>/blob.<ext>;sidecar 禁止当像素。
    */
-  resolveOwnedMedia(ghostId: string, hash: string, ownerScopeKey: string): Promise<string | null>;
+  resolveOwnedMedia(ghostId: string, hash: string, ownerScopeKey: string): Promise<{ absPath: string; url: string } | null>;
   /**
    * 用户在插件详情「模型与任务」里显式选的模型(与插件新建任务共用同一份
    * 配置,见 pluginTaskPrefsStore);null = 未选 = 跟随默认。只作用于快问快答;
@@ -252,11 +233,10 @@ export interface CindySlotDeps {
    * 不限并发。可选依赖:不注入等同全部不限。每单现读,配置热更即生效。
    */
   getInflightLimit?(ghostId: string): number | null;
-  /** 落 blob + 账本记账(出生=该意识);返回取件地址与指纹。 */
+  /** 为 Core 已入仓的结果登记该插件引用，不重新生成或写入媒体字节。 */
   saveGhostMedia(params: {
     ghostId: string;
-    buffer: Uint8Array;
-    mimeType: string;
+    media: LegacyMediaResult;
     /** 任务受理时捕获的账号作用域；宿主须在每个持久化 await 边界复核。 */
     ownerScopeKey: string;
     /** 人类可读备注(记进账本 label,画廊 caption 用)。 */
@@ -292,6 +272,20 @@ export interface CindySlotDeps {
    */
   searchWeb?: CindyProxySearchService['search'];
   /**
+   * Cindy 托管模型服务是否就绪(已登录且有网关凭证)。只用于在媒体目录为空时
+   * 给出对因的错误:未登录时空目录说明没有任何可用型号,而不是目录暂时取不到。
+   * 它不代表其他供应商的状态,文案也不对其他供应商的连接状态下结论。
+   * 模型服务不再作为插件级的前置门禁(#7581):没用到模型的工具不受影响。
+   * 可选依赖:不注入 = 按旧口径回"目录暂时取不到"。
+   */
+  isModelAccessReady?(): boolean;
+  /**
+   * 网关凭证暂时取不到但同账号下会恢复(首次登录的 key 写入窗口,或同步暂时失败、
+   * 可重试)。此时 isModelAccessReady() 仍为 false:各模型能力按临时状态回复,
+   * 不报 NO_CANDIDATE。可选依赖:不注入 = 视为不在这段窗口里。
+   */
+  isModelAccessTransientlyUnavailable?(): boolean;
+  /**
    * 快问快答(text.oneshot,2026-07-31):把 prompt 交给主机的轻量任务
    * 模型链直答一次。注入实现包装 utility-model/oneShotCandidates 的
    * requestUtilityText(动态 import,保持本模块纯 node 可测)。可选依赖:
@@ -310,7 +304,13 @@ export interface CindySlotDeps {
     route?: OneshotRoute;
   }): Promise<
     | { ok: true; text: string; model?: string }
-    | { ok: false; reason: 'no_candidate' | 'timeout' | 'failed'; message: string }
+    | {
+        ok: false;
+        reason: 'no_candidate' | 'timeout' | 'failed';
+        message: string;
+        /** 执行层实际解析的供应商,仅供主机分类错误,不透传给插件。 */
+        providerId?: string;
+      }
   >;
   /**
    * 把身份卡声明的偏好模型 id 解析成当前目录里可路由的 供应商×agent×模型;
@@ -506,6 +506,11 @@ const KIND_INFO: Record<string, CindyKindInfo> = {
 
 const CATEGORY_LABEL: Record<CindyKindInfo['category'], string> = { image: '图像', video: '视频' };
 
+/** 模型服务凭证暂时取不到(账号切换 / 下发中 / 同步暂时失败)时给插件的统一文案。 */
+const MODEL_ACCESS_TRANSIENT_MESSAGE =
+  'Cindy 模型服务正在准备凭证(账号切换、登录后下发或同步暂时失败),这是主机侧临时状态,' +
+  '不是本插件的问题;请如实告知用户稍后再试,不要频繁重试。';
+
 /**
  * ── 图像能力的选型解析(2026-07-11 设计定案)──────────────────────────
  * 意识只表达意图(tier 档位)或透传用户显式点名(model);"用谁干"由主机
@@ -585,11 +590,71 @@ export class GhostCindySlot {
   constructor(private readonly deps: CindySlotDeps) {}
 
   /**
+   * Cindy 模型服务暂时不可用、但同账号下马上会好:账号切换中,或未就绪且凭证在下发 /
+   * 同步暂时失败。插件级门禁拿掉后(#7581),这段窗口里的"没有可用模型 / 未配置"
+   * 不能当终态报给插件(NO_CANDIDATE 的作者契约是不重试),各能力改回各自的临时口径。
+   */
+  private isModelAccessTransient(): boolean {
+    if (this.deps.isOwnerBoundaryPending()) return true;
+    return (
+      this.deps.isModelAccessReady?.() === false &&
+      this.deps.isModelAccessTransientlyUnavailable?.() === true
+    );
+  }
+
+  /**
+   * 出网前后各看一次临时窗口:调用开始时 key 还没写入、await 期间 CredentialsSync
+   * 刚写好时,事后的探测已是就绪,单看它会把一次本可重试的失败报成终态。
+   */
+  private wasModelAccessTransient(atStart: boolean): boolean {
+    return atStart || this.isModelAccessTransient();
+  }
+
+  private async handleDirectMediaRequest(ghostId: string, payload: unknown, sessionId?: string): Promise<GhostPipeModelResult> {
+    const ghost = this.deps.getGhost(ghostId);
+    const owner = this.deps.getOwnerScopeKey();
+    const isCurrent = () => {
+      const current = this.deps.getGhost(ghostId);
+      return !this.deps.isOwnerBoundaryPending() && this.deps.getOwnerScopeKey() === owner
+        && current?.instanceKey === ghost?.instanceKey && current?.dir === ghost?.dir
+        && ghostCindyModelActionApproved(current, 'media_request');
+    };
+    const forbidden = { ok: false as const, errorCode: 'PERMISSION_DENIED', message: '插件或账号未获准直接调用 Cindy AI 媒体能力' };
+    if (!isCurrent()) return forbidden;
+    if (!this.deps.dispatchMediaRequest) return { ok: false, errorCode: 'UNAVAILABLE', message: '宿主不支持媒体直调' };
+
+    const count = this.inflight.get(ghostId) ?? 0;
+    const limit = this.deps.getInflightLimit?.(ghostId) ?? null;
+    if (limit !== null && count >= limit) {
+      return { ok: false, errorCode: 'BUSY', message: '同时进行的代办已达上限' };
+    }
+    this.inflight.set(ghostId, count + 1);
+    try {
+      const result = await this.deps.dispatchMediaRequest(payload, {
+        owner, instance: ghost?.instanceKey ?? ghostId, sessionId, isCurrent,
+        resolveAudio: async hash => {
+          const media = await this.deps.resolveOwnedMedia(ghostId, hash, owner);
+          return isCurrent() ? media?.absPath : undefined;
+        },
+      });
+      return isCurrent() ? result : forbidden;
+    } catch {
+      return isCurrent()
+        ? { ok: false, errorCode: 'INTERNAL', message: '媒体请求未完成' }
+        : forbidden;
+    } finally {
+      const remaining = (this.inflight.get(ghostId) ?? 1) - 1;
+      if (remaining > 0) this.inflight.set(ghostId, remaining);
+      else this.inflight.delete(ghostId);
+    }
+  }
+
+  /**
    * 处理一条 cindy-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message },沙箱拿到的是
    * 结构化拒绝而不是异常穿透。
    */
-  async handleModelRequest(ghostId: string, payload: unknown): Promise<GhostPipeModelResult> {
+  async handleModelRequest(ghostId: string, payload: unknown, sessionId?: string): Promise<GhostPipeModelResult> {
     this.sweepJobs();
     const p = payload as {
       kind?: unknown;
@@ -615,6 +680,56 @@ export class GhostCindySlot {
       provider?: unknown;
       callerTool?: unknown;
     };
+    if (p?.kind === 'media_request') {
+      return this.handleDirectMediaRequest(ghostId, payload, sessionId);
+    }
+    if (p?.kind === 'decisions' || p?.kind === 'rerank' || p?.kind === 'list_models') {
+      const input = payload as Record<string, unknown>;
+      const api = p.kind === 'list_models' ? input.api : p.kind;
+      const ghost = this.deps.getGhost(ghostId);
+      if ((api !== 'decisions' && api !== 'rerank') || !ghostCindyModelActionApproved(ghost, api)) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未获准调用所请求的模型能力' };
+      }
+      const count = this.inflight.get(ghostId) ?? 0;
+      const limit = this.deps.getInflightLimit?.(ghostId) ?? null;
+      if (limit !== null && count >= limit) return { ok: false, errorCode: 'BUSY', message: '同时进行的代办已达上限' };
+      const owner = this.deps.getOwnerScopeKey();
+      const assertCurrent = () => {
+        if (this.deps.isOwnerBoundaryPending() || this.deps.getOwnerScopeKey() !== owner
+          || !ghostCindyModelActionApproved(this.deps.getGhost(ghostId), api)) {
+          throw new EvaluationError('PERMISSION_DENIED', '插件或账号授权已变化');
+        }
+      };
+      this.inflight.set(ghostId, count + 1);
+      try {
+        const request = { ...input, action: p.kind, api,
+          model_id: input.model, provider_id: input.providerId } as CindyEvaluateToolRequest;
+        if (!this.deps.evaluate || !this.deps.readEvaluationImage) return { ok: false, errorCode: 'UNAVAILABLE', message: '主机不支持决策和重排' };
+        const result = await this.deps.evaluate(request, { sessionId, assertCurrent,
+          readImage: async ref => {
+            assertCurrent();
+            if (ref.startsWith('data:')) {
+              if (ref.length > 44 * 1024 * 1024 || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]*={0,2}$/.test(ref)) throw new EvaluationError('INVALID_INPUT', '图片 data URL 无效或过大');
+              return Buffer.from(ref.slice(ref.indexOf(',') + 1), 'base64');
+            }
+            const hash = /^cindy-media:\/\/blobs\/([a-f0-9]{64})\.[a-z0-9]+$/.exec(ref)?.[1] ?? ref;
+            const media = await this.deps.resolveOwnedMedia(ghostId, hash, owner);
+            if (!media) throw new EvaluationError('PERMISSION_DENIED', '图片不属于当前插件');
+            assertCurrent();
+            return this.deps.readEvaluationImage!(media.absPath);
+          },
+        });
+        if (result.ok !== true) return result as GhostPipeModelResult;
+        if (p.kind === 'list_models') return { ok: true, models: (result.models as Array<{id: string; provider_id: string; name: string}>).map(m => ({ model: m.id, providerId: m.provider_id, name: m.name })) } as GhostPipeModelResult;
+        const { estimated_cost, ...rest } = result;
+        return { ...rest, ok: true, model: String(result.model), usage: result.usage, estimatedCost: estimated_cost } as GhostPipeModelResult;
+      } catch {
+        return { ok: false, errorCode: 'INTERNAL', message: '模型调用未完成' };
+      } finally {
+        const remaining = (this.inflight.get(ghostId) ?? 1) - 1;
+        if (remaining > 0) this.inflight.set(ghostId, remaining); else this.inflight.delete(ghostId);
+      }
+    }
     if (p?.kind === 'query_job') {
       return this.handleQueryJob(ghostId, p);
     }
@@ -664,6 +779,7 @@ export class GhostCindySlot {
     // 文本转向量(embed.text):同 oneshot 走独立分支 —— 不产媒体、不落总仓、
     // 没有归属查账与异步受理,整条媒体链的东西一样都用不上。
     if (p?.kind === 'embed_text') {
+      const transientAtStart = this.isModelAccessTransient();
       try {
         return await this.handleEmbedText(ghostId, payload);
       } catch (err) {
@@ -672,7 +788,15 @@ export class GhostCindySlot {
         // 而不是一律压成 INTERNAL(PR #1707 review):INTERNAL 对插件的含义是"主机
         // 内部炸了,你改参数也没用",可 400 维度不支持要它改参数、429 要它退避重试。
         // 压平之后这三种在协议上长得一模一样,插件只能瞎猜。
-        const errorCode = embeddingErrorCode(err);
+        let errorCode = embeddingErrorCode(err);
+        // 执行层 AUTH_FAILED 在凭证下发 / 同步暂时失败窗口里同样是临时状态;
+        // DISABLED 是用户停用,不受影响。
+        if (
+          (err as { code?: unknown } | null)?.code === 'AUTH_FAILED' &&
+          this.wasModelAccessTransient(transientAtStart)
+        ) {
+          errorCode = 'INTERNAL';
+        }
         this.deps.log?.warn('ghost cindy-request embed_text unexpected failure', {
           ghostId,
           error: message,
@@ -830,6 +954,17 @@ export class GhostCindySlot {
     // (说明见 cindyMediaCatalog.ts;详情页对应的那几行同时显示为灰字不可选)。
     if (cfg.models.length === 0 || cfg.defaults === null) {
       const category = CATEGORY_LABEL[info.category];
+      // 账号切换、凭证下发或同步暂时失败期间目录也会为空，都是可重试的临时状态，
+      // 不能当成"未登录"下结论，交给下面的临时口径。
+      if (this.deps.isModelAccessReady?.() === false && !this.isModelAccessTransient()) {
+        return {
+          ok: false,
+          message:
+            `当前没有可用的${category}模型：Cindy 模型服务未登录，其他已连接的供应商也没有可用的${category}模型。` +
+            `请如实告知用户：登录 Cindy，或在设置中连接或启用支持${category}的模型后再试。`,
+          errorCode: 'NO_CANDIDATE',
+        };
+      }
       return {
         ok: false,
         message:
@@ -1006,19 +1141,20 @@ export class GhostCindySlot {
       // 吃源图的代办:逐张查账验归属——任何一张不是它名下的,整单拒
       // (统一话术不泄露细节)。异步模式也在受理期同步校验,拒绝立即可见。
       const imagePaths: string[] = [];
+      const imageRefs: string[] = [];
       for (const hash of hashes) {
         const lookup = hash.startsWith('library:') ? hash.slice('library:'.length) : hash;
         if (isLibrarySidecarRelPath(lookup)) {
           return { ok: false, message: '源图必须是 library 正本 blob,sidecar 禁止当像素' };
         }
-        const abs = await this.deps.resolveOwnedMedia(ghostId, lookup, ownerScopeKey);
+        const media = await this.deps.resolveOwnedMedia(ghostId, lookup, ownerScopeKey);
         assertOwnerScopeCurrent();
-        if (!abs) {
+        if (!media) {
           return { ok: false, message: '源图不在本意识名下(仅能改自己生成或画廊里的媒体)' };
         }
         if (isLibraryBlobRelPath(lookup)) {
           try {
-            assertLibraryEditImageSource(abs);
+            assertLibraryEditImageSource(media.absPath);
           } catch (err) {
             return {
               ok: false,
@@ -1026,7 +1162,8 @@ export class GhostCindySlot {
             };
           }
         }
-        imagePaths.push(abs);
+        imagePaths.push(media.absPath);
+        imageRefs.push(media.url);
       }
 
       // 单次生成 → 落库 → 组装取件字段(同步返回与异步后台共用一条链;
@@ -1044,45 +1181,20 @@ export class GhostCindySlot {
         assertOwnerScopeCurrent();
         // 可选参数一律条件展开:不传时载荷里连键都没有,与老协议逐字节同形
         // (videoParams 本身就是按此规则组装的,直接摊开即可)。
-        let generated: { buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams };
-        if (kind === 'edit_image') {
-          generated = await this.deps.editImage({
-            prompt,
-            model,
-            ...(providerId ? { providerId } : {}),
-            imagePaths,
-            ...(aspectRatio !== undefined ? { aspectRatio } : {}),
-          });
-        } else if (kind === 'gen_image') {
-          generated = await this.deps.generateImage({
-            prompt,
-            model,
-            ...(providerId ? { providerId } : {}),
-            ...(aspectRatio !== undefined ? { aspectRatio } : {}),
-          });
-        } else if (kind === 'edit_video') {
-          generated = await this.deps.editVideo({
-            prompt,
-            model,
-            ...(providerId ? { providerId } : {}),
-            imagePaths,
-            refMode,
-            ...videoParams,
-          });
-        } else {
-          generated = await this.deps.generateVideo({
-            prompt,
-            model,
-            ...(providerId ? { providerId } : {}),
-            ...videoParams,
-          });
-        }
+        const generated = await this.deps.invokeMedia({
+          kind: kind as LegacyMediaKind, prompt, model,
+          ...(providerId ? { providerId } : {}), imagePaths, imageRefs,
+          ...(aspectRatio !== undefined ? { aspectRatio } : {}),
+          ...(kind === 'edit_video' ? { refMode } : {}),
+          ...videoParams,
+          ...(sessionId ? { sessionId } : {}),
+          assertCurrent: assertOwnerScopeCurrent,
+        });
         assertOwnerScopeCurrent();
 
         const saved = await this.deps.saveGhostMedia({
           ghostId,
-          buffer: generated.buffer,
-          mimeType: generated.mimeType,
+          media: generated,
           ownerScopeKey,
           label: prompt.slice(0, 200),
           // 模型代办产物记账(ghostMediaLedger),随 ghost_call 收口带回;
@@ -1096,7 +1208,7 @@ export class GhostCindySlot {
           ...(providerId ? { providerId } : {}),
           callId,
           hash: saved.hash,
-          bytes: generated.buffer.byteLength,
+          bytes: generated.bytes,
         });
         // 实际选型随结果回传(主机权威信息):意识交卷 note、会话里的 AI 与
         // 用户由此看得见"这单是谁画的"。
@@ -1104,8 +1216,8 @@ export class GhostCindySlot {
           providerModelLabel ?? cfg.models.find((m) => m.id === model)?.label ?? model;
         // 图片代办附带像素宽高(字节头解析,best-effort):意识供聊天卡片时
         // 据此精确声明卡高,首帧零跳动;解析不出就缺省,意识回退估计值。
-        const dims =
-          kind === 'gen_image' || kind === 'edit_image' ? probeImageSize(generated.buffer) : null;
+        const dims = generated.width && generated.height
+          ? { width: generated.width, height: generated.height } : null;
         return {
           url: saved.url,
           hash: saved.hash,
@@ -1436,6 +1548,7 @@ export class GhostCindySlot {
         logicalProvider: 'cindy',
       });
       let allowRetry = false;
+      const transientAtStart = this.isModelAccessTransient();
       try {
         const outcome = await searchWeb({ query, limit });
         if (
@@ -1459,6 +1572,19 @@ export class GhostCindySlot {
             ...(outcome.status !== undefined ? { status: outcome.status } : {}),
             ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
           });
+          // 未出网的 NOT_CONFIGURED 在凭证下发 / 同步暂时失败窗口里只是 key 还没写入:
+          // 与账号切换同一口径回 UPSTREAM_UNAVAILABLE,binding 照常允许重试。
+          if (
+            outcome.errorCode === 'NOT_CONFIGURED' &&
+            outcome.requestStarted === false &&
+            this.wasModelAccessTransient(transientAtStart)
+          ) {
+            return {
+              ok: false,
+              message: MODEL_ACCESS_TRANSIENT_MESSAGE,
+              errorCode: 'UPSTREAM_UNAVAILABLE',
+            };
+          }
           return {
             ok: false,
             message: outcome.message,
@@ -1598,6 +1724,7 @@ export class GhostCindySlot {
         const resolved = declaredModel ? this.deps.resolveOneshotModel?.(declaredModel) : null;
         if (resolved) route = { kind: 'catalog', ...resolved };
       }
+      const transientAtStart = this.isModelAccessTransient();
       const outcome = await oneshot({
         prompt,
         // 缺省不设输出上限:各供应商/模型按自然输出,60s 超时是实际边界;
@@ -1608,17 +1735,33 @@ export class GhostCindySlot {
         route,
       });
       if (!outcome.ok) {
+        this.deps.log?.warn('ghost cindy-request oneshot_text failed', {
+          ghostId,
+          callId,
+          reason: outcome.reason,
+        });
+        // 链上无候选可能只是 Cindy 凭证还没写入:按链路失败(INTERNAL,重试由调方决定)
+        // 回复,与账号切换期间的口径一致。显式钉在非 Cindy(xd)供应商上的路由不回落
+        // Cindy,凭证下发好了也救不回来,无候选就是终态,保留 NO_CANDIDATE。缺省供应商
+        // 用执行层的实际推断结果;固定路线仍无法解析时同样是终态,不借 Cindy 状态解释。
+        const pinnedOutsideCindy = route !== undefined && (route.providerId ?? outcome.providerId) !== 'xd';
+        if (
+          outcome.reason === 'no_candidate' &&
+          (this.deps.isOwnerBoundaryPending() ||
+            (!pinnedOutsideCindy && this.wasModelAccessTransient(transientAtStart)))
+        ) {
+          return {
+            ok: false,
+            message: MODEL_ACCESS_TRANSIENT_MESSAGE,
+            errorCode: 'INTERNAL',
+          };
+        }
         const errorCode =
           outcome.reason === 'no_candidate'
             ? 'NO_CANDIDATE'
             : outcome.reason === 'timeout'
               ? 'TIMEOUT'
               : 'INTERNAL';
-        this.deps.log?.warn('ghost cindy-request oneshot_text failed', {
-          ghostId,
-          callId,
-          reason: outcome.reason,
-        });
         return { ok: false, message: outcome.message, errorCode };
       }
       let text = outcome.text;
@@ -1814,6 +1957,10 @@ export class GhostCindySlot {
     // NO_CANDIDATE(与 oneshot 的"链上无候选"同语义:不是参数错,是主机没得选)。
     const cfg = getConfig();
     if (cfg.models.length === 0 || cfg.defaults === null) {
+      // 向量目录来自网关:凭证还没写入时目录为空是临时状态,不报 NO_CANDIDATE。
+      if (this.isModelAccessTransient()) {
+        return { ok: false, message: MODEL_ACCESS_TRANSIENT_MESSAGE, errorCode: 'INTERNAL' };
+      }
       return {
         ok: false,
         message: '当前没有可用的向量模型(可能已在设置里停用,或该版本未提供该能力)',

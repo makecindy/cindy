@@ -21,6 +21,7 @@ import {
   formatClaudeSubscriptionPlanLabel,
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
+import appI18n from 'i18next';
 
 export interface UsageCardWindow {
   key: string;
@@ -49,6 +50,8 @@ export interface UsageCardAccount {
   notices?: Array<{ text: string; tone: 'warn' | 'crit' }>;
   emptyText?: string;
   updatedAt?: number | null;
+  /** Optional recovery for a failed read; counters and other usage stay intact. */
+  refreshFailure?: { retry: () => void; retrying: boolean };
 }
 
 /** Compact surfaces lead with time remaining; round up to minutes and show
@@ -144,7 +147,7 @@ export function buildClaudeUsageCard(
     typeof rawRateLimitStatus === 'string' ? rawRateLimitStatus.trim().toLowerCase() : undefined;
   return {
     title: 'Claude',
-    planLabel: formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType),
+    planLabel: formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType, snapshot.planTier, snapshot.planDisplayName),
     windows,
     updatedAt: snapshot.updatedAt,
     emptyText: windows.length ? undefined : t('quotaCard.noWindows'),
@@ -398,8 +401,8 @@ export function buildXaiUsageCard(
   ) {
     details.push(
       t('todaySpend.xai.requestsLine', {
-        remaining: rateLimit.remainingRequests.toLocaleString(),
-        limit: rateLimit.limitRequests.toLocaleString(),
+        remaining: rateLimit.remainingRequests.toLocaleString(appI18n.language),
+        limit: rateLimit.limitRequests.toLocaleString(appI18n.language),
       }),
     );
   }

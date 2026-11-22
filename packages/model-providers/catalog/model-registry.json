@@ -1,7 +1,53 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-09T03:15:49.561Z",
+  "updatedAt": "2026-11-20T08:00:00.000Z",
   "models": [
+    {
+      "id": "openai/gpt-6.2-sol",
+      "name": "GPT-6.2 Sol",
+      "status": "active",
+      "sortOrder": 13,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6.2-sol",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "defaults": {
+            "supportsFastMode": true,
+            "contextWindow": 500000
+          },
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6.2-sol",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 500000,
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        "claude-code": {
+          "contextWindow": 500000,
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      }
+    },
     {
       "id": "openai/gpt-6.1-sol",
       "name": "GPT-6.1 Sol",
@@ -45,6 +91,32 @@
             "xhigh",
             "max"
           ]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-6.1-terra",
+      "name": "GPT-6.1 Terra",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6.1-terra",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6.1-terra",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
         }
       }
     },
@@ -714,6 +786,78 @@
       "modelRef": "openai/gpt-5.6-cyber"
     },
     {
+      "id": "openai/gpt-6-cyber",
+      "name": "GPT-6 Cyber",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6-cyber",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6-cyber",
+      "sortOrder": 26,
+      "defaultEnabled": false,
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-astra",
+      "name": "GPT-6.2 Astra",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6.2-astra",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "defaults": {
+            "supportsFastMode": true
+          }
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6.2-astra",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000,
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        "claude-code": {
+          "contextWindow": 272000,
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      }
+    },
+    {
       "id": "openai/gpt-6-astra",
       "name": "GPT-6 Astra",
       "status": "active",
@@ -749,6 +893,24 @@
       ],
       "nativeApi": "openai-responses",
       "modelRef": "openai/gpt-6-astra"
+    },
+    {
+      "id": "anthropic/claude-fable-5-2",
+      "name": "Fable 5.2",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "anthropic",
+          "modelId": "claude-fable-5-2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-fable-5-2"
     },
     {
       "id": "anthropic/claude-fable-5-1",
@@ -1708,7 +1870,8 @@
           ],
           "defaults": {
             "supportsFastMode": false
-          }
+          },
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "google-generative-ai",
@@ -1728,7 +1891,8 @@
           ],
           "defaults": {
             "supportsFastMode": false
-          }
+          },
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "google-generative-ai",
@@ -2225,7 +2389,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "minimax-global",
@@ -2233,7 +2398,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "anthropic-messages",
@@ -2903,6 +3069,34 @@
       "modelRef": "qwen/qwen3.8-flash"
     },
     {
+      "id": "qwen/qwen4-max",
+      "name": "Qwen 4 Max",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen4-max",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "cn"
+        },
+        {
+          "providerId": "aliyun-model-studio-global",
+          "modelId": "qwen4-max",
+          "agents": [
+            "claude-code",
+            "codex"
+          ]
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "qwen/qwen4-max",
+      "status": "active",
+      "sortOrder": 122,
+      "defaultEnabled": false
+    },
+    {
       "id": "qwen/qwen3.7-plus",
       "name": "Qwen 3.7 Plus",
       "status": "active",
@@ -3251,6 +3445,21 @@
         {
           "providerId": "xai",
           "modelId": "xai/grok-imagine-video",
+          "agents": []
+        }
+      ],
+      "nativeApi": "xai-videos"
+    },
+    {
+      "id": "xai/grok-imagine-video-1.5",
+      "name": "Grok Imagine Video 1.5",
+      "modelRef": "xai/grok-imagine-video-1.5",
+      "mode": "video_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-imagine-video-1.5",
           "agents": []
         }
       ],
@@ -3611,6 +3820,276 @@
           "agents": []
         }
       ]
+    },
+    {
+      "id": "google-gemini-api/gemini-4-neon",
+      "name": "Gemini 4 Neon",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-4-neon",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-4-neon"
+    },
+    {
+      "id": "google-gemini-api/gemini-4-carbon",
+      "name": "Gemini 4 Carbon",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-4-carbon",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-4-carbon"
+    },
+    {
+      "id": "google-gemini-api/gemini-4-argon",
+      "name": "Gemini 4 Argon",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-4-argon",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-4-argon"
+    },
+    {
+      "id": "google-gemini-api/gemini-4-hydrogen",
+      "name": "Gemini 4 Hydrogen",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-4-hydrogen",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-4-hydrogen"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.8-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.8-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.7-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.7-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.6-flash",
+      "name": "Gemini 3.6 Flash",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.6-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.6-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.5-flash",
+      "name": "Gemini 3.5 Flash",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.5-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.5-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.1-pro-preview",
+      "name": "Gemini 3.1 Pro",
+      "status": "preview",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.1-pro-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.1-pro-preview"
+    },
+    {
+      "id": "google-gemini-api/gemini-3-flash-preview",
+      "name": "Gemini 3 Flash",
+      "status": "preview",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3-flash-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3-flash-preview"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.5-flash-lite",
+      "name": "Gemini 3.5 Flash-Lite",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.5-flash-lite",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.5-flash-lite"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash-Lite",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.1-flash-lite",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.1-flash-lite"
+    },
+    {
+      "id": "google-gemini-api/gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro",
+      "status": "deprecated",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-2.5-pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-2.5-pro"
+    },
+    {
+      "id": "google-gemini-api/gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "status": "deprecated",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-2.5-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-2.5-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-2.5-flash-lite",
+      "name": "Gemini 2.5 Flash-Lite",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-2.5-flash-lite",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-2.5-flash-lite"
     }
   ],
   "nativeApiRules": [
@@ -3743,6 +4222,11 @@
       "providerId": "xai",
       "modelIdPrefix": "xai/grok-",
       "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "google-gemini-api",
+      "modelIdPrefix": "gemini-",
+      "nativeApi": "google-generative-ai"
     }
   ],
   "localModels": {
@@ -4203,6 +4687,135 @@
   },
   "baseModels": [
     {
+      "id": "openai/gpt-6.2-sol",
+      "aliases": [
+        "gpt-6.2-sol"
+      ],
+      "defaults": {
+        "name": "GPT-6.2 Sol",
+        "group": "gpt",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-6.2-sol"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+                "verifiedAt": "2026-11-18"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 5,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+                "verifiedAt": "2026-11-18"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+                "verifiedAt": "2026-11-18"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 8,
+              "outputPerMtok": 30,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 10,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+                "verifiedAt": "2026-11-18"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.05,
+              "cacheWritePerMtok": 1.25,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+                "verifiedAt": "2026-11-18"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+                "verifiedAt": "2026-11-18"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "openai/gpt-6.1-sol",
       "aliases": [
         "gpt-6.1-sol"
@@ -4325,6 +4938,121 @@
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
                 "verifiedAt": "2026-09-29"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-6.1-terra",
+      "aliases": [
+        "gpt-6.1-terra"
+      ],
+      "defaults": {
+        "name": "GPT-6.1 Terra",
+        "group": "gpt",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "description": "OpenAI GPT-6.1 Terra for visual reasoning, computer use and natural writing",
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.05,
+              "cacheWritePerMtok": 1.25,
+              "effectiveFrom": "2026-10-26",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-11-12"
+              },
+              "maxInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "effectiveFrom": "2026-10-26",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-11-12"
+              },
+              "maxInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 4,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 5,
+              "effectiveFrom": "2026-10-26",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-11-12"
+              },
+              "minInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.5,
+              "outputPerMtok": 2.5,
+              "cacheReadPerMtok": 0.025,
+              "cacheWritePerMtok": 0.625,
+              "effectiveFrom": "2026-10-26",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-11-12"
+              },
+              "maxInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.05,
+              "cacheWritePerMtok": 1.25,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-10-26",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-11-12"
               }
             }
           ]
@@ -5350,6 +6078,183 @@
       ]
     },
     {
+      "id": "openai/gpt-6-cyber",
+      "aliases": [
+        "gpt-6-cyber"
+      ],
+      "defaults": {
+        "name": "GPT-6 Cyber",
+        "description": "OpenAI cyber security reasoning model; access requires Daybreak Red approval",
+        "group": "gpt",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "efforts": [],
+        "defaultEffort": null,
+        "supportsImageInput": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-6-cyber"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-11-17"
+              },
+              "cacheReadPerMtok": 2,
+              "cacheWritePerMtok": 25,
+              "maxInputTokens": 272001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-6.2-astra",
+      "aliases": [
+        "gpt-6.2-astra"
+      ],
+      "defaults": {
+        "name": "GPT-6.2 Astra",
+        "group": "gpt",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-6.2-astra"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 40,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+                "verifiedAt": "2026-11-18"
+              },
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 10,
+              "maxInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 16,
+              "outputPerMtok": 60,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+                "verifiedAt": "2026-11-18"
+              },
+              "cacheReadPerMtok": 0.8,
+              "cacheWritePerMtok": 20,
+              "minInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 16,
+              "outputPerMtok": 80,
+              "cacheReadPerMtok": 0.8,
+              "cacheWritePerMtok": 20,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+                "verifiedAt": "2026-11-18"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 32,
+              "outputPerMtok": 120,
+              "cacheReadPerMtok": 1.6,
+              "cacheWritePerMtok": 40,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+                "verifiedAt": "2026-11-18"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+                "verifiedAt": "2026-11-18"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 8,
+              "outputPerMtok": 30,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 10,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+                "verifiedAt": "2026-11-18"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "openai/gpt-6-astra",
       "aliases": [
         "gpt-6-astra"
@@ -5464,6 +6369,77 @@
                 "verifiedAt": "2026-09-07"
               },
               "minInputTokens": 272001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "anthropic/claude-fable-5-2",
+      "aliases": [
+        "claude-fable-5-2"
+      ],
+      "defaults": {
+        "name": "Fable 5.2",
+        "description": "Claude Fable 5.2 for demanding reasoning and long-horizon agentic work",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 40,
+              "effectiveFrom": "2026-11-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-12"
+              },
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 10,
+              "cacheWrite1hPerMtok": 16
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 16,
+              "outputPerMtok": 80,
+              "effectiveFrom": "2026-11-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-12"
+              },
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 20,
+              "cacheWrite1hPerMtok": 32
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "effectiveFrom": "2026-11-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-12"
+              }
             }
           ]
         }
@@ -6811,6 +7787,335 @@
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-10-14"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 3.6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.18,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 7.2,
+              "outputPerMtok": 36,
+              "cacheReadPerMtok": 0.36,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-4-carbon",
+      "aliases": [
+        "gemini-4-carbon"
+      ],
+      "defaults": {
+        "name": "Gemini 4 Carbon",
+        "description": "Google Gemini 4 Carbon — most capable Gemini reasoning model for complex software engineering and agents",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-4-carbon"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-11-10",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-12"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 3.6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.18,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 7.2,
+              "outputPerMtok": 36,
+              "cacheReadPerMtok": 0.36,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-4-hydrogen",
+      "aliases": [
+        "gemini-4-hydrogen"
+      ],
+      "defaults": {
+        "name": "Gemini 4 Hydrogen",
+        "description": "Google Gemini 4 Hydrogen — cost-efficient Gemini model for everyday coding and agentic workflows",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-4-hydrogen"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.075,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-13"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.0375,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 2.7,
+              "outputPerMtok": 13.5,
+              "cacheReadPerMtok": 0.135,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "aliases": [
+        "gemini-4-neon"
+      ],
+      "defaults": {
+        "name": "Gemini 4 Neon",
+        "description": "Google Gemini 4 Neon — frontier Gemini model for complex software engineering, knowledge work and science workflows",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-4-neon"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.15,
+              "effectiveFrom": "2026-11-18",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-19"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.075,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 5.4,
+              "outputPerMtok": 27,
+              "cacheReadPerMtok": 0.27,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
             }
           ]
         }
@@ -6832,7 +8137,18 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        }
       },
       "referencePriceGroups": [
         {
@@ -6886,7 +8202,19 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash"
       },
       "referencePriceGroups": [
         {
@@ -6918,6 +8246,60 @@
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-08-13"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.375,
+              "outputPerMtok": 1.875,
+              "cacheReadPerMtok": 0.0375,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.075,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 1.35,
+              "outputPerMtok": 6.75,
+              "cacheReadPerMtok": 0.135,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 2.7,
+              "outputPerMtok": 13.5,
+              "cacheReadPerMtok": 0.27,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
             }
           ]
         }
@@ -6940,7 +8322,18 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        }
       },
       "referencePriceGroups": [
         {
@@ -6979,8 +8372,111 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
-      }
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 0.2,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-12"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 6,
+              "cacheReadPerMtok": 0.2,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 9,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 3.6,
+              "outputPerMtok": 21.6,
+              "cacheReadPerMtok": 0.36,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 7.2,
+              "outputPerMtok": 32.4,
+              "cacheReadPerMtok": 0.72,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "google/gemini-3-flash-preview",
@@ -6999,8 +8495,66 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
-      }
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.5,
+              "outputPerMtok": 3,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-12"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.25,
+              "outputPerMtok": 1.5,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.9,
+              "outputPerMtok": 5.4,
+              "cacheReadPerMtok": 0.09,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "google/gemini-3.5-flash-lite",
@@ -7019,7 +8573,19 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"
       },
       "referencePriceGroups": [
         {
@@ -7036,6 +8602,32 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-09-11"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.15,
+              "outputPerMtok": 1.25,
+              "cacheReadPerMtok": 0.015,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.54,
+              "outputPerMtok": 4.5,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -7059,7 +8651,19 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite"
       },
       "referencePriceGroups": [
         {
@@ -7076,6 +8680,317 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-09-11"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.125,
+              "outputPerMtok": 0.75,
+              "cacheReadPerMtok": 0.0125,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.45,
+              "outputPerMtok": 2.7,
+              "cacheReadPerMtok": 0.045,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-pro",
+      "aliases": [
+        "gemini-2.5-pro"
+      ],
+      "defaults": {
+        "name": "Gemini 2.5 Pro",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "description": "Google Gemini 2.5 Pro — thinking model for complex reasoning (deprecated; migrates to Gemini 3.8 Flash)",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.125,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.25,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.625,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.125,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.25,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 2.25,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.225,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 4.5,
+              "outputPerMtok": 27,
+              "cacheReadPerMtok": 0.45,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-flash",
+      "aliases": [
+        "gemini-2.5-flash"
+      ],
+      "defaults": {
+        "name": "Gemini 2.5 Flash",
+        "description": "Google Gemini 2.5 Flash — fast hybrid reasoning model (deprecated; migrates to Gemini 3.5 Flash-Lite)",
+        "group": "google",
+        "contextWindow": 1048576,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "maxOutputTokens": 65536,
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash",
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.3,
+              "outputPerMtok": 2.5,
+              "cacheReadPerMtok": 0.03,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              },
+              "effectiveUntil": "2026-12-01"
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.15,
+              "outputPerMtok": 1.25,
+              "cacheReadPerMtok": 0.03,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.54,
+              "outputPerMtok": 4.5,
+              "cacheReadPerMtok": 0.054,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-flash-lite",
+      "aliases": [
+        "gemini-2.5-flash-lite"
+      ],
+      "defaults": {
+        "name": "Gemini 2.5 Flash-Lite",
+        "group": "google",
+        "contextWindow": 1048576,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "description": "Google Gemini 2.5 Flash-Lite — high-throughput lightweight multimodal model",
+        "maxOutputTokens": 65536,
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.1,
+              "outputPerMtok": 0.4,
+              "cacheReadPerMtok": 0.01,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.05,
+              "outputPerMtok": 0.2,
+              "cacheReadPerMtok": 0.01,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.18,
+              "outputPerMtok": 0.72,
+              "cacheReadPerMtok": 0.018,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -7115,6 +9030,48 @@
         ],
         "defaultEffort": "medium"
       }
+    },
+    {
+      "id": "qwen/qwen4-max",
+      "aliases": [
+        "qwen4-max"
+      ],
+      "defaults": {
+        "name": "Qwen 4 Max",
+        "description": "Alibaba Qwen 4 Max flagship multimodal model for coding and agentic tasks",
+        "group": "china",
+        "contextWindow": 983616,
+        "efforts": [
+          "low",
+          "high",
+          "xhigh"
+        ],
+        "maxOutputTokens": 262144,
+        "defaultEffort": "high",
+        "supportsImageInput": true,
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen4-max"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 10,
+              "outputPerMtok": 30,
+              "cacheReadPerMtok": 0.5,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-17"
+              },
+              "cacheWritePerMtok": 12.5
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "qwen/qwen3.8-max-preview",
@@ -7627,7 +9584,61 @@
         "name": "MiniMax M3",
         "group": "china",
         "contextWindow": 1000000
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.3,
+              "outputPerMtok": 1.2,
+              "cacheReadPerMtok": 0.06,
+              "maxInputTokens": 512001,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.minimax.io/docs/guides/pricing-paygo",
+                "verifiedAt": "2026-11-12"
+              }
+            }
+          ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2.1,
+              "outputPerMtok": 8.4,
+              "cacheReadPerMtok": 0.42,
+              "maxInputTokens": 512001,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+                "verifiedAt": "2026-11-12"
+              }
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4.2,
+              "outputPerMtok": 16.8,
+              "cacheReadPerMtok": 0.84,
+              "minInputTokens": 512001,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+                "verifiedAt": "2026-11-12"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "minimax/minimax-m2.7",
@@ -8453,6 +10464,64 @@
       ]
     },
     {
+      "id": "tencent/hy4",
+      "aliases": [],
+      "defaults": {
+        "name": "Hy4"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://cloud.tencent.com/document/product/1823/130055",
+                "verifiedAt": "2026-11-12"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tencent/hy4-flash",
+      "aliases": [],
+      "defaults": {
+        "name": "Hy4 Flash",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 64000,
+        "supportsImageInput": true,
+        "officialDocs": "https://cloud.tencent.com/document/product/1823/130051"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.5,
+              "outputPerMtok": 2,
+              "cacheReadPerMtok": 0.02,
+              "effectiveFrom": "2026-11-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://cloud.tencent.com/document/product/1823/130055",
+                "verifiedAt": "2026-11-17"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "moonshotai/kimi-k3.1-pro",
       "aliases": [
         "kimi-k3.1-pro",
@@ -8864,7 +10933,8 @@
           "output": [
             "image"
           ]
-        }
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
       }
     },
     {
@@ -8883,7 +10953,8 @@
           "output": [
             "image"
           ]
-        }
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
       }
     },
     {
@@ -8932,6 +11003,26 @@
       "defaults": {
         "name": "Grok Imagine Video",
         "mode": "video_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        }
+      }
+    },
+    {
+      "id": "xai/grok-imagine-video-1.5",
+      "aliases": [
+        "grok-imagine-video-1.5"
+      ],
+      "defaults": {
+        "name": "Grok Imagine Video 1.5",
+        "mode": "video_generation",
+        "officialDocs": "https://docs.x.ai/developers/model-capabilities/video/reference-to-video",
         "modalities": {
           "input": [
             "text",
@@ -9276,12 +11367,87 @@
       ]
     },
     {
+      "id": "meta/muse-ember-1.0",
+      "aliases": [
+        "muse-ember-1.0"
+      ],
+      "defaults": {
+        "name": "Muse Ember",
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://dev.meta.ai/docs/muse-ember",
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "contextWindow": 1048576,
+        "maxOutputTokens": 524288
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.1,
+              "outputPerMtok": 0.5,
+              "cacheReadPerMtok": 0.004,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://dev.meta.ai/docs/pricing-rate-limits",
+                "verifiedAt": "2026-11-12"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "google/gemini-3.8-flash",
       "aliases": [
         "gemini-3.8-flash"
       ],
       "defaults": {
-        "name": "Gemini 3.8 Flash"
+        "name": "Gemini 3.8 Flash",
+        "description": "Google Gemini 3.8 Flash — most intelligent Flash model for long-horizon software engineering and agents",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"
       },
       "referencePriceGroups": [
         {
@@ -9312,6 +11478,60 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-09-23"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.375,
+              "outputPerMtok": 1.875,
+              "cacheReadPerMtok": 0.0375,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.075,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 1.35,
+              "outputPerMtok": 6.75,
+              "cacheReadPerMtok": 0.135,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 2.7,
+              "outputPerMtok": 13.5,
+              "cacheReadPerMtok": 0.27,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -10186,6 +12406,786 @@
         "name": "Agnes 3.0 Pro",
         "mode": "chat",
         "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-30-pro"
+      }
+    },
+    {
+      "id": "google/antigravity-preview-09-2026",
+      "aliases": [
+        "antigravity-preview-09-2026"
+      ],
+      "defaults": {
+        "mode": "other",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Antigravity Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/deep-research-max-preview-04-2026",
+      "aliases": [
+        "deep-research-max-preview-04-2026"
+      ],
+      "defaults": {
+        "mode": "other",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Deep Research Max Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/deep-research-preview-04-2026",
+      "aliases": [
+        "deep-research-preview-04-2026"
+      ],
+      "defaults": {
+        "mode": "other",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Deep Research Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-2.5-flash-image",
+      "aliases": [
+        "gemini-2.5-flash-image"
+      ],
+      "defaults": {
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Gemini 2.5 Flash Image",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-2.5-flash-native-audio-preview-12-2025",
+      "aliases": [
+        "gemini-2.5-flash-native-audio-preview-12-2025"
+      ],
+      "defaults": {
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio",
+            "image"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api",
+        "name": "Gemini 2.5 Flash Native Audio",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-2.5-flash-preview-tts",
+      "aliases": [
+        "gemini-2.5-flash-preview-tts"
+      ],
+      "defaults": {
+        "mode": "audio_speech",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation",
+        "name": "Gemini 2.5 Flash Preview TTS",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-2.5-pro-preview-tts",
+      "aliases": [
+        "gemini-2.5-pro-preview-tts"
+      ],
+      "defaults": {
+        "mode": "audio_speech",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation",
+        "name": "Gemini 2.5 Pro Preview TTS",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3-pro-image-preview",
+      "aliases": [
+        "gemini-3-pro-image-preview"
+      ],
+      "defaults": {
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Gemini 3 Pro Image Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.1-flash-image-preview",
+      "aliases": [
+        "gemini-3.1-flash-image-preview"
+      ],
+      "defaults": {
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Gemini 3.1 Flash Image Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.1-flash-lite-image",
+      "aliases": [
+        "gemini-3.1-flash-lite-image"
+      ],
+      "defaults": {
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite-image",
+        "name": "Gemini 3.1 Flash Lite Image",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.1-flash-live-preview",
+      "aliases": [
+        "gemini-3.1-flash-live-preview"
+      ],
+      "defaults": {
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio",
+            "image"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-live-preview",
+        "name": "Gemini 3.1 Flash Live Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.1-flash-tts-preview",
+      "aliases": [
+        "gemini-3.1-flash-tts-preview"
+      ],
+      "defaults": {
+        "mode": "audio_speech",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-tts-preview",
+        "name": "Gemini 3.1 Flash TTS Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.5-live-translate-preview",
+      "aliases": [
+        "gemini-3.5-live-translate-preview"
+      ],
+      "defaults": {
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "audio"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-live-translate-preview",
+        "name": "Gemini 3.5 Live Translate",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.5-transcribe",
+      "aliases": [
+        "gemini-3.5-transcribe"
+      ],
+      "defaults": {
+        "mode": "audio_transcription",
+        "modalities": {
+          "input": [
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe",
+        "name": "Gemini 3.5 Transcribe",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.5-transcribe-live",
+      "aliases": [
+        "gemini-3.5-transcribe-live"
+      ],
+      "defaults": {
+        "mode": "audio_transcription",
+        "modalities": {
+          "input": [
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api/live-transcribe",
+        "name": "Gemini 3.5 Transcribe Live",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.8-flash-lite-tts",
+      "aliases": [
+        "gemini-3.8-flash-lite-tts"
+      ],
+      "defaults": {
+        "mode": "audio_speech",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash-lite-tts",
+        "name": "Gemini 3.8 Flash-Lite TTS",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.8-flash-tts",
+      "aliases": [
+        "gemini-3.8-flash-tts"
+      ],
+      "defaults": {
+        "mode": "audio_speech",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash-tts",
+        "name": "Gemini 3.8 Flash TTS",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.8-live",
+      "aliases": [
+        "gemini-3.8-live"
+      ],
+      "defaults": {
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio",
+            "image"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live",
+        "name": "Gemini 3.8 Live",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-3.8-live-extended-thinking",
+      "aliases": [
+        "gemini-3.8-live-extended-thinking"
+      ],
+      "defaults": {
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio",
+            "image"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking",
+        "name": "Gemini 3.8 Live Extended Thinking",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-nano-banana-2.1",
+      "aliases": [
+        "gemini-nano-banana-2.1"
+      ],
+      "defaults": {
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-nano-banana-2.1",
+        "name": "Gemini Nano Banana 2.1",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-omni-1.1-flash",
+      "aliases": [
+        "gemini-omni-1.1-flash"
+      ],
+      "defaults": {
+        "mode": "video_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni",
+        "name": "Gemini Omni 1.1 Flash",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-omni-1.2-flash",
+      "aliases": [
+        "gemini-omni-1.2-flash"
+      ],
+      "defaults": {
+        "mode": "video_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni",
+        "name": "Gemini Omni 1.2 Flash",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/gemini-omni-flash-preview",
+      "aliases": [
+        "gemini-omni-flash-preview"
+      ],
+      "defaults": {
+        "mode": "video_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni",
+        "name": "Gemini Omni Flash Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/lyria-3-clip-preview",
+      "aliases": [
+        "lyria-3-clip-preview"
+      ],
+      "defaults": {
+        "mode": "audio_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "audio",
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/music-generation",
+        "name": "Lyria 3 Clip Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/lyria-3-pro-preview",
+      "aliases": [
+        "lyria-3-pro-preview"
+      ],
+      "defaults": {
+        "mode": "audio_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "audio",
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/lyria-3-pro-preview",
+        "name": "Lyria 3 Pro Preview",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/lyria-3.5",
+      "aliases": [
+        "lyria-3.5"
+      ],
+      "defaults": {
+        "mode": "audio_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "audio",
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/music-generation",
+        "name": "Lyria 3.5",
+        "group": "google"
+      }
+    },
+    {
+      "id": "google/lyria-realtime-exp",
+      "aliases": [
+        "lyria-realtime-exp"
+      ],
+      "defaults": {
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/lyria-realtime-exp",
+        "name": "Lyria RealTime",
+        "group": "google"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2.1",
+      "aliases": [
+        "gpt-realtime-2.1"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2.1",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2.1"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2.1-mini",
+      "aliases": [
+        "gpt-realtime-2.1-mini"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2.1-mini",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2",
+      "aliases": [
+        "gpt-realtime-2"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-1.5",
+      "aliases": [
+        "gpt-realtime-1.5"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-1.5",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-1.5"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime",
+      "aliases": [
+        "gpt-realtime",
+        "gpt-realtime-2025-08-28"
+      ],
+      "defaults": {
+        "name": "gpt-realtime",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-mini",
+      "aliases": [
+        "gpt-realtime-mini",
+        "gpt-realtime-mini-2025-12-15"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-mini",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-mini"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.0-realtime-plus",
+      "aliases": [
+        "qwen-audio-3.0-realtime-plus"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.0-realtime-plus",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.0-realtime-flash",
+      "aliases": [
+        "qwen-audio-3.0-realtime-flash"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.0-realtime-flash",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.1-realtime-plus",
+      "aliases": [
+        "qwen-audio-3.1-realtime-plus"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.1-realtime-plus",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.1-realtime-flash",
+      "aliases": [
+        "qwen-audio-3.1-realtime-flash"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.1-realtime-flash",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
       }
     }
   ],
@@ -11405,6 +14405,7 @@
         "pi"
       ],
       "modelIds": [
+        "claude-fable-5-2",
         "claude-fable-5-1",
         "claude-fable-5",
         "claude-opus-5",

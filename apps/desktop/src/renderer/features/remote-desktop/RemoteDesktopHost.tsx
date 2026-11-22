@@ -66,7 +66,7 @@ export function RemoteDesktopHost() {
       {state.active && !state.overlay && (
         <div
           role="status"
-          className="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-[var(--border-default)] bg-[var(--settings-theme-card-bg)] px-4 py-2 text-13 text-[var(--text-primary)]"
+          className="fixed bottom-4 left-1/2 z-float flex -translate-x-1/2 items-center gap-3 rounded-full border border-[var(--border-default)] bg-[var(--settings-theme-card-bg)] px-4 py-2 text-13 text-[var(--text-primary)]"
         >
           <span>
             {t(

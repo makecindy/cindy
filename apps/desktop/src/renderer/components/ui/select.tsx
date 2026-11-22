@@ -35,8 +35,12 @@ export interface SelectProps {
   contentClassName?: string;
   /** Trigger height: default 36px; compact 32px for narrow drawers and dense lists. */
   size?: 'default' | 'compact';
-  /** Trigger width preset: 220px / 320px, or full width for stacked fields. Omit to size by className. */
-  width?: 'sm' | 'md' | 'full';
+  /**
+   * Trigger width preset: 220px / 320px, full width for stacked fields, or 120px (`xs`) for a
+   * short value paired inline with another control (DESIGN.md §4 Desktop settings controls).
+   * Settings use a preset; className is for layout (shrink / flex), not ad-hoc widths or heights.
+   */
+  width?: 'xs' | 'sm' | 'md' | 'full';
   'aria-describedby'?: string;
   'aria-invalid'?: AriaAttributes['aria-invalid'];
   'aria-required'?: AriaAttributes['aria-required'];
@@ -44,7 +48,7 @@ export interface SelectProps {
 }
 
 /** Width presets, also for SelectParts triggers that compose their own rows. */
-export const SELECT_WIDTHS = { sm: 'w-[220px]', md: 'w-[320px]', full: 'w-full' } as const;
+export const SELECT_WIDTHS = { xs: 'w-[120px]', sm: 'w-[220px]', md: 'w-[320px]', full: 'w-full' } as const;
 
 /** Desktop single-value field (DESIGN.md §4): standard secondary Button,
  * equal-width Radix panel, 12px container / 8px rows and semantic theme colors.
@@ -140,7 +144,7 @@ export function Select({
           sideOffset={4}
           collisionPadding={8}
           className={cn(
-            'z-[10010] w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-13 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
+            'z-dropdown w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-13 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
             contentClassName,
           )}
         >

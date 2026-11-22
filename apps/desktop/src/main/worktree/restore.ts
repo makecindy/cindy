@@ -24,6 +24,7 @@ import {
 import { readAttachedWorktreeBranch } from './attachedBranch';
 import { gitExec, GitExecError } from './gitExec';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
+import { buildMultiboxRestoreArgs, deferCarriedMultiboxConfig, logMultiboxAddResult, shouldUseMultibox } from './multibox';
 import { applyWorktreeIncludeFile } from './includePatternsEngine';
 import { pathKey } from './liveSessionRefs';
 import {
@@ -254,8 +255,18 @@ async function addRestoredWorktree(
   baseRepo: string,
   worktreePath: string,
   branch: string,
+  snapshot?: string,
 ): Promise<void> {
   await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
+  // Multibox also carries a local untracked .multibox.toml. If the pending stash holds
+  // that path, defer only the just-copied base-identical config until snapshot apply.
+  // Errors stay visible, never retried as a plain `git worktree add`.
+  if (await shouldUseMultibox(baseRepo)) {
+    const { stdout } = await gitExec(buildMultiboxRestoreArgs(worktreePath, branch), baseRepo);
+    logMultiboxAddResult(worktreePath, stdout);
+    if (snapshot) await deferCarriedMultiboxConfig(baseRepo, worktreePath, snapshot);
+    return;
+  }
   const addArgs = ['-c', 'core.longpaths=true', 'worktree', 'add', worktreePath, branch];
   try {
     await gitExec(addArgs, baseRepo);
@@ -498,7 +509,8 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
     // 目录被手动删过时 git 元数据可能残留，先 prune 对账再 add。
     await gitExec(['worktree', 'prune'], parsed.baseRepo).catch(() => undefined);
     await ensureLocalBranchForRestore(parsed.baseRepo, branch);
-    await addRestoredWorktree(parsed.baseRepo, status.worktreePath, branch);
+    const pending = await findPendingSnapshot(parsed.baseRepo, sessionId, parsed.name);
+    await addRestoredWorktree(parsed.baseRepo, status.worktreePath, branch, pending?.sha);
     // 快照必须先于本地配置恢复：未跟踪文件可能同时命中 .claude/.sivi 或
     // .xdtworktreeinclude / .worktreeinclude，提前拷贝会让 git stash apply 因目标已存在而失败。
     snapshotApplied = await applyPendingSnapshot(

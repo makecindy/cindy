@@ -1,5 +1,7 @@
 import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
 import fs from 'node:fs';
+import { isProviderRouteSuspended } from '../maker-host/model-route-availability.js';
+import { remoteAccessProviderId } from '../maker-host/mergedProviderPool.js';
 import { isProviderShareMemberBudget, type ProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
@@ -8,12 +10,16 @@ import { captureProviderManagementScope } from '../provider-group/managementScop
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isRemoteModelSelection, type RemoteModelSelection } from '../../shared/remoteModelAccess.js';
 
-interface ProviderRule { models?: string[]; members: Record<string, string[]>; budgets?: Record<string, ProviderShareMemberBudget | null> | null }
+interface ProviderRule {
+  models?: string[]; members: Record<string, string[]>; budgets?: Record<string, ProviderShareMemberBudget | null> | null;
+  /** The stored rule could not be read: deny every remote use of this provider until it is saved again. */
+  unreadable?: true;
+}
 interface Settings { providers: Record<string, ProviderRule> | null }
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const selection = (value: unknown): string[] => isRemoteModelSelection(value) && value !== null ? value : [];
 
-/** Remote-only authorization; local model preferences and supplier credentials never pass through this store. */
+/** Remote grants stay independent of local preferences; invocation also respects local provider suspension. */
 export function createRemoteModelAccessStore(options: { filePath(): string; scopeKey(): string; withMutation?<T>(providerId: string, work: () => Promise<T>): Promise<T> }) {
   const listeners = new Set<() => void>();
   const log = createLogger('remote-model-access');
@@ -28,13 +34,14 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
       const providers = (raw as Settings | null)?.providers;
       if (!object(providers)) return { providers: null };
       return { providers: Object.fromEntries(Object.entries(providers).map(([id, rule]) => {
-        if (!object(rule) || !object(rule.members)) return [id, { models: [], members: {} }];
+        if (!object(rule) || !object(rule.members)) return [id, { models: [], members: {}, unreadable: true }];
         return [id, {
           ...('models' in rule ? { models: selection(rule.models) } : {}),
           ...(object(rule.budgets) ? { budgets: Object.fromEntries(Object.entries(rule.budgets).map(([member, budget]) =>
             [member, isProviderShareMemberBudget(budget) ? budget : null])) } : ('budgets' in rule ? { budgets: null } : {})),
           members: object(rule.members)
             ? Object.fromEntries(Object.entries(rule.members).map(([member, ids]) => [member, selection(ids)])) : {},
+          ...(rule.unreadable === true ? { unreadable: true } : {}),
         }];
       })) };
     },
@@ -47,7 +54,12 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
     const providers = store.read().providers;
     if (providers === null) throwIpcError('PRECONDITION_FAILED', 'Remote model permissions could not be read');
     const rule = Object.hasOwn(providers, providerId) ? providers[providerId] : undefined;
-    const providerModels = rule?.models ?? null;
+    // A connection merged into an account pool takes the pool's provider-wide range. Share members' grants and
+    // budgets stay with the provider the share was made on, which is where sharing keeps writing them.
+    const poolId = remoteAccessProviderId(providerId);
+    const rangeRule = poolId === providerId ? rule : (Object.hasOwn(providers, poolId) ? providers[poolId] : undefined);
+    // An unreadable rule denies even when a merged connection would otherwise take its pool's range.
+    const providerModels = rule?.unreadable ? [] : rangeRule?.models ?? null;
     const models = memberId ? (rule && Object.hasOwn(rule.members, memberId) ? rule.members[memberId] : null) : providerModels;
     if (memberId && rule?.budgets === null) throwIpcError('PRECONDITION_FAILED', 'Member budget settings could not be read');
     const hasBudget = !!memberId && !!rule?.budgets && Object.hasOwn(rule.budgets, memberId);
@@ -64,6 +76,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
     },
     allows(providerId: string, model: string, memberId?: string): boolean {
       try {
+        if (isProviderRouteSuspended(providerId)) return false;
         const { models, providerModels } = read(providerId, memberId);
         return Boolean(model) && (providerModels === null || providerModels.includes(model)) && (models === null || models.includes(model));
       } catch { return false; }
@@ -71,13 +84,15 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
     /** Offline direct leases cannot enforce O's live per-member usage budget. */
     allowsDelegatedExecution(providerId: string, model: string, memberId: string): boolean {
       try {
+        if (isProviderRouteSuspended(providerId)) return false;
         const { models, providerModels, memberBudget } = read(providerId, memberId);
         return Boolean(model) && (providerModels === null || providerModels.includes(model))
           && (models === null || models.includes(model))
           && !(memberBudget?.enabled && memberBudget.rules.length > 0);
       } catch { return false; }
     },
-    async set(providerId: string, models: RemoteModelSelection, memberId: string | undefined, assertCurrent: () => void, memberBudget?: ProviderShareMemberBudget | null) {
+    async set(providerId: string, models: RemoteModelSelection, memberId: string | undefined, assertCurrent: () => void,
+      memberBudget?: ProviderShareMemberBudget | null, assertAfterWrite: () => void = assertCurrent) {
       if (!isRemoteModelSelection(models)) throwIpcError('INVALID_PARAMS', 'Invalid remote model selection');
       if (memberBudget !== undefined && (!memberId || (memberBudget !== null && !isProviderShareMemberBudget(memberBudget))))
         throwIpcError('INVALID_PARAMS', 'Invalid member budget settings');
@@ -88,7 +103,9 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
         if (value.providers === null) throwIpcError('PRECONDITION_FAILED', 'Remote model permissions could not be read');
         const providers = { ...value.providers };
         const previous = Object.hasOwn(providers, providerId) ? providers[providerId] : undefined;
-        const rule: ProviderRule = { ...previous, members: { ...previous?.members } };
+        // Saving this provider again replaces an unreadable rule; other providers keep their marker.
+        const { unreadable: _unreadable, ...kept } = previous ?? { members: {} };
+        const rule: ProviderRule = { ...kept, members: { ...previous?.members } };
         if (memberId) {
           if (models === null) delete rule.members[memberId];
           else Object.defineProperty(rule.members, memberId, { value: [...models], enumerable: true, configurable: true, writable: true });
@@ -104,7 +121,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
         else Object.defineProperty(providers, providerId, { value: rule, enumerable: true, configurable: true, writable: true });
         return { providers };
       });
-      assertCurrent();
+      assertAfterWrite();
       const updated = read(providerId, memberId);
       for (const listener of listeners) {
         try { listener(); }
@@ -121,7 +138,8 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
 }
 
 export const remoteModelAccess = createRemoteModelAccessStore({
-  withMutation: withAvailabilityPolicyMutation,
+  // Same import cycle as the Device Link settings store: forward at call time.
+  withMutation: (providerId, work) => withAvailabilityPolicyMutation(providerId, work),
   filePath: () => ownerScopedUserDataPath('remote-model-access.json'),
   scopeKey: () => { captureProviderManagementScope(); return activeOwnerScopeKey(); },
 });

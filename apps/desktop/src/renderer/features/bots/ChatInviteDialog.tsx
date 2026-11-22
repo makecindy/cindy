@@ -13,6 +13,7 @@ import type { BotGroupMemberView, ChatInvitePreview } from '../../../shared/botG
 import { BotAvatar } from './BotAvatar';
 import { refreshBotGroups } from './botGroupStore';
 import { chatErrorKey } from './chatError';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
@@ -149,11 +150,11 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
   // Allow dismissal during link generation, but not acceptance or revocation.
   const locked = () => busyRef.current && (revokeConfirm || (!groupId && !(fromLink && !preview)));
   return <Dialog.Root open onOpenChange={open => !open && !locked() && onClose()}>
-    <Dialog.Portal><Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+    <Dialog.Portal><Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
       <Dialog.Content ref={contentRef} onPointerDownOutside={e => e.preventDefault()}
         onOpenAutoFocus={e => { if (groupId) { e.preventDefault(); contentRef.current?.focus(); } }}
         onEscapeKeyDown={e => { if (e.isComposing || e.keyCode === 229 || locked()) e.preventDefault(); }}
-        className={cn('modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] flex-col outline-none',
+        className={cn('modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] flex-col outline-none',
           groupId && created ? 'w-[min(420px,calc(100vw-32px))]' : 'w-[min(460px,calc(100vw-32px))]',
           groupId ? 'gap-5 p-6' : 'gap-4 p-5')}>
         {groupId ? <div className="flex flex-col items-center gap-3 pt-1 text-center">
@@ -202,7 +203,7 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         </div>
       </Dialog.Content>
     </Dialog.Portal>
-    <ConfirmDialog open={revokeConfirm} cancelFirst presentation="standard"
+    <ConfirmDialog open={revokeConfirm} zIndex={Z_INDEX_LAYERS['modal-nested']}
       onOpenChange={open => { if (!busyRef.current) setRevokeConfirm(open); }}
       title={t(key('revokeLink'))} description={t(key('revokeDescription'))}
       confirmText={t(key('revokeLink'))} confirmVariant="destructive" loading={busy}

@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient.js';
 import { messages, sessions } from './schema.js';
 import { safeStringify } from './mapper.js';
@@ -46,6 +46,35 @@ export async function writeMessageContentRow(
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
   return row ? { ...row, content: serialized } : undefined;
+}
+
+/** Mark only the original visible input and preserve concurrent unrelated metadata. */
+export async function markOversizedInputSkippedRow(
+  client: DbClient,
+  sessionId: string,
+  clientId: string,
+): Promise<typeof messages.$inferSelect | undefined> {
+  const db = client.drizzle;
+  const meta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN
+    CASE WHEN json_type(${messages.agentMeta}) = 'object' THEN ${messages.agentMeta} ELSE '{}' END
+    ELSE '{}' END`;
+  const task = db.select({ id: sessions.id }).from(sessions).where(and(
+    eq(sessions.id, sessionId),
+    sql`${sessions.status} != 'deleted'`,
+    or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+  ));
+  const [row] = await db.update(messages)
+    .set({ agentMeta: sql`json_set(${meta}, '$.inputNotice', 'oversized-input-skipped')` })
+    .where(and(
+      eq(messages.sessionId, sessionId),
+      eq(messages.clientId, clientId),
+      eq(messages.role, 'user'),
+      isNull(messages.rewindAt),
+      sql`json_extract(${meta}, '$.autoResume') IS NOT 1`,
+      sql`json_extract(${meta}, '$.inputNotice') IS NULL`,
+      exists(task),
+    )).returning();
+  return row;
 }
 
 /** Exact publication rollback: a late correction cannot remove a replacement row. */
@@ -159,4 +188,19 @@ export async function findVisibleToolUseMessageByAliasesRow(
   return row?.clientId && row.toolUseId
     ? { clientId: row.clientId, toolUseId: row.toolUseId }
     : null;
+}
+
+export async function readVisiblePiUserEntry(client: DbClient, sessionId: string, clientId: string): Promise<string | undefined> {
+  const [row] = await client.drizzle
+    .select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(and(
+      eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+      eq(messages.role, 'user'), isNull(messages.rewindAt),
+      or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+    ))
+    .limit(1);
+  const id = row && parseAgentMetaRecord(row.agentMeta)?.piEntryId;
+  return typeof id === 'string' && id.length > 0 && id.length <= 128 ? id : undefined;
 }

@@ -1,7 +1,7 @@
 import { isAttachmentOssRef, isPeerAttachmentRef, parseAttachmentOssRef, parsePeerAttachmentRef } from '@cindy/device-link';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { readStartReviewRequest, type StartReviewRequest } from './reviewStartHandler.js';
-import type { materializeQueuedOssAttachmentsDeferred } from './normalizeAttachments.js';
+import type { materializeQueuedOssAttachmentsDeferred } from './normalizeAttachments.desktop.js';
 
 /** Translate controller uploads before Review authorizes and snapshots host files. */
 export async function prepareRemoteReviewAttachments(

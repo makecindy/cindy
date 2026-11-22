@@ -8,7 +8,7 @@
  *   - 默认 title / ack emoji
  *   - 群 lane prepareAgentTurnText: 拉取最近历史 + 不使用辅助模型 + 失败通知 owner
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import os from 'node:os';
 import path from 'node:path';
@@ -128,6 +128,10 @@ const CONFIG = {
   effortOverrides: { 'claude-opus-4-7': 'xhigh' as const },
 };
 
+// 控制文案跟随界面语言; 本文件断言的是中文原文。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
+
 describe('feishu ImChannelAdapter characterization', () => {
   const adapter = buildFeishuAdapter(fakeIm, CONFIG);
   scopeMocks.root = path.join(os.tmpdir(), 'xdt-feishu-adapter-test');
@@ -192,17 +196,17 @@ describe('feishu ImChannelAdapter characterization', () => {
     expect(adapter.processingEmoji).toBe('Typing');
   });
 
-  it('会话落「对话」分组(workspaceKind=dialogue) + oneshot 起名前缀 [飞书·DM]', () => {
+  it('会话落「对话」分组(workspaceKind=dialogue) + 起名后先显示渠道', () => {
     expect(adapter.sessions.workspaceKind).toBe('dialogue');
     expect(adapter.sessions.generatedTitlePrefix).toBeTypeOf('function');
-    expect((adapter.sessions.generatedTitlePrefix as () => string)()).toBe('[飞书·DM] ');
+    expect((adapter.sessions.generatedTitlePrefix as () => string)()).toBe('飞书 · ');
   });
 
   it('Lark 凭据使用独立的 Lark 会话标题', () => {
     getService.mockReturnValueOnce('lark');
     expect(adapter.sessions.defaultTitle('ou_1234567890')).toBe('[Lark·DM] 567890');
     getService.mockReturnValueOnce('lark');
-    expect((adapter.sessions.generatedTitlePrefix as () => string)()).toBe('[Lark·DM] ');
+    expect((adapter.sessions.generatedTitlePrefix as () => string)()).toBe('Lark · ');
   });
 
   it('workingDir = userData/im-working-dir/{botAppId}(同 bot 共享)', () => {
@@ -240,19 +244,17 @@ describe('feishu group lane adapter hooks', () => {
     expect(adapter.sessions.defaultTitle('g/oc_chat/omt_1234567890')).toBe('[飞书·话题] 567890');
   });
 
-  it('resolveSessionTitle: 群 lane 拉群名拼 [飞书·群] {群名}, 话题 lane 拼 [飞书·话题] {群名}', async () => {
+  it('resolveSessionTitle: 主群使用群名，话题留给首条文字命名', async () => {
     getChatName.mockResolvedValueOnce('产品交流群');
-    expect(await adapter.sessions.resolveSessionTitle?.('g/oc_chat1')).toBe('[飞书·群] 产品交流群');
-    expect(await adapter.sessions.resolveSessionTitle?.('g/oc_chat1/omt_t1')).toBe(
-      '[飞书·话题] 产品交流群',
-    );
+    expect(await adapter.sessions.resolveSessionTitle?.('g/oc_chat1')).toBe('飞书 · 产品交流群');
+    expect(await adapter.sessions.resolveSessionTitle?.('g/oc_chat1/omt_t1')).toBeNull();
     // 群名已缓存, 不再重复打 API
     expect(getChatName).toHaveBeenCalledTimes(1);
   });
 
   it('resolveSessionTitle: 群名消毒(控制字符剥除); DM lane / 拉不到名返回 null 回落', async () => {
     getChatName.mockResolvedValueOnce('坏' + String.fromCharCode(7) + '群名');
-    expect(await adapter.sessions.resolveSessionTitle?.('g/oc_chat2')).toBe('[飞书·群] 坏 群名');
+    expect(await adapter.sessions.resolveSessionTitle?.('g/oc_chat2')).toBe('飞书 · 坏 群名');
     expect(await adapter.sessions.resolveSessionTitle?.('ou_owner')).toBeNull();
     getChatName.mockResolvedValueOnce(null);
     expect(await adapter.sessions.resolveSessionTitle?.('g/oc_chat3')).toBeNull();
@@ -264,7 +266,7 @@ describe('feishu group lane adapter hooks', () => {
     expect(adapter.sessions.skipOneshotTitleFor?.('ou_owner')).toBe(false);
   });
 
-  it('composeGeneratedTitle: 话题 lane 拼 [飞书·{群名}·{简介}] {threadId 后 6 位}', async () => {
+  it('composeGeneratedTitle: 飞书话题将主题放在群名前', async () => {
     // 群名缓存是模块级状态, 各用例用独立 chatId 避免串。
     getChatName.mockResolvedValueOnce('产品交流群');
     expect(
@@ -274,14 +276,14 @@ describe('feishu group lane adapter hooks', () => {
         '周进度总结',
         's1',
       ),
-    ).toBe('[飞书·产品交流群·周进度总结] 9ce6ab');
+    ).toBe('飞书 · 周进度总结 · 产品交流群');
   });
 
-  it('composeGeneratedTitle: 群名未知退化为 [飞书·话题·{简介}]; DM 返回 null 回落', async () => {
+  it('composeGeneratedTitle: 群名未知时只显示渠道与主题; DM 返回 null 回落', async () => {
     getChatName.mockResolvedValueOnce(null);
     expect(
       await adapter.sessions.composeGeneratedTitle?.('g/oc_chat6/omt_t2', undefined, '简介', 's1'),
-    ).toBe('[飞书·话题·简介] omt_t2');
+    ).toBe('飞书 · 简介');
     expect(
       await adapter.sessions.composeGeneratedTitle?.('ou_owner', undefined, 'x', 's1'),
     ).toBeNull();
@@ -293,11 +295,11 @@ describe('feishu group lane adapter hooks', () => {
     getChatName.mockResolvedValueOnce('产品交流群');
     expect(
       await adapter.sessions.composeGeneratedTitle?.('g/oc_chat7', undefined, 'x', 's1'),
-    ).toBe('[飞书·群] 产品交流群');
+    ).toBe('飞书 · 产品交流群');
     getChatName.mockResolvedValueOnce(null);
     expect(
       await adapter.sessions.composeGeneratedTitle?.('g/oc_1234567890', undefined, 'x', 's1'),
-    ).toBe('[飞书·群] 567890');
+    ).toBe('飞书 · 567890');
   });
 
   it('群轮次(speaker 存在)挂 channel 强确认策略; DM 不挂', () => {
@@ -749,7 +751,7 @@ describe('feishu group lane adapter hooks', () => {
     expect(sendMarkdownText.mock.calls[0][1]).toContain(
       '(im:message.group_msg.include_bot:read)',
     );
-    expect(sendMarkdownText.mock.calls[0][1]).toContain('错误详情: code=99991672 no permission');
+    expect(sendMarkdownText.mock.calls[0][1]).toContain('错误详情：code=99991672 no permission');
     // 一键跳转当前 bot 应用的权限页(appId 取自 getStatus)
     expect(sendMarkdownText.mock.calls[0][1]).toContain(
       '[点击前往](https://open.feishu.cn/app/cli_abc/auth)',

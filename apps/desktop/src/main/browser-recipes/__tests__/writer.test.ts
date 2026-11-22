@@ -11,8 +11,8 @@ vi.mock('electron', () => ({
   shell: { openPath: async () => '' },
 }));
 
-const { writeUserRecipe, resetSiteRecipe } = await import('../writer.js');
-const { loadUserBrowserRecipes } = await import('../loader.js');
+const { writeUserRecipe, resetSiteRecipe } = await import('../writer.desktop.js');
+const { loadUserBrowserRecipes } = await import('../loader.desktop.js');
 const { browserExperienceStore } = await import('../experience.js');
 
 let dir: string;

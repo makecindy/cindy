@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   observe: undefined as ((manifest: Manifest) => void) | undefined,
   unsubscribe: vi.fn(),
   prefetch: vi.fn(),
+  prepare: vi.fn(),
+  getReadyBinaryPath: vi.fn(),
   once: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: {
@@ -22,7 +24,7 @@ vi.mock('../../manifestService.js', () => ({
     return mocks.unsubscribe;
   },
 }));
-vi.mock('../index.js', () => ({ prefetch: mocks.prefetch }));
+vi.mock('../index.js', () => ({ prefetch: mocks.prefetch, prepare: mocks.prepare, getReadyBinaryPath: mocks.getReadyBinaryPath }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 
 import { startBinaryBackgroundUpdates, stopBinaryBackgroundUpdates } from '../background-update';
@@ -39,6 +41,8 @@ describe('binary background update lifecycle', () => {
     mocks.packaged = true;
     mocks.personal = false;
     mocks.observe = undefined;
+    mocks.getReadyBinaryPath.mockReset().mockReturnValue('/runtime');
+    mocks.prepare.mockReset().mockResolvedValue({ ready: true });
     mocks.prefetch.mockReset().mockResolvedValue(true);
     mocks.unsubscribe.mockClear();
     mocks.once.mockClear();
@@ -66,6 +70,21 @@ describe('binary background update lifecycle', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(mocks.prefetch).toHaveBeenCalledTimes(6);
     expect(mocks.prefetch.mock.calls[3][1].manifest).toBe(manifest);
+  });
+
+  // A fresh offline install can enter the app. A later successful manifest
+  // must install its missing runtime, not merely cache an unusable archive. Unit.
+  it('repairs missing engines on a later manifest without replacing ready engines', async () => {
+    mocks.getReadyBinaryPath.mockImplementation(kind => kind === 'claude-code' ? undefined : '/runtime');
+    startBinaryBackgroundUpdates();
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(mocks.prepare).toHaveBeenCalledWith('claude-code', expect.objectContaining({ broadcastProgress: false, broadcastFailure: false }));
+    expect(mocks.prefetch.mock.calls.map(([kind]) => kind)).toEqual(['codex', 'pi']);
+    mocks.getReadyBinaryPath.mockReturnValue('/runtime');
+    mocks.observe?.({ app: { version: '2.0.0' } });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.prepare).toHaveBeenCalledTimes(1);
+    expect(mocks.prefetch.mock.calls.map(([kind]) => kind)).toContain('claude-code');
   });
 
   it('cancels in-flight work and removes the observer when quitting', async () => {

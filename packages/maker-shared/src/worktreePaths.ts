@@ -172,5 +172,27 @@ export function sessionProjectDirectory(session: {
   projectDir?: string | null;
   workingDir?: string | null;
 }): string | null {
-  return session.projectDir ?? session.workingDir ?? null;
+  if (session.projectDir != null) return session.projectDir;
+  if (session.workingDir == null) return null;
+  return managedWorktreeBaseRepo(session.workingDir) ?? session.workingDir;
+}
+
+/** Owner task-list grouping, independent of the lane's execution/project context. */
+export function sessionTaskProjectDirectory(session: {
+  /** Search summaries carry the resolved display membership without chat attribution. */
+  taskProjectDir?: string | null;
+  projectDir?: string | null;
+  workingDir?: string | null;
+  companion?: { id?: string; role?: string; taskProjectDir?: string | null } | null;
+}): string | null {
+  return session.taskProjectDir ?? session.companion?.taskProjectDir ?? sessionProjectDirectory(session);
+}
+
+/** Inbox identity follows the visible project, not a worktree or dialogue's execution cwd. */
+export function sessionTaskProjectIconDirectory(session: Parameters<typeof sessionTaskProjectDirectory>[0] & {
+  workspaceKind?: string | null;
+}): string | null {
+  if (session.workspaceKind === 'dialogue' && !session.taskProjectDir && !session.companion?.taskProjectDir) return null;
+  const directory = sessionTaskProjectDirectory(session)?.trim();
+  return directory ? collapseWorktreeDirForGrouping(directory) : null;
 }

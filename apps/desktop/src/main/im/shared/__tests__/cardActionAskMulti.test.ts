@@ -7,6 +7,7 @@
  * 这条链路本来就是它和多处注入的唯一粘合点。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 import type { AskUserQuestionItem } from '@cindy/maker-core';
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
@@ -186,6 +187,11 @@ beforeEach(() => {
 afterEach(() => {
   for (const id of liveRequestIds.splice(0)) cancelPending(id, 'test-end');
 });
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('本机凭证确认卡的 IM 按钮', () => {
   it.each(['direct', 'shared'] as const)('%s 路径保留任务授权，普通卡忽略按钮伪造的标记', async (route) => {

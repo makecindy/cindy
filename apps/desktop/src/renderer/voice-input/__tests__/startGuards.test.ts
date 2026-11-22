@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveVoiceInputStartGuards } from '../startGuards';
+import { requestRendererMicrophonePermission, resolveVoiceInputStartGuards } from '../startGuards';
 
 const grantedPermission = { ok: true as const, status: 'granted' };
 type PermissionSnapshot =
@@ -90,5 +90,35 @@ describe('resolveVoiceInputStartGuards', () => {
       permissionSource: 'cache',
     });
     expect(apis.getUserMedia).not.toHaveBeenCalled();
+  });
+});
+
+// The explicit microphone action used to request OS access for an absent or busy
+// device, and could overwrite a fresh system denial with a successful trial.
+describe('requestRendererMicrophonePermission', () => {
+  it.each(['NotFoundError', 'NotReadableError', 'AbortError'])('reports %s without a second OS request', async name => {
+    const apis = stubVoiceInputApis('darwin');
+    apis.getUserMedia.mockRejectedValue(new DOMException('Input unavailable', name));
+    expect(await requestRendererMicrophonePermission()).toMatchObject({ ok: false, status: 'device-unavailable' });
+    expect(apis.requestMicrophonePermission).not.toHaveBeenCalled();
+    expect(apis.setRendererMicrophonePermissionVerified).not.toHaveBeenCalled();
+  });
+  it('honors an explicit system denial after a successful microphone trial', async () => {
+    const apis = stubVoiceInputApis('darwin');
+    const stop = vi.fn();
+    const denied = { ok: false, status: 'denied', error: 'Denied' };
+    apis.getUserMedia.mockResolvedValue({ getTracks: () => [{ stop }] });
+    apis.getSystemPermissions.mockResolvedValue({ microphone: denied });
+    expect(await requestRendererMicrophonePermission()).toEqual(denied);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+  it('releases the trial stream without repeating a native request when only the status IPC fails', async () => {
+    const apis = stubVoiceInputApis('darwin');
+    const stop = vi.fn();
+    apis.getUserMedia.mockResolvedValue({ getTracks: () => [{ stop }] });
+    apis.getSystemPermissions.mockRejectedValue(new Error('IPC unavailable'));
+    expect(await requestRendererMicrophonePermission()).toEqual({ ok: true, status: 'granted' });
+    expect(stop).toHaveBeenCalledOnce();
+    expect(apis.requestMicrophonePermission).not.toHaveBeenCalled();
   });
 });

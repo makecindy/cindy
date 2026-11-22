@@ -16,7 +16,9 @@ import { AttachmentCollectionPreview, useOpeningCollection } from './AttachmentC
  *     OS 原生文件剪贴板(Win/Mac),粘贴出来是文件本体而不是字节流。
  *   - <video controls autoPlay loop preload="auto"> — autoplay is fine because
  *     the user explicitly clicked the cover to open the lightbox. Audio
- *     previews do not loop, and unmounting always pauses the element.
+ *     previews do not loop, and leaving always pauses and releases the element:
+ *     a paused element can keep its decoder and audio pipeline alive, so the
+ *     source is detached before the player goes away.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -35,6 +37,7 @@ import { registerMedia } from '@/lib/mediaPlaybackBus';
 import { useVideoContextMenu } from './useVideoContextMenu';
 import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewFooter, PreviewScrim } from './PreviewChrome';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 interface VideoLightboxProps {
   src: string;
@@ -58,6 +61,29 @@ export function VideoLightbox(props: VideoLightboxProps) {
   );
 }
 
+/**
+ * Drop the element's source instead of only pausing it.
+ *
+ * Pausing stops the clock but keeps the media resource attached, so Chromium may
+ * keep decoding audio after the element leaves the DOM — the reported symptom on
+ * Windows is sound that only the system mixer can stop. Detaching the source and
+ * running the load algorithm releases the pipeline (the spec also resets
+ * currentTime there, so callers that need the position must read it first).
+ */
+function releaseMediaElement(el: HTMLMediaElement | null): void {
+  if (!el) return;
+  try {
+    el.pause();
+  } catch {
+    /* 元素已 detach — 静默 */
+  }
+  // The playback bus may have released this element first; a second load()
+  // would only run the load algorithm again on an already-empty element.
+  if (el.getAttribute('src') === null && el.srcObject === null) return;
+  el.removeAttribute('src');
+  el.load();
+}
+
 function VideoLightboxContent({
   src,
   filename,
@@ -72,12 +98,16 @@ function VideoLightboxContent({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { menuPos, setMenuPos, portalContainer, restoreVideoFocus } = useVideoContextMenu(videoRef, src);
   const lastMenuCloseAt = useRef(0);
+  // Effect 重放时要补回被摘掉的源,而重放的 effect 不该跟着 src 重新订阅。
+  const srcRef = useRef(src);
+  srcRef.current = src;
 
   const handleClose = useCallback(() => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
-    videoRef.current?.pause();
+    // load() 会把 currentTime 归零,续播位置必须先取。
     const time = videoRef.current?.currentTime;
+    releaseMediaElement(videoRef.current);
     setIsVisible(false);
     setTimeout(() => onClose(time), 200);
   }, [onClose]);
@@ -85,14 +115,20 @@ function VideoLightboxContent({
   // 全局媒体互斥:lightbox autoPlay 起播时 bus 会自动 pause 其它正在
   // 播放的 audio/video;反过来,其它媒体起播时也会 pause 这里的视频。
   // 合集预览关闭或切换时会直接卸载本组件而不经过 handleClose,卸载时
-  // 显式 pause,避免脱离 DOM 的媒体在后台继续发声。
+  // 同样要释放源,否则脱离 DOM 的媒体会在后台继续发声。
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
+    // Effect replay (StrictMode in dev, Vite Fast Refresh in the app) runs the
+    // cleanup above on this same DOM node: the release detaches the source, and
+    // React does not write the unchanged JSX `src` back, so the still-open
+    // preview would sit there empty. Restore it during setup, as WallpaperVideo
+    // does for its playback loop.
+    if (el.getAttribute('src') === null) el.setAttribute('src', srcRef.current);
     const unregister = registerMedia(el);
     return () => {
       unregister();
-      el.pause();
+      releaseMediaElement(el);
     };
   }, []);
 
@@ -169,7 +205,7 @@ function VideoLightboxContent({
       className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
-        zIndex: 9999,
+        zIndex: Z_INDEX_LAYERS.fullscreen,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -309,7 +345,7 @@ function VideoLightboxContent({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            align="start" sideOffset={2} className="z-[10000]"
+            align="start" sideOffset={2}
             portalContainer={portalContainer}
             style={portalContainer ? { pointerEvents: 'auto' } : undefined}
             onCloseAutoFocus={restoreVideoFocus}

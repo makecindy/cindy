@@ -1,8 +1,9 @@
 import { isSafeSessionPathSegment } from '../sessionIds.js';
 import { isLibraryExtraDirSlot } from './extraDirsValidator.js';
 
-import type { AgentKind, CreateSessionOptions, WorkspaceKind } from '@cindy/maker-core';
+import { acpHarnessKeyFromProviderId, type CreateSessionOptions, type EngineKind, type WorkspaceKind } from '@cindy/maker-core';
 
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 
 /**
@@ -57,7 +58,7 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
   [key: string]: unknown;
 }
 
-type StderrLogger = (agentKind: AgentKind, line: string) => void;
+type StderrLogger = (agentKind: EngineKind, line: string) => void;
 
 export interface ReadCreateSessionOptsDeps {
   allocateDialogueWorkspace?: (sessionId: string, nowMs: number) => string;
@@ -65,8 +66,10 @@ export interface ReadCreateSessionOptsDeps {
   now?: () => number;
 }
 
-function readAgentKind(value: unknown): AgentKind {
+function readAgentKind(value: unknown): EngineKind {
   if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  // Plugin ACP engine (docs/plans/acp-plugin-bridge.md); further checks in readCreateSessionOpts.
+  if (value === 'acp') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -145,6 +148,19 @@ export function readCreateSessionOpts(
       throwIpcError('INVALID_PARAMS', 'agentDeviceId cannot be combined with remoteHostId');
     }
   }
+  if (agentKind === 'acp') {
+    // Plugin engines are chosen through their harness id. They run on this computer, on another
+    // computer of the same account, or on a direct provider share (never SSH or invalid peer ids).
+    if (!acpHarnessKeyFromProviderId(typeof body.providerId === 'string' ? body.providerId : null)) {
+      throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
+    }
+    if (typeof body.remoteHostId === 'string' && body.remoteHostId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'plugin engine tasks do not run in SSH workspaces');
+    }
+    if (typeof body.agentDeviceId === 'string' && (isSharedTaskPeer(body.agentDeviceId) || parseProviderSharePeer(body.agentDeviceId))) {
+      throwIpcError('INVALID_PARAMS', 'invalid plugin engine target device');
+    }
+  }
   return {
     ...body,
     id,
@@ -171,4 +187,22 @@ export function withCreateSessionStderr(
     ...opts,
     vendorOptions: { ...vendorOptions, onStderrLine },
   };
+}
+
+export function createSessionStderrOptions(log: { warn(message: string): void }) {
+  return function buildCreateOptsWithStderr(o: MakerSessionCreateOpts) {
+    // 把 vendor 子进程 stderr 引到主进程日志,否则 "process exited with code 1" 之类
+    // 的失败信息会被默默丢掉。renderer 仍可以通过 vendorOptions 自定义,这里只在缺省时兜底。
+    return withCreateSessionStderr(o, (agentKind, line) =>
+      log.warn(`[${agentKind}/stderr] ${line}`),
+    );
+  };
+}
+
+export function isSessionRunningError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  if (code === 'SESSION_RUNNING') return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
 }

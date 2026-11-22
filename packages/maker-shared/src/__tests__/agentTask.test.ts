@@ -32,10 +32,11 @@ const CLAUDE_2_1_280_ASYNC_RECEIPT = [
 ].join('\n');
 
 describe('isAgentTaskToolName', () => {
-  it('matches Task / Agent / collab:* and nothing else', () => {
+  it('matches spawn tools and nothing else', () => {
     expect(isAgentTaskToolName('Task')).toBe(true);
     expect(isAgentTaskToolName('Agent')).toBe(true);
     expect(isAgentTaskToolName('collab:spawn')).toBe(true);
+    expect(isAgentTaskToolName('collab:spawnAgent')).toBe(true);
     expect(isAgentTaskToolName('Read')).toBe(false);
     expect(isAgentTaskToolName('TodoWrite')).toBe(false);
     expect(isAgentTaskToolName('')).toBe(false);
@@ -56,13 +57,15 @@ describe('isAgentTaskToolName', () => {
 });
 
 describe('isSubagentSpawnToolName', () => {
-  it('separates real launches from Codex control cards', () => {
-    for (const name of ['Task', 'Agent', 'subagent', 'collab:spawn', 'collab:spawnAgent']) {
+  it('separates real launches from Codex control calls', () => {
+    for (const name of ['Task', 'Agent', 'subagent', 'collab:spawn', 'collab:spawnAgent', 'collab:spawn_agent']) {
       expect(isSubagentSpawnToolName(name)).toBe(true);
     }
+    // 控制调用不是子代理的诞生:既不能算 spawn,也不能走子代理卡(否则每轮 wait
+    // 都会长出一张 "Subagent wait" 卡和一条后台任务行)。
     for (const name of ['collab:wait', 'collab:sendInput', 'collab:resumeAgent', 'collab:closeAgent']) {
       expect(isSubagentSpawnToolName(name)).toBe(false);
-      expect(isAgentTaskToolName(name)).toBe(true);
+      expect(isAgentTaskToolName(name)).toBe(false);
     }
   });
 });

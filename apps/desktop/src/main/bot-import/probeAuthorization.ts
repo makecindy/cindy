@@ -39,10 +39,11 @@ export async function withAuthorizedImportProbe<T>(
     const live = maker.getSession(sessionId);
     const permission = live?.stablePermissionModeState;
     const plan = live?.stablePlanModeState;
-    if (!meta || status !== 'active' || live && (!permission || !plan || plan.enabled)) throw new Error('IMPORT_PROBE_AUTHORIZATION_UNAVAILABLE');
+    // Plugin-engine tasks have no Cindy auto-review route (docs/plans/acp-plugin-bridge.md).
+    if (!meta || meta.agentKind === 'acp' || status !== 'active' || live && (!permission || !plan || plan.enabled)) throw new Error('IMPORT_PROBE_AUTHORIZATION_UNAVAILABLE');
     const mode = live ? permission!.mode : meta.permissionMode;
     if (mode === 'plan') throw new Error('IMPORT_PROBE_AUTHORIZATION_UNAVAILABLE');
-    return { meta, mode, live, liveKey: JSON.stringify([permission, plan]) };
+    return { meta, agentKind: meta.agentKind, mode, live, liveKey: JSON.stringify([permission, plan]) };
   };
   const scope = await readScope();
   let live = scope.live;
@@ -71,7 +72,7 @@ export async function withAuthorizedImportProbe<T>(
     const decision: AutoReviewDecision = scope.mode === 'bypassPermissions' ? { verdict: 'allow' as const }
       : scope.mode !== 'auto' ? { verdict: 'ask' as const }
         : await resolveAutoReviewDecision({
-          sessionId, agentKind: scope.meta.agentKind, model: scope.meta.model,
+          sessionId, agentKind: scope.agentKind, model: scope.meta.model,
           // This authority comes from the accepted takeover selection, not the
           // imported personality, job prompt, tool description or planner output.
           userIntent: 'Import the selected agent and take over the selected automations after verifying their existing data access. Perform read-only checks; this request does not authorize modifying or deleting external data or sending messages during verification.',

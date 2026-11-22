@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type InteractionDecision } from '@cindy/maker-core';
+import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type AgentEvent, type InteractionDecision } from '@cindy/maker-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,18 @@ import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/prov
 import { decodeOpenPayload, decodeStartOptions, encodeStartOptions, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
 
 let root: string;
+
+// Project memory uses a locator rather than the full index. Both wire endpoints must keep it;
+// older senders omit it and retain their existing memory behavior (unit, real codec roundtrip).
+it('roundtrips the project memory locator without requiring it from older senders', () => {
+  const input = { model: 'm', workingDir: '/project', makerMemoryEnabled: true,
+    makerMemoryProjectDir: '/project/.cindy/memory', makerMemoryIndexSnapshot: '' };
+  expect(decodeStartOptions(encodeStartOptions(input))).toMatchObject({
+    makerMemoryProjectDir: input.makerMemoryProjectDir, makerMemoryIndexSnapshot: '',
+  });
+  expect(decodeStartOptions({ model: 'm' }).makerMemoryProjectDir).toBeUndefined();
+  expect(decodeStartOptions({ model: 'm', makerMemoryProjectDir: 7 }).makerMemoryProjectDir).toBeUndefined();
+});
 
 it('encodes only application isolation, never its private URL, token, path or target', () => {
   const encoded = encodeStartOptions({ sessionId: 'client', workingDir: '/workspace', model: 'm', [LOCAL_AGENT_CLIENT]: {
@@ -364,6 +376,41 @@ describe('tunnel', () => {
 });
 
 describe('remote AgentSessionHandle close', () => {
+  // #9985 unit: close classification must use the foreground terminal and local
+  // teardown intent. Existing idle cleanup tests never sent a turn before close.
+  it.each(['idle', 'done', 'terminal-error', 'abort', 'close', 'detach'] as const)(
+    'keeps an intentional or settled %s quiet when the remote stream closes', async settlement => {
+      const dispose = vi.fn(async () => undefined);
+      const controller = createRemoteAgentHandle({
+        client: {
+          callWithId: async () => undefined,
+          call: async () => undefined,
+          close: async () => {
+            // A delayed busy snapshot must not undo our local close/detach intent.
+            controller.onState({ turnRunning: true });
+            controller.onClosed('superseded');
+          },
+        } as unknown as RemoteAgentRunClient,
+        started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: '', methods: [], state: {} },
+        workspace: new ExecutorWorkspace({ workingDir: root }),
+        recordApproval() {}, newId: () => 'req', dispose,
+      });
+      if (settlement !== 'idle') await controller.handle.send({ type: 'user', content: 'work' });
+      const terminal: AgentEvent = settlement === 'terminal-error'
+        ? { type: 'error', source: 'claude-code', data: { message: 'quota reached', usageResetAt: 1794400000000, isTerminal: true } }
+        : { type: 'done', source: 'claude-code', data: {} };
+      if (settlement === 'done' || settlement === 'terminal-error') controller.onEvent(terminal);
+      if (settlement === 'abort') await controller.handle.abort();
+      if (settlement === 'close' || settlement === 'detach') await controller.handle[settlement]!({ reason: 'navigation' });
+      controller.onClosed('ended');
+      controller.onClosed('error', 'late duplicate close');
+      const seen: AgentEvent[] = [];
+      for await (const event of controller.handle.events()) seen.push(event);
+      expect(seen).toEqual(settlement === 'done' || settlement === 'terminal-error' ? [terminal] : []);
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
+
   // #9263 unit: old execution hosts silently strip iMessage permissions. Check
   // send/steer before dispatch, including a reconnect that changes host version.
   it('requires current executor support before sending iMessage context', async () => {
@@ -527,7 +574,7 @@ describe('confirmations raised on this computer', () => {
     expect(await controller.confirm(request)).toBe(false);
     expect(credentialConfirmation({ kind: 'exec', command: 'cat .env', cwd: root }, 'x')).toMatchObject({
       toolName: 'Bash',
-      input: { command: 'cat .env' },
+      input: { command: 'cat .env', cwd: root },
     });
   });
 
@@ -633,6 +680,58 @@ describe('exec-server relay gate', () => {
       kind: 'permission', requestId: 'r', toolName: 'mcp__cindy_exec__WebFetch', input: { url: ' http://10.0.0.5/wiki ', prompt: 'x' },
     }, workspace)).toEqual([{ kind: 'fetch', url: 'http://10.0.0.5/wiki' }]);
     expect(approvalActionsFor({ kind: 'ask_user_question', requestId: 'r', questions: [] }, workspace)).toEqual([]);
+  });
+
+  // PR #11698: a generic ACP confirmation previously minted a local command or
+  // write grant from its arguments alone. This unit exercises the resulting
+  // grants and the real executor gate, which built-in-tool cases don't cover.
+  it('records only the canonical operation shown on a plugin engine confirmation', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const acp = { acpToolKind: 'other', acpOptions: [{ name: 'Allow', kind: 'allow_once' }] };
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'cindy_exec · Bash', input: { command: 'rm -rf build' }, metadata: acp,
+    }, workspace, true)).toEqual([]);
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Bash', input: { command: 'rm -rf build' },
+    }, workspace, true)).toEqual([{ kind: 'exec', command: 'rm -rf build', cwd: root }]);
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Write',
+      input: { file_path: '.env', content: 'A=1', changes: [{ path: 'hidden.txt' }] },
+    }, workspace, true)).toEqual([{ kind: 'write', path: path.join(root, '.env') }]);
+    const gate = new ExecutorGate(workspace, 'normal');
+    const target = path.join(root, '.env');
+    for (const approval of approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Read', input: { file_path: '.env' },
+    }, workspace, true)) gate.recordApproval(approval);
+    expect(gate.authorize({ kind: 'read', path: target }).ok).toBe(true);
+    expect(gate.authorize({ kind: 'write', path: target }).ok).toBe(false);
+  });
+
+  // PR #11698: the controller must show and grant the cwd used by the executor.
+  // Existing grant checks only use the workspace root. One Bash in a different
+  // cwd exposes the mismatch through the real reverse-interaction handler.
+  it('shows the live shell directory and binds the approval to it', async () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const cwd = path.join(root, 'project');
+    const recordApproval = vi.fn();
+    const controller = createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'acp-1', agentKind: 'acp', model: 'm', shadowDir: '', methods: [], state: {} },
+      workspace,
+      getExecutorCwd: () => cwd,
+      recordApproval,
+      newId: () => 'req',
+      dispose: async () => undefined,
+    });
+    const show = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    controller.handle.setInteractionResolver(show);
+    const command = 'rm -rf build';
+    await controller.onRequest({
+      type: 'interaction',
+      request: { kind: 'permission', requestId: 'bash-1', toolName: 'Bash', input: { command } },
+    });
+    expect(show).toHaveBeenCalledWith(expect.objectContaining({ input: { command, cwd } }));
+    expect(recordApproval).toHaveBeenCalledExactlyOnceWith({ kind: 'exec', command, cwd });
   });
 });
 

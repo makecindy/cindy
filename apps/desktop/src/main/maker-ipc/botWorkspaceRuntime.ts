@@ -1,20 +1,37 @@
 import { stat } from 'node:fs/promises';
 
 import { app } from 'electron';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
+import { ensureDialogueWorkspaceDir, isManagedDialogueWorkspace } from '../localDb/dialogueWorkspace.js';
+import { teammateWorkspaceDir } from './botProjectMemory.js';
+import { registeredTaskProject } from '../mcp-integrations/projectManagementCore.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { ensureBotChatOnlyWorkspaceDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { botGroupPlans, botSessionLinks, sessions } from '../localDb/schema.js';
+import { botGroupPlans, botProfileVersions, botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { botGroupPlanRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
+import { botGroupPlanRouteKey, groupLaneOfRouteKey, groupLaneUsesChatWorkspace, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
 
 export interface BotWorkspaceRuntimeDeps {
   ensureWorkspaceDir?: typeof ensureBotWorkspaceDir;
+  registeredProject?: typeof registeredTaskProject;
+  dialogueWorkspace?: typeof ensureDialogueWorkspaceDir;
   ownerUserDataPath?: () => string;
   legacyUserDataPath?: () => string;
   isDirectory?: (dir: string) => Promise<boolean>;
+}
+
+/** Opening a chat may allocate a dialogue directory, never the missing project of a buddy. */
+export async function privateBotWorkspace(botId: string, projectMode: boolean, deps: BotWorkspaceRuntimeDeps = {}) {
+  const root = (deps.ownerUserDataPath ?? ownerScopedUserDataPath)();
+  if (projectMode) {
+    const projectDir = await (deps.registeredProject ?? registeredTaskProject)(teammateWorkspaceDir(root, botId));
+    return { projectDir, workspaceKind: projectDir ? 'project' as const : 'dialogue' as const, workingDir: projectDir ?? undefined };
+  }
+  const workingDir = await (deps.ensureWorkspaceDir ?? ensureBotWorkspaceDir)(root, botId, (deps.legacyUserDataPath ?? (() => app.getPath('userData')))());
+  return { projectDir: null, workspaceKind: 'dialogue' as const, workingDir };
 }
 
 export class BotPlanWorkDirUnavailableError extends Error {
@@ -33,21 +50,9 @@ async function isExistingDirectory(dir: string): Promise<boolean> {
 }
 
 /**
- * `prepareStartOptions` 生命周期钩子在每次 session 启动/恢复时都会调用本函数——
- * 不只是 Bot session。这里只做一件事：如果这个 session 挂在某个 Bot 名下
- * （`bot_session_links` 有匹配行），把 `opts.workingDir` 收敛到该 Bot 的
- * Bot Home「workspace/」目录（`ensureBotWorkspaceDir`，与创建期 `bots.ts`／
- * delegation 走的是同一个解析函数，本调用是幂等自愈，防用户手动删了目录）。
- * 非 Bot session 直接原样返回，不做任何改动。
- *
- * 群分工在已登记的工作目录里干活：旧本地计划读取 `bot_group_plans.work_dir`，
- * 服务端计划读取建专线时持久化的 `sessions.working_dir`，不要求本地计划行。
- * 目录不可用直接失败，绝不回退到 Home。仅聊天授权优先于分工规则，每次启动都
- * 收敛到按账号、伙伴和授权专线隔离的聊天目录，不读取项目或 Home。
- *
- * 旧版这里还挂着 per-task lease／worktree／远端 host／project-binding 的一整套
- * 状态机；那些表（bot_workspace_leases 等）已随 Section A 的整体裁剪删除，
- * 创建期也早已直接调用 `ensureBotWorkspaceDir`，所以这里不再需要重建等价逻辑。
+ * Restore the recorded execution directory on start and resume. Private conversations use
+ * the buddy's workspace, group tasks use their own selected workspace, and chat-only
+ * grants always use an isolated directory. A missing plan workspace stops that step.
  */
 export async function prepareBotWorkspaceRuntime(
   opts: MakerSessionCreateOpts,
@@ -67,9 +72,13 @@ export async function prepareBotWorkspaceRuntime(
 
   const ownerUserDataPath = deps.ownerUserDataPath ?? ownerScopedUserDataPath;
   const groupRouteKey = link[0]?.role === 'group' ? link[0].routeKey : null;
-  if (isChatOnlyGroupLane(groupRouteKey)) {
-    opts.workingDir = await ensureBotChatOnlyWorkspaceDir(ownerUserDataPath(), botId, groupLaneOfRouteKey(groupRouteKey!));
+  const [lane] = groupRouteKey ? await db.select({
+    workingDir: sessions.workingDir, workspaceKind: sessions.workspaceKind, projectDir: sessions.projectDir,
+  }).from(sessions).where(eq(sessions.id, sessionId)).limit(1) : [];
+  if (groupRouteKey && groupLaneUsesChatWorkspace(groupRouteKey)) {
+    opts.workingDir = await ensureBotChatOnlyWorkspaceDir(ownerUserDataPath(), botId, groupLaneOfRouteKey(groupRouteKey));
     opts.workspaceKind = 'dialogue';
+    opts.projectDir = lane?.projectDir ?? undefined;
     opts.remoteHostId = undefined;
     return;
   }
@@ -87,23 +96,57 @@ export async function prepareBotWorkspaceRuntime(
     } else {
       // A server plan's local workspace is recorded when its access-scoped lane
       // is created. Never resolve a coincidentally matching legacy plan id.
-      const [session] = await db.select({ workingDir: sessions.workingDir })
-        .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-      workDir = session?.workingDir;
+      workDir = lane?.workingDir;
     }
     const isDirectory = deps.isDirectory ?? isExistingDirectory;
     if (!workDir || !(await isDirectory(workDir))) throw new BotPlanWorkDirUnavailableError();
     opts.workingDir = workDir;
-    opts.workspaceKind = 'project';
+    opts.workspaceKind = lane?.workspaceKind === 'dialogue' ? 'dialogue' : 'project';
+    opts.projectDir = lane?.projectDir ?? undefined;
     opts.remoteHostId = undefined;
     return;
   }
 
-  const ensureWorkspaceDir = deps.ensureWorkspaceDir ?? ensureBotWorkspaceDir;
-  const legacyUserDataPath = deps.legacyUserDataPath ?? (() => app.getPath('userData'));
-
-  const workingDir = await ensureWorkspaceDir(ownerUserDataPath(), botId, legacyUserDataPath());
-  opts.workingDir = workingDir;
-  opts.workspaceKind = 'dialogue';
+  if (groupRouteKey && lane?.workingDir) {
+    const isDirectory = deps.isDirectory ?? isExistingDirectory;
+    if (!(await isDirectory(lane.workingDir))) throw new BotPlanWorkDirUnavailableError();
+    opts.workingDir = lane.workingDir;
+    opts.workspaceKind = lane.workspaceKind === 'dialogue' ? 'dialogue' : 'project';
+    opts.projectDir = lane.projectDir ?? undefined;
+    opts.remoteHostId = undefined;
+    return;
+  }
+  const workspace = await privateBotWorkspace(botId, await readTeammateProjectMode(botId), deps);
+  const [stored] = await db.select({ workspaceKind: sessions.workspaceKind, projectDir: sessions.projectDir,
+    workingDir: sessions.workingDir, createdAt: sessions.createdAt }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  let dir = workspace.workingDir;
+  if (!dir) {
+    dir = stored?.workingDir && isManagedDialogueWorkspace(stored.workingDir) && await isExistingDirectory(stored.workingDir)
+      ? stored.workingDir : (deps.dialogueWorkspace ?? ensureDialogueWorkspaceDir)(sessionId, stored?.createdAt ?? Date.now());
+  }
+  opts.workingDir = dir;
+  opts.workspaceKind = workspace.workspaceKind;
+  opts.projectDir = workspace.projectDir ?? undefined;
   opts.remoteHostId = undefined;
+  if (stored && (stored.workspaceKind !== workspace.workspaceKind || stored.projectDir !== workspace.projectDir || stored.workingDir !== dir)) {
+    await db.update(sessions).set({ workingDir: dir, workspaceKind: workspace.workspaceKind, projectDir: workspace.projectDir })
+      .where(eq(sessions.id, sessionId));
+  }
+}
+
+export async function readTeammateProjectMode(botId: string): Promise<boolean> {
+  const [row] = await getDbClient().drizzle
+    .select({ config: botProfileVersions.capabilitiesJson })
+    .from(botProfiles)
+    .innerJoin(botProfileVersions, and(
+      eq(botProfileVersions.botId, botProfiles.id),
+      eq(botProfileVersions.version, botProfiles.currentVersion),
+    ))
+    .where(eq(botProfiles.id, botId))
+    .limit(1);
+  try {
+    return readBotProjectMode(JSON.parse(row?.config ?? '{}') as Record<string, unknown>);
+  } catch {
+    return false;
+  }
 }

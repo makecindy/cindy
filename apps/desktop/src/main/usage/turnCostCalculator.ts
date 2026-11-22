@@ -6,21 +6,18 @@ import { isByokProviderId, type AgentKind } from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
 
-import { gatewayLedgerCurrency, getModelPriceQuote } from '../../shared/modelPriceQuote.js';
+import { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import {
-  addRegionalMoney,
-  toLedgerCurrency,
-  usdToLedgerCurrency,
+  sumMoneyByCurrency,
+  usdMoney,
   type ModelPriceQuote,
   type ModelPricingCatalog,
-  type MoneyCurrency,
   type MoneyEstimateReason,
   type PriceVariant,
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { buildTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails.js';
-import { isSubscriptionDirectRoute } from '../../shared/subscriptionModels.js';
-import { currentLedgerCurrency } from './ledgerCurrency.js';
+import { isSubscriptionDirectRoute, isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import type { ModelUsageDeltaEntry } from './modelUsageDelta.js';
 
 export interface TurnTokenDeltas {
@@ -35,6 +32,7 @@ export interface TurnTokenDeltas {
 export interface TurnUsageSegment extends TurnTokenDeltas {
   id?: string;
   model?: string;
+  modelConfirmed?: boolean;
   priceVariant?: PriceVariant;
   costUsd?: number;
   complete?: boolean;
@@ -67,6 +65,7 @@ export function normalizeTurnUsageSegments(value: unknown): TurnUsageSegment[] {
       continue;
     if (typeof raw.id === 'string' && raw.id) segment.id = raw.id;
     if (typeof raw.model === 'string' && raw.model.trim()) segment.model = raw.model.trim();
+    if (typeof raw.modelConfirmed === 'boolean') segment.modelConfirmed = raw.modelConfirmed;
     if (
       raw.priceVariant === 'standard' ||
       raw.priceVariant === 'priority' ||
@@ -226,15 +225,9 @@ export function computeGatewaySegmentedTurnCost(
   return total;
 }
 
-/**
- * @param ledgerCurrency 本账号的账本币种（结算币种）。非 Gateway 来源的 USD 口径金额
- *   按它投影，而不是按构建区域 —— 本地账本单币种，按区域投影会让以 USD 结算的账号在
- *   CN 构建上收到 CNY 金额并被账本守卫整批丢弃。
- */
 export function computePriceQuoteTurnMoney(
   tokens: TurnTokenDeltas,
   price: ModelPriceQuote | undefined,
-  ledgerCurrency: MoneyCurrency,
   segments?: readonly TurnUsageSegment[],
 ): RegionalMoney | null {
   if (!price) return null;
@@ -271,22 +264,13 @@ export function computePriceQuoteTurnMoney(
     ...(baseReasons ?? []),
     ...(currencyInferred ? (['inferred-currency'] as const) : []),
   ];
-  const money: RegionalMoney = {
+  return {
     amount: Math.max(0, amount),
     currency: price.currency,
     approximate: price.approximate || valueEstimate || currencyInferred,
     kind: valueEstimate ? 'value-estimate' : 'actual-cost',
     ...(estimateReasons.length > 0 ? { estimateReasons } : {}),
   };
-  // Gateway 报价的币种就是该账号的实际结算币种,原样记账才能与账单对账 —— 不做任何换算。
-  // 否则以 USD 结算的账号在 CN 构建上,turn 会被 USD_TO_CNY_FIXED_RATE 折成 CNY,而同一
-  // 界面的账号配额(走 gatewayMoney,不换算)仍是 USD 原值,造成同一行 $ / ¥ 混排且金额差
-  // 一个汇率倍数、无法与服务端账单核对。
-  //
-  // 其余来源(第三方参考价、订阅价值估算)是 USD 口径,投影到**账本币种**而不是构建区域:
-  // 账本是单币种的,按区域投影会让这些金额在 USD 结算账号上变成 CNY,继而被账本写入守卫
-  // 当异币种整批丢弃,订阅估算与自定义供应商花费就再也记不进来。
-  return price.source === 'gateway' ? money : toLedgerCurrency(money, ledgerCurrency);
 }
 
 export function resolveTurnCost(args: {
@@ -313,11 +297,6 @@ export function resolveTurnCost(args: {
     return { model, money: null, source: 'subscription' };
   }
 
-  // 本账号的账本币种:目录里有报价时以报价声明为准；目录为空时沿用模型同步已经写入的
-  // 活动账本币种。不能重新按构建区域推断——目录可能只是因为模型都缺标准价格而为空，
-  // 但账号结算币种仍已由完整模型目录确定，按区域回落会让金额被账本守卫拒收。
-  const ledgerCurrency = gatewayLedgerCurrency(pricing) ?? currentLedgerCurrency();
-
   if (context.billingRoute === 'xd-gateway') {
     // 长上下文档不看模型 id 后缀：computeGatewayTurnCost 按本轮实际 input token 落进
     // quote 的 inputTokenPriceBands，比 `[1m]` 这类后缀更权威（后缀只表示会话开了大
@@ -328,7 +307,7 @@ export function resolveTurnCost(args: {
     }
     return {
       model,
-      money: computePriceQuoteTurnMoney(tokens, quote, ledgerCurrency, segments),
+      money: computePriceQuoteTurnMoney(tokens, quote, segments),
       source: 'gateway',
     };
   }
@@ -340,7 +319,7 @@ export function resolveTurnCost(args: {
   if (context.accessKind === 'managed') {
     return {
       model,
-      money: providerQuote ? computePriceQuoteTurnMoney(tokens, providerQuote, ledgerCurrency, segments) : null,
+      money: providerQuote ? computePriceQuoteTurnMoney(tokens, providerQuote, segments) : null,
       source: 'reference',
     };
   }
@@ -358,7 +337,6 @@ export function resolveTurnCost(args: {
     const referenceMoney = computePriceQuoteTurnMoney(
       tokens,
       providerQuote,
-      ledgerCurrency,
       segments,
     );
     if (referenceMoney) {
@@ -369,16 +347,14 @@ export function resolveTurnCost(args: {
     }
   }
 
-  // 其它第三方供应商 / 未知路由:SDK 值是 USD 口径,投影到账本币种而不是构建区域,
-  // 否则 USD 结算账号上这些花费会变成 CNY 并被账本守卫丢弃。
   const sdkAmount = Math.max(0, sdkCostDelta ?? 0);
   if (context.billingRoute === 'provider-api' && sdkAmount > 0) {
-    return { model, money: usdToLedgerCurrency(sdkAmount, ledgerCurrency), source: 'sdk' };
+    return { model, money: usdMoney(sdkAmount), source: 'sdk' };
   }
   return {
     model,
     money: providerQuote
-      ? computePriceQuoteTurnMoney(tokens, providerQuote, ledgerCurrency, segments)
+      ? computePriceQuoteTurnMoney(tokens, providerQuote, segments)
       : null,
     source: context.billingRoute === 'provider-api' ? 'reference' : 'sdk-fallback',
   };
@@ -395,6 +371,7 @@ export interface ResolvedModelCost {
 export interface ClaudeTurnCostResolution {
   /** Actual provider/Gateway spend only. Never includes reference-price estimates. */
   turnMoney: RegionalMoney | null;
+  actualByCurrency: RegionalMoney[];
   /** Reference-price value only. Kept out of actual spend/session ledgers. */
   estimatedTurnMoney: RegionalMoney | null;
   perModel: ResolvedModelCost[];
@@ -528,20 +505,17 @@ export function resolveClaudeTurnCostSinks(
       (resolved.money.kind === 'actual-cost' ? actualMoney : estimatedMoney).push(resolved.money);
     }
   }
+  const actualByCurrency = sumMoneyByCurrency(actualMoney);
   return {
-    turnMoney: actualMoney.length > 0 ? addRegionalMoney(actualMoney) : null,
-    estimatedTurnMoney: estimatedMoney.length > 0 ? addRegionalMoney(estimatedMoney) : null,
+    actualByCurrency,
+    turnMoney: actualByCurrency[0] ?? null,
+    estimatedTurnMoney: sumMoneyByCurrency(estimatedMoney)[0] ?? null,
     perModel,
   };
 }
 
-/**
- * @param ledgerCurrency 本账号账本币种。订阅参考价是 USD 口径，按它投影而不是按区域，
- *   否则以 USD 结算的账号上这些估值会变成 CNY 并被账本守卫丢弃。
- */
 export function estimateClaudeSubscriptionTurnValue(
   perModel: ResolvedModelCost[],
-  ledgerCurrency: MoneyCurrency,
   pricing: ModelPricingCatalog | null | undefined = undefined,
 ): RegionalMoney | null {
   const values: RegionalMoney[] = [];
@@ -549,10 +523,25 @@ export function estimateClaudeSubscriptionTurnValue(
     if (!isAnthropicModel(item.model) || item.money?.amount) continue;
     const quote = getModelPriceQuote(pricing, 'anthropic', item.model, 'claude-code');
     if (!quote) continue;
-    const value = computePriceQuoteTurnMoney(item.deltas, quote, ledgerCurrency);
+    const value = computePriceQuoteTurnMoney(item.deltas, quote);
     if (value && value.amount > 0) values.push(value);
   }
-  return values.length > 0 ? addRegionalMoney(values) : null;
+  return sumMoneyByCurrency(values)[0] ?? null;
+}
+
+export function claudeModelBilling(item: ResolvedModelCost, billing?: UsageBillingSource): UsageBillingSource {
+  const billingSource = item.source === 'gateway' ? 'cindy-ai' : item.source === 'subscription'
+    ? 'subscription' : billing?.billingSource;
+  if (billingSource === 'subscription') {
+    const bridge = item.model.startsWith('chatgpt/') ? 'openai' : isExclusiveXaiModelId(item.model) ? 'xai' : undefined;
+    if (bridge && billing?.providerId !== bridge && item.source === 'subscription') {
+      return { providerId: bridge, billingSource };
+    }
+    if (billing?.billingSource === 'subscription' && !billing.providerId) {
+      return { providerId: bridge ?? 'anthropic', billingSource };
+    }
+  }
+  return { ...(billingSource === billing?.billingSource ? billing : {}), billingSource };
 }
 
 export function buildClaudeTurnUsageDetails(
@@ -570,18 +559,12 @@ export function buildClaudeTurnUsageDetails(
   durationMs?: number,
   turnDurationMs?: number,
   billing?: UsageBillingSource,
+  trace?: unknown,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
   const perModelCost = perModel
-    ?.filter((item) => item.money && item.money.amount > 0)
-    .map((item) => {
-      const billingSource = item.source === 'gateway' ? 'cindy-ai' as const
-        : item.source === 'subscription' ? 'subscription' as const : billing?.billingSource;
-      // A bridge can use another account type in the same turn. Never attach
-      // the selected provider's identity to that different billing source.
-      return { model: item.model, money: item.money!,
-        ...(billingSource === billing?.billingSource ? billing : {}), billingSource };
-    });
+    ?.filter(item => item.money && item.money.amount > 0)
+    .map(item => ({ model: item.model, money: item.money!, ...claudeModelBilling(item, billing) }));
   return buildTurnUsageDetails({
     ...billing,
     inputTokens: hasModelUsageDeltas
@@ -598,8 +581,10 @@ export function buildClaudeTurnUsageDetails(
       : usage?.cache_creation_input_tokens,
     model: deltas?.length === 1 ? deltas[0].model : hasModelUsageDeltas ? undefined : fallbackModel,
     models: hasModelUsageDeltas ? deltas?.map((delta) => delta.model) : undefined,
+    perModelTokens: perModel?.map(item => ({ model: item.model, ...item.deltas, ...claudeModelBilling(item, billing) })),
     perModelCost: perModelCost && perModelCost.length > 0 ? perModelCost : undefined,
     durationMs,
     turnDurationMs,
+    trace,
   });
 }

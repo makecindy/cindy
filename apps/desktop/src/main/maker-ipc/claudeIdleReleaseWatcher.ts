@@ -1,0 +1,174 @@
+import type { Maker, Session } from '@cindy/maker-core';
+import type { DbClient } from '../localDb/client/DbClient.js';
+
+/** Only live runtime capabilities; persistent task state is never modified here. */
+export type IdleClaudeSession = Pick<Session, 'id' | 'agentKind' | 'remoteHostId' | 'agentDeviceId' | 'sdkSessionId'
+  | 'getStatus' | 'getTurnGeneration' | 'isTurnRunning' | 'listBackgroundTasks'
+  | 'countPendingWakeContinuations' | 'manageAsyncUserQuestions' | 'onEvent' | 'closeIfIdle' | 'close'>
+  & Partial<Pick<Session, 'hasLiveBackgroundWork'>>;
+/** Codex mirrors the Pi and Claude 30-minute default; no separate setting. */
+export const DEFAULT_CODEX_IDLE_RELEASE_MINUTES = 30;
+/** Engines whose ordinary local tasks share this reclamation policy. */
+export type IdleReleaseAgentKind = 'claude-code' | 'codex';
+export interface ClaudeIdleReleaseDeps {
+  /** Defaults to Claude; Codex reuses the same gates plus its async background probe. */
+  agentKind?: IdleReleaseAgentKind;
+  listSessions(): IdleClaudeSession[];
+  getSession(id: string): IdleClaudeSession | undefined;
+  readMinutes(): number;
+  isOrdinaryTask(id: string, sdkSessionId: string): Promise<boolean>;
+  hasPendingInput(id: string): Promise<boolean>;
+  isHostBusy(id: string): boolean;
+  withLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
+  close(session: IdleClaudeSession, retryFailedClose: boolean): Promise<boolean>;
+  now(): number;
+  released(sessionId: string, idleMs: number): void;
+  warn(message: string): void;
+}
+
+/** Scope query runs through the DB worker; source and ownership are host facts. */
+const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex') => `SELECT id FROM sessions s
+WHERE s.id = ? AND s.status = 'active' AND s.source = 'desktop'
+AND s.hidden_at IS NULL AND s.agent_device_id IS NULL
+AND s.sdk_session_id = ? AND s.sdk_session_id != '<pending>'
+AND s.agent_kind = '${dbAgentKind}' AND s.remote_host_id IS NULL AND s.orca_role IS NULL
+AND NOT EXISTS (SELECT 1 FROM bot_session_links b WHERE b.session_id = s.id)
+AND NOT EXISTS (SELECT 1 FROM orca_workers w WHERE w.session_id = s.id)
+AND NOT EXISTS (SELECT 1 FROM orca_teams t WHERE t.lead_session_id = s.id AND t.status = 'active')
+AND NOT EXISTS (SELECT 1 FROM session_goals g WHERE g.session_id = s.id AND g.status != 'complete')`;
+export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
+/** Same ordinary-task scope for Codex: bots, Orca, Goals, remote and hidden tasks keep their own lifecycle. */
+export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex');
+
+/** Whether a task is in the ordinary scope, by the given SQL against the database the caller reads now. */
+export function createOrdinaryIdleReleaseTaskCheck(
+  getDbClient: () => Pick<DbClient, 'queryOne'>,
+  ordinaryTaskSql: string,
+): ClaudeIdleReleaseDeps['isOrdinaryTask'] {
+  return async (id, sdkSessionId) => Boolean(
+    await getDbClient().queryOne(ordinaryTaskSql, [id, sdkSessionId]),
+  );
+}
+
+/** Retires only the current runtime: idle-only, unless retrying a close that failed into error. */
+export function createIdleReleaseRuntimeClose(
+  maker: Pick<Maker, 'closeSessionIfCurrent'>,
+  withRehydrateCloseSuppressed: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>,
+): ClaudeIdleReleaseDeps['close'] {
+  return (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
+    await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
+      retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
+  );
+}
+
+/** Single-flight scans reuse the send lock and Session's atomic close-if-idle boundary. */
+export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
+  const agentKind = deps.agentKind ?? 'claude-code';
+  const label = agentKind === 'codex' ? 'Codex' : 'Claude';
+  const tracked = new Map<IdleClaudeSession, { since: number; generation: number; closeFailed: boolean; unsubscribe: () => void }>();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let epoch = 0;
+  let scanning = false;
+  const forget = (session: IdleClaudeSession) => {
+    tracked.get(session)?.unsubscribe();
+    tracked.delete(session);
+  };
+  const busy = (session: IdleClaudeSession, retryFailedClose = false) =>
+    (session.getStatus() !== 'active' && !(retryFailedClose && session.getStatus() === 'error'))
+    || !session.sdkSessionId || session.sdkSessionId === '<pending>' || session.isTurnRunning() || session.listBackgroundTasks().length > 0
+    || session.countPendingWakeContinuations() > 0 || deps.isHostBusy(session.id);
+  // Session.close expires these cards. Unlike synchronous questions, async
+  // questions deliberately do not hold a product turn or a host interaction lock.
+  const hasQuestions = (session: IdleClaudeSession) => session.getStatus() === 'active'
+    && (session.manageAsyncUserQuestions({ action: 'list' }).questions?.length ?? 0) > 0;
+  const scanNow = async () => {
+    if (scanning) return;
+    scanning = true;
+    const scanEpoch = epoch;
+    try {
+      const minutes = deps.readMinutes();
+      if (!Number.isFinite(minutes) || minutes <= 0) {
+        for (const session of tracked.keys()) forget(session);
+        return;
+      }
+      const sessions = deps.listSessions().filter(s => s.agentKind === agentKind && !s.remoteHostId && !s.agentDeviceId);
+      const live = new Set(sessions);
+      for (const session of tracked.keys()) if (!live.has(session)) forget(session);
+      for (const session of sessions) {
+        if (scanEpoch !== epoch) return;
+        let state = tracked.get(session);
+        if (!state) {
+          state = { since: deps.now(), generation: session.getTurnGeneration(), closeFailed: false, unsubscribe: () => {} };
+          const observed = state;
+          // Includes short turns and background activity between scans; no event contents retained.
+          state.unsubscribe = session.onEvent(() => { observed.since = deps.now(); });
+          tracked.set(session, state);
+        }
+        try {
+          await deps.withLock(session.id, async () => {
+            if (scanEpoch !== epoch || deps.getSession(session.id) !== session) return;
+            if (busy(session, state.closeFailed) || hasQuestions(session) || state.generation !== session.getTurnGeneration()) {
+              state.since = deps.now();
+              state.generation = session.getTurnGeneration();
+              return;
+            }
+            if (deps.now() - state.since < minutes * 60_000) return;
+            const sdkSessionId = session.sdkSessionId;
+            if (!await deps.isOrdinaryTask(session.id, sdkSessionId) || await deps.hasPendingInput(session.id)) {
+              state.since = deps.now();
+              return;
+            }
+            // Provider work invisible to listBackgroundTasks (Codex native children,
+            // yielded exec cells, background terminals). A failed probe counts as busy.
+            if (await session.hasLiveBackgroundWork?.()) {
+              state.since = deps.now();
+              return;
+            }
+            // Queue restoration can yield to a Goal/Orca ownership transition.
+            // Scope is the last asynchronous check; recheck live state below before closing.
+            if (!await deps.isOrdinaryTask(session.id, sdkSessionId)) {
+              state.since = deps.now();
+              return;
+            }
+            // SQL/queue restoration can yield to a new turn, setting change, shutdown or replacement.
+            const currentMinutes = deps.readMinutes();
+            if (scanEpoch !== epoch || deps.getSession(session.id) !== session || busy(session, state.closeFailed) || hasQuestions(session)
+              || session.getTurnGeneration() !== state.generation || session.sdkSessionId !== sdkSessionId
+              || currentMinutes <= 0
+              || !Number.isFinite(currentMinutes) || deps.now() - state.since < currentMinutes * 60_000) return;
+            try {
+              if (await deps.close(session, state.closeFailed)) {
+                forget(session);
+                deps.released(session.id, Math.max(0, deps.now() - state.since));
+              }
+            } catch (error) {
+              // Session fences provider events and enters error after failed teardown.
+              // Only our own failed close may be retried; unrelated error runtimes stay untouched.
+              state.closeFailed = true;
+              throw error;
+            }
+          });
+        } catch {
+          state.since = deps.now();
+          deps.warn(`${label} idle release skipped: runtime or task state unavailable`);
+        }
+      }
+    } catch {
+      deps.warn(`${label} idle release scan failed`);
+    } finally { scanning = false; }
+  };
+  return {
+    scanNow,
+    start() {
+      if (timer) clearInterval(timer);
+      timer = setInterval(() => { void scanNow(); }, 60_000);
+      timer.unref?.();
+    },
+    stop() {
+      epoch += 1;
+      if (timer) clearInterval(timer);
+      timer = undefined;
+      for (const session of tracked.keys()) forget(session);
+    },
+  };
+}

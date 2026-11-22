@@ -1,6 +1,7 @@
 import {
   buildMessageSourceNote,
   messageSourceSenderFromMeta,
+  buildMessageSourceReplyHint,
   readMessageSourceDevice,
   readMessageSourcePlugin,
   type MessageSourceDevice,
@@ -60,17 +61,26 @@ function forwardedRequestClause(receipt: unknown): string | null {
  */
 export function buildWireMessageSourceNote(
   fields: WireMessageSourceFields | undefined,
-  opts: { visibleText?: string; autoResume?: boolean } = {},
+  opts: { visibleText?: string; autoResume?: boolean; sendToSession?: {
+    agentKind: 'claude-code' | 'codex' | 'pi';
+    supportsRemote: boolean;
+  } } = {},
 ): string | null {
   if (!fields || opts.autoResume) return null;
-  const clause = !fields.sourcePlugin && !fields.sharedTaskAuthor
+  const sender = messageSourceSenderFromMeta(fields);
+  // A request to the group's Cindy already says it is the owner's own request (its receipt only
+  // carries the owner's words for review); a second clause would repeat it.
+  const clause = !fields.sourcePlugin && !fields.sharedTaskAuthor && !(sender?.kind === 'session' && sender.groupRequest)
     ? forwardedRequestClause(fields.autoReviewUserText) : null;
   // Peer inputs are hidden from the timeline, but their owner evidence must
   // still reach the model. Other synthetic triggers remain unannotated.
   if (!clause && opts.visibleText !== undefined && isSyntheticTriggerText(opts.visibleText.trimStart()))
     return null;
-  const note = buildMessageSourceNote(messageSourceSenderFromMeta(fields));
-  return clause ? `${note ?? '[消息来源] '}${clause}` : note;
+  const note = buildMessageSourceNote(sender);
+  const replyHint = buildMessageSourceReplyHint(sender, opts.sendToSession);
+  const withClause = clause ? `${note ?? '[消息来源] '}${clause}` : note;
+  if (!replyHint) return withClause;
+  return `${withClause ?? '[消息来源] 本条消息'}\n${replyHint}`;
 }
 
 /** 宽容读取主机透传的设备来源(未知平台 / 缺 id 返回 undefined)。 */

@@ -108,7 +108,11 @@ afterEach(() => {
 
 describe('NativeVideoPlayer', () => {
   it('starts inline playback only after an explicit play action on a visible message', () => {
-    const player = render({ visible: true, autoPlay: true });
+    const player = render({ visible: true, autoPlay: false });
+    expect(player.play).not.toHaveBeenCalled();
+    render({ visible: true, autoPlay: true });
+    expect(player.play).not.toHaveBeenCalled();
+    act(() => player.emit('statusChange', { status: 'readyToPlay' }));
     expect(player.play).toHaveBeenCalledOnce();
     render({ visible: false, autoPlay: true });
     expect(player.pause).toHaveBeenCalledOnce();

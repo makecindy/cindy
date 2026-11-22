@@ -23,7 +23,7 @@ export default {
     },
     'token-plan': { about: 'Token Plan recommends Qwen-Audio instead of workspace CosyVoice' },
     'token-plan-existing': { about: 'Existing Token Plan uses the same Qwen-Audio recommendation' },
-    'speech-visibility': { about: 'Previously hidden speech can be shown and hidden through model management' },
+    'speech-visibility': { about: 'Speech hidden by the old visibility switch reads as off, turns on, and turning it off again disables it' },
     subscription: { about: 'Existing OpenAI subscription has no speech-add button or menu item' },
   },
   async ready(page) {
@@ -40,8 +40,11 @@ export default {
       await page.getByTestId('speech-visible').filter({ hasText: 'true' }).waitFor({ state: 'attached' });
       assert.equal(await toggle.getAttribute('aria-checked'), 'true');
       await ui.capture('shown-speech');
+      // Function-type models have one enable switch: off is a disable write, not a visibility one.
       await toggle.click();
-      await page.getByTestId('speech-visible').filter({ hasText: 'false' }).waitFor({ state: 'attached' });
+      await page.waitForFunction(() => window.speechDisableWrites?.some(write => write.kind === 'model' && write.disabled === true));
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+      assert.equal(await page.getByTestId('speech-visible').textContent(), 'true', 'the old visibility record is no longer what turns it off');
       return;
     }
     const existing = ['default', 'empty', 'bailian-existing', 'token-plan-existing'].includes(ui.case);

@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
-import { applyScheduledModelSelection, assertScheduledHarnessSupported, createScheduledModelScope, createScheduledModelSelectionResolver, resolveScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  assertScheduledHarnessSupported,
+  createScheduledModelScope,
+  createScheduledModelSelectionResolver,
+  reconcileScheduledModelRouteBeforeBaseline,
+  resolveScheduledModelSelection,
+  resolveScheduledModelSelectionWithRefresh,
+  type ScheduledModelSelection,
+  ScheduledModelSelectionBusyError,
+} from '../scheduledModelSelection';
 
 const selection: ScheduledModelSelection = {
   agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: null, fastMode: false,
@@ -52,6 +62,26 @@ describe('one-run automation model preferences', () => {
     const scope = createScheduledModelScope({ ...h.deps, write: async () => false });
     await expect(scope.restore('task')).rejects.toThrow('changed');
     expect(h.state().baseline).not.toBeNull();
+  });
+  // Unit regression: uncertainty must not invoke the recovery for a removed model
+  // and discard the owner's saved choice. Exercise real resolution through restore.
+  it.each(['owner-provider', null])('keeps the saved baseline with source %s when its catalog cannot be confirmed', async providerId => {
+    const h = scopeFixture();
+    await h.deps.apply('task', { ...h.original, providerId });
+    await h.scope.begin('task');
+    h.automate();
+    const before = h.state();
+    const recoverUnavailableBaseline = vi.fn(async () => true);
+    const scope = createScheduledModelScope({ ...h.deps, recoverUnavailableBaseline,
+      apply: async (_id, saved) => resolveScheduledModelSelection(saved, [{
+        ...provider('owner-provider'), agents: ['codex'],
+        routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+        subscriptionReadUnavailable: true, models: { codex: [] },
+      }]),
+    });
+    await expect(scope.restore('task')).rejects.toThrow('MODEL_CATALOG_UNCONFIRMED');
+    expect(h.state()).toEqual(before);
+    expect(recoverUnavailableBaseline).not.toHaveBeenCalled();
   });
   it.each(['same-process', 'restart'])('restores all owner settings after %s', async (mode) => {
     const h = scopeFixture();
@@ -125,6 +155,84 @@ describe('one-run automation model preferences', () => {
     // away from the automation just to capture it again.
     expect(await scope.begin('task')).toBe('scope-1');
     expect(prepareBaseline).toHaveBeenCalledTimes(1);
+  });
+  // #9642, PR #9680: unit coverage through begin/restore. Earlier preparation
+  // cases only injected errors; idle pending switches could still fail hard.
+  // Change both model and source to catch capturing the pre-switch profile.
+  it('captures and restores the applied pending route instead of the old model and source', async () => {
+    const h = scopeFixture();
+    const switched = { ...h.original, agentKind: 'pi' as const,
+      model: 'switched-owner-model', providerId: 'switched-owner-source' };
+    let pending = true;
+    let finishSwitch!: () => void;
+    const switching = new Promise<void>((resolve) => { finishSwitch = resolve; });
+    const applyPendingSwitch = vi.fn(async () => {
+      await switching;
+      await h.deps.apply('task', switched);
+      pending = false;
+      return 'applied' as const;
+    });
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => pending,
+        hasPendingSwitch: () => pending, isIdle: () => true, applyPendingSwitch,
+      }),
+    });
+    const beginning = scope.begin('task');
+    await vi.waitFor(() => expect(applyPendingSwitch).toHaveBeenCalledOnce());
+    expect(h.state().baseline).toBeNull();
+    finishSwitch();
+    const scopeId = await beginning;
+    expect(JSON.parse(h.state().baseline!)).toEqual({ ...switched, scopeId });
+    h.automate();
+    await scope.restore('task', scopeId);
+    expect(h.state()).toEqual({ profile: switched, baseline: null });
+  });
+  it.each([
+    { idle: false, pendingSwitch: true, label: 'busy switch' },
+    { idle: true, pendingSwitch: true, label: 'unsettled switch' },
+    { idle: true, pendingSwitch: false, label: 'pending runtime mutation' },
+  ])('defers $label without capturing the old baseline', async ({ idle, pendingSwitch }) => {
+    const h = scopeFixture();
+    const applyPendingSwitch = vi.fn(async () => 'staged' as const);
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => true,
+        hasPendingSwitch: () => pendingSwitch, isIdle: () => idle, applyPendingSwitch,
+      }),
+    });
+    await expect(scope.begin('task')).rejects.toBeInstanceOf(ScheduledModelSelectionBusyError);
+    expect(h.state().baseline).toBeNull();
+    expect(applyPendingSwitch).toHaveBeenCalledTimes(idle && pendingSwitch ? 1 : 0);
+  });
+  it('captures the reconciled route without reapplying a switch that already settled', async () => {
+    const h = scopeFixture();
+    const switched = { ...h.original, model: 'reconciled-model', providerId: 'reconciled-source' };
+    let pending = true;
+    const applyPendingSwitch = vi.fn(async () => 'applied' as const);
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => { await h.deps.apply('task', switched); pending = false; },
+        hasPendingRoute: () => pending, hasPendingSwitch: () => pending,
+        isIdle: () => true, applyPendingSwitch,
+      }),
+    });
+    const scopeId = await scope.begin('task');
+    expect(JSON.parse(h.state().baseline!)).toEqual({ ...switched, scopeId });
+    expect(applyPendingSwitch).not.toHaveBeenCalled();
+  });
+  it('preserves an actual switch failure instead of classifying every error as busy', async () => {
+    const h = scopeFixture();
+    const failure = new Error('route unavailable');
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => true,
+        hasPendingSwitch: () => true, isIdle: () => true,
+        applyPendingSwitch: async () => { throw failure; },
+      }),
+    });
+    await expect(scope.begin('task')).rejects.toBe(failure);
+    expect(h.state().baseline).toBeNull();
   });
   // #6895 unit regression: a lane outside the save's lock snapshot can see
   // Profile B after preparation applied A. Do not stamp A with B's revision.
@@ -389,6 +497,13 @@ function provider(id: string, model: Partial<CatalogModel> = {}): ProviderView {
 }
 
 describe('saved effort uses the selected provider and Harness catalog copy', () => {
+  // PR #9900, unit: upgrading a saved source adds a display-only alias marker.
+  // Previous dispatch coverage had no aliases; the original source must still resolve.
+  it('preserves an explicitly saved imported connection at dispatch', () => {
+    const imported = { ...provider('custom'), subscriptionPoolAlias: true as const };
+    expect(resolveScheduledModelSelection(selection, [provider('openai'), imported]))
+      .toMatchObject({ providerId: 'custom', model: 'test-model' });
+  });
   // Main now applies new-route admission to both local and remote restores.
   it('rejects a disabled local model during scheduled resolution', () => {
     expect(() => resolveScheduledModelSelection({ ...selection, agentDeviceId: null, effort: 'high' }, [
@@ -669,5 +784,50 @@ describe('automation restore uses the execution computer', () => {
     await expect(h.scope.restore('task')).rejects.toThrow('provider unavailable');
     expect(h.remote).not.toHaveBeenCalled();
     expect(h.state().baseline).not.toBeNull();
+  });
+});
+
+// Unit regression: a missing model in a stale subscription directory must recover
+// before automation dispatch, and uncertainty must not retire the owner's baseline.
+describe('scheduled model discovery recovery', () => {
+  const missing = (): ProviderView => ({ ...provider('custom'), subscriptionAccountPool: 'openai',
+    subscriptionReadUnavailable: true, models: { pi: [] } });
+  it.each(['custom', null])('recovers the same saved model with source %s before returning its route', async providerId => {
+    const readProviders = vi.fn().mockResolvedValueOnce([missing()]).mockResolvedValue([provider('custom')]);
+    const refreshProvider = vi.fn(async () => {});
+    expect(await resolveScheduledModelSelectionWithRefresh({ ...selection, providerId }, { readProviders, refreshProvider, assertCurrent: () => {} }))
+      .toMatchObject({ model: selection.model, providerId: selection.providerId });
+    expect(refreshProvider).toHaveBeenCalledExactlyOnceWith('custom');
+  });
+  it.each([true, false].flatMap(uncertain => ['custom', null].map(providerId => ({ uncertain, providerId }))))
+  ('classifies still missing membership with uncertain=$uncertain and source=$providerId', async ({ uncertain, providerId }) => {
+    const view: ProviderView = { ...missing(), subscriptionReadUnavailable: uncertain ? true : undefined };
+    const refreshProvider = vi.fn(async () => {});
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId }, {
+      readProviders: async () => [view], refreshProvider, assertCurrent: () => {},
+    })).rejects.toThrow(uncertain ? 'MODEL_CATALOG_UNCONFIRMED' : 'MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+  it('preserves an already resolvable implicit route and never refreshes an unrelated explicit source', async () => {
+    const views = [missing(), provider('available')];
+    const refreshProvider = vi.fn(async () => {});
+    const deps = { readProviders: async () => views, refreshProvider, assertCurrent: () => {} };
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId: null }, deps))
+      .resolves.toMatchObject({ providerId: 'available', model: selection.model });
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId: 'removed' }, deps))
+      .rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).not.toHaveBeenCalled();
+  });
+  it('keeps suspension authoritative and rejects an owner switch during refresh', async () => {
+    const refreshProvider = vi.fn(async () => {});
+    await expect(resolveScheduledModelSelectionWithRefresh(selection, {
+      readProviders: async () => [{ ...missing(), suspended: true }], refreshProvider, assertCurrent: () => {},
+    })).rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).not.toHaveBeenCalled();
+    let current = true;
+    await expect(resolveScheduledModelSelectionWithRefresh(selection, {
+      readProviders: async () => [missing()], refreshProvider: async () => { current = false; },
+      assertCurrent: () => { if (!current) throw new Error('owner changed'); },
+    })).rejects.toThrow('owner changed');
   });
 });

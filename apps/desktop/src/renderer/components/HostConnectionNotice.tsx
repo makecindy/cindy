@@ -42,7 +42,7 @@ export function HostConnectionBanner({ view, onRetry, client = 'browser' }: { vi
   const needsPairing = view.status === 'authorization-required';
   const title = needsPairing ? 'pairing' : view.failed ? 'retrying' : view.restoring ? 'restoring' : 'connecting';
   return (
-    <div className="pointer-events-none fixed inset-x-3 top-14 z-50 mx-auto max-w-xl">
+    <div className="pointer-events-none fixed inset-x-3 top-14 z-float mx-auto max-w-xl">
       <ErrorNotice
         className="pointer-events-auto"
         role="status"

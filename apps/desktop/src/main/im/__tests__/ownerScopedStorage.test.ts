@@ -57,7 +57,11 @@ vi.mock('../../ownerNamespaceMigration.js', () => ({
   hasLegacyOwnerNamespaceClaim: () => true,
 }));
 
-import { __testing, assertOwnerScopeSettledForWrite, claimLegacyImPath, ownerScopedImSecrets } from '../ownerScopedStorage';
+import { __testing, assertOwnerScopeSettledForWrite, claimLegacyImPath, ownerScopedImSecrets, ownerScopedImSecretRevision } from '../ownerScopedStorage';
+import { discordFinalTextStorage } from '../discord/finalTextStorage';
+import { discordChannelAccessStore } from '../discord/channelAccessStore';
+import { addBotImConnectionRecord, setBotImConnectionDiscordChannelAccess, updateBotImConnectionRecord } from '../shared/botImConnectionStore';
+import { DiscordFinalTextOutbox } from '../../../../../../packages/lizi-im/src/discord/finalTextOutbox';
 
 function setSession(mode: TestSession['mode'], ownerId: string | null): void {
   mocks.session = { mode, dataOwnerId: ownerId, generation: mocks.session.generation + 1 };
@@ -71,6 +75,171 @@ function writeLegacySecret(name: string, value: string): string {
 }
 
 describe('IM owner-scoped storage', () => {
+  // #11600 review: an unchanged legacy encrypted file must keep the exact
+  // revision stored by the previous binary. Unit tier: persist with the old
+  // metadata stamp, recreate the production outbox, and observe real delivery
+  // or cancellation after credential replacement / target revoke-and-regrant.
+  it.each(['personal', 'companion'] as const)('recovers pre-upgrade %s outbox entries without reviving revoked output', async kind => {
+    setSession('local', 'local-v1');
+    const lane = 'g/1/20';
+    const access = { channels: [{ guildId: '1', channelId: '20' }] };
+    const id = 'aaaaaaaaaaaa';
+    const personal = kind === 'personal';
+    const connection = personal ? 'personal' : `bot-im-${id}-`;
+    const prefix = personal ? '' : connection;
+    if (!personal) await addBotImConnectionRecord({ botId: 'partner', channel: 'discord' }, { id: () => id, now: () => 1 });
+    const grant = async (enabled: boolean) => {
+      const value = enabled ? access : { channels: [] };
+      if (personal) discordChannelAccessStore.write(value);
+      else await setBotImConnectionDiscordChannelAccess(id, value);
+    };
+    await grant(true);
+    for (const mutation of ['unchanged', 'replace', 'regrant'] as const) {
+      const revisions = ['discord-bot-token', 'discord-owner-user-id'].map(name => {
+        const target = __testing.scopedSecretPath(`${prefix}${name}`)!;
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, Buffer.from(`encrypted:invalid-legacy-${name}`).toString('base64'));
+        const stat = fs.statSync(target, { bigint: true });
+        return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      });
+      const legacyCredential = revisions.join(':');
+      const storage = discordFinalTextStorage(connection, personal);
+      expect(storage.credentialStamp!()).toBe(legacyCredential);
+      const legacyStorage = { ...storage, credentialStamp: () => legacyCredential,
+        authorizationStamp: (target: string) => legacyCredential + storage.authorizationStamp(target).slice(storage.credentialStamp!().length) };
+      let ready = false;
+      const send = vi.fn(async () => 'sent');
+      const create = (old: boolean) => new DiscordFinalTextOutbox({ storage: () => old ? legacyStorage : storage,
+        identity: () => 'bot:owner', ready: () => ready, prepare: async () => ({ assertCurrent() {}, send }), warn: vi.fn() });
+      const first = create(true);
+      try { await first.complete(`upgrade-${mutation}`, lane, 'keep pending across upgrade'); } finally { first.stop(); }
+      if (mutation === 'replace') expect(ownerScopedImSecrets.write(`${prefix}discord-bot-token`, 'invalid-new-token')).toBe(true);
+      if (mutation === 'regrant') { await grant(false); await grant(true); }
+      ready = true;
+      const restarted = create(false);
+      try {
+        await restarted.drain();
+        expect(send).toHaveBeenCalledTimes(mutation === 'unchanged' ? 1 : 0);
+        expect(JSON.parse(storage.read()!).entries.at(-1)).toMatchObject({ state: mutation === 'unchanged' ? 'delivered' : 'cancelled' });
+      } finally { restarted.stop(); }
+    }
+  });
+
+  // #10002: restored credential bytes have new file metadata; retain text only for an unchanged grant.
+  // Unit: real credential revisions + atomic outbox persistence + process recreation, without a network.
+  it.each([false, true])('restores rollback metadata across restart without restoring revoked grants (revoked=%s)', async revoked => {
+    setSession('local', 'local-v1');
+    const access = { channels: [{ guildId: '1', channelId: '20' }] };
+    discordChannelAccessStore.write(access);
+    ownerScopedImSecrets.write('discord-bot-token', 'invalid-old-test-token');
+    const storage = discordFinalTextStorage('personal', true);
+    let ready = false;
+    const send = vi.fn(async () => 'sent');
+    const create = () => new DiscordFinalTextOutbox({ storage: () => storage, identity: () => 'bot:owner', ready: () => ready,
+      prepare: async () => ({ assertCurrent() {}, send }), warn: vi.fn() });
+    const first = create();
+    try {
+      await first.complete('accepted', 'g/1/20', 'keep after rollback');
+      const previous = storage.credentialStamp!();
+      ownerScopedImSecrets.write('discord-bot-token', 'invalid-replacement-test-token');
+      if (revoked) { discordChannelAccessStore.write({ channels: [] }); discordChannelAccessStore.write(access); }
+      ownerScopedImSecrets.write('discord-bot-token', 'invalid-old-test-token');
+      expect(storage.credentialStamp!()).not.toBe(previous);
+      first.restoreCredentialStamp(previous);
+    } finally { first.stop(); }
+    ready = true; const restarted = create();
+    try {
+      await restarted.drain();
+      expect(send).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      expect(JSON.parse(storage.read()!).entries[0].state).toBe(revoked ? 'cancelled' : 'delivered');
+    } finally { restarted.stop(); }
+  });
+  // unit: actual access-store mutations and disk-backed outbox recovery. File-wide mtime invalidation
+  // lost authorized output after an unrelated edit; target generations must preserve it and still revoke old output.
+  it.each(['personal', 'companion'] as const)('preserves %s pending text across unrelated grants, but never across target revoke/regrant', async kind => {
+    setSession('local', 'local-v1');
+    const lane = 'g/1/20/30';
+    const access = { channels: [{ guildId: '1', channelId: '20' }] };
+    const id = 'aaaaaaaaaaaa';
+    if (kind === 'companion') await addBotImConnectionRecord({ botId: 'partner', channel: 'discord' }, { id: () => id, now: () => 1 });
+    const write = async (config: typeof access) => {
+      if (kind === 'personal') discordChannelAccessStore.write(config);
+      else await setBotImConnectionDiscordChannelAccess(id, config);
+    };
+    await write(access);
+    const storage = discordFinalTextStorage(kind === 'personal' ? 'personal' : `bot-im-${id}-`, kind === 'personal');
+    let ready = false;
+    const send = vi.fn(async () => 'delivered');
+    const create = () => new DiscordFinalTextOutbox({ storage: () => storage, identity: () => 'bot:owner', ready: () => ready,
+      prepare: async () => ({ assertCurrent() {}, send }), warn: vi.fn() });
+    const first = create(); await first.complete('accepted-1', lane, 'keep'); first.stop();
+    const authorization = storage.authorizationStamp(lane);
+    if (kind === 'companion') {
+      await updateBotImConnectionRecord(id, { botContextId: 'connected-platform-id' });
+      await addBotImConnectionRecord({ botId: 'other-partner', channel: 'discord' }, { id: () => 'bbbbbbbbbbbb', now: () => 2 });
+      await setBotImConnectionDiscordChannelAccess('bbbbbbbbbbbb', { channels: [{ guildId: '9', channelId: '90' }] });
+    }
+    await write({ channels: [...access.channels, { guildId: '2', channelId: '40' }, { guildId: '1', channelId: '21' }] });
+    expect(storage.authorizationStamp(lane)).toBe(authorization);
+    ready = true; const next = create(); await next.drain(); expect(send).toHaveBeenCalledTimes(1);
+    ready = false; await next.complete('accepted-2', lane, 'revoke'); next.stop();
+    await write({ channels: [] }); await write(access);
+    expect(storage.authorizationStamp(lane)).not.toBe(authorization);
+    ready = true; const last = create(); await last.drain();
+    expect(send).toHaveBeenCalledTimes(1); expect(last.hasCompleted('accepted-2', lane)).toBe(true);
+    expect(JSON.parse(storage.read()!).entries.at(-1)).toMatchObject({ state: 'cancelled', segments: [] }); last.stop();
+  });
+  // unit: the real terminal store must survive process recreation, fail closed across owner switches,
+  // and invalidate old output when the same bot credential is replaced. Existing credential tests
+  // do not cover the metadata-only revision or atomic terminal-output file.
+  it('persists Discord terminal output under one owner and tracks credential replacement without exposing it', () => {
+    setSession('local', 'local-v1');
+    ownerScopedImSecrets.write('discord-bot-token', 'invalid-test-token');
+    const revision = ownerScopedImSecretRevision('discord-bot-token');
+    const storage = discordFinalTextStorage('personal', true);
+    const authorization = storage.authorizationStamp('g/1/20');
+    storage.write('{"version":1,"entries":[]}');
+    expect(discordFinalTextStorage('personal', true).read()).toBe('{"version":1,"entries":[]}');
+    expect(revision).not.toContain('invalid-test-token');
+    ownerScopedImSecrets.write('discord-bot-token', 'another-invalid-test-token');
+    const replacementRevision = ownerScopedImSecretRevision('discord-bot-token');
+    expect(replacementRevision).not.toBe(revision);
+    expect(storage.authorizationStamp('g/1/20')).not.toBe(authorization);
+    mocks.ownerScopeKey = 'owner-2'; setSession('cloud', 'cloud-b');
+    expect(() => storage.read()).toThrow('DISCORD_ACCOUNT_CHANGED');
+    expect(() => storage.write('late')).toThrow('DISCORD_ACCOUNT_CHANGED');
+    expect(discordFinalTextStorage('personal', true).read()).toBeNull();
+  });
+
+  it('recovers atomic credential backups and removes stale backups with the credential', () => {
+    setSession('local', 'local-v1');
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-backup-token')).toBe(true);
+    const target = __testing.scopedSecretPath('discord-bot-token');
+    expect(target).not.toBeNull();
+    fs.copyFileSync(target!, `${target}.bak`);
+    fs.unlinkSync(target!);
+
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-backup-token');
+    expect(ownerScopedImSecretRevision('discord-bot-token')).toMatch(/^sha256:/);
+    expect(fs.existsSync(target!)).toBe(true);
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-replacement-after-backup')).toBe(true);
+    expect(fs.existsSync(`${target}.bak`)).toBe(false);
+
+    fs.copyFileSync(target!, `${target}.bak`);
+    ownerScopedImSecrets.remove('discord-bot-token');
+    expect(fs.existsSync(target!)).toBe(false);
+    expect(fs.existsSync(`${target}.bak`)).toBe(false);
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBeNull();
+  });
+  it.each(['not-a-uuid', '12345678-1234-4123-8123-123456789abc'])('does not reinterpret a legacy credential containing a revision marker (%s)', revision => {
+    setSession('local', 'local-v1');
+    const target = __testing.scopedSecretPath('bluebubbles-password');
+    expect(target).not.toBeNull();
+    fs.mkdirSync(path.dirname(target!), { recursive: true });
+    const legacy = `cindy-im-secret-v2:${revision}:legacy-value`;
+    fs.writeFileSync(target!, Buffer.from(`encrypted:${legacy}`).toString('base64'), 'utf-8');
+    expect(ownerScopedImSecrets.read('bluebubbles-password')).toBe(legacy);
+  });
   beforeEach(() => {
     mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-owner-scope-'));
     mocks.ownerScopeKey = 'owner-1';
@@ -143,6 +312,10 @@ describe('IM owner-scoped storage', () => {
     expect(target).not.toBeNull();
     fs.writeFileSync(target!, Buffer.from('corrupt').toString('base64'), 'utf-8');
     expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({ kind: 'error' });
+    fs.writeFileSync(target!, JSON.stringify({ version: 2, revision: 'invalid', encrypted: 'invalid' }));
+    expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({ kind: 'error' });
+    expect(() => ownerScopedImSecretRevision('telegram-bot-offline')).toThrow('IM_SECRET_FILE_INVALID');
+
     // 旧 read 契约保持兼容：调用方若不需要区分，错误仍折叠为 null。
     expect(ownerScopedImSecrets.read('telegram-bot-offline')).toBeNull();
   });

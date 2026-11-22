@@ -33,15 +33,14 @@ import {
   getCcMgrUpgradeSnapshot,
 } from '../ccMgrUpgradeStore.js';
 
-describe('ccMgrUpgradeStore agent-scoped clear (round 22-G4 HIGH)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    upgradeListener = null;
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  upgradeListener = null;
+});
 
+describe('ccMgrUpgradeStore agent-scoped clear (round 22-G4 HIGH)', () => {
   it('set pi pending then clear pi → pi snapshot null, cc unaffected', async () => {
-    installCcMgrUpgradeListener();
-    // 等初始 snapshot 的退避 setTimeout 不干扰(它 500ms 后才跑, 测试不 await)。
+    const dispose = installCcMgrUpgradeListener();
     expect(upgradeListener).not.toBeNull();
 
     // set pi pending
@@ -76,5 +75,52 @@ describe('ccMgrUpgradeStore agent-scoped clear (round 22-G4 HIGH)', () => {
     // 清 cc 后 cc 也消失
     upgradeListener!({ hostId: 'h1', available: null, agent: 'cc' });
     expect(getCcMgrUpgradeSnapshot('h1', 'cc')).toBeNull();
+    dispose();
+  });
+});
+
+// Cold-start regression: install only after EnvCheckGuard has passed. The ready
+// caller must see the pending snapshot without a guessed delay; a late response
+// must not revive a dismissed banner or update an unmounted window. Existing
+// coverage exercised push-only clears, never an in-flight snapshot (unit tier).
+type UpgradeSnapshot = Awaited<ReturnType<typeof window.electronAPI.remoteSsh.ccMgrListPendingUpgrades>>;
+
+function pendingSnapshot() {
+  let resolveSnapshot!: (value: UpgradeSnapshot) => void;
+  const snapshot = new Promise<UpgradeSnapshot>((resolve) => { resolveSnapshot = resolve; });
+  return { snapshot, resolveSnapshot };
+}
+
+describe('ccMgrUpgradeStore ready snapshot lifecycle', () => {
+  it('loads immediately after registration and preserves newer pushes', async () => {
+    const { snapshot, resolveSnapshot } = pendingSnapshot();
+    vi.mocked(window.electronAPI.remoteSsh.ccMgrListPendingUpgrades).mockReturnValueOnce(snapshot);
+    const dispose = installCcMgrUpgradeListener();
+    try {
+      expect(window.electronAPI.remoteSsh.ccMgrListPendingUpgrades).toHaveBeenCalledTimes(1);
+      upgradeListener!({ hostId: 'snapshot-cleared', agent: 'cc', available: null });
+      resolveSnapshot({
+        pending: ['snapshot-cleared', 'snapshot-kept'].map(hostId => ({
+          hostId, agent: 'cc' as const, currentVersion: '1', availableVersion: '2',
+        })),
+      });
+      await snapshot;
+      expect(getCcMgrUpgradeSnapshot('snapshot-cleared')).toBeNull();
+      expect(getCcMgrUpgradeSnapshot('snapshot-kept')?.availableVersion).toBe('2');
+    } finally {
+      dispose();
+    }
+  });
+
+  it('ignores a pending response after teardown', async () => {
+    const { snapshot, resolveSnapshot } = pendingSnapshot();
+    vi.mocked(window.electronAPI.remoteSsh.ccMgrListPendingUpgrades).mockReturnValueOnce(snapshot);
+    const dispose = installCcMgrUpgradeListener();
+    dispose();
+    resolveSnapshot({
+      pending: [{ hostId: 'snapshot-disposed', agent: 'cc', currentVersion: '1', availableVersion: '2' }],
+    });
+    await snapshot;
+    expect(getCcMgrUpgradeSnapshot('snapshot-disposed')).toBeNull();
   });
 });

@@ -485,6 +485,17 @@ it('publishes a null preview when an ordinary latest-message rewrite has an empt
   });
 });
 
+// Empty rows no longer win the list preview, so the push must carry what the list will show.
+it('publishes the surviving preview when an ordinary latest-message rewrite has an empty body', async () => {
+  const insert = h.sqlite!.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, 's1', 'assistant', ?, ?)");
+  insert.run('previous', 'previous', JSON.stringify('Previous answer'), 1);
+  insert.run('target', 'target', JSON.stringify('Old body'), 2);
+  await updateMessageContent('s1', 'target', '');
+  expect(h.broadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    sessionId: 's1', patch: { preview: 'Previous answer' },
+  });
+});
+
 
 it('does not republish a rewritten message at the session clear boundary', async () => {
   h.sqlite!.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('target', 'target', 's1', 'assistant', 'Old body', 10)").run();

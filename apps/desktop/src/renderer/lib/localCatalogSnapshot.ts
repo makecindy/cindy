@@ -6,6 +6,7 @@
  * 或乱序结果一律保留上一份有效快照。
  * device-link 的远端 capabilities 不经过这里，继续按 deviceId 独立缓存。
  */
+import type { ProviderView } from '@cindy/model-providers';
 import { createLogger } from '@/lib/logger';
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import {
@@ -36,13 +37,26 @@ import {
   getCachedProvidersSnapshot,
   isProvidersRefreshCurrent,
   loadProvidersSnapshot,
+  type ProvidersSnapshot,
 } from '@/lib/providersSnapshotStore';
+
+/** Only model presentation reads this projection. Shared catalog consumers use current routes. */
+export function withSubscriptionDisplayModels(provider: ProviderView): ProviderView {
+  const models = provider.subscriptionDisplayModels;
+  return !provider.removed && models && Object.values(models).some(entries => entries?.length)
+    ? { ...provider, models, connected: true }
+    : provider;
+}
 
 const log = createLogger('localCatalogSnapshot');
 let refreshGeneration = 0;
 let refreshOwner = getDataOwnerGeneration();
 let scheduleRefresh = createCoalescedRefresh<boolean>();
 const RECOVERY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000] as const;
+// Network-type failures (catalog IPC failed, or a subscription account cannot be read) then
+// retry once a minute for ten more minutes: an outage often outlasts the first minute and the
+// OS may never report it offline/online (2026-11-20). Local storage failures keep the short budget.
+const NETWORK_RECOVERY_DELAYS_MS = [...RECOVERY_DELAYS_MS, ...Array<number>(10).fill(60_000)];
 let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let recoveryAttempt = 0;
 let recoveryOwners = 0;
@@ -52,43 +66,90 @@ function cancelRecovery(): void {
   recoveryTimer = undefined;
 }
 
-function failed(owner: DataOwnerGeneration, reason: LocalCatalogFailureReason): void {
-  if (!isDataOwnerGenerationCurrent(owner)) return;
-  setLocalCatalogFailure(owner, reason);
-  // Corrupt bytes need deliberate repair, not repeated writes or a reset to
-  // factory defaults. Other failures receive a bounded recovery window.
-  if (!recoveryOwners || reason === 'preferences-corrupt'
-    || recoveryAttempt >= RECOVERY_DELAYS_MS.length) return;
+function scheduleRecovery(owner: DataOwnerGeneration, network: boolean): void {
+  const delays: readonly number[] = network ? NETWORK_RECOVERY_DELAYS_MS : RECOVERY_DELAYS_MS;
+  if (!recoveryOwners || document.visibilityState !== 'visible'
+    || recoveryAttempt >= delays.length) return;
   cancelRecovery();
   recoveryTimer = setTimeout(() => {
     recoveryTimer = undefined;
-    if (!isDataOwnerGenerationCurrent(owner)) return;
+    if (!isDataOwnerGenerationCurrent(owner) || document.visibilityState !== 'visible') return;
     recoveryAttempt += 1;
     void refreshSnapshot();
-  }, RECOVERY_DELAYS_MS[recoveryAttempt]);
+  }, delays[recoveryAttempt]);
+}
+
+function failed(owner: DataOwnerGeneration, reason: LocalCatalogFailureReason): void {
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  setLocalCatalogFailure(owner, reason);
+  // Corrupt preferences require deliberate repair. Other failures share the
+  // existing bounded recovery timer, including a partial native-account read.
+  if (reason !== 'preferences-corrupt') scheduleRecovery(owner, reason === 'catalog-unavailable');
+}
+
+function isUnavailableSubscription(provider: ProvidersSnapshot['providers'][number]): boolean {
+  return !provider.suspended && !provider.removed && provider.subscriptionReadUnavailable === true;
+}
+
+function hasUnavailableSubscription(snapshot: ProvidersSnapshot | null): boolean {
+  return snapshot?.providers.some(isUnavailableSubscription) ?? false;
+}
+
+function hasRecoveredSubscription(previous: ProvidersSnapshot | null, next: ProvidersSnapshot): boolean {
+  if (!previous || previous.dataOwnerId !== next.dataOwnerId
+    || previous.ownerGeneration !== next.ownerGeneration) return false;
+  const previouslyUnavailable = new Map(previous.providers.filter(isUnavailableSubscription)
+    .map(provider => [provider.id, provider.connected]));
+  return next.providers.some(provider => {
+    if (!provider.connected || provider.suspended || provider.removed) return false;
+    const wasConnected = previouslyUnavailable.get(provider.id);
+    return wasConnected !== undefined && (!wasConnected || !provider.subscriptionReadUnavailable);
+  });
+}
+
+/**
+ * Network is back: let Main retry the model sources whose last fetch failed now instead of
+ * after their failure cooldown. Main joins in-flight work and keeps successful sources on
+ * their normal cooldown, so repeated reports stay cheap.
+ */
+function requestNetworkRestoredRefresh(): void {
+  // Optional: test windows and older preloads may not expose it.
+  const maker = window.electronAPI?.maker;
+  if (typeof maker?.requestProviderModelsAutoRefresh !== 'function') return;
+  Promise.resolve(maker.requestProviderModelsAutoRefresh('network-restored')).catch(() => {});
 }
 
 /** Main-window lifecycle owns recovery. Never leave polling behind after unmount/HMR. */
 export function startLocalCatalogRecovery(): () => void {
+  if (!recoveryOwners) recoveryAttempt = 0;
   recoveryOwners += 1;
   const retry = (): void => {
+    if (document.visibilityState !== 'visible') return;
     const owner = getDataOwnerGeneration();
     const snapshot = getCachedProvidersSnapshot();
     // An owner-generation change hides the previous failure. A foreground
     // retry may still be needed if this account has no current complete snapshot.
     if (getLocalCatalogFailure() || (owner.dataOwnerId && (!snapshot
-      || snapshot.ownerGeneration !== owner.generation))) void refreshLocalCatalogSnapshot();
+      || snapshot.ownerGeneration !== owner.generation || hasUnavailableSubscription(snapshot)))) void refreshLocalCatalogSnapshot();
   };
   const onVisible = (): void => {
     if (document.visibilityState === 'visible') retry();
+    else cancelRecovery();
+  };
+  const onOnline = (): void => {
+    requestNetworkRestoredRefresh();
+    retry();
   };
   window.addEventListener('focus', retry);
-  window.addEventListener('online', retry);
+  window.addEventListener('online', onOnline);
   document.addEventListener('visibilitychange', onVisible);
+  // Initial preload can finish before this lifecycle mounts. Recover its partial
+  // read through the same bounded timer; configuration uses onProvidersChanged.
+  if (hasUnavailableSubscription(getCachedProvidersSnapshot())) scheduleRecovery(getDataOwnerGeneration(), true);
   return () => {
     recoveryOwners -= 1;
     window.removeEventListener('focus', retry);
-    window.removeEventListener('online', retry);
+    window.removeEventListener('online', onOnline);
     document.removeEventListener('visibilitychange', onVisible);
     if (!recoveryOwners) cancelRecovery();
   };
@@ -153,11 +214,15 @@ async function refreshSnapshot(): Promise<boolean> {
         return false;
       }
 
+      // One source recovering is enough to retry failed refreshes, even without an OS event.
+      const recovered = hasRecoveredSubscription(getCachedProvidersSnapshot(), providers);
       // 两次提交均为同步通知；React 会把同一事件循环内的 hook 更新批处理到同一帧。
       commitLocalCapabilitiesSnapshot(capabilitiesGeneration, capabilities);
       commitProvidersSnapshot(providersGeneration, providers);
-      recoveryAttempt = 0;
       setLocalCatalogFailure(owner, null);
+      if (hasUnavailableSubscription(providers)) scheduleRecovery(owner, true);
+      else recoveryAttempt = 0;
+      if (recovered) requestNetworkRestoredRefresh();
       return true;
     } catch (error) {
       if (refreshGeneration === generation) {

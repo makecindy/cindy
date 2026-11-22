@@ -1,8 +1,13 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
+import { supportsAppWallpaper, useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
+import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
+import { SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { useUpdates } from 'expo-updates';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import {
   Alert,
   AppState,
@@ -60,23 +65,30 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
+import { useRelayAccountOffers } from '@/device-link/relayAccountDirectory';
+import { RELAY_JOIN_ROUTE, startRelayAccountJoin } from '@/device-link/relayJoinIntent';
+import { AgentNetSettingsGroup } from '@/device-link/AgentNetSettingsGroup';
+import { openManualGiftCard } from '@/gift-card/giftCardIntent';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
   readPushEnabled,
   syncPushRegistration,
+  enablePushNotifications,
   writePushEnabled,
   readPushPreviewEnabled,
   writePushPreviewEnabled,
 } from '@/notifications/pushNotifications';
-import { isChatBackgroundSupported, readChatBackgroundEnabled, writeChatBackgroundEnabled } from '@/notifications/chatBackground';
+import { CHAT_BACKGROUND_MODES, type ChatBackgroundMode, isChatBackgroundSupported, readChatBackgroundMode, writeChatBackgroundMode } from '@/notifications/chatBackground';
 import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
   subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
+import { AppIconSettings, useAppIconChoice } from '@/settings/AppIconSettings';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
+import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { isGooglePlayInstallation } from '@/update/androidInstallSource';
 import {
@@ -98,6 +110,7 @@ import {
   ChoicePickerRow,
   InfoRow,
   SettingsGroup,
+  SettingsCardFill,
   SettingsSwitchRow,
   useSettingsRowStyles,
 } from '@/session/SettingsGroupRows';
@@ -117,6 +130,7 @@ import { useGuardedPush } from '@/utils/useGuardedPush';
 type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'uptodate' | 'error';
 // 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列;
 // 文言等古典版本在菜单里合为一项放最后,选中后下方出现简繁与文风两行。
+// 简体中文 / 繁體中文界面不占额外选项,只在下方多出一行「AI 作答文风」。
 const CLASSICAL_OPTION = 'classical';
 type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
 const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
@@ -144,11 +158,16 @@ function hasRunningRemoteTasks(): boolean {
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
   const rowStyles = useSettingsRowStyles();
-  const { preference: themePreference, setPreference: setThemePreference } = useTheme();
+  const appIconChoice = useAppIconChoice();
+  const { colors, mode, preference: themePreference, setPreference: setThemePreference } = useTheme();
+  const { selected: wallpaper } = useWallpaper();
+  const headerHeight = useOptionalHeaderHeight();
   const router = useRouter();
   const push = useGuardedPush();
   const auth = useAuth();
   const { t } = useTranslation();
+  const wallpaperLabel = t('settings.appearance.wallpaper.title');
+  const wallpaperName = t(`settings.appearance.wallpaper.options.${wallpaper}`);
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
   const languageOption: LanguageOption = classical ? CLASSICAL_OPTION : locale;
@@ -157,6 +176,8 @@ export default function SettingsScreen() {
   const { status, connectionIssue } = useDeviceLink();
   // 中转服务:官方中转或自建中转(docs/self-hosted-relay-plan.md §5.3)。
   const selfHostedRelay = useSelfHostedRelay();
+  // 同账号电脑正在用的中转:不用链接,点一下确认就加入(§5.4)。
+  const accountRelays = useRelayAccountOffers().filter((offer) => offer.relayId !== selfHostedRelay?.relayId);
   const [relaySwitching, setRelaySwitching] = useState(false);
   const [relayMessage, setRelayMessage] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -172,7 +193,9 @@ export default function SettingsScreen() {
   const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushPreview, setPushPreview] = useState(true);
-  const [chatBackground, setChatBackground] = useState(false);
+  const [chatBackground, setChatBackground] = useState<ChatBackgroundMode>('auto');
+  const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
+  const [backgroundPickerSnap, setBackgroundPickerSnap] = useState<ContextSheetSnap>('half');
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
   // 使用统计(TapDB)开关。真相在 analyticsConsentStore,这里只是视图态。
@@ -465,11 +488,33 @@ export default function SettingsScreen() {
     );
   }, [relaySwitching, selfHostedRelay, switchToOfficialRelay, t]);
 
+  const requestJoinAccountRelay = useCallback((offer: (typeof accountRelays)[number]) => {
+    if (relaySwitching) return;
+    Alert.alert(
+      t('relay.settings.accountSwitchTitle', { name: offer.name }),
+      [
+        t('relay.settings.accountSwitchBody', { device: offer.ownerDeviceName }),
+        selfHostedRelay ? t('relay.join.switchNote', { current: selfHostedRelay.name }) : '',
+      ].filter(Boolean).join('\n\n'),
+      [
+        { text: t('devices.common.cancel'), style: 'cancel' },
+        {
+          text: t('relay.settings.accountSwitchAction'),
+          onPress: () => {
+            startRelayAccountJoin(offer);
+            router.push(RELAY_JOIN_ROUTE);
+          },
+        },
+      ],
+    );
+  }, [relaySwitching, router, selfHostedRelay, t]);
+
   // 自建中转下:被主人移出 / 中转停用(4410)或中转凭证被拒(401),以及本机凭证缺失,
   // 都要在这里给出原因,并配「切回官方中转」。
+  // 只走 V2 的网络(别人分享来的中转)本来就没有旧版凭证。
   const relayIssueMessage = !selfHostedRelay
     ? null
-    : selfHostedRelay.credential === null
+    : selfHostedRelay.credential === null && !selfHostedRelay.agentNetOnly
       ? t('relay.settings.credentialMissingHint')
       : status !== 'online' && (connectionIssue?.kind === 'device-removed' || connectionIssue?.kind === 'auth-failed')
         ? t('relay.settings.removedHint')
@@ -483,7 +528,7 @@ export default function SettingsScreen() {
       if (!cancelled) setPushEnabled(enabled);
     });
     void readPushPreviewEnabled().then(value => { if (!cancelled) setPushPreview(value); });
-    const refreshBackground = () => { void readChatBackgroundEnabled().then(value => { if (!cancelled) setChatBackground(value); }); };
+    const refreshBackground = () => { void readChatBackgroundMode().then(value => { if (!cancelled) setChatBackground(value); }); };
     refreshBackground();
     const foreground = AppState.addEventListener('change', state => { if (state === 'active') refreshBackground(); });
     return () => {
@@ -534,13 +579,12 @@ export default function SettingsScreen() {
         }
         return;
       }
-      const result = await syncPushRegistration({ enabled: true, apiFetch: auth.apiFetch });
+      const result = await enablePushNotifications({ apiFetch: auth.apiFetch,
+        onEnabled: () => setPushEnabled(true) });
       if (result === 'permission-denied') {
         setPushMessage(t('settings.notifications.permissionDenied'));
         return; // 权限被拒:开关保持关闭,不落盘
       }
-      await writePushEnabled(true);
-      setPushEnabled(true);
       if (result === 'local-only') setPushMessage(t('settings.notifications.googleUnavailable'));
     } catch (error) {
       setPushMessage(formatRemoteError(error));
@@ -563,8 +607,7 @@ export default function SettingsScreen() {
   const resumeAnalyticsReporting = useCallback(async () => {
     const status = await initMobileTapdb();
     if (!status.ok) return;
-    const userId = auth.user?.id;
-    if (userId) await setTapdbUser(userId);
+    await setTapdbUser(auth.user?.tapdbChargeAlias, auth.user?.tapdbUsageAlias);
   }, [auth.user?.id]);
 
   const toggleAnalytics = useCallback(async () => {
@@ -677,6 +720,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.screen">
+      <WallpaperBackdrop />
       <SimpleStackHeader
         scrollEdge
         backTestID="settings.backButton"
@@ -685,6 +729,7 @@ export default function SettingsScreen() {
         titleTestID="settings.title"
       />
 
+      <SettingsCardFill.Provider value={wallpaper === 'none' ? undefined : wallpaperRaisedFill(colors.surfaceElevated, mode)}>
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} testID="settings.scroll">
         {/* 账号头部:身份 + 连接状态一次性呈现,下面分组不再重复 */}
         <View style={styles.headerCard} testID="settings.accountHeader">
@@ -704,11 +749,13 @@ export default function SettingsScreen() {
         </View>
 
         {/* 中转服务:当前走官方中转还是自建中转;自建时提供「切回官方中转」。
-            加入自建中转从电脑上的二维码进入(相机扫码打开加入页),这里不放扫码入口。 */}
+            同账号电脑正在用的中转列在这里,点一下确认就加入;别人分享的中转用相机扫码打开加入页,这里不放扫码入口。 */}
         <SettingsGroup
-          footer={selfHostedRelay
-            ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
-            : t('relay.settings.officialHint')}
+          footer={selfHostedRelay?.shared
+            ? t('relay.settings.sharedHint', { address: selfHostedRelay.baseUrl })
+            : selfHostedRelay
+              ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
+              : t('relay.settings.officialHint')}
           messages={[
             relayIssueMessage ? { text: relayIssueMessage, testID: 'settings.relay.issue' } : null,
             relayMessage ? { text: relayMessage, testID: 'settings.relay.message' } : null,
@@ -720,8 +767,26 @@ export default function SettingsScreen() {
             key="relay-current"
             label={t('relay.settings.currentLabel')}
             testID="settings.relay.current"
-            value={selfHostedRelay ? selfHostedRelay.name : t('relay.settings.official')}
+            value={selfHostedRelay
+              ? selfHostedRelay.shared?.ownerName
+                ? t('relay.settings.sharedCurrent', { name: selfHostedRelay.name, owner: selfHostedRelay.shared.ownerName })
+                : selfHostedRelay.name
+              : t('relay.settings.official')}
           />
+          {accountRelays.map((offer) => (
+            <ActionInfoRow
+              accessibilityLabel={t('relay.settings.accountSwitchTitle', { name: offer.name })}
+              disabled={relaySwitching}
+              key={`relay-account-${offer.ownerDeviceId}-${offer.relayId}`}
+              label={offer.name}
+              onPress={() => requestJoinAccountRelay(offer)}
+              testID={`settings.relay.account.${offer.relayId}`}
+              value={offer.kind === 'shared'
+                ? t(offer.sharedBy ? 'relay.settings.accountSharedBy' : 'relay.settings.accountSharedOn',
+                  { device: offer.ownerDeviceName, owner: offer.sharedBy ?? '' })
+                : t('relay.settings.accountManagedOn', { device: offer.ownerDeviceName })}
+            />
+          ))}
           {selfHostedRelay ? (
             <ActionInfoRow
               accessibilityLabel={t('relay.settings.switchToOfficial')}
@@ -734,6 +799,8 @@ export default function SettingsScreen() {
             />
           ) : null}
         </SettingsGroup>
+
+        <AgentNetSettingsGroup deviceName={deviceName} />
 
         {/* 版本:当前版本 + 统一检查入口(允许整包分发时先查整包,否则直接查热更);
             更新方式与检查结果写在分组下方。检查不可用或审核模式时不显示检查行。 */}
@@ -817,16 +884,12 @@ export default function SettingsScreen() {
                 }).catch(error => setPushMessage(formatRemoteError(error))).finally(() => setPushBusy(false));
               }}
             />
-            {isChatBackgroundSupported() ? <SettingsSwitchRow
-              accessibilityLabel={t('settings.notifications.background')}
+            {isChatBackgroundSupported() ? <ChoicePickerRow
+              expanded={backgroundPickerOpen}
               label={t('settings.notifications.background')}
-              value={chatBackground}
-              disabled={pushBusy || !pushEnabled}
-              onValueChange={() => {
-                const next = !chatBackground;
-                void writeChatBackgroundEnabled(next).then(() => setChatBackground(next))
-                  .catch(error => setPushMessage(formatRemoteError(error)));
-              }}
+              value={t(`settings.notifications.backgroundModes.${chatBackground}`)}
+              onPress={() => { setBackgroundPickerSnap('half'); setBackgroundPickerOpen(true); }}
+              testID="settings.backgroundPicker"
             /> : null}
           </SettingsGroup>
         ) : null}
@@ -879,6 +942,17 @@ export default function SettingsScreen() {
           </SettingsGroup>
         ) : null}
 
+        {/* 礼品卡:与外部链接共用根级兑换面板,这里只负责打开。 */}
+        <SettingsGroup footer={t('giftCard.settingsFooter')} testID="settings.giftCard" title={t('giftCard.sectionTitle')}>
+          <ActionInfoRow
+            accessibilityLabel={t('giftCard.action')}
+            chevron={false}
+            label={t('giftCard.action')}
+            onPress={openManualGiftCard}
+            testID="settings.giftCard.redeem"
+          />
+        </SettingsGroup>
+
         <SettingsGroup title={t('sharedTask.title')}>
           <ActionInfoRow
             accessibilityLabel={t('sharedTask.manageSharing')}
@@ -888,6 +962,8 @@ export default function SettingsScreen() {
             testID="settings.sharedTasks.row"
           />
         </SettingsGroup>
+
+        <PromptRecommendationSettings />
 
         {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup title={t('settings.appearance.title')}>
@@ -907,7 +983,15 @@ export default function SettingsScreen() {
               value={t(`settings.appearance.options.${themePreference}`)}
             />
           </NativePullDownMenu>
+          {supportsAppWallpaper(Platform.OS) && <ActionInfoRow
+            label={wallpaperLabel}
+            value={wallpaperName}
+            accessibilityLabel={`${wallpaperLabel}: ${wallpaperName}`}
+            onPress={() => push('/settings/wallpaper')}
+            testID="settings.wallpaper.open"
+          />}
           <UserBubbleSettings />
+          {appIconChoice ? <AppIconSettings choice={appIconChoice} /> : null}
         </SettingsGroup>
 
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
@@ -932,40 +1016,40 @@ export default function SettingsScreen() {
             />
           </NativePullDownMenu>
           {classical ? (
-            <>
-              <NativePullDownMenu
-                actions={CLASSICAL_SCRIPTS.map((script) => ({
-                  id: script.locale,
-                  state: script.locale === classical ? 'on' : 'off',
-                  title: t(`settings.language.classical.script.${script.key}`),
-                }))}
-                onAction={selectClassicalScript}
-              >
-                <ChoicePickerRow
-                  expanded={classicalPicker === 'script'}
-                  label={t('settings.language.classical.scriptAriaLabel')}
-                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
-                  testID="settings.language.classicalScript"
-                  value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
-                />
-              </NativePullDownMenu>
-              <NativePullDownMenu
-                actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
-                  id: style.id,
-                  state: style.id === classicalStyle ? 'on' : 'off',
-                  title: t(`settings.language.classical.styles.${style.id}`),
-                }))}
-                onAction={selectClassicalStyle}
-              >
-                <ChoicePickerRow
-                  expanded={classicalPicker === 'style'}
-                  label={t('settings.language.classical.styleAriaLabel')}
-                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
-                  testID="settings.language.classicalStyle"
-                  value={t(`settings.language.classical.styles.${classicalStyle}`)}
-                />
-              </NativePullDownMenu>
-            </>
+            <NativePullDownMenu
+              actions={CLASSICAL_SCRIPTS.map((script) => ({
+                id: script.locale,
+                state: script.locale === classical ? 'on' : 'off',
+                title: t(`settings.language.classical.script.${script.key}`),
+              }))}
+              onAction={selectClassicalScript}
+            >
+              <ChoicePickerRow
+                expanded={classicalPicker === 'script'}
+                label={t('settings.language.classical.scriptAriaLabel')}
+                onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
+                testID="settings.language.classicalScript"
+                value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
+              />
+            </NativePullDownMenu>
+          ) : null}
+          {classical ? (
+            <NativePullDownMenu
+              actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
+                id: style.id,
+                state: style.id === classicalStyle ? 'on' : 'off',
+                title: t(`settings.language.classical.styles.${style.id}`),
+              }))}
+              onAction={selectClassicalStyle}
+            >
+              <ChoicePickerRow
+                expanded={classicalPicker === 'style'}
+                label={t('settings.language.classical.styleAriaLabel')}
+                onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
+                testID="settings.language.classicalStyle"
+                value={t(`settings.language.classical.styles.${classicalStyle}`)}
+              />
+            </NativePullDownMenu>
           ) : null}
         </SettingsGroup>
 
@@ -1096,6 +1180,38 @@ export default function SettingsScreen() {
           ) : null}
         </View>
       </ScrollView>
+      </SettingsCardFill.Provider>
+      {wallpaper !== 'none' && headerHeight > 0 && <SessionHeaderNativeBlur height={headerHeight} />}
+      <SheetModal
+        nativePresentation
+        visible={backgroundPickerOpen}
+        onBackdropPress={() => setBackgroundPickerOpen(false)}
+        onRequestClose={() => setBackgroundPickerOpen(false)}
+      >
+        <NotificationPickerContent>
+          <SheetSurface
+            bottomInset={safeAreaInsets.bottom}
+            heights={choicePickerHeights}
+            onClose={() => setBackgroundPickerOpen(false)}
+            onSnapChange={setBackgroundPickerSnap}
+            snap={backgroundPickerSnap}
+            title={t('settings.notifications.background')}
+          >
+            <MobileChoicePickerList
+              activeId={chatBackground}
+              options={CHAT_BACKGROUND_MODES.map(id => ({ id, label: t(`settings.notifications.backgroundModes.${id}`) }))}
+              onSelect={value => {
+                const mode = CHAT_BACKGROUND_MODES.find(mode => mode === value);
+                if (!mode) return;
+                setBackgroundPickerOpen(false);
+                void writeChatBackgroundMode(mode).then(() => setChatBackground(mode))
+                  .catch(error => setPushMessage(formatRemoteError(error)));
+              }}
+              testID="settings.backgroundPicker.option"
+            />
+          </SheetSurface>
+        </NotificationPickerContent>
+      </SheetModal>
       <SheetModal
         backdropTestID="settings.appearancePicker.backdrop"
         nativePresentation
@@ -1172,6 +1288,13 @@ export default function SettingsScreen() {
       </SheetModal>
     </SafeAreaView>
   );
+}
+
+// Native sheets measure RN contents intrinsically; use the actual sheet/pane width
+// so the centered heading and choice rows do not shrink to the shortest label.
+function NotificationPickerContent({ children }: { children: ReactNode }) {
+  const viewport = usePaneViewport();
+  return <View style={{ width: viewport.width }}>{children}</View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

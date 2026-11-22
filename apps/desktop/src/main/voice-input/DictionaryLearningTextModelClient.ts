@@ -20,6 +20,7 @@ export class DictionaryLearningTextModelClient implements TextModelClient {
     // Model selection and fallback belong to requestUtilityText. The advisor's
     // model/cache labels must not pin a provider or reintroduce the voice chain.
     const result = await this.requestText(JSON.stringify(input.user), {
+      source: 'dictionary-learning',
       systemPrompt: input.system,
       timeoutMs: 8_000,
       // The advisor returns at most three actions, not a general text response.
@@ -61,8 +62,13 @@ function parseDictionaryResponse(text: string): unknown {
   } catch {
     throw new Error('Invalid dictionary response');
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-    || !('actions' in parsed) || !Array.isArray(parsed.actions)) {
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed) ||
+    !('actions' in parsed) ||
+    !Array.isArray(parsed.actions)
+  ) {
     throw new Error('Invalid dictionary response');
   }
   return parsed;

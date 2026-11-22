@@ -26,10 +26,7 @@ import {
   type BinaryProvisionerConfig,
   type VendorRuntimeState,
 } from './types.js';
-import {
-  isBinaryVersionNotOlder,
-  normalizeBinaryVersion,
-} from './binary-version-probe.js';
+import { findPreferredLocalBinary as findPreferredLocalBinaryIn } from './local-version-selection.js';
 import { getVendorAsset, resolveVendorAssetUrl, type VendorAsset } from './manifest.js';
 import {
   clearPreparedBinaryDownloads,
@@ -39,6 +36,7 @@ import {
 } from './download-cache.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { download, DownloadError, type ProgressEvent } from '../downloader/index.js';
+import { createDownloadProgressReporter } from '../downloader/progressReporter.js';
 import {
   fetchManifest,
   getCachedManifest,
@@ -64,39 +62,6 @@ function getFinalBinPath(installSubdir: string, version: string, binaryName: str
 
 function getVerifiedMarker(installSubdir: string, version: string): string {
   return path.join(getVersionDir(installSubdir, version), '.verified');
-}
-
-interface VerifiedBinaryCandidate {
-  directoryVersion: string;
-  binaryPath: string;
-}
-
-/** List executable installs carrying the provisioner's completed-download marker. */
-function listVerifiedBinaries(
-  installSubdir: string,
-  binaryName: string,
-): VerifiedBinaryCandidate[] {
-  try {
-    const root = getInstallRoot(installSubdir);
-    return fs
-      .readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => ({
-        directoryVersion: entry.name,
-        binaryPath: getFinalBinPath(installSubdir, entry.name, binaryName),
-      }))
-      .filter((candidate) => {
-        try {
-          fs.accessSync(getVerifiedMarker(installSubdir, candidate.directoryVersion));
-          fs.accessSync(candidate.binaryPath, fs.constants.X_OK);
-          return true;
-        } catch {
-          return false;
-        }
-      });
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -134,11 +99,7 @@ function findLatestVerifiedBinary(
   return null;
 }
 
-/**
- * Choose the highest real local semver that is not older than the manifest.
- * A resolver failure is deliberately ignored so this additive check can never
- * turn the existing exact-manifest path into a startup failure.
- */
+// Moved to local-version-selection.ts (no Electron), with the install root passed in.
 async function findPreferredLocalBinary(
   installSubdir: string,
   binaryName: string,
@@ -147,29 +108,7 @@ async function findPreferredLocalBinary(
     ((binaryPath: string, signal?: AbortSignal) => Promise<string | null>) | undefined,
   signal?: AbortSignal,
 ): Promise<{ version: string; binaryPath: string } | null> {
-  const requiredVersion = manifestVersion === undefined ? null : normalizeBinaryVersion(manifestVersion);
-  if (!resolveVersion || (manifestVersion !== undefined && !requiredVersion)) return null;
-
-  // Probe all completed installs concurrently so one broken candidate cannot hide
-  // a self-updated runtime or multiply the bounded probe delay.
-  const resolved = await Promise.all(
-    listVerifiedBinaries(installSubdir, binaryName).map(async (candidate) => {
-      try {
-        const reported = await resolveVersion(candidate.binaryPath, signal);
-        const version = reported ? normalizeBinaryVersion(reported) : null;
-        return version ? { version, binaryPath: candidate.binaryPath } : null;
-      } catch {
-        return null;
-      }
-    }),
-  );
-  return resolved.reduce<{ version: string; binaryPath: string } | null>((preferred, candidate) => {
-    if (!candidate || (requiredVersion !== null && !isBinaryVersionNotOlder(candidate.version, requiredVersion)))
-      return preferred;
-    return !preferred || isBinaryVersionNotOlder(candidate.version, preferred.version)
-      ? candidate
-      : preferred;
-  }, null);
+  return findPreferredLocalBinaryIn(() => getInstallRoot(installSubdir), binaryName, manifestVersion, resolveVersion, signal);
 }
 
 function isInstalled(installSubdir: string, version: string, binaryName: string): boolean {
@@ -356,6 +295,18 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
       let preparedUpdateFallback: { version: string; binaryPath: string } | undefined;
       try {
         const binaryName = deriveBinaryName();
+        if (opts?.localOnly) {
+          const local = await findUsableLocalBinary(opts.signal);
+          const cached = getCachedManifest();
+          const asset = cached && getVendorAsset(cached, config.manifestField);
+          if (!asset || !hasPreparedBinaryDownload(config.vendorKey, asset)) {
+            if (!local) return { ready: false, binaryPath: '', error: 'runtime_not_installed' };
+            emit({ status: 'ready', installedVersion: local.version, binaryPath: local.binaryPath }, onProgress);
+            return { ready: true, binaryPath: local.binaryPath };
+          }
+          // Reuse the existing verifier/installer, but never download on a miss.
+          opts = { ...opts, allowDownload: false, checkForUpdates: false };
+        }
         // 1. 拉 manifest（不带 dev fallback —— dev mode 归属在 Boss 2 包壳层）
         let manifest = getCachedManifest();
         if (!manifest) manifest = await fetchManifest(undefined, opts?.signal);
@@ -479,6 +430,18 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
           return { ready: true, binaryPath: usableLocal.binaryPath };
         }
         if (!prepared && opts?.allowDownload === false) throw new Error('prepared_download_unavailable');
+        // Standard display progress. Byte updates ride on the raw onProgress emit below;
+        // retry and verify are pushed as soon as they happen so the bar never looks frozen.
+        // A retry keeps the current status: it must not start the transfer budget early.
+        const reporter = createDownloadProgressReporter({
+          initialPhase: 'downloading',
+          total: asset.size,
+          emit: (progress) => {
+            if (progress.phase === 'retrying') emit({ download: progress }, onProgress);
+            else if (progress.phase === 'verifying')
+              emit({ status: 'verifying', download: progress }, onProgress);
+          },
+        });
         if (!prepared) await download({
           url,
           targetPath: downloadDest,
@@ -489,6 +452,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
           // 持续有进度的正常下载仍可在宿主总 deadline 内完成。
           retry: config.optionalAsset ? { maxAttempts: 1 } : undefined,
           onProgress: (e: ProgressEvent) => {
+            reporter.callbacks.onProgress(e);
             emit({
               status: 'downloading',
               downloadProgress: {
@@ -496,8 +460,11 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
                 total: e.total ?? asset.size,
                 speedBps: e.speedBps,
               },
+              download: reporter.snapshot(),
             }, onProgress);
           },
+          onRetry: reporter.callbacks.onRetry,
+          onVerifying: reporter.callbacks.onVerifying,
         });
 
         // 7. 解压分发
@@ -532,6 +499,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
           installedVersion: asset.version,
           binaryPath: finalBinPath,
           downloadProgress: undefined,
+          download: undefined,
         }, onProgress);
         return { ready: true, binaryPath: finalBinPath };
 

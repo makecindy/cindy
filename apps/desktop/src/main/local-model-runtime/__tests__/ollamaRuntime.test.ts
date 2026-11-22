@@ -139,6 +139,38 @@ describe('ollamaRuntime', () => {
     expect((await run(120_000)).kind).toBe('ready');
   });
 
+  // PR #9420: cancellation must also interrupt an HTTP probe, not just polling sleep.
+  // Unit tier; hold the initial or readiness probe until its fetch signal aborts.
+  it.each(['initial', 'poll'] as const)('aborts a pending %s probe without launching again', async (phase) => {
+    const controller = new AbortController();
+    const openApp = vi.fn(async () => undefined);
+    let entered!: () => void;
+    const probing = new Promise<void>((resolve) => { entered = resolve; });
+    let requestSignal: AbortSignal | undefined;
+    let calls = 0;
+    const pending = startOfficialOllamaApp({
+      platform: 'darwin',
+      appExists: () => true,
+      openApp,
+      signal: controller.signal,
+      sleep: async () => undefined,
+      fetchImpl: async (_url, init) => {
+        if (phase === 'poll' && calls++ === 0) throw new OllamaHttpError('refused', 'down');
+        requestSignal = init.signal;
+        entered();
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    });
+    const result = expect(pending).rejects.toThrow('aborted');
+    await probing;
+    controller.abort();
+    expect(requestSignal?.aborted).toBe(true);
+    await result;
+    expect(openApp).toHaveBeenCalledTimes(phase === 'initial' ? 0 : 1);
+  });
+
   it('aborts start polling when the install signal fires', async () => {
     const abort = new AbortController();
     const pending = startOfficialOllamaApp({

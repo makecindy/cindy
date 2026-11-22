@@ -28,7 +28,7 @@ import type { TurnChangeFileSummary, TurnChangeSetSummary } from '../../../share
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
-import { isHtmlFilePath } from './useOpenWithMenu';
+import { isHtmlFilePath } from './messageLinkActions';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 
 const MAX_VISIBLE_FILES = 3;

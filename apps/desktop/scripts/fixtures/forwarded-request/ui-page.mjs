@@ -6,7 +6,7 @@ export default {
   stubs: {
     'src/renderer/lib/makerChatStore': { partial: "import { makerChatStore as real } from './src/renderer/lib/makerChatStore'; export const makerChatStore = { ...real, reloadMessages: () => {} };" },
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
-    'src/renderer/features/bots/botStore': 'const profiles = []; export const useBotProfiles = () => profiles;',
+    'src/renderer/features/bots/botStore': 'const profiles = []; export const useBotProfiles = () => profiles; export const canonicalBotSessionId = () => undefined;',
     'src/renderer/components/chat/GhostToolCard': 'export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle"; export const GhostToolCard = () => null; export const MailCardEditor = () => null;',
   },
   cases: {
@@ -25,6 +25,16 @@ export default {
       assert.ok(text.includes('只检查，不发布。'));
       assert.ok(!text.includes('\\n\\n'));
       return;
+    }
+    if (ui.case === 'quote') {
+      // Forwarded task messages in a companion conversation are collapsed letters.
+      // Exercise the real disclosure before checking the body and quoting it.
+      const letter = page.getByRole('button').filter({
+        hasText: await ui.t('chat.botTaskLetter.replied'),
+      });
+      assert.equal(await letter.getAttribute('aria-expanded'), 'false');
+      await letter.click();
+      assert.equal(await letter.getAttribute('aria-expanded'), 'true');
     }
     if (['task', 'fork', 'rewind', 'quote'].includes(ui.case)) {
       const expand = page.getByRole('button', { name: await ui.t('chat.userMessage.expandLongMessage'), exact: true });

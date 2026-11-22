@@ -1,0 +1,1485 @@
+{
+  "manifest": {
+    "kind": "live-model-real-browser-fixture-pages",
+    "model": "claude-opus-5-5",
+    "repeats": 3,
+    "variants": [
+      "A",
+      "C"
+    ],
+    "baselineRef": "4ac45b894e",
+    "baselineSha": "4ac45b894ef89459681367ec1330839a93243d1e",
+    "head": "5d6e6f02cdb8646846ce02c44916dd1d3d13b851",
+    "dirty": [],
+    "tasks": [
+      {
+        "id": "form",
+        "focus": "sequence"
+      },
+      {
+        "id": "catalog",
+        "focus": "sequence"
+      },
+      {
+        "id": "orders",
+        "focus": "sequence"
+      },
+      {
+        "id": "report",
+        "focus": "sequence"
+      },
+      {
+        "id": "settings",
+        "focus": "sequence"
+      },
+      {
+        "id": "vault",
+        "focus": "escape-hatch"
+      },
+      {
+        "id": "badge",
+        "focus": "escape-hatch"
+      },
+      {
+        "id": "iframe",
+        "focus": "control"
+      },
+      {
+        "id": "directory",
+        "focus": "control"
+      }
+    ],
+    "realSites": {},
+    "limitations": [
+      "Dedicated-browser runtime only; sidebar and My browser are not exercised.",
+      "Fixture pages, not real sites.",
+      "Claude Code print mode with only the browser tools; not a full Cindy session."
+    ],
+    "effort": "medium",
+    "effortNote": "Passed to the CLI as --effort medium through a wrapper; this run predates the script's own --effort option."
+  },
+  "summary": {
+    "byVariant": {
+      "A": {
+        "runs": 27,
+        "passed": 27,
+        "turns": 5.222222222222222,
+        "browserCalls": 3.185185185185185,
+        "costUsd": 0.14457888518518514,
+        "seconds": 12.83088888888889,
+        "toolResultChars": 23064.62962962963
+      },
+      "C": {
+        "runs": 27,
+        "passed": 27,
+        "turns": 3.925925925925926,
+        "browserCalls": 2.925925925925926,
+        "costUsd": 0.039023488888888895,
+        "seconds": 10.20837037037037,
+        "toolResultChars": 3696.703703703704
+      }
+    },
+    "byTask": {
+      "form": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 6,
+          "browserCalls": 4,
+          "costUsd": 0.1652062333333333,
+          "seconds": 16.512333333333334,
+          "toolResultChars": 21679
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 4,
+          "browserCalls": 3,
+          "costUsd": 0.05619286666666667,
+          "seconds": 13.624333333333333,
+          "toolResultChars": 6497.666666666667
+        }
+      },
+      "catalog": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 4,
+          "browserCalls": 2,
+          "costUsd": 0.1477900666666667,
+          "seconds": 9.823666666666666,
+          "toolResultChars": 21178
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 3,
+          "browserCalls": 2,
+          "costUsd": 0.03449623333333334,
+          "seconds": 7.210666666666666,
+          "toolResultChars": 3466
+        }
+      },
+      "orders": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 5.666666666666667,
+          "browserCalls": 3.6666666666666665,
+          "costUsd": 0.1880094333333333,
+          "seconds": 18.344333333333335,
+          "toolResultChars": 27138.666666666668
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 3,
+          "browserCalls": 2,
+          "costUsd": 0.05205946666666667,
+          "seconds": 10.567,
+          "toolResultChars": 6569.333333333333
+        }
+      },
+      "report": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 4,
+          "browserCalls": 2,
+          "costUsd": 0.11971749999999999,
+          "seconds": 10.487,
+          "toolResultChars": 16975
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 3,
+          "browserCalls": 2,
+          "costUsd": 0.023579199999999998,
+          "seconds": 9.054,
+          "toolResultChars": 1755
+        }
+      },
+      "settings": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 8,
+          "browserCalls": 5.666666666666667,
+          "costUsd": 0.171772,
+          "seconds": 19.079666666666665,
+          "toolResultChars": 22408.333333333332
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 6.333333333333333,
+          "browserCalls": 5.333333333333333,
+          "costUsd": 0.06356803333333333,
+          "seconds": 17.035999999999998,
+          "toolResultChars": 6758.666666666667
+        }
+      },
+      "vault": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 6,
+          "browserCalls": 4,
+          "costUsd": 0.1358848666666667,
+          "seconds": 12.698333333333332,
+          "toolResultChars": 30546
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 5,
+          "browserCalls": 4,
+          "costUsd": 0.0347577,
+          "seconds": 10.310666666666668,
+          "toolResultChars": 2189.6666666666665
+        }
+      },
+      "badge": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 6,
+          "browserCalls": 4,
+          "costUsd": 0.1427956,
+          "seconds": 13.761666666666665,
+          "toolResultChars": 34931.333333333336
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 5,
+          "browserCalls": 4,
+          "costUsd": 0.0402954,
+          "seconds": 10.813,
+          "toolResultChars": 2795
+        }
+      },
+      "iframe": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 3,
+          "browserCalls": 1,
+          "costUsd": 0.10775433333333334,
+          "seconds": 5.2299999999999995,
+          "toolResultChars": 15766
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 3,
+          "browserCalls": 2,
+          "costUsd": 0.020929866666666668,
+          "seconds": 6.177,
+          "toolResultChars": 1386
+        }
+      },
+      "directory": {
+        "A": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 4.333333333333333,
+          "browserCalls": 2.3333333333333335,
+          "costUsd": 0.12227993333333335,
+          "seconds": 9.540999999999999,
+          "toolResultChars": 16959.333333333332
+        },
+        "C": {
+          "runs": 3,
+          "passed": 3,
+          "turns": 3,
+          "browserCalls": 2,
+          "costUsd": 0.025332633333333337,
+          "seconds": 7.0826666666666656,
+          "toolResultChars": 1853
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "task": "catalog",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 2,
+      "runtimeCalls": 16,
+      "costUsd": 0.1525069,
+      "durationMs": 9735,
+      "wallMs": 25676,
+      "inputTokens": 45746,
+      "outputTokens": 670,
+      "toolResultChars": 21178,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(navigate,snapshot,navigate,snapshot,navigate,snapshot,navigate,snapshot)"
+      ],
+      "final": "我逐个打开了四件商品的详情页，SKU 如下：\n\n| 商品 | SKU |\n|---|---|\n| Alpha Lamp | SKU-0E00B84F |\n| Cobalt Desk | SKU-6C07DC47 |\n| Echo Chair | SKU-B3562C4E |\n| Garnet Shelf | SKU-50062851 |"
+    },
+    {
+      "task": "form",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 3,
+      "runtimeCalls": 20,
+      "costUsd": 0.0549592,
+      "durationMs": 12354,
+      "wallMs": 28344,
+      "inputTokens": 18739,
+      "outputTokens": 792,
+      "toolResultChars": 6725,
+      "toolCalls": [
+        "open",
+        "batch(type,type,select,type,click,click,type,snapshot)",
+        "batch(click,wait,read)"
+      ],
+      "final": "表单已提交，页面显示的确认码是 **CONF-577C25C8**。\n\n页面显示 “Account created”（账户已创建），所有字段都按你给的信息填写。"
+    },
+    {
+      "task": "form",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 17,
+      "costUsd": 0.1700543,
+      "durationMs": 16745,
+      "wallMs": 32607,
+      "inputTokens": 76605,
+      "outputTokens": 1122,
+      "toolResultChars": 21679,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(type,type,select,fill,click,click,type,snapshot)",
+        "batch(type,click,click,type,snapshot)",
+        "act:click"
+      ],
+      "final": "表单已提交，页面显示的确认码是：**CONF-EB63E049**\n\n提交后页面标题为 “Account created”，并显示 “Thanks, Ada Lovelace”。提交前我核对过页面上的值，都和你给的一致：姓名、邮箱、Team 套餐、7 个席位、APAC 地区、已勾选订阅产品更新，备注为 NOTE-5756C3D1。"
+    },
+    {
+      "task": "catalog",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 26,
+      "costUsd": 0.034917000000000004,
+      "durationMs": 7225,
+      "wallMs": 22072,
+      "inputTokens": 11514,
+      "outputTokens": 515,
+      "toolResultChars": 3467,
+      "toolCalls": [
+        "open",
+        "read"
+      ],
+      "final": "这四件商品的 SKU 都已在各自的详情页上查到：\n\n| 商品 | SKU |\n|---|---|\n| Alpha Lamp | SKU-A78AD0A9 |\n| Cobalt Desk | SKU-A0DF18D9 |\n| Echo Chair | SKU-160AC900 |\n| Garnet Shelf | SKU-AC5AD799 |"
+    },
+    {
+      "task": "orders",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 26,
+      "costUsd": 0.0524261,
+      "durationMs": 10933,
+      "wallMs": 25500,
+      "inputTokens": 13277,
+      "outputTokens": 715,
+      "toolResultChars": 6570,
+      "toolCalls": [
+        "open",
+        "batch(click,wait,read,click,wait,read,click,wait,read,click,wait,read)"
+      ],
+      "final": "找到了，状态是 REFUNDED 的订单只有一单，在第 4 页：\n\n- **订单号**：ORD-5E9F0E6B\n- **金额**：423.96\n\n5 页一共 30 单我都看过了，其他订单的状态只有 PAID、SHIPPED 和 PENDING 三种。"
+    },
+    {
+      "task": "orders",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 24,
+      "costUsd": 0.20268709999999998,
+      "durationMs": 21861,
+      "wallMs": 36949,
+      "inputTokens": 85368,
+      "outputTokens": 1564,
+      "toolResultChars": 28020,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(click,wait,snapshot)",
+        "batch(click,wait,extract,evaluate,wait,extract,evaluate,wait,snapshot)",
+        "batch(click,wait,evaluate,evaluate,wait,evaluate)"
+      ],
+      "final": "5 页都看过了，只有一单是 REFUNDED，在第 4 页：\n\n- **订单号：ORD-ED1FD74C**\n- **金额：645.62**\n\n其余订单的状态都是 PAID、SHIPPED 或 PENDING。"
+    },
+    {
+      "task": "report",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 2,
+      "runtimeCalls": 8,
+      "costUsd": 0.1199639,
+      "durationMs": 10323,
+      "wallMs": 25291,
+      "inputTokens": 42003,
+      "outputTokens": 420,
+      "toolResultChars": 16975,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(click,wait,snapshot)"
+      ],
+      "final": "我点了 “Generate report” 生成报告，页面显示 “Report ready”。报告里的 **Total 是 98,300**。"
+    },
+    {
+      "task": "report",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 11,
+      "costUsd": 0.0238573,
+      "durationMs": 9104,
+      "wallMs": 23713,
+      "inputTokens": 9570,
+      "outputTokens": 382,
+      "toolResultChars": 1755,
+      "toolCalls": [
+        "open",
+        "batch(click,wait,read)"
+      ],
+      "final": "我点了“Generate report”生成报告，页面显示 “Report ready”，报告里的 **Total 是 35,285**。"
+    },
+    {
+      "task": "settings",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 8,
+      "browserCalls": 6,
+      "runtimeCalls": 19,
+      "costUsd": 0.17178369999999998,
+      "durationMs": 18964,
+      "wallMs": 34005,
+      "inputTokens": 106657,
+      "outputTokens": 1133,
+      "toolResultChars": 22382,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "act:click",
+        "act:click",
+        "batch(click,click,select)",
+        "act:evaluate",
+        "act:click"
+      ],
+      "final": "通知设置已保存，回执号是 **RCPT-E90F9512**。\n\n- Email notifications：已关闭\n- Weekly digest：已打开\n- Frequency：已改为 Monthly\n\nSMS alerts 我没改，还是关着的。"
+    },
+    {
+      "task": "settings",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 5,
+      "runtimeCalls": 22,
+      "costUsd": 0.0597922,
+      "durationMs": 15036,
+      "wallMs": 30091,
+      "inputTokens": 26845,
+      "outputTokens": 903,
+      "toolResultChars": 6964,
+      "toolCalls": [
+        "open",
+        "act:click",
+        "act:click",
+        "batch(click,click,select,snapshot)",
+        "batch(click,wait,read)"
+      ],
+      "final": "已保存，回执号是 **RCPT-620D47B7**。\n\n我从 More 菜单进入 Notification settings，按你的要求改了三项：\n- Email notifications：已关闭\n- Weekly digest：已打开\n- Frequency：已改成 Monthly\n\n点击 Save changes 后，页面显示“Saved · receipt RCPT-620D47B7”。"
+    },
+    {
+      "task": "vault",
+      "focus": "escape-hatch",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 20,
+      "costUsd": 0.1348134,
+      "durationMs": 12249,
+      "wallMs": 26922,
+      "inputTokens": 69881,
+      "outputTokens": 793,
+      "toolResultChars": 16864,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "cdp(nodes)",
+        "cdp(click,nodes)",
+        "cdp(call)"
+      ],
+      "final": "访问码是 **VAULT-BF4FD38F**。\n\n页面上的按钮在普通页面结构里看不到，所以我用浏览器的底层接口找到“Reveal access code”按钮并点了它，访问码随后显示在按钮下方。"
+    },
+    {
+      "task": "vault",
+      "focus": "escape-hatch",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 5,
+      "browserCalls": 4,
+      "runtimeCalls": 20,
+      "costUsd": 0.033961200000000004,
+      "durationMs": 9995,
+      "wallMs": 24702,
+      "inputTokens": 17130,
+      "outputTokens": 665,
+      "toolResultChars": 2167,
+      "toolCalls": [
+        "open",
+        "cdp(nodes)",
+        "cdp(click,nodes)",
+        "cdp(nodes)"
+      ],
+      "final": "我点了页面上的“Reveal access code”按钮，页面显示的访问码是：**VAULT-A22AE645**"
+    },
+    {
+      "task": "badge",
+      "focus": "escape-hatch",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 34,
+      "costUsd": 0.1386598,
+      "durationMs": 12915,
+      "wallMs": 27907,
+      "inputTokens": 70889,
+      "outputTokens": 807,
+      "toolResultChars": 17671,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "cdp(nodes)",
+        "cdp(type,type,click,nodes)",
+        "cdp(nodes)"
+      ],
+      "final": "页面显示的 badge 编号是 **BADGE-A168CE40**。\n\n面板在普通页面读取里看不到，所以我改用更底层的方式找到输入框。Employee ID 填了 E-66920，Door PIN 填了 6938，然后点了 Issue badge。页面随后显示 “Badge issued: BADGE-A168CE40”。"
+    },
+    {
+      "task": "badge",
+      "focus": "escape-hatch",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 5,
+      "browserCalls": 4,
+      "runtimeCalls": 36,
+      "costUsd": 0.0407056,
+      "durationMs": 10993,
+      "wallMs": 26081,
+      "inputTokens": 18322,
+      "outputTokens": 794,
+      "toolResultChars": 2795,
+      "toolCalls": [
+        "open",
+        "cdp(nodes)",
+        "cdp(type,type,click,nodes)",
+        "cdp(nodes)"
+      ],
+      "final": "我已在面板里把 Employee ID 填成 E-31309、Door PIN 填成 1945，并点了 Issue badge。页面显示的 badge 编号是 **BADGE-6E2D9AD8**（原文为“Badge issued: BADGE-6E2D9AD8”）。"
+    },
+    {
+      "task": "iframe",
+      "focus": "control",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 1,
+      "runtimeCalls": 4,
+      "costUsd": 0.10763350000000001,
+      "durationMs": 4964,
+      "wallMs": 19941,
+      "inputTokens": 27899,
+      "outputTokens": 226,
+      "toolResultChars": 15766,
+      "toolCalls": [
+        "list_tools",
+        "open"
+      ],
+      "final": "嵌入的支持面板里显示的支持码是 **SUP-B98405F0**。"
+    },
+    {
+      "task": "iframe",
+      "focus": "control",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 11,
+      "costUsd": 0.0211025,
+      "durationMs": 6587,
+      "wallMs": 21316,
+      "inputTokens": 8924,
+      "outputTokens": 352,
+      "toolResultChars": 1386,
+      "toolCalls": [
+        "read",
+        "open"
+      ],
+      "final": "页面里嵌入的支持面板显示的支持码是 **SUP-C8434374**。\n\n普通读取页面时只拿到外层页面的文字，看不到嵌入面板。改用页面快照后，才读到这个支持码。"
+    },
+    {
+      "task": "directory",
+      "focus": "control",
+      "variant": "A",
+      "repetition": 0,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 2,
+      "runtimeCalls": 8,
+      "costUsd": 0.12047520000000002,
+      "durationMs": 8751,
+      "wallMs": 23800,
+      "inputTokens": 42045,
+      "outputTokens": 445,
+      "toolResultChars": 16833,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(type,wait,snapshot)"
+      ],
+      "final": "我在通讯录里搜索了 Okafor，只找到一个结果，他的分机号是 **8108**。"
+    },
+    {
+      "task": "directory",
+      "focus": "control",
+      "variant": "C",
+      "repetition": 0,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 11,
+      "costUsd": 0.0236898,
+      "durationMs": 6551,
+      "wallMs": 21438,
+      "inputTokens": 9553,
+      "outputTokens": 377,
+      "toolResultChars": 1731,
+      "toolCalls": [
+        "open",
+        "batch(type,wait,read)"
+      ],
+      "final": "我在通讯录里搜索了 Okafor，只找到一条记录：**Okafor 的分机号是 4247**。"
+    },
+    {
+      "task": "form",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 3,
+      "runtimeCalls": 20,
+      "costUsd": 0.0596117,
+      "durationMs": 16477,
+      "wallMs": 30836,
+      "inputTokens": 18290,
+      "outputTokens": 1103,
+      "toolResultChars": 6043,
+      "toolCalls": [
+        "open",
+        "batch(type,type,select,type,click,click,type)",
+        "batch(click,wait,read)"
+      ],
+      "final": "表单已提交，页面显示：“Account created — Thanks, Ada Lovelace. Your confirmation code is **CONF-E27D24AF**.”\n\n确认码是 **CONF-E27D24AF**。\n\n提交前我核对过页面，姓名、邮箱、席位 7、地区 APAC、勾选订阅产品更新、备注 NOTE-C9F082C0 都已填好。套餐选 Team 的操作也执行成功了，但页面快照没显示套餐框里选中的值，提交后的确认页也没写套餐，所以 Team 是否正确提交，我没法从页面上确认。"
+    },
+    {
+      "task": "catalog",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 26,
+      "costUsd": 0.034478,
+      "durationMs": 7228,
+      "wallMs": 21854,
+      "inputTokens": 11465,
+      "outputTokens": 505,
+      "toolResultChars": 3465,
+      "toolCalls": [
+        "open",
+        "read"
+      ],
+      "final": "我打开了这四件商品的详情页，SKU 如下：\n\n| 商品 | SKU |\n|---|---|\n| Alpha Lamp | SKU-6BC1B810 |\n| Cobalt Desk | SKU-E4D742A1 |\n| Echo Chair | SKU-CF213ACC |\n| Garnet Shelf | SKU-F7140C47 |"
+    },
+    {
+      "task": "form",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 17,
+      "costUsd": 0.1628204,
+      "durationMs": 16779,
+      "wallMs": 31682,
+      "inputTokens": 76836,
+      "outputTokens": 1110,
+      "toolResultChars": 21679,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(type,type,select,fill,click,click,type,snapshot)",
+        "batch(type,click,click,type,snapshot)",
+        "act:click"
+      ],
+      "final": "表单已提交成功，页面显示 “Account created”。确认码是 **CONF-8807078D**。\n\n提交前我核对过所有字段都已正确填写：\n- 姓名：Ada Lovelace\n- 邮箱：ada@example.test\n- 套餐：Team\n- 席位：7\n- 地区：APAC\n- 已勾选订阅产品更新\n- 备注：NOTE-782DCA83"
+    },
+    {
+      "task": "catalog",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 2,
+      "runtimeCalls": 16,
+      "costUsd": 0.1457677,
+      "durationMs": 9736,
+      "wallMs": 24302,
+      "inputTokens": 45776,
+      "outputTokens": 695,
+      "toolResultChars": 21178,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(navigate,snapshot,navigate,snapshot,navigate,snapshot,navigate,snapshot)"
+      ],
+      "final": "我逐个打开了这四件商品的详情页，SKU 如下：\n\n| 商品 | SKU |\n|---|---|\n| Alpha Lamp | SKU-77DEFC46 |\n| Cobalt Desk | SKU-125A3C4C |\n| Echo Chair | SKU-37874A7E |\n| Garnet Shelf | SKU-FBED8C41 |"
+    },
+    {
+      "task": "orders",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 26,
+      "costUsd": 0.0523153,
+      "durationMs": 10420,
+      "wallMs": 25092,
+      "inputTokens": 13409,
+      "outputTokens": 671,
+      "toolResultChars": 6569,
+      "toolCalls": [
+        "open",
+        "batch(click,wait,read,click,wait,read,click,wait,read,click,wait,read)"
+      ],
+      "final": "我翻完了全部 5 页，只有一单的状态是 REFUNDED，在第 4 页：\n\n- **订单号：ORD-4CAD415D**\n- **金额：527.39**"
+    },
+    {
+      "task": "orders",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 5,
+      "browserCalls": 3,
+      "runtimeCalls": 19,
+      "costUsd": 0.1892194,
+      "durationMs": 14986,
+      "wallMs": 29645,
+      "inputTokens": 66113,
+      "outputTokens": 880,
+      "toolResultChars": 30757,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "act:click",
+        "batch(click,wait,snapshot,click,wait,snapshot,click,wait,snapshot)"
+      ],
+      "final": "找到了，状态为 REFUNDED 的订单在第 4 页：\n\n- **订单号：ORD-A3188969**\n- **金额：166.44**\n\n5 页共 30 条订单都看过了，只有这一单是 REFUNDED。"
+    },
+    {
+      "task": "report",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 11,
+      "costUsd": 0.0232986,
+      "durationMs": 9076,
+      "wallMs": 23686,
+      "inputTokens": 9494,
+      "outputTokens": 367,
+      "toolResultChars": 1755,
+      "toolCalls": [
+        "open",
+        "batch(click,wait,read)"
+      ],
+      "final": "我点击了“Generate report”，报告已经生成，页面显示 **Total 是 57,883**。"
+    },
+    {
+      "task": "report",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 2,
+      "runtimeCalls": 8,
+      "costUsd": 0.11970190000000001,
+      "durationMs": 10690,
+      "wallMs": 25162,
+      "inputTokens": 42006,
+      "outputTokens": 408,
+      "toolResultChars": 16975,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(click,wait,snapshot)"
+      ],
+      "final": "我点了“Generate report”生成报告，报告里的 **Total 是 21,315**。"
+    },
+    {
+      "task": "settings",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 7,
+      "browserCalls": 6,
+      "runtimeCalls": 22,
+      "costUsd": 0.06848480000000001,
+      "durationMs": 18621,
+      "wallMs": 33442,
+      "inputTokens": 32103,
+      "outputTokens": 1214,
+      "toolResultChars": 6727,
+      "toolCalls": [
+        "open",
+        "act:click",
+        "act:click",
+        "batch(click,click,select)",
+        "batch(click,click,select)",
+        "batch(click,wait,read)"
+      ],
+      "final": "已保存，页面显示的回执号是 **RCPT-8300F79B**。\n\n我是从 More 菜单进入 Notification settings 改的：\n- Email notifications：已关闭\n- Weekly digest：已打开\n- Frequency：已选 Monthly\n\n两个开关的新状态在页面上确认过。Frequency 选 Monthly 时没有报错，但页面快照里看不到下拉框当前显示的值，所以这一项我没能再核对一遍。"
+    },
+    {
+      "task": "vault",
+      "focus": "escape-hatch",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 5,
+      "browserCalls": 4,
+      "runtimeCalls": 20,
+      "costUsd": 0.034625800000000005,
+      "durationMs": 10398,
+      "wallMs": 24779,
+      "inputTokens": 17283,
+      "outputTokens": 674,
+      "toolResultChars": 2235,
+      "toolCalls": [
+        "open",
+        "cdp(nodes)",
+        "cdp(click,nodes)",
+        "cdp(nodes)"
+      ],
+      "final": "我点了页面上的“Reveal access code”按钮，页面显示的访问码是：**VAULT-14D134BB**"
+    },
+    {
+      "task": "settings",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 8,
+      "browserCalls": 6,
+      "runtimeCalls": 19,
+      "costUsd": 0.1728414,
+      "durationMs": 19766,
+      "wallMs": 34229,
+      "inputTokens": 106686,
+      "outputTokens": 1182,
+      "toolResultChars": 22386,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "act:click",
+        "act:click",
+        "batch(click,click,select)",
+        "act:evaluate",
+        "act:click"
+      ],
+      "final": "通知设置已保存，回执号是 **RCPT-94DFFEFD**。\n\n- Email notifications：已关闭\n- Weekly digest：已开启\n- Frequency：已改为 Monthly\n- SMS alerts 没有改动，现在是关闭状态\n\n保存后页面显示「Saved · receipt RCPT-94DFFEFD」。"
+    },
+    {
+      "task": "vault",
+      "focus": "escape-hatch",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 16,
+      "costUsd": 0.1367605,
+      "durationMs": 12436,
+      "wallMs": 27004,
+      "inputTokens": 70391,
+      "outputTokens": 738,
+      "toolResultChars": 37317,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "cdp(nodes)",
+        "cdp(click,nodes)",
+        "screenshot"
+      ],
+      "final": "访问码是 **VAULT-661A8E5A**。\n\n页面普通读取里找不到“Reveal access code”按钮，它藏在页面一个隐藏区块里。我改用更底层的方式找到它并点击，然后截图看到了访问码。"
+    },
+    {
+      "task": "badge",
+      "focus": "escape-hatch",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 5,
+      "browserCalls": 4,
+      "runtimeCalls": 36,
+      "costUsd": 0.0401895,
+      "durationMs": 10586,
+      "wallMs": 24746,
+      "inputTokens": 18286,
+      "outputTokens": 788,
+      "toolResultChars": 2795,
+      "toolCalls": [
+        "open",
+        "cdp(nodes)",
+        "cdp(type,type,click,nodes)",
+        "cdp(nodes)"
+      ],
+      "final": "我已在面板里把 Employee ID 填成 E-94910、Door PIN 填成 5478，并点了 Issue badge。页面显示：**Badge issued: BADGE-F76D0426**，badge 编号是 **BADGE-F76D0426**。"
+    },
+    {
+      "task": "badge",
+      "focus": "escape-hatch",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 36,
+      "costUsd": 0.1467892,
+      "durationMs": 14212,
+      "wallMs": 28810,
+      "inputTokens": 71947,
+      "outputTokens": 872,
+      "toolResultChars": 44062,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "cdp(nodes)",
+        "cdp(type,type,click,nodes)",
+        "batch(wait,cdp,screenshot)"
+      ],
+      "final": "badge 已经发好了，页面显示：**Badge issued: BADGE-EA0BC1D7**\n\nEmployee ID 填的是 E-50856，Door PIN 填的是 8334，填完点了 Issue badge。"
+    },
+    {
+      "task": "iframe",
+      "focus": "control",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 11,
+      "costUsd": 0.0208897,
+      "durationMs": 6063,
+      "wallMs": 20649,
+      "inputTokens": 8903,
+      "outputTokens": 346,
+      "toolResultChars": 1386,
+      "toolCalls": [
+        "read",
+        "open"
+      ],
+      "final": "支持面板里显示的支持码是 **SUP-32C20E4E**。\n\n直接读取页面文字时，读不到嵌入面板里的内容，所以我通过页面快照看了面板内部，才找到这个支持码。"
+    },
+    {
+      "task": "iframe",
+      "focus": "control",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 1,
+      "runtimeCalls": 4,
+      "costUsd": 0.107484,
+      "durationMs": 5114,
+      "wallMs": 19264,
+      "inputTokens": 27905,
+      "outputTokens": 221,
+      "toolResultChars": 15766,
+      "toolCalls": [
+        "list_tools",
+        "open"
+      ],
+      "final": "支持面板里显示的支持码是 **SUP-216C8E57**。"
+    },
+    {
+      "task": "directory",
+      "focus": "control",
+      "variant": "C",
+      "repetition": 1,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 12,
+      "costUsd": 0.025404000000000003,
+      "durationMs": 7004,
+      "wallMs": 21464,
+      "inputTokens": 9669,
+      "outputTokens": 416,
+      "toolResultChars": 1914,
+      "toolCalls": [
+        "open",
+        "batch(type,press,wait,read)"
+      ],
+      "final": "在通讯录里搜索 “Okafor”，结果显示 Okafor 的分机号是 **8722**。"
+    },
+    {
+      "task": "directory",
+      "focus": "control",
+      "variant": "A",
+      "repetition": 1,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 2,
+      "runtimeCalls": 7,
+      "costUsd": 0.11706630000000001,
+      "durationMs": 7347,
+      "wallMs": 21967,
+      "inputTokens": 41746,
+      "outputTokens": 377,
+      "toolResultChars": 16506,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "act:type"
+      ],
+      "final": "我在通讯录里搜了 Okafor，只找到一条结果，这个人的分机号是 **3452**。"
+    },
+    {
+      "task": "form",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 17,
+      "costUsd": 0.162744,
+      "durationMs": 16013,
+      "wallMs": 30281,
+      "inputTokens": 76943,
+      "outputTokens": 1087,
+      "toolResultChars": 21679,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(type,type,select,fill,click,click,type,snapshot)",
+        "batch(type,click,click,type,snapshot)",
+        "act:click"
+      ],
+      "final": "表单已提交成功，页面显示 “Account created”，确认码是 **CONF-56EAB1AE**。\n\n提交前我核对过，所有字段都和你给的一致：Ada Lovelace、ada@example.test、Team、7 个席位、APAC、已勾选订阅产品更新、备注 NOTE-8B0A8539。"
+    },
+    {
+      "task": "form",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 3,
+      "runtimeCalls": 20,
+      "costUsd": 0.0540077,
+      "durationMs": 12042,
+      "wallMs": 26050,
+      "inputTokens": 18614,
+      "outputTokens": 771,
+      "toolResultChars": 6725,
+      "toolCalls": [
+        "open",
+        "batch(type,type,select,type,click,click,type,snapshot)",
+        "batch(click,wait,read)"
+      ],
+      "final": "表单已按你给的信息填好并提交成功。页面显示“Account created”，确认码是 **CONF-1AA5152A**。"
+    },
+    {
+      "task": "catalog",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 2,
+      "runtimeCalls": 16,
+      "costUsd": 0.14509560000000002,
+      "durationMs": 10000,
+      "wallMs": 24084,
+      "inputTokens": 45679,
+      "outputTokens": 689,
+      "toolResultChars": 21178,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(navigate,snapshot,navigate,snapshot,navigate,snapshot,navigate,snapshot)"
+      ],
+      "final": "这四件商品的 SKU 都从各自的详情页上查到了：\n\n| 商品 | SKU |\n|---|---|\n| Alpha Lamp | SKU-1BF43DBA |\n| Cobalt Desk | SKU-74BEC895 |\n| Echo Chair | SKU-244258F3 |\n| Garnet Shelf | SKU-9CC3054E |"
+    },
+    {
+      "task": "catalog",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 26,
+      "costUsd": 0.034093700000000005,
+      "durationMs": 7179,
+      "wallMs": 21443,
+      "inputTokens": 11397,
+      "outputTokens": 502,
+      "toolResultChars": 3466,
+      "toolCalls": [
+        "open",
+        "read"
+      ],
+      "final": "这四件商品的 SKU 都从各自的详情页读到了：\n\n| 商品 | SKU |\n|---|---|\n| Alpha Lamp | SKU-54CEB227 |\n| Cobalt Desk | SKU-B7776BD9 |\n| Echo Chair | SKU-A7FB5C7B |\n| Garnet Shelf | SKU-5C3C58EB |"
+    },
+    {
+      "task": "orders",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 26,
+      "costUsd": 0.051437000000000004,
+      "durationMs": 10348,
+      "wallMs": 25241,
+      "inputTokens": 13273,
+      "outputTokens": 677,
+      "toolResultChars": 6569,
+      "toolCalls": [
+        "open",
+        "batch(click,wait,read,click,wait,read,click,wait,read,click,wait,read)"
+      ],
+      "final": "状态为 REFUNDED 的订单在第 4 页：\n\n- **订单号：ORD-636430EF**\n- **金额：495.68**\n\n5 页都看过了，只有这一单是 REFUNDED。"
+    },
+    {
+      "task": "orders",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 19,
+      "costUsd": 0.1721218,
+      "durationMs": 18186,
+      "wallMs": 32920,
+      "inputTokens": 77103,
+      "outputTokens": 1264,
+      "toolResultChars": 22639,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "requests",
+        "batch(click,wait,extract,snapshot)",
+        "batch(click,wait,extract,click,wait,extract,click,wait,extract)"
+      ],
+      "final": "状态为 REFUNDED 的订单在第 4 页：\n\n- **订单号：ORD-0EB858CF**\n- **金额：47.89**\n\n5 页共 30 单我都看过了，只有这一单是 REFUNDED。"
+    },
+    {
+      "task": "report",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 4,
+      "browserCalls": 2,
+      "runtimeCalls": 8,
+      "costUsd": 0.1194867,
+      "durationMs": 10448,
+      "wallMs": 25240,
+      "inputTokens": 41957,
+      "outputTokens": 410,
+      "toolResultChars": 16975,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "batch(click,wait,snapshot)"
+      ],
+      "final": "报告已生成，显示 “Report ready”。报告里的 **Total 是 47,755**。"
+    },
+    {
+      "task": "report",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 11,
+      "costUsd": 0.0235817,
+      "durationMs": 8982,
+      "wallMs": 23475,
+      "inputTokens": 9505,
+      "outputTokens": 378,
+      "toolResultChars": 1755,
+      "toolCalls": [
+        "open",
+        "batch(click,wait,read)"
+      ],
+      "final": "我打开页面，点了 “Generate report”，页面显示 “Report ready”。报告里的 **Total 是 67,201**。"
+    },
+    {
+      "task": "settings",
+      "focus": "sequence",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 8,
+      "browserCalls": 5,
+      "runtimeCalls": 18,
+      "costUsd": 0.1706909,
+      "durationMs": 18509,
+      "wallMs": 32751,
+      "inputTokens": 92100,
+      "outputTokens": 1011,
+      "toolResultChars": 22457,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "act:click",
+        "act:click",
+        "batch(click,click,select,snapshot)",
+        "act:click"
+      ],
+      "final": "已保存，回执号是 **RCPT-B0E8F061**（页面显示 “Saved · receipt RCPT-B0E8F061”）。\n\n我从 More 菜单进了 Notification settings，做了这些改动：\n- Email notifications：已关闭\n- Weekly digest：已打开\n- Frequency：已改成 Monthly\n\nSMS alerts 我没动，还是关着。"
+    },
+    {
+      "task": "settings",
+      "focus": "sequence",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 5,
+      "runtimeCalls": 22,
+      "costUsd": 0.0624271,
+      "durationMs": 17451,
+      "wallMs": 32078,
+      "inputTokens": 26680,
+      "outputTokens": 1074,
+      "toolResultChars": 6585,
+      "toolCalls": [
+        "open",
+        "act:click",
+        "act:click",
+        "batch(click,click,select)",
+        "batch(click,wait,read)"
+      ],
+      "final": "已保存，页面显示的回执号是 **RCPT-0A31A39A**。\n\n我是从 More 菜单进的 Notification settings：\n- **Email notifications**：已关闭，保存前已确认。\n- **Weekly digest**：已打开，保存前已确认。\n- **Frequency**：选成了 Monthly，操作返回成功。不过页面快照没显示下拉框当前的值，所以这一项我没能直接确认。"
+    },
+    {
+      "task": "vault",
+      "focus": "escape-hatch",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 16,
+      "costUsd": 0.13608070000000003,
+      "durationMs": 13410,
+      "wallMs": 28831,
+      "inputTokens": 70122,
+      "outputTokens": 743,
+      "toolResultChars": 37457,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "cdp(nodes)",
+        "cdp(click,nodes)",
+        "screenshot"
+      ],
+      "final": "访问码是 **VAULT-5DDA8CFE**。\n\n我点了页面上的“Reveal access code”按钮，然后在截图里读到了它。页面的文本读取拿不到这段文字，所以我没法用文本核对，结果来自截图识别。"
+    },
+    {
+      "task": "vault",
+      "focus": "escape-hatch",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 5,
+      "browserCalls": 4,
+      "runtimeCalls": 20,
+      "costUsd": 0.035686100000000005,
+      "durationMs": 10539,
+      "wallMs": 25300,
+      "inputTokens": 17202,
+      "outputTokens": 736,
+      "toolResultChars": 2167,
+      "toolCalls": [
+        "open",
+        "cdp(nodes)",
+        "cdp(click,nodes)",
+        "cdp(nodes)"
+      ],
+      "final": "访问码是 **VAULT-6E974EB3**。\n\n这个按钮在普通页面快照里看不到，所以我直接找到页面里的“Reveal access code”按钮并点击。点击后页面显示“Access code: VAULT-6E974EB3”。"
+    },
+    {
+      "task": "badge",
+      "focus": "escape-hatch",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 6,
+      "browserCalls": 4,
+      "runtimeCalls": 32,
+      "costUsd": 0.1429378,
+      "durationMs": 14158,
+      "wallMs": 28779,
+      "inputTokens": 71249,
+      "outputTokens": 902,
+      "toolResultChars": 43061,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "cdp(nodes)",
+        "cdp(type,type,click,nodes)",
+        "screenshot"
+      ],
+      "final": "我已经填好 Employee ID（E-75312）和 Door PIN（5054），点了 Issue badge。页面上显示的 badge 编号是 **BADGE-F165E106**。\n\n这个编号是我从提交后的页面截图里读到的。页面的无障碍文本里没有这行内容，所以只能靠截图确认。"
+    },
+    {
+      "task": "badge",
+      "focus": "escape-hatch",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 5,
+      "browserCalls": 4,
+      "runtimeCalls": 36,
+      "costUsd": 0.039991099999999995,
+      "durationMs": 10860,
+      "wallMs": 26263,
+      "inputTokens": 18214,
+      "outputTokens": 781,
+      "toolResultChars": 2795,
+      "toolCalls": [
+        "open",
+        "cdp(nodes)",
+        "cdp(type,type,click,nodes)",
+        "cdp(nodes)"
+      ],
+      "final": "我已在页面面板中把 Employee ID 填为 E-66071、Door PIN 填为 8271，然后点了 Issue badge。页面显示：**Badge issued: BADGE-870F98FF**\n\n所以 badge 编号是 **BADGE-870F98FF**。"
+    },
+    {
+      "task": "iframe",
+      "focus": "control",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 1,
+      "runtimeCalls": 4,
+      "costUsd": 0.1081455,
+      "durationMs": 5612,
+      "wallMs": 20857,
+      "inputTokens": 27919,
+      "outputTokens": 243,
+      "toolResultChars": 15766,
+      "toolCalls": [
+        "list_tools",
+        "open"
+      ],
+      "final": "我打开了这个页面并读取了嵌入的支持面板。面板里显示的支持码是 **SUP-1C38B1E3**。"
+    },
+    {
+      "task": "iframe",
+      "focus": "control",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 11,
+      "costUsd": 0.0207974,
+      "durationMs": 5881,
+      "wallMs": 20478,
+      "inputTokens": 8967,
+      "outputTokens": 329,
+      "toolResultChars": 1386,
+      "toolCalls": [
+        "read",
+        "open"
+      ],
+      "final": "页面里嵌入的支持面板（iframe）显示的支持码是 **SUP-9A5E6F91**。"
+    },
+    {
+      "task": "directory",
+      "focus": "control",
+      "variant": "C",
+      "repetition": 2,
+      "pass": true,
+      "turns": 3,
+      "browserCalls": 2,
+      "runtimeCalls": 12,
+      "costUsd": 0.0269041,
+      "durationMs": 7693,
+      "wallMs": 22588,
+      "inputTokens": 9755,
+      "outputTokens": 465,
+      "toolResultChars": 1914,
+      "toolCalls": [
+        "open",
+        "batch(type,press,wait,read)"
+      ],
+      "final": "Okafor 的分机号是 **3536**。\n\n我在通讯录里按姓氏搜索 Okafor，只找到这一条结果：“Okafor — extension 3536”。"
+    },
+    {
+      "task": "directory",
+      "focus": "control",
+      "variant": "A",
+      "repetition": 2,
+      "pass": true,
+      "turns": 5,
+      "browserCalls": 3,
+      "runtimeCalls": 10,
+      "costUsd": 0.1292983,
+      "durationMs": 12525,
+      "wallMs": 27333,
+      "inputTokens": 56301,
+      "outputTokens": 590,
+      "toolResultChars": 17539,
+      "toolCalls": [
+        "list_tools",
+        "open",
+        "act:type",
+        "batch(wait,snapshot)"
+      ],
+      "final": "Okafor 的分机号是 **2378**。我在通讯录里搜索 Okafor 后只出现了这一条结果，过一会儿再查看，结果也没有变化。"
+    }
+  ]
+}

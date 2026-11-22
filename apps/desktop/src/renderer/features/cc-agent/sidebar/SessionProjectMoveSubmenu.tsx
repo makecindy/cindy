@@ -1,5 +1,6 @@
 import { Folder, FolderPlus, MessageCircle, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -34,6 +35,7 @@ export function SessionProjectMoveSubmenu({
   onMoveToDialogue,
 }: SessionProjectMoveSubmenuProps) {
   const { t } = useTranslation();
+  const movableProjects = projectOptions.filter((project) => !isTeammateProjectPath(project.path));
   const normalizedCurrent = normalizePath(
     !isDialogue && currentSession ? sessionProjectDirectory(currentSession) : null,
   );
@@ -44,8 +46,8 @@ export function SessionProjectMoveSubmenu({
         {heading ?? t('ccAgent.sidebar.sessionMenu.moveToProjectHeading')}
       </div>
       <div className="pending-queue-scroll -mr-1 max-h-[224px] overflow-x-hidden overflow-y-auto pr-1">
-        {projectOptions.length > 0 ? (
-          projectOptions.map((project) => {
+        {movableProjects.length > 0 ? (
+          movableProjects.map((project) => {
             const isCurrent = normalizePath(project.path) === normalizedCurrent;
             return (
               <DropdownMenuItem

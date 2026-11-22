@@ -1,6 +1,57 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
+
+/** Consume launcher-only routing before Main can spawn agents or other dev apps. */
+export function consumePersonalMonitorEnvironment(env: NodeJS.ProcessEnv) {
+  const directory = env.CINDY_PERSONAL_MONITOR_DIR;
+  const generation = env.CINDY_PERSONAL_GENERATION;
+  const assetDigest = env.CINDY_PERSONAL_ASSET_DIGEST;
+  delete env.CINDY_PERSONAL_MONITOR_DIR;
+  delete env.CINDY_PERSONAL_GENERATION;
+  delete env.CINDY_PERSONAL_ASSET_DIGEST;
+  return directory && generation ? { directory, generation, assetDigest } : null;
+}
+export const personalMonitorEnvironment = consumePersonalMonitorEnvironment(process.env);
+let monitorOwned = false;
+export function ownsPersonalBuildMonitor() { return monitorOwned; }
+
+/** A BrowserWindow also exists for Chromium's error page. Probe the document
+ * actually displayed, without queuing more evaluations behind a hung renderer. */
+export function createPersonalRendererProbe<W extends {
+  isDestroyed(): boolean;
+  webContents: {
+    isDestroyed(): boolean;
+    isCrashed(): boolean;
+    isLoadingMainFrame(): boolean;
+    executeJavaScript(code: string): Promise<unknown>;
+  };
+}>(current: () => W | null, htmlFile?: string) {
+  const pending = new WeakMap<W, Promise<boolean>>();
+  const expected = htmlFile ? pathToFileURL(htmlFile).href : undefined;
+  const script = [
+    expected && `location.href.split(/[?#]/, 1)[0] === ${JSON.stringify(expected)}`,
+    "document.readyState === 'complete'",
+    "document.querySelector('#root[data-cindy-mounted=\"1\"]')?.childElementCount > 0",
+  ].filter(Boolean).join(' && ');
+  return async () => {
+    const win = current();
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed() || win.webContents.isCrashed()
+        || win.webContents.isLoadingMainFrame()) return false;
+    let probe = pending.get(win);
+    if (!probe) {
+      probe = win.webContents.executeJavaScript(script)
+        .then(ok => ok === true && current() === win, () => false)
+        .finally(() => { pending.delete(win); });
+      pending.set(win, probe);
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([probe, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 1500); })]);
+    } finally { clearTimeout(timer); }
+  };
+}
 
 export interface PersonalBuildMonitorDeps {
   directory: string;
@@ -8,6 +59,9 @@ export interface PersonalBuildMonitorDeps {
   pid: number;
   now(): number;
   ready(): boolean;
+  assetDigest?: string;
+  interactive?(): Promise<boolean>;
+  interfaceFailure?(): number | undefined;
   remoteReady(): boolean;
   idle(): boolean;
   busy(): Promise<boolean>;
@@ -24,6 +78,18 @@ export function createPersonalBuildMonitor(d: PersonalBuildMonitorDeps) {
   const st = fs.lstatSync(d.directory);
   if (!st.isDirectory() || st.isSymbolicLink() || (st.mode & 0o077) !== 0)
     throw new Error('Personal build monitor needs a private directory');
+  // A pre-owner-file host may already be writing here. Do not adopt its generation either.
+  if (fs.existsSync(path.join(d.directory, 'heartbeat.json'))) return async () => {};
+  // A generation is single-use. Never reclaim it, even when its original PID has exited.
+  // Older hosts can still leak routing to a child; that child must not overwrite health evidence.
+  try {
+    fs.writeFileSync(path.join(d.directory, 'host-owner.json'), JSON.stringify({ pid: d.pid, generation: d.generation }),
+      { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return async () => {};
+    throw error;
+  }
+  monitorOwned = true;
   let active = false;
   const heartbeat = path.join(d.directory, 'heartbeat.json');
   const request = path.join(d.directory, 'request.json');
@@ -33,9 +99,11 @@ export function createPersonalBuildMonitor(d: PersonalBuildMonitorDeps) {
     try {
       let busy = true;
       try { busy = await d.busy(); } catch { /* Unknown activity is busy. */ }
-      const ready = d.ready(), remoteReady = d.remoteReady(), idle = d.idle();
+      const interactive = d.interactive ? await d.interactive() : undefined;
+      const interfaceFailure = d.interfaceFailure?.();
+      const ready = d.ready() && interactive !== false && interfaceFailure === undefined, remoteReady = d.remoteReady(), idle = d.idle();
       atomicWriteFileSync(heartbeat, JSON.stringify({ protocol: 1, generation: d.generation,
-        pid: d.pid, at: d.now(), ready, remoteReady, busy, idle }));
+        pid: d.pid, at: d.now(), ready, interactive, interfaceFailure, assetDigest: d.assetDigest, remoteReady, busy, idle }));
       if (!ready || busy || !idle || d.quitting()) return;
       type Request = { action?: string; generation?: string; pid?: number; expiresAt?: number; requireRemote?: boolean };
       const read = (file: string): Request => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } };

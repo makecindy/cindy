@@ -115,6 +115,9 @@ const ledgerAddRefMock = vi.fn(async (params: TestLedgerRef) => {
   return `ref-${ledgerRefs.length}`;
 });
 const callCindyMediaMock = vi.fn();
+const callEvaluateMock = vi.fn();
+const readEvaluationImageFileMock = vi.fn();
+vi.mock('../../cindy-evaluate/runtime.js', () => ({ callEvaluate: callEvaluateMock, readEvaluationImageFile: readEvaluationImageFileMock }));
 const dirDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'dir-ticket' } }));
 const saveDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'save-ticket' } }));
 const liveGrantStateMock = vi.fn();
@@ -152,10 +155,14 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: logInfoMock, warn: logWarnMock, error: () => {}, debug: () => {} }),
 }));
 // Claude 走建线闭包 ctx；Codex / Pi 用此 mock 模拟 HTTP bridge 的 ALS 恢复。
-vi.mock('@cindy/mcps', async (importOriginal) => ({
-  resolveLiziMcpSessionContext: (await importOriginal<typeof import('@cindy/mcps')>()).resolveLiziMcpSessionContext,
-  getLiziMcpSessionContext: () => alsSessionContextMock(),
-}));
+vi.mock('@cindy/mcps', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/mcps')>();
+  return {
+    resolveLiziMcpSessionContext: actual.resolveLiziMcpSessionContext,
+    authorizedSessionPathStillBound: actual.authorizedSessionPathStillBound,
+    getLiziMcpSessionContext: () => alsSessionContextMock(),
+  };
+});
 
 const isAuthorizationSessionMock = vi.fn(async () => false);
 vi.mock('../../maker-ipc/botAuthorizationHost.js', () => ({ isBotAuthorizationSession: isAuthorizationSessionMock }));
@@ -166,6 +173,10 @@ vi.mock('../../maker-ipc/botAuthorizationService.js', () => ({
 
 const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
+const listInstalledMock = vi.fn(() => listMock());
+const listInstalledAsyncMock = vi.fn(async () => listMock());
+const findInstalledInstanceMock = vi.fn((id: string) =>
+  listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id));
 const approvedReceiptMock = vi.fn<(...args: unknown[]) => { manifest: InstalledGhost["manifest"] } | null>(() => null);
 const activeSessionAvailableMock = vi.fn<(ghostId: string) => boolean>(() => true);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
@@ -198,10 +209,10 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock,
-    findInstalledInstance: (id: string) => listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id),
+  getGhostManager: () => ({ list: listInstalledMock,
+    findInstalledInstance: findInstalledInstanceMock,
     readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
-  listInstalledGhostsAsync: async () => listMock(),
+  listInstalledGhostsAsync: listInstalledAsyncMock,
   ghostForgeForbiddenRootDirs: () => [],
   listAvailableGhostsForAuthorization: () => listMock(),
   findAvailableGhostForAuthorization: (id: string) =>
@@ -384,6 +395,9 @@ beforeEach(() => {
   fs.mkdirSync(outsideDir, { recursive: true });
   approvedReceiptMock.mockReset();
   approvedReceiptMock.mockReturnValue(null);
+  listInstalledMock.mockClear();
+  listInstalledAsyncMock.mockClear();
+  findInstalledInstanceMock.mockClear();
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   activeSessionAvailableMock.mockReset();
@@ -480,6 +494,8 @@ beforeEach(() => {
   liveGrantStateMock.mockReset();
   liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true });
   callCindyMediaMock.mockReset();
+  callEvaluateMock.mockReset();
+  readEvaluationImageFileMock.mockReset();
   alsSessionContextMock.mockReset();
   cardRegisterMock.mockClear();
   logWarnMock.mockClear();
@@ -1785,7 +1801,7 @@ describe('花名册 / ghost_list 过滤', () => {
     await expect(makeDeps().getAwakeGhost('missing')).resolves.toEqual({
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
-      message: t('newChat.pluginSetup.targetNotFound'),
+      message: expect.stringContaining('Plugins settings link for the task computer'),
     });
   });
 
@@ -2030,7 +2046,7 @@ describe('ghost_call 兜底拒绝', () => {
     ).resolves.toEqual({
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
-      message: t('newChat.pluginSetup.targetNotFound'),
+      message: expect.stringContaining('Plugins settings link for the task computer'),
     });
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -3630,6 +3646,7 @@ describe('market install live authority', () => {
   ) {
     const ghost = { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true };
     const market = {
+      lookup: vi.fn(async () => ({ items: [{ pluginId: 'p1', ghostId: 'mail-suite', namespace: null, releaseId: 'r1', installState: 'not-installed' }], unavailableCustomSourceNames: [] })),
       snapshot: vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       query: vi.fn(async () => ({ items: [], nextCursor: null, counts: null, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       detail: vi.fn(async () => ({ ghostId: 'mail-suite', releaseId: 'r1', manifest: ghost.manifest })),
@@ -3638,6 +3655,24 @@ describe('market install live authority', () => {
     const deps = makeDeps(agentKind, 's1', 's1-instance', {}, market as unknown as CindyGhostsHostDeps['pluginMarket'], requestHostPermission);
     return { deps, market };
   }
+
+  // A missing PR plugin used to end the task with only a generic not-found error.
+  it('guides missing-plugin discovery without eager market I/O from info, manual or call', async () => {
+    const { deps, market } = marketHarness();
+    for (const result of [
+      await deps.getAwakeGhost('mail-suite', null),
+      await deps.readGhostManual({ ghostId: 'mail-suite', namespace: null }),
+      await deps.callGhostTool({ ghostId: 'mail-suite', namespace: null, tool: 'pr_card', args: {} }),
+    ]) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND',
+        message: expect.stringContaining('match the exact identity {"ghost_id":"mail-suite","namespace":null}') });
+    }
+    expect(market.lookup).not.toHaveBeenCalled();
+    expect(market.query).not.toHaveBeenCalled();
+    expect(market.install).not.toHaveBeenCalled();
+    const mismatch = await deps.getAwakeGhost('mail-suite', 'acme');
+    expect(mismatch).toMatchObject({ ok: false, message: expect.stringContaining('{"ghost_id":"mail-suite","namespace":"acme"}') });
+  });
 
   it.each(['claude-code', 'codex', 'pi'] as const)('uses the live %s task and does not connect on install', async (kind) => {
     liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', isCurrent: () => true });
@@ -3854,6 +3889,124 @@ describe('plugin page audience and shared tool execution', () => {
       manifest: { ...(chipGhost('art') as InstalledGhost).manifest,
         mcpApps: { ui: { resources: [], tools: { run: { visibility: ['app'] } } } } } };
   }
+  // Regression: a page tool call scanned every installation, including a second
+  // synchronous scan for sessionContext. Existing audience tests did not check IO.
+  // Unit: real ticket + callGhostTool entry, fake install store (50 instances),
+  // one session-context tool; preserve dispatch and all mutable-state denials.
+  function callPage(ghost: InstalledGhost) {
+    const grant = { instance: installedGhostStoragePart(ghost), revision: 'approved-ui',
+      sessionId: 's1', clientId: 'card', tool: 'run', assertCurrent: async () => {} };
+    return withPluginPageTicket(grant, ticket => consumePluginPageTicket(ticket,
+      grant.instance, grant.revision, grant.tool, pageCall =>
+        getCindyGhostsMcpDeps({ sessionId: 's1', sessionInstanceId: 's1-instance',
+          agentKind: 'claude-code', workingDir: WORKDIR }, {}, pageCall)
+          .callGhostTool({ ghostId: grant.instance, tool: grant.tool, args: {} })));
+  }
+  it('dispatches a page tool with session context without scanning other installations', async () => {
+    const ghost = pageGhost();
+    ghost.manifest.sessionContext = true;
+    ghost.instanceKey = '_root__art';
+    ghost.namespace = null;
+    const newerCopy = { ...ghost, instanceKey: '_ns__local__art', namespace: 'local',
+      manifest: { ...ghost.manifest, version: '99.0.0' } };
+    listMock.mockReturnValue([ghost, newerCopy, ...Array.from({ length: 48 }, (_, i) => chipGhost(`other-${i}`))]);
+    expect(await callPage(ghost)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: installedGhostStoragePart(ghost), tool: 'run',
+      args: expect.objectContaining({ session_context: expect.objectContaining({ session_id: 's1' }) }),
+    }));
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).not.toHaveBeenCalled();
+  });
+  function legacyPageCopies(): [InstalledGhost, InstalledGhost] {
+    const bound: InstalledGhost = { ...pageGhost(), instanceKey: 'art', namespace: null };
+    const other: InstalledGhost = { ...bound, instanceKey: '_ns__acme__art', namespace: 'acme',
+      dir: path.join(tmpUserData, '_ns', 'acme', 'art') };
+    return [bound, other];
+  }
+  // Unit regression: a legacy bare storage key became ambiguous after installing
+  // a namesake. A page ticket already binds an instance; model name lookup does not.
+  // Existing modern-key coverage missed this case. Minimum: two same-name copies.
+  it('keeps a legacy page bound to its instance while model name lookup remains ambiguous', async () => {
+    const [bound, other] = legacyPageCopies();
+    listMock.mockReturnValue([bound, other]);
+    expect(await callPage(bound)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: bound.instanceKey, tool: 'run' }));
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).not.toHaveBeenCalled();
+
+    dispatchMock.mockClear();
+    expect(await makeDeps().callGhostTool({ ghostId: bound.manifest.id, tool: 'run', args: {} }))
+      .toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  // PR #9936: undefined also means the registry is not populated. Previous
+  // fixtures only modeled missing installs, so an approved page could fail cold.
+  // Unit: real ticket/call entry; one cache miss before setup or after the DB await,
+  // with another same-name copy first in the list to detect accidental redirection.
+  it.each(['initial', 'session-context'] as const)('recovers a page instance after an %s registry cache miss', async phase => {
+    const [bound, other] = legacyPageCopies();
+    bound.manifest.sessionContext = true;
+    listMock.mockReturnValue([other, bound]);
+    if (phase === 'initial') findInstalledInstanceMock.mockReturnValueOnce(undefined);
+    else sessionSnapshotMock.mockImplementationOnce(async () => {
+      findInstalledInstanceMock.mockReturnValueOnce(undefined);
+      return { workingDir: WORKDIR, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null };
+    });
+    expect(await callPage(bound)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: bound.instanceKey, tool: 'run',
+      args: expect.objectContaining({ session_context: expect.objectContaining({ session_id: 's1' }) }),
+    }));
+    expect(listInstalledMock).toHaveBeenCalledOnce();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+  });
+  // The initial lookup must retain the same errors before setup can run;
+  // revision drift here is a page authorization error, unlike drift after await.
+  // Keep the other copy available throughout: neither gate may redirect to it.
+  it.each([
+    ['disabled', 'GHOST_ASLEEP'],
+    ['revision', 'PERMISSION_DENIED'],
+    ['workdir', 'GHOST_DISABLED_IN_WORKDIR'],
+    ['missing', 'GHOST_NOT_FOUND'],
+  ] as const)('rejects an initially %s page target before setup', async (change, errorCode) => {
+    const [ghost, other] = legacyPageCopies();
+    listMock.mockReturnValue([ghost, other]);
+    if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }, other]);
+    if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }, other]);
+    if (change === 'workdir') setGhostDisabledForWorkdir(WORKDIR, installedGhostStoragePart(ghost), true);
+    if (change === 'missing') listMock.mockReturnValue([other]);
+    expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 1 : 0);
+  });
+  it.each([
+    ['disabled', 'GHOST_ASLEEP'],
+    ['revision', 'GHOST_NOT_FOUND'],
+    ['workdir', 'GHOST_DISABLED_IN_WORKDIR'],
+    ['missing', 'GHOST_NOT_FOUND'],
+  ] as const)('rejects a page tool when %s changes during session context lookup', async (change, errorCode) => {
+    const [ghost, other] = legacyPageCopies();
+    ghost.manifest.sessionContext = true;
+    listMock.mockReturnValue([ghost, other]);
+    sessionSnapshotMock.mockImplementationOnce(async () => {
+      if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }, other]);
+      if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }, other]);
+      if (change === 'workdir') setGhostDisabledForWorkdir(WORKDIR, installedGhostStoragePart(ghost), true);
+      if (change === 'missing') listMock.mockReturnValue([other]);
+      return { workingDir: WORKDIR, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null };
+    });
+    expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    // The initial page binding and the post-session-context recheck are two
+    // separate exact checks; each cold check may fall back once.
+    expect(listInstalledMock).toHaveBeenCalledTimes(change === 'missing' ? 2 : 0);
+  });
   // C14/X01: a cold page call used to bootstrap with no business id, then leak
   // its ALS grant into long-lived MCP callbacks. Existing tests only used live
   // tasks. Unit: real ticket/restore/ghost dispatch, bootstrap and IO are fakes.
@@ -4354,4 +4507,56 @@ it('does not couple ordinary desktop setup cards to a tool abort signal', async 
   await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, signal: controller.signal });
   expect(ensureReadyMock).toHaveBeenCalled();
   expect(ensureReadyMock.mock.calls[0][0].signal).toBeUndefined();
+});
+
+// Unit regression: the image grant must survive file reading and subsequent quote/codec work.
+// Existing media-path tests only authorize path disclosure, not this later paid dispatch.
+it.each(['read', 'submit'])('retains evaluate image grants through %s and rejects revocation', async phase => {
+  const actual = await vi.importActual<typeof import('../../cindy-brain/ghostLocalPathGrant')>('../../cindy-brain/ghostLocalPathGrant');
+  classifyLocalAttachmentPathMock.mockImplementation(actual.classifyLocalAttachmentPath);
+  const file = path.join(outsideDir, 'evaluation.png');
+  fs.writeFileSync(file, 'fixture');
+  let generation = 0;
+  liveGrantStateMock.mockImplementation(() => {
+    const captured = generation;
+    return { permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => captured === generation };
+  });
+  readEvaluationImageFileMock.mockImplementation(async () => { if (phase === 'read') generation++; return Buffer.alloc(0); });
+  const dispatch = vi.fn();
+  callEvaluateMock.mockImplementation(async (_request, context) => {
+    await context.readImage(file);
+    if (phase === 'submit') generation++;
+    context.assertCurrent();
+    dispatch();
+    return { ok: true };
+  });
+  await expect(makeDeps('codex', 'evaluation-grant').callEvaluate?.({ action: 'decisions', questions: { q: { type: 'noul', instructions: 'check' } }, state: [] }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(readEvaluationImageFileMock).toHaveBeenCalledWith(fs.realpathSync.native(file));
+});
+
+// Unit: use the canonical target for approval/read, and reject a symlink substituted
+// during the read. The earlier revocation test covered permission state, not path binding.
+it('binds evaluate image reads to the canonical file and rejects link substitution', async ({ skip }) => {
+  const actual = await vi.importActual<typeof import('../../cindy-brain/ghostLocalPathGrant')>('../../cindy-brain/ghostLocalPathGrant');
+  classifyLocalAttachmentPathMock.mockImplementation(actual.classifyLocalAttachmentPath);
+  const file = path.join(outsideDir, 'bound-evaluation.png');
+  const alias = path.join(outsideDir, 'evaluation-alias.png');
+  const replacement = path.join(outsideDir, 'replacement-evaluation.png');
+  fs.writeFileSync(file, 'fixture'); fs.writeFileSync(replacement, 'replacement');
+  try { fs.symlinkSync(file, alias); }
+  catch (error) { if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) { skip(); return; } throw error; }
+  liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => true });
+  callEvaluateMock.mockImplementation(async (_request, context) => { await context.readImage(alias); return { ok: true }; });
+  readEvaluationImageFileMock.mockResolvedValue(Buffer.alloc(0));
+  expect(await makeDeps('codex', 'evaluation-link').callEvaluate?.({ action: 'decisions', state: [] })).toEqual({ ok: true });
+  const canonical = fs.realpathSync.native(file);
+  expect(readEvaluationImageFileMock).toHaveBeenCalledWith(canonical);
+  readEvaluationImageFileMock.mockImplementation(async () => {
+    fs.unlinkSync(file); fs.symlinkSync(replacement, file);
+    return Buffer.alloc(0);
+  });
+  await expect(makeDeps('codex', 'evaluation-link-race').callEvaluate?.({ action: 'decisions', state: [] }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
 });

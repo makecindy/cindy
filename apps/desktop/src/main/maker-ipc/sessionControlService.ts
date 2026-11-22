@@ -1,12 +1,15 @@
-import { DelegationNotAuthorizedError, formatForwardedRequest, type CapturedAgentRequest } from './forwardedRequest.js';
+import { formatForwardedRequest, type CapturedAgentRequest } from './forwardedRequest.js';
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type {
   AgentKind,
+  EngineKind,
   Effort,
+  PermissionMode,
   SessionGracefulStopResult,
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
-import { assertTaskActionCurrent, bindTaskActionInput, combineInputGuards } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, bindTaskActionInput, captureTaskActionGuard, captureTaskActionDeliveryGuard, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
+import { revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type {
@@ -15,6 +18,7 @@ import type {
 } from './sessionRuntimeControl.js';
 
 import {
+  canEditQueuedMessage,
   updateQueuedMessageText,
   type AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue.js';
@@ -25,7 +29,7 @@ import {
   type SessionQueueSteerResult,
 } from './sessionQueueControl.js';
 
-type Failure<Code extends string> = { ok: false; errorCode: Code; message: string };
+type Failure<Code extends string> = { ok: false; errorCode: Code; message: string; data?: Record<string, unknown> };
 
 export type SessionQueuedMessageControlResult =
   | { ok: true; queuedMessageId: string }
@@ -35,12 +39,12 @@ export type SessionQueuedMessageControlResult =
       | 'MESSAGE_CONSUMING'
       | 'NOT_AUTHORIZED'
       | 'INVALID_ARGS'
-      | 'DELEGATION_NOT_AUTHORIZED'
+      | 'UNSUPPORTED_CAPABILITY'
     >;
 
 export type SessionSteerResult =
   | { ok: true; queuedMessageId: string }
-  | Failure<'NOT_FOUND' | 'NO_ACTIVE_TURN' | 'UNSUPPORTED_CAPABILITY' | 'DELIVERY_FAILED' | 'DELEGATION_NOT_AUTHORIZED'>;
+  | Failure<'NOT_FOUND' | 'NO_ACTIVE_TURN' | 'UNSUPPORTED_CAPABILITY' | 'DELIVERY_FAILED'>;
 
 export type SessionStopResult =
   | {
@@ -51,11 +55,20 @@ export type SessionStopResult =
     }
   | Failure<'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY'>;
 
+/**
+ * A route change waiting for its boundary. `user` marks a picker choice staged for the next
+ * send; Agent tools see it so they do not revise a selection they cannot see.
+ */
+export type SessionRuntimePendingProjection =
+  | PendingSessionRuntimeMutation
+  | { generation: number; source: 'user'; profile: SessionRuntimeProfile };
+
 export interface SessionRuntimeDetails extends SessionActivitySnapshot {
+  permissionMode?: PermissionMode;
   runtimeGeneration: number;
   baselineProfile: SessionRuntimeProfile;
   effectiveProfile: SessionRuntimeProfile;
-  pendingMutation: PendingSessionRuntimeMutation | null;
+  pendingMutation: SessionRuntimePendingProjection | null;
   fallbackEnabled: boolean;
 }
 
@@ -69,13 +82,18 @@ export type SessionRuntimeSetResult =
       effectiveBoundary?: 'next_send';
       generation: number;
       effectiveProfile: SessionRuntimeProfile;
-      pendingMutation: PendingSessionRuntimeMutation | null;
+      pendingMutation: SessionRuntimePendingProjection | null;
+      permissionMode?: PermissionMode;
     }
-  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'>;
+  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY' | 'INTERNAL'>;
 
 export interface SessionControlLiveSession {
-  agentKind: AgentKind;
-  capabilities: { sameTurnSteer: { supported: boolean } };
+  agentKind: EngineKind;
+  capabilities: {
+    sameTurnSteer: { supported: boolean };
+    permissionModes?: readonly { id: PermissionMode }[];
+    setPermissionModeMidSession?: { supported: boolean };
+  };
   isTurnRunning(): boolean;
   getTurnGeneration(): number;
   requestGracefulStop(): Promise<SessionGracefulStopResult>;
@@ -89,10 +107,20 @@ export interface SessionSteerTurnIdentity {
 }
 
 export interface SessionControlServiceDeps {
+  /** The gateway supplies the real plugin identity; tool arguments cannot grant this access. */
+  getPluginCaller?(): { source: NonNullable<AgentInputQueuedMessage['sourcePlugin']>; assertCurrent(): void } | undefined;
+  runSessionAction?(params: {
+    targetSessionId: string;
+    action: 'pause' | 'resume' | 'retry' | 'compact';
+    instructions?: string;
+    beforeMutation: () => Promise<void>;
+    beforeDelivery?: () => Promise<void>;
+  }): Promise<{ ok: true; result: unknown } | Failure<string>>;
   sessionExists(sessionId: string): Promise<boolean>;
   getLiveSession(sessionId: string): SessionControlLiveSession | null;
   getSessionActivitySnapshot(sessionId: string): Promise<SessionActivitySnapshot>;
   getSessionRuntimeDetails(sessionId: string): Promise<SessionRuntimeDetails>;
+  setSessionPermissionMode?(params: { sessionId: string; mode: PermissionMode; beforeMutation?: () => Promise<void> }): Promise<unknown>;
   setSessionRuntime(params: {
     targetSessionId: string;
     expectedGeneration?: number;
@@ -104,12 +132,13 @@ export interface SessionControlServiceDeps {
       providerId?: string | null;
       effort?: Effort | null;
       fastMode?: boolean | 'ultrafast';
+      permissionMode?: PermissionMode;
     };
   }): Promise<SessionRuntimeSetResult>;
   assertExternalInputAllowed(sessionId: string): Promise<void>;
   createQueuedMessage(params: {
     targetSessionId: string;
-    callerSessionId: string;
+    callerSessionId?: string;
     queuedMessageId: string;
     message: string;
   }): Promise<AgentInputQueuedMessage>;
@@ -128,6 +157,8 @@ export interface SessionControlServiceDeps {
     consumingClientIds: string[];
   }>;
   replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
+  updateQueuedMessageText?(sessionId: string, expected: AgentInputQueuedMessage, text: string,
+    finalize: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage): boolean;
   removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
   steerStoredQueuedMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
   moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
@@ -153,8 +184,35 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
   }
 
   return {
+    async controlSession(params: {
+      targetSessionId: string;
+      action: 'pause' | 'resume' | 'retry' | 'compact';
+      instructions?: string;
+    }): Promise<{ ok: true; result: unknown } | Failure<string>> {
+      const plugin = deps.getPluginCaller?.();
+      await assertTaskActionCurrent();
+      const actionGuard = captureTaskActionGuard();
+      const deliveryGuard = captureTaskActionDeliveryGuard();
+      const beforeMutation = async () => { await actionGuard?.(); plugin?.assertCurrent(); };
+      const beforeDelivery = deliveryGuard ?? beforeMutation;
+      const missing = await ensureTarget(params.targetSessionId);
+      await beforeMutation();
+      if (missing) return missing;
+      if (!deps.runSessionAction) return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Session control is unavailable on this Host' };
+      await deps.assertExternalInputAllowed(params.targetSessionId);
+      await beforeMutation();
+      try {
+        return await deps.runSessionAction({ ...params, beforeMutation, beforeDelivery });
+      } catch (error) {
+        const code = error instanceof Error && error.name === 'NotSupportedError' && params.action === 'compact'
+          ? 'UNSUPPORTED_CAPABILITY' : (error as { code?: unknown } | null)?.code;
+        if (typeof code === 'string' && ['UNSUPPORTED_CAPABILITY', 'PRECONDITION_FAILED', 'NOT_FOUND', 'SESSION_RUNNING', 'COMPACT_FAILED'].includes(code))
+          return { ok: false, errorCode: code, message: error instanceof Error ? error.message : 'Session action is unavailable' };
+        throw error;
+      }
+    },
     async updateQueuedMessage(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       queuedMessageId: string;
       /** Host-only authorization check after async reads, immediately before mutation. */
@@ -163,15 +221,35 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
-      const captured = await deps.captureRequest?.(params.callerSessionId, params.message,
-        { sessionId: params.targetSessionId });
-      if (captured?.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: captured.blocked };
-      return queueControl.update({
+      const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
+      const update = {
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         message: params.message,
+        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
+      };
+      if (plugin) {
+        const edit = deps.updateQueuedMessageText;
+        if (!edit) return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Queued message text editing is unavailable' };
+        return queueControl.update({
+          ...update,
+          authorize: (item) => canEditQueuedMessage(item)
+            ? { ok: true }
+            : { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'This queued message is not editable in the task interface' },
+          updateText: (expected) => edit(params.targetSessionId, expected, params.message, (updated) => {
+            revokeTrustedDesktopQueuedOrigin(updated);
+            updated.sourcePlugin = plugin.source;
+            updated.autoReviewUserText = { kind: 'agent-request' };
+            bindTaskActionInput(params.targetSessionId, updated);
+            return updated;
+          }),
+        });
+      }
+      const captured = params.callerSessionId ? await deps.captureRequest?.(params.callerSessionId, params.message,
+        { sessionId: params.targetSessionId }) : undefined;
+      return queueControl.update({
+        ...update,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
-        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
         rebuild: (item, message) => {
           const next = rebuildSessionQueueItem(item, message, captured?.autoReviewUserText);
           bindTaskActionInput(params.targetSessionId, next);
@@ -181,7 +259,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     },
 
     async cancelQueuedMessage(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       queuedMessageId: string;
       /** Host-only authorization check after async reads, immediately before mutation. */
@@ -189,50 +267,53 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
+      const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
       return queueControl.cancel({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
-        authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
-        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
+        authorize: (item) => plugin ? { ok: true } : authorizeSessionQueueItem(item, params.callerSessionId),
+        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
       });
     },
 
     async steerQueuedMessage(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       queuedMessageId: string;
     }): Promise<SessionQueueSteerResult | Failure<'NOT_FOUND'>> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
+      const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
       return queueControl.steer({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
-        beforeMutation: assertTaskActionCurrent,
+        beforeMutation: combineInputGuards(assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
         authorize: (item) =>
-          authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
+          plugin ? { ok: true } : authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
       });
     },
 
     async moveQueuedMessage(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       queuedMessageId: string;
       position: number;
     }): Promise<SessionQueueMoveResult | Failure<'NOT_FOUND'>> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
+      const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
       return queueControl.move({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         position: params.position,
-        beforeMutation: assertTaskActionCurrent,
+        beforeMutation: combineInputGuards(assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
         authorize: (item) =>
-          authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
+          plugin ? { ok: true } : authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
       });
     },
 
     async steerSession(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       message: string;
       /** Host-owned stable ID; the input coordinator owns acceptance deduplication. */
@@ -274,17 +355,10 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       }
       const turnGeneration = live.getTurnGeneration();
       const queuedMessageId = params.queuedMessageId ?? deps.createId();
-      let item: AgentInputQueuedMessage;
-      try {
-        item = await deps.createQueuedMessage({
-          ...params,
-          queuedMessageId,
-        });
-      } catch (error) {
-        if (error instanceof DelegationNotAuthorizedError)
-          return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: error.message };
-        throw error;
-      }
+      const item: AgentInputQueuedMessage = await deps.createQueuedMessage({
+        ...params,
+        queuedMessageId,
+      });
       await beforeMutation?.();
       const current = deps.getLiveSession(params.targetSessionId);
       if (
@@ -371,11 +445,56 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         providerId?: string | null;
         effort?: Effort | null;
         fastMode?: boolean | 'ultrafast';
+        permissionMode?: PermissionMode;
       };
     }): Promise<SessionRuntimeSetResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (params.beforeMutation) await params.beforeMutation();
       if (missing) return missing;
+      if (params.patch.permissionMode !== undefined) {
+        if (hasTaskActionAuthorization(params.targetSessionId)) {
+          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+            message: 'An admitted task cannot change its own permission mode, including in a mixed runtime patch.' };
+        }
+        if (!deps.setSessionPermissionMode) return { ok: false, errorCode: 'INVALID_ARGS', message: 'Permission control is unavailable.' };
+        const beforeMutation = combineInputGuards(params.beforeMutation, assertTaskActionCurrent);
+        const { permissionMode, ...runtimePatch } = params.patch;
+        const hasRuntimePatch = Object.keys(runtimePatch).length > 0;
+        let result: SessionRuntimeSetResult;
+        if (hasRuntimePatch) {
+          const live = deps.getLiveSession(params.targetSessionId);
+          if (live && (!live.capabilities.permissionModes?.some(mode => mode.id === permissionMode) ||
+            live.capabilities.setPermissionModeMidSession?.supported !== true)) {
+            return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+              message: `The live ${live.agentKind} session does not support permission mode '${permissionMode}'. Runtime settings were not changed.` };
+          }
+          result = await deps.setSessionRuntime({ ...params, patch: runtimePatch, beforeMutation });
+        } else {
+          const details = await deps.getSessionRuntimeDetails(params.targetSessionId);
+          await beforeMutation?.();
+          if (params.expectedGeneration !== undefined && details.runtimeGeneration !== params.expectedGeneration)
+            return { ok: false, errorCode: 'CONFLICT', message: 'Runtime generation changed; read it again before retrying.' };
+          result = { ok: true, status: 'applied', generation: details.runtimeGeneration,
+            effectiveProfile: details.effectiveProfile, pendingMutation: details.pendingMutation };
+        }
+        if (!result.ok) return result;
+        try {
+          await beforeMutation?.();
+          await deps.setSessionPermissionMode({ sessionId: params.targetSessionId, mode: permissionMode, beforeMutation });
+        } catch (error) {
+          if (!hasRuntimePatch) throw error;
+          return { ok: false, errorCode: 'INTERNAL',
+            message: `Runtime settings were ${result.status}, but permission_mode failed. Read get_session_runtime before retrying.`,
+            data: { runtime: { status: result.status, generation: result.generation, fields: Object.keys(runtimePatch),
+              ...(result.effectiveBoundary ? { effective_boundary: result.effectiveBoundary } : {}) },
+              failed: 'permission_mode', original_error: {
+                code: typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : null,
+                message: error instanceof Error ? error.message : String(error),
+              } },
+          };
+        }
+        return { ...result, permissionMode };
+      }
       return deps.setSessionRuntime({ ...params,
         beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
       });
@@ -385,9 +504,9 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
 
 export function authorizeSessionQueueItem(
   item: AgentInputQueuedMessage,
-  callerSessionId: string,
+  callerSessionId: string | undefined,
 ): { ok: true } | { ok: false; message: string } {
-  return item.origin?.kind === 'session' && item.origin.senderSessionId === callerSessionId
+  return !!callerSessionId && item.origin?.kind === 'session' && item.origin.senderSessionId === callerSessionId
     ? { ok: true }
     : { ok: false, message: 'queued message was not sent by the current session' };
 }
@@ -398,13 +517,13 @@ export function authorizeSessionQueueItem(
  */
 export function authorizeSessionQueueReorder(
   item: AgentInputQueuedMessage,
-  callerSessionId: string,
+  callerSessionId: string | undefined,
   targetSessionId: string,
 ): { ok: true } | { ok: false; message: string } {
   const plainMachineMessage =
     !item.sourcePlugin &&
     (item.origin?.kind === 'orca' ||
-      (item.origin?.kind === 'session' && !item.origin.senderBotId));
+      item.origin?.kind === 'session');
   const owned =
     authorizeSessionQueueItem(item, callerSessionId).ok || callerSessionId === targetSessionId;
   return plainMachineMessage && owned

@@ -1,5 +1,6 @@
 import { mountPage, subscription } from '../../ui-page/harness';
 import { ProviderGroupSection } from '../../../src/renderer/features/provider-group/ProviderGroupSection';
+import { RemoteProviderGroupMembers } from '../../../src/renderer/features/provider-group/RemoteProviderGroupMembers';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../src/shared/claudeSubscriptionUsage';
 import type { ProviderGroupView } from '../../../src/shared/providerGroup';
 import type {
@@ -64,7 +65,18 @@ type AccountScenario = {
   single?: boolean;
   missingUsage?: boolean;
   singleAdded?: 'paused' | 'signed-out';
+  pending?: boolean;
+  remote?: boolean;
 };
+
+async function readAccounts(data: AccountScenario): Promise<SubscriptionPoolView> {
+  if (data.pending) {
+    await new Promise<void>((resolve) => {
+      const off = subscription('accountsReady')(() => { off(); resolve(); });
+    });
+  }
+  return pool(data);
+}
 
 function pool(data: AccountScenario): SubscriptionPoolView {
   const first = account('default', {
@@ -113,7 +125,7 @@ void mountPage({
       onChanged: subscription('groupChanged'),
     },
     subscriptionAccounts: {
-      command: async () => pool(ctx.data as AccountScenario),
+      command: () => readAccounts(ctx.data as AccountScenario),
       onChanged: subscription('subscriptionAccounts'),
     },
     maker: {
@@ -123,8 +135,22 @@ void mountPage({
       },
     },
     deviceLink: {
-      listDevices: async () => ({ devices: [] }),
+      listDevices: async () => ({ devices: [{
+        deviceId: 'group-host', name: 'Mac mini', platform: 'darwin', isSelf: false,
+        online: true, remoteControlEnabled: true, controlEnabled: true, appVersion: '0.1.130',
+      }] }),
       getState: async () => ({ linkStatus: 'online' }),
+      invoke: async (deviceId: string, channel: string) => {
+        if (deviceId !== 'group-host') throw new Error(`Unexpected device: ${deviceId}`);
+        if (channel === 'maker:provider:list') return { providers: [{
+          id: 'anthropic', name: 'Anthropic', source: 'builtin', connected: true,
+          agents: ['claude'], models: {}, auth: { method: 'oauth', native: 'claude' }, routing: {},
+        }] };
+        if (channel === 'maker:usage:claude-subscription') return defaultUsage;
+        if (channel === 'maker:subscription-accounts') return readAccounts(ctx.data as AccountScenario);
+        throw new Error(`Unexpected remote read: ${channel}`);
+      },
+      onRemotePush: subscription('devicePush'),
       onPresenceChanged: subscription('devicePresence'),
       onStatusChanged: subscription('deviceStatus'),
       onControlTargetChanged: subscription('deviceControl'),
@@ -137,9 +163,11 @@ void mountPage({
       onReceivedChanged: subscription('receivedShares'),
     },
   }),
-  render: () => (
-    <main className="mx-auto w-full min-w-0 max-w-[900px] p-4">
-      <ProviderGroupSection providerId="anthropic" providerName="Anthropic" />
+  render: (ctx) => (
+    <main data-pending-accounts={ctx.data.pending || undefined} className="mx-auto w-full min-w-0 max-w-[900px] p-4">
+      {ctx.data.remote ? (
+        <RemoteProviderGroupMembers deviceId="group-host" providerId="anthropic" config={view.config!} />
+      ) : <ProviderGroupSection providerId="anthropic" providerName="Anthropic" />}
     </main>
   ),
 });

@@ -42,6 +42,7 @@ export interface DeviceListDeviceLike {
   name: string;
   online: boolean;
   platform: string | null;
+  app?: string;
   remoteControlEnabled: boolean;
 }
 
@@ -71,7 +72,12 @@ export interface DeviceListPresentation {
 }
 
 export function isControllableDevice(device: DeviceListDeviceLike): boolean {
-  return device.online && device.remoteControlEnabled && !device.isSelf && !isMobilePlatform(device.platform);
+  return device.online && device.remoteControlEnabled && !device.isSelf && isCindyApp(device.app) && !isMobilePlatform(device.platform);
+}
+
+/** Self-reported UX routing only. Missing App labels preserve legacy Cindy behavior. */
+export function isCindyApp(app: string | null | undefined): boolean {
+  return app == null || app === 'cindy';
 }
 
 /**
@@ -99,7 +105,7 @@ export function toDeviceListItems<TDevice extends DeviceListDeviceLike>(
 ): DeviceListItem<TDevice>[] {
   return devices
     .map((device) => toDeviceListItem(device, now, revokedDevices, localizer))
-    .filter((item) => item.state !== 'self' && !isMobilePlatform(item.device.platform))
+    .filter((item) => item.state !== 'self' && isCindyApp(item.device.app) && !isMobilePlatform(item.device.platform))
     .map((item, index) => ({ index, item }))
     .sort((a, b) => compareDeviceListItems(a.item, b.item) || a.index - b.index)
     .map(({ item }) => item);
@@ -268,4 +274,25 @@ function formatLastSeen(iso: string | null, now: number, localizer?: Presentatio
   if (diffDays < 7) return presentationText(localizer, 'devices.presentation.deviceList.lastSeen.daysAgo', `${diffDays} 天前在线`, { count: diffDays });
   const date = presentationDate(localizer, new Date(ts));
   return presentationText(localizer, 'devices.presentation.deviceList.lastSeen.onDate', `上次在线 ${date}`, { date });
+}
+
+/** The authenticated Model Access response supplies the public Console origin for this realm. */
+export function cloudComputerEntry(value: unknown, membershipId: string, organizationId: string) {
+  if (!value || typeof value !== 'object') return null;
+  const row = value as Record<string, unknown>;
+  if (row.enabled !== true || row.membershipId !== membershipId || row.organizationId !== organizationId || typeof row.url !== 'string') return null;
+  let url: URL;
+  try { url = new URL(row.url); } catch { return null; }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
+      !url.pathname.endsWith('/console/orgs/' + encodeURIComponent(organizationId) + '/personal/cloud')) return null;
+  if (row.computer === null) return {url:url.href, action:'addCloud' as const};
+  if (!row.computer || typeof row.computer !== 'object' || !('status' in row.computer)) return null;
+  const add = row.canAdd === true ? {canAdd:true as const} : {};
+  switch (row.computer.status) {
+    case 'awaiting_delivery': case 'queued': case 'creating': case 'awaiting_device':
+      return {...add,url:url.href, action:'preparingCloud' as const};
+    case 'blocked': case 'linked': case 'deleting': case 'reinstalling':
+      return {...add,url:url.href, action:'manageCloud' as const};
+    default: return null;
+  }
 }

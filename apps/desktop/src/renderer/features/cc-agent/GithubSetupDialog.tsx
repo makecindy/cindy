@@ -6,7 +6,8 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
-import { DownloadMeter } from '@/components/settings/DownloadMeter';
+import { DownloadMeter } from '@/components/ui/download-meter';
+import { initialDownloadProgress } from '../../../shared/downloadProgress';
 import type { GithubSetupState } from '../../../shared/githubSetup';
 
 const isRunning = (phase: GithubSetupState['phase']) =>
@@ -130,7 +131,7 @@ export function GithubSetupDialog({
         : state.phase;
   const description =
     stage === 'error'
-      ? copy('errors.' + (state.error ?? 'login'))
+      ? copy(state.error === 'network' ? 'account.network' : 'errors.' + (state.error ?? 'login'))
       : copy('stages.' + stage + '.description');
   const readyToAuthorize = stage === 'authorizing' && Boolean(state.userCode);
   const completed = stage === 'connected';
@@ -146,10 +147,10 @@ export function GithubSetupDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onInteractOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(400px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto p-4 outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[85vh] w-[min(400px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto p-4 outline-none"
         >
           <div className="flex items-center gap-2" aria-live="polite">
             {completed ? (
@@ -166,8 +167,11 @@ export function GithubSetupDialog({
           <Dialog.Description className="text-13 leading-relaxed text-[var(--confirm-desc)]">
             {description}
           </Dialog.Description>
-          {stage === 'downloading' && (
-            <DownloadMeter progress={{ label: 'GitHub CLI', percent: state.percent }} />
+          {(stage === 'downloading' || (stage === 'installing' && state.download)) && (
+            <DownloadMeter
+              label="GitHub CLI"
+              progress={state.download ?? initialDownloadProgress('downloading')}
+            />
           )}
           {readyToAuthorize && (
             <div className="flex flex-col gap-3">
@@ -179,12 +183,12 @@ export function GithubSetupDialog({
                   <code className="select-all whitespace-nowrap font-mono text-18 tracking-widest text-[var(--text-primary)]">
                     {state.userCode}
                   </code>
-                  <Tip text={copyLabel} contentClassName="z-[10002]">
+                  <Tip text={copyLabel}>
                     <button
                       type="button"
                       onClick={() => void copyCode()}
                       aria-label={copyLabel}
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
                       {copiedCode === state.userCode ? <Check size={16} /> : <Copy size={16} />}
                     </button>

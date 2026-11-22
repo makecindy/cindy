@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { openFirstRunGuide, parkFirstRunGuide, getFirstRunGuideState } from '@/features/first-run-guide/firstRunGuideStore';
 
 import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { AuthState, DesktopLoginActionResult } from '@/lib/authService';
@@ -91,12 +92,46 @@ afterEach(() => {
 });
 
 describe('initial auth decision', () => {
+  // #10601, unit: real Provider + useLogin. Existing failures only exercise
+  // desktop; browser identity must remove the action through both public hooks.
+  it.each([undefined, 'desktop', 'browser'] as const)('projects local entry for client %s', async (client) => {
+    Object.assign(window.electronAPI, { hostConnection: client ? { client } : undefined });
+    mocks.service.initialize.mockResolvedValue({ isAuthenticated: false, isCanary: false });
+    const hook = renderHook(() => ({ auth: useAuth(), login: useLogin({ autoLoad: false }) }), {
+      wrapper: AuthProvider,
+    });
+    await waitFor(() => expect(hook.result.current.auth.isInitializing).toBe(false));
+    if (client === 'browser') {
+      expect(hook.result.current.auth.enterLocalMode).toBeNull();
+      expect(hook.result.current.login.enterLocalMode).toBeNull();
+    } else {
+      expect(hook.result.current.auth.enterLocalMode).toBeTypeOf('function');
+      expect(hook.result.current.login.enterLocalMode).toBeTypeOf('function');
+    }
+  });
+
   const signedOut: AuthState = {
     user: null, mode: 'signed-out', dataOwnerId: null, ownerGeneration: 1,
     ownerBoundaryPending: false, canEnterApp: false, isAuthenticated: false,
     isCanary: false, deviceId: 'device', hasAccountDeletionReceipt: false,
     accountDeletionRestored: false, credentialStoreUnavailable: false,
   };
+  // unit, real Provider (甲 2026-11-17): the Host's start-failure reason reaches the login page through this
+  // context; a later Host state without one clears it.
+  it('passes the Host start-failure reason through and clears it with the next state', async () => {
+    let push!: (state: AuthState) => void;
+    mocks.service.onAuthStateChange.mockImplementation((listener) => {
+      push = listener;
+      return () => {};
+    });
+    mocks.service.initialize.mockResolvedValue({ ...signedOut, hostUnavailable: { reason: 'HOST_ACCOUNT_MISMATCH' } });
+    const hook = renderHook(() => useAuth(), { wrapper: AuthProvider });
+    await waitFor(() => expect(hook.result.current.hostUnavailableReason).toBe('HOST_ACCOUNT_MISMATCH'));
+
+    act(() => push({ ...signedOut, ownerGeneration: 2 }));
+    expect(hook.result.current.hostUnavailableReason).toBeNull();
+  });
+
   // unit：真实 Provider；旧 finally 把 boundary pending 判成完成，已有 reject 用例覆盖不到。
   it.each(['cloud', 'local', 'signed-out'] as const)('waits for stable %s after a pending initialize response', async (mode) => {
     let push!: (state: AuthState) => void;
@@ -171,7 +206,14 @@ describe('login recovery ignores abandoned IPC results', () => {
     }));
     expect(catalog.result.current.providers.providers).toHaveLength(1);
     expect(catalog.result.current.capabilities.capabilities?.availableModels[0].id).toBe('member-a');
+    // PR #9997: a parked guide must not survive the real AuthProvider logout boundary.
+    // Existing tests only covered model snapshots, not the guide's module-local state.
+    act(() => {
+      openFirstRunGuide({ manual: true, migration: true, legacyMigrated: true });
+      parkFirstRunGuide();
+    });
     await act(async () => { await auth.result.current.logout(); });
+    expect(getFirstRunGuideState()).toMatchObject({ open: false, parked: false });
     expect(mocks.service.logout).toHaveBeenCalledOnce();
     expect(catalog.result.current.providers.providers).toEqual([]);
     expect(catalog.result.current.capabilities.capabilities).toBeNull();
@@ -194,7 +236,7 @@ describe('login recovery ignores abandoned IPC results', () => {
       expect(hook.result.current.login.isLoading).toBe(true);
       mocks.service.enterLocalMode.mockRejectedValueOnce(new Error('IPC unavailable'));
       await act(async () => {
-        await expect(hook.result.current.login.enterLocalMode()).rejects.toThrow('IPC unavailable');
+        await expect(hook.result.current.login.enterLocalMode!()).rejects.toThrow('IPC unavailable');
       });
       expect(hook.result.current.auth.loginState).toEqual({
         step: 'error', code: 'AUTH_REQUEST_FAILED', recoverTo: 'identifier',
@@ -327,14 +369,14 @@ describe('login recovery ignores abandoned IPC results', () => {
     await act(async () => { await hook.result.current.dispatchLoginAction({ type: 'reset' }); });
     mocks.service.enterLocalMode.mockRejectedValueOnce(new Error('skip failed'));
     await act(async () => {
-      await expect(hook.result.current.enterLocalMode()).rejects.toThrow('skip failed');
+      await expect(hook.result.current.enterLocalMode!()).rejects.toThrow('skip failed');
     });
     expect(hook.result.current.loginState).toEqual(form);
 
     let failSkip!: (error: Error) => void;
     mocks.service.enterLocalMode.mockReturnValueOnce(new Promise((_, reject) => { failSkip = reject; }));
     let skip!: Promise<void>;
-    act(() => { skip = hook.result.current.enterLocalMode(); });
+    act(() => { skip = hook.result.current.enterLocalMode!(); });
     await act(async () => { await hook.result.current.cancelAddAccount(); });
     await act(async () => {
       failSkip(new Error('old skip failed'));

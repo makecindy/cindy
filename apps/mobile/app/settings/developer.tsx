@@ -22,6 +22,7 @@ import { clearDiagnostics, diagnosticsEnabled, exportDiagnostics, hydrateDiagnos
 import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome';
 import { ActionInfoRow, InfoRow, SettingsGroup, SettingsSwitchRow } from '@/session/SettingsGroupRows';
 import { buildMobileDebugRows, type MobileSettingsRow } from '@/settings/mobileSettings';
+import { PushDiagnosticsGroup } from '@/settings/PushDiagnosticsGroup';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, spacing, typeScale } from '@/theme/tokens';
@@ -264,6 +265,7 @@ export default function DeveloperSettingsScreen() {
         title={t('settings.developer.title')}
       />
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} testID="settings.developer.scroll">
+        {Platform.OS === 'ios' ? <PushDiagnosticsGroup /> : null}
         <SettingsGroup
           footer={t('settings.localLogs.footer')}
           messages={[localLogsStatus ? { text: localLogsStatus, testID: 'settings.localLogs.status' } : null]}
