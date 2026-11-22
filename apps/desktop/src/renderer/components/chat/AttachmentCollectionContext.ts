@@ -19,6 +19,8 @@ export const ActivePreviewCollection = createContext<{
   index: number;
   select(index: number): void;
   beforeLeave: { current: ((leave: () => void) => void) | null };
+  /** The foreground image preview registers its non-modal keyboard scope here. */
+  scopeRef: { current: HTMLElement | null };
   restoreFocus?(event: Event): void;
 } | null>(null);
 

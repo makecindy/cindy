@@ -52,6 +52,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn, basename } from '@/lib/utils';
 import type {
   FileDiff,
@@ -2013,9 +2014,8 @@ function CommitOrPushDropdown({
           }}
           className="mt-1 gap-2"
         >
-          <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
-            {includeUnstaged && <Check size={10} />}
-          </span>
+          {/* 共享 Checkbox 只作显示，勾选由菜单项本身承担。 */}
+          <Checkbox checked={includeUnstaged} readOnly tabIndex={-1} aria-hidden className="pointer-events-none" />
           <span className="min-w-0 flex-1 truncate">
             {t('rightSidebar.review.commit.includeUnstaged')}
           </span>

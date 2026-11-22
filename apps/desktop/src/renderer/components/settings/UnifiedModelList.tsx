@@ -1070,7 +1070,7 @@ export function UnifiedModelList({
         data-deep-link-target={focusedRow?.id === row.id ? 'true' : undefined}
         className={cn(
           focusedRow?.id === row.id && 'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
-          'group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+          'group flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
           // 被用户关掉的功能型模型不整行压暗:行名已用三级文字色表达「关」,开关要保持可点的观感。
           !state.ready && !capabilityOff && 'opacity-55',
         )}
@@ -1536,7 +1536,7 @@ export function UnifiedModelList({
                           tabIndex={focusedRow?.id === row.id ? -1 : undefined}
                           data-deep-link-target={focusedRow?.id === row.id ? 'true' : undefined}
                           className={cn(
-                            'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-[7px]',
+                            'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-1.5',
                             focusedRow?.id === row.id &&
                               'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
                           )}

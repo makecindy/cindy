@@ -15,6 +15,7 @@ import { VideoLightbox } from './VideoLightbox';
 import { createPortal } from 'react-dom';
 import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewScrim } from './PreviewChrome';
 import { Spinner } from '@/components/ui/spinner';
+import { lightboxOwnsShortcutTarget } from '@/lib/lightboxLayer';
 const TextLightbox = lazy(() =>
   import('./TextLightbox').then((module) => ({ default: module.TextLightbox })),
 );
@@ -48,6 +49,7 @@ export function AttachmentCollectionPreview({
   const fileContext = useChatSessionFile();
   const [origin] = useState(fileContext);
   const beforeLeave = useRef<((leave: () => void) => void) | null>(null);
+  const scopeRef = useRef<HTMLElement | null>(null);
   const item = items[index]!;
   const closing = useRef(false);
   const close = () => {
@@ -74,10 +76,15 @@ export function AttachmentCollectionPreview({
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || document.fullscreenElement) return;
-      const target = event.target as HTMLElement;
-      if (target.closest('input, textarea, [contenteditable="true"], video, audio, [role="menu"]'))
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('input, textarea, [contenteditable="true"], video, audio, [role="menu"]'))
         return;
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      // The image preview is non-modal: its collection arrows must not consume
+      // keys whose focus belongs to the conversation behind the float. Modal
+      // viewers keep their existing document-level navigation.
+      const panel = scopeRef.current;
+      if (panel && !lightboxOwnsShortcutTarget(event.target, panel)) return;
       event.preventDefault();
       selectRef.current(index + (event.key === 'ArrowLeft' ? -1 : 1));
     };
@@ -88,7 +95,7 @@ export function AttachmentCollectionPreview({
     <ChatSessionFileProvider value={origin}>
       <AttachmentCollectionContext.Provider value={null}>
         <ImageGalleryContext.Provider value={null}>
-          <ActivePreviewCollection.Provider value={{ items, index, select, beforeLeave, restoreFocus }}>
+          <ActivePreviewCollection.Provider value={{ items, index, select, beforeLeave, scopeRef, restoreFocus }}>
             <Suspense
               key={item.id}
               fallback={createPortal(

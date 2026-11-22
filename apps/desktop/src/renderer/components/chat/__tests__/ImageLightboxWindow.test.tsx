@@ -3,20 +3,23 @@
  * ImageLightbox 非模态浮窗的 DOM 行为与几何边界。
  *
  * 测试价值
- * - 生产入口与可观察结果：挂载真实 ImageLightbox / useImagePreviewWindow 纯几何入口，
- *   断言无遮罩、无滚动锁、标题栏拖动移动整个浮窗、停靠/调整尺寸改变面板矩形、
- *   Esc 与关闭按钮仍工作、放大后图片内容仍走 pan。
+ * - 生产入口与可观察结果：挂载真实 ImageLightbox / AttachmentCollectionPreview /
+ *   useImagePreviewWindow 纯几何入口，断言无遮罩、无滚动锁、标题栏拖动移动整个浮窗、
+ *   停靠/调整尺寸改变面板矩形、Esc 与关闭按钮仍工作、放大后图片内容仍走 pan；
+ *   换图后显示新源、重操作浮窗后键盘焦点归位、Esc 只关最上层、集合方向键不抢背景。
  * - Bug／规则依据：主人 2026-11-20 报告「预览窗无法拖动且盖住主要对话区域」；
- *   DESIGN.md §4 Dialog & Modal 图片预览例外、product-rules/attachment-preview.md
- *   「打开与返回」、engineering-conventions.md §3.2。
+ *   #11952 review threads 指出复用浮窗换图、键盘焦点归属、多浮窗 Esc 与集合方向键
+ *   的对称路径；DESIGN.md §4 Dialog & Modal 图片预览例外、
+ *   product-rules/attachment-preview.md「打开与返回」、engineering-conventions.md §3.2。
  * - 现有覆盖缺口：chatMediaLightboxFocus / ImageLightboxAnnotate 只覆盖焦点、标注和
- *   图片点击；没有覆盖浮窗位置、非模态背景交互、视口边界与两种拖动手势的区分。
+ *   图片点击；没有覆盖浮窗位置、非模态背景交互、视口边界、换源与多浮窗叠放。
  * - 最小失败输入：1280×800 视口打开一张图；标题栏 pointerdown→pointermove→pointerup；
- *   320×600 视口或超出视口的 resize 位移。修复前没有拖动/停靠入口且存在遮罩。
+ *   320×600 视口或超出视口的 resize 位移；rerender 换 src；背景焦点按方向键；
+ *   两个浮窗同时挂载后按一次 Escape。
  * - tier：unit（进程内 DOM，无真实 I/O）。
- * - 实测耗时：单独运行 24.45s（transform 8.33s / setup 8.05s / collect 6.95s，
- *   用例本体 1.26s）。超过 10s 的原因是真实 Desktop jsdom + i18n + Radix Tooltip
- *   生产组件收集成本；6 条用例合并在同一文件，未再新增小文件。
+ * - 实测耗时：单独运行 13.20s 墙钟（Vitest 10.35s：transform 3.52s /
+ *   setup 2.02s / collect 3.97s / 用例本体 2.02s）。超过 10s 的原因是真实 Desktop
+ *   jsdom + i18n + Radix Tooltip 生产组件收集成本；10 条用例合并在同一文件，未再新增小文件。
  */
 
 import React from 'react';
@@ -25,16 +28,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import {
+  AttachmentCollectionContext,
+  type AttachmentCollectionItem,
+} from '@/components/chat/AttachmentCollectionContext';
+import {
   clampPreviewRect,
   dockPreviewRect,
   resizePreviewRect,
 } from '@/components/chat/imagePreviewWindow';
 
 const SRC = 'cindy-media://blobs/source.png';
+const NEXT_SRC = 'cindy-media://blobs/next.png';
 
 function panel(): HTMLElement {
   const node = document.body.querySelector<HTMLElement>('[data-lightbox-layer]');
   if (!node) throw new Error('image preview panel missing');
+  return node;
+}
+
+function panels(): HTMLElement[] {
+  return Array.from(document.body.querySelectorAll<HTMLElement>('[data-lightbox-layer]'));
+}
+
+function previewImage(): HTMLImageElement {
+  const node = document.body.querySelector<HTMLImageElement>('img[alt=""]');
+  if (!node) throw new Error('preview image missing');
   return node;
 }
 
@@ -203,5 +221,89 @@ describe('ImageLightbox non-modal window', () => {
     expect(clamped.x).toBeGreaterThanOrEqual(0);
     expect(clamped.y).toBeGreaterThanOrEqual(40);
     expect(clamped.x + clamped.width).toBeLessThanOrEqual(viewport.width);
+  });
+
+  it('switches the reused preview when the host opens another image', async () => {
+    const onClose = vi.fn();
+    const view = render(
+      <>
+        <div data-scroll-container="" style={{ overflowY: 'auto' }}>背景消息</div>
+        <ImageLightbox src={SRC} onClose={onClose} />
+      </>,
+    );
+    expect(previewImage().getAttribute('src')).toBe(SRC);
+    view.rerender(
+      <>
+        <div data-scroll-container="" style={{ overflowY: 'auto' }}>背景消息</div>
+        <ImageLightbox src={NEXT_SRC} onClose={onClose} />
+      </>,
+    );
+    await waitFor(() => expect(previewImage().getAttribute('src')).toBe(NEXT_SRC));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('returns keyboard focus to the preview on image and titlebar gestures', () => {
+    render(
+      <>
+        <input aria-label="background input" />
+        <ImageLightbox src={SRC} onClose={vi.fn()} />
+      </>,
+    );
+    const input = screen.getByRole('textbox', { name: 'background input' });
+    const node = panel();
+
+    input.focus();
+    fireEvent.mouseDown(imageSurface(), { button: 0, clientX: 200, clientY: 200 });
+    expect(document.activeElement).toBe(node);
+
+    input.focus();
+    fireEvent.pointerDown(dragHandle(), {
+      pointerId: 9,
+      button: 0,
+      buttons: 1,
+      clientX: 200,
+      clientY: 60,
+    });
+    fireEvent.pointerUp(window, { pointerId: 9, buttons: 0, clientX: 200, clientY: 60 });
+    expect(document.activeElement).toBe(panel());
+  });
+
+  it('closes only the foreground preview on Escape', async () => {
+    const backgroundClose = vi.fn();
+    const foregroundClose = vi.fn();
+    render(
+      <>
+        <ImageLightbox src={SRC} onClose={backgroundClose} />
+        <ImageLightbox src={NEXT_SRC} onClose={foregroundClose} />
+      </>,
+    );
+    expect(panels()).toHaveLength(2);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(foregroundClose).toHaveBeenCalledTimes(1), { timeout: 1000 });
+    expect(backgroundClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps collection arrow keys inside the non-modal preview focus scope', async () => {
+    const items: AttachmentCollectionItem[] = [
+      { id: 'first', name: 'first.png', source: SRC, kind: 'image', media: true },
+      { id: 'second', name: 'second.png', source: NEXT_SRC, kind: 'image', media: true },
+    ];
+    render(
+      <AttachmentCollectionContext.Provider value={items}>
+        <button type="button">background control</button>
+        <ImageLightbox src={SRC} onClose={vi.fn()} />
+      </AttachmentCollectionContext.Provider>,
+    );
+    expect(previewImage().getAttribute('src')).toBe(SRC);
+
+    const background = screen.getByRole('button', { name: 'background control' });
+    background.focus();
+    fireEvent.keyDown(background, { key: 'ArrowRight' });
+    expect(previewImage().getAttribute('src')).toBe(SRC);
+
+    const node = panels().at(-1)!;
+    node.focus();
+    fireEvent.keyDown(node, { key: 'ArrowRight' });
+    await waitFor(() => expect(previewImage().getAttribute('src')).toBe(NEXT_SRC));
   });
 });

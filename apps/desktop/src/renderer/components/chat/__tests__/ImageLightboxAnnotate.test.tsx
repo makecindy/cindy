@@ -8,6 +8,7 @@
  * - Esc / X:笔迹未偏离基线时行为同旧版(立即退出,不弹确认);有改动时经统一
  *   确认框,关闭确认框的那次 Esc 不会再次触发放弃;
  * - Space / 中键拖拽平移时不落笔;
+ * - 笔迹未保存时暂不把背景发送/清空路径暴露给键盘,避免托盘卸载静默丢笔迹;
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
@@ -416,6 +417,32 @@ describe('ImageLightbox annotate mode', () => {
       vi.advanceTimersByTime(250);
     });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('guards unsaved strokes from background send/clear paths', () => {
+    const onBackgroundKeyDown = vi.fn();
+    render(
+      <>
+        <input aria-label="composer input" onKeyDown={onBackgroundKeyDown} />
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationEdit={{ onSave: vi.fn() }}
+        />
+      </>,
+    );
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 20, y: 20 }, { x: 120, y: 80 });
+    expect(committedPaths('stroke')).toHaveLength(1);
+
+    const guard = document.body.querySelector<HTMLElement>('[data-preview-unsaved-guard]');
+    expect(guard).not.toBeNull();
+    const input = screen.getByRole('textbox', { name: 'composer input' });
+    input.focus();
+    fireEvent.keyDown(input, { key: 'a' });
+    expect(onBackgroundKeyDown).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(document.body.querySelector('[data-lightbox-layer]'));
   });
 });
 
