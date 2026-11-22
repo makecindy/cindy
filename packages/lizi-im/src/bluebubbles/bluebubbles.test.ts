@@ -1116,6 +1116,18 @@ describe('BlueBubbles local ingress', () => {
       expect(first.path).not.toBe(second.path);
       expect(path.basename(first.path)).not.toMatch(/[<>:"|?*]/);
       expect(first.name).toBe('budget_.pdf');
+      // Review (#12146): a preview that finishes after the original never replaces it.
+      const bodies = ['complete', 'pre'];
+      const racing = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response(bodies.shift())));
+      toFile.mockImplementation((guid, dest) => racing.downloadToFile(guid, dest));
+      f.message('race', { attachments: [{ guid: 'mov-3', transferName: 'clip.mov', totalBytes: 8 }] });
+      const original = await f.im.fetchAttachment(chat, 'race', 'mov-3', root);
+      const preview = await f.im.fetchAttachment(chat, 'race', 'mov-3', root);
+      expect(original).toMatchObject({ bytes: 8, complete: true });
+      expect(preview).toMatchObject({ bytes: 3, complete: false });
+      expect(preview.path).not.toBe(original.path);
+      expect(await fs.readFile(original.path, 'utf8')).toBe('complete');
+      expect((await fs.readdir(root)).some((entry) => entry.endsWith('.download') || entry.endsWith('.partial'))).toBe(false);
     } finally { await fs.rm(root, { recursive: true, force: true }); await f.im.dispose(); }
   });
 

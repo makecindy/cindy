@@ -13,7 +13,7 @@ import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 /** BlueBubbles can answer before Messages has the full file; its record states the real size. */
 /**
  * The on-disk name of a fetched original, kept within one 255-byte file name together with the
- * `<digest16>-` prefix and the `.<uuid>.partial` download suffix (62 bytes). Keeps the extension and
+ * `<digest16>-preview-` prefix (25 bytes); downloads stage under their own short names. Keeps the extension and
  * replaces characters Windows refuses in file names.
  */
 function attachmentFileName(raw: string): string {
@@ -1068,11 +1068,21 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     await fs.mkdir(destDir, { recursive: true });
     // The full attachment identity tells apart originals whose GUIDs share a prefix and whose names match.
     const id = createHash('sha256').update(attachment.guid).digest('hex').slice(0, 16);
-    const dest = path.join(destDir, `${id}-${name}`);
-    const bytes = await api.downloadToFile(attachment.guid, dest);
-    this.assertLive(generation);
+    // Each download lands in its own staging file first. Only a complete original is published under the
+    // original's name; an incomplete copy gets its own preview name, so it never replaces a verified original.
+    const staged = path.join(destDir, `.${randomUUID()}.download`);
+    const bytes = await api.downloadToFile(attachment.guid, staged);
     const totalBytes = attachment.totalBytes ?? null;
-    return { path: dest, name, bytes, totalBytes, complete: totalBytes === null || totalBytes === 0 || bytes >= totalBytes };
+    const complete = totalBytes === null || totalBytes === 0 || bytes >= totalBytes;
+    const dest = path.join(destDir, `${id}-${complete ? '' : 'preview-'}${name}`);
+    try {
+      this.assertLive(generation);
+      await fs.rename(staged, dest);
+    } catch (error) {
+      await fs.rm(staged, { force: true }).catch(() => {});
+      throw error;
+    }
+    return { path: dest, name, bytes, totalBytes, complete };
   }
   /** Reuse the already-authorized receiver. No dispose, credential write or second listener. */
   async verifyGroupHandoff(chatId: string): Promise<() => void> {
