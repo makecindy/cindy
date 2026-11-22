@@ -11,6 +11,7 @@
  * - 笔迹一经提交就写回待发附件草稿,发送/清空托盘不再依赖浮窗键盘守卫;
  *   当前浮窗菜单的方向键 / Enter 与缩放快捷键互不抢事件;
  *   离开确认锁在异步保存完成后才释放。
+ * - 逐笔草稿回写不触发换图确认；换图只由宿主请求的不同图片上下文驱动。
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
@@ -656,6 +657,42 @@ describe('ImageLightbox annotate mode', () => {
     });
     await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(THIRD_SRC));
     expect(onSourceChangeCancelled).not.toHaveBeenCalled();
+  });
+
+  it('does not treat draft write-back as a source retarget', async () => {
+    function Host() {
+      const [strokes, setStrokes] = useState<Stroke[]>([]);
+      return (
+        <ConfirmDialogProvider>
+          <ImageLightbox
+            src={SRC}
+            onClose={vi.fn()}
+            annotationEdit={{
+              initialStrokes: strokes,
+              onDraftChange: ({ strokes: next }) => setStrokes(next),
+              onSave: vi.fn(),
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    await waitFor(() => expect(committedPaths('stroke')).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: label('chat.media.annotateUndo') }),
+    ).toBeTruthy();
+
+    pressKey({ key: 'z', ctrlKey: true });
+    await waitFor(() => expect(committedPaths('stroke')).toHaveLength(0));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: label('chat.media.annotateUndo') }),
+    ).toBeTruthy();
   });
 });
 

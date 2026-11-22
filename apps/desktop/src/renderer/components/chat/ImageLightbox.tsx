@@ -401,6 +401,7 @@ function sourceSnapshotFromProps({
   return source;
 }
 
+/** Immutable host identity only; draft strokes are owned by the mounted content. */
 function imageSourceKey(source: ImageSourceSnapshot): string {
   return JSON.stringify([
     source.src,
@@ -410,8 +411,6 @@ function imageSourceKey(source: ImageSourceSnapshot): string {
     source.enableGallery ?? false,
     source.annotationFallbackSrc ?? null,
     source.autoAnnotate ?? false,
-    source.initialStrokes ?? null,
-    source.annotationEdit?.initialStrokes ?? null,
   ]);
 }
 
@@ -546,6 +545,19 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const contentProps: ImageLightboxContentProps = {
     ...activeSource,
     onClose: props.onClose,
+    // Keep the accepted baseline strokes, but let the latest host callbacks
+    // write each draft change back without turning it into a source request.
+    annotationEdit: activeSource.annotationEdit
+      ? {
+          ...activeSource.annotationEdit,
+          onDraftChange:
+            requestedSourceRef.current.annotationEdit?.onDraftChange ??
+            activeSource.annotationEdit.onDraftChange,
+          onSave:
+            requestedSourceRef.current.annotationEdit?.onSave ??
+            activeSource.annotationEdit.onSave,
+        }
+      : undefined,
     leaveGuardRef,
   };
   const contentKey = `${sourceToken}:${imageSourceKey(activeSource)}`;
