@@ -12533,6 +12533,7 @@
           "listenPortLabel": "Lokaler Empfangsport",
           "listenPortPlaceholder": "18747",
           "hint": "Verbinde dich mit deinem BlueBubbles-Server im lokalen Netzwerk. Nur ausgewählte Chats werden verarbeitet. Stoppe vor dem Verbinden alle anderen automatischen Antwortdienste für diese Chats.",
+          "automationDenied": "macOS hat BlueBubbles beim Senden den Zugriff auf Nachrichten verweigert. Prüfe auf dem Mac mit BlueBubbles die Systemeinstellungen unter „Datenschutz & Sicherheit“ → „Automation“.",
           "uncertain": "{{count}} Zustellungen müssen geprüft werden. Prüfe vor einem erneuten Versuch den Chatverlauf, um Duplikate zu vermeiden."
         }
       },
@@ -15076,7 +15077,6 @@
     "runningStatus": {
       "currentRate": "Letzte Geschwindigkeit",
       "lastRequestRate": "Durchschnitt der letzten Anfrage",
-      "recentTokenRate": "Zuletzt {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Durchschnitt dieser Runde",
       "rateHistory": "Verlauf der Generierungsgeschwindigkeit",
@@ -15848,7 +15848,7 @@
       "viewThread": "Thread-Kontext anzeigen ({{count}})",
       "memberFromGroup": "{{name}} · aus der {{platform}}-Gruppe „{{group}}“",
       "memberFromPlatform": "{{name}} · aus einer {{platform}}-Gruppe",
-      "guestFromDm": "{{name}} · aus einer {{platform}}-Direktnachricht (nicht der Eigentümer)",
+      "guestFromDm": "{{name}} · aus einer {{platform}}-Direktnachricht",
       "unknownSender": "Gruppenmitglied"
     },
     "rewind": {

@@ -171,7 +171,7 @@ describe('createWorktree naming authority', () => {
       finishCheckout = (fail) => (fail ? reject(new Error('checkout failed')) : resolve({ stdout: '', stderr: '' }));
     });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
-      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+      if (args[0] === 'checkout' && args.includes('.')) {
         enteredCheckout();
         return checkout;
       }

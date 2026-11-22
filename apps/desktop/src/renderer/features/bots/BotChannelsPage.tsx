@@ -251,6 +251,9 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
+                {view.health?.automationDenied && (
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.automationDenied')}</p>
+                )}
                 {view.health && view.health.uncertainInputs + view.health.uncertainSends > 0 ? (
                   <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
                     count: view.health.uncertainInputs + view.health.uncertainSends,

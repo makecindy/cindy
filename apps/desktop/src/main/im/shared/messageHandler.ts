@@ -337,7 +337,10 @@ export function createMessageHandler(
     // iMessage participation mode applies before any attachment notice.
     if (channel === 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
-    const hasContent = event.text.length > 0 || event.attachments.length > 0;
+    // An entry the model can fetch by itself (an original over the direct-delivery cap) is content.
+    const hasContent = event.text.length > 0 || event.attachments.length > 0
+      || event.unsupported.some(entry => entry.retrievable);
+    const reportedUnsupported = event.unsupported.filter(entry => !entry.retrievable);
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
     if (!hasContent && !event.invoked && !event.replyContext && event.unsupported.length > 0) {
@@ -369,9 +372,9 @@ export function createMessageHandler(
     // Durable callers may retry a busy dispatch. Emit mixed-attachment notices
     // only after acceptance so those queue retries cannot repeat the notice.
     const notifyUnsupported = async () => {
-      if (!event.unsupported.length) return;
+      if (!reportedUnsupported.length) return;
       try {
-        await im.sendText(event.senderId, ui.agent.unsupportedNotice(event.unsupported), {
+        await im.sendText(event.senderId, ui.agent.unsupportedNotice(reportedUnsupported), {
           threadTs: event.scopeKey,
         });
       } catch (err) {

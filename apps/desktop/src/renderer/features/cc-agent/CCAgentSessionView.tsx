@@ -7600,18 +7600,21 @@ export function RunningStatusBar({
       !backgroundTasksRunning &&
       !workflowWaiting,
   });
+  // The panel shows the turn's last reading at any age; the status bar only a live one.
   const latestRate = rateHistory.latestRate;
+  const liveRate = rateHistory.latestRateFresh ? latestRate : null;
   const usageMeta = resolveRunningUsageMeta({
     outputTokens: rateOutputTokens,
     generationDurationMs: rateDurationMs,
     generationReliable: rateReliable,
     tokenUsage: Math.max(tokenUsage, displayTokens),
-    latestRate,
+    latestRate: liveRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
+  const liveRateText = liveRate !== null ? formatRecentOutputTokenRate(liveRate) : null;
   const showRate = tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0);
-  const rateText = !isHidden && !reconnecting && usageMeta.kind === 'rate' && showRate && latestRateText !== null
-    ? t(tokenSpeed?.measurement ? 'chat.runningStatus.recentTokenRate' : 'chat.runningStatus.tokenRate', { rate: latestRateText })
+  const rateText = !isHidden && !reconnecting && usageMeta.kind === 'rate' && showRate && liveRateText !== null
+    ? t('chat.runningStatus.tokenRate', { rate: liveRateText })
     : null;
   const averageRate = tokenSpeed?.measurement
     ? tokenSpeed.measurement.average === null ? null : formatRecentOutputTokenRate(tokenSpeed.measurement.average)

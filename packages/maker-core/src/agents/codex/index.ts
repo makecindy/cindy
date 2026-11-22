@@ -158,6 +158,7 @@ import {
 import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { listCodexModels } from './app-server/list-models.js';
 import { buildCodexEnv } from './env-builder.js';
+import { codexCommandRustLogExclusion } from './app-server/response-timing.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
 import {
   buildCodexBotSkillConfigOverrides,
@@ -224,6 +225,8 @@ import {
   codexUsageRefreshDue,
   resetCodexSpeed,
   settleCodexSpeedUsage,
+  noteCodexResponseEnded,
+  noteCodexResponseTiming,
   resumeCodexGeneration,
   translateAgentMessageDelta,
   translateReasoningSummaryTextDelta,
@@ -256,7 +259,7 @@ import {
   readCodexRolloutModelProvider,
   sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
-import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
+import { hasCurrentTeammateInstructions, rememberDeliveredTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
@@ -1746,6 +1749,8 @@ const isLikelyValidThreadId = (id: string | undefined): id is string =>
 export class CodexAgent extends BaseAgent {
   readonly kind = 'codex' as const;
   readonly capabilities: Capabilities;
+  /** Teammate instruction marker this process put into each recent thread (bounded); cleared by a compaction it sees. */
+  private readonly deliveredTeammateInstructions = new Map<string, string>();
 
   /**
    * Hosts keyed by target — `'local'` 或 `remote:<remoteHostId>`。每个 target
@@ -4563,6 +4568,8 @@ assertRouteCurrent();
      * 一起失去。memory flush 侧仍保持原有的「controller 存在才通知」语义。
      */
     const handleCompactBoundary = (): void => {
+      // Compaction may drop earlier developer items; the next resume re-delivers the teammate block.
+      if (sdkSessionId) this.deliveredTeammateInstructions.delete(sdkSessionId);
       nativeRecovery?.publish('codex', 'contextCompaction', {});
       compactionStormTracker.noteCompaction();
       memoryFlushController?.onCompactBoundary();
@@ -5957,6 +5964,30 @@ assertRouteCurrent();
         log.warn('Native auto-review continuation policy unavailable; preserving native policy');
       }
     }
+    // Cindy's local app-server gets RUST_LOG only to emit the response timing trace
+    // (env-builder). Codex hands its own environment to the commands it runs, so give
+    // them the user's own value back, or keep the variable out when there was none.
+    let commandRustLogConfig: Record<string, unknown> = {};
+    if (!opts.remoteHostId) {
+      const userRustLog = process.env.RUST_LOG;
+      if (userRustLog?.trim()) {
+        commandRustLogConfig = { 'shell_environment_policy.set.RUST_LOG': userRustLog };
+      } else {
+        try {
+          const response = await host.request<{ config?: Record<string, unknown> }>(
+            Method.ConfigRead, { cwd: opts.workingDir, includeLayers: false },
+            { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+          );
+          assertCurrentHost('Command environment policy');
+          commandRustLogConfig = codexCommandRustLogExclusion(response.config?.shell_environment_policy) ?? {};
+        } catch (error) {
+          if (error instanceof CodexRouteSelectionChangedError) throw error;
+          // Replacing an exclusion list that could not be read might expose a variable the
+          // user keeps from commands; a stray log filter is the lesser harm.
+          log.warn('Codex command environment policy unavailable; RUST_LOG may reach commands');
+        }
+      }
+    }
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
     // Verified with 0.156.0: features.view_image removes the native reader.
@@ -6882,6 +6913,7 @@ assertRouteCurrent();
         // and lose the Host origin after the first terminal event.
         'features.goals': false,
         ...taskShellEnvConfig,
+        ...commandRustLogConfig,
         // Keep companion memory in its own Home. Native delegation uses the
         // same feature settings and permissions as an ordinary task.
         ...(isolatedBotProfile(opts.botRuntimeProfile) ? {
@@ -7477,6 +7509,9 @@ assertRouteCurrent();
         codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
       } else if (developerInstructions) {
         codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
+        if (opts.botRuntimeProfile) {
+          rememberDeliveredTeammateInstructions(this.deliveredTeammateInstructions, threadId, teammateRuntimeInstructionItem(developerInstructions).marker);
+        }
       }
       sdkSessionId = threadId;
       workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
@@ -7702,13 +7737,15 @@ assertRouteCurrent();
         if (opts.botRuntimeProfile && developerInstructions && !useProxyChannel) {
           const current = teammateRuntimeInstructionItem(developerInstructions);
           if (!await hasCurrentTeammateInstructions(sessionRolloutPath, current.marker,
-            opts.remoteHostId ? this.deps.getRemoteAgentFileOps?.(opts.remoteHostId) ?? {} : undefined)) {
+            opts.remoteHostId ? this.deps.getRemoteAgentFileOps?.(opts.remoteHostId) ?? {} : undefined,
+            this.deliveredTeammateInstructions.get(threadId))) {
             assertCurrentHost('thread/inject_items');
             await host.request(Method.ThreadInjectItems, { threadId, items: [current.item] }, {
               timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
             });
             assertCurrentHost('thread/inject_items');
           }
+          rememberDeliveredTeammateInstructions(this.deliveredTeammateInstructions, threadId, current.marker);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         // Resumed app-server threads may have sticky collaborationMode='plan' from
@@ -13113,12 +13150,15 @@ assertRouteCurrent();
           });
           // Input/cache-only segments still belong in the ledger, but cannot
           // pair already reported output with a later generation denominator.
+          let settledReading = false;
           if (last.outputTokens > 0) {
             const calibration = settleCodexSpeedUsage(translatorRt, last);
             if (calibration) log.debug('SDK ▷ token speed calibration', { turnId: params.turnId, ...calibration });
+            settledReading = calibration?.requestTps !== undefined;
           }
-          // The tool can run for minutes with no further delta to flush this settlement.
-          if (last.outputTokens > 0 && translatorRt.generationPendingToolIds.size > 0) pushStatus(lastStatusText);
+          // The tool can run for minutes with no further delta to flush this settlement, and a
+          // request's own reading must not wait for the next request's events (at most one a request).
+          if (last.outputTokens > 0 && (translatorRt.generationPendingToolIds.size > 0 || settledReading)) pushStatus(lastStatusText);
           else maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
           if (memoryFlushController) {
@@ -13415,6 +13455,17 @@ assertRouteCurrent();
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         // 迟到的旧 turn 收口只允许发 background 结果,不能给当前 turn 注入前台状态。
         if (isTurnInFlight && !isLateCollabTerminal) pushStatus('Generating...');
+      },
+      responseCompleted: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.responseCompleted?.(params))) return;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        noteCodexResponseEnded(translatorRt, params.turnId);
+      },
+      responseTiming: (params) => {
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.responseTiming?.(params))) return;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        // A generation time that arrived after its usage replaces the reading just shown.
+        if (noteCodexResponseTiming(translatorRt, params) && lastUsageRefreshAt !== 0) pushStatus(lastStatusText);
       },
       itemOmitted: (params) => {
         // 正文超限被宿主丢弃的条目不再展示, 但它仍是这一轮真实发生过的工作 (常见是写过大文件):
@@ -15873,13 +15924,18 @@ assertRouteCurrent();
       const storage = await this.deps.resolveCodexThreadStorage?.(opts.threadId);
       const companionEnvironment = opts.sessionId
         ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
+      // Same identity as the live session's host (startSession), including the subscription account
+      // it runs on; without it a session's own host looked like another writer and every explicit
+      // route apply closed and relinked an unchanged session.
+      const subscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
       const targetKey = localSessionHostIdentity({
         sessionId: opts.sessionId ?? '', accountProviderId,
-        accountSessionHost: accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true,
+        accountSessionHost: subscriptionAccount !== undefined || accountProviderId !== undefined
+          || this.deps.isolateCodexAccountSessions === true,
         reviewMode: opts.reviewMode === true,
         customContext: typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0,
         storage, policy: selection.policy, environmentIdentity: companionEnvironment?.identity,
-      });
+      }) + (subscriptionAccount ? `:subscription:${subscriptionAccount.id}` : '');
       if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
       for (const [key, host] of hosts) {
         if (!registryCurrent()) break;
