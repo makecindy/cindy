@@ -1656,7 +1656,6 @@ function ExpandedView({
     () => filterSidebarTasks(statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex),
     [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex],
   );
-  // The inbox counts a task as a teammate's by the same test as the teammate filter.
   // A teammate's own conversations and its project's tasks stay out of the inbox until they need the
   // owner; a task it opened elsewhere is ordinary work (shared with the phone).
   const isInboxTeammateTask = isTeammateOwnInboxTask;
