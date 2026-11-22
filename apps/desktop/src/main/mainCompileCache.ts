@@ -18,14 +18,16 @@
  * this runs the entry chunks are already loaded, so app code cannot close it. Where the
  * gate says no, that case is logged as a warning for diagnosis.
  *
- * Location and lifecycle: `userData/main-compile-cache/<build id>/`, where the build id
- * comes from `mainBundleBuildId`. Node adds a per-Node/V8-version subdirectory and keys
- * entries by module file name, so a build id that missed a chunk change would let stale
- * entries pile up in one directory. After the
- * bootstrap chunk loads, directories of other builds are removed, and all of them
- * when this launch does not use the cache, so at most one build's cache stays on
- * disk. It holds only compiled code, no credentials or user data; a missing, corrupt
- * or rejected entry just means V8 compiles as before.
+ * Location and lifecycle: `userData/main-compile-cache/<packaged|source>/<build id>/`,
+ * where the build id comes from `mainBundleBuildId`. Node adds a per-Node/V8-version
+ * subdirectory and keys entries by module file name, so a build id that missed a chunk
+ * change would let stale entries pile up in one directory. A source run and the installed
+ * app may share one userData and run at the same time, so each flavor owns its own
+ * namespace. After the bootstrap chunk loads, other builds in the own namespace are
+ * removed, and all of them when this launch does not use the cache; the other flavor's
+ * namespace is never touched. At most one build per flavor stays on disk. It holds only
+ * compiled code, no credentials or user data; a missing, corrupt or rejected entry just
+ * means V8 compiles as before.
  *
  * Node writes the cache only on a clean exit. `process.exit()` (the Windows updater's
  * forced quit) and crashes skip it, so the caller flushes once the bundle has loaded;
@@ -42,8 +44,12 @@ import { createLogger } from './logger.js';
 
 const log = createLogger('main-compile-cache');
 
-/** Directory under userData that holds one subdirectory per build. */
+/** Directory under userData that holds one namespace per flavor, each with one directory per build. */
 const CACHE_ROOT_DIR_NAME = 'main-compile-cache';
+
+/** Flavor namespaces: the installed app and a source run, which may share a userData. */
+const PACKAGED_DIR = 'packaged';
+const SOURCE_DIR = 'source';
 
 /**
  * Identifies the main bundle build. Every chunk is named after its content hash, so the
@@ -140,11 +146,12 @@ export function startMainCompileCache(
   runtime: MainCompileCacheRuntime = nodeRuntime,
 ): MainCompileCache {
   const root = path.join(options.userDataDir, CACHE_ROOT_DIR_NAME);
+  const ownRoot = path.join(root, options.isPackaged ? PACKAGED_DIR : SOURCE_DIR);
   let status = 'not-allowed';
   let enabled = false;
   if (mainCompileCacheAllowed(options)) {
     try {
-      const result = runtime.enableCompileCache(path.join(root, options.buildId)).status;
+      const result = runtime.enableCompileCache(path.join(ownRoot, options.buildId)).status;
       status = STATUS_NAMES[result] ?? String(result);
       enabled = result === compileCacheStatus.ENABLED;
     } catch (error) {
@@ -171,20 +178,29 @@ export function startMainCompileCache(
       }
     },
     async pruneUnused() {
-      let names: string[];
-      try {
-        names = await fs.readdir(root);
-      } catch {
-        return;
-      }
-      await Promise.all(names.filter((name) => name !== keep).map(async (name) => {
-        try {
-          await fs.rm(path.join(root, name), { recursive: true, force: true });
-        } catch (error) {
-          // Another instance may still be writing it; the next launch retries.
-          log.warn('compile cache prune failed', { error: error instanceof Error ? error.name : 'unknown' });
-        }
-      }));
+      // Own namespace: every build except the one this launch uses.
+      await removeEntries(ownRoot, (name) => name !== keep);
+      // Root: only entries outside both namespaces (layouts from earlier builds of this
+      // feature). The other flavor's namespace belongs to an instance that may be running.
+      await removeEntries(root, (name) => name !== PACKAGED_DIR && name !== SOURCE_DIR);
     },
   };
+}
+
+/** Removes the matching entries of a directory; a missing directory has nothing to remove. */
+async function removeEntries(dir: string, shouldRemove: (name: string) => boolean): Promise<void> {
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return;
+  }
+  await Promise.all(names.filter(shouldRemove).map(async (name) => {
+    try {
+      await fs.rm(path.join(dir, name), { recursive: true, force: true });
+    } catch (error) {
+      // Another instance may still be writing it; the next launch retries.
+      log.warn('compile cache prune failed', { error: error instanceof Error ? error.name : 'unknown' });
+    }
+  }));
 }

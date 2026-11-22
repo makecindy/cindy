@@ -75,11 +75,14 @@ describe('startMainCompileCache', () => {
     userDataDir = null;
   });
 
-  async function profileWithBuilds(...builds: string[]): Promise<string> {
+  /** Creates `main-compile-cache/<entry>` directories; entries may name a flavor namespace. */
+  async function profileWithEntries(...entries: string[][]): Promise<string> {
     userDataDir = await mkdtemp(path.join(os.tmpdir(), 'cindy-main-compile-cache-'));
-    for (const build of builds) await mkdir(path.join(userDataDir, 'main-compile-cache', build), { recursive: true });
+    for (const entry of entries) await mkdir(path.join(userDataDir, 'main-compile-cache', ...entry), { recursive: true });
     return userDataDir;
   }
+  const listing = async (dir: string, ...namespace: string[]) =>
+    (await readdir(path.join(dir, 'main-compile-cache', ...namespace)).catch(() => [] as string[])).sort();
 
   function fakeRuntime(status: number, launchEnvironmentDir?: string) {
     const calls = { enabled: [] as string[], flushes: 0 };
@@ -99,31 +102,38 @@ describe('startMainCompileCache', () => {
   const devInstall = { isPackaged: false, platform: process.platform, resourcesPath: os.tmpdir(), homeDir: os.homedir() };
   const macInstall = { isPackaged: true, platform: 'darwin' as const, resourcesPath: '/Applications/Cindy.app/Contents/Resources', homeDir: '/Users/me' };
 
-  // The last case is PR #12070 review: NODE_COMPILE_CACHE turns the cache on before app code runs.
-  // It cannot be undone from here, so on a disallowed install it must be reported, never adopted.
+  // PR #12070 review cases:
+  // - NODE_COMPILE_CACHE turns the cache on before app code runs; on a disallowed install it is
+  //   reported, never adopted.
+  // - A source run and the installed app may share one userData at the same time; each prunes only
+  //   its own flavor namespace, so neither deletes the cache the other is using.
   it.each([
-    ['enabled: keeps only the current build', devInstall, ENABLED, undefined, 'enabled', 1, 1, ['0.2.0-index-new']],
-    ['Node reports disabled: removes every build', devInstall, DISABLED, undefined, 'disabled', 1, 0, []],
-    ['install not allowed: never enables and removes leftovers', macInstall, ENABLED, undefined, 'not-allowed', 0, 0, []],
-    ['install not allowed, launch environment enabled it: reported, not adopted', macInstall, ENABLED, '/tmp/env-cache', 'enabled-by-environment', 0, 0, []],
-  ] as const)('%s', async (_name, install, nodeStatus, launchDir, status, enableCalls, flushes, remaining) => {
-    const dir = await profileWithBuilds('0.1.0-index-old', '0.2.0-index-new');
+    ['enabled: keeps only the current build of its own flavor', devInstall, ENABLED, undefined, 'enabled', 1, 1, ['0.2.0-new'], ['0.9.0-pkg']],
+    ['Node reports disabled: empties only its own flavor', devInstall, DISABLED, undefined, 'disabled', 1, 0, [], ['0.9.0-pkg']],
+    ['install not allowed: never enables and empties only its own flavor', macInstall, ENABLED, undefined, 'not-allowed', 0, 0, ['0.1.0-old', '0.2.0-new'], []],
+    ['install not allowed, launch environment enabled it: reported, not adopted', macInstall, ENABLED, '/tmp/env-cache', 'enabled-by-environment', 0, 0, ['0.1.0-old', '0.2.0-new'], []],
+  ] as const)('%s', async (_name, install, nodeStatus, launchDir, status, enableCalls, flushes, sourceLeft, packagedLeft) => {
+    // A layout from earlier builds of this feature sits directly under the root.
+    const dir = await profileWithEntries(['source', '0.1.0-old'], ['source', '0.2.0-new'], ['packaged', '0.9.0-pkg'], ['0.0.0-legacy']);
     const { calls, runtime } = fakeRuntime(nodeStatus, launchDir);
+    const buildId = install.isPackaged ? '0.9.0-pkg' : '0.2.0-new';
 
-    const cache = startMainCompileCache({ ...install, userDataDir: dir, buildId: '0.2.0-index-new' }, runtime);
+    const cache = startMainCompileCache({ ...install, userDataDir: dir, buildId }, runtime);
     cache.flush();
     await cache.pruneUnused();
 
     expect(cache.status).toBe(status);
     expect(calls.enabled).toEqual(
-      enableCalls ? [path.join(dir, 'main-compile-cache', '0.2.0-index-new')] : [],
+      enableCalls ? [path.join(dir, 'main-compile-cache', install.isPackaged ? 'packaged' : 'source', buildId)] : [],
     );
     expect(calls.flushes).toBe(flushes);
-    expect((await readdir(path.join(dir, 'main-compile-cache'))).sort()).toEqual(remaining);
+    expect(await listing(dir, 'source')).toEqual(sourceLeft);
+    expect(await listing(dir, 'packaged')).toEqual(packagedLeft);
+    expect(await listing(dir)).toEqual(['packaged', 'source']);
   });
 
   it('pruning tolerates a profile that never had a cache', async () => {
-    const dir = await profileWithBuilds();
+    const dir = await profileWithEntries();
     const { runtime } = fakeRuntime(ENABLED);
     const cache = startMainCompileCache({ ...devInstall, userDataDir: dir, buildId: 'b' }, runtime);
     await expect(cache.pruneUnused()).resolves.toBeUndefined();
