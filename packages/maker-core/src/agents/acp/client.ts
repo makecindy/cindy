@@ -4,6 +4,8 @@ export interface AcpTransport {
   onLine(listener: (line: string) => void): () => void;
   onClose(listener: () => void): () => void;
   close(): Promise<void>;
+  /** Process exit confirmation, even if a previous close attempt timed out. */
+  readonly whenExited?: Promise<void>;
 }
 export type AcpRecord = Record<string, unknown>;
 export type AcpResponse = { result: AcpRecord } | { error: Error };

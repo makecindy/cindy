@@ -33,7 +33,7 @@ export type AgentEventType =
   | 'tool_use'              // 工具调用开始
   | 'tool_result'           // 工具调用结果（精简，UI 内嵌显示）
   | 'tool_result_full'      // 工具调用结果（完整，UI 详情面板用）
-  | 'antigravity_tool_activity' // Host-only progress and native command lifecycle
+  | 'antigravity_tool_activity' // Host-only progress and runtime lifecycle
   | 'agent_task_update'     // 子 agent / task 状态更新（Claude Code task_* + Codex collab agent）
   | 'image'                 // 模型查看 / 生成的图片 (codex 独有, claude SDK 不会发)
   | 'account_usage'         // vendor-specific 账号级用量 (codex rateLimits 等); data shape 由 emit 端自定, renderer 按 source/字段嗅探
@@ -53,8 +53,12 @@ export interface AntigravityCommandExit {
 }
 
 export type AntigravityToolActivity =
+  | { kind: 'process_exited' }
   | { kind: 'tool_progress'; toolUseId: string }
   | ({ kind: 'command_exited' } & AntigravityCommandExit);
+
+/** Native identity for host bookkeeping. The tool card keeps its ACP display title. */
+export const ANTIGRAVITY_NATIVE_TOOL_NAME = Symbol('antigravityNativeToolName');
 
 export interface TurnDiffEventData {
   /** Provider-owned turn identity. Same id updates replace, rather than append to, the prior diff. */
@@ -203,6 +207,7 @@ export interface SendOrigin {
 export interface AgentEvent {
   type: AgentEventType;
   data: unknown;
+  [ANTIGRAVITY_NATIVE_TOOL_NAME]?: string;
   /** 事件来源标识，便于调试 */
   source?: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   /**

@@ -39,7 +39,7 @@
  */
 
 import type { ResponseObserver } from '@cindy/anthropic-compat-proxy';
-import type { AgentEvent, AntigravityToolActivity } from '@cindy/maker-core';
+import { ANTIGRAVITY_NATIVE_TOOL_NAME, type AgentEvent, type AntigravityToolActivity } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('claude-bg-activity');
@@ -90,6 +90,7 @@ interface SessionActivityState {
   engineOpenTools: Map<string, EngineWork>;
   engineOpenToolsUntil: number;
   antigravity: boolean;
+  antigravitySessionInstanceId?: string;
   /** 已通知 Agent Island 的「插件引擎仍在回合外工作」。 */
   engineActive: boolean;
   /** 最近一次快照:该会话是否有仍在运行、会自己结束的后台命令(不含长驻服务)。 */
@@ -264,6 +265,16 @@ function evaluate(sessionId: string, st: SessionActivityState): void {
   if (next) armOffTimer(sessionId, st);
 }
 
+/** A confirmed exit can arrive after Session has fenced its event stream. */
+export function clearAntigravityProcessActivity(sessionId: string, sessionInstanceId: string | undefined): void {
+  const st = states.get(sessionId);
+  if (!st?.antigravity || st.antigravitySessionInstanceId !== sessionInstanceId) return;
+  st.engineOpenTools.clear();
+  st.engineOpenToolsUntil = 0;
+  st.engineActivityAt = 0;
+  if (!st.turnRunning) evaluate(sessionId, st);
+}
+
 /**
  * 插件引擎(ACP)任务的事件:记下未完成的工具调用与回合外输出,再重评。
  * 只给 ACP 和 Antigravity 任务调用;回合内的工具调用也要记,回合结束时仍未完成的
@@ -277,6 +288,10 @@ export function observePluginEngineEvent(sessionId: string, event: AgentEvent): 
   let st = states.get(sessionId);
   if (event.type === 'antigravity_tool_activity' && antigravity) {
     const activity = event.data as AntigravityToolActivity;
+    if (activity.kind === 'process_exited') {
+      clearAntigravityProcessActivity(sessionId, event.sessionInstanceId);
+      return;
+    }
     const call = st?.engineOpenTools.get(activity.toolUseId);
     if (!st || !call) return;
     if (activity.kind === 'command_exited') {
@@ -288,8 +303,18 @@ export function observePluginEngineEvent(sessionId: string, event: AgentEvent): 
     }
     refreshEngineOpenToolDeadlines(st, Date.now());
   } else if (event.type === 'tool_use' && typeof data.toolUseId === 'string' && data.toolUseId) {
+    // The native schedule tool may never pair with a terminal ACP frame.
+    // Its card and eventual wake output still follow the normal event pipeline.
+    const nativeToolName = event[ANTIGRAVITY_NATIVE_TOOL_NAME];
+    const waitsForWake = nativeToolName !== undefined
+      ? nativeToolName === 'schedule'
+      : data.toolName === 'Run schedule' || data.toolName === 'schedule';
+    if (antigravity && waitsForWake) return;
     st ??= ensureState(sessionId);
-    if (antigravity) st.antigravity = true;
+    if (antigravity) {
+      st.antigravity = true;
+      st.antigravitySessionInstanceId = event.sessionInstanceId;
+    }
     if (!st.engineOpenTools.has(data.toolUseId)) {
       const now = Date.now();
       const deadline = st.turnRunning && !background ? null : now + PLUGIN_ENGINE_OPEN_WORK_CAP_MS;
@@ -308,7 +333,10 @@ export function observePluginEngineEvent(sessionId: string, event: AgentEvent): 
   // handles their bookkeeping without treating history delivery as new work.
   if (background && (!antigravity || event.type === 'text' || event.type === 'thinking')) {
     st ??= ensureState(sessionId);
-    if (antigravity) st.antigravity = true;
+    if (antigravity) {
+      st.antigravity = true;
+      st.antigravitySessionInstanceId = event.sessionInstanceId;
+    }
     const now = Date.now();
     if (st.engineOpenToolsUntil > 0 && engineOpenToolsDeadline(st) < now) {
       refreshEngineOpenToolDeadlines(st, now);

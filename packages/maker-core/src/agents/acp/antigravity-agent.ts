@@ -5,6 +5,7 @@ import { BaseAgent, AgentStartupStoppedError, TASK_SYSTEM_PROMPT, type AgentDeps
 import type { AuthState, Effort, PermissionMode, UserMessage } from '../../types/common.js';
 import type { Capabilities } from '../../types/capabilities.js';
 import type { AgentEvent, AntigravityCommandExit, AntigravityToolActivity, InteractionResolver, UsageSnapshot } from '../../types/events.js';
+import { ANTIGRAVITY_NATIVE_TOOL_NAME } from '../../types/events.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import { AcpSubscriptionSession, type AcpDiscoveredModel } from './subscription-session.js';
 import { record, type AcpRecord, type AcpResponse, type AcpTransport } from './client.js';
@@ -283,8 +284,12 @@ export class AntigravityAgent extends BaseAgent {
     const settledTools = new Map<string, { background: boolean; awaitingOutput: boolean }>();
     const watchedCommandCalls = new Set<string>();
     let stopWatchingCommandExits: (() => void) | undefined;
-    const emit = (type: AgentEvent['type'], data: unknown, background = false) => {
-      queue.push({ type, data, source: 'antigravity', ...(background ? { turnScope: 'background' as const } : {}) });
+    const emit = (type: AgentEvent['type'], data: unknown, background = false, nativeToolName?: string) => {
+      queue.push({
+        type, data, source: 'antigravity',
+        ...(background ? { turnScope: 'background' as const } : {}),
+        ...(nativeToolName ? { [ANTIGRAVITY_NATIVE_TOOL_NAME]: nativeToolName } : {}),
+      });
     };
     const emitToolActivity = (activity: AntigravityToolActivity) => emit('antigravity_tool_activity', activity, true);
     const stopCommandWatch = () => {
@@ -345,13 +350,7 @@ export class AntigravityAgent extends BaseAgent {
         stopCommandWatch();
         // Only release the event stream after this process has stopped. Session's
         // normal stream-end lifecycle then rebuilds on the next user send; no replay.
-        void session.close().then(() => {
-          try { current.dispose?.(); } finally {
-            flushBackgroundText();
-            interruptOpenTools();
-            queue.end();
-          }
-        }).catch(() => {
+        void retireSession().catch(() => {
           thisAgent.deps.logger.warn('ACP cleanup pending after connection closed', { code: 'ACP_PROCESS_EXIT_UNCONFIRMED' });
         });
       },
@@ -414,7 +413,7 @@ export class AntigravityAgent extends BaseAgent {
             };
             call = { background };
             openTools.set(toolUseId, call);
-            emit('tool_use', { toolUseId, ...parseMessageToolUse({ role: 'tool_use', toolUseId, content }) }, background);
+            emit('tool_use', { toolUseId, ...parseMessageToolUse({ role: 'tool_use', toolUseId, content }) }, background, tool.name);
           }
           if (terminal) {
             finishTool(toolUseId, fullText, isError, !fullText);
@@ -441,6 +440,44 @@ export class AntigravityAgent extends BaseAgent {
     });
     const thisAgent = this;
     let session = createSession(connection);
+    let retirement: {
+      session: AcpSubscriptionSession;
+      pending?: Promise<void>;
+      confirmed: boolean;
+      waitingForExit: boolean;
+    } | undefined;
+    const retireSession = (finishToolCards = true): Promise<void> => {
+      if (retirement?.session !== session) {
+        retirement = { session, confirmed: false, waitingForExit: false };
+      }
+      const retiring = retirement;
+      if (retiring.pending) return retiring.pending;
+      const owner = connection;
+      const confirmExit = () => {
+        if (session !== retiring.session || retiring.confirmed) return;
+        retiring.confirmed = true;
+        stopCommandWatch();
+        try { owner.dispose?.(); } finally {
+          flushBackgroundText();
+          if (closed || finishToolCards) interruptOpenTools();
+          emitToolActivity({ kind: 'process_exited' });
+          if (closed) queue.end();
+        }
+      };
+      retiring.pending = retiring.session.close().then(confirmExit, error => {
+        retiring.pending = undefined;
+        // Observe a late exit after a failed close. In the ordinary path,
+        // closing the subscription first lets pending prompt terminals drain.
+        if (!retiring.waitingForExit && owner.transport.whenExited) {
+          retiring.waitingForExit = true;
+          void owner.transport.whenExited.then(confirmExit).catch(() => {
+            thisAgent.deps.logger.warn('ACP cleanup failed after process exit');
+          });
+        }
+        throw error;
+      });
+      return retiring.pending;
+    };
     let id: string;
     try {
       await session.initialize();
@@ -454,12 +491,10 @@ export class AntigravityAgent extends BaseAgent {
       this.authState = { authenticated: true, authSource: 'oauth', subscriptionTier: session.tier && { ...session.tier } };
       this.cachedProbe = Promise.resolve();
       this.publishModels(session);
-    } catch (error) { await session.close(); connection.dispose?.(); throw new AgentStartupStoppedError(error); }
+    } catch (error) { await retireSession(); throw new AgentStartupStoppedError(error); }
     const reconnect = async (next: PermissionMode | undefined): Promise<void> => {
       usable = false;
-      stopCommandWatch();
-      await session.close(); connection.dispose?.();
-      flushBackgroundText();
+      await retireSession();
       interruptOpenTools();
       if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
       assertCurrent();
@@ -480,7 +515,7 @@ export class AntigravityAgent extends BaseAgent {
         if (lastEffort !== undefined && resumed.currentEffort !== lastEffort) await resumed.setEffort(lastEffort);
         assertCurrent();
         if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
-      } catch (error) { await resumed.close(); replacement.dispose?.(); throw error; }
+      } catch (error) { await retireSession(); throw error; }
       usable = true;
     };
     const change = async (run: () => Promise<void>): Promise<void> => {
@@ -510,8 +545,10 @@ export class AntigravityAgent extends BaseAgent {
           if (!promptDispatched) return;
           const retiring = session;
           cancelTimer = setTimeout(() => {
+            if (session !== retiring) return;
             usable = false;
-            void retiring.close().catch(() => {
+            // Clear dead activity now. A later reconnect still owns tool-card reconciliation.
+            void retireSession(false).catch(() => {
               thisAgent.deps.logger.warn('ACP cleanup pending after cancel', { code: 'ACP_PROCESS_EXIT_UNCONFIRMED' });
             });
           }, CANCEL_GRACE_MS);
@@ -623,12 +660,9 @@ export class AntigravityAgent extends BaseAgent {
       getPlanMode: () => plan,
       close: async () => {
         closed = true;
-        stopCommandWatch();
         cancelTurn?.();
         await control?.catch(() => {});
-        await session.close();
-        connection.dispose?.();
-        flushBackgroundText();
+        await retireSession();
         interruptOpenTools();
         queue.end();
       },

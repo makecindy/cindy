@@ -1165,13 +1165,16 @@ describe('production Session event pipeline', () => {
     }
   });
 
-  // Unit, cd245937: native command progress must reach the background tracker
-  // without publishing a new chat event or recording another tool call.
-  it('keeps Antigravity command lifecycle events in the host', async () => {
+  // Unit, cd245937 and the 2026-11-22 stuck-activity incident: a native command
+  // receipt or a process exit reaches the tracker without escaping to chat.
+  it.each([
+    { kind: 'command_exited', taskId: 'native-1', toolUseId: 'call-1' },
+    { kind: 'process_exited' },
+  ])('keeps Antigravity $kind lifecycle events in the host', async (data) => {
     const h = harness();
     Object.defineProperty(h.session, 'agentKind', { value: 'antigravity' });
     try {
-      const progress = event('antigravity_tool_activity', { kind: 'command_exited', taskId: 'native-1', toolUseId: 'call-1' }, {
+      const progress = event('antigravity_tool_activity', data, {
         source: 'antigravity', turnScope: 'background',
       });
       h.emit(progress);

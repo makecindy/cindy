@@ -9,8 +9,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from '@cindy/maker-core';
+import { ANTIGRAVITY_NATIVE_TOOL_NAME, type AgentEvent } from '@cindy/maker-core';
 import {
+  clearAntigravityProcessActivity,
   clearClaudeSessionBackgroundActivity,
   createClaudeSessionActivityResponseObserver,
   getClaudeSessionBackgroundActivity,
@@ -169,6 +170,36 @@ describe('claude-session-background-activity', () => {
       setPluginEngineBackgroundWorkListener((id, active, options) => island.push([id, active, options.turnStarting]));
     });
 
+    // Unit: the 2026-11-22 incident left a native "Run schedule" card unpaired
+    // at done. Existing unpaired-call tests covered work, not a passive timer.
+    it.each([
+      { toolName: 'Run schedule' },
+      { toolName: 'schedule' },
+      { toolName: 'Set a timer', nativeToolName: 'schedule' },
+    ])('keeps $toolName idle until the engine emits wake output', ({ toolName, nativeToolName }) => {
+      const sid = 'agy-timer';
+      const scheduled = (toolUseId: string, turnScope?: 'background'): AgentEvent => ({
+        ...toolUse(toolUseId, turnScope),
+        source: 'antigravity',
+        [ANTIGRAVITY_NATIVE_TOOL_NAME]: nativeToolName,
+        data: { toolUseId, toolName, input: { DurationSeconds: 60, Prompt: 'Continue' } },
+      });
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, scheduled('timer'));
+      noteClaudeSessionTurnState(sid, false);
+      observePluginEngineEvent(sid, scheduled('another-timer', 'background'));
+      vi.advanceTimersByTime(60_000);
+      expect(broadcasts).toEqual([]);
+      expect(island).toEqual([]);
+
+      observePluginEngineEvent(sid, {
+        type: 'text', source: 'antigravity', turnScope: 'background', data: { text: 'Woke.' },
+      });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
+
     it('回合结束仍有未完成的工具调用立即点亮,结果到达后按静默窗熄灭;没有回合外工作不触发', () => {
       noteClaudeSessionTurnState('quiet', true);
       observePluginEngineEvent('quiet', toolUse('read'));
@@ -291,6 +322,37 @@ describe('claude-session-background-activity', () => {
       expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
       exit('task-2', 'call-2');
       expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
+
+    // Unit: the 2026-11-22 incident exposed a missing process-wide off edge.
+    // A live command plus recent output outlasts individual result pairing.
+    it('clears only the exited Antigravity session and stays quiet for late results', () => {
+      const sid = 'agy-exit';
+      const other = 'agy-live';
+      for (const sessionId of [sid, other]) {
+        noteClaudeSessionTurnState(sessionId, true);
+        observePluginEngineEvent(sessionId, {
+          type: 'tool_use', source: 'antigravity', sessionInstanceId: 'current',
+          data: { toolUseId: 'command', toolName: 'Run run_command' },
+        });
+        noteClaudeSessionTurnState(sessionId, false);
+        expect(getClaudeSessionBackgroundActivity(sessionId)).toBe(true);
+      }
+      observePluginEngineEvent(sid, {
+        type: 'text', source: 'antigravity', turnScope: 'background', sessionInstanceId: 'current',
+        data: { text: 'Finishing.' },
+      });
+      clearAntigravityProcessActivity(sid, 'retired');
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      observePluginEngineEvent(sid, {
+        type: 'antigravity_tool_activity', source: 'antigravity', turnScope: 'background', sessionInstanceId: 'current',
+        data: { kind: 'process_exited' },
+      });
+      observePluginEngineEvent(sid, { ...toolResult('command', 'background'), source: 'antigravity' });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(getClaudeSessionBackgroundActivity(other)).toBe(true);
+      expect(broadcasts.at(-1)).toEqual({ sessionId: sid, active: false });
+      expect(island.at(-1)).toEqual([sid, false, false]);
     });
 
     // Unit: one post-turn text event is enough to extend a live ACP tool's

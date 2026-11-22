@@ -18,6 +18,7 @@ import { antigravityConnected, setAntigravityState } from './antigravity-state.j
 
 import { assertVerifiedAntigravityBinary, supportsAntigravityRuntime } from './antigravity-runtime.js';
 import { watchAntigravityCommandExits } from './antigravity-command-exits.js';
+import { clearAntigravityProcessActivity } from './claude-session-background-activity.js';
 
 import { downloadAntigravityRelease, fetchAntigravityRelease, managedAntigravityPlatform } from './antigravity-download.js';
 
@@ -249,11 +250,23 @@ function createAntigravityAgent(
         assertVerifiedAntigravityBinary(binding.binary);
         const transport = spawnAcp(binding.binary, antigravitySubscriptionArgs(geminiHome(binding.id), opts?.permissionMode, !!tools?.mcpServers.length),
           cwd, { profileStorage: binding.id !== LEGACY_PROFILE, httpsProxy });
+        let observingLateExit = false;
         const tracked = { ...transport, async close() {
-          await transport.close();
-          transports.delete(tracked);
+          try {
+            await transport.close();
+            transports.delete(tracked);
+          } catch (error) {
+            const { sessionId, sessionInstanceId } = opts ?? {};
+            if (!observingLateExit && sessionId && sessionInstanceId && transport.whenExited) {
+              observingLateExit = true;
+              // Explicit session close can fence the event stream before a late exit.
+              void transport.whenExited.then(() => clearAntigravityProcessActivity(sessionId, sessionInstanceId));
+            }
+            throw error;
+          }
         } };
         transports.set(tracked, binding.id);
+        void transport.whenExited?.then(() => transports.delete(tracked));
         return {
           sessionScope, isCurrent: () => isCurrentBinding(binding),
           useCachedAuthentication: stableSession && !antigravityNativeResumeId(opts.resumeSessionId, sessionScope) && binding.id !== LEGACY_PROFILE,

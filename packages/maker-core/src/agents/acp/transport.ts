@@ -46,6 +46,11 @@ export function spawnAcp(binary: string, args: string[], cwd: string, options: {
   let closing: Promise<void> | undefined;
   const end = () => { if (!ended) { ended = true; for (const l of closed) l(); } };
   process.on('error', end); process.on('exit', end);
+  const whenExited = new Promise<void>(resolve => {
+    // 'close' also covers a failed spawn, which does not emit 'exit'.
+    process.once('exit', () => resolve());
+    process.once('close', () => resolve());
+  });
   process.stdout.on('data', (chunk: Buffer) => {
     tail += decoder.write(chunk);
     if (Buffer.byteLength(tail) > 8 * 1024 * 1024) { process.kill(); end(); return; }
@@ -56,6 +61,7 @@ export function spawnAcp(binary: string, args: string[], cwd: string, options: {
     }
   });
   return {
+    whenExited,
     write(line) { if (ended) throw new Error('ACP_CLOSED'); process.stdin.write(line); },
     onLine(l) { listeners.add(l); return () => { listeners.delete(l); }; },
     onClose(l) { closed.add(l); if (ended) queueMicrotask(l); return () => { closed.delete(l); }; },

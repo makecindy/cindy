@@ -145,6 +145,7 @@ export function prepareSessionEvent(
     return;
   }
   if (event.type === 'antigravity_tool_activity') {
+    // Native command receipts and process exit only update host activity.
     if (session.agentKind === 'antigravity') observePluginEngineEvent(session.id, event);
     return;
   }

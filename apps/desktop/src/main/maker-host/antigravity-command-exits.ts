@@ -6,6 +6,7 @@ const NATIVE_CONVERSATION_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const NATIVE_RECEIPT_FILE = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.json$/i;
 const MAX_RECEIPT_BYTES = 128 * 1024;
 const MAX_PENDING_RECEIPTS = 64;
+const INITIAL_MAILBOX_RECHECK_MS = 100;
 
 // ACP 1.5.x can omit the native background command notification. The local
 // CLI writes the same notification to its conversation mailbox, with both the
@@ -67,6 +68,7 @@ async function observeMailbox(
 
   let mailboxWatcher: FSWatcher | undefined;
   let opening = false;
+  let mailboxChangedWhileOpening = false;
   const pending = new Set<string>();
   let draining = false;
   const drain = async () => {
@@ -91,8 +93,20 @@ async function observeMailbox(
       void drain();
     }
   };
+  const scanMailbox = async () => {
+    let count = 0;
+    const directory = await fs.opendir(mailbox);
+    for await (const entry of directory) {
+      if (signal.aborted || count++ >= MAX_PENDING_RECEIPTS) break;
+      if (entry.isFile()) enqueue(entry.name);
+    }
+  };
   const attachMailbox = async () => {
-    if (mailboxWatcher || opening || signal.aborted) return;
+    if (mailboxWatcher || signal.aborted) return;
+    if (opening) {
+      mailboxChangedWhileOpening = true;
+      return;
+    }
     opening = true;
     try {
       if (await fs.realpath(mailbox) !== mailbox || signal.aborted) return;
@@ -102,16 +116,16 @@ async function observeMailbox(
 
       // Register the watch before looking at existing files to cover a receipt
       // written while the watch was opening. Do not scan a full conversation.
-      let count = 0;
-      const directory = await fs.opendir(mailbox);
-      for await (const entry of directory) {
-        if (signal.aborted || count++ >= MAX_PENDING_RECEIPTS) break;
-        if (entry.isFile()) enqueue(entry.name);
-      }
+      await scanMailbox();
     } catch {
       // In new conversations the CLI can create its mailbox at the first exit.
     } finally {
       opening = false;
+      // Creation can arrive while realpath is still resolving a missing mailbox.
+      if (mailboxChangedWhileOpening) {
+        mailboxChangedWhileOpening = false;
+        void attachMailbox();
+      }
     }
   };
   const parent = watch(stateDir, { persistent: false, signal }, (_event, name) => {
@@ -119,6 +133,22 @@ async function observeMailbox(
   });
   parent.on('error', () => parent.close());
   await attachMailbox();
+  if (signal.aborted) return;
+  // The first scan can see a temporary file while the OS starts the watch.
+  // Reconcile once after registration to catch a rename in that startup gap.
+  const recheck = setTimeout(() => {
+    signal.removeEventListener('abort', cancelRecheck);
+    if (!mailboxWatcher) {
+      void attachMailbox();
+      return;
+    }
+    void fs.realpath(mailbox).then(realMailbox => {
+      if (!signal.aborted && realMailbox === mailbox) return scanMailbox();
+    }).catch(() => {});
+  }, INITIAL_MAILBOX_RECHECK_MS);
+  const cancelRecheck = () => clearTimeout(recheck);
+  signal.addEventListener('abort', cancelRecheck, { once: true });
+  recheck.unref();
 }
 
 async function readReceipt(file: string): Promise<unknown> {
