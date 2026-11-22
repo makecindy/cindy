@@ -1154,6 +1154,10 @@ export function VoiceInputOverlay() {
     try {
       const requestResult = await requestRendererMicrophonePermission();
       if (requestResult.ok) return;
+      if (requestResult.status === 'device-unavailable') {
+        await showStartFailure(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+        return;
+      }
       const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
       if (!settingsResult.ok) {
         log.warn('open microphone settings failed:', settingsResult.error);
@@ -1161,7 +1165,7 @@ export function VoiceInputOverlay() {
     } catch (error) {
       log.warn('open microphone settings failed:', error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [showStartFailure, t]);
 
   const openPermissionPromptSettings = useCallback(() => {
     const prompt = permissionPrompt;

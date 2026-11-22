@@ -977,7 +977,7 @@
     "captureFailed": "無法擷取螢幕",
     "permission": {
       "title": "需要螢幕錄製權限",
-      "detail": "截圖需要在「系統設定 > 隱私權與安全性 > 螢幕與系統錄音」中允許 {{appName}}，開啟後請重新開啟 {{appName}}。",
+      "detail": "允許 {{appName}} 錄製螢幕，再試一次。若 macOS 提示，請重新開啟 App。",
       "openSettings": "打開系統設定",
       "later": "暫不開啟"
     },
@@ -1144,12 +1144,12 @@
     "windowsError": "尚未完成授權，請在這台電腦上重試。",
     "windowsErrorDetail": "錯誤碼 {{code}}",
     "permissionsTitle": "遠端桌面權限",
-    "permissionsIntro": "檢視桌面需要螢幕錄製權限；操作桌面還需要輔助使用權限。請在電腦上完成授權，結果會自動更新。",
+    "permissionsIntro": "請在被控 Mac 上完成授權。檢視桌面需要螢幕錄製，使用鍵盤和滑鼠還需要允許 Cindy 控制 App。授權後會自動檢查。",
     "permissionsReady": "系統權限已就緒，可以重新連線。",
     "screenRecording": "螢幕錄製",
-    "accessibility": "輔助使用",
-    "screenRecordingHelp": "開啟系統設定，為目前的 Cindy 啟用螢幕錄製。若系統要求重新啟動，請重新開啟 Cindy 後連線。",
-    "accessibilityHelp": "點擊開啟設定後，為系統授權提示中的應用程式啟用輔助使用。返回後會自動檢測實際輸入權限。",
+    "accessibility": "鍵盤與滑鼠控制",
+    "screenRecordingHelp": "在「螢幕錄製」或「螢幕與系統音訊錄製」中，允許目前執行的 Cindy 錄製螢幕。若 macOS 提示，請重新開啟 Cindy。",
+    "accessibilityHelp": "在「隱私權與安全性」選取系統提示的應用程式。若看到「System & App Protection Override」，請選取允許它控制的 App；較早版本請在「輔助使用」中開啟。",
     "permissionChecking": "檢測中…",
     "permissionGranted": "已授權",
     "permissionUnknown": "未確認",
@@ -1343,7 +1343,9 @@
       }
     },
     "lockOnExitHintPrivacy": "退出遠端桌面後蓋上隱私畫面，AI 可以繼續工作；有人碰電腦就會鎖定。",
-    "lockedEnablePrivacyHint": "想讓 AI 在你離開時繼續使用這台電腦，可以在它的「設定 → 通用 → 離開電腦時」中開啟隱私畫面。"
+    "lockedEnablePrivacyHint": "想讓 AI 在你離開時繼續使用這台電腦，可以在它的「設定 → 通用 → 離開電腦時」中開啟隱私畫面。",
+    "revealCurrentApp": "在 Finder 中顯示 {{app}}",
+    "openPermissionInNewWindow": "在新視窗開啟"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3144,7 +3146,7 @@
         },
         "accessibility": {
           "label": "自動輸入",
-          "tooltip": "輔助使用權限用於在其他 App 中自動輸入語音結果、讀取游標附近文字作為潤色上下文，並識別外部修改以改進詞典。"
+          "tooltip": "允許 Cindy 在選取的 App 中輸入語音結果、讀取游標附近的文字並辨識修改。在 Mac 顯示的「輔助使用」或「System & App Protection Override」中授權。"
         }
       },
       "interactionSound": {
@@ -5734,10 +5736,10 @@
         "toggleAria": "使用我的瀏覽器登入狀態",
         "confirmTitle": "允許 Agent 使用你的瀏覽器登入狀態？",
         "confirmDescription": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。可以隨時關掉，拷貝會被刪除。",
-        "confirmDescriptionMac": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。讀取 Chrome 登入檔還需要「完整磁碟取用權限」。可以隨時關掉，拷貝會被刪除。",
+        "confirmDescriptionMac": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。可以隨時關掉，拷貝會被刪除。 若系統詢問檔案夾權限，請選取所需的瀏覽器個人資料檔案夾。",
         "confirm": "使用我的登入狀態",
-        "readDeniedTitle": "需要完整磁碟取用權限",
-        "readDeniedDescription": "讀取 Chrome 登入檔需要系統允許 Cindy。請在「隱私權與安全性 → 完整磁碟取用權限」中開啟 Cindy，然後回到這裡再試。",
+        "readDeniedTitle": "無法讀取瀏覽器個人資料",
+        "readDeniedDescription": "在「隱私權與安全性 → 完整磁碟取用權」選取目前執行的 Cindy。若可選取檔案夾，請只選所需的瀏覽器個人資料檔案夾，再試一次。",
         "openFullDiskAccess": "打開系統設定",
         "readDeniedLater": "稍後再說",
         "toast": {
@@ -5909,7 +5911,7 @@
         "permissionIntro": {
           "title": "啟用自動操作電腦",
           "description": "{{appName}} 將在本機安裝或啟動 Cua Driver，用於讀取螢幕並執行點選、輸入等操作。請僅在你主動發起自動操作電腦任務時啟用。",
-          "macosDescription": "接下來 {{appName}} 會安裝或開啟 Cua Driver 的授權流程，並可能跳轉到 macOS 系統設定。請先為 CuaDriver 授予「輔助使用」和「螢幕錄製」核心權限；之後在使用過程中，macOS 可能還會按目標 App 或具體動作彈出額外確認。只有在你主動發起 Computer Use 任務時才應確認這些請求。完成後回到 {{appName}}，它會自動檢查並啟用。",
+          "macosDescription": "{{appName}} 將在本機安裝或啟動 Cua Driver，用於讀取螢幕並執行點選、輸入等操作。請僅在你主動發起自動操作電腦任務時啟用。為 CuaDriver 開啟螢幕錄製。在「System & App Protection Override」選取允許它控制的 App；較早版本的 macOS 請在「輔助使用」中開啟。",
           "confirm": "繼續",
           "cancel": "稍後再說"
         },
@@ -5930,8 +5932,8 @@
         },
         "permissions": {
           "title": "系統授權",
-          "macosHint": "Computer Use 需要「輔助使用」和「螢幕錄製」。實際使用時，macOS 仍可能按目標 App 或具體動作彈出額外確認。",
-          "accessibilityLabel": "輔助使用",
+          "macosHint": "為 CuaDriver 開啟螢幕錄製。在「System & App Protection Override」選取允許它控制的 App；較早版本請在「輔助使用」中開啟。",
+          "accessibilityLabel": "鍵盤與滑鼠控制",
           "screenRecordingLabel": "螢幕錄製",
           "grant": "去授權",
           "accessibility": "輔助使用：{{status}}",
@@ -5977,7 +5979,7 @@
           "toggleFailed": "切換直接電腦控制失敗",
           "installFailed": "cua-driver 安裝失敗",
           "permissionFailed": "Computer Use 權限未完成",
-          "permissionPending": "請完成這兩項系統權限，然後回到這裡點選「重新檢查」",
+          "permissionPending": "請在 Mac 上完成授權。若狀態仍未更新，請按「重新檢查」。",
           "permissionSettingsOpened": "已開啟系統權限設定。完成授權後，請回到這裡點選「重新檢查」。",
           "permissionSettingsMonitoring": "已開啟系統權限設定。完成授權後，狀態會自動更新。",
           "openPermissionSettingsFailed": "無法開啟系統權限設定"
@@ -20388,7 +20390,7 @@
     "epermGuidance": {
       "title": "macOS 拒絕存取資料夾",
       "message": "Cindy 無法存取你的「{{folder}}」資料夾",
-      "detail": "macOS 拒絕了存取。請開啟「系統設定」授予權限，然後重新執行 Agent 命令。",
+      "detail": "在「檔案與檔案夾」允許 Cindy 取用這個檔案夾，再試一次。",
       "openSystemSettings": "開啟系統設定",
       "cancel": "取消",
       "folderNames": {
