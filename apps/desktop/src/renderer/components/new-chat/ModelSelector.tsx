@@ -3469,7 +3469,7 @@ function ModelSelectorContentView({
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--model-item-hover)]">
             <Unplug size={16} className="text-[var(--text-secondary)]" />
           </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="truncate text-sm font-medium text-[var(--model-item-text)]">
               {t('newChat.modelSelector.source.emptyTitle')}
             </span>
@@ -3579,7 +3579,7 @@ function ModelSelectorContentView({
   const searchField = (
     <div
       className={cn(
-        'flex items-center gap-2 rounded-full border border-[var(--model-dropdown-border)] px-3 py-[7px] transition-colors',
+        'flex items-center gap-2 rounded-full border border-[var(--model-dropdown-border)] px-3 py-1.5 transition-colors',
         interactionDisabled
           ? 'cursor-not-allowed bg-[var(--surface-elevated-soft)]'
           : 'bg-[var(--surface)]',
@@ -4158,7 +4158,7 @@ function ModelSelectorContentView({
           />
           {/* 「配置模型」只对本机目录与分享来的供应商展示(见 showProvidersEntry)。 */}
           {showProvidersEntry && (
-            <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-2">
               <button
                 type="button"
                 disabled={interactionDisabled}

@@ -72,7 +72,7 @@
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-0_5);
   border-radius: var(--radius-full);
   color: inherit;
   line-height: 20px;
@@ -130,7 +130,7 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-1_5);
 }
 
 .resource-usage-icon {
@@ -208,7 +208,7 @@
   display: flex;
   min-height: 42px;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-1_5);
   padding: var(--space-2) var(--space-1);
   color: var(--text-tertiary);
   font-size: var(--text-12);

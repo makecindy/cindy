@@ -42,6 +42,7 @@ export function CheckoutSessions({
             {t(`newChat.checkout.runningTitle${vars.count === 1 ? '_one' : ''}`, vars)}
           </span>
         </div>
+        {/* ml-[22px] = 14px Spinner + gap-2，正文对齐标题文字（DESIGN.md §5 悬挂缩进）。 */}
         <div className="ml-[22px] mt-1 space-y-2 text-12 text-[var(--text-secondary)]">
           <p>
             {t(
