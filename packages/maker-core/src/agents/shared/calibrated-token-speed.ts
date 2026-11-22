@@ -249,6 +249,10 @@ export class CalibratedTokenSpeedMeter {
     tokens: number;
     /** What the request added to the chart axis. */
     axisMs: number;
+    /** What it added to the provisional totals, if timed by its wait. */
+    provisionalCreditMs: number;
+    /** The displayed request reading, which can still be replaced. */
+    readingRate?: number;
     /** What it added to the measured average, if anything. */
     measured?: { tokens: number; ms: number };
     server: boolean;
@@ -474,17 +478,14 @@ export class CalibratedTokenSpeedMeter {
     // Nothing measured yet: the wait is the only time there is to go by, for now.
     else creditMs = waitMs ?? 0;
     if (waitMs !== undefined && serverTps === undefined) creditMs = Math.min(creditMs, waitMs);
-    if (knownTps <= 0 && creditMs > 0) {
+    const provisionalCreditMs = knownTps <= 0 ? Math.max(0, creditMs) : 0;
+    const axisMs = requestMs + creditMs;
+    if (provisionalCreditMs > 0) {
       this.provisionalTokens += requestTokens;
       this.provisionalOwnMs += requestMs;
-      this.provisionalCreditMs += creditMs;
-    } else if (requestTps !== undefined && this.provisionalTokens > 0) {
-      // A real speed at last: the requests timed by their wait ran at it too.
-      const credit = Math.max(0, (this.provisionalTokens * 1_000) / requestTps - this.provisionalOwnMs);
-      this.settledMs -= Math.max(0, this.provisionalCreditMs - credit);
-      this.provisionalTokens = 0;
-      this.provisionalOwnMs = 0;
-      this.provisionalCreditMs = 0;
+      this.provisionalCreditMs += provisionalCreditMs;
+    } else if (requestTps !== undefined) {
+      this.recalibrateProvisionalTime(requestTps);
     }
     const report: SpeedCalibrationReport = {
       requestTokens,
@@ -498,12 +499,14 @@ export class CalibratedTokenSpeedMeter {
       thinkingScale: this.rawThinkingCount > 0 ? this.thinkingCountScale.value : this.thinkingTextScale.value,
     };
     this.settledTokens = turnOutputTokens;
-    this.settledMs += requestMs + creditMs;
+    this.settledMs += axisMs;
     this.clockAtSettle = this.clockMs;
     this.clearLive();
     const measured = serverTps !== undefined
       ? { tokens: requestTokens, ms: server!.ms }
       : requestTps !== undefined ? { tokens: paced, ms: requestMs } : undefined;
+    this.peak = Math.max(this.peak, this.lastSettle?.readingRate ?? 0);
+    let readingRate: number | undefined;
     if (requestTps !== undefined && measured) {
       this.lastRequestTps = requestTps;
       this.measuredTokens += measured.tokens;
@@ -513,6 +516,7 @@ export class CalibratedTokenSpeedMeter {
         // A request that streamed nothing never moved the clock: its reading is from now,
         // not from where the previous request stopped.
         this.tps = requestTps;
+        readingRate = requestTps;
         this.rememberReading(requestTps, 'request', requestMs > 0 ? this.pausedAt : now);
       }
     }
@@ -522,8 +526,10 @@ export class CalibratedTokenSpeedMeter {
     this.lastSettle = {
       index: this.requests,
       tokens: requestTokens,
-      axisMs: requestMs + creditMs,
-      ...(requestTps !== undefined && measured ? { measured } : {}),
+      axisMs,
+      provisionalCreditMs,
+      readingRate,
+      measured,
       server: serverTps !== undefined,
     };
     return report;
@@ -532,6 +538,11 @@ export class CalibratedTokenSpeedMeter {
   /** Position of the newest finished request in this turn; 0 before the first. */
   get lastRequestIndex(): number {
     return this.requests;
+  }
+
+  /** The latest settled request's own rate, even when the next request is already streaming. */
+  get lastRequestRate(): number | undefined {
+    return this.invalid ? undefined : this.lastSettle?.readingRate;
   }
 
   /**
@@ -551,20 +562,52 @@ export class CalibratedTokenSpeedMeter {
     }
     this.measuredTokens += last.tokens;
     this.measuredMs += ms;
-    // Requests timed by their wait ran at this speed too.
-    if (this.provisionalTokens > 0) {
-      const credit = Math.max(0, (this.provisionalTokens * 1_000) / rate - this.provisionalOwnMs);
-      this.settledMs -= Math.max(0, this.provisionalCreditMs - credit);
-      this.provisionalTokens = 0;
-      this.provisionalOwnMs = 0;
-      this.provisionalCreditMs = 0;
+    const oldEnd = Math.round(this.settledMs);
+    // This request gets a direct replacement below. Only infer time for earlier requests.
+    if (last.provisionalCreditMs > 0) {
+      this.provisionalTokens -= last.tokens;
+      this.provisionalOwnMs -= last.axisMs - last.provisionalCreditMs;
+      this.provisionalCreditMs -= last.provisionalCreditMs;
     }
-    this.settledMs = Math.max(0, this.settledMs + ms - last.axisMs);
-    this.lastSettle = { ...last, axisMs: ms, measured: { tokens: last.tokens, ms }, server: true };
+    this.recalibrateProvisionalTime(rate);
+    this.settledMs += ms - last.axisMs;
+    const atMs = Math.round(this.settledMs);
+    const mark = this.lastRequest!;
+    const markIndex = this.traceMarks.length - 1;
+    this.clampRequestMarks(atMs, markIndex);
+    this.lastRequest = { ...mark, atMs };
+    this.traceMarks[markIndex] = [atMs, mark.thinkingTokens ?? -1, 1];
+    this.traceMarkStarts[markIndex] = atMs;
+    this.traceMarkEnds[markIndex] = atMs;
+
+    const shift = atMs - oldEnd;
+    const nextRequestPoints = this.traceSpeed
+      .filter(([at]) => at > oldEnd)
+      .map(([at, speed, kind]): [number, number, SpeedReading['kind']] => [at + shift, speed, kind]);
+    this.traceSpeed = this.traceSpeed.filter(([at]) => at < Math.min(oldEnd, atMs));
+    this.traceSpeed.push([atMs, Math.round(rate * 10) / 10, 'request'], ...nextRequestPoints);
+    this.compactTraceSpeed();
+
+    const latest = this.latestReading;
+    this.latestReading = latest?.kind === 'stream' && latest.atMs > oldEnd
+      ? { ...latest, atMs: latest.atMs + shift }
+      : { kind: 'request', rate, atMs, measuredAt: Date.now() };
+    this.lastSettle = {
+      ...last, axisMs: ms, provisionalCreditMs: 0, readingRate: rate,
+      measured: { tokens: last.tokens, ms }, server: true,
+    };
     this.lastRequestTps = rate;
-    if (!this.hasLiveRate) this.tps = rate;
-    this.rememberReading(rate, 'request', Date.now());
+    if (this.paused || this.stopped) this.tps = rate;
     return true;
+  }
+
+  private recalibrateProvisionalTime(rate: number): void {
+    if (this.provisionalCreditMs <= 0) return;
+    const credit = Math.max(0, (this.provisionalTokens * 1_000) / rate - this.provisionalOwnMs);
+    this.settledMs -= Math.max(0, this.provisionalCreditMs - credit);
+    this.provisionalTokens = 0;
+    this.provisionalOwnMs = 0;
+    this.provisionalCreditMs = 0;
   }
 
   /** Turn end. `realOutputTokens` replaces the estimate when the provider reported it. */
@@ -631,6 +674,7 @@ export class CalibratedTokenSpeedMeter {
     const elapsedMs = this.settledMs + this.liveMs + silentMs + (this.measuring === 'yes' ? sinceTick : 0);
     // A sub-second measurement has no stable denominator: it would publish a spike.
     const average = elapsedMs >= MIN_VALID_DURATION_MS ? (tokens * 1_000) / elapsedMs : 0;
+    const peak = Math.max(this.peak, this.lastSettle?.readingRate ?? 0);
     return {
       rate: streaming ? this.tps : average,
       average,
@@ -642,7 +686,7 @@ export class CalibratedTokenSpeedMeter {
       tokens: Math.round(tokens),
       elapsedMs,
       streaming,
-      ...(this.peak > 0 ? { peak: this.peak } : {}),
+      ...(peak > 0 ? { peak } : {}),
       ...(this.lastRequest ? { request: this.lastRequest, trace: this.trace() } : {}),
     };
   }
@@ -666,8 +710,8 @@ export class CalibratedTokenSpeedMeter {
 
   private markRequest(thinkingTokens: number | undefined, outputTokens: number): void {
     this.requests += 1;
-    // A later settle can trim provisional time: a mark never sits left of the one before it.
-    const atMs = Math.max(Math.round(this.settledMs), this.traceMarks.at(-1)?.[0] ?? 0);
+    const atMs = Math.round(this.settledMs);
+    this.clampRequestMarks(atMs, this.traceMarks.length);
     this.lastRequest = {
       index: this.requests,
       atMs,
@@ -683,7 +727,8 @@ export class CalibratedTokenSpeedMeter {
     // Repeatedly halving neighbours moved large early groups to their right edge.
     let closest = 0;
     let smallestSpan = Infinity;
-    for (let i = 0; i < this.traceMarks.length - 1; i += 1) {
+    // The newest mark stays separate so late provider timing can move it exactly.
+    for (let i = 0; i < this.traceMarks.length - 2; i += 1) {
       const end = this.traceMarkEnds[i + 1];
       const span = end - this.traceMarkStarts[i];
       if (span < smallestSpan) { smallestSpan = span; closest = i; }
@@ -700,18 +745,32 @@ export class CalibratedTokenSpeedMeter {
     this.traceMarkEnds.splice(closest, 1);
   }
 
+  /** Keep earlier marks in bounds if recalibration shortened provisional time. */
+  private clampRequestMarks(atMs: number, beforeIndex: number): void {
+    for (let i = beforeIndex - 1; i >= 0 && this.traceMarkEnds[i] > atMs; i -= 1) {
+      const [at, thinking, count] = this.traceMarks[i];
+      this.traceMarks[i] = [Math.min(at, atMs), thinking, count];
+      this.traceMarkStarts[i] = Math.min(this.traceMarkStarts[i], atMs);
+      this.traceMarkEnds[i] = atMs;
+    }
+  }
+
   /** Decimate stream samples; always retain a fresh settlement until the bounded trace is thinned. */
   private rememberReading(rate: number, kind: SpeedReading['kind'], measuredAt: number): void {
     const atMs = Math.round(this.settledMs + this.liveMs);
     const last = this.traceSpeed.at(-1);
     this.latestReading = { kind, rate, atMs, measuredAt };
-    this.peak = Math.max(this.peak, rate);
+    if (kind === 'stream') this.peak = Math.max(this.peak, rate);
     if (last && atMs - last[0] < this.traceSampleMs) {
       if (kind === 'stream') return;
       // A provisional clock can be corrected backwards on settlement.
       while (this.traceSpeed.length && this.traceSpeed.at(-1)![0] >= atMs) this.traceSpeed.pop();
     }
     this.traceSpeed.push([atMs, Math.round(rate * 10) / 10, kind]);
+    this.compactTraceSpeed();
+  }
+
+  private compactTraceSpeed(): void {
     if (this.traceSpeed.length <= TRACE_MAX_POINTS) return;
     // An odd count: every other reading, the newest among them.
     this.traceSpeed = this.traceSpeed.filter((_, index) => index % 2 === 0);

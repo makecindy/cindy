@@ -388,8 +388,11 @@ export function recordTokenSpeed(
     lastReport: null,
     speedOffsetMs: offset,
     speedElapsedMs: speed.elapsedMs,
-    peak: Math.max(history.startedAt !== startedAt ? 0 : history.peak, speed.peak ?? 0,
-      reading?.rate ?? (measured ? speed.rate : 0)),
+    // The host can replace a provisional request reading, including the peak it set.
+    peak: speed.measurement && speed.peak !== undefined
+      ? speed.peak
+      : Math.max(history.startedAt !== startedAt ? 0 : history.peak, speed.peak ?? 0,
+          reading?.rate ?? (measured ? speed.rate : 0)),
     // Neither a pause nor request warm-up is a measurement. Keep the original expiry.
     hostMeasuredAt: reading?.measuredAt,
     latestKind: reading?.kind,

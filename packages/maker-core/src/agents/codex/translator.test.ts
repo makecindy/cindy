@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { replay, type CaptureLine } from '../../../../../scripts/token-speed-replay.js';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 
 import {
@@ -3182,12 +3183,49 @@ it('applies a provider generation time that arrives after the usage it belongs t
     expect(codexSpeedSnapshot(rt)?.measurement?.latest).toBeNull();
     vi.setSystemTime(2_120);
     expect(noteCodexResponseTiming(rt, { turnId: 'turn', sampledTokensTotal: 120, samplingMs: 1_500 })).toBe(true);
-    expect(codexSpeedSnapshot(rt)?.measurement).toMatchObject({ average: 80, latest: { kind: 'request', rate: 80 } });
+    expect(codexSpeedSnapshot(rt)).toMatchObject({
+      elapsedMs: 1_500,
+      average: 80,
+      measurement: { average: 80, latest: { kind: 'request', rate: 80, atMs: 1_500 } },
+      request: { atMs: 1_500 },
+      trace: { durationMs: 1_500, marks: [[1_500, 0, 1]], speed: [[1_500, 80]] },
+    });
     // A timing for a response that is not the newest settled one changes nothing.
     expect(noteCodexResponseTiming(rt, { turnId: 'turn', sampledTokensTotal: 120, samplingMs: 1_000 })).toBe(false);
   } finally {
     vi.useRealTimers();
   }
+});
+
+// Unit via the real replay driver: a streamed request gets a client reading before its
+// provider timing corrects it. The next request's counter resets and it has no own reading
+// until its timing arrives. Coverage and the speed comparison must include each request once.
+it('replays one reading per request even when provider timing is late and its total resets', () => {
+  const ids = { threadId: 't', turnId: 'turn' };
+  const line = (t: number, method: string, params: object = {}): CaptureLine =>
+    ({ t, msg: { method, params: { ...ids, ...params } } });
+  const item = { type: 'agentMessage', id: 'reply', text: '' };
+  const usage = (t: number, outputTokens: number) =>
+    line(t, 'thread/tokenUsage/updated', { tokenUsage: { last: { outputTokens } } });
+  const timing = (t: number, sampledTokensTotal: number, samplingMs: number) =>
+    line(t, 'cindy/response/timing', { sampledTokensTotal, samplingMs });
+  const result = replay([
+    line(0, 'turn/started'),
+    line(0, 'item/started', { item }),
+    line(500, 'item/agentMessage/delta', { itemId: item.id, delta: 'word '.repeat(40) }),
+    line(1_100, 'item/agentMessage/delta', { itemId: item.id, delta: 'word '.repeat(50) }),
+    line(2_000, 'turn/moderationMetadata'),
+    usage(2_000, 90),
+    timing(2_020, 90, 2_500),
+    line(4_000, 'turn/moderationMetadata'),
+    usage(4_000, 60),
+    timing(4_020, 60, 2_500),
+    line(4_100, 'turn/completed'),
+  ]);
+  expect(result.requestReadings).toBe(2);
+  expect(result.vsServer).toEqual([1, 1]);
+  // The replaced client reading (45 tok/s) also stops contributing to the panel peak.
+  expect(result.peak).toBe(36);
 });
 
 // Seen in a real Codex turn on this Mac: the provider's running total started again from a

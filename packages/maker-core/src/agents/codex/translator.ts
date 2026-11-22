@@ -58,6 +58,7 @@ import {
 import { isRemoteCompactEncryptedContentError, REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON } from '../shared/remote-compact-encrypted-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
+import { codexResponseSampledTokens } from './app-server/response-timing.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import {
   formatTerminalRateLimitRetryMessage,
@@ -336,9 +337,7 @@ export function noteCodexResponseTiming(
   if (!rt.generationTimingReliable || rt.generationTurnId !== timing.turnId) return false;
   // A total below the last one means the provider started counting again (a new connection or
   // retried response): this response's tokens are then the whole total.
-  const tokens = timing.sampledTokensTotal > rt.serverTimingTotal
-    ? timing.sampledTokensTotal - rt.serverTimingTotal
-    : timing.sampledTokensTotal;
+  const tokens = codexResponseSampledTokens(timing.sampledTokensTotal, rt.serverTimingTotal);
   rt.serverTimingTotal = timing.sampledTokensTotal;
   const settled = rt.lastSettledResponse;
   if (settled && settled.turnId === timing.turnId && settled.outputTokens === tokens && rt.pendingServerTimings.length === 0) {

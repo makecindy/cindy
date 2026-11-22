@@ -36,6 +36,11 @@ export interface CodexResponseTiming {
   samplingMs: number;
 }
 
+/** A total that stops increasing starts a new provider accumulation. */
+export function codexResponseSampledTokens(total: number, previous: number): number {
+  return total > previous ? total - previous : total;
+}
+
 const MARKER = 'responses websocket timing';
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC starts the ANSI colour codes Codex writes.
 const ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g;

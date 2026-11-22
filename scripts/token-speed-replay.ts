@@ -36,10 +36,12 @@ import {
   translateReasoningTextDelta,
   translateItemNotification,
 } from '../packages/maker-core/src/agents/codex/translator.js';
+import { codexResponseSampledTokens } from '../packages/maker-core/src/agents/codex/app-server/response-timing.js';
 import { estimateWordTokens } from '../packages/maker-core/src/agents/shared/calibrated-token-speed.js';
 import {
   emptyRateHistory,
   recordTokenSpeed,
+  type SpeedReading,
   type TokenSpeedSnapshot,
 } from '../packages/maker-shared/src/runningTokenRateHistory.js';
 
@@ -65,6 +67,7 @@ export interface SpeedDriver {
   /** Feeds one message; returns true when the panel would refresh. */
   feed(line: CaptureLine): boolean;
   snapshot(now: number): TokenSpeedSnapshot | undefined;
+  lastRequestRate?(): number | undefined;
 }
 
 interface Harness {
@@ -128,6 +131,7 @@ const claude: Harness = {
         return true;
       },
       snapshot: (now) => state.tokenSpeed.snapshot(now),
+      lastRequestRate: () => state.tokenSpeed.lastRequestRate,
     };
   },
 };
@@ -236,6 +240,7 @@ const codex: Harness = {
         return true;
       },
       snapshot: (now) => codexSpeedSnapshot(rt, now),
+      lastRequestRate: () => rt.tokenSpeed.lastRequestRate,
     };
   },
 };
@@ -320,9 +325,10 @@ function serverRates(lines: CaptureLine[]): number[] {
   const rates: number[] = [];
   let previous = 0;
   for (const line of lines) {
+    if (line.msg.method === 'turn/started') previous = 0;
     if (line.msg.method !== 'cindy/response/timing') continue;
     const { sampledTokensTotal, samplingMs } = line.msg.params as { sampledTokensTotal: number; samplingMs: number };
-    rates.push(((sampledTokensTotal - previous) * 1_000) / samplingMs);
+    rates.push((codexResponseSampledTokens(sampledTokensTotal, previous) * 1_000) / samplingMs);
     previous = sampledTokensTotal;
   }
   return rates;
@@ -359,7 +365,19 @@ export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult
   let history = emptyRateHistory(null);
   let lastMeasurementTime: number | undefined;
   let lastRequestIndex = 0;
-  let lastRequestReadingAt: number | undefined;
+  const requestRates = new Map<number, number>();
+  let previousReading: SpeedReading | null | undefined;
+  const recordRequestRate = (snapshot: TokenSpeedSnapshot) => {
+    const latest = snapshot.measurement?.latest;
+    const request = snapshot.request;
+    // An untimed request can still show the previous reading. A correction supplies
+    // a new reading for the same request, so it replaces the entry under that index.
+    const rate = measure.lastRequestRate
+      ? measure.lastRequestRate()
+      : latest?.kind === 'request' && latest !== previousReading ? latest.rate : undefined;
+    if (request && rate !== undefined) requestRates.set(request.index, rate);
+    previousReading = latest;
+  };
   const firstStart = requests[0]?.start ?? 0;
   // The Codex translator reads the clock itself: let it read the recording's.
   const realNow = Date.now;
@@ -368,9 +386,13 @@ export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult
   try {
     for (const line of lines) {
       clock = line.t;
-      if (!measure.feed(line)) continue;
+      const published = measure.feed(line);
+      // Capture usage settlements even inside the status refresh throttle.
+      if (!published && line.msg.method !== 'thread/tokenUsage/updated') continue;
       const shown = measure.snapshot(line.t);
       if (!shown) continue;
+      recordRequestRate(shown);
+      if (!published) continue;
       history = recordTokenSpeed(history, { startedAt: 1, speed: shown, now: line.t });
       const latest = shown.measurement?.latest;
       const index = shown.request?.index ?? 0;
@@ -381,13 +403,6 @@ export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult
         if (reference) result.average.push(shown.measurement.average / reference);
       }
       lastRequestIndex = index;
-      if (latest?.kind === 'request' && latest.measuredAt !== lastRequestReadingAt) {
-        // Every settled reading counts, however short the request or the output so far.
-        lastRequestReadingAt = latest.measuredAt;
-        result.requestReadings += 1;
-        const server = truthByRequest[index - 1];
-        if (server > 0) result.vsServer.push(latest.rate / server);
-      }
       const real = truth.at(line.t);
       if (real.clockMs < 1_000 || real.tokens < 20) continue;
       const untimedOutput = requests.filter(request => request.start === request.end && request.end <= line.t)
@@ -404,16 +419,17 @@ export function replay(lines: CaptureLine[], driver?: SpeedDriver): ReplayResult
     }
     const end = lines.at(-1)?.t ?? 0;
     result.final = measure.snapshot(end);
-    // The last request can settle after the last published update: the panel still shows it.
-    const lastReading = result.final?.measurement?.latest;
-    if (lastReading?.kind === 'request' && lastReading.measuredAt !== lastRequestReadingAt) {
-      result.requestReadings += 1;
-      const server = truthByRequest[(result.final?.request?.index ?? 0) - 1];
-      if (server > 0) result.vsServer.push(lastReading.rate / server);
+    if (result.final) {
+      recordRequestRate(result.final);
+      history = recordTokenSpeed(history, { startedAt: 1, speed: result.final, now: end });
     }
-    if (result.final) history = recordTokenSpeed(history, { startedAt: 1, speed: result.final, now: end });
   } finally {
     Date.now = realNow;
+  }
+  result.requestReadings = requestRates.size;
+  for (const [index, rate] of requestRates) {
+    const server = truthByRequest[index - 1];
+    if (server > 0) result.vsServer.push(rate / server);
   }
   result.chart = history.samples.map((sample) => sample.rate);
   result.peak = history.peak;
