@@ -2457,6 +2457,26 @@ describe('tasks using imported Codex connections', () => {
     } finally { release(); }
   });
 
+  // Review (#12144): once the running account is removed, switching the idle task to another source must
+  // still reach the target's writer check instead of failing on the stale account.
+  it('checks another target normally when the running account was removed', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('default')] };
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => true);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    let removed = false;
+    const running = { id: 'gone', configDir: 'openai/gone', readState: async () => ({ authenticated: true }),
+      assertCurrent() { if (removed) throw new Error('Subscription account was disconnected'); } };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    removed = true;
+    try {
+      await expect(agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'anthropic-api', model: 'm', threadId: 't' }))
+        .resolves.toBe(true);
+      await expect(agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' }))
+        .resolves.toBe(true);
+      expect(check.mock.calls.map(([options]) => options[NATIVE_SUBSCRIPTION_ACCOUNT])).toEqual([undefined, undefined]);
+    } finally { release(); }
+  });
+
   it('forks old history through the same imported account and reconnects through its old login', async () => {
     h.pools.openai = {
       strategy: 'round', accounts: [account('default'), account('imported')],

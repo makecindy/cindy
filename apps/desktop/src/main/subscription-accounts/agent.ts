@@ -486,7 +486,10 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           // The live session's host carries the subscription account it runs on. When the target
           // route stays on that account, compare against that same host instead of mistaking it for
           // another writer of the thread (which closed and relinked unchanged sessions).
-          const account = getSessionSubscriptionAccount(options.sessionId);
+          // A running account that was since removed or disconnected cannot be the target's writer;
+          // check the target as before instead of failing a switch to another working source.
+          let account: ReturnType<typeof getSessionSubscriptionAccount>;
+          try { account = getSessionSubscriptionAccount(options.sessionId); } catch { account = undefined; }
           const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
           // A provider can hold several accounts; its first (`ownAccount`) is only one of them. The
           // route stays on the running account when that account belongs to the target provider.
