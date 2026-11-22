@@ -74,7 +74,9 @@ function pair(options: { connected?: boolean; connectedAt?(id: string): number |
 function idleDeviceLink(calls: string[], deviceLinkGeneration = 0): DeviceLinkClient {
   return {
     onPresenceChanged: () => () => {},
+      captureInboundAcceptance: () => undefined,
     onPeerStreamAccepted: () => () => {},
+    onPeerLinkAccepted: () => () => {},
     onPeerRouteStateChanged: () => () => {},
     getPeerLinkGeneration: () => deviceLinkGeneration,
     isLinkReady: () => false,
@@ -407,6 +409,7 @@ describe('AgentNetSessionLinks', () => {
     let deviceLinkRecovering = true;
     const deviceLink = {
       onPresenceChanged: () => () => {},
+      captureInboundAcceptance: () => undefined,
       isLinkReady: () => false,
       needsLinkRecovery: () => deviceLinkRecovering,
       // 列表这类不需要链路的请求还在途：不挡会话。
@@ -619,6 +622,102 @@ describe('AgentNetSessionLinks', () => {
     expect(calls).toEqual([]);
   });
 
+  it('retires captured inbound proof when the user closes before a later Session open', async () => {
+    const { links } = pair();
+    answerOnSession(links.host);
+    links.controller.onFrame(env => { if (env.kind === 'link-open') links.controller.sendLinkAccept(env.src!, env.id!, { appVersion: 'test', allowlistHash: 'test' }); });
+    const accepted: boolean[] = [];
+    links.controller.onPeerLinkAccepted((_peer, _accepted, continuation) => accepted.push(continuation === true));
+    try {
+      await links.host.openLink('b-controller', openPayload);
+      const proof = links.controller.captureInboundAcceptance('a-host');
+      expect(proof?.current()).toBe(true);
+      links.controller.closeLink('a-host', 'user');
+      await links.controller.openLink('a-host', openPayload, undefined, { inboundAcceptance: proof });
+      expect(accepted).toEqual([false]);
+      expect(proof?.current()).toBe(false);
+    } finally { links.controller.stop(); links.host.stop(); }
+  });
+
+  // P2: a reset observed while the reciprocal Session open waits for acceptance
+  // is a new recovery boundary, even when the underlying Session stays live.
+  it.each([false, true])('fences an inbound Session proof when timeout close overtakes open (reset=%s)', async reset => {
+    const { links, sessions } = pair();
+    const held: Envelope[] = [], accepted: boolean[] = [];
+    let resets = 0;
+    links.host.onFrame(env => { if (env.kind === 'link-open') held.push(env); });
+    links.controller.onFrame(env => {
+      if (env.kind === 'link-open') links.controller.sendLinkAccept(env.src!, env.id!, { appVersion: 'test', allowlistHash: 'test' });
+      if (env.kind === 'link-close') resets += 1;
+    });
+    links.controller.onPeerLinkAccepted((_peer, _accept, continuation) => accepted.push(continuation === true));
+    try {
+      await links.host.openLink('b-controller', openPayload);
+      const proof = links.controller.captureInboundAcceptance('a-host');
+      expect(proof?.current()).toBe(true);
+      const reverse = links.controller.openLink('a-host', openPayload, undefined, { inboundAcceptance: proof });
+      await vi.waitFor(() => expect(held).toHaveLength(1));
+      if (reset) {
+        sessions.host!.close('transport-timeout');
+        await vi.waitFor(() => expect(resets).toBe(1));
+      }
+      links.host.sendLinkAccept('b-controller', held[0].id!, { appVersion: 'test', allowlistHash: 'test' });
+      await reverse;
+      expect(links.controller.isLinkReady('a-host')).toBe(true);
+      expect(accepted).toEqual([!reset]);
+    } finally { links.controller.stop(); links.host.stop(); }
+  });
+
+  // Unit: after an explicit close/new open, the old Session reply must not
+  // project acceptance through the new Main request's notification ownership.
+  it('rejects a superseded Session open when its late accept overtakes the new open', async () => {
+    const { links } = pair();
+    const held: Envelope[] = [], accepted: boolean[] = [];
+    links.host.onFrame(env => { if (env.kind === 'link-open') held.push(env); });
+    links.controller.onPeerLinkAccepted((_peer, _accept, continuation) => accepted.push(continuation === true));
+    try {
+      const old = links.controller.openLink('a-host', openPayload).then(() => 'accepted', error => error.code);
+      await vi.waitFor(() => expect(held).toHaveLength(1));
+      links.controller.closeLink('a-host', 'user');
+      const next = links.controller.openLink('a-host', openPayload);
+      await vi.waitFor(() => expect(held).toHaveLength(2));
+      links.host.sendLinkAccept('b-controller', held[0].id!, { appVersion: 'test', allowlistHash: 'test' });
+      expect(await old).toBe('LINK_NOT_OPEN');
+      expect(accepted).toEqual([]);
+      links.host.sendLinkAccept('b-controller', held[1].id!, { appVersion: 'test', allowlistHash: 'test' });
+      await next;
+      expect(accepted).toEqual([false]);
+    } finally { links.controller.stop(); links.host.stop(); }
+  });
+
+  it('pairs a Session reverse open with its fresh inbound acceptance, preserving later recovery notifications', async () => {
+    const { links } = pair();
+    answerOnSession(links.host);
+    const routed = routeSessionPeers(idleDeviceLink([]), links.controller);
+    const accepted: boolean[] = [];
+    routed.onPeerLinkAccepted((_peer, _accept, continuation) => accepted.push(continuation === true));
+    let reverse!: Promise<unknown>;
+    links.controller.onFrame(env => {
+      if (env.kind !== 'link-open') return;
+      links.controller.sendLinkAccept(env.src!, env.id!, { appVersion: 'test', allowlistHash: 'test' });
+      // Same call chain as Main's inbound listener → streaming subscription replay.
+      reverse = routed.openLink('a-host', openPayload, undefined, { inboundAcceptance: links.controller.captureInboundAcceptance('a-host') });
+    });
+    try {
+      await links.host.openLink('b-controller', openPayload);
+      await reverse;
+      expect(accepted).toEqual([true]);
+      await routed.openLink('a-host', openPayload); // a later genuine same-Session open
+      expect(accepted).toEqual([true, false]);
+      links.host.closeLink('b-controller', 'transport-timeout');
+      await Promise.resolve();
+      await routed.openLink('a-host', openPayload);
+      expect(accepted).toEqual([true, false, false]);
+    } finally {
+      links.controller.stop(); links.host.stop();
+    }
+  });
+
   // 2026-11-17 review：会话断了、重开落到 Device Link（会话没及时回来）以后，控制方向的状态要改由 Device Link 报。原来会话上那条
   // 「断了待恢复」「被本机关过」一直留着：这个对端永远「待恢复」，每次调用都先再建一次链、接受后的补订阅又触发重建；断开发不到
   // Device Link 那条；用户关过一次，之后 Device Link 上的链路断了也不自动重建。对端经会话控制本机、会话断了时，按对端取连接还是这一层，
@@ -704,6 +803,7 @@ describe('AgentNetSessionLinks', () => {
       isLinkReady: () => false, needsLinkRecovery: () => false, getReliableSendQueueDepth: () => 0 } as unknown as DeviceLinkClient;
     const deviceLink = {
       onPresenceChanged: () => () => {},
+      captureInboundAcceptance: () => undefined,
       isLinkReady: () => false, needsLinkRecovery: () => false, hasPendingRequestsTo: () => false, getReliableSendQueueDepth: () => 0,
       openLink: async () => { calls.push('device-link:openLink'); return { appVersion: 'dl', allowlistHash: 'dl' }; },
       invoke: async () => { calls.push('device-link:invoke'); return { ok: true, result: 'device-link' }; },

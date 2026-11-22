@@ -19,6 +19,7 @@ import {
 } from '../appSessionState.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 import { createLogger } from '../logger.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 
 const log = createLogger('im/owner-scoped-storage');
 const LEGACY_OWNER_MARKER = 'im-legacy-owner.json';
@@ -151,11 +152,14 @@ function scopedSecretPath(name: string): string | null {
   return path.join(safeStorageDir(), `im_owner_${ownerKey}_${name}.enc`);
 }
 
-/** Non-secret binding generation for durable IM output. Never reads or returns credential bytes. */
+/** Non-secret binding generation; backup recovery never decrypts or exposes credentials. */
 export function ownerScopedImSecretRevision(name: string): string {
   const target = scopedSecretPath(name);
   if (!target) throw new Error('IM_ACCOUNT_SCOPE_UNAVAILABLE');
   try {
+    // A failed Windows backup swap can leave the only valid encrypted copy here.
+    // Restore before observing identity, rather than treating it as a revocation.
+    if (!fs.existsSync(target) && fs.existsSync(`${target}.bak`)) readAtomicFileSync(target);
     const stat = fs.statSync(target, { bigint: true });
     return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
   } catch (error) {
@@ -164,10 +168,12 @@ export function ownerScopedImSecretRevision(name: string): string {
   }
 }
 
-function prepareSecretPath(name: string): string | null {
+function prepareSecretPath(name: string, removing = false): string | null {
   const scoped = scopedSecretPath(name);
   if (!scoped) return null;
-  claimLegacyImPath(path.join(safeStorageDir(), `${name}.enc`), scoped);
+  // A scoped backup is newer than any leftover legacy credential. Readers and
+  // writers must recover it first; removal still retires claimable legacy data.
+  if (removing || !fs.existsSync(`${scoped}.bak`)) claimLegacyImPath(path.join(safeStorageDir(), `${name}.enc`), scoped);
   return scoped;
 }
 
@@ -177,7 +183,8 @@ function readSecretResult(name: string): IMSecretReadResult {
     if (!safeStorage.isEncryptionAvailable()) return { kind: 'error' };
     const target = prepareSecretPath(name);
     if (!target) return { kind: 'error' };
-    const encrypted = fs.readFileSync(target, 'utf-8');
+    const encrypted = readAtomicFileSync(target);
+    if (encrypted === null) return { kind: 'missing' };
     return {
       kind: 'value',
       value: safeStorage.decryptString(Buffer.from(encrypted, 'base64')),
@@ -196,8 +203,7 @@ export const ownerScopedImSecrets: ImSecrets = {
       if (!safeStorage.isEncryptionAvailable()) return false;
       const target = prepareSecretPath(name);
       if (!target) return false;
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, safeStorage.encryptString(plaintext).toString('base64'), 'utf-8');
+      atomicWriteFileSync(target, safeStorage.encryptString(plaintext).toString('base64'));
       return true;
     } catch {
       return false;
@@ -210,8 +216,15 @@ export const ownerScopedImSecrets: ImSecrets = {
   readResult: readSecretResult,
   remove(name) {
     try {
-      const target = prepareSecretPath(name);
-      if (target) fs.unlinkSync(target);
+      const target = prepareSecretPath(name, true);
+      if (target) {
+        // Remove a recoverable backup first, so a later read cannot resurrect
+        // revoked credentials after an interrupted atomic replacement.
+        for (const file of [`${target}.bak`, target]) {
+          try { fs.unlinkSync(file); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        }
+      }
     } catch {
       // Missing credentials are already removed.
     }

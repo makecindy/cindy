@@ -1,4 +1,4 @@
-import { DeviceLinkError, PeerRecoveryScheduler, shortDeviceRef } from '@cindy/device-link';
+import { DeviceLinkError, PeerRecoveryScheduler, shortDeviceRef, type PeerLinkAcceptanceProof } from '@cindy/device-link';
 
 const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
   'VERSION_MISMATCH',
@@ -29,14 +29,14 @@ export type SubscriptionReplayRef = {
 };
 
 export type SubscriptionReplayScheduler = {
-  replay(reason: string, deviceId?: string): void;
+  replay(reason: string, deviceId?: string, inboundAcceptance?: PeerLinkAcceptanceProof): void;
   cancel(deviceId: string): void;
   teardown(): void;
 };
 
 type SubscriptionReplaySchedulerOptions = {
   snapshotSubscriptions: (deviceId?: string) => SubscriptionReplayRef[];
-  remoteSubscribe: (deviceId: string, topics: string[]) => Promise<unknown>;
+  remoteSubscribe: (deviceId: string, topics: string[], options?: { inboundAcceptance?: PeerLinkAcceptanceProof }) => Promise<unknown>;
   isLinkTornDown: () => boolean;
   isRelayOnline: (deviceId: string) => boolean;
   /** Current SDK proof only; remembered presence cannot keep a path alive. */
@@ -65,25 +65,28 @@ export function createSubscriptionReplayScheduler(
 ): SubscriptionReplayScheduler {
   // Reuse Mobile's per-peer serialization, cancellation and retry accounting.
   // The adapter owns only Desktop's subscription snapshot and availability gates.
-  const scheduler = new PeerRecoveryScheduler(async (deviceId) => {
-    const retained = options.hasOfflineDirectPath?.(deviceId) === true;
-    if (options.isLinkTornDown() || (!options.isRelayOnline(deviceId) && !retained)) return { retry: false };
-    if (options.isDeviceUnresponsive(deviceId)) return { retry: false };
-    if (options.getPresenceAvailability(deviceId) === false && !retained) return { retry: false };
-    const current = options.snapshotSubscriptions(deviceId)
-      .find((ref) => ref.deviceId === deviceId);
-    if (!current || current.topics.length === 0) return { retry: false };
+  const scheduler = new PeerRecoveryScheduler<PeerLinkAcceptanceProof>(async (deviceId, inboundAcceptance) => {
     try {
-      await options.remoteSubscribe(deviceId, current.topics);
-      return { retry: false };
-    } catch (error) {
-      const retry = !options.isPermanentError(error, deviceId);
-      options.log.warn(
-        `device-link replay subscriptions failed for ${shortDeviceRef(deviceId)}, ` +
-        `${retry ? 'retrying with backoff' : 'permanent, giving up'}: ${String(error)}`,
-      );
-      return { retry };
-    }
+      const retained = options.hasOfflineDirectPath?.(deviceId) === true;
+      if (options.isLinkTornDown() || (!options.isRelayOnline(deviceId) && !retained)) return { retry: false };
+      if (options.isDeviceUnresponsive(deviceId)) return { retry: false };
+      if (options.getPresenceAvailability(deviceId) === false && !retained) return { retry: false };
+      const current = options.snapshotSubscriptions(deviceId)
+        .find((ref) => ref.deviceId === deviceId);
+      if (!current || current.topics.length === 0) return { retry: false };
+      try {
+        if (inboundAcceptance) await options.remoteSubscribe(deviceId, current.topics, { inboundAcceptance });
+        else await options.remoteSubscribe(deviceId, current.topics);
+        return { retry: false };
+      } catch (error) {
+        const retry = !options.isPermanentError(error, deviceId);
+        options.log.warn(
+          `device-link replay subscriptions failed for ${shortDeviceRef(deviceId)}, ` +
+          `${retry ? 'retrying with backoff' : 'permanent, giving up'}: ${String(error)}`,
+        );
+        return { retry };
+      }
+    } finally { inboundAcceptance?.consume(); }
   }, {
     unrefRetryTimers: true,
     retryBaseMs: options.retryBaseMs ?? 3_000,
@@ -91,14 +94,14 @@ export function createSubscriptionReplayScheduler(
   });
 
   return {
-    replay(reason, deviceId) {
+    replay(reason, deviceId, inboundAcceptance) {
       const refs = options.snapshotSubscriptions(deviceId);
-      if (refs.length === 0) return;
+      if (refs.length === 0) { inboundAcceptance?.consume(); return; }
       options.log.debug(
         `device-link replay subscriptions (${reason}): devices=${refs.length} ` +
         `topics=${refs.reduce((sum, ref) => sum + ref.topics.length, 0)}`,
       );
-      scheduler.requestMany(refs.map((ref) => ref.deviceId));
+      for (const ref of refs) scheduler.request(ref.deviceId, inboundAcceptance?.deviceId === ref.deviceId ? inboundAcceptance : undefined);
     },
     cancel(deviceId) { scheduler.cancel(deviceId); },
     teardown() { scheduler.clear(); },

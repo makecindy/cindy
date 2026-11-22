@@ -298,6 +298,35 @@ describe('subscription replay scheduler', () => {
     scheduler.teardown();
   });
 
+  // Inbound replay provenance must survive the existing concurrency queue, but
+  // must not be reused by a later unrelated replay. Same production scheduler.
+  it('carries only the queued inbound replay proof and retires unused proof', async () => {
+    const refs = Array.from({ length: 7 }, (_, i) => ({ deviceId: `peer-${i}`, topics: ['sessions'] }));
+    const pending = deferred<unknown>();
+    const remoteSubscribe = vi.fn().mockImplementation((id: string) => id === 'peer-6' ? Promise.resolve() : pending.promise);
+    const proof = { deviceId: 'peer-6', isSource: () => false, current: () => true, consume: vi.fn(() => true) };
+    const scheduler = createSubscriptionReplayScheduler({
+      snapshotSubscriptions: id => refs.filter(ref => !id || ref.deviceId === id), remoteSubscribe,
+      isLinkTornDown: () => false, isRelayOnline: () => true, isDeviceUnresponsive: () => false,
+      getPresenceAvailability: () => true, isPermanentError: () => false,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    scheduler.replay('occupy');
+    scheduler.replay('inbound', 'peer-6', proof);
+    expect(remoteSubscribe).toHaveBeenCalledTimes(6);
+    pending.resolve(undefined);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(remoteSubscribe).toHaveBeenLastCalledWith('peer-6', ['sessions'], { inboundAcceptance: proof });
+    await Promise.resolve(); await Promise.resolve();
+    scheduler.replay('later', 'peer-6');
+    expect(remoteSubscribe).toHaveBeenLastCalledWith('peer-6', ['sessions']);
+    expect(proof.consume).toHaveBeenCalled();
+    const unused = { ...proof, deviceId: 'absent', consume: vi.fn(() => true) };
+    scheduler.replay('no-subscribers', 'absent', unused);
+    expect(unused.consume).toHaveBeenCalledOnce();
+    scheduler.teardown();
+  });
+
   it('invalidates retry timers from an old generation', async () => {
     vi.useFakeTimers();
     try {

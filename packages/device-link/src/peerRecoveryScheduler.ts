@@ -20,7 +20,8 @@ export interface PeerRecoverySnapshot {
   retryAttempt: number;
 }
 
-interface PeerRecoveryEntry {
+interface PeerRecoveryEntry<Context> {
+  context?: Context;
   phase: PeerRecoveryPhase;
   generation: number;
   running: boolean;
@@ -84,14 +85,14 @@ export class PeerRecoveryOpenIntentRegistry {
  * every other desktop behind its timeout. Each peer owns its own rerun flag,
  * retry attempt and timer.
  */
-export class PeerRecoveryScheduler {
-  private readonly runPeer: (deviceId: string) => Promise<PeerRecoveryResult>;
+export class PeerRecoveryScheduler<Context = undefined> {
+  private readonly runPeer: (deviceId: string, context?: Context) => Promise<PeerRecoveryResult>;
   private readonly onError?: PeerRecoverySchedulerOptions['onError'];
   private readonly maxConcurrent: number;
   private readonly unrefRetryTimers: boolean;
   private readonly retryBaseMs: number;
   private readonly retryMaxMs: number;
-  private readonly entries = new Map<string, PeerRecoveryEntry>();
+  private readonly entries = new Map<string, PeerRecoveryEntry<Context>>();
   private readonly queue: string[] = [];
   private readonly queued = new Set<string>();
   private active = 0;
@@ -120,7 +121,7 @@ export class PeerRecoveryScheduler {
   }
 
   constructor(
-    run: (deviceId: string) => Promise<PeerRecoveryResult>,
+    run: (deviceId: string, context?: Context) => Promise<PeerRecoveryResult>,
     options: PeerRecoverySchedulerOptions = {},
   ) {
     this.runPeer = run;
@@ -140,9 +141,10 @@ export class PeerRecoveryScheduler {
     );
   }
 
-  request(deviceId: string): void {
+  request(deviceId: string, context?: Context): void {
     if (!deviceId) return;
     const entry = this.getOrCreateEntry(deviceId);
+    if (context !== undefined) entry.context = context;
     if (entry.retryTimer) {
       clearTimeout(entry.retryTimer);
       entry.retryTimer = null;
@@ -157,8 +159,8 @@ export class PeerRecoveryScheduler {
     this.enqueue(deviceId, entry);
   }
 
-  requestMany(deviceIds: Iterable<string>): void {
-    for (const deviceId of deviceIds) this.request(deviceId);
+  requestMany(deviceIds: Iterable<string>, context?: Context): void {
+    for (const deviceId of deviceIds) this.request(deviceId, context);
   }
 
   /** Cancels one peer without touching any other peer's timers or work. */
@@ -166,6 +168,7 @@ export class PeerRecoveryScheduler {
     const entry = this.entries.get(deviceId);
     if (!entry) return;
     entry.generation += 1;
+    entry.context = undefined;
     entry.rerun = false;
     if (resetAttempt) entry.retryAttempt = 0;
     if (entry.retryTimer) {
@@ -222,7 +225,7 @@ export class PeerRecoveryScheduler {
     for (const [deviceId] of this.entries) this.cancel(deviceId, resetAttempts);
   }
 
-  private getOrCreateEntry(deviceId: string): PeerRecoveryEntry {
+  private getOrCreateEntry(deviceId: string): PeerRecoveryEntry<Context> {
     let entry = this.entries.get(deviceId);
     if (!entry) {
       entry = {
@@ -238,7 +241,7 @@ export class PeerRecoveryScheduler {
     return entry;
   }
 
-  private enqueue(deviceId: string, entry: PeerRecoveryEntry): void {
+  private enqueue(deviceId: string, entry: PeerRecoveryEntry<Context>): void {
     if (this.queued.has(deviceId)) return;
     entry.phase = 'queued';
     this.queued.add(deviceId);
@@ -258,7 +261,7 @@ export class PeerRecoveryScheduler {
     }
   }
 
-  private start(deviceId: string, entry: PeerRecoveryEntry): void {
+  private start(deviceId: string, entry: PeerRecoveryEntry<Context>): void {
     const generation = entry.generation;
     entry.phase = 'running';
     entry.running = true;
@@ -267,7 +270,9 @@ export class PeerRecoveryScheduler {
 
     let run: Promise<PeerRecoveryResult>;
     try {
-      run = this.runPeer(deviceId);
+      const context = entry.context;
+      entry.context = undefined;
+      run = context === undefined ? this.runPeer(deviceId) : this.runPeer(deviceId, context);
     } catch (error) {
       try {
         this.onError?.(deviceId, error);
@@ -292,7 +297,7 @@ export class PeerRecoveryScheduler {
 
   private finish(
     deviceId: string,
-    entry: PeerRecoveryEntry,
+    entry: PeerRecoveryEntry<Context>,
     generation: number,
     result: PeerRecoveryResult,
   ): void {
