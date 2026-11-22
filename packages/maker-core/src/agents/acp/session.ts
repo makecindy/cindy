@@ -534,6 +534,11 @@ export class AcpSession {
         prompt,
         // Without this an agent whose turn just ended starts a turn of its own, which Cindy does not track.
         _meta: { steering: { idleBehavior: 'promptRequired' } },
+      }, {
+        onResult: (reply) => {
+          // Finish the old segment before the decoder handles any following update.
+          if (reply.outcome === 'injected' && this.turn === turn) this.emit(this.translator.flushPending());
+        },
       });
     } catch (error) {
       if (!(error instanceof AcpRpcError)) {
@@ -548,8 +553,6 @@ export class AcpSession {
     }
     switch (result.outcome) {
       case 'injected':
-        // The reply to the steered message starts a new segment, after the user's message.
-        if (this.turn === turn) this.emit(this.translator.flushPending());
         return;
       case 'promptRequired':
         throw new Error(NO_ACTIVE_TURN_TO_STEER);

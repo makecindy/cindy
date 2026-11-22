@@ -483,21 +483,30 @@ describe('AcpSession same-turn steering', () => {
     .filter((event) => event.type === 'text' && (event.data as AcpRecord).isFinal === true)
     .map((event) => (event.data as AcpRecord).text);
 
-  it('adds the message to the running turn, and the reply to it starts a new segment', async () => {
-    const agent = createFakeAgent({ handlers: { initialize: steeringInit, '_session/steering': () => ({ outcome: 'injected' }) } });
+  it('starts a new reply segment when the steer acknowledgement and text share a stdout chunk', async () => {
+    const agent = createFakeAgent({ handlers: { initialize: steeringInit, '_session/steering': () => new Promise(() => {}) } });
     const { session, events } = await open(agent);
     expect(session.capabilities.sameTurnSteer.supported).toBe(true);
     await session.send({ type: 'user', content: 'fix the bug' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Editing a.ts.' } });
 
-    await session.steer({ type: 'user', content: 'use b.ts instead' });
+    const steer = session.steer({ type: 'user', content: 'use b.ts instead' });
+    await vi.waitFor(() => expect(agent.methods()).toContain('_session/steering'));
+    const request = agent.sent.find((message) => message.method === '_session/steering')!;
     expect(agent.sent.filter((message) => message.method === '_session/steering').map((message) => message.params)).toEqual([{
       sessionId: 'sess-1',
       prompt: [{ type: 'text', text: 'use b.ts instead' }],
       _meta: { steering: { idleBehavior: 'promptRequired' } },
     }]);
-    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Switching to b.ts.' } });
+    const chunk = [
+      { jsonrpc: '2.0', id: request.id, result: { outcome: 'injected' } },
+      { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sess-1', update: {
+        sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Switching to b.ts.' },
+      } } },
+    ].map((message) => JSON.stringify(message) + '\n').join('');
+    new AcpLineDecoder(agent.rawLine).push(new TextEncoder().encode(chunk));
+    await steer;
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
     await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
 
