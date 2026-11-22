@@ -1179,9 +1179,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 这里只需要本 route 所属 navigator 的 state —— session 路由直属 root stack。
     getState(): CollabSessionStateLike | undefined;
   }>();
+  // The selected device can send outcomes under its Device Link shard ID.
+  // A shared peer keeps its own scope even if the listed task has a physical device.
+  const credentialNoticeAlias = deviceId && deviceId === listedSession?.canonicalDeviceId
+    && !isScopedPeer(deviceId) && !isScopedPeer(listedSession.deviceLinkDeviceId)
+    ? listedSession.deviceLinkDeviceId : undefined;
   useEffect(() => subscribeSessionCredentialSwitchNotices(
-    deviceId, sessionId, () => navigation.isFocused(), (key) => Alert.alert(t(key)),
-  ), [deviceId, navigation, sessionId, t]);
+    deviceId, sessionId, () => navigation.isFocused(), (key) => Alert.alert(t(key)), credentialNoticeAlias,
+  ), [credentialNoticeAlias, deviceId, navigation, sessionId, t]);
   const router = useRouter();
   // 完整消息读取权限按「会话 + 单调代际」登记。focus 与 AppState 正交：后台时
   // 导航仍可能保持 focused，必须立即撤权；重新聚焦/回前台会生成新代际，使旧

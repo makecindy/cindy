@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
@@ -9,6 +11,7 @@ import {
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   SESSION_ACTIVITY_CHANNEL,
   SHARED_TASK_CAPABILITY,
+  isScopedPeer,
   sharedTaskHostPeer,
   type DeviceLinkClient,
   type DeviceLinkStatus,
@@ -46,7 +49,7 @@ vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
 vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
 vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: async () => undefined }));
 import { useMobileMakerTransport } from '../device-link/useMobileMakerTransport';
-import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
+import { createMobileMakerTransport, type MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
 import { revokedDevicesStore } from '../device-link/revokedDevicesStore';
 import { localNetworkStore, type NetworkState } from '../device-link/localNetworkStatus';
@@ -56,7 +59,8 @@ import { normalizeRemoteMessages } from '../session/messageNormalize';
 import type { RemoteMessage, RemoteSession } from '../session/types';
 import { getDeviceFetchEpoch, subscribeDeviceProvidersGen } from '../device-link/deviceProvidersCache';
 import { useRemoteAgentCatalogs } from '../session/useRemoteAgentCatalogs';
-import { subscribeSessionCredentialSwitchNotices } from '../session/credentialSwitchOutcome';
+import { subscribeCredentialSwitchOutcome, subscribeSessionCredentialSwitchNotices } from '../session/credentialSwitchOutcome';
+import { resolveSessionLinkDeviceId } from '../session/sessionLinks';
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
@@ -266,6 +270,138 @@ it('keeps the legacy mobile credential alert unless the host confirms the previo
     ]);
   } finally {
     off();
+  }
+});
+
+// Unit/jsdom, #12020: the task page may call the current canonical ID while the
+// Provider delivers a frame under that device's Link ID. Exercise the page's
+// real route and effect to catch a zero-notice loss and preserve the explicit peer boundary.
+// Page initialization needs native navigation. Execute its route expressions and effect with
+// the real Provider and transport below, with only the native and client boundaries stubbed.
+function sourceFunction(path: string, name: string) {
+  const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(node) && node.name?.text === name);
+  if (!declaration?.body) throw new Error('missing production function ' + name);
+  return { source, statements: declaration.body.statements };
+}
+
+function productionBindings(path: string, name: string, names: string[]): string {
+  const { source, statements } = sourceFunction(path, name);
+  return names.map(binding => {
+    for (const statement of statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.name.text === binding) return 'const ' + declaration.getText(source) + ';';
+      }
+    }
+    throw new Error('missing production binding ' + name + '.' + binding);
+  }).join('\n');
+}
+
+const pagePath = 'app/sessions/[sessionId].tsx';
+const screen = sourceFunction(pagePath, 'SessionScreenContent');
+const effectStatement = screen.statements.find(statement => ts.isExpressionStatement(statement)
+  && ts.isCallExpression(statement.expression) && statement.expression.expression.getText(screen.source) === 'useEffect'
+  && /subscribe(?:Session)?CredentialSwitch(?:Outcome|Notices)/.test(statement.getText(screen.source))) as ts.ExpressionStatement | undefined;
+if (!effectStatement || !ts.isCallExpression(effectStatement.expression)) throw new Error('missing production credential effect');
+const callback = effectStatement.expression.arguments[0].getText(screen.source);
+
+const wirePage = new Function(
+  'params', 'sessionId', 'remoteSessionStore', 'readRouteParam',
+  'resolveSessionLinkDeviceId', 'useMobileMakerTransport', 'isScopedPeer',
+  productionBindings(pagePath, 'SessionScreenContent', [
+    'linkedDeviceId', 'listedSession', 'deviceId', 'maker', 'credentialNoticeAlias',
+  ]) + '\nreturn { deviceId, maker, credentialNoticeAlias };',
+);
+const wireLayout = new Function(
+  'params', 'sessionId', 'remoteSessionStore', 'readRouteParam',
+  'resolveSessionLinkDeviceId', 'useRemoteSessionLinkTarget', 'useRemoteSessionDetail',
+  productionBindings('src/session/SessionTaskLayout.tsx', 'SessionTaskLayout', [
+    'linkedDeviceId', 'listedSession', 'deviceId', 'session',
+  ]) + '\nreturn { deviceId, session };',
+);
+const subscribePage = new Function(
+  'deviceId', 'credentialNoticeAlias', 'sessionId', 'navigation', 't', 'Alert',
+  'subscribeSessionCredentialSwitchNotices', 'return (' + callback + ')();',
+);
+
+const shared = sharedTaskHostPeer('semantic-shared', 'physical-b');
+const scenarios = [
+  {
+    name: 'old link A prefers listed owner B',
+    linked: 'old-a', canonical: 'owner-b', display: 'owner-b', frame: 'owner-b', expected: 'owner-b',
+  },
+  {
+    name: 'explicit shared peer keeps the scoped device identity',
+    linked: shared, canonical: 'physical-b', display: 'physical-b', frame: shared, expected: shared,
+  },
+  {
+    name: 'same machine uses canonical ID but its authorized frame has the distinct Device Link alias',
+    linked: 'old-a', canonical: 'canonical-b', display: 'device-link-b', frame: 'device-link-b', expected: 'canonical-b',
+  },
+  {
+    name: 'the same device also accepts a frame with its canonical ID',
+    linked: 'old-a', canonical: 'canonical-b', display: 'device-link-b', frame: 'canonical-b', expected: 'canonical-b',
+  },
+] as const;
+
+it.each(scenarios)('$name', async info => {
+  const taskId = 'credential-notice-task';
+  const params = { deviceId: info.linked };
+  const row = { id: taskId, canonicalDeviceId: info.canonical, deviceLinkDeviceId: info.display };
+  const fixtureStore = { getSessions: () => [row], getSessionDeviceId: () => info.display };
+  const show = vi.fn();
+  const showOnA = vi.fn();
+  let stopWatchingA: (() => void) | undefined;
+  let focused = true;
+  const doSelect = (deviceId: string) => createMobileMakerTransport({ deviceId, invoke: context.invoke });
+
+  const readRouteParam = (value: string) => value;
+  const routed = wirePage(params, taskId, fixtureStore, readRouteParam, resolveSessionLinkDeviceId, doSelect, isScopedPeer);
+  const layout = wireLayout(params, taskId, fixtureStore, readRouteParam, resolveSessionLinkDeviceId,
+    () => row, (device: string, id: string) => [device, id]);
+  expect(layout).toEqual({ deviceId: info.expected, session: [info.expected, taskId] });
+  expect(routed.deviceId).toBe(info.expected);
+  const client = transport.clients[0];
+  client.readyPeers.add(info.expected);
+  client.openLink.mockResolvedValue(accepted(info.linked === shared ? [SHARED_TASK_CAPABILITY] : undefined));
+  const received: Array<{ deviceId: string; sessionId: string }> = [];
+  const unsubscribeRecord = subscribeCredentialSwitchOutcome(outcome => { received.push(outcome); });
+  const unsubscribe = subscribePage(
+    routed.deviceId, routed.credentialNoticeAlias, taskId, { isFocused: () => focused },
+    (key: string) => key, { alert: show }, subscribeSessionCredentialSwitchNotices,
+  );
+  const push = (src: string, id = taskId) => act(async () => {
+    client.frame({ v: 1, kind: 'push', src, dst: 'mobile', payload: {
+      channel: 'maker:session-credential-switch-applied', payload: { sessionId: id },
+    }} as Parameters<typeof client.frame>[0]);
+  });
+  try {
+    await act(async () => { await routed.maker.setModel(taskId, 'fixture-model'); });
+    expect(client.invoke.mock.calls.map(call => [call[0], call[1].channel, call[1].args])).toEqual([
+      [info.expected, 'maker:set-model', [taskId, 'fixture-model']],
+    ]);
+    await push('old-a');
+    await push('unrelated-device');
+    if (info.linked === shared) await push('physical-b');
+    await push(info.frame, 'other-task');
+    focused = false;
+    await push(info.frame);
+    expect(show).not.toHaveBeenCalled();
+    focused = true;
+    stopWatchingA = subscribePage(
+      'old-a', undefined, taskId, { isFocused: () => true },
+      (key: string) => key, { alert: showOnA }, subscribeSessionCredentialSwitchNotices,
+    );
+    await push(info.frame);
+    expect(showOnA).not.toHaveBeenCalled();
+    expect(received.filter(outcome => outcome.deviceId === info.frame && outcome.sessionId === taskId)).toHaveLength(2);
+    expect(show.mock.calls).toEqual([['models.switchOutcome.applied']]);
+  } finally {
+    unsubscribe();
+    unsubscribeRecord();
+    stopWatchingA?.();
   }
 });
 

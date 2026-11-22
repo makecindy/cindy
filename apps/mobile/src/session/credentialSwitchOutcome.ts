@@ -20,9 +20,11 @@ export function subscribeSessionCredentialSwitchNotices(
   sessionId: string,
   isFocused: () => boolean,
   notify: (key: CredentialSwitchNotice) => void,
+  deviceLinkAlias?: string,
 ): () => void {
   return subscribeCredentialSwitchOutcome((outcome) => {
-    if (outcome.deviceId !== deviceId || outcome.sessionId !== sessionId || !isFocused()) return;
+    if (outcome.deviceId !== deviceId && outcome.deviceId !== deviceLinkAlias) return;
+    if (outcome.sessionId !== sessionId || !isFocused()) return;
     if (outcome.kind === 'applied') notify('models.switchOutcome.applied');
     else if (outcome.reason === 'apply-failed' && outcome.previousSettingsRetained === true) {
       notify('models.switchOutcome.previousSettingsRetained');
