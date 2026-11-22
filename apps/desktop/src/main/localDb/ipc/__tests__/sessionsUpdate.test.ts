@@ -198,7 +198,8 @@ vi.mock('../../../maker-host/session-context-budget-store.js', async (importOrig
 });
 
 import { PendingCredentialSwitchService } from '../../../maker-ipc/pendingCredentialSwitch.js';
-import { createSessionRuntimeCleanup } from '../../../maker-ipc/sessionRuntimeProjection.js';
+import { createSessionRuntimeCleanup, createSessionRuntimeProjection, createSessionRuntimeProjector } from '../../../maker-ipc/sessionRuntimeProjection.js';
+import { acceptSessionRuntimeMutation, clearSessionRuntimeControlState } from '../../../maker-ipc/sessionRuntimeControl.js';
 
 import {
   applyAgentSwitchToSessionRow,
@@ -231,7 +232,8 @@ import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sessionStatusRemote.js';
 import * as sessionQueries from '../../sessionQueries';
-import { setSessionRuntimeProjector } from '../../mapper';
+import { getDbClient } from '../../client/current';
+import { sessionToCamel, setSessionRuntimeProjector } from '../../mapper';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
@@ -1284,6 +1286,50 @@ describe('local-db:sessions:update handler wiring', () => {
       }));
     } finally {
       setSessionRuntimeProjector(null);
+    }
+  });
+
+  it('publishes the committed model when switching computers while keeping valid same-computer overrides', async () => {
+    const sessionId = 'pi-local';
+    const projection = createSessionRuntimeProjection({ broadcastSessionPatched });
+    setSessionRuntimeProjector(createSessionRuntimeProjector({
+      projectScheduledPreferences: projection.projectScheduledPreferences,
+      runtimePluginsSelected: () => false,
+    }));
+    const shared = {
+      agentDeviceId: 'shared-computer', agentKind: 'pi', model: 'shared-model',
+      providerId: 'shared-provider', effort: 'high', fastMode: true,
+    } as const;
+    const local = {
+      agentDeviceId: null, agentKind: 'pi', model: 'local-model',
+      providerId: 'local-provider', effort: 'medium', fastMode: false,
+    } as const;
+    acceptSessionRuntimeMutation({ sessionId, source: 'fallback', profile: shared, deferred: false });
+    try {
+      await applyAgentSwitchToSessionRow(sessionId, {
+        ...shared, model: 'saved-shared-model',
+      });
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+        sessionId, patch: expect.objectContaining({ runtimeEffective: shared }),
+      }));
+
+      await applyAgentSwitchToSessionRow(sessionId, local);
+      const { agentDeviceId, ...localProfile } = local;
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+        sessionId, patch: expect.objectContaining({
+          agentDeviceId, model: local.model, providerId: local.providerId, runtimeEffective: localProfile,
+        }),
+      }));
+
+      await projection.broadcastSessionRuntimeProjection(sessionId);
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+        sessionId, patch: expect.objectContaining({ runtimeEffective: localProfile }),
+      }));
+      const row = await sessionQueries.selectSessionWithCount(getDbClient().drizzle, sessionId);
+      expect(sessionToCamel(row!)).toMatchObject({ agentDeviceId: null, runtimeEffective: localProfile });
+    } finally {
+      setSessionRuntimeProjector(null);
+      clearSessionRuntimeControlState(sessionId);
     }
   });
 
