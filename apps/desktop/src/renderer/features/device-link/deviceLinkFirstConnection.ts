@@ -10,7 +10,7 @@
  * App-lifetime singleton (same shape as useDeviceLinkDeviceList): one status listener per window.
  */
 import { useEffect, useSyncExternalStore } from 'react';
-import { useDeviceLinkDeviceListRequestState } from './useDeviceLinkDeviceList';
+import { useDeviceLinkDeviceListAuthoritative, useDeviceLinkDeviceListRequestState } from './useDeviceLinkDeviceList';
 
 /**
  * One full relay connect attempt: token request (15 s) plus handshake (15 s), the device-link
@@ -101,13 +101,16 @@ function subscribe(fn: () => void): () => void {
 
 /**
  * True while connectivity is still undetermined: inside the window and either the relay is not
- * online yet or the device directory has not settled. Unreachable is then "connecting".
+ * online yet or the device directory has no complete, fresh read. Unreachable is then "connecting".
  */
 export function useDeviceLinkFirstConnectionPending(): boolean {
   const open = useSyncExternalStore(subscribe, () => windowOpen);
   const status = useSyncExternalStore(subscribe, () => linkStatus);
   const directory = useDeviceLinkDeviceListRequestState();
-  const settled = status === 'online' && directory.status === 'ready';
+  // Only a complete, fresh read settles early. A stale fallback (e.g. a timed-out read right
+  // after waking) shows unverified homes as offline; the window then runs to its end instead.
+  const fresh = useDeviceLinkDeviceListAuthoritative();
+  const settled = status === 'online' && directory.status === 'ready' && fresh;
   // Settled once: later directory refreshes (another device's presence, a rename) briefly
   // return to `loading` and must not turn a confirmed offline view back into "connecting".
   // Only the next real relay drop opens a new window.

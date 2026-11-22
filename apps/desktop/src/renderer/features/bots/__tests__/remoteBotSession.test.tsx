@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   lastReplyAt: 0,
   devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
   deviceListStatus: 'ready' as 'loading' | 'ready' | 'error',
+  deviceListAuthoritative: true,
   profileLoadState: 'ready' as 'pending' | 'ready' | 'error',
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
   cloudView: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('../botStore', () => ({ useBotProfilesLoadState: () => h.profileLoadStat
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => h.devices,
   useDeviceLinkDeviceListRequestState: () => ({ status: h.deviceListStatus, error: null }),
+  useDeviceLinkDeviceListAuthoritative: () => h.deviceListAuthoritative,
 }));
 vi.mock('../CloudCompanionOfflineView', () => ({
   CloudCompanionOfflineView: (props: unknown) => { h.cloudView(props); return <div>cloud-offline-view</div>; },
@@ -85,6 +87,7 @@ beforeEach(() => {
   h.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
   h.devices = null;
   h.deviceListStatus = 'ready';
+  h.deviceListAuthoritative = true;
   h.profileLoadState = 'ready';
   h.cloudView.mockReset();
   h.pin.mockReset();
@@ -368,6 +371,22 @@ it.each([['one minute', 60_000], ['a night', 8 * 60 * 60_000]] as const)('gives 
   } finally {
     vi.useRealTimers();
   }
+  expect(await screen.findByText('cloud-offline-view')).toBeTruthy();
+});
+
+// PR #11991 review: right after waking the relay can be online while the directory read timed
+// out and fell back to a stale snapshot. It is `ready`, but unverified homes read offline, so it
+// must not settle the window early; only a complete read does.
+it('keeps connecting while the relay is online but the directory is only a stale fallback', async () => {
+  homeOfflineActor();
+  h.deviceListAuthoritative = false;
+  act(() => h.relayStatus?.({ status: 'connecting' }));
+  const view = render(<RemoteBotSessionView />);
+  act(() => h.relayStatus?.({ status: 'online' }));
+  expect(screen.getByText('ccAgent.sidebar.machineSwitcher.connecting')).toBeTruthy();
+  expect(h.cloudView).not.toHaveBeenCalled();
+  h.deviceListAuthoritative = true;
+  view.rerender(<RemoteBotSessionView />);
   expect(await screen.findByText('cloud-offline-view')).toBeTruthy();
 });
 
