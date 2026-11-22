@@ -663,6 +663,51 @@ it('keeps a composer delivery that crosses card teardown', async () => {
   }
 });
 
+// Unit through the real card lifecycle and owner-scoped draft store. The listener
+// outlives unmount, so a delivery can land after an account switch and used to
+// enter the new owner's draft of a shared task ID. Minimal failing input: owner
+// a opens the card, the renderer switches to owner b, then the payload arrives.
+it('drops a composer delivery that arrives after an account switch', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let deliver!: (payload: unknown) => void;
+  const mcpApps = vi.fn(async () => ({}));
+  vi.stubGlobal('electronAPI', { maker: { mcpApps,
+    onMcpAppComposerAttachment: (callback: typeof deliver) => { deliver = callback; return () => {}; } } });
+  setDataOwnerGeneration('owner-a');
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="shared-task" clientId="card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const viewId = (controller as unknown as { document: { viewId: string } }).document.viewId;
+    controller.close.mockReturnValue(closed);
+    await act(async () => root.render(null));
+    setDataOwnerGeneration('owner-b');
+    deliver({ sessionId: 'shared-task', viewId, attachment: { id: 'stale', mcpAppResourceKey: 'resource', name: 'stale.txt',
+      path: '/owner-a/stale.txt', ext: '.txt', size: 1, category: 'text', mimeType: 'text/plain' } });
+    expect(getDraft('shared-task')?.attachments ?? []).toEqual([]);
+    deliver({ sessionId: 'shared-task', viewId, requestId: 'contains', resourceKey: 'resource' });
+    expect(mcpApps).toHaveBeenLastCalledWith('shared-task', { op: 'host-result', requestId: 'contains', result: false });
+  } finally {
+    finish();
+    clearDraft('shared-task');
+    setDataOwnerGeneration(null);
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 it('reopens when device ownership is restored but ignores unchanged ownership', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');

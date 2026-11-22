@@ -52,6 +52,10 @@ const MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT = 10;
 const MCP_APP_COMPOSER_ATTACHMENT_WINDOW_MS = 60_000;
 // Successful no-ops are free and can arrive far faster than actual additions.
 const MAX_COMPOSER_DUPLICATE_RECEIPTS = 512;
+// Pages may add without a gesture, so the rolling rate alone would keep
+// staging files for as long as a card stays open. Reopening resets the View.
+const MCP_APP_COMPOSER_ATTACHMENTS_PER_VIEW = 32;
+const MCP_APP_COMPOSER_ATTACHMENT_BYTES_PER_VIEW = 512 * 1024 * 1024;
 
 export function validateComposerAttachment(bytes: Uint8Array, mimeType: string): {
   category: 'image' | 'pdf' | 'text';
@@ -336,6 +340,8 @@ interface View {
   composerAttachmentResources: Set<string>;
   composerAttachmentInFlight: boolean;
   composerAttachmentTimes: number[];
+  /** Attachments this View delivered over its lifetime; never refunded. */
+  composerAttachmentTotal: { count: number; bytes: number };
   composerAttachmentReceipts: Set<string>;
   composerDuplicateReceipts: Set<string>;
 }
@@ -756,6 +762,7 @@ export class McpAppsHost {
         composerAttachmentResources: new Set(),
         composerAttachmentInFlight: false,
         composerAttachmentTimes: [],
+        composerAttachmentTotal: { count: 0, bytes: 0 },
         composerAttachmentReceipts: new Set(),
         composerDuplicateReceipts: new Set(),
       };
@@ -1067,6 +1074,9 @@ export class McpAppsHost {
                   return {};
                 }
               }
+              const total = view.composerAttachmentTotal;
+              if (total.count >= MCP_APP_COMPOSER_ATTACHMENTS_PER_VIEW || total.bytes >= MCP_APP_COMPOSER_ATTACHMENT_BYTES_PER_VIEW)
+                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_LIMIT');
               const now = Date.now();
               view.composerAttachmentTimes = view.composerAttachmentTimes.filter(at => now - at < MCP_APP_COMPOSER_ATTACHMENT_WINDOW_MS);
               if (view.composerAttachmentTimes.length >= MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT)
@@ -1095,12 +1105,16 @@ export class McpAppsHost {
               }
               if (bytes.byteLength < 1 || bytes.byteLength > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
                 throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+              if (total.bytes + bytes.byteLength > MCP_APP_COMPOSER_ATTACHMENT_BYTES_PER_VIEW)
+                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_LIMIT');
               const validated = validateComposerAttachment(bytes, mimeType ?? 'application/octet-stream');
               await check();
               await this.deps.sendComposerAttachment!({
                 caller, sessionId, viewId, resourceKey, name, mimeType: validated.mimeType,
                 size: bytes.byteLength, bytes, assertCurrent: check,
               });
+              total.count += 1;
+              total.bytes += bytes.byteLength;
               await check();
               if (requestId) view.composerAttachmentReceipts.add(requestId);
               return {};

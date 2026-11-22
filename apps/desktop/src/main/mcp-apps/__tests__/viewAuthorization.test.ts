@@ -369,6 +369,35 @@ describe('MCP App upstream result authorization', () => {
     await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 4, result: {} })));
   });
 
+  // Unit through the production composer request. Pages may add without a
+  // gesture and the per-minute rate refills, so one open card could stage files
+  // indefinitely. Minimal failing input: a 33rd distinct add after the rate window.
+  // Gap: the 512 MiB byte ceiling shares this check but is not exercised here,
+  // because reaching it needs eight 64 MiB reads.
+  it('stops a View after its lifetime attachment allowance', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:1', false, '<p>Composer</p>', { composer: true, sendComposerAttachment });
+    const uri = (index: number) => `report://${index}.txt`;
+    f.methods.callTool.mockResolvedValueOnce({
+      content: Array.from({ length: 33 }, (_, index) => ({ type: 'resource_link', uri: uri(index), name: `r${index}` })),
+    });
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: {} } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: expect.anything() })));
+    f.methods.readResource.mockImplementation(async ({ uri: read }: { uri: string }) => ({ contents: [{ uri: read, mimeType: 'text/plain', text: 'x' }] }));
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    for (let index = 0; index < 33; index++) {
+      now += 61_000;
+      const id = 10 + index;
+      await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/add', params: { uri: uri(index), name: `r${index}.txt` } });
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id })));
+    }
+    expect(sendComposerAttachment).toHaveBeenCalledTimes(32);
+    expect(f.outgoing).toContainEqual(expect.objectContaining({
+      id: 42, error: expect.objectContaining({ message: expect.stringContaining('MCP_APP_COMPOSER_ATTACHMENT_LIMIT') }),
+    }));
+  });
+
   // Unit through the production AppBridge tools/call entry. External MCP cards
   // return results on their own branch; a resource shown only in such a result
   // was rejected as MCP_APP_FILE_NOT_AUTHORIZED. Minimal failing input: one
