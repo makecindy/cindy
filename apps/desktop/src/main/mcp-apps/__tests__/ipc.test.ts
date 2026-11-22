@@ -32,6 +32,8 @@ const state = vi.hoisted(() => ({
   broadcast: vi.fn(),
   create: vi.fn(),
   trusted: vi.fn(),
+  redeem: vi.fn(),
+  handleDrop: undefined as undefined | ((event: unknown, payload: unknown) => Promise<void>),
   invoke: vi.fn(),
   open: vi.fn(),
   dispatch: vi.fn(),
@@ -44,10 +46,13 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({
   app: { getPath: () => state.userData },
+  webContents: { fromId: vi.fn() },
+  BrowserWindow: { fromWebContents: vi.fn() },
   ipcMain: {
     removeHandler: vi.fn(),
     handle: (_name: string, handler: typeof state.handle) => {
-      state.handle = handler;
+      if (_name === 'maker:redeem-composer-attachment-drag') state.handleDrop = handler as typeof state.handleDrop;
+      else state.handle = handler;
     },
   },
   shell: { openExternal: vi.fn() },
@@ -60,7 +65,10 @@ vi.mock('@cindy/mcps', () => ({
 }));
 vi.mock('../host.js', () => ({
   appServerRevision: (config: unknown) => JSON.stringify(config),
+  validateComposerAttachment: (_bytes: Uint8Array, mimeType: string) =>
+    ({ category: mimeType.startsWith('image/') ? 'image' : mimeType === 'application/pdf' ? 'pdf' : 'text', mimeType }),
   McpAppsHost: class {
+    redeemComposerAttachmentDrag = state.redeem;
     open = state.open;
     dispatch = state.dispatch;
     callPluginAction = state.action;
@@ -69,6 +77,7 @@ vi.mock('../host.js', () => ({
     }
   },
 }));
+vi.mock('../../cindy-media/chatAttachments.js', () => ({ ingestChatImageBuffer: async () => ({ url: 'cindy-media://blobs/preview' }) }));
 vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => state.plugin }));
 vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn(), replacePluginAppServers: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ getMcpAppRevisionKey: state.revisionKey }));
@@ -140,6 +149,7 @@ beforeEach(() => {
   };
   state.updateResult = [state.row];
   state.owner = {
+    userId: 'owner-a',
     client: {
       drizzle: {
         select: () => ({
@@ -179,6 +189,89 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // Unit: the AppBridge tests bypass Electron. A subframe calling the drop IPC
+  // must fail before any ticket lookup, and only Electron supplies the window ID.
+  it('binds drag redemption to the trusted top-level IPC sender', async () => {
+    const payload = { sessionId: 'task', ticket: 'ab'.repeat(24), caller: 'renderer:9' };
+    const event = { sender: { id: 7 } };
+    state.trusted.mockImplementationOnce(() => { throw new Error('untrusted frame'); });
+    await expect(state.handleDrop!(event, payload)).rejects.toThrow('untrusted frame');
+    expect(state.redeem).not.toHaveBeenCalled();
+    await state.handleDrop!(event, payload);
+    expect(state.redeem).toHaveBeenCalledWith('renderer:7', 'task', payload.ticket);
+  });
+
+  // Unit at the Main IPC boundary. Only Main can map a renderer to its window.
+  // A card in the detached sidebar was offered the composer and staged files into
+  // a renderer without ChatInput. Minimal failing input: a sidebar window caller.
+  it('offers the composer only to renderers in a task composer window', async () => {
+    const { webContents, BrowserWindow } = await import('electron');
+    const main = { isDestroyed: () => false };
+    const sidebar = { isDestroyed: () => false };
+    vi.mocked(webContents.fromId).mockImplementation(id => ({ isDestroyed: () => false, id }) as never);
+    vi.mocked(BrowserWindow.fromWebContents).mockImplementation(contents =>
+      ((contents as unknown as { id: number }).id === 1 ? main : sidebar) as never);
+    registerMcpAppsIpc(async () => {}, vi.fn(), undefined, undefined, window => window === (main as never));
+    expect(state.deps!.composerCaller!('renderer:1')).toBe(true);
+    expect(state.deps!.composerCaller!('renderer:2')).toBe(false);
+    expect(state.deps!.composerCaller!('device:phone')).toBe(false);
+  });
+
+  // Tier: unit at the production Main IPC boundary. A local MCP App resource
+  // must be staged and delivered back to the renderer, using the same owner
+  // identity as the active DB snapshot. The previous code read a nonexistent
+  // `dataOwnerId` field and rejected every request with MCP_APP_OWNER_ONLY.
+  it('stages a local composer attachment with the DB snapshot user id', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-composer-ipc-'));
+    state.userData = root;
+    const send = vi.fn();
+    const target = { isDestroyed: () => false, send };
+    const { webContents } = await import('electron');
+    vi.mocked(webContents.fromId).mockReturnValue(target as never);
+    try {
+      await state.deps!.sendComposerAttachment!({
+        caller: 'renderer:1', sessionId: 'task', viewId: 'view', resourceKey: 'card-resource', name: 'sample.txt',
+        mimeType: 'text/plain', size: 3, bytes: new Uint8Array([97, 98, 99]),
+        assertCurrent: async () => {},
+      });
+      expect(send).toHaveBeenCalledWith('maker:mcp-apps:composer-attachment', expect.objectContaining({
+        sessionId: 'task', viewId: 'view',
+        attachment: expect.objectContaining({ name: 'sample.txt', size: 3, mimeType: 'text/plain' }),
+      }));
+      const stagedPath = send.mock.calls[0]![1].attachment.path as string;
+      expect(await fs.readFile(stagedPath)).toEqual(Buffer.from('abc'));
+    } finally {
+      state.userData = '';
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit at the Main IPC boundary. Sending treats `.gif` as a file, so the
+  // extension must follow the validated bytes, not the page-supplied name.
+  // Minimal failing inputs: a GIF without `.gif`, a PNG named `.gif`.
+  it.each([
+    { name: 'animation', mimeType: 'image/gif', ext: '.gif' },
+    { name: 'photo.gif', mimeType: 'image/png', ext: '.png' },
+    { name: 'scan', mimeType: 'image/jpeg', ext: '.jpg' },
+    { name: 'report.txt', mimeType: 'application/pdf', ext: '.pdf' },
+  ])('derives the staged extension from validated content: $name as $mimeType', async ({ name, mimeType, ext }) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-composer-ext-'));
+    state.userData = root;
+    const send = vi.fn();
+    const { webContents } = await import('electron');
+    vi.mocked(webContents.fromId).mockReturnValue({ isDestroyed: () => false, send } as never);
+    try {
+      await state.deps!.sendComposerAttachment!({
+        caller: 'renderer:1', sessionId: 'task', viewId: 'view', resourceKey: `ext-${name}`, name,
+        mimeType, size: 3, bytes: new Uint8Array([1, 2, 3]), assertCurrent: async () => {},
+      });
+      expect(send.mock.calls[0]![1].attachment).toEqual(expect.objectContaining({ name, ext }));
+    } finally {
+      state.userData = '';
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   // Security regression #10649, unit: a trusted renderer's path is not proof
   // that the user supplied its bytes. Reject it before any provider dispatch.
   it.each([false, true])('rejects a renderer-supplied absolute attachment path before dispatch (with bytes: %s)', async withBytes => {

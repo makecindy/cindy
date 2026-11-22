@@ -393,6 +393,7 @@
       "showDeviceTasks": "查看任务",
       "openDevice": "打开",
       "renameDevice": "重命名",
+      "groupDevice": "设备",
       "groupProject": "项目",
       "sortBy": {
         "priority": "优先级",
@@ -434,11 +435,15 @@
       "showCollapsedTeammateAvatars": "收起时显示头像",
       "displayHeading": "显示",
       "view": {
+        "card": "卡片",
         "text": "文字",
         "list": "列表"
       },
       "taskInfoHeading": "任务信息",
       "taskInfo": {
+        "teammate": "伙伴头像",
+        "project": "项目图标和名称",
+        "harness": "Harness 图标",
         "time": "时间",
         "pr": "PR 状态",
         "tokens": "Token",

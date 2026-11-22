@@ -1340,11 +1340,12 @@
         "body": "Plugin terpasang tidak dapat menampilkan {{device}} di komputer lain. Periksa pembaruan kompatibilitas, atau gunakan perangkat di komputer tempat tugas berjalan.",
         "action": "Periksa pembaruan kompatibilitas",
         "unavailable": "Sumber Plugin ini belum memiliki pembaruan yang mendukung tampilan jarak jauh; gunakan perangkat di komputer tempat tugas berjalan"
-      },
-      "update": {}
+      }
     },
     "lockOnExitHintPrivacy": "Menutup layar setelah keluar dari desktop jarak jauh, jadi AI bisa tetap bekerja; begitu ada yang menyentuh komputer, layar terkunci.",
-    "lockedEnablePrivacyHint": "Agar AI tetap bisa memakai komputer ini saat kamu pergi, aktifkan penutup layar di “Pengaturan → Umum → Saat kamu pergi” miliknya."
+    "lockedEnablePrivacyHint": "Agar AI tetap bisa memakai komputer ini saat kamu pergi, aktifkan penutup layar di “Pengaturan → Umum → Saat kamu pergi” miliknya.",
+    "revealCurrentApp": "Tampilkan {{app}} di Finder",
+    "openPermissionInNewWindow": "Buka di jendela baru"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -7035,8 +7036,7 @@
         "label": "Jaringan lokal",
         "deniedHint": "Tanpa izin ini, komputer dan ponsel di jaringan yang sama tidak bisa terhubung langsung ke komputer ini; koneksi harus lewat relay dan jadi lebih lambat.",
         "settingsHint": "Aktifkan Cindy di “Pengaturan Sistem › Privasi & Keamanan › Jaringan lokal”. Setelah kembali ke sini, pengaturan berlaku otomatis."
-      },
-      "ownModelAccess": {}
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -9358,12 +9358,6 @@
     },
     "navigation": {
       "unavailable": "Tidak dapat membuka pengaturan komputer tujuan. Pastikan komputer online dan mengizinkan kontrol jarak jauh; jika versinya lama, perbarui Cindy dulu."
-    },
-    "visionBridge": {
-      "toast": {},
-      "capability": {},
-      "targetModels": {},
-      "backends": {}
     }
   },
   "remoteDevice": {
@@ -11073,6 +11067,11 @@
       "pinned": "Disematkan",
       "needsAttention": "Perlu ditangani",
       "duplicate": "Duplikasi Rekan",
+      "duplicating": "Menduplikasi Rekan…",
+      "duplicateFailed": "Gagal menduplikasi Rekan",
+      "duplicateModelRequired": "Pilih model default untuk Rekan di Pengaturan sebelum menduplikasi",
+      "pinFailed": "Gagal mengubah status semat Rekan",
+      "hideFailed": "Gagal mengubah status sembunyi Rekan",
       "moreActions": "Tindakan lain untuk {{name}}",
       "viewIcons": "Ikon",
       "showCollapsedTeammateAvatars": "Tampilkan avatar saat diciutkan",
@@ -12107,46 +12106,15 @@
     },
     "guided": {
       "title": "Buat Rekan",
-      "reviewTitle": "Rekan barumu",
-      "question": "Jelaskan singkat apa yang kamu harapkan",
-      "placeholder": "Misalnya, menemani latihan bahasa Inggris, bisa mengobrol soal kehidupan, dan serius mengoreksi ekspresimu.",
       "generate": "Buat Rekan",
-      "generating": "Menyusun Rekan-mu…",
-      "generationFailed": "Gagal membuat Rekan. Ide-mu masih ada; coba lagi.",
       "modelRequired": "Pilih model yang tersedia di atas untuk melanjutkan.",
       "modelFollowsDefault": "Mengikuti model bawaan Rekan.",
       "modelForThisBot": "Pilihan ini hanya berlaku untuk Rekan ini.",
-      "cindyDescription": "Siap membantu memakai Cindy, menghubungkan alat, dan menyelesaikan pekerjaan bersamamu.",
-      "cindySummary": "Mengurus Cindy, menghubungkan alat, menyelesaikan pekerjaan.",
-      "openCindy": "Buka Cindy",
-      "addCindy": "Tambahkan Cindy",
-      "done": "Selesai",
-      "editName": "Ubah nama",
       "duplicateName": "Nama itu sudah dipakai. Pilih nama lain yang lebih mudah dibedakan.",
-      "introduction": "Perkenalan diri",
-      "editIntroduction": "Ubah perkenalan",
-      "refine": "Sesuaikan Rekan",
-      "refinePlaceholder": "Apa lagi yang ingin diubah? Misalnya, sedikit lebih santai dan lebih humoris.",
-      "back": "Kembali",
-      "invite": "Undang Rekan",
       "portrait": "Avatar {{number}}",
       "upload": "Unggah gambar",
       "generateAvatar": "Buat avatar",
-      "useAvatar": "Pakai ini",
-      "examples": {
-        "english": {
-          "label": "Latihan bahasa Inggris",
-          "prompt": "Latih bahasa Inggris lewat obrolan sehari-hari; sabar tapi tidak asal, dan koreksi ekspresi yang tidak wajar dengan serius."
-        },
-        "ideas": {
-          "label": "Cari ide bersama",
-          "prompt": "Rekan kreatif yang punya imajinasi dan pendapat, menemani diskusi tulisan dan ide produk, serta membantu mengubah ide menjadi rencana konkret."
-        },
-        "life": {
-          "label": "Ngobrol soal kehidupan",
-          "prompt": "Rekan yang hangat dan humoris, mau mendengar cerita kecil dalam hidupmu tanpa buru-buru memberi saran."
-        }
-      }
+      "useAvatar": "Pakai ini"
     },
     "import": {
       "title": "Impor Rekan",
@@ -12510,6 +12478,7 @@
           "listenPortLabel": "Port pendengar lokal",
           "listenPortPlaceholder": "18747",
           "hint": "Hubungkan ke BlueBubbles di jaringan lokal; hanya obrolan yang dipilih yang ditangani. Sebelum menghubungkan, hentikan dulu program balasan otomatis lain untuk obrolan tersebut.",
+          "automationDenied": "Saat mengirim, macOS menolak permintaan BlueBubbles untuk mengendalikan “Pesan”. Periksa “Pengaturan Sistem → Privasi & Keamanan → Otomasi” di Mac yang menjalankan BlueBubbles.",
           "uncertain": "Ada {{count}} hasil pemrosesan pesan yang perlu diperiksa. Lihat riwayat obrolan dulu sebelum memutuskan mencoba lagi, agar tidak terjadi balasan ganda."
         }
       },
@@ -14506,10 +14475,8 @@
       "agentSwitch": {
         "engineNotReady": "Engine sudah dialihkan, tetapi engine baru gagal dimulai; akan dicoba ulang saat kamu mengirim pesan",
         "failed": "Pengalihan engine gagal; tidak diterapkan",
-        "deferred": "Pengalihan dijadwalkan: beralih ke {{agent}} · {{model}} saat pesan berikutnya dikirim",
-        "confirmation": {}
-      },
-      "agentRelocation": {}
+        "deferred": "Pengalihan dijadwalkan: beralih ke {{agent}} · {{model}} saat pesan berikutnya dikirim"
+      }
     },
     "agentSelect": {
       "label": "Engine",
@@ -15081,7 +15048,6 @@
     "runningStatus": {
       "currentRate": "Kecepatan terbaru",
       "lastRequestRate": "Rata-rata permintaan terakhir",
-      "recentTokenRate": "Terbaru {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Rata-rata giliran",
       "rateHistory": "Riwayat kecepatan pembuatan",
@@ -16185,8 +16151,7 @@
       "signingIn": "Akun langganan yang dipakai tugas ini sedang masuk. Selesaikan proses masuknya lalu coba lagi.",
       "unavailable": "Akun langganan yang terikat pada tugas ini tidak bisa dipakai untuk permintaan ini. Periksa pengaturan akun di penyedia model pada komputer yang menjalankan tugas, atau pilih sumber model lain.",
       "legacy": "Akun langganan yang terikat pada tugas ini belum tersedia. Periksa status masuk dan penggunaan akun tersebut di komputer yang menjalankan tugas, atau pilih sumber model lain. Tugas ini tidak berganti akun otomatis."
-    },
-    "visionBridge": {}
+    }
   },
   "ccAgent": {
     "sessionEntry": {
@@ -21508,6 +21473,9 @@
     "actionFailed": "Tindakan Plugin ini tidak bisa diselesaikan. Coba lagi."
   },
   "mcpApps": {
+    "composerDragFailed": "Lampiran gagal ditambahkan; seret ulang atau klik “Tambahkan ke kolom input”",
+    "composerAttachmentFormat": "Mendukung gambar, PDF, dan teks biasa, maksimal 64 MiB per file.",
+    "composerAttachmentBusy": "Tambahkan lampiran nanti.",
     "sharedTaskReadOnly": "Hanya pemilik tugas yang bisa berinteraksi dengan kartu ini.",
     "retry": "Muat ulang",
     "loadFailed": "Aplikasi gagal dimuat. Periksa koneksi lalu muat ulang.",

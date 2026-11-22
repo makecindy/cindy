@@ -11,7 +11,9 @@
  */
 
 import path from 'node:path';
-import { readBotImConnection } from './shared/botImConnectionStore';
+import { botProfiles } from '../localDb/schema';
+import { eq } from 'drizzle-orm';
+import { authorizedIMessageRoute, readBotImConnection } from './shared/botImConnectionStore';
 import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
 import {
@@ -406,6 +408,13 @@ export function createBotIMessageIM(secretKeyPrefix: string, connectionId: strin
     secretPrefix: secretKeyPrefix,
     storage: blueBubblesStateStorage(connectionId),
     contextId: () => readBotImConnection(connectionId)?.botContextId ?? null,
+    delegatedGroupAlias: async (chat, authorization) => {
+      const route = authorizedIMessageRoute(readBotImConnection(connectionId), chat, authorization);
+      if (!route) return undefined;
+      const [bot] = await getDbClient().drizzle.select({ name: botProfiles.displayName })
+        .from(botProfiles).where(eq(botProfiles.id, route.botId)).limit(1);
+      return bot?.name;
+    },
     receiver: (listenHost, port) => {
       const key = `${listenHost}:${port}`;
       let receiver = localImReceivers.get(key);

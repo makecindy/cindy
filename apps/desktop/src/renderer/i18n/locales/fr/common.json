@@ -1006,7 +1006,7 @@
     "captureFailed": "Impossible de capturer l'écran",
     "permission": {
       "title": "Autorisation d'enregistrement de l'écran requise",
-      "detail": "Pour réaliser des captures d'écran, autorisez {{appName}} dans Réglages Système > Confidentialité et sécurité > Enregistrement de l'écran et de l'audio du système, puis rouvrez {{appName}}.",
+      "detail": "Autorisez {{appName}} à enregistrer l’écran, puis réessayez. Rouvrez l’app si macOS le demande.",
       "openSettings": "Ouvrir les Réglages Système",
       "later": "Plus tard"
     },
@@ -1173,12 +1173,12 @@
     "windowsError": "L'autorisation n'a pas abouti. Réessayez sur cet ordinateur.",
     "windowsErrorDetail": "Code d'erreur {{code}}",
     "permissionsTitle": "Autorisations du bureau à distance",
-    "permissionsIntro": "L'enregistrement de l'écran permet de voir le bureau. L'accessibilité permet en plus de le contrôler. Terminez l'autorisation sur l'ordinateur ; l'état se met à jour automatiquement.",
+    "permissionsIntro": "Sur le Mac à contrôler, autorisez l’enregistrement de l’écran pour voir le bureau. Pour utiliser le clavier et la souris, autorisez aussi Cindy à contrôler des apps. Cindy vérifie automatiquement les autorisations.",
     "permissionsReady": "Les autorisations système sont prêtes. Vous pouvez vous reconnecter.",
     "screenRecording": "Enregistrement de l'écran",
-    "accessibility": "Accessibilité",
-    "screenRecordingHelp": "Ouvrez les Réglages Système et activez l'enregistrement de l'écran pour cette app Cindy. Si macOS vous demande de redémarrer, rouvrez Cindy avant de vous connecter.",
-    "accessibilityHelp": "Ouvrez les réglages et activez l'accessibilité pour l'app indiquée par l'invite système. L'autorisation de saisie réelle est vérifiée automatiquement à votre retour.",
+    "accessibility": "Contrôle du clavier et de la souris",
+    "screenRecordingHelp": "Autorisez la version de Cindy en cours d’exécution dans Enregistrement de l’écran ou Enregistrement de l’écran et des sons du système. Rouvrez Cindy si macOS le demande.",
+    "accessibilityHelp": "Dans Confidentialité et sécurité, sélectionnez l’app indiquée par macOS. Si vous voyez System & App Protection Override, choisissez les apps qu’elle peut contrôler. Sur les versions antérieures, activez Accessibilité.",
     "permissionChecking": "Vérification…",
     "permissionGranted": "Accordée",
     "permissionUnknown": "Non confirmée",
@@ -1374,7 +1374,9 @@
       }
     },
     "lockOnExitHintPrivacy": "Affiche l'écran de confidentialité à la sortie pour que l'IA continue de travailler ; toucher l'ordinateur le verrouille.",
-    "lockedEnablePrivacyHint": "Pour que l'IA continue d'utiliser cet ordinateur en votre absence, activez l'écran de confidentialité dans ses Paramètres → Général → En votre absence."
+    "lockedEnablePrivacyHint": "Pour que l'IA continue d'utiliser cet ordinateur en votre absence, activez l'écran de confidentialité dans ses Paramètres → Général → En votre absence.",
+    "revealCurrentApp": "Afficher {{app}} dans le Finder",
+    "openPermissionInNewWindow": "Ouvrir dans une autre fenêtre"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3213,7 +3215,7 @@
         },
         "accessibility": {
           "label": "Saisie automatique",
-          "tooltip": "L'autorisation d'accessibilité permet à la saisie vocale de taper dans d'autres applications, de lire le texte proche du curseur comme contexte d'affinage et de détecter les modifications externes pour l'apprentissage du dictionnaire."
+          "tooltip": "Autorisez Cindy à insérer la dictée dans les apps choisies, à lire le texte autour du curseur pour l’améliorer et à détecter les corrections pour le dictionnaire. Utilisez Accessibilité ou System & App Protection Override, selon l’option affichée sur votre Mac."
         }
       },
       "interactionSound": {
@@ -5836,10 +5838,10 @@
         "toggleAria": "Utiliser mes connexions du navigateur",
         "confirmTitle": "Autoriser l'Agent à utiliser vos connexions du navigateur ?",
         "confirmDescription": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
-        "confirmDescriptionMac": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. La lecture des fichiers de connexion de Chrome nécessite également l'accès complet au disque. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
+        "confirmDescriptionMac": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée. Si macOS vous demande de choisir un dossier, sélectionnez celui du profil de navigateur à utiliser.",
         "confirm": "Utiliser mes connexions",
-        "readDeniedTitle": "Accès complet au disque requis",
-        "readDeniedDescription": "Cindy a besoin de cette autorisation pour lire les fichiers de connexion de Chrome. Activez Cindy dans Confidentialité et sécurité → Accès complet au disque, puis réessayez.",
+        "readDeniedTitle": "Impossible de lire le profil du navigateur",
+        "readDeniedDescription": "Dans Confidentialité et sécurité → Accès complet au disque, sélectionnez la copie de Cindy en cours d’exécution. Si macOS propose de choisir un dossier, sélectionnez uniquement celui du profil du navigateur, puis réessayez.",
         "openFullDiskAccess": "Ouvrir les Réglages Système",
         "readDeniedLater": "Plus tard",
         "toast": {
@@ -6011,7 +6013,7 @@
         "permissionIntro": {
           "title": "Activer l'automatisation de l'ordinateur",
           "description": "{{appName}} va installer ou démarrer Cua Driver localement pour lire l'écran et effectuer des actions comme cliquer et saisir du texte. Ne l'activez que si vous avez volontairement lancé une tâche d'automatisation de l'ordinateur.",
-          "macosDescription": "{{appName}} va ensuite installer ou ouvrir le processus d'autorisation de Cua Driver, et peut basculer vers les Réglages Système de macOS. Accordez d'abord à CuaDriver les autorisations essentielles Accessibilité et Enregistrement de l'écran. Lors de l'utilisation ultérieure, macOS peut encore afficher des confirmations supplémentaires pour une application cible ou une action précise. N'approuvez ces demandes que si vous avez volontairement lancé une tâche Computer Use. Revenez ensuite dans {{appName}}, qui vérifiera automatiquement.",
+          "macosDescription": "{{appName}} va installer ou démarrer Cua Driver localement pour lire l'écran et effectuer des actions comme cliquer et saisir du texte. Ne l'activez que si vous avez volontairement lancé une tâche d'automatisation de l'ordinateur. Autorisez CuaDriver à enregistrer l’écran. Dans System & App Protection Override, choisissez les apps qu’il peut contrôler. Sur les versions antérieures de macOS, activez Accessibilité.",
           "confirm": "Continuer",
           "cancel": "Plus tard"
         },
@@ -6032,8 +6034,8 @@
         },
         "permissions": {
           "title": "Accès système",
-          "macosHint": "Computer Use nécessite Accessibilité et Enregistrement de l'écran. Lors de l'utilisation réelle, macOS peut encore afficher des confirmations supplémentaires pour une application cible ou une action.",
-          "accessibilityLabel": "Accessibilité",
+          "macosHint": "Autorisez CuaDriver à enregistrer l’écran. Dans System & App Protection Override, choisissez les apps qu’il peut contrôler. Sur les versions antérieures, activez Accessibilité.",
+          "accessibilityLabel": "Contrôle du clavier et de la souris",
           "screenRecordingLabel": "Enregistrement de l'écran",
           "grant": "Accorder",
           "accessibility": "Accessibilité : {{status}}",
@@ -6079,7 +6081,7 @@
           "toggleFailed": "Échec de l'activation ou de la désactivation du contrôle direct de l'ordinateur",
           "installFailed": "Échec de l'installation de cua-driver",
           "permissionFailed": "Les autorisations Computer Use sont incomplètes",
-          "permissionPending": "Accordez les deux autorisations système, puis revenez ici et cliquez sur Revérifier",
+          "permissionPending": "Terminez l’autorisation sur le Mac. Si l’état ne se met pas à jour, relancez la vérification.",
           "permissionSettingsOpened": "Réglages des autorisations système ouverts. Après les avoir accordées, revenez ici et cliquez sur « Revérifier ».",
           "permissionSettingsMonitoring": "Réglages des autorisations système ouverts. Accordez les autorisations et le statut se mettra à jour automatiquement.",
           "openPermissionSettingsFailed": "Impossible d'ouvrir les réglages des autorisations système"
@@ -11195,6 +11197,11 @@
       "pinned": "Épinglés",
       "needsAttention": "Action requise",
       "duplicate": "Dupliquer l’ami",
+      "duplicating": "Duplication de l’ami…",
+      "duplicateFailed": "Impossible de dupliquer l’ami.",
+      "duplicateModelRequired": "Pour dupliquer cet ami, choisissez d’abord un modèle par défaut pour les amis dans les Paramètres.",
+      "pinFailed": "Impossible de modifier l’épinglage de l’ami.",
+      "hideFailed": "Impossible de masquer ou d’afficher l’ami.",
       "moreActions": "Plus d'actions pour {{name}}",
       "viewIcons": "Icônes",
       "showCollapsedTeammateAvatars": "Afficher les avatars en mode réduit",
@@ -12244,46 +12251,15 @@
     },
     "guided": {
       "title": "Créer un ami",
-      "reviewTitle": "Votre nouvel ami",
-      "question": "Décrivez brièvement vos attentes.",
-      "placeholder": "Par exemple : aide-moi à pratiquer l'anglais grâce à des conversations du quotidien et des corrections bienveillantes.",
       "generate": "Créer l’ami",
-      "generating": "Création de votre ami…",
-      "generationFailed": "Impossible de générer votre ami. Votre idée est conservée ; veuillez réessayer.",
       "modelRequired": "Choisissez un modèle disponible ci-dessus pour continuer.",
       "modelFollowsDefault": "Suit le modèle par défaut des amis.",
       "modelForThisBot": "Ce choix s'applique uniquement à cet ami.",
-      "cindyDescription": "Je peux vous aider à utiliser Cindy, à connecter vos outils et à accomplir vos tâches ensemble.",
-      "cindySummary": "Gérer Cindy, connecter des outils et accomplir vos tâches.",
-      "openCindy": "Ouvrir Cindy",
-      "addCindy": "Ajouter Cindy",
-      "done": "Terminé",
-      "editName": "Modifier le nom",
       "duplicateName": "Ce nom est déjà pris. Choisissez un nom facile à distinguer.",
-      "introduction": "À propos de moi",
-      "editIntroduction": "Modifier la présentation",
-      "refine": "Ajuster l’ami",
-      "refinePlaceholder": "Que voudriez-vous changer ? Par exemple : moins formel et un peu plus enjoué.",
-      "back": "Retour",
-      "invite": "Inviter l’ami",
       "portrait": "Portrait {{number}}",
       "upload": "Importer une image",
       "generateAvatar": "Générer un portrait",
-      "useAvatar": "Utiliser ce portrait",
-      "examples": {
-        "english": {
-          "label": "Pratiquer l'anglais",
-          "prompt": "Pratique l'anglais avec moi à travers des conversations du quotidien. Sois patient et corrige avec bienveillance les expressions peu naturelles."
-        },
-        "ideas": {
-          "label": "Explorer des idées",
-          "prompt": "Un partenaire créatif imaginatif, qui a ses propres opinions et m'aide à transformer mes idées d'écriture et de produits en plans concrets."
-        },
-        "life": {
-          "label": "Parler de la vie",
-          "prompt": "Un ami chaleureux et drôle, qui écoute les petites choses de ma vie sans se précipiter pour donner des conseils."
-        }
-      }
+      "useAvatar": "Utiliser ce portrait"
     },
     "import": {
       "title": "Importer un ami",
@@ -12658,6 +12634,7 @@
           "listenPortLabel": "Port local de réception",
           "listenPortPlaceholder": "18747",
           "hint": "Connexion à BlueBubbles sur le réseau local. Seules les discussions sélectionnées sont traitées. Arrêtez leurs autres réponses automatiques avant la connexion.",
+          "automationDenied": "Lors de l’envoi, macOS a refusé à BlueBubbles l’accès à Messages. Sur le Mac qui exécute BlueBubbles, ouvrez Réglages Système → Confidentialité et sécurité → Automatisation.",
           "uncertain": "{{count}} envois sont à vérifier. Consultez l’historique avant de réessayer pour éviter les doublons."
         }
       },
@@ -15232,7 +15209,6 @@
     "runningStatus": {
       "currentRate": "Vitesse récente",
       "lastRequestRate": "Moyenne de la dernière requête",
-      "recentTokenRate": "Dernière mesure {{rate}} tok/s",
       "waitingSample": "Échantillonnage",
       "averageRate": "Moyenne du tour",
       "rateHistory": "Historique de la vitesse de génération",
@@ -16013,7 +15989,7 @@
       "viewThread": "Voir le contexte du fil ({{count}})",
       "memberFromGroup": "{{name}} · depuis le groupe {{platform}} « {{group}} »",
       "memberFromPlatform": "{{name}} · depuis un groupe {{platform}}",
-      "guestFromDm": "{{name}} · depuis un message privé {{platform}} (pas le propriétaire)",
+      "guestFromDm": "{{name}} · depuis un message privé {{platform}}",
       "unknownSender": "Membre du groupe"
     },
     "rewind": {
@@ -20688,7 +20664,7 @@
     "epermGuidance": {
       "title": "Accès au dossier refusé par macOS",
       "message": "Cindy ne peut pas accéder à votre dossier {{folder}}",
-      "detail": "macOS a refusé l'accès. Ouvrez les Réglages Système pour accorder l'autorisation, puis relancez la commande de votre Agent.",
+      "detail": "Dans Fichiers et dossiers, autorisez Cindy à accéder à ce dossier, puis réessayez.",
       "openSystemSettings": "Ouvrir les Réglages Système",
       "cancel": "Annuler",
       "folderNames": {
@@ -21784,6 +21760,9 @@
     "actionFailed": "Cette action du plugin n’a pas pu être effectuée. Réessayez."
   },
   "mcpApps": {
+    "composerDragFailed": "Impossible d’ajouter la pièce jointe. Faites-la glisser à nouveau ou sélectionnez « Ajouter à la zone de saisie ».",
+    "composerAttachmentFormat": "Utilisez une image, un PDF ou un fichier texte de 64 Mio maximum.",
+    "composerAttachmentBusy": "Patientez un instant avant d’ajouter une autre pièce jointe.",
     "sharedTaskReadOnly": "Seul le propriétaire de la session peut interagir avec cette carte.",
     "retry": "Recharger",
     "loadFailed": "Impossible de charger l'application. Vérifiez la connexion et rechargez.",

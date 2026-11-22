@@ -697,7 +697,8 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
     expect(sessionRowSource).toContain('const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
-    expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
+    expect(sessionRowSource).toContain('singleLine={!showPreviewLine}');
+    expect(listStyles).toContain('singleLine && styles.sessionIconCellSingleLine');
     expect(sessionRowSource).toContain('{showPreviewLine ? (');
     expect(sessionRowSource).not.toContain('numberOfLines={2}');
     // 相对时间下沉到独家订阅分钟心跳的叶子组件(行主体 memo 化后由它单独保鲜,风暴修复)

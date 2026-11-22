@@ -393,6 +393,7 @@
       "showDeviceTasks": "Lihat tugas",
       "openDevice": "Buka",
       "renameDevice": "Ganti nama",
+      "groupDevice": "Perangkat",
       "groupProject": "Proyek",
       "sortBy": {
         "priority": "Prioritas",
@@ -434,11 +435,15 @@
       "showCollapsedTeammateAvatars": "Tampilkan avatar saat diciutkan",
       "displayHeading": "Tampilan",
       "view": {
+        "card": "Kartu",
         "text": "Teks",
         "list": "Daftar"
       },
       "taskInfoHeading": "Info sesi",
       "taskInfo": {
+        "teammate": "Foto profil Rekan",
+        "project": "Ikon dan nama proyek",
+        "harness": "Ikon Harness",
         "time": "Waktu",
         "pr": "Status PR",
         "tokens": "Token",

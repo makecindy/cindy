@@ -9,6 +9,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { performance as hooks } from 'node:perf_hooks';
 import { createLocalJWKSet, SignJWT } from 'jose';
 import { createAgentNetSharingAuth } from '@cindy/agent-net-relay/sharing-auth';
 import { createPrivateNetwork, startAgentNetRelay, generateIdentity, createJoinRequest, approveJoin, createDelegation, issueCertificate, signature } from '@cindy/agent-net-relay';
@@ -518,6 +519,50 @@ it.each(['undeclared', 'budget'] as const)('closes a connection whose peer opens
   await vi.waitFor(() => expect(closed).toBe(true), { timeout: 20_000 });
 }, 40_000);
 
+/** 测试价值（Node 驱动按速率发包时不空转）
+ * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的端点（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。按速率发包、
+ *   两次发包之间不到一毫秒时，驱动所在线程大部分时间空着（事件循环利用率），而不是一轮一轮看时间。
+ * - Bug 依据：2026-11-22 容器弱网矩阵（Linux、Electron 42）：计时器精度 1 毫秒的系统（Linux、macOS）上，驱动把所有短于一毫秒的等待都当成
+ *   等不起，两毫秒没有包到达就每轮看时间，20 Mbit 线路上每 MiB 285–470 毫秒 CPU（Device Link 43–46）。Windows 的计时器精度 16 毫秒，
+ *   一直由核心判断，不受影响。
+ * - 现有覆盖缺口：`coreDriverWake.test.ts` 只测唤醒计划这个纯函数，「等不等得起」由谁判断不在里面；别的测试只看收发结果。
+ * - 最小失败输入：两个端点只经一条 JS 线路相连（单程 20 毫秒、每秒 2 MB，每 5 毫秒到一批），传 3 MB。改前 Linux 上事件循环利用率 0.47，
+ *   改后 0.11。到达均匀时确认包每一两毫秒就有一个、带着核心走，看不出空转；成批到达时两批之间没有到达。
+ * - tier：integration，两个真实 WASM 端点，线路是本进程里的计时器。 */
+it('leaves the driver thread mostly idle while it paces a transfer, instead of polling the clock', async () => {
+  const server = generateIdentity('a-server'), client = generateIdentity('b-client');
+  const accepting = await Endpoint.create({ identity: server.transportPrivateKey, prologue: 'unit-pacing', udp: false, accept: { admit: () => true } });
+  const dialing = await Endpoint.create({ identity: client.transportPrivateKey, prologue: 'unit-pacing', udp: false });
+  cleanup.push(() => accepting.close()); cleanup.push(() => dialing.close());
+  // One direction of a 2 MB/s line with 20 ms one way: datagrams leave in order at the line's rate, then travel, and arrive in
+  // 5 ms batches as over Wi-Fi aggregation or a busy relay. Between batches nothing arrives to drive the core.
+  const line = (deliver: (datagram: Uint8Array) => void) => {
+    let free = 0;
+    return (datagram: Uint8Array) => {
+      const at = Math.max(free, performance.now()) + datagram.length / 2_000;
+      free = at;
+      const copy = datagram.slice();
+      setTimeout(() => deliver(copy), Math.ceil((at + 20) / 5) * 5 - performance.now());
+    };
+  };
+  let toServer!: (datagram: Uint8Array) => void, toClient!: (datagram: Uint8Array) => void;
+  const clientLink = dialing.createLink((datagram) => toServer(datagram));
+  const serverLink = accepting.createLink((datagram) => toClient(datagram));
+  toServer = line((datagram) => serverLink.deliver(datagram));
+  toClient = line((datagram) => clientLink.deliver(datagram));
+  const total = 3_000_000;
+  let received = 0;
+  accepting.on('connection', (connection: Connection) => connection.on('stream', (stream: RecvStream) => stream.on('data', (data: Uint8Array) => { received += data.length; })));
+  const connection = dialing.connect(Buffer.from(server.transportKey, 'base64url'), clientLink.address);
+  await vi.waitFor(() => expect(connection.established).toBe(true), { timeout: 5_000 });
+  const stream = connection.openStream('normal');
+  const before = hooks.eventLoopUtilization();
+  stream.write(new Uint8Array(total));
+  await vi.waitFor(() => expect(received).toBeGreaterThanOrEqual(total), { timeout: 20_000, interval: 50 });
+  const busy = hooks.eventLoopUtilization(before).utilization;
+  // 2026-11-22 Linux container, Node 22: 0.47 before the fix, 0.11 after; Windows was already 0.1 (its timer is coarse, the core decided).
+  expect(busy).toBeLessThan(0.3);
+}, 30_000);
 /** 测试价值（Node 驱动收回交完的流）
  * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
  *   都交给核心的流，以及放弃了的流，不再留在连接的表里；进度和缓冲照样按流号问核心。
