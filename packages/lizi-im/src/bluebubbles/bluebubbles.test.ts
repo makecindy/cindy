@@ -1018,8 +1018,8 @@ describe('BlueBubbles local ingress', () => {
     await f.im.reconcile();
     // The note says how to reach the original (2026-11-22: the model had only a file name).
     expect(f.received.map(event => [event.text, event.unsupported])).toEqual([
-      ['missing-size', [{ type: 'oversize', label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=missing-size，attachment_guid=missing-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
-      ['zero-size', [{ type: 'oversize', label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=zero-size，attachment_guid=zero-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
+      ['missing-size', [{ type: 'oversize', retrievable: true, label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=missing-size，attachment_guid=missing-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
+      ['zero-size', [{ type: 'oversize', retrievable: true, label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=zero-size，attachment_guid=zero-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
     ]);
     expect(f.state().inbox['missing-size'].state).toBe('accepted');
     expect(f.state().inbox['zero-size'].state).toBe('accepted');
@@ -1047,7 +1047,7 @@ describe('BlueBubbles local ingress', () => {
     expect(download).toHaveBeenCalledTimes(3);
     const event = f.received.find(item => item.messageId === 'photo')!;
     expect(event.attachments).toHaveLength(1);
-    expect(event.unsupported).toEqual([{ type: 'preview', label:
+    expect(event.unsupported).toEqual([{ type: 'preview', retrievable: true, label:
       'IMG_0106.jpeg（本轮附件只有 103 KB，原件 873 KB；message_id=photo，attachment_guid=img-1；可用 cindy_imessage.fetch_attachment 取原件）' }]);
     expect(cacheImage.mock.calls[0][0].token).toMatch(/:img-1:preview$/);
 
@@ -1074,6 +1074,11 @@ describe('BlueBubbles local ingress', () => {
       const dest = path.join(root, 'clip.mov');
       await expect(api.downloadToFile('g', dest)).resolves.toBe(7);
       expect((await fs.stat(dest)).size).toBe(7);
+      // Review (#12146): two concurrent downloads of one original each write their own temporary file.
+      const both = await Promise.all([api.downloadToFile('g', path.join(root, 'twice.mov')), api.downloadToFile('g', path.join(root, 'twice.mov'))]);
+      expect(both).toEqual([7, 7]);
+      expect((await fs.stat(path.join(root, 'twice.mov'))).size).toBe(7);
+      await fs.rm(path.join(root, 'twice.mov'));
       const capped = path.join(root, 'capped.mov');
       await expect(api.downloadToFile('g', capped, 5)).rejects.toThrow('BLUEBUBBLES_RESPONSE_TOO_LARGE');
       expect(await fs.readdir(root)).toEqual(['clip.mov']);

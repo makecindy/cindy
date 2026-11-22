@@ -905,7 +905,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       for (const attachment of message.attachments ?? []) {
         const name = attachment.transferName || attachment.guid;
-        const oversize = () => event.unsupported.push({ type: 'oversize', label:
+        const oversize = () => event.unsupported.push({ type: 'oversize', retrievable: true, label:
           `${name}（${attachment.totalBytes ? formatBytes(attachment.totalBytes) : '超过 64 MB'}，超过直接读取上限；${originalPointer(guid, attachment.guid)}）` });
         if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { oversize(); continue; }
         let bytes: Uint8Array;
@@ -915,6 +915,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           for (let attempt = 0; attempt < 2 && isShortCopy(attachment, bytes); attempt++) {
             await new Promise(resolve => setTimeout(resolve, this.shortCopyRetryMs));
             this.assertLive(generation);
+            if (this.cancelledEvents.has(event)) return;
             bytes = await api.download(attachment.guid);
           }
         } catch (error) {
@@ -925,7 +926,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         }
         this.assertLive(generation);
         if (isShortCopy(attachment, bytes)) {
-          event.unsupported.push({ type: 'preview', label:
+          event.unsupported.push({ type: 'preview', retrievable: true, label:
             `${name}（本轮附件只有 ${formatBytes(bytes.byteLength)}，原件 ${formatBytes(attachment.totalBytes!)}；${originalPointer(guid, attachment.guid)}）` });
         }
         if (this.cancelledEvents.has(event)) return;

@@ -1,6 +1,7 @@
 /** BlueBubbles REST transport. Credentials never leave the configured origin. */
 import { createWriteStream } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 export interface BlueBubblesAttachment {
@@ -151,7 +152,8 @@ export class BlueBubblesApi {
   async downloadToFile(guid: string, dest: string, limit = BLUEBUBBLES_ORIGINAL_MAX_BYTES, timeoutMs = 15 * 60_000): Promise<number> {
     const url = new URL(`/api/v1/attachment/${encodeURIComponent(guid)}/download?original=true`, this.origin);
     url.searchParams.set('password', this.password);
-    const partial = `${dest}.${process.pid}.partial`;
+    // Each download writes its own file; concurrent downloads of one original never share it.
+    const partial = `${dest}.${randomUUID()}.partial`;
     let size = 0;
     try {
       const response = await this.fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
