@@ -170,6 +170,8 @@ it("preserves original exports ahead of previews and copies temporary URLs withi
   expect(result.stdout).toContain("PASS: unnamed abstract image bytes preserve concrete extensions and MIME");
   expect(result.stdout).toContain("PASS: temporary file URL copied inside provider callback");
   expect(result.stdout).toContain("PASS: unreadable provider file URLs fall back to their file representation");
+  expect(result.stdout).toContain("PASS: recovered HEIC/TIFF/BMP and extensionless images keep image classification");
+  expect(result.stdout).toContain("PASS: byte refetch keeps filename, bytes and type after a copy failure");
   expect(result.stdout).toContain("PASS: string file paths keep their original filename and bytes");
   expect(result.stdout).toContain("PASS: durable exact-snapshot rejection, retry and replacement");
 }, 180_000);

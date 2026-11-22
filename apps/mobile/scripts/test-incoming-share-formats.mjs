@@ -28,6 +28,12 @@ final class EphemeralProvider: NSItemProvider {
     Thread.current.threadDictionary.removeObject(forKey: "owning-provider-callback")
     try? FileManager.default.removeItem(at: url)
   }
+  // An ephemeral provider has no file representation. Fail fast instead of
+  // leaking a continuation if a broken copy path falls through to it.
+  override func loadFileRepresentation(forTypeIdentifier identifier: String, completionHandler: @escaping (URL?, Error?) -> Void) -> Progress {
+    completionHandler(nil, CocoaError(.fileReadUnsupportedScheme))
+    return Progress(totalUnitCount: 0)
+  }
 }
 // A modern provider can vend bytes without implementing legacy loadItem
 // or supplying a temporary file for loadFileRepresentation.
@@ -40,13 +46,32 @@ final class BytesProvider: NSItemProvider {
     return Progress(totalUnitCount: 0)
   }
 }
+// A host that advertises a file URL it never grants read access to, but still
+// hands over an owned copy through loadFileRepresentation. loadItem must stay
+// unreadable, otherwise the test silently exercises the direct-URL path.
+final class UnreadableURLProvider: NSItemProvider {
+  var unavailable: URL!
+  var copy: URL!
+  override func loadItem(forTypeIdentifier identifier: String, options: [AnyHashable: Any]? = nil, completionHandler: NSItemProvider.CompletionHandler? = nil) {
+    completionHandler?(unavailable as NSURL, nil)
+  }
+  override func loadFileRepresentation(forTypeIdentifier identifier: String, completionHandler: @escaping (URL?, Error?) -> Void) -> Progress {
+    completionHandler(copy, nil)
+    return Progress(totalUnitCount: 0)
+  }
+}
 enum ShareType { case text, url, image, video, audio, file }
 struct SharePayload { let type: ShareType; let value: String; let mimeType: String?; let metadata: String? }
 final class Adapter {
   var requireProviderCallback = false
+  // A provider-owned URL can omit resource values: the ordinary copy fails
+  // even though its bytes are still readable. This switch exercises the
+  // byte-refetch success branch without making the bytes unreadable too.
+  var simulateCopyFailure = false
   func parse(_ provider: NSItemProvider) async -> SharePayload? { await parseProvider(provider) }
   func copyAndProcessFile(url: URL, type: ShareType) -> SharePayload? {
     precondition(!requireProviderCallback || Thread.current.threadDictionary["owning-provider-callback"] as? Bool == true, "URL escaped provider callback")
+    if simulateCopyFailure { return nil }
     guard url.isFileURL, let bytes = try? Data(contentsOf: url) else { return nil }
     return saveDataToAppGroup(data: bytes, fileName: url.lastPathComponent, type: type, mimeType: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType)
   }
@@ -299,24 +324,70 @@ final class Adapter {
     if selected != "provider-owned-url" {
       // A host may advertise a file URL it never grants read access to while its
       // file representation still hands over an owned copy inside the callback.
-      let bytes = Data("spreadsheet bytes".utf8)
-      let unavailable = root.appendingPathComponent("closed-container/missing.xlsx")
-      let copy = root.appendingPathComponent("季度报表.xlsx")
-      try! bytes.write(to: copy)
-      let provider = NSItemProvider()
-      provider.suggestedName = "季度报表.xlsx"
-      provider.registerItem(forTypeIdentifier: UTType.fileURL.identifier, loadHandler: { completion, _, _ in
-        completion?(unavailable as NSURL, nil)
-      })
-      provider.registerFileRepresentation(forTypeIdentifier: UTType.fileURL.identifier, fileOptions: [], visibility: .all) { completion in
-        completion(copy, false, nil); return nil
+      // The copy's own name/header decides its type, so a recovered HEIC/TIFF/BMP
+      // or extensionless image still reaches the same conversion as a readable one.
+      // 测试价值
+      // - 生产入口与可观察结果：parseProvider 的 file-URL 回退 → copyShareFile；
+      //   分享消费者看到 .image 负载、原文件名与原字节，而不是被当成普通文件。
+      // - Bug／规则依据：评审 thread PRRT_kwDOTgdRUs64TGjL（恢复的图片跳过转换）。
+      // - 现有覆盖缺口：原用例只有 xlsx，回退路径固定 .file，图片格式从未走过分类。
+      // - 最小失败输入：不可读 file URL + 返回 photo.heic 的 file representation；
+      //   修复前得到 .file。tier：unit（适配器真实 NSItemProvider/UTType 行为）。
+      // - 实测耗时：整份 Swift harness 约 5.4s（含两次 swiftc 编译，未新增文件）。
+      for (name, bytes, expected) in [("季度报表.xlsx", Data("spreadsheet bytes".utf8), ShareType.file),
+                                      ("photo.heic", png, ShareType.image),
+                                      ("scan.tiff", png, ShareType.image),
+                                      ("bitmap.bmp", png, ShareType.image),
+                                      ("extensionless-image", png, ShareType.image)] {
+        let unavailable = root.appendingPathComponent("closed-container/missing-" + name)
+        let copy = root.appendingPathComponent(name)
+        try! bytes.write(to: copy)
+        let provider = UnreadableURLProvider()
+        provider.unavailable = unavailable
+        provider.copy = copy
+        provider.suggestedName = name
+        provider.registerItem(forTypeIdentifier: UTType.fileURL.identifier, loadHandler: { _, _, _ in })
+        adapter.requireProviderCallback = false
+        guard let payload = await adapter.parse(provider), payload.type == expected,
+              let result = URL(string: payload.value) else { fatalError("Unreadable provider URL lost " + name) }
+        precondition(result.lastPathComponent == name, "Recovered copy lost its filename: " + name)
+        precondition(try! Data(contentsOf: result) == bytes, "Recovered copy lost its bytes: " + name)
+        try! FileManager.default.removeItem(at: copy)
       }
-      adapter.requireProviderCallback = false
-      guard let payload = await adapter.parse(provider), payload.type == .file,
-            let result = URL(string: payload.value) else { fatalError("Unreadable provider URL was not recovered") }
-      precondition(result.lastPathComponent == "季度报表.xlsx")
-      precondition(try! Data(contentsOf: result) == bytes)
       print("PASS: unreadable provider file URLs fall back to their file representation")
+      print("PASS: recovered HEIC/TIFF/BMP and extensionless images keep image classification")
+    }
+    if selected != "byte-refetch" {
+      // A provider-owned URL can omit resource values: the ordinary copy fails
+      // while its bytes remain readable. Simulate only the copy failure so the
+      // byte-refetch success branch must produce the attachment itself.
+      // 测试价值
+      // - 生产入口与可观察结果：copyShareFile 的按字节重取分支；消费者看到
+      //   原文件名、原字节与按 URL 判定的类型。
+      // - Bug／规则依据：评审 thread PRRT_kwDOTgdRUs64TGjQ（重取成功路径未覆盖）。
+      // - 现有覆盖缺口：替身只在 Data(contentsOf:) 失败时返回 nil，生产代码
+      //   再读同一 URL 必失败，重取分支即使被删掉测试也照样通过。
+      // - 最小失败输入：simulateCopyFailure = true 的可读临时文件；删除重取
+      //   分支或改坏文件名/字节即失败。tier：unit（同上 harness）。
+      for (name, bytes, expected) in [("refetch.xlsx", Data("byte refetch bytes".utf8), ShareType.file),
+                                      ("refetch.heic", png, ShareType.image),
+                                      ("extensionless-refetch", png, ShareType.image)] {
+        let url = root.appendingPathComponent(name)
+        try! bytes.write(to: url)
+        let provider = EphemeralProvider()
+        provider.url = url
+        provider.registerItem(forTypeIdentifier: UTType.fileURL.identifier, loadHandler: { _, _, _ in })
+        adapter.requireProviderCallback = true
+        adapter.simulateCopyFailure = true
+        guard let payload = await adapter.parse(provider), payload.type == expected,
+              let result = URL(string: payload.value) else { fatalError("Byte refetch lost " + name) }
+        adapter.simulateCopyFailure = false
+        adapter.requireProviderCallback = false
+        precondition(result.lastPathComponent == name, "Byte refetch lost the filename: " + name)
+        precondition(try! Data(contentsOf: result) == bytes, "Byte refetch lost the bytes: " + name)
+        precondition(!FileManager.default.fileExists(atPath: url.path), "Byte refetch escaped the provider callback")
+      }
+      print("PASS: byte refetch keeps filename, bytes and type after a copy failure")
     }
     if selected != "provider-string-path" {
       // Some hosts export the file URL as a bare path string instead of NSURL.

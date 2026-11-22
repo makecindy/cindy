@@ -16,7 +16,7 @@
       // Some hosts expose a URL they never grant read access to. A file representation
       // still hands over an owned copy inside the callback, so retry there before
       // failing the whole share.
-      if let file = await loadFileRepresentation(provider, identifier: UTType.fileURL.identifier, kind: .file) { return file }
+      if let file = await loadFileRepresentation(provider, identifier: UTType.fileURL.identifier) { return file }
       shareDiagnostic("file URL unreadable", provider)
     }
     let formats: [(UTType, ShareType)] = [(.movie, .video), (.audio, .audio), (.directory, .file)]
@@ -88,11 +88,15 @@
     }
   }
 
-  private func loadFileRepresentation(_ provider: NSItemProvider, identifier: String, kind: ShareType) async -> SharePayload? {
+  private func loadFileRepresentation(_ provider: NSItemProvider, identifier: String) async -> SharePayload? {
     await withCheckedContinuation { continuation in
       provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, error in
         if let error { self.shareDiagnostic("file representation failed: \(error.localizedDescription)", provider) }
-        continuation.resume(returning: url.flatMap { self.copyShareFile(url: $0, type: kind) })
+        // The host may recover an image (HEIC/TIFF/BMP or an extensionless
+        // original) whose type cannot come from the unreadable source URL.
+        // Classify the copy we actually receive so both copy paths keep the
+        // conversion a readable image URL would have received.
+        continuation.resume(returning: url.flatMap { self.copyShareFile(url: $0, type: self.fileShareType($0)) })
       }
     }
   }
