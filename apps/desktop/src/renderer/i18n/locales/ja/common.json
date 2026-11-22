@@ -21473,6 +21473,9 @@
     "actionFailed": "プラグインの操作を完了できませんでした。もう一度お試しください。"
   },
   "mcpApps": {
+    "composerDragFailed": "添付できませんでした。もう一度ドラッグするか、「入力欄に追加」を選んでください。",
+    "composerAttachmentFormat": "画像、PDF、プレーンテキストに対応しています。1 件あたり最大 64 MiB です。",
+    "composerAttachmentBusy": "しばらく待ってから添付してください。",
     "sharedTaskReadOnly": "このカードを操作できるのはセッションのオーナーだけです。",
     "retry": "再読み込み",
     "loadFailed": "アプリを読み込めませんでした。接続を確認して再読み込みしてください。",

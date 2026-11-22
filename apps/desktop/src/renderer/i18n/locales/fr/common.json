@@ -21758,6 +21758,9 @@
     "actionFailed": "Cette action du plugin n’a pas pu être effectuée. Réessayez."
   },
   "mcpApps": {
+    "composerDragFailed": "Impossible d’ajouter la pièce jointe. Faites-la glisser à nouveau ou sélectionnez « Ajouter à la zone de saisie ».",
+    "composerAttachmentFormat": "Utilisez une image, un PDF ou un fichier texte de 64 Mio maximum.",
+    "composerAttachmentBusy": "Patientez un instant avant d’ajouter une autre pièce jointe.",
     "sharedTaskReadOnly": "Seul le propriétaire de la session peut interagir avec cette carte.",
     "retry": "Recharger",
     "loadFailed": "Impossible de charger l'application. Vérifiez la connexion et rechargez.",

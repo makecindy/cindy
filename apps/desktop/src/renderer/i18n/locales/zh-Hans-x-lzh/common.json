@@ -21473,6 +21473,9 @@
     "actionFailed": "此法器操作未成，请重试。"
   },
   "mcpApps": {
+    "composerDragFailed": "附件未入，请再拖之，或按「加到输入框」。",
+    "composerAttachmentFormat": "可纳图、PDF 及纯文，每件以 64 MiB 为限。",
+    "composerAttachmentBusy": "请稍候再添附件。",
     "sharedTaskReadOnly": "此卡唯差事之主可操作。",
     "retry": "重载",
     "loadFailed": "应用程序加载未成。请察连接后重载。",

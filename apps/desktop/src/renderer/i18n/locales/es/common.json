@@ -21758,6 +21758,9 @@
     "actionFailed": "No se pudo completar la acción del complemento. Vuelve a intentarlo."
   },
   "mcpApps": {
+    "composerDragFailed": "No se pudo añadir el archivo adjunto. Arrástralo de nuevo o selecciona «Añadir al cuadro de texto».",
+    "composerAttachmentFormat": "Usa una imagen, un PDF o un archivo de texto sin formato de hasta 64 MiB.",
+    "composerAttachmentBusy": "Espera un momento antes de añadir otro archivo adjunto.",
     "sharedTaskReadOnly": "Solo el propietario de la sesión puede interactuar con esta tarjeta.",
     "retry": "Recargar",
     "loadFailed": "La aplicación no se pudo cargar. Comprueba la conexión y vuelve a cargarla.",

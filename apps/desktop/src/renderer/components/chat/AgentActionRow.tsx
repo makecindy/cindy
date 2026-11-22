@@ -1199,7 +1199,7 @@ export function AgentActionRow({
           v11 (2026-04-20):背景色 + 边框对齐"用户输入气泡"
           (`--msg-user-bg` + `--msg-user-border`),与 hover 嵌入式 inline-code
           灰区分开,把就地展开视觉上提升为一个独立"卡片"。 */}
-      {renderPluginUiBody(pluginUi.toolBody ? { position: 'tool.body', sessionId: fileCtx.sessionId, tool: toolName,
+      {renderPluginUiBody(pluginUi.toolBody ? { position: 'tool.body', sessionId: fileCtx.sessionId, clientId: message.clientId, tool: toolName,
         disabled: isRemoteFileOrigin(fileCtx.origin), plugin: message.sourcePlugin?.pluginId,
         context: () => ({ tool: { clientId: message.clientId, name: toolName, input: message.toolInput, result: toolResult, status } }) } : undefined,
       isInlineExpand && expanded && (

@@ -21560,6 +21560,9 @@
     "actionFailed": "Die Plugin-Aktion konnte nicht abgeschlossen werden. Versuche es erneut."
   },
   "mcpApps": {
+    "composerDragFailed": "Der Anhang konnte nicht hinzugefügt werden. Ziehe ihn erneut oder wähle „Zum Eingabefeld hinzufügen“.",
+    "composerAttachmentFormat": "Bilder, PDF- und reine Textdateien dürfen bis zu 64 MiB groß sein.",
+    "composerAttachmentBusy": "Bitte warte kurz, bevor du einen weiteren Anhang hinzufügst.",
     "sharedTaskReadOnly": "Nur der Besitzer der Sitzung kann mit dieser Karte interagieren.",
     "retry": "Neu laden",
     "loadFailed": "Die App konnte nicht geladen werden. Prüfe die Verbindung und lade sie neu.",
