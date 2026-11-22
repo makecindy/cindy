@@ -18,44 +18,52 @@ export function teammateRuntimeInstructionItem(instructions: string) {
   };
 }
 
-function tailHasCurrentInstructions(tail: string, marker: string, truncated: boolean): boolean {
+/** 'current' / 'stale' (a later compaction or another generation) / 'unknown' (nothing in the window). */
+function tailInstructionState(tail: string, marker: string, truncated: boolean): 'current' | 'stale' | 'unknown' {
   const lines = tail.split('\n');
   if (truncated) lines.shift();
   for (let i = lines.length - 1; i >= 0; i--) {
     let row;
     try { row = JSON.parse(lines[i]); } catch { continue; }
-    if (row?.type === 'compacted') return false;
+    if (row?.type === 'compacted') return 'stale';
     if (row?.type !== 'response_item' || row.payload?.role !== 'developer') continue;
     if (!Array.isArray(row.payload.content)) continue;
     const text = row.payload.content.map((part: { text?: string } | null) =>
       typeof part?.text === 'string' ? part.text : '').join('\n');
-    if (text.startsWith(PREFIX)) return text.startsWith(`${marker}\n`);
+    if (text.startsWith(PREFIX)) return text.startsWith(`${marker}\n`) ? 'current' : 'stale';
   }
-  return false;
+  return 'unknown';
 }
 
 /** Bounded dedupe only. A missing/compacted/unreadable marker means re-deliver, never skip the guide.
  * Passing a remote reader (even without tail support) never falls through to the local filesystem.
+ * `delivered` is the marker this process itself put into the thread (thread/start or injection); it
+ * only answers when the bounded tail shows neither the marker nor a compaction, because one image
+ * result is megabytes and a long thread pushes its marker out of the window on every resume.
  */
 export async function hasCurrentTeammateInstructions(
   rolloutPath: string | undefined,
   marker: string,
   remote?: Pick<RemoteAgentFileOps, 'readFileTail'>,
+  delivered?: string,
 ): Promise<boolean> {
   if (!rolloutPath) return false;
   let file;
   try {
+    let state: 'current' | 'stale' | 'unknown';
     if (remote) {
       if (!remote.readFileTail) return false;
       const tail = await remote.readFileTail(rolloutPath, TAIL_BYTES);
-      return tailHasCurrentInstructions(tail, marker, Buffer.byteLength(tail, 'utf8') >= TAIL_BYTES);
+      state = tailInstructionState(tail, marker, Buffer.byteLength(tail, 'utf8') >= TAIL_BYTES);
+    } else {
+      file = await open(rolloutPath, 'r');
+      const { size } = await file.stat();
+      const start = Math.max(0, size - TAIL_BYTES);
+      const bytes = Buffer.alloc(size - start);
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, start);
+      state = tailInstructionState(bytes.subarray(0, bytesRead).toString('utf8'), marker, start > 0);
     }
-    file = await open(rolloutPath, 'r');
-    const { size } = await file.stat();
-    const start = Math.max(0, size - TAIL_BYTES);
-    const bytes = Buffer.alloc(size - start);
-    const { bytesRead } = await file.read(bytes, 0, bytes.length, start);
-    return tailHasCurrentInstructions(bytes.subarray(0, bytesRead).toString('utf8'), marker, start > 0);
+    return state === 'current' || (state === 'unknown' && delivered === marker);
   } catch {
     return false;
   } finally {

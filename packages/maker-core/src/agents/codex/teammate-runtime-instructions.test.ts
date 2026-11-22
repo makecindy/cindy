@@ -58,3 +58,19 @@ it('never uses local history for a missing, incompatible or failed remote reader
   expect(await hasCurrentTeammateInstructions(file, marker, {})).toBe(false);
   expect(await hasCurrentTeammateInstructions(file, marker, { readFileTail: async () => { throw new Error('SSH disconnected'); } })).toBe(false);
 });
+
+// Regression (2026-11-22): one image result is megabytes, so a long teammate thread pushed its marker out of
+// the bounded tail and every resume appended the ~17k-character block again. What this process delivered
+// answers only when the tail shows nothing; a compaction or another generation in the tail still re-delivers.
+it('trusts this process\'s own delivery only when the bounded tail is inconclusive', async () => {
+  const marker = teammateRuntimeInstructionItem('BASELINE').marker;
+  const filler = JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ text: 'x'.repeat(300000) }] } }) + '\n';
+  await writeFile(file, entry('BASELINE') + filler);
+  expect(await hasCurrentTeammateInstructions(file, marker)).toBe(false);
+  expect(await hasCurrentTeammateInstructions(file, marker, undefined, marker)).toBe(true);
+  expect(await hasCurrentTeammateInstructions(file, teammateRuntimeInstructionItem('CHANGED').marker, undefined, marker)).toBe(false);
+  await writeFile(file, entry('BASELINE') + filler + JSON.stringify({ type: 'compacted', payload: { message: 'summary' } }) + '\n');
+  expect(await hasCurrentTeammateInstructions(file, marker, undefined, marker)).toBe(false);
+  await writeFile(file, entry('OTHER'));
+  expect(await hasCurrentTeammateInstructions(file, marker, undefined, marker)).toBe(false);
+});

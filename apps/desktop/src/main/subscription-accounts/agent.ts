@@ -31,7 +31,7 @@ import {
   accountProviderId,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
-import { registerSessionSubscriptionAccount } from './session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from './session.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
 interface SubscriptionRouteOptions {
@@ -480,6 +480,17 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               lastFailure = failure;
             }
           }
+        };
+      if (property === 'requiresCodexThreadHostTransfer')
+        return async (options: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0]) => {
+          // The live session's host carries the subscription account it runs on. When the target
+          // route stays on that account, compare against that same host instead of mistaking it for
+          // another writer of the thread (which closed and relinked unchanged sessions).
+          const account = getSessionSubscriptionAccount(options.sessionId);
+          const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
+          const sameAccount = account && ref && (ref.providerId === ref.kind || ref.ownAccount === account.id);
+          return target.requiresCodexThreadHostTransfer(sameAccount
+            ? { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : options);
         };
       if (property === 'forkSdkSession')
         return async (options: ForkSdkSessionOptions) => {

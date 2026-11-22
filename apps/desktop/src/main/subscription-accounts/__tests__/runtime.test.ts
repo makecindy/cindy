@@ -275,7 +275,7 @@ import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/cod
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
-import { getSessionSubscriptionAccount } from '../session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from '../session.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
 import { getActiveCatalogWithCodexModels } from '../../maker-host/active-catalog.js';
 import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
@@ -2408,6 +2408,30 @@ describe('tasks using imported Codex connections', () => {
     h.pools.openai.accounts = [account('default')];
     await expect(agent.startSession({ providerId: 'openai-old', sessionId: 'old-task' } as StartSessionOptions)).rejects.toThrow();
     expect(start).toHaveBeenCalledOnce();
+  });
+
+  // Regression (2026-11-22): the writer check must compare against the host the session actually runs on,
+  // which carries its subscription account; a route onto another account still compares without it.
+  it('checks the thread writer host with the account the session runs on, only for that account', async () => {
+    h.pools.openai = {
+      strategy: 'round', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = { id: 'imported', configDir: 'openai/imported', assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      h.pools.openai.legacyCodexAccounts = { 'openai-old': 'default' };
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[2][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'other', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[3][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
   });
 
   it('forks old history through the same imported account and reconnects through its old login', async () => {
