@@ -465,6 +465,35 @@ it('stops waiting for a stalled attribution read, pauses the host, and does not 
   } finally { vi.useRealTimers(); }
 });
 
+// Unit, same rule: an older host pushes a delegation change and the forced re-read stops at A's
+// timeout. B was skipped though its cached mark may be stale; the next ordinary refresh after the
+// host pause must still read it. Minimal input: A, B known; A's second read never answers.
+it('keeps teammates skipped by a timed-out forced re-read unconfirmed for the next refresh', async () => {
+  h.devices = [host('a')];
+  let aReads = 0;
+  let bReads = 0;
+  h.invoke.mockImplementation((_device, channel, args) => {
+    if (channel === REMOTE_RESOURCE_LIST_CHANNEL) return Promise.resolve(teammatesAB());
+    if (args[0] === 'canonical') return ++aReads === 2 ? new Promise(() => {}) : Promise.resolve(createdBy('canonical'));
+    return Promise.resolve(++bReads === 1 ? createdBy('second') : { ok: true, delegations: [
+      { requestingBotId: 'second-bot', childSessionId: 'second-new' }] });
+  });
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([['canonical-child'], ['second-child']]);
+    act(() => h.push({ deviceId: 'a', channel: 'maker:bot-delegation:changed' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_500); });
+    expect(taskTargets()).toEqual(['canonical', 'second', 'canonical']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(taskTargets()).toEqual(['canonical', 'second', 'canonical', 'second']);
+    expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([['canonical-child'], ['second-new']]);
+  } finally { vi.useRealTimers(); }
+});
+
 it('cannot restore old attribution when a pending task-card read completes after switching accounts', async () => {
   h.devices = [host('a')];
   let finish!: (value: unknown) => void;

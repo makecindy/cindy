@@ -199,7 +199,15 @@ export function useRemoteBotSync(): void {
             delegationRetryAt.set(retryKey, Date.now() + DELEGATION_RETRY_MS);
             // The host still holds that request until its invoke budget ends: do not queue the next
             // teammate behind it. Later rounds read the others before retrying this one.
-            if (error === DELEGATION_READ_TIMEOUT) { delegationRetryAt.set(deviceId, Date.now() + DELEGATION_HOST_PAUSE_MS); break; }
+            if (error === DELEGATION_READ_TIMEOUT) {
+              delegationRetryAt.set(deviceId, Date.now() + DELEGATION_HOST_PAUSE_MS);
+              // A forced re-read cut short: the teammates it skipped stay unconfirmed, so an ordinary
+              // refresh after the pause still reads them instead of trusting their cached marks.
+              if (refreshTasks) for (const rest of readOrder.slice(readOrder.indexOf(bot) + 1)) {
+                if (rest.sessionId && !delegationRetryAt.has(retryKeyOf(rest))) delegationRetryAt.set(retryKeyOf(rest), 0);
+              }
+              break;
+            }
           }
         }
         if (current() && generations.get(deviceId) === epoch) taskRefreshes.delete(deviceId);
