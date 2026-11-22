@@ -13335,7 +13335,8 @@
           "subject": {
             "githubIssue": "La tarjeta de confirmación “Enviar incidencia de GitHub”",
             "renameSessions": "La tarjeta de confirmación “Renombrar tareas en lote”",
-            "pluginFileGrant": "La tarjeta de confirmación “Autorizar archivos del complemento”"
+            "pluginFileGrant": "La tarjeta de confirmación “Autorizar archivos del complemento”",
+            "mediaPathReveal": "La tarjeta de confirmación “Permitir que el Agent obtenga la ubicación de un archivo multimedia en la computadora”"
           }
         },
         "replyWords": {

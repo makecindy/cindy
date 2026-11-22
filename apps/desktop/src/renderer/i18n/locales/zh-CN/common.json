@@ -13171,7 +13171,8 @@
           "subject": {
             "githubIssue": "「提交 GitHub Issue」的确认卡",
             "renameSessions": "「批量重命名任务」的确认卡",
-            "pluginFileGrant": "「插件文件授权」的确认卡"
+            "pluginFileGrant": "「插件文件授权」的确认卡",
+            "mediaPathReveal": "「让 Agent 获取图片等媒体文件在电脑上的位置」的确认卡"
           }
         },
         "replyWords": {

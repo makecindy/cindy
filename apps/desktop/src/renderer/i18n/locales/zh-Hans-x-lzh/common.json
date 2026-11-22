@@ -13171,7 +13171,8 @@
           "subject": {
             "githubIssue": "「呈 GitHub Issue」之确认卡",
             "renameSessions": "「批次易差事之名」之确认卡",
-            "pluginFileGrant": "「法器卷帙授权」之确认卡"
+            "pluginFileGrant": "「法器卷帙授权」之确认卡",
+            "mediaPathReveal": "「许 Agent 知图等媒体卷于机上之所在」之确认卡"
           }
         },
         "replyWords": {

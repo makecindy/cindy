@@ -388,7 +388,7 @@ import {
   type GhostGrantConfirmInteractionSnapshot,
 } from '../cindy-brain/ghostGrantConfirmBridge.js';
 import { createFeishuDesktopConfirmNotifier } from '../im/desktopConfirmNoticeWiring.js';
-import { buildInputHandoffNoticeText, desktopConfirmSubject } from '../im/desktopConfirmNotice.js';
+import { buildInputHandoffNoticeText, desktopConfirmSubject, ghostGrantConfirmSubject } from '../im/desktopConfirmNotice.js';
 import { sendInputHandoffChannelNotice, notifyInputHandoffOnce, forgetInputHandoffNotice } from '../im/shared/inputHandoffChannelNotice.js';
 import { bindingStore } from '../im/binding.js';
 import { isHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
@@ -3536,8 +3536,8 @@ export async function confirmTaskAction(
 const ghostGrantConfirmBridge = initGhostGrantConfirmBridge({
   broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
   logger: log,
-  onDesktopOnlyConfirmPending: (sessionId) =>
-    desktopConfirmImNotifier(sessionId, desktopConfirmSubject('pluginFileGrant')),
+  onDesktopOnlyConfirmPending: (sessionId, lane) =>
+    desktopConfirmImNotifier(sessionId, desktopConfirmSubject(ghostGrantConfirmSubject(lane))),
 });
 
 const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({

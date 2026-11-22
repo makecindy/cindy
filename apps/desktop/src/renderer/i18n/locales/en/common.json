@@ -13224,7 +13224,8 @@
           "subject": {
             "githubIssue": "The “Submit GitHub Issue” confirmation card",
             "renameSessions": "The “Rename tasks in bulk” confirmation card",
-            "pluginFileGrant": "The “Plugin file access” confirmation card"
+            "pluginFileGrant": "The “Plugin file access” confirmation card",
+            "mediaPathReveal": "The “Let the Agent get a media file’s location on the computer” confirmation card"
           }
         },
         "replyWords": {

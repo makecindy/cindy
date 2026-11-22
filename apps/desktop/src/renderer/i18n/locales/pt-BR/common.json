@@ -13335,7 +13335,8 @@
           "subject": {
             "githubIssue": "O cartão de confirmação “Enviar Issue do GitHub”",
             "renameSessions": "O cartão de confirmação “Renomear tarefas em lote”",
-            "pluginFileGrant": "O cartão de confirmação “Autorização de arquivos do plugin”"
+            "pluginFileGrant": "O cartão de confirmação “Autorização de arquivos do plugin”",
+            "mediaPathReveal": "O cartão de confirmação “Permitir que o Agent obtenha o local de um arquivo de mídia no computador”"
           }
         },
         "replyWords": {

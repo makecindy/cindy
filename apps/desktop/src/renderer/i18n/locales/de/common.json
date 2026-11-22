@@ -13224,7 +13224,8 @@
           "subject": {
             "githubIssue": "Die Bestätigungskarte „GitHub-Issue einreichen“",
             "renameSessions": "Die Bestätigungskarte „Mehrere Sitzungen umbenennen“",
-            "pluginFileGrant": "Die Bestätigungskarte „Plugin-Dateizugriff erlauben“"
+            "pluginFileGrant": "Die Bestätigungskarte „Plugin-Dateizugriff erlauben“",
+            "mediaPathReveal": "Die Bestätigungskarte „Agent den Speicherort einer Mediendatei auf dem Computer mitteilen“"
           }
         },
         "replyWords": {
