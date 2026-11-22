@@ -96,6 +96,7 @@ let activeAuthRealm = 'global', pendingAuthRealm = null, loginFlowState = null;
 let pendingAccountToken = null, pendingAccountRefreshToken = null, pendingAccountMemberships = [];
 let accountDeletionRestoredNoticePending = false, confirmedAccountDeletionCredential = null;
 let coldStartAuthInFlight = null, coldStartRetryWait = null, refreshTimer = null;
+let enterpriseGuestSignIn = null;
 let coldStartRecoveryStopped = false, coldStartRetryState = null;
 let lastAcceptedRefreshToken = null, persistedRefreshTokenNeedsIdentityCheck = false;
 let foreignDeviceLocalSignOut = false;
@@ -208,7 +209,12 @@ function setup(random = 0) {
   const deps = {
     // Exercise the Linux cold-start path on every test host, with no enrollment on disk.
     process: { platform: 'linux', env: {} },
-    readCloudGuest: vi.fn(async () => null),
+    deviceId: 'test-device',
+    readCloudGuest: vi.fn<() => Promise<object | null>>(async () => null),
+    cloudGuestSaved: vi.fn(async () => false),
+    cloudGuestAuthorization: vi.fn<() => Promise<{ code: string; verifier: string }>>(),
+    isAtomicPersistedSecretAbsent: () => true,
+    writeAtomicSafe: () => true,
     confirmCloudGuestWhenOnline: vi.fn(),
     getAccessToken: () => null,
     saved,
@@ -311,6 +317,24 @@ describe('saved login recovery after startup network failure', () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  // Standard tier: a pending enrollment used to hold the launch screen until the guest retry deadline.
+  it('unlocks the startup screen while one guest enrollment continues and discards a superseded grant', async () => {
+    const h = setup();
+    h.saved.session = null;
+    h.deps.readCloudGuest.mockResolvedValue({ requestId: 'pilot-order' });
+    let grant!: (value: { code: string; verifier: string }) => void;
+    h.deps.cloudGuestAuthorization.mockImplementation(() => new Promise((resolve) => { grant = resolve; }));
+    const onColdStartPending = vi.fn<(completion: Promise<unknown>) => void>();
+    const startup = h.start({ onColdStartPending });
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(startup).resolves.toMatchObject({ isAuthenticated: false });
+    expect(h.deps.cloudGuestAuthorization).toHaveBeenCalledTimes(1);
+    expect(onColdStartPending).toHaveBeenCalledTimes(1);
+    h.cancelRecovery();
+    grant({ code: 'test-code', verifier: 'test-verifier' });
+    await expect(onColdStartPending.mock.calls[0][0]).resolves.toMatchObject({ isAuthenticated: false });
   });
 
   it('keeps slowly retrying beyond three failures and restores the original account after the startup fallback', async () => {

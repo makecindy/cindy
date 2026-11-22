@@ -65,14 +65,15 @@ export async function cloudGuestSaved(guest) {
     throw error;
   }
 }
-export async function markCloudGuestSaved(guest) {
+const verifierKey = (guest) => "cloud-guest-pkce-" + guest.requestId;
+
+export async function markCloudGuestSaved(guest, store) {
   await mkdir(dirFor(guest), { recursive: true, mode: 0o700 });
   await writeFile(marker(guest, "signed-in"), guest.membershipId, {
     mode: 0o600,
   });
-  await unlink(marker(guest, "pkce")).catch((error) => {
-    if (error.code !== "ENOENT") throw error;
-  });
+  store.remove(verifierKey(guest));
+  await removeLegacyVerifier(guest);
 }
 // The clean Host has no settings yet. Publish once without replacing later user choices or a concurrently created profile.
 export async function initializeCloudHostAccess(userDataDir) {
@@ -100,32 +101,47 @@ function origin(raw) {
     throw new Error("Invalid trusted service origin");
   return url.origin;
 }
-async function verifierFor(guest) {
-  const dir = dirFor(guest);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  const temp = path.join(dir, "." + randomBytes(16).toString("hex"));
-  await writeFile(temp, randomBytes(48).toString("base64url"), {
-    mode: 0o600,
-    flag: "wx",
+async function removeLegacyVerifier(guest) {
+  await unlink(marker(guest, "pkce")).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
   });
-  try {
-    await link(temp, marker(guest, "pkce"));
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-  } finally {
-    await unlink(temp);
+}
+
+async function verifierFor(guest, store) {
+  const key = verifierKey(guest);
+  const legacyPath = marker(guest, "pkce");
+  const legacy = await open(
+    legacyPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  ).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+    return null;
+  });
+  let previous;
+  if (legacy) {
+    try {
+      const stat = await legacy.stat();
+      if (!stat.isFile() || stat.uid !== process.getuid?.() || stat.mode & 0o077 || stat.size !== 64)
+        throw new Error("Invalid legacy guest verifier");
+      previous = await legacy.readFile("utf8");
+      if (!/^[\w-]{64}$/.test(previous))
+        throw new Error("Invalid legacy guest verifier");
+    } finally {
+      await legacy.close();
+    }
   }
-  const verifier = await readFile(marker(guest, "pkce"), "utf8");
+  const saved = store.read(key);
+  const verifier = saved ?? previous ?? randomBytes(48).toString("base64url");
   if (!/^[\w-]{64}$/.test(verifier))
     throw new Error("Unable to resume guest sign-in");
+  if (!saved) store.write(key, verifier);
+  if (legacy) await removeLegacyVerifier(guest);
   return verifier;
 }
 class GuestSignInRefused extends Error {}
 const directFetch = (input, init) => globalThis.fetch(input, init);
 
-async function authorize(guest, deviceId, authBase, serviceFetch) {
-  const base = origin(authBase),
-    verifier = await verifierFor(guest);
+async function authorize(guest, deviceId, authBase, verifier, serviceFetch) {
+  const base = origin(authBase);
   const metadata = "http://169.254.169.254/latest/";
   const request = async (url, init = {}) => {
     // Metadata is local to the instance. Only Cindy service requests use the Host proxy.
@@ -231,11 +247,12 @@ async function authorize(guest, deviceId, authBase, serviceFetch) {
   return { code: result.code, verifier };
 }
 
-export async function cloudGuestAuthorization(guest, deviceId, authBase, serviceFetch = directFetch) {
+export async function cloudGuestAuthorization(guest, deviceId, authBase, store, serviceFetch = directFetch) {
+  const verifier = await store.withLock(() => verifierFor(guest, store));
   const until = Date.now() + 600000;
   for (;;) {
     try {
-      return await authorize(guest, deviceId, authBase, serviceFetch);
+      return await authorize(guest, deviceId, authBase, verifier, serviceFetch);
     } catch (error) {
       if (error instanceof GuestSignInRefused || Date.now() + 5000 >= until)
         throw error;
