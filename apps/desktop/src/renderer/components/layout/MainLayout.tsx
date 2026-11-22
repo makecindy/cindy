@@ -1933,7 +1933,7 @@ export function MainLayout() {
                     <div
                       data-testid="right-sidebar-fixed-trigger"
                       className={cn(
-                        'pointer-events-none absolute z-50 flex items-center gap-1',
+                        'pointer-events-none absolute z-float flex items-center gap-1',
                         rightSidebarSide === 'left' ? 'left-2 flex-row-reverse' : 'right-2',
                       )}
                       style={
@@ -1976,7 +1976,7 @@ export function MainLayout() {
                 {isMac && rightSidebarPaneAvailable && rsbWindow.loaded && (
                   <div
                     data-testid="right-sidebar-fixed-trigger"
-                    className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+                    className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
                     style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                   >
                     <RightSidebarToggle
@@ -2074,7 +2074,7 @@ export function MainLayout() {
             右上角（系统按钮下一行），与截图中的原位置一致。 */}
         {!isMac && (
           <div
-            className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
             data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >

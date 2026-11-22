@@ -2214,14 +2214,14 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     <Dialog.Portal>
                       <Dialog.Overlay
                         className={cn(
-                          'modal-scrim fixed inset-0 z-50',
+                          'modal-scrim fixed inset-0 z-modal',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       />
                       <Dialog.Content
                         onPointerDownOutside={(event) => event.preventDefault()}
                         className={cn(
-                          'modal-panel fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
+                          'modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
                           'p-5 outline-none',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
