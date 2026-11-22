@@ -418,7 +418,7 @@ interface ComputerDriverInstallResult {
   status: ComputerDriverStatus;
 }
 
-type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult;
+type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult & { continueToScreenRecording?: boolean };
 
 interface ComputerDriverUpdateCheck {
   currentVersion: string | null;
