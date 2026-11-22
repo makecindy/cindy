@@ -5475,6 +5475,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Nenhum modelo auxiliar está disponível",
+        "configDescription": "Afeta a nomeação automática de tarefas, os resumos de tarefas fixadas, a Ajuda e as tarefas de plugins, como a tradução de legendas. Corrija os problemas abaixo ou escolha outros modelos disponíveis em Personalizado.",
+        "runtimeTitle": "As últimas solicitações aos modelos auxiliares falharam",
+        "runtimeDescription": "A rede ou o serviço podem estar temporariamente indisponíveis. Este aviso some sozinho quando as solicitações voltarem a funcionar. Se continuar aparecendo, escolha outros modelos disponíveis em Personalizado.",
+        "fallback": "As tarefas de plugins estão usando temporariamente {{model}} com um esforço de raciocínio menor, o que pode ser mais lento e consumir mais cota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Abrir provedores",
+        "customize": "Personalizar modelos auxiliares",
+        "issues": {
+          "signed_out": "É preciso entrar na Cindy",
+          "provider_disabled": "Provedor desativado",
+          "model_disabled": "Modelo desativado",
+          "payment_required": "Não incluído no seu plano ou saldo",
+          "no_credential": "Falta o login ou a chave",
+          "unavailable": "Indisponível no momento"
+        },
+        "toast": {
+          "config": "Nenhum modelo auxiliar está disponível. A nomeação de tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, são afetados.",
+          "runtime": "As últimas solicitações aos modelos auxiliares falharam. A nomeação de tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, podem ser afetados.",
+          "open": "Abrir configurações"
+        }
       }
     },
     "compaction": {

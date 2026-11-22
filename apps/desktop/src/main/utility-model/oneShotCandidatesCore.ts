@@ -198,11 +198,17 @@ export interface OneShotCandidatesPorts {
   ensureManagedOllamaReadyForSession: typeof import('../local-model-runtime/preflight.js').ensureManagedOllamaReadyForSession;
   getUtilityModelChainProfiles: typeof import('./UtilityModelSelection.js').getUtilityModelChainProfiles;
   getEffectiveAuxiliaryModelChain: typeof import('./resolveAuxiliaryModelChain.js').getEffectiveAuxiliaryModelChain;
+  /**
+   * Result of each auxiliary-chain request, for the user-facing health notice.
+   * Desktop only: the Node Host has no surface to show it and leaves it unset.
+   */
+  reportAuxiliaryChainOutcome?: (outcome: 'success' | 'no_candidate' | 'failed') => void;
 }
 
 /** One instance per launcher. */
 export function createOneShotCandidates(ports: OneShotCandidatesPorts) {
 const getCatalog = ports.getCatalog ?? getActiveCatalog;
+const { reportAuxiliaryChainOutcome } = ports;
 const { readClaudeApiKey, getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch, getGrokAccessToken, getGrokOAuthCredentialGeneration, readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken, getGenericOAuthLoginGeneration, undiciFetch, claudeUpstreamEndpoint, reportCindyGatewayKeyRejected, readCustomProviderKey, ensureManagedOllamaReadyForSession, getUtilityModelChainProfiles, getEffectiveAuxiliaryModelChain } = ports;
 
 
@@ -929,6 +935,16 @@ async function requestDefaultUtilityText(
 
   const chain = initialChain!;
   const attempts: UtilityTextAttempt[] = [];
+  // Cancelled or superseded requests say nothing about whether the chain works.
+  const settle = (result: UtilityTextResult): UtilityTextResult => {
+    if (opts?.signal?.aborted || !requestSnapshotStillCurrent()) return result;
+    reportAuxiliaryChainOutcome?.(
+      result.ok
+        ? 'success'
+        : result.attempts.some((attempt) => attempt.status === 'failed') ? 'failed' : 'no_candidate',
+    );
+    return result;
+  };
   for (const ref of chain.refs) {
     const parsed = parseAuxiliaryModelRef(ref);
     if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) continue;
@@ -949,7 +965,7 @@ async function requestDefaultUtilityText(
         attempts,
         requestOpts,
       );
-      if (success) return success;
+      if (success) return settle(success);
       continue;
     }
     const result = await requestExplicitProviderText(prompt, {
@@ -958,10 +974,10 @@ async function requestDefaultUtilityText(
       agentKind: parsed.route.agentKind,
       model: parsed.route.model,
     });
-    if (result.ok) return result;
+    if (result.ok) return settle(result);
     attempts.push(...result.attempts);
   }
-  return failedChainResult(attempts);
+  return settle(failedChainResult(attempts));
 }
 
 function stableSnapshot(value: unknown): string {

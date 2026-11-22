@@ -341,6 +341,7 @@ type AuxiliaryModelSettingsPatch =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsPatch;
 type AuxiliaryModelSettingsState =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsState;
+type AuxiliaryModelHealth = import('../shared/auxiliaryModelHealth').AuxiliaryModelHealth;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -7009,6 +7010,7 @@ interface ElectronAPI {
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
     ) => Promise<AuxiliaryModelSettingsState>;
+    auxiliaryModelHealthGet: () => Promise<AuxiliaryModelHealth>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;

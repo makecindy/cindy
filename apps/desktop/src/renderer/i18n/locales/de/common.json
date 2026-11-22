@@ -5417,6 +5417,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Kein Hilfsmodell verfügbar",
+        "configDescription": "Betroffen sind automatische Aufgabentitel, Zusammenfassungen angehefteter Aufgaben, die Hilfe und Plugin-Aufgaben wie die Untertitelübersetzung. Behebe die Probleme unten oder wähle unter „Benutzerdefiniert“ andere verfügbare Modelle aus.",
+        "runtimeTitle": "Die letzten Anfragen an Hilfsmodelle sind fehlgeschlagen",
+        "runtimeDescription": "Netzwerk oder Dienst sind möglicherweise vorübergehend nicht erreichbar. Dieser Hinweis verschwindet von selbst, sobald Anfragen wieder gelingen. Wenn er bestehen bleibt, wähle unter „Benutzerdefiniert“ andere verfügbare Modelle aus.",
+        "fallback": "Plugin-Aufgaben verwenden vorübergehend {{model}} mit niedrigerer Denkintensität. Das kann langsamer sein und mehr Kontingent verbrauchen.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Anbieter öffnen",
+        "customize": "Hilfsmodelle anpassen",
+        "issues": {
+          "signed_out": "Anmeldung bei Cindy erforderlich",
+          "provider_disabled": "Anbieter deaktiviert",
+          "model_disabled": "Modell deaktiviert",
+          "payment_required": "Nicht in deinem Tarif oder Guthaben enthalten",
+          "no_credential": "Anmeldung oder Schlüssel fehlt",
+          "unavailable": "Derzeit nicht verfügbar"
+        },
+        "toast": {
+          "config": "Kein Hilfsmodell verfügbar. Aufgabentitel, Zusammenfassungen und Plugin-Aufgaben wie die Untertitelübersetzung sind betroffen.",
+          "runtime": "Die letzten Anfragen an Hilfsmodelle sind fehlgeschlagen. Aufgabentitel, Zusammenfassungen und Plugin-Aufgaben wie die Untertitelübersetzung können betroffen sein.",
+          "open": "Einstellungen öffnen"
+        }
       }
     },
     "compaction": {

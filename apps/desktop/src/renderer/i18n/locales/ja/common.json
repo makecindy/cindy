@@ -5374,6 +5374,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "利用できる補助モデルがありません",
+        "configDescription": "タスクの自動命名、ピン留めタスクの要約、Help、字幕翻訳などのプラグインタスクに影響します。以下の問題を解決するか、「カスタム」で利用できる他のモデルを選択してください。",
+        "runtimeTitle": "補助モデルへのリクエストが続けて失敗しています",
+        "runtimeDescription": "ネットワークやサービスが一時的に不安定な可能性があります。リクエストが成功すると、この通知は自動的に消えます。表示が続く場合は、「カスタム」で利用できる他のモデルを選択してください。",
+        "fallback": "プラグインタスクは一時的に {{model}} を低い推論強度で使用しています。時間がかかり、クォータの消費が増える場合があります。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "プロバイダーを開く",
+        "customize": "補助モデルをカスタマイズ",
+        "issues": {
+          "signed_out": "Cindy へのログインが必要",
+          "provider_disabled": "プロバイダーが無効",
+          "model_disabled": "モデルが無効",
+          "payment_required": "現在のプランまたは残高では利用不可",
+          "no_credential": "ログイン情報またはキーがありません",
+          "unavailable": "現在利用不可"
+        },
+        "toast": {
+          "config": "利用できる補助モデルがありません。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響します。",
+          "runtime": "補助モデルへのリクエストが続けて失敗しています。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響する可能性があります。",
+          "open": "設定を開く"
+        }
       }
     },
     "compaction": {
