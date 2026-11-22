@@ -37,8 +37,12 @@ function prompt(opts: MakerSessionCreateOpts): string {
 describe('IM channel lanes hydrate the full Bot profile', () => {
   // Unit: an owner's group project differs from the teammate workspace. Verify the
   // actual session options consumed by all three adapters (bot-group-chat §7.5).
-  it.each(['codex', 'pi', 'claude-code'] as const)('keeps teammate skills and memory in a group project on %s', async agentKind => {
-    seed('group', 'group:g1:access:owner:1', { projectMode: true, memory: true });
+  // A member's tools lane in the same project folder gets the same context (owner 2026-11-22).
+  it.each([
+    ['codex', 'group:g1:access:owner:1'], ['pi', 'group:g1:access:owner:1'],
+    ['claude-code', 'group:g1:access:owner:1'], ['codex', 'group:g1:access:tools:1:mask:member-1'],
+  ] as const)('keeps teammate skills and memory in a group project on %s (%s)', async (agentKind, routeKey) => {
+    seed('group', routeKey, { projectMode: true, memory: true });
     const opts = { id: 'lane', agentKind, workingDir: path.resolve('/projects/group'), model: 'm' } as MakerSessionCreateOpts;
     const skill = { name: 'review', description: 'Review rules', path: '/bots/bot/workspace/skills/review' };
     await hydrateBotProfileRuntime(opts, {
@@ -385,38 +389,42 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(main.botProfileContextPrompt).not.toContain('# 你会做什么');
     expect(main.botProfileContextPrompt).not.toContain('teammate-guide');
 
+    // 分工 elsewhere is an ordinary task in that folder too, still on the teammate's one project memory.
     seed('canonical', null, { ...narrow, projectMode: true });
     const elsewhere = { id: 'plan', agentKind: 'pi', workingDir: '/code/app', model: 'm' } as MakerSessionCreateOpts;
     const planSnapshot = await hydrateBotProfileRuntime(elsewhere, deps, { persistSnapshot: false });
-    expect(elsewhere.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(elsewhere.botRuntimeProfile?.projectContext).toBe(true);
     expect(planSnapshot?.disabledToolsets).toEqual([]);
+    expect(elsewhere.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
 
-    // A group lane has the same tools; whether the group may use them is the group's authorization.
-    seed('group', 'group:g1', { ...narrow, projectMode: true });
-    const group = { id: 'group', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
-    const groupSnapshot = await hydrateBotProfileRuntime(group, deps, { persistSnapshot: false });
-    expect(group.botRuntimeProfile?.projectContext).toBeUndefined();
-    expect(groupSnapshot?.disabledToolsets).toEqual([]);
-    expect(group.botRuntimeProfile?.toolsetPolicy.configured).toEqual(['browser', 'docs']);
-    // ...but shares the teammate's one project memory, not the old teammate store.
-    expect(group.makerMemoryEnabled).toBe(true);
-    expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
-    expect(deps.readMemoryIndex).not.toHaveBeenCalled();
-
-    // An IM lane (other people) keeps the channel isolation: never the owner's ordinary-task
-    // context (personal instructions, settings, Skills), only the teammate's project memory.
-    seed('channel', 'im:telegram:777:g:-100123', { ...narrow, projectMode: true });
-    const lane = { id: 'lane', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
-    const laneSnapshot = await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
-    expect(lane.botRuntimeProfile?.projectContext).toBeUndefined();
-    expect(laneSnapshot?.disabledToolsets).toEqual([]);
-    expect(lane.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
+    // Regression (owner 2026-11-22, iMessage · Niny lane had no plugin roster, host prompt or project
+    // Skills): no session of a V2 teammate is an "isolated lane". Other people's IM chats and group lanes,
+    // whoever spoke, run as the same ordinary project task; permissions stay with the permission tier.
+    for (const [role, routeKey] of [
+      ['group', 'group:g1'],
+      ['group', 'group:g1:access:tools:2:mask:member-1'],
+      ['channel', 'im:telegram:777:g:-100123'],
+      ['channel', 'im:imessage:imessage-1:dm:any;-;+8613000000000'],
+    ] as const) {
+      seed(role, routeKey, { ...narrow, projectMode: true });
+      const lane = { id: 'lane', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+      const laneSnapshot = await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
+      expect(lane.botRuntimeProfile?.projectContext, routeKey).toBe(true);
+      expect(laneSnapshot?.disabledToolsets, routeKey).toEqual([]);
+      expect(lane.botRuntimeProfile?.toolsetPolicy.configured, routeKey).toEqual(['browser', 'docs']);
+      // The teammate's one project memory, loaded natively from its workspace.
+      expect(lane.makerMemoryEnabled, routeKey).toBe(true);
+      expect(lane.makerMemoryScopeKey ?? await resolveMemoryScopeKey(lane.workingDir), routeKey)
+        .toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
+      expect(deps.readMemoryIndex).not.toHaveBeenCalled();
+    }
 
     // A chat-only group still gets no tools.
     seed('group', 'group:g1:access:chat:1', { ...narrow, projectMode: true });
     const chatOnly = { id: 'chat', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
     await hydrateBotProfileRuntime(chatOnly, deps, { persistSnapshot: false });
     expect(chatOnly.botRuntimeProfile?.toolsetPolicy.configured).toEqual([]);
+    expect(chatOnly.botRuntimeProfile?.projectContext).toBeUndefined();
 
     seed('canonical', null, narrow);
     const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
