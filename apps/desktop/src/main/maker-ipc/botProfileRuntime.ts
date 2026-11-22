@@ -849,6 +849,7 @@ export async function hydrateBotProfileRuntime(
   let resolvedMcpServers: string[] = [];
   let unavailableMcpServers: string[] = [];
   let runtimeMcpMode: 'inherit' | 'allowlist' = mcpMode;
+  let mcpCatalogUnreadable = false;
   if (deps.listMcpServers) {
     runtimeMcpMode = 'allowlist';
     try {
@@ -868,6 +869,7 @@ export async function hydrateBotProfileRuntime(
       // A project-context (V2) session mounts the ordinary task's MCP surface; this catalog only
       // shapes the snapshot, so an unreadable catalog must not keep the teammate from starting.
       if (!projectContext) throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
+      mcpCatalogUnreadable = true;
       log.warn('teammate MCP catalog unavailable; ordinary task MCP surface applies', { error: String(error) });
     }
   } else if (mcpMode === 'allowlist') {
@@ -880,6 +882,7 @@ export async function hydrateBotProfileRuntime(
   let unavailableToolsets: string[] = [];
   let disabledToolsets: string[] = [];
   let runtimeToolsetMode: 'inherit' | 'allowlist' = toolsetMode;
+  let toolsetCatalogUnreadable = false;
   if (!chatOnly && deps.listToolsets) {
     runtimeToolsetMode = 'allowlist';
     try {
@@ -899,6 +902,7 @@ export async function hydrateBotProfileRuntime(
       disabledToolsets = resolvedToolsetsResult.disabled;
     } catch (error) {
       if (!projectContext) throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
+      toolsetCatalogUnreadable = true;
       log.warn('teammate toolset catalog unavailable; ordinary task plugins apply', { error: String(error) });
     }
   } else if (toolsetMode === 'allowlist') {
@@ -1173,6 +1177,20 @@ export async function hydrateBotProfileRuntime(
     toolsetMode,
     toolsets: configuredToolsets,
   });
+  // An unreadable catalog says nothing new: keep the last known resources so a transient failure
+  // (and its recovery, or a second failure) does not look like a change and rebuild a working session.
+  const mcpResources = mcpCatalogUnreadable && Array.isArray(previousResolved?.mcpResources)
+    ? previousResolved.mcpResources
+    : resolvedMcpServers.map((name) => {
+      const entry = mcpCatalog.find((item) => item.name === name);
+      return { name, generation: entry?.generation ?? null };
+    });
+  const toolsetResources = toolsetCatalogUnreadable && Array.isArray(previousResolved?.toolsetResources)
+    ? previousResolved.toolsetResources
+    : resolvedToolsets.map((id) => {
+      const entry = toolsetCatalog.find((item) => item.id === id);
+      return { id, version: entry?.version ?? null };
+    });
   const runtimeEpochSha256 = createHash('sha256').update(JSON.stringify({
     profileVersion: row.profileVersion,
     profilePrompt: opts.botProfilePrompt ?? '',
@@ -1189,14 +1207,8 @@ export async function hydrateBotProfileRuntime(
     botOwnSkillResources: ownSkills.map((entry) => ({
       name: entry.name, path: entry.path, description: entry.description, updatedAt: entry.updatedAt ?? null,
     })),
-    mcpResources: resolvedMcpServers.map((name) => {
-      const entry = mcpCatalog.find((item) => item.name === name);
-      return { name, generation: entry?.generation ?? null };
-    }),
-    toolsetResources: resolvedToolsets.map((id) => {
-      const entry = toolsetCatalog.find((item) => item.id === id);
-      return { id, version: entry?.version ?? null };
-    }),
+    mcpResources,
+    toolsetResources,
   }), 'utf8').digest('hex');
   const resolvedJson = JSON.stringify({
     schemaVersion: 1,
@@ -1220,14 +1232,8 @@ export async function hydrateBotProfileRuntime(
     // 刻意与 skillResources 分开:下面的漂移检查只认那三个 *Resources 键,
     // 伙伴自己写的技能不该把「刚学会就 resume 不了」变成硬错误。
     botOwnSkillResources: ownSkills.map((entry) => ({ name: entry.name, path: entry.path })),
-    mcpResources: resolvedMcpServers.map((name) => {
-      const entry = mcpCatalog.find((item) => item.name === name);
-      return { name, generation: entry?.generation ?? null };
-    }),
-    toolsetResources: resolvedToolsets.map((id) => {
-      const entry = toolsetCatalog.find((item) => item.id === id);
-      return { id, version: entry?.version ?? null };
-    }),
+    mcpResources,
+    toolsetResources,
     runtimeEpoch: { sha256: runtimeEpochSha256 },
   });
   const previousRuntimeEpoch = previousResolved
