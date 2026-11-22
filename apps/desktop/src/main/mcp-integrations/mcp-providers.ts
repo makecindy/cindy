@@ -102,7 +102,8 @@ import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.desktop.js';
 import { getComputerMcpDeps } from './computer.desktop.js';
 import { discordIm, feishuIm, wechatIm } from '../im';
-import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
+import { directDeliveryFile, prepareDirectDelivery } from '../im/imessage/directDelivery';
+import { getBotFeishuTransport, getBotIMessageDirectTarget } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
@@ -1689,7 +1690,40 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     isEnabled: ctx => hasImChannelVendorOptions(ctx.vendorOptions, 'imessage')
       || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
     toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
-      instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
+      instance: createIMessageMcpServer({
+        getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+        sendDirectDelivery: async (context, targetSessionId, text) => {
+          const db = tryGetDbClient();
+          const session = context.sessionId;
+          if (!db || !session || !context.sessionInstanceId) throw new Error('OWNER_INPUT_REQUIRED');
+          const owner = activeOwnerScopeKey();
+          const boundary = getTaskActionInputState(session).boundary;
+          const assertCurrent = () => {
+            const input = getTaskActionInputState(session);
+            if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey() || db !== tryGetDbClient() ||
+                !input.ownerInput || input.boundary !== boundary || getTaskActionSession(session)?.instanceId !== context.sessionInstanceId) {
+              throw new Error('OWNER_INPUT_REQUIRED');
+            }
+          };
+          assertCurrent();
+          const link = await db.queryOne<{ botId: string; role: string; routeKey: string | null }>(
+            `SELECT src.bot_id AS botId, dest.role, dest.route_key AS routeKey FROM bot_session_links src
+             JOIN bot_profiles p ON p.id = src.bot_id AND p.status = 'active'
+             JOIN bot_session_links dest ON dest.bot_id = p.id AND dest.archived_at IS NULL
+             JOIN sessions s ON s.id = dest.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE src.session_id = ? AND src.role = 'canonical' AND src.archived_at IS NULL
+             AND dest.session_id = ? AND dest.role IN ('canonical', 'channel')`, [session, targetSessionId]);
+          assertCurrent();
+          if (!link || (link.role === 'channel' && !link.routeKey)) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const target = getBotIMessageDirectTarget(link.botId, link.role === 'canonical' ? null : link.routeKey);
+          if (!target) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const file = directDeliveryFile(link.botId, target.connection, target.origin, target.chat);
+          const record = prepareDirectDelivery(file, text);
+          const receipt = await target.im.sendDirectDelivery(target.chat, text, record.requestId);
+          assertCurrent();
+          return receipt;
+        },
+      }) }),
   });
 
   gated.push({

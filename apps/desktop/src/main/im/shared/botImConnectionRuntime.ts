@@ -28,6 +28,7 @@ import { withBotProfileLocks } from '../../maker-ipc/botProfileLock';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
 import { isIpcError } from '../../../shared/ipc-errors';
+import { clearDirectDeliveries, directDeliveryDirectory } from '../imessage/directDelivery';
 import { ownerScopedImSecrets } from '../ownerScopedStorage';
 import { readWechatChannelSettings, writeWechatCompanionBinding } from '../wechat/channelSettings';
 import {
@@ -286,6 +287,25 @@ export async function startBotImConnections(): Promise<void> {
 /** 账号 IM 连接停止: 释放全部实例, 记录保留。 */
 export async function stopBotImConnections(): Promise<void> {
   for (const live of [...instances.values()]) await releaseInstance(live);
+}
+
+/** Match an existing session link against the verified, currently connected direct chat. */
+export function getBotIMessageDirectTarget(botId: string, routeKey: string | null) {
+  const connections = listBotImConnectionsForBot(botId).filter(record => record.channel === 'imessage');
+  // The canonical task has no connection identity of its own.
+  if (routeKey === null && connections.length !== 1) return null;
+  const matches = [];
+  for (const record of connections) {
+    const live = instances.get(record.id);
+    if (live?.transport.kind !== 'imessage' || live.record.botId !== botId) continue;
+    const { im, orchestrator } = live.transport;
+    if (im.getStatus().kind !== 'connected' || !im.connectedOrigin) continue;
+    const chat = routeKey === null ? im.getOwnerUserId() : orchestrator.adapter.connectedChatForLane?.(botId, routeKey);
+    if (chat && /^(?:any|iMessage);-;/.test(chat) && !im.isGroup(chat)) {
+      matches.push({ im, chat, connection: record.id, origin: im.connectedOrigin });
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
 }
 
 export function getBotImConnectionOrchestrator(id: string): ImOrchestrator | undefined {
@@ -719,6 +739,7 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
   const record = readBotImConnection(id);
   if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
   const live = instances.get(id);
+  const deliveryDirectory = record.channel === 'imessage' ? directDeliveryDirectory(id) : undefined;
   // 先归档这条连接的全部隐藏专线, 再放掉它们的运行时。
   let archivedSessionIds: string[] = [];
   if (record.botContextId) {
@@ -753,6 +774,7 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
     }
     await releaseInstance(live);
   }
+  if (deliveryDirectory) clearDirectDeliveries(deliveryDirectory);
   purgeSecrets(record);
   await removeBotImConnectionRecord(id);
   log.info(`bot im connection ${id} (${record.channel}) removed archivedLanes=${archivedSessionIds.length}`);

@@ -2629,11 +2629,13 @@ describe('pi translator live token speed', () => {
     }
   });
 
+  // Also: the finished turn keeps the parent's speed chart. Child output makes the usage
+  // counters incomparable and clears their timing, which used to drop the chart as well.
   it('keeps delegated subagent output out of the parent generation meter', () => {
     vi.useFakeTimers();
     try {
       const ctx = createPiTranslateContext(noopLogger);
-      const { queue } = makeQueue();
+      const { queue, events } = makeQueue();
       vi.setSystemTime(1_000);
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
       translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
@@ -2671,6 +2673,10 @@ describe('pi translator live token speed', () => {
       expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
       translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
       expect(ctx.tokenSpeed.snapshot()?.tokens).toBe(4);
+      const done = events.find((event) => event.type === 'done');
+      const usage = (done?.data as { usage?: { durationMs?: number; generationTrace?: { requests: number } } })?.usage;
+      expect(usage?.durationMs).toBeUndefined();
+      expect(usage?.generationTrace).toMatchObject({ requests: 1 });
     } finally {
       vi.useRealTimers();
     }

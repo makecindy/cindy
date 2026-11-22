@@ -7,7 +7,7 @@ import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
 import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
 import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
-import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { AUTOMATION_DENIED, BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 
 export interface BlueBubblesConfig {
@@ -167,7 +167,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     });
   }
   getChat(chatGuid: string): BlueBubblesChat | undefined { return this.chats.get(chatGuid); }
-  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number } {
+  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number; automationDenied?: boolean } {
     return { lastCatchUpAt: this.lastCatchUpAt, lastWebhookAt: this.lastWebhookAt,
       ...(this.receipts?.uncertainCounts(this.activeDispatches, this.activeSends)
         ?? { uncertainInputs: 0, uncertainSends: 0 }) };
@@ -941,9 +941,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     }
     if (changed) void this.pump(generation).catch(error => this.fail(generation, error));
   }
-  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>): Promise<{ messageId: string }> {
+  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>, requestId?: string): Promise<{ messageId: string }> {
     const { api, receipts, generation } = this.target(chatId);
-    const id = randomUUID();
+    const id = requestId ?? randomUUID();
+    if (requestId && receipts.hasOutgoing(requestId)) {
+      const messageId = receipts.confirmedSend(requestId, chatId);
+      if (!messageId) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+      return { messageId };
+    }
     const echoSignature = text === null ? 'file' : receipts.textSignature(text);
     receipts.outgoing(id, { chatId, state: 'sending', echoSignature });
     let sent = false;
@@ -958,10 +963,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       this.wakeSendWaiters(chatId, generation);
       return { messageId: result.guid };
-    } catch {
+    } catch (error) {
       const confirmed = receipts.confirmedSend(id);
       if (confirmed && this.live(generation)) return { messageId: confirmed };
-      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown', echoSignature });
+      // The server reports only the final AppleScript attempt. A prior attempt
+      // may have succeeded, so retain the correlation and never replay here.
+      const denied = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED;
+      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown', echoSignature, ...(denied && { automationDenied: true }) });
+      if (denied) throw error;
       throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
     } finally {
       if (this.live(generation)) { this.activeSends.delete(id); this.setStatus(this.status); }
@@ -975,8 +984,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   }
   listChats(): BlueBubblesChat[] { return [...this.chats.values()].map(chat => structuredClone(chat)); }
   sendText(chatId: string, text: string): Promise<{ messageId: string }> { return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id)); }
+  sendDirectDelivery(chatId: string, text: string, requestId: string): Promise<{ messageId: string }> {
+    if (!/^(?:iMessage|any);-;/.test(chatId) || this.isGroup(chatId)) {
+      return Promise.reject(new Error('BLUEBUBBLES_DIRECT_CHAT_REQUIRED'));
+    }
+    return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id), requestId);
+  }
   sendMarkdownText(chatId: string, text: string): Promise<{ messageId: string }> { return this.sendText(chatId, text); }
-  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
+  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult & { deliveryError?: typeof AUTOMATION_DENIED | 'BLUEBUBBLES_SEND_UNKNOWN' }> {
     const { generation } = this.target(chatId);
     let bytes: Buffer;
     try {
@@ -990,13 +1005,17 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (bytes.length > BLUEBUBBLES_MAX_BYTES) return { ok: false, reason: 'TOO_LARGE' };
     const name = path.basename(displayName ?? absPath);
     try { return { ok: true, ...await this.send(chatId, null, (api, id) => api.sendFile(chatId, bytes, name, id)) }; }
-    catch { return { ok: false, reason: 'SEND_FAIL' }; }
+    catch (error) {
+      const deliveryError = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED
+        ? AUTOMATION_DENIED : 'BLUEBUBBLES_SEND_UNKNOWN';
+      return { ok: false, reason: 'SEND_FAIL', deliveryError };
+    }
   }
   async commitFinal(output: ImFinalOutput): Promise<void> {
     if (output.text.trim() && output.text.trim() !== 'NO_REPLY') await this.sendText(output.userId, output.text);
     for (const file of new Set(output.mediaAbsPaths ?? [])) {
       const result = await this.sendFile(output.userId, file);
-      if (!result.ok) throw new Error('BLUEBUBBLES_FILE_SEND_FAILED');
+      if (!result.ok) throw new Error(result.deliveryError ?? 'BLUEBUBBLES_FILE_SEND_FAILED');
     }
   }
   cancelTextReply(requestId: string): boolean {
