@@ -22611,6 +22611,11 @@
     "unknown": "Unbekannt",
     "more": "{{count}} weitere",
     "conversationOnly": "Diese Sitzung enthält nur das Gespräch. Es wurde nichts geändert oder erzeugt.",
+    "outcome": {
+      "failed": "Fehlgeschlagen",
+      "testsFailed": "Tests fehlgeschlagen",
+      "ok": "OK"
+    },
     "phaseValue": {
       "running": "Läuft",
       "waiting-permission": "Wartet auf deine Freigabe",

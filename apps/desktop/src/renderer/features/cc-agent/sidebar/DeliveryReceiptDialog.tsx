@@ -30,7 +30,14 @@ interface ListedMessage {
 
 type ReceiptFacts = Omit<DeliveryReceiptInput, 'phase' | 'interactionKind' | 'workflowWaitingOn'>;
 
-async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
+function outcomeLabel(outcome: string, t: (key: string) => string): string {
+  if (outcome === 'failed') return t('deliveryReceipt.outcome.failed');
+  if (outcome === 'tests failed') return t('deliveryReceipt.outcome.testsFailed');
+  if (outcome === 'ok') return t('deliveryReceipt.outcome.ok');
+  return outcome || t('deliveryReceipt.unknown');
+}
+
+async function readReceiptFacts(session: Session, stillCurrent: () => boolean): Promise<ReceiptFacts | null> {
   const [sets, messages, git, refs] = await Promise.all([
     window.electronAPI.maker.listTurnChangeSets(session.id),
     window.electronAPI.localDb.messages.list(session.id, { limit: 100 }),
@@ -75,6 +82,7 @@ async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
   const activeRefs = refs.filter((ref) => ref.removedAt == null);
   let pullRequests: DeliveryReceiptPullRequest[] = [];
   if (activeRefs.length > 0) {
+    if (!stillCurrent()) return null;
     const statuses: PrStatusResult[] | null = await window.electronAPI.gitContext
       .getPrStatuses(activeRefs.map(prStatusQuery))
       .catch(() => null);
@@ -179,8 +187,8 @@ export function DeliveryReceiptDialog({
           setFailed(true);
           return;
         }
-        const nextFacts = await readReceiptFacts(next);
-        if (!disposed) setFacts(nextFacts);
+        const nextFacts = await readReceiptFacts(next, () => !disposed);
+        if (!disposed && nextFacts) setFacts(nextFacts);
       })
       .catch(() => {
         if (!disposed) setFailed(true);
@@ -231,11 +239,11 @@ export function DeliveryReceiptDialog({
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           onClick={(event) => event.stopPropagation()}
         />
         <Dialog.Content
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto p-4 text-[var(--text-primary)]"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[85vh] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto p-4 text-[var(--text-primary)]"
           onClick={(event) => event.stopPropagation()}
           onPointerDownOutside={(event) => event.preventDefault()}
         >
@@ -281,7 +289,7 @@ export function DeliveryReceiptDialog({
                       <li key={`${command.command}:${command.outcome}`} className="break-all">
                         <span>{command.command}</span>
                         <span className={command.failed ? ' text-[var(--text-danger)]' : ' text-[var(--text-secondary)]'}>
-                          {' '}{command.outcome || t('deliveryReceipt.unknown')}
+                          {' '}{outcomeLabel(command.outcome, t)}
                         </span>
                       </li>
                     ))}

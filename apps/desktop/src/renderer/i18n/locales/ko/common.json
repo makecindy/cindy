@@ -22522,6 +22522,11 @@
     "unknown": "알 수 없음",
     "more": "{{count}}개 더 있음",
     "conversationOnly": "이번 세션에는 대화만 있습니다. 바꾼 파일이나 결과 파일이 없습니다.",
+    "outcome": {
+      "failed": "실패",
+      "testsFailed": "테스트 실패",
+      "ok": "성공"
+    },
     "phaseValue": {
       "running": "실행 중",
       "waiting-permission": "승인 대기",

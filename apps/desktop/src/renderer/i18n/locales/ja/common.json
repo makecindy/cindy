@@ -22522,6 +22522,11 @@
     "unknown": "不明",
     "more": "ほか {{count}} 件",
     "conversationOnly": "このセッションには会話しかありません。変更も成果物もありません。",
+    "outcome": {
+      "failed": "失敗",
+      "testsFailed": "テスト失敗",
+      "ok": "成功"
+    },
     "phaseValue": {
       "running": "実行中",
       "waiting-permission": "承認待ち",

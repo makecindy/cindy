@@ -2,9 +2,9 @@
  * 一个任务的只读交付收据。只投影既有读结果，不落库、不把「这一轮结束」写成已完成。
  * 命令成败与 apps/desktop agentHandoff 的 extractCommandOutcome 共用 judgeCommandOutcome。
  */
-import path from 'node:path';
 import { isBotDeliverableFile, type BotDeliverableFile } from './botDeliverable.js';
 import { describeToolUse } from './toolUseDescriptor.js';
+import { extractToolResultDiagnostics } from './toolResultCompaction.js';
 
 export const DELIVERY_RECEIPT_FILE_CAP = 20;
 export const DELIVERY_RECEIPT_OUTPUT_CAP = 10;
@@ -112,21 +112,27 @@ export interface DeliveryReceiptInput {
   captureIncomplete?: boolean;
 }
 
-function pathApiFor(filePath: string, base: string | null): path.PlatformPath {
-  if (filePath.startsWith('\\') || /^[A-Za-z]:[\/]/.test(filePath)) return path.win32;
-  if (filePath.startsWith('/')) return path.posix;
-  if (base && (base.startsWith('\\') || /^[A-Za-z]:[\/]/.test(base))) return path.win32;
-  return path.posix;
+function isWindowsShaped(filePath: string): boolean {
+  return filePath.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(filePath);
 }
 
-/** 绝对路径保持原样，重复调用不改变结果。相对路径按记录自己的工作目录拼接。 */
+/**
+ * 绝对路径保持原样，重复调用不改变结果。相对路径按记录自己的工作目录拼接。
+ * 不使用 node:path：这份投影会进 Renderer。
+ */
 export function resolveDeliveryReceiptPath(filePath: string, base: string | null | undefined): string {
   if (!filePath) return filePath;
   const root = base?.trim() ? base : null;
-  const api = pathApiFor(filePath, root);
-  if (api.isAbsolute(filePath)) return filePath;
+  const windows = isWindowsShaped(filePath) || (root != null && isWindowsShaped(root));
+  if (windows) {
+    if (isWindowsShaped(filePath) || filePath.startsWith('/') || filePath.startsWith('\\')) return filePath;
+    if (!root) return filePath;
+    const relative = filePath.replace(/^[\\/]+/, '').replace(/\//g, '\\');
+    return `${root.replace(/[\\/]+$/, '')}\\${relative}`;
+  }
+  if (filePath.startsWith('/')) return filePath;
   if (!root) return filePath;
-  return api.join(root, filePath);
+  return `${root.replace(/\/+$/, '')}/${filePath.replace(/^\/+/, '')}`;
 }
 
 export function judgeCommandOutcome(input: {
@@ -231,7 +237,12 @@ function outcomeText(content: unknown, record: Record<string, unknown>): string 
 
 function commandOutcomeOf(content: unknown): string | undefined {
   // 字符串是命令输出本身。不能因为输出碰巧是 JSON，就把里面的 exitCode / isError 当成进程状态。
-  if (typeof content === 'string') return judgeCommandOutcome({ text: content });
+  if (typeof content === 'string') {
+    return judgeCommandOutcome({
+      isError: extractToolResultDiagnostics(content)?.isError,
+      text: content,
+    });
+  }
   const record = asRecord(content);
   if (!record) return undefined;
   return judgeCommandOutcome({

@@ -22522,6 +22522,11 @@
     "unknown": "未知",
     "more": "还有 {{count}} 项",
     "conversationOnly": "这次只有对话，没有改动文件，也没有产出文件。",
+    "outcome": {
+      "failed": "失败",
+      "testsFailed": "测试失败",
+      "ok": "通过"
+    },
     "phaseValue": {
       "running": "运行中",
       "waiting-permission": "等你批准",

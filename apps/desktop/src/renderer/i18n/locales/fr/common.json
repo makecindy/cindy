@@ -22824,6 +22824,11 @@
     "unknown": "Inconnu",
     "more": "{{count}} de plus",
     "conversationOnly": "Cette session ne contient que la conversation. Rien n’a été modifié ni produit.",
+    "outcome": {
+      "failed": "Échec",
+      "testsFailed": "Tests échoués",
+      "ok": "OK"
+    },
     "phaseValue": {
       "running": "En cours",
       "waiting-permission": "En attente de votre accord",

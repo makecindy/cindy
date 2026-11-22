@@ -22522,6 +22522,11 @@
     "unknown": "未明",
     "more": "尚有 {{count}} 項",
     "conversationOnly": "此番唯有言談，未改檔案，亦無產出。",
+    "outcome": {
+      "failed": "未成",
+      "testsFailed": "試未成",
+      "ok": "成"
+    },
     "phaseValue": {
       "running": "方行",
       "waiting-permission": "待汝許",

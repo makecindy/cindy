@@ -22611,6 +22611,11 @@
     "unknown": "Unknown",
     "more": "{{count}} more",
     "conversationOnly": "This task only has the conversation. Nothing was changed or produced.",
+    "outcome": {
+      "failed": "Failed",
+      "testsFailed": "Tests failed",
+      "ok": "OK"
+    },
     "phaseValue": {
       "running": "Running",
       "waiting-permission": "Waiting for your approval",

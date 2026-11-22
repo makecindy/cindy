@@ -193,6 +193,28 @@ describe('buildDeliveryReceipt', () => {
     ]);
   });
 
+  it('keeps a truncated persisted failure marker as failed', () => {
+    const text = `<tool_use_error>${'x'.repeat(20)}
+
+[tool result diagnostics: {"isError":true}]
+
+[tool result truncated: stored first 8KB]`;
+    const receipt = buildDeliveryReceipt({
+      title: 'Run',
+      messages: [
+        {
+          role: 'tool_use',
+          toolUseId: 't1',
+          content: { toolName: 'bash', toolUseId: 't1', input: { command: 'pnpm test' } },
+        },
+        { role: 'tool_result', toolUseId: 't1', content: text },
+      ],
+    });
+    expect(receipt.verification.items).toEqual([
+      { command: 'pnpm test', outcome: 'failed', failed: true },
+    ]);
+  });
+
   it('does not call an incomplete capture a conversation with no file changes', () => {
     const receipt = buildDeliveryReceipt({
       title: 'Edit env',

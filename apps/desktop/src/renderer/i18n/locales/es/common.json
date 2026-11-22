@@ -22824,6 +22824,11 @@
     "unknown": "Desconocido",
     "more": "{{count}} más",
     "conversationOnly": "Esta sesión solo tiene conversación. No hubo cambios ni archivos producidos.",
+    "outcome": {
+      "failed": "Error",
+      "testsFailed": "Tests fallidos",
+      "ok": "OK"
+    },
     "phaseValue": {
       "running": "En ejecución",
       "waiting-permission": "Esperando tu aprobación",
