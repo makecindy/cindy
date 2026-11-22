@@ -218,7 +218,7 @@ function MarkdownHarness({ pinContentWidth = false, androidTableSelection = fals
   ` + markdownReturn.getText(rendererSource) + String.raw`
 }
 const MarkdownBody = MarkdownHarness;
-function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
+function BubbleHarness({ body, kind = 'user', automationOrigin: origin, taskLetter = false }) {
   const styles = {};
   const isUser = kind === 'user';
   const item = { message: { key: "message", source: { clientId: "message" }, kind, body, automationOrigin: origin } };
@@ -242,7 +242,7 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
   const isStreamingAssistant = false;
   const contentLayout = buildMessageContentLayout({ screenWidth: 402 });
   const t = i18n.t.bind(i18n);
-  ` + collapseCode + ['ownBubbleColors', 'tableFallbackBackground', 'bubble']
+  ` + collapseCode + ['boundCompanionBody', 'ownBubbleColors', 'tableFallbackBackground', 'bubble']
     .map(name => bodyStatement(name, 'MessageBubble').getText(rendererSource)).join(String.fromCharCode(10)) + String.raw`
   return bubble;
 }

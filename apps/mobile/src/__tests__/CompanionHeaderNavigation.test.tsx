@@ -177,7 +177,7 @@ const PageHost = new Function('React', 'useState', 'useHostManagedSession', 'Com
   `${compiled}; return PageHost;`)({ createElement, Fragment }, useState, useHostManagedSession, CompanionHeader, StackScreen);
 const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-a', shareSelectionActive: false, nativeHeader: false,
   companionEntry: { ready: true },
-  companionResource: { ref: { kind: 'bot', collectionId: 'bots', id: 'bot-a' }, display: { title: 'Cindy' } } as RemoteResource | null,
+  companionResource: { ref: { kind: 'bot', collectionId: 'bots', id: 'bot-a' }, display: { title: 'Cindy' }, links: [] } as RemoteResource | null,
   setSearchOpen: vi.fn(), goBackToHome: vi.fn(), companionWorkingLabel: null as string | null });
 const showPage = (bindings: ReturnType<typeof pageBindings>) => act(async () => { root.render(<PageHost bindings={bindings} />); });
 
