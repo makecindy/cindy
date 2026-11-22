@@ -16800,7 +16800,7 @@
       "taskInfo": {
         "harness": "Icono del harness",
         "project": "Icono y nombre del proyecto",
-        "teammate": "Avatar del compañero",
+        "teammate": "Avatar del amigo",
         "time": "Hora",
         "pr": "Estado del PR",
         "worktree": "worktree",
