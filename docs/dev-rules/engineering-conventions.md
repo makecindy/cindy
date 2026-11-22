@@ -314,6 +314,13 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 8 个）完整�
     `apps/desktop/src/main/__tests__/oauthResultPageGlossary.test.ts`。它的文案分散在
     若干函数里且要传 provider / brand 实参，测试用固定占位实参求值后再扫；占位值不含
     CJK 与标点，免得实参本身影响判定。
+  - desktop：`src/main/localDb/ipc/botRemoteEditors.ts`（远程伙伴编辑器的手写 13 语 catalog）→
+    `apps/desktop/src/main/__tests__/buddyTermShadowCopy.test.ts`；按 glossary 的 `forbidden`
+    列表扫源码里的 locale 键值，新增手写 catalog 时把文件加进 `SCANNED_FILES`。
+
+  术语从 `proposed` 改 `decided` 时，如果在评审期间已有新增 key 的 PR 合入 main，
+  新键会立刻被判红（2026-11-22 的 Buddy / Teammate 就是这么分叉的）。这类红一律当天收敛到新术语，
+  不写进 baseline、不降级条款；只有确实需要保留旧叫法的同形异义才走 `exempt` 并在 `note` 写明理由。
 
   新增同类手写 catalog 时记得加进对应测试的 `collectEntries()`。**catalog 要单独成模块**：
   原先这两份分别嵌在 `bootstrap-electron.ts` 与 `fullAccessConfirmation.ts` 里，测试一 import
