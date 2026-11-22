@@ -7,13 +7,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { createLogger } from '@/lib/logger';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
 const log = createLogger('LegalTermsUpdateGate');
-
-/** 盖过应用内所有浮层(下拉 / 全屏预览等最高用到 10020):不同意就不能继续使用。 */
-const GATE_Z_INDEX = 10030;
 
 /**
  * 协议更新确认:已同意过旧版《服务条款》《隐私协议》的个人账号,进入主界面时必须先确认
@@ -72,7 +70,7 @@ export function LegalTermsUpdateGate() {
       onDisagree={disagree}
       onOpenTerms={() => openLink(LEGAL_LINKS.termsOfService)}
       onOpenPrivacy={() => openLink(LEGAL_LINKS.privacyPolicy)}
-      zIndex={GATE_Z_INDEX}
+      zIndex={Z_INDEX_LAYERS['blocking-gate']}
     />,
     document.body,
   );

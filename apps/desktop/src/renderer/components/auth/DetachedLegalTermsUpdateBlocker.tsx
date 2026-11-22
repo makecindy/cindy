@@ -5,9 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { LOGIN_COLORS } from '@/components/login/loginDesignTokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
-
-/** 与主窗口的协议更新确认同层:盖过应用内所有浮层。 */
-const BLOCKER_Z_INDEX = 10030;
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /**
  * 分离侧栏 / 单页签窗口的协议更新遮挡。
@@ -94,16 +92,16 @@ export function DetachedLegalTermsUpdateBlocker() {
         if (event.target === event.currentTarget) event.currentTarget.focus();
       }}
       className="fixed inset-0 grid place-items-center p-6 outline-none"
-      style={{ background: LOGIN_COLORS.consentOverlay, zIndex: BLOCKER_Z_INDEX }}
+      style={{ background: LOGIN_COLORS.consentOverlay, zIndex: Z_INDEX_LAYERS['blocking-gate'] }}
     >
       <div
         className="w-full max-w-[340px] rounded-[18px] px-5 py-5 text-center"
         style={{ background: LOGIN_COLORS.panelBg, boxShadow: `inset 0 0 0 1px ${LOGIN_COLORS.panelBorder}` }}
       >
-        <p id="detached-legal-terms-title" className="text-16 font-bold" style={{ color: LOGIN_COLORS.titleText }}>
+        <p id="detached-legal-terms-title" className="text-16 font-semibold" style={{ color: LOGIN_COLORS.titleText }}>
           {t('legalTermsUpdate.title')}
         </p>
-        <p id="detached-legal-terms-body" className="mt-2 text-13 leading-5" style={{ color: LOGIN_COLORS.secondaryText }}>
+        <p id="detached-legal-terms-body" className="mt-2 text-13 leading-[1.54]" style={{ color: LOGIN_COLORS.secondaryText }}>
           {t('legalTermsUpdate.detachedBody')}
         </p>
       </div>
