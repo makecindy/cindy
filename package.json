@@ -91,6 +91,7 @@
     "generate:project-symbols": "node apps/desktop/scripts/generate-project-symbols.mjs",
     "check:dev-docs": "node --test scripts/__tests__/dev-docs-contract.test.mjs",
     "check:settings-search": "node scripts/check-settings-search.mjs",
+    "check:same-source": "node scripts/check-same-source.mjs",
     "check:built-in-skills": "node scripts/check-built-in-skills.mjs",
     "check:test-hygiene": "node scripts/check-test-hygiene.mjs",
     "check:dco": "node scripts/check-dco.mjs",
