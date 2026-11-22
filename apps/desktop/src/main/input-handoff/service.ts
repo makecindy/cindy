@@ -65,14 +65,16 @@ export interface InputHandoffTargetProblem {
 }
 
 /**
- * What the agent tells the owner when the screen is locked. The owner is often
- * on their phone, so it names the ways they have from there.
+ * What the agent tells the owner when the screen is locked, both when the
+ * request starts and when the card was already open. The owner is often on
+ * their phone, so it names the way they have from there.
  */
 const SCREEN_LOCKED_NEXT = 'This computer\'s screen is locked (a display going to sleep locks it too), so nothing was read or typed. '
-  + 'Ask the owner to wake and unlock it. If they are away from it, Cindy\'s remote desktop can unlock it from their iPhone or another Mac '
-  + 'when automatic unlock is turned on there; otherwise someone has to unlock it at the computer. '
-  + 'A terminal password prompt (sudo -A, ssh, git over HTTPS) does not need the screen and can still be answered from their phone. '
-  + 'Request input handoff again only after they say it is unlocked.';
+  + 'Ask the owner to wake and unlock it. If they are away from it, they can try to unlock it through Cindy\'s remote desktop '
+  + 'from an iPhone or another Mac that has automatic unlock turned on for this Mac (not from the single-window view on the input handoff card); '
+  + 'if that is not available, ask them to unlock it at the computer. '
+  + 'Request a window input handoff again only after they confirm it is unlocked. '
+  + 'A terminal password prompt (sudo -A, ssh, git over HTTPS) does not read the screen and can still be answered from their phone.';
 
 /** A password prompt from a verified terminal program in the task's shell. */
 export interface TerminalPromptRequest {
