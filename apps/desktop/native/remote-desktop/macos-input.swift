@@ -1088,7 +1088,12 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--verify-own
 // screenshots and recordings, which the standard alert cannot do.
 final class OwnerPromptPanel {
   let panel: NSPanel
-  init(context: LAContext, alpha: CGFloat) {
+  /**
+   * Built closed on purpose: Main needs the window number in its capture exclusion filter
+   * before the control becomes visible, so the caller announces the id first and asks for
+   * the panel to be shown afterwards (a remote lease can otherwise start in between).
+   */
+  init(context: LAContext, alpha: CGFloat, show: Bool = true) {
     let side: CGFloat = 32
     panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: side, height: side),
       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -1114,6 +1119,12 @@ final class OwnerPromptPanel {
       let visible = screen.visibleFrame
       panel.setFrameOrigin(NSPoint(x: visible.midX - side / 2, y: visible.minY + 72))
     }
+    panel.alphaValue = show ? alpha : 0
+    if show { panel.orderFrontRegardless() }
+  }
+  /** Puts the panel on screen at `alpha`, after Main has the window number. */
+  func show(alpha: CGFloat) {
+    panel.alphaValue = alpha
     panel.orderFrontRegardless()
   }
   func close() {
@@ -1146,7 +1157,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
   // that refuses to verify against a control the user cannot see is not something we can
   // argue with, so a refusal that arrives instantly re-mounts the same control at full
   // opacity and asks once more, rather than leaving touch-to-return silently broken.
-  var panel = OwnerPromptPanel(context: context, alpha: 0.02)
+  var panel = OwnerPromptPanel(context: context, alpha: 0.02, show: false)
   var answered = false
   var retried = false
   // The check that is live right now. The visible retry arms its own context, so the stop
@@ -1161,6 +1172,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
     print("panel \(panel.windowNumber)"); fflush(stdout)
   }
   announce(panel)
+  panel.show(alpha: 0.02)
   func arm(_ context: LAContext) {
     armed = context
     let started = DispatchTime.now()
@@ -1180,8 +1192,9 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
           panel.close()
           let visible = LAContext()
           visible.localizedFallbackTitle = ""
-          panel = OwnerPromptPanel(context: visible, alpha: 1)
+          panel = OwnerPromptPanel(context: visible, alpha: 1, show: false)
           announce(panel)
+          panel.show(alpha: 1)
           arm(visible)
         }
         return

@@ -3955,6 +3955,13 @@ async function callComputerDriverToolImpl(
   const driverInputArgs = stripLocalListWindowsArgs(name, operationArgs);
   const normalizedArgs = normalizeToolArgsForDriver(name, driverInputArgs);
   const entry = await getCuaMcpSession(sessionId, signal);
+  // The session is registered and announced now, so whatever overlay was holding this
+  // display has already been told to go (the away cover's Touch ID panel): wait for that
+  // helper to close before the first native read, and re-check ownership afterwards.
+  if (captureBarrier) {
+    await captureBarrier();
+    assertActive();
+  }
   const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId, entry.toolSchemas);
   const timeoutMs = getCuaMcpToolTimeoutMs(name);
   let inputDispatched = false;
@@ -4169,7 +4176,6 @@ function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDe
           'COMPUTER_USE_DISABLED',
         );
       }
-      if (captureBarrier) await captureBarrier();
       await ensureRuntime();
       plugin?.assertCurrent();
       return callComputerDriverTool(name, args, context);
