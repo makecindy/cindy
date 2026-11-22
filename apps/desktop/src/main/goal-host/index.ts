@@ -92,7 +92,8 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         maker: deps.maker,
         warn: (message, meta) => logger.warn(message, meta),
       }),
-    acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    acquirePendingAgentSwitch: (id, hasPendingFollowup) =>
+      acquirePendingAgentSwitchForDirectSend(id, undefined, undefined, undefined, hasPendingFollowup),
     recyclePiRuntimeIfResourcesDrifted: deps.recyclePiRuntimeIfResourcesDrifted,
     isSessionInTurn,
     ensureInputReady: ensureGoalInputReady,

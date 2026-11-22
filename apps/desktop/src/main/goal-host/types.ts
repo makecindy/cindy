@@ -184,7 +184,7 @@ export interface GoalControllerDeps {
    * 锁住本 session、落实 deferred agent switch 并 bootstrap 新 live session。
    * 调用方在重新读取 live session 且 Session.send 返回后执行 release。
    */
-  acquirePendingAgentSwitch?: (sessionId: string) => Promise<() => void>;
+  acquirePendingAgentSwitch?: (sessionId: string, hasPendingFollowup?: boolean) => Promise<() => void>;
   /** 项目资源漂移回收 seam(pi 本地根任务):空闲时经 Maker 以 runtime-refresh 原因
    * 关闭旧运行时,调用方随后的 ensureSession 活化即重扫重建。生产装配经 Maker;
    * 测试可不注入(跳过回收,与桌面发送事务同口径)。 */

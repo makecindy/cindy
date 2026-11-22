@@ -2509,7 +2509,7 @@ export class GoalController {
       // apply、重新读取 live session 和 Session.send；否则并发 SET_MODEL 能在 fresh
       // session 创建后、send 前再次换 route，让本轮落到 UI 未显示的来源。
       releaseAgentSwitchLock =
-        (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+        (await this.deps.acquirePendingAgentSwitch?.(sessionId, true)) ?? (() => {});
       if (!isCurrentLifecycle()) return;
       // 项目资源漂移:先经注入的回收 seam 回收旧运行时(runtime-refresh),随后的
       // ensureSession 活化即重扫重建;与桌面发送事务同口径。测试装配不注入即跳过

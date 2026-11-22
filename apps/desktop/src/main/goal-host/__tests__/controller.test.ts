@@ -703,7 +703,7 @@ describe('GoalController', () => {
       agentKind: 'claude-code',
     });
 
-    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('s1');
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('s1', true);
     expect(oldSession.sends).toHaveLength(0);
     expect(switchedSession.sends).toHaveLength(1);
     expect(switchedSession.sends[0].originKind).toBe('goal');
@@ -3512,7 +3512,7 @@ describe('GoalController', () => {
 
     expect((await local.storage.get('s1'))?.status).toBe('active');
     expect(local.session.sends).toHaveLength(1);
-    expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(2);
+    expect(acquirePendingAgentSwitch.mock.calls).toEqual([['s1'], ['s1', true]]);
   });
 
   it('keeps a fail-closed owner when persisting a restore failure is unavailable', async () => {

@@ -204,7 +204,9 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
    */
   withSendToSessionLock?: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   /** 直发前与 sendToSessionInternal 共用同一套满窗 / compact 失败换窗预检。 */
-  prepareUnhealthySession?: (sessionId: string) => Promise<boolean | void>;
+  prepareUnhealthySession?: (sessionId: string, sendContext?: {
+    hasPendingFollowup?: boolean; isExplicitRetry?: boolean;
+  }) => Promise<boolean | void>;
   /**
    * 项目资源漂移时的 runtime 回收(空闲口径, pi only)。true=已按 runtime-refresh
    * 关闭旧 runtime,调用方应转 queued/lazy 路径重建投递,不拿旧 argv 跑这一轮。
@@ -696,7 +698,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         if (deps.hasPendingAgentSwitch?.(params.targetSessionId)) {
           throw new Error('Agent switch is still pending; retry the send after recovery');
         }
-        await deps.prepareUnhealthySession?.(params.targetSessionId);
+        await deps.prepareUnhealthySession?.(params.targetSessionId, { hasPendingFollowup: true, isExplicitRetry: false });
         try {
           await deps.hydrateOrcaSessionIfNeeded?.(params.targetSessionId, meta);
         } catch (err) {

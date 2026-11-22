@@ -2202,10 +2202,10 @@ describe('Desktop recovery assembly ordering and fences', () => {
     } else {
       expect((deps.getRecoveryAbortSignal('s') as AbortSignal).aborted).toBe(false);
       h.coordinator.hasPendingQueuedWork.mockReturnValue(true);
-      const signal = deps.getRecoveryAbortSignal('s');
+      const signal = deps.getRecoveryAbortSignal('s', undefined, () => h.order.push('persist'));
       expect(signal).toBeInstanceOf(AbortSignal);
       expect((signal as AbortSignal).aborted).toBe(true);
-      expect(h.order).toEqual(['clear']);
+      expect(h.order).toEqual(['persist', 'clear']);
     }
   });
 

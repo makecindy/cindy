@@ -395,7 +395,7 @@ describe('complete selection commit boundaries', () => {
   // sends and restore the durable owner preference only for an ordinary send.
   // PR #6831: legacy schedules have no complete selection, but still must
   // preserve the native context before the runner applies their model override.
-  it.each(['explicit', 'legacy', 'ordinary'])('applies only the next send route (%s)', async route => {
+  it.each(['explicit', 'legacy', 'ordinary', 'goal-followup'])('applies only the next send route (%s)', async route => {
     const owner: ScheduledModelSelection = {
       agentKind: 'codex', model: 'owner-model', providerId: 'provider', effort: 'high', fastMode: false,
     };
@@ -418,6 +418,9 @@ describe('complete selection commit boundaries', () => {
     profile = automatic;
     // A new scope instance also exercises a restart between turns.
     const recoverRenamedSessionModelOnSend = vi.fn(async () => {});
+    // #8242: actual Goal input must survive both lease adapters; preparatory/IM calls omit it.
+    const prepareUnhealthySessionForSend = vi.fn(async (_id: string, _context?: { hasPendingFollowup?: boolean; isExplicitRetry?: boolean }) => false);
+    const ordinary = route === 'ordinary' || route === 'goal-followup';
     const adapter = compile(directSendAdapter, {
       takeOverLocalAgentVisibleSession,
       scheduledModelScope: createScheduledModelScope(deps),
@@ -425,7 +428,7 @@ describe('complete selection commit boundaries', () => {
       isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
       applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
       recoverRenamedSessionModelOnSend,
-      applyScheduledProfile: apply, prepareUnhealthySessionForSend: vi.fn(async () => false),
+      applyScheduledProfile: apply, prepareUnhealthySessionForSend,
       // 发送边界的预算对账（register.ts）：本用例只关心路由选择，注入 no-op。
       reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
       replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
@@ -434,15 +437,17 @@ describe('complete selection commit boundaries', () => {
     });
     const directSend = compile(directSendEntry, { pendingAgentSwitchApplyHolder: adapter });
     const lease = await directSend('scheduled-task', undefined,
-      route === 'explicit' ? automatic : undefined, route === 'legacy');
+      route === 'explicit' ? automatic : undefined, route === 'legacy', route === 'goal-followup');
     // The legacy runner applies its model later under this same lease.
     if (route === 'legacy') await apply('scheduled-task', automatic);
     if (typeof lease === 'function') lease();
     else lease.release();
-    expect(transitions).toEqual([route === 'ordinary' ? owner.model : automatic.model]);
-    expect(profile.model).toBe(route === 'ordinary' ? owner.model : automatic.model);
-    expect(baseline === null).toBe(route === 'ordinary');
-    expect(recoverRenamedSessionModelOnSend).toHaveBeenCalledTimes(route === 'ordinary' ? 1 : 0);
+    expect(prepareUnhealthySessionForSend.mock.calls[0]?.[1]).toEqual(
+      route === 'goal-followup' ? { hasPendingFollowup: true, isExplicitRetry: false } : undefined);
+    expect(transitions).toEqual([ordinary ? owner.model : automatic.model]);
+    expect(profile.model).toBe(ordinary ? owner.model : automatic.model);
+    expect(baseline === null).toBe(ordinary);
+    expect(recoverRenamedSessionModelOnSend).toHaveBeenCalledTimes(ordinary ? 1 : 0);
   });
 
   // Unit: execute the production direct-send adapter with the real send lock.
