@@ -88,7 +88,11 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
-import { isLightboxCovered, lightboxOwnsShortcutTarget } from '@/lib/lightboxLayer';
+import {
+  activateLightboxLayer,
+  isLightboxCovered,
+  lightboxOwnsShortcutTarget,
+} from '@/lib/lightboxLayer';
 import { extractIpcError } from '@/utils/ipcError';
 import { getMimeType, extractExt, type AttachedFile } from '@/lib/fileTypes';
 import {
@@ -377,6 +381,8 @@ interface ImageLightboxProps {
    * 这类"光栅化后直奔涂画"的入口用它省一次点击;默认 false 不影响既有场景。
    */
   autoAnnotate?: boolean;
+  /** Called when a source-retarget leave is rejected; hosts must restore their request to the displayed source. */
+  onSourceChangeCancelled?: (displayedSrc: string) => void;
 }
 
 /** `xdt-file://local/?path=<enc>` → 绝对路径;非该 scheme 或解析失败返回 null。 */
@@ -470,6 +476,8 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const activeSrcRef = useRef(activeSrc);
   const pendingSrcRef = useRef<string | null>(null);
   const leaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
+  const onSourceChangeCancelledRef = useRef(props.onSourceChangeCancelled);
+  onSourceChangeCancelledRef.current = props.onSourceChangeCancelled;
   useEffect(() => {
     if (props.src === activeSrcRef.current) {
       pendingSrcRef.current = null;
@@ -488,7 +496,11 @@ export function ImageLightbox(props: ImageLightboxProps) {
       leave();
       return;
     }
-    void guard(leave);
+    void guard(leave).then((applied) => {
+      if (applied) return;
+      pendingSrcRef.current = null;
+      onSourceChangeCancelledRef.current?.(activeSrcRef.current);
+    });
   }, [props.src]);
 
   const items = useOpeningCollection(props.annotationFallbackSrc ?? activeSrc);
@@ -632,8 +644,9 @@ function ImageLightboxContent({
   } = useImagePreviewWindow({ onGestureEnd: suppressPanelGestureClick });
   const focusPreviewPanel = useCallback(() => {
     const panel = overlayRef.current;
-    if (!panel || panel.contains(document.activeElement)) return;
-    panel.focus({ preventScroll: true });
+    if (!panel) return;
+    activateLightboxLayer(panel);
+    if (!panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
   }, []);
   const handleHeaderPointerDown = useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
@@ -830,6 +843,7 @@ function ImageLightboxContent({
           : 'cancel';
       if (!mountedRef.current) return false;
       if (choice === 'tertiary') {
+        syncAnnotationDraft([...baselineStrokesRef.current]);
         leave();
         return true;
       }
@@ -1680,7 +1694,7 @@ function ImageLightboxContent({
       asChild
       onMountAutoFocus={(event) => {
         event.preventDefault();
-        overlayRef.current?.focus();
+        focusPreviewPanel();
       }}
     >
     {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 非模态浮窗的键盘关闭由全局 Escape 处理；点击空白背景关闭是 lightbox 本身的交互。 */}

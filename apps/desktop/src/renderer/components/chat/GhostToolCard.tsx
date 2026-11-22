@@ -1189,6 +1189,9 @@ function GhostCardCanvas({
           galleryId={lightbox.galleryId}
           enableGallery
           onClose={() => setLightbox(null)}
+          onSourceChangeCancelled={(displayedSrc) =>
+            setLightbox((current) => (current ? { ...current, src: displayedSrc } : current))
+          }
           sessionId={sessionId}
         />
       ) : null}

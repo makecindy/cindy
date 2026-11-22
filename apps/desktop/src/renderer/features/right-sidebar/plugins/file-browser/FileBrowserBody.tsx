@@ -805,6 +805,7 @@ function FileBrowserBodyWithWorkdir({
           src={imageLightboxSrc}
           sessionId={ctx.sessionId}
           onClose={() => setImageLightboxSrc(null)}
+          onSourceChangeCancelled={setImageLightboxSrc}
         />
       ) : null}
     </div>

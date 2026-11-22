@@ -342,4 +342,30 @@ describe('ImageLightbox non-modal window', () => {
     fireEvent.keyDown(documentControl, { key: 'ArrowLeft' });
     await waitFor(() => expect(previewImage().getAttribute('src')).toBe(SRC));
   });
+
+  it('lets a reactivated older preview own shortcuts and Escape', async () => {
+    const firstClose = vi.fn();
+    const secondClose = vi.fn();
+    render(
+      <>
+        <ImageLightbox src={SRC} onClose={firstClose} />
+        <ImageLightbox src={NEXT_SRC} onClose={secondClose} />
+      </>,
+    );
+    const [first, second] = panels();
+    const firstSurface = first.querySelector<HTMLElement>('img[alt=""]')?.parentElement;
+    const secondSurface = second.querySelector<HTMLElement>('img[alt=""]')?.parentElement;
+    expect(firstSurface && secondSurface).toBeTruthy();
+
+    fireEvent.mouseDown(firstSurface!, { button: 0, clientX: 200, clientY: 200 });
+    expect(first.hasAttribute('data-preview-active')).toBe(true);
+    const secondTransform = secondSurface!.style.transform;
+    fireEvent.keyDown(first, { key: '+' });
+    expect(firstSurface!.style.transform).not.toBe(secondSurface!.style.transform);
+    expect(secondSurface!.style.transform).toBe(secondTransform);
+
+    fireEvent.keyDown(first, { key: 'Escape' });
+    await waitFor(() => expect(firstClose).toHaveBeenCalledTimes(1), { timeout: 1000 });
+    expect(secondClose).not.toHaveBeenCalled();
+  });
 });

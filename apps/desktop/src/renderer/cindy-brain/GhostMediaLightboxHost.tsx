@@ -50,7 +50,13 @@ export function GhostMediaLightboxHost({
     return <VideoLightbox src={media.src} onClose={() => setMedia(null)} />;
   }
   return (
-    <ImageLightbox src={media.src} onClose={() => setMedia(null)} sessionId={media.originSessionId}
+    <ImageLightbox
+      src={media.src}
+      onClose={() => setMedia(null)}
+      onSourceChangeCancelled={(displayedSrc) =>
+        setMedia((current) => (current ? { ...current, src: displayedSrc } : current))
+      }
+      sessionId={media.originSessionId}
     />
   );
 }

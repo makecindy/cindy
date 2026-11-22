@@ -1679,6 +1679,34 @@ describe('remote agent round trip', () => {
     } finally { await host.dispose(); }
   });
 
+  // 跨电脑执行时 MCP 桥由本机准备：V2 伙伴的 MCP 白名单只作快照(目录读不出时为空)，不能把普通任务的 MCP 过滤掉；
+  // 隔离运行的伙伴仍按白名单。
+  it('prepares the ordinary MCP bridge for V2 teammates on another computer', async () => {
+    const host = createHost();
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    try {
+      for (const [name, botRuntimeProfile, filtered] of [
+        ['v2-project', teammateProfile(true), false],
+        ['isolated-teammate', teammateProfile(false), true],
+      ] as const) {
+        const prepareMcpBridge = vi.fn(async () => null);
+        const start = createDeviceAgentStarter({
+          remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
+          rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge, makerMemory: () => undefined,
+          captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+        });
+        const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+          sessionId: `mcp-${name}`, workingDir: project, model: 'm', botRuntimeProfile,
+        } });
+        expect(prepareMcpBridge, name).toHaveBeenCalledTimes(1);
+        const ctx = (prepareMcpBridge.mock.calls[0] as unknown[])[2] as { botMcpPolicy?: unknown };
+        expect(ctx.botMcpPolicy, name).toEqual(filtered ? botRuntimeProfile.mcpPolicy : undefined);
+        await handle.close({ reason: 'navigation' });
+      }
+    } finally { await host.dispose(); }
+  });
+
   // 内置与插件带的 Skill 以任务所在电脑为准：本机停用的不带；对方的 Claude Code 把带来的挂成插件(保持 cindy:pr)，
   // 不在项目 Skill 里再出现一次。
   it('mounts this computer\'s enabled managed skills as plugins on the agent computer', async () => {

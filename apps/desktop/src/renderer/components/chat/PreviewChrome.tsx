@@ -1,5 +1,7 @@
 import {
   useContext,
+  useEffect,
+  useRef,
   type CSSProperties,
   type PointerEventHandler,
   type ReactNode,
@@ -16,6 +18,7 @@ import {
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { cn } from '@/lib/utils';
 import { ActivePreviewCollection } from './AttachmentCollectionContext';
+import { activateLightboxLayer } from '@/lib/lightboxLayer';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /** Scope teardown runs after closing/switching; don't restore into a removed viewer. */
@@ -134,8 +137,13 @@ export function PreviewHeader({
   onPointerDown?: PointerEventHandler<HTMLElement>;
 }) {
   const { t } = useTranslation();
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    activateLightboxLayer(headerRef.current?.closest<HTMLElement>('[data-lightbox-layer]') ?? null);
+  }, []);
   return (
     <header
+      ref={headerRef}
       data-preview-drag-handle={isDraggable ? '' : undefined}
       className={cn(
         'absolute inset-x-0 top-0 z-raised flex h-16 min-w-0 items-center gap-3 border-b border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 text-[var(--text-primary)]',

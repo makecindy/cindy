@@ -1,7 +1,19 @@
-/** Lightboxes share a z-index and portal to body; the last mounted layer is in front. */
+/** Activated preview layers own shortcuts; DOM mount order is only the fallback. */
+export function activateLightboxLayer(element: HTMLElement | null): void {
+  if (!element) return;
+  document
+    .querySelectorAll<HTMLElement>('[data-lightbox-layer][data-preview-active]')
+    .forEach((layer) => {
+      if (layer !== element) layer.removeAttribute('data-preview-active');
+    });
+  element.setAttribute('data-preview-active', '');
+}
+
+/** Lightboxes share a z-index; the activated layer, else the last mounted one, is in front. */
 export function isLightboxCovered(element: HTMLElement): boolean {
   const layers = document.querySelectorAll<HTMLElement>('[data-lightbox-layer]');
-  const foreground = layers.item(layers.length - 1);
+  const active = document.querySelector<HTMLElement>('[data-lightbox-layer][data-preview-active]');
+  const foreground = active ?? layers.item(layers.length - 1);
   return foreground !== null && !foreground.contains(element);
 }
 

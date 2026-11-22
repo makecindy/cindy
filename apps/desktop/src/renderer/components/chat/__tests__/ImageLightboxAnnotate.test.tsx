@@ -15,6 +15,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { i18n } from '@/i18n';
@@ -25,6 +26,7 @@ import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
 const SRC = 'cindy-media://blobs/source.png';
+const NEXT_SRC = 'cindy-media://blobs/next.png';
 
 type Stroke = { points: Array<{ x: number; y: number }> };
 
@@ -501,6 +503,87 @@ describe('ImageLightbox annotate mode', () => {
       menu.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(false);
     }
+  });
+
+  it('restores the baseline annotation draft on close-discard', async () => {
+    const baseline: Stroke[] = [{ points: [{ x: 0.5, y: 0.5 }] }];
+    const onDraftChange = vi.fn();
+    render(
+      <ConfirmDialogProvider>
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationEdit={{ initialStrokes: baseline, onDraftChange, onSave: vi.fn() }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    openAnnotate();
+    pressKey({ key: 'z', ctrlKey: true });
+    expect(onDraftChange).toHaveBeenLastCalledWith({ strokes: [] });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('chat.lightbox.close') }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmAction'),
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(onDraftChange).toHaveBeenLastCalledWith({
+        strokes: [{ points: [{ x: 0.5, y: 0.5 }] }],
+      }),
+    );
+  });
+
+  it('lets the same source request retry after a cancelled leave', async () => {
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [src, setSrc] = useState(SRC);
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSrc(NEXT_SRC)}>
+            open next
+          </button>
+          <ImageLightbox
+            src={src}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave: vi.fn(), onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayedSrc) => {
+              onSourceChangeCancelled(displayedSrc);
+              setSrc(displayedSrc);
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmCancel'),
+        }),
+      );
+    });
+    await waitFor(() => expect(onSourceChangeCancelled).toHaveBeenCalledWith(SRC));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
   });
 });
 

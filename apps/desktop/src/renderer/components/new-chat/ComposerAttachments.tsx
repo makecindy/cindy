@@ -380,6 +380,7 @@ function ThumbnailItem({
         <ImageLightbox
           src={lightboxSrc}
           onClose={() => setLightboxSrc(null)}
+          onSourceChangeCancelled={setLightboxSrc}
           // 托盘图片的标注编辑:惰性烧录只写回矢量笔迹,不再依赖会话缓存,
           // 缓存附件与草稿 base64 附件统一支持。
           annotationEdit={

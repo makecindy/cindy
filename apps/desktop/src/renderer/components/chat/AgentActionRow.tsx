@@ -1251,7 +1251,17 @@ export function AgentActionRow({
           onClose={closeLightbox}
         />
       )}
-      {lightbox.kind === 'image' && <ImageLightbox src={lightbox.src} onClose={closeLightbox} />}
+      {lightbox.kind === 'image' && (
+        <ImageLightbox
+          src={lightbox.src}
+          onClose={closeLightbox}
+          onSourceChangeCancelled={(displayedSrc) =>
+            setLightbox((current) =>
+              current.kind === 'image' ? { ...current, src: displayedSrc } : current,
+            )
+          }
+        />
+      )}
       {lightbox.kind === 'payload' && (
         <ToolPayloadLightbox
           payload={lightbox.payload}

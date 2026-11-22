@@ -3626,7 +3626,9 @@ export function createTurnRunner(
     if (!t) return;
     state.scheduledTranspond = null; // 防重入(下一条 stray 不会再命中)
     // 静默须在终态事件同步读(run 此时仍在跑)。失败照发；已开卡的不留半截卡。
-    const silenced = !errMsg && isSilencedSchedulerTurn(t.origin);
+    // A teammate's channel lane exists to talk in this chat: a scheduled run there always posts its
+    // result (owner 2026-11-22); silence only quiets desktop notifications.
+    const silenced = !errMsg && state.botLane !== 'channel' && isSilencedSchedulerTurn(t.origin);
     state.pendingTranspondFinals += 1;
     clearSilentStopSettleWait(t);
     clearTranspondTicker(t);

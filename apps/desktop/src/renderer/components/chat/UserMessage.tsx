@@ -1884,6 +1884,9 @@ export function UserMessage({
         <ImageLightbox
           src={rewriteToRemoteMediaOrigin(lightboxSrc, remoteMediaOrigin)}
           onClose={() => setLightboxSrc(null)}
+          onSourceChangeCancelled={(displayedSrc) =>
+            setLightboxSrc(rewriteToRemoteMediaOrigin(displayedSrc, remoteMediaOrigin))
+          }
         />
       )}
       {/* text-lightbox F1: Text Lightbox for file chip click */}

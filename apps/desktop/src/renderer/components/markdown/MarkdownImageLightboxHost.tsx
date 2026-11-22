@@ -38,5 +38,12 @@ export function MarkdownImageLightboxHost({
   }, []);
 
   if (src == null) return null;
-  return <ImageLightbox src={src} onClose={() => setSrc(null)} sessionId={sessionId} />;
+  return (
+    <ImageLightbox
+      src={src}
+      onClose={() => setSrc(null)}
+      onSourceChangeCancelled={setSrc}
+      sessionId={sessionId}
+    />
+  );
 }

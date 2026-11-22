@@ -1541,7 +1541,13 @@ export function QuestionReferenceText({ text, onPreviewOpenChange }: { text: str
         setModelLightboxPath={setModel}
       >{part.text}</MarkdownTargetLink>
     ) : part.text)}
-    {image && <ImageLightbox src={image} onClose={() => setImage(null)} />}
+    {image && (
+      <ImageLightbox
+        src={image}
+        onClose={() => setImage(null)}
+        onSourceChangeCancelled={setImage}
+      />
+    )}
     {file && <TextLightbox filePath={file.path} fileName={file.name} initialLine={file.line} onClose={() => setFile(null)} />}
     {model && <ModelLightbox source={{ kind: 'local', absPath: model }} onClose={() => setModel(null)} />}
   </>;
@@ -2152,7 +2158,11 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         </ReactMarkdown>
       )}
       {lightboxSrc && (
-        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+        <ImageLightbox
+          src={lightboxSrc}
+          onClose={() => setLightboxSrc(null)}
+          onSourceChangeCancelled={setLightboxSrc}
+        />
       )}
       {/* ADR-4: triggerRef intentionally omitted — markdown links rendered by
           react-markdown have no stable button ref; TextLightbox falls back
