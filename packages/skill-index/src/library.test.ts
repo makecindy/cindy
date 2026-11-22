@@ -71,6 +71,24 @@ describe('local Skill library workflow', () => {
     expect((await loadIndex(library)).snapshot().entries).toHaveLength(26);
   });
 
+  it.each(['gateway', 'parent'])('finds originals beneath a generated gateway when adding its %s directory', async kind => {
+    const target = path.join(root, 'index-' + kind);
+    const parent = path.join(root, 'extra-' + kind);
+    const gateway = path.join(parent, 'navigation');
+    await runCli(['init', '--library', target, '--source', source], executable);
+    await runCli(['gateway', '--library', target, '--output', gateway, '--name', 'custom-navigation'], executable);
+    if (kind === 'parent') {
+      const file = path.join(gateway, 'SKILL.md');
+      const generated = await fs.readFile(file, 'utf8');
+      await fs.writeFile(file, generated.replace('metadata: { cindyLibraryGateway: true }\n', ''));
+    }
+    await fs.mkdir(path.join(gateway, 'nested'));
+    await fs.writeFile(path.join(gateway, 'nested', 'SKILL.md'), '---\nname: nested-method\ndescription: Nested method.\n---\n');
+    await runCli(['add', '--library', target, '--source', kind === 'parent' ? parent : gateway], executable);
+    expect((await loadIndex(target)).snapshot().entries.map(({ entry }) => entry.name).sort())
+      .toEqual(['audio-edit', 'motion-feel', 'nested-method']);
+  });
+
   it('deduplicates physical sources and stops at a Skill resource boundary', async () => {
     const nested = path.join(source, 'motion', 'references', 'example');
     await fs.mkdir(nested);

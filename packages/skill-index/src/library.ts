@@ -12,6 +12,8 @@ export interface LibraryConfig {
   embedding?: { baseUrl: string; model: string; apiKeyEnv: string; dimensions?: number };
 }
 
+const CLI_GATEWAY_DESCRIPTION = 'Find relevant methods in your local Skill library at the start of a task. Search by the task, then read the selected original Skills and use their resources.';
+
 const IGNORED_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', 'build', '.runtime-skills']);
 
 /** Registered roots own the catalog. A Skill folder is a leaf; its resources are not more Skills. */
@@ -29,18 +31,23 @@ export async function discoverSkills(sources: readonly LibrarySource[]): Promise
       const filePath = await fs.realpath(path.join(real, skill.name));
       const raw = (await fs.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
       if (!/^---\r?\n/.test(raw)) throw new Error(`${filePath}: expected YAML Skill frontmatter`);
-      const { data } = matter(raw);
-      if (typeof data.name !== 'string' || typeof data.description !== 'string') {
-        throw new Error(`${filePath}: name and description must be strings`);
+      const { data, content } = matter(raw);
+      // Older CLI gateways predate the metadata flag and carry the generated command list.
+      const legacyGateway = data.description === CLI_GATEWAY_DESCRIPTION
+        && content.includes('- Search arguments: [') && content.includes('- Read arguments: [');
+      if (!(data.metadata?.cindyLibraryGateway === true || legacyGateway)) {
+        if (typeof data.name !== 'string' || typeof data.description !== 'string') {
+          throw new Error(`${filePath}: name and description must be strings`);
+        }
+        const strings = (value: unknown): string[] => Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === 'string') : [];
+        entries.push({
+          id: createHash('sha256').update(identity).digest('hex').slice(0, 24),
+          name: data.name, description: data.description, filePath, source,
+          aliases: strings(data.metadata?.aliases), tags: strings(data.metadata?.tags),
+        });
+        return;
       }
-      const strings = (value: unknown): string[] => Array.isArray(value)
-        ? value.filter((item): item is string => typeof item === 'string') : [];
-      entries.push({
-        id: createHash('sha256').update(identity).digest('hex').slice(0, 24),
-        name: data.name, description: data.description, filePath, source,
-        aliases: strings(data.metadata?.aliases), tags: strings(data.metadata?.tags),
-      });
-      return;
     }
     for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
       if (IGNORED_DIRECTORIES.has(child.name) || child.name.startsWith('.')) continue;
@@ -185,8 +192,8 @@ export function discoverySkill(library: string, executable: string, name = 'cind
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64) throw new Error('Use a lowercase hyphenated Skill name (max 64 characters)');
   return [
     '---', `name: ${name}`,
-    'description: Find relevant methods in your local Skill library at the start of a task. Search by the task, then read the selected original Skills and use their resources.',
-    '---', '', '# Local Skill library', '',
+    `description: ${CLI_GATEWAY_DESCRIPTION}`,
+    'metadata: { cindyLibraryGateway: true }', '---', '', '# Local Skill library', '',
     'At the start of a task, search this library using the user\'s goal before choosing a method. Search again when a new part of the task needs different expertise.',
     'Run the Node CLI using the following executable and arguments. Preserve paths as individual arguments using your shell\'s quoting rules:', '',
     `- Executable: ${JSON.stringify(executable)}`,
@@ -206,7 +213,7 @@ export function helperDiscoverySkill(libraryId: string, name = 'cindy-skill-libr
   return [
     '---', `name: ${name}`,
     'description: At the start of a task, find relevant methods in your registered local Skill library and read only the selected originals.',
-    '---', '', '# Local Skill library', '',
+    'metadata: { cindyLibraryGateway: true }', '---', '', '# Local Skill library', '',
     `Library: ${JSON.stringify(libraryId)}.`,
     'For ordinary user tasks. Teammates use their own personal Skill discovery entry.',
     'Before choosing a method for the current task, discover search_local_skills and read_local_skill with cindy_helper.list_tools(category="skills").',
