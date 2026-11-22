@@ -124,6 +124,50 @@ describe('buildDeliveryReceipt', () => {
     expect(removed.outputs.shown).toBe(false);
   });
 
+  it('drops an undone file and follows a later rename of a created file', () => {
+    const undone = buildDeliveryReceipt({
+      title: 'Report',
+      workingDir: '/repo',
+      changedFiles: [{ path: '/repo/out/report.csv', status: 'added', applied: false }],
+    });
+    expect(undone.outputs.shown).toBe(false);
+    expect(undone.changes.shown).toBe(false);
+    const renamed = buildDeliveryReceipt({
+      title: 'Report',
+      workingDir: '/repo',
+      changedFiles: [
+        { path: '/repo/out/report.csv', status: 'added' },
+        { path: '/repo/out/final.csv', oldPath: '/repo/out/report.csv', status: 'renamed' },
+      ],
+    });
+    expect(renamed.outputs.items).toEqual([{ path: '/repo/out/final.csv', name: 'final.csv' }]);
+    expect(renamed.changes.items).toEqual([
+      { path: '/repo/out/report.csv', openable: false },
+      { path: '/repo/out/final.csv', openable: true },
+    ]);
+  });
+
+  it('treats a persisted tool-error wrapper as a failed command', () => {
+    const receipt = buildDeliveryReceipt({
+      title: 'Run checks',
+      messages: [
+        {
+          role: 'tool_use',
+          toolUseId: 't1',
+          content: { toolName: 'exec', toolUseId: 't1', input: { command: 'pnpm test' } },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 't1',
+          content: '<tool_use_error>rejected</tool_use_error>',
+        },
+      ],
+    });
+    expect(receipt.verification.items).toEqual([
+      { command: 'pnpm test', outcome: 'failed', failed: true },
+    ]);
+  });
+
   it('does not describe an unread pull-request list as none or passed', () => {
     const receipt = buildDeliveryReceipt({
       title: 'PR',

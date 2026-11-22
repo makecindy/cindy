@@ -238,6 +238,12 @@ it('hides the mute entry for a task whose notifications another device sends', (
   expect(screen.queryByRole('menuitem', { name: 'deliveryReceipt' })).toBeNull();
 });
 
+it('hides this result when the task files are on an SSH workspace', () => {
+  render(<Harness target={{ ...session, remoteHostId: 'ssh-1' } as Session} />);
+  openMenu();
+  expect(screen.queryByRole('menuitem', { name: 'deliveryReceipt' })).toBeNull();
+});
+
 it('shows unpin without a branch entry even for a forked Pi task', () => {
   render(
     <Harness

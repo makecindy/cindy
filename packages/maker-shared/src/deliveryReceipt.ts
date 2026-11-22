@@ -26,6 +26,13 @@ export interface DeliveryReceiptFileInput {
   status?: string;
   name?: string;
   artifact?: unknown;
+  /** 改名前的路径。只有 status 为 renamed 时使用。 */
+  oldPath?: string | null;
+  /**
+   * false 表示这条记录所属的变更已经撤销，不再描述当前工作区。
+   * 省略表示仍然生效。
+   */
+  applied?: boolean;
 }
 
 export interface DeliveryReceiptChecks {
@@ -58,13 +65,19 @@ export interface DeliveryReceiptSection<T> {
   shown: boolean;
 }
 
+export interface DeliveryReceiptChangeItem {
+  path: string;
+  /** false 时这个路径已经删除或被改名走，只作为改动记下来，不再提供打开。 */
+  openable: boolean;
+}
+
 export interface DeliveryReceipt {
   title: string;
   /** get_task_digest 的 phase。finished 只表示这一轮结束。 */
   phase: string;
   workingDir: string | null;
   branch: string | null;
-  changes: DeliveryReceiptSection<{ path: string }>;
+  changes: DeliveryReceiptSection<DeliveryReceiptChangeItem>;
   verification: DeliveryReceiptSection<{ command: string; outcome: string; failed: boolean }>;
   outputs: DeliveryReceiptSection<{ path: string; name: string }>;
   prUrl: string | null;
@@ -103,6 +116,8 @@ export function judgeCommandOutcome(input: {
   const text = input.text ?? '';
   const exitMatch = text.match(/exit(?:ed)?(?:\s+code)?[:\s]+(-?\d+)/i);
   if (exitMatch) return `exit ${exitMatch[1]}`;
+  // 落库把 isError 编成整段文本的这层包裹，对象上的字段会丢掉。只认整段，避免命令输出里偶然出现这个词。
+  if (text.startsWith('<tool_use_error>') && text.endsWith('</tool_use_error>')) return 'failed';
   if (/\b(tests? failed|failing tests|assertionerror)\b/i.test(text)) return 'tests failed';
   if (input.isError === false) return 'ok';
   return undefined;
@@ -310,10 +325,25 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
   const changed = input.changedFiles ?? [];
   const order: string[] = [];
   const byPath = new Map<string, DeliveryReceiptFileInput & { created: boolean; removed: boolean }>();
+  const remember = (path: string) => {
+    if (!byPath.has(path)) order.push(path);
+  };
   for (const file of changed) {
-    if (!file.path) continue;
+    if (!file.path || file.applied === false) continue;
+    if (file.status === 'renamed' && file.oldPath && file.oldPath !== file.path) {
+      const previous = byPath.get(file.oldPath);
+      if (previous) previous.removed = true;
+      const current = byPath.get(file.path);
+      remember(file.path);
+      byPath.set(file.path, {
+        ...file,
+        created: previous?.created === true || current?.created === true,
+        removed: false,
+      });
+      continue;
+    }
     const previous = byPath.get(file.path);
-    if (!previous) order.push(file.path);
+    remember(file.path);
     const created = file.status && NEW_FILE_STATUSES.has(file.status)
       ? true
       : file.status === 'deleted'
@@ -325,7 +355,10 @@ export function buildDeliveryReceipt(input: DeliveryReceiptInput): DeliveryRecei
       removed: file.status === 'deleted',
     });
   }
-  const changeItems = order.map((path) => ({ path }));
+  const changeItems = order.map((path) => {
+    const file = byPath.get(path)!;
+    return { path, openable: !file.removed };
+  });
   const outputFiles: BotDeliverableFile[] = [];
   for (const path of order) {
     const file = byPath.get(path)!;

@@ -290,7 +290,7 @@ function ActiveSessionTaskMenu({
           </>
         )}
         {copy}
-        {!guest && !empty && !session.deviceLinkDeviceId && item('deliveryReceipt', () => requestOpenDeliveryReceipt(session.id))}
+        {!guest && !empty && !session.deviceLinkDeviceId && !session.remoteHostId && item('deliveryReceipt', () => requestOpenDeliveryReceipt(session.id))}
         {session.status === 'active' &&
           (hosted && !guest ? (
             <DropdownMenuSub>

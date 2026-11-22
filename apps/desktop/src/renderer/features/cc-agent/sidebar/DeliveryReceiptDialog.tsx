@@ -52,7 +52,15 @@ async function readReceiptFacts(session: Session): Promise<ReceiptFacts> {
   let unlistedChangeCount = 0;
   for (const set of [...sets].sort((a, b) => a.createdAt - b.createdAt)) {
     unlistedChangeCount += Math.max(0, set.fileCount - set.files.length);
-    for (const file of set.files) changedFiles.push({ path: file.path, status: file.status });
+    const applied = set.workspaceState !== 'undone';
+    for (const file of set.files) {
+      changedFiles.push({
+        path: resolveReceiptPath(file.path, set.cwd),
+        oldPath: file.oldPath ? resolveReceiptPath(file.oldPath, set.cwd) : null,
+        status: file.status,
+        applied,
+      });
+    }
   }
   if (!refs) {
     return {
@@ -104,7 +112,7 @@ function ReceiptFiles({
   workingDir,
   remote,
 }: {
-  items: Array<{ path: string; name?: string }>;
+  items: Array<{ path: string; name?: string; openable?: boolean }>;
   omitted: number;
   workingDir: string | null;
   remote: boolean;
@@ -114,7 +122,7 @@ function ReceiptFiles({
     <ul className="mt-1 flex flex-col">
       {items.map((file) => (
         <li key={file.path}>
-          {remote ? (
+          {remote || file.openable === false ? (
             <span className="block min-h-8 truncate px-1 text-left text-sm text-[var(--text-primary)]">
               {file.name || file.path}
             </span>
@@ -169,6 +177,11 @@ export function DeliveryReceiptDialog({
       .then(async (next) => {
         if (disposed) return;
         setSession(next);
+        // 另一台电脑或 SSH 工作区的记录不在本机。不拿本机空结果冒充这次结果。
+        if (next.deviceLinkDeviceId || next.remoteHostId) {
+          setFailed(true);
+          return;
+        }
         const nextFacts = await readReceiptFacts(next);
         if (!disposed) setFacts(nextFacts);
       })
