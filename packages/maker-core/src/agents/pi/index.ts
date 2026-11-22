@@ -6953,10 +6953,65 @@ export class PiAgent extends BaseAgent {
       const stateData = (state.data ?? {}) as {
         sessionFile?: string | null;
         sessionId?: string;
-        model?: { contextWindow?: number } | null;
+        model?: { provider?: unknown; id?: unknown; contextWindow?: number } | null;
       };
       if (typeof stateData.model?.contextWindow === 'number' && stateData.model.contextWindow > 0) {
         ctx.contextWindow = stateData.model.contextWindow;
+      }
+      // #12064: a resumed session can come back on a different model than the one
+      // this session selected (the host, sessions.model and the picker all still
+      // say B, while every request says A). get_state reports what Pi actually
+      // materialized, so compare it with the launch target and apply the target
+      // once. Without this the mismatch stays invisible until the next request
+      // reaches the provider.
+      if (
+        typeof stateData.model?.provider === 'string'
+        && typeof stateData.model.id === 'string'
+        && (stateData.model.provider !== initialProvider || stateData.model.id !== initialWireModel)
+      ) {
+        this.deps.logger.warn('pi resumed on a different model; applying the session model', {
+          resumeSessionId: opts.resumeSessionId ?? null,
+          expected: `${initialProvider}/${initialWireModel}`,
+          actual: `${stateData.model.provider}/${stateData.model.id}`,
+        });
+        const applied = await proc.request({
+          type: 'set_model',
+          provider: initialProvider,
+          modelId: initialWireModel,
+        });
+        if (!applied.success) {
+          throw new Error(
+            `pi set_model failed after resume: ${applied.error ?? 'unknown'} — ` +
+              `refusing to run on ${stateData.model.provider}/${stateData.model.id}`,
+          );
+        }
+        const confirmed = await proc.request({ type: 'get_state' });
+        const confirmedModel = (confirmed.data as {
+          model?: { provider?: unknown; id?: unknown; contextWindow?: unknown } | null;
+        } | undefined)?.model;
+        if (
+          !confirmed.success
+          || confirmedModel?.provider !== initialProvider
+          || confirmedModel.id !== initialWireModel
+        ) {
+          throw new Error(
+            `pi did not confirm ${initialProvider}/${initialWireModel} after resume ` +
+              `(got ${String(confirmedModel?.provider)}/${String(confirmedModel?.id)})`,
+          );
+        }
+        if (
+          typeof confirmedModel.contextWindow === 'number'
+          && confirmedModel.contextWindow > 0
+        ) {
+          ctx.contextWindow = confirmedModel.contextWindow;
+        }
+        // set_model leaves Pi on the new model's default thinking level; restore
+        // the level this startup had already applied before the correction.
+        if (opts.thinkingEnabled === false) {
+          await proc.request({ type: 'set_thinking_level', level: 'off' });
+        } else if (startupEffort) {
+          await proc.request({ type: 'set_thinking_level', level: effortToPiThinkingLevel(startupEffort) });
+        }
       }
       if (
         (typeof stateData.sessionFile !== 'string' || stateData.sessionFile.length === 0) &&

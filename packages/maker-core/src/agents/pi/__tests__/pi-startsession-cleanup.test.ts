@@ -46,6 +46,8 @@ const knobs = vi.hoisted(() => ({
   getStateRejects: false,
   timeoutCommand: null as string | null,
   getStateSessionFile: null as string | null,
+  getStateModels: [] as Array<{ provider?: string; id?: string; contextWindow?: number } | null>,
+  setModelSuccess: true,
   switchSessionGate: null as Promise<void> | null,
   switchSessionRejects: false,
   switchSessionSuccess: null as boolean | null,
@@ -62,6 +64,7 @@ const knobs = vi.hoisted(() => ({
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
   spawnedArgs: [] as string[][],
   requests: [] as string[],
+  requestCommands: [] as Array<Record<string, unknown>>,
   requestOptions: [] as Array<{ commandType: string; timeoutMs?: number }>,
 }));
 
@@ -114,6 +117,7 @@ vi.mock('../rpc-client.js', async (importOriginal) => ({
       options?: { timeoutMs?: number },
     ): Promise<{ success: boolean; data?: unknown; error?: string }> {
       knobs.requests.push(cmd.type);
+      knobs.requestCommands.push(cmd as unknown as Record<string, unknown>);
       knobs.requestOptions.push({ commandType: cmd.type, timeoutMs: options?.timeoutMs });
       if (cmd.type === knobs.timeoutCommand) {
         const { PiRpcRequestTimeoutError } = await importOriginal<typeof import('../rpc-client.js')>();
@@ -126,6 +130,10 @@ vi.mock('../rpc-client.js', async (importOriginal) => ({
         if (knobs.switchSessionSuccess === false) return { success: false, error: 'session load failed (mock)' };
       }
       if (cmd.type === 'get_state') {
+        const queued = knobs.getStateModels.length > 0 ? knobs.getStateModels.shift() : undefined;
+        if (queued !== undefined) {
+          return { success: true, data: { sessionFile: knobs.getStateSessionFile ?? '/mock/session.jsonl', model: queued } };
+        }
         const gate = knobs.getStateGate;
         if (gate) await gate;
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
@@ -133,6 +141,9 @@ vi.mock('../rpc-client.js', async (importOriginal) => ({
       }
       if (cmd.type === 'abort' && knobs.abortRejects) {
         return { success: false, error: 'abort rejected (mock)' };
+      }
+      if (cmd.type === 'set_model' && !knobs.setModelSuccess) {
+        return { success: false, error: 'model not available (mock)' };
       }
       // switch_session / set_thinking_level / set_auto_compaction / get_entries 等一律成功。
       return { success: true, data: { entries: [] } };
@@ -198,6 +209,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.getStateRejects = false;
     knobs.timeoutCommand = null;
     knobs.getStateSessionFile = null;
+    knobs.getStateModels = [];
+    knobs.setModelSuccess = true;
     knobs.switchSessionGate = null;
     knobs.switchSessionRejects = false;
     knobs.switchSessionSuccess = null;
@@ -213,6 +226,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.spawnedEnvs = [];
     knobs.spawnedArgs = [];
     knobs.requests = [];
+    knobs.requestCommands = [];
     knobs.requestOptions = [];
     disposed = 0;
     closedInstance = 0;
@@ -297,6 +311,30 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       ...overrides,
     };
   }
+
+  it('applies the selected model when a resumed process reports a different one', async () => {
+    knobs.getStateModels = [
+      { provider: 'cindy', id: 'other', contextWindow: 200_000 },
+      { provider: 'cindy', id: 'm', contextWindow: 200_000 },
+    ];
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession({ ...opts(), resumeSessionId: '/mock/session.jsonl' });
+    try {
+      const setModel = knobs.requestCommands.find((command) => command.type === 'set_model');
+      expect(setModel).toMatchObject({ provider: 'cindy', modelId: 'm' });
+      expect(knobs.requestCommands.filter((command) => command.type === 'get_state')).toHaveLength(2);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('fails the resume instead of running on an unconfirmed model', async () => {
+    knobs.getStateModels = [{ provider: 'cindy', id: 'other', contextWindow: 200_000 }];
+    knobs.setModelSuccess = false;
+    const agent = new PiAgent(buildDeps());
+    await expect(agent.startSession({ ...opts(), resumeSessionId: '/mock/session.jsonl' }))
+      .rejects.toThrow('set_model failed after resume');
+  });
 
   it('writes model-scoped compaction without replacing the inherited policy of other models or providers', async () => {
     const agent = new PiAgent(buildDeps({
