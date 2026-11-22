@@ -276,6 +276,12 @@ export function recordSessionClaudeTurnUsage(
             ...(selectedModel !== 'unknown' ? { selectedModel } : {}),
             ...(isSelectedOpaque ? { opaqueModelId: true } : {}),
             opaqueModelIds: claudeOpaqueModelIds,
+            ...(turnContext.officialAnthropicApi !== undefined
+              ? { officialAnthropicApi: turnContext.officialAnthropicApi }
+              : {}),
+            ...(turnContext.officialAnthropicModels !== undefined
+              ? { officialAnthropicModels: turnContext.officialAnthropicModels }
+              : {}),
           },
           claudeUsageSegments,
           claudeUsageSegmentsComplete,

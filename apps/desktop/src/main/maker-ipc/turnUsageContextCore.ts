@@ -1,5 +1,10 @@
 import type { AgentKind } from '@cindy/model-providers';
-import { normalizeModelIdForPricing, type BillingRoute } from '../usage/turnCostCalculator.js';
+import {
+  isOfficialAnthropicProviderConnection,
+  normalizeModelIdForPricing,
+  resolveOfficialAnthropicModelsForAgent,
+  type BillingRoute,
+} from '../usage/turnCostCalculator.js';
 import { isSubscriptionDirectRoute, isExclusiveXaiModelId, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 import { isUserProviderSession } from '../maker-host/provider-route.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -35,6 +40,11 @@ export function captureTurnUsageContext(
   const opaqueModelIdsByAgent = opaqueEntries.length > 0
     ? Object.fromEntries(opaqueEntries) as Partial<Record<AgentKind, readonly string[]>>
     : undefined;
+  const officialAnthropic = agent
+    ? resolveOfficialAnthropicModelsForAgent(provider, providerId, agent)
+    : {
+        officialAnthropicApi: isOfficialAnthropicProviderConnection(providerId, provider),
+      };
   return {
     providerId,
     ...(agent && provider?.routing?.[agent]?.usagePresetId ? { usagePresetId: provider.routing[agent]!.usagePresetId } : {}),
@@ -44,6 +54,12 @@ export function captureTurnUsageContext(
       ? { selectedModel: normalizedSelectedModel }
       : {}),
     ...(opaqueModelIdsByAgent ? { opaqueModelIdsByAgent } : {}),
+    ...(officialAnthropic.officialAnthropicApi || (provider && providerId !== 'anthropic')
+      ? { officialAnthropicApi: officialAnthropic.officialAnthropicApi }
+      : {}),
+    ...(officialAnthropic.officialAnthropicModels
+      ? { officialAnthropicModels: officialAnthropic.officialAnthropicModels }
+      : {}),
     isUserProviderRoute: isUserProviderSession(sessionId, providerId),
     subscriptionKind: isOpenAiSubscriptionProviderId(providerId) ? 'codex' as const
       : isClaudeSubscriptionProviderId(providerId) ? 'claude' as const

@@ -3447,6 +3447,166 @@ describe('usage through the production event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // 回归价值：2026-11-22 PR #11464 Codex P2 (PRRT_kwDOTgdRUs66ehqz / PRRT_kwDOTgdRUs66ehq0)；
+  // 真实经过 handleSessionEvent -> captureTurnUsageContext -> sessionClaudeTurnUsageCore，
+  // 覆盖官方 Anthropic 自定义 ID（https://api.anthropic.com）保留 SDK actual-cost 而同 preset ID
+  // 中转（https://relay.example）走参考报价，且同轮子代理段（claude:2:toolu_1）不被主 opaqueModelId 劫持。tier: unit。
+  it.each([
+    { scenario: 'official-custom-id-reference', providerId: 'anthropic-work', upstream: 'https://api.anthropic.com', source: 'provider-reference' as const, expectKind: 'actual-cost' as const, expectAmount: 2.75 },
+    { scenario: 'official-custom-id-override', providerId: 'anthropic-work', upstream: 'https://api.anthropic.com', source: 'user-override' as const, expectKind: 'value-estimate' as const, expectAmount: 3 },
+    { scenario: 'relay-with-anthropic-preset', providerId: 'anthropic-api', upstream: 'https://relay.example', source: 'provider-reference' as const, expectKind: 'value-estimate' as const, expectAmount: 3 },
+  ])('classifies official vs relayed Anthropic API connections by endpoint ($scenario)', async ({
+    providerId,
+    upstream,
+    source,
+    expectKind,
+    expectAmount,
+  }) => {
+    const h = harness();
+    effects.fn('getSessionProvider').mockReturnValue(providerId);
+    effects.fn('getGatewayAccountCurrency').mockResolvedValue('USD');
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+    h.deps.readSessionModelForUsage = vi.fn(async () => 'claude-sonnet-4-6');
+    effects.fn('getActiveCatalog').mockReturnValue({
+      providers: [
+        {
+          id: providerId,
+          auth: { method: 'api_key' },
+          access: { kind: 'api' },
+          routing: { 'claude-code': { upstream } },
+          models: { 'claude-code': [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', catalogPresetId: 'anthropic-api' }] },
+        },
+      ],
+    });
+    effects.fn('getReferenceModelPricing').mockReturnValue({
+      [providerId]: {
+        'claude-sonnet-4-6\u0000claude-code': {
+          providerId,
+          modelId: 'claude-sonnet-4-6',
+          currency: 'USD',
+          source,
+          approximate: true,
+          inputPerMtok: 3,
+          outputPerMtok: 15,
+        },
+      },
+    });
+    h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+    h.emit(event('done', {
+      total_cost_usd: 2.75,
+      modelUsageCumulativeStartsAtZero: true,
+      modelUsage: {
+        'claude-sonnet-4-6': { inputTokens: 1_000_000, outputTokens: 0, costUSD: 2.75 },
+      },
+      usageSegmentsComplete: true,
+      usageSegments: [{
+        id: 'claude:1:__main__',
+        model: 'claude-sonnet-4-6',
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+        complete: true,
+      }],
+    }, { source: 'claude-code' }));
+    await microtasks();
+
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'assistant-row',
+      money: expect.objectContaining({ amount: expectAmount, kind: expectKind }),
+    }));
+    if (expectKind === 'actual-cost') {
+      expect(effects.fn('recordTurnSpend')).toHaveBeenCalledWith(expect.objectContaining({ amount: expectAmount }));
+    } else {
+      expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    }
+    await h.dispose();
+  });
+
+  it('prices opaque main and distinct subagent models separately in one Claude turn', async () => {
+    const h = harness();
+    effects.fn('getSessionProvider').mockReturnValue('custom-magpie');
+    effects.fn('getGatewayAccountCurrency').mockResolvedValue('USD');
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+    h.deps.readSessionModelForUsage = vi.fn(async () => 'magpie-mix');
+    effects.fn('getActiveCatalog').mockReturnValue({
+      providers: [
+        {
+          id: 'custom-magpie',
+          auth: { method: 'api_key' },
+          access: { kind: 'api' },
+          routing: { 'claude-code': { upstream: 'https://magpie.example' } },
+          models: {
+            'claude-code': [
+              { id: 'magpie-mix', name: 'Magpie Mix', opaqueModelId: true },
+              { id: 'claude-haiku-4-5', name: 'Haiku' },
+            ],
+          },
+        },
+      ],
+    });
+    effects.fn('getReferenceModelPricing').mockReturnValue({
+      'custom-magpie': {
+        'magpie-mix\u0000claude-code': {
+          providerId: 'custom-magpie',
+          modelId: 'magpie-mix',
+          currency: 'USD',
+          source: 'provider-reference',
+          approximate: true,
+          inputPerMtok: 2,
+          outputPerMtok: 10,
+        },
+        'claude-haiku-4-5\u0000claude-code': {
+          providerId: 'custom-magpie',
+          modelId: 'claude-haiku-4-5',
+          currency: 'USD',
+          source: 'provider-reference',
+          approximate: true,
+          inputPerMtok: 1,
+          outputPerMtok: 5,
+        },
+      },
+    });
+    h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+    h.emit(event('done', {
+      total_cost_usd: 10.5,
+      modelUsageCumulativeStartsAtZero: true,
+      modelUsage: {
+        'claude-sonnet-4-6': { inputTokens: 1_000_000, outputTokens: 0, costUSD: 9.99 },
+        'claude-haiku-4-5': { inputTokens: 500_000, outputTokens: 0, costUSD: 0.51 },
+      },
+      usageSegmentsComplete: true,
+      usageSegments: [
+        {
+          id: 'claude:1:__main__',
+          model: 'claude-sonnet-4-6',
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+        {
+          id: 'claude:2:toolu_1',
+          model: 'claude-haiku-4-5',
+          inputTokens: 500_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+      ],
+    }, { source: 'claude-code' }));
+    await microtasks();
+
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'assistant-row',
+      money: expect.objectContaining({ amount: 2.5, kind: 'value-estimate' }),
+    }));
+    await h.dispose();
+  });
 });
 
 

@@ -971,6 +971,51 @@ describe('provider share usage estimates', () => {
     expect(amount?.currency).toBe('USD');
   });
 
+  // 回归价值：2026-11-22 PR #11464 Codex P2 (PRRT_kwDOTgdRUs66ehqz)；
+  // 验证共享估算对自定义 ID 官方 Anthropic API（https://api.anthropic.com）保留 SDK 金额且仅允许
+  // user-override 覆盖，而同 preset ID 的中转连接（https://relay.example）仍优先使用参考报价。tier: unit。
+  it.each([
+    { providerId: 'anthropic-work', upstream: 'https://api.anthropic.com', source: 'provider-reference' as const, hasOverride: false, expected: 0.25 },
+    { providerId: 'anthropic-work', upstream: 'https://api.anthropic.com', source: 'user-override' as const, hasOverride: true, expected: 0.0034 },
+    { providerId: 'anthropic-api', upstream: 'https://relay.example', source: 'provider-reference' as const, hasOverride: false, expected: 0.0034 },
+  ])('matches official vs relayed Anthropic precedence in share estimates ($providerId / $source)', async ({
+    providerId,
+    upstream,
+    source,
+    hasOverride,
+    expected,
+  }) => {
+    activeCatalogOverride.value = {
+      providers: [
+        {
+          id: providerId,
+          name: 'Anthropic API',
+          agents: ['codex'],
+          routing: { codex: { upstream, wireProtocol: 'anthropic-messages' } },
+          models: { codex: [{ id: 'gpt-6.1-sol', name: 'Model', catalogPresetId: 'anthropic-api' }] },
+        },
+      ],
+    };
+    if (hasOverride) {
+      usageStores.priceOverrides.mockReturnValue({
+        custom_override: {
+          providerId,
+          agent: 'codex',
+          modelId: 'gpt-6.1-sol',
+          values: { inputPerMtok: 2 },
+          baseReference: null,
+          updatedAt: '2026-10-17T00:00:00Z',
+        },
+      });
+    }
+    usageStores.referencePricing.mockReturnValue({
+      [providerId]: { 'gpt-6.1-sol': { ...quote, providerId, source } },
+    });
+    const amount = await readEstimate(providerId, 0.25);
+    expect(amount?.amount).toBeCloseTo(expected, 8);
+    expect(amount?.currency).toBe('USD');
+  });
+
   // 回归价值：2026-11-19 #11456 & Greptile P2；供应商分享账单估算对齐本地记账：从 active catalog
   // 读取不透明模型标记（不触发 listProviders 账号/模型刷新），缺报价时扣留 SDK 兜底金额。tier: unit。
   it.each([

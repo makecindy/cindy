@@ -161,7 +161,14 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
             ? { selectedModel: normalizedContextModel }
             : {}),
           ...(isSelectedOpaque ? { opaqueModelId: true } : {}),
-          opaqueModelIds: piOpaqueModelIds }, segments }).money;
+          opaqueModelIds: piOpaqueModelIds,
+          ...(context.officialAnthropicApi !== undefined
+            ? { officialAnthropicApi: context.officialAnthropicApi }
+            : {}),
+          ...(context.officialAnthropicModels !== undefined
+            ? { officialAnthropicModels: context.officialAnthropicModels }
+            : {}),
+        }, segments }).money;
     // BYOM reference estimates stay message-only, as in the legacy turn path.
     const ledgerMoney = money?.kind === 'actual-cost' || subscription ? money : null;
     // A resolved message-only estimate is final without ledger spend. Only a

@@ -300,6 +300,12 @@ export function recordSessionPiTurnUsage(
                     ? { opaqueModelId: true }
                     : {}),
                   opaqueModelIds: piOpaqueModelIds,
+                  ...(turnContext.officialAnthropicApi !== undefined
+                    ? { officialAnthropicApi: turnContext.officialAnthropicApi }
+                    : {}),
+                  ...(turnContext.officialAnthropicModels !== undefined
+                    ? { officialAnthropicModels: turnContext.officialAnthropicModels }
+                    : {}),
                 },
                 segments: pricingSegments,
               }).money;

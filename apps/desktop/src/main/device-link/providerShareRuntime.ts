@@ -83,7 +83,11 @@ import {
   type ModelPriceOverridesSnapshot,
 } from '../usage/referenceModelPricing.js';
 import type { ModelPriceQuote } from '../../shared/regionalMoney.js';
-import { computePriceQuoteTurnMoney, normalizeModelIdForPricing } from '../usage/turnCostCalculator.js';
+import {
+  computePriceQuoteTurnMoney,
+  isOfficialAnthropicProviderConnection,
+  normalizeModelIdForPricing,
+} from '../usage/turnCostCalculator.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { normalizeProviderShareMemberNote, PROVIDER_SHARE_MEMBER_NOTE_MAX_LENGTH } from '../../shared/providerShareMemberNote.js';
@@ -718,14 +722,19 @@ function createUsageEstimator() {
   let overrides: ModelPriceOverridesSnapshot | undefined;
   const referencePricing = new Map<string, ReturnType<typeof getReferenceModelPricing>>();
   let catalogProviders: ReturnType<typeof getActiveCatalog>['providers'] | undefined;
+  const getCatalogProvider = (providerId: string | null) => {
+    if (!providerId) return undefined;
+    catalogProviders ??= getActiveCatalog().providers;
+    return catalogProviders.find((item) => item.id === providerId);
+  };
   const isOpaqueRow = (
     providerId: string | null,
     agent: AgentKind | undefined,
     model: string,
   ): boolean => {
-    if (!providerId || providerId === 'xd' || providerId === 'anthropic') return false;
-    catalogProviders ??= getActiveCatalog().providers;
-    const provider = catalogProviders.find((item) => item.id === providerId);
+    if (!providerId || providerId === 'xd') return false;
+    const provider = getCatalogProvider(providerId);
+    if (isOfficialAnthropicProviderConnection(providerId, provider, agent, model)) return false;
     if (!provider?.models) return false;
     const agents = agent ? [agent] : (Object.keys(provider.models) as AgentKind[]);
     return agents.some((candidateAgent) =>
@@ -750,10 +759,17 @@ function createUsageEstimator() {
     const sdkMoney: ProviderShareMoney | null = row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
     const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
     const model = normalizeModelIdForPricing(row.model);
-    if (row.providerId === 'anthropic' && sdkMoney) {
+    const provider = getCatalogProvider(row.providerId);
+    const isOfficialAnthropic = isOfficialAnthropicProviderConnection(
+      row.providerId,
+      provider,
+      agent,
+      model,
+    );
+    if (isOfficialAnthropic && sdkMoney) {
       overrides ??= readModelPriceOverridesSnapshot();
       const hasAnthropicOverride = Object.values(overrides).some(
-        (entry) => entry?.providerId === 'anthropic',
+        (entry) => entry?.providerId === row.providerId,
       );
       if (!hasAnthropicOverride) return sdkMoney;
     }
@@ -772,7 +788,7 @@ function createUsageEstimator() {
       const price = getModelPriceQuote(pricing, row.providerId, model, agent);
       // 与本机记账(resolveTurnCost)一致：非 Anthropic 供应商优先按有效报价重算，
       // Anthropic 仅让用户显式覆写覆盖 SDK 账单事实，其余仍保留 SDK 记录金额。
-      if (!sdkMoney || row.providerId !== 'anthropic' || price?.source === 'user-override') {
+      if (!sdkMoney || !isOfficialAnthropic || price?.source === 'user-override') {
         const money = perTurnAverageMoney(row, price);
         if (money) return money;
       }

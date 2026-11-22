@@ -12,9 +12,12 @@ import {
   computeGatewayTurnCost,
   estimateClaudeSubscriptionTurnValue,
   isAnthropicModel,
+  isOfficialAnthropicMessagesEndpoint,
+  isOfficialAnthropicProviderConnection,
   normalizeModelIdForPricing,
   normalizeTurnUsageSegments,
   resolveClaudeTurnCostSinks,
+  resolveOfficialAnthropicModelsForAgent,
   resolveTurnCost,
   type ResolvedModelCost,
   type TurnPricingContext,
@@ -1334,5 +1337,262 @@ describe('enterprise BYOK reported SDK costs', () => {
         },
       }),
     ).toEqual({ model: 'deepseek-flash', money: null, source: 'reference' });
+  });
+});
+
+// 回归价值：2026-11-22 PR #11464 Codex P2 (PRRT_kwDOTgdRUs66ehqz / PRRT_kwDOTgdRUs66ehq0)；
+// 覆盖缺口：官方 Anthropic API 的 endpoint 校验不依赖 providerId === 'anthropic' 或 preset ID，
+// 且 Claude 子代理段（claude:<seq>:<parentToolUseId>）不继承主模型的 selectedModel / opaqueModelId。tier: unit。
+describe('PR #11464 Codex P2 regressions', () => {
+  it.each([
+    { baseUrl: 'https://api.anthropic.com', wireProtocol: undefined, requestPath: undefined, expected: true },
+    { baseUrl: 'https://api.anthropic.com/v1/', wireProtocol: 'anthropic-messages' as const, requestPath: '/v1/messages', expected: true },
+    { baseUrl: 'https://relay.example', wireProtocol: 'anthropic-messages' as const, requestPath: undefined, expected: false },
+    { baseUrl: 'https://api.anthropic.com/proxy', wireProtocol: 'anthropic-messages' as const, requestPath: undefined, expected: false },
+    { baseUrl: 'https://api.anthropic.com.evil.com', wireProtocol: 'anthropic-messages' as const, requestPath: undefined, expected: false },
+    { baseUrl: 'http://api.anthropic.com', wireProtocol: 'anthropic-messages' as const, requestPath: undefined, expected: false },
+    { baseUrl: 'https://api.anthropic.com:8443', wireProtocol: 'anthropic-messages' as const, requestPath: undefined, expected: false },
+    { baseUrl: 'https://user@api.anthropic.com', wireProtocol: 'anthropic-messages' as const, requestPath: undefined, expected: false },
+    { baseUrl: 'https://api.anthropic.com', wireProtocol: 'openai-chat' as const, requestPath: undefined, expected: false },
+    { baseUrl: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages' as const, requestPath: '/proxy/messages', expected: false },
+  ])('verifies official Anthropic Messages endpoint %j', ({ baseUrl, wireProtocol, requestPath, expected }) => {
+    expect(isOfficialAnthropicMessagesEndpoint({ baseUrl, wireProtocol, requestPath })).toBe(expected);
+  });
+
+  it('respects per-model route overrides alongside official Anthropic defaults', () => {
+    const provider = {
+      id: 'anthropic-work',
+      routing: {
+        'claude-code': { upstream: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages' as const },
+        codex: { upstream: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages' as const },
+      },
+      models: {
+        'claude-code': [
+          { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', catalogPresetId: 'anthropic-api' },
+          {
+            id: 'relay-opus',
+            name: 'Relay Opus',
+            catalogPresetId: 'anthropic-api',
+            route: { baseUrl: 'https://relay.example', wireProtocol: 'anthropic-messages' as const },
+          },
+        ],
+      },
+    };
+    expect(isOfficialAnthropicProviderConnection('anthropic-work', provider, 'claude-code', 'claude-sonnet-4-6')).toBe(true);
+    expect(isOfficialAnthropicProviderConnection('anthropic-work', provider, 'claude-code', 'relay-opus')).toBe(false);
+    expect(resolveOfficialAnthropicModelsForAgent(provider, 'anthropic-work', 'claude-code')).toEqual({
+      officialAnthropicApi: true,
+      officialAnthropicModels: { 'relay-opus': false },
+    });
+  });
+
+  it('treats official non-default Anthropic connections like anthropic for SDK vs reference pricing while keeping relays on quotes', () => {
+    const tokens = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 };
+    const pricing = catalog(
+      quote('claude-sonnet-4-6', 3, 15, { providerId: 'anthropic-work', source: 'provider-reference', approximate: true }),
+      quote('relay-opus', 4, 20, { providerId: 'anthropic-work', source: 'provider-reference', approximate: true }),
+      quote('claude-sonnet-4-6', 3, 15, { providerId: 'anthropic-api', source: 'provider-reference', approximate: true }),
+    );
+    // Official custom-ID Anthropic connection keeps SDK billing over reference price.
+    expect(
+      resolveTurnCost({
+        rawModel: 'claude-sonnet-4-6',
+        tokens,
+        sdkCostDelta: 2.75,
+        pricing,
+        context: {
+          providerId: 'anthropic-work',
+          billingRoute: 'provider-api',
+          region: 'global',
+          officialAnthropicApi: true,
+          officialAnthropicModels: { 'relay-opus': false },
+        },
+      }),
+    ).toEqual({
+      model: 'claude-sonnet-4-6',
+      money: { amount: 2.75, currency: 'USD', approximate: false, kind: 'actual-cost' },
+      source: 'sdk',
+    });
+    // Per-model relay route on the same provider still prefers the reference quote.
+    expect(
+      resolveTurnCost({
+        rawModel: 'relay-opus',
+        tokens,
+        sdkCostDelta: 2.75,
+        pricing,
+        context: {
+          providerId: 'anthropic-work',
+          billingRoute: 'provider-api',
+          region: 'global',
+          officialAnthropicApi: true,
+          officialAnthropicModels: { 'relay-opus': false },
+        },
+      }),
+    ).toMatchObject({
+      model: 'relay-opus',
+      money: { amount: 4, kind: 'value-estimate' },
+      source: 'reference',
+    });
+    // A relay saved under preset ID 'anthropic-api' (officialAnthropicApi: false) uses quotes.
+    expect(
+      resolveTurnCost({
+        rawModel: 'claude-sonnet-4-6',
+        tokens,
+        sdkCostDelta: 2.75,
+        pricing,
+        context: {
+          providerId: 'anthropic-api',
+          billingRoute: 'provider-api',
+          region: 'global',
+          officialAnthropicApi: false,
+        },
+      }),
+    ).toMatchObject({
+      model: 'claude-sonnet-4-6',
+      money: { amount: 3, kind: 'value-estimate' },
+      source: 'reference',
+    });
+  });
+
+  it('scopes selectedModel and opaqueModelId to main-request segments without affecting subagent models', () => {
+    const pricing = catalog(
+      quote('magpie-mix', 2, 10, { providerId: 'custom-magpie', source: 'provider-reference', approximate: true }),
+      quote('claude-haiku-4-5', 1, 5, { providerId: 'custom-magpie', source: 'provider-reference', approximate: true }),
+    );
+    const result = resolveClaudeTurnCostSinks(
+      [
+        delta('claude-sonnet-4-6', { inputTokensDelta: 1_000_000, costUsdDelta: 9.99 }),
+        delta('claude-haiku-4-5', { inputTokensDelta: 500_000, costUsdDelta: 0.55 }),
+      ],
+      pricing,
+      {
+        providerId: 'custom-magpie',
+        billingRoute: 'provider-api',
+        region: 'global',
+        selectedModel: 'magpie-mix',
+        opaqueModelId: true,
+        opaqueModelIds: ['magpie-mix'],
+      },
+      [
+        {
+          id: 'claude:1:__main__',
+          model: 'claude-sonnet-4-6',
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+        {
+          id: 'claude:2:toolu_1',
+          model: 'claude-haiku-4-5',
+          inputTokens: 500_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+      ],
+      true,
+    );
+    expect(result.turnMoney).toBeNull();
+    expect(result.estimatedTurnMoney?.amount).toBeCloseTo(2.5, 8);
+    expect(result.perModel).toMatchObject([
+      { model: 'claude-sonnet-4-6', source: 'reference', money: { amount: 2, kind: 'value-estimate' } },
+      { model: 'claude-haiku-4-5', source: 'reference', money: { amount: 0.5, kind: 'value-estimate' } },
+    ]);
+  });
+
+  it('separates opaque main usage from an unquoted subagent model and same-model backend collisions', () => {
+    // Subagent on a non-opaque unquoted model keeps SDK fallback while unpriced opaque main stays suppressed.
+    const distinctResult = resolveClaudeTurnCostSinks(
+      [
+        delta('claude-sonnet-4-6', { inputTokensDelta: 1_000_000, costUsdDelta: 9.99 }),
+        delta('claude-haiku-4-5', { inputTokensDelta: 500_000, costUsdDelta: 0.4 }),
+      ],
+      {},
+      {
+        providerId: 'custom-magpie',
+        billingRoute: 'provider-api',
+        region: 'global',
+        selectedModel: 'magpie-mix',
+        opaqueModelId: true,
+        opaqueModelIds: ['magpie-mix'],
+      },
+      [
+        {
+          id: 'claude:1:__main__',
+          model: 'claude-sonnet-4-6',
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+        {
+          id: 'claude:2:toolu_1',
+          model: 'claude-haiku-4-5',
+          inputTokens: 500_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+      ],
+      true,
+    );
+    expect(distinctResult.perModel).toMatchObject([
+      { model: 'claude-sonnet-4-6', money: null, source: 'reference' },
+      { model: 'claude-haiku-4-5', money: { amount: 0.4, kind: 'actual-cost' }, source: 'sdk' },
+    ]);
+
+    // Collision: main (opaque magpie-mix -> backend sonnet) + subagent (explicit sonnet).
+    const collisionPricing = catalog(
+      quote('magpie-mix', 2, 10, { providerId: 'custom-magpie', source: 'provider-reference', approximate: true }),
+      quote('claude-sonnet-4-6', 3, 15, { providerId: 'custom-magpie', source: 'provider-reference', approximate: true }),
+    );
+    const collisionResult = resolveClaudeTurnCostSinks(
+      [delta('claude-sonnet-4-6', { inputTokensDelta: 2_000_000, costUsdDelta: 9.99 })],
+      collisionPricing,
+      {
+        providerId: 'custom-magpie',
+        billingRoute: 'provider-api',
+        region: 'global',
+        selectedModel: 'magpie-mix',
+        opaqueModelId: true,
+        opaqueModelIds: ['magpie-mix'],
+      },
+      [
+        {
+          id: 'claude:1:__main__',
+          model: 'claude-sonnet-4-6',
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+        {
+          id: 'claude:2:toolu_1',
+          model: 'claude-sonnet-4-6',
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+      ],
+      true,
+    );
+    expect(collisionResult.estimatedTurnMoney?.amount).toBeCloseTo(5, 8);
+    expect(collisionResult.perModel.map((entry) => entry.money?.amount)).toEqual([2, 3]);
+    expect(
+      buildClaudeTurnUsageDetails(
+        undefined,
+        [delta('claude-sonnet-4-6', { inputTokensDelta: 2_000_000 })],
+        'fallback',
+        collisionResult.perModel,
+      )?.model,
+    ).toBe('claude-sonnet-4-6');
   });
 });
