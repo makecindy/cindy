@@ -74,7 +74,6 @@ export interface RelayUdpOptions {
   relayedSendCounters?(): { retransmitted: number; sent: number };
 }
 
-/** UDP 因「只通登记、不通数据」被停用时的说明，随路由一起报给日志。 */
 /**
  * 走中转的连接上的重传与发包累计。核心的连接统计是整条连接生命周期的累计，换路径（直连 ↔ 中转）不清零：只把两次采样之间
  * 一直在中转上的那段增长算进来，刚换到中转、第一次见到的连接只记基线（审查：长期直连切回中转时，它整个历史的重传会被当成
@@ -97,6 +96,7 @@ export class RelaySendCounters {
   }
 }
 
+/** UDP 因「只通登记、不通数据」被停用时的说明，随路由一起报给日志。 */
 export interface RelayUdpSuspension { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends'; cooldownMs: number }
 
 export class RelayUdpPath {
