@@ -35,6 +35,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
   resumeQuotaWait?(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void;
   botFallbackInputs: { has(createOpts: object): boolean };
   explicitScheduledModelInputs?: { has(createOpts: object): boolean };
+  rearmScheduledModelPreparation?(sessionId: string, item: AgentInputQueuedMessage): void;
   modelGroupInputs?: { has(createOpts: object): boolean };
   workerInputs?: { has(createOpts: object): boolean };
   scheduledQuotaInputs?: { has(createOpts: object): boolean };
@@ -72,7 +73,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
   inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, resumeQuotaWait, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs,
-  settlePausedResumeIntoHistory, explicitScheduledModelInputs,
+  settlePausedResumeIntoHistory, explicitScheduledModelInputs, rearmScheduledModelPreparation,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
@@ -236,6 +237,11 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
               // A queue-head retry keeps its original input ID and has no
               // replacement turn to release the guard. Retain the attempt budget.
               if (reportPreparation || startupAdmission) interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+              // The original queue head still owns its receipt, but its first
+              // preparation captured the rejected engine's route.
+              if (schedulerRunId && signals.reason === BOT_MODEL_STARTUP_ADMISSION_REASON && fallback.outcome === 'switched') {
+                rearmScheduledModelPreparation?.(sessionId, item);
+              }
               const outcome = await inputCoordinator.autoRetryLastError(
                 sessionId,
                 decision.attemptToken,

@@ -18585,6 +18585,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     resumeQuotaWait: (sessionId, item, signals) => inputCoordinator.resumeModelGroupQuotaWait(sessionId, item, signals),
     interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, explicitScheduledModelInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
+    rearmScheduledModelPreparation: (sessionId, item) => schedulerQueueBridgeHolder?.rearmModelPreparation(sessionId, item),
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
     pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,

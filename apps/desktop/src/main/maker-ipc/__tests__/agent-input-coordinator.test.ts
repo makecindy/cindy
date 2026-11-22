@@ -14169,6 +14169,8 @@ describe('Bot startup admission', () => {
     modelRejection?: { message: string; explicit?: boolean }) {
     const scheduledQuotaInputs = new WeakSet<object>();
     const h = createHarness({ isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts) });
+    const { schedulerBridge, preparations } = createInputEnqueueHarness(h.coordinator);
+    const preparedEngines: string[] = [];
     const attemptCurrent = vi.spyOn(h.coordinator, 'isAutoResumeAttemptCurrent');
     const sid = 'startup-admission';
     let backup = false;
@@ -14208,12 +14210,16 @@ describe('Bot startup admission', () => {
       createDbMessage: async (id, row) => { await mocks.createMessage(id, row); },
       isSessionRunningError: () => false, log: mocks.logger,
     });
-    h.sendToAgent.mockImplementation(async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome);
+    h.sendToAgent.mockImplementation(async (...args) => {
+      await runSchedulerQueuedPreparation(args[3].persistUserMessage?.clientId, preparations, () => {});
+      return (await transaction.sendToAgentAccepted(...args)).outcome;
+    });
     const botFallbackInputs = new WeakSet<object>();
     const fallback = vi.fn(async (_sid: string, _episode: number, _token: number, _required: boolean, current: () => boolean) => {
       if (!current()) return { session: null, outcome: 'superseded' as const };
       backup = true;
-      h.setAgentKind('codex');
+      session.agentKind = modelRejection ? 'pi' : 'codex';
+      h.setAgentKind(session.agentKind);
       return { session: null, outcome: 'switched' as const };
     });
     const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
@@ -14235,6 +14241,7 @@ describe('Bot startup admission', () => {
       }, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
       botFallbackInputs, scheduledQuotaInputs,
       explicitScheduledModelInputs: { has: () => modelRejection?.explicit === true },
+      rearmScheduledModelPreparation: schedulerBridge.rearmModelPreparation,
       saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
       getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
@@ -14252,9 +14259,18 @@ describe('Bot startup admission', () => {
     if (bot) botFallbackInputs.add(item.createOpts);
     if (quota || modelRejection) {
       item.origin = { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'daily-run' };
+      if (modelRejection) {
+        const accept = schedulerBridge.trackPrompt(item.clientId, {
+          sessionId: sid, origin: item.origin, text: 'original task', persistedContent: 'original task',
+          explicitModelRoute: modelRejection.explicit,
+          onPreparing: async () => { preparedEngines.push(session.agentKind); },
+          onAccepted: () => { expect(preparedEngines.at(-1)).toBe(session.agentKind); },
+        });
+        h.onAcceptedQueuedMessage.mockImplementation(async () => { await accept(); });
+      }
       if (quota) scheduledQuotaInputs.add(item.createOpts);
     }
-    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent,
+    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent, preparedEngines,
       setAvailable: () => { backup = true; } };
   }
 
@@ -14282,12 +14298,15 @@ describe('Bot startup admission', () => {
           await h.sendToAgent.mock.results[1].value;
           expect(h.fallback).toHaveBeenCalledExactlyOnceWith(h.sid, 1, expect.any(Number), true, expect.any(Function));
           expect(h.session.send).toHaveBeenCalledOnce();
+          expect(h.preparedEngines).toEqual(['codex', 'pi']);
+          expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'original task' });
           expect(h.onUserMessagePersisted).toHaveBeenCalledOnce();
           expect(h.coordinator.getProjection(h.sid).error).toBeNull();
           expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
           expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId)).toEqual(['original', 'original']);
         } else {
           expect(h.fallback).not.toHaveBeenCalled();
+          expect(h.preparedEngines).toEqual(['codex']);
           expect(h.session.send).not.toHaveBeenCalled();
           expect(h.onRejectedUserTurn).toHaveBeenCalledOnce();
         }
