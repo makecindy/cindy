@@ -13,6 +13,7 @@ import {
   clearRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { ProjectsSection, type ProjectsSectionProps } from '../features/cc-agent/sidebar/sections/ProjectsSection';
+import { SidebarFilterPopover } from '../features/cc-agent/sidebar/SidebarFilterPopover';
 import { useConversationSearch } from '../features/cc-agent/sidebar/ConversationSearchBox';
 import { SidebarInlineSearch } from '../features/cc-agent/sidebar/SidebarInlineSearch';
 import { ConfirmDialogProvider, useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -59,6 +60,15 @@ function remoteSessions(): Session[] {
   } as Session));
 }
 
+function oldSessions(ids: readonly string[], overrides: Partial<Session> = {}): Session[] {
+  return ids.map((id, index) => {
+    const timestamp = new Date(Date.UTC(2020, 0, 30 - index)).toISOString();
+    return {
+      id, title: id, status: 'active', createdAt: timestamp, updatedAt: timestamp, ...overrides,
+    } as Session;
+  });
+}
+
 function props(groupDevice: boolean): ProjectsSectionProps {
   return {
     unclassified: [], projects: [], dialogues: [], allKnownProjects: [], allProjectKeysForOrder: ['local:known-project'],
@@ -86,14 +96,14 @@ function props(groupDevice: boolean): ProjectsSectionProps {
   };
 }
 
-/** Three remote tasks in the shared dialogue group (limit 1, so two rows fold). */
+/** Seven remote tasks in the shared dialogue group: five default rows and two older rows. */
 function groupProps(groupDevice: boolean): ProjectsSectionProps {
-  return { ...props(groupDevice), dialogues: remoteSessions() };
+  const ids = ['first', 'extra-1', 'extra-2', 'extra-3', 'extra-4', 'idle', 'lit'];
+  return { ...props(groupDevice), dialogues: oldSessions(ids, { deviceLinkDeviceId: 'remote' }) };
 }
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem('sidebar.collapse.projectSessionLimit', '1');
   // ProjectsSection 渲染时读 window.electronAPI.platform 做项目键比较(main 897de9031);
   // jsdom 没有 preload 桥,这里只补 platform 字段,与 windowCloseBehavior 用例同法。
   Object.defineProperty(window, 'electronAPI', {
@@ -131,6 +141,77 @@ it('skips an untouched project subtree on a title patch and still updates its re
   expectLamp(header(), 'needs-interaction');
   act(() => clearRemoteSessionActivity());
   expectLamp(header(), null);
+});
+
+// #11575, unit: real display menu → real ProjectsSection and its memoized project rows.
+// Fixed-limit folding tests do not cover a preference change reaching mounted groups.
+// Two groups with older rows beyond the new default expose a disconnected menu or list.
+it('updates both mounted project groups and preserves exemptions and local Show all', async () => {
+  const now = new Date('2026-11-22T12:00:00Z');
+  vi.setSystemTime(now);
+  const p = props(false);
+  p.filter.sortBy = 'created';
+  const alpha = oldSessions(['a-1', 'a-2', 'a-3', 'a-4', 'a-5', 'a-recent', 'a-old'], {
+    workingDir: '/Alpha', workspaceKind: 'project', _count: { messages: 1 },
+  });
+  alpha[5].lastActivityAt = '2026-11-22T11:00:00Z';
+  const beta = oldSessions(['b-1', 'b-2', 'b-3', 'b-4', 'b-running', 'b-attention'], {
+    workingDir: '/Beta', workspaceKind: 'project', _count: { messages: 1 },
+  });
+  p.projects = [alpha, beta].flatMap((sessions) =>
+    groupSessions(sessions).projects.map((project) => ({ ...project, sessions })),
+  );
+  p.allKnownProjects = p.projects;
+  p.allProjectKeysForOrder = p.projects.map((project) => project.projectKey);
+  p.dialogues = oldSessions(['d-1', 'd-2', 'd-3', 'd-4', 'd-5', 'd-6']);
+  p.runningSessionIds = new Set(['b-running']);
+  p.notifications = new Set(['b-attention']);
+
+  function Sidebar({ activeSessionId }: { activeSessionId?: string }) {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <SidebarFilterPopover filter={p.filter} allKnownProjects={p.projects} open={open} onOpenChange={setOpen} />
+        <ProjectsSection {...p} activeSessionId={activeSessionId} />
+      </>
+    );
+  }
+  const visible = (sessions: Session[]) =>
+    sessions.filter(({ id }) => screen.queryByTestId(`row-${id}`)).map(({ id }) => id);
+  const compactAlpha = ['a-1', 'a-2', 'a-recent'];
+  const compactBeta = ['b-1', 'b-2', 'b-running', 'b-attention'];
+  const visibleDialogues = ['d-1', 'd-2', 'd-3', 'd-4', 'd-5'];
+  const view = render(<Sidebar />);
+
+  expect(visible(alpha)).toEqual(['a-1', 'a-2', 'a-3', 'a-4', 'a-5', 'a-recent']);
+  expect(visible(beta)).toEqual(beta.map(({ id }) => id));
+  expect(visible(p.dialogues)).toEqual(visibleDialogues);
+  const display = await screen.findByRole('menuitem', { name: /^ccAgent\.sidebar\.displayHeading/ });
+  fireEvent.keyDown(display, { key: 'ArrowRight' });
+  const projectLimit = await screen.findByRole('menuitem', {
+    name: /^ccAgent\.sidebar\.projectSessionLimitHeading/,
+  });
+  fireEvent.keyDown(projectLimit, { key: 'ArrowRight' });
+  const two = await screen.findByRole('menuitemradio', { name: '2' });
+  fireEvent.click(two);
+  // No rerender or direct storage mutation between the menu action and the two row assertions.
+  expect(visible(alpha)).toEqual(compactAlpha);
+  expect(visible(beta)).toEqual(compactBeta);
+  expect(visible(p.dialogues)).toEqual(visibleDialogues);
+  fireEvent.keyDown(two, { key: 'Escape' });
+
+  view.rerender(<Sidebar activeSessionId="b-3" />);
+  expect(visible(beta)).toEqual(beta.map(({ id }) => id));
+  view.rerender(<Sidebar />);
+  const alphaGroup = screen.getByTestId('row-a-1').closest<HTMLElement>('[data-project-working-dir]')!;
+  fireEvent.click(within(alphaGroup).getByRole('button', { name: 'ccAgent.sidebar.showAllSessions' }));
+  expect(visible(alpha)).toEqual(alpha.map(({ id }) => id));
+  expect(visible(beta)).toEqual(compactBeta);
+
+  view.unmount();
+  render(<Sidebar />);
+  expect(visible(alpha)).toEqual(compactAlpha);
+  expect(visible(beta)).toEqual(compactBeta);
 });
 
 function activity(phase: typeof phases[number]) {
@@ -247,10 +328,9 @@ describe('Sidebar group context menus', () => {
   it.each(['active', 'archived'] as const)('offers scoped search and bulk %s actions for local dialogues', async (status) => {
     const p = props(false);
     p.filter.status = status;
-    p.dialogues = ['first', 'folded'].map((id) => ({
-      id, title: id, status, workspaceKind: 'dialogue', pinnedAt: null,
-      createdAt: '2026-09-03', updatedAt: '2026-09-03',
-    } as Session));
+    p.dialogues = oldSessions(['first', 'd-2', 'd-3', 'd-4', 'd-5', 'folded'], {
+      status, workspaceKind: 'dialogue', pinnedAt: null,
+    });
     const pinned = { ...p.dialogues[0], id: 'pinned', pinnedAt: '2026-10-21' };
     const make: Session = { ...p.dialogues[0], id: 'make', source: 'cindy-make' };
     p.dialogueActionSessions = [...p.dialogues, pinned, make];
@@ -541,13 +621,9 @@ describe.each([false, true])('Dialogue group starting lifecycle, device grouping
 
 function multiDeviceProps(): ProjectsSectionProps {
   const p = props(true);
-  const sessions = remoteSessions();
   p.dialogues = [
-    { ...sessions[0], id: 'a-first', deviceLinkDeviceId: 'a' },
-    { ...sessions[1], id: 'a-idle', deviceLinkDeviceId: 'a' },
-    { ...sessions[0], id: 'b-first', deviceLinkDeviceId: 'b' },
-    { ...sessions[1], id: 'b-idle', deviceLinkDeviceId: 'b' },
-    { ...sessions[2], id: 'lit', deviceLinkDeviceId: 'b' },
+    ...oldSessions(['a-first', 'a-2', 'a-3', 'a-4', 'a-5', 'a-idle'], { deviceLinkDeviceId: 'a' }),
+    ...oldSessions(['b-first', 'b-2', 'b-3', 'b-4', 'b-5', 'b-idle', 'lit'], { deviceLinkDeviceId: 'b' }),
   ];
   p.remoteDeviceIndex = new Map([['a', { name: 'Device A', online: true }], ['b', { name: 'Device B', online: true }]]);
   return p;
@@ -598,8 +674,8 @@ describe('Dialogue groups across devices', () => {
     expect(within(a).queryByTestId('row-lit')).toBeNull();
     expect(within(b).getByTestId('row-lit')).toBeTruthy();
     expect(screen.getAllByText('ccAgent.sidebar.dialogues')).toHaveLength(2);
-    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
-    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(2);
+    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(5);
+    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(6);
     fireEvent.click(within(b).getByTestId('row-lit'));
     expect(p.onSessionClick).toHaveBeenCalledWith('lit');
     fireEvent.click(deviceHeader('Device B'));
@@ -616,13 +692,13 @@ describe('Dialogue groups across devices', () => {
     const a = deviceHeader('Device A').parentElement!;
     const b = deviceHeader('Device B').parentElement!;
     fireEvent.click(within(b).getByText('ccAgent.sidebar.showAllSessions'));
-    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(3);
-    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
+    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(7);
+    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(5);
     const bHeader = groupHeader(b);
     view.rerender(<ProjectsSection {...p} dialogues={[...p.dialogues].reverse()} />);
     expect(groupHeader(b)).toBe(bHeader);
-    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(3);
-    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
+    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(7);
+    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(5);
   });
 
   it('folds dialogue groups independently per device and includes them in fold-all', () => {
@@ -649,7 +725,7 @@ describe('Dialogue groups across devices', () => {
     expect(screen.getAllByText('ccAgent.sidebar.dialogues')).toHaveLength(1);
     expect(screen.queryByText('Device A')).toBeNull();
     fireEvent.click(screen.getByText('ccAgent.sidebar.showAllSessions'));
-    expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);
+    expect(screen.getAllByTestId(/^row-/)).toHaveLength(p.dialogues.length);
   });
 });
 

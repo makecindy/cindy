@@ -16640,6 +16640,8 @@
       "filterSummaryActive": "{{count}} aktiv",
       "filterReset": "Filter zurücksetzen",
       "displayHeading": "Anzeige",
+      "projectSessionLimitHeading": "Sitzungen pro Projekt",
+      "projectSessionLimitDescription": "Die aktuelle Sitzung und Sitzungen, die in den letzten 24 Stunden aktiv waren, laufen oder Aufmerksamkeit erfordern, bleiben sichtbar.",
       "taskInfoHeading": "Sitzungsinfo",
       "taskInfoSummaryNone": "Keine",
       "taskInfoSummarySeparator": ", ",

@@ -188,11 +188,32 @@ describe('sidebar display settings menu', () => {
     expect([dot('active'), dot('archived'), dot('all')]).toEqual([false, true, false]);
   });
 
+  // #11575, unit: the real menu must expose a previously saved off-preset count
+  // and let users return to the default without using DevTools. List tests cover
+  // the normal presets, not the upgrade case of a single saved value of 8.
+  it('keeps an existing custom count selectable until returning to the default', async () => {
+    const key = 'sidebar.collapse.projectSessionLimit';
+    localStorage.setItem(key, '8');
+    try {
+      render(<Preview filter={makeFilter()} />);
+      await openSubmenu(/^显示/);
+      const limit = await openSubmenu(/^项目任务显示条数/);
+      expect(within(limit).getByRole('menuitemradio', { name: '8', checked: true })).toBeTruthy();
+      fireEvent.click(within(limit).getByRole('menuitemradio', { name: '5' }));
+      expect(within(limit).getByRole('menuitemradio', { name: '5', checked: true })).toBeTruthy();
+      expect(localStorage.getItem(key)).toBeNull();
+    } finally {
+      localStorage.removeItem(key);
+    }
+  });
+
   it('hides unavailable grouping choices and their summary without clearing saved device preference', async () => {
     const filter = makeFilter({ groupBy: 'flat' });
     render(<Preview filter={filter} remote={false} />);
     expect(screen.queryByRole('menuitem', { name: /^项目排序/ })).toBeNull();
     expect(screen.getByRole('menuitem', { name: /^分组/ }).textContent).toBe('分组对话');
+    const display = await openSubmenu(/^显示/);
+    expect(within(display).queryByRole('menuitem', { name: /^项目任务显示条数/ })).toBeNull();
     const group = await openSubmenu(/^分组/);
     expect(
       within(group)

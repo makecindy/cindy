@@ -16796,6 +16796,8 @@
       "filterSummaryActive": "Activos: {{count}}",
       "filterReset": "Restablecer filtros",
       "displayHeading": "Visualización",
+      "projectSessionLimitHeading": "Sesiones por proyecto",
+      "projectSessionLimitDescription": "La sesión actual y las sesiones activas en las últimas 24 horas, en curso o que requieren atención siguen visibles.",
       "taskInfoHeading": "Información de la sesión",
       "taskInfoSummaryNone": "Ninguno",
       "taskInfoSummarySeparator": ", ",

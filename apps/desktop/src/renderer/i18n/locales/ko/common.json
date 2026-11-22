@@ -16566,6 +16566,8 @@
       "filterSummaryActive": "{{count}}개 적용 중",
       "filterReset": "필터 초기화",
       "displayHeading": "표시",
+      "projectSessionLimitHeading": "프로젝트별 세션 수",
+      "projectSessionLimitDescription": "현재 보고 있는 세션과 최근 24시간 내 활동한 세션, 실행 중이거나 확인이 필요한 세션은 계속 표시됩니다.",
       "taskInfoHeading": "세션 정보",
       "taskInfoSummaryNone": "없음",
       "taskInfoSummarySeparator": ", ",

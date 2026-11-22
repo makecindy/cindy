@@ -54,7 +54,6 @@ import type {
   AutomationScheduleSessionInfo,
   AutomationSessionGroup,
 } from '../../lib/automationSidebarGrouping';
-import { getProjectSessionCollapseLimit } from '../../lib/sidebarCollapseConfig';
 import type { SessionLampAggregate } from '../../lib/sessionLampAggregation';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
@@ -92,6 +91,8 @@ export interface ProjectNodeProps {
   selectedSessionIds?: ReadonlySet<string>;
   /** Sidebar 内容过滤态或时间升序排序下强制展示全部 session entry。 */
   disableSessionCollapse: boolean;
+  /** Only the grouped main list supplies the display preference; pinned projects keep the default. */
+  sessionCollapseLimit?: number;
   /**
    * 隐藏标题右侧的远程机器标注(设备名 / SSH endpoint)。
    * 「按设备分组」开启时列表已经按设备切段、段头写着设备名,行内再标一遍是重复
@@ -146,6 +147,7 @@ export const ProjectNode = memo(function ProjectNode({
   scheduleSessionIndex,
   selectedSessionIds,
   disableSessionCollapse,
+  sessionCollapseLimit,
   hideRemoteMachineLabel = false,
   lamp,
   foldExemptSessionIds,
@@ -210,7 +212,7 @@ export const ProjectNode = memo(function ProjectNode({
             scheduleSessionIndex={scheduleSessionIndex}
             selectedSessionIds={selectedSessionIds}
             collapsible
-            collapseLimit={getProjectSessionCollapseLimit()}
+            collapseLimit={sessionCollapseLimit}
             disableCollapse={disableSessionCollapse}
             foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={isCollapsed || parentSectionCollapsed}

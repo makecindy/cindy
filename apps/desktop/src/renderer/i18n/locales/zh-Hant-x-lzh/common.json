@@ -16566,6 +16566,8 @@
       "filterSummaryActive": "{{count}} 項生效",
       "filterReset": "復原篩選",
       "displayHeading": "示",
+      "projectSessionLimitHeading": "各案所示差事數",
+      "projectSessionLimitDescription": "正覽、近 24 小時內有動靜、方行或待理之差事，仍示之。",
       "taskInfoHeading": "差事資訊",
       "taskInfoSummaryNone": "無",
       "taskInfoSummarySeparator": "、",
