@@ -8,7 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const native = path.join(root, 'packages/agent-net-native');
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', ...options });
-  if (result.error || result.status !== 0) throw new Error(`AGENT_NET_NATIVE_GATE_FAILED: ${command} ${args[0]}`);
+  if (result.error || result.status !== 0) throw new Error(`AGENT_NET_NATIVE_GATE_FAILED: ${command} ${args[0]}${result.error ? ` (${result.error.message})` : ''}`);
 }
 const version = spawnSync('rustc', ['-vV'], { encoding: 'utf8' });
 const host = /^host: (.+)$/m.exec(version.stdout ?? '')?.[1];
@@ -21,12 +21,13 @@ const library = path.join(native, 'target', host, 'debug', filename);
 if (!existsSync(library)) throw new Error('AGENT_NET_NATIVE_LIBRARY_MISSING');
 const python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 run(python, ['--version']);
-const pnpm = (args, extraEnv = env) => process.env.npm_execpath
-  ? run(process.execPath, [process.env.npm_execpath, ...args], { env: extraEnv })
-  : run(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args, { env: extraEnv, shell: process.platform === 'win32' });
+const pnpm = (args, extraEnv = env, options = {}) => process.env.npm_execpath
+  ? run(process.execPath, [process.env.npm_execpath, ...args], { env: extraEnv, ...options })
+  : run(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args, { env: extraEnv, shell: process.platform === 'win32', ...options });
 pnpm(['--filter', '@cindy/agent-net', 'prepare-core']);
 // Match the integration tier: real native processes and transport timers run
 // in one worker, rather than competing with another socket suite in this gate.
-pnpm(['--filter', '@cindy/agent-net', 'exec', 'vitest', 'run', '--pool=forks', '--maxWorkers=1'], {
+// Its own limit, under the job's: a run stuck past it fails with its output (each test as it finishes), where a cancelled job keeps no log.
+pnpm(['--filter', '@cindy/agent-net', 'exec', 'vitest', 'run', '--pool=forks', '--maxWorkers=1', '--reporter=verbose'], {
   ...env, CINDY_AGENT_NET_NATIVE_LIBRARY: library, PYTHON: python,
-});
+}, { timeout: 10 * 60_000 });

@@ -18,8 +18,6 @@ const SEGMENT = MARK + '#', ESCAPED = MARK + '=';
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const INDEX = new Int16Array(128).fill(-1);
 for (let index = 0; index < ALPHABET.length; index++) INDEX[ALPHABET.charCodeAt(index)] = index;
-/** A run this long of base64 characters somewhere in the JSON: the only case worth the replacer's pass. */
-const CANDIDATE = new RegExp(`[A-Za-z0-9+/]{${BINARY_MIN_CHARS}}`);
 const CANONICAL = /^[A-Za-z0-9+/]*={0,2}$/;
 
 interface NodeBuffer { from(value: string | Uint8Array, encoding?: string): Uint8Array & { toString(encoding: string): string } }
@@ -80,11 +78,23 @@ export function base64Codec(platform: Base64Platform) {
 const { canonicalBase64Bytes, base64Of } = base64Codec(globalThis as Base64Platform);
 
 /**
+ * A run of BINARY_MIN_CHARS base64 characters somewhere in `text`: the only case worth the replacer's pass. A plain loop, not a regex
+ * with a counted repeat: V8 runs that in one pass, but a backtracking engine (the phone's Hermes) may restart it at every position.
+ */
+function hasBase64Run(text: string): boolean {
+  for (let index = 0, run = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code < 128 && INDEX[code] >= 0) { if (++run >= BINARY_MIN_CHARS) return true; } else run = 0;
+  }
+  return false;
+}
+
+/**
  * `json` (the message as JSON) with its long base64 strings taken out as bytes; `segments` empty when there are none (the JSON is then
  * `json` itself, read without the reviver).
  */
 export function extractSegments(message: unknown, json: string): { json: string; segments: Uint8Array[] } {
-  if (json.length < BINARY_MIN_CHARS || !CANDIDATE.test(json)) return { json, segments: [] };
+  if (json.length < BINARY_MIN_CHARS || !hasBase64Run(json)) return { json, segments: [] };
   const segments: Uint8Array[] = [];
   const out = JSON.stringify(message, (_key, value: unknown) => {
     if (typeof value !== 'string') return value;
