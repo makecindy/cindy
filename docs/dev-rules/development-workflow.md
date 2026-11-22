@@ -147,6 +147,11 @@ worktree 建成空目录或自动切到项目根继续修改代码。
     `upstream/main` / `upstream/master`），其次 `origin` 默认分支，最后才回退本地
     `main` / `master`，避免落后的个人 fork 扩大测试范围；运行前应先更新目标分支引用。
     选测包含已提交、已暂存、未暂存和未跟踪文件。同一包源码通过 Vitest `related` 选测；
+    locale JSON（`apps/desktop/src/renderer/i18n/locales/<locale>/*.json` 与
+    `crossLocaleStrings.generated.json`）被 renderer 几乎全量导入，按 import graph 选测会
+    命中接近全部 renderer 测试且先付出数分钟依赖图成本，因此改为显式运行 i18n 专项测试，
+    并先执行 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`；任一检查失败即中止本次选测。
+    这批测试不覆盖其他页面里的文案断言，完整覆盖仍由 CI 全量单测兜底。
     公共包源码变化时，依赖方跑整包单测。包内 `package.json`、Vitest 配置或删除文件时，
     对所属包及受影响依赖方跑整包；说明性文档不触发根级 runner 或业务单测。
     `i18n/GLOSSARY.md` 与 `docs/legal/notices/` 是有内容断言的生成产物，仍运行根级

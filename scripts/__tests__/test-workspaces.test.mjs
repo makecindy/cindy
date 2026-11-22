@@ -27,6 +27,7 @@ import {
 	checkIncludeCoverage,
 	checkTestFiles,
 	classifyFailure,
+	collectPlanChecks,
 	createBoundedOutputBuffer,
 	createOutputForwarder,
 	createWorkspaceRunReporter,
@@ -51,6 +52,7 @@ import {
 	resolveTestInvocation,
 	runCommand,
 	runPlannedTests,
+	runPlanChecks,
 	runWithExclusiveBarriers,
 	selectFilesForTier,
 	validateManifest,
@@ -2725,4 +2727,193 @@ test("the runner drops agent-shell variables that change test results, and nothi
 	assert.deepEqual(stripAgentEnvPollutants(env), ["NODE_ENV", "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "CINDY_INPUT_HANDOFF_ROUTE"]);
 	assert.deepEqual(env, { PATH: "/bin", CI: "true" });
 	assert.deepEqual(stripAgentEnvPollutants(env), []);
+});
+
+/*
+测试价值
+- 生产入口与可观察结果：`pnpm test:unit:related` 走 planner 命名文件时的 Vitest argv、
+  `check:<name>` 门禁的串行执行与退出语义，以及 reporter 的 START／PASS／FAIL 行。
+- Bug／规则依据：locale JSON 改动按 import graph 选中 1,157 个测试文件；`vitest related`
+  打开文件前先付约 190s 依赖图成本（docs/dev-rules/development-workflow.md）。
+- 现有覆盖缺口：既有用例只覆盖 related 模式、include 选测与 preflight，没有「显式文件」
+  通道，也没有 planner 门禁执行。
+- 最小失败输入：把 locale 改动映射成 10 个 i18n 测试后仍走 `related`，或门禁失败却照跑
+  workspace 测试并以 0 退出。
+- tier：根 runner（node --test scripts/__tests__）。
+*/
+
+function readInvocationArgs(call) {
+	// cmd.exe wrappers reference only the slots they use; leftover
+	// CINDY_PNPM_CMD_ARG_* from an outer shell must not be read as argv.
+	const commandLine = call.args.at(-1) ?? "";
+	const slots = [...commandLine.matchAll(/%CINDY_PNPM_CMD_ARG_(\d+)%/g)].map(
+		(match) => match[1],
+	);
+	if (slots.length > 0) {
+		const argv = slots.map(
+			(index) => call.options.env[`CINDY_PNPM_CMD_ARG_${index}`],
+		);
+		// Slot 0 is the pnpm executable itself; keep the arguments only.
+		return argv[0] === "--dir" ? argv : argv.slice(1);
+	}
+	const dirIndex = call.args.indexOf("--dir");
+	return dirIndex > 0 ? call.args.slice(dirIndex) : call.args;
+}
+
+test("buildPnpmArgs runs planner-named files explicitly without the related graph", () => {
+	const explicit = [
+		"apps/desktop/src/renderer/__tests__/i18nCompleteness.test.ts",
+		"apps/desktop/src/main/__tests__/copy.i18n.test.ts",
+	];
+	const args = buildPnpmArgs(
+		"F:/repo",
+		{ cwd: "apps/desktop" },
+		{
+			type: "packageBin",
+			bin: "vitest",
+			args: ["run", "--pool=threads", "--maxWorkers=8"],
+		},
+		{ exclude: ["**/*.bench.ts"] },
+		["apps/desktop/src/renderer/__tests__/other.test.ts"],
+		undefined,
+		explicit,
+	);
+	assert.equal(args[3], "vitest");
+	assert.equal(args.includes("related"), false);
+	assert.equal(args.includes("--passWithNoTests"), false);
+	assert.deepEqual(args.slice(4, 7), ["run", "--pool=threads", "--maxWorkers=8"]);
+	assert.deepEqual(args.slice(7, 9), [
+		"src/renderer/__tests__/i18nCompleteness.test.ts",
+		"src/main/__tests__/copy.i18n.test.ts",
+	]);
+	assert.deepEqual(args.slice(-2), ["--exclude", "**/*.bench.ts"]);
+});
+
+test("runPlannedTests forwards planner-named files to the Vitest command", async () => {
+	const calls = [];
+	const explicit = [
+		"apps/desktop/src/renderer/__tests__/i18nCompleteness.test.ts",
+		"apps/desktop/src/main/__tests__/copy.i18n.test.ts",
+	];
+	const manifest = {
+		workspaces: [
+			{
+				name: "desktop",
+				cwd: "apps/desktop",
+				status: "required",
+				tiers: {
+					unit: {
+						status: "required",
+						command: { type: "packageBin", bin: "vitest", args: ["run"] },
+					},
+				},
+			},
+		],
+	};
+	await runPlannedTests({
+		root: "F:/repo",
+		workspaceCwds: ["apps/desktop"],
+		allFiles: explicit,
+		manifest,
+		tier: "unit",
+		explicitFilesByWorkspace: { "apps/desktop": explicit },
+		runCommandImpl: async (command, args, options) => {
+			calls.push({ command, args, options });
+			return { exitCode: 0, output: "ok" };
+		},
+	});
+	assert.equal(calls.length, 1);
+	const argv = readInvocationArgs(calls[0]);
+	assert.equal(argv.includes("related"), false);
+	assert.deepEqual(argv.slice(-2), [
+		"src/renderer/__tests__/i18nCompleteness.test.ts",
+		"src/main/__tests__/copy.i18n.test.ts",
+	]);
+});
+
+test("runPlanChecks runs every gate in order and reports each result", async () => {
+	const calls = [];
+	const writes = [];
+	const checks = [
+		{ script: "check:i18n", cwd: "." },
+		{ script: "check:i18n-glossary", cwd: "." },
+	];
+	const results = await runPlanChecks({
+		root: "F:/repo",
+		checks,
+		reporter: createWorkspaceRunReporter({
+			stdout: { write: (chunk) => writes.push(chunk) },
+		}),
+		runCommandImpl: async (command, args, options) => {
+			calls.push({ command, args, options });
+			return { exitCode: 0, output: "ok" };
+		},
+	});
+	assert.deepEqual(
+		calls.map((call) => readInvocationArgs(call).at(-1)),
+		["check:i18n", "check:i18n-glossary"],
+	);
+	for (const call of calls) {
+		const argv = readInvocationArgs(call);
+		assert.equal(argv[0], "--dir");
+		assert.equal(normalizeRelPath(call.options.cwd), "F:/repo");
+	}
+	assert.deepEqual(
+		results.map((result) => result.exitCode),
+		[0, 0],
+	);
+	const output = writes.join("");
+	assert.match(output, /START check:i18n\n/);
+	assert.match(output, /PASS check:i18n \(/);
+	assert.match(output, /PASS check:i18n-glossary \(/);
+});
+
+test("runPlanChecks surfaces a failing gate and keeps the remaining gates visible", async () => {
+	const writes = [];
+	const results = await runPlanChecks({
+		root: "F:/repo",
+		checks: [
+			{ script: "check:i18n", cwd: "." },
+			{ script: "check:i18n-glossary", cwd: "." },
+		],
+		reporter: createWorkspaceRunReporter({
+			stdout: { write: (chunk) => writes.push(chunk) },
+		}),
+		runCommandImpl: async (command, args, options) => {
+			const argv = readInvocationArgs({ args, options });
+			return argv.at(-1) === "check:i18n"
+				? { exitCode: 1, output: "en is missing key" }
+				: { exitCode: 0, output: "ok" };
+		},
+	});
+	assert.deepEqual(
+		results.map((result) => [result.script, result.exitCode]),
+		[
+			["check:i18n", 1],
+			["check:i18n-glossary", 0],
+		],
+	);
+	assert.equal(results[0].failure, "COMMAND_FAILED");
+	const output = writes.join("");
+	assert.match(output, /FAIL COMMAND_FAILED check:i18n \(/);
+	assert.match(output, /\[check:i18n\]\nen is missing key/);
+	assert.match(output, /PASS check:i18n-glossary \(/);
+});
+
+test("collectPlanChecks dedupes gates across runs and ignores runs without checks", () => {
+	const deduped = collectPlanChecks([
+		{
+			cwd: "apps/desktop",
+			checks: [
+				{ script: "check:i18n", cwd: "." },
+				{ script: "check:i18n-glossary", cwd: "." },
+			],
+		},
+		{ cwd: "packages/maker-core" },
+		{ cwd: "apps/desktop", checks: [{ script: "check:i18n", cwd: "." }] },
+	]);
+	assert.deepEqual(deduped, [
+		{ script: "check:i18n", cwd: "." },
+		{ script: "check:i18n-glossary", cwd: "." },
+	]);
 });

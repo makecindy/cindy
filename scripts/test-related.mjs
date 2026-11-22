@@ -49,6 +49,39 @@ const SKIP_BASENAMES = new Set([
 	".prettierignore",
 	".eslintignore",
 ]);
+// Locale JSON is imported by the shared i18n module, so Vitest's import graph
+// marks almost every renderer test as related: a 12-file locale change selected
+// 1,157 test files / 33,244 tests, and the graph walk alone cost ~190s before
+// any test started. Route locale edits to the i18n gates plus the tests that
+// model copy explicitly instead of paying that fan-out locally. CI still runs
+// the full unit tier, so page-level copy assertions outside this list stay
+// covered there (docs/dev-rules/development-workflow.md).
+const LOCALE_INPUT_PATTERNS = [
+	/^apps\/desktop\/src\/renderer\/i18n\/locales\/[^/]+\/[^/]+\.json$/,
+	/^apps\/desktop\/src\/renderer\/i18n\/crossLocaleStrings\.generated\.json$/,
+];
+
+/** Every `*.i18n.test.*` must be listed here; a root-runner test enforces it. */
+export const LOCALE_RELATED_TEST_FILES = Object.freeze([
+	"apps/desktop/src/main/cindy-brain/__tests__/ghostExternalLinkNavigation.i18n.test.ts",
+	"apps/desktop/src/renderer/__tests__/PermissionPrompt.i18n.test.tsx",
+	// Source-to-locale parity: catches a `t('key')` that no locale provides.
+	"apps/desktop/src/renderer/__tests__/i18nCompleteness.test.ts",
+	"apps/desktop/src/renderer/components/chat/__tests__/SystemCard.i18n.test.tsx",
+	"apps/desktop/src/renderer/components/cindy-make/__tests__/CindyMakeBuildFailure.i18n.test.tsx",
+	"apps/desktop/src/renderer/components/cindy-make/__tests__/CindyMakeHistoryPanel.i18n.test.tsx",
+	"apps/desktop/src/renderer/components/cindy-make/__tests__/CindyMakePreflightDialog.i18n.test.tsx",
+	"apps/desktop/src/renderer/components/cindy-make/__tests__/CindyMakeTestCard.i18n.test.tsx",
+	"apps/desktop/src/renderer/components/cindy-make/__tests__/CindyMakeVersionsPanel.i18n.test.tsx",
+	"apps/desktop/src/renderer/features/cc-agent/sidebar/__tests__/TaskMigrationDialog.i18n.test.tsx",
+]);
+
+/** Root scripts that guard locale structure and terminology. `cwd` is repo-relative. */
+export const LOCALE_RELATED_CHECKS = Object.freeze([
+	{ script: "check:i18n", cwd: "." },
+	{ script: "check:i18n-glossary", cwd: "." },
+]);
+
 // A fork's origin can lag behind the contribution target. Prefer the upstream
 // default branch before origin, and use local branches only as a fallback.
 const GIT_BASE_REFS = [
@@ -70,6 +103,11 @@ export function isSkippableFile(file) {
 	if (SKIP_BASENAMES.has(basename)) return true;
 	const extension = path.posix.extname(basename).toLowerCase();
 	return SKIP_EXTENSIONS.has(extension);
+}
+
+export function isLocaleInputFile(file) {
+	const normalized = normalizeRelPath(file);
+	return LOCALE_INPUT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 export function isWideFile(file) {
@@ -232,11 +270,15 @@ function hasRequiredUnitTier(workspace) {
 function describeRelatedRuns(runs) {
 	if (runs.length === 0) return "no workspace unit tests";
 	return runs
-		.map((run) =>
-			Array.isArray(run.relatedFiles)
-				? `${run.cwd} (related ${run.relatedFiles.length})`
-				: `${run.cwd} (full)`,
-		)
+		.map((run) => {
+			const checks = run.checks?.length ? `, ${run.checks.length} checks` : "";
+			if (Array.isArray(run.explicitFiles)) {
+				return `${run.cwd} (${run.localeInputCount} locale inputs → ${run.explicitFiles.length} test files${checks})`;
+			}
+			return Array.isArray(run.relatedFiles)
+				? `${run.cwd} (related ${run.relatedFiles.length}${checks})`
+				: `${run.cwd} (full${checks})`;
+		})
 		.join(", ");
 }
 
@@ -293,8 +335,28 @@ export function planRelatedUnitTests({
 	const ownerRelated = new Map();
 	const sourceChangedCwds = new Set();
 	const fullWorkspaces = new Set();
+	const localeInputs = testable.filter(isLocaleInputFile);
+	const localeInputSet = new Set(localeInputs);
+	const localeCwds = new Set(
+		localeInputs
+			.map((file) => workspaceForFile(file, workspaceCwds))
+			.filter(Boolean),
+	);
+
+	if (localeInputs.length > 0) {
+		const missing = LOCALE_RELATED_TEST_FILES.filter((file) => !fileExists(file));
+		if (missing.length > 0) {
+			throw new Error(
+				"i18n locale related mapping is stale: " +
+					`${missing.join(", ")} does not exist. Update ` +
+					"LOCALE_RELATED_TEST_FILES in scripts/test-related.mjs.",
+			);
+		}
+	}
 
 	for (const file of testable) {
+		// Vitest related would walk the i18n import graph instead of the mapping.
+		if (localeInputSet.has(file)) continue;
 		const cwd = workspaceForFile(file, workspaceCwds);
 		if (!cwd) continue;
 		const workspace = byCwd.get(cwd);
@@ -313,23 +375,66 @@ export function planRelatedUnitTests({
 		[...sourceChangedCwds],
 		buildDependentMap(workspaces, packageJsonByCwd),
 	);
-	const runCwds = new Set([...ownerRelated.keys(), ...dependents]);
+
+	// Locale edits are the mapped tests' trigger, so they replace the import
+	// graph rather than joining it. When the same package already has real
+	// related work, the mapped tests join that run (the graph is paid anyway);
+	// otherwise they run as an explicit file list with no graph walk at all.
+	const explicitFilesByCwd = localeInputs.length > 0 ? new Map() : null;
+	if (explicitFilesByCwd) {
+		const mappedByCwd = new Map();
+		for (const testFile of LOCALE_RELATED_TEST_FILES) {
+			const cwd = workspaceForFile(testFile, workspaceCwds);
+			if (!cwd) continue;
+			const workspace = byCwd.get(cwd);
+			if (!workspace || !hasRequiredUnitTier(workspace)) continue;
+			if (!mappedByCwd.has(cwd)) mappedByCwd.set(cwd, []);
+			mappedByCwd.get(cwd).push(testFile);
+		}
+		for (const [cwd, mappedTests] of mappedByCwd) {
+			if (dependents.has(cwd) || fullWorkspaces.has(cwd)) continue;
+			const ownFiles = ownerRelated.get(cwd);
+			if (ownFiles && ownFiles.size > 0) {
+				for (const testFile of mappedTests) ownFiles.add(testFile);
+				continue;
+			}
+			explicitFilesByCwd.set(cwd, mappedTests);
+		}
+	}
+
+	const runCwds = new Set([
+		...ownerRelated.keys(),
+		...dependents,
+		...(explicitFilesByCwd?.keys() ?? []),
+	]);
 	const runs = [...runCwds]
 		.sort()
 		.flatMap((cwd) => {
 			const workspace = byCwd.get(cwd);
 			if (!workspace || !hasRequiredUnitTier(workspace)) return [];
 			const ownFiles = [...(ownerRelated.get(cwd) ?? [])].sort();
+			const explicitFiles = explicitFilesByCwd?.get(cwd);
 			const relatedFiles = dependents.has(cwd) || fullWorkspaces.has(cwd)
 				? null : ownFiles;
-			if (Array.isArray(relatedFiles) && relatedFiles.length === 0) return [];
-			return [
-				{
-					cwd,
-					name: workspace.name,
-					relatedFiles,
-				},
-			];
+			if (
+				Array.isArray(relatedFiles) &&
+				relatedFiles.length === 0 &&
+				!explicitFiles?.length
+			) return [];
+			const checks = localeCwds.has(cwd) ? [...LOCALE_RELATED_CHECKS] : [];
+			const run = explicitFiles?.length
+				? {
+						cwd,
+						name: workspace.name,
+						explicitFiles,
+						localeInputCount: localeInputs.length,
+					}
+				: {
+						cwd,
+						name: workspace.name,
+						relatedFiles,
+					};
+			return [checks.length > 0 ? { ...run, checks } : run];
 		});
 
 	if (runs.length === 0 && !runTestRunner) {

@@ -4,13 +4,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
 	buildDependentMap,
 	collectChangedFiles,
 	collectTransitiveDependents,
+	isLocaleInputFile,
 	isSkippableFile,
 	isTestFile,
 	isWideFile,
+	LOCALE_RELATED_CHECKS,
+	LOCALE_RELATED_TEST_FILES,
 	planRelatedUnitTests,
 	shouldRunTestRunner,
 	workspaceForFile,
@@ -325,5 +329,176 @@ test("a stale fork does not count upstream commits as local work, including from
 		assert.equal(collectChangedFiles((args) => git(worktree, args)).baseRef, "main");
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+/*
+测试价值
+- 生产入口与可观察结果：`pnpm test:unit:related` 的选测计划。locale JSON 改动后，开发者
+  看到的是「12 locale inputs → 10 test files, 2 checks」，而不是 1,157 个 renderer 测试。
+- Bug／规则依据：2026-11-22 的 12 文件 locale 改动命中 1,157 个测试文件 / 33,244 个测试；
+  `vitest related` 仅建依赖图就实测 190s（docs/dev-rules/development-workflow.md
+  「相关单测怎么选」）。
+- 现有覆盖缺口：相邻用例只覆盖普通源码、公共包、宽文件与删除文件，没有 locale 输入。
+- 最小失败输入：只改 `apps/desktop/src/renderer/i18n/locales/en/common.json`，旧 planner
+  会把它原样放进 relatedFiles，Vitest related 随即扫出整片 renderer。
+- tier：根 runner（node --test scripts/__tests__），不进入 workspace tier。
+*/
+
+const LOCALE_CHANGE_FILES = [
+	"de",
+	"en",
+	"es",
+	"fr",
+	"ja",
+	"ko",
+	"pt-BR",
+	"pt-PT",
+	"zh-CN",
+	"zh-Hans-x-lzh",
+	"zh-Hant-x-lzh",
+	"zh-TW",
+].map((locale) => `apps/desktop/src/renderer/i18n/locales/${locale}/common.json`);
+
+function findI18nTestFiles(repoRoot, subdir) {
+	const found = [];
+	const visit = (absDir) => {
+		for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+			if (entry.isDirectory()) {
+				if (entry.name === "node_modules" || entry.name.startsWith(".")) {
+					continue;
+				}
+				visit(path.join(absDir, entry.name));
+				continue;
+			}
+			if (/\.i18n\.test\.[cm]?[jt]sx?$/.test(entry.name)) {
+				found.push(
+					path
+						.relative(repoRoot, path.join(absDir, entry.name))
+						.split(path.sep)
+						.join("/"),
+				);
+			}
+		}
+	};
+	visit(path.join(repoRoot, subdir));
+	return found.sort();
+}
+
+test("locale inputs are classified without catching other JSON or other apps", () => {
+	assert.equal(isLocaleInputFile("apps/desktop/src/renderer/i18n/locales/en/common.json"), true);
+	assert.equal(isLocaleInputFile("apps/desktop/src/renderer/i18n/locales/pt-BR/aiRename.json"), true);
+	assert.equal(
+		isLocaleInputFile("apps/desktop/src/renderer/i18n/crossLocaleStrings.generated.json"),
+		true,
+	);
+	assert.equal(isLocaleInputFile("apps/desktop/package.json"), false);
+	assert.equal(isLocaleInputFile("apps/mobile/src/i18n/locales/en/common.json"), false);
+	assert.equal(isLocaleInputFile("apps/desktop/src/renderer/i18n/locales/en/common.ts"), false);
+});
+
+test("a locale-only change runs the mapped i18n tests and gates without touching the import graph", () => {
+	const plan = planRelatedUnitTests({
+		changedFiles: LOCALE_CHANGE_FILES,
+		workspaces,
+		packageJsonByCwd,
+	});
+	assert.equal(plan.mode, "related");
+	assert.equal(plan.runTestRunner, false);
+	assert.deepEqual(plan.runs, [
+		{
+			cwd: "apps/desktop",
+			name: "desktop",
+			explicitFiles: [...LOCALE_RELATED_TEST_FILES],
+			localeInputCount: 12,
+			checks: [...LOCALE_RELATED_CHECKS],
+		},
+	]);
+	assert.match(
+		plan.reason,
+		/apps\/desktop \(12 locale inputs → 10 test files, 2 checks\)/,
+	);
+	for (const localeFile of LOCALE_CHANGE_FILES) {
+		assert.equal(
+			plan.runs[0].explicitFiles.includes(localeFile),
+			false,
+			`locale JSON must not reach Vitest: ${localeFile}`,
+		);
+		assert.equal("relatedFiles" in plan.runs[0], false);
+	}
+});
+
+test("locale edits join an existing related run instead of replacing it", () => {
+	const plan = planRelatedUnitTests({
+		changedFiles: [...LOCALE_CHANGE_FILES, "apps/desktop/src/main/foo.ts"],
+		workspaces,
+		packageJsonByCwd,
+	});
+	const [run] = plan.runs;
+	assert.equal(plan.runs.length, 1);
+	assert.deepEqual(run.checks, [...LOCALE_RELATED_CHECKS]);
+	assert.equal("explicitFiles" in run, false);
+	assert.deepEqual(
+		[...run.relatedFiles].sort(),
+		["apps/desktop/src/main/foo.ts", ...LOCALE_RELATED_TEST_FILES].sort(),
+	);
+	for (const localeFile of LOCALE_CHANGE_FILES) {
+		assert.equal(run.relatedFiles.includes(localeFile), false, localeFile);
+	}
+});
+
+test("locale edits keep the gates when the owning workspace already runs in full", () => {
+	const plan = planRelatedUnitTests({
+		changedFiles: [
+			"apps/desktop/src/renderer/i18n/locales/en/common.json",
+			"packages/maker-shared/src/index.ts",
+		],
+		workspaces,
+		packageJsonByCwd,
+	});
+	assert.deepEqual(
+		plan.runs.map((run) => [run.cwd, run.relatedFiles, run.checks ?? []]),
+		[
+			["apps/desktop", null, [...LOCALE_RELATED_CHECKS]],
+			["packages/maker-core", null, []],
+			["packages/maker-shared", ["packages/maker-shared/src/index.ts"], []],
+		],
+	);
+});
+
+test("a stale locale mapping fails loudly instead of silently widening the run", () => {
+	const missing = "apps/desktop/src/renderer/__tests__/i18nCompleteness.test.ts";
+	assert.throws(
+		() =>
+			planRelatedUnitTests({
+				changedFiles: ["apps/desktop/src/renderer/i18n/locales/en/common.json"],
+				workspaces,
+				packageJsonByCwd,
+				fileExists: (file) => file !== missing,
+			}),
+		(error) => {
+			assert.match(error.message, /i18n locale related mapping is stale/);
+			assert.ok(error.message.includes(missing), error.message);
+			return true;
+		},
+	);
+});
+
+test("every repository i18n test is mapped for locale-only changes", () => {
+	const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+	const actual = findI18nTestFiles(repoRoot, "apps/desktop");
+	assert.deepEqual(
+		LOCALE_RELATED_TEST_FILES.filter((file) => /\.i18n\.test\./.test(file)).sort(),
+		actual,
+		"add every new *.i18n.test.* to LOCALE_RELATED_TEST_FILES in scripts/test-related.mjs",
+	);
+	assert.ok(
+		LOCALE_RELATED_TEST_FILES.includes(
+			"apps/desktop/src/renderer/__tests__/i18nCompleteness.test.ts",
+		),
+		"locale edits must keep the source-to-locale parity test",
+	);
+	for (const file of LOCALE_RELATED_TEST_FILES) {
+		assert.match(file, /^apps\/desktop\//, file);
 	}
 });
