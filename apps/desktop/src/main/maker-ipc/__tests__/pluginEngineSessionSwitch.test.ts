@@ -318,7 +318,7 @@ describe('switching a plugin-engine task back to a built-in engine', () => {
   it('clears an older switch when reselecting the current shared companion engine', async () => {
     const agentDeviceId = 'share:friend';
     const { deps, pendingSwitches } = makeDeps({ ...pluginRow(), source: 'bot', agentDeviceId });
-    pendingSwitches.set('s1', { targetAgentKind: 'codex', model: 'other-model' });
+    pendingSwitches.set('s1', { targetAgentKind: 'codex', model: 'other-model', providerId: null });
 
     const result = await performSessionAgentSwitch(deps, {
       sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, agentDeviceId,
