@@ -1,3 +1,4 @@
+import { closeIdleDesktopSessionForMove } from '../sessionWorkingDirMove.desktop.js';
 import { configureUserDataDir } from '../../../userDataPath.js';
 import { configureOwnerContext } from '../../../ownerContext.js';
 import { _setStoreForTests } from '../../../worktree/worktreeStore.js';
@@ -196,6 +197,9 @@ vi.mock('../../../maker-host/session-context-budget-store.js', async (importOrig
   return { ...actual, writeSessionContextWindowBudget: vi.fn(actual.writeSessionContextWindowBudget) };
 });
 
+import { PendingCredentialSwitchService } from '../../../maker-ipc/pendingCredentialSwitch.js';
+import { createSessionRuntimeCleanup } from '../../../maker-ipc/sessionRuntimeProjection.js';
+
 import {
   applyAgentSwitchToSessionRow,
   broadcastSessionPatched,
@@ -208,6 +212,7 @@ import {
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
   setSessionRuntimeCleanup,
+  setSessionsSnoozeInDb,
   setSessionWorktreeBindingLookup,
   setSessionWorktreeRecycle,
   updateSessionInDb,
@@ -260,6 +265,7 @@ function createDb(): void {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -2099,6 +2105,28 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).not.toHaveBeenCalled();
   });
 
+  // L338, unit: use the bootstrap port through the real move. A cold runtime has no
+  // live agentKind, but only Claude defers closing until transcript relocation.
+  it.each(['cc', 'pi', 'codex'])('uses the stored %s engine for cold and idle task moves', async kind => {
+    const id = kind + '-local';
+    for (const live of [false, true]) {
+      const maker = { isSessionAlive: () => live, closeSession: h.closeSession,
+        getSession: () => live ? { agentKind: kind === 'cc' ? 'claude-code' : kind, isTurnRunning: () => false } : null };
+      h.getMakerIfReady.mockReturnValue(maker);
+      h.closeSession.mockClear();
+      const dir = '/new/' + (live ? 'idle' : 'cold');
+      const row = await updateSessionInDb(id, { workingDir: dir }, { closeIdleSessionForMove: closeIdleDesktopSessionForMove });
+      expect(row.workingDir).toBe(dir);
+      expect(h.closeSession).toHaveBeenCalledTimes(kind === 'cc' ? 0 : 1);
+    }
+    const running = { isSessionAlive: () => true, closeSession: h.closeSession, getSession: () => ({ isTurnRunning: () => true }) };
+    h.getMakerIfReady.mockReturnValue(running);
+    h.closeSession.mockClear();
+    await expect(updateSessionInDb(id, { workingDir: '/new/busy' }, { closeIdleSessionForMove: closeIdleDesktopSessionForMove }))
+      .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.closeSession).not.toHaveBeenCalled();
+  });
+
   it('does nothing for codex sessions', async () => {
     await invokeUpdate('codex-local', { workingDir: '/new/dir' });
     expect(h.relocate).not.toHaveBeenCalled();
@@ -2113,7 +2141,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
       const updated = await updateSessionInDb(sessionId, { workingDir });
 
-      expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith(sessionId);
+      expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith(sessionId, sessionId.split('-')[0]);
       expect(updated.workingDir).toBe(storedWorkingDir);
       expect(
         h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(sessionId),
@@ -2128,7 +2156,7 @@ describe('local-db:sessions:update handler wiring', () => {
       updateSessionInDb('codex-local', { workingDir: path.join(os.tmpdir(), 'moved-session') }),
     ).rejects.toThrow('[PRECONDITION_FAILED]');
 
-    expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith('codex-local');
+    expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith('codex-local', 'codex');
     expect(
       h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
     ).toEqual({ working_dir: '/old/dir' });
@@ -2146,16 +2174,17 @@ describe('local-db:sessions:update handler wiring', () => {
     );
   });
 
-  it('rejects moving a local Pi/Codex session whose turn became active', async () => {
+  it.each(['cc-local', 'pi-local', 'codex-local'])('rejects moving a running %s task', async sessionId => {
     h.closeIdleSessionForMove.mockResolvedValueOnce(false);
 
-    await expect(invokeUpdate('codex-local', { workingDir: '/new/dir' })).rejects.toThrow(
+    await expect(invokeUpdate(sessionId, { workingDir: '/new/dir' })).rejects.toThrow(
       '[PRECONDITION_FAILED]',
     );
 
     expect(
-      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(sessionId),
     ).toEqual({ working_dir: '/old/dir' });
+    expect(h.relocate).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
   });
 
@@ -2471,6 +2500,39 @@ describe('terminal intent during session creation', () => {
       expect(f.broadcast.mock.calls.map(call => call[0]).sort()).toEqual(['cc-local', 'codex-local']);
     } finally { oldHold.resolve(); for (const hold of f.holds.values()) hold.resolve(); await Promise.all([old, sibling, terminal]); }
   });
+  // L342, SQLite tier. The real task-status writer must retire the deferred
+  // credential registration before a later close or its timer can apply it.
+  it.each(['archived', 'deleted'] as const)('%s retires a deferred credential selection without dispatch', async status => {
+    const sessionId = 'codex-local';
+    const wake = vi.fn();
+    const persistRoute = vi.fn(async () => {});
+    const credential = new PendingCredentialSwitchService({
+      maker: { listActiveSessions: () => [], closeSession: async () => {} },
+      onApplied: wake,
+      persistRoute,
+    });
+    setSessionRuntimeCleanup(createSessionRuntimeCleanup({
+      cancelPendingRemoteStart: () => {},
+      discardWorkingDirectoryRecovery: () => {},
+      clearDeferredCredentialSelection: id => credential.clearDeferredSelection(id),
+      broadcastSessionRuntimeProjection: async () => {},
+      log: { debug() {} },
+    }));
+    credential.register(sessionId, {
+      model: 'next', providerId: 'next-source', agentKind: 'codex',
+      deferredSelection: { agentKind: 'codex', effort: 'high', fastMode: true, clearScheduledBaseline: false },
+    });
+    try {
+      expect((await patchSessionMetaInDb(sessionId, { status })).status).toBe(status);
+      expect(credential.has(sessionId)).toBe(false);
+      await credential.onTurnSettled(sessionId);
+      expect(persistRoute).not.toHaveBeenCalled();
+      expect(wake).not.toHaveBeenCalled();
+    } finally {
+      credential.clear(sessionId);
+    }
+  });
+
   it('patch-meta checks authorization before cancelling a held creation', async () => {
     const f = creationFixture(); let failure: unknown, denied: unknown;
     const opening = f.start().catch(error => { failure = error; });
@@ -2580,6 +2642,46 @@ describe('task snooze persistence', () => {
     });
     await invoke('codex-local', { status: 'archived' });
     await expect(invoke('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', snoozedUntil: null, snoozedAt: null });
+  });
+  // Agent snooze_sessions (2026-11-22 parity): the batch writes through the UI's
+  // patch-meta path, checks every id first, and reports what a mid-batch failure left written.
+  it('snoozes an Agent batch only after every task is present and not deleted', async () => {
+    const until = new Date(Date.now() + 3600000).toISOString();
+    const snoozed = () => h.sqlite!.prepare("SELECT id, snoozed_until AS until FROM sessions WHERE id IN ('cc-local','codex-local') ORDER BY id").all();
+    await expect(setSessionsSnoozeInDb(['cc-local', 'missing'], until)).rejects.toThrow(/NOT_FOUND|不存在/);
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = 'pi-local'").run();
+    await expect(setSessionsSnoozeInDb(['cc-local', 'pi-local'], until)).rejects.toThrow(/PRECONDITION_FAILED|已删除/);
+    expect(snoozed()).toEqual([{ id: 'cc-local', until: null }, { id: 'codex-local', until: null }]);
+
+    let calls = 0;
+    const result = await setSessionsSnoozeInDb(['cc-local', 'codex-local'], until, async () => {
+      if (++calls === 2) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    });
+    expect(result).toMatchObject({ changed: [{ sessionId: 'cc-local', snoozedUntil: until }], error: { sessionId: 'codex-local' } });
+    expect(snoozed()).toEqual([{ id: 'cc-local', until: Date.parse(until) }, { id: 'codex-local', until: null }]);
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+      sessionId: 'cc-local', patch: expect.objectContaining({ snoozedUntil: until }),
+    }));
+
+    await expect(setSessionsSnoozeInDb(['cc-local', 'codex-local'], null)).resolves.toEqual({ changed: [
+      expect.objectContaining({ sessionId: 'cc-local', snoozedUntil: null }),
+      expect.objectContaining({ sessionId: 'codex-local', snoozedUntil: null }),
+    ] });
+  });
+  // PR #12041 review: authorization revoked while patch-meta waits must stop the
+  // final write, as for deletion; the async pre-check alone is not enough.
+  it('rechecks the task action right before each snooze write', async () => {
+    const until = new Date(Date.now() + 3600000).toISOString();
+    // The async pre-check passes for both items; the second is revoked only after it.
+    let item = 0;
+    let revoked = false;
+    const result = await setSessionsSnoozeInDb(['cc-local', 'codex-local'], until, async () => {
+      if (++item === 2) queueMicrotask(() => { revoked = true; });
+    }, () => {
+      if (revoked) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    });
+    expect(result).toMatchObject({ changed: [{ sessionId: 'cc-local' }], error: { sessionId: 'codex-local' } });
+    expect(h.sqlite!.prepare("SELECT snoozed_until AS until FROM sessions WHERE id = 'codex-local'").get()).toEqual({ until: null });
   });
   it.each(['not-a-date', '2000-01-01T00:00:00.000Z', 123])('rejects invalid deferral %s without writing', async snoozedUntil => {
     await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();

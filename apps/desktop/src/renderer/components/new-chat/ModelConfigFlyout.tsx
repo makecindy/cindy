@@ -154,7 +154,7 @@ export function ModelConfigFlyout({
               : t('newChat.modelSelector.unified.addFavorite')
           }
           className={cn(
-            'mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-colors',
+            'mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-colors',
             starred
               ? 'text-[var(--favorite-star)]'
               : 'text-[var(--text-tertiary)] hover:text-[var(--favorite-star)]',
@@ -165,7 +165,7 @@ export function ModelConfigFlyout({
         </button>
       </div>
 
-      <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-[3px] text-12 text-[var(--text-tertiary)]">
+      <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-0.5 text-12 text-[var(--text-tertiary)]">
         {sourceLabel}
         {contextWindow > 0 && (
           <>
@@ -292,7 +292,7 @@ export function ModelConfigFlyout({
         //   第 2 行:折后价单行排列 —— 输入 ¥32 · 输出 ¥162 · 缓存读取 ¥3.2
         // 原价对比收进 title(hover 才看):浮层是「选之前扫一眼」的地方,一张对照表
         // 会把它变成账单页,且删除线在 12px 下几乎看不清。
-        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-[9px] text-12 leading-[1.7] text-[var(--text-tertiary)]">
+        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-2 text-12 leading-[1.7] text-[var(--text-tertiary)]">
           <div className="flex flex-wrap items-baseline gap-x-1">
             <span>{t('newChat.modelSelector.pricing.title')}</span>
             {price.kind === 'free' ? (

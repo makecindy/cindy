@@ -640,7 +640,7 @@ function SetupMigrationDialogBody() {
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(next) => { if (!next) close(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
         <Dialog.Content
           aria-describedby={undefined}
           onPointerDownOutside={(event) => event.preventDefault()}
@@ -650,7 +650,7 @@ function SetupMigrationDialogBody() {
             if (busyRef.current || event.isComposing) event.preventDefault();
           }}
           style={WINDOW_NO_DRAG_STYLE}
-          className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+          className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
         >
           <div className="flex flex-col items-start gap-3 px-4 pb-3 pt-4">
             <Dialog.Title asChild>

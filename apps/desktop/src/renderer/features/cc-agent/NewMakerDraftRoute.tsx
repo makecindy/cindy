@@ -1,3 +1,4 @@
+import { isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { useAlternateDraftModel } from './alternateDraftModel';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
@@ -7782,20 +7783,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         // - 纯文件夹**不消费**,留给窗口级兜底(拖文件夹 = 设为工作目录的既有行为)。
         // ChatInput 自己的 onDrop 有 stopPropagation,落在输入框上不会到这里。
         onDragEnter={(e) => {
+          if (isComposerAttachmentDrag(e.dataTransfer)) return;
           e.preventDefault();
           pageDragCounterRef.current += 1;
           if (pageDragCounterRef.current === 1) setPageDragOver(true);
         }}
         onDragLeave={(e) => {
+          if (isComposerAttachmentDrag(e.dataTransfer)) return;
           e.preventDefault();
           if (pageDragCounterRef.current > 0) pageDragCounterRef.current -= 1;
           if (pageDragCounterRef.current === 0) setPageDragOver(false);
         }}
         onDragOver={(e) => {
+          if (isComposerAttachmentDrag(e.dataTransfer)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
         }}
         onDrop={(e) => {
+          if (isComposerAttachmentDrag(e.dataTransfer)) return;
           pageDragCounterRef.current = 0;
           setPageDragOver(false);
           // .cindy / .cshare 已被窗口级 capture 接管(装入 / 导入链路),不当附件消费。
@@ -7838,7 +7843,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             ChatInput 卡内渲染(externalDragOver),遮罩只描边界。 */}
           {pageDragOver && (
             <div
-              className="pointer-events-none absolute inset-0 z-50"
+              className="pointer-events-none absolute inset-0 z-float"
               style={{
                 backgroundColor: 'var(--drop-overlay-bg)',
                 border: '2px dashed var(--drop-overlay-border)',
@@ -7888,7 +7893,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   'inline-flex items-center gap-2',
                   isDraftNarrow
                     ? 'static order-2 mb-3 w-full flex-wrap justify-start'
-                    : 'absolute right-0 top-[22px] z-10',
+                    : 'absolute right-0 top-[22px] z-raised',
                 )}
               >
                 {/* 设备切换器(#807):设备是一级维度,排在 mode pill 左边;没有对端设备时
@@ -8005,7 +8010,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               <ThemeBrandLockup
                 theme={activeColorTheme}
                 testId="create-agent-brand-lockup"
-                className={cn('mb-[15px]', isDraftNarrow && 'order-1')}
+                className={cn('mb-3.5', isDraftNarrow && 'order-1')}
               />
 
               <div

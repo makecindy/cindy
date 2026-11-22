@@ -8,7 +8,7 @@ export default {
   notCovered: 'Scenario billing data; no paid model request or remote device connection.',
   cases: {
     default: { about: 'One model in subscription and Cindy AI channels; two additional models' },
-    narrow: { about: 'Same detail panel at 320 px', viewport: { width: 320, height: 760 } },
+    narrow: { about: 'Two native currencies and media at 320 px', data: { mixed: true }, viewport: { width: 320, height: 760 } },
     legacy: { about: 'Older host has no breakdown; do not show zero', data: { legacy: true } },
     trace: { about: 'A three-request turn: its speed and reasoning per request above the details', data: { traceRequests: 3 } },
     'trace-long': { about: 'A 140-request turn drawn at the same width', data: { traceRequests: 140 } },
@@ -35,6 +35,7 @@ export default {
     }
     const trigger = page.getByRole('button').filter({ hasText: /1\.53/ });
     assert.match(await trigger.innerText(), /\+.*3\.34/);
+    if (ui.data.mixed) assert.match(await trigger.innerText(), /\$1\.53.*¥2\.00.*\$3\.34/);
     await trigger.hover();
     const panel = page.getByRole('dialog');
     await panel.waitFor();

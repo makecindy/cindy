@@ -684,7 +684,11 @@ describe('turnRunner: connection handed to a companion bot', () => {
         }),
       }),
     }));
-    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+    const commitFinal = vi.fn(async () => undefined);
+    runner = createTurnRunner({
+      ...fakeAdapter, channel: 'imessage',
+      output: { kind: 'chunked-text', im: fakeAdapter.im, commitFinal },
+    }, fakeRepo, fakeCards, {
       companion: companion as unknown as ImCompanionRouteDeps,
       acquirePendingAgentSwitch,
     });
@@ -694,6 +698,10 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(harnesses.get('mimi-main')!.send).not.toHaveBeenCalled();
     expect(switched.send).toHaveBeenCalledTimes(1);
     for (const [, text] of mocks.im.sendText.mock.calls) expect(String(text)).not.toContain('❌');
+    switched.emit({ type: 'text', data: { text: 'sample reply', isFinal: true } } as AgentEvent);
+    switched.emit({ type: 'done', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledOnce());
+    expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER, text: 'sample reply', terminal: 'done' }));
     expect(runner.getMakerSessionById('mimi-main')).toBe(switched.session);
   });
 
@@ -834,6 +842,27 @@ describe('turnRunner: connection handed to a companion bot', () => {
     binding = null;
     await expect(runner.resolveRouteTargetOrUnavailable!(BOT_CONTEXT, OWNER))
       .resolves.toMatchObject({ row: { id: legacyIdFor(BOT_CONTEXT, OWNER) } });
+  });
+
+  // #12116 keeps an explicitly delegated iMessage group on its recipient: when that buddy is
+  // unavailable the route fails with GROUP_RECIPIENT_UNAVAILABLE. Merging this PR must keep that
+  // maintainer behavior (no transient retry, no notice, no channel task) while other groups
+  // still get the companion-unavailable notice.
+  it('keeps the delegated-group failure from #12116 instead of the unavailable notice', async () => {
+    runner = createTurnRunner({ ...fakeAdapter, requiresCompanionLane: (userId) => userId === 'g/-100777' },
+      fakeRepo, fakeCards, { companion: companion as unknown as ImCompanionRouteDeps });
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_CANONICAL_UNAVAILABLE', message: 'changing' });
+    await expect(runner.runAgentTurn({
+      botContextId: BOT_CONTEXT, userId: 'g/-100777', userMessageId: 'delegated', text: 'hello', attachments: [],
+    })).rejects.toThrow('GROUP_RECIPIENT_UNAVAILABLE');
+    expect(companion.resolveSession).toHaveBeenCalledOnce();
+    expect(mocks.im.sendText).not.toHaveBeenCalled();
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    await runTurn('g/-100123');
+    expect(mocks.im.sendText).toHaveBeenCalledWith('g/-100123', expect.stringContaining('Bot 当前未启用'), expect.anything());
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
   });
 
   // A stalled processing-reaction request must not hold the rejected turn (and the lane's

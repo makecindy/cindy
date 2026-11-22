@@ -50,6 +50,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 /** Where the model bytes come from — decides URL building and menu actions. */
 export type ModelLightboxSource =
@@ -286,7 +287,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
       className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
-        zIndex: 9999,
+        zIndex: Z_INDEX_LAYERS.fullscreen,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -416,7 +417,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
       </div>
 
         {failed ? (
-          <div className="absolute inset-x-0 top-20 z-10 flex items-center justify-center gap-3 bg-[var(--surface)] p-3 text-sm">
+          <div className="absolute inset-x-0 top-20 z-raised flex items-center justify-center gap-3 bg-[var(--surface)] p-3 text-sm">
             <span>{t('chat.media.modelLoadFailed')}</span>
             <button
               type="button"
@@ -473,7 +474,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
             }}
           />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" sideOffset={2} className="z-[10000]">
+        <DropdownMenuContent align="start" sideOffset={2}>
           <DropdownMenuItem
             disabled={modelPending !== null}
             onSelect={(e) => {

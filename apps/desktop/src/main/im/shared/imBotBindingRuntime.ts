@@ -43,9 +43,9 @@ async function isActiveSession(sessionId: string): Promise<boolean> {
   return row?.status === 'active' && row.source === 'bot';
 }
 
-export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {
+export function createImCompanionRouteDeps(ownerBotId: string | ((chatId?: string) => string | null)): ImCompanionRouteDeps {
   return {
-    readBinding: () => typeof ownerBotId === 'function' ? ownerBotId() : ownerBotId,
+    readBinding: (_contextId, chatId) => typeof ownerBotId === 'function' ? ownerBotId(chatId) : ownerBotId,
 
     async resolveSession({ botId, target, create }): Promise<ImCompanionSessionResult | null> {
       if (!create) {
@@ -81,7 +81,7 @@ export function createImCompanionRouteDeps(ownerBotId: string | (() => string | 
         : { ok: false, errorCode: lane.errorCode, message: lane.message };
     },
 
-    archiveLane: (routeKey) => archiveBotChannelLanes({ routeKey }),
+    archiveLane: (routeKey, botId) => archiveBotChannelLanes({ routeKey, botId }),
 
     prepareSend: (sessionId) => prepareBotSessionForImSend(sessionId),
   };
