@@ -3303,11 +3303,17 @@ const RenderItemView = memo(function RenderItemView({
               <FileChip key={`${name}:${index}`} name={name} presentationOnly
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
-            renderText={(text, index) => (
+            renderText={(text, index, longMessage) => (
               // 排队/待发送正文仍是可读内容:待答 ask 卡锁住输入框时,主人要能长按
               // 选中并复制刚排队的话,再粘到自定义答案里。发送锁不能降级为阅读锁。
+              // 长正文展开后沿用完成态同款有界保护:普通任务回退可选中的 RN Text,
+              // 伙伴用有界文本分组保留部分选字,避免巨型 iOS UITextView 展开后空白。
+              // longMessage 由真实气泡按整条正文实测透传,结构化 atom 与普通正文共用,
+              // 避免在此按单块 token 再判一次长度(单一状态所有者)。
               <MarkdownBody key={`text:${index}`} text={text} streaming={false}
                 selectable pinContentWidth={false}
+                allowIosUITextView={!longMessage || actions.companion === true}
+                boundTextRuns={longMessage && actions.companion === true}
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
             resolveRemoteMedia={actions.onResolveRemoteMedia}

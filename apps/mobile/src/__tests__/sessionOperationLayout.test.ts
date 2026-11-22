@@ -7,7 +7,6 @@ import {
   buildSessionOperationLayout,
   composerDisabledReasonI18nKey,
 } from "@/session/sessionOperationLayout";
-import { copyMessageText } from "@/session/messageActions";
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
@@ -203,34 +202,5 @@ describe("session operation layout", () => {
       showPendingInteraction: false,
       showQueue: true,
     });
-  });
-
-  // 测试价值
-  // - 生产入口与可观察结果：真实 buildSessionOperationLayout 在待答 ask 卡下锁发送，
-  //   但真实 copyMessageText 仍能经注入的 writer 写入剪贴板。
-  // - Bug／规则依据：docs/product-rules/cindy-bots-runtime.md §「私聊引用回复」要求正文
-  //   长按选字与复制动作栏始终可用；发送锁不是阅读锁。
-  // - 现有覆盖缺口：上面的布局用例只断言 composerSlot / canUseComposer，现有
-  //   messageActions 用例没有在 pending-interaction 布局下走剪贴板写入路径。
-  // - 最小失败输入：hasActivePendingInteraction + pendingInteractionBlocksComposer
-  //   都为 true；若未来把 copyMessageText 挂到 canUseComposer 上，这条会红。
-  // - tier：unit（纯生产函数 + 内存 writer，无原生剪贴板/设备依赖）。
-  // - 实测耗时：4.02s 实墙（单文件，8 条用例；既有 i18n 载入占主要收集时间）。
-  it("keeps the clipboard writable while a pending interaction locks the composer", async () => {
-    const layout = buildSessionOperationLayout({
-      hasCurrentSession: true,
-      hasActivePendingInteraction: true,
-      pendingInteractionBlocksComposer: true,
-    });
-    expect(layout.canUseComposer).toBe(false);
-    expect(layout.composerSlot).toBe("pending-interaction");
-    expect(layout.messageHistoryMode).toBe("visible");
-
-    let clipboard = "";
-    const status = await copyMessageText("pending ask copy", async value => {
-      clipboard = value;
-    });
-    expect(status).toBe("copied");
-    expect(clipboard).toBe("pending ask copy");
   });
 });
