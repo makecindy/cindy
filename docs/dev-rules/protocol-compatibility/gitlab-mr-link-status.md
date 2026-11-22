@@ -22,3 +22,7 @@ Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub 
 帧格式、认证、版本或部署程序。验证入口为 `pnpm --filter @cindy/device-link test`、
 `pnpm --filter @cindy/device-link-relay test` 与
 `pnpm --filter @cindy/device-link-relay run interop`；结果以本次交付的执行日志为准。
+
+MR 卡片用完整 HTTPS MR 链接标记状态、开放态操作和归档按钮，以实例和完整项目路径区分同号 MR。GitHub 卡片仍使用已有的 `owner/repo#N`。桌面和手机复用任务关联与实时状态判断归档资格；旧宿主保留卡片快照，无法识别新标记。
+
+GitLab 状态优先使用对应实例的 glab 登录态，缺少登录态时读取当前账号已批准、已启用的公开 GitLab 插件的同域连接。REST 提供基础状态，GraphQL 补充同一提交的 CI 和讨论。定时跟进复用 `prTrigger` 与宿主状态观察器，仅在变化后唤醒任务；GitLab 地址不进入 GitHub App 订阅清单。旧宿主可能拒绝 GitLab 触发器，卡片以调度器回执核实跟进状态。

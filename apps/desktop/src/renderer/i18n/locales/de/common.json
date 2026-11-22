@@ -17435,15 +17435,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Ohne GitHub-App-Benachrichtigungen wird weiterhin regelmäßig geprüft.",
-      "label": "PR",
-      "url": "Pull-Request-URL",
+      "label": "PR / MR",
+      "url": "PR- oder MR-URL",
       "condition": "Auslösen bei",
-      "any": "PR-Aktivität",
+      "any": "Aktivität",
       "merged": "Merge",
       "review": "Review-Aktivität",
       "ci": "CI-Statusänderung",
       "timed": "Zusätzlich regelmäßig prüfen",
-      "invalid": "GitHub-Pull-Request-URL eingeben."
+      "invalid": "URL eines GitHub-PR oder GitLab-MR eingeben."
     },
     "presentation": {
       "status": {

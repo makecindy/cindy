@@ -17361,15 +17361,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "未接通 GitHub App 通知，仍会按计划检查。",
-      "label": "PR",
-      "url": "PR 链接",
+      "label": "PR / MR",
+      "url": "PR 或 MR 链接",
       "condition": "触发条件",
-      "any": "PR 有新动态",
+      "any": "有新动态",
       "merged": "PR 已合并",
       "review": "评审有新动态",
       "ci": "CI 状态变化",
       "timed": "同时定时检查",
-      "invalid": "请输入完整的 GitHub PR 链接。"
+      "invalid": "请输入完整的 GitHub PR 或 GitLab MR 链接。"
     },
     "presentation": {
       "status": {

@@ -1,5 +1,6 @@
-import { createGlabCliTokenSource } from '../git-context/glabCliTokenSource';
-import { fetchGitlabMr } from '../git-context/gitlabPrSummary';
+import { createGlabCliTokenSource, readGitlabStatusToken } from '../git-context/glabCliTokenSource';
+import { fetchGitlabMr, fetchGitlabMrStatus } from '../git-context/gitlabPrSummary';
+import { normalizePrTrigger } from '@cindy/maker-scheduler/pr-trigger';
 import { remotePrStatuses } from '@cindy/maker-shared';
 /**
  * git-context/prStatusService 单测 — 状态映射、TTL 缓存、in-flight 去重、
@@ -501,6 +502,33 @@ describe('GitLab MR status', () => {
     repo: 'project',
     prNumber: 7,
   };
+  it('uses the exact plugin host when glab is unavailable and discards a read across an account switch', async () => {
+    const cli = createGlabCliTokenSource({ exec: vi.fn((_bin, _args, _opts, cb) => cb({ code: 'ENOENT' }, '')) as never });
+    let owner = 'first';
+    const readPlugin = vi.fn(async (host: string) => host === q.host ? 'fixture' : null);
+    expect(await readGitlabStatusToken(q.host, cli, () => owner, readPlugin)).toEqual({ ok: true, token: 'fixture' });
+    expect(await readGitlabStatusToken('other.example.com', cli, () => owner, readPlugin)).toMatchObject({ ok: false });
+    expect(await readGitlabStatusToken(q.host, cli, () => owner, async () => {
+      owner = 'second';
+      return 'fixture';
+    })).toMatchObject({ ok: false });
+    cli.rejectToken(q.host);
+    readPlugin.mockClear();
+    expect(await readGitlabStatusToken(q.host, cli, () => owner, readPlugin)).toMatchObject({ ok: false });
+    expect(readPlugin).not.toHaveBeenCalled();
+  });
+
+  // The title bar should remain usable on self-managed instances with an older GraphQL schema.
+  it('keeps REST status and a scoped URL when optional summaries fail', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/api/graphql')
+      ? Response.json({ errors: [{ message: 'Unknown field' }] })
+      : Response.json({ iid: 7, title: 'Fix', state: 'opened', draft: true, source_branch: 'feature', sha: 'head' }));
+    expect(await fetchGitlabMrStatus('fake', q, fetch)).toMatchObject({
+      state: 'open', draft: true, title: 'Fix', checks: null, unresolved_count: null,
+      html_url: 'https://git.example.com/group/sub/project/-/merge_requests/7',
+    });
+    expect(fetch.mock.calls[0]?.[0]).toBe('https://git.example.com/api/v4/projects/group%2Fsub%2Fproject/merge_requests/7');
+  });
   const mr = () => ({
     state: 'opened',
     draft: false,
@@ -924,6 +952,37 @@ describe('PR follow watch', () => {
     watch.observe(Q, merged);
     await new Promise(resolve => setImmediate(resolve));
     expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles review already outstanding when a GitLab follow-up starts, without waking again after success', async () => {
+    const target = { provider: 'gitlab' as const, host: 'git.example.com', owner: 'group/sub', repo: 'project', prNumber: 7 };
+    const url = 'https://git.example.com/group/sub/project/-/merge_requests/7';
+    const task = schedule('review-mr', url, { createdAt: 1, prTrigger: { url, change: 'any' } });
+    const runNow = vi.fn(async () => null);
+    const processed = vi.fn(async () => false);
+    const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true, hasSuccessfulPrRunSince: processed, runNow });
+    const status = { ...target, ok: true as const, status: 'open' as const, title: 'Fix', branch: 'fix', htmlUrl: url, unresolvedCount: 1 };
+    await watch.reconcileInitialMrWork(task, status);
+    expect(runNow).toHaveBeenCalledOnce();
+    processed.mockResolvedValue(true);
+    await watch.reconcileInitialMrWork(task, status);
+    expect(runNow).toHaveBeenCalledOnce();
+  });
+
+  it('keeps GitLab follow-ups local and recovers a merge missed while the host was offline', async () => {
+    const url = 'https://git.example.com/group/sub/project/-/merge_requests/7';
+    const prTrigger = normalizePrTrigger({ url: url.toUpperCase().replace('HTTPS:', 'https:'), change: 'any' });
+    expect(prTrigger.url).toBe(url);
+    const task = schedule('mr', url, { createdAt: 1, preRunHook: undefined, prTrigger });
+    expect(followedGithubPrs([task])).toEqual([]);
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true, runNow });
+    watch.observe({ host: 'git.example.com', provider: 'gitlab', owner: 'group/sub', repo: 'project', prNumber: 7 },
+      { ok: true, status: 'merged', metadata: { merged_at: new Date(20).toISOString() } } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledWith('mr', expect.objectContaining({ detail: url }), task);
   });
 
   it('filters CI, review and recovery wakeups for ordinary tasks with no gate', async () => {

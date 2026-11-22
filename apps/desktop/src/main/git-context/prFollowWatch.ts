@@ -54,17 +54,18 @@ export function prStatusSignature(result: PrStatusResult): string | null {
     ok.mergeState ?? '',
     ok.conflicts ?? '',
     ok.reviewDecision ?? '',
+    ...(ok.provider === 'gitlab' ? [ok.metadata?.user_notes_count ?? '', ok.metadata?.pipeline_status ?? '', ok.metadata?.blocking_discussions_resolved ?? ''] : []),
   ].join('|');
 }
 
 export function changesBetween(previous: string | undefined, current: string | undefined): PrChange[] {
   if (!previous || !current || previous === current) return [];
   const changes: PrChange[] = ['any'];
-  const [oldStatus, , oldChecks, oldThreads, , , oldReview] = previous.split('|');
-  const [status, , checks, threads, , , review] = current.split('|');
+  const [oldStatus, , oldChecks, oldThreads, , , oldReview, oldNotes, oldPipeline, oldBlocking] = previous.split('|');
+  const [status, , checks, threads, , , review, notes, pipeline, blocking] = current.split('|');
   if (oldStatus !== status && status === 'merged') changes.push('merged');
-  if (checks && checks !== oldChecks) changes.push('ci');
-  if ((review && review !== oldReview) || (threads && threads !== oldThreads)) changes.push('review');
+  if ((checks && checks !== oldChecks) || (pipeline && pipeline !== oldPipeline)) changes.push('ci');
+  if ((review && review !== oldReview) || (threads && threads !== oldThreads) || (notes && notes !== oldNotes) || (blocking && blocking !== oldBlocking)) changes.push('review');
   return changes;
 }
 
@@ -114,10 +115,11 @@ export class PrFollowWatch {
     if (this.signatures.size > MAX_TRACKED) this.signatures.delete(this.signatures.keys().next().value!);
     if (previous === undefined || previous === signature) {
       this.retryPending();
-      if (previous === undefined && result.ok && result.status === 'merged') {
-        const mergedAt = Date.parse(String(result.metadata?.merged_at ?? ''));
+      if (previous === undefined && result.ok && (result.status === 'merged' || (query.provider === 'gitlab' && result.status === 'closed'))) {
+        const mergedAt = Date.parse(String((result.status === 'merged' ? result.metadata?.merged_at : result.metadata?.closed_at) ?? ''));
         if (Number.isFinite(mergedAt)) {
-          void this.trigger(sessionPrUrl(query), ['merged'], undefined, undefined, mergedAt).catch(error =>
+          const changes: PrChange[] = query.provider !== 'gitlab' ? ['merged'] : result.status === 'merged' ? ['merged', 'any'] : ['any'];
+          void this.trigger(sessionPrUrl(query), changes, undefined, undefined, mergedAt).catch(error =>
             this.deps.log?.warn?.('PR merge reconciliation failed', { error: String(error) }));
         }
       }
@@ -130,6 +132,18 @@ export class PrFollowWatch {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  /** Following may start after CI failed or review arrived. Process existing work once, even if the status never changes. */
+  async reconcileInitialMrWork(schedule: Schedule, result: OkStatus): Promise<void> {
+    const rule = schedule.prTrigger;
+    if (result.provider !== 'gitlab' || result.status !== 'open' || rule?.change !== 'any' ||
+        sessionPrUrl(result).toLowerCase() !== rule.url.toLowerCase()) return;
+    if (!result.conflicts && !result.checks?.failed && !result.unresolvedCount &&
+        result.metadata?.pipeline_status !== 'failed' && result.metadata?.blocking_discussions_resolved !== false) return;
+    const generation = this.generation;
+    if (await this.deps.hasSuccessfulPrRunSince?.(schedule.id, schedule.createdAt)) return;
+    await this.trigger(rule.url, ['any'], () => generation === this.generation, schedule.id);
   }
 
   /** Snapshot the observer baseline before refreshing an explicit event. */

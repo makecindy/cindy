@@ -1306,7 +1306,8 @@ export function ScheduleFormDialog({
                             {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
                               placeholder="https://github.com/owner/repo/pull/123" />}
                           </FormField>
-                          <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />
+                          {(!form.prUrl || /^https:\/\/github\.com\//i.test(form.prUrl)) &&
+                            <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />}
                           <FormField label={t('scheduler.prTrigger.condition')}>
                             {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
                               options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}

@@ -17361,15 +17361,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App 알림을 받을 수 없어도 정기 확인은 계속됩니다.",
-      "label": "PR",
-      "url": "PR URL",
+      "label": "PR / MR",
+      "url": "PR 또는 MR URL",
       "condition": "실행 조건",
-      "any": "PR 활동",
+      "any": "새 활동",
       "merged": "병합됨",
       "review": "리뷰 활동",
       "ci": "CI 상태 변경",
       "timed": "정기적으로도 확인",
-      "invalid": "GitHub PR URL을 입력하세요."
+      "invalid": "GitHub PR 또는 GitLab MR URL을 입력하세요."
     },
     "presentation": {
       "status": {

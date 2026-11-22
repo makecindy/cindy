@@ -17435,15 +17435,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Scheduled checks will continue while GitHub App notifications are unavailable.",
-      "label": "PR",
-      "url": "Pull request URL",
+      "label": "PR / MR",
+      "url": "PR or MR URL",
       "condition": "Run when",
-      "any": "PR activity",
+      "any": "Activity",
       "merged": "Merged",
       "review": "Review activity",
       "ci": "CI status changes",
       "timed": "Also check on a schedule",
-      "invalid": "Enter a GitHub pull request URL."
+      "invalid": "Enter a GitHub PR or GitLab MR URL."
     },
     "presentation": {
       "status": {

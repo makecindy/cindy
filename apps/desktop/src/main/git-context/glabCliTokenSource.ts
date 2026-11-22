@@ -36,7 +36,7 @@ export function createGlabCliTokenSource(
   } = {},
 ) {
   const now = deps.now ?? Date.now;
-  const cache = new Map<string, { result: GlabTokenResult; until: number }>();
+  const cache = new Map<string, { result: GlabTokenResult; until: number; rejected?: boolean }>();
   const inflight = new Map<string, Promise<GlabTokenResult>>();
   let generation = 0;
   const invalidate = () => {
@@ -51,9 +51,14 @@ export function createGlabCliTokenSource(
         if (!entry.result.ok) cache.delete(host);
       }
     },
+    isRejected(host: string) {
+      const cached = cache.get(host.toLowerCase());
+      return cached?.rejected === true && cached.until > now();
+    },
     rejectToken(host: string) {
       cache.set(host.toLowerCase(), {
         result: { ok: false, reason: 'glab-not-logged-in' },
+        rejected: true,
         until: now() + 30_000,
       });
     },
@@ -123,3 +128,20 @@ export function createGlabCliTokenSource(
 }
 
 export const glabCliTokenSource = createGlabCliTokenSource();
+
+/** CLI cache contains CLI results only. Resolve plugin credentials anew for the active owner and exact host. */
+export async function readGitlabStatusToken(
+  host: string,
+  cli: ReturnType<typeof createGlabCliTokenSource>,
+  ownerScope: () => string,
+  readPlugin: (host: string) => Promise<string | null>,
+): Promise<GlabTokenResult> {
+  if (!isPrHost(host)) return { ok: false, reason: 'no-token' };
+  const scope = ownerScope();
+  const local = await cli.readTokenDetailed(host);
+  if (scope !== ownerScope()) return { ok: false, reason: 'no-token' };
+  if (local.ok || cli.isRejected(host)) return local;
+  const token = await readPlugin(host);
+  if (scope !== ownerScope()) return { ok: false, reason: 'no-token' };
+  return token ? { ok: true, token } : local;
+}
