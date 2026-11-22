@@ -254,6 +254,7 @@ function readGitText(args: string[]): string | null {
   try {
     const value = execFileSync('git', args, {
       cwd: app.getAppPath(),
+      windowsHide: true,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();

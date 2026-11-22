@@ -23,6 +23,10 @@ export interface PeerChannel {
   /** Features the peer declared along with session support. */
   sessionFeatures?(): readonly string[];
   path?(): 'direct' | 'relay' | null;
+  /** The peer's authenticated direct UDP address while `path()` is `'direct'`, so a fast foreground resume can dial it first. */
+  directAddress?(): { address: string; port: number } | null;
+  /** Fires when `path()` or `directAddress()` changes after the channel was adopted (for instance after hole punching). */
+  onPathChange?(handler: (path: 'direct' | 'relay' | null) => void): void;
   stats?(): Record<string, number> | null;
   addressKind?(): 'relay' | 'loopback' | 'private' | 'public' | null;
 }

@@ -467,3 +467,73 @@ it.each(['comes up', 'never comes up', 'was not offered', 'was up for the previo
       await expect(dial).resolves.toBeDefined();
     } finally { await transport?.close(); vi.useRealTimers(); }
   });
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机 `NativeTransport.connect` 自定义 `timeoutMs` 与 `NativeChannel.directAddress` / `onPathChange`。
+ *   ① 记忆的局域网候选拨号按传入的 `timeoutMs`（350 ms）超时结束，不等满默认 3 秒；
+ *   ② 连接先经中转建立、随后打洞切到 UDP 直连时，触发 `onPathChange('direct')` 并返回验证后的 `{ address, port }`。
+ * - Bug／规则依据：手机前台快恢复要求失效记忆地址在 350 ms 内回退中转，且打洞成功后必须记录直连地址供下次前台恢复复用。
+ * - 现有覆盖缺口：已有测试只覆盖默认 3 秒拨号超时与初次建立路径，未覆盖自定义短预算与运行中路径切换通知。
+ * - 最小失败输入：1 次带 `timeoutMs: 350` 的未完成 UDP 拨号 + 1 条由 `{ link: 1 }` 切到 `{ address, port }` 的连接。
+ * - tier：unit，内存引擎桩 + 假计时器；约 15 毫秒。 */
+it('honors a custom dial timeoutMs budget and reports directAddress updates when a channel switches paths', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native-fast'), remote = generateIdentity('remote-fast');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  let mode: 'stall' | 'relay' | 'direct' = 'stall';
+  let nextStream = 0;
+  const closedIds: number[] = [];
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      if (command.op === 'identity') return { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 40000 } as T;
+      if (command.op === 'connect') return (mode === 'stall' ? 11 : 12) as T;
+      if (command.op === 'openStream') return (++nextStream) as T;
+      if (command.op === 'close') { closedIds.push(command.id as number); return true as T; }
+      if (command.op === 'poll') {
+        if (mode === 'stall') {
+          return { packets: [], connections: [{ id: 11, established: false, dead: false, closedByPeer: false, unacked: true,
+            remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }] } as T;
+        }
+        return { packets: [], connections: [{ id: 12, established: true, dead: false, closedByPeer: false, unacked: false,
+          remoteKey: remote.transportKey, path: mode === 'relay' ? { link: 1 } : { address: '192.168.1.10', port: 41000 },
+          events: [], data: [], rttUs: 2000, sent: 1, received: 1, rotations: 0 }] } as T;
+      }
+      return true as T;
+    },
+    async destroy() {},
+  };
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, {
+      admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
+      relayIdOf: () => remote.deviceId,
+      onIncoming: () => undefined,
+    }, undefined, true);
+    const fastDial = transport.connect({ id: key, dial: { relayId: remote.deviceId, udp: { address: '192.168.1.20', port: 42000 }, preferUdp: true, timeoutMs: 350 } });
+    const rejected = fastDial.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(closedIds).toEqual([]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await rejected).toMatchObject({ message: 'NATIVE_CONNECT_TIMEOUT' });
+    expect(closedIds).toContain(11);
+
+    mode = 'relay';
+    const connected = transport.connect({ id: key, dial: { relayId: remote.deviceId } });
+    await vi.advanceTimersByTimeAsync(20);
+    const channel = await connected;
+    const paths: Array<'direct' | 'relay' | null> = [];
+    channel.onPathChange!(path => paths.push(path));
+    expect(channel.path!()).toBe('relay');
+    expect(channel.directAddress!()).toBeNull();
+
+    mode = 'direct';
+    await vi.advanceTimersByTimeAsync(20);
+    expect(paths).toEqual(['direct']);
+    expect(channel.path!()).toBe('direct');
+    expect(channel.directAddress!()).toEqual({ address: '192.168.1.10', port: 41000 });
+  } finally {
+    await transport?.close();
+    vi.useRealTimers();
+  }
+});

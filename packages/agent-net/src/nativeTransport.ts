@@ -269,16 +269,17 @@ export class NativeTransport implements Transport {
   async connect(entry: RosterEntry): Promise<PeerChannel> {
     if (!this.options.admit(entry.id)) throw new Error('UNAUTHORIZED_PEER');
     await this.synchronizeAdmission();
-    const dial = entry.dial as { relayId?: string; udp?: Address; preferUdp?: boolean };
+    const dial = entry.dial as { relayId?: string; udp?: Address; preferUdp?: boolean; timeoutMs?: number };
     const expected = this.options.relayIdOf?.(entry.id);
     if (!expected || dial.relayId !== expected) throw new Error('PEER_ADDRESS_MISMATCH');
     const address = dial.preferUdp && dial.udp ? dial.udp : { link: this.linkFor(expected) };
     if ('link' in address) await this.relayUdpSettled();
     const key = toBase64Url(Uint8Array.from(entry.id.match(/../g)!, part => parseInt(part, 16)));
     const id = await this.call<number>({ op: 'connect', key, address });
+    const budgetMs = typeof dial.timeoutMs === 'number' && dial.timeoutMs > 0 ? dial.timeoutMs : 3_000;
     return new Promise((resolve, reject) => {
       if (this.closed) { reject(new Error('NATIVE_TRANSPORT_CLOSED')); return; }
-      this.waiting.set(id, { resolve, reject, deadline: now() + 3_000 });
+      this.waiting.set(id, { resolve, reject, deadline: now() + budgetMs });
       this.wake();
     });
   }
@@ -532,6 +533,8 @@ class NativeChannel implements PeerChannel {
   private earlySession: Array<[SessionLaneName, Uint8Array]> = [];
   private earlySessionBytes = 0;
   private readonly drainHandlers: Array<() => void> = [];
+  private readonly pathHandlers: Array<(path: 'direct' | 'relay' | null) => void> = [];
+  private reportedPath = '';
   constructor(private owner: NativeTransport, private id: number, readonly remoteId: string) {}
   async initialize(): Promise<void> {
     this.data.stream = await this.owner.call<number>({ op: 'openStream', id: this.id });
@@ -631,6 +634,14 @@ class NativeChannel implements PeerChannel {
   }
   receive(state: NativeState): void {
     this.state = state;
+    if (!this.events.closed && state.path) {
+      const tag = 'link' in state.path ? 'relay' : `${state.path.address}:${state.path.port}`;
+      if (tag !== this.reportedPath) {
+        this.reportedPath = tag;
+        const current = this.path();
+        for (const handler of this.pathHandlers) handler(current);
+      }
+    }
     if (Array.isArray(state.buffered)) {
       const core = new Map(state.buffered);
       for (const outgoing of [this.data, this.control, ...(this.lanes ? Object.values(this.lanes) : [])]) {
@@ -698,6 +709,8 @@ class NativeChannel implements PeerChannel {
   onData(handler: (bytes: Uint8Array) => void): void { this.events.onData(handler); }
   onClose(handler: () => void): void { this.events.onClose(handler); }
   path(): 'direct' | 'relay' | null { return this.events.closed || !this.state?.path ? null : 'link' in this.state.path ? 'relay' : 'direct'; }
+  directAddress(): Address | null { return this.events.closed || !this.state?.path || 'link' in this.state.path ? null : this.state.path; }
+  onPathChange(handler: (path: 'direct' | 'relay' | null) => void): void { this.pathHandlers.push(handler); }
   stats(): Record<string, number> | null {
     return this.events.closed || !this.state ? null : { srttUs: this.state.rttUs, sent: this.state.sent, received: this.state.received, rotations: this.state.rotations };
   }
