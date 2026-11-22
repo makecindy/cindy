@@ -1,3 +1,5 @@
+import { profileReleaseFixture } from './test-support/profile-release-fixture.mjs';
+import { bindHostProfileServices } from './agent/profile-services.ts';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,20 +9,24 @@ import { getTableColumns, getTableName } from 'drizzle-orm';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { sessions, botSessionLinks, botProfiles, projectAliases, recentWorkdirs } from '../../desktop/src/main/localDb/schema.ts';
 import { configureHostOwner } from './agent/claude-auth.mjs';
-import { getActiveDataOwnerPushStamp, commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { getActiveDataOwnerPushStamp, commitVolatileAppSession, ownerScopedUserDataPath } from '../../desktop/src/main/appSessionState.ts';
 import { writeProjectsRootDirectory } from '../../desktop/src/main/projects-root-settings.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHostConfirmations } from './host-confirmations.ts';
+import { releaseFailure } from './agent/profile-hold.ts';
 import { createHostToolService } from './agent/host-tools.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createHostServer } from './server.mjs';
+import { createHostService } from './service.mjs';
+import { createHostProjectInfoUpdate } from './project-info.ts';
 import { createWebAuth } from './web-auth.mjs';
 import { createEventHub } from './events.mjs';
 import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
 import { createLiziMcpProviders } from '@cindy/mcps';
 import { handlePluginHostToolRequest } from '../../desktop/src/main/cindy-brain/hostToolSlot.ts';
 import { createHostToolRuntime, setHostToolProviders } from '../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
+import { HELP_KNOWLEDGE } from '../../desktop/src/main/maker-ipc/helpKnowledge.generated.ts';
 
 // Unit: existing installation and business confirmations use the Host's
 // window-bound confirmation bridge; a different paired controller, disconnection
@@ -284,13 +290,50 @@ test('negotiated HTTP event streams deliver one live owner dialog without puttin
   assert.equal(received[0].type, 'plugin_push');
 });
 
+// Test value (engineering-conventions §3.2)
+// - Production entry and observable result: the Host's cindy_helper provider from createHostToolService,
+//   called the way an engine calls it (toHostTools(...).call). get_capabilities({ scope: 'help' }) returns
+//   the desktop's product help (index, then a full document) instead of HELP_UNAVAILABLE.
+// - Rule: release table row 22 (cindy_helper ports); the desktop passes productHelpDocs: HELP_KNOWLEDGE
+//   (mcp-providers.ts). Without it an agent on the Host answers "where is X / how do I" without the docs.
+// - Coverage gap: the tests above call plugin host tools and history; none reads get_capabilities.
+// - Minimal failing input: the Host xdtHelper deps without productHelpDocs.
+// - Tier: unit, in process with an in-memory SQLite task row; no engine or network.
+test('the Host cindy_helper serves the desktop product help to agents', async () => {
+  // An ordinary active task of the current owner, in the real tables the helper's authorizer and surface read.
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, botSessionLinks, botProfiles]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  sqlite.exec("INSERT INTO sessions(id,title,source,status,created_at,updated_at) VALUES ('task','Task','desktop','active',1,1)");
+  const database = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(database, 'owner');
+  const confirmations = createHostConfirmations({ current: () => true });
+  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => true,
+    owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => null,
+    getSession: () => undefined, confirmations, t: key => key,
+    // As main.ts: the input coordinator's facts for the calling turn, here an owner-typed turn.
+    taskActions: { input: () => ({ key: 'owner-turn', ownerInput: true, boundary: 'fixture' }) } });
+  const agent = service.providers.find(p => p.name === 'cindy_helper').toHostTools({ agentKind: 'codex', workingDir: '', sessionId: 'task' });
+  const body = result => JSON.parse(result.content.find(item => item.type === 'text').text);
+  try {
+    const index = body(await agent.call('get_capabilities', { scope: 'help' }));
+    assert.equal(index.ok, true, JSON.stringify(index));
+    assert.deepEqual(index.docs.map(doc => doc.key), HELP_KNOWLEDGE.map(doc => doc.id));
+    const first = HELP_KNOWLEDGE[0];
+    const doc = body(await agent.call('get_capabilities', { scope: 'help', key: first.id }));
+    assert.equal(doc.ok, true, JSON.stringify(doc));
+    assert.equal(doc.doc.content, first.content);
+  } finally { await agent.close(); service.close(); confirmations.close(); clearCurrentDbClient(database); sqlite.close(); }
+});
+
 // Integration: the Node provider previously exposed no project callbacks. Exercise
 // its actual MCP dispatch, shared core, isolated SQLite and temporary directories;
 // no Electron shim, credentials, Git service or real user paths are involved.
 test('Node AI tools create, inspect and edit the complete project profile in the current owner', async t => {
   const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'host-project-tools-')));
   configureHostOwner({ userDataDir: profile, ownerId: 'projects-owner' });
-  const sqlite = new Database(':memory:');
+  const sqlite = new Database(path.join(profile, 'owner.sqlite'));
   for (const table of [sessions, botSessionLinks, botProfiles, projectAliases, recentWorkdirs]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column =>
       `"${column.name}" ${column.getSQLType()}${column.primary ? ' PRIMARY KEY' : ''}`).join(',')})`);
@@ -302,13 +345,21 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   await Promise.all([root, first, second].map(dir => fs.mkdir(dir)));
   await writeProjectsRootDirectory(root);
   let current = true;
+  let held = null;
+  const profileHold = () => held;
+  const snapshot = async () => {
+    const entries = await fs.readdir(profile, { recursive: true, withFileTypes: true });
+    const files = entries.filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name)).sort();
+    return Promise.all(files.map(async file => [path.relative(profile, file), await fs.readFile(file)]));
+  };
   const changes = [];
   const confirmations = createHostConfirmations({ current: () => current });
-  const service = createHostToolService({ profileDir: profile, ownerId: 'projects-owner', current: () => current,
+  const toolOptions = { profileDir: profile, ownerId: 'projects-owner', current: () => current,
     owner: () => getActiveDataOwnerPushStamp(), deviceId: () => 'this-host', onProjectsChanged: catalogChanged => { changes.push(catalogChanged); },
     getGhost: () => null, getSession: () => undefined, confirmations, t: key => key,
     taskActions: { input: () => ({ key: 'input', ownerInput: true, boundary: 'input' }) },
-  });
+  };
+  const service = createHostToolService({ ...toolOptions, profileHold });
   const runtime = service.providers.find(provider => provider.name === 'cindy_helper').toHostTools({
     agentKind: 'codex', workingDir: profile, sessionId: 'task' });
   t.after(async () => {
@@ -344,6 +395,133 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   assert.ok(list.projects.some(item => item.working_dir === created.working_dir));
   assert.equal((await call('update_project_info', { project_key: created.project_key, field: 'profile', value: { directories: [] } })).ok, true);
   assert.deepEqual((await call('get_project_info', { project_key: created.project_key })).project.directories, []);
+  // Integration: drive the same four service assemblies as serve. A boolean hold loses
+  // the drain reason here even when an outer HTTP gate would independently refuse.
+  await t.test('assembled helper and project writes see queue release and recovery', async t => {
+    const fixture = profileReleaseFixture(t);
+    const services = bindHostProfileServices(fixture.queue);
+    const tools = services.tools(toolOptions);
+    const helper = tools.providers.find(p => p.name === 'cindy_helper').toHostTools({
+      agentKind: 'codex', workingDir: profile, sessionId: 'task' });
+    t.after(async () => { await helper.close(); tools.close(); });
+    const project = services.project({ platform: () => null, changed: value => changes.push(value) });
+    const fields = { project_key: created.project_key, field: 'name', value: 'Updated' };
+    const writeHelper = async () => body(await helper.call('update_project_info', fields));
+    const writeProject = () => project({ ...getActiveDataOwnerPushStamp(), projectKey: created.project_key, field: 'name', value: 'Updated' });
+    const held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: Desktop is using this profile.';
+    await fixture.occupy(held);
+    const before = await snapshot();
+    const pushes = changes.length;
+    assert.deepEqual(await writeHelper(), { ok: false, errorCode: 'PRECONDITION_FAILED', data: { hint: held } });
+    await assert.rejects(writeProject(), { message: '[PRECONDITION_FAILED] ' + held });
+    await fixture.failRelease();
+    const { code, reason, message } = releaseFailure();
+    assert.deepEqual(await writeHelper(), { ok: false, errorCode: code, data: { reason, hint: message } });
+    await assert.rejects(writeProject(), { code, reason, message: '[PRECONDITION_FAILED] ' + message });
+    assert.deepEqual(await snapshot(), before);
+    assert.equal(changes.length, pushes);
+    await fixture.recover();
+    assert.equal((await writeHelper()).ok, true);
+    await writeProject();
+    assert.equal(changes.length, pushes + 2);
+  });
+  // §3.2 integration: the MCP entry bypassed the HTTP profile hold. A running task with
+  // a valid owner must get the service's refusal for each new project write. The original
+  // case covered an owner change only. Use the actual profile and SQLite bytes to catch writes.
+  await t.test('profile hold refuses project writes and still serves project reads', async () => {
+    const before = await snapshot();
+    const beforePushes = changes.length;
+    held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+    const invoke = createHostService({ profileHold });
+    const serviceError = await invoke('/api/project-info/set').catch(error => error);
+    assert.equal(serviceError.code, 'PRECONDITION_FAILED');
+    const expected = { ok: false, errorCode: serviceError.code,
+      data: { hint: serviceError.message.replace(/^\[PRECONDITION_FAILED\] /, '') } };
+    for (const [tool, args] of [
+      ['create_project', { name: 'Denied' }],
+      ['update_project_info', { project_key: created.project_key, field: 'name', value: 'Denied' }],
+      ['rename_project', { working_dir: created.working_dir, name: 'Denied' }],
+      ['remove_project', { working_dir: created.working_dir }],
+    ]) {
+      assert.deepEqual(await call(tool, args), expected, tool);
+    }
+    assert.deepEqual(await fs.readdir(root), ['Demo']);
+    assert.equal(changes.length, beforePushes);
+    assert.deepEqual(await snapshot(), before);
+    const projects = await call('list_projects', {});
+    assert.ok(projects.projects.some(item => item.working_dir === created.working_dir));
+    assert.equal((await call('get_project_info', { project_key: created.project_key })).project.name, 'Updated');
+    held = null;
+  });
+  // §3.2 integration: the existing entry-held case has no native-confirmation await
+  // or project lock. A request admitted before either wait must leave every profile file intact.
+  const holdMessage = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+  await t.test('HTTP project settings recheck profile hold after native confirmation', async () => {
+    const before = await snapshot();
+    const beforePushes = changes.length;
+    const confirmation = Promise.withResolvers();
+    const entered = Promise.withResolvers();
+    const updateProjectInfo = createHostProjectInfoUpdate({
+      profileHold,
+      changed: catalogChanged => changes.push(catalogChanged),
+      platform: () => ({
+        status: () => ({ attached: true }),
+        call: async request => {
+          assert.equal(request.method, 'project.check');
+          entered.resolve();
+          return confirmation.promise;
+        },
+      }),
+    });
+    const invoke = createHostService({ profileHold, updateProjectInfo });
+    const pending = invoke('/api/project-info/desktop-set', { requestId: 'fixture', input: {
+      ...getActiveDataOwnerPushStamp(), projectKey: created.project_key,
+      field: 'profile', value: { name: 'Denied', directories: [{ path: first, access: 'write' }] },
+    } }, { caller: 'local-api:host' });
+    const rejected = assert.rejects(pending, { code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] ' + holdMessage });
+    await Promise.race([entered.promise, rejected]);
+    held = holdMessage;
+    confirmation.resolve(true);
+    try {
+      await rejected;
+    } finally {
+      held = null;
+    }
+    assert.deepEqual(await snapshot(), before);
+    assert.equal(changes.length, beforePushes);
+  });
+  await t.test('MCP project settings recheck profile hold inside the write lock', async t => {
+    const before = await snapshot();
+    const beforePushes = changes.length;
+    const open = fs.open;
+    const lock = ownerScopedUserDataPath('project-info-write.lock');
+    let reason = holdMessage;
+    const mockedOpen = t.mock.method(fs, 'open', async (file, ...args) => {
+      const handle = await open(file, ...args);
+      if (file === lock && args[0] === 'wx') held = reason;
+      return handle;
+    });
+    try {
+      const result = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Denied' });
+      assert.equal(result.errorCode, 'PRECONDITION_FAILED');
+      assert.equal(result.data.hint, holdMessage);
+      assert.equal(held, holdMessage);
+      const failed = { ...releaseFailure(), message: '/private/fixture.db' };
+      reason = failed;
+      held = null;
+      const retry = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Denied' });
+      assert.equal(retry.errorCode, failed.code);
+      assert.equal(retry.data.reason, failed.reason);
+      assert.equal(retry.data.hint, releaseFailure().message);
+      assert.doesNotMatch(retry.data.hint, /fixture/);
+    } finally {
+      mockedOpen.mock.restore();
+      held = null;
+    }
+    assert.deepEqual(await snapshot(), before);
+    assert.equal(changes.length, beforePushes);
+  });
+  assert.equal((await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Updated' })).ok, true);
   current = false;
   const stale = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Wrong owner' });
   assert.equal(stale.ok, false);

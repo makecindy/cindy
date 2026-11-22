@@ -1,4 +1,5 @@
 /** Official CLI login/control APIs only. No Claude credential access. */
+import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -225,6 +226,7 @@ export function codexAccountRpc(
   method: string,
   params: unknown,
   canDispatch?: () => boolean | Promise<boolean>,
+  refreshId?: string,
 ): Promise<unknown> {
   const binary = getReadyBinaryPath('codex');
   if (!binary) return Promise.reject(new Error('Codex CLI unavailable'));
@@ -235,6 +237,8 @@ export function codexAccountRpc(
       stdio: ['pipe', 'pipe', 'ignore'],
       windowsHide: true,
     });
+    // Codex's own model-manager log identifies each probe by process id.
+    if (refreshId) desktopMakerLogger.debug('Codex model/list probe started', { refreshId, pid: child.pid });
     let settled = false;
     let buffer = '';
     const finish = (error?: Error, result?: unknown) => {

@@ -1073,6 +1073,7 @@ function translatePiEventInternal(
         // calibration overwrite it.
         ctx.turnMainOutputUsageComplete = false;
         ctx.unreportedEstimatedOutput += messageEstimate;
+        ctx.tokenSpeed.finishUnreportedRequest();
         ctx.lastCalibratedTokens = meterTokens;
       }
       pushStatus(queue, ctx, 'Working…', true);
@@ -1270,8 +1271,10 @@ function translatePiEventInternal(
         ...(ctx.turnWallClockStartedAt > 0
           ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }
           : {}),
-        // Display only: lets the finished message show the chart the turn ran with.
-        ...(ctx.generationTimingReliable && generationTrace ? { generationTrace } : {}),
+        // Display only: lets the finished message show the chart the turn ran with. The meter
+        // calibrates on the parent's own output and invalidates itself on a broken clock; the
+        // timing flag above covers the usage counters, which child output makes incomparable.
+        ...(generationTrace ? { generationTrace } : {}),
       };
       const terminalError = pendingAssistantError ?? (outputLimited ? {
         message: 'Pi reached the model output limit. The response may be incomplete.',

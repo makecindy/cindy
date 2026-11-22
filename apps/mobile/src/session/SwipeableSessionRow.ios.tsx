@@ -1,18 +1,21 @@
+import { useWallpaper } from '@/theme/wallpaper';
 import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
-import { useWindowWidth } from '@/platform/windowDimension';
+import { useTaskRowSwipeWidth } from './useTaskRowSwipeWidth';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
  * 交互契约(2026-07-07 与产品确认):
- *  - 右滑露出「置顶/取消置顶」和「已读」,全滑(超过屏宽 55%)松手标为已读;
+ *  - 右滑露出「置顶/取消置顶」和「已读」,全滑(达到任务行宽的 55%)松手标为已读;
  *  - 左滑露出「选项」+「归档」,全滑=归档(归档按钮越过阈值时扩展盖满,预告松手即触发);
  *  - 删除不做滑动直达,只在「选项」菜单里(带系统 Alert 确认),由页面层承接;
  *  - 同一时间只允许一行滑开:互斥由页面级 SwipeRowRegistry 驱动(开新关旧、滚动关行)。
  *
  * 视觉对齐新 iOS(26)的滑动操作形态(2026-07-07 产品反馈迭代两轮):
  * 按钮是**悬浮的圆形图标钮**(radius.pill,从圆起步),随露出进度淡入 + 缩放弹入;
- * 继续拖动时主按钮从圆**拉长成胶囊**(宽度跟手、圆角恒为半高),图标钉在行边缘一侧跟手,
- * 全滑阈值后主按钮拉伸盖满整个露出区。非全高色块、非方角浮块。
+ * 继续拖动时主按钮从圆**拉长成胶囊**(宽度跟手、圆角恒为半高,贴到次按钮旁边不留空),图标钉在行边缘一侧跟手,
+ * 全滑阈值后主按钮拉伸盖满整个露出区,并在图标旁淡入动作文字(2026-11-20 用户要求:
+ * 两个方向拉长后的胶囊都要有文字,右滑「标为已读」,左滑「归档 / 取消归档 / 完成」)。
+ * 非全高色块、非方角浮块。
  *
  * 实现要点(RNGH ReanimatedSwipeable 的测量机制决定的结构约束):
  *  - 面板 snap 宽度由 render*Actions 返回内容的布局宽度决定(库用 marker 元素测量),
@@ -22,8 +25,9 @@ import { useWindowWidth } from '@/platform/windowDimension';
  *  - 全滑判定在 onSwipeableWillOpen(松手后的 JS 回调)同步读 translation,不在
  *    worklet 拖动中触发 —— 手指还按着时行被移除会拆手势树。
  */
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
+import { Text } from "@/components/AppText";
 import {
   ReanimatedSwipeable as Swipeable,
   SwipeDirection,
@@ -39,6 +43,7 @@ import Animated, {
 } from "react-native-reanimated";
 import {
   Check,
+  CircleDashed,
   Archive,
   ArchiveRestore,
   Ellipsis,
@@ -55,8 +60,10 @@ import {
 import type { RemoteSession } from "@/session/types";
 import { useDisclosurePrepare } from "@/session/listDisclosureTransition";
 import {
+  fontWeight,
   iconSize,
   iconStroke,
+  textStyles,
   useTheme,
   useThemedStyles,
   type ThemeColors,
@@ -71,11 +78,25 @@ const BUTTON_GAP = spacing.md;
 /** 两侧面板都放两个按钮:gap + 圆 + gap + 圆 + gap。 */
 const LEFT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
 const RIGHT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
-/** 全滑触发阈值:位移超过屏宽的这个比例,松手即执行(iOS Mail 惯例的 50-60% 区间)。 */
-const FULL_SWIPE_RATIO = 0.55;
 /** 「归档」按钮越过全滑阈值时扩展盖满右侧面板的过渡时长。 */
 const ARM_ANIMATION_MS = 150;
 const ICON_SIZE = iconSize.swipeAction;
+/** 拉长成胶囊后的文字与图标的间距:文字伸进图标格这么多(图标格 56、图标 23,两侧各空 16.5)。 */
+const LABEL_ICON_OVERLAP = spacing.sm;
+
+/**
+ * 主按钮(已读 / 归档)的宽度:面板宽度以内是正圆;拉过面板后跟着拉长,一直贴到随行外扩的
+ * 次按钮旁边,中间不留空;越过全滑阈值(armed)再盖过次按钮,铺满整个露出区。
+ */
+function stretchedActionWidth(revealed: number, armed: number): number {
+  "worklet";
+  const besideSecondary = Math.max(
+    BUTTON_SIZE,
+    revealed - BUTTON_GAP * 3 - BUTTON_SIZE,
+  );
+  const full = Math.max(BUTTON_SIZE, revealed - BUTTON_GAP * 2);
+  return besideSecondary + (full - besideSecondary) * armed;
+}
 
 /**
  * 页面级滑动控制 bundle:registry + 四个动作回调打包成一个稳定引用(useMemo),
@@ -137,10 +158,12 @@ function SwipeableSessionRowInner({
   const instanceId = useId();
   const rowKey = `${instanceId}:${session.id}`;
   const pinnedAt = session.pinnedAt;
+  const { selected: wallpaper } = useWallpaper();
+  const [swipingRow, setSwipingRow] = useState<string | null>(null);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const windowWidth = useWindowWidth();
-  const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
+  const { fullSwipeThreshold, onRowLayout } = useTaskRowSwipeWidth();
+  const rowSurface = wallpaper === 'none' || swipingRow === rowKey ? colors.surface : 'transparent';
 
   const methodsRef = useRef<SwipeableMethods | null>(null);
   // Leave the pane edge's drag band to resizing (see usePaneEdgeInset).
@@ -185,11 +208,13 @@ function SwipeableSessionRowInner({
   });
   const handleOpenStartDrag = useCallback(() => {
     const { registry, rowKey } = gestureInputs.current;
+    if (wallpaper !== 'none') setSwipingRow(rowKey);
     registry.onRowOpen(rowKey, close);
-  }, [close]);
+  }, [close, wallpaper]);
 
   const handleClose = useCallback(() => {
     const { registry, rowKey } = gestureInputs.current;
+    setSwipingRow(null);
     registry.onRowClose(rowKey);
   }, []);
 
@@ -309,8 +334,8 @@ function SwipeableSessionRowInner({
     <Swipeable
       ref={methodsRef}
       hitSlop={hitSlop}
-      childrenContainerStyle={{ backgroundColor: colors.surface }}
-      containerStyle={{ backgroundColor: colors.surface }}
+      childrenContainerStyle={{ backgroundColor: rowSurface }}
+      containerStyle={{ backgroundColor: rowSurface }}
       onSwipeableClose={handleClose}
       onSwipeableOpenStartDrag={handleOpenStartDrag}
       onSwipeableWillOpen={handleWillOpen}
@@ -318,7 +343,7 @@ function SwipeableSessionRowInner({
       renderRightActions={renderRightActions}
       testID={testID}
     >
-      {children}
+      <View onLayout={onRowLayout}>{children}</View>
     </Swipeable>
   );
 }
@@ -394,13 +419,15 @@ function LeftActionsPanel({
       transform: [
         { scale: interpolate(progress, [0.08, 0.6], [0.5, 1], "clamp") },
       ],
-      // armed 时从正圆拉长成胶囊铺满整个露出区(保留两侧 gap),盖过「置顶」。
-      width:
-        BUTTON_SIZE +
-        Math.max(0, revealed - BUTTON_GAP * 2 - BUTTON_SIZE) *
-          armedProgress.value,
+      // 拉过面板宽度后跟着拉长,补满它与「置顶」之间的空白(2026-11-20 用户要求:中间态不留空);
+      // armed 时再铺满整个露出区(保留两侧 gap),盖过「置顶」。
+      width: stretchedActionWidth(revealed, armedProgress.value),
     };
   });
+  // 文字只在越过全滑阈值(松手即生效)时出现;中间态的胶囊只有图标。
+  const readLabelStyle = useAnimatedStyle(() => ({
+    opacity: armedProgress.value,
+  }));
 
   return (
     <View style={styles.pinShell}>
@@ -430,8 +457,16 @@ function LeftActionsPanel({
           style={styles.actionPressable}
           testID={testID ? `${testID}.readAction` : undefined}
         >
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.leadingActionLabelWrap, readLabelStyle]}
+          >
+            <Text numberOfLines={1} style={styles.leadingActionLabel}>
+              {readLabel}
+            </Text>
+          </Animated.View>
           <View style={styles.pinIconWrap}>
-            <Check
+            <CircleDashed
               color={colors.swipeActionText}
               size={ICON_SIZE}
               strokeWidth={iconStroke.regular}
@@ -524,13 +559,15 @@ function RightActionsPanel({
       transform: [
         { scale: interpolate(progress, [0.08, 0.6], [0.5, 1], "clamp") },
       ],
-      // armed 时从正圆拉长成胶囊铺满整个露出区(保留两侧 gap),盖过「选项」。
-      width:
-        BUTTON_SIZE +
-        Math.max(0, revealed - BUTTON_GAP * 2 - BUTTON_SIZE) *
-          armedProgress.value,
+      // 拉过面板宽度后跟着拉长,补满它与「选项」之间的空白(2026-11-20 用户要求:中间态不留空);
+      // armed 时再铺满整个露出区(保留两侧 gap),盖过「选项」。
+      width: stretchedActionWidth(revealed, armedProgress.value),
     };
   });
+  // 文字只在越过全滑阈值(松手即生效)时出现;中间态的胶囊只有图标。
+  const archiveLabelStyle = useAnimatedStyle(() => ({
+    opacity: armedProgress.value,
+  }));
 
   return (
     <View style={styles.rightShell}>
@@ -560,6 +597,14 @@ function RightActionsPanel({
           style={styles.actionPressable}
           testID={testID ? `${testID}.archiveAction` : undefined}
         >
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.trailingActionLabelWrap, archiveLabelStyle]}
+          >
+            <Text numberOfLines={1} style={styles.trailingActionLabel}>
+              {archiveLabel}
+            </Text>
+          </Animated.View>
           <View style={styles.rightIconWrap}>
             <StatusIcon
               color={colors.swipeActionText}
@@ -649,6 +694,35 @@ const makeStyles = (colors: ThemeColors) =>
     },
     actionPressable: {
       flex: 1,
+    },
+    // 胶囊文字:占满图标格以外的胶囊宽度,贴着图标一侧对齐;静置的正圆里宽度为 0。
+    leadingActionLabelWrap: {
+      bottom: 0,
+      justifyContent: "center",
+      left: spacing.lg,
+      position: "absolute",
+      right: BUTTON_SIZE - LABEL_ICON_OVERLAP,
+      top: 0,
+    },
+    trailingActionLabelWrap: {
+      bottom: 0,
+      justifyContent: "center",
+      left: BUTTON_SIZE - LABEL_ICON_OVERLAP,
+      position: "absolute",
+      right: spacing.lg,
+      top: 0,
+    },
+    leadingActionLabel: {
+      ...textStyles.body,
+      color: colors.swipeActionText,
+      fontWeight: fontWeight.medium,
+      textAlign: "right",
+    },
+    trailingActionLabel: {
+      ...textStyles.body,
+      color: colors.swipeActionText,
+      fontWeight: fontWeight.medium,
+      textAlign: "left",
     },
   });
 

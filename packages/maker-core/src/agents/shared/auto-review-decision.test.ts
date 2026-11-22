@@ -12,6 +12,7 @@ import {
   AUTO_REVIEW_RETRY_ATTEMPTS,
   AUTO_REVIEW_RETRY_BACKOFF_MS,
   annotatePermissionRequestForUnavailableReview,
+  annotatePermissionRequestForAutoReview,
   autoReviewRetryBudgetMs,
   getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
@@ -88,6 +89,36 @@ describe('toolAutoReviewAction', () => {
 });
 
 describe('resolveAutoReviewDecision', () => {
+  // #8706 unit: the real normalization/annotation/notice chain must keep quota,
+  // discard arbitrary delegate text, and never grant permission on model failure.
+  it('preserves only the safe quota cause through confirmation metadata and notices', async () => {
+    const decision = await resolveAutoReviewDecision(request({ kind: 'exec', command: 'npm run build' }), async () => ({
+      verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted', reason: 'PRIVATE_UPSTREAM_BODY',
+    }));
+    expect(decision).toMatchObject({ verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted' });
+    const permission: { kind: 'permission'; metadata?: Record<string, unknown> } = { kind: 'permission' };
+    const annotated = annotatePermissionRequestForAutoReview(permission, decision);
+    expect(annotated.metadata).toMatchObject({ autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' });
+    const emit = vi.fn();
+    const notice = createAutoReviewUnavailableNotice(emit);
+    notice.notify(decision);
+    notice.notify(decision);
+    expect(emit).toHaveBeenCalledOnce();
+    expect(emit.mock.calls[0][0]).toContain('[AUTO_REVIEW_UNAVAILABLE_QUOTA]');
+    expect(isAutoReviewUnavailableNotice(emit.mock.calls[0][0])).toBe(true);
+    expect(JSON.stringify([decision, annotated, emit.mock.calls])).not.toMatch(/PRIVATE_UPSTREAM_BODY|Full access/);
+    notice.reset();
+    notice.notify(decision);
+    expect(emit).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['allow', 'block'] as const)('does not attach an outage to a valid %s', async (verdict) => {
+    const decision = await resolveAutoReviewDecision(request({ kind: 'exec', command: 'npm run build' }), async () => ({
+      verdict, unavailable: true, unavailableReason: 'quota_exhausted',
+    }));
+    expect(decision).toEqual({ verdict });
+  });
+
   it('names the legacy prompt result as an internal needs-review tier, not a UI prompt', () => {
     expect(classifyLocalAutoReviewTier(request({ kind: 'other' }))).toBe('needs-review');
     expect(classifyLocalAutoReviewTier(request({

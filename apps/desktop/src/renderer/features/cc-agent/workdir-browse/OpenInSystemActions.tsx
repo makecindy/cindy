@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
-import { ExternalLink, FolderOpen } from 'lucide-react';
+import { Eye, ExternalLink, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
@@ -11,11 +11,13 @@ export interface OpenInSystemActionsProps {
   absPath: string;
   /** Extra classes applied to the outer button row. */
   className?: string;
+  systemPreview?: boolean;
 }
 
 export function OpenInSystemActions({
   absPath,
   className,
+  systemPreview = true,
 }: OpenInSystemActionsProps) {
   const { t } = useTranslation();
 
@@ -47,7 +49,15 @@ export function OpenInSystemActions({
   };
 
   return (
-    <div className={cn('flex items-center gap-2', className)}>
+    <div className={cn('flex flex-wrap items-center justify-center gap-2', className)}>
+      {systemPreview && typeof window.electronAPI.openSystemPreview === 'function' &&
+        ['darwin', 'win32'].includes(window.electronAPI.platform) && (
+        <Button variant="secondary" size="md" compact type="button" onClick={async () => {
+          if (!(await window.electronAPI.openSystemPreview(absPath).catch(() => false))) toast.error(t('ccAgent.common.openFailed'));
+        }}>
+          <Eye size={14} />{t('ccAgent.workdirBrowse.systemPreview')}
+        </Button>
+      )}
       <Button variant="cta" size="md" compact type="button" onClick={onOpenFile}>
         <ExternalLink size={14} />
         {t('ccAgent.workdirBrowse.unrenderable.openInSystem')}

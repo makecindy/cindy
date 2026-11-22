@@ -11,6 +11,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
+import { once } from 'node:events';
+import { createServer, request } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -20,9 +22,14 @@ import { createHostAgentGraph } from './runtime.ts';
 import { getDesktopClaudeReadOnlyAllowedTools } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.ts';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.ts';
 import { CodexCredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-host/codex-credential-switch.ts';
+import { writeCodexServerCompaction } from '../../../desktop/src/main/maker-host/compaction-settings-store.ts';
 import { readPiGlobalContext } from '../../../../packages/maker-core/src/agents/pi/global-context.ts';
 import { createMainI18n } from '../../../desktop/src/main/i18n.ts';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
+import { createHostHarnessBinaries, resolveHarnessBinaryPath } from './harness-binary.ts';
+import { AGENT_BINARY_LAYOUT } from '../../../desktop/src/main/agent-binaries/binaryStatus.ts';
+import { closeCliProxyBridge } from '../../../desktop/src/main/maker-host/cli-proxy-bridge.ts';
+import { useHostChromiumProxySession } from '../outbound-proxy.ts';
 
 // node:test has no default timeout; an explicit bound turns a hang into a failure.
 const TEST_TIMEOUT_MS = 120_000;
@@ -73,6 +80,49 @@ test('Claude gets the desktop read-only allowed tools', { timeout: TEST_TIMEOUT_
   const graph = buildGraph(t, 'engine-deps-allowed');
   assert.deepEqual(graph.agent.deps.claudeAllowedTools, getDesktopClaudeReadOnlyAllowedTools());
   assert.ok(graph.agent.deps.claudeAllowedTools.length > 0);
+});
+
+// Rule: the desktop Pi spawn port in pi-host.ts yields to explicit proxy env, otherwise the
+// shared CONNECT bridge resolves each target through the host runtime's own system proxy session.
+// Gap: the shared bridge tests do not exercise the port on the real Host graph. Minimal input:
+// Pi's empty spawn env and one CONNECT to a synthetic host. Tier: unit with a loopback proxy.
+test('Host Pi preserves explicit proxy settings and uses Host system routing for HTTPS tunnels', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const graph = buildGraph(t, 'engine-deps-pi-proxy');
+  const proxyKeys = Object.keys(process.env).filter(key => /^(?:https?|all|no)_proxy$/i.test(key));
+  const savedProxyEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
+  for (const key of proxyKeys) delete process.env[key];
+  t.after(() => Object.assign(process.env, savedProxyEnv));
+  const authorities = [];
+  const upstream = createServer().on('connect', (req, socket) => {
+    authorities.push(req.url);
+    socket.end('HTTP/1.1 200 Connection Established\r\n\r\n');
+  });
+  upstream.listen(0, '127.0.0.1');
+  t.after(() => new Promise(resolve => upstream.close(resolve)));
+  await once(upstream, 'listening');
+  const targets = [];
+  useHostChromiumProxySession({ resolveProxy: async url => {
+    targets.push(url);
+    return `PROXY 127.0.0.1:${upstream.address().port}`;
+  } });
+  t.after(() => useHostChromiumProxySession(null));
+  t.after(closeCliProxyBridge);
+
+  const getProxy = graph.pi.deps.getLocalPiHttpsProxy;
+  assert.equal(await getProxy({ HTTPS_PROXY: 'http://proxy.example.test:8080' }), undefined);
+  assert.equal(await getProxy({ all_proxy: 'socks5://proxy.example.test:1080' }), undefined);
+  const bridge = new URL(await getProxy({}));
+  assert.equal(bridge.hostname, '127.0.0.1');
+  const connect = request(bridge, { method: 'CONNECT', path: 'pi-host-routing.example.test:443',
+    signal: AbortSignal.timeout(2000) });
+  const connected = once(connect, 'connect');
+  connect.end();
+  const [response, socket] = await connected;
+  socket.destroy();
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(targets, ['https://pi-host-routing.example.test/']);
+  assert.deepEqual(authorities, ['pi-host-routing.example.test:443']);
 });
 
 test('Claude subagent usage goes through the process-wide bridge the loopback proxy fills', { timeout: TEST_TIMEOUT_MS }, t => {
@@ -129,6 +179,20 @@ test('a Codex credential-mode switch is refused while a session is busy, by its 
   assert.deepEqual(closed, []);
 });
 
+
+// The desktop passes the user's Codex server-compaction choice at every Codex start; the Host passed
+// nothing, so a choice made in the window was ignored by Host tasks.
+test('Codex reads the user\'s server-compaction choice from the owner file the desktop writes', { timeout: TEST_TIMEOUT_MS }, t => {
+  t = lifoCleanup(t);
+  const graph = buildGraph(t, 'engine-deps-codex-compaction');
+  const read = graph.codex.deps.getCodexServerCompactionPreference;
+  assert.equal(read(), null, 'no choice keeps the native policy');
+  t.after(() => writeCodexServerCompaction(null));
+  writeCodexServerCompaction(false);
+  assert.equal(read(), false);
+  writeCodexServerCompaction(true);
+  assert.equal(read(), true);
+});
 
 test('Claude gets the MCP duplicate choices main.ts builds from the plugin gateway reads', { timeout: TEST_TIMEOUT_MS }, t => {
   t = lifoCleanup(t);
@@ -243,4 +307,100 @@ test('Pi gets the desktop startup hint and extension dialog strings in the syste
   // Every string is a translation, not a key the lookup fell back to.
   const values = [strings.confirm, strings.cancel, strings.mutationFailed, ...Object.values(strings.mutationFailure), ...Object.values(strings.mutationSuccess)];
   for (const value of values) assert.ok(value.trim() && !value.startsWith('settings.piPackages.'), value);
+});
+
+// The engine binary each harness starts with (harness-binary.ts), chosen with the desktop's rules
+// (agent-binaries/index.ts prepare, localOnly). Gap: the Host took the first `.verified` install in
+// readdirSync order and ignored Pi's selected.json. Fake engines are scripts that print a version.
+const binarySkip = process.platform === 'win32' && 'the fake engines are shell scripts';
+const PI_A = '0.70.0-11111111-1111-1111-1111-111111111111';
+const PI_B = '0.72.0-22222222-2222-2222-2222-222222222222';
+function binaryProfile(t) {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-harness-binary-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  return profile;
+}
+// An install `<profile>/<subdir>/<directory>/<binary>` whose binary prints `version`; verified unless told not.
+function installEngine(profile, kind, directory, version, { verified = true } = {}) {
+  const layout = AGENT_BINARY_LAYOUT[kind];
+  const binary = path.join(profile, layout.installSubdir, directory, layout.binaryName);
+  fs.mkdirSync(path.dirname(binary), { recursive: true });
+  fs.writeFileSync(binary, `#!/bin/sh\necho ${version}\n`, { mode: 0o755 });
+  if (verified) fs.writeFileSync(path.join(profile, layout.installSubdir, directory, '.verified'), '');
+  return binary;
+}
+const selectPi = (profile, value) => fs.writeFileSync(path.join(profile, 'pi', 'selected.json'),
+  typeof value === 'string' ? value : JSON.stringify(value));
+const piSelection = directory => ({ schema: 1, source: 'official', version: directory.split('-')[0], directory });
+
+// Rule (index.ts prepare; pi-kernel-selection.ts "A saved downgrade wins over every higher leftover
+// install"): a valid selection of the lower version is used, ahead of the higher install and of the
+// bundled binary.
+test('Pi starts with its selected version, ahead of a higher install and the bundled binary', { timeout: TEST_TIMEOUT_MS, skip: binarySkip }, async t => {
+  const profile = binaryProfile(t);
+  const lower = installEngine(profile, 'pi', PI_A, '0.70.0');
+  installEngine(profile, 'pi', PI_B, '0.72.0');
+  const bundled = installEngine(profile, 'pi', 'bundled', '0.73.0');
+  selectPi(profile, piSelection(PI_A));
+  assert.deepEqual(await resolveHarnessBinaryPath('pi', { userDataDir: profile, bundledCandidates: [bundled] }),
+    { binaryPath: lower });
+});
+
+// Rule (index.ts prepare: "Do not resurrect a higher leftover version after an explicit downgrade"): a
+// malformed selection, or one naming an install without `.verified`, leaves Pi unavailable.
+test('Pi is unavailable with an unusable selection and does not take a higher install', { timeout: TEST_TIMEOUT_MS, skip: binarySkip }, async t => {
+  const unusable = { binaryPath: null, error: 'pi_selection_invalid' };
+  const malformed = binaryProfile(t);
+  installEngine(malformed, 'pi', PI_B, '0.72.0');
+  selectPi(malformed, '{"schema":1,');
+  assert.deepEqual(await resolveHarnessBinaryPath('pi', { userDataDir: malformed, bundledCandidates: [] }), unusable);
+  const unverified = binaryProfile(t);
+  installEngine(unverified, 'pi', PI_A, '0.70.0', { verified: false });
+  installEngine(unverified, 'pi', PI_B, '0.72.0');
+  selectPi(unverified, piSelection(PI_A));
+  assert.deepEqual(await resolveHarnessBinaryPath('pi', { userDataDir: unverified, bundledCandidates: [] }), unusable);
+});
+
+// Rule (factory.ts findUsableLocalBinary through findPreferredLocalBinary): with no selection, the
+// install whose binary reports the highest version, whatever the directory names or their order.
+test('with no selection, Pi takes the install that reports the highest version', { timeout: TEST_TIMEOUT_MS, skip: binarySkip }, async t => {
+  for (const order of [['a-9.9.9', 'b-0.0.1'], ['b-0.0.1', 'a-9.9.9']]) {
+    const profile = binaryProfile(t);
+    const reported = { 'a-9.9.9': '0.70.0', 'b-0.0.1': '0.72.0' }; // names disagree with the versions
+    const binaries = Object.fromEntries(order.map(directory => [directory, installEngine(profile, 'pi', directory, reported[directory])]));
+    assert.deepEqual(await resolveHarnessBinaryPath('pi', { userDataDir: profile, bundledCandidates: [] }),
+      { binaryPath: binaries['b-0.0.1'] }, `created in the order ${order.join(', ')}`);
+  }
+});
+
+// Rule (index.ts: every engine prepares with preserveLocalVersion): Claude Code and Codex take the same
+// highest reported version; their bundled binary comes first.
+test('Claude Code and Codex take the install that reports the highest version, after the bundled binary', { timeout: TEST_TIMEOUT_MS, skip: binarySkip }, async t => {
+  for (const kind of ['claude-code', 'codex']) {
+    const profile = binaryProfile(t);
+    installEngine(profile, kind, 'a-9.9.9', '1.0.0');
+    const highest = installEngine(profile, kind, 'b-0.0.1', '2.0.0');
+    assert.deepEqual(await resolveHarnessBinaryPath(kind, { userDataDir: profile, bundledCandidates: [] }), { binaryPath: highest }, kind);
+    const bundled = installEngine(profile, kind, 'bundled', '0.1.0', { verified: false });
+    assert.deepEqual(await resolveHarnessBinaryPath(kind, { userDataDir: profile, bundledCandidates: [bundled] }), { binaryPath: bundled }, kind);
+  }
+});
+
+// Rule (desktop prepare: an invalid selection leaves Pi unavailable): the harness status the Host reports
+// (main.ts probe and boot values) is the engine choice it starts with. Gap: the status kept its own scan,
+// which takes the first `.verified` install, so Pi showed ready with an invalid selection and a higher
+// install left. Minimal failing input: status() still scanning after resolve(). tier: unit (fake engines).
+test('once the engines are chosen, an invalid Pi selection is not reported ready', { timeout: TEST_TIMEOUT_MS, skip: binarySkip }, async t => {
+  const profile = binaryProfile(t);
+  installEngine(profile, 'pi', PI_B, '0.72.0');
+  selectPi(profile, '{"schema":1,');
+  const claude = installEngine(profile, 'claude-code', 'a', '2.0.0');
+  const unavailable = [];
+  const binaries = createHostHarnessBinaries({ userDataDir: () => profile, harnessRoot: () => path.join(profile, 'no-bundled'),
+    onUnavailable: (kind, error) => unavailable.push([kind, error]) });
+  // Before an owner runtime chooses, the synchronous scan answers (and sees the leftover Pi install).
+  assert.deepEqual(binaries.status(), { 'claude-code': true, codex: false, pi: true });
+  assert.deepEqual(await binaries.resolve(), { 'claude-code': claude, codex: null, pi: null });
+  assert.deepEqual(binaries.status(), { 'claude-code': true, codex: false, pi: false });
+  assert.deepEqual(unavailable, [['pi', 'pi_selection_invalid']]);
 });

@@ -176,6 +176,7 @@ interface DeviceLinkPeerLinkView {
   receivedAgoMs: number | null;
 }
 interface DeviceLinkPeerLinksSnapshot {
+  traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
@@ -417,7 +418,7 @@ interface ComputerDriverInstallResult {
   status: ComputerDriverStatus;
 }
 
-type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult;
+type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult & { continueToScreenRecording?: boolean };
 
 interface ComputerDriverUpdateCheck {
   currentVersion: string | null;
@@ -492,6 +493,8 @@ interface AuthUser {
   orgSlug: string | null;
   /** 企业 logo(auth console 组织设置上传);个人身份或未设置为 null。 */
   orgLogoUrl: string | null;
+  tapdbChargeAlias?: string;
+  tapdbUsageAlias?: string;
   passportId: string;
 }
 
@@ -837,6 +840,7 @@ interface CCAgentPermissionRequestPayload {
   description?: string;
   suggestions?: unknown[];
   autoReviewUnavailable?: boolean;
+  autoReviewQuotaExhausted?: boolean;
   /** Auto-review's reason for asking; shown as the card's "why". */
   autoReviewReason?: string;
 }
@@ -1224,6 +1228,8 @@ interface ElectronAPI {
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) => () => void;
   osRelease: string;
+  /** Running application bundle name as it appears in a macOS file picker. */
+  macPermissionAppName?: string;
   appVersion: string;
   /** 当前进程是否经 ARM64 转译运行(Apple 芯片上的 Intel 包)。 */
   getArm64Translation?: () => Promise<boolean>;
@@ -1743,15 +1749,7 @@ interface ElectronAPI {
      * 每个窗口都跳页弹表单)。独立的插件面板窗 / 右侧栏窗收不到本推送。
      */
     onScheduleDraft: (
-      callback: (payload: {
-        requestId: string;
-        ghostId: string;
-        ghostName: string;
-        iconDataUrl?: string;
-        name: string;
-        prompt: string;
-        intervalMs?: number;
-      }) => void,
+      callback: (payload: import('../shared/ghost').GhostScheduleDraftPush) => void,
     ) => () => void;
     /** 运行时状态快照(错误接管态首帧数据源)。 */
     runtimeStates: () => Promise<{ states: Record<string, string> }>;
@@ -2390,7 +2388,6 @@ interface ElectronAPI {
 
   // ── 使用统计(TapDB)同意闸 ──
   getAnalyticsSettings: () => Promise<AnalyticsSettingsPayload>;
-  setProductTokensEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
@@ -3292,7 +3289,7 @@ interface ElectronAPI {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ) => () => void;
 
@@ -3318,7 +3315,7 @@ interface ElectronAPI {
     | { type: 'installed-plugin'; ghostId?: string }
     | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
   >;
 
@@ -3541,6 +3538,8 @@ interface ElectronAPI {
 
   /** 图片 lightbox 字节层:http / cindy-remote-media 源取字节(标注/位图复制)。 */
   readImageBytes: (params: { url: string }) => Promise<{ base64: string; mimeType: string }>;
+
+  openSystemPreview: (filePath: string) => Promise<boolean>;
 
   /**
    * 附件卡缩略图:本机文件走系统缩略图服务(macOS QuickLook / Windows Shell)。
@@ -4344,6 +4343,7 @@ interface ElectronAPI {
   openRemoteDesktop: (target: { deviceId: string; name: string; handoff?: string }) => Promise<void>;
   remoteDesktopViewer: import('../shared/remoteDesktopViewer').RemoteDesktopViewerApi;
   remoteDesktop: import('../shared/remoteDesktop').RemoteDesktopApi;
+  localNetwork: import('../shared/localNetwork').LocalNetworkApi;
   selfHostedRelay: import('../shared/selfHostedRelay').SelfHostedRelayApi;
   sharedTask: {
     host(command: import('@cindy/device-link').SharedTaskHostCommand): Promise<unknown>;
@@ -4376,6 +4376,7 @@ interface ElectronAPI {
     onChanged(cb: (event: { providerId: string }) => void): () => void;
   };
   deviceLink: {
+    cloudComputerEntry(): Promise<unknown>;
     confirmSkillMutation: (deviceId: string, operationId: string) => Promise<import('../shared/remoteSkills').RemoteSkillReceipt>;
     pickPluginPackage: (deviceId: string) => Promise<{ attachment: string } | null>;
     taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest) => Promise<import('@cindy/device-link').TaskMigrationView>;
@@ -4836,6 +4837,7 @@ interface ElectronAPI {
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    githubAppAccess: () => Promise<import('../shared/githubSetup').GithubAppAccess>;
     githubAppStatus: () => Promise<import('../shared/githubSetup').GithubAppConnectionState>;
     connectGithubApp: () => Promise<void>;
     installGithubApp: () => Promise<void>;
@@ -5025,6 +5027,7 @@ interface ElectronAPI {
         sessionId: string;
         totalMoney: import('../shared/regionalMoney').RegionalMoney;
         totalCostUsd?: number;
+        totalCostUsdIsApproximate?: boolean;
       },
       ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
     ) => void,
@@ -5074,13 +5077,14 @@ interface ElectronAPI {
 
   // ── chat-data-localization (M-FE2) — local SQLite IPC bridge ──
   localDb: {
+    onRuntimeCorruption?: (callback: (stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
     /** Open / migrate the per-user db file. Failure → fatal dialog + ready:false. */
-    ensureReady: (userId: string) => Promise<
+    ensureReady: (userId: string, recovery?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => Promise<
       | { ready: true }
       | {
           ready: false;
           error: {
-            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED';
+            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED' | 'DB_RUNTIME_CORRUPT';
             message: string;
           };
         }
@@ -5178,6 +5182,7 @@ interface ElectronAPI {
       }) => Promise<import('@/lib/ccAgent.types').Session>;
       get: (id: string) => Promise<import('@/lib/ccAgent.types').Session>;
       getMany: (ids: string[]) => Promise<import('@/lib/ccAgent.types').Session[]>;
+      archiveLinkedSideChat: (id: string, parentId: string) => Promise<import('@/lib/ccAgent.types').Session>;
       resolveReferences: (
         sessionIds: string[],
       ) => Promise<import('../shared/sessionReference').SessionReference[]>;
@@ -5665,6 +5670,7 @@ interface ElectronAPI {
    * 跟 localDb 平级放在 ElectronAPI 顶层。
    */
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload) => Promise<unknown>;
     /** webview dom-ready 后调,上报 (sessionId, tabId, webContentsId)。 */
     report: (input: {
       sessionId: string;
@@ -5810,7 +5816,20 @@ interface ElectronAPI {
      * Asks engine plugins to republish their models, like the provider model refresh when the picker
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
      */
-    refreshPluginEngines?: () => Promise<void>;
+    refreshPluginEngines?: (targetGhostId?: string) => Promise<void>;
+    /**
+     * Opens or closes one engine of this computer for the owner's other computers
+     * (PluginEngineView.remoteUse). The new state also arrives through onPluginEnginesChanged.
+     */
+    setPluginEngineRemoteUse?: (key: string, enabled: boolean) => Promise<{ supported: boolean; enabled: boolean }>;
+    /**
+     * Renames, hides or turns off one engine of this computer, or turns some of its models off
+     * (Settings → Model providers). Resolves with the engine as it is listed afterwards (null when
+     * its plugin is no longer on); the new list also arrives through onPluginEnginesChanged.
+     */
+    setPluginEnginePrefs?: (
+      input: import('../shared/pluginEngines').PluginEnginePrefsInput,
+    ) => Promise<import('../shared/pluginEngines').PluginEngineView | null>;
     /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
     onPluginEnginesChanged: (
       cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,
@@ -5932,6 +5951,7 @@ interface ElectronAPI {
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
       disabledProviders?: Record<string, boolean>;
+      hiddenProviders?: Record<string, boolean>;
     }>;
     /** 复用各内置供应商既有真源刷新模型清单。 */
     refreshBuiltinProviderModels: (
@@ -6080,6 +6100,8 @@ interface ElectronAPI {
     onProvidersChanged: (cb: () => void) => () => void;
 
     mcpApps: (sessionId: string | null, input: unknown) => Promise<unknown>;
+    redeemComposerAttachmentDrag: (input: { sessionId: string; ticket: string }) => Promise<void>;
+    onMcpAppComposerAttachment: (cb: (input: import('../shared/mcpApps').McpAppComposerAttachment) => void) => () => void;
     onPluginUiAction: (callback: (input: unknown) => void) => () => void;
     onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
@@ -6228,6 +6250,8 @@ interface ElectronAPI {
       input:
         | { kind: 'model'; providerId: string; modelIds: string[]; disabled: boolean }
         | { kind: 'provider'; providerId: string; disabled: boolean; remoteDeviceId?: string }
+        // provider-hidden = 只从模型选择器里收起,不是准入(见 disableOverrides.ts)。
+        | { kind: 'provider-hidden'; providerId: string; hidden: boolean; remoteDeviceId?: string }
         // reset = 恢复默认:删除该供应商整组停用 override(含指向已下架模型的陈旧条目)。
         | { kind: 'reset'; providerId: string },
     ) => Promise<{ ok: true }>;
@@ -7132,7 +7156,11 @@ interface ElectronAPI {
       cb: (payload: { sessionId: string; model: string; providerId: string | null }) => void,
     ) => () => void;
     onSessionCredentialSwitchFailed: (
-      cb: (payload: { sessionId: string; reason: 'apply-failed' | 'rollback-failed' }) => void,
+      cb: (payload: {
+        sessionId: string;
+        reason: 'apply-failed' | 'rollback-failed';
+        previousSettingsRetained?: boolean;
+      }) => void,
     ) => () => void;
 
     /** cc 默认路由会话的生效计费路由(proxy 按请求观察);null = 会话尚未发过请求 */
@@ -7393,6 +7421,7 @@ interface ElectronAPI {
       ) => () => void;
       /** 用量历史聚合 (首页仪表盘)。wire 形态与 main/usage/usageHistory.ts 的 UsageHistoryPayload 同形。 */
       getHistory: (opts?: {
+        currency?: 'USD' | 'CNY';
         days?: number | 'all';
         modelDays?: number | 'all';
         /** 'local' (默认) / 'all' (所有设备合并) / 其它电脑的 deviceId。 */
@@ -7406,9 +7435,9 @@ interface ElectronAPI {
           day: string;
           money: import('../shared/regionalMoney').RegionalMoney;
           costUsd?: number;
-        }) => void,
+        }, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void,
       ) => () => void;
-      onTodayTokensChanged: (cb: (p: CodexUsageSnapshot) => void) => () => void;
+      onTodayTokensChanged: (cb: (p: CodexUsageSnapshot, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
       onClaudeAccountChanged: (
         cb: (p: {
           spend: number;

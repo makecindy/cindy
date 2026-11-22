@@ -381,6 +381,8 @@ export interface SessionSendOptions extends SendOptions {
 }
 
 export interface SessionTurnLifecycleObserver {
+  /** A reservation precedes async preparation; it may never reach provider dispatch. */
+  onTurnReserved?(generation: number): ((dispatched: boolean) => void) | void;
   /** Last synchronous authorization check; no asynchronous work may follow before handle.send. */
   onDispatching?(): void;
   /** Awaited after option validation and before any provider-owned start hook or send. */
@@ -1038,7 +1040,7 @@ export class Session {
     this.sendReservation = reservation;
     this.unacceptedSendGeneration = reservedTurnGeneration;
     this.terminalObservedDuringReservation = null;
-    onTurnReserved?.(reservedTurnGeneration);
+    let releaseReservation: ((dispatched: boolean) => void) | void = undefined;
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
@@ -1059,6 +1061,8 @@ export class Session {
       return { accepted: false, reason: 'cancelled-before-dispatch' };
     };
     try {
+      releaseReservation = turnLifecycleObserver?.onTurnReserved?.(reservedTurnGeneration);
+      onTurnReserved?.(reservedTurnGeneration);
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
@@ -1280,6 +1284,14 @@ export class Session {
         }
       } else {
         this.terminalObservedDuringReservation = null;
+      }
+      try {
+        releaseReservation?.(turnDispatched);
+      } catch (error) {
+        this.logger.warn('turn reservation observer cleanup failed', {
+          turnGeneration: reservedTurnGeneration,
+          error: String(error),
+        });
       }
       if (turnLifecyclePrepared && !turnDispatched) {
         try {
@@ -1594,7 +1606,8 @@ export class Session {
   }
 
   /**
-   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+   * Pending native follow-ups, including bounded background Bash completion
+   * retention. This read-only probe does not claim or extend a product turn.
    * 会话已关闭 / agent 不支持 → 0(此时不会再有 wake turn,0 即事实)。
    */
   countPendingWakeContinuations(): number {

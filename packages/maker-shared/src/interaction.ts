@@ -164,6 +164,7 @@ export interface IssueConfirmPayload {
 export interface PermissionReviewPresentation {
   sourceDescription?: string;
   autoReviewUnavailable: boolean;
+  autoReviewQuotaExhausted?: true;
   /** Why Auto-review asked; null for ordinary Ask-mode prompts. */
   autoReviewReason: string | null;
   canAlwaysAllow: boolean;
@@ -344,6 +345,8 @@ export function buildPermissionReviewPresentation(
 
   return {
     autoReviewUnavailable: permissionAutoReviewUnavailable(request),
+    ...(permissionAutoReviewUnavailable(request) && isRecord(request.metadata) && request.metadata.autoReviewUnavailableReason === 'quota_exhausted'
+      ? { autoReviewQuotaExhausted: true as const } : {}),
     autoReviewReason: permissionAutoReviewUnavailable(request) ? null : permissionAutoReviewReason(request),
     ...(sourceDescription ? { sourceDescription } : {}),
     canAlwaysAllow,

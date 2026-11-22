@@ -143,9 +143,37 @@ export function ghostHarnessText(
 
 /* ── Runtime availability (`PUT /harnesses`) ─────────────────────────────── */
 
+/**
+ * Host-authored argument of an engine entry started for a task whose files and commands are on
+ * another computer (`process.argv` of the entry). The plugin never supplies it. An entry started
+ * with it must switch off the agent's own file and command tools for that one process, without
+ * writing the agent's user-level configuration, and leave all file and command work to the MCP
+ * servers Cindy passes in `session/new`.
+ */
+export const GHOST_HARNESS_REMOTE_WORKSPACE_ARG = '--cindy-remote-workspace';
+
+/**
+ * Host-authored argument added alongside {@link GHOST_HARNESS_REMOTE_WORKSPACE_ARG} when the task
+ * belongs to another Cindy account (provider sharing). An entry started with it must also isolate
+ * the launch from the sharer's personal instructions, skills, plugins, MCP servers and local-network
+ * fetch tools so the guest uses only the model and the MCP tools Cindy passes in `session/new`.
+ */
+export const GHOST_HARNESS_GUEST_WORKSPACE_ARG = '--cindy-guest-workspace';
+
 export interface GhostHarnessAvailability {
   /** The main JSON-RPC worker can answer usage({harnessId}) for this engine. */
   reportsUsage?: true;
+  /**
+   * The entry honours {@link GHOST_HARNESS_REMOTE_WORKSPACE_ARG}: this engine can run a task whose
+   * files and commands are on another computer of the same account. Absent = this computer only.
+   */
+  remoteWorkspace?: true;
+  /**
+   * The entry honours {@link GHOST_HARNESS_GUEST_WORKSPACE_ARG}: this engine isolates personal
+   * instructions, skills, plugins and local-network fetch tools so the user can share it with
+   * other Cindy accounts. Valid only together with `remoteWorkspace`.
+   */
+  guestWorkspace?: true;
   id: string;
   available: boolean;
   /** Short machine-readable slug, e.g. `not-installed`. */
@@ -296,6 +324,8 @@ export function parseGhostHarnessAvailability(
     harnesses.push({
       id,
       ...(item.available && item.reportsUsage === true ? { reportsUsage: true } : {}),
+      ...(item.available && item.remoteWorkspace === true ? { remoteWorkspace: true } : {}),
+      ...(item.available && item.remoteWorkspace === true && item.guestWorkspace === true ? { guestWorkspace: true } : {}),
       available: item.available as boolean,
       ...(item.reason !== undefined ? { reason: item.reason as string } : {}),
       ...(item.message !== undefined ? { message: item.message as string } : {}),

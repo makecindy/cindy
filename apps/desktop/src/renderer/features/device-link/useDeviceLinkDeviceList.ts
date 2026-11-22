@@ -18,6 +18,8 @@
 import { useSyncExternalStore } from 'react';
 
 let devices: DeviceLinkDeviceView[] | null = null;
+// Membership outlives display rows: a partial/expired directory cannot prove a cached peer is gone.
+let registeredDeviceIds: ReadonlySet<string> | null = null;
 const subs = new Set<() => void>();
 const removalSubs = new Set<(deviceId: string) => void>();
 let started = false;
@@ -198,8 +200,9 @@ export function applyDeviceRename(
 function setDevices(
   next: DeviceLinkDeviceView[],
   budget: { requestedAt: { wall: number; mono: number }; remainingMs: number } | undefined,
-  authoritative: boolean,
+  source: 'complete' | 'partial' | 'stale',
 ): boolean {
+  const authoritative = source === 'complete';
   // 按 deviceId 稳定排序,避免服务端返回顺序抖动触发无谓重渲染。
   const sorted = [...next].sort((a, b) => a.deviceId.localeCompare(b.deviceId));
   if (budget) {
@@ -211,9 +214,18 @@ function setDevices(
     }
   } else clearDirectoryExpiry();
   const devicesChanged = !relevantEqual(devices, sorted);
+  const previousIds = registeredDeviceIds;
+  const hasNewIds = previousIds !== null && sorted.some(device => !previousIds.has(device.deviceId));
+  const membershipChanged = (source !== 'stale' && hasNewIds)
+    || (authoritative && previousIds?.size !== sorted.length);
+  if (membershipChanged) {
+    const nextIds = new Set(authoritative ? [] : previousIds);
+    for (const device of sorted) nextIds.add(device.deviceId);
+    registeredDeviceIds = nextIds;
+  }
   const settledChanged = !initialRequestSettled;
   const requestChanged = setRequestState('ready', null);
-  if (!devicesChanged && !settledChanged && !requestChanged) return true;
+  if (!devicesChanged && !membershipChanged && !settledChanged && !requestChanged) return true;
   devices = sorted;
   initialRequestSettled = true;
   subs.forEach((fn) => fn());
@@ -235,7 +247,8 @@ function clearDevices(): void {
   clearDirectoryExpiry();
   loadGeneration += 1; // 作废所有在途 listDevices 响应(见 loadGeneration 注释)。
   const requestChanged = setRequestState('ready', null);
-  const changed = devices !== null || !initialRequestSettled || requestChanged;
+  const changed = devices !== null || registeredDeviceIds !== null || !initialRequestSettled || requestChanged;
+  registeredDeviceIds = null;
   if (!changed) return;
   devices = null;
   initialRequestSettled = true;
@@ -347,10 +360,17 @@ export function renameDeviceLinkDevice(deviceId: string, name: string): void {
 export function removeDeviceLinkDevice(deviceId: string): void {
   loadGeneration += 1;
   removalSubs.forEach(fn => fn(deviceId));
+  const membershipChanged = registeredDeviceIds?.has(deviceId);
+  if (membershipChanged) {
+    const remaining = new Set(registeredDeviceIds);
+    remaining.delete(deviceId);
+    registeredDeviceIds = remaining;
+  }
+  const previous = devices;
   if (devices?.some(device => device.deviceId === deviceId)) {
     devices = devices.filter(device => device.deviceId !== deviceId);
-    subs.forEach(fn => fn());
   }
+  if (devices !== previous || membershipChanged) subs.forEach(fn => fn());
   refreshImpl?.();
 }
 
@@ -361,7 +381,7 @@ export function subscribeDeviceLinkDeviceRemoval(fn: (deviceId: string) => void)
 }
 
 function ensureStarted(): void {
-  if (started) return;
+  if (started || typeof window === 'undefined' || !window.electronAPI?.deviceLink?.onPresenceChanged) return;
   started = true;
   let linkStatus: 'stopped' | 'connecting' | 'online' | null = null;
   let linkStatusRevision = 0;
@@ -497,7 +517,8 @@ function ensureStarted(): void {
       // rows it carries but proves no absence: the server may still be limiting
       // reads, and the missing leg's devices are not gone (Codex review #9360
       // 「Keep one-leg hybrid results non-authoritative」).
-      const authoritative = result?.stale !== true && result?.partial !== true;
+      const source = result.stale ? 'stale' : result.partial ? 'partial' : 'complete';
+      const authoritative = source === 'complete';
       // 退避**只在完整目录恢复时**清零:部分目录只说明它带来的那条腿读到了,缺的那条
       // 腿仍可能坏着。每次部分成功都清零的话,下一次重试永远从 2 秒重新开始,阶梯
       // 涨不到 30 秒上限 —— 一条腿长期坏着时会变成每 2 秒追问一次
@@ -508,9 +529,11 @@ function ensureStarted(): void {
       } else if (authoritative) {
         retryDeadlineMs = 0;
       }
-      const displayed = setDevices(list, result?.displayBudget
-        ? { requestedAt, remainingMs: result.displayBudget.remainingMs } : undefined,
-      authoritative);
+      const displayed = setDevices(
+        list,
+        result.displayBudget ? { requestedAt, remainingMs: result.displayBudget.remainingMs } : undefined,
+        source,
+      );
       // A source already retired cannot be refreshed into validity by another
       // stale answer. Keep the normal retry cadence instead of a tight loop.
       // A **partial** directory is displayed but still missing one leg's devices:
@@ -640,6 +663,11 @@ function getSnapshot(): DeviceLinkDeviceView[] | null {
 /** 订阅全量设备列表(共享单例);null = 尚未加载。 */
 export function useDeviceLinkDeviceList(): DeviceLinkDeviceView[] | null {
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/** Null until the first complete directory. Partial reads can confirm presence only. */
+export function useRegisteredDeviceIds(): ReadonlySet<string> | null {
+  return useSyncExternalStore(subscribe, () => registeredDeviceIds);
 }
 
 function getInitialRequestSettledSnapshot(): boolean {

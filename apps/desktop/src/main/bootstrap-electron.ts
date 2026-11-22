@@ -1,3 +1,4 @@
+import { createCompanyTokenReporting } from './usage/companyTokenReporting.desktop.js';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor, createPersonalRendererProbe, personalMonitorEnvironment } from './personalBuildMonitor.js';
@@ -253,6 +254,7 @@ function readGitText(args: string[]): string | null {
   try {
     const value = execFileSync('git', args, {
       cwd: app.getAppPath(),
+      windowsHide: true,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
@@ -320,7 +322,7 @@ import {
   startImConnection,
   stopImConnection,
 } from './im';
-import { buildBotImConnectionListPayload } from './im/shared/botImConnectionRuntime.js';
+import { buildBotImConnectionListPayload, configureTeammateIMessageGroup, listTeammateIMessageGroups } from './im/shared/botImConnectionRuntime.js';
 import { readWechatChannelSettings } from './im/wechat/channelSettings.js';
 import { readXCompanionAssignment } from './hook-control/ipc.js';
 import type { BotControlState } from '@cindy/mcps';
@@ -508,14 +510,18 @@ import {
   inspectPassiveLocalProfileAdoption,
 } from './localProfileDataMigration';
 import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier';
+import { openSystemPreview } from './file-browser/system-preview';
 import { registerFsBrowseIpc } from './fsBrowse/ipc';
 import {
   ensureReady as localDbEnsureReady,
   getRawDb as localDbGetRawDb,
   closeDb as localDbCloseDb,
   getCurrentDbPath as localDbGetCurrentDbPath,
+  getCurrentUserId as localDbGetCurrentUserId,
+  markRuntimeDbCorrupt as localDbMarkRuntimeDbCorrupt,
   getDbPathForUser,
 } from './localDb/index';
+import { notifyRuntimeDbCorruption } from './localDb/fatalDetailsClipboard';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
 import { deliverPendingAgentAppUpdateResult } from './agent-app-update/index';
@@ -560,7 +566,7 @@ import {
   freezeSessionActiveTurnMarkers,
 } from './localDb/sessionActiveTurn';
 import { configureMigrationRuntime } from './localDb/migrationRuntime';
-import { configureLocalDbHostUi } from './localDb/hostUi';
+import { configureLocalDbHostUi, localDbHostUi } from './localDb/hostUi';
 import { configureUiText } from './uiText';
 import { runPendingDbSlimmingAtStartup } from './localDb/dbSlimmingStartup';
 import { shouldShowNativeFatalDialog } from './localDb/fatalDialogPolicy';
@@ -588,6 +594,7 @@ import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import {
   acquirePiSubagentLaunchFence,
   clearStalePiSubagentLaunchFence,
+  hasActivePiSubagentRuns,
   hasActivePiSubagentRunsSync,
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
@@ -618,7 +625,7 @@ import {
   clearAllSessionAttention,
   refreshWindowsAppBadge,
 } from './appBadgeService';
-import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
+import { initNotificationService, showDeviceSessionDesktopEvent, showPrivacyScreenNotification } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import { startAgentIslandQuota } from './agent-island/quota.js';
@@ -666,6 +673,7 @@ import {
   setAwayCaptureExcludedWindows,
   startLinuxAwayCover,
 } from './remote-desktop';
+import { registerLocalNetworkIpc } from './local-network/index.js';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import { DisplayDemand } from './remote-desktop/displayDemand';
 import {
@@ -675,7 +683,7 @@ import {
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.desktop.js';
 import * as usageReporting from './product-token-usage/reporting.js';
-import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initAnalyticsSettingsService, noteAuthColdStartState, onAnalyticsPermissionChange } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
@@ -725,6 +733,7 @@ import {
   hasInFlightRemoteInvokes,
   setHistoryToolNameReader,
   setUsageWidgetSnapshotReader,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
   setAgentNetSwitchRemoteHandler,
@@ -779,6 +788,7 @@ import { registerSkillhubIpc } from './skillhub/registerIpc';
 import { listAllowedSkillhubProjectRoots } from './skillhub/allowedProjectRoots';
 import { SkillhubMarketService } from './skillhub/marketService';
 import { skillhubAutoSyncService } from './skillhub/autoSyncService';
+import { closeIdleDesktopSessionForMove } from './localDb/ipc/sessionWorkingDirMove.desktop.js';
 import { rehydrateCloseSuppression } from './maker-host/rehydrateCloseSuppression.js';
 import {
   builtInSkillDescriptors,
@@ -1130,6 +1140,7 @@ import {
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   setDeepLinkMainWindow,
+  openMainWindowSettingsNavigation,
   focusMainWindow as activateMainWindow,
   takePendingDeepLinkFromRenderer,
 } from './deepLink.js';
@@ -1391,6 +1402,7 @@ function installHostClientMode(): boolean {
   // to the Host instance and to the account the windows show.
   const hostIpcLog = createLogger('host-ipc');
   const ipcProxy = createHostIpcProxy({
+    preconditionMessage: () => t('ipcError.PRECONDITION_FAILED'),
     baseUrl: delegation.baseUrl,
     token: delegation.token,
     instanceId: delegation.instanceId,
@@ -2144,16 +2156,32 @@ const piSubagentLog = createLogger('pi-subagent');
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
+  closeMainDb: (userId) => {
+    localDbCloseDb({ skipOptimize: true, recoverRuntimeCorruptionForUserId: userId });
+  },
+  quarantineMainDb: (userId, error) => {
+    localDbMarkRuntimeDbCorrupt(userId, error);
+  },
   getCurrentDbPath: localDbGetCurrentDbPath,
   createWorkerClient: createDbClient,
-  createInprocClient: () => createInprocDbClient(),
-  setCurrentDbClient,
+  createInprocClient: (options) => createInprocDbClient(options),
+  setCurrentDbClient(client, userId) {
+    setCurrentDbClient(client, userId);
+    usageReporting.prepareTokenReporting();
+  },
   clearCurrentDbClient,
   log: dbClientLog,
 });
 
 async function ensureLifecycleDbClient(userId: string) {
+  const ownerStamp = getActiveDataOwnerPushStamp();
   return lifecycleDbClientManager.ensure(userId, {
+    onCorruption: () => {
+      const current = getActiveDataOwnerPushStamp();
+      if (ownerStamp.dataOwnerId !== userId || current.dataOwnerId !== userId
+        || current.ownerGeneration !== ownerStamp.ownerGeneration) return;
+      notifyRuntimeDbCorruption(ownerStamp, (stamp) => localDbHostUi().broadcast('local-db:runtime-corruption', stamp));
+    },
     drizzleDir: getDrizzleDir(),
     sqliteVecExtPath: resolveSqliteVecExtPath(),
     nativeBinding: resolveBetterSqliteNativeBinding() ?? undefined,
@@ -5288,7 +5316,29 @@ const registerIpcHandlers = () => {
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
   // 多控制端重连风暴中会互相挤爆对方的可靠传输窗口。
+  let lastActivityRevision: number | undefined;
+  const readHostActivity = () => getAgentIslandService()?.getForegroundTaskActivity() ?? null;
+  let summaryTimer: ReturnType<typeof setTimeout> | undefined;
+  const stopIslandUpdates = getAgentIslandService()?.subscribeTaskOverview(() => {
+    // Tool and text updates can be much more frequent than changes to the three counts.
+    if (summaryTimer) return;
+    summaryTimer = setTimeout(() => {
+      summaryTimer = undefined;
+      publishHostTaskActivity(() => {
+        const summary = readHostActivity();
+        if (!summary || summary.revision === lastActivityRevision) return null;
+        lastActivityRevision = summary.revision;
+        return summary;
+      });
+    }, 80);
+    summaryTimer.unref();
+  });
+  if (stopIslandUpdates) onQuit('foreground-task-activity', () => {
+    clearTimeout(summaryTimer);
+    stopIslandUpdates();
+  });
   setSessionsSubscribedListener((controllerDeviceId) => {
+    publishHostTaskActivity(readHostActivity, controllerDeviceId);
     getAgentIslandService()?.replaySessionActivity((payload) => {
       pushSessionActivityToController(controllerDeviceId, payload);
     });
@@ -5318,6 +5368,13 @@ const registerIpcHandlers = () => {
     });
     startAwayGuard({
       excludedWindows: setAwayCaptureExcludedWindows,
+      notifyFailure: (reason) => showPrivacyScreenNotification(
+        t('settings.windowBehavior.awayGuard.label'),
+        t(reason === 'permission' ? 'settings.windowBehavior.awayGuard.permissionMissing' : 'settings.windowBehavior.awayGuard.previewUnavailable'),
+        () => openMainWindowSettingsNavigation({
+          deviceId: authManager.getDeviceId(), tab: 'general', section: 'settings.windowBehavior.awayGuard.label',
+        }),
+      ),
       needsDisplay: () => displayDemand.needed(),
       enabled: () => readWindowBehaviorSettings().awayGuard,
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
@@ -6876,6 +6933,8 @@ const registerIpcHandlers = () => {
 
   // ── Auth IPC handlers (delegated to authManager) ──
 
+  const companyReporting = !hostClientMode ? createCompanyTokenReporting(onAnalyticsPermissionChange) : null;
+  app.once('will-quit', () => companyReporting?.dispose());
   ipcMain.handle('auth:initialize', async () => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;
@@ -6891,6 +6950,7 @@ const registerIpcHandlers = () => {
       // 以后台完成的那次登录为准。
       const markAuthMilestone = (s: authManager.AuthState) => {
         if (s.isAuthenticated) markStartupMilestone('auth-initialized');
+        if (s.canEnterApp || !pendingCompletion) companyReporting?.refresh();
       };
       markAuthMilestone(state);
       void (pendingCompletion as Promise<authManager.AuthState> | null)?.then(markAuthMilestone, () => undefined);
@@ -7154,11 +7214,12 @@ const registerIpcHandlers = () => {
       const connections: NonNullable<BotControlState['conversations']>['connections'] =
         buildBotImConnectionListPayload(botId).connections
           .map(record => ({ channel: record.service ?? record.channel, connectionId: record.id, status: record.status.kind }));
+      connections.push(...listTeammateIMessageGroups(botId));
       if (readWechatChannelSettings().companionBotId === botId) connections.push({ channel: 'wechat', status: 'assigned' });
       const x = readXCompanionAssignment();
       if (x?.botId === botId) connections.push({ channel: 'x', status: x.enabled ? 'assigned' : 'disabled' });
       return connections;
-    });
+    }, configureTeammateIMessageGroup);
     // 模型供应商目录(providers.json)按「OSS 真源 / bundled 兜底」加载一次存内存:必须在第一次
     // getMakerCore()(下面构造 Maker、同步从 getActiveCatalog() 派生 availableModels)之前完成,
     // 否则首个进程会用内置兜底目录派生模型清单。ensureActiveCatalogLoaded 幂等且永不抛
@@ -7233,6 +7294,8 @@ const registerIpcHandlers = () => {
         app.once('will-quit', () => { clearInterval(monitorTimer); stopObserving(); });
       }
       registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {
+        readPiActivityForBanner: () =>
+          hasActivePiSubagentRuns(path.join(app.getPath('userData'), 'pi-agent-home'), { hostPid: process.pid }),
         describeTurns: () => describeRelaunchTurns(() => listInTurnSessionIds(getMakerIfReady())),
       });
       // Client mode returned above and never reaches the runtime assembly.
@@ -7253,6 +7316,10 @@ const registerIpcHandlers = () => {
       });
       registerMakerCoreIpc(ipcMaker, {
         builtinApiKeyDeps,
+        // Keep aligned with maker-host/index.ts historyRemote injection. That provider fact wires
+        // sendToRemoteSession into cindy_helper; the shared register option carries the same fact
+        // into model-facing delivery hints.
+        supportsRemoteSessionHandoff: true,
         onAnySessionTurnKeepaliveChange: (isRunning) => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();
@@ -7902,6 +7969,7 @@ const registerIpcHandlers = () => {
       app.getPath('userData'),
       app.getPath('appData'),
     ),
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
   });
   // 新电脑设置(docs/product-rules/new-device-setup-migration.md)：从同账号另一台电脑读取非秘密配置，
@@ -7913,6 +7981,7 @@ const registerIpcHandlers = () => {
       app.getPath('userData'),
       app.getPath('appData'),
     ),
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     getMainWindow: () => mainWindowRef,
     getLegacyMigrated: () => didMigrateLegacyDataForUser(authManager.getCurrentUserId()),
   });
@@ -9280,6 +9349,11 @@ const registerIpcHandlers = () => {
     );
   }
 
+  ipcMain.handle('file:system-preview', (event, filePath: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return openSystemPreview(BrowserWindow.fromWebContents(event.sender), filePath);
+  });
+
   // 附件卡缩略图:系统缩略图服务(macOS QuickLook / Windows Shell)按路径出小预览。
   // 高权限入口——先过 sender 闸,再由 readFileThumbnail 做路径策略与 payload 校验;
   // 任何失败都回 null,由 renderer 回落到自绘文件图标。
@@ -10077,14 +10151,18 @@ app.on('ready', async () => {
   // Cindy-owned Skill activation and all home-level projections happen through
   // one stable-owner boundary. Passive shared-userData instances may consume the
   // active bundle but cannot switch it or its projections.
-  try {
-    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
-  } catch (error) {
+  //
+  // Warm-up only; the first window does not wait for it. Every Agent launch and
+  // Skill listing awaits the same preparation itself, and PreparationCache lets
+  // them join this run instead of starting another. Waiting here cost 0.7–3.9 s
+  // before the main window, and with a saved sign-in the owner is usually still
+  // being restored, so the owner guard rejected this pass anyway.
+  void desktopClaudeAuthAdapter.ensureSharedGlobalSkills().catch((error: unknown) => {
     // A broken optional Skill must not block the desktop from starting.
     createLogger('built-in-skills').warn('built-in Skill preparation failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-  }
+  });
 
   // macOS App Translocation fix: when the user launches the app without
   // dragging it to /Applications first, macOS runs it from a read-only
@@ -10189,16 +10267,7 @@ app.on('ready', async () => {
     resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
     requestWorktreeRecycle,
     lookupSessionWorktreeBinding: (sessionId) => worktreeStore.get(sessionId)?.path ?? null,
-    closeIdleSessionForMove: async (sessionId) => {
-      const maker = getMakerIfReady();
-      if (maker?.getSession(sessionId)?.isTurnRunning()) return false;
-      if (maker) {
-        await rehydrateCloseSuppression.withSuppressed(sessionId, () =>
-          maker.closeSession(sessionId),
-        );
-      }
-      return true;
-    },
+    closeIdleSessionForMove: closeIdleDesktopSessionForMove,
     // 任务级窗口预算落库后的运行时应用：与模型级上限编辑同一套「关 handle
     // 冷重建 / 回合中登记 pending」语义。
     applyContextWindowBudget: applySessionContextWindowBudgetChange,
@@ -10214,12 +10283,23 @@ app.on('ready', async () => {
         return false;
       }
     },
-    isOwnerCurrent: (userId) =>
-      isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending()),
+    isOwnerCurrent: (userId, recovery) => {
+      const current = getActiveDataOwnerPushStamp();
+      return isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending())
+        && (!recovery || (recovery.dataOwnerId === userId
+          && recovery.ownerGeneration === current.ownerGeneration));
+    },
     discardStaleOwner: (userId) =>
       lifecycleDbClientManager.dispose(`stale-owner-after-ready:${userId}`),
-    beforeEnsureReady: async (userId) => {
+    beforeEnsureReady: async (userId, recovery) => {
       if (hostClientMode) return;
+      // Readiness from another window must not clear a corrupt instance. Only
+      // the explicit, current-generation recovery request retires its handles.
+      await lifecycleDbClientManager.prepareForEnsure(userId, recovery !== undefined, () => {
+        const current = getActiveDataOwnerPushStamp();
+        return isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending())
+          && (!recovery || recovery.ownerGeneration === current.ownerGeneration);
+      });
       // Provider discovery is detached from DB read readiness for the same owner, but a
       // different owner must not replace the DB while the previous account task can still
       // update owner-scoped catalogs or agent environments.
@@ -10783,8 +10863,7 @@ app.on('ready', async () => {
   // handler 还没注册的话那次 invoke 会 reject,而它是 fail closed 的 —— 已同意
   // 的用户会一直不上报,直到手动去设置里拨一下开关。
   initAnalyticsSettingsService({
-    enabled: usageReporting.tokenReportingEnabled,
-    set: usageReporting.setTokenReporting,
+    prepare: usageReporting.prepareTokenReporting,
     interrupt: usageReporting.interruptTokenReporting,
     revokeAll: usageReporting.revokeAllTokenReporting,
     report: usageReporting.reportTokenUsage,
@@ -10868,6 +10947,7 @@ app.on('ready', async () => {
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
+  registerLocalNetworkIpc();
   registerRemoteDesktopIpc(
     isGlobalVoiceInputOverlaySender,
     { name: getControllerName, revoke: revokeController },

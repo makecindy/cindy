@@ -7,12 +7,14 @@ import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
 import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
 import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
-import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { AUTOMATION_DENIED, BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 
 export interface BlueBubblesConfig {
   serverUrl: string;
   ownerAddress: string;
+  /** Explicit receiving address for native group mentions on this connection. */
+  mentionAddress?: string;
   chatGuids: string[];
   listenHost: string;
   listenPort: number;
@@ -42,7 +44,11 @@ export function parseBlueBubblesConfig(raw: unknown): BlueBubblesConfig {
       selfAccountAddresses[chat] = address.trim().toLowerCase();
     }
   }
-  return { serverUrl: blueBubblesOrigin(r.serverUrl), ownerAddress: r.ownerAddress.trim().toLowerCase(),
+  const mentionAddress = iMessageAddress(r.mentionAddress);
+  if (r.mentionAddress !== undefined && r.mentionAddress !== '' && !mentionAddress) {
+    throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+  }
+  return { ...(mentionAddress ? { mentionAddress } : {}), serverUrl: blueBubblesOrigin(r.serverUrl), ownerAddress: r.ownerAddress.trim().toLowerCase(),
     ...(selfAccountAddresses && { selfAccountAddresses }),
     groupAliases: (r.groupAliases as string[] | undefined) ?? ['Cindy'],
     chatGuids: [...new Set(r.chatGuids as string[])], listenHost: r.listenHost, listenPort: r.listenPort as number };
@@ -52,6 +58,7 @@ export interface BlueBubblesOptions {
   secretPrefix: string;
   /** Host-persisted route identity survives a server address edit. */
   contextId?(): string | null;
+  delegatedGroupAlias?(chatId: string, authorization: string): Promise<string | undefined>;
   storage: BlueBubblesStateStorage;
   receiver(host: string, port: number): LocalWebhookReceiver;
   api?(origin: string, password: string): BlueBubblesApi;
@@ -65,12 +72,28 @@ class BlueBubblesReceiveError extends Error {
 }
 export const BLUEBUBBLES_SECRET_KEYS = ['bluebubbles-origin', 'bluebubbles-config', 'bluebubbles-password', 'bluebubbles-webhook-token', 'bluebubbles-echo-key'] as const;
 
+function iMessageAddress(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 320) return;
+  if (/^\+[1-9]\d{1,14}$/.test(value)) return value;
+  if (/^[^@\s:]+@[^@\s:]+$/.test(value)) return value.toLowerCase();
+}
+
+function mentionsSelf(body: unknown, selfAddress: string | undefined): boolean {
+  if (!selfAddress || !Array.isArray(body)) return false;
+  return body.some(part => Array.isArray(part?.runs) && part.runs.some((run: unknown) => {
+    const attribute = (run as { attributes?: Record<string, unknown> } | null)?.attributes?.__kIMMentionConfirmedMention;
+    const address = iMessageAddress(attribute);
+    return address === selfAddress;
+  }));
+}
+
 export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private status: IMStatus = { kind: 'idle' };
   private readonly messages = new Set<Handler>();
   private readonly statuses = new Set<(status: IMStatus) => void>();
   private config: BlueBubblesConfig | null = null;
   private api: BlueBubblesApi | null = null;
+  private verifiedMentionAddress?: string;
   private receipts: BlueBubblesReceipts | null = null;
   private pendingEdit: object | null = null;
   private readonly chats = new Map<string, BlueBubblesChat>();
@@ -136,16 +159,22 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       && chat.participants![0]!.address.toLowerCase() === this.config?.ownerAddress)?.guid ?? null;
   }
   isGroup(chatGuid: string): boolean { return /^(?:iMessage|any);\+;/.test(chatGuid) || (this.chats.get(chatGuid)?.participants?.length ?? 0) > 1; }
-  isGroupInvocation(text: string): boolean {
+  /** Identifies this chat's continuous grant on the current bridge without disclosing its address. */
+  groupAuthorization(chat: string): string | null {
+    if (!this.config || !this.receipts || !this.chats.has(chat) || !this.isGroup(chat)) return null;
+    return createHash('sha256').update(JSON.stringify([this.config.serverUrl, this.config.ownerAddress,
+      chat, this.receipts.activatedAtFor(chat)])).digest('hex');
+  }
+  isGroupInvocation(text: string, aliases = this.config?.groupAliases ?? []): boolean {
     const current = text.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
       .replace(/"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|`[^`\n]*`/g, '');
-    return (this.config?.groupAliases ?? []).some(alias => {
+    return aliases.some(alias => {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(`(^|[^\\p{L}\\p{N}_@])@${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(current);
     });
   }
   getChat(chatGuid: string): BlueBubblesChat | undefined { return this.chats.get(chatGuid); }
-  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number } {
+  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number; automationDenied?: boolean } {
     return { lastCatchUpAt: this.lastCatchUpAt, lastWebhookAt: this.lastWebhookAt,
       ...(this.receipts?.uncertainCounts(this.activeDispatches, this.activeSends)
         ?? { uncertainInputs: 0, uncertainSends: 0 }) };
@@ -320,6 +349,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
 
   async dispose(): Promise<void> {
     ++this.generation;
+    this.verifiedMentionAddress = undefined;
     if (this.timer) clearTimeout(this.timer);
     if (this.deferredTimer) clearTimeout(this.deferredTimer);
     this.timer = null;
@@ -404,7 +434,19 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     // Finish or park preparation already in progress before enumerating history.
     await this.pumping?.catch(error => { if (!(error instanceof BlueBubblesReceiveError)) throw error; });
     this.assertLive(generation);
-    await api.info(); this.assertLive(generation);
+    this.verifiedMentionAddress = undefined;
+    const info = await api.info(); this.assertLive(generation);
+    // This endpoint reports the signed-in Apple account on this BlueBubbles
+    // server. The configured ownerAddress instead identifies a remote sender.
+    const mentionAddress = config.mentionAddress;
+    const account = mentionAddress && info.private_api === true && info.helper_connected === true
+      && config.chatGuids.some(chat => this.isGroup(chat))
+      ? await api.iMessageAccount().catch(() => null) : null;
+    this.assertLive(generation);
+    if (mentionAddress && Array.isArray(account?.vetted_aliases)
+      && account.vetted_aliases.some(entry => iMessageAddress(entry?.Alias) === mentionAddress)) {
+      this.verifiedMentionAddress = mentionAddress;
+    }
     const before = this.now();
     // All chats share this scan's upper watermark. A later POST must await its own scan.
     const inactive = receipts.inactiveCorrelationsByChat(this.activeSends);
@@ -587,13 +629,21 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           if (receipts.wasStopped(guid, chat.guid, message.dateCreated)) {
             receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
           }
+          const group = this.isGroup(chat.guid);
+          // The Apple thread root can point to our message even when the direct
+          // reply targets someone else. Leave it to context, never activation.
+          const grant = group && this.groupAuthorization(chat.guid);
+          const alias = grant && await this.options.delegatedGroupAlias?.(chat.guid, grant);
+          this.assertLive(generation);
+          const invoked = group && (this.isGroupInvocation(message.text ?? '', alias ? [alias] : undefined)
+            || (typeof message.replyToGuid === 'string' && receipts.hasSentMessage(chat.guid, message.replyToGuid))
+            || mentionsSelf(message.attributedBody, this.verifiedMentionAddress));
           event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
             contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
             speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress && (!message.isFromMe || chat.guid === this.getOwnerUserId()) },
             ...(typeof message.threadOriginatorGuid === 'string' && message.threadOriginatorGuid !== guid ? { imessageReplyGuid: message.threadOriginatorGuid } : {}),
             interactionSource: { chatName: chat.displayName, senderName: sender },
-            ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
-              invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
+            ...(group ? { ambient: !invoked, invoked } : {}) };
           this.eventSentAt.set(event, message.dateCreated);
           this.pendingInputs.set(guid, event);
           preparing = true;
@@ -901,9 +951,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     }
     if (changed) void this.pump(generation).catch(error => this.fail(generation, error));
   }
-  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>): Promise<{ messageId: string }> {
+  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>, requestId?: string): Promise<{ messageId: string }> {
     const { api, receipts, generation } = this.target(chatId);
-    const id = randomUUID();
+    const id = requestId ?? randomUUID();
+    if (requestId && receipts.hasOutgoing(requestId)) {
+      const messageId = receipts.confirmedSend(requestId, chatId);
+      if (!messageId) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+      return { messageId };
+    }
     const echoSignature = text === null ? 'file' : receipts.textSignature(text);
     receipts.outgoing(id, { chatId, state: 'sending', echoSignature });
     let sent = false;
@@ -918,10 +973,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       this.wakeSendWaiters(chatId, generation);
       return { messageId: result.guid };
-    } catch {
+    } catch (error) {
       const confirmed = receipts.confirmedSend(id);
       if (confirmed && this.live(generation)) return { messageId: confirmed };
-      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown', echoSignature });
+      // The server reports only the final AppleScript attempt. A prior attempt
+      // may have succeeded, so retain the correlation and never replay here.
+      const denied = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED;
+      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown', echoSignature, ...(denied && { automationDenied: true }) });
+      if (denied) throw error;
       throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
     } finally {
       if (this.live(generation)) { this.activeSends.delete(id); this.setStatus(this.status); }
@@ -933,10 +992,42 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.assertLive(generation);
     return rows.filter(row => row.chats?.some(chat => chat.guid === chatId));
   }
+  /** Reuse the already-authorized receiver. No dispose, credential write or second listener. */
+  async verifyGroupHandoff(chatId: string): Promise<() => void> {
+    const { api, generation } = this.target(chatId);
+    const url = this.webhookUrl;
+    if (!url || !this.isGroup(chatId)) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+    let step = 'SERVER';
+    try {
+      await api.info();
+      this.assertLive(generation);
+      step = 'CHAT';
+      const chat = await api.chat(chatId);
+      if (chat.guid !== chatId || !chat.participants?.length) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+      this.assertLive(generation);
+      step = 'CALLBACK';
+      await api.registerWebhook(url);
+      this.assertLive(generation);
+    } catch (error) {
+      const reason = error instanceof BlueBubblesApiError ? error.code : 'UNAVAILABLE';
+      throw new Error(`BLUEBUBBLES_${step}_${reason}`);
+    }
+    return () => {
+      this.assertLive(generation);
+      if ([...this.activeDispatches].some(id => this.pendingInputs.get(id)?.chatId === chatId))
+        throw new Error('GROUP_BUSY');
+    };
+  }
   listChats(): BlueBubblesChat[] { return [...this.chats.values()].map(chat => structuredClone(chat)); }
   sendText(chatId: string, text: string): Promise<{ messageId: string }> { return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id)); }
+  sendDirectDelivery(chatId: string, text: string, requestId: string): Promise<{ messageId: string }> {
+    if (!/^(?:iMessage|any);-;/.test(chatId) || this.isGroup(chatId)) {
+      return Promise.reject(new Error('BLUEBUBBLES_DIRECT_CHAT_REQUIRED'));
+    }
+    return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id), requestId);
+  }
   sendMarkdownText(chatId: string, text: string): Promise<{ messageId: string }> { return this.sendText(chatId, text); }
-  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
+  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult & { deliveryError?: typeof AUTOMATION_DENIED | 'BLUEBUBBLES_SEND_UNKNOWN' }> {
     const { generation } = this.target(chatId);
     let bytes: Buffer;
     try {
@@ -950,13 +1041,17 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (bytes.length > BLUEBUBBLES_MAX_BYTES) return { ok: false, reason: 'TOO_LARGE' };
     const name = path.basename(displayName ?? absPath);
     try { return { ok: true, ...await this.send(chatId, null, (api, id) => api.sendFile(chatId, bytes, name, id)) }; }
-    catch { return { ok: false, reason: 'SEND_FAIL' }; }
+    catch (error) {
+      const deliveryError = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED
+        ? AUTOMATION_DENIED : 'BLUEBUBBLES_SEND_UNKNOWN';
+      return { ok: false, reason: 'SEND_FAIL', deliveryError };
+    }
   }
   async commitFinal(output: ImFinalOutput): Promise<void> {
     if (output.text.trim() && output.text.trim() !== 'NO_REPLY') await this.sendText(output.userId, output.text);
     for (const file of new Set(output.mediaAbsPaths ?? [])) {
       const result = await this.sendFile(output.userId, file);
-      if (!result.ok) throw new Error('BLUEBUBBLES_FILE_SEND_FAILED');
+      if (!result.ok) throw new Error(result.deliveryError ?? 'BLUEBUBBLES_FILE_SEND_FAILED');
     }
   }
   cancelTextReply(requestId: string): boolean {

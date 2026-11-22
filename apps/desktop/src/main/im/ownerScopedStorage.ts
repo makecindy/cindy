@@ -237,11 +237,10 @@ export const ownerScopedImSecrets: ImSecrets = {
     try {
       const target = prepareSecretPath(name);
       if (target) {
-        // atomicWriteFileSync can leave a stale backup when Windows AV holds it.
-        // Remove that backup before the primary so revocation cannot resurrect
-        // an older encrypted credential on a later read or write.
-        fs.rmSync(`${target}.bak`, { force: true, maxRetries: 3, retryDelay: 20 });
-        fs.rmSync(target, { force: true, maxRetries: 3, retryDelay: 20 });
+        try { fs.unlinkSync(`${target}.bak`); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        fs.unlinkSync(target);
       }
     } catch {
       // Missing credentials are already removed.

@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { MAKER_PUSH } from '../../maker-ipc/channels';
 import {
@@ -22,6 +22,28 @@ const PRELOAD_PATH = path.resolve(
     : path.join(process.cwd(), 'apps', 'desktop'),
   'src/preload/sidebarWindowPreload.ts',
 );
+
+const bridge = vi.hoisted(() => ({ expose: vi.fn(), invoke: vi.fn() }));
+vi.mock('electron', () => ({
+  contextBridge: { exposeInMainWorld: bridge.expose },
+  ipcRenderer: { invoke: bridge.invoke, on: vi.fn(), sendSync: vi.fn() },
+  webUtils: { getPathForFile: vi.fn() },
+}));
+
+// #11392: the detached window uses its own preload. Exercise its public methods,
+// since checking the main preload alone misses a disabled preview and missing thumbnails.
+it('routes detached file previews and thumbnails through their dedicated IPCs', async () => {
+  await import('../../../preload/sidebarWindowPreload');
+  const api = bridge.expose.mock.calls.find(([name]) => name === 'electronAPI')![1];
+  const filePath = path.resolve('report.pdf');
+  const thumbnail = { dataUrl: null, byteSize: 64 };
+  bridge.invoke.mockResolvedValueOnce(true).mockResolvedValueOnce(thumbnail);
+  expect(await api.openSystemPreview(filePath)).toBe(true);
+  expect(await api.getFileThumbnail({ path: filePath, size: 128 })).toBe(thumbnail);
+  expect(bridge.invoke.mock.calls).toEqual([
+    ['file:system-preview', filePath], ['file:thumbnail', { path: filePath, size: 128 }],
+  ]);
+});
 
 let source = '';
 try {

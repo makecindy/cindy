@@ -11,6 +11,7 @@ import { buildUserProvider } from '@cindy/model-providers';
 
 const fixture = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   isAppSessionBoundaryPending: () => false, activeOwnerScopeKey: () => 'cloud:pi-codec-fixture',
 }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: true }) }));

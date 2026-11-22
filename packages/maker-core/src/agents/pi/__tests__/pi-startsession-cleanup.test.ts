@@ -184,6 +184,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   let agentHome = '';
   let cwd = '';
   let disposed = 0;
+  let closedInstance = 0;
   let proxyDisposed = 0;
   let proxyGeneration = 0;
   let preparedMcpContext: unknown;
@@ -214,6 +215,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.requests = [];
     knobs.requestOptions = [];
     disposed = 0;
+    closedInstance = 0;
     proxyDisposed = 0;
     proxyGeneration++;
     preparedMcpContext = undefined;
@@ -289,6 +291,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
           },
           mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: 'Bearer spawn-secret-canary' },
           disposeSessionCtx: () => { disposed++; },
+          closeSessionInstance: () => { closedInstance++; },
         };
       },
       ...overrides,
@@ -3394,12 +3397,14 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // Pi RPC and Cindy's durable Subagent status poll both release their timers.
     expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1);
+    expect(closedInstance).toBe(1);
     await vi.waitFor(() => expect(proxyDisposed).toBe(2));
 
     // 上层随后仍可能调用 close() —— 幂等,不得二次注销。
     await handle.close();
     expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1);
+    expect(closedInstance).toBe(1);
     expect(proxyDisposed).toBe(2);
   });
 

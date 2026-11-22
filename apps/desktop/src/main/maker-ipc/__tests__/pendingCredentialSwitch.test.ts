@@ -1,3 +1,4 @@
+import { getPendingCredentialSwitchTargetWith, registerPendingCredentialSwitchWith } from '../pendingCredentialSwitchAccess.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -6,6 +7,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBetterSqliteDatabase } from '../../localDb/betterSqliteFactory.js';
+import { createDbTransportError, DB_TRANSPORT_OUTCOME_UNKNOWN } from '../../localDb/client/DbTransport.js';
 import { createDbClientForHandle } from '../../localDb/client/createDbClientForHandle.js';
 import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import { runMigrations } from '../../localDb/migrate.js';
@@ -24,6 +26,8 @@ import {
   type PendingCredentialSwitchDeps,
 } from '../pendingCredentialSwitch.js';
 import { createPendingCredentialSwitchRouteReader, createPendingCredentialSwitchService } from '../pendingCredentialSwitchAssembly.js';
+import { applyRuntimeSetModelChange } from '../runtimeSetModel.js';
+import { withSendToSessionLock } from '../sendToSessionLock.js';
 
 const touchedSessions = new Set<string>();
 
@@ -559,7 +563,7 @@ describe('PendingCredentialSwitchService', () => {
         [{ id: sessionId, agentKind: 'claude-code', remoteHostId: null, isTurnRunning: () => false }],
         { resolveRoute, retryDelayMs: 60_000 },
       );
-      h.persistRoute.mockRejectedValueOnce(new Error('disk on fire'));
+      h.persistRoute.mockRejectedValue(new Error('disk on fire'));
 
       h.service.register(sessionId, {
         model: 'claude-opus-5',
@@ -572,6 +576,41 @@ describe('PendingCredentialSwitchService', () => {
       expect(h.service.has(sessionId)).toBe(true);
       expect(h.onApplied).not.toHaveBeenCalled();
       expect(h.broadcastApplied).not.toHaveBeenCalled();
+      expect(getSessionProvider(sessionId)).toBe('openai');
+      await h.service.onTurnSettled(sessionId);
+      expect(h.persistRoute).toHaveBeenCalledTimes(2);
+      const receipt = Promise.withResolvers<void>();
+      h.persistRoute.mockReturnValueOnce(receipt.promise);
+      const finishing = h.service.onTurnSettled(sessionId);
+      await vi.waitFor(() => expect(h.persistRoute).toHaveBeenCalledTimes(3));
+      expect(getSessionProvider(sessionId)).toBe('openai');
+      expect(h.onApplied).not.toHaveBeenCalled();
+      receipt.resolve();
+      await finishing;
+      expect(getSessionProvider(sessionId)).toBe('anthropic');
+      expect(h.service.has(sessionId)).toBe(false);
+      expect(h.onApplied).toHaveBeenCalledExactlyOnceWith(sessionId);
+    });
+
+    it('does not claim the old route is intact if the desktop DB lost the write receipt', async () => {
+      const id = rememberSession('pending-desktop-unknown-receipt');
+      setSessionProvider(id, 'old-source');
+      const resolveRoute = vi.fn<NonNullable<PendingCredentialSwitchDeps['resolveRoute']>>()
+        .mockResolvedValueOnce({ model: 'next', providerId: 'new-source', degraded: false })
+        .mockResolvedValueOnce({ providerId: null, degraded: true })
+        .mockResolvedValue({ model: 'next', providerId: 'new-source', degraded: false });
+      const { service, persistRoute, broadcastFailed } = createHarness([], { resolveRoute });
+      persistRoute.mockRejectedValueOnce(createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'reply lost'));
+      service.register(id, { model: 'next', providerId: 'new-source', agentKind: 'codex',
+        deferredSelection: { agentKind: 'codex', effort: 'medium', fastMode: false, clearScheduledBaseline: false } });
+      await service.onTurnSettled(id);
+      await service.onTurnSettled(id);
+      expect(service.has(id)).toBe(true);
+      expect(getSessionProvider(id)).toBe('old-source');
+      expect(broadcastFailed).not.toHaveBeenCalled();
+      await service.onTurnSettled(id);
+      expect(service.has(id)).toBe(false);
+      expect(getSessionProvider(id)).toBe('new-source');
     });
 
     it('目录里一个启用对话模型都没有 ⇒ 只清显式来源(store null + DB 回写 null)', async () => {
@@ -688,7 +727,12 @@ describe('PendingCredentialSwitchService', () => {
 describe('the desktop pending switch service on a migrated database', () => {
   const vec = process.platform === 'darwin' ? 'dylib' : process.platform === 'win32' ? 'dll' : 'so';
 
-  it('lands a switch to a model without effort levels and keeps the stored effort', async () => {
+  // DB tier. The SQLite UPDATE really commits; a same-account connection epoch
+  // change at the receipt must leave the retry gate intact without a failure notice.
+  it.each(['success', 'connection changes after the write', 'statement aborts'] as const)(
+    'settles a model without effort levels when %s', async outcome => {
+    const rebindAfterWrite = outcome === 'connection changes after the write';
+    const abort = outcome === 'statement aborts';
     const dir = mkdtempSync(path.join(tmpdir(), 'pending-switch-effort-'));
     const file = path.join(dir, 'cindy.db');
     configureMigrationRuntime({ drizzleDir: fileURLToPath(new URL('../../../../drizzle', import.meta.url)), isPackaged: true });
@@ -699,21 +743,23 @@ describe('the desktop pending switch service on a migrated database', () => {
     const client = createDbClientForHandle({ db, drizzle: drizzle(db, { schema }) });
     setCurrentDbClient(client, 'pending-switch-effort');
     const sessionId = rememberSession('pending-switch-no-effort');
+    let pendingService: PendingCredentialSwitchService | undefined;
     try {
       const now = Date.now();
       await getDbClient().drizzle.insert(schema.sessions).values({ id: sessionId, model: 'claude-opus-4-7', effort: 'high',
-        agentKind: 'cc', providerId: 'anthropic', createdAt: now, updatedAt: now });
+        agentKind: 'cc', providerId: rebindAfterWrite || abort ? 'old-source' : 'anthropic', createdAt: now, updatedAt: now });
       const views = [{ id: 'anthropic', connected: true, agents: ['claude-code'], source: 'user', routing: { 'claude-code': {} },
         models: { 'claude-code': [{ id: 'claude-haiku-4-5', efforts: [], defaultEffort: null, supportsFastMode: false }] } }];
       const wakeSession = vi.fn();
       const refreshQueuedRoute = vi.fn();
       const broadcastSessionPatched = vi.fn();
+      const broadcastToAllWindows = vi.fn();
       const error = vi.fn();
       const service = createPendingCredentialSwitchService({
         maker: { listActiveSessions: () => [], closeSession: async () => {} },
         isSessionInTurn: () => false,
         applyPiPendingSelection: vi.fn(),
-        broadcastToAllWindows: vi.fn(),
+        broadcastToAllWindows,
         inputCoordinator: { wakeSession },
         resolveLenientSessionRoute: async (_agent, model, providerId) => ({ model, providerId, degraded: false }),
         getSessionDbAgentKind: () => 'cc',
@@ -723,10 +769,58 @@ describe('the desktop pending switch service on a migrated database', () => {
         broadcastSessionPatched,
         log: { debug() {}, info() {}, warn() {}, error } as never,
       });
+      pendingService = service;
       setSessionEffort(sessionId, 'high');
 
-      service.register(sessionId, { model: 'claude-haiku-4-5', providerId: 'anthropic', agentKind: 'claude-code' });
+      if (rebindAfterWrite) {
+        setSessionProvider(sessionId, 'old-source');
+        db.function('fixture_rebind_owner_connection', () => {
+          setCurrentDbClient(client, 'pending-switch-effort');
+          return 1;
+        });
+        db.exec('CREATE TEMP TRIGGER rebind_after_route_write AFTER UPDATE OF model ON sessions ' +
+          'BEGIN SELECT fixture_rebind_owner_connection(); END');
+      }
+      if (abort) {
+        setSessionProvider(sessionId, 'old-source');
+        db.exec(`CREATE TEMP TRIGGER abort_deferred_patch BEFORE UPDATE OF model ON sessions
+          BEGIN SELECT RAISE(ABORT, 'fixture statement rollback'); END`);
+      }
+      await registerPendingCredentialSwitchWith({
+        pendingCredentialSwitchHolder: service,
+        agentInputCoordinatorHolder: { wakeSession },
+        getSessionDbAgentKind: () => 'cc',
+        getMaker: () => ({ getSession: () => null }) as never,
+      }, sessionId, { model: 'claude-haiku-4-5', providerId: 'anthropic',
+        ...(rebindAfterWrite || abort ? { deferredSelection: { agentKind: 'claude-code' as const,
+          effort: null, fastMode: false, clearScheduledBaseline: false } } : {}) });
       await service.onTurnSettled(sessionId);
+      if (abort) {
+        expect(service.has(sessionId)).toBe(false);
+        expect(broadcastToAllWindows).toHaveBeenCalledExactlyOnceWith('maker:session-credential-switch-failed',
+          { sessionId, reason: 'apply-failed', previousSettingsRetained: true });
+        const stored = { model: 'claude-opus-4-7', providerId: 'old-source', effort: 'high', fastMode: false };
+        expect(broadcastSessionPatched).toHaveBeenCalledExactlyOnceWith(sessionId, { ...stored, agentSwitchIntent: null });
+        expect(refreshQueuedRoute).toHaveBeenCalledExactlyOnceWith(sessionId, stored);
+        expect(wakeSession).toHaveBeenCalledOnce();
+        expect(db.prepare('SELECT model, provider_id AS providerId FROM sessions WHERE id = ?').get(sessionId))
+          .toEqual({ model: stored.model, providerId: stored.providerId });
+        await service.onTurnSettled(sessionId);
+        expect(error).toHaveBeenCalledOnce();
+        return;
+      }
+      if (rebindAfterWrite) {
+        expect(db.prepare('SELECT provider_id FROM sessions WHERE id = ?').get(sessionId))
+          .toEqual({ provider_id: 'anthropic' });
+        expect(broadcastToAllWindows).not.toHaveBeenCalled();
+        expect(getSessionProvider(sessionId)).toBe('old-source');
+        expect(service.has(sessionId)).toBe(true);
+        expect(wakeSession).not.toHaveBeenCalled();
+        expect(error).toHaveBeenCalledOnce();
+        error.mockClear();
+        db.exec('DROP TRIGGER rebind_after_route_write');
+        await service.onTurnSettled(sessionId);
+      }
 
       expect(error).not.toHaveBeenCalled();
       expect(service.has(sessionId)).toBe(false);
@@ -736,9 +830,87 @@ describe('the desktop pending switch service on a migrated database', () => {
       // The model has no effort levels: the runtime starts without one, and the queued input carries none.
       expect(getSessionEffort(sessionId)).toBeNull();
       expect(refreshQueuedRoute).toHaveBeenCalledWith(sessionId, expect.objectContaining({ model: 'claude-haiku-4-5', effort: undefined }));
-      expect(broadcastSessionPatched.mock.calls[0]?.[1]).not.toHaveProperty('effort');
+      const patch = broadcastSessionPatched.mock.calls[0]?.[1];
+      if (rebindAfterWrite) {
+        expect(patch).toMatchObject({ effort: '', runtimeEffective: { effort: null } });
+      } else {
+        expect(patch).not.toHaveProperty('effort');
+      }
     } finally {
+      pendingService?.clear(sessionId);
       setSessionEffort(sessionId, null);
+      clearCurrentDbClient(client);
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // L342 N4. A failed replacement restores the original registration. A
+  // committed same-value effort edit is visible only in that registration.
+  it.each(['native close', 'hot setModel'])('keeps the same-value effort edit across failed %s', async failure => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'restore-pending-credential-'));
+    const file = path.join(dir, 'cindy.db');
+    configureMigrationRuntime({ drizzleDir: fileURLToPath(new URL('../../../../drizzle', import.meta.url)), isPackaged: true });
+    configureSqliteVecExtPath(fileURLToPath(new URL(`../../../../native/sqlite-vec/${process.platform}-${process.arch}/vec0.${vec}`, import.meta.url)));
+    const db = createBetterSqliteDatabase(file);
+    expect(loadSqliteVec(db).loaded).toBe(true);
+    await runMigrations(db, file);
+    const client = createDbClientForHandle({ db, drizzle: drizzle(db, { schema }) });
+    setCurrentDbClient(client, 'restore-pending-credential');
+    const id = rememberSession('restore-original-registration');
+    const failureError = new Error(`fixture ${failure} failed`);
+    const live = { id, agentKind: 'claude-code' as const, model: 'claude-opus-4-7',
+      setModel: async () => { throw failureError; } };
+    const liveMaker = { getSession: () => live, listActiveSessions: () => [live],
+      closeSession: async () => { throw failureError; } };
+    const wakeSession = vi.fn();
+    const service = createPendingCredentialSwitchService({
+      maker: { listActiveSessions: () => [], closeSession: async () => {} },
+      isSessionInTurn: () => false,
+      applyPiPendingSelection: vi.fn(),
+      broadcastToAllWindows: vi.fn(),
+      inputCoordinator: { wakeSession },
+      resolveLenientSessionRoute: async (_agent, model, providerId) => ({ model, providerId, degraded: false }),
+      getSessionDbAgentKind: () => 'cc',
+      getDesktopProviderService: () => ({ listProviders: async () => [{
+        id: 'anthropic', source: 'user', connected: true, agents: ['claude-code'],
+        models: { 'claude-code': [{ id: 'claude-haiku-4-5', efforts: ['medium', 'high'], defaultEffort: 'medium' }] },
+      }] }) as never,
+      resolveConfiguredContextWindow: () => null,
+      agentInputCoordinatorHolder: null,
+      broadcastSessionPatched: vi.fn(),
+      log: { debug() {}, info() {}, warn() {}, error() {} } as never,
+    });
+    const access = { pendingCredentialSwitchHolder: service, agentInputCoordinatorHolder: { wakeSession },
+      getSessionDbAgentKind: () => 'cc' as const, getMaker: () => liveMaker as never };
+    const register = (sessionId: string, target: Parameters<typeof registerPendingCredentialSwitchWith>[2]) =>
+      registerPendingCredentialSwitchWith(access, sessionId, target);
+    try {
+      const now = Date.now();
+      await client.drizzle.insert(schema.sessions).values({ id, model: live.model, agentKind: 'cc',
+        providerId: 'anthropic', effort: 'high', createdAt: now, updatedAt: now });
+      setSessionProvider(id, 'anthropic');
+      setSessionEffort(id, 'high');
+      await withSendToSessionLock(id, async () => {
+        await register(id, { model: 'claude-haiku-4-5', providerId: 'anthropic',
+          deferredSelection: { agentKind: 'claude-code', effort: 'medium', fastMode: false, clearScheduledBaseline: false } });
+        await client.exec('UPDATE sessions SET effort = ? WHERE id = ?', ['high', id]);
+        service.noteCommittedAxis(id, { effort: true });
+        await expect(applyRuntimeSetModelChange({
+          maker: liveMaker, sessionId: id, model: live.model,
+          forceSessionRebuild: failure === 'native close',
+          getPendingCredentialSwitch: sessionId => getPendingCredentialSwitchTargetWith(access, sessionId),
+          clearPendingCredentialSwitch: sessionId => service.clear(sessionId),
+          registerPendingCredentialSwitch: register,
+        })).rejects.toBe(failureError);
+      });
+      await service.onTurnSettled(id);
+      expect(db.prepare('SELECT model, effort FROM sessions WHERE id = ?').get(id))
+        .toEqual({ model: 'claude-haiku-4-5', effort: 'high' });
+      expect(wakeSession).toHaveBeenCalledOnce();
+    } finally {
+      service.clear(id);
+      setSessionEffort(id, null);
       clearCurrentDbClient(client);
       db.close();
       rmSync(dir, { recursive: true, force: true });

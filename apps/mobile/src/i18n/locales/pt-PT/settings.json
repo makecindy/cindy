@@ -62,6 +62,28 @@
       "dark": "Escuro"
     },
     "saveFailed": "Não foi possível guardar o modo de aspeto. A definição anterior será reposta após reiniciar.",
+    "wallpaper": {
+      "title": "Imagem de fundo",
+      "choose": "Escolher fotografia ou vídeo",
+      "replace": "Substituir imagem de fundo",
+      "remove": "Remover imagem de fundo",
+      "importing": "A processar…",
+      "tooLarge": "Escolha uma fotografia até 20 MB ou um vídeo até 100 MB.",
+      "importFailed": "Não foi possível importar a fotografia ou o vídeo.",
+      "saveFailed": "Não foi possível guardar a definição da imagem de fundo.",
+      "static": "Estático",
+      "dynamic": "Dinâmico",
+      "motionLabel": "Apresentação",
+      "options": {
+        "none": "Nenhum",
+        "custom": "Imagem de fundo personalizada",
+        "cindy-whisper": "Sussurro",
+        "cindy-night-glance": "Olhar noturno",
+        "cindy-scarlet-stroll": "Passeio escarlate",
+        "cindy-neon": "Silhueta néon",
+        "cindy-prism": "Fragmentos de prisma"
+      }
+    },
     "userBubble": {
       "title": "Cor do meu balão de mensagem",
       "presets": "Cor",
@@ -263,7 +285,7 @@
     "openUserAgreement": "Abrir o acordo do utilizador",
     "appFilingNumber": "Número de registo da aplicação",
     "analytics": "Estatísticas de utilização",
-    "analyticsHint": "Ajuda-nos a compreender os arranques e a retenção. Envia informações do dispositivo, como o modelo, o sistema operativo e a versão da aplicação, um identificador do dispositivo e o ID da sua conta após iniciar sessão; nunca conversas, ficheiros ou prompts.",
+    "analyticsHint": "Se ativar esta opção, usaremos um pseudónimo de conta e um identificador do dispositivo para compreender os arranques da aplicação e as visitas recorrentes. Isto ajuda-nos a melhorar o produto. Os pagamentos usam outro pseudónimo. Estas estatísticas não incluem as suas conversas, ficheiros ou instruções.\nOs registos antigos contêm os IDs originais das contas. Quem tiver acesso a esses registos poderá associar um novo pseudónimo à conta através do mesmo identificador de dispositivo.",
     "analyticsSaveFailed": "Não foi possível guardar esta definição; poderá ser reposta após reiniciar.",
     "analyticsReset": "Repor predefinição",
     "analyticsResetAction": "Repor"

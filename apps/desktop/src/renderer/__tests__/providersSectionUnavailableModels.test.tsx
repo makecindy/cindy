@@ -43,6 +43,7 @@ const {
     disabledProviders: {} as Record<string, true>,
     mediaReady: false,
     customOverride: null as ProviderView | null,
+    legacyGemini: null as ProviderView | null,
     /** The run location the user chose for Anthropic on this computer's provider page. */
     anthropicRunLocation: undefined as string | undefined,
     loading: false,
@@ -140,6 +141,7 @@ vi.mock('@/hooks/useProviders', () => ({
       } satisfies ProviderView,
     ];
     const byId = new Map<string, ProviderView>(providers.map((provider) => [provider.id, provider]));
+    if (providerSnapshotState.legacyGemini) byId.set('gemini', providerSnapshotState.legacyGemini);
     if (providerSnapshotState.customOverride) {
       byId.delete('custom');
       byId.set(providerSnapshotState.customOverride.id, providerSnapshotState.customOverride);
@@ -165,6 +167,7 @@ vi.mock('@/hooks/useProviders', () => ({
 
 vi.mock('@/contexts/AuthContext', () => ({
   useOptionalDataOwnerGeneration: () => 0,
+  useOptionalAuthDeviceId: () => null,
   useAuth: () => ({
     mode: 'cloud',
     dataOwnerId: authState.dataOwnerId,
@@ -192,6 +195,7 @@ vi.mock('@/hooks/useModelAccessStatus', () => ({
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: confirmSpy }),
+  useOptionalConfirmDialog: () => ({ confirm: confirmSpy }),
 }));
 
 vi.mock('@/lib/toast', () => ({
@@ -205,7 +209,8 @@ vi.mock('@/lib/customProviders', async (importOriginal) => ({
   updateCustomProvider: vi.fn(),
 }));
 
-vi.mock('@/lib/providerModels', () => ({
+vi.mock('@/lib/providerModels', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/providerModels')>(),
   providerMonogram: () => 'X',
   isDeviceModelVisible: () => true,
 }));
@@ -215,7 +220,8 @@ vi.mock('@/lib/providerSubtitle', () => ({
   providerSubtitleForDisplay: () => 'XD Gateway',
 }));
 
-vi.mock('@/state/modelVisibilityPrefs', () => ({
+vi.mock('@/state/modelVisibilityPrefs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/state/modelVisibilityPrefs')>(),
   isModelEnabled: () => true,
   resetModelVisibilities: vi.fn(async () => true),
   setModelVisibilities: vi.fn(),
@@ -238,6 +244,7 @@ import { resetModelVisibilities, setModelVisibilities } from '@/state/modelVisib
 import { readCustomProviderKey, updateCustomProvider } from '@/lib/customProviders';
 import { BUNDLED_CATALOG, buildUserProvider, providerPresetOAuth } from '@cindy/model-providers';
 
+import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 
 type ScanResult = { detections: unknown[] };
@@ -253,6 +260,7 @@ beforeEach(() => {
   providerSnapshotState.disabledProviders = {};
   providerSnapshotState.mediaReady = false;
   providerSnapshotState.customOverride = null;
+  providerSnapshotState.legacyGemini = null;
   providerSnapshotState.anthropicRunLocation = undefined;
   providerSnapshotState.loading = false;
   providerSnapshotState.error = null;
@@ -263,6 +271,7 @@ beforeEach(() => {
   confirmSpy.mockReset().mockResolvedValue(false);
   vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    modelAccess: { getByokStatus: vi.fn(async () => ({ providers: [] })) },
     subscriptionAccounts: {
       command: vi.fn(async ({ providerId }: { providerId: string }) => ({
         providerId, configured: false, strategy: 'least', accounts: [],
@@ -316,6 +325,9 @@ describe('ProvidersSection — 双栏管理', () => {
     expect((ownDevicesState.catalogs.get('peer') as { providers: ProviderView[] }).providers[0]?.remoteInvocationEnabled).toBe(true);
     view.unmount();
     const reopened = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    // A disabled provider is folded into the 已停用 group, which starts closed after reopening.
+    expect(screen.queryByRole('button', { name: 'settings.providers.remote.rowLabel' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /settings\.providers\.pill\.suspended/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.remote.rowLabel' }));
     expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
@@ -329,17 +341,99 @@ describe('ProvidersSection — 双栏管理', () => {
 
   // Unit: an opaque enterprise UUID has no inferred brand. The settings rail
   // must still render the host-supplied artwork instead of a name initial.
-  it('renders explicit organization artwork in the provider list', async () => {
+  it.each([undefined, '<svg/>'])('renders organization artwork in the provider list (custom icon %s)', async (customIcon) => {
     providerSnapshotState.customOverride = {
       id: 'byok-test', name: 'Enterprise Codex', source: 'organization',
       auth: { method: 'managed' }, agents: ['codex'], routing: {}, models: { codex: [] },
-      connected: true, logoKind: 'openai-spectrum',
+      connected: true, logoKind: 'openai-spectrum', customIcon,
     };
     render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
     const row = await screen.findByRole('button', { name: /Enterprise Codex/ });
+    if (customIcon) {
+      const image = row.querySelector('img')!;
+      expect(image.getAttribute('src')).toBe('data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E');
+      fireEvent.error(image);
+    }
     const gradient = row.querySelector('linearGradient');
     expect(gradient).not.toBeNull();
     expect(row.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${gradient!.id})`);
+  });
+
+  // Unit: render both production lists with one BYOK directory. The old custom-icon
+  // wrapper replaced model artwork even though the spectrum only marks provider fallback.
+  it('replaces only the positions where organization provider artwork would appear', async () => {
+    const makeModel = (id: string, name: string, icon?: string) => ({
+      id, name, icon, mode: 'chat' as const, contextWindow: 128000,
+      efforts: [], defaultEffort: null, defaultEnabled: true,
+    });
+    const provider: ProviderView = {
+      id: 'byok-test', name: 'Enterprise Codex', source: 'organization', logoKind: 'openai-spectrum',
+      auth: { method: 'managed' }, agents: ['codex'],
+      routing: { codex: { upstream: 'https://example.invalid/v1', authStrategy: 'api-key-header', wireProtocol: 'openai-responses' } },
+      connected: true,
+      models: { codex: [
+        makeModel('gpt-test', 'Named Model Brand', 'codex'),
+        makeModel('gpt-inferred', 'Inferred Model Brand'),
+        makeModel('meta/test', 'Model Brand Initial'),
+        makeModel('test-model', 'Supplier Fallback'),
+      ] },
+    };
+    providerSnapshotState.order = [provider.id];
+    const picture = 'data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E';
+    const content = (value: ProviderView) => {
+      providerSnapshotState.customOverride = value;
+      return <MemoryRouter>
+        <section aria-label="Settings"><ProvidersSection /></section>
+        <section aria-label="Picker">
+          <ModelSelectorContent modelId="test-model" currentProviderId={value.id} vendorKey="codex"
+            effort="high" remoteAgent={undefined} providersOverride={[value]} onModelChange={() => {}} onEffortChange={() => {}} />
+        </section>
+      </MemoryRouter>;
+    };
+    const view = render(content(provider));
+    const positions = async () => {
+      const settings = within(screen.getByRole('region', { name: 'Settings' }));
+      const picker = within(screen.getByRole('region', { name: 'Picker' }));
+      const source = await settings.findByRole('button', { name: /Enterprise Codex/ });
+      const namedSetting = await settings.findByText('Named Model Brand');
+      const fallbackSetting = await settings.findByText('Supplier Fallback');
+      const inferredSetting = await settings.findByText('Inferred Model Brand');
+      const initialSetting = await settings.findByText('Model Brand Initial');
+      const rail = screen.getByRole('region', { name: 'Picker' }).querySelector('[data-rail-item="provider:byok-test"]');
+      const namedPicker = await picker.findByRole('option', { name: /Named Model Brand/ });
+      const fallbackPicker = await picker.findByRole('option', { name: /Supplier Fallback/ });
+      const inferredPicker = await picker.findByRole('option', { name: /Inferred Model Brand/ });
+      return {
+        source,
+        header: settings.getByTestId('provider-detail-identity'),
+        namedSetting: namedSetting.parentElement,
+        initialSetting: initialSetting.parentElement,
+        inferredSetting: inferredSetting.parentElement,
+        fallbackSetting: fallbackSetting.parentElement,
+        rail,
+        namedPicker,
+        fallbackPicker,
+        inferredPicker,
+      };
+    };
+    const marks = (locations: Awaited<ReturnType<typeof positions>>, selector: string) =>
+      Object.entries(locations).filter(([, node]) => node?.querySelector(selector)).map(([site]) => site);
+
+    const original = await positions();
+    const spectrum = marks(original, 'path[fill^="url("]');
+    expect(spectrum).toEqual(['source', 'header', 'fallbackSetting', 'rail', 'fallbackPicker', 'inferredPicker']);
+    const modelMarks = (locations: Awaited<ReturnType<typeof positions>>) =>
+      (['namedSetting', 'inferredSetting', 'namedPicker'] as const)
+        .map((location) => locations[location]?.querySelector('svg path')?.getAttribute('d'));
+    const originalModelMarks = modelMarks(original);
+    expect(originalModelMarks.every(Boolean)).toBe(true);
+
+    view.rerender(content({ ...provider, customIcon: '<svg/>' }));
+    const uploaded = await positions();
+    expect(marks(uploaded, `img[src="${picture}"]`)).toEqual(spectrum);
+    expect(marks(uploaded, 'path[fill^="url("]')).toEqual([]);
+    expect(modelMarks(uploaded)).toEqual(originalModelMarks);
+    expect(uploaded.initialSetting?.firstElementChild?.textContent).toBe('M');
   });
 
   it('batches a saved Hinoki refresh before waiting and preserves manual models', async () => {
@@ -1008,6 +1102,61 @@ describe('ProvidersSection — 双栏管理', () => {
     if (hasModels) expect(projected.find(model => model.id === 'old-model')?.defaultEnabled).toBe(false);
     expect(refetchProvidersSpy).toHaveBeenCalled();
   });
+  // Renderer unit: a saved binding must expose the original image preferences under
+  // the new connection, even when no legacy API key has ever been configured.
+  it.each(['first setup', 'old key retained', 'old row removed while suspended'])(
+    'manages bound Gemini images after %s', async state => {
+      const legacyConnected = state === 'old key retained';
+      const legacySuspended = state === 'old row removed while suspended';
+      providerSnapshotState.customOverride = {
+        id: 'new-google', name: 'Google Gemini API', source: 'user', connected: true,
+        auth: { method: 'apiKey' }, agents: ['codex'], routing: {}, models: { codex: [] },
+      };
+      providerSnapshotState.legacyGemini = {
+        id: 'gemini', name: 'My old Gemini', source: 'builtin', connected: legacyConnected,
+        auth: { method: 'apiKey' }, agents: [], routing: {}, models: {},
+        imageModels: [{ id: 'gemini-image-test', name: 'Gemini image test' }],
+        availableMediaModelIds: legacySuspended ? [] : ['gemini-image-test'],
+        suspended: legacySuspended,
+        removed: legacySuspended || undefined,
+        geminiImageSettingsConnectionId: 'new-google',
+      };
+      providerSnapshotState.order = ['new-google', 'gemini', 'xd'];
+      const setModelDisable = vi.fn<typeof window.electronAPI.maker.setModelDisable>().mockResolvedValue({ ok: true });
+      window.electronAPI.maker.setModelDisable = setModelDisable;
+      const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+
+      if (legacySuspended) {
+        fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.enableProvider' }));
+        expect(setModelDisable).toHaveBeenCalledWith({ kind: 'provider', providerId: 'gemini', disabled: false });
+        providerSnapshotState.legacyGemini = {
+          ...providerSnapshotState.legacyGemini,
+          suspended: false,
+          availableMediaModelIds: ['gemini-image-test'],
+        };
+        view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      }
+
+      const imageSwitch = await screen.findByRole('switch', { name: 'Gemini image test' });
+      fireEvent.click(imageSwitch);
+      // Functional models use the enable axis, including models managed on a bound connection.
+      expect(setModelDisable).toHaveBeenCalledWith({
+        kind: 'model',
+        providerId: 'gemini',
+        modelIds: ['gemini-image-test'],
+        disabled: true,
+      });
+      if (legacyConnected) {
+        fireEvent.click(screen.getByRole('button', { name: /^My old Gemini/ }));
+        expect(screen.queryByText('Gemini image test')).toBeNull();
+        fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+        expect(await screen.findByRole('menuitem', { name: 'settings.providers.builtinApiKey.replaceKey' })).toBeTruthy();
+        expect(screen.queryByRole('menuitem', { name: 'settings.providers.menu.disableProvider' })).toBeNull();
+      } else {
+        expect(screen.queryByRole('button', { name: /My old Gemini/ })).toBeNull();
+      }
+    });
+
   it('dims GPT Image 2 without a ready image channel, independently of chat connection', async () => {
     providerSnapshotState.order = ['custom', 'xd'];
     providerSnapshotState.customConnected = true;

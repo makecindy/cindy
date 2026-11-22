@@ -213,14 +213,20 @@ describe('IM owner-scoped storage', () => {
     expect(() => storage.write('late')).toThrow('DISCORD_ACCOUNT_CHANGED');
     expect(discordFinalTextStorage('personal', true).read()).toBeNull();
   });
-  it('recovers an atomic credential backup and removes stale backups on revoke', () => {
+
+  it('recovers atomic credential backups and removes stale backups with the credential', () => {
     setSession('local', 'local-v1');
-    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-test-token')).toBe(true);
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-backup-token')).toBe(true);
     const target = __testing.scopedSecretPath('discord-bot-token');
     expect(target).not.toBeNull();
-    fs.renameSync(target!, `${target}.bak`);
-    expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-test-token');
+    fs.copyFileSync(target!, `${target}.bak`);
+    fs.unlinkSync(target!);
+
+    expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('invalid-backup-token');
+    expect(ownerScopedImSecretRevision('discord-bot-token')).toMatch(/^sha256:/);
     expect(fs.existsSync(target!)).toBe(true);
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'invalid-replacement-after-backup')).toBe(true);
+    expect(fs.existsSync(`${target}.bak`)).toBe(false);
 
     fs.copyFileSync(target!, `${target}.bak`);
     ownerScopedImSecrets.remove('discord-bot-token');
@@ -237,13 +243,13 @@ describe('IM owner-scoped storage', () => {
     expect(ownerScopedImSecrets.write('wecom-group-notification-enabled', 'false')).toBe(true);
     const target = __testing.scopedSecretPath('wecom-group-webhook-url')!;
     fs.copyFileSync(target, `${target}.bak`);
-    const originalRemove = fs.rmSync;
+    const originalRemove = fs.unlinkSync;
     const blocked = locked === 'backup' ? `${target}.bak` : target;
     const fetch = vi.fn();
     const service = new WecomGroupNotificationService(fetch, ownerScopedImSecrets);
-    const remove = vi.spyOn(fs, 'rmSync').mockImplementation((file, options) => {
+    const remove = vi.spyOn(fs, 'unlinkSync').mockImplementation((file) => {
       if (file === blocked) throw Object.assign(new Error('credential file busy'), { code: 'EBUSY' });
-      return originalRemove(file, options);
+      return originalRemove(file);
     });
     try {
       expect(() => service.clear()).toThrow('WECOM_GROUP_WEBHOOK_CLEAR_FAILED');

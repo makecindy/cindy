@@ -86,6 +86,11 @@ const store = createOverrideSettingsFile<PersistedAppSessionSettings>({
 
 let active: ActiveAppSession | null = null;
 let boundaryDepth = 0;
+// Changes only on a committed mode/data-owner transition. A projection repair can
+// advance the window generation without ending the account's in-flight turns.
+let dataOwnerLifetime = 0;
+export function getDataOwnerLifetime(): number { return dataOwnerLifetime; }
+
 let appSessionCommitBoundaryHook: (() => void) | null = null;
 const sessionInvalidationListeners = new Set<() => void>();
 
@@ -228,6 +233,7 @@ export function commitActiveAppSession(
     dataOwnerId,
     generation: previous.generation + 1,
   };
+  if (ownerChanged) dataOwnerLifetime++;
   log.info('stable app session committed', {
     mode,
     dataOwnerId,
@@ -262,6 +268,7 @@ export function commitVolatileAppSession(
     dataOwnerId,
     generation: previous.generation + 1,
   };
+  if (ownerChanged) dataOwnerLifetime++;
   log.info('volatile app session committed', {
     mode,
     dataOwnerId,

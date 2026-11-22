@@ -37,8 +37,7 @@ import {
 const log = createLogger('analytics-settings');
 
 interface ProductTokens {
-  enabled(): boolean;
-  set(enabled: boolean): Promise<void>;
+  prepare(): void;
   interrupt(): void;
   revokeAll(): void;
   report(): Promise<void>;
@@ -96,11 +95,11 @@ export function analyticsSettingsPayload(): AnalyticsSettingsPayload {
     analyticsEnabled: value.analyticsEnabled,
     analyticsEnabledCustomized: isAnalyticsEnabledCustomized(),
     allowed: isReportingAllowedNow(),
-    ...(productTokens && {productTokensEnabled: productTokens.enabled()}),
   };
 }
 
 function broadcastSettingsChange(): void {
+  productTokens?.prepare();
   const payload = analyticsSettingsPayload();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -108,6 +107,26 @@ function broadcastSettingsChange(): void {
       win.webContents.send(ANALYTICS_SETTINGS_CHANGE_CHANNEL, payload);
     } catch (err) {
       log.warn(`broadcast '${ANALYTICS_SETTINGS_CHANGE_CHANNEL}' failed (non-fatal)`, err);
+    }
+  }
+}
+
+type PermissionListener = (allowed: boolean, explicitEnabled?: boolean) => void;
+const permissionListeners = new Set<PermissionListener>();
+export function onAnalyticsPermissionChange(listener: PermissionListener): () => void {
+  permissionListeners.add(listener);
+  return () => { permissionListeners.delete(listener); };
+}
+
+function applyPermissionChange(explicitEnabled?: boolean): void {
+  broadcastSettingsChange();
+  const allowed = isReportingAllowedNow();
+  for (const listener of permissionListeners) {
+    try {
+      listener(allowed, explicitEnabled);
+    } catch (err) {
+      log.warn('Could not apply usage statistics preference to local reporting', err);
+      if (explicitEnabled !== undefined) throwIpcError('INTERNAL', 'failed to apply analytics preference');
     }
   }
 }
@@ -145,7 +164,7 @@ function broadcastSettingsChange(): void {
  */
 function migrateOrLog(): void {
   try {
-    if (migrateExistingLoginAsConsented(true)) broadcastSettingsChange();
+    if (migrateExistingLoginAsConsented(true)) applyPermissionChange();
   } catch (err) {
     log.warn('existing-login consent migration failed (non-fatal)', err);
   }
@@ -249,6 +268,7 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
   }
   ipcRegistered = true;
   productTokens = reporter;
+  reporter?.prepare();
   // Jitter separates release/restart waves. Idle accounts send no requests.
   const interval = reporter && setInterval(() => void reporter.report(), (45 + Math.random()*30)*60_000);
   interval?.unref();
@@ -267,23 +287,11 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
     // 那道闸在密钥链暂不可用时会保守地拒绝关窗,而此处的确定性不依赖任何探测。
     // 幂等(closeLegacyConsentMigration 自带 no-op 早返回),不写用户偏好。
     if (authManager.isLocalMode()) sealMigrationWindowOrLog();
-    broadcastSettingsChange();
+    applyPermissionChange();
   });
 
   ipcMain.handle('analytics:settings-get', (event) => {
     assertTrustedAppRendererEvent(event);
-    return analyticsSettingsPayload();
-  });
-
-  ipcMain.handle('analytics:product-tokens-set', async (event, enabled: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    try {
-      if (!productTokens) throw new Error('Reporting unavailable');
-      await productTokens.set(enabled === true);
-    } catch {
-      throwIpcError('INTERNAL', 'failed to persist product token preference');
-    }
-    broadcastSettingsChange();
     return analyticsSettingsPayload();
   });
 
@@ -293,7 +301,7 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
     const enabled = rawEnabled === true;
     if (!enabled) writeOrThrowIpcError(() => productTokens?.revokeAll(), 'clear token reporting grants failed');
     writeOrThrowIpcError(() => setAnalyticsEnabled(enabled), 'write analytics setting failed');
-    broadcastSettingsChange();
+    applyPermissionChange(enabled);
     return analyticsSettingsPayload();
   });
 
@@ -305,14 +313,14 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
       () => clearAnalyticsEnabledOverride(),
       'clear analytics enabled override failed',
     );
-    broadcastSettingsChange();
+    applyPermissionChange();
     return analyticsSettingsPayload();
   });
 
   ipcMain.handle('analytics:consent-accept', (event) => {
     assertTrustedAppRendererEvent(event);
     writeOrThrowIpcError(() => acceptPrivacyConsent(), 'record privacy consent failed');
-    broadcastSettingsChange();
+    applyPermissionChange();
     return analyticsSettingsPayload();
   });
 

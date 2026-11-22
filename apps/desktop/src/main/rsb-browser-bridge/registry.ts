@@ -56,6 +56,9 @@ export type PinChangeListener = (tabId: string, pinned: boolean) => void;
  * In-memory tab registry. Singleton lifetime is the desktop app's main process.
  */
 export class TabRegistry {
+  private readonly previewOpeners = new WeakMap<WebContents, TabRecord>();
+  /** Current file guests are managed by the page pool, outside the automation registry. */
+  private readonly previewTargets = new Map<string, { webContentsId: number; visible: boolean }>();
   private readonly records = new Map<string, TabRecord>(); // tabId → record
   /** tabId set of automation-active tabs that must not be LRU-evicted. */
   private readonly pinned = new Set<string>();
@@ -88,6 +91,27 @@ export class TabRegistry {
     this.detachDestroyedListener(record.tabId);
     this.records.set(record.tabId, record);
     this.attachDestroyedListener(record);
+    this.notifyReport(record);
+  }
+
+  reportPreviewOpener(record: TabRecord, guest: WebContents, visible: boolean): void {
+    const previous = this.previewOpeners.get(guest);
+    const current = this.previewTargets.get(record.tabId);
+    // A visibility report from the old host can arrive after a detached window takes over.
+    if (previous?.tabId === record.tabId && current && current.webContentsId !== record.webContentsId) return;
+    this.previewOpeners.set(guest, record);
+    this.previewTargets.set(record.tabId, { webContentsId: record.webContentsId, visible });
+    if (current?.webContentsId !== record.webContentsId) {
+      guest.once('destroyed', () => {
+        if (this.previewTargets.get(record.tabId)?.webContentsId === record.webContentsId) {
+          this.previewTargets.delete(record.tabId);
+        }
+      });
+      this.notifyReport(record);
+    }
+  }
+
+  private notifyReport(record: TabRecord): void {
     for (const l of this.reportListeners) {
       try {
         l(record);
@@ -184,7 +208,30 @@ export class TabRegistry {
     for (const record of this.records.values()) {
       if (record.webContentsId === webContentsId) return record;
     }
+    const guest = this.opts.lookupWebContents(webContentsId);
+    return guest && !guest.isDestroyed() ? this.previewOpeners.get(guest) ?? null : null;
+  }
+
+  /** Guest owner for lifecycle notifications, independent of automation access. */
+  getPreviewGuest(tabId: string): WebContents | null {
+    const id = this.previewTargets.get(tabId)?.webContentsId;
+    if (id === undefined) return null;
+    const guest = this.opts.lookupWebContents(id);
+    if (guest && !guest.isDestroyed() && this.previewOpeners.get(guest)?.tabId === tabId) return guest;
+    this.previewTargets.delete(tabId);
     return null;
+  }
+
+  listResourceTargets(): Array<Pick<TabRecord, 'tabId' | 'webContentsId'>> {
+    const targets: Array<Pick<TabRecord, 'tabId' | 'webContentsId'>> = this.listAll();
+    for (const [tabId, { webContentsId }] of this.previewTargets) {
+      if (!this.records.has(tabId)) targets.push({ tabId, webContentsId });
+    }
+    return targets;
+  }
+
+  previewVisibility(tabId: string): boolean | undefined {
+    return this.records.has(tabId) ? undefined : this.previewTargets.get(tabId)?.visible;
   }
 
   /** Read by tab id. Returns null if unknown OR if the webContents is dead. */

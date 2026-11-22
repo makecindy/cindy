@@ -49,6 +49,13 @@ export type MessagePayload = SharedMessagePayload<NormalizedToolDiff, Normalized
   galleryImageSlot?: number;
 };
 
+/** Windows drive letters resemble URI schemes; recognize paths before preserving real URIs. */
+export function toRemoteAttachmentUrl(source: string): string {
+  return /^[A-Za-z]:[\\/]/.test(source) || !/^[a-z][a-z0-9+.-]*:/i.test(source)
+    ? `xdt-file://open?path=${encodeURIComponent(source)}`
+    : source;
+}
+
 /** Direct media already has playable bytes; only host-owned references need fetching. */
 export async function resolveAttachmentPreviewSource(
   payload: Extract<MessagePayload, { kind: 'file' | 'media' }>,
@@ -58,9 +65,7 @@ export async function resolveAttachmentPreviewSource(
   if (payload.kind === 'media' && payload.media.previewable && (isPayloadDirectPreviewableUrl(payload.media.url) || /^data:audio\//i.test(payload.media.url)))
     return { url: payload.media.url, mimeType: payload.media.mimeType };
   const source = payload.kind === 'file' ? payload.sourcePath! : payload.media.url;
-  const url = /^(?:[a-z][a-z0-9+.-]*):/i.test(source)
-    ? source
-    : `xdt-file://open?path=${encodeURIComponent(source)}`;
+  const url = toRemoteAttachmentUrl(source);
   return resolve({ kind: 'file', url, previewable: false }, { front: true, signal });
 }
 

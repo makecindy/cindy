@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import { app } from 'electron';
-import WebSocket from 'ws';
+import { currentLinkTraffic } from './linkTraffic.desktop.js';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { AgentNetWorkerSocket, type AgentNetAppSocket, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
 import { isScopedPeer } from '@cindy/device-link';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof } from '@cindy/agent-net-relay/client';
 import { CERT_LIFETIME_MS, agentNetStunServer, type DeviceView } from '@cindy/agent-net-protocol';
-import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { activeSelfHostedRelay, isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
@@ -128,6 +129,8 @@ function relayChanged(): void {
 }
 /** 这台电脑换了网络：Agent-Net 主连接马上探测中转、从新地址发包（AgentNetWorkerSocket.networkChanged）。Agent-Net 关着时什么也不做。 */
 export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
+/** 发往这个对端的会话请求超时、它此刻走中转：让承载它的连接判断中转 UDP 是否只通登记（relayUdp.ts noteStall）。 */
+export function agentNetRelayStalled(peer: string): void { sessionSocket(peer)?.relayStalled?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
 export function agentNetNoteDeviceRemoved(deviceId: string): void { currentMembership()?.noteRemoved(deviceId); }
 /** 官方 Agent-Net 上认不认这台设备：Device Link 里删掉了、还没重新登录的不认（packages/agent-net/src/membership.ts）；自建中转上都认。 */
@@ -439,7 +442,7 @@ export function outgoingAgentNetClientForRelay(relayId: string, baseUrl: string)
     || stored.certificate.networkId !== 'private:' + relayId) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
   return new AgentNetClient(baseUrl, decodeIdentity(secrets), stored.certificate, stored.rootPublicKey, undefined, {
     ownerPinnedHttp: true, fetch: outboundFetch,
-    createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }),
+    createWebSocket: (url, options) => openLinkWebSocket('agent-net', url, options),
   });
 }
 export function currentAgentNetClient(): AgentNetClient | null {
@@ -492,6 +495,7 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
   const connectedAt = new Map<string, number>();
   try {
     const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, log: agentNetLog,
+      observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
       userId: authManager.getCurrentUserId() ?? '', scoped: true,
       onDelegationRequests: requests => approver?.update(requests),
       onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); } });
@@ -566,6 +570,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   const notifyCovered = new Set<string>();
   let socket: AgentNetWorkerSocket;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
+    observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
     onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); },

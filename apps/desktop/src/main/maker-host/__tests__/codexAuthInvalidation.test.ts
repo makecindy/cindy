@@ -3527,4 +3527,123 @@ describe('Codex 系统凭证备份与旧硬链接 (#9316 review)', () => {
     );
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
+
+  /*
+   * 测试价值
+   * - 生产入口：DesktopCodexAuthAdapter.warmUp / getState / logout。
+   * - 规则依据：docs/dev-rules/credentials-and-local-storage.md（只移除当前 Cindy 实例已作废的
+   *   硬链接别名，不改写 ~/.codex/auth.json 字节与 inode；unproven 标记保持非破坏）。
+   * - 最小失败输入：存量硬链（nlink=2）配 durable disconnect 或已归因服务端作废标记后仅启动/读状态，
+   *   或对未迁移的存量硬链直接执行显式 logout（用户在原生 Codex CLI/App 重登而不在 Cindy 点登录）。
+   * - tier：unit（临时目录真实文件链接，无子进程与网络）。
+   */
+  it(
+    '对账被抑制或显式断开时拆掉当前 profile 的存量硬链,避免永久卡死原生 Codex 登录保存',
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-suppressed-hardlink-'));
+      dirs.push(root);
+      h.dataOwnerId = 'owner-a';
+      const home = path.join(root, 'home');
+      const systemAuth = path.join(home, '.codex', 'auth.json');
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+      const systemBytes = JSON.stringify({
+        tokens: { access_token: 'legacy-token', account_id: 'acct-1' },
+      });
+      fs.writeFileSync(systemAuth, systemBytes);
+      const systemBefore = fs.statSync(systemAuth, { bigint: true });
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const { writeUnprovenCodexAuthSuppressionMarker } = await import(
+        '../codex-auth-invalidation.js'
+      );
+
+      // 1. durable disconnect 期间启动/读状态：拆掉当前 profile 硬链（nlink 回到 1），仍保持断开。
+      h.userDataDir = path.join(root, 'user-data-disconnected');
+      const disconnectedHome = path.join(h.userDataDir, 'codex-home');
+      const disconnectedAuth = path.join(disconnectedHome, 'auth.json');
+      fs.mkdirSync(disconnectedHome, { recursive: true });
+      fs.linkSync(systemAuth, disconnectedAuth);
+      expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(2n);
+      expect(
+        writeInvalidatedSystemCodexAuthMarker(
+          disconnectedHome,
+          systemAuth,
+          CODEX_USER_DISCONNECT_REASON,
+          disconnectedAuth,
+        ),
+      ).toBe(true);
+      await expect(
+        new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
+      ).resolves.toMatchObject({ authenticated: false, errorReason: 'no_oauth' });
+      expect(fs.existsSync(disconnectedAuth)).toBe(false);
+      expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(1n);
+
+      // 2. 已归因服务端作废标记期间读状态（例如锁释放后重启）：拆掉残留硬链，解锁原生 Codex 重登死锁。
+      h.userDataDir = path.join(root, 'user-data-invalidated');
+      const invalidatedHome = path.join(h.userDataDir, 'codex-home');
+      const invalidatedAuth = path.join(invalidatedHome, 'auth.json');
+      fs.mkdirSync(invalidatedHome, { recursive: true });
+      fs.linkSync(systemAuth, invalidatedAuth);
+      expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(2n);
+      expect(
+        writeInvalidatedSystemCodexAuthMarker(
+          invalidatedHome,
+          systemAuth,
+          'token_revoked',
+          invalidatedAuth,
+          'system-shared',
+          'owner-a',
+        ),
+      ).toBe(true);
+      await expect(
+        new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
+      ).resolves.toMatchObject({
+        authenticated: false,
+        errorReason: 'token_revoked',
+        credentialScope: 'system-shared',
+      });
+      expect(fs.existsSync(invalidatedAuth)).toBe(false);
+      expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(1n);
+
+      // 3. unproven 抑制标记严格保持非破坏：不得擅自删除未证明归属的链接。
+      h.userDataDir = path.join(root, 'user-data-unproven');
+      const unprovenHome = path.join(h.userDataDir, 'codex-home');
+      const unprovenAuth = path.join(unprovenHome, 'auth.json');
+      fs.mkdirSync(unprovenHome, { recursive: true });
+      fs.linkSync(systemAuth, unprovenAuth);
+      expect(
+        writeUnprovenCodexAuthSuppressionMarker(
+          unprovenHome,
+          systemAuth,
+          unprovenAuth,
+          'token_revoked',
+          'system-shared',
+          'owner-a',
+        ),
+      ).toBe(true);
+      await new DesktopCodexAuthAdapter().warmUp();
+      await expect(
+        new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
+      ).resolves.toMatchObject({ authenticated: false, errorReason: 'token_revoked' });
+      expect(fs.existsSync(unprovenAuth)).toBe(true);
+      fs.unlinkSync(unprovenAuth);
+      expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(1n);
+
+      // 4. 尚未对账迁移的存量硬链直接走显式 logout：拆掉硬链，保留系统凭证字节与 inode。
+      h.userDataDir = path.join(root, 'user-data-logout');
+      const logoutHome = path.join(h.userDataDir, 'codex-home');
+      const logoutAuth = path.join(logoutHome, 'auth.json');
+      fs.mkdirSync(logoutHome, { recursive: true });
+      fs.linkSync(systemAuth, logoutAuth);
+      expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(2n);
+      await new DesktopCodexAuthAdapter().logout();
+      expect(fs.existsSync(logoutAuth)).toBe(false);
+      expect(fs.statSync(systemAuth, { bigint: true })).toMatchObject({
+        ino: systemBefore.ino,
+        mtimeNs: systemBefore.mtimeNs,
+        nlink: 1n,
+      });
+      expect(fs.readFileSync(systemAuth, 'utf8')).toBe(systemBytes);
+    },
+  );
 });

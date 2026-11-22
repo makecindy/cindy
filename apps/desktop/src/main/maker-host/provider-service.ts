@@ -12,6 +12,7 @@
  * active-catalog 统一持有；连接状态每次实时读（凭证变化要立即反映）。
  */
 
+import type { ProviderPickerModel } from '@cindy/device-link';
 import { createLogger } from '../logger.js';
 import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
 
@@ -25,10 +26,18 @@ import {
   type ProviderView,
   type Provider,
   isCustomRoutedProvider,
+  isProviderDisabled,
+  isCindyDistributedProvider,
+  isCindyAutoModelId,
   type AgentKind,
 } from '@cindy/model-providers';
 
 const log = createLogger('provider-service');
+
+interface SubscriptionConnectionOptions {
+  /** Derived from a host-provided full catalog for existing bound task routes. */
+  includeBoundAccounts?: boolean;
+}
 
 /**
  * 读取连接态时是否允许附带**本机副作用**（绑定自愈、随之而来的清单拉取）。
@@ -37,21 +46,28 @@ const log = createLogger('provider-service');
  * 通道（`maker:provider:list`）同时服务于 device-link 与可能不受信的渲染上下文，所以副作用
  * 只在调用方明确是「本机主页面」时才放行；其余一律降级为纯读（PR #548 review）。
  */
-export interface ConnectionReadOptions {
+export interface ConnectionReadOptions extends SubscriptionConnectionOptions {
   allowSideEffects: boolean;
   /** Host-only snapshot read: never refresh CLI status or load account presentation. */
   snapshotOnly?: boolean;
-  /** Derived only from a host-provided full catalog, for existing bound task routes. */
-  includeBoundAccounts?: boolean;
   /**
    * Wait for post-claim model discovery before materializing this snapshot.
    * This is an internal readiness hint for routing callers; ordinary provider reads
    * intentionally keep the low-latency/LKG behavior even when side effects are allowed.
    */
   waitForDiscovery?: boolean;
+  /** This picker already refreshed its own subscription pools. */
+  pickerPoolsReady?: boolean;
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
+  /** Attach cached subscription models for the local UI beside the current routing view. */
+  includeSubscriptionDisplayModels?: boolean;
+  /** Same-account remote picker. Full management and routing callers leave this unset. */
+  picker?: {
+    scope: 'available' | ProviderPickerModel;
+    describe?: (providerOrder: string[], deferredProviderIds: string[]) => void;
+  };
   /**
    * Internal catalog override for policy consumers that need the routing truth
    * rather than the user-selectable projection. Never sourced from IPC input.
@@ -89,7 +105,8 @@ export interface ProviderServiceDeps {
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
   /** Live membership precedes access overrides. Explicit/lazy routing reads retain history-only models. */
-  projectCatalog?: (catalog: Catalog, routingCatalog: boolean) => Catalog;
+  projectCatalog?: (catalog: Catalog, routingCatalog: boolean, include?: (provider: Provider) => boolean, includeLastConfirmed?: boolean) => Catalog;
+  refreshPickerPools?: (providers: readonly Provider[]) => Promise<void>;
   /** 连接状态判定器。 */
   connection: ProviderConnectionReaders;
   /**
@@ -97,11 +114,13 @@ export interface ProviderServiceDeps {
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
    */
   genericOAuthConnected?: (providerId: string) => boolean;
-  codexAccountConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
+  codexAccountConnected?: (providerId: string, options?: SubscriptionConnectionOptions) => boolean;
   /** A provider Cindy created for subscription accounts: one of its own accounts is signed in. */
-  subscriptionPoolConnected?: (providerId: string, options?: { includeBoundAccounts?: boolean }) => boolean;
+  subscriptionPoolConnected?: (providerId: string, options?: SubscriptionConnectionOptions) => boolean;
   subscriptionAccountConnected?: (providerId: string) => boolean;
   subscriptionReadUnavailable?: (providerId: string) => boolean;
+  subscriptionReadUnreachable?: (providerId: string) => boolean;
+  subscriptionModelsConfirmedAt?: (providerId: string) => number | undefined;
   subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
   openAiAccountInfo?: (providerId: string) => Promise<ProviderView['openAiAccount']>;
   /**
@@ -156,20 +175,68 @@ export interface ProviderService {
  */
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
   async function listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]> {
+    const routingCatalog = Boolean(opts?.getCatalog || opts?.catalog);
+    const subscriptionOptions = routingCatalog ? { includeBoundAccounts: true } : undefined;
     const readOpts: ConnectionReadOptions = {
       allowSideEffects: opts?.allowSideEffects === true && opts?.snapshotOnly !== true,
       snapshotOnly: opts?.snapshotOnly === true,
       waitForDiscovery: opts?.waitForDiscovery === true,
-      ...(opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : {}),
+      ...subscriptionOptions,
     };
+    const picker = opts?.picker;
+    const access = picker ? deps.getModelAccess?.() : undefined;
+    let pickerCatalog: Catalog | undefined;
+    const autoSourceIdentities: ProviderView[] = [];
+    if (picker) {
+      const base = deps.getCatalog();
+      const scope = picker.scope;
+      const include = (p: Provider) => scope === 'available'
+        ? !isProviderDisabled(access, p.id)
+        : isProviderDisabled(access, p.id) && (scope.providerId === null || scope.providerId === p.id);
+      const deferred = scope === 'available' ? base.providers.filter(p => !include(p)) : base.providers.filter(include);
+      picker.describe?.(scope === 'available' ? base.providers.map(p => p.id) : [], deferred.map(p => p.id));
+      if (scope === 'available') {
+        for (const p of deferred) {
+          // Saved Auto choices can move between Cindy-distributed sources. Preserve just
+          // their membership for relocation, without reading credentials or publishing routes.
+          if (isCindyDistributedProvider(p)) autoSourceIdentities.push({
+            id: p.id, name: p.name, source: p.source, agents: p.agents, auth: { method: p.auth.method },
+            routing: {}, connected: false, suspended: true,
+            models: Object.fromEntries(p.agents.map(agent => [agent,
+              p.models[agent]?.filter(m => isCindyAutoModelId(m.id)).map(m => ({
+                id: m.id, name: m.name, efforts: m.efforts, defaultEffort: m.defaultEffort, contextWindow: m.contextWindow,
+                defaultEnabled: m.defaultEnabled, availability: m.availability,
+              })) ?? [],
+            ])),
+          });
+        }
+      }
+      // Cold built-in, created and legacy account pools can discover the bound model
+      // only after refresh. For an implicit route, narrow by agent before reading membership.
+      const implicitAgent = scope !== 'available' && scope.providerId === null ? scope.agent : undefined;
+      const pools = base.providers.filter(p => include(p) && (!implicitAgent || p.agents.includes(implicitAgent))
+        && (p.id === 'openai' || p.id === 'anthropic' || p.subscriptionPool !== undefined || p.auth.native === 'codex'));
+      await deps.refreshPickerPools?.(pools);
+      readOpts.pickerPoolsReady = true;
+      const projected = deps.projectCatalog?.(base, false, include) ?? base;
+      let providers = projected.providers.filter(include);
+      if (scope !== 'available') {
+        providers = providers.flatMap(p => {
+          const model = p.models[scope.agent]?.find(m => m.id === scope.modelId);
+          return model ? [{ ...p, models: { [scope.agent]: [model] }, imageModels: undefined, videoModels: undefined,
+            audioModels: undefined, evaluationModels: undefined, embeddingModels: undefined }] : [];
+        });
+      }
+      pickerCatalog = { ...projected, providers };
+    }
+    const readConnection = (id: keyof ProviderConnectionReaders) =>
+      !pickerCatalog || pickerCatalog.providers.some(p => p.id === id) ? deps.connection[id](readOpts) : false;
     const [xd, anthropic, openai, xai] = await Promise.all([
-      Promise.resolve(deps.connection.xd(readOpts)),
-      Promise.resolve(deps.connection.anthropic(readOpts)),
-      Promise.resolve(deps.connection.openai(readOpts)),
-      Promise.resolve(deps.connection.xai(readOpts)),
+      readConnection('xd'), readConnection('anthropic'), readConnection('openai'), readConnection('xai'),
     ]);
-    const sourceCatalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
-    const catalog = deps.projectCatalog?.(sourceCatalog, !!(opts?.getCatalog || opts?.catalog)) ?? sourceCatalog;
+    // Full routing reads must materialize their catalog after all connection claims settle.
+    const sourceCatalog = pickerCatalog ?? opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
+    const catalog = pickerCatalog ?? deps.projectCatalog?.(sourceCatalog, routingCatalog) ?? sourceCatalog;
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
@@ -182,16 +249,14 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       }
       // 为订阅账号新建的供应商（2026-11-13）：自己名下有已登录的账号才算连接。
       else if (p.subscriptionPool) {
-        connected[p.id] = deps.subscriptionPoolConnected?.(p.id,
-          opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : undefined) ?? false;
+        connected[p.id] = deps.subscriptionPoolConnected?.(p.id, subscriptionOptions) ?? false;
       }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
       else if (p.auth.native === 'claude' || p.auth.native === 'xai') {
         connected[p.id] = deps.subscriptionAccountConnected?.(p.id) ?? false;
       } else if (p.auth.native === 'codex') {
-        connected[p.id] = deps.codexAccountConnected?.(p.id,
-          opts?.getCatalog || opts?.catalog ? { includeBoundAccounts: true } : undefined) ?? false;
+        connected[p.id] = deps.codexAccountConnected?.(p.id, subscriptionOptions) ?? false;
       } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
       } else if (isCustomRoutedProvider(p)) {
@@ -203,6 +268,18 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         connected[p.id] = deps.builtinApiKeyConnected?.(p.id) ?? false;
       }
     }
+    const unavailableSubscriptions = new Map<string, number | undefined>();
+    for (const provider of catalog.providers) {
+      if (deps.subscriptionReadUnavailable?.(provider.id)) {
+        unavailableSubscriptions.set(provider.id, deps.subscriptionModelsConfirmedAt?.(provider.id));
+      }
+    }
+    // Both projections read the same cached account state, without starting another refresh.
+    const displayCatalog = !routingCatalog && !picker && opts?.includeSubscriptionDisplayModels &&
+      [...unavailableSubscriptions.values()].some(confirmedAt => confirmedAt !== undefined)
+      ? deps.projectCatalog?.(sourceCatalog, false,
+          provider => unavailableSubscriptions.get(provider.id) !== undefined, true)
+      : undefined;
     const discoveryFailures: ModelDiscoveryFailureState = {};
     if (deps.modelDiscoveryFailure) {
       for (const p of catalog.providers) {
@@ -212,7 +289,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     }
     let media: readonly { providerId: string; id: string }[] | undefined;
     try {
-      media = deps.getAvailableMediaModels?.();
+      if (!picker) media = deps.getAvailableMediaModels?.();
     } catch (error) {
       // Media is optional enrichment; configuration and chat providers remain usable.
       media = [];
@@ -232,17 +309,20 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     const contextLimits = deps.getModelContextLimits?.() ?? {};
-    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
-      ...provider,
-      models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
-        agent, models?.map((model) => {
-          const { contextWindowOverride: _previous, ...base } = model;
-          const limit = contextLimits[`${agent}:${provider.id}:${model.id}`];
-          return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
-            ? { ...base, contextWindowOverride: limit } : base;
-        }),
-      ])),
-    })).map((provider) => {
+    const modelAccess = picker ? access : deps.getModelAccess?.();
+    const formatModels = (provider: ProviderView): ProviderView => {
+      const withContext: ProviderView = {
+        ...provider,
+        models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+          agent, models?.map((model) => {
+            const { contextWindowOverride: _previous, ...base } = model;
+            const limit = contextLimits[`${agent}:${provider.id}:${model.id}`];
+            return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+              ? { ...base, contextWindowOverride: limit } : base;
+          }),
+        ])),
+      };
+      provider = withContext;
       if (!deps.hasModelAliasOverride) return provider;
       const blocked = new Set(Object.entries(provider.models).flatMap(([agent, models]) =>
         (models ?? []).filter((m) => m.selectionAliasKey &&
@@ -255,15 +335,25 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           const { selectionAliasKey: _marker, ...original } = m;
           return original;
         })])) };
-    }).map((provider) => ({
+    };
+    const displayModels = new Map(displayCatalog
+      ? buildRegistry({
+          ...displayCatalog,
+          providers: displayCatalog.providers.filter(provider =>
+            unavailableSubscriptions.get(provider.id) !== undefined),
+        }, connected, {}, modelAccess).map(provider => [provider.id, formatModels(provider).models] as const)
+      : []);
+    return buildRegistry(catalog, connected, discoveryFailures, modelAccess).map(formatModels).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
       ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
       ...(provider.source === 'organization' ? { logoKind: deps.getOrganizationProviderLogoKind?.(provider) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),
-      ...(deps.subscriptionReadUnavailable?.(provider.id)
-        ? { subscriptionReadUnavailable: true as const } : {}),
+      ...(unavailableSubscriptions.has(provider.id)
+        ? { subscriptionReadUnavailable: true as const, subscriptionModelsConfirmedAt: unavailableSubscriptions.get(provider.id),
+          ...(deps.subscriptionReadUnreachable?.(provider.id) ? { subscriptionReadUnreachable: true as const } : {}) } : {}),
+      ...(displayModels.has(provider.id) ? { subscriptionDisplayModels: displayModels.get(provider.id) } : {}),
     })).map(
       (provider) =>
         media === undefined
@@ -280,7 +370,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
                     ),
                   ],
             },
-    ).map(provider => deps.projectProvider?.(provider) ?? provider);
+    ).map(provider => deps.projectProvider?.(provider) ?? provider).concat(autoSourceIdentities);
   }
 
   return { listProviders };

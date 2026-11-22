@@ -361,8 +361,8 @@ async function runAction({ action, image, display, selection, ownerScope, transl
 }
 
 /**
- * Electron 在 macOS 上只区分已授权 / 未授权。未授权时先枚举一次屏幕源, 让
- * Cindy 出现在系统的屏幕录制列表里 (首次还会弹出系统询问), 再说明去哪里开启。
+ * Give macOS a real capture request before offering Settings. Whether a prompt
+ * appears or the application is already listed is up to the system.
  */
 async function ensureMacScreenRecordingPermission(): Promise<boolean> {
   if (systemPreferences.getMediaAccessStatus('screen') === 'granted') return true;

@@ -887,17 +887,25 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("dispatches a discovered send_to_session call without dropping nested arguments", async () => {
+  // Unit through MCP tools/list and tools/call: on 11/19 the user's wording only
+  // found runtime settings despite handoff being registered. Follow the result
+  // to the existing task, and keep title-only requests on the rename path.
+  it("discovers sending to an existing task without exposing it in rename discovery", async () => {
     const sendToSession = vi.fn(async () => ({
       ok: true as const,
       targetSessionId: TARGET_SESSION_ID,
       agentKind: "codex" as const,
-      wakeKind: "resumed" as const,
+      wakeKind: "queued" as const,
       targetTitle: "Issue follow-up",
       targetLastUserSendAt: null,
     }));
+    const rename = vi.fn(async (args: { sessionId: string; title: string }) => ({
+      ok: true as const,
+      ...args,
+    }));
+    let restricted = false;
     const server = createXdtHelperMcpServer(
-      { sendToSession },
+      { sendToSession, setCurrentSessionTitle: rename, resolveSurface: async () => restricted ? "restricted" : "default" },
       {
         agentKind: "codex",
         workingDir: "/repo",
@@ -921,26 +929,96 @@ describe("cindy_helper MCP server", () => {
         "call_tool",
         "list_tools",
       ]);
-
-      const discovered = parsePayload(
-        await client.callTool({
-          name: "list_tools",
-          arguments: { category: "handoff" },
-        }),
+      const matchingEntries = topLevelTools.tools.filter((tool) => tool.description?.includes("send_to_session"));
+      expect(matchingEntries.map((tool) => tool.name)).toEqual(["list_tools"]);
+      expect(matchingEntries[0].description).toContain("仅本机");
+      const list = async (args: Record<string, string>) => parsePayload(
+        await client.callTool({ name: "list_tools", arguments: args }),
       );
-      expect(discovered).toMatchObject({
+
+      expect(await list({ category: "handoff" })).toMatchObject({
         ok: true,
         category: "handoff",
+        tools: [expect.objectContaining({
+          name: "send_to_session",
+          description: expect.not.stringContaining("目标在另一台电脑:target_session_id"),
+        })],
       });
-      const discoveredTools = discovered.tools as Array<{ name: string }>;
-      expect(discoveredTools.map((tool) => tool.name)).toContain(
-        "send_to_session",
-      );
+      expect(await list({})).toMatchObject({ categories: expect.arrayContaining([
+        expect.objectContaining({ name: "handoff", description: expect.stringContaining("仅本机") }),
+      ]) });
+      expect(await list({ name: "send_to_session" })).toMatchObject({
+        ok: true,
+        tool: {
+          name: "send_to_session",
+          inputSchema: {
+            properties: {
+              target_session_id: { type: "string", description: expect.not.stringContaining("deviceId::sessionId") },
+              message: { type: "string" },
+            },
+            required: ["message"],
+          },
+        },
+      });
+      const search = await list({ query: "发消息给另一个任务会话" });
+      const [firstMatch] = search.items as Array<{ next: { tool: string; args: Record<string, string> } }>;
+      expect(firstMatch).toMatchObject({
+        key: "native.send_to_session",
+        availability: "available",
+        summary: expect.stringContaining("仅本机"),
+      });
+      // PR #11583: the exact action should still match with polite prefixes or sentence punctuation.
+      for (const query of [
+        "向另一个任务发送消息",
+        "send a message to another task",
+        "给伙伴发消息",
+        "请发消息给另一个任务会话",
+        "发消息给另一个任务会话。",
+        "请帮我发消息给另一个任务会话！",
+        "Please, send a message to another task.",
+      ]) {
+        const result = await list({ query });
+        expect((result.items as unknown[])[0], query).toMatchObject({ key: "native.send_to_session", availability: "available" });
+      }
+      const genericSearch = await list({ query: "任务" });
+      expect((genericSearch.items as unknown[])[0]).not.toMatchObject({ key: "native.send_to_session" });
+      const wrappedGenericSearch = await list({ query: "请任务。" });
+      expect((wrappedGenericSearch.items as Array<{ key: string }>).map(item => item.key)).not.toContain("native.send_to_session");
+      const detail = parsePayload(await client.callTool({
+        name: firstMatch.next.tool,
+        arguments: firstMatch.next.args,
+      }));
+      const { operations: [{ call }] } = detail.control as {
+        operations: Array<{ call: { tool: string; args: { name: string } } }>;
+      };
+      expect(detail).toMatchObject({ control: { domain: "tasks" } });
+
+      const control = await list({ category: "control" });
+      const controlNames = (control.tools as Array<{ name: string }>).map((tool) => tool.name);
+      expect(controlNames).toContain("set_current_session_title");
+      expect(controlNames).not.toContain("send_to_session");
+      for (const query of [
+        "把这个会话改名",
+        "不要给伙伴发消息，只把这个会话改名",
+        "请不要给伙伴发消息，只把这个会话改名。",
+      ]) {
+        const renameSearch = await list({ query });
+        expect(renameSearch).toMatchObject({ ok: true });
+        expect((renameSearch.items as Array<{ key: string }>).map((item) => item.key)).not.toContain("native.send_to_session");
+      }
+      expect(rename).not.toHaveBeenCalled();
+      expect(sendToSession).not.toHaveBeenCalled();
+      expect(parsePayload(await client.callTool({
+        name: "call_tool",
+        arguments: { name: "set_current_session_title", args: { title: "New title" } },
+      }))).toMatchObject({ ok: true, title: "New title" });
+      expect(rename).toHaveBeenCalledExactlyOnceWith({ sessionId: "dispatcher-session", title: "New title" });
+      expect(sendToSession).not.toHaveBeenCalled();
 
       const result = await client.callTool({
-        name: "call_tool",
+        name: call.tool,
         arguments: {
-          name: "send_to_session",
+          ...call.args,
           args: {
             target_session_id: TARGET_SESSION_ID,
             message: "Continue the existing task",
@@ -952,7 +1030,7 @@ describe("cindy_helper MCP server", () => {
       expect(parsePayload(result)).toMatchObject({
         ok: true,
         target_session_id: TARGET_SESSION_ID,
-        wake_kind: "resumed",
+        wake_kind: "queued",
       });
       expect(sendToSession).toHaveBeenCalledOnce();
       expect(sendToSession).toHaveBeenCalledWith({
@@ -963,6 +1041,9 @@ describe("cindy_helper MCP server", () => {
         useWorktree: undefined,
         workingDir: undefined,
       });
+      restricted = true;
+      const restrictedEntries = await client.listTools();
+      expect(restrictedEntries.tools.find(tool => tool.name === "list_tools")?.description).not.toContain("send_to_session");
     } finally {
       await client.close();
       await server.close();
@@ -1293,7 +1374,8 @@ describe("cindy_helper MCP server", () => {
         (overview.categories as Array<{ name: string; description: string }>).map((c) => [c.name, c.description]),
       );
       for (const description of Object.values(described)) expect(description).toMatch(/\S/);
-      for (const name of ['history', 'handoff', 'bots']) expect(described[name]).toContain('可跨电脑');
+      for (const name of ['history', 'bots']) expect(described[name]).toContain('可跨电脑');
+      expect(described.handoff).toContain('宿主支持跨电脑新建时');
       expect(described.handoff).toContain('agent_device_id');
       expect(described.handoff).not.toContain('新建只在本机');
       expect(described.control).toMatch(/本机。$/);
@@ -1465,6 +1547,12 @@ describe("cindy_helper MCP server", () => {
   });
 
   it("fails closed when the host cannot classify the Session surface", async () => {
+    let canClassify = true;
+    const sendToRemoteSession = vi.fn();
+    const resolveSurface = vi.fn(async () => {
+      if (!canClassify) throw new Error("db unavailable");
+      return "default" as const;
+    });
     const sendToSession = vi.fn(async () => ({
       ok: true as const,
       targetSessionId: TARGET_SESSION_ID,
@@ -1475,8 +1563,9 @@ describe("cindy_helper MCP server", () => {
     }));
     const server = createXdtHelperMcpServer(
       {
-        resolveSurface: async () => { throw new Error("db unavailable"); },
+        resolveSurface,
         sendToSession,
+        sendToRemoteSession,
       },
       { agentKind: "pi", workingDir: "/repo", sessionId: "unknown-session" },
     );
@@ -1484,10 +1573,23 @@ describe("cindy_helper MCP server", () => {
     const client = new Client({ name: "cindy-helper-restricted-test", version: "0.0.0" });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
+      const listDescription = async () => (await client.listTools()).tools.find((tool) => tool.name === "list_tools")?.description;
+      const description = await listDescription();
+      expect(description).not.toContain("send_to_session");
+      expect(resolveSurface).not.toHaveBeenCalled();
+      const available = parsePayload(await client.callTool({ name: "list_tools", arguments: { query: "发消息给另一个任务会话" } }));
+      expect((available.items as unknown[])[0]).toMatchObject({ summary: expect.stringContaining("本机或已授权电脑") });
+      canClassify = false;
+      // Pi fingerprints descriptions, so the lookup instruction stays stable.
+      expect(await listDescription()).toBe(description);
       const overview = parsePayload(
         await client.callTool({ name: "list_tools", arguments: {} }),
       );
       expect(overview.categories).toEqual([]);
+      for (const args of [{ name: "send_to_session" }, { query: "请发消息给另一个任务会话。" }]) {
+        expect(parsePayload(await client.callTool({ name: "list_tools", arguments: args })))
+          .toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      }
       const forbiddenCall = parsePayload(
         await client.callTool({
           name: "call_tool",
@@ -1502,6 +1604,7 @@ describe("cindy_helper MCP server", () => {
         errorCode: "CAPABILITY_NOT_AVAILABLE",
       });
       expect(sendToSession).not.toHaveBeenCalled();
+      expect(sendToRemoteSession).not.toHaveBeenCalled();
     } finally {
       await client.close();
       await server.close();
@@ -1918,6 +2021,10 @@ it('keeps the control directory compact and reports gaps and invalid continuatio
     expect(await read({ key: 'mobile.preferences' })).toMatchObject({ control: { availability: 'not_exposed', operations: [] } });
     expect(await read({ key: 'teammates.profile' })).toMatchObject({ control: { availability: 'unavailable_in_context', operations: [] } });
     expect(await read({ key: 'native.set_current_session_title' })).toMatchObject({ control: { operations: [expect.objectContaining({ name: 'set_current_session_title' })] } });
+    const entries = await client.listTools();
+    expect(entries.tools.find(tool => tool.name === 'list_tools')?.description).not.toContain('send_to_session');
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { name: 'send_to_session' } })))
+      .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
     expect(rename).not.toHaveBeenCalled();
     expect(await read({ key: 'missing' })).toMatchObject({ ok: false, errorCode: 'UNKNOWN_CONTROL' });
     // 2026-11-08: a teammate told to use list_agents searched that exact name and found nothing.
@@ -1977,4 +2084,21 @@ it('discovers and generates settings links on the task computer', async () => {
     expect(parsePayload(await server.hostTools.call('get_settings_link', { page: 'slack' })))
       .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   } finally { await server.close(); }
+});
+
+// Unit, agent-user-parity.md「第一时间能发现」(PR #12041 review): the first
+// list_tools overview must name snooze and its cross-computer scope, not only
+// the expanded control list.
+it('names snooze_sessions and its cross-computer scope in the control overview', async () => {
+  const setSessionsSnooze = vi.fn(async () => ({ ok: true as const, changed: [] }));
+  const server = createXdtHelperMcpServer({ setSessionsSnooze }, { agentKind: 'codex', workingDir: '/tmp', sessionId: 's' });
+  const client = new Client({ name: 'snooze-discovery', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} })) as { categories: Array<{ name: string; description: string }> };
+    const control = overview.categories.find((c) => c.name === 'control');
+    expect(control?.description).toMatch(/snooze_sessions[^；]*支持本机与跨电脑（deviceId::sessionId）/);
+    expect(server.hostTools.describe('snooze_sessions')).toMatchObject({ category: 'control' });
+  } finally { await client.close(); await server.close(); }
 });
