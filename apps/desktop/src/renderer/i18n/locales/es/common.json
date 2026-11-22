@@ -14659,6 +14659,7 @@
       "steerNotSent": "Mensaje no enviado. La incorporación a la tarea no está disponible temporalmente; se conservó tu borrador.",
       "credentialSwitchApplied": "El cambio de proveedor de modelo ya está en vigor.",
       "credentialSwitchFailed": "No se pudo cambiar el proveedor de modelos. Vuelve a elegir el modelo.",
+      "credentialSwitchKeptSettings": "No se completó el cambio. La tarea seguirá usando la configuración anterior.",
       "modelSwitchContextGuard": {
         "warnToast": "Esta conversación ya usa {{used}}: aproximadamente el {{pct}}% de la capacidad de {{total}} del nuevo modelo",
         "condensedToast": "Las partes anteriores de la conversación se condensarán para ajustarse al nuevo modelo. El historial completo seguirá disponible.",
@@ -15933,6 +15934,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "El contexto está lleno, por lo que no se pudo procesar este mensaje. Los mensajes siguientes se procesarán en orden.",
       "attachmentPrefix": "Archivos adjuntos: ",
       "attachmentAttachedAria": "Se adjuntó {{name}}",
       "saveAttachmentAs": "Guardar el adjunto {{name}} como",

@@ -14659,6 +14659,7 @@
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; o rascunho foi mantido.",
       "credentialSwitchApplied": "A mudança de fornecedor de modelos já está em vigor.",
       "credentialSwitchFailed": "A mudança de fornecedor de modelos falhou. Escolha novamente o modelo.",
+      "credentialSwitchKeptSettings": "A alteração não foi concluída. A tarefa continuará a usar as definições anteriores.",
       "modelSwitchContextGuard": {
         "warnToast": "Esta conversa já utiliza {{used}} — cerca de {{pct}}% da capacidade de {{total}} do novo modelo",
         "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",
@@ -15933,6 +15934,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "O contexto está cheio, pelo que não foi possível processar esta mensagem. As mensagens seguintes serão processadas por ordem.",
       "attachmentPrefix": "Anexos: ",
       "attachmentAttachedAria": "{{name}} anexado",
       "saveAttachmentAs": "Guardar anexo {{name}} como",

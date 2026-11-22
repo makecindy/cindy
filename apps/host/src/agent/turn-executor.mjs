@@ -1402,6 +1402,7 @@ export function createTurnExecutor(deps) {
       listen(id, session);
       return session;
     },
+    behindDurableWrites,
     enqueueDurableWrite(id, label, fn) { return historyFor(id).enqueueDurableWrite(label, fn); },
     /** A task's event persistence, for the auto-resume runtime (auto-resume.ts) and the reply anchor. */
     autoResumeHistory: id => historyFor(id),

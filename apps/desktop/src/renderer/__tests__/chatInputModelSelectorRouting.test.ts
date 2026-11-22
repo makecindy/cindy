@@ -10,7 +10,7 @@ const chatInputSource = normalizeSourceText(
 
 describe('ChatInput model source switching wiring', () => {
   it('preserves an explicit connection for submission even when its catalog row is unavailable', () => {
-    expect(chatInputSource).toContain('const sendProviderId = activeProviderId || null;');
+    expect(chatInputSource).toContain('const sendProviderId = (sendCurrentSelection ? composerSelection.current.providerId : activeProviderId) || null;');
     expect(chatInputSource).toContain('providerId: sendProviderId');
     expect(chatInputSource).not.toContain('effectiveSourceIdForModel(sendProviders, activeProviderId');
   });
