@@ -2800,6 +2800,66 @@ describe('Scheduler', () => {
     }
   });
 
+  // Codex P1 on #12087(第九轮复评):补排 CAS 落空后,回读到的新版**仍是周期任务**
+  // 但没有排期时,必须按它自己的 cadence 补排。并发的手动触发(runNow)在触发时
+  // 只落 lastFiredAt、**从不恢复** nextFireAt(手动触发不改自动排期)—— 行因此停在
+  // 「周期但没有排期」:既不会被触发(没有排期),周期 DB sync 也只重灌行、不补
+  // nextFireAt,任务停摆到进程重启,而凭据被当成已收口摘掉。
+  it('replans a recurring row left without a schedule by a concurrent run-now', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 10_000,
+        runStallAbortGraceMs: 1_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+        runnerImpl: (_s, ctx) => new Promise<FireResult>(() => {
+          ctx.signal.addEventListener('abort', () => {});
+        }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 60_000 });
+      const realGet = h.storage.get.bind(h.storage);
+      const inReplanPath = () => (new Error().stack ?? '').includes('applyStalledClaimReplan');
+      let staleRow: Schedule | null = null;
+      let replanReads = 0;
+      vi.spyOn(h.storage, 'get').mockImplementation(async (id: string) => {
+        if (id !== sch.id) return realGet(id);
+        if (!inReplanPath()) return realGet(id);
+        replanReads += 1;
+        // 补排的第一次回读拿到的是**并发 runNow 落 lastFiredAt 之前**那一版 →
+        // 它的补排 CAS 必然落空。
+        if (replanReads === 1 && staleRow) return { ...staleRow };
+        return realGet(id);
+      });
+
+      // 第一轮 run:认领之后那一版(nextFireAt 被认领清空)。
+      h.clock.advance(60_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      staleRow = { ...(await h.storage.get(sch.id))! };
+      expect(staleRow.nextFireAt).toBeUndefined();
+
+      // 另一台电脑上的手动触发在触发时乐观落 lastFiredAt,不动 nextFireAt。
+      const claimed = (await realGet(sch.id))!;
+      await h.storage.update(sch.id, { lastFiredAt: h.clock.now() }, claimed);
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+
+      // 强制收口:补排拿着旧快照去补排,落空 → 回读新版(仍是周期、没有排期)→ 补排。
+      h.clock.advance(10_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(1_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+
+      const replanned = h.storage.schedules.get(sch.id)?.nextFireAt ?? 0;
+      expect(replanned).toBeGreaterThan(h.clock.now());
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Codex P1 on #12087(第五、六轮复评):退役写入的指纹不能只是 nextFireAt 或 CAS 字段。
   // 用户把 cadence 改走再改回原值时,CAS 字段与 nextFireAt 都能回到收据中的值(ABA),
   // 但 updatedAt 已推进;不能把用户那一版当成退役写入接管掉,静默跳过用户选中的排期。

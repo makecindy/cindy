@@ -4574,6 +4574,33 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
+   * 按 fresh 这一版算出下一次排期并落笔(CAS + 签发收据)。返回落笔后的行,
+   * 落空返回 null(CAS 败:行在这期间又被改过)。
+   *
+   * 收据在**发写之前**登记:覆盖「已落库但回包挂起」的恢复路径 —— 那种情况下
+   * 我们没有拿到回包,却已经写下了 nextFireAt,后续补排要能认出「这是谁写的」。
+   */
+  private writeReplanNextFireAt(
+    scheduleId: string,
+    fresh: Schedule,
+    freshNext: number,
+    attempt: ReplanAttempt,
+  ): Promise<Schedule | null> {
+    const write = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
+    const receipt = this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq, fresh);
+    void write.then(
+      (row) => {
+        if (row) {
+          this.refreshReplanWriteReceipt(scheduleId, receipt, row);
+          this.settleReplanWrite(scheduleId, freshNext, attempt.issueSeq);
+        } else this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq);
+      },
+      () => this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq),
+    );
+    return write;
+  }
+
+  /**
    * 周期任务(或被用户改成周期任务的一次性任务)的补排落笔。
    *
    * CAS:这一版读到的行必须还是当前行才能落笔。
@@ -4597,24 +4624,20 @@ export class Scheduler extends EventEmitter {
   ): Promise<boolean> {
     const next = computeNextFireAt(current, now);
     if (next === undefined) return true; // manual:按语义不续命
-    const write = this.storage.update(scheduleId, { nextFireAt: next }, current);
-    const receipt = this.recordReplanWrite(scheduleId, next, attempt.issueSeq, current);
-    void write.then(
-      (row) => {
-        if (row) {
-          this.refreshReplanWriteReceipt(scheduleId, receipt, row);
-          this.settleReplanWrite(scheduleId, next, attempt.issueSeq);
-        } else this.dropReplanWrite(scheduleId, next, attempt.issueSeq);
-      },
-      () => this.dropReplanWrite(scheduleId, next, attempt.issueSeq),
-    );
+    const write = this.writeReplanNextFireAt(scheduleId, current, next, attempt);
     let updated = await write;
     if (!updated) {
       // CAS 落空:读之后行被别人改过 —— 用户改了任务,或者被退役的那次补排把按
       // 故障前时刻算出的旧排期写了进去(**旧 RPC 先落地**的那一种顺序,CAS 只
-      // 挡住了"新写先落库")。重读一次:行里是**退役写入**(按签发身份认,不看它
-      // 是否已经到期)就用按恢复时刻算出的值接管;别的情形保留对方的结果 ——
-      // 用户改的 cadence 优先于我们算的值(Codex P1 on #12087)。
+      // 挡住了"新写先落库")。重读一次,按**回读到的那一版自己的语义**重新判定:
+      //
+      // - 行里是**退役写入**(按签发身份认,不看它是否已经到期)→ 用按恢复时刻
+      //   算出的值接管。
+      // - 行里**没有排期**(nextFireAt 为空)→ 这条任务当下没有下一次触发的时间。
+      //   周期任务按它自己的 cadence 从恢复时刻补排;一次性任务按一次性语义过期
+      //   (这次触发已经被消耗掉了)。
+      // - 行里有排期且不是退役写入 → 保留对方的结果:用户改的 cadence 优先于
+      //   我们算的值(Codex P1 on #12087)。
       const fresh = await this.storage.get(scheduleId);
       if (
         fresh &&
@@ -4623,39 +4646,38 @@ export class Scheduler extends EventEmitter {
       ) {
         const freshNext = computeNextFireAt(fresh, now);
         if (freshNext !== undefined) {
-          const takeover = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
-          const receipt = this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq, fresh);
-          void takeover.then(
-            (row) => {
-              if (row) {
-                this.refreshReplanWriteReceipt(scheduleId, receipt, row);
-                this.settleReplanWrite(scheduleId, freshNext, attempt.issueSeq);
-              } else this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq);
-            },
-            () => this.dropReplanWrite(scheduleId, freshNext, attempt.issueSeq),
-          );
-          updated = await takeover;
+          updated = await this.writeReplanNextFireAt(scheduleId, fresh, freshNext, attempt);
         }
       } else if (
         fresh &&
         fresh.status === 'active' &&
         !fresh.manual &&
-        !fresh.recurring &&
         fresh.nextFireAt === undefined
       ) {
-        // 用户在补排挂起期间把这条**周期**任务改成了**一次性**:改「recurring」
-        // 本身不触发重算(重算的触发字段是 cron / 时区 / interval / manual /
-        // 截止时间),于是新版是 active 且 nextFireAt 为空 —— 而这次触发已经被
-        // 卡死的那一轮消耗掉了,按一次性语义它应当**过期**。
-        //
-        // 不处理的话这条行既不会被触发(没有排期),也不会自动过期(周期 DB sync
-        // 只重灌行、不补 nextFireAt),只能等进程重启才被当成"还没跑过"重新排
-        // 一次 —— 一次性任务因此多跑一轮(Codex P1 on #12087)。
-        //
-        // 过期写入再落空说明行又被改过:这次没做成,凭据继续上膛,由后续 tick
-        // 重试(重试时按新一版重新判定)。
-        const expired = await this.expireStalledOneShot(scheduleId, fresh, attempt, now);
-        return expired !== null;
+        if (fresh.recurring) {
+          // 新版仍是周期任务却没有排期:并发的手动触发(runNow)只落 lastFiredAt /
+          // lastFinishedAt、**从不恢复** nextFireAt,于是这一版仍是没有排期的
+          // 周期任务。不补排的话它不会被触发(没有排期),周期 DB sync 也只重灌行、
+          // 不补 nextFireAt —— 任务停摆到进程重启(Codex P1 on #12087)。按它自己
+          // 的 cadence 从恢复时刻补排。
+          const freshNext = computeNextFireAt(fresh, now);
+          if (freshNext !== undefined) {
+            updated = await this.writeReplanNextFireAt(scheduleId, fresh, freshNext, attempt);
+          }
+        } else {
+          // 新版是**一次性**任务:用户在补排挂起期间把周期任务改成了一次性(改
+          // 「recurring」本身不触发重算,于是新版是 active 且 nextFireAt 为空),
+          // 而这次触发已经被卡死的那一轮消耗掉 —— 按一次性语义它应当**过期**。
+          //
+          // 不处理的话这条行既不会被触发(没有排期),也不会自动过期(周期 DB sync
+          // 只重灌行、不补 nextFireAt),只能等进程重启才被当成"还没跑过"重新排
+          // 一次 —— 一次性任务因此多跑一轮(Codex P1 on #12087)。
+          //
+          // 过期写入再落空说明行又被改过:这次没做成,凭据继续上膛,由后续 tick
+          // 重试(重试时按新一版重新判定)。
+          const expired = await this.expireStalledOneShot(scheduleId, fresh, attempt, now);
+          return expired !== null;
+        }
       }
     }
     if (updated && updated.status === 'active') {
