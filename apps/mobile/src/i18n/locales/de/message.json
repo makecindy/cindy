@@ -14,6 +14,7 @@
     "failedSamplingAttempt": "Diese Antwort wurde nicht abgeschlossen. Ihr Inhalt dient nur als Referenz.",
     "moreActions": "Weitere Nachrichtenaktionen",
     "reply": "Antworten",
+    "taskLetterReplied": "{{name}} hat geantwortet",
     "newMessagesToBottom": "Neue Nachrichten, nach unten springen",
     "jumpToBottom": "Nach unten springen",
     "openForkOrigin": "Ursprungsnachricht der Abzweigung öffnen",

@@ -14,6 +14,7 @@
     "failedSamplingAttempt": "Esta resposta não foi concluída. Seu conteúdo serve apenas como referência.",
     "moreActions": "Mais ações da mensagem",
     "reply": "Responder",
+    "taskLetterReplied": "{{name}} respondeu",
     "newMessagesToBottom": "Novas mensagens, ir para o fim",
     "jumpToBottom": "Ir para o fim",
     "openForkOrigin": "Abrir mensagem de origem da ramificação",

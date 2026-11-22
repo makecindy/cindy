@@ -2586,6 +2586,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     companionResource?.ref.kind === 'bot' ? { source: 'bot' } : currentSession,
     false,
   );
+  const companionRole = currentSession?.companion?.role;
+  const companionPrimaryChat = companionChat && !companionEntry.readOnly
+    && !companionEntry.threadRootSessionId && !companionEntry.threadRootClientId
+    && (companionRole
+      ? companionRole === 'canonical'
+      : companionResource?.ref.kind === 'bot' && companionResource.links.some(({ rel, target }) =>
+        rel === 'conversation' && target.kind === 'session' && target.sessionId === sessionId));
   const lastAckKeyRef = useRef<string | null>(null);
   const sessionResourceCards = useSessionResourceCards(
     deviceId, deviceName, sessionId, currentSession?.source, remoteSessionRunning,
@@ -11337,6 +11344,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 <SessionQuickSendProvider value={canUseComposer ? async (text) => (await send({ independentText: text })) === true : null}>
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
                   <SessionMessageHistory companion={companionChat} companionQuote={companionQuoteOptions}
+                    companionPrimaryChat={companionPrimaryChat}
                     companionThreadOptions={companionThreadOptions} conversationHeader={companionThreadRoot}
                     onOpenCompanionSettings={openCompanionSettings} onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
                     companionAttentionLabel={activePendingKind ? (companionWorkGroupLabel ?? undefined)

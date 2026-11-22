@@ -14,6 +14,7 @@
     "failedSamplingAttempt": "Esta respuesta no se completó. Su contenido es sólo de referencia.",
     "moreActions": "Más acciones de mensajes",
     "reply": "Responder",
+    "taskLetterReplied": "{{name}} respondió",
     "newMessagesToBottom": "Mensajes nuevos, saltar al final",
     "jumpToBottom": "Saltar al fondo",
     "openForkOrigin": "Abrir mensaje de origen de la bifurcación",
