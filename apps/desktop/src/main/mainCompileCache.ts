@@ -12,6 +12,12 @@
  * directories stay off, because there the cache would bypass the ASAR integrity fuse
  * and, on macOS, lend the app's system permissions. Source runs have no such fuse.
  *
+ * This gate only decides whether Cindy turns the cache on. `NODE_COMPILE_CACHE` in the
+ * launch environment makes Node enable it before any app code runs, in every build and
+ * before this module existed; the NODE_OPTIONS fuse does not cover it, and by the time
+ * this runs the entry chunks are already loaded, so app code cannot close it. Where the
+ * gate says no, that case is logged as a warning for diagnosis.
+ *
  * Location and lifecycle: `userData/main-compile-cache/<build id>/`. Node adds a
  * per-Node/V8-version subdirectory and keys entries by module file name. After the
  * bootstrap chunk loads, directories of other builds are removed, and all of them
@@ -25,7 +31,7 @@
  *
  * `NODE_DISABLE_COMPILE_CACHE=1` turns it off.
  */
-import { constants, enableCompileCache, flushCompileCache } from 'node:module';
+import { constants, enableCompileCache, flushCompileCache, getCompileCacheDir } from 'node:module';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createLogger } from './logger.js';
@@ -62,10 +68,18 @@ export interface MainCompileCacheOptions extends MainCompileCacheInstall {
 export interface MainCompileCacheRuntime {
   enableCompileCache(directory: string): { status: number };
   flushCompileCache(): void;
+  /** Directory of a cache that is already on, e.g. from `NODE_COMPILE_CACHE` at launch. */
+  getCompileCacheDir(): string | undefined;
 }
 
 /** Controls for the compile cache started at launch. */
 export interface MainCompileCache {
+  /**
+   * What launch did: enabled, already-enabled, disabled, failed, not-allowed, or
+   * enabled-by-environment (the install does not allow it, but the launch environment
+   * turned it on before app code ran).
+   */
+  readonly status: string;
   /** Writes modules compiled since launch; Node otherwise writes only on a clean exit. */
   flush(): void;
   /** Removes cache directories this launch does not use. */
@@ -88,6 +102,7 @@ export function mainCompileCacheAllowed(install: MainCompileCacheInstall): boole
 const nodeRuntime: MainCompileCacheRuntime = {
   enableCompileCache: (directory) => enableCompileCache(directory),
   flushCompileCache: () => flushCompileCache(),
+  getCompileCacheDir: () => getCompileCacheDir(),
 };
 
 /**
@@ -111,12 +126,17 @@ export function startMainCompileCache(
       status = 'failed';
       log.warn('compile cache unavailable', { error: error instanceof Error ? error.name : 'unknown' });
     }
+  } else if (runtime.getCompileCacheDir()) {
+    // NODE_COMPILE_CACHE at launch: already in use for the entry chunks and cannot be undone here.
+    status = 'enabled-by-environment';
   }
-  // Status only: Node's failure message carries the userData path.
-  log.info('compile cache', { status });
+  // Status only, never the directory: it carries the userData path.
+  if (status === 'enabled-by-environment') log.warn('compile cache enabled by the launch environment', { status });
+  else log.info('compile cache', { status });
   const keep = enabled ? options.buildId : null;
 
   return {
+    status,
     flush() {
       if (!enabled) return;
       try {
