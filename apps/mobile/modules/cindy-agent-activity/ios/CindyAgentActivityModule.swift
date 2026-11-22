@@ -12,6 +12,9 @@ private struct ActivitySnapshot: Decodable {
 private final class AgentActivityController {
   static let shared = AgentActivityController()
   private let log = Logger(subsystem: "app.cindy.activity", category: "freshness")
+  private var foregroundEpoch = 0
+  private var foregroundContent: CindyAgentActivityAttributes.ContentState?
+  var foregroundConflict: (() -> Void)?
   private var tail: Task<Void, Never>?
   private var observed: Activity<CindyAgentActivityAttributes>?
   private var dismissedAccount: String? {
@@ -31,6 +34,12 @@ private final class AgentActivityController {
   private init() {
     account = UserDefaults.standard.string(forKey: ownerKey)
     dismissedAccount = UserDefaults.standard.string(forKey: dismissedOwnerKey)
+    observers.append(Task {
+      for await _ in NotificationCenter.default.notifications(named: UIApplication.willResignActiveNotification) {
+        foregroundEpoch += 1
+        foregroundContent = nil
+      }
+    })
     for activity in Activity<CindyAgentActivityAttributes>.activities { observe(activity) }
     observers.append(Task {
       for await activity in Activity<CindyAgentActivityAttributes>.activityUpdates { observe(activity) }
@@ -55,7 +64,7 @@ private final class AgentActivityController {
   }
 
   func configureAccount(_ next: String?) async {
-    if account != next { dismissedAccount = nil; observed = nil }
+    if account != next { dismissedAccount = nil; observed = nil; foregroundContent = nil; foregroundEpoch += 1 }
     account = next
     // Scope only, never a credential. A background cold launch can reject an
     // activity for the account used before sign-out while JS restores auth.
@@ -101,6 +110,7 @@ private final class AgentActivityController {
       return
     }
     guard watches[activity.id] == nil else { return }
+    if observed?.id != activity.id { foregroundContent = nil }
     observed = activity
     // An activity that exists supersedes an earlier removal; keeping the flag
     // would go on reporting it and block the next local activity.
@@ -108,6 +118,17 @@ private final class AgentActivityController {
     watches[activity.id] = [Task {
       for await content in activity.contentUpdates {
         log.debug("content observed; expiry: \(content.staleDate?.timeIntervalSince1970 ?? 0)")
+        if var expected = foregroundContent, observed?.id == activity.id,
+           UIApplication.shared.applicationState == .active, content.state == activity.content.state,
+           (content.state.confirmedAt ?? 0) >= (expected.confirmedAt ?? 0) {
+          expected.confirmedAt = content.state.confirmedAt
+          if expected != content.state {
+            // A later APNs send can still describe an older task transition. Recheck
+            // the computers once; never replay a saved local snapshot over a push.
+            foregroundContent = nil
+            foregroundConflict?()
+          }
+        }
         // Let the phone-local diagnostic recorder observe content arrival. JS
         // strips these dates before comparing/sending registration payloads.
         registrationChanged?()
@@ -139,6 +160,36 @@ private final class AgentActivityController {
       await previous?.value
       guard account == owner else { return }
       await apply(json)
+    }
+  }
+
+  // Update only the registered activity that existed when the foreground snapshot arrived.
+  // Queued work from a previous account, activity, or foreground lifetime has no authority.
+  func updateForeground(_ scope: String, _ json: String?, _ observedAtMs: Double) {
+    guard account == scope, UIApplication.shared.applicationState == .active,
+          let current = observed, current.attributes.accountId == scope else { return }
+    let epoch = foregroundEpoch
+    let observedAt = Date(timeIntervalSince1970: observedAtMs / 1000)
+    let previous = tail
+    tail = Task {
+      await previous?.value
+      guard epoch == foregroundEpoch, account == scope, observed?.id == current.id, UIApplication.shared.applicationState == .active,
+            current.activityState == .active || current.activityState == .stale,
+            (current.content.state.confirmedAt ?? 0) <= observedAt.timeIntervalSince1970 else { return }
+      guard let json else {
+        foregroundContent = nil
+        if #available(iOS 17.2, *) {
+          endedByApp.insert(current.id)
+          await current.end(nil, dismissalPolicy: .immediate, timestamp: observedAt)
+        } else { await end(current) }
+        return
+      }
+      guard var state = try? JSONDecoder().decode(CindyAgentActivityAttributes.ContentState.self, from: Data(json.utf8)) else { return }
+      state.confirmedAt = observedAt.timeIntervalSince1970
+      foregroundContent = state
+      let content = ActivityContent(state: state, staleDate: observedAt.addingTimeInterval(state.freshnessInterval))
+      if #available(iOS 17.2, *) { await current.update(content, timestamp: observedAt) }
+      else { await current.update(content) }
     }
   }
 
@@ -209,9 +260,12 @@ private final class AgentActivityController {
 public final class CindyAgentActivityModule: Module {
   public func definition() -> ModuleDefinition {
     Name("CindyAgentActivity")
-    Events("pushRegistrationChanged")
-    OnCreate {
+    Events("pushRegistrationChanged", "foregroundActivityConflict")
+    OnCreate { [weak self] in
       Task { @MainActor [weak self] in
+        AgentActivityController.shared.foregroundConflict = { [weak self] in
+          self?.sendEvent("foregroundActivityConflict", [:])
+        }
         AgentActivityController.shared.registrationChanged = { [weak self] in
           self?.sendEvent("pushRegistrationChanged", [:])
         }
@@ -225,6 +279,9 @@ public final class CindyAgentActivityModule: Module {
     }
     Function("setState") { (json: String?) in
       DispatchQueue.main.async { AgentActivityController.shared.enqueue(json) }
+    }
+    Function("updateForeground") { (scope: String, json: String?, observedAtMs: Double) in
+      DispatchQueue.main.async { AgentActivityController.shared.updateForeground(scope, json, observedAtMs) }
     }
     Function("markStale") {
       DispatchQueue.main.async { AgentActivityController.shared.markStale() }

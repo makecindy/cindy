@@ -733,6 +733,7 @@ import {
   hasInFlightRemoteInvokes,
   setHistoryToolNameReader,
   setUsageWidgetSnapshotReader,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
   setAgentNetSwitchRemoteHandler,
@@ -5313,7 +5314,29 @@ const registerIpcHandlers = () => {
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
   // 多控制端重连风暴中会互相挤爆对方的可靠传输窗口。
+  let lastActivityRevision: number | undefined;
+  const readHostActivity = () => getAgentIslandService()?.getForegroundTaskActivity() ?? null;
+  let summaryTimer: ReturnType<typeof setTimeout> | undefined;
+  const stopIslandUpdates = getAgentIslandService()?.subscribeTaskOverview(() => {
+    // Tool and text updates can be much more frequent than changes to the three counts.
+    if (summaryTimer) return;
+    summaryTimer = setTimeout(() => {
+      summaryTimer = undefined;
+      publishHostTaskActivity(() => {
+        const summary = readHostActivity();
+        if (!summary || summary.revision === lastActivityRevision) return null;
+        lastActivityRevision = summary.revision;
+        return summary;
+      });
+    }, 80);
+    summaryTimer.unref();
+  });
+  if (stopIslandUpdates) onQuit('foreground-task-activity', () => {
+    clearTimeout(summaryTimer);
+    stopIslandUpdates();
+  });
   setSessionsSubscribedListener((controllerDeviceId) => {
+    publishHostTaskActivity(readHostActivity, controllerDeviceId);
     getAgentIslandService()?.replaySessionActivity((payload) => {
       pushSessionActivityToController(controllerDeviceId, payload);
     });
