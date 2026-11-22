@@ -752,6 +752,7 @@ import { registerRemoteResourcesIpc } from './device-link/remoteResourcesIpc';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
   registerWorktreeIpc,
+  WorktreeManager,
   WorktreePool,
   reconcilePendingSafeDirectoryCleanups,
   worktreeStore,
@@ -10260,6 +10261,20 @@ app.on('ready', async () => {
     resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
     requestWorktreeRecycle,
     lookupSessionWorktreeBinding: (sessionId) => worktreeStore.get(sessionId)?.path ?? null,
+    localPluginWorktrees: {
+      create: (request, assertCurrent) => {
+        if (worktreeStore.get(request.sessionId)) {
+          throwIpcError('PRECONDITION_FAILED', 'The task already has a worktree');
+        }
+        return WorktreeManager.createWorktree(request, {
+          awaitFullCheckout: true,
+          refreshDefaultSource: true,
+          assertCurrent,
+        });
+      },
+      discard: (sessionId, managedPath, canRemove) =>
+        WorktreeManager.discardPrecreatedWorktree(sessionId, managedPath, { canRemove }),
+    },
     closeIdleSessionForMove: closeIdleDesktopSessionForMove,
     // 任务级窗口预算落库后的运行时应用：与模型级上限编辑同一套「关 handle
     // 冷重建 / 回合中登记 pending」语义。
