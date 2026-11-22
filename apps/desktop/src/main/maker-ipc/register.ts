@@ -12841,7 +12841,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
 
       lockStage = 'prepare-unhealthy-session';
-      if (await prepareUnhealthySessionForSend(targetSessionId)) {
+      if (await prepareUnhealthySessionForSend(targetSessionId, { hasPendingFollowup: true, isExplicitRetry: false })) {
         // Pre-send account/context recovery retired the native thread. Do not pass
         // the metadata captured before recovery back to lazy bootstrap.
         meta.sdkSessionId = undefined;
@@ -18762,7 +18762,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getCoordinator: () => agentInputCoordinatorHolder,
       resetWireNotes: id => wireNoteMemory.reset(id),
     }, sessionId),
-    getRecoveryAbortSignal: (sessionId, claim) => desktopContextRecoveryAbortSignal({
+    getRecoveryAbortSignal: (sessionId, claim, beforeQueuedDrain) => desktopContextRecoveryAbortSignal({
       getCoordinator: () => agentInputCoordinatorHolder,
       resetWireNotes: id => wireNoteMemory.reset(id),
       enqueueDurableWrite,
@@ -18772,7 +18772,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return session?.instanceId === turn.instanceId && session.getTurnGeneration() === turn.generation;
       },
       log,
-    }, sessionId, claim),
+    }, sessionId, claim, beforeQueuedDrain),
     // PI provider compat 自愈：上游拒收可选请求字段后，把「该 provider/model 关掉该字段」
     // 学进 models.json compat 的覆盖存储；重建会话时 writeModelsJson 合并它。
     readPiNativeCompatOverride: (providerId, modelId, routeKey) =>

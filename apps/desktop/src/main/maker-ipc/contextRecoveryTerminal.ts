@@ -114,7 +114,10 @@ export function settleContextRecoveryTerminal(ports: ContextRecoveryTerminalPort
           instanceId: event.sessionInstanceId,
           generation: event.sessionTurnGeneration,
           ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
-        })
+        }, ...(session.agentKind === 'pi' && ports.isPiRequestBodyTooLargeErrorData(overflowErrorData)
+          // Queue takeover aborts hidden recovery. Persist the claimed raw 413
+          // before clearing coordinator recovery so pre-send preparation sees it.
+          ? [surfaceOverflowFailure] as const : []))
         .then((recovered) => {
           if (recovered) {
             if (ports.getSuppressedBroadcasts().get(session.id)?.event === broadcastEvent) {

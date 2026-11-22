@@ -17,7 +17,8 @@ import type { DbClient } from '../../localDb/client/DbClient.js';
 import type { PiUsageWrite } from '../../localDb/worker/opHandlers/piUsageTx.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
-import { createContextOverflowRollover } from '../contextOverflowRollover.js';
+import { createContextOverflowRollover, type OverflowSourceMessage } from '../contextOverflowRollover.js';
+import { contextRecoveryAbortSignal } from '../contextRecoveryAssembly.js';
 import { setMainLocale } from '../../i18n.desktop.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 import { onChannelTurn } from '../channelTurnSignal.js';
@@ -1491,6 +1492,7 @@ describe('production Session event pipeline', () => {
       'task',
       expect.objectContaining({ message: '413 length limit exceeded' }),
       { instanceId: undefined, generation: undefined },
+      expect.any(Function),
     );
     await Promise.resolve();
     await Promise.resolve();
@@ -1500,6 +1502,56 @@ describe('production Session event pipeline', () => {
     );
     expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalled();
     expect(h.deps.overflowSuppressedBroadcasts.size).toBe(0);
+    await h.dispose();
+  });
+
+  // #8242 P1 / unit: the old test preloaded a durable 413. Exercise the
+  // production queue-abort callback before pre-send preparation instead.
+  it('retains raw Pi 413 evidence before an already-queued follow-up drains', async () => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'pi' });
+    h.activity.setSessionInTurn('task', true);
+    const source: OverflowSourceMessage[] = [
+      { role: 'user', content: 'Original oversized request', clientId: 'u1', createdAt: 1 },
+    ];
+    effects.fn('onTurnErrorEvent').mockImplementation((_id, data, _meta, persistId) => {
+      source.push({ role: 'error', content: JSON.stringify(data), clientId: persistId, createdAt: 2 });
+    });
+    const errorAtDrain: boolean[] = [];
+    const clearError = vi.fn(() => {
+      // Observe without throwing inside recovery's failure handler.
+      errorAtDrain.push(source.at(-1)?.role === 'error');
+    });
+    const commitRebuild = vi.fn(async () => {});
+    const rollover = createContextOverflowRollover({
+      drainPersistQueue: async () => {},
+      getSessionRow: async () => ({ status: 'active', source: 'desktop', agentKind: 'pi',
+        remoteHostId: null, sdkSessionId: '/fixture/pi', clearedAt: null,
+        contextTokens: 0, contextWindow: 200_000, model: 'fixture', providerId: 'fixture' }),
+      getLiveSession: () => undefined,
+      listMessages: async () => source,
+      findLatestRebuildMeta: async () => null,
+      closeSession: async () => {},
+      commitRebuild,
+      setPendingHandoff: vi.fn(),
+      replayUserMessage: vi.fn(async () => ({ accepted: true })),
+      withCloseSuppressed: async (_id, run) => run(),
+      getRecoveryAbortSignal: (id, claim, beforeQueuedDrain) => contextRecoveryAbortSignal({
+        getCoordinator: () => ({ hasPendingQueuedWork: () => true, clearError,
+          getInputAbortSignal: () => new AbortController().signal }),
+        resetWireNotes: vi.fn(),
+      }, id, claim, beforeQueuedDrain),
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+    (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = rollover;
+    h.emit(event('error', { message: '413 length limit exceeded' }));
+    await microtasks();
+    expect(clearError).toHaveBeenCalledOnce();
+    expect(errorAtDrain).toEqual([true]);
+    expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledOnce();
+    expect(await rollover.prepareUnhealthySession('task', { hasPendingFollowup: true })).toBe(true);
+    expect(commitRebuild).toHaveBeenCalledWith('task', expect.stringContaining('Original oversized request'),
+      expect.any(Object), expect.any(AbortSignal));
     await h.dispose();
   });
 

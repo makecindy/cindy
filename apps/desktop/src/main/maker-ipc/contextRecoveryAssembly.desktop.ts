@@ -14,6 +14,7 @@ type DesktopRecoveryPorts = Omit<RecoveryCallbackPorts, 'persistSkippedOversized
 
 export function desktopContextRecoveryAbortSignal(
   ports: DesktopRecoveryPorts, sessionId: string, claim?: ClaimedOversizedInput,
+  beforeQueuedDrain?: () => void,
 ): AbortSignal {
   const owner = getCurrentDbClientSnapshot();
   const isCurrentOwner = () =>
@@ -32,5 +33,5 @@ export function desktopContextRecoveryAbortSignal(
         }
       }).catch(() => ports.log.warn('Could not save the skipped input notice', { sessionId: id }));
     },
-  }, sessionId, claim && isCurrentOwner() && ports.isCurrentTurn(claim) ? claim : undefined);
+  }, sessionId, claim && isCurrentOwner() && ports.isCurrentTurn(claim) ? claim : undefined, beforeQueuedDrain);
 }

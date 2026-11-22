@@ -299,6 +299,7 @@ export function contextRecoveryRebuilt(
 
 export function contextRecoveryAbortSignal(
   ports: RecoveryCallbackPorts, sessionId: string, skippedInput?: ClaimedOversizedInput,
+  beforeQueuedDrain?: () => void,
 ): AbortSignal {
   const coordinator = ports.getCoordinator()!;
   if (coordinator.hasPendingQueuedWork(sessionId)) {
@@ -306,6 +307,8 @@ export function contextRecoveryAbortSignal(
     // queued. Release that old error so the queued input can actually drain.
     const skippedClientId = skippedInput
       ? coordinator.skippedOversizedInputClientId?.(sessionId, skippedInput) : undefined;
+    // Preserve terminal evidence before clearError can release the queued send.
+    beforeQueuedDrain?.();
     coordinator.clearError(sessionId);
     if (skippedClientId) ports.persistSkippedOversizedInput?.(sessionId, skippedClientId);
     return AbortSignal.abort();

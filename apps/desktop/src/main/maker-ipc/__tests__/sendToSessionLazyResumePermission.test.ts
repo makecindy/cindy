@@ -740,6 +740,23 @@ describe('group dispatch cancellation during preparation', () => {
   });
 });
 
+// #8242 P2 / guard: execute the actual direct service closure, where the
+// new input is still absent from history until Session.send's onAccepted.
+it('prepares an idle direct follow-up with pending context before persistence', async () => {
+  const persist = vi.fn(async () => {});
+  const prepare = vi.fn(async () => {
+    expect(persist).not.toHaveBeenCalled();
+    return false;
+  });
+  const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
+    prepareUnhealthySessionForSend: prepare, persistUserTurnMessage: persist,
+  });
+  expect(await h.sendToSessionInternal({ targetSessionId: 'child', message: 'Continue, shorter',
+    clientId: 'new-followup' })).toMatchObject({ ok: true });
+  expect(prepare).toHaveBeenCalledWith('child', { hasPendingFollowup: true, isExplicitRetry: false });
+  expect(h.sentTo).toEqual([expect.objectContaining({ sessionId: 'child' })]);
+});
+
 describe('stored-mode Host dispatch keeps the persisted permission and Plan', () => {
   // PR #10271 / Greptile, guard: sendToSessionInternal kept the old provider snapshot after
   // account recovery changed the persisted source. Execute the real dispatch closure: a legacy

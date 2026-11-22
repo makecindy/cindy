@@ -556,7 +556,7 @@ export interface ContextOverflowRolloverDeps {
       sourceCapabilitySelectionText: string;
     },
   ): Promise<{ accepted: boolean }>;
-  getRecoveryAbortSignal?(sessionId: string, skippedInput?: ClaimedOversizedInput): AbortSignal;
+  getRecoveryAbortSignal?(sessionId: string, skippedInput?: ClaimedOversizedInput, beforeQueuedDrain?: () => void): AbortSignal;
   /**
    * Read persisted learning for the exact connection/wire-model/route.
    * A live runtime receipt separately confirms whether it actually loaded the fix.
@@ -678,6 +678,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     errorData: unknown,
     /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
     turnIdentity?: RecoveryTurnIdentity,
+    beforeQueuedDrain?: () => void,
   ): Promise<boolean>;
   prepareUnhealthySession(
     sessionId: string,
@@ -1444,6 +1445,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sessionId: string,
       errorData: unknown,
       turnIdentity?: RecoveryTurnIdentity,
+      beforeQueuedDrain?: () => void,
     ): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
@@ -1465,8 +1467,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           isPromptLengthRejection(errorData)
           ? { inputClientId: claimed.inputClientId, instanceId: claimed.instanceId, generation: claimed.generation }
           : undefined;
-        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId, skippedInput);
+        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId, skippedInput, ...(beforeQueuedDrain ? [beforeQueuedDrain] as const : []));
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
+        // Queue takeover already owns the next input. Release this claim before
+        // its drain can acquire the send lock and run pre-send preparation.
+        if (signal.aborted) return true;
         if (deps.withSessionLock) {
           return await deps.withSessionLock(sessionId, () =>
             runRecover(sessionId, errorData, signal, turnIdentity, externalOwnerAtFailure),
