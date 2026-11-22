@@ -336,14 +336,17 @@ export function planRelatedUnitTests({
 	const sourceChangedCwds = new Set();
 	const fullWorkspaces = new Set();
 	const localeInputs = testable.filter(isLocaleInputFile);
-	const localeInputSet = new Set(localeInputs);
+	// A deleted locale file keeps the documented fallback: the owning package and
+	// its dependents run in full. Only existing files take the fast path below.
+	const mappedLocaleInputs = localeInputs.filter((file) => fileExists(file));
+	const mappedLocaleInputSet = new Set(mappedLocaleInputs);
 	const localeCwds = new Set(
 		localeInputs
 			.map((file) => workspaceForFile(file, workspaceCwds))
 			.filter(Boolean),
 	);
 
-	if (localeInputs.length > 0) {
+	if (mappedLocaleInputs.length > 0) {
 		const missing = LOCALE_RELATED_TEST_FILES.filter((file) => !fileExists(file));
 		if (missing.length > 0) {
 			throw new Error(
@@ -356,7 +359,7 @@ export function planRelatedUnitTests({
 
 	for (const file of testable) {
 		// Vitest related would walk the i18n import graph instead of the mapping.
-		if (localeInputSet.has(file)) continue;
+		if (mappedLocaleInputSet.has(file)) continue;
 		const cwd = workspaceForFile(file, workspaceCwds);
 		if (!cwd) continue;
 		const workspace = byCwd.get(cwd);
@@ -380,7 +383,7 @@ export function planRelatedUnitTests({
 	// graph rather than joining it. When the same package already has real
 	// related work, the mapped tests join that run (the graph is paid anyway);
 	// otherwise they run as an explicit file list with no graph walk at all.
-	const explicitFilesByCwd = localeInputs.length > 0 ? new Map() : null;
+	const explicitFilesByCwd = mappedLocaleInputs.length > 0 ? new Map() : null;
 	if (explicitFilesByCwd) {
 		const mappedByCwd = new Map();
 		for (const testFile of LOCALE_RELATED_TEST_FILES) {

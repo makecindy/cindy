@@ -428,6 +428,42 @@ test("a locale-only change runs the mapped i18n tests and gates without touching
 	}
 });
 
+test("a deleted locale file keeps the full-owner-suite fallback", () => {
+	const removed = "apps/desktop/src/renderer/i18n/locales/en/common.json";
+	const plan = planRelatedUnitTests({
+		changedFiles: [removed, ...LOCALE_CHANGE_FILES.filter((file) => file !== removed)],
+		workspaces,
+		packageJsonByCwd,
+		fileExists: (file) => file !== removed,
+	});
+	assert.deepEqual(plan.runs, [
+		{
+			cwd: "apps/desktop",
+			name: "desktop",
+			relatedFiles: null,
+			checks: [...LOCALE_RELATED_CHECKS],
+		},
+	]);
+	assert.match(plan.reason, /apps\/desktop \(full, 2 checks\)/);
+
+	// A deletion is not a locale edit to route around: the existing rule still
+	// runs the owning package in full even when nothing else changed.
+	const removedOnly = planRelatedUnitTests({
+		changedFiles: [removed],
+		workspaces,
+		packageJsonByCwd,
+		fileExists: (file) => file !== removed,
+	});
+	assert.deepEqual(removedOnly.runs, [
+		{
+			cwd: "apps/desktop",
+			name: "desktop",
+			relatedFiles: null,
+			checks: [...LOCALE_RELATED_CHECKS],
+		},
+	]);
+});
+
 test("locale edits join an existing related run instead of replacing it", () => {
 	const plan = planRelatedUnitTests({
 		changedFiles: [...LOCALE_CHANGE_FILES, "apps/desktop/src/main/foo.ts"],
