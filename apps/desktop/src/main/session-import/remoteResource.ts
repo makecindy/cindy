@@ -10,6 +10,8 @@
 
 import { createHash } from 'node:crypto';
 
+import { SESSION_IMPORT_ANTIGRAVITY_PRIMITIVE } from '@cindy/maker-shared/import-source-marks';
+
 import {
   remoteResourceRegistry,
   RemoteResourceRegistryError,
@@ -17,7 +19,7 @@ import {
 } from '../device-link/remoteResourceRegistry.js';
 import { cancelImport, importJob, latestImportJob, recoverInterruptedImports, startImport } from './executor.js';
 import { scanImportSources } from './scan.js';
-import type { ImportJobView } from './types.js';
+import type { ImportJobView, ImportSourceId } from './types.js';
 
 export const SESSION_IMPORT_COLLECTION = 'session-import';
 export const SESSION_IMPORT_PRIMITIVE = 'session-import';
@@ -27,12 +29,20 @@ const MAX_KEYS = 400;
 
 const groupToken = (key: string) => createHash('sha256').update(key).digest('hex').slice(0, 16);
 
-function jobData(job: ImportJobView) {
+function canRenderSource(primitives: readonly string[], source: ImportSourceId): boolean {
+  return source !== 'antigravity' || primitives.includes(SESSION_IMPORT_ANTIGRAVITY_PRIMITIVE);
+}
+
+function jobData(job: ImportJobView, primitives: readonly string[]) {
+  const items = job.items.filter((it) => canRenderSource(primitives, it.source));
+  // An older client opening the most recent job should still be able to scan
+  // other sources while a desktop-only job is running.
+  const status = items.length === 0 && job.items.length > 0 ? 'missing' : job.status;
   return {
     kind: 'job' as const,
     requestId: job.requestId,
-    status: job.status,
-    items: job.items.map((it) => ({
+    status,
+    items: items.map((it) => ({
       key: it.key,
       source: it.source,
       title: it.title,
@@ -77,7 +87,9 @@ export function createSessionImportRemoteProvider(): RemoteResourceProvider {
       if (id === 'scan' || id === 'scan:force') {
         void recoverInterruptedImports();
         const scan = await scanImportSources(id === 'scan:force');
-        const visible = scan.candidates.filter((c) => !c.hidden).sort((a, b) => b.updatedAt - a.updatedAt);
+        const visible = scan.candidates
+          .filter((c) => !c.hidden && canRenderSource(request.client.primitives, c.source))
+          .sort((a, b) => b.updatedAt - a.updatedAt);
         return resource(id, {
           kind: 'scan',
           total: visible.length,
@@ -101,7 +113,7 @@ export function createSessionImportRemoteProvider(): RemoteResourceProvider {
         await recoverInterruptedImports();
         const requestId = id.slice('job:'.length);
         const job = requestId === 'latest' ? latestImportJob() : importJob(requestId);
-        return resource(id, job ? jobData(job) : { kind: 'job', requestId, status: 'missing', items: [] });
+        return resource(id, job ? jobData(job, request.client.primitives) : { kind: 'job', requestId, status: 'missing', items: [] });
       }
       throw new RemoteResourceRegistryError('NOT_FOUND', 'unknown session import resource');
     },
@@ -112,7 +124,7 @@ export function createSessionImportRemoteProvider(): RemoteResourceProvider {
         if (keys.length === 0 || keys.length > MAX_KEYS) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'keys');
         const job = await startImport(keys);
         return {
-          result: jobData(job),
+          result: jobData(job, request.client.primitives),
           effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: SESSION_IMPORT_COLLECTION, kind: KIND, id: `job:${job.requestId}` } } }],
         };
       }

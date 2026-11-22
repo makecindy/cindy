@@ -8,3 +8,6 @@ key、来源、标题、分组名（不含路径，分组键是不透明摘要�
 逐项结果。动作 `import`（`input.keys`，最多 400 个）开始导入并以 `navigate` 指向对应 job；`cancel`（`input.requestId`）停止。
 文件路径、来源内部定位信息不出电脑；原文件夹不存在的任务只能在电脑上选新文件夹。桌面、手机与 Agent 同时发起时，
 已在另一次导入里排队或进行中的条目不会重复导入。不改 relay 帧、服务端 schema 或 Mobile 原生配置，自建中转无需适配。
+
+Antigravity 来源通过客户端附加 primitive `session-import-antigravity` 协商。旧控制端继续接收原来源，
+扫描与导入结果投影不返回它无法渲染的 Antigravity 条目。仅修改业务资源投影，仍通过现有中转转发。

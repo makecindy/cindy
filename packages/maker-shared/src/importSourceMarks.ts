@@ -8,8 +8,11 @@
  */
 
 export type ImportSourceKey =
-  | 'claude' | 'codex' | 'pi' | 'opencode' | 'gemini' | 'cursor'
+  | 'claude' | 'codex' | 'pi' | 'opencode' | 'gemini' | 'antigravity' | 'cursor'
   | 'qwen' | 'kimi' | 'factory' | 'workbuddy' | 'deepseek';
+
+/** Remote import clients advertise this when they can render Antigravity rows. */
+export const SESSION_IMPORT_ANTIGRAVITY_PRIMITIVE = 'session-import-antigravity';
 
 /** 来源的显示名（产品名，不翻译）。 */
 export const IMPORT_SOURCE_NAMES: Record<ImportSourceKey, string> = {
@@ -18,6 +21,7 @@ export const IMPORT_SOURCE_NAMES: Record<ImportSourceKey, string> = {
   pi: 'Pi',
   opencode: 'OpenCode',
   gemini: 'Gemini CLI',
+  antigravity: 'Antigravity',
   cursor: 'Cursor',
   qwen: 'Qwen Code',
   kimi: 'Kimi Code',
@@ -27,13 +31,17 @@ export const IMPORT_SOURCE_NAMES: Record<ImportSourceKey, string> = {
 };
 
 /** 由路径绘制的来源图形（不含复用 Agent mark 或供应商 Logo 的来源）。 */
-export const IMPORT_SOURCE_MARKS: Record<'gemini' | 'cursor' | 'qwen' | 'kimi' | 'workbuddy' | 'factory', { viewBox: string; paths: string[] }> = {
+export const IMPORT_SOURCE_MARKS: Record<'gemini' | 'antigravity' | 'cursor' | 'qwen' | 'kimi' | 'workbuddy' | 'factory', { viewBox: string; paths: string[] }> = {
   gemini: {
     viewBox: '-1.636 -1.636 27.273 27.273',
     paths: [
       'M16.793 10.358v3.867L7.236 18.82v-2.8l7.751-3.728-7.75-3.728V5.763l9.556 4.595z',
       'M19.608 0A4.392 4.392 0 0124 4.392v15.216A4.392 4.392 0 0119.608 24H4.392A4.392 4.392 0 010 19.608V4.392A4.392 4.392 0 014.392 0h15.216zM4.26 1.444A2.816 2.816 0 001.444 4.26v15.48a2.816 2.816 0 002.816 2.816h15.48a2.816 2.816 0 002.816-2.816V4.26a2.816 2.816 0 00-2.816-2.816H4.26z',
     ],
+  },
+  antigravity: {
+    viewBox: '0 0 24 24',
+    paths: ['M2 19.5 8.9 7.1a3.55 3.55 0 0 1 6.2 0L22 19.5h-4.1l-4.6-8.4a1.5 1.5 0 0 0-2.6 0l-4.6 8.4z'],
   },
   cursor: {
     viewBox: '0 0 24 24',

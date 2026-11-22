@@ -11,7 +11,7 @@ import Svg, { G, Path } from 'react-native-svg';
 import { useTranslation } from 'react-i18next';
 import { Check, CircleCheck, CircleX, Clock, TriangleAlert } from 'lucide-react-native';
 import { REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_PROTOCOL_VERSION } from '@cindy/device-link';
-import { IMPORT_SOURCE_MARKS, IMPORT_SOURCE_NAMES, type ImportSourceKey } from '@cindy/maker-shared/import-source-marks';
+import { IMPORT_SOURCE_MARKS, IMPORT_SOURCE_NAMES, SESSION_IMPORT_ANTIGRAVITY_PRIMITIVE, type ImportSourceKey } from '@cindy/maker-shared/import-source-marks';
 import { PROVIDER_LOGO_PATHS } from '@cindy/model-providers/branding';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -23,6 +23,7 @@ import { CompanionSheet } from './CompanionSheet';
 
 const COLLECTION = 'session-import';
 const PRIMITIVE = 'session-import';
+const IMPORT_PRIMITIVES = [PRIMITIVE, SESSION_IMPORT_ANTIGRAVITY_PRIMITIVE];
 const CONFIRM_COUNT = 50;
 const CONFIRM_BYTES = 1024 * 1024 * 1024;
 const MAX_KEYS = 400;
@@ -47,6 +48,7 @@ export function ImportSourceMarkNative({ source, color, size = iconSize.md }: { 
   const mark = source === 'opencode' || source === 'deepseek'
     ? { viewBox: '0 0 24 24', paths: [PROVIDER_LOGO_PATHS[source]] }
     : IMPORT_SOURCE_MARKS[source];
+  if (!mark) return null;
   return <Svg accessible={false} width={size} height={size} viewBox={mark.viewBox}>
     <G fill={color} fillRule="evenodd" clipRule="evenodd">{mark.paths.map((d, i) => <Path key={i} d={d} />)}</G>
   </Svg>;
@@ -73,7 +75,7 @@ export function SessionImportSheet({ visible, onClose, onClosed, deviceId, devic
     await openLink(deviceId);
     const raw = await invoke(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{
       ref: { collectionId: COLLECTION, kind: 'import', id },
-      client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: [PRIMITIVE], locale: i18n.language },
+      client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: IMPORT_PRIMITIVES, locale: i18n.language },
     }]);
     return blockData(raw);
   }, [deviceId, invoke, openLink, i18n.language]);
@@ -142,7 +144,7 @@ export function SessionImportSheet({ visible, onClose, onClosed, deviceId, devic
     setBusy(true); setError(false);
     try {
       const keys = picked.map(c => c.key).slice(0, MAX_KEYS);
-      const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId: COLLECTION, actionId: 'import', input: { keys } }, i18n.language);
+      const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId: COLLECTION, actionId: 'import', input: { keys } }, i18n.language, IMPORT_PRIMITIVES);
       const data = response.result as JobData | undefined;
       if (alive.current && data?.kind === 'job') { setJob(data); setSelected(new Set()); setConfirming(false); }
     } catch {

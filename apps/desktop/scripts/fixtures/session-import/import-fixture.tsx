@@ -1,6 +1,6 @@
 import { forbid, mountPage, subscription } from '../../ui-page/harness';
 import { SessionImportSection } from '../../../src/renderer/components/settings/SessionImportSection';
-import type { ImportCandidate, ImportJobView, ImportScanResult, ImportSourceId } from '../../../src/shared/sessionImport';
+import { IMPORT_SOURCE_IDS, type ImportCandidate, type ImportJobView, type ImportScanResult, type ImportSourceId } from '../../../src/shared/sessionImport';
 
 const NOW = 1793250000000;
 const DAY = 86_400_000;
@@ -26,14 +26,17 @@ const CANDIDATES: ImportCandidate[] = [
   candidate('kimi', 5, '清洗重复的计费事件', 'billing-jobs', { missingDir: true }),
   candidate('gemini', 6, 'Add nightly export to S3', 'billing-jobs', { missingDir: true }),
   candidate('qwen', 7, '整理本周产品周会纪要', null),
+  candidate('antigravity', 9, 'Review Antigravity workspace changes', 'cindy'),
   candidate('deepseek', 8, 'Old session written by a newer DeepSeek Harness', null, { unsupportedVersion: '5' }),
 ];
 
 const SCAN: ImportScanResult = {
   candidates: CANDIDATES,
   hiddenCounts: { cindy: 220, temp: 12, internal: 41, imported: 3 },
-  sources: (['claude', 'codex', 'pi', 'opencode', 'gemini', 'cursor', 'qwen', 'kimi', 'deepseek'] as ImportSourceId[])
-    .map((id) => ({ id, label: id, count: CANDIDATES.filter((c) => c.source === id).length })),
+  sources: IMPORT_SOURCE_IDS.flatMap((id) => {
+    const count = CANDIDATES.filter((c) => c.source === id).length;
+    return count ? [{ id, label: id, count }] : [];
+  }),
   sourceErrors: [{ id: 'factory', message: 'permission denied' }],
   scannedAt: NOW,
 };

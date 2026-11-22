@@ -9,6 +9,7 @@ export const IMPORT_SOURCE_IDS = [
   'pi',
   'opencode',
   'gemini',
+  'antigravity',
   'cursor',
   'qwen',
   'kimi',
