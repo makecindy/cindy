@@ -194,9 +194,10 @@ export async function reconcileCommittedComposerDraft(
     guard();
     const documentKey = documentStorageKeyForSession(id);
     const textKey = storageKeyForSession(id);
-    const raw = await AsyncStorage.getItem(documentKey);
-    const text = await AsyncStorage.getItem(textKey);
+    const persisted = new Map(await AsyncStorage.multiGet([documentKey, textKey]));
     guard();
+    const raw = persisted.get(documentKey);
+    const text = persisted.get(textKey);
     const stored = raw ? parseStoredComposerDocument(JSON.parse(raw)) : null;
     if (raw && !stored) throw new Error('COMPOSER_DRAFT_INVALID');
     const memory = documentDrafts.get(id);
@@ -216,12 +217,11 @@ export async function reconcileCommittedComposerDraft(
       drafts.set(id, replacementText);
       cancelPendingPersist(id);
     }
-    if (replaceDocument) {
-      await AsyncStorage.setItem(documentKey, JSON.stringify(next));
-      guard();
-    }
-    if (text === beforeText) {
-      await AsyncStorage.setItem(textKey, replacementText);
+    const writes: [string, string][] = [];
+    if (replaceDocument) writes.push([documentKey, JSON.stringify(next)]);
+    if (text === beforeText) writes.push([textKey, replacementText]);
+    if (writes.length > 0) {
+      await AsyncStorage.multiSet(writes);
       guard();
     }
   }, true);

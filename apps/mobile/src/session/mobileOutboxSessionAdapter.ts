@@ -48,7 +48,9 @@ export interface OutboxSessionAccessDeps {
     options: { preSend(): void },
   ): Promise<unknown>;
   readSession(record: DurableOutboxRecord): Promise<RemoteSession>;
+  freshSession?(record: DurableOutboxRecord): RemoteSession | undefined;
   isForeground(): boolean;
+  canDeliverInBackground?(record: DurableOutboxRecord): boolean;
   canConnect(deviceId: string): boolean;
   isCreationHeld(sessionId: string): boolean;
   hasCreationTask(sessionId: string): boolean;
@@ -90,7 +92,7 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
     return read;
   };
   const canRun = (record: DurableOutboxRecord) =>
-    !record.chat && deps.isForeground() &&
+    !record.chat && (deps.isForeground() || deps.canDeliverInBackground?.(record) === true) &&
     (hidden(record) ||
       isDurableOutboxSettled(record) ||
       (!record.suspended &&
@@ -102,7 +104,7 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
   const sessionPolicy = (record: DurableOutboxRecord) =>
     cindyMakeOutboxPolicy(record, {
       knownSession: () => knownSession(record),
-      readSession: () => readSessionOnce(record),
+      readSession: async () => deps.freshSession?.(record) ?? await readSessionOnce(record),
       isCurrent: () => deps.isCurrent() && deps.getRecords().includes(record),
     });
   return { hidden, invokeOwned, readSessionOnce, canRun, sessionPolicy };

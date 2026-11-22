@@ -53,6 +53,8 @@ import { cacheOutboxHistory } from "./outboxHistoryCache";
 import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
 import type { DurableOutboxRecord } from "./durableOutbox";
+import { canDeliverNewSessionInBackground, endNewSessionBackgroundDelivery } from "./newSessionBackgroundDelivery";
+import { readFirstSendSession } from "./firstSendSessionSnapshot";
 import {
   canConnectOutboxPeer,
   createOutboxMessageLeases,
@@ -98,6 +100,10 @@ export function MobileOutboxBridge() {
     const needsReconciliation = (record: DurableOutboxRecord) =>
       outboxNeedsReconciliation(record,
         findRemoteHistoryView(record.deviceId, record.item.sessionId)?.isActive() === true);
+    const connectionEpochFor = (deviceId: string) =>
+      latest.current.link.getConnectionState?.(deviceId).connectionEpoch ?? latest.current.link.connectionEpoch;
+    const freshSession = (record: DurableOutboxRecord) =>
+      readFirstSendSession(record, connectionEpochFor(record.deviceId));
     const { hidden, invokeOwned, readSessionOnce, canRun, sessionPolicy } = createOutboxSessionAccess({
       getSessions: () => remoteSessionStore.getSessions(),
       getRecords: () => mobileDurableOutbox.getSnapshot(),
@@ -105,7 +111,9 @@ export function MobileOutboxBridge() {
       guard,
       invoke: (deviceId, channel, args, options) => latest.current.link.invoke(deviceId, channel, args, options),
       readSession: (record) => maker(record).getSession(record.item.sessionId),
+      freshSession,
       isForeground: () => AppState.currentState !== "background" && AppState.currentState !== "inactive",
+      canDeliverInBackground: canDeliverNewSessionInBackground,
       canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
       isCreationHeld: isDurableOutboxCreationHeld,
       hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null,
@@ -141,8 +149,7 @@ export function MobileOutboxBridge() {
     const knownClearBoundaries = new Map<string, { epoch: number; value: number | null }>();
     // What a host answered belongs to the connection it answered on: a host that
     // restarted or was replaced by an older build must be asked again.
-    const connectionEpochFor = (deviceId: string) =>
-      latest.current.link.getConnectionState?.(deviceId).connectionEpoch ?? latest.current.link.connectionEpoch;
+
     const learnProjection = (r: DurableOutboxRecord, projection: unknown) => {
       if (!projection || typeof projection !== 'object') return;
       const epoch = connectionEpochFor(r.deviceId);
@@ -208,7 +215,9 @@ export function MobileOutboxBridge() {
       },
       staleClearBoundary: (error) =>
         formatRemoteError(error).includes("REMOTE_OPTIMISTIC_INPUT_CLEARED"),
-      trace: (event, fields) => mobileDebugLog("debug", "device-link", event, fields),
+      trace: (event, fields) => mobileDebugLog("debug", "device-link", event, {
+        ...fields, appState: AppState.currentState,
+      }),
       session: (r) => maker(r).getSession(r.item.sessionId),
       applyProjection: (r, projection) => {
         guard();
@@ -223,8 +232,13 @@ export function MobileOutboxBridge() {
             epoch.remote,
           );
       },
-      prepare: async (r) => {
-        const session = await readSessionOnce(r);
+      readSessionForPreparation: (record) => freshSession(record) ? undefined : readSessionOnce(record),
+      prepare: async (r, prefetchedSession) => {
+        const createdSession = freshSession(r);
+        const session = createdSession ?? prefetchedSession ?? await readSessionOnce(r);
+        if (createdSession) mobileDebugLog("debug", "device-link", "send reused created session", {
+          client: r.item.clientId.slice(-8),
+        });
         guard();
         if (!session?.workingDir)
           throw new Error(i18n.t("session.screen.missingWorkingDir"));
@@ -323,6 +337,7 @@ export function MobileOutboxBridge() {
               : {}),
           },
         );
+        endNewSessionBackgroundDelivery(r);
         // 电脑已接收这条消息(离线时是重连后才送达):在已归档任务里发消息即取消归档。
         // 绑账号归属而不绑这条待发记录:消息对账后记录会被清走,取消归档不能随之失效。
         void unarchiveSessionAfterSend(

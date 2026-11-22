@@ -13,7 +13,7 @@ import {
   createDurableOutboxDelivery,
   type DeliveryProjection,
 } from "../session/durableOutboxDelivery";
-import type { QueuedRemoteMessage, RemoteMessage } from "../session/types";
+import type { QueuedRemoteMessage, RemoteMessage, RemoteSession } from "../session/types";
 import { appendOptimisticUserMessage, projectOptimisticUserMessages, type OptimisticUserMessage } from '../session/optimisticUserMessages';
 
 function deferred<T>() {
@@ -1283,6 +1283,35 @@ describe('known projection first send', () => {
     expect(deps.enqueue.mock.calls[1]?.[0]).toMatchObject({ clearBoundaryMs: 9, enqueueStarted: true });
     await vi.waitFor(() => expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned' }));
   });
+});
+
+// Unit: the first-send path previously waited for the projection before reading
+// the session. Hold the projection reply to verify the reads overlap, while the
+// existing ownership and clear-boundary checks still gate the actual enqueue.
+it.each([false, true])('overlaps first-send reads and respects owner loss (owner lost: %s)', async (ownerLost) => {
+  const { store, deps, deactivate } = await setup();
+  await store.add(message());
+  const pendingProjection = deferred<DeliveryProjection>();
+  deps.projection.mockReturnValueOnce(pendingProjection.promise);
+  const session = { id: 'session', workingDir: '/dialogue' } as RemoteSession;
+  const read = vi.fn(async () => session);
+  const run = createDurableOutboxDelivery({ ...deps, readSessionForPreparation: read }).run();
+  for (let n = 0; n < 40 && !deps.projection.mock.calls.length; n++) await Promise.resolve();
+  try {
+    expect(deps.projection).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledOnce();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  } finally {
+    if (ownerLost) deactivate();
+    pendingProjection.resolve({ ...projection('id-1'), clearBoundaryMs: 9 });
+    await run;
+  }
+  if (ownerLost) {
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  } else {
+    expect(deps.prepare).toHaveBeenCalledWith(expect.anything(), session);
+    expect(deps.enqueue).toHaveBeenCalledWith(expect.objectContaining({ clearBoundaryMs: 9, enqueueStarted: true }));
+  }
 });
 
 it('starts a newly added message while another task is still being delivered', async () => {

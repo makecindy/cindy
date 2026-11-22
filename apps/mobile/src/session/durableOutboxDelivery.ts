@@ -11,6 +11,7 @@ import {
 import type {
   InputProjection,
   QueuedRemoteMessage,
+  RemoteSession,
   RemoteSerializedAttachment,
 } from "./types";
 
@@ -34,7 +35,8 @@ export interface DurableOutboxDeliveryDeps {
   /** Phone-local timing diagnostics only; never receives message content. */
   trace?(event: string, fields: Record<string, number | string | boolean>): void;
   session(record: DurableOutboxRecord): Promise<{ id: string; status: string } | null>;
-  prepare(record: DurableOutboxRecord): Promise<QueuedRemoteMessage>;
+  readSessionForPreparation?(record: DurableOutboxRecord): Promise<RemoteSession> | undefined;
+  prepare(record: DurableOutboxRecord, session?: RemoteSession): Promise<QueuedRemoteMessage>;
   upload(
     record: DurableOutboxRecord,
     upload: DurableUpload,
@@ -129,13 +131,13 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       attempts.delete(id(record));
       requireProjection.delete(id(record));
     };
-    const finishHistory = async () => {
+    const finishHistory = async (alreadyCached = false) => {
       if (!current(record)) return;
       trace("send history confirmed", {
         client: record.item.clientId.slice(-8),
         clickToHistoryMs: Date.now() - record.createdAt,
       });
-      if (deps.cacheHistory && !await deps.cacheHistory(record)) {
+      if (!alreadyCached && deps.cacheHistory && !await deps.cacheHistory(record)) {
         // Even a legacy host has durably accepted this row. Retaining its local
         // bubble must not block later sends or make the old message retryable.
         if (current(record) && !record.historyConfirmed)
@@ -157,6 +159,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         if (!reconciled || !current(reconciled)) return;
         record = reconciled;
       }
+      stage('draftHandoff');
       // Persisted completion never re-enters delivery, even after missing files or lost host history.
       if (isDurableOutboxSettled(record)) return await finish();
       // Reentry may restore history without restoring the raw message window.
@@ -164,7 +167,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       // send; do not keep its pending bubble behind projection/history RPCs.
       if (hasDurableOwnership(record) && !record.cancelRequested && deps.cacheHistory
         && await deps.cacheHistory(record)) {
-        if (current(record)) await finish();
+        await finishHistory(true);
         return;
       }
       if (!current(record)) return;
@@ -172,7 +175,16 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       // delivery support and the task's clear boundary are already known, the
       // enqueue itself is the only round trip; the host still enforces the
       // boundary and a stale one is retried once through the projection below.
-      const knownProjection = neverSent(record) ? deps.knownProjection?.(record) : undefined;
+      const firstAttempt = neverSent(record);
+      const knownProjection = firstAttempt ? deps.knownProjection?.(record) : undefined;
+      // A fresh input with no staged files or resource binding will need both
+      // reads. Overlap them, then apply the projection and check ownership
+      // before using the session row. Recovery and uploads keep their order.
+      const sessionRead = firstAttempt && !knownProjection && record.uploads.length === 0 && !record.resourceRef
+        ? deps.readSessionForPreparation?.(record)
+        : undefined;
+      // The projection may end the attempt before preparation consumes the read.
+      void sessionRead?.catch(() => undefined);
       let projection: DeliveryProjection;
       if (knownProjection) projection = knownProjection;
       else try {
@@ -329,7 +341,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
             if (!retained) deps.discardUploads(record, [attachment]);
           }
         }
-        const prepared = await deps.prepare(record);
+        const session = sessionRead ? await sessionRead : undefined;
+        if (!current(record)) return;
+        const prepared = await deps.prepare(record, session);
         if (!current(record)) return;
         await update({
           prepared: {
@@ -392,6 +406,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       trace("send accepted", {
         client: record.item.clientId.slice(-8),
         knownProjection: knownProjection !== undefined,
+        parallelSessionRead: sessionRead !== undefined,
         durable: durableEnqueue,
         clickToAcceptedMs: Date.now() - record.createdAt,
         deliverMs: Date.now() - startedAt,

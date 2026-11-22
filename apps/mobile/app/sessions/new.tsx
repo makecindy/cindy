@@ -54,6 +54,7 @@ import { modelNeedsReselection } from '@/session/modelReselection';
 import { completePrecreatedWorktreeRecovery } from '@/session/completePrecreatedWorktreeRecovery';
 
 import { mobileDurableOutbox, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
+import { rememberFirstSendSession } from '@/session/firstSendSessionSnapshot';
 
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
@@ -243,6 +244,7 @@ import {
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { beginNewSessionBackgroundDelivery } from '@/session/newSessionBackgroundDelivery';
 import {
   applyPluginEnginePick,
   applyRemoteAgentPick,
@@ -568,8 +570,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
   const {
     getPresenceAvailability,
+    getConnectionState,
     invoke,
     openLink,
+    holdBackgroundConnection,
     subscribe,
     unsubscribe,
     onAgentsChanged,
@@ -4125,6 +4129,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // 建出重复会话(codex review P2)。交接成功后锁保持到组件销毁;「返回编辑」
     // 回来的是新 mount,creatingRef 天然复位。
     let handedOff = false;
+    let endBackgroundDelivery: (() => void) | undefined;
     const creationLeases: { precreated: (() => void) | null; durable: (() => void) | null;
     } = { precreated: null, durable: null };
     const accountIdAtCreate = auth.user?.id?.trim() ?? '';
@@ -4333,6 +4338,13 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         if (!ensureDeviceAlive()) return;
         applyGuard(guardResult);
       }
+      if (useDurableCreation && effectiveDraft.workspaceKind === 'dialogue'
+        && !effectiveDraft.agentDeviceId && !effectiveDraft.pluginEngine
+        && !collabDraft && sendAttachments.length === 0) {
+        endBackgroundDelivery = beginNewSessionBackgroundDelivery(
+          authOwnerAtCreate, deviceIdSnapshot, sessionId, firstMessageClientId, holdBackgroundConnection,
+        );
+      }
       startNewSessionCreation({
         startedAt,
         sessionId,
@@ -4375,13 +4387,19 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         authGateHint: agentAuthGateHint(agentKindSnapshot),
         onUnauthenticated: () => evictDeviceProviders(deviceIdSnapshot),
         isCurrentOwner,
+        endBackgroundDelivery,
         transport: {
           maker,
-          handoffFirstMessage: useDurableCreation ? async (item) => {
+          getConnectionEpoch: () => getConnectionState?.(deviceIdSnapshot).connectionEpoch,
+          handoffFirstMessage: useDurableCreation ? async (item, snapshot) => {
             if (!isCurrentOwner()) throw new Error('OUTBOX_OWNER_CHANGED');
             const record = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sessionId && r.item.clientId === firstMessageClientId);
             if (!record) throw new Error('OUTBOX_STALE_WRITE');
-            await mobileDurableOutbox.update(record, { template: item, state: 'queued', suspended: false, error: undefined });
+            const queued = await mobileDurableOutbox.update(record, {
+              template: item, state: 'queued', suspended: false, error: undefined,
+            });
+            // The live creation task still holds delivery until the handoff returns.
+            if (snapshot && isCurrentOwner()) rememberFirstSendSession(queued, snapshot);
           } : undefined,
           openLink,
           subscribe,
@@ -4408,10 +4426,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // 首条消息已交接:收起输入框与软键盘(与任务页发送同口径),进入任务页时不带着键盘。
       setComposerVoiceHoldArmed(false);
       firstMessageInputRef.current?.blur();
-      router.replace({
-        pathname: '/sessions/[sessionId]',
-        params: { sessionId, deviceId: deviceIdSnapshot, deviceName: selectedDeviceName },
+      if (useDurableCreation) mobileDebugLog('debug', 'new-session', 'creation handed off', {
+        client: firstMessageClientId.slice(-8), elapsedMs: Date.now() - startedAt,
       });
+      if (navigation.isFocused()) {
+        router.replace({
+          pathname: '/sessions/[sessionId]',
+          params: { sessionId, deviceId: deviceIdSnapshot, deviceName: selectedDeviceName },
+        });
+      }
     } catch (err) {
       if (!isCurrentOwner()) return;
       // agent 未鉴权(电脑端没配 key / 没登录)是新任务失败的高频原因。
@@ -4422,6 +4445,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       creationLeases.precreated?.();
       creationLeases.durable?.();
       if (!handedOff) {
+        endBackgroundDelivery?.();
         creatingRef.current = false;
         setCreating(false);
         setCreateStartedAt(null);
@@ -4447,8 +4471,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     flushRecoveredDraft,
     leaveForeignOutboxRecovery,
     getPresenceAvailability,
+    getConnectionState,
     maker,
     openLink,
+    holdBackgroundConnection,
+    navigation,
     planModeCapability,
     planModeDraftOn,
     router,

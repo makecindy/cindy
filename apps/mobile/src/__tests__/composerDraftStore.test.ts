@@ -17,6 +17,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
       store.delete(key);
     }),
     getAllKeys: vi.fn(async () => [...store.keys()]),
+    multiGet: vi.fn(async (keys: readonly string[]) =>
+      keys.map((key): [string, string | null] => [key, store.get(key) ?? null])),
+    multiSet: vi.fn(async (entries: readonly [string, string][]) => {
+      for (const [key, value] of entries) store.set(key, value);
+    }),
     multiRemove: vi.fn(async (keys: readonly string[]) => {
       for (const key of keys) store.delete(key);
     }),
@@ -42,7 +47,7 @@ describe('composerDraftStore', () => {
     const before = textComposerDocument('sent');
     store.set(__testing.documentStorageKeyForSession('s1'), JSON.stringify(before));
     store.set(__testing.storageKeyForSession('s1'), 'sent');
-    vi.mocked(storage.setItem).mockRejectedValueOnce(new Error('disk busy'));
+    vi.mocked(storage.multiSet).mockRejectedValueOnce(new Error('disk busy'));
     await expect(reconcileCommittedComposerDraft('s1', { before, after: emptyComposerDocument() }, () => {})).rejects.toThrow('disk busy');
     await reconcileCommittedComposerDraft('s1', { before, after: emptyComposerDocument() }, () => {});
     expect(store.get(__testing.storageKeyForSession('s1'))).toBe('');

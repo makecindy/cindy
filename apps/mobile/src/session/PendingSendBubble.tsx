@@ -480,7 +480,7 @@ export function PendingSendBubble({
         </View>
       ) : null}
       <View style={styles.bubbleRow}>
-        {!queued ? <Pressable
+        {!queued && !(spinning && item.firstSendAccepted) ? <Pressable
           accessibilityHint={item.hint ?? undefined}
           accessibilityLabel={item.source
             ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })

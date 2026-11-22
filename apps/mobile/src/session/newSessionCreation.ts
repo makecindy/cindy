@@ -57,6 +57,7 @@ import { isExplicitRemoteNotFoundError } from './newSessionWorktree';
 import { mergeAttachmentsWithinLimit } from './attachments';
 import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachmentUpload';
 import { noteLocalSend } from './localSendMotion';
+import type { FirstSendSessionSnapshot } from './firstSendSessionSnapshot';
 import {
   forgetPendingPrecreatedWorktree,
   parseDiscardPrecreatedAck,
@@ -73,7 +74,8 @@ export type NewSessionCreationStatus = 'running' | 'create-failed' | 'enqueue-fa
 
 export interface NewSessionCreationTransport {
   maker: MobileMakerTransport;
-  handoffFirstMessage?: (item: QueuedRemoteMessage) => Promise<void>;
+  handoffFirstMessage?: (item: QueuedRemoteMessage, snapshot?: FirstSendSessionSnapshot) => Promise<void>;
+  getConnectionEpoch?: () => number | undefined;
   openLink: (deviceId: string) => Promise<unknown>;
   subscribe: (owner: string, deviceId: string, topics: string[]) => Promise<void>;
   /** 手机控制端在首条消息越过 device-link 前读取各引用来源的可信历史快照。 */
@@ -133,6 +135,7 @@ export interface NewSessionCreationParams {
   revalidateDraftAfterAuth?: (fresh: DeviceProvidersPayload) => Promise<Partial<NewSessionDraft> | null>;
   /** Account-generation fence captured before the create flow starts. */
   isCurrentOwner?: () => boolean;
+  endBackgroundDelivery?: () => void;
   transport: NewSessionCreationTransport;
   /** 退避 / 轮询的 sleep 注入点(单测替换为立即返回;对齐 resolveInteractionResilient 的 opts.sleep 模式)。 */
   sleep?: (ms: number) => Promise<void>;
@@ -406,6 +409,7 @@ export function retryNewSessionCreation(sessionId: string): void {
 export function dismissNewSessionCreation(sessionId: string, opts: { removeSyntheticRow?: boolean } = {}): void {
   const task = tasks.get(sessionId);
   if (!task) return;
+  task.params.endBackgroundDelivery?.();
   tasks.delete(sessionId);
   if (opts.removeSyntheticRow) {
     remoteSessionStore.applySessionPatch(task.deviceId, sessionId, { status: 'deleted' });
@@ -912,6 +916,7 @@ export function completeNewSessionDurableEdit(sessionId: string, deviceId: strin
 // ---------------------------------------------------------------------------
 
 function failTask(task: InternalTask, status: 'create-failed' | 'enqueue-failed', error: string): void {
+  task.params.endBackgroundDelivery?.();
   // task 可能已被 dismiss(用户返回编辑)——不要复活。
   if (!tasks.has(task.sessionId)) return;
   if (!isTaskOwnerCurrent(task)) {
@@ -1323,7 +1328,9 @@ async function runPipeline(task: InternalTask): Promise<void> {
     const creationDraft = params.transport.handoffFirstMessage ? finalDraft
       : await resolveNewSessionSkillDraft(finalDraft, params.deviceId, maker);
     assertTaskOwnerCurrent(task);
+    const createEpoch = params.transport.getConnectionEpoch?.();
     const createOutcome = await createSessionIdempotent(task, creationDraft);
+    const createdAt = Date.now();
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
     // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
     // 修正版:否则 getSession 弱网失败时 sessionForQueue 按旧 finalDraft 合成,
@@ -1425,7 +1432,14 @@ async function runPipeline(task: InternalTask): Promise<void> {
     ), task.firstMessageSessionRefs);
     if (params.transport.handoffFirstMessage) {
       try {
-        await params.transport.handoffFirstMessage(queuedDraft);
+        const snapshot = freshSession && freshSession === createOutcome.session
+          && createEpoch !== undefined && params.transport.getConnectionEpoch?.() === createEpoch
+          && effectiveFinalDraft.workspaceKind === 'dialogue' && !task.precreatedWorktree
+          && !params.orcaEnable && !effectiveFinalDraft.agentDeviceId && !effectiveFinalDraft.pluginEngine
+          && params.attachments.length === 0
+          ? { session: freshSession, connectionEpoch: createEpoch, createdAt }
+          : undefined;
+        await params.transport.handoffFirstMessage(queuedDraft, snapshot);
         assertTaskOwnerCurrent(task);
         remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { pendingLocalCreation: false });
         finishTask(task);

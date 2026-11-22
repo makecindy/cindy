@@ -64,7 +64,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { isDurableOutboxHandedOff, isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -4521,7 +4521,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : null;
     const sending = new Set(sendingQueueClientIds);
     for (const record of durableOutboxRecords) {
-      if (record.item.sessionId === sessionId && record.deviceId === deviceId && record.state !== 'host-owned') sending.add(record.item.clientId);
+      if (record.item.sessionId !== sessionId || record.deviceId !== deviceId) continue;
+      // The first bubble remains a local send presentation until history arrives,
+      // even if the computer briefly exposes its input in the queue.
+      if (record.state !== 'host-owned' || (record.creation && !record.cancelRequested)) {
+        sending.add(record.item.clientId);
+      }
     }
     if (!creationPendingClientId || sending.has(creationPendingClientId)) {
       return sending;
@@ -6372,6 +6377,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         queue: inputProjection.pendingQueue,
         settling: settlingItemsForRender,
         outbox: outboxDisplayItems,
+        acceptedFirstSendClientIds: new Set(durableOutboxRecords
+          .filter((record) => record.deviceId === deviceId && record.item.sessionId === sessionId
+            && record.creation && !record.cancelRequested && isDurableOutboxHandedOff(record))
+          .map((record) => record.item.clientId)),
         hiddenClientIds: queueHiddenClientIds,
         sendingClientIds: sendingQueueBadgeClientIds,
         editingClientId: queueEditing?.clientId ?? null,
@@ -6390,6 +6399,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       livePendingSendClientIds,
       outboxItems,
       outboxDisplayItems,
+      durableOutboxRecords,
+      deviceId,
       outboxWaitingFor,
       queueBusy,
       queueEditing?.clientId,

@@ -2346,11 +2346,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const getConnectionState = useCallback((deviceId: string): DeviceLinkConnectionState => {
     const client = clientRef.current, source = client?.connectionFor(deviceId);
     const state = source && source !== client ? { status: source.getStatus(), connectionEpoch: connectionEpochFor(deviceId), connectionIssue: source.getConnectionIssue() }
-      : { status, connectionEpoch, connectionIssue };
+      : { status, connectionEpoch: connectionEpochFor(deviceId), connectionIssue };
     const retained = clientRef.current?.connectionFor(deviceId).peekOfflineDirectPath(deviceId) === true
       && !revokedDevicesStore.has(deviceId) && presenceAvailableByDeviceRef.current.get(deviceId) !== false;
     return retained ? { ...state, status: 'online', connectionIssue: null, signalingStatus: state.status, usingRetainedDirect: true } : state;
-  }, [connectionEpochFor, status, connectionEpoch, connectionIssue, presenceVersion]);
+  }, [connectionEpochFor, status, connectionIssue, presenceVersion]);
 
   const value = useMemo<DeviceLinkContextValue>(() => ({
     beginBackgroundTransition,

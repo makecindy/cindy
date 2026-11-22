@@ -66,6 +66,7 @@ import {
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { takeOrcaStartFailure } from '@/session/orcaTeam';
 import { sessionFromCreateResult, type NewSessionDraft } from '@/session/newSession';
+import { readFirstSendSession, rememberFirstSendSession, type FirstSendSessionSnapshot } from '@/session/firstSendSessionSnapshot';
 import {
   __testing as recoveryTesting,
   listPendingPrecreatedWorktrees,
@@ -1730,12 +1731,50 @@ describe('newSessionCreation pipeline', () => {
     params.transport.handoffFirstMessage = handoff;
     startNewSessionCreation(params);
     await flushPipeline();
-    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }));
+    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }), undefined);
     expect(maker.input.enqueue).not.toHaveBeenCalled();
     expect(maker.setPlanMode).not.toHaveBeenCalled();
     expect(getNewSessionCreationTask('durable-first')).toBeNull();
     expect(remoteSessionStore.getSessions().find((session) => session.id === 'durable-first')?.pendingLocalCreation).toBe(false);
   });
+  // A create reply removes a remote read only for that exact ledger revision and link.
+  it.each([false, true])('reuses the prepared dialogue row when reconnecting=%s', async (reconnecting) => {
+    const sessionId = 'prepared-first';
+    const draft = { ...DRAFT, workspaceKind: 'dialogue' as const, workingDir: '' };
+    const session = sessionFromCreateResult({ sessionId, workDir: '/dialogue/first' }, draft);
+    let epoch = 4;
+    const maker = makeMaker({
+      createSession: vi.fn(async () => {
+        if (reconnecting) epoch += 1;
+        return { sessionId, workDir: session.workingDir, session };
+      }),
+    });
+    const params = makeParams(sessionId, maker, { draft });
+    const record: DurableOutboxRecord = { ...recoveryOutboxRecord(sessionId), state: 'queued' };
+    params.transport.getConnectionEpoch = () => epoch;
+    const handoff = vi.fn(async (_item, snapshot?: FirstSendSessionSnapshot) => {
+      if (snapshot) rememberFirstSendSession(record, snapshot);
+    });
+    params.transport.handoffFirstMessage = handoff;
+    startNewSessionCreation(params);
+    await flushPipeline();
+
+    expect(handoff).toHaveBeenCalledTimes(1);
+    expect(maker.getSession).not.toHaveBeenCalled();
+    expect(readFirstSendSession(record, epoch)).toBe(reconnecting ? undefined : session);
+    expect(readFirstSendSession(record, epoch + 1)).toBeUndefined();
+    expect(readFirstSendSession({ ...record }, epoch)).toBeUndefined();
+    const snapshot = handoff.mock.calls[0]?.[1];
+    if (snapshot) {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(snapshot.createdAt + 5_000);
+      try {
+        expect(readFirstSendSession(record, epoch)).toBeUndefined();
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
   it('keeps the creation task recoverable when saving the first-message handoff fails', async () => {
     const maker = makeMaker(); const params = makeParams('durable-first-failed', maker, { firstMessageClientId: 'saved-id' });
     params.transport.handoffFirstMessage = async () => { throw new Error('disk full'); };

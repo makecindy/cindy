@@ -123,6 +123,14 @@ function touch(type: 'Start' | 'Move' | 'End' | 'Cancel', x = 0, y = 0, count = 
 function flush() {
   act(() => { for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); } });
 }
+it('hides the spinner badge after the first send is accepted while keeping its bubble', () => {
+  show({ phase: 'settling', queueIndex: null, actions: null });
+  expect(host.querySelector('[data-testid="pendingSend.badge.settling"]')).not.toBeNull();
+  show({ phase: 'settling', queueIndex: null, actions: null, firstSendAccepted: true });
+  expect(host.querySelector('[data-testid="pendingSend.badge.settling"]')).toBeNull();
+  expect(host.querySelector('[data-testid="pendingSend.bubble.a"]')).not.toBeNull();
+});
+
 it.each([null, 'a'])('toggles the same message for selection %s, allowing finger jitter', (selected) => {
   show({}, selected); touch('Start'); touch('Move', 3, 2); touch('End', 3, 2);
   expect(select).not.toHaveBeenCalled(); flush(); flush();

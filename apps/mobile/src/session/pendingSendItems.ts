@@ -90,6 +90,7 @@ export interface MobilePendingSendItem {
   /** Structured quote / pasted-text / Slash atoms used by the optimistic renderer. */
   sentInlineTokens: SentInlineToken[];
   phase: MobilePendingSendPhase;
+  firstSendAccepted?: boolean;
   /** 队列序号(从 1 起,用于无障碍播报);不在队列里的条目为 null。 */
   queueIndex: number | null;
   thumbs: MobileOutboxThumb[];
@@ -365,6 +366,7 @@ export interface BuildPendingSendItemsInput {
   settling: readonly QueuedRemoteMessage[];
   /** 本地待发条目(附件上传中 / enqueue 在途或失败)。 */
   outbox: readonly MobileOutboxDisplayItem[];
+  acceptedFirstSendClientIds?: ReadonlySet<string>;
   /** 已回流进消息流的 clientId:正式消息已在流里,气泡不再渲染(避免双显)。 */
   hiddenClientIds: ReadonlySet<string>;
   /** enqueue RPC 在途的 clientId(徽标转圈,不谎报「已入队」)。 */
@@ -423,6 +425,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
         slashCommandRanges: item.chatMessage.slashCommandRanges,
       }),
       phase,
+      firstSendAccepted: input.acceptedFirstSendClientIds?.has(item.clientId),
       queueIndex,
       thumbs: attachments.thumbs,
       fileCount: attachments.fileCount,
@@ -467,6 +470,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       text: item.quotesEncoded ? stripChatQuoteMarkerLines(item.text) : item.text,
       sentInlineTokens: buildPendingSentInlineTokens(item),
       phase: item.failed ? 'failed' : waitingFor ? 'waiting' : uploadsPending ? 'uploading' : 'sending',
+      firstSendAccepted: input.acceptedFirstSendClientIds?.has(item.clientId),
       ...(waitingFor ? { waitingFor } : {}),
       ...(item.sentAt !== undefined ? { sentAt: item.sentAt } : {}),
       queueIndex: null,
