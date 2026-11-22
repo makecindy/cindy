@@ -307,6 +307,8 @@ MUTANTS = [
      "if fin && stream != DEFAULT_STREAM {", "if false && fin && stream != DEFAULT_STREAM {"),
     ("流：探测时不补发额度", "src/connection.rs",
      "                        state.grant_repeats = state.grant_repeats.max(1);\n", ""),
+    ("流：回探测的确认只带两条流的额度", "src/connection.rs",
+     "                    self.grant_all = true;\n", ""),
     ("流：开流数量不设限", "src/connection.rs",
      "self.recv_streams.contains_key(&header.stream) || self.recv_streams.len() < self.config.max_streams as usize", "true"),
     ("流：发送不看额度", "src/connection.rs",

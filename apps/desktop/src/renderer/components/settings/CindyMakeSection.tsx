@@ -308,8 +308,8 @@ export function CindyMakeSection() {
             : 'settings.cindyMake.description',
         )}
       />
-      {/* 页面标题以下的内容保持原来 18px 的节奏。 */}
-      <div className="flex flex-col gap-[18px]">
+      {/* 页面标题以下的内容间距 16px（gap-4）；原 18px 按 2026-11-22 写死值裁决收到刻度。 */}
+      <div className="flex flex-col gap-4">
         {createOpen && <CindyMakeCreateDialog onOpenChange={setCreateOpen} />}
         <div
           role="tablist"
@@ -370,7 +370,7 @@ export function CindyMakeSection() {
           aria-labelledby={tabId + '-environment-tab'}
           hidden={activeTab !== 'environment'}
         >
-          <div className="flex flex-col gap-[18px]">
+          <div className="flex flex-col gap-4">
             {import.meta.env.DEV && (
               <SettingsCard>
                 <SettingsRow
@@ -445,7 +445,7 @@ export function CindyMakeSection() {
           aria-labelledby={tabId + '-versions-tab'}
           hidden={activeTab !== 'versions'}
         >
-          <div className="flex flex-col gap-[18px]">
+          <div className="flex flex-col gap-4">
             <Button className="self-start" onClick={() => setCreateOpen(true)}>
               {t('settings.cindyMake.create.title')}
             </Button>

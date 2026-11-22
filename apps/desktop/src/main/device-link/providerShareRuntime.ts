@@ -75,7 +75,6 @@ import { isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getGatewayModelPricing, getModelPriceQuote } from '../usage/modelPricing.js';
 import {
   getReferenceModelPricing,
@@ -708,7 +707,7 @@ function perTurnAverageMoney(row: ProviderShareUsageEstimateRow, price: ModelPri
     outputTokens: row.outputTokens / turns,
     cacheReadTokens: row.cacheReadTokens / turns,
     cacheCreateTokens: row.cacheCreateTokens / turns,
-  }, price, currentLedgerCurrency());
+  }, price);
   return money && { amount: money.amount * turns, currency: money.currency };
 }
 

@@ -400,6 +400,7 @@ export class SendStream {
     this.queued = 0;
     this.finishing = true;
     this.finished = true;
+    this.connection.sendStreams.delete(this.id);
     this.connection.endpoint.schedule();
     return Math.max(0, dropped) + local;
   }
@@ -441,6 +442,9 @@ export class SendStream {
     if (this.queue.length === 0 && this.finishing && !this.finished) {
       this.finished = core.conn_finish(this.connection.id, this.id) === 1;
     }
+    // 交完了：这里再没有它的事（进度、缓冲和放弃都按流号直接问核心），不再留在连接的表里。会话一条大消息一条流，
+    // 长连着的连接上流越来越多，每一轮都要过一遍这张表（2026-11-22）。
+    if (this.finished && this.queue.length === 0) this.connection.sendStreams.delete(this.id);
     return moved;
   }
 }

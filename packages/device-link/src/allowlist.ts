@@ -51,7 +51,7 @@ import {
   COMPANION_CLOUD_MERGE_TIMEOUT_MS,
   COMPANION_CLOUD_TARGETS_CHANNEL,
 } from './companionCloud.js';
-import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
+import { TASK_ACTIVITY_SNAPSHOT, SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -504,6 +504,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'notification:clear-session-attention',
   // Completed-card action, guarded by an owner-issued token before any mutation.
   // Old hosts reject this channel; callers must not fall back to unguarded writes.
+  TASK_ACTIVITY_SNAPSHOT,
   'agent-island:completion-action',
   // —— Project automation ——
   'maker:project-automation:reconcile',
@@ -915,6 +916,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'local-db:sessions:created',
   'local-db:task-tags:changed',
   'local-db:sessions:patched',
+  TASK_ACTIVITY_SNAPSHOT,
   SESSION_ACTIVITY_CHANNEL,
   SESSION_SYNC_CHANNEL,
   'local-db:messages:created',

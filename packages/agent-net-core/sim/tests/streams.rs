@@ -836,6 +836,47 @@ fn lost_credit_is_sent_again() {
     assert_eq!(read, total, "at {}us dead={}", pair.now, pair.a.is_dead());
 }
 
+/// 一个确认平时只带两条流的额度；对端等额度发探测时，这一端把每条流都标成要重发。编号靠后的一条流最初那几份额度丢了以后，
+/// 回探测的确认要把它也带上，否则每次都是编号最小的两条，它一直停在初始的 128 个分片上（2026-11-22：会话 v2 的正文流是
+/// 一条连接的第 6 条流，手机轮询慢一点就停在 160 KB）。
+#[test]
+fn a_later_stream_gets_its_lost_credit_back() {
+    let config = upgraded_config();
+    let clean = path(100_000_000, 5_000);
+    let mut pair = Pair::new(&config, clean.clone(), clean.clone(), 1);
+    // 先开着的几条流（像会话的数据、控制和三条通道），各发一点、读走，最初的额度都送到了。
+    let early: Vec<u32> = (0..5).map(|_| pair.a.open_stream(Priority::Normal).unwrap()).collect();
+    for &stream in &early {
+        assert_eq!(pair.a.send_stream(pair.now, stream, &[1u8; 100]), 100);
+    }
+    while pair.now < 200_000 {
+        for &stream in &early {
+            drain(&mut pair.b, pair.now, stream);
+        }
+        pair.advance();
+    }
+    // 再开一条流发 1 MiB；开头 100 毫秒回来的确认全丢，新流最初那几份额度跟着丢了。
+    pair.to_a = Link::new(LinkProfile { loss: 1.0, ..clean.clone() }, 7);
+    let (late, lossy_until) = (pair.a.open_stream(Priority::Normal).unwrap(), pair.now + 100_000);
+    let total = 1 << 20;
+    let (mut written, mut read, mut restored) = (0, 0, false);
+    let chunk = [9u8; 4096];
+    while read < total && pair.now < 30_000_000 && !pair.a.is_dead() {
+        if !restored && pair.now >= lossy_until {
+            pair.to_a = Link::new(clean.clone(), 7);
+            restored = true;
+        }
+        if written < total {
+            written += pair.a.send_stream(pair.now, late, &chunk[..chunk.len().min(total - written)]);
+        }
+        read += drain(&mut pair.b, pair.now, late);
+        pair.advance();
+    }
+    assert_eq!(read, total, "后开的流停在 {read} 字节，at {}us", pair.now);
+    // 确认恢复后第一个探测就补上（实测恢复后 0.42 秒传完；只靠逐个确认轮着带是 1.36 秒）。
+    assert!(pair.now < lossy_until + 1_000_000, "确认恢复 {}us 后才传完", pair.now - lossy_until);
+}
+
 /// 一条流不管发多少，只在开头带一次流头。单流场景的线上开销不能因为多路流变大。
 #[test]
 fn a_lone_stream_does_not_repeat_its_header() {
