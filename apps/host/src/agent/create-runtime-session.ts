@@ -14,8 +14,24 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../deskt
 import { ensureDialogueWorkspaceDir } from '../../../desktop/src/main/localDb/dialogueWorkspace.js';
 import type { LocalRouteAdmissionOpts } from '../../../desktop/src/main/maker-ipc/localRouteAdmission.ts';
 import { readHostCreateSessionOpts } from '../create-session-request.js';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
+import { storedSessionOptions } from './input-queue.mjs';
 
 const sameDir = (a?: string | null, b?: string | null) => (a ? path.resolve(a) : '') === (b ? path.resolve(b) : '');
+
+/** The run parameters of a stored task row (the shape storedSessionOptions reads). */
+export interface StoredTaskRow {
+  status: string;
+  workingDir: string | null;
+  agentKind: string;
+  model: string | null;
+  effort: string | null;
+  permissionMode: string | null;
+  providerId: string | null;
+  fastMode: boolean | 'ultrafast' | null;
+  planModeEnabled: boolean | null;
+  sdkSessionId: string | null;
+}
 
 export interface HostRuntimeSessionCreatePorts {
   serverDeps: { createSession(input: Record<string, unknown>): Promise<{ id: string }> };
@@ -24,7 +40,7 @@ export interface HostRuntimeSessionCreatePorts {
   assertProviderExecutionSupported(id: string, providerId?: string | null): void;
   admitLocalRoute(opts: LocalRouteAdmissionOpts): Promise<void>;
   /** The stored task row of a caller-provided id, or null when no such row exists. */
-  readStoredSession(id: string): Promise<{ status: string; workingDir: string | null } | null>;
+  readStoredSession(id: string): Promise<StoredTaskRow | null>;
 }
 
 export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePorts, input: unknown) {
@@ -48,9 +64,9 @@ export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePo
   // exists: start its runtime again instead of failing the insert on sessions.id.
   const stored = opts.id ? await readStoredSession(opts.id) : null;
   if (stored && (stored.status !== 'active' || sameDir(stored.workingDir, opts.workingDir) === false)) {
-    throw new Error('[PRECONDITION_FAILED] This task id already belongs to a different task');
+    throwIpcError('PRECONDITION_FAILED', 'This task id already belongs to a different task');
   }
-  if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) throw new Error('Host account changed');
+  if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'Host account changed');
   const row = stored
     ? { id: opts.id as string }
     : await serverDeps.createSession({
@@ -62,7 +78,11 @@ export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePo
     });
   const agentGraph = getAgentGraph();
   if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending() || !agentGraph) throw new Error('Host account changed');
-  const session = await agentGraph.maker.createSession({ ...opts, id: row.id });
+  // A retried id starts from its stored row, as send and restore do (input-queue.mjs storedSessionOptions):
+  // without the stored sdkSessionId, a runtime released since then would start a new native
+  // conversation and the task would lose its history.
+  const startOpts = stored ? { ...opts, ...storedSessionOptions(stored), id: row.id } : { ...opts, id: row.id };
+  const session = await agentGraph.maker.createSession(startOpts);
   if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) throw new Error('Host account changed');
   return { sessionId: session.id, agentKind: session.agentKind, workDir: session.workDir,
     capabilities: session.capabilities, usedProjectContext: false };

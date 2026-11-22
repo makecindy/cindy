@@ -18,7 +18,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 
 import { ipcMain as ipcMainType, type IpcMain, shell } from 'electron';
 // Bind the Desktop platform ports before any Worktree operation runs.
-import './desktopWorktreePorts.js';
+import './WorktreeManagerPorts.desktop.js';
 import * as WorktreeManager from './WorktreeManager';
 import * as worktreeStore from './worktreeStore';
 import { getWorktreeRestoreStatus, restoreWorktreeForSession } from './restore';

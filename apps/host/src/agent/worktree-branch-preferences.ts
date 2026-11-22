@@ -1,7 +1,7 @@
 import path from 'node:path';
-import { createOverrideSettingsFile } from '../../../desktop/src/main/maker-host/override-settings-file.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
+import { createAsyncJsonSettings } from './async-json-settings.js';
 
 export interface NewMakerWorktreeBranchPreferenceSnapshot {
   baseRepo: string;
@@ -17,9 +17,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-const store = createOverrideSettingsFile<StoreShape>({
+const store = createAsyncJsonSettings<StoreShape>({
   filePath: () => path.join(getUserDataDir(), 'new-maker-worktree-branch-preferences.json'),
-  defaults: { preferences: {} },
+  defaults: () => ({ preferences: {} }),
   normalize(raw) {
     const preferences: StoreShape['preferences'] = {};
     if (!isRecord(raw) || !isRecord(raw.preferences)) return { preferences };
@@ -43,23 +43,24 @@ function canonicalize(baseRepo: string): string {
   return path.resolve(baseRepo.trim());
 }
 
-export function getNewMakerWorktreeBranchPreference(
+export async function getNewMakerWorktreeBranchPreference(
   baseRepo: string,
-): NewMakerWorktreeBranchPreferenceSnapshot | null {
-  return store.read().preferences[canonicalize(baseRepo)] ?? null;
+): Promise<NewMakerWorktreeBranchPreferenceSnapshot | null> {
+  return (await store.read()).preferences[canonicalize(baseRepo)] ?? null;
 }
 
 export function applyNewMakerWorktreeBranchPreference(input: {
   baseRepo: string;
   sourceBranch: string;
-}): NewMakerWorktreeBranchPreferenceSnapshot {
+}): Promise<NewMakerWorktreeBranchPreferenceSnapshot> {
   const baseRepo = canonicalize(input.baseRepo);
-  const current = getNewMakerWorktreeBranchPreference(baseRepo);
-  const snapshot: NewMakerWorktreeBranchPreferenceSnapshot = {
-    baseRepo,
-    sourceBranch: input.sourceBranch.trim(),
-    revision: (current?.revision ?? 0) + 1,
-  };
-  store.writePatch({ preferences: { ...store.read().preferences, [baseRepo]: snapshot } });
-  return snapshot;
+  // Read and revision bump inside one ordered update, so concurrent writes never reuse a revision.
+  return store.update(current => {
+    const snapshot: NewMakerWorktreeBranchPreferenceSnapshot = {
+      baseRepo,
+      sourceBranch: input.sourceBranch.trim(),
+      revision: (current.preferences[baseRepo]?.revision ?? 0) + 1,
+    };
+    return { next: { preferences: { ...current.preferences, [baseRepo]: snapshot } }, result: snapshot };
+  });
 }

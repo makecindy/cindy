@@ -90,7 +90,7 @@ describe('createWorktree naming authority', () => {
       }
       return { stdout: '', stderr: '' };
     });
-    await import('../worktree/desktopWorktreePorts');
+    await import('../worktree/WorktreeManagerPorts.desktop');
     manager = await import('../worktree/WorktreeManager');
   });
 
@@ -350,7 +350,7 @@ describe('createWorktree naming authority', () => {
     // profile lock and cancellation marker are real shared filesystem state.
     const creator = manager;
     vi.resetModules();
-    await import('../worktree/desktopWorktreePorts');
+    await import('../worktree/WorktreeManagerPorts.desktop');
     const canceller = await import('../worktree/WorktreeManager');
     let release!: () => void;
     let entered!: () => void;

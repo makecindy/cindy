@@ -55,7 +55,6 @@ import { registerPrecreatedWorktreeDiscardHandler } from '../../desktop/src/main
 import type { IpcHandlerRegistry } from '../../desktop/src/main/maker-ipc/ipcHandlerRegistry.js';
 import type { CreateWorktreeReq } from '../../desktop/src/main/worktree/types.js';
 import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
-import { requireBuiltinAgentKind } from '../../desktop/src/main/maker-host/engineKind.js';
 
 /**
  * What each port the Host hands the shared inbound dispatch (dispatch.ts InboundDispatchPorts) can do
@@ -160,11 +159,11 @@ export interface HostDeviceLinkPorts {
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   /** The desktop-compatible maker:send transaction (agent/input-queue.mjs). */
-  send?(sessionId: string, message: unknown, createOpts?: unknown, sendOpts?: unknown): Promise<unknown>;
+  send(sessionId: string, message: unknown, createOpts?: unknown, sendOpts?: unknown): Promise<unknown>;
   /** Captures the current clear boundary and input generation before a direct send. */
-  assertRemoteInputControlBoundary?(sessionId: string, opts: unknown): Promise<MainOwnedInputBoundaryStamp>;
+  assertRemoteInputControlBoundary(sessionId: string, opts: unknown): Promise<MainOwnedInputBoundaryStamp>;
   /** The desktop-compatible extra-directory grant flow, including validation and rollback. */
-  setExtraDirs?(sessionId: string, dirs: string[]): Promise<string[] | { dirs: string[] } | void>;
+  setExtraDirs(sessionId: string, dirs: string[]): Promise<string[] | { dirs: string[] } | void>;
   /** Optional host event hub used to mirror draft and worktree preference changes. */
   publish?(event: any): void;
   /** A precreated Worktree is claimed as soon as its DB row or live runtime exists. */
@@ -283,13 +282,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   // The remote project/draft flow reads the Host-owned persisted mirror. The getter
   // hydrates the shared reader on first use after every Host restart.
-  registry.register('maker:get-new-maker-defaults', ([agentKind]) => {
+  registry.register('maker:get-new-maker-defaults', async ([agentKind]) => {
     assertCurrent();
     const kind = requireString(agentKind, 'agentKind');
     if (kind !== 'claude-code' && kind !== 'codex' && kind !== 'pi') {
-      throw new Error('[INVALID_PARAMS] agentKind must be claude-code, codex or pi');
+      throwIpcError('INVALID_PARAMS', 'agentKind must be claude-code, codex or pi');
     }
-    return getHostNewMakerDefaults(requireBuiltinAgentKind(kind, 'Plugin engines in the Node Host'));
+    const defaults = await getHostNewMakerDefaults(kind);
+    assertCurrent();
+    return defaults;
   });
   const worktrees = deps.worktree;
   registry.register('worktree:detect-cwd', async ([raw]) => {
@@ -331,6 +332,9 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     };
     const context = getDeviceLinkInvokeContext();
     const result = await worktrees.createWorktree(request, {
+      // The controller starts the task in this directory right after the reply; on the Host nothing
+      // else waits for the background checkout, so answer only once the whole tree is written.
+      awaitFullCheckout: true,
       // Experience routing only: mobile/unknown controllers keep using their local ref.
       refreshDefaultSource: !context || isDesktopPlatform(context.controllerPlatform),
       assertWriteAllowed: () => { refuseWhileHeld(); assertCurrent(); },
@@ -359,26 +363,19 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   registerMakerSessionSendHandler(ipcRegistry, {
     sendToAgentAccepted: async (sessionId, message, createOpts, sendOpts) => {
-      if (!deps.send) throw new Error('[NOT_SUPPORTED] maker:send is not available on this Host');
       refuseWhileHeld();
-      if (!sessionId) throw new Error('[INVALID_PARAMS] sessionId required');
+      if (!sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
       const result = await deps.send(sessionId, message, createOpts,
         stampDirectSendSourceDevice(sendOpts, readDeviceLinkInvokeSourceDevice()));
       assertCurrent();
       return result;
     },
-    assertRemoteInputControlBoundary: async (sessionId, opts) => {
-      if (!deps.assertRemoteInputControlBoundary) {
-        throw new Error('[NOT_SUPPORTED] maker:send input boundary is not available on this Host');
-      }
-      return deps.assertRemoteInputControlBoundary(sessionId, opts);
-    },
+    assertRemoteInputControlBoundary: (sessionId, opts) => deps.assertRemoteInputControlBoundary(sessionId, opts),
   });
   registry.register(MAKER_INVOKE.SET_EXTRA_DIRS, async ([sessionId, dirs]) => {
-    if (!deps.setExtraDirs) throw new Error('[NOT_SUPPORTED] maker:set-extra-dirs is not available on this Host');
     refuseWhileHeld();
-    if (typeof sessionId !== 'string' || !sessionId) throw new Error('[INVALID_PARAMS] sessionId required');
-    if (!Array.isArray(dirs)) throw new Error('[INVALID_PARAMS] dirs must be an array');
+    if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+    if (!Array.isArray(dirs)) throwIpcError('INVALID_PARAMS', 'dirs must be an array');
     const result = await deps.setExtraDirs(sessionId, dirs);
     // The grant transaction exposes metadata internally; the wire contract is the applied subset.
     const applied = Array.isArray(result) ? result : result?.dirs;
@@ -393,29 +390,39 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   registry.register(MAKER_INVOKE.SET_PLAN_MODE, ([sessionId, enabled]) => call('/api/sessions/set-plan-mode', { sessionId, enabled }));
   registry.register(MAKER_INVOKE.SET_FAST_MODE, ([sessionId, enabled]) => call('/api/sessions/set-fast-mode', { sessionId, enabled }));
   registry.register(MAKER_INVOKE.SET_THINKING_ENABLED, ([sessionId, enabled]) => call('/api/sessions/set-thinking-enabled', { sessionId, enabled }));
-  registry.register(MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, ([pref]) => {
+  // Both writes reply and push only after the file is replaced (no synchronous I/O on this event loop).
+  const publishDefaults = async () => {
+    deps.publish?.({ type: 'new_maker_defaults_changed', defaults: await getHostNewMakerDefaultsByVendor() });
+  };
+  registry.register(MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, async ([pref]) => {
     refuseWhileHeld();
-    const result = applyHostNewMakerDraftPref(pref);
-    deps.publish?.({ type: 'new_maker_defaults_changed' });
+    const result = await applyHostNewMakerDraftPref(pref);
+    assertCurrent();
+    await publishDefaults();
     return result;
   });
-  registry.register(MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_PREF, ([pref]) => {
+  registry.register(MAKER_INVOKE.APPLY_NEW_MAKER_WORKTREE_PREF, async ([pref]) => {
     refuseWhileHeld();
-    const result = applyHostNewMakerWorktreePref(pref);
-    deps.publish?.({ type: 'new_maker_defaults_changed' });
+    const result = await applyHostNewMakerWorktreePref(pref);
+    assertCurrent();
+    await publishDefaults();
     return result;
   });
   registerNewMakerWorktreeBranchPreferenceHandler(ipcRegistry, {
     isDeviceLinkInvoke,
     assertTrustedCaller: () => throwIpcError('PERMISSION_DENIED', 'Trusted Cindy caller required'),
-    getPreference: baseRepo => {
+    getPreference: async baseRepo => {
       assertCurrent();
-      return getNewMakerWorktreeBranchPreference(baseRepo);
+      const preference = await getNewMakerWorktreeBranchPreference(baseRepo);
+      assertCurrent();
+      return preference;
     },
-    applyPreference: input => {
+    applyPreference: async input => {
       refuseWhileHeld();
       assertCurrent();
-      return applyNewMakerWorktreeBranchPreference(input);
+      const snapshot = await applyNewMakerWorktreeBranchPreference(input);
+      assertCurrent();
+      return snapshot;
     },
     broadcast: (_channel, snapshot) => deps.publish?.({ type: 'new_maker_worktree_branch_changed', snapshot }),
   });
@@ -772,7 +779,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         }
         break;
       case 'new_maker_defaults_changed':
-        emit(MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED, getHostNewMakerDefaultsByVendor());
+        emit(MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED, event.defaults);
         break;
       case 'new_maker_worktree_branch_changed':
         emit('maker:new-maker-worktree-branch:changed', event.snapshot);

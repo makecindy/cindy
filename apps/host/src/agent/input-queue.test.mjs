@@ -4180,17 +4180,22 @@ test('route admission: a Device Link create is refused before its row, or create
  *   an id whose row already exists.
  * - Minimal failing input: one stored active row with the requested id and directory; an
  *   unpatched Host calls createSession for it. The same id in another directory is refused.
+ *   The row carries sdkSessionId: a start without resumeSessionId (Greptile P1 on #12125) opens
+ *   a new native conversation and the task loses its history.
  * - Tier: unit; fixture ports only.
  */
 test('Device Link create: a retried id reuses its stored task row instead of inserting again', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   await createTaskOn('retried', 'prov-a');
   const dir = process.cwd();
-  const { ports, rows, started, input } = deviceLinkCreate(r, {}, { retried: { status: 'active', workingDir: dir } });
+  // The row as a first create and one turn left it: its runtime was released, its native session remains.
+  const row = { status: 'active', workingDir: dir, agentKind: 'cc', model: 'big', providerId: 'prov-a', sdkSessionId: 'native-retried' };
+  const { ports, rows, started, input } = deviceLinkCreate(r, {}, { retried: row });
   const created = await createHostRuntimeSession(ports, { ...input('prov-a'), id: 'retried' });
   assert.equal(created.sessionId, 'retried');
   assert.equal(rows.length, 0, 'no second task row');
   assert.equal(started.length, 1, 'the runtime is started for the stored row');
+  assert.equal(started[0].resumeSessionId, 'native-retried', 'it resumes the stored native conversation');
   const other = deviceLinkCreate(r, {}, { retried: { status: 'active', workingDir: '/another/project' } });
   await assert.rejects(createHostRuntimeSession(other.ports, { ...input('prov-a'), id: 'retried' }),
     /\[PRECONDITION_FAILED\] This task id already belongs to a different task/);

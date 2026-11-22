@@ -18,6 +18,7 @@ import { configureWorktreeStoreDbSync } from '../../../desktop/src/main/worktree
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.js';
 import { sessions } from '../../../desktop/src/main/localDb/schema.js';
 import { eq } from 'drizzle-orm';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 
 /**
  * Bind the shared Git lifecycle to this Host's profile. The general archive/recovery
@@ -39,7 +40,7 @@ export function createHostWorktreeLifecycle(profileDir: string) {
   configureWorktreeManagerPorts({
     ...cancellation,
     recycleManagedWorktree: async () => {
-      throw new Error('General Worktree archive recovery is not available in the Node Host');
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'General Worktree archive recovery is not available in the Node Host');
     },
   });
 

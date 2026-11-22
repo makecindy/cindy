@@ -1,5 +1,5 @@
 import { activeOwnerScopeKey } from '../../../desktop/src/main/appSessionState.js';
-import { requireObject, requireString } from '../../../desktop/src/main/utils/ipcValidate.js';
+import { requireObject, requireString, throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import {
   getRemoteNewMakerDefaults,
   getRemoteNewMakerDefaultsByVendor,
@@ -9,9 +9,9 @@ import {
   type ProviderModelMemorySnapshot,
 } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.js';
 import { normalizeBotModelChain } from '../../../desktop/src/shared/botModelChain.js';
-import { createOverrideSettingsFile } from '../../../desktop/src/main/maker-host/override-settings-file.js';
 import { ownerScopedPath, isOwnerBoundaryPending } from '../../../desktop/src/main/ownerContext.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
+import { createAsyncJsonSettings } from './async-json-settings.js';
 
 /**
  * Host-owned New Maker mirror. A Node Host has no renderer to own this state, so
@@ -86,7 +86,7 @@ function normalizeSnapshot(raw: unknown): NewMakerDraftSnapshot {
   };
 }
 
-const store = createOverrideSettingsFile<NewMakerDraftSnapshot>({
+const store = createAsyncJsonSettings<NewMakerDraftSnapshot>({
   filePath: () => ownerScopedPath('host-new-maker-defaults.json'),
   defaults: emptySnapshot,
   normalize: normalizeSnapshot,
@@ -94,157 +94,169 @@ const store = createOverrideSettingsFile<NewMakerDraftSnapshot>({
   label: 'Host New Maker draft preferences',
 });
 
-let snapshotScope: string | undefined;
-let snapshot: NewMakerDraftSnapshot | null = null;
-let providerMemory: ProviderModelMemorySnapshot = {};
+/** The loaded snapshot of one account; providerModelMemory lives inside it. */
+let loaded: { scope: string; snapshot: NewMakerDraftSnapshot } | null = null;
 
-function readSnapshot(): NewMakerDraftSnapshot {
-  if (isOwnerBoundaryPending()) throw new Error('[PRECONDITION_FAILED] Host account is changing');
-  const scope = activeOwnerScopeKey();
-  if (!snapshot || snapshotScope !== scope) {
-    snapshot = store.read();
-    snapshotScope = scope;
-    providerMemory = snapshot.providerModelMemory ?? {};
-  }
-  return snapshot;
+function currentScope(): string {
+  if (isOwnerBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'Host account is changing');
+  return activeOwnerScopeKey();
 }
 
-function syncSharedCache(): NewMakerDraftSnapshot {
-  const next = readSnapshot();
-  next.providerModelMemory = providerMemory;
-  setProviderModelMemoryCache(providerMemory);
-  setNewMakerDraftCache(next, activeOwnerScopeKey());
-  return next;
+function assertScope(scope: string): void {
+  if (currentScope() !== scope) throwIpcError('PRECONDITION_FAILED', 'Host account changed');
 }
 
-function publishSnapshot(): void {
-  const next = syncSharedCache();
-  store.writePatch(next);
-  snapshot = next;
+/** Feed the shared reader (newMakerDefaultsCache) the Desktop also answers from. */
+function adopt(scope: string, snapshot: NewMakerDraftSnapshot): void {
+  loaded = { scope, snapshot };
+  setProviderModelMemoryCache(snapshot.providerModelMemory ?? {});
+  setNewMakerDraftCache(snapshot, scope);
+}
+
+async function loadSnapshot(): Promise<void> {
+  const scope = currentScope();
+  if (loaded?.scope === scope) return;
+  const snapshot = await store.read();
+  assertScope(scope);
+  if (loaded?.scope !== scope) adopt(scope, snapshot);
 }
 
 /** First read after a Host restart hydrates the same reader used by Desktop. */
-export function getHostNewMakerDefaults(agent: 'claude-code' | 'codex' | 'pi') {
-  syncSharedCache();
+export async function getHostNewMakerDefaults(agent: 'claude-code' | 'codex' | 'pi') {
+  await loadSnapshot();
   return getRemoteNewMakerDefaults(agent);
 }
 
-export function getHostNewMakerDefaultsByVendor() {
-  syncSharedCache();
+export async function getHostNewMakerDefaultsByVendor() {
+  await loadSnapshot();
   return getRemoteNewMakerDefaultsByVendor();
+}
+
+/**
+ * Apply one change to this account's snapshot. The change runs on a copy, in order with every other
+ * write, and the shared reader only sees it once the file has been replaced.
+ */
+async function mutate(change: (next: NewMakerDraftSnapshot) => void): Promise<void> {
+  const scope = currentScope();
+  const next = await store.update(current => {
+    assertScope(scope);
+    const base = loaded?.scope === scope ? loaded.snapshot : current;
+    const copy = structuredClone(base);
+    change(copy);
+    return { next: copy, result: copy };
+  });
+  assertScope(scope);
+  adopt(scope, next);
 }
 
 function requireAgent(value: unknown): 'claude-code' | 'codex' | 'pi' {
   const agent = requireString(value, 'agent');
   if (agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi') {
-    throw new Error('[INVALID_PARAMS] agent must be claude-code|codex|pi');
+    throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi');
   }
   return agent;
 }
 
-export function applyHostNewMakerDraftPref(raw: unknown) {
+export async function applyHostNewMakerDraftPref(raw: unknown) {
   const pref = requireObject(raw);
   const agent = requireAgent(pref.agent);
   const providerId = pref.providerId === undefined ? undefined : requireString(pref.providerId, 'providerId');
-  if (pref.active !== true && !providerId) throw new Error('[INVALID_PARAMS] providerId required');
+  if (pref.active !== true && !providerId) throwIpcError('INVALID_PARAMS', 'providerId required');
   const modelId = requireString(pref.modelId, 'modelId');
-  if (!modelId) throw new Error('[INVALID_PARAMS] modelId required');
+  if (!modelId) throwIpcError('INVALID_PARAMS', 'modelId required');
   if (pref.effort !== undefined) requireString(pref.effort, 'effort');
   if (pref.fast !== undefined && typeof pref.fast !== 'boolean' && pref.fast !== 'ultrafast') {
-    throw new Error('[INVALID_PARAMS] fast must be boolean or ultrafast');
+    throwIpcError('INVALID_PARAMS', 'fast must be boolean or ultrafast');
   }
   if (pref.thinking !== undefined && typeof pref.thinking !== 'boolean') {
-    throw new Error('[INVALID_PARAMS] thinking must be boolean');
+    throwIpcError('INVALID_PARAMS', 'thinking must be boolean');
   }
   if (pref.markModelChoice !== undefined && typeof pref.markModelChoice !== 'boolean') {
-    throw new Error('[INVALID_PARAMS] markModelChoice must be boolean');
+    throwIpcError('INVALID_PARAMS', 'markModelChoice must be boolean');
   }
   if (pref.selectDraftAgent !== undefined && typeof pref.selectDraftAgent !== 'boolean') {
-    throw new Error('[INVALID_PARAMS] selectDraftAgent must be boolean');
+    throwIpcError('INVALID_PARAMS', 'selectDraftAgent must be boolean');
   }
   const taskProviderId = pref.taskProviderId === undefined
     ? undefined
     : requireString(pref.taskProviderId, 'taskProviderId');
+  const effort = typeof pref.effort === 'string' ? pref.effort : undefined;
 
-  const next = readSnapshot();
-  const vendor = agent === 'claude-code' ? 'cc' : agent;
-  if (pref.active === true && !taskProviderId) {
-    const previous = next.lastByVendor[vendor] ?? {};
-    next.lastByVendor = {
-      ...next.lastByVendor,
-      [vendor]: {
-        ...previous,
-        model: modelId,
-        providerId: providerId ?? null,
-        effort: typeof pref.effort === 'string' ? pref.effort : previous.effort,
-      },
-    };
-    next.modelChosenByVendor = {
-      ...next.modelChosenByVendor,
-      [vendor]: pref.markModelChoice !== false,
-    };
-  } else if (pref.markModelChoice !== undefined && !taskProviderId) {
-    next.modelChosenByVendor = {
-      ...next.modelChosenByVendor,
-      [vendor]: pref.markModelChoice,
-    };
-  }
+  await mutate(next => {
+    const vendor = agent === 'claude-code' ? 'cc' : agent;
+    if (pref.active === true && !taskProviderId) {
+      const previous = next.lastByVendor[vendor] ?? {};
+      const marks = pref.markModelChoice !== false;
+      const alreadyChosen = next.modelChosenByVendor?.[vendor] === true;
+      // As the desktop draft (newMakerDraft.ts patchVendorPrefsInternal): a write that does not mark a
+      // choice (an effort or Fast change on the current model) never replaces a model or source the
+      // user chose, and never clears that mark. A different model's effort is dropped with it.
+      const keepsChoice = !marks && alreadyChosen;
+      const keepsEffort = keepsChoice && modelId !== previous.model;
+      next.lastByVendor = {
+        ...next.lastByVendor,
+        [vendor]: {
+          ...previous,
+          ...(keepsChoice ? {} : { model: modelId, providerId: providerId ?? null }),
+          effort: effort !== undefined && !keepsEffort ? effort : previous.effort,
+        },
+      };
+      if (marks) next.modelChosenByVendor = { ...next.modelChosenByVendor, [vendor]: true };
+    } else if (pref.markModelChoice === true && !taskProviderId) {
+      next.modelChosenByVendor = { ...next.modelChosenByVendor, [vendor]: true };
+    }
 
-  if (typeof pref.effort === 'string') next.effortByModel = { ...next.effortByModel, [modelId]: pref.effort };
-  if (pref.fast !== undefined) next.fastModeByModel = { ...next.fastModeByModel, [modelId]: pref.fast };
+    if (effort !== undefined) next.effortByModel = { ...next.effortByModel, [modelId]: effort };
+    if (pref.fast !== undefined) next.fastModeByModel = { ...next.fastModeByModel, [modelId]: pref.fast as boolean | 'ultrafast' };
 
-  const memoryKeys = [`${agent}:*`];
-  if (providerId) memoryKeys.push(`${agent}:${providerId}`);
-  for (const key of memoryKeys) {
-    const previous = providerMemory[key] ?? { effortByModel: {}, fastByModel: {}, thinkingByModel: {} };
-    providerMemory = {
-      ...providerMemory,
-      [key]: {
-        effortByModel: typeof pref.effort === 'string'
-          ? { ...previous.effortByModel, [modelId]: pref.effort }
-          : previous.effortByModel,
+    const memory = { ...(next.providerModelMemory ?? {}) };
+    const memoryKeys = [`${agent}:*`];
+    if (providerId) memoryKeys.push(`${agent}:${providerId}`);
+    for (const key of memoryKeys) {
+      const previous = memory[key] ?? { effortByModel: {}, fastByModel: {}, thinkingByModel: {} };
+      memory[key] = {
+        effortByModel: effort !== undefined ? { ...previous.effortByModel, [modelId]: effort } : previous.effortByModel,
         fastByModel: pref.fast !== undefined
-          ? { ...previous.fastByModel, [modelId]: pref.fast }
+          ? { ...previous.fastByModel, [modelId]: pref.fast as boolean | 'ultrafast' }
           : previous.fastByModel,
         thinkingByModel: pref.thinking !== undefined
-          ? { ...previous.thinkingByModel, [modelId]: pref.thinking }
+          ? { ...previous.thinkingByModel, [modelId]: pref.thinking as boolean }
           : previous.thinkingByModel,
-      },
-    };
-  }
+      };
+    }
+    next.providerModelMemory = memory;
 
-  if (pref.selectDraftAgent === true && pref.active === true && pref.markModelChoice === true && !taskProviderId) {
-    next.selectedRoute = normalizeBuiltInRoute({
-      harness: agent === 'claude-code' ? 'claude' : agent,
-      model: modelId,
-      providerId: providerId ?? null,
-      effort: pref.effort,
-      fastMode: pref.fast,
-    });
-  }
-  publishSnapshot();
+    if (pref.selectDraftAgent === true && pref.active === true && pref.markModelChoice === true && !taskProviderId) {
+      next.selectedRoute = normalizeBuiltInRoute({
+        harness: agent === 'claude-code' ? 'claude' : agent,
+        model: modelId,
+        providerId: providerId ?? null,
+        effort,
+        fastMode: pref.fast,
+      });
+    }
+  });
   return getHostNewMakerDefaults(agent);
 }
 
 /** Simulate a fresh process without deleting the persisted file. */
 export function resetHostDraftPreferencesReadCacheForTest(): void {
-  snapshot = null;
-  providerMemory = {};
+  loaded = null;
   setProviderModelMemoryCache({});
   setNewMakerDraftCache(emptySnapshot(), activeOwnerScopeKey());
 }
 
-export function resetHostDraftPreferencesForTest(): void {
-  store.reset();
+export async function resetHostDraftPreferencesForTest(): Promise<void> {
+  await store.reset();
   resetHostDraftPreferencesReadCacheForTest();
 }
 
-export function applyHostNewMakerWorktreePref(raw: unknown) {
+export async function applyHostNewMakerWorktreePref(raw: unknown) {
   const pref = requireObject(raw);
   if (typeof pref.worktreeEnabled !== 'boolean') {
-    throw new Error('[INVALID_PARAMS] worktreeEnabled must be boolean');
+    throwIpcError('INVALID_PARAMS', 'worktreeEnabled must be boolean');
   }
-  readSnapshot().worktreeEnabled = pref.worktreeEnabled;
-  publishSnapshot();
+  const worktreeEnabled = pref.worktreeEnabled;
+  await mutate(next => { next.worktreeEnabled = worktreeEnabled; });
   return getHostNewMakerDefaultsByVendor();
 }

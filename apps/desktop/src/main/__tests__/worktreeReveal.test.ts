@@ -48,7 +48,7 @@ vi.mock('../worktree/worktreeStore', () => ({
 
 // 业务依赖 (避免触达真实 git 调用)
 // The manager is mocked here; its Desktop port bindings have nothing to bind to.
-vi.mock('../worktree/desktopWorktreePorts', () => ({}));
+vi.mock('../worktree/WorktreeManagerPorts.desktop', () => ({}));
 vi.mock('../worktree/WorktreeManager', () => ({
   createWorktree: vi.fn(),
   detectCwd: (...args: unknown[]) => detectCwdMock(...args),

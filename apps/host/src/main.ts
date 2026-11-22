@@ -2245,11 +2245,11 @@ async function setSessionExtraDirs(sessionId: string, requestedDirs: string[]): 
   const generation = inputQueue.profileHoldGeneration();
   const assertWriteAllowed = () => {
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) {
-      throw new Error('[PRECONDITION_FAILED] Host account changed');
+      throwIpcError('PRECONDITION_FAILED', 'Host account changed');
     }
     const held = inputQueue.profileHoldReason();
     if (held || generation !== inputQueue.profileHoldGeneration()) {
-      throw new Error(`[PRECONDITION_FAILED] ${held ?? 'Host profile ownership changed'}`);
+      throwIpcError('PRECONDITION_FAILED', held ?? 'Host profile ownership changed');
     }
   };
   assertWriteAllowed();
@@ -2329,10 +2329,13 @@ function startDeviceLink(): void {
       assertProviderExecutionSupported,
       admitLocalRoute: opts => runtimeSelection.admitLocalRoute(opts),
       readStoredSession: async id => {
-        const [row] = await getDbClient().drizzle
-          .select({ status: sessionTable.status, workingDir: sessionTable.workingDir })
-          .from(sessionTable).where(eq(sessionTable.id, id)).limit(1);
-        return row ? { status: row.status, workingDir: row.workingDir || null } : null;
+        const [row] = await getDbClient().drizzle.select({
+          status: sessionTable.status, workingDir: sessionTable.workingDir, agentKind: sessionTable.agentKind,
+          model: sessionTable.model, effort: sessionTable.effort, permissionMode: sessionTable.permissionMode,
+          providerId: sessionTable.providerId, fastMode: sessionTable.fastMode,
+          planModeEnabled: sessionTable.planModeEnabled, sdkSessionId: sessionTable.sdkSessionId,
+        }).from(sessionTable).where(eq(sessionTable.id, id)).limit(1);
+        return row ? { ...row, workingDir: row.workingDir || null } : null;
       },
     }), input);
     },

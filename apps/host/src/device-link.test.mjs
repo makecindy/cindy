@@ -152,7 +152,13 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       return projection;
     } },
   });
-  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => url,
+  // The real lifecycle, with createWorktree recording what the channel asks of it.
+  const worktreeCreates = [];
+  const worktreeLifecycle = { ...createHostWorktreeLifecycle(profile), createWorktree: async (request, options) => {
+    worktreeCreates.push({ request, options });
+    return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
+  } };
+  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
     send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
@@ -231,6 +237,14 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.deepEqual(stat.result, { kind: 'dir', resolvedPath: createdDir });
   const refused = await clients[2].invoke('host', { channel: 'maker:set-model', args: ['task', 'release-refusal'] });
   assert.deepEqual(refused, { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] ' + releaseFailure().message } });
+  // Regression (Greptile P1 on #12125): on the Host nothing else waits for the background checkout, and
+  // the controller starts the task as soon as worktree:create answers, so the channel must ask the
+  // manager to answer only after the whole tree is checked out. Before the fix the option was absent.
+  const createdWorktree = await clients[0].invoke('host', { channel: 'worktree:create', args: [{
+    sessionId: 'remote-worktree', baseRepo: profile, name: 'remote', sourceBranch: 'main' }] });
+  assert.equal(createdWorktree.ok, true, JSON.stringify(createdWorktree));
+  assert.equal(worktreeCreates.length, 1);
+  assert.equal(worktreeCreates[0].options.awaitFullCheckout, true);
   const detected = await clients[0].invoke('host', { channel: 'worktree:detect-cwd', args: [{ cwd: profile }] });
   assert.equal(detected.ok, true, JSON.stringify(detected));
   assert.equal(detected.result.gitInstalled, true);
