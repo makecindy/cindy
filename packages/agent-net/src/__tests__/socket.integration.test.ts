@@ -25,10 +25,12 @@ import { verifyCertificate, verifyDelegation } from '@cindy/agent-net-relay';
 import { nodeRelayAuthCrypto } from '@cindy/device-link/node-relay-crypto';
 import { initializeRelay, startRelayServer, createDeviceCredential, hashSecret } from '@cindy/device-link-relay';
 import { AgentNetSocket } from '../socket.js';
+import { SessionLanes } from '../session/lanes.js';
 import { AgentNetWorkerSocket, type AgentNetAppSocket } from '../workerSocket.js';
 import { startRelayGateway } from '../gateway.js';
 import { StunClient } from '../stun.js';
 import { createCoreTransport } from '../transport.js';
+import { Endpoint, type Connection, type RecvStream } from '@cindy/agent-net-core/node';
 import type { PeerChannel } from '../types.js';
 import WebSocket from 'ws';
 
@@ -472,6 +474,33 @@ it('tells a directly connected peer right away when the transport closes', async
   await source.close();
   await vi.waitFor(() => expect(closed).toBe(true), { timeout: 2_000 });
 });
+/** 测试价值（Node 驱动收回交完的流）
+ * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
+ *   都交给核心的流，以及放弃了的流，不再留在连接的表里；进度和缓冲照样按流号问核心。
+ * - Bug 依据：2026-11-22 自审会话 v2：一条大消息一条流，这张表只增不减，驱动每一轮都要遍历它，长连着的连接越用越慢。
+ * - 现有覆盖缺口：会话的测试只看结果送到，看不到驱动里留着多少条流。
+ * - 最小失败输入：同一条连接上分六批共开 300 条流，各写 1 KB 后结束（核心同时最多 64 条）；再一条写了 4 MiB 后放弃。
+ * - tier：integration，两个真实 WASM 端点经 127.0.0.1 UDP。 */
+it('lets go of streams the Node driver has handed over, so its table does not grow with every large message', async () => {
+  const server = generateIdentity('a-server'), client = generateIdentity('b-client');
+  const accepting = await Endpoint.create({ identity: server.transportPrivateKey, prologue: 'unit-streams', bind: { address: '127.0.0.1' },
+    accept: { admit: () => true } });
+  const dialing = await Endpoint.create({ identity: client.transportPrivateKey, prologue: 'unit-streams', bind: { address: '127.0.0.1' } });
+  cleanup.push(() => accepting.close()); cleanup.push(() => dialing.close());
+  let received = 0;
+  accepting.on('connection', (connection: Connection) => connection.on('stream', (stream: RecvStream) => stream.on('data', (data: Uint8Array) => { received += data.length; })));
+  const connection = dialing.connect(Buffer.from(server.transportKey, 'base64url'), accepting.address());
+  await vi.waitFor(() => expect(connection.established).toBe(true));
+  for (let round = 0; round < 6; round++) {
+    for (let index = 0; index < 50; index++) { const stream = connection.openStream('normal'); stream.write(new Uint8Array(1000)); stream.finish(); }
+    await vi.waitFor(() => expect(connection.drained).toBe(true));
+  }
+  await vi.waitFor(() => expect(received).toBe(300 * 1000));
+  const given = connection.openStream('normal');
+  given.write(new Uint8Array(4 << 20));
+  expect(given.abandon()).not.toBeNull();
+  expect(connection.sendStreams.size).toBe(0);
+});
 /** 测试价值
  * - 生产入口与可观察结果：Desktop worker 里会话用的 createCoreTransport 会话通道（sessionWire）。积压读数算上已经交给核心、还没发出或
  *   还没确认的字节：数据刚交给核心的那一刻读数就是它的大小，不是 0。
@@ -664,18 +693,25 @@ it('fails frames waiting for a member the host rule then refuses, and never send
  * - Bug／规则依据：docs/agent-net-session-plan.md 第 10.1 节，Agent-Net 自建独立上层，和 Device Link 完全解耦。
  * - 现有覆盖缺口：新能力，单元测试只覆盖通道排序与会话协议，没有真实核心上的协商与收发。
  * - 最小失败输入：一次建链、一次请求、一次推送、一条 Device Link 推送；只有一端启用会话时不出现会话
- *   （对端没人读会话还先宣告的话，这一端的建链要等到超时）。
+ *   （对端没人读会话还先宣告的话，这一端的建链要等到超时）。会话 v2（两端都是新版）：推送、300 KB 结果、推送，结果走自己的流
+ *   （真实核心上流的键分片到达、流的结束），业务拿到的先后不变，结果在流上时也算在会话积压里。
  * - tier：integration，真实回环 WS 中转，不开 UDP。 */
 it('carries an independent session between two new nodes alongside Device Link frames', async () => {
   const f = await network(false); f.host.stop(); f.controller.stop();
   const laneFor = (channel: string) => (channel === 'test:interactive' ? 'control' as const : 'normal' as const);
-  const pushes: unknown[] = [];
+  const pushes: unknown[] = [], large = 'large-session-result-'.repeat(15_000);
+  let backlog = -1;
   const a = await AgentNetSocket.open({ client: f.a, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   const b = await AgentNetSocket.open({ client: f.b, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   cleanup.push(() => a.close()); cleanup.push(() => b.close());
   a.useSessions({ laneFor, handlers: () => ({
     onOpen: (id) => { a.session('b-controller')!.accept(id, { appVersion: 'host' }); },
-    onRequest: (request) => { a.session('b-controller')!.respond(request.id, { ok: true, result: [request.channel, ...request.args] }); },
+    onRequest: (request) => {
+      const session = a.session('b-controller')!;
+      if (request.channel === 'test:large') session.push('test:before', 1);
+      session.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : [request.channel, ...request.args] });
+      if (request.channel === 'test:large') { backlog = session.bufferedAmount; session.push('test:after', 2); }
+    },
   }) });
   await vi.waitFor(() => expect(b.knowsPeer('a-host')).toBe(true));
   for (const socket of [a, b]) socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: {
@@ -694,6 +730,14 @@ it('carries an independent session between two new nodes alongside Device Link f
   await expect(session.request('test:interactive', ['x'], { timeoutMs: 5_000 })).resolves.toEqual({ ok: true, result: ['test:interactive', 'x'] });
   a.session('b-controller')!.push('test:topic', { n: 1 });
   await vi.waitFor(() => expect(pushes).toEqual([['test:topic', { n: 1 }]]));
+  const bodies = vi.spyOn(SessionLanes.prototype, 'receiveBody');
+  cleanup.push(() => bodies.mockRestore());
+  await expect(session.request('test:large', [], { timeoutMs: 10_000, onSettled: () => { pushes.push('result'); } }))
+    .resolves.toEqual({ ok: true, result: large });
+  await vi.waitFor(() => expect(pushes.slice(1)).toEqual([['test:before', 1], 'result', ['test:after', 2]]));
+  expect(bodies.mock.calls.some(([, bytes]) => bytes === null)).toBe(true);
+  // The body on its own stream still counts in the session's backlog, as it would on its lane.
+  expect(backlog).toBeGreaterThanOrEqual(large.length);
   const delivered = new Promise<Envelope>((resolve) => b.on('message', (raw) => {
     const frame = JSON.parse(raw.toString()) as Envelope; if (frame.kind === 'push') resolve(frame);
   }));

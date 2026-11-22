@@ -24,8 +24,9 @@ import { StunClient } from './stun.js';
 import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
 import {
-  AGENT_NET_SESSION_V1, ChannelEvents, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES, SESSION_LANE_KINDS,
-  SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PeerChannel, type RosterEntry, type SessionLaneName, type Transport, type TransportOptions,
+  AGENT_NET_SESSION_V1, ChannelEvents, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES, SESSION_BODY_KIND, SESSION_LANE_KINDS,
+  SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName, type Transport,
+  type TransportOptions,
 } from './types.js';
 
 const PROLOGUE = 'cindy/agent-net/device-link/2';
@@ -80,6 +81,12 @@ class CoreChannel implements PeerChannel {
   private sessionHandler: ((lane: SessionLaneName, bytes: Uint8Array) => void) | null = null;
   private earlySession: Array<[SessionLaneName, Uint8Array]> = [];
   private earlySessionBytes = 0;
+  /** Session v2: this channel reads and opens body streams (`SessionWire.openBody`). */
+  readonly sessionBodies = true;
+  /** Session v2: body streams this side opened on the control and normal lanes, counted in the session's backlog until acknowledged. */
+  private readonly bodyStreams = new Set<SendStream>();
+  private bodyHandler: ((key: number, bytes: Uint8Array | null) => void) | null = null;
+  private earlyBodies: Array<[number, Uint8Array | null]> = [];
 
   constructor(
     private readonly connection: Connection,
@@ -97,6 +104,8 @@ class CoreChannel implements PeerChannel {
     connection.on('stream', (stream: RecvStream) => {
       let kind: number | null = null;
       let text = '';
+      // Session v2 body stream: its key (4 bytes) follows the kind byte; they may arrive in separate chunks.
+      let bodyKey: number | null = null, keyBytes: number[] = [];
       stream.on('data', (bytes: Uint8Array) => {
         let chunk = bytes;
         if (kind === null) {
@@ -105,6 +114,11 @@ class CoreChannel implements PeerChannel {
         }
         if (kind === DATA) {
           if (chunk.length) this.events.data(chunk);
+          return;
+        }
+        if (kind === SESSION_BODY_KIND) {
+          while (bodyKey === null && chunk.length) { keyBytes.push(chunk[0]); chunk = chunk.subarray(1); if (keyBytes.length === 4) bodyKey = new DataView(Uint8Array.from(keyBytes).buffer).getUint32(0, false); }
+          if (bodyKey !== null && chunk.length) this.sessionBody(bodyKey, chunk);
           return;
         }
         const lane = SESSION_LANE_BY_KIND.get(kind);
@@ -122,6 +136,7 @@ class CoreChannel implements PeerChannel {
       // 对端结束了它的数据流：它要走了，这一端也收尾。
       stream.on('end', () => {
         if (kind === DATA) this.close();
+        if (kind === SESSION_BODY_KIND && bodyKey !== null) this.sessionBody(bodyKey, null);
       });
     });
     connection.on('close', () => {
@@ -224,21 +239,66 @@ class CoreChannel implements PeerChannel {
       };
       this.sessionStreams = { control: open('control'), normal: open('normal'), background: open('background') };
     }
-    const streams = this.sessionStreams;
+    const streams = this.sessionStreams, channel = this;
     return {
       write: (lane, bytes) => { if (!this.events.closed) streams[lane].write(bytes); },
       // 控制与普通通道连核心缓冲里的一起算：慢线路上核心里能排上 1 MiB 推送，只算 JS 这边的话读数一直是 0，业务照样往里灌，交互回复
       // 排在后面几秒（2026-11-17 审查）。后台通道（文件块）只算 JS 这边的，下载时不压住任务文字。
       get bufferedAmount() {
         return streams.control.pendingBytes + streams.control.coreBufferedBytes + streams.normal.pendingBytes + streams.normal.coreBufferedBytes
-          + streams.background.pendingBytes;
+          + streams.background.pendingBytes + channel.bodiesBuffered();
       },
       onData: (handler) => {
         this.sessionHandler = handler;
         for (const [lane, bytes] of this.earlySession.splice(0)) handler(lane, bytes);
         this.earlySessionBytes = 0;
       },
+      openBody: (lane, key) => this.openBody(lane, key),
+      onBody: (handler) => {
+        this.bodyHandler = handler;
+        for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
+      },
     };
+  }
+
+  /**
+   * Session v2: bodies on the control and normal lanes count like their lanes (with what the core still buffers); a stream leaves
+   * the count once everything in it was acknowledged.
+   */
+  private bodiesBuffered(): number {
+    let total = 0;
+    for (const stream of this.bodyStreams) {
+      const buffered = stream.pendingBytes + stream.coreBufferedBytes;
+      if (buffered === 0 && stream.handedOver) this.bodyStreams.delete(stream); else total += buffered;
+    }
+    return total;
+  }
+
+  /** Session v2: a stream of its own for one message body (types.ts SESSION_BODY_KIND), at its lane's priority. */
+  private openBody(lane: SessionLaneName, key: number): SessionBodyWriter | null {
+    if (this.events.closed) return null;
+    let stream: SendStream;
+    try { stream = this.connection.openStream(SESSION_PRIORITY[lane]); } catch { return null; }
+    const head = new Uint8Array(5);
+    head[0] = SESSION_BODY_KIND;
+    new DataView(head.buffer).setUint32(1, key, false);
+    stream.write(head);
+    if (lane !== 'background') this.bodyStreams.add(stream);
+    return {
+      write: (bytes) => { if (!this.events.closed) stream.write(bytes); },
+      finish: () => stream.finish(),
+      // A core from before abandoned streams (no `conn_abandon`): what was written still goes, the stream ends after it.
+      abandon: () => { if (stream.abandon() === null) stream.finish(); this.bodyStreams.delete(stream); },
+    };
+  }
+
+  private sessionBody(key: number, bytes: Uint8Array | null): void {
+    if (this.bodyHandler) { this.bodyHandler(key, bytes); return; }
+    if (bytes) {
+      this.earlySessionBytes += bytes.length;
+      if (this.earlySessionBytes > MAX_EARLY_SESSION_BYTES) { this.close(); return; }
+    }
+    this.earlyBodies.push([key, bytes && bytes.slice()]);
   }
 
   private sessionData(lane: SessionLaneName, bytes: Uint8Array): void {

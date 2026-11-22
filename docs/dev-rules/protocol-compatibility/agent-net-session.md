@@ -124,6 +124,45 @@
 「keeps presence on the session with a new peer and still sends the frame to an older one」（在线状态只在会话上、连接上没有 Device Link 帧，
 老版本对端等过以后收到帧，自报的设备号不算数）。端到端对比用 `packages/agent-net/bench/session-latency.ts --modes v1,session`。
 
+## 会话 v2（2026-11-22，`agent-net-session-v2`）
+
+方案见 [`agent-net-session-plan.md`](../../agent-net-session-plan.md) 第 7 节、第 10.2 节的 v2-2。v2 只换大消息的走法，业务拿到消息的先后与 v1 完全一样。
+
+- **开启方式（两端都宣告）**：通道能读独立消息流的节点（Desktop 与 Node Host 的核心通道，打开 Agent-Net 的手机的原生通道）在宣告那一行里
+  多带一项 `agent-net-session-v2`（`{"session":["agent-net-session-v1","presence-v1","agent-net-session-v2"]}`）。两端都带了才用
+  （`portableSocket.ts` 的 `bodies`）；对端只有 v1、或本端这条通道不能读，就和 v1 一样，通道上的帧逐字节相同。
+  旧节点遇到不认识的流类型会关掉整条连接，所以只有收到对端的这一项以后才开正文流。
+- **正文流**：编码后 64 KiB 及以上的消息（`lanes.ts` 的 `BODY_STREAM_BYTES`）走一条自己的核心流：首字节 `0x33`，随后 4 字节大端的键，
+  再是消息的 UTF-8 JSON，写完流就结束；核心优先级同它本该走的那条通道。通道上原来放这条消息的位置换成占位
+  `{c, p?, r?, b?, o?, z: [键, 正文字节数], i?}`：计数（`p`、`r`、`b`、`o`）与 v1 相同，`i` 只在结果上，是请求号。键由发送方从随机起点递增，
+  一个会话里不重复。正文流开不出来（流数到了上限）时这条消息照 v1 整条写在通道上。
+- **先后**：占位停在它的通道头，直到正文收齐才交出，所以先后与 v1 相同（列表结果与它之后的补丁推送照旧不乱）。变化只在传输：
+  正文不占着通道，接收方从正文的第一个字节就知道这条结果在来。
+- **按进展判超时**：结果的正文开始到达后（占位里的 `i` 对上调用方在等的请求），请求自己的时限不再算，改成 15 秒没有新字节才报
+  `INVOKE_TIMEOUT`（`peer.ts` 的 `RESULT_STALL_MS`，核心判连接已死的 30 秒的一半）。慢线上大结果不再因为传不完就超时、再按同样大小重要。
+- **放弃**：调用方超时发 `cancel` 时，结果的正文还在发的话，发送方放弃这条流（核心的 `abandon_stream`：没发出的不再发，已发出的照常重传），
+  并在控制通道发一条 `{c:"control", x: 键}`：流的头几个字节可能也没发出，接收方只能靠它认出是哪个占位。接收方跳过这个占位（仍算交出，
+  同一通道后面的照常交），这条流之后到的字节丢掉；正文提前结束（比 `z` 里的短）时同样跳过。记下的放弃最多 1024 个，最早的先忘，不当错误。
+  请求还在业务里时收到 `cancel`，结果不再发回（v1 照发，调用方忽略）。
+- **上限**：接收方同时最多 1024 条还没交出的正文，正文字节算在 64 MiB 的积压里；本端会话还没准备好时先到的正文与会话流共用 16 MiB。
+  手机一条连接同时最多 32 条正文流（核心每条连接 64 条流，通道自己用 5 条），超过时照 v1 走通道。
+- **积压读数**：控制、普通通道的正文流和它们的通道一样，算 JS 这边与核心里还没发出、还没确认的字节；后台的只算 JS 这边。
+- **Node 驱动**：`agent-net-core/wasm/node.mts` 里写完（连结束标记都交给核心）或放弃了的流不再留在连接的表里：一条大消息一条流，
+  长连着的连接上这张表原来只增不减，驱动每一轮都要遍历它。进度、缓冲与放弃照样按流号问核心。
+- **手机原生库**：正文流只用开流、写、结束，所有原生库都有。带 `stream-levels` 的原生库放弃时用 `abandon`；更早的只能结束（已经交给引擎的照发，
+  接收方同样看出不全）。原生库按流报缓冲时，核心收回了的流报一次就不再报（`MAX_REPORTED_STREAMS` 为 40）。
+- **中转**：不变，只转发密文数据报。
+- **兼容组合**：v2 对 v2 走正文流；v2 对 v1、v1 对 v1、任一端通道不能读时都是 v1。v1 的会话端不认 `z`、`x`，但收不到它们：
+  只有对端宣告了 v2 才发。
+
+回归：`packages/agent-net/src/__tests__/sessionLanes.test.ts` 的「v2:」几条（先后与进展、放弃通知先到、后到、流头都没发出、正文提前结束、
+上千次放弃以后会话照常、对 v1 和小消息逐字节相同、按进展判超时与停住、业务里的请求被取消后不发结果）；`portableSocket.test.ts`「opens body streams
+only to a peer that declared session v2, on a channel that reads them」；`nativeTransport.test.ts`「opens, ends and gives up session v2 body streams
+on the native engine」（结束、写之前放弃、结束后放弃、开流暂时失败、对端流的键分片到达）；`socket.integration.test.ts`「carries an independent
+session between two new nodes alongside Device Link frames」（真实核心上 300 KB 结果走正文流，夹在两条推送之间，积压读数算上它）、
+「lets go of streams the Node driver has handed over…」（300 条写完的流和一条放弃的流都不留在驱动的表里）；
+`native.integration.test.ts`「carries sessions on the real native engine…」（真实原生库的三种构建上，大结果两个方向都走正文流）。
+
 ### 自建中继上的新分享
 
 自建中继在 `/info` 广告 `private-sharing-v1` 后，新版桌面端创建的分享使用版本 3 的邀请。新邀请需要支持该版本的客户端。版本 2 的邀请继续使用原身份服务；官方网络及历史成员记录沿用原有权限。

@@ -10,7 +10,7 @@
  * - tier：unit，内存里的字节，默认按 1、5、64、3 字节轮流拆开喂。 */
 import { afterEach, expect, it, vi } from 'vitest';
 import { SessionLanes, type SessionLane } from '../session/lanes.js';
-import { SessionPeer, type SessionHandle, type SessionRole } from '../session/peer.js';
+import { RESULT_STALL_MS, SessionPeer, type SessionHandle, type SessionRole } from '../session/peer.js';
 import { serveWorkerSessions, WorkerSessions, SESSION_BACKLOG_REPORT_MS } from '../session/workerSessions.js';
 
 function pair() {
@@ -259,4 +259,196 @@ it('lets Main see a session backlog drain without sending anything more', async 
   backlog = 0;
   await vi.advanceTimersByTimeAsync(SESSION_BACKLOG_REPORT_MS * 2);
   expect(announced!.bufferedAmount).toBe(0);
+});
+
+/** 测试价值（会话 v2：大消息走自己的流）
+ * - 生产入口与可观察结果：`SessionLanes` 带 `openBody`（两端都宣告了 agent-net-session-v2，portableSocket.ts）。64 KiB 以上的消息
+ *   走一条自己的流，通道上只留一个占位；业务拿到消息的先后和 v1 一模一样，接收方从结果的第一个字节起就知道它在来（`onProgress`）；
+ *   调用方放弃了的结果，发送方不再发剩下的，占位被跳过，同一通道后面的消息照常送达；对端是 v1 时线上的字节和原来一样。
+ * - Bug／规则依据：docs/agent-net-session-plan.md 第 7 节 v2-2。慢线上大结果传得比请求时限还久，超时以后又按同样大小重新要
+ *   （第 10.2 节）；业务依赖的先后（列表结果和它之后的补丁推送）不能因为换了流而变。
+ * - 现有覆盖缺口：新能力，原有用例都是 v1 的通道。
+ * - 最小失败输入：推送、大结果、推送、小结果，大结果的流一半先于占位、一半晚于占位；放弃通知先于占位到、晚于占位到、流的头几个字节
+ *   都没发出（只有通知能让占位放行）、流提前结束；放弃以后已经发出的字节晚到；一千多次放弃之后会话仍可用（记下的放弃不能
+ *   越积越多直到会话报积压）；没有 `openBody` 或消息小于 64 KiB 时帧的字节与 v1 相同。
+ * - tier：unit，内存里的字节。 */
+function bodyPair(options: { bodies?: boolean } = {}) {
+  const wire: Record<SessionLane, Uint8Array[]> = { control: [], normal: [], background: [] };
+  const streams = new Map<number, { lane: SessionLane; bytes: Uint8Array[]; end?: 'finish' | 'abandon'; sent: number }>();
+  const delivered: unknown[] = [], progress: Array<[string, number, number]> = [];
+  const sender = new SessionLanes({ write: (lane, bytes) => wire[lane].push(bytes), deliver() {}, onError(error) { throw error; },
+    ...(options.bodies === false ? {} : { openBody: (lane: SessionLane, key: number) => {
+      const stream: { lane: SessionLane; bytes: Uint8Array[]; end?: 'finish' | 'abandon'; sent: number } = { lane, bytes: [], sent: 0 };
+      streams.set(key, stream);
+      return { write: (bytes: Uint8Array) => { stream.bytes.push(bytes); }, finish: () => { stream.end ??= 'finish'; }, abandon: () => { stream.end = 'abandon'; } };
+    } }) });
+  const receiver = new SessionLanes({ write() {}, deliver: (message) => { delivered.push(message); }, onError(error) { throw error; },
+    onProgress: (id, received, total) => { progress.push([id, received, total]); } });
+  const arrive = (lane: SessionLane) => { for (const bytes of wire[lane].splice(0)) receiver.receive(lane, bytes); };
+  /** The body stream's next bytes up to `upTo` of it, in 7000-byte pieces, then its end if `end`. */
+  const arriveBody = (key: number, upTo: number, end: boolean) => {
+    const stream = streams.get(key)!, all = Buffer.concat(stream.bytes);
+    for (; stream.sent < Math.min(upTo, all.length); stream.sent += 7000) {
+      receiver.receiveBody(key, new Uint8Array(all.subarray(stream.sent, Math.min(upTo, all.length, stream.sent + 7000))));
+    }
+    stream.sent = Math.min(stream.sent, upTo, all.length);
+    if (end) receiver.receiveBody(key, null);
+  };
+  return { sender, receiver, wire, streams, delivered, progress, arrive, arriveBody };
+}
+const sizeOf = (chunks: Uint8Array[]) => chunks.reduce((total, chunk) => total + chunk.length, 0);
+
+it('v2: carries a large result on a stream of its own, reports its progress and hands it over in v1 order', () => {
+  const { sender, wire, streams, delivered, progress, arrive, arriveBody } = bodyPair();
+  const result = { listed: 'r'.repeat(100_000) };
+  sender.send('normal', 'push', 'push-1');
+  sender.send('normal', 'result', result, { id: 'call-1' });
+  sender.send('normal', 'push', 'push-2');
+  sender.send('normal', 'result', 'small-result', { id: 'call-2' });
+  expect(streams.size).toBe(1);
+  const [key] = streams.keys(), total = JSON.stringify(result).length;
+  expect(streams.get(key)).toMatchObject({ lane: 'normal', end: 'finish' });
+  expect(sizeOf(wire.normal)).toBeLessThan(1024);
+  arriveBody(key, 49_000, false);
+  arrive('normal');
+  // The placeholder knows its result's id: what already arrived counts as progress at once.
+  expect(delivered).toEqual(['push-1']);
+  expect(progress.at(-1)).toEqual(['call-1', 49_000, total]);
+  arriveBody(key, Infinity, true);
+  expect(progress.at(-1)).toEqual(['call-1', total, total]);
+  expect(delivered).toEqual(['push-1', result, 'push-2', 'small-result']);
+});
+
+it('v2: skips a result its caller gave up on, whenever the notice comes, and keeps its lane going', () => {
+  for (const when of ['notice-first', 'placeholder-first', 'no-head-sent', 'ended-short'] as const) {
+    const { sender, streams, delivered, arrive, arriveBody } = bodyPair();
+    sender.send('normal', 'result', 'x'.repeat(200_000), { id: 'gone' });
+    sender.send('normal', 'push', 'after');
+    const [key] = streams.keys();
+    expect(sender.abandonResult('gone')).toBe(true);
+    expect(sender.abandonResult('gone')).toBe(false);
+    expect(streams.get(key)!.end).toBe('abandon');
+    if (when === 'notice-first') { arrive('control'); arrive('normal'); }
+    if (when === 'placeholder-first') { arriveBody(key, 14_000, false); arrive('normal'); expect(delivered).toEqual([]); arrive('control'); }
+    // The core dropped the stream's first bytes with the rest: the placeholder would wait for ever without the notice.
+    if (when === 'no-head-sent') { arrive('normal'); expect(delivered).toEqual([]); arrive('control'); }
+    if (when === 'ended-short') { arriveBody(key, 14_000, true); arrive('normal'); }
+    expect(delivered, when).toEqual(['after']);
+    // Bytes of it already sent still arrive: dropped, not an error.
+    arriveBody(key, 28_000, true);
+    arrive('control');
+    sender.send('normal', 'push', 'later');
+    arrive('normal');
+    expect(delivered, when).toEqual(['after', 'later']);
+  }
+});
+
+it('v2: stays usable after more given-up results than it keeps notices for', () => {
+  const delivered: unknown[] = [];
+  const receiver = new SessionLanes({ write() {}, deliver: (message) => { delivered.push(message); }, onError(error) { throw error; } });
+  const frame = (lane: SessionLane, value: object) => {
+    const body = Buffer.from(JSON.stringify(value)), bytes = Buffer.alloc(4 + body.length);
+    bytes.writeUInt32BE(body.length, 0); body.copy(bytes, 4);
+    receiver.receive(lane, new Uint8Array(bytes));
+  };
+  for (let key = 1; key <= 1500; key++) {
+    frame('control', { c: 'control', x: key });
+    frame('normal', { c: 'result', p: [0, 0, 0], z: [key, 70_000], i: `call-${key}` });
+    receiver.receiveBody(key, new Uint8Array(1350));
+    receiver.receiveBody(key, null);
+  }
+  frame('normal', { m: 'still-open', c: 'push' });
+  expect(delivered).toEqual(['still-open']);
+});
+
+it('v2: writes the same frame bytes as v1 to a v1 peer and for messages below a body', () => {
+  const v1 = (message: unknown, kind: string, p?: number[]) => {
+    const body = Buffer.from(JSON.stringify({ m: message, c: kind, ...(p ? { p } : {}) }));
+    const bytes = Buffer.alloc(4 + body.length); bytes.writeUInt32BE(body.length, 0); body.copy(bytes, 4);
+    return bytes;
+  };
+  const large = { rows: ['ü'.repeat(70_000)] }, small = { rows: ['a', null, 1.5] };
+  for (const bodies of [false, true]) {
+    const { sender, wire, streams } = bodyPair({ bodies });
+    sender.send('normal', 'push', small);
+    sender.send('normal', 'result', bodies ? small : large, { id: 'call-1' });
+    expect(streams.size).toBe(0);
+    expect(Buffer.concat(wire.normal)).toEqual(Buffer.concat([v1(small, 'push'), v1(bodies ? small : large, 'result', [0, 1, 0])]));
+  }
+});
+
+/** 测试价值（会话 v2 的时限）
+ * - 生产入口与可观察结果：`SessionPeer` 两端都开了 v2（`bodies`）：结果在流上一直有字节到，就不按请求的时限判超时；停住 15 秒
+ *   （RESULT_STALL_MS）才报 INVOKE_TIMEOUT，并让对方放弃没发完的结果；调用方已经放弃、还在业务里的请求，结果不再发回。
+ * - Bug／规则依据：docs/agent-net-session-plan.md 第 7 节 v2-2、第 10.2 节：慢线上一个大的远程任务结果 10 秒传不完，超时，
+ *   又用同样的游标再要一次，直到放弃这个任务。
+ * - 现有覆盖缺口：上面的用例只测通道上的字节；v1 的超时用例不涉及流。
+ * - 最小失败输入：10 秒时限、每 5 秒到 10 KB、共 100 秒传完的结果；只到一片就停住的结果；时限过了还在业务里的请求。
+ * - tier：unit，内存里的字节、假时钟，没有真实等待。 */
+function bodyPeers() {
+  const bodies = new Map<number, { bytes: Uint8Array[]; end?: 'finish' | 'abandon'; sent: number }>();
+  let toCaller!: (lane: SessionLane, bytes: Uint8Array) => void, toCallee!: (lane: SessionLane, bytes: Uint8Array) => void;
+  let bodyToCaller!: (key: number, bytes: Uint8Array | null) => void;
+  const requests: string[] = [];
+  let toCallerBytes = 0;
+  const caller = new SessionPeer({ bodies: true, laneFor: () => 'normal', wire: { write: (lane, bytes) => toCallee(lane, bytes),
+    bufferedAmount: 0, onData: (handler) => { toCaller = handler; }, onBody: (handler) => { bodyToCaller = handler; } } });
+  const callee: SessionPeer = new SessionPeer({ bodies: true, laneFor: () => 'normal',
+    wire: { write: (lane, bytes) => { toCallerBytes += bytes.length; toCaller(lane, bytes); }, bufferedAmount: 0,
+      onData: (handler) => { toCallee = handler; },
+      openBody: (_lane, key) => {
+        const body: { bytes: Uint8Array[]; end?: 'finish' | 'abandon'; sent: number } = { bytes: [], sent: 0 };
+        bodies.set(key, body);
+        return { write: (bytes) => { body.bytes.push(bytes); }, finish: () => { body.end ??= 'finish'; }, abandon: () => { body.end = 'abandon'; } };
+      } },
+    onRequest: (request) => { requests.push(request.id); } });
+  /** `count` pieces of 10 KB of the body with `key` reach the caller, one every `everyMs`; `end` then ends its stream. */
+  const trickle = async (key: number, count: number, everyMs: number, end = false) => {
+    const body = bodies.get(key)!, all = Buffer.concat(body.bytes);
+    for (let index = 0; index < count && body.sent < all.length; index++) {
+      await vi.advanceTimersByTimeAsync(everyMs);
+      const piece = all.subarray(body.sent, body.sent + 10_000);
+      body.sent += piece.length;
+      bodyToCaller(key, new Uint8Array(piece));
+    }
+    if (end) bodyToCaller(key, null);
+  };
+  return { caller, callee, bodies, requests, trickle, sentToCaller: () => toCallerBytes };
+}
+
+it('v2: lets a large result take as long as its bytes keep coming, and gives up on one that stalls', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const { caller, callee, bodies, requests, trickle } = bodyPeers();
+  const listing = { items: 'i'.repeat(190_000) };
+  const slow = caller.request('test:list', [], { timeoutMs: 10_000 });
+  callee.respond(requests[0], { ok: true, result: listing });
+  const [first] = bodies.keys();
+  await trickle(first, 20, 5_000, true);
+  await expect(slow).resolves.toEqual({ ok: true, result: listing });
+
+  const stalled = caller.request('test:list', [], { timeoutMs: 10_000 });
+  callee.respond(requests[1], { ok: true, result: listing });
+  const second = [...bodies.keys()][1];
+  await trickle(second, 1, 1_000);
+  await vi.advanceTimersByTimeAsync(RESULT_STALL_MS);
+  await expect(stalled).resolves.toMatchObject({ ok: false, error: { code: 'INVOKE_TIMEOUT' } });
+  // Its cancel reached the callee: the rest of the body is not sent.
+  expect(bodies.get(second)!.end).toBe('abandon');
+  // What was already sent of it still arrives; the session goes on.
+  await trickle(second, 3, 10, true);
+  const echo = caller.request('test:echo', [], { timeoutMs: 1_000 });
+  callee.respond(requests[2], { ok: true, result: 'echo' });
+  await expect(echo).resolves.toEqual({ ok: true, result: 'echo' });
+});
+
+it('v2: does not send the result of a request its caller gave up on while the business ran it', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const { caller, callee, bodies, requests, sentToCaller } = bodyPeers();
+  const call = caller.request('test:export', [], { timeoutMs: 1_000 });
+  await vi.advanceTimersByTimeAsync(1_000);
+  await expect(call).resolves.toMatchObject({ ok: false, error: { code: 'INVOKE_TIMEOUT' } });
+  const before = sentToCaller();
+  callee.respond(requests[0], { ok: true, result: 'e'.repeat(500_000) });
+  expect(bodies.size).toBe(0);
+  expect(sentToCaller()).toBe(before);
 });

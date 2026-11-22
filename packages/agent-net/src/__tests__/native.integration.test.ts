@@ -22,6 +22,7 @@ import { PROTOCOL_VERSION } from '@cindy/device-link-protocol';
 import { AgentNetSocket } from '../socket.js';
 import { AgentNetSocket as PortableSocket } from '../portableSocket.js';
 import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
+import { SessionLanes } from '../session/lanes.js';
 import { PortableAgentNetClient, type BinarySocket } from '../portableClient.js';
 import type { SocketClient } from '../socketPorts.js';
 import { uploadNativeMedia, readNativeMedia } from '../nativeMedia.js';
@@ -457,11 +458,14 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
  * - 生产入口与可观察结果：手机用的 PortableSocket.useSessions + NativeTransport，真实编译的原生库（C 接口）、真实 V2 中转与
  *   Node 节点（电脑一端）。会话上建链、调用、拿回 1 MB 结果；中转转发的数据报经 UDP 收发；STUN 查到的地址成为候选。
  *   旧安装包里的原生库（没有 features、不认新操作）配新 JS 时，会话照样可用，也不去调新操作。
+ *   会话 v2（2026-11-22）：两端都宣告了 agent-net-session-v2，大结果两个方向都走自己的流（手机的 NativeChannel、电脑的
+ *   CoreChannel 各开各收），三种原生库上都一样，拿回的内容与 v1 相同。
  * - Bug／规则依据：docs/agent-net-session-plan.md 第 10 节阶段 4（手机接入会话层与原生接口）、第 8 节中转 UDP；
  *   docs/dev-rules/mobile-development.md 冷更边界：热更的 JS 必须能在旧原生包上运行。
  * - 现有覆盖缺口：原生通道没有会话通道，手机只走 Device Link 帧；原生库没有中转 UDP 和 STUN，现有用例都不覆盖。
  * - 最小失败输入：一次建链、一次请求、一个 1 MB 结果；去掉原生的会话通道（不宣告、不开流）时会话一直不出现，
- *   去掉中转 UDP 时 1 MB 全经 WebSocket 回来。
+ *   去掉中转 UDP 时 1 MB 全经 WebSocket 回来；电脑向手机要一个 800 KB 的结果；手机读错流的键或不把流交给引擎时，
+ *   结果一直不到；手机不宣告 v2 时大结果不走流。
  * - tier：integration，真实回环中转与 UDP，不开局域网发现。 */
 it.skipIf(!library)('carries sessions on the real native engine, relays them over UDP, over the binary bridge, and on an older native build', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-native-'));
@@ -494,6 +498,10 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
     onRequest: (request) => { host.session(member.deviceId)!.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : request.args[0] }); },
   }) });
   hello(host);
+  const phoneLarge = 'phone-session-result-'.repeat(40_000);
+  // Body streams are read on both sides (v2 is declared and used whenever both ends read them).
+  const bodies = vi.spyOn(SessionLanes.prototype, 'receiveBody');
+  cleanups.push(async () => { bodies.mockRestore(); });
   for (const build of ['current', 'older', 'binary'] as const) {
     const peer = new NativePeer();
     await peer.call({ seed, context, deviceId: member.deviceId, enhancedTransport: build !== 'older' }, 'create');
@@ -549,7 +557,9 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
           }) } } });
         return transport;
       } } });
-    phone.useSessions({ laneFor: () => 'normal', handlers: () => ({}) });
+    phone.useSessions({ laneFor: () => 'normal', handlers: () => ({
+      onRequest: (request) => { phone.session(owner.deviceId)!.respond(request.id, { ok: true, result: phoneLarge }); },
+    }) });
     hello(phone);
     if (build !== 'older') {
       // The relay's STUN answered on the engine's own port, and relayed datagrams switched to UDP once it acknowledged.
@@ -562,8 +572,13 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
     const session = phone.session(owner.deviceId)!;
     await expect(session.open({ controllerName: 'phone' }, 5_000)).resolves.toEqual({ appVersion: 'host' });
     await expect(session.request('test:echo', [build], { timeoutMs: 5_000 })).resolves.toEqual({ ok: true, result: build });
-    const before = relayedOverWebSocket;
+    const before = relayedOverWebSocket, bodyBytes = () => bodies.mock.calls.filter(([, bytes]) => bytes).length;
+    const bodiesBefore = bodyBytes();
     await expect(session.request('test:large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: large });
+    expect(bodyBytes()).toBeGreaterThan(bodiesBefore);
+    const fromPhone = bodyBytes();
+    await expect(host.session(member.deviceId)!.request('test:phone-large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: phoneLarge });
+    expect(bodyBytes()).toBeGreaterThan(fromPhone);
     if (build === 'older') { expect(newOps).toEqual([]); expect(relayedOverWebSocket - before).toBeGreaterThan(large.length / 2); }
     else expect(relayedOverWebSocket - before).toBeLessThan(256 * 1024);
     if (build === 'binary') {
