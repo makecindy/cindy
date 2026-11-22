@@ -16440,7 +16440,7 @@
     "sidebar": {
       "machineSwitcher": {
         "addCloud": "Tambah host cloud",
-        "preparingCloud": "Host cloud · menyiapkan",
+        "preparingCloud": "Menyiapkan host cloud",
         "manageCloud": "Kelola host cloud",
         "allMachines": "Semua",
         "localMachine": "Komputer ini",

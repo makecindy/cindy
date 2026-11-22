@@ -22,7 +22,7 @@
   "usageUpdateDesktopCopy": "Versi Cindy di komputer terlalu lama dan belum bisa menyinkronkan pemakaian ke ponsel. Setelah diperbarui, data akan tampil otomatis.",
   "management": {
     "addCloud": "Tambah host cloud",
-    "preparingCloud": "Host cloud · menyiapkan",
+    "preparingCloud": "Menyiapkan host cloud",
     "manageCloud": "Kelola host cloud",
     "title": "Manajemen perangkat",
     "openDevice": "Lihat detail perangkat {{name}}",
