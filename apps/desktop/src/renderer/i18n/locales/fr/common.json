@@ -15268,6 +15268,7 @@
       "codexHelperUnverified": "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
       "replyFailed": "Impossible de terminer la réponse",
+      "toolDescriptionTooLong": "La description d’un outil dépasse la limite de cette API. Vérifiez sa configuration ou contactez son fournisseur. La longueur signalée et la limite figurent dans les détails de l’erreur.",
       "retryTitle": "Renvoyer le dernier message",
       "cancelTitle": "Fermer l'erreur",
       "retry": "Réessayer",

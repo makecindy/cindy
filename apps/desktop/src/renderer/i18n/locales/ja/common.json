@@ -15107,6 +15107,7 @@
       "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "replyFailed": "返信を完了できませんでした",
+      "toolDescriptionTooLong": "ツールの説明がこの API の長さ制限を超えています。ツールの設定を確認するか、提供元にお問い合わせください。実際の長さと上限はエラーの詳細で確認できます。",
       "retryTitle": "最後のメッセージを再送信",
       "cancelTitle": "エラーを閉じる",
       "retry": "再試行",

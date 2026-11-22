@@ -64,6 +64,7 @@ import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import {
   isStreamInterruptedErrorMessage,
+  isToolDescriptionTooLongError,
 } from '@/utils/streamInterruptError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
@@ -701,7 +702,9 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = localizedReasonError ?? t(preconditionMessage === undefined
+    displayError = isToolDescriptionTooLongError(error)
+      ? t('chat.errorBanner.toolDescriptionTooLong')
+      : localizedReasonError ?? t(preconditionMessage === undefined
       ? 'chat.errorBanner.replyFailed' : 'ipcError.PRECONDITION_FAILED');
     hasSpecialGuidance = false;
   }

@@ -15107,6 +15107,7 @@
       "codexHelperUnverified": "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다.",
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
       "replyFailed": "답변을 완료하지 못했습니다",
+      "toolDescriptionTooLong": "도구 설명이 이 API의 길이 제한을 초과했습니다. 도구 설정을 확인하거나 작성자에게 문의하세요. 실제 길이와 제한은 오류 세부 정보에서 확인할 수 있습니다.",
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",
       "retry": "다시 시도",

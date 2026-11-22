@@ -123,3 +123,15 @@ describe('unwrapProviderErrorDisplay', () => {
     expect(unwrapProviderErrorDisplay(completions)).toBe(completions);
   });
 });
+
+// #11544: production classifier; existing tests cover stream errors, not field-length refusals.
+// Unit: the reported tools[0].description rejection must be distinguished from other long fields.
+describe('tool description length rejection', () => {
+  it('recognizes the reported field and leaves unrelated length errors alone', async () => {
+    const { isToolDescriptionTooLongError } = await import('../utils/streamInterruptError');
+    expect(isToolDescriptionTooLongError("Invalid 'tools[0].description': string too long. Expected a string with maximum length 1048576, but got a string with length 1344337 instead.")).toBe(true);
+    expect(isToolDescriptionTooLongError('[StringParam] [tools[0].description] [string_above_max_length]')).toBe(true);
+    expect(isToolDescriptionTooLongError("Invalid 'messages[0].content': string too long.")).toBe(false);
+    expect(isToolDescriptionTooLongError("Invalid 'tools[0].description': invalid type.")).toBe(false);
+  });
+});

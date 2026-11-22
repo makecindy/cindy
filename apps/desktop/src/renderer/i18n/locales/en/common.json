@@ -15172,6 +15172,7 @@
       "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "replyFailed": "Could not complete the reply",
+      "toolDescriptionTooLong": "A tool description exceeds the limit allowed by this API. Review the tool configuration or contact its author. See the error details for the reported length and limit.",
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",

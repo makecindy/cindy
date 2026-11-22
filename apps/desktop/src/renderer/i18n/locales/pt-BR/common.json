@@ -15268,6 +15268,7 @@
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
       "requestFormatError": "O aplicativo enviou uma solicitação inválida, por isso não foi possível concluir esta resposta.",
       "replyFailed": "Não foi possível concluir a resposta",
+      "toolDescriptionTooLong": "A descrição de uma ferramenta excede o limite desta API. Verifique a configuração da ferramenta ou contate o fornecedor. Consulte o tamanho informado e o limite nos detalhes do erro.",
       "retryTitle": "Reenviar a última mensagem",
       "cancelTitle": "Fechar aviso de erro",
       "retry": "Tentar novamente",
