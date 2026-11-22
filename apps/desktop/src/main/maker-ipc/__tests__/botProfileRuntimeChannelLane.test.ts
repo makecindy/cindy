@@ -426,6 +426,23 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(classic.extraDirs).toBeUndefined();
   });
 
+  // A V2 session mounts the ordinary task's MCP and plugins, so its own catalogs only shape the snapshot:
+  // an unreadable catalog must not keep the teammate from answering. A classic teammate still fails closed.
+  it('starts a V2 teammate when its capability catalogs cannot be read, classic teammates still refuse', async () => {
+    const deps = {
+      readProfileFolder: async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' }),
+      listMcpServers: async () => { throw new Error('catalog offline'); },
+      listToolsets: async () => { throw new Error('registry offline'); },
+    };
+    seed('canonical', null, { memory: false, projectMode: true });
+    const v2 = { id: 'main', agentKind: 'codex', workingDir: path.resolve('/bots/bot/workspace'), model: 'm' } as MakerSessionCreateOpts;
+    await expect(hydrateBotProfileRuntime(v2, deps, { persistSnapshot: false })).resolves.not.toBeNull();
+    expect(v2.botRuntimeProfile?.projectContext).toBe(true);
+    seed('canonical', null, { memory: false });
+    const classic = { id: 'main', agentKind: 'codex', workingDir: path.resolve('/bots/bot/workspace'), model: 'm' } as MakerSessionCreateOpts;
+    await expect(hydrateBotProfileRuntime(classic, deps, { persistSnapshot: false })).rejects.toThrow('MCP 能力目录');
+  });
+
   it('still refuses read-only history links', async () => {
     seed('history', null);
     const opts = { id: 'old', agentKind: 'claude-code', workingDir: '/x', model: 'm' } as MakerSessionCreateOpts;

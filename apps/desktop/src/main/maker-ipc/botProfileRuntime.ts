@@ -864,8 +864,11 @@ export async function hydrateBotProfileRuntime(
       });
       resolvedMcpServers = resolvedMcp.resolved;
       unavailableMcpServers = resolvedMcp.unavailable;
-    } catch {
-      throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
+    } catch (error) {
+      // A project-context (V2) session mounts the ordinary task's MCP surface; this catalog only
+      // shapes the snapshot, so an unreadable catalog must not keep the teammate from starting.
+      if (!projectContext) throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
+      log.warn('teammate MCP catalog unavailable; ordinary task MCP surface applies', { error: String(error) });
     }
   } else if (mcpMode === 'allowlist') {
     unavailableMcpServers = configuredMcpServers;
@@ -894,8 +897,9 @@ export async function hydrateBotProfileRuntime(
       resolvedToolsets = resolvedToolsetsResult.resolved;
       unavailableToolsets = resolvedToolsetsResult.unavailable;
       disabledToolsets = resolvedToolsetsResult.disabled;
-    } catch {
-      throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
+    } catch (error) {
+      if (!projectContext) throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
+      log.warn('teammate toolset catalog unavailable; ordinary task plugins apply', { error: String(error) });
     }
   } else if (toolsetMode === 'allowlist') {
     unavailableToolsets = configuredToolsets;
