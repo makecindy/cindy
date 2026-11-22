@@ -24,6 +24,7 @@ import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
 import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { useTranslation } from 'react-i18next';
 import {
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isRemoteAgentResumeRejectedError,
   isResponsesLiteParallelToolCallsError,
@@ -98,7 +99,8 @@ export function ErrorMessageCard({
       : isGatewayProxyTokenInvalid
         ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
         : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
-          ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+          ?? localizedReasonError ?? remoteGuidance
+          ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
     : geminiGuidance ?? subscriptionGuidance ?? fallbackText;

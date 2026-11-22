@@ -70,8 +70,6 @@ interface ProfileState {
   defaultAvatarUrl?: string | null;
 }
 
-// Tooltip 默认 z-[60],会被 z-[10000] 的弹窗盖住(DESIGN §4 Dialog & Modal)。
-const DIALOG_TIP_CLASS = 'z-[10001]';
 
 export function ProfileEditDialog({ open, onOpenChange, avatarEditor }: ProfileEditDialogProps) {
   const { t } = useTranslation();
@@ -310,7 +308,6 @@ export function ProfileEditDialog({ open, onOpenChange, avatarEditor }: ProfileE
               source={cropSession.source}
               crop={cropSession.crop}
               onCropChange={updateCrop}
-              tipClassName={DIALOG_TIP_CLASS}
             />
           </div>
         }

@@ -1107,7 +1107,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return result.ok ? { ok: true as const, sessionId, status: 'deleted' as const } : result;
         }
         try {
-          await patchSessionMetaInDb(sessionId, { status: 'deleted' }, { beforeWrite: captureTaskActionSyncGuard() });
+          const guard = captureTaskActionSyncGuard();
+          const row = await getSessionRowSnapshotStrict(sessionId);
+          await assertCurrent();
+          await patchSessionMetaInDb(sessionId, {
+            status: 'deleted', ...(row?.sideChatPromoted && { deleteTarget: 'task' as const }),
+          }, { beforeWrite: guard });
           return { ok: true as const, sessionId, status: 'deleted' as const };
         } catch (error) {
           return { ok: false as const, errorCode: isIpcError(error) ? error.code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task deletion failed.' };

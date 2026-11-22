@@ -563,7 +563,8 @@
       "calloutUnknown": "요청한 사람을 모른다면 거절하세요. 거절하면 이 링크는 더 이상 사용할 수 없습니다.",
       "approve": "공유 승인",
       "reject": "요청 거절",
-      "later": "나중에 처리"
+      "later": "나중에 처리",
+      "calloutPluginEngine": "{{name}}님은 자신의 컴퓨터에 플러그인이나 CLI를 설치하지 않고도 이 컴퓨터의 CLI 로그인과 할당량으로 사용할 수 있습니다."
     },
     "apply": {
       "loading": "공유 링크를 읽는 중…",
@@ -1164,7 +1165,7 @@
     "title": "원격 데스크톱",
     "allow": "원격 데스크톱 허용",
     "allowHint": "같은 계정의 기기에서 이 컴퓨터의 모든 앱을 보고 조작하도록 허용합니다. 위의 기기 제어도 켜주세요.",
-    "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요.",
+    "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
     "inputUnsupported": "이 컴퓨터의 현재 데스크톱 환경에서는 Cindy를 통한 원격 키보드 및 마우스 제어가 지원되지 않습니다.",
     "controlUnavailable": "원격 키보드 및 마우스 제어를 일시적으로 사용할 수 없습니다. 다시 연결해 주세요.",
     "beingControlled": "데스크톱을 원격으로 제어 중",
@@ -1281,7 +1282,7 @@
     "privacyScreen": "연결 중 프라이버시 화면 사용",
     "privacyScreenHint": "원격 제어 중 이 컴퓨터의 화면을 가립니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
     "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
-    "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
+    "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다. 원격 컴퓨터가 Mac인 경우 해당 Mac에서 실행 중인 Cindy의 제어 권한을 확인하세요.",
     "hostMute": "원격 컴퓨터 음소거",
     "hostMuteHint": "연결 중 원격 컴퓨터의 소리를 음소거합니다",
     "hostMuteFailed": "원격 컴퓨터의 음소거 상태를 변경할 수 없습니다",
@@ -1310,7 +1311,7 @@
     "credentialSigningRequired": "Mac 개발 버전에 서명 설정이 없습니다. Mac에서 서명을 설정하고 Cindy를 다시 시작한 후 다시 시도해 주세요.",
     "credentialPasswordRejected": "Mac 로그인 암호를 확인하지 못했습니다. 다시 입력해 주세요.",
     "credentialIdentityChanged": "컴퓨터의 신원을 확인할 수 없습니다. 확인되지 않은 기기로 암호를 보내지 않습니다.",
-    "credentialAccessibilityRequired": "Mac의 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 Cindy를 허용한 후 다시 연결하세요.",
+    "credentialAccessibilityRequired": "Mac에서 실행 중인 Cindy의 제어 권한을 확인한 뒤 다시 연결하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
     "credentialUnlockUnavailable": "이 Mac의 잠금을 안전하게 해제하지 못했습니다. 잠금 화면에서 본인 계정을 선택한 후 다시 연결하세요. 계속 실패하면 Mac에서 직접 잠금을 해제하세요.",
     "disconnecting": "연결 끊는 중…",
     "loadingDisplayModes": "해상도 불러오는 중…",
@@ -1349,6 +1350,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 모델을 해당 제공자에서 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
+    "MODEL_CATALOG_UNCONFIRMED": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
     "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
     "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
     "INVALID_PARAMS": "입력값이 올바르지 않습니다. 확인 후 다시 시도하세요.",
@@ -2469,8 +2471,8 @@
         "hint": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, Touch ID나 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
         "permission": "누군가 이 Mac을 건드릴 때 즉시 잠그려면 '시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용'에서 Cindy를 허용하세요. 허용하기 전에는 평소처럼 화면이 꺼지고 잠깁니다.",
         "preview": "지금 사용해 보기",
-        "previewStarting": "마우스와 키보드에서 손을 떼세요. 3초 뒤 프라이버시 화면이 나타납니다. 아무 키나 눌러 잠근 뒤 잠금을 해제해 보세요.",
-        "previewUnavailable": "프라이버시 화면을 표시할 수 없습니다. Cindy를 다시 시작한 뒤 다시 시도하세요.",
+        "previewStarting": "프라이버시 화면을 준비하고 있습니다. 마우스와 키보드에서 손을 떼세요. 화면이 가려지면 키를 눌러 잠금을 테스트하세요.",
+        "previewUnavailable": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
         "delay": {
           "30": "30초",
           "60": "1분",
@@ -2481,7 +2483,10 @@
           "system": "시스템"
         },
         "hintWindows": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, Windows Hello나 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
-        "hintLinux": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다."
+        "hintLinux": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
+        "permissionMissing": "프라이버시 화면이 꺼져 있습니다. 키를 누르거나 클릭하면 Mac을 잠글 수 있도록 Cindy에 권한을 부여해야 합니다.",
+        "checkFailed": "이 컴퓨터에서 프라이버시 화면 권한을 확인할 수 없습니다.",
+        "saveFailed": "프라이버시 화면 설정을 저장하지 못했습니다."
       }
     },
     "agentIsland": {
@@ -3715,6 +3720,7 @@
         "connecting": "연결 중…",
         "rename": "이름 변경",
         "suspended": "비활성화됨",
+        "hidden": "숨김",
         "unconfigured": "설정 안 됨"
       },
       "button": {
@@ -3725,7 +3731,9 @@
         "cancel": "취소",
         "retry": "모델 목록 다시 가져오기",
         "retrying": "다시 가져오는 중…",
-        "enableProvider": "제공자 활성화"
+        "enableProvider": "제공자 활성화",
+        "showProvider": "표시",
+        "hideInstead": "숨김으로 변경"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4105,7 +4113,7 @@
         "paymentRequired": "유료",
         "paymentUnlock": "유료로 잠금 해제",
         "enableModel": "이 모델 활성화",
-        "capabilityGroupHint": "대화 모델 선택에는 표시되지 않습니다. 스위치로 해당 기능에서의 표시 여부를 설정합니다.",
+        "capabilityGroupHint": "모델 선택기에는 표시되지 않습니다. 스위치로 해당 기능에서 이 모델을 사용할지 정합니다.",
         "accessWriteFailed": "변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.",
         "visibilityWriteFailed": "모델 표시 설정을 저장하지 못했습니다. 다시 시도해 주세요. 문제가 계속되면 Cindy를 다시 시작해 주세요.",
         "disabledGroup": "비활성화됨",
@@ -4249,22 +4257,22 @@
           "aria": "모델 유형으로 필터",
           "chat": "대화"
         },
-        "hiddenGroup": "표시 안 함",
+        "hiddenGroup": "숨김",
         "management": {
           "brand": "제조사"
         },
         "manage": {
           "title": "모델",
-          "selected": "{{count}}개 선택됨",
-          "hint": "스위치로 사용할 대화 모델을 선택하세요.",
+          "selected": "{{count}}개 표시",
+          "hint": "스위치로 모델 선택기에 표시할 모델을 정합니다. 끄면 숨겨질 뿐이며, 모델 선택기 하단의 ‘숨김’에서 계속 선택할 수 있습니다.",
           "menu": "관리",
           "arrange": "목록 정렬",
           "byBrand": "제조사별로 묶기",
           "byName": "모델 이름순 정렬",
-          "selection": "모델 선택",
-          "showAll": "모든 모델 선택",
-          "hideAll": "모든 선택 해제",
-          "reset": "기본 선택 복원",
+          "selection": "모델 선택기에 표시",
+          "showAll": "모두 표시",
+          "hideAll": "모두 숨기기",
+          "reset": "기본 표시로 복원",
           "connectionRequired": "연결하면 사용할 수 있습니다. 모델 선택은 유지됩니다."
         }
       },
@@ -4278,7 +4286,8 @@
         "groupBadge_other": "제공자 그룹 · 컴퓨터 {{count}}대",
         "groupNote": "{{device}}에서 이 제공자를 제공자 그룹으로 만들었습니다. 모델 목록에서 선택해 새 작업을 만들면 {{device}}가 그룹 배정 방식에 따라 아래 컴퓨터 중 한 대에 작업을 배정하고, 그 컴퓨터에 문제가 생기면 다른 컴퓨터로 바꿔 계속합니다. {{device}}가 온라인이면 여기에서 「원격 및 공유」를 열어 그룹과 공유를 관리할 수 있습니다.",
         "groupMembersTitle": "그룹의 컴퓨터",
-        "groupMembersFailed": "지금은 그룹의 컴퓨터 상태를 가져올 수 없습니다."
+        "groupMembersFailed": "지금은 그룹의 컴퓨터 상태를 가져올 수 없습니다.",
+        "hiddenBanner": "이 컴퓨터의 모델 선택기에서 숨겨져 있습니다. 즐겨찾기와 사용 중인 세션에는 영향이 없습니다."
       },
       "genericOAuth": {
         "subtitle": "구독 계정",
@@ -4322,7 +4331,8 @@
           "rejected": "이 제공자가 요청을 거부했습니다. 아래는 마지막으로 가져온 목록입니다. 잠시 후 다시 시도하거나 다른 제공자를 사용하세요.",
           "empty": "이번에는 이 제공자가 사용 가능한 모델을 반환하지 않았습니다. 아래는 마지막으로 가져온 목록입니다. 계정 권한을 확인한 후 다시 시도하세요."
         },
-        "suspendedBanner": "이 제공자는 비활성화되어 있습니다. 자격 증명은 유지되며, 활성화하면 모델을 다시 사용할 수 있습니다.",
+        "suspendedBanner": "이 제공자는 비활성화되어 새 세션과 백그라운드 기능에서 더 이상 사용되지 않습니다. 자격 증명은 유지됩니다. 모델 선택기에서만 보이지 않게 하려면 숨김으로 변경하세요.",
+        "hiddenBanner": "모델 선택기에서 숨겨져 있습니다. 사용 중인 세션과 백그라운드 기능에는 영향이 없으며, 모델 선택기 하단의 ‘숨김’에서 계속 선택할 수 있습니다.",
         "remoteAccess": {
           "label": "원격 사용 허용",
           "description": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다.",
@@ -4532,7 +4542,9 @@
       },
       "menu": {
         "disableProvider": "이 제공자 비활성화",
-        "enableProvider": "이 제공자 활성화"
+        "enableProvider": "이 제공자 활성화",
+        "hideProvider": "모델 선택기에서 숨기기",
+        "showProvider": "모델 선택기에 표시"
       },
       "builtinApiKey": {
         "subtitle": "API key 연결",
@@ -6999,7 +7011,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "프라이버시 화면에 포함됨: 컴퓨터가 잠자기 상태로 전환되지 않습니다."
+      "keepAwakeIncluded": "프라이버시 화면에 포함됨: 컴퓨터가 잠자기 상태로 전환되지 않습니다.",
+      "localNetwork": {
+        "label": "로컬 네트워크",
+        "deniedHint": "이 권한이 없으면 같은 네트워크의 컴퓨터와 휴대폰이 이 컴퓨터에 직접 연결할 수 없고 릴레이를 거쳐야 해서 느려집니다.",
+        "settingsHint": "시스템 설정 › 개인정보 보호 및 보안 › 로컬 네트워크에서 Cindy를 켜세요. 돌아오면 바로 적용됩니다."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8515,7 +8532,8 @@
           "description": "켜면 내 다른 컴퓨터에서 이 엔진으로 작업을 실행할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다. 파일과 명령은 작업이 있는 컴퓨터에 그대로 남습니다.",
           "unsupported": "이 플러그인은 아직 다른 컴퓨터에서 엔진을 사용하는 것을 지원하지 않습니다.",
           "remoteControlOff": "이 컴퓨터는 아직 원격 제어를 허용하지 않아 다른 컴퓨터에서 이 엔진을 사용할 수 없습니다.",
-          "ariaLabel": "내 다른 컴퓨터에서 {{engine}} 사용 허용"
+          "ariaLabel": "내 다른 컴퓨터에서 {{engine}} 사용 허용",
+          "descriptionShareable": "켜면 내 다른 컴퓨터와 공유받은 사람이 플러그인을 설치하지 않고도 이 엔진으로 작업을 실행할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다. 파일과 명령은 작업이 있는 컴퓨터에 그대로 남습니다."
         },
         "githubRelease": {
           "title": "플러그인 업데이트",
@@ -10894,6 +10912,13 @@
         "enabled": "켜짐"
       },
       "close": "다운로드 화면 닫기"
+    },
+    "localNetwork": {
+      "title": "로컬 네트워크 접근 허용",
+      "relayOnly": "다른 기기가 지금은 릴레이를 통해서만 이 컴퓨터에 연결되어 느립니다. 허용하면 같은 네트워크에서는 직접 연결됩니다.",
+      "controlEnabled": "같은 네트워크의 기기가 이 컴퓨터를 직접 제어하려면 로컬 네트워크 접근이 필요합니다. 없으면 릴레이를 거칩니다.",
+      "allow": "허용",
+      "dismiss": "나중에"
     }
   },
   "bots": {
@@ -13042,6 +13067,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "자동 승인 모델의 사용 한도를 모두 소진했습니다. Agent를 실행하는 컴퓨터에서 사용량이나 청구를 확인하거나 설정에서 보조 모델을 직접 지정하세요. 승인이 필요한 작업은 계속 직접 확인해야 합니다.",
           "autoReviewNoAvailableModel": "사용 가능한 자동 검토 모델이 없습니다. Agent가 실행되는 컴퓨터에서 모델 제공자를 열어 검토용 제공자를 활성화하고 연결하거나, 설정에서 보조 모델을 직접 구성하세요. 검토가 필요한 작업은 계속 직접 확인해야 합니다.",
           "autoReviewUnavailable": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 세션을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
           "autoReviewUnavailableWechat": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 개인 WeChat에서는 전체 접근을 사용할 수 없습니다. 이번 작업을 직접 확인하세요.",
@@ -14092,6 +14118,8 @@
       "source": {
         "lastConfirmed": "마지막 새로고침: {{time}}",
         "unconfirmed": "모델 목록을 갱신하지 못함",
+        "unreachable": "{{source}}에 연결할 수 없음",
+        "unreachableDetail": "연결할 수 없습니다. 네트워크를 확인하세요",
         "unavailable": "모델 사용 불가",
         "reconnect": "다시 연결",
         "manage": "소스 관리",
@@ -14115,6 +14143,8 @@
         "remoteFavoriteUnavailable": "{{source}} · 그 컴퓨터의 모델을 불러올 수 없음",
         "favoritesGroup": "즐겨찾기",
         "recentGroup": "최근",
+        "hiddenGroup": "숨김({{count}})",
+        "hiddenGroupHint": "숨긴 제공자와 모델도 선택할 수 있습니다",
         "recentEmpty": "최근 사용한 모델이 없습니다 — 모델을 선택하면 여기에 표시됩니다",
         "favoritesSaveFailed": "즐겨찾기 변경 사항을 저장하지 못했습니다",
         "favoritesCleanupFailed": "공유가 해제된 모델의 즐겨찾기를 삭제하지 못했습니다",
@@ -14292,6 +14322,8 @@
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
+
+      "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
       "resumeAction": "계속 전송",
       "resumeAria": "대기열 메시지 전송 계속",
       "showMore_one": "{{count}}개 더 있음",
@@ -15069,6 +15101,9 @@
       "usageLimitAutoContinueTitle": "사용량 한도가 재설정될 때까지 별도 조치가 없으면 이 작업을 자동으로 계속합니다",
       "usageLimitAutoContinueCancel": "취소",
       "usageLimitAutoContinueCancelTitle": "자동 계속 취소(오류와 다시 시도는 유지됩니다)",
+      "usageLimitReached": "모델 계정이 사용량 한도에 도달했습니다",
+      "usageLimitReachedWithReset": "모델 계정이 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
+      "usageLimitReachedNoReset": "모델 계정이 사용량 한도에 도달했습니다. 한도 재설정을 기다리거나 다른 모델로 전환한 후 다시 시도하세요.",
       "codexOrganizationUsageLimitWithReset": "현재 연결된 Codex 계정은 조직에서 관리하며 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
       "codexOrganizationUsageLimit": "현재 연결된 Codex 계정은 조직에서 관리하며 사용량 한도에 도달했습니다. 한도 재설정을 기다리거나 사용 가능한 다른 계정으로 전환한 후 다시 시도하세요.",
       "codexUsageLimitWithReset": "현재 연결된 Codex 계정이 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
@@ -15087,7 +15122,7 @@
       "switchClaudeSubscriptionTitle": "이 세션을 Claude.ai 구독으로 전환하고 다시 시도",
       "switchingClaudeSubscription": "Claude.ai로 전환하는 중…",
       "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
-      "codexAppServerRetired": "Codex 서비스가 다시 시작되었거나 교체되었습니다. 현재 요청이 중단되었으므로 다시 실행해 주세요.",
+      "codexAppServerRetired": "Codex 연결이 끊겨 진행 중이던 요청이 중단되었습니다. 이 세션에서 계속할 수 있습니다.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
       "codexAuthMissingLocal": "이 컴퓨터의 “{{provider}}” 연결을 인증하지 못했습니다. 설정에서 해당 연결의 로그인 상태를 확인하고 연결을 복구한 뒤 이 세션으로 돌아와 계속하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
@@ -15140,6 +15175,7 @@
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
+      "pluginEngineStatus": "백그라운드에서 계속 작업 중…",
       "bashWorkStatus_one": "백그라운드에서 작업 중(명령 {{count}}개)…",
       "bashServiceStatus_one": "백그라운드 서비스 실행 중({{count}}개)",
       "bashWorkStatus_other": "백그라운드에서 작업 중(명령 {{count}}개)…",
@@ -15174,6 +15210,7 @@
       "continueFailed_other": "세션 {{count}}개를 이어서 진행하지 못했습니다. 세션을 열어 다시 시도하세요."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
       "actionScheduled": "이 동작에 대한 세션 권한이 만료되었습니다. 다음 실행은 예정대로 진행됩니다.",
       "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
       "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
@@ -15844,11 +15881,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "현재 연결에서 이전 모델을 사용할 수 없어 모델을 전환하는 동안 컨텍스트를 압축하지 못했습니다.",
       "MODEL_SELECTION_UNAVAILABLE": "선택한 모델을 해당 제공자에서 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
+      "MODEL_CATALOG_UNCONFIRMED": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
       "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
       "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
       "REMOTE_DAEMON_CLOSED": "원격 연결이 끊겼습니다. 업데이트 중일 수 있습니다. 이번 턴은 종료되었으니 메시지를 다시 보내 주세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "자동 승인 모델의 사용 한도를 모두 소진했습니다. Agent를 실행하는 컴퓨터에서 사용량이나 청구를 확인하거나 설정에서 보조 모델을 직접 지정하세요. 승인이 필요한 작업은 계속 직접 확인해야 합니다.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "사용 가능한 자동 검토 모델이 없습니다. Agent가 실행되는 컴퓨터에서 모델 제공자를 열어 검토용 제공자를 활성화하고 연결하거나, 설정에서 보조 모델을 직접 구성하세요. 검토가 필요한 작업은 계속 직접 확인해야 합니다.",
       "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 작업을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 개인 WeChat에서는 전체 접근을 사용할 수 없습니다. 이번 작업을 직접 확인하세요.",
@@ -16064,7 +16104,6 @@
       "opened": "미리보기 페이지를 열었습니다"
     },
     "sideChat": {
-      "openPage": "전체 작업 페이지 열기",
       "returnMain": "기본 작업으로 돌아가기",
       "new": "새 사이드 채팅",
       "mainWindowDescription": "사이드 채팅은 현재 메인 창에서 사용할 수 있습니다. 대화 내용은 저장되어 있습니다.",
@@ -16072,6 +16111,14 @@
       "commandDescription": "메인 작업의 맥락으로 사이드 채팅을 엽니다. 명령 뒤의 질문은 초안으로 입력됩니다.",
       "title": "사이드 채팅",
       "context": "사이드 채팅을 연 시점까지 완료된 컨텍스트를 사용합니다. 메인 작업은 계속 실행되며, 이 탭을 닫을 때까지 기록이 유지됩니다.",
+      "viewCollaboration": "협업 보기",
+      "openConversation": "대화 열기",
+      "openFromTaskList": "왼쪽 작업 목록에서도 열 수 있습니다.",
+      "returnToSideChat": "사이드바의 추가 질문으로 돌아가기",
+      "reopenSideChat": "사이드바의 추가 질문 다시 열기",
+      "origin": "이 대화는 사이드바의 추가 질문에서 시작되었습니다.",
+      "originNamed": "이 대화는 「{{title}}」의 사이드바 추가 질문에서 시작되었습니다.",
+      "originUnavailable": "이 대화는 사이드바의 추가 질문에서 시작되었습니다. 원래 작업은 열 수 없습니다.",
       "opening": "여는 중…",
       "notReady": "메인 작업의 첫 답변이 완료될 때까지 기다려 주세요.",
       "unsupported": "이 작업의 Agent는 다른 실행 환경에서 실행됩니다. 여기서는 아직 사이드 채팅을 사용할 수 없습니다.",
@@ -16080,9 +16127,10 @@
       "mainTaskOnly": "메인 작업에서 사이드 채팅을 열어 주세요.",
       "sharedTaskUnavailable": "공유 작업에서는 사이드 채팅을 사용할 수 없습니다.",
       "archivedTask": "이 작업의 보관을 취소한 후 사이드 채팅을 열어 주세요.",
-      "closeTitle": "사이드 채팅을 닫을까요?",
-      "closeDescription": "이 채팅을 중지하고 삭제합니다. 메인 작업에는 영향을 주지 않습니다.",
-      "closeConfirm": "닫고 삭제",
+      "closeTitle": "이 후속 질문을 닫고 보관할까요?",
+      "closeDescription": "왼쪽 작업 목록의 해당 작업도 보관됩니다.",
+      "closeDescriptionRunning": "왼쪽 작업 목록의 해당 작업도 보관되며 협업 Worker가 중지됩니다.",
+      "closeConfirm": "닫고 보관",
       "closeFailed": "사이드 채팅을 닫지 못했습니다. 다시 시도해 주세요."
     },
     "botStartedTasks": {
@@ -16105,6 +16153,10 @@
       "retryIn": "{{seconds}}초 후 자동 재시도"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "이 모델의 구독 사용량이 한도에 도달했습니다. 다른 모델로 전환할 수 있습니다.",
+      "poolRetryUntil": "{{resetAt}} 이후에 다시 시도할 수 있습니다.",
+      "poolOtherSignedOut": "다른 구독 계정이 로그아웃되어 있습니다. 작업을 실행하는 컴퓨터에서 로그인한 후 다시 시도할 수 있습니다.",
+      "poolUnavailable": "이 모델에서 사용할 수 있는 구독 계정이 없습니다. 모델을 바꾸거나 작업을 실행하는 컴퓨터에서 계정을 확인하세요.",
       "limited": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 한도가 초기화된 후 다시 시도하거나 다른 모델 연결을 선택하세요.",
       "limitedUntil": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 초기화 예정: {{resetAt}}. 초기화 후 다시 시도하거나 다른 모델 연결을 선택하세요.",
       "loginRequired": "이 작업에서 사용하는 구독 계정에 다시 로그인해야 합니다. 작업을 실행하는 컴퓨터에서 해당 계정에 다시 로그인한 후 다시 시도하세요.",
@@ -16969,7 +17021,41 @@
             "token": "예비 토큰 사용 중",
             "recheck": "연결 확인",
             "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
-            "otherMethods": "다른 연결 방법"
+            "otherMethods": "다른 연결 방법",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 접근 권한",
+            "all": "모든 저장소",
+            "selected": "선택한 저장소",
+            "visible": "현재 계정에 표시되는 저장소: {{count}}개",
+            "unknownCount": "저장소 수를 확인할 수 없음",
+            "permissions": "권한 상세",
+            "read": "읽기 전용",
+            "write": "읽기 및 쓰기",
+            "admin": "관리",
+            "loading": "접근 권한 확인 중…",
+            "missing": "이 컴퓨터에서 GitHub App을 연결하여 접근 권한을 확인하세요.",
+            "unavailable": "권한을 확인할 수 없습니다.",
+            "empty": "현재 계정에 표시되는 설치가 없습니다.",
+            "suspended": "설치가 일시 중지됨",
+            "events": "이 컴퓨터에서 이벤트를 구독하는 저장소: {{count}}개",
+            "manage": "저장소 접근 관리",
+            "names": {
+              "actions": "Actions",
+              "administration": "저장소 관리",
+              "checks": "검사",
+              "contents": "저장소 콘텐츠",
+              "deployments": "배포",
+              "issues": "이슈",
+              "members": "조직 구성원",
+              "metadata": "메타데이터",
+              "organization_events": "조직 이벤트",
+              "pull_requests": "풀 리퀘스트",
+              "repository_hooks": "저장소 웹훅",
+              "statuses": "커밋 상태",
+              "workflows": "워크플로 파일"
+            }
           },
           "app": {
             "title": "저장소 이벤트",
@@ -16982,6 +17068,21 @@
             "repositories": "저장소 선택",
             "disconnect": "이벤트 연결 해제",
             "connect": "GitHub App 연결"
+          },
+          "connection": {
+            "operations": "저장소 작업",
+            "operationsMissing": "아직 저장소 작업 권한이 없습니다",
+            "checking": "GitHub 연결 확인 중…",
+            "mismatch": "작업 계정과 알림 계정이 다릅니다. 확인 후 다시 연결하세요.",
+            "ready": "GitHub 계정이 연결되었습니다.",
+            "close": "닫기",
+            "incomplete": "계정이 연결되었습니다. 이 컴퓨터의 작업 권한을 승인하세요.",
+            "eventsOnly": "이 계정은 저장소 알림용입니다. 계정 이름이 표시되어도 이 컴퓨터의 작업 권한이 승인된 것은 아닙니다.",
+            "connect": "GitHub 연결",
+            "alternative": "로컬 GitHub 로그인 사용",
+            "cliDescription": "기존 로그인을 계속 사용할 수 있습니다. 개인 알림 등 GitHub App이 지원하지 않는 기능에는 이 방식이 필요합니다.",
+            "disconnect": "GitHub App 연결 해제",
+            "repositories": "관심 저장소: {{count}}개"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건",
@@ -17366,7 +17467,8 @@
         "title": "저장소 자동화 가져오기",
         "description": "출처: {{workingDir}}. 아래 설정을 확인하세요. 가져오면 변경 사항이 적용되고 새 자동화가 활성화됩니다. 명령을 실행하고 전체 액세스 권한으로 Agent를 시작할 수 있으므로 신뢰하는 내용만 가져오세요.",
         "accept": "가져오기 확인",
-        "removed": "삭제 예정: {{names}}"
+        "removed": "삭제 예정: {{names}}",
+        "fileMissing": "가져오기를 건너뛰었습니다. {{projectName}}에서 자동화 파일을 찾을 수 없습니다."
       },
       "toast": {
         "summary": "추가 {{inserted}} · 업데이트 {{updated}} · 삭제 {{deleted}}",
@@ -17463,6 +17565,7 @@
       "openWorkdirFailed": "폴더를 열지 못했습니다"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
       "status": {
         "running": "실행 중",
         "success": "성공",
@@ -18412,7 +18515,7 @@
       "expired": "대기 시간이 너무 길어 대리 입력이 종료되었습니다."
     },
     "failure": {
-      "permission": "Cindy에 이 컴퓨터 화면을 읽을 권한이 없습니다. 시스템 설정의 손쉬운 사용에서 Cindy를 허용하세요.",
+      "permission": "Cindy가 이 Mac의 화면을 읽을 수 없습니다. 실행 중인 Cindy의 제어 권한을 확인하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
       "target_gone": "대상 창이 닫혔습니다.",
       "unreadable": "이 화면을 읽을 수 없습니다. 호스트 컴퓨터에서 직접 완료한 뒤 Agent에게 넘기세요.",
       "action_failed": "방금 작업이 적용되지 않았습니다. 화면을 확인하고 다시 시도하세요.",
@@ -21391,6 +21494,7 @@
       "reviewed": "검토됨",
       "verified-publisher": "확인된 게시자"
     },
+    "viewLimit": "열린 페이지가 너무 많습니다. 다른 페이지를 화면 밖으로 스크롤하거나 접으면 이 페이지가 자동으로 열립니다.",
     "pluginRevoked": "플러그인이 비활성화되거나 변경되어 이 페이지를 사용할 수 없습니다.",
     "pluginCspRejected": "페이지에서 선언되지 않은 도메인을 요청하여 로드를 차단했습니다.",
     "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인하세요",
@@ -22121,6 +22225,7 @@
     "picker": {
       "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 모드로 묶으면 여기서 선택할 수 있습니다.",
       "manage": "모델 그룹 관리",
+      "deviceTitle": "모델 그룹 · {{device}}",
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
       "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
       "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."
@@ -22370,5 +22475,10 @@
       "auto": "자동 리뷰",
       "bypassPermissions": "전체 접근"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "System & App Protection Override에서 {{app}} 오른쪽의 ⓘ를 누르세요. 목록에 없으면 ＋를 눌러 실행 중인 앱을 추가하세요.",
+    "review": "$t(macControlPermission.selectApp)\n앱 선택 옵션이 있으면 제어 대상을 지정한 앱으로 제한할 수 있습니다. Mac 전체 제어를 허용하면 모든 앱과 데이터에 접근할 수 있습니다. 동의한다면 각 항목을 읽고 확인한 뒤 창 하단에서 허용하세요."
   }
 }

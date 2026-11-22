@@ -442,7 +442,7 @@ function AskUserQuestionForm({
   const snapshotButtons = useCallback(() => {
     // Capture a static copy of the current button bar's DOM via a frozen JSX snapshot.
     // This uses the current values at call time, not reactive state.
-    const btnClass = 'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium pointer-events-none';
+    const btnClass = 'rounded-full px-5 py-2 text-13 font-medium pointer-events-none';
     const skipClass = cn(
       btnClass,
       'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]',
@@ -805,7 +805,7 @@ function AskUserQuestionForm({
   ) : null;
   // A companion call's question bridge shows this on the call bar instead.
   const speakerFilteredNotice = !voiceBridge && dictation.speakerFiltered ? (
-    <p role="status" className="px-[4px] text-12 leading-5 text-[var(--text-secondary)]">
+    <p role="status" className="px-1 text-12 leading-5 text-[var(--text-secondary)]">
       {t('voiceInputOverlay.speakerFiltered')}
     </p>
   ) : null;
@@ -989,13 +989,13 @@ function AskUserQuestionForm({
   // view (DESIGN.md §4: permanent entries pin below the scroll region).
   const customAnswerEntry =
     options.length > 0 && !currentQ?.answerConstraints?.choices ? (
-      <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
+      <div className="overflow-hidden rounded-xl border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
         {showCustomInput ? (
           <div
             data-testid="interaction-answer-composer"
             className={cn(
               'flex w-full min-w-0 gap-2',
-              composerExpanded ? 'flex-col p-3' : 'items-end px-[16px] py-[8px]',
+              composerExpanded ? 'flex-col p-3' : 'items-end px-4 py-2',
             )}
           >
             <AutoGrowingAnswerTextarea
@@ -1073,11 +1073,11 @@ function AskUserQuestionForm({
           // The number badge stays last so it lines up with the option badges
           // above; the microphone sits just before it, the same order as the
           // expanded answer row (mic, then send).
-          <div className="flex items-center gap-2 px-[16px] py-[8px]">
+          <div className="flex items-center gap-2 px-4 py-2">
             <button
               type="button"
               className={cn(
-                'flex min-w-0 flex-1 items-center gap-3 py-[6px] text-left',
+                'flex min-w-0 flex-1 items-center gap-3 py-1.5 text-left',
                 'transition-colors hover:bg-[var(--ask-option-hover)]',
               )}
               disabled={voiceLocked}
@@ -1108,7 +1108,7 @@ function AskUserQuestionForm({
               aria-hidden="true"
               data-testid="ask-user-custom-badge"
               onClick={handleCustomOptionClick}
-              className="flex h-[28px] w-[28px] shrink-0 cursor-pointer items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]"
+              className="flex h-[28px] w-[28px] shrink-0 cursor-pointer items-center justify-center rounded-lg bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]"
             >
               {options.length + 1}
             </div>
@@ -1189,10 +1189,10 @@ function AskUserQuestionForm({
 
         {/* Options Container */}
         {options.length > 0 && (
-          <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
+          <div className="overflow-hidden rounded-xl border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
             {options.map((opt, idx) => {
               const rowClassName = cn(
-                'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
+                'flex w-full items-center justify-between px-4 py-3.5 text-left',
                 'transition-colors hover:bg-[var(--ask-option-hover)]',
               );
               const optionText = (
@@ -1208,7 +1208,7 @@ function AskUserQuestionForm({
                 </div>
               );
               const numberBadge = (
-                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
+                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-lg bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
                   {idx + 1}
                 </div>
               );
@@ -1260,7 +1260,7 @@ function AskUserQuestionForm({
           <div
             data-testid="interaction-answer-composer"
             className={cn(
-              'flex w-full min-w-0 gap-2 rounded-[8px] border border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+              'flex w-full min-w-0 gap-2 rounded-lg border border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
               composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
             )}
           >

@@ -567,7 +567,8 @@
       "calloutUnknown": "Wenn du diese Person nicht kennst, lehne ab. Nach der Ablehnung funktioniert der Link nicht mehr.",
       "approve": "Freigabe genehmigen",
       "reject": "Anfrage ablehnen",
-      "later": "Später entscheiden"
+      "later": "Später entscheiden",
+      "calloutPluginEngine": "{{name}} kann die Engine nutzen, ohne das Plugin oder die CLI auf dem eigenen Computer zu installieren, und verwendet dabei die CLI-Anmeldung und das Kontingent dieses Computers."
     },
     "apply": {
       "loading": "Freigabelink wird gelesen…",
@@ -1176,7 +1177,7 @@
     "title": "Remotedesktop",
     "allow": "Remotedesktop erlauben",
     "allowHint": "Erlaube deinen angemeldeten Geräten, alle Apps auf diesem Computer anzuzeigen und zu bedienen. Aktiviere oben auch die Gerätesteuerung.",
-    "permissionHint": "Erlaube auf dem Computer in den Systemeinstellungen die Bildschirmaufnahme und die Bedienungshilfen und stelle dann die Verbindung erneut her.",
+    "permissionHint": "Erlaube auf dem Computer in den Systemeinstellungen die Bildschirmaufnahme und die Bedienungshilfen und stelle dann die Verbindung erneut her. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“.",
     "inputUnsupported": "Die aktuelle Desktopumgebung dieses Computers unterstützt die Fernsteuerung von Tastatur und Maus in Cindy nicht.",
     "controlUnavailable": "Die Fernsteuerung von Tastatur und Maus ist vorübergehend nicht verfügbar. Verbinde dich erneut, um es noch einmal zu versuchen.",
     "beingControlled": "Dein Desktop wird gesteuert",
@@ -1293,7 +1294,7 @@
     "privacyScreen": "Sichtschutz während der Verbindung",
     "privacyScreenHint": "Verdeckt den Bildschirm dieses Computers während der Fernsteuerung. Klickt jemand am Computer oder drückt eine Taste, wird zuerst gefragt, ob die Verbindung getrennt werden soll.",
     "privacyActive": "Der Sichtschutz ist aktiv. Klickt jemand am Computer oder drückt eine Taste, wird zuerst gefragt, ob die Verbindung getrennt werden soll.",
-    "privacyFailed": "Der Sichtschutz konnte nicht aktiviert werden. Der Bildschirm des Computers ist möglicherweise noch sichtbar.",
+    "privacyFailed": "Der Sichtschutz konnte nicht aktiviert werden. Der Bildschirm des Computers ist möglicherweise noch sichtbar. Ist der ferngesteuerte Computer ein Mac, prüfe dort die Steuerungsberechtigung der laufenden Cindy-App.",
     "hostMute": "Gesteuerten Computer stummschalten",
     "hostMuteHint": "Gesteuerten Computer während der Verbindung stummschalten",
     "hostMuteFailed": "Stummschaltung des gesteuerten Computers konnte nicht geändert werden",
@@ -1323,7 +1324,7 @@
     "credentialSigningRequired": "Dem Mac-Entwicklungsbuild fehlt die Signaturkonfiguration. Starte Cindy auf dem Mac mit eingerichteter Signatur neu und versuche es erneut.",
     "credentialPasswordRejected": "Das Mac-Anmeldepasswort wurde nicht akzeptiert. Gib es erneut ein.",
     "credentialIdentityChanged": "Die Computeridentität konnte nicht überprüft werden. An ein nicht verifiziertes Gerät wurde kein Passwort gesendet.",
-    "credentialAccessibilityRequired": "Erlaube Cindy auf dem Mac unter Systemeinstellungen → Datenschutz & Sicherheit → Bedienungshilfen den Zugriff und verbinde dich erneut.",
+    "credentialAccessibilityRequired": "Prüfe auf dem Mac die Steuerungsberechtigung für die laufende Cindy-App und stelle die Verbindung erneut her. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“.",
     "credentialUnlockUnavailable": "Dieser Mac konnte nicht sicher entsperrt werden. Wähle dein Konto auf seinem Sperrbildschirm aus und verbinde dich erneut. Falls es weiterhin fehlschlägt, entsperre den Mac vor Ort.",
     "disconnecting": "Verbindung wird getrennt…",
     "loadingDisplayModes": "Auflösungen werden geladen…",
@@ -1362,6 +1363,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
     "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
+    "MODEL_CATALOG_UNCONFIRMED": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
     "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
     "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
     "INVALID_PARAMS": "Ungültige Eingabe. Überprüfe sie und versuch es erneut.",
@@ -2499,8 +2501,8 @@
         "hint": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
         "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt.",
         "preview": "Jetzt ausprobieren",
-        "previewStarting": "Lass Maus und Tastatur los. In 3 Sekunden erscheint der Sichtschutz; drücke eine beliebige Taste zum Sperren und entsperre dann zum Testen.",
-        "previewUnavailable": "Der Sichtschutz konnte nicht angezeigt werden. Starte Cindy neu und versuche es erneut.",
+        "previewStarting": "Der Sichtschutz wird vorbereitet. Lass Maus und Tastatur los. Sobald der Bildschirm verdeckt ist, drücke zum Testen der Sperre eine Taste.",
+        "previewUnavailable": "Der Sichtschutz konnte nicht aktiviert werden. Der Bildschirm des Computers ist möglicherweise noch sichtbar.",
         "delay": {
           "30": "30 s",
           "60": "1 Min.",
@@ -2511,7 +2513,10 @@
           "system": "System"
         },
         "hintWindows": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Windows Hello oder deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
-        "hintLinux": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer."
+        "hintLinux": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit deinem Passwort. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
+        "permissionMissing": "Der Sichtschutz ist aus. Cindy benötigt die Berechtigung, den Mac bei einem Klick oder Tastendruck zu sperren.",
+        "checkFailed": "Cindy konnte die Berechtigung für den Sichtschutz auf diesem Computer nicht prüfen.",
+        "saveFailed": "Die Einstellung für den Sichtschutz konnte nicht gespeichert werden."
       }
     },
     "agentIsland": {
@@ -3756,6 +3761,7 @@
         "connecting": "Verbindung wird hergestellt…",
         "rename": "Umbenennen",
         "suspended": "Deaktiviert",
+        "hidden": "Ausgeblendet",
         "unconfigured": "Nicht konfiguriert"
       },
       "button": {
@@ -3766,7 +3772,9 @@
         "cancel": "Abbrechen",
         "retry": "Modellsuche erneut versuchen",
         "retrying": "Modellsuche wird erneut versucht…",
-        "enableProvider": "Anbieter aktivieren"
+        "enableProvider": "Anbieter aktivieren",
+        "showProvider": "Anzeigen",
+        "hideInstead": "Stattdessen ausblenden"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4147,7 +4155,7 @@
         "paymentRequired": "Kostenpflichtig",
         "paymentUnlock": "Kostenpflichtig freischalten",
         "enableModel": "Dieses Modell aktivieren",
-        "capabilityGroupHint": "Wird in der Chat-Modellauswahl nicht angezeigt. Der Schalter steuert die Sichtbarkeit in der entsprechenden Funktion.",
+        "capabilityGroupHint": "Wird in der Modellauswahl nicht angezeigt. Der Schalter legt fest, ob die entsprechende Funktion das Modell verwenden kann.",
         "accessWriteFailed": "Änderung konnte nicht gespeichert werden. Bitte versuche es erneut.",
         "visibilityWriteFailed": "Die Einstellung zur Modellsichtbarkeit konnte nicht gespeichert werden. Versuche es erneut oder starte Cindy neu, falls das Problem weiterhin besteht.",
         "disabledGroup": "Deaktiviert",
@@ -4291,22 +4299,22 @@
           "aria": "Nach Modelltyp filtern",
           "chat": "Chat"
         },
-        "hiddenGroup": "Nicht angezeigt",
+        "hiddenGroup": "Ausgeblendet",
         "management": {
           "brand": "Hersteller"
         },
         "manage": {
           "title": "Modelle",
-          "selected": "{{count}} ausgewählt",
-          "hint": "Wähle deine Chatmodelle mit den Schaltern aus.",
+          "selected": "{{count}} angezeigt",
+          "hint": "Die Schalter legen fest, welche Modelle in der Modellauswahl erscheinen. Ausschalten blendet ein Modell nur aus; du kannst es weiterhin unten in der Modellauswahl unter „Ausgeblendet“ wählen.",
           "menu": "Verwalten",
           "arrange": "Liste anordnen",
           "byBrand": "Nach Hersteller gruppieren",
           "byName": "Nach Modellname sortieren",
-          "selection": "Modellauswahl",
-          "showAll": "Alle Modelle auswählen",
-          "hideAll": "Auswahl leeren",
-          "reset": "Standardauswahl wiederherstellen",
+          "selection": "In der Modellauswahl anzeigen",
+          "showAll": "Alle Modelle anzeigen",
+          "hideAll": "Alle Modelle ausblenden",
+          "reset": "Standardanzeige wiederherstellen",
           "connectionRequired": "Verbinden, um diese Modelle zu nutzen. Deine Auswahl wird gespeichert."
         }
       },
@@ -4321,7 +4329,8 @@
         "groupBadge_other": "Anbietergruppe · {{count}} Computer",
         "groupNote": "{{device}} hat diesen Anbieter zu einer Anbietergruppe gemacht. Wenn du damit eine Aufgabe startest, weist {{device}} sie gemäß der Gruppenstrategie einem der unten aufgeführten Computer zu und verschiebt sie auf einen anderen, falls bei diesem Computer ein Problem auftritt. Solange {{device}} online ist, kannst du die Gruppe und ihre Freigaben hier unter „Fernzugriff & Freigabe“ verwalten.",
         "groupMembersTitle": "Computer in der Gruppe",
-        "groupMembersFailed": "Der Status der Computer in der Gruppe konnte gerade nicht abgerufen werden."
+        "groupMembersFailed": "Der Status der Computer in der Gruppe konnte gerade nicht abgerufen werden.",
+        "hiddenBanner": "In der Modellauswahl auf diesem Computer ausgeblendet. Favoriten und Sitzungen, die ihn verwenden, sind nicht betroffen."
       },
       "genericOAuth": {
         "subtitle": "Abonnementkonto",
@@ -4365,7 +4374,8 @@
           "rejected": "Dieser Anbieter hat die Anfrage abgelehnt. Die Liste unten stammt von der letzten erfolgreichen Aktualisierung. Versuche es später erneut oder verwende einen anderen Anbieter.",
           "empty": "Dieser Anbieter hat diesmal keine nutzbaren Modelle zurückgegeben. Die Liste unten stammt von der letzten erfolgreichen Aktualisierung. Prüfe die Zugriffsrechte deines Kontos und versuche es erneut."
         },
-        "suspendedBanner": "Dieser Anbieter ist deaktiviert. Anmeldeinformationen bleiben erhalten; aktiviere ihn, um seine Modelle wieder zu verwenden.",
+        "suspendedBanner": "Dieser Anbieter ist deaktiviert: Neue Sitzungen und Hintergrundfunktionen verwenden ihn nicht mehr. Anmeldeinformationen bleiben erhalten. Wenn er nur nicht in der Modellauswahl erscheinen soll, blende ihn stattdessen aus.",
+        "hiddenBanner": "In der Modellauswahl ausgeblendet. Sitzungen und Hintergrundfunktionen, die ihn verwenden, sind nicht betroffen, und du kannst ihn weiterhin unten in der Modellauswahl unter „Ausgeblendet“ wählen.",
         "remoteAccess": {
           "label": "Remote-Nutzung erlauben",
           "description": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent.",
@@ -4575,7 +4585,9 @@
       },
       "menu": {
         "disableProvider": "Diesen Anbieter deaktivieren",
-        "enableProvider": "Diesen Anbieter aktivieren"
+        "enableProvider": "Diesen Anbieter aktivieren",
+        "hideProvider": "In der Modellauswahl ausblenden",
+        "showProvider": "In der Modellauswahl anzeigen"
       },
       "builtinApiKey": {
         "subtitle": "Verbindung per API-Schlüssel",
@@ -7042,7 +7054,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Im Sichtschutz enthalten: Dieser Computer geht nicht in den Ruhezustand."
+      "keepAwakeIncluded": "Im Sichtschutz enthalten: Dieser Computer geht nicht in den Ruhezustand.",
+      "localNetwork": {
+        "label": "Lokales Netzwerk",
+        "deniedHint": "Ohne diese Berechtigung können sich Computer und Telefone im selben Netzwerk nicht direkt mit diesem Computer verbinden. Sie laufen über das Relay, was langsamer ist.",
+        "settingsHint": "Aktiviere Cindy unter Systemeinstellungen › Datenschutz & Sicherheit › Lokales Netzwerk. Die Änderung gilt, sobald du zurückkommst."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8558,7 +8575,8 @@
           "description": "Wenn aktiviert, können deine anderen Computer Aufgaben mit dieser Engine ausführen. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent. Dateien und Befehle bleiben auf dem Computer, auf dem die Aufgabe liegt.",
           "unsupported": "Dieses Plugin unterstützt die Nutzung seiner Engine von anderen Computern aus noch nicht.",
           "remoteControlOff": "Dieser Computer ermöglicht noch keine Fernsteuerung, sodass andere Computer diese Engine nicht nutzen können.",
-          "ariaLabel": "Deinen anderen Computern die Nutzung von {{engine}} erlauben"
+          "ariaLabel": "Deinen anderen Computern die Nutzung von {{engine}} erlauben",
+          "descriptionShareable": "Wenn aktiviert, können deine anderen Computer und Personen, mit denen du teilst, Aufgaben mit dieser Engine ausführen, ohne das Plugin zu installieren. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent. Dateien und Befehle bleiben auf dem Computer, auf dem die Aufgabe liegt."
         },
         "githubRelease": {
           "title": "Plugin-Updates",
@@ -10937,6 +10955,13 @@
         "enabled": "Aktiviert"
       },
       "close": "Download-Dialog schließen"
+    },
+    "localNetwork": {
+      "title": "Zugriff auf lokales Netzwerk erlauben",
+      "relayOnly": "Deine anderen Geräte erreichen diesen Computer gerade nur über das Relay, was langsamer ist. Erlaube den Zugriff, damit sich Geräte im selben Netzwerk direkt verbinden.",
+      "controlEnabled": "Geräte im selben Netzwerk können diesen Computer nur mit Zugriff auf das lokale Netzwerk direkt steuern. Sonst läuft die Verbindung über das Relay.",
+      "allow": "Erlauben",
+      "dismiss": "Später"
     }
   },
   "bots": {
@@ -13095,6 +13120,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "Das Kontingent eines Modells für die automatische Prüfung ist aufgebraucht. Prüfe Nutzung oder Abrechnung oder passe die Hilfsmodelle in den Einstellungen des Computers an, auf dem der Agent läuft. Prüfpflichtige Aktionen erfordern weiterhin deine Bestätigung.",
           "autoReviewNoAvailableModel": "Kein Modell für die automatische Prüfung verfügbar. Aktiviere und verbinde auf dem Computer, auf dem der Agent läuft, einen Prüfanbieter unter Modellanbieter oder konfiguriere Hilfsmodelle in den Einstellungen. Prüfpflichtige Aktionen benötigen weiterhin deine Bestätigung.",
           "autoReviewUnavailable": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Stelle diese Aufgabe auf Vollzugriff um, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt höhere Risiken.",
           "autoReviewUnavailableWechat": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
@@ -14146,6 +14172,8 @@
       "source": {
         "lastConfirmed": "Zuletzt aktualisiert: {{time}}",
         "unconfirmed": "Modellliste nicht aktuell",
+        "unreachable": "{{source}} nicht erreichbar",
+        "unreachableDetail": "Keine Verbindung. Netzwerk prüfen.",
         "unavailable": "Modell nicht verfügbar",
         "reconnect": "Erneut verbinden",
         "manage": "Quelle verwalten",
@@ -14169,6 +14197,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Modelle dieses Computers können gerade nicht gelesen werden",
         "favoritesGroup": "Favoriten",
         "recentGroup": "Zuletzt verwendet",
+        "hiddenGroup": "Ausgeblendet ({{count}})",
+        "hiddenGroupHint": "Ausgeblendete Anbieter und Modelle können weiterhin gewählt werden",
         "recentEmpty": "Noch keine zuletzt verwendeten Modelle — wähle ein Modell, dann erscheint es hier",
         "favoritesSaveFailed": "Änderungen an Favoriten konnten nicht gespeichert werden",
         "favoritesCleanupFailed": "Favoriten für widerrufene Anbieterfreigaben konnten nicht entfernt werden",
@@ -14346,6 +14376,8 @@
       "regionAria": "Warteschlange ausstehender Nachrichten",
       "listAria": "Nachrichten in der Warteschlange",
       "pausedFooter": "Aufgabe gestoppt, Warteschlange pausiert",
+
+      "steerUnsupportedNotice": "Diese Engine unterstützt kein Einbringen. Nachrichten in der Warteschlange werden nach der aktuellen Runde gesendet.",
       "resumeAction": "Senden fortsetzen",
       "resumeAria": "Nachrichten aus der Warteschlange weiter senden",
       "showMore_one": "{{count}} weitere",
@@ -15097,6 +15129,9 @@
       "usageLimitAutoContinueTitle": "Wenn du bis zum Zurücksetzen des Nutzungslimits nichts unternommen hast, wird diese Aufgabe automatisch fortgesetzt",
       "usageLimitAutoContinueCancel": "Abbrechen",
       "usageLimitAutoContinueCancelTitle": "Automatische Fortsetzung abbrechen. Der Fehler und „Erneut versuchen“ bleiben verfügbar.",
+      "usageLimitReached": "Das Modellkonto hat sein Nutzungslimit erreicht",
+      "usageLimitReachedWithReset": "Das Modellkonto hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
+      "usageLimitReachedNoReset": "Das Modellkonto hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen Modell.",
       "codexOrganizationUsageLimitWithReset": "Das verbundene Codex-Konto wird von deiner Organisation verwaltet und hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
       "codexOrganizationUsageLimit": "Das verbundene Codex-Konto wird von deiner Organisation verwaltet und hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen verfügbaren Konto.",
       "codexUsageLimitWithReset": "Das verbundene Codex-Konto hat sein Nutzungslimit erreicht. Die Nutzung wird voraussichtlich um {{resetAt}} zurückgesetzt.",
@@ -15115,7 +15150,7 @@
       "switchClaudeSubscriptionTitle": "Diese Sitzung auf das Claude.ai-Abonnement umstellen und erneut versuchen",
       "switchingClaudeSubscription": "Wechsel zu Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Wechsel zu Claude.ai oder erneuter Versuch dieser Sitzung fehlgeschlagen: {{msg}}",
-      "codexAppServerRetired": "Der Codex-Dienst wurde neu gestartet oder ersetzt. Die aktuelle Anfrage wurde unterbrochen; führe sie erneut aus.",
+      "codexAppServerRetired": "Die Verbindung zu Codex wurde getrennt. Die laufende Anfrage wurde unterbrochen. Du kannst in dieser Sitzung fortfahren.",
       "codexAuthMissing": "Remote-Codex ist noch nicht angemeldet (401 Unauthorized). Klicke auf „Authentifizierung synchronisieren“, um deine lokalen Codex-Zugangsdaten in das entfernte Cindy-Codex-Home-Verzeichnis zu übertragen, und versuch es dann erneut.",
       "codexAuthMissingLocal": "Die Verbindung „{{provider}}“ auf diesem Computer konnte nicht authentifiziert werden. Prüfe ihren Anmeldestatus in den Einstellungen und kehre nach der Wiederherstellung zu dieser Sitzung zurück.",
       "codexSessionExpired": "Die OpenAI-Verbindung muss aktualisiert werden. Verbinde ChatGPT erneut, um fortzufahren. {{appName}} meldet deine systemweite Codex CLI nicht ab und fordert dich nicht auf, andere Modellquellen erneut zu verbinden.",
@@ -15168,6 +15203,7 @@
     },
     "backgroundActivity": {
       "status": "Hintergrund-Unteraufgaben laufen, Modellnutzung fällt weiterhin an…",
+      "pluginEngineStatus": "Arbeitet im Hintergrund weiter…",
       "bashWorkStatus_one": "Arbeitet im Hintergrund ({{count}} Befehl)…",
       "bashServiceStatus_one": "{{count}} Hintergrunddienst läuft",
       "bashWorkStatus_other": "Arbeitet im Hintergrund ({{count}} Befehle)…",
@@ -15202,6 +15238,7 @@
       "continueFailed_other": "{{count}} Sitzungen konnten nicht fortgesetzt werden. Öffne sie, um es erneut zu versuchen."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
       "actionScheduled": "Die Berechtigung für diese Aktion ist abgelaufen. Der nächste Lauf ist weiterhin geplant.",
       "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
       "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
@@ -15872,11 +15909,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Der Kontext konnte beim Modellwechsel nicht komprimiert werden, da das vorherige Modell über diese Verbindung nicht verfügbar ist.",
       "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
+      "MODEL_CATALOG_UNCONFIRMED": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
       "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
       "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
       "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Diese Runde wurde beendet. Sende die Nachricht erneut.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Lokale Datei-/Bildanhänge sind in Remote-Sitzungen nicht zugänglich. Füge stattdessen den Inhalt direkt ein.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Das Kontingent eines Modells für die automatische Prüfung ist aufgebraucht. Prüfe Nutzung oder Abrechnung oder passe die Hilfsmodelle in den Einstellungen des Computers an, auf dem der Agent läuft. Prüfpflichtige Aktionen erfordern weiterhin deine Bestätigung.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Kein Modell für die automatische Prüfung verfügbar. Aktiviere und verbinde auf dem Computer, auf dem der Agent läuft, einen Prüfanbieter unter Modellanbieter oder konfiguriere Hilfsmodelle in den Einstellungen. Prüfpflichtige Aktionen benötigen weiterhin deine Bestätigung.",
       "AUTO_REVIEW_UNAVAILABLE": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Stelle diese Aufgabe auf Vollzugriff um, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt höhere Risiken.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
@@ -16101,7 +16141,6 @@
       "opened": "Vorschauseite geöffnet"
     },
     "sideChat": {
-      "openPage": "Vollständige Aufgabenseite öffnen",
       "returnMain": "Zurück zur Hauptaufgabe",
       "new": "Neuer Nebenchat",
       "mainWindowDescription": "Nebenchats laufen derzeit im Hauptfenster. Deine Unterhaltung ist gespeichert.",
@@ -16109,6 +16148,14 @@
       "commandDescription": "Öffne einen Nebenchat mit dem Kontext dieser Aufgabe. Optionaler Text wird als Frageentwurf übernommen.",
       "title": "Nebenchat",
       "context": "Nutzt den beim Öffnen abgeschlossenen Kontext. Die Hauptaufgabe läuft weiter. Der Verlauf bleibt erhalten, bis du diesen Tab schließt.",
+      "viewCollaboration": "Zusammenarbeit anzeigen",
+      "openConversation": "Unterhaltung öffnen",
+      "openFromTaskList": "Auch links in der Aufgabenliste verfügbar.",
+      "returnToSideChat": "Zurück zur Rückfrage",
+      "reopenSideChat": "Rückfrage erneut öffnen",
+      "origin": "Dieses Gespräch begann als Rückfrage.",
+      "originNamed": "Dieses Gespräch begann als Rückfrage zu „{{title}}“.",
+      "originUnavailable": "Dieses Gespräch begann als Rückfrage. Die ursprüngliche Aufgabe ist nicht verfügbar.",
       "opening": "Wird geöffnet…",
       "notReady": "Warte, bis die Hauptaufgabe ihre erste Antwort abgeschlossen hat.",
       "unsupported": "Der Agent dieser Aufgabe läuft in einer anderen Ausführungsumgebung. Nebenchats sind hier noch nicht verfügbar.",
@@ -16117,9 +16164,10 @@
       "mainTaskOnly": "Öffne einen Nebenchat aus der Hauptaufgabe.",
       "sharedTaskUnavailable": "Nebenchats sind in geteilten Aufgaben nicht verfügbar.",
       "archivedTask": "Hebe die Archivierung dieser Aufgabe auf, um einen Nebenchat zu öffnen.",
-      "closeTitle": "Nebenchat schließen?",
-      "closeDescription": "Diese Folgeunterhaltung wird beendet und ihr Verlauf gelöscht. Die Hauptaufgabe läuft weiter.",
-      "closeConfirm": "Schließen und löschen",
+      "closeTitle": "Diese Nachfrage schließen und archivieren?",
+      "closeDescription": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert.",
+      "closeDescriptionRunning": "Die zugehörige Aufgabe in der linken Seitenleiste wird ebenfalls archiviert und ihre Worker werden angehalten.",
+      "closeConfirm": "Schließen und archivieren",
       "closeFailed": "Der Nebenchat konnte nicht geschlossen werden. Versuch es erneut."
     },
     "teammateProcess": {
@@ -16179,6 +16227,10 @@
       "retryIn": "Automatischer Versuch in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
+      "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
+      "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",
+      "poolUnavailable": "Für dieses Modell ist kein Abo-Konto verfügbar. Wechseln Sie das Modell oder prüfen Sie die Konten auf dem Computer, der die Aufgabe ausführt.",
       "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle.",
       "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle.",
       "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
@@ -17043,7 +17095,41 @@
             "token": "Fallback-Token wird verwendet",
             "recheck": "Verbindung prüfen",
             "summary": "Verwalte GitHub-Repositories, Issues, Pull Requests und Actions.",
-            "otherMethods": "Andere Verbindungsmethoden"
+            "otherMethods": "Andere Verbindungsmethoden",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub-App-Zugriff",
+            "all": "Alle Repositorys",
+            "selected": "Ausgewählte Repositorys",
+            "visible": "Sichtbare Repositorys: {{count}}",
+            "unknownCount": "Anzahl nicht verfügbar",
+            "permissions": "Berechtigungen",
+            "read": "Nur lesen",
+            "write": "Lesen und schreiben",
+            "admin": "Verwalten",
+            "loading": "Zugriff wird geladen…",
+            "missing": "Verbinde die GitHub-App auf diesem Computer, um den Zugriff zu sehen.",
+            "unavailable": "Zugriffsdetails nicht verfügbar.",
+            "empty": "Für dieses Konto sind keine Installationen sichtbar.",
+            "suspended": "Installation angehalten",
+            "events": "Repositorys mit Ereignisabo auf diesem Computer: {{count}}",
+            "manage": "Repository-Zugriff verwalten",
+            "names": {
+              "actions": "Actions",
+              "administration": "Repository-Verwaltung",
+              "checks": "Prüfungen",
+              "contents": "Repository-Inhalte",
+              "deployments": "Deployments",
+              "issues": "Issues",
+              "members": "Organisationsmitglieder",
+              "metadata": "Metadaten",
+              "organization_events": "Organisationsereignisse",
+              "pull_requests": "Pull Requests",
+              "repository_hooks": "Repository-Webhooks",
+              "statuses": "Commit-Status",
+              "workflows": "Workflow-Dateien"
+            }
           },
           "app": {
             "title": "Repository-Ereignisse",
@@ -17056,6 +17142,21 @@
             "repositories": "Repositorys auswählen",
             "disconnect": "Ereignisse trennen",
             "connect": "GitHub App verbinden"
+          },
+          "connection": {
+            "operations": "Repository-Aktionen",
+            "operationsMissing": "Repository-Zugriff noch nicht autorisiert",
+            "checking": "GitHub-Verbindung wird geprüft…",
+            "mismatch": "Aktionen und Benachrichtigungen verwenden verschiedene Konten. Bitte prüfen und erneut verbinden.",
+            "ready": "GitHub-Konto verbunden.",
+            "close": "Schließen",
+            "incomplete": "Konto verknüpft. Autorisiere jetzt Aktionen auf diesem Computer.",
+            "eventsOnly": "Dieses Konto empfängt Repository-Ereignisse. Der Name bestätigt keine Autorisierung auf diesem Computer.",
+            "connect": "GitHub verbinden",
+            "alternative": "Lokale GitHub-Anmeldung verwenden",
+            "cliDescription": "Die lokale Anmeldung bleibt nutzbar. Persönliche Benachrichtigungen und andere von GitHub Apps nicht unterstützte Funktionen benötigen sie weiterhin.",
+            "disconnect": "GitHub App trennen",
+            "repositories": "Beobachtete Repositorys: {{count}}"
           }
         },
         "unresolved": "Ungelöste Review-Threads: {{count}}",
@@ -17440,7 +17541,8 @@
         "title": "Repository-Automatisierungen importieren",
         "description": "Quelle: {{workingDir}}. Prüfe die folgenden Definitionen. Der Import übernimmt diese Änderungen und aktiviert neue Automatisierungen. Diese können Befehle ausführen und Agents mit Vollzugriff starten. Importiere nur vertrauenswürdige Inhalte.",
         "accept": "Import bestätigen",
-        "removed": "Wird entfernt: {{names}}"
+        "removed": "Wird entfernt: {{names}}",
+        "fileMissing": "Import übersprungen. Die Automatisierungsdatei in {{projectName}} wurde nicht gefunden."
       },
       "toast": {
         "summary": "{{inserted}} hinzugefügt · {{updated}} aktualisiert · {{deleted}} entfernt",
@@ -17537,6 +17639,7 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",
         "success": "Erfolgreich",
@@ -18487,7 +18590,7 @@
       "expired": "Eingabeübergabe wegen zu langer Wartezeit beendet."
     },
     "failure": {
-      "permission": "Cindy kann den Bildschirm dieses Computers nicht lesen. Erlaube Cindy den Zugriff unter „Bedienungshilfen“ in den Systemeinstellungen.",
+      "permission": "Cindy kann die Oberfläche auf diesem Mac nicht lesen. Prüfe die Steuerungsberechtigung für die laufende Cindy-App. Die Steuerungsberechtigung findest du ab macOS 27.3 unter „System & App Protection Override“, auf älteren Versionen unter „Bedienungshilfen“.",
       "target_gone": "Das Zielfenster wurde geschlossen.",
       "unreadable": "Dieser Bildschirm kann nicht gelesen werden. Du kannst den Schritt auf dem Host-Computer abschließen und dann an den Agent zurückgeben.",
       "action_failed": "Diese Aktion hatte keine Wirkung. Prüfe den Bildschirm und versuche es erneut.",
@@ -21478,6 +21581,7 @@
       "reviewed": "Geprüft",
       "verified-publisher": "Verifizierter Herausgeber"
     },
+    "viewLimit": "Zu viele Seiten sind geöffnet. Scrolle eine andere Seite aus dem sichtbaren Bereich oder klappe sie ein. Diese Seite öffnet sich dann automatisch.",
     "pluginRevoked": "Das Plugin wurde deaktiviert oder geändert. Diese Seite ist nicht mehr verfügbar.",
     "pluginCspRejected": "Die Seite hat eine nicht deklarierte Domain angefordert und wurde blockiert.",
     "filesOnExecutionComputer": "Dateiinhalt auf dem ausführenden Computer anzeigen",
@@ -22210,6 +22314,7 @@
     "picker": {
       "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
       "manage": "Modellgruppen verwalten",
+      "deviceTitle": "Modellgruppen · {{device}}",
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
       "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
       "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."
@@ -22459,5 +22564,10 @@
       "auto": "Automatische Prüfung",
       "bypassPermissions": "Vollzugriff"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "Wähle in „System & App Protection Override“ {{app}} und klicke rechts auf ⓘ. Fehlt die App, füge die laufende Kopie mit + hinzu.",
+    "review": "$t(macControlPermission.selectApp)\nFalls angeboten, lässt sich die Kontrolle auf ausgewählte Apps beschränken. Vollständige Kontrolle erlaubt Zugriff auf alle Apps und Daten. Wenn du zustimmst, lies und bestätige jeden Punkt und erlaube den Zugriff unten im Fenster."
   }
 }

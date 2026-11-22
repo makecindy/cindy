@@ -1,5 +1,25 @@
 import { BRAND_NAME } from './branding.js';
 
+export type SessionDeleteTarget = 'side-chat' | 'task';
+
+/** A legacy host rejects this key before writing anything. A timeout is never equivalent. */
+export async function patchSessionWithDeleteTarget<T, P extends { status?: string }>(
+  patch: P,
+  target: SessionDeleteTarget | undefined,
+  invoke: (patch: P & { deleteTarget?: SessionDeleteTarget }) => Promise<T>,
+): Promise<T> {
+  if (patch.status !== 'deleted' || !target) return invoke(patch);
+  try {
+    return await invoke({ ...patch, deleteTarget: target });
+  } catch (err) {
+    if (target === 'side-chat' && err instanceof Error &&
+        /(?:^|: Error: )\[INVALID_PARAMS\] field not allowed in patch-meta: deleteTarget$/.test(err.message)) {
+      return invoke(patch);
+    }
+    throw err;
+  }
+}
+
 export const DEVICE_LINK_SUBSCRIBE_CHANNEL = 'device-link:subscribe';
 export const DEVICE_LINK_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
 /** Marker passed as sessions:get arg[1] only by background list reconciliation probes. */

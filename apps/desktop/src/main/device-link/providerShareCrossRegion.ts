@@ -670,6 +670,12 @@ export function isCrossRegionShareListUnavailable(shareId: string): boolean {
   return stateForShare(shareId)?.listConfirmed === false;
 }
 
+/** Whether any current cross-region membership list is still unconfirmed. */
+export function hasUnconfirmedCrossRegionReceivedList(): boolean {
+  const rt = runtime;
+  return !!rt && current(rt) && [...rt.regions.values()].some(state => !state.listConfirmed);
+}
+
 export function getUnavailableCrossRegionShareIds(): string[] {
   const rt = runtime;
   if (!rt || !current(rt)) return [];

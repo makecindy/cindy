@@ -21,10 +21,11 @@ import { effectiveSourceIdForModel, getModel, reconcileInvocationEffort, type Pr
 import type { Session, WorkspaceKind } from '@/lib/ccAgent.types';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineEffort } from '../../../shared/pluginEngines';
 
 export interface DeviceLinkCreateParams {
-  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi'(persistedAgentKind)。 */
-  agentKind: 'cc' | 'codex' | 'pi';
+  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi'(persistedAgentKind)，或被控电脑的插件引擎 'acp'。 */
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   /**
    * 被控端上的项目目录。缺省 / 空白 = 在该设备上建**不绑项目的 standalone dialogue**,
    * workspaceKind 随之派生为 'dialogue',运行目录由被控端分配。
@@ -63,7 +64,7 @@ export interface DeviceLinkCreateParams {
 }
 
 export interface DeviceLinkCreateArgs {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   /** 控制端预生成的会话 id(worktree 流程中与 worktree:create 登记的绑定同 id)。 */
   id?: string;
   /** 仅项目会话出现;dialogue 不带此字段(被控端自行分配运行目录)。 */
@@ -142,6 +143,13 @@ export interface DeviceLinkSubmissionParams {
   capabilityAgentKind: AgentKind;
   /** 远程 Agent:运行 Agent 的另一台电脑;缺省 = 被控电脑本身。 */
   agentDeviceId?: string | null;
+  /** 被控电脑上的插件引擎(agentKind='acp', providerId='acp-plugin:<ghostId>:<harnessId>')。 */
+  pluginEngine?: {
+    providerId: string;
+    model: string;
+    effort: PluginEngineEffort | '';
+    permissionMode: PermissionMode;
+  };
 }
 
 /**
@@ -165,6 +173,18 @@ export interface DeviceLinkSubmissionParams {
  * 只有未指定连接时，才用 effectiveSourceIdForModel 解析默认来源。
  */
 export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): DeviceLinkCreateArgs {
+  if (p.pluginEngine) {
+    return buildDeviceLinkCreateArgs({
+      agentKind: 'acp',
+      id: p.id,
+      workingDir: p.workingDir,
+      model: p.pluginEngine.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+      effort: p.pluginEngine.effort || null,
+      permissionMode: p.pluginEngine.permissionMode,
+      fastMode: false,
+      providerId: p.pluginEngine.providerId,
+    });
+  }
   const providerId = p.candidate.providerId || effectiveSourceIdForModel(
     p.deviceProviders,
     null,
@@ -259,8 +279,8 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     // 回流都会把它冲回 null,会话就先掉进项目外的草稿区、首条落地后再跳回项目。
     userSendAt: null,
     status: 'active',
-    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
-    agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
+    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi',运行时也承载插件引擎的 'acp'),args 里是 maker-core 形态。
+    agentKind: (p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind) as Session['agentKind'],
     // 乐观行就带上 Agent 所在电脑:会话页的模型按钮与目录从一开始就按那台显示。
     ...(p.args.agentDeviceId ? { agentDeviceId: p.args.agentDeviceId } : {}),
     extraDirs: p.args.extraDirs ?? [],

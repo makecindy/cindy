@@ -42,7 +42,7 @@ export interface BotCapabilities {
   agentDeviceId?: string | null;
   effort: string;
   fastMode: boolean | 'ultrafast';
-  harness: 'claude' | 'codex' | 'pi';
+  harness: BotHarness;
   /** Ordered, complete runtime routes. The first route is the normal choice. */
   modelChain: BotModelRoute[];
   /** null follows the global Bot default; an array is this Bot's explicit chain. */
@@ -83,11 +83,12 @@ export type { BotHarness, BotModelRoute };
 export { BOT_MODEL_CHAIN_MAX };
 
 function vendorForHarness(harness: BotCapabilities['harness']): 'cc' | 'codex' | 'pi' {
-  return harness === 'claude' ? 'cc' : harness;
+  return harness === 'claude' ? 'cc' : harness === 'acp' ? 'pi' : harness;
 }
 
 function normalizeBotModel(model: unknown, harness: BotCapabilities['harness']): string {
   if (typeof model === 'string' && model.trim()) return model.trim();
+  if (harness === 'acp') return 'default';
   // 旧记录缺 model 时走与新建同一条口径,不另读 lastByVendor 的种子快照。
   return defaultBotModel(vendorForHarness(harness));
 }
@@ -598,7 +599,14 @@ export function normalizeDbProfile(value: unknown): BotProfile | null {
   const followsDefault = rawCapabilities?.modelChainOverride === null || rawCapabilities?.modelOverride === null;
   const resolvedModel = modelOverride ?? (followsDefault
     ? { model: '', providerId: null, effort: '', fastMode: false }
-    : getEffectiveBotModelSettings(vendorForHarness(harness), null));
+    : harness === 'acp'
+      ? {
+          model: typeof rawCapabilities?.model === 'string' && rawCapabilities.model.trim() ? rawCapabilities.model.trim() : 'default',
+          providerId: typeof rawCapabilities?.providerId === 'string' ? rawCapabilities.providerId : null,
+          effort: typeof rawCapabilities?.effort === 'string' ? rawCapabilities.effort : '',
+          fastMode: false,
+        }
+      : getEffectiveBotModelSettings(vendorForHarness(harness), null));
   const modelChain = normalizeBotModelChain(rawCapabilities?.modelChain, followsDefault ? null : {
     harness,
     model: resolvedModel.model || rawCapabilities?.model,

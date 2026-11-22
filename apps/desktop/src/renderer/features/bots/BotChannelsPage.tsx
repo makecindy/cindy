@@ -904,7 +904,7 @@ function BotChannelAddDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !busyRef.current && onOpenChange(open)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
@@ -915,7 +915,7 @@ function BotChannelAddDialog({
             event.preventDefault();
             firstOptionRef.current.focus();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(480px,calc(100vw-32px))] flex-col p-4 outline-none"
+          className="modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] w-[min(480px,calc(100vw-32px))] flex-col p-4 outline-none"
         >
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
@@ -1001,7 +1001,7 @@ function BotChannelAddDialog({
                       {control => <Input {...control} mono secret={key === 'password'} value={imessage[key]}
                         onChange={value => setIMessage(previous => ({ ...previous, [key]: value }))}
                         placeholder={editing && key === 'password' ? t('bots.channels.edit.keepPassword') : t(`bots.channels.add.imessage.${key}Placeholder`)} autoComplete="off"
-                        spellCheck={false} disabled={busy} secretTipContentClassName="z-[10001]" />}
+                        spellCheck={false} disabled={busy} />}
                     </FormField>
                   ))}
                 </>
@@ -1019,7 +1019,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1120,7 +1119,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1156,7 +1154,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1192,7 +1189,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1211,7 +1207,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>

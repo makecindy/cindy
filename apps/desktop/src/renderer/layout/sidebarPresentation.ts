@@ -20,8 +20,6 @@ export function useSidebarPresentation(
   const expansion = useRef(expansionWidth);
   expansion.current = expansionWidth;
   const previous = useRef<boolean | null>(null);
-  const generation = useRef(0);
-  const frame = useRef<number | null>(null);
   const latest = useRef(presentation);
   latest.current = presentation;
 
@@ -29,9 +27,6 @@ export function useSidebarPresentation(
     const wasCollapsed = previous.current;
     previous.current = ready ? collapsed : null;
     if (ready && wasCollapsed === collapsed) return;
-    const id = ++generation.current;
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
-    frame.current = null;
     const resize = window.electronAPI.windowSidebarExpansion;
     const width = root.current?.getBoundingClientRect().width ?? 0;
     // Saved native bounds are standalone; a restored-open sidebar expands normally.
@@ -48,34 +43,46 @@ export function useSidebarPresentation(
     // The sidebar consumes this same snapshot, so it cannot begin its own animation yet.
     setPresentation({ ...latest.current, ...(openingFromMount ? { collapsed: true } : {}), frozenWidth: width });
     const viewport = window.innerWidth;
+    let active = true;
+    let frame: number | null = null;
+    const listener = new AbortController();
+    const stopWaiting = () => {
+      active = false;
+      listener.abort();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
     void resize(collapsed ? 0 : expansion.current()).then((delta) => {
-      if (id !== generation.current) return;
+      if (!active) return;
       const growth = typeof delta === 'number' ? delta : 0;
       const target = viewport + growth;
       const started = performance.now();
       const finish = () => {
-        if (id !== generation.current) return;
+        if (!active) return;
         // The invoke reply can arrive before Chromium observes the new native bounds.
         // A hidden/closing window must not retain a frozen layout indefinitely.
         if (growth !== 0 && Math.abs(window.innerWidth - target) > 1 && performance.now() - started < 1000) {
-          frame.current = requestAnimationFrame(finish);
+          if (frame === null) {
+            frame = requestAnimationFrame(() => {
+              frame = null;
+              finish();
+            });
+          }
           return;
         }
-        frame.current = null;
+        stopWaiting();
         setPresentation({ collapsed, instant: growth !== 0,
           ...(!collapsed ? { expandedWidth: width + growth } : {}),
         });
       };
-      if (growth === 0) finish();
-      else frame.current = requestAnimationFrame(finish);
+      finish();
+      if (active) window.addEventListener('resize', finish, { signal: listener.signal });
     }).catch(() => {
-      if (id === generation.current) setPresentation({ collapsed, instant: false });
+      if (active) setPresentation({ collapsed, instant: false });
     });
+    return stopWaiting;
   }, [collapsed, ready, root]);
 
   useLayoutEffect(() => () => {
-    generation.current++;
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
     // StrictMode's second mount must establish a fresh baseline.
     previous.current = null;
   }, []);

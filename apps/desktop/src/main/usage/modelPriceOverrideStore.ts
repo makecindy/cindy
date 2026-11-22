@@ -439,7 +439,7 @@ function mergedQuote(
   };
 }
 
-function currencyCanProjectToLedger(
+export function currencyCanProjectToLedger(
   currency: MoneyCurrency,
   ledgerCurrency: MoneyCurrency,
 ): boolean {
@@ -602,13 +602,14 @@ export function applyModelPriceOverrides(
   );
   for (const record of Object.values(options.entries ?? readEntries())) {
     if (record.providerId === 'xd') continue;
-    const reference = providerReferencePriceQuote(record.providerId, record.modelId, registry, {
-      agent: record.agent,
-      at: options.at,
-    });
+    const key = modelPricingKey(record.modelId, record.agent);
+    // The projection already checked this engine's endpoint and historical tariff date.
+    const reference = pricing[record.providerId]?.[key] ?? providerReferencePriceQuote(
+      record.providerId, record.modelId, registry, { agent: record.agent, at: options.at },
+    );
     const quote = mergedQuote(record, reference, record.values, record.baseReference);
     if (!quote || !currencyCanProjectToLedger(quote.currency, ledgerCurrency)) continue;
-    (next[record.providerId] ??= {})[modelPricingKey(record.modelId, record.agent)] = quote;
+    (next[record.providerId] ??= {})[key] = quote;
   }
   return next;
 }

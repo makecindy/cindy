@@ -23,7 +23,7 @@
   flex: 1;
   height: 6px;
   overflow: hidden;
-  border-radius: 9999px;
+  border-radius: var(--radius-full, 9999px);
   background: var(--slider-track);
 }
 .cindy-slider-fill {
@@ -38,7 +38,7 @@
   width: var(--slider-size);
   height: var(--slider-size);
   border: 0;
-  border-radius: 9999px;
+  border-radius: var(--radius-full, 9999px);
   background: var(--slider-thumb);
   box-shadow: var(--slider-thumb-shadow);
   transition:

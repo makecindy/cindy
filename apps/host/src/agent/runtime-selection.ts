@@ -377,6 +377,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     describeAgentDevice: undefined,
     // Plugin engines are only assembled on the desktop. The switch handler rejects ACP without admission.
     admitPluginEngineTarget: undefined,
+    admitRemotePluginEngineTarget: undefined,
     describePluginEngine: undefined,
     resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
       if (agentDeviceId) return null;
@@ -489,11 +490,11 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     }),
     log: deps.log,
   }));
-  const persistSessionFields: SessionRuntimeSelectionPorts['persistSessionFields'] = (sessionId, patch) => persistSessionFieldsWith(explicitPorts<Parameters<typeof persistSessionFieldsWith>[0]>({
+  const persistSessionFields: SessionRuntimeSelectionPorts['persistSessionFields'] = (sessionId, patch, options) => persistSessionFieldsWith(explicitPorts<Parameters<typeof persistSessionFieldsWith>[0]>({
     captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
     // The session settings' budget hook, as the desktop registers it (bootstrap-electron.ts).
     applyContextWindowBudget: () => contextWindowBudgetReconcile.sessionContextWindowBudgetApplier,
-  }), sessionId, patch);
+  }), sessionId, patch, options);
   const ports = (): SessionRuntimeSelectionPorts => explicitPorts<SessionRuntimeSelectionPorts>({
     maker: maker(),
     agentSwitchPending: pendingSwitches,

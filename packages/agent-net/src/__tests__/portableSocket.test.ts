@@ -189,7 +189,8 @@ it('retires a failed LAN candidate and retries only that peer through the relay'
  * - Bug 依据：2026-11-17 审查，连接断开（路径丢了、NAT 换了映射）以后只有下一次调用、目录更新才会再拨；这期间对方显示离线，
  *   「仅使用 Agent-Net」时空闲的账号可以一直这样。
  * - 最小失败输入：目录里在线的一台设备，连上后连接断开。tier：unit，假定时器推进重拨的等待。 */
-it('dials a device of the account again when its connection drops while the directory has it online', async () => {
+// A failed first handshake has no channel to emit a close event. Exercise both recovery entries.
+it.each(['initial failure', 'fresh directory', 'channel close'])('redials an online device after %s', async failure => {
   const local = generateIdentity('a-local'), remote = generateIdentity('b-remote');
   const { root, bootstrap } = createPrivateNetwork('Redial after drop', local);
   const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
@@ -200,24 +201,207 @@ it('dials a device of the account again when its connection drops while the dire
   const drops: Array<() => void> = [];
   const connect = vi.fn(async (): Promise<PeerChannel> => ({ remoteId, send() {}, onData() {}, onClose(callback) { drops.push(callback); },
     close() {}, path: () => 'relay' }));
+  if (failure !== 'channel close') connect.mockRejectedValueOnce(new Error('handshake timed out'));
   const socket = await AgentNetSocket.openWithBindings({
     client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
       connect: async () => uplink },
     userId: bootstrap.ownerCertificate.subject,
     bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, connect, close: async () => undefined }) },
   });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
     socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
-    await vi.waitFor(() => expect(socket.pathTo('b-remote')).toBe('relay'));
+    await vi.advanceTimersByTimeAsync(0);
     expect(connect).toHaveBeenCalledOnce();
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    drops[0]();
+    if (failure === 'channel close') drops[0]();
     expect(socket.pathTo('b-remote')).toBeNull();
-    await vi.advanceTimersByTimeAsync(1_300);
+    if (failure === 'fresh directory') uplink.emit('directory');
+    await vi.advanceTimersByTimeAsync(700);
+    expect(connect).toHaveBeenCalledTimes(failure === 'fresh directory' ? 2 : 1);
+    await vi.advanceTimersByTimeAsync(600);
     expect(connect).toHaveBeenCalledTimes(2);
     expect(socket.pathTo('b-remote')).toBe('relay');
   } finally { vi.useRealTimers(); socket.close(); }
 });
+
+/** 测试价值
+ * - 生产入口与可观察结果：PortableSocket.openWithBindings 到业务层第一条 hello（Desktop worker、Node Host 与手机共用）。
+ *   刚打开的一方不等任何计时器就拨目录里在线的设备，不论设备号大小；打开时中转连不上的，等第一份实时目录到了再拨；
+ *   这一轮拨完以后恢复「设备号小的先拨」。
+ * - Bug／规则依据：2026-11-21 真机（Redmi K40，设备号比账号下七台电脑都大）：冷启动、后台超过 10 秒回前台，每次都要等满
+ *   LATE_DIAL_MS（0.8 到 1.2 秒）才自己拨，期间七台电脑没有一台拨进来（它们还抱着上一个进程的连接）；设备号小的手机不用等。
+ * - 现有覆盖缺口：上一条覆盖已经开着的一方；没有「刚打开」这一轮，也没有打开时中转不通的情形。
+ * - 最小失败输入：一台在线、设备号更小的同账号设备；打开时中转可用或不可用。
+ * - tier：unit，真实路由与证书，内存传输，计时器用替身（不推进）；两行合计约 30 毫秒。 */
+it.each([['the relay is there', true], ['the relay comes back later', false]] as const)(
+  'dials every online device at once after opening, whatever the ids, when %s', async (_name, relayUp) => {
+    const local = generateIdentity('z-local'), remote = generateIdentity('b-remote'), later = generateIdentity('c-later');
+    const { root, bootstrap } = createPrivateNetwork('Arrival dial', local);
+    const view = (identity: typeof remote, online: boolean): DeviceView => ({
+      certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity, role: 'member' }),
+      name: identity.deviceId, online, remoteControlEnabled: true, capabilities: [] });
+    const device = view(remote, true), second = view(later, false);
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device, second], delegations: [],
+      send() {}, presence() {}, onDatagram() {}, close() {} });
+    const keyOf = (identity: typeof remote) => Buffer.from(identity.transportKey, 'base64url').toString('hex');
+    const connect = vi.fn(async (entry: RosterEntry): Promise<PeerChannel> => ({ remoteId: entry.id, send() {}, onData() {}, onClose() {}, close() {}, path: () => 'relay' }));
+    let attempts = 0;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const socket = await AgentNetSocket.openWithBindings({
+      client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+        connect: async () => { if (!relayUp && attempts++ === 0) throw new Error('offline'); return uplink; } },
+      userId: bootstrap.ownerCertificate.subject, cachedDirectory: [device, second], directoryExpiresAt: Date.now() + 60_000,
+      bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, connect, close: async () => undefined }) },
+    });
+    try {
+      socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+      if (!relayUp) {
+        // The cached directory says nothing about who is online now: nothing to dial until the relay answers.
+        expect(connect).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connect.mock.calls.map(([entry]) => entry.id)).toEqual([keyOf(remote)]);
+      expect(socket.pathTo('b-remote')).toBe('relay');
+      // Past that first round a device that comes online is the one that dials (the lower id); this side only if it does not.
+      uplink.devices = [device, { ...second, online: true }];
+      uplink.emit('directory');
+      await vi.advanceTimersByTimeAsync(700);
+      expect(connect).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(connect.mock.calls.map(([entry]) => entry.id)).toEqual([keyOf(remote), keyOf(later)]);
+    } finally { vi.useRealTimers(); socket.close(); }
+  });
+
+/** 测试价值
+ * - 生产入口与可观察结果：PortableSocket.openWithBindings 接中转数据包的入口。传输层建好之前中转送来的包，建好后原样交给传输层，
+ *   最多留 EARLY_DATAGRAMS 个；建好以后的包直接交。
+ * - Bug／规则依据：中转在本机连上的那一刻就向其它设备通告本机上线（`agent-net-relay` 的 `announce`），按通告拨过来的设备，
+ *   第一个握手包在传输层建好之前（手机上约 50 毫秒）就到了。原来这个包被丢掉，对方要等核心 200 毫秒后重发；
+ *   刚打开的一方现在自己也立刻拨，留下这个包两边才在第一个来回就落到同一条连接上。
+ * - 现有覆盖缺口：集成测试两端几乎同时打开，没有「一端的包先到、传输层后建好」的顺序。
+ * - 最小失败输入：传输层建好之前到的 40 个包，建好之后到的 1 个包。
+ * - tier：unit，内存传输，无计时器；约 10 毫秒。 */
+it('hands the transport the datagrams that arrived before it existed', async () => {
+  const local = generateIdentity('z-local'), remote = generateIdentity('b-remote');
+  const { root, bootstrap } = createPrivateNetwork('Early datagrams', local);
+  const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
+  let fromRelay: (id: string, data: Uint8Array) => void = () => undefined;
+  const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const,
+    devices: [{ certificate, name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [] } as DeviceView], delegations: [],
+    send() {}, presence() {}, onDatagram(handler: typeof fromRelay) { fromRelay = handler; }, close() {} });
+  const got: number[] = [];
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+      connect: async () => uplink },
+    userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async (request) => {
+      for (let i = 0; i < 40; i++) fromRelay('b-remote', Uint8Array.of(i));
+      expect(got).toEqual([]);
+      request.relay!.uplink.onDatagram((id, data) => { if (id === 'b-remote') got.push(data[0]!); });
+      return { id: 'local', dial: {}, connect: async () => { throw new Error('unused'); }, close: async () => undefined };
+    } },
+  });
+  try {
+    expect(got).toEqual(Array.from({ length: 32 }, (_, i) => i));
+    fromRelay('b-remote', Uint8Array.of(99));
+    expect(got.at(-1)).toBe(99);
+    expect(got).toHaveLength(33);
+  } finally { socket.close(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：PortableSocket 在名册里看到同账号设备在线后的拨号（Desktop worker、Node Host 与手机共用）。
+ *   已经开着的一方看到设备号更小的设备上线，平时不拨；对方的拨号迟迟不来时自己拨过去，对方按时拨进来时一次也不拨。
+ * - Bug／规则依据：2026-11-21 真机，手机被强杀后重启，设备号比手机小、只能经中转的电脑抱着旧连接不再拨，
+ *   手机这边也不拨，这台电脑在手机上离线 20 秒到 15 分钟。
+ * - 现有覆盖缺口：上一条只覆盖设备号小的一方在连接断开后重拨，没有「该对方拨、对方不拨」的情形。
+ * - 最小失败输入：本机先开着，之后目录里一台设备号更小的同账号设备上线，以及它拨进来或不拨进来两种情况。
+ * - tier：unit，真实路由与证书，内存传输，计时器用替身推进；两行合计约 30 毫秒。 */
+it.each([['never comes', false], ['comes in time', true]] as const)(
+  'dials the lower-id device that came online later itself only when that device\'s dial %s', async (_name, dialsIn) => {
+    const local = generateIdentity('z-local'), remote = generateIdentity('b-remote');
+    const { root, bootstrap } = createPrivateNetwork('Late dial', local);
+    const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
+    const device: DeviceView = { certificate, name: 'Remote', online: false, remoteControlEnabled: true, capabilities: [] };
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
+      send() {}, presence() {}, onDatagram() {}, close() {} });
+    const remoteId = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+    const channel = (): PeerChannel => ({ remoteId, send() {}, onData() {}, onClose() {}, close() {}, path: () => 'relay' });
+    const connect = vi.fn(async () => channel());
+    let incoming: (channel: PeerChannel) => void = () => undefined;
+    const socket = await AgentNetSocket.openWithBindings({
+      client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+        connect: async () => uplink },
+      userId: bootstrap.ownerCertificate.subject,
+      bindings: { verifyCertificate, createTransport: async (request) => {
+        incoming = request.onIncoming;
+        return { id: 'local', dial: {}, connect, close: async () => undefined };
+      } },
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+      uplink.devices = [{ ...device, online: true }];
+      uplink.emit('directory');
+      if (dialsIn) incoming(channel());
+      // Not before the other side had its chance: the delay is LATE_DIAL_MS within ±20%.
+      await vi.advanceTimersByTimeAsync(700);
+      expect(connect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(connect).toHaveBeenCalledTimes(dialsIn ? 0 : 1);
+      expect(socket.pathTo('b-remote')).toBe('relay');
+    } finally { vi.useRealTimers(); socket.close(); }
+  });
+
+/** 测试价值
+ * - 生产入口与可观察结果：PortableSocket.openWithBindings 读目录、交给传输层的准入名单（`admittedPeers`）、拨号与入站连接的归属
+ *   （Desktop worker、Node Host 与手机共用）。目录里同账号两张证书带同一把传输密钥时，只认签发晚的那一张：准入名单里这把密钥只出现一次，
+ *   用这把密钥建的连接记在那台设备名下，另一个设备号像不在目录里的设备一样连不上，但仍记作 Agent-Net 设备（不因此改走 Device Link）；
+ *   带本机自己密钥的别的设备号不算对端。
+ * - Bug／规则依据：2026-11-21 真机，账号目录 26 台设备里有两个设备号带同一把传输密钥（同一台设备换了设备号重新登记，旧证书还在）。
+ *   手机的原生引擎按密钥准入，遇到重复就拒收整份名单（`DUPLICATE_PEER`），手机每次打开 Agent-Net 都失败；电脑上连接被记到排在前面的旧设备号名下。
+ * - 现有覆盖缺口：没有任何用例的目录里有重复的传输密钥；原生引擎的 `DUPLICATE_PEER` 只在名单本身出错时测过。
+ * - 最小失败输入：一台设备的两张证书（不同设备号、不同签发时间、同一把密钥），先旧后新或先新后旧；再加一张带本机密钥的别的设备号的证书。
+ * - tier：unit，真实证书与路由，内存传输；三行合计约 40 毫秒。 */
+it.each([['listed first', true], ['listed last', false]] as const)(
+  'keeps only the latest certificate of a transport key when the earlier one is %s', async (_name, staleFirst) => {
+    const local = generateIdentity('a-local'), device = generateIdentity('m-renamed-device');
+    const { root, bootstrap } = createPrivateNetwork('Duplicate transport key', local);
+    const issued = Date.now();
+    const view = (identity: Pick<typeof device, 'deviceId' | 'signingKey' | 'transportKey'>, now: number, online: boolean): DeviceView => ({
+      certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity, role: 'member', now }),
+      name: identity.deviceId, online, remoteControlEnabled: true, capabilities: [] });
+    const stale = view({ ...device, deviceId: 'm-earlier-device-id' }, issued - 60_000, false), current = view(device, issued, true);
+    // Another device id carrying this device's own key is this device as it was, whenever it was issued: never a peer.
+    const impostor = view({ ...local, deviceId: 'z-carries-the-local-key' }, issued, true);
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const,
+      devices: staleFirst ? [stale, current, impostor] : [impostor, current, stale], delegations: [],
+      send() {}, presence() {}, onDatagram() {}, close() {} });
+    const key = Buffer.from(device.transportKey, 'base64url').toString('hex');
+    const connect = vi.fn(async (entry: RosterEntry): Promise<PeerChannel> => ({ remoteId: entry.id, send() {}, onData() {}, onClose() {}, close() {}, path: () => 'relay' }));
+    let transport!: TransportOptions;
+    const socket = await AgentNetSocket.openWithBindings({
+      client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+        connect: async () => uplink },
+      userId: bootstrap.ownerCertificate.subject,
+      bindings: { verifyCertificate, createTransport: async (options) => { transport = options; return { id: 'local', dial: {}, connect, close: async () => undefined }; } },
+    });
+    try {
+      const admitted = transport.admittedPeers!();
+      expect(admitted.filter(peer => peer.id === key).map(peer => peer.relayId)).toEqual(['m-renamed-device']);
+      expect(new Set(admitted.map(peer => peer.id)).size).toBe(admitted.length);
+      expect(admitted.map(peer => peer.relayId)).not.toContain('z-carries-the-local-key');
+      expect(transport.relayIdOf!(key)).toBe('m-renamed-device');
+      expect([socket.supports('m-renamed-device'), socket.supports('m-earlier-device-id'), socket.supports('z-carries-the-local-key')]).toEqual([true, false, false]);
+      // Left out, not forgotten: a device this socket has seen on Agent-Net is not handed to Device Link instead.
+      expect([socket.knowsPeer('m-renamed-device'), socket.knowsPeer('m-earlier-device-id'), socket.knowsPeer('z-carries-the-local-key')]).toEqual([true, true, true]);
+      socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+      await vi.waitFor(() => expect(socket.pathTo('m-renamed-device')).toBe('relay'));
+      expect(socket.pathTo('m-earlier-device-id')).toBeNull();
+      expect(connect).toHaveBeenCalledOnce();
+    } finally { socket.close(); }
+  });
 
 /** 测试价值
  * - 生产入口与可观察结果：PortableSocket 的拨号与入站连接（Desktop worker 与手机共用）；对端重建节点后再拨进来，
@@ -519,4 +703,207 @@ it('keeps presence on the session with a new peer and still sends the frame to a
     expect(presenceFrames('c-old')).toMatchObject([{ payload: { deviceId: 'a-local', busy: true } }]);
     expect(channels.get('b-new')!.send).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); socket.close(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：PortableSocket 的中转重连与 networkChanged（手机换网事件、Desktop 网络监听经 worker 都走这里）。
+ *   中转断着、正在等退避时网络变了，马上重连，不等退避；连上后再通知一次传输层，断网期间发出的包立刻重发。
+ *   正在进行的连接尝试不被打断；中转好好的时候换网只通知传输层，不重连。
+ * - 规则依据：和 Device Link 客户端收到网络变化时的做法一致（绕过退避、不打断进行中的连接）。2026-11-20 真机换网
+ *   22 次中转重连都在 0.2–3.6 秒内按原退避连上，没有遇到连续失败；连续失败时退避会翻倍到 15 秒，新网络通了也要等。
+ * - 现有覆盖缺口：之前没有测试覆盖中转重连和网络变化的交互。
+ * - 最小失败输入：中转断开、重连失败三次（下一次在 4 秒后），这时来一次网络变化。tier：unit，真实路由与证书，内存中转，假计时器。
+ */
+it('reconnects the relay at once when the network changes during its backoff', async () => {
+  const local = generateIdentity('local'), remote = generateIdentity('remote');
+  const { root, bootstrap } = createPrivateNetwork('Relay after network change', local);
+  const device: DeviceView = { name: 'Remote', online: false, remoteControlEnabled: true, capabilities: [],
+    certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' }) };
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {} });
+  const first = makeUplink(), second = makeUplink();
+  let pending: ((uplink: ReturnType<typeof makeUplink>) => void) | null = null;
+  const connect = vi.fn().mockResolvedValueOnce(first)
+    .mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline'))
+    .mockImplementation(() => new Promise((resolve) => { pending = resolve; }));
+  const networkChanged = vi.fn();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, networkChanged, close: async () => undefined,
+      connect: async () => { throw new Error('No peer dial needed'); } }) },
+  });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    // The relay is up: a network change moves the transport only.
+    socket.networkChanged();
+    expect(networkChanged).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+    // Lost, then three failed attempts (0.5 s, 1 s, 2 s): the next one would wait 4 s.
+    first.emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(500 + 1000 + 2000);
+    expect(connect).toHaveBeenCalledTimes(4);
+    socket.networkChanged();
+    expect(connect).toHaveBeenCalledTimes(5);
+    // A second change while that attempt is in flight keeps it.
+    socket.networkChanged();
+    expect(connect).toHaveBeenCalledTimes(5);
+    expect(networkChanged).toHaveBeenCalledTimes(3);
+    pending!(second);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(networkChanged).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(connect).toHaveBeenCalledTimes(5);
+  } finally { vi.useRealTimers(); socket.close(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机物理换网时的 `replaceRelayConnection`（DeviceLinkContext → notifyMobileAgentNetNetworkChanged）。
+ *   旧的中转连接被关掉、马上连新的，传输层被告知换网（中转回来后再告知一次）；和对端的加密连接不关、照常可用。
+ *   中转本来就断着、正有一次连接在进行时不另起一次。
+ * - Bug 依据：#11770 审查。手机换网不再重建 Agent-Net 主连接以后，旧网络上半开的中转 WebSocket 没人替换（React Native 的
+ *   WebSocket 不能 ping，Device Link 的心跳由这个 socket 本地回答），只能等 TCP 自己报错，经 WebSocket 中转的消息一直卡住。
+ * - 现有覆盖缺口：上一条只覆盖中转已经断开的情况。
+ * - 最小失败输入：中转在线、已连上一台对端时换网一次；中转断开、连接进行中时再换网一次。tier：unit，真实路由与证书，内存中转与传输。
+ */
+it('replaces only the relay connection when the phone changes networks', async () => {
+  const local = generateIdentity('a-local'), remote = generateIdentity('b-remote');
+  const { root, bootstrap } = createPrivateNetwork('Relay on a route change', local);
+  const device: DeviceView = { name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [],
+    certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' }) };
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close: vi.fn() });
+  const first = makeUplink(), second = makeUplink();
+  let pending: ((uplink: ReturnType<typeof makeUplink>) => void) | null = null;
+  const connect = vi.fn().mockResolvedValueOnce(first).mockImplementation(() => new Promise((resolve) => { pending = resolve; }));
+  const networkChanged = vi.fn(), channelClose = vi.fn();
+  const channel: PeerChannel = { remoteId: Buffer.from(remote.transportKey, 'base64url').toString('hex'), send() {}, onData() {},
+    onClose() {}, close: channelClose, path: () => 'relay' };
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, networkChanged, close: async () => undefined,
+      connect: async () => channel }) },
+  });
+  try {
+    socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+    await vi.waitFor(() => expect(socket.pathTo('b-remote')).toBe('relay'));
+    socket.replaceRelayConnection();
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(networkChanged).toHaveBeenCalledOnce();
+    // A second change while the new relay connection is still being made keeps that attempt.
+    socket.replaceRelayConnection();
+    expect(connect).toHaveBeenCalledTimes(2);
+    pending!(second);
+    await vi.waitFor(() => expect(networkChanged).toHaveBeenCalledTimes(3));
+    expect(channelClose).not.toHaveBeenCalled();
+    expect(socket.pathTo('b-remote')).toBe('relay');
+  } finally { socket.close(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机回前台时的 `AgentNetSocket.openWithBindings({ initialCandidates, deferRelay: true })`、
+ *   `canConnectSession`、`connectSession` 与 `presence-changed` 投递。
+ *   ① 无需等中转 WebSocket 建好即返回并按 350 ms 预算直拨记忆的局域网 UDP 候选，存活对端立即直连成功并上报 `onDirectAddress`；
+ *   ② 拨号进行中及 `openingRelay` 未返回前不向业务层误发 `presence-changed { online: false }`，仅对确认离线或拨号最终失败的对端报离线；
+ *   ③ 多对端故障隔离：某台记忆候选失效（端口变化）只退役该候选并回退中转重拨，不影响另一台已建立的直连。
+ * - Bug／规则依据：2026-11-21 真机（Redmi K40）后台 20s 回前台：① 丢弃上次验证过的直连地址导致每次串行等待中转握手；
+ *   ② `hello` 与 `dialRoster` 对正在首拨的对端先发 `online: false` 污染 `peerOfflineGate` 触发同步 `DEVICE_OFFLINE`。
+ * - 现有覆盖缺口：已有测试未覆盖 `deferRelay` 并行中转握手、350 ms 记忆候选超时回退，以及首拨期间不误报离线的多对端隔离。
+ * - 最小失败输入：存活直连 `b-live`、失效候选回退中转 `c-stale`、真实离线 `d-offline`、首拨失败 `e-fail` 四台对端。
+ * - tier：unit，真实证书与路由，内存传输，无真实等待；约 15 毫秒。 */
+it('dials remembered UDP candidates before the relay finishes, suppresses false initial offline events, and isolates stale candidates per peer', async () => {
+  const local = generateIdentity('m-phone');
+  const livePeer = generateIdentity('b-live');
+  const stalePeer = generateIdentity('c-stale');
+  const offlinePeer = generateIdentity('d-offline');
+  const failPeer = generateIdentity('e-fail');
+  const { root, bootstrap } = createPrivateNetwork('Fast resume socket', local);
+  const makeView = (identity: typeof livePeer, online: boolean): DeviceView => ({
+    certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity, role: 'member' }),
+    name: identity.deviceId, online, remoteControlEnabled: true, capabilities: [],
+  });
+  const cached = [makeView(livePeer, false), makeView(stalePeer, false), makeView(offlinePeer, false), makeView(failPeer, false)];
+  const liveDirectory = [makeView(livePeer, true), makeView(stalePeer, true), makeView(offlinePeer, false), makeView(failPeer, true)];
+  let resolveRelay!: (uplink: any) => void;
+  const uplink = Object.assign(new EventEmitter(), {
+    kind: 'agent-net' as const, devices: liveDirectory, delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {},
+  });
+  const keyOf = (identity: typeof livePeer) => Buffer.from(identity.transportKey, 'base64url').toString('hex');
+  let rejectStaleUdp!: (error: Error) => void;
+  let rejectFailDial!: (error: Error) => void;
+  const liveClose = vi.fn();
+  const connect = vi.fn((entry: RosterEntry): Promise<PeerChannel> => {
+    const dial = entry.dial as { relayId?: string; udp?: { address: string; port: number }; preferUdp?: boolean; timeoutMs?: number };
+    if (entry.id === keyOf(livePeer)) {
+      return Promise.resolve({
+        remoteId: entry.id, send() {}, onData() {}, onClose() {}, close: liveClose,
+        path: () => 'direct', directAddress: () => ({ address: '192.168.1.10', port: 41000 }),
+      });
+    }
+    if (entry.id === keyOf(stalePeer) && dial.preferUdp) {
+      return new Promise((_, reject) => { rejectStaleUdp = reject; });
+    }
+    if (entry.id === keyOf(stalePeer)) {
+      return Promise.resolve({ remoteId: entry.id, send() {}, onData() {}, onClose() {}, close() {}, path: () => 'relay' });
+    }
+    if (entry.id === keyOf(failPeer)) {
+      return new Promise((_, reject) => { rejectFailDial = reject; });
+    }
+    throw new Error('Unexpected dial: ' + entry.id);
+  });
+  const recordedDirect = new Map<string, { address: string; port: number }>();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: {
+      base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey,
+      certificate: bootstrap.ownerCertificate, identity: local,
+      connect: () => new Promise(resolve => { resolveRelay = resolve; }),
+    },
+    userId: bootstrap.ownerCertificate.subject,
+    cachedDirectory: cached,
+    directoryExpiresAt: Date.now() + 60_000,
+    initialCandidates: new Map([
+      ['b-live', { address: '192.168.1.10', port: 41000 }],
+      ['c-stale', { address: '192.168.1.20', port: 42000 }],
+    ]),
+    deferRelay: true,
+    onDirectAddress: (id, address) => { recordedDirect.set(id, address); },
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, connect, close: async () => undefined }) },
+  });
+  const offlineEvents: string[] = [];
+  socket.on('message', (raw) => {
+    const frame = JSON.parse(raw.toString());
+    if (frame.kind === 'presence-changed' && frame.payload?.online === false) offlineEvents.push(frame.payload.deviceId);
+  });
+  try {
+    await vi.waitFor(() => expect(socket.pathTo('b-live')).toBe('direct'));
+    expect(recordedDirect.get('b-live')).toEqual({ address: '192.168.1.10', port: 41000 });
+    expect(connect).toHaveBeenCalledWith({ id: keyOf(livePeer), dial: { relayId: 'b-live', udp: { address: '192.168.1.10', port: 41000 }, preferUdp: true, timeoutMs: 350 } });
+    expect(connect).toHaveBeenCalledWith({ id: keyOf(stalePeer), dial: { relayId: 'c-stale', udp: { address: '192.168.1.20', port: 42000 }, preferUdp: true, timeoutMs: 350 } });
+    expect(socket.supports('b-live')).toBe(true);
+    expect(socket.supports('c-stale')).toBe(false);
+    expect(socket.canConnectSession('c-stale')).toBe(true);
+    expect(socket.canConnectSession('d-offline')).toBe(true);
+
+    socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Phone', platform: 'test', appVersion: '1', remoteControlEnabled: false, busy: false } }));
+    expect(offlineEvents).toEqual([]);
+
+    resolveRelay(uplink);
+    await vi.waitFor(() => expect(offlineEvents).toEqual(['d-offline']));
+    expect(socket.canConnectSession('d-offline')).toBe(false);
+
+    rejectStaleUdp(new Error('NATIVE_CONNECT_TIMEOUT'));
+    await vi.waitFor(() => expect(socket.pathTo('c-stale')).toBe('relay'));
+    expect(connect).toHaveBeenCalledWith({ id: keyOf(stalePeer), dial: { relayId: 'c-stale' } });
+    expect(socket.pathTo('b-live')).toBe('direct');
+    expect(liveClose).not.toHaveBeenCalled();
+    expect(offlineEvents).toEqual(['d-offline']);
+
+    rejectFailDial(new Error('NATIVE_CONNECT_TIMEOUT'));
+    await vi.waitFor(() => expect(offlineEvents).toEqual(['d-offline', 'e-fail']));
+  } finally {
+    socket.close();
+  }
 });

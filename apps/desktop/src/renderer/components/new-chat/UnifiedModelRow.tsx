@@ -257,7 +257,7 @@ export function UnifiedModelRow({
     paymentRequired && paymentRequiredLabel ? (
       <span
         data-payment-required-badge
-        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
+        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-px text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
       >
         <Lock size={10} />
         {paymentRequiredLabel}
@@ -368,6 +368,7 @@ export function UnifiedModelRow({
               {...(provider?.name !== undefined ? { name: provider.name } : {})}
               {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
               {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
+              customIcon={provider?.customIcon}
               colorClass="text-[var(--text-secondary)]"
               withMargin={false}
             />

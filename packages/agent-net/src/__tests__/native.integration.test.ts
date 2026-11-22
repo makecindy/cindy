@@ -426,7 +426,7 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
  * - 最小失败输入：一次建链、一次请求、一个 1 MB 结果；去掉原生的会话通道（不宣告、不开流）时会话一直不出现，
  *   去掉中转 UDP 时 1 MB 全经 WebSocket 回来。
  * - tier：integration，真实回环中转与 UDP，不开局域网发现。 */
-it.skipIf(!library)('carries sessions on the real native engine, relays them over UDP, and keeps working on an older native build', async () => {
+it.skipIf(!library)('carries sessions on the real native engine, relays them over UDP, over the binary bridge, and on an older native build', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-native-'));
   cleanups.push(async () => {
     if (path.dirname(path.resolve(directory)) !== path.resolve(tmpdir())
@@ -457,12 +457,37 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
     onRequest: (request) => { host.session(member.deviceId)!.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : request.args[0] }); },
   }) });
   hello(host);
-  for (const build of ['current', 'older'] as const) {
+  for (const build of ['current', 'older', 'binary'] as const) {
     const peer = new NativePeer();
-    await peer.call({ seed, context, deviceId: member.deviceId, enhancedTransport: build === 'current' }, 'create');
-    const newOps: string[] = [];
-    // An installed binary from before this change: no `features`, and the operations it lacks fail as unknown.
-    const port: NativeEnginePort = build === 'current' ? { command: value => peer.call(value), destroy: () => peer.destroy() } : {
+    await peer.call({ seed, context, deviceId: member.deviceId, enhancedTransport: build !== 'older' }, 'create');
+    const newOps: string[] = [], commands: string[] = [];
+    let ioCalls = 0, work = false;
+    // As CindyAgentNetModule: the engine's own turn, and `io` that first waits for the engine to have something for JS.
+    const turn = async () => {
+      const state = await peer.call(null, 'pump') as number;
+      if (state < 0) throw new Error('NATIVE_ENGINE_FAILURE');
+      if (state & 1) work = true;
+    };
+    const waitForWork = async (maxMs: number) => {
+      const deadline = Date.now() + maxMs;
+      await turn();
+      while (!work && Date.now() < deadline) { await new Promise(resolve => setTimeout(resolve, 2)); await turn(); }
+      const had = work; work = false;
+      return had;
+    };
+    // `current`: this binary behind an adapter without `io` (as an app module from before it); `binary`: the whole of it.
+    const port: NativeEnginePort = build === 'current' ? { command: value => peer.call(value), destroy: () => peer.destroy() } : build === 'binary' ? {
+      command: value => { commands.push(String(value.op)); return peer.call(value); },
+      wait: waitForWork,
+      async io(input, waitMs = 0, kick = false) {
+        if (waitMs > 0 && !await waitForWork(waitMs)) return new Uint8Array(0);
+        ioCalls++;
+        const output = Buffer.from(await peer.call(Buffer.from(input).toString('base64'), 'io') as string, 'base64');
+        if (kick) await turn();
+        return new Uint8Array(output);
+      },
+      kick() { work = true; },
+      destroy: () => peer.destroy() } : {
       async command(value) {
         if (value.op === 'stun' || value.op === 'relayUdp') { newOps.push(value.op); throw new Error('UNKNOWN_NATIVE_OPERATION'); }
         const result = await peer.call(value);
@@ -489,7 +514,7 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
       } } });
     phone.useSessions({ laneFor: () => 'normal', handlers: () => ({}) });
     hello(phone);
-    if (build === 'current') {
+    if (build !== 'older') {
       // The relay's STUN answered on the engine's own port, and relayed datagrams switched to UDP once it acknowledged.
       await until(async () => transport!.candidates().some(candidate => candidate.address === '127.0.0.1'));
       await until(async () => transport!.relayOverUdp);
@@ -502,8 +527,14 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
     await expect(session.request('test:echo', [build], { timeoutMs: 5_000 })).resolves.toEqual({ ok: true, result: build });
     const before = relayedOverWebSocket;
     await expect(session.request('test:large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: large });
-    if (build === 'current') expect(relayedOverWebSocket - before).toBeLessThan(256 * 1024);
-    else { expect(newOps).toEqual([]); expect(relayedOverWebSocket - before).toBeGreaterThan(large.length / 2); }
+    if (build === 'older') { expect(newOps).toEqual([]); expect(relayedOverWebSocket - before).toBeGreaterThan(large.length / 2); }
+    else expect(relayedOverWebSocket - before).toBeLessThan(256 * 1024);
+    if (build === 'binary') {
+      // Reads, writes after a connection's first bytes, and relayed datagrams all went through `io`.
+      expect(ioCalls).toBeGreaterThan(0);
+      expect(commands.filter(op => op === 'poll' || op === 'datagram')).toEqual([]);
+      expect(commands.filter(op => op === 'write').length).toBeLessThanOrEqual(2);
+    }
     // The next build reconnects as the same phone right away: its new connection replaces this one on the host, which may
     // not have noticed this close yet (relayed close packets race the relay WebSocket's own close).
     phone.close();

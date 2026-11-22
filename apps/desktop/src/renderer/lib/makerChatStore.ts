@@ -881,6 +881,7 @@ export interface PendingPermission {
   description?: string;
   suggestions?: unknown[];
   autoReviewUnavailable?: boolean;
+  autoReviewQuotaExhausted?: boolean;
   autoReviewReason?: string;
   /** Renderer-only delivery state; never part of the permission decision. */
   submitting?: boolean;
@@ -2875,6 +2876,11 @@ export interface SessionChatState {
    * optimistic user bubble and preserve the original queued snapshot.
    */
   steeringQueueClientIds: string[];
+  /**
+   * The host reports this task's engine cannot take input into its running turn
+   * (projection `steerUnsupported`): no steer action, input waits for the next turn.
+   */
+  steerUnsupported: boolean;
   /** Queue is paused by an explicit Stop and resumes only via the queue Continue button. */
   queuePaused: boolean;
   /**
@@ -3063,6 +3069,7 @@ export type SessionChatLightState = Pick<
   | 'lastExpandedPlanViewerState'
   | 'pendingQueue'
   | 'steeringQueueClientIds'
+  | 'steerUnsupported'
   | 'queuePaused'
   | 'queueEditLocks'
   | 'queueInteractionLocks'
@@ -3148,6 +3155,7 @@ function createInitialState(): SessionChatState {
     sdkSessionId: null,
     pendingQueue: [],
     steeringQueueClientIds: [],
+    steerUnsupported: false,
     queuePaused: false,
     queueInteractionLocks: [],
     queueEditLocks: [],
@@ -3235,6 +3243,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   lastExpandedPlanViewerState: 'expanded',
   pendingQueue: [],
   steeringQueueClientIds: [],
+  steerUnsupported: false,
   queuePaused: false,
   queueInteractionLocks: [],
   queueEditLocks: [],
@@ -5308,6 +5317,8 @@ function applyInputProjection(
       messages,
       pendingQueue,
       steeringQueueClientIds: projection.steeringQueueClientIds,
+      // Older hosts omit it: steer stays available, as before.
+      steerUnsupported: projection.steerUnsupported === true,
       queuePaused: projection.queuePaused,
       queueExpanded: projection.queueExpanded,
       queueInteractionLocks: projection.queueInteractionLocks,
@@ -7035,6 +7046,7 @@ export function handleStreamEvent(
         description?: string;
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
+        autoReviewQuotaExhausted?: boolean;
         autoReviewReason?: string;
       };
       return {
@@ -7049,6 +7061,7 @@ export function handleStreamEvent(
           sourceDescription: data.sourceDescription,
           suggestions: data.suggestions,
           autoReviewUnavailable: data.autoReviewUnavailable === true,
+          ...(data.autoReviewUnavailable === true && data.autoReviewQuotaExhausted === true ? { autoReviewQuotaExhausted: true } : {}),
           autoReviewReason: data.autoReviewReason,
           ...(state.pendingPermission?.requestId === data.requestId
             ? {
@@ -9069,6 +9082,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           title: typeof request.title === 'string' ? request.title : undefined,
           description: typeof request.description === 'string' ? request.description : undefined,
           autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+          ...(metadata?.autoReviewUnavailable === true && metadata?.autoReviewUnavailableReason === 'quota_exhausted' ? { autoReviewQuotaExhausted: true } : {}),
           autoReviewReason: typeof metadata?.autoReviewReason === 'string' ? metadata.autoReviewReason : undefined,
           suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
           mcpApp: { clientId: app.clientId, serverId: app.serverId, title: app.title, scope: app.scope === 'session' ? 'session' : 'once' },
@@ -9091,6 +9105,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         description: typeof request.description === 'string' ? request.description : undefined,
         suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
         autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+        ...(metadata?.autoReviewUnavailable === true && metadata?.autoReviewUnavailableReason === 'quota_exhausted' ? { autoReviewQuotaExhausted: true } : {}),
         autoReviewReason: typeof metadata?.autoReviewReason === 'string' && metadata.autoReviewReason.trim()
           ? metadata.autoReviewReason.trim() : undefined,
         sourceDescription: typeof metadata?.imSourceDescription === 'string' ? metadata.imSourceDescription : undefined,
@@ -10548,6 +10563,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     lastExpandedPlanViewerState: state.lastExpandedPlanViewerState,
     pendingQueue: state.pendingQueue,
     steeringQueueClientIds: state.steeringQueueClientIds,
+    steerUnsupported: state.steerUnsupported,
     queuePaused: state.queuePaused,
     queueEditLocks: state.queueEditLocks,
     queueInteractionLocks: state.queueInteractionLocks,
@@ -10604,6 +10620,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.lastExpandedPlanViewerState === b.lastExpandedPlanViewerState &&
     a.pendingQueue === b.pendingQueue &&
     a.steeringQueueClientIds === b.steeringQueueClientIds &&
+    a.steerUnsupported === b.steerUnsupported &&
     a.queuePaused === b.queuePaused &&
     a.queueEditLocks === b.queueEditLocks &&
     a.queueInteractionLocks === b.queueInteractionLocks &&
@@ -20084,7 +20101,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp, initialHeight: mcpApp.initialHeight },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =

@@ -198,7 +198,7 @@ export function CustomProviderRuntimeFillOverlay({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10001]',
+            'modal-scrim fixed inset-0 z-modal-raised',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -215,7 +215,7 @@ export function CustomProviderRuntimeFillOverlay({
             returnFocusRef.current.focus();
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised -translate-x-1/2 -translate-y-1/2',
             'flex max-h-[78vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col',
             'outline-none',
           )}

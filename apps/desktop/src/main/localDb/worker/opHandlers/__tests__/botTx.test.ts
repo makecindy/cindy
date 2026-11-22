@@ -105,7 +105,8 @@ describe('Bot named worker transactions', () => {
       },
       apply: async (_id, route) => {
         if (failApply) throw new Error('provider unavailable');
-        current = { ...route, effort: route.effort as ScheduledModelSelection['effort'] };
+        if (route.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
+        current = { ...route, agentKind: route.agentKind, effort: route.effort as ScheduledModelSelection['effort'] };
       },
       onSelectionAccepted: async () => { writeBaseline(null); },
     });

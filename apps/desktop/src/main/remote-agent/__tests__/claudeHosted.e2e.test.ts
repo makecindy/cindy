@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
 import {
-  ClaudeCodeAgent, NATIVE_SUBSCRIPTION_ACCOUNT, type AgentDeps, type AgentEvent,
+  ClaudeCodeAgent, NATIVE_SUBSCRIPTION_ACCOUNT, TurnDispatchUnconfirmedError, type AgentDeps, type AgentEvent,
   type BaseAgent, type AgentSessionHandle, Session, type StartSessionOptions,
   type InteractionDecision, type InteractionRequest, type Logger,
 } from '@cindy/maker-core';
@@ -58,6 +58,11 @@ import { remoteAgentEventMapper } from '../controller/eventMap';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
+import { MakerScheduleRunner, type SchedulerRunnerRuntime } from '../../scheduler-host/runner';
+import { createSchedulerQueueBridge, type SchedulerQueueBridge } from '../../maker-ipc/schedulerQueueBridge';
+import { createQueuedAcceptedCallbacks } from '../../maker-ipc/queuedAcceptedCallbacks';
+import { SnapshotOperationDeadlineError } from '../../utils/operationBudget';
+import type { Maker } from '@cindy/maker-core';
 import { exerciseConnectionPool, sharedAccountRegisterWiring, sharedAccountSendTransaction } from './poolHarness';
 import { getActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog';
 import { createModelRoutingTransform, setClaudeProxyGatewayKeyReader, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host';
@@ -559,7 +564,16 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect', disconnectHandoff = false) {
+  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect',
+    { disconnectHandoff = false, replayAttachments = false,
+      stopRecoveryAt }: {
+        disconnectHandoff?: boolean;
+        replayAttachments?: boolean;
+        stopRecoveryAt?: 'close-busy' | 'close-stopped' | 'close-throws' | 'startup' | 'send-throws' | 'send-rejected'
+          | 'replacement-closed' | 'replacement-runtime-closed' | 'replacement-accepted-then-closed'
+          | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
+          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted';
+      } = {}) {
     const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
     const continuation = 'Continue the remaining work.';
     const oldRequestsWithContinuation = () => observations.filter(request =>
@@ -571,6 +585,8 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     const project = path.join(caseRoot, 'project');
     fs.mkdirSync(project, { recursive: true });
     const marker = `CONTEXT_${randomUUID()}`;
+    const image = { originalName: 'handoff-screenshot.png', url: `cindy-media://blobs/${'a'.repeat(64)}.png`, mimeType: 'image/png' };
+    const file = { name: 'handoff-notes.pdf', path: path.join(caseRoot, 'guest-private-files', 'handoff-notes.pdf') };
     const completed = path.join(project, 'completed-step.txt');
     const remaining = path.join(project, 'remaining-step.txt');
     const task = randomUUID();
@@ -699,6 +715,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     const events: AgentEvent[] = [];
     let active!: AgentSessionHandle;
     let live: Session | undefined;
+    let releaseReplacementClose: (() => void) | undefined;
     const opens: Array<{ groupSwitchToken?: string; options: StartSessionOptions }> = [];
     let sends = 0;
     let reclaimed = false;
@@ -779,7 +796,10 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     try {
       await open(); oldNative = active.id;
       const user = 'Complete step one, report its receipt and the remaining step, then wait.';
-      history.push({ clientId: randomUUID(), sessionId: task, role: 'user', content: user, createdAt: Date.now() });
+      const content = replayAttachments
+        ? JSON.stringify({ text: user, images: [image], files: [file], slashCommandRanges: [] })
+        : user;
+      history.push({ clientId: randomUUID(), sessionId: task, role: 'user', content, createdAt: Date.now() });
       if (live) await live.send(user);
       else await active.send({ type: 'user', content: user });
       await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(1), { timeout: 30_000, interval: 20 });
@@ -802,15 +822,35 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         poolCli.limited.add(originalDir);
         await refreshSubscriptionPool(published, true);
         const clientId = randomUUID();
+        const originalSession = live;
+        const makerListeners = new Set<Parameters<Maker['on']>[0]>();
+        const failureListeners = new Set<(error?: string, stopped?: true) => void>();
+        const schedule = { id: 'fixture-schedule', runId: 'fixture-run' };
+        let shareIsActive = true;
+        let planModeEnabled = false;
+        const cancelledInput = new AbortController();
+        const fireAbort = new AbortController();
+        const accepted = createQueuedAcceptedCallbacks();
         const wiring = sharedAccountRegisterWiring({
           maker: {
             getSession: () => live,
             closeSessionIfCurrent: async (current: Session) => {
+              if (stopRecoveryAt === 'close-stopped') coordinator.stop(task);
+              if (stopRecoveryAt === 'close-busy' || stopRecoveryAt === 'close-stopped') return 'busy';
+              if (stopRecoveryAt === 'close-throws') throw new Error('fixture close failed');
               if (live !== current || !await current.closeIfIdle()) return 'busy';
               live = undefined;
+              if (stopRecoveryAt === 'schedule-aborted') {
+                expect(coordinator.isSharedReconnectPending(task, schedule.runId)).toBe(true);
+                fireAbort.abort();
+              }
+              if (stopRecoveryAt === 'cancelled') cancelledInput.abort();
+              if (stopRecoveryAt === 'stopped-before-open') coordinator.stop(task);
+              if (stopRecoveryAt === 'stale') shareIsActive = false;
               return 'closed';
             },
           },
+          findReceivedShare: () => ({ status: shareIsActive ? 'active' : 'unknown' }),
           providerGroupService: service,
           getProviderGroupGuestSwitch: () => guestSwitch,
           getSessionRowSnapshotStrict: async () => ({ ...row, clearedAt: null }),
@@ -832,16 +872,75 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             log: noopLogger,
           },
           createSessionWithRuntimePlugins: async (opts: StartSessionOptions) => {
+            if (stopRecoveryAt === 'startup') throw new Error('fixture replacement start failed');
             await open(opts.resumeSessionId);
+            if (!live) throw new Error('missing replacement');
+            if (stopRecoveryAt === 'send-throws') vi.spyOn(live, 'send').mockRejectedValueOnce(new Error('fixture replacement send failed'));
+            if (stopRecoveryAt === 'unconfirmed') {
+              vi.spyOn(active, 'send').mockImplementationOnce(async () => {
+                coordinator.stop(task);
+                throw new TurnDispatchUnconfirmedError('fixture dispatch confirmation lost');
+              });
+            }
+            if (stopRecoveryAt === 'replacement-accepted-then-closed') {
+              const replacement = live;
+              // Model an accepted provider dispatch followed by a close before its caller receives the result.
+              vi.spyOn(replacement, 'send').mockImplementationOnce(async () => {
+                await replacement.close();
+                return { accepted: true };
+              });
+            }
+            if (stopRecoveryAt === 'send-rejected') {
+              vi.spyOn(live, 'send').mockResolvedValueOnce({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+            }
+            if (stopRecoveryAt === 'send-stopped' || stopRecoveryAt === 'mode-changed' || stopRecoveryAt === 'mode-changed-with-stop'
+              || stopRecoveryAt === 'replacement-closed' || stopRecoveryAt === 'replacement-runtime-closed') {
+              const replacement = live;
+              if (stopRecoveryAt === 'replacement-closed') {
+                const closeHandle = active.close.bind(active);
+                const closing = new Promise<void>(resolve => { releaseReplacementClose = resolve; });
+                vi.spyOn(active, 'close').mockImplementationOnce(async options => {
+                  await closing;
+                  await closeHandle(options);
+                });
+              }
+              const send = replacement.send.bind(replacement);
+              vi.spyOn(replacement, 'send').mockImplementationOnce((message, options) =>
+                send(message, {
+                  ...options,
+                  onAccepted: async signal => {
+                    await options?.onAccepted?.(signal);
+                    if (stopRecoveryAt === 'send-stopped') coordinator.stop(task);
+                    else if (stopRecoveryAt === 'replacement-closed') void replacement.close();
+                    else if (stopRecoveryAt === 'replacement-runtime-closed') {
+                      replacement.onStatusChange(status => { if (status === 'closed') coordinator.onSessionClosed(task); });
+                      await replacement.close();
+                    } else planModeEnabled = true;
+                  },
+                }));
+            }
+            for (const listener of makerListeners) listener({ type: 'session:created', session: live });
             return live;
           },
+        });
+        let coordinator!: AgentInputCoordinator;
+        let schedulerBridge: SchedulerQueueBridge | undefined;
+        let recoveryFailure: string | undefined;
+        const onSharedReconnectFailed = vi.fn((sessionId: string, runId: string, error: unknown, stopped?: true) => {
+          expect([sessionId, runId]).toEqual([task, schedule.runId]);
+          recoveryFailure = stopped ? undefined : (error as Error).message;
+          for (const notify of failureListeners) notify(recoveryFailure, stopped);
         });
         const { sendToAgentAccepted } = sharedAccountSendTransaction({
           ...wiring,
           captureSharedReconnectRecovery: process.env.CINDY_TEST_DISABLE_SHARED_RECONNECT === '1'
             ? undefined : wiring.captureSharedReconnectRecovery,
           getSession: () => live,
-          readScheduledPermissions: async () => ({ permissionMode: 'bypassPermissions', planModeEnabled: false }),
+          readScheduledPermissions: async () => {
+            if (planModeEnabled && stopRecoveryAt === 'mode-changed-with-stop') coordinator.stop(task);
+            return { permissionMode: 'bypassPermissions', planModeEnabled };
+          },
+          readAutoReviewHistory: async () => [{ clientId: 'schedule-history', role: 'user', content: continuation, agentMeta: null }],
           reconcileCreateOptsWithDb: async (_id, opts) => {
             opts.agentDeviceId = shareRoute;
             opts.providerId = published;
@@ -852,38 +951,179 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           },
           peekPendingHandoff: id => pending.peek(id),
           consumePendingHandoff: id => pending.consume(id),
+          onSharedReconnectClaimed: (sessionId, reconnectClientId) => coordinator.markSharedReconnectPending(sessionId, reconnectClientId),
+          onSharedReconnectFinished: (sessionId, reconnectClientId) => coordinator.clearSharedReconnectPending(sessionId, reconnectClientId),
+          onSharedReconnectFailed: process.env.CINDY_TEST_DISABLE_SCHEDULER_RECONNECT_FAILURE === '1'
+            ? undefined : onSharedReconnectFailed,
         });
-        const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) =>
-          (await sendToAgentAccepted(...args)).outcome);
-        const coordinator = new AgentInputCoordinator({
+        const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) => {
+          const [id, message, createOpts, options] = args;
+          const reconnectRecovery = options.reconnectRecovery;
+          const sendOpts = stopRecoveryAt === 'cancelled' && reconnectRecovery ? {
+            ...options,
+            reconnectRecovery: { ...reconnectRecovery, signal: AbortSignal.any([reconnectRecovery.signal, cancelledInput.signal]) },
+          } : options;
+          try {
+            const { outcome } = await sendToAgentAccepted(id, message, createOpts, sendOpts);
+            await accepted.settle(id, options, outcome);
+            return outcome;
+          } catch (error) {
+            await accepted.rollback(id, options.persistUserMessage?.clientId);
+            throw error;
+          }
+        });
+        const attemptAutomaticResume = vi.fn(() => null);
+        const persistTerminalSendError = vi.fn();
+        coordinator = new AgentInputCoordinator({
+          persistTerminalSendError,
+          beforeDispatchUserTurn: async () => {
+            if (stopRecoveryAt === 'snapshot-deadline' && live !== originalSession) {
+              throw new SnapshotOperationDeadlineError();
+            }
+          },
+          isResumableTurnErrorCandidate: signals => signals.reason === 'scheduler-snapshot-preparation',
+          onResumableTurnError: attemptAutomaticResume,
           sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
+          getSchedulerRunSignal: (id, item) => schedulerBridge?.runSignalFor(id, item),
+          onAcceptedQueuedMessage: (id, item) => accepted.run(id, item),
           touchUserSend: async () => {}, createUserMessage: vi.fn(),
           isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
           getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
           getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
           emitProjection: () => {},
         });
-        coordinator.enqueue(task, {
-          clientId, text: continuation, persistedContent: continuation, model: MODEL, effort: 'medium',
-          permissionMode: 'bypassPermissions', workingDir: project,
-          createOpts: { agentKind: 'claude-code', workingDir: project, model: MODEL, permissionMode: 'bypassPermissions' },
-          chatMessage: { clientId, role: 'user', content: continuation, isStreaming: false, createdAt: new Date().toISOString() },
-          ...(failure === 'scheduled-reconnect' ? {
-            origin: { kind: 'scheduler', scheduleId: 'fixture-schedule', scheduleName: 'Fixture', runId: 'fixture-run' },
-          } : {}),
-        }, { manualUiSend: failure === 'reconnect' });
-        await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+        const input = {
+          clientId, text: continuation, persistedContent: continuation, model: MODEL, effort: '',
+          permissionMode: 'bypassPermissions' as const, workingDir: project,
+          createOpts: { agentKind: 'claude-code' as const, workingDir: project, model: MODEL,
+            permissionMode: 'bypassPermissions' as const, planMode: false },
+          chatMessage: { clientId, role: 'user' as const, content: continuation, isStreaming: false, createdAt: new Date().toISOString() },
+        };
         if (failure === 'scheduled-reconnect') {
-          await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
-          expect(guestSwitch.hasOffer(task)).toBe(true);
-          expect(order.filter(event => event === 'token')).toHaveLength(1);
-          expect(opens).toHaveLength(2);
-          expect(sends).toBe(1);
-          expect(oldRequestsWithContinuation()).toBe(0);
-          expect(await pending.peek(task)).toBeNull();
-          expect(fs.existsSync(remaining)).toBe(false);
-          return;
-        }
+          const modes = { permissionMode: 'bypassPermissions' as const, planModeEnabled: false };
+          const getSessionRowSnapshot: SchedulerRunnerRuntime['getSessionRowSnapshot'] = async () => ({
+            ...modes, status: 'active', agentKind: row.agentKind, model: row.model, sdkSessionId: row.sdkSessionId,
+            providerId: row.providerId, agentDeviceId: row.agentDeviceId, remoteHostId: null,
+            title: null, userSendAt: null, workingDir: project, workspaceKind: 'project',
+          });
+          const bridge = schedulerBridge = createSchedulerQueueBridge({
+            coordinator, isSessionBusy: () => coordinator.shouldQueueNewTurn(task),
+            getSessionMeta: async () => ({ ...row, agentKind: 'claude-code' as const, workDir: project }),
+            getSessionRowSnapshot, createId: () => clientId, discardWatchers: new Map(), preparations: new Map(),
+            enqueue: async req => {
+              accepted.register(req.clientId, () => req.onAccepted({ permissionMode: modes.permissionMode, planMode: false }), req.onAcceptedRollback);
+              coordinator.enqueue(req.targetSessionId, {
+                ...input, text: req.message, persistedContent: req.persistedContent, origin: req.origin,
+              }, { manualUiSend: req.manualUiSend });
+            },
+          });
+          const markResult = vi.fn();
+          const turnActive = vi.fn();
+          const runner = new MakerScheduleRunner({
+            maker: {
+              getSession: () => live,
+              getSessionMeta: async () => ({ ...row, agentKind: 'claude-code', workDir: project }),
+              isSessionAlive: () => true,
+              createSession: async () => originalSession,
+              closeSession: async () => {},
+              getCapabilities: () => ({ availableModels: [] }),
+              on: (listener: Parameters<Maker['on']>[0]) => {
+                makerListeners.add(listener);
+                return () => makerListeners.delete(listener);
+              },
+            } as unknown as Maker,
+            getDb: () => ({}) as never, notifier: { notify: async () => {} }, logger: noopLogger,
+            schedulerQueue: {
+              ...bridge,
+              isSharedReconnectPending: (id, runId) => coordinator.isSharedReconnectPending(id, runId),
+              onAutoResumeFailed: (_id, _runId, listener) => {
+                failureListeners.add(listener);
+                return () => failureListeners.delete(listener);
+              },
+            },
+          }, {
+            shouldApplyExclusiveProviderRerouteLive: () => false,
+            createMessage: vi.fn(), rewindPersistedUserMessageAfterClear: vi.fn(),
+            getSessionRowSnapshot, getSessionFsSnapshot: async () => ({ ...modes, planModeEnabled, workingDir: project, remoteHostId: null }),
+            touchUserSendInDb: vi.fn(async () => {}), wireSessionToIpc: vi.fn(),
+            isSessionInTurn: () => live?.isTurnRunning() ?? false,
+            noteSilentStopUserSend: () => {}, onSilentStopSettled: () => () => {},
+            agentHandoffPending: pending, resolveWorkingDir: vi.fn(),
+            releaseWorktree: vi.fn(), isManagedScheduledTarget: () => false,
+            restoreScheduledTarget: vi.fn(),
+          });
+          expect(bridge.isSessionBusy(task)).toBe(false);
+          let settled: { resultText?: string; skipped?: boolean; error?: unknown } | undefined;
+          const run = runner.fire({
+            id: schedule.id, name: 'Fixture', prompt: continuation, targetSessionId: task,
+            source: 'user', kind: 'cron', cronExpr: '* * * * *', timezone: 'UTC', recurring: true,
+            manual: false, agentKind: 'claude-code', workspaceKind: 'project', workingDir: project,
+            useWorktree: false, notify: { desktop: false, feishu: false }, status: 'active',
+            createdAt: Date.now(), updatedAt: Date.now(),
+          }, {
+            runId: schedule.runId, firedAt: Date.now(), signal: fireAbort.signal,
+            onRunnerNotified: markResult, onTurnActive: turnActive,
+          }).then(result => { settled = result; }, error => { settled = { error }; });
+          try {
+            await vi.waitFor(() => expect(settled, 'runner must settle without a watchdog').toBeDefined(), { timeout: 10_000 });
+            expect(turnActive).toHaveBeenCalledExactlyOnceWith(task);
+            expect(makerListeners.size).toBe(0);
+            if (stopRecoveryAt === 'schedule-aborted') {
+              await send.mock.results[0].value.catch(() => undefined);
+              expect(opens.filter(open => open.groupSwitchToken), 'replacement open after scheduler abort').toHaveLength(0);
+              expect(opens).toHaveLength(2);
+              // The stopped open supplied a credential (asserted at claim),
+              // but it never reached the default offer store for a new open.
+              expect(order).not.toContain('token');
+              expect(guestSwitch.hasOffer(task)).toBe(false);
+              expect(await pending.peek(task)).toBeNull();
+              expect(live).toBeUndefined();
+              expect(row.sdkSessionId).toBe(oldNative);
+              expect(readAccountBinding(`task:${hostTask}`, 'anthropic')?.accountId).toBe(accounts[original]);
+              expect(settled?.error).toMatchObject({ message: 'queued heartbeat aborted by schedule pause/delete' });
+              expect(markResult).toHaveBeenCalledExactlyOnceWith('failure');
+              expect(onSharedReconnectFailed).not.toHaveBeenCalled();
+              await vi.waitFor(() => expect(bridge.isPromptTracked(task, clientId)).toBe(false));
+              expect(coordinator.getProjection(task).error).toBeNull();
+              expect(persistTerminalSendError).not.toHaveBeenCalled();
+              expect(sends).toBe(1);
+              expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+              return;
+            }
+            if (stopRecoveryAt) {
+              if (stopRecoveryAt === 'send-stopped' || stopRecoveryAt === 'stopped-before-open' || stopRecoveryAt === 'close-stopped'
+                || stopRecoveryAt === 'mode-changed' || stopRecoveryAt === 'mode-changed-with-stop') {
+                expect(settled).toMatchObject(stopRecoveryAt === 'mode-changed' ? { deferred: true } : { skipped: true });
+                expect(markResult).not.toHaveBeenCalled();
+                expect(recoveryFailure).toBeUndefined();
+              } else {
+                expect(markResult).toHaveBeenCalledExactlyOnceWith('failure');
+                const expectedError = stopRecoveryAt === 'unconfirmed'
+                  ? 'fixture dispatch confirmation lost'
+                  : stopRecoveryAt === 'snapshot-deadline' ? 'Snapshot operation deadline exceeded'
+                    : stopRecoveryAt === 'replacement-accepted-then-closed' ? 'Replacement session ended after dispatch'
+                      : 'SUBSCRIPTION_ACCOUNT_LIMITED';
+                expect(recoveryFailure).toContain(expectedError);
+                expect(settled?.error).toMatchObject({ message: expect.stringContaining(expectedError) });
+              }
+              expect(fs.existsSync(remaining)).toBe(false);
+              if (stopRecoveryAt === 'snapshot-deadline') {
+                await vi.waitFor(() => expect(coordinator.getProjection(task).error).toContain('Snapshot operation deadline exceeded'));
+              }
+              expect(attemptAutomaticResume).not.toHaveBeenCalled();
+              expect(sends).toBe(1);
+              expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+              return;
+            }
+            if (settled?.error) throw settled.error;
+            expect(markResult).toHaveBeenCalledExactlyOnceWith('success');
+            expect(settled?.resultText).toBe('Remaining step completed.');
+          } finally {
+            fireAbort.abort();
+            await run;
+          }
+        } else coordinator.enqueue(task, input, { manualUiSend: true });
+        await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
         await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
         expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
         expect(opens).toHaveLength(3);
@@ -964,6 +1204,17 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         expect(fs.existsSync(remaining)).toBe(false);
       }
       expect(freshRequests[0].body.includes(marker), 'fresh CLI request must include old tool receipt').toBe(true);
+      if (replayAttachments) {
+        const request = JSON.parse(freshRequests[0].body) as { messages: Array<{ role: string; content: unknown }> };
+        const firstUser = contentText(request.messages.find(message => message.role === 'user')?.content);
+        expect(firstUser.includes('[Attachment references:'), 'fresh CLI request must include attachment references').toBe(true);
+        expect(firstUser).toContain(user);
+        expect(firstUser).toContain(image.originalName);
+        expect(firstUser).toContain(image.url);
+        expect(firstUser).toContain(file.name);
+        expect(firstUser).not.toContain(file.path);
+        expect(firstUser).not.toContain('guest-private-files');
+      }
       expect(freshRequests[0].body.match(/Continue the remaining work\./g)).toHaveLength(1);
       expect(events.some(event => event.type === 'text' && JSON.stringify(event.data).includes('Remaining step completed.'))).toBe(true);
       if (failure === 'run' || failure === 'idle-send') expect(oldRequestsWithContinuation()).toBeGreaterThan(0);
@@ -976,6 +1227,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       expect(events.filter(event => event.type === 'tool_use' && (event.data as { toolName?: string }).toolName === 'Bash')).toHaveLength(1);
     } finally {
       releaseQuotaResponse();
+      releaseReplacementClose?.();
       await live?.close().catch(() => undefined);
       for (const handle of handles) await handle.close({ reason: 'navigation' }).catch(() => undefined);
       await host.dispose();
@@ -996,13 +1248,45 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
   it('continues the original input once after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
     await exercise('a', 'reconnect');
   });
-  it('keeps scheduled inputs on the existing failure path after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
+  // #11895 / e2e: fire against an idle live Session, whose old executor
+  // run is gone. Exercise runner acceptance and terminal tracking in addition
+  // to the real controller, host and CLI. Disabling capture must break success.
+  it('recovers scheduled input once after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
     await exercise('a', 'scheduled-reconnect');
   });
+  // #11895 / e2e: pause or delete after the original Session closes. The
+  // real runner has already accepted the input and has no live Session to
+  // cancel. Its run signal must prevent the credentialed open and handoff.
+  it('cancels scheduled reconnect after the original session closes', { timeout: 90_000 }, async () => {
+    await exercise('a', 'scheduled-reconnect', { stopRecoveryAt: 'schedule-aborted' });
+  });
+  // #11895 / e2e: after claiming the token, each pre-dispatch exit must
+  // settle the same runner with the quota cause and without a second send.
+  it.each([
+    'close-busy', 'close-throws', 'startup', 'send-throws', 'send-rejected',
+    'replacement-closed', 'replacement-runtime-closed', 'replacement-accepted-then-closed',
+    'cancelled', 'stale', 'snapshot-deadline',
+  ] as const)(
+    'settles claimed scheduled reconnect on %s', { timeout: 90_000 },
+    async stopRecoveryAt => exercise('a', 'scheduled-reconnect', { stopRecoveryAt }),
+  );
+  it.each(['send-stopped', 'stopped-before-open', 'close-stopped', 'mode-changed-with-stop'] as const)(
+    'keeps an explicit stop as a skipped run on %s', { timeout: 90_000 },
+    async stopRecoveryAt => exercise('a', 'scheduled-reconnect', { stopRecoveryAt }),
+  );
+  it('retains an unconfirmed replacement send even if Stop races the reply', { timeout: 90_000 },
+    async () => exercise('a', 'scheduled-reconnect', { stopRecoveryAt: 'unconfirmed' }));
+  it('defers the original scheduled run when Plan mode changes before replacement dispatch', { timeout: 90_000 },
+    async () => exercise('a', 'scheduled-reconnect', { stopRecoveryAt: 'mode-changed' }));
   it('switches accounts when an existing idle run rejects the next send', { timeout: 90_000 }, async () => {
     await exercise('a', 'idle-send');
   });
   it('fails to finish the remaining action when the production handoff sink is disconnected', { timeout: 90_000 }, async () => {
-    await expect(exercise('a', 'cold', true)).rejects.toThrow('fresh CLI request must include old tool receipt');
+    await expect(exercise('a', 'cold', { disconnectHandoff: true })).rejects.toThrow('fresh CLI request must include old tool receipt');
+  });
+  // E2E: the shared quota switch builds from the saved user envelope. The
+  // replacement CLI's first loopback request must include references but no file path.
+  it('replays image references and file names in the first replacement CLI request', { timeout: 90_000 }, async () => {
+    await exercise('a', 'cold', { replayAttachments: true });
   });
 });

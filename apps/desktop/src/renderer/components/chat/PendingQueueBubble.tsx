@@ -33,7 +33,8 @@ export interface PendingQueueBubbleProps {
   localSend?: boolean;
   simplifiedBotConversation?: boolean;
   onEdit(entry: QueuedMessage): void;
-  onSteer(clientId: string): Promise<boolean>;
+  /** Omitted when the task's engine cannot take input into its running turn: no steer item. */
+  onSteer?(clientId: string): Promise<boolean>;
   onRemove(clientId: string): void;
   onMove(clientId: string, targetIndex: number): void;
 }
@@ -155,7 +156,7 @@ export function PendingQueueBubble({
                 {t('newChat.pendingQueue.releaseHoldAction')}
               </DropdownMenuItem>
             )}
-            {!availability.actions.steer.disabled && holdRow.canSteer && (
+            {onSteer && !availability.actions.steer.disabled && holdRow.canSteer && (
               <DropdownMenuItem
                 className="gap-2"
                 onSelect={() => {
