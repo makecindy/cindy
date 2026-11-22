@@ -6081,6 +6081,7 @@ for (const boundary of [
   'N3 mixed readback', 'N3 unreadable then refused', 'N5 refusal readback temporarily unavailable',
 ]) {
   test(`deferred credential choice keeps the Host route until settlement: ${boundary}`, async t => {
+    t = lifoCleanup(t);
     const agent = boundary.includes('Fast') || boundary === 'independent axes without an atomic payload' ? 'codex' : 'claude-code';
     const logs = [];
     const r = await modelChangeRuntime(t, { agent, log: {
