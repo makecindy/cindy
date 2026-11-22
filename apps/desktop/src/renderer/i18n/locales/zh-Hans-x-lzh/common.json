@@ -563,7 +563,8 @@
       "calloutUnknown": "若君不识申请之人，请拒之；拒后此链接即废。",
       "approve": "许分享",
       "reject": "拒其请",
-      "later": "容后再理"
+      "later": "容后再理",
+      "calloutPluginEngine": "{{name}} 用之时无须于己机安设法器或 CLI，径用此机之 CLI 登门与限额。"
     },
     "apply": {
       "loading": "方读分享链接…",
@@ -3716,6 +3717,7 @@
         "connecting": "方连…",
         "rename": "易名",
         "suspended": "已停",
+        "hidden": "已隐",
         "unconfigured": "未设"
       },
       "button": {
@@ -3726,7 +3728,9 @@
         "cancel": "罢",
         "retry": "重取模型清单",
         "retrying": "方重取…",
-        "enableProvider": "启供方"
+        "enableProvider": "启供方",
+        "showProvider": "显之",
+        "hideInstead": "改为隐"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4106,7 +4110,7 @@
         "paymentRequired": "付费",
         "paymentUnlock": "付费解锁",
         "enableModel": "启此模型",
-        "capabilityGroupHint": "不见于言谈模型之选；开关定其于相应功能中列否",
+        "capabilityGroupHint": "不见于模型之选；开关定相应功能可用此模型否",
         "accessWriteFailed": "禁用之设未能存，请再试",
         "visibilityWriteFailed": "模型显示之设未能存，请再试；若仍未成，请重启 Cindy。",
         "disabledGroup": "已停",
@@ -4250,22 +4254,22 @@
           "aria": "依模型之类筛之",
           "chat": "言谈"
         },
-        "hiddenGroup": "未显",
+        "hiddenGroup": "已隐",
         "management": {
           "brand": "制者"
         },
         "manage": {
           "title": "模型",
-          "selected": "已择 {{count}} 个",
-          "hint": "以开关择常用之言谈模型。",
+          "selected": "显 {{count}} 个",
+          "hint": "开关定模型见于模型之选否。关之但隐，仍可于选单之末「已隐」中择之。",
           "menu": "理",
           "arrange": "清单排列",
           "byBrand": "依制者分组",
           "byName": "依模型名排列",
-          "selection": "常用模型",
-          "showAll": "尽选模型",
-          "hideAll": "尽罢所选",
-          "reset": "复预设之选",
+          "selection": "显于模型之选",
+          "showAll": "尽显",
+          "hideAll": "尽隐",
+          "reset": "复预设之显",
           "connectionRequired": "连接后可用，已择模型仍留。"
         }
       },
@@ -4279,7 +4283,8 @@
         "groupBadge_other": "供方组 · {{count}} 台机",
         "groupNote": "{{device}} 已将此供方立为供方组。于模型清单中择之以新开差事，{{device}} 将依组策略分差事予下列一机运行；彼机有恙，自换一机续之。{{device}} 在线时，君可自此处之「远程与分享」理此组及分享。",
         "groupMembersTitle": "组内之机",
-        "groupMembersFailed": "暂不能读组内诸机之状态。"
+        "groupMembersFailed": "暂不能读组内诸机之状态。",
+        "hiddenBanner": "已隐于此机模型之选。所藏与方用之差事皆不受其扰。"
       },
       "genericOAuth": {
         "subtitle": "订阅名籍",
@@ -4323,7 +4328,8 @@
           "rejected": "此供方拒此番请求，下为前次所得之模型清单。请稍后再试，或改用他供方。",
           "empty": "此供方此番未返任何可用模型，下为前次所得之清单。请确认名籍权柄后再试。"
         },
-        "suspendedBanner": "此供方已停，凭证仍留；启之，其模型方复可用",
+        "suspendedBanner": "此供方已停，新差事与幕后诸功皆不复用之，凭证仍留。若但不欲见于模型之选，可改为隐。",
+        "hiddenBanner": "已隐于模型之选。方用之差事与幕后诸功皆不受其扰；欲用时，仍可于选单之末「已隐」中择之。",
         "remoteAccess": {
           "label": "许远程调用",
           "description": "启之，则君之他机与君所分享之人，可用此供方之模型；Agent 行于此机，用此机之登门与限额。",
@@ -4533,7 +4539,9 @@
       },
       "menu": {
         "disableProvider": "停此供方",
-        "enableProvider": "启此供方"
+        "enableProvider": "启此供方",
+        "hideProvider": "隐于模型之选",
+        "showProvider": "显于模型之选"
       },
       "builtinApiKey": {
         "subtitle": "API key 连接",
@@ -7000,7 +7008,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已含于隐私画面：此机不眠。"
+      "keepAwakeIncluded": "已含于隐私画面：此机不眠。",
+      "localNetwork": {
+        "label": "本地网络",
+        "deniedHint": "无此权，同网之电脑与手机不得直连此机，唯经中继，其速迟矣。",
+        "settingsHint": "请于「系统设置 › 隐私与安全性 › 本地网络」启 Cindy，归此即自生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8502,7 +8515,8 @@
           "description": "启之，则君之他机可用此引擎行差事；Agent 行于此机，用此机之登门与限额；文件与指令仍留于差事所在之机。",
           "unsupported": "此法器尚未许他机用其引擎。",
           "remoteControlOff": "此机尚未许同名籍之设备远程控制，他机不可用此引擎。",
-          "ariaLabel": "许君之他机用 {{engine}}"
+          "ariaLabel": "许君之他机用 {{engine}}",
+          "descriptionShareable": "启之，则君之他机与所共之友无须安设法器，即可用此引擎行差事；Agent 行于此机，用此机之登门与限额；文件与指令仍留于差事所在之机。"
         },
         "githubRelease": {
           "title": "法器更新",
@@ -10895,6 +10909,13 @@
         "enabled": "已启"
       },
       "close": "阖"
+    },
+    "localNetwork": {
+      "title": "启本地网络之权",
+      "relayOnly": "汝他设备今唯经中继连此机，其速迟。启之，则同网可直连。",
+      "controlEnabled": "同网设备欲直控此机，须本地网络之权，否则唯经中继。",
+      "allow": "启之",
+      "dismiss": "暂不启"
     }
   },
   "bots": {
@@ -14118,6 +14139,8 @@
         "remoteFavoriteUnavailable": "{{source}} · 暂读不得彼机之模型",
         "favoritesGroup": "珍藏",
         "recentGroup": "近用",
+        "hiddenGroup": "已隐（{{count}}）",
+        "hiddenGroupHint": "已隐之供方与模型，仍可择用",
         "recentEmpty": "尚无近用——择一模型，自会来此相候",
         "favoritesSaveFailed": "珍藏之变未能存",
         "favoritesCleanupFailed": "未能清已失效之分享模型珍藏",
@@ -17431,7 +17454,8 @@
         "title": "纳仓库之自运",
         "description": "来源：{{workingDir}}。请检查下方设置。导入会套用这些变更并启用新增自运，它们可以执行命令、启动具有完整访问权限的 Agent。请仅导入你信任的内容。",
         "accept": "确认导入",
-        "removed": "将删除：{{names}}"
+        "removed": "将删除：{{names}}",
+        "fileMissing": "「{{projectName}}」中未见自运卷，故未纳入"
       },
       "toast": {
         "summary": "增 {{inserted}} · 更 {{updated}} · 删 {{deleted}}",
@@ -17528,6 +17552,7 @@
       "openWorkdirFailed": "启卷匣未成"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
       "status": {
         "running": "方行",
         "success": "成",
@@ -21456,6 +21481,7 @@
       "reviewed": "已审",
       "verified-publisher": "发布者已验"
     },
+    "viewLimit": "所开之页过多。移他页出屏，或收之，此页即自开。",
     "pluginRevoked": "法器已禁用或已变更，此页已失效",
     "pluginCspRejected": "此页请求未声明之网域，已拒其加载",
     "filesOnExecutionComputer": "卷之内容请于运行之机览之",

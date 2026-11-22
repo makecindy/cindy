@@ -10,9 +10,9 @@
  * engine lists it for that model (otherwise the engine keeps its own); Fast does not apply. Built-in
  * tasks never reach this function.
  */
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
 import type { PluginHarness } from '../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../localDb/sessionOpening.js';
-import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   isPluginEngineEffort,
@@ -56,18 +56,16 @@ export function admitPluginEngineSession(
 }
 
 /**
- * The engine belongs to another computer of the same account (`body.agentDeviceId`): the plugin
- * need not be installed here, so this computer cannot check the engine itself. Like a provider of
- * another computer, whether that computer offers it (plugin supports the mode, engine available,
- * opened for remote use) is decided there when the task starts; a refusal surfaces as the start
- * error and never falls back to an engine of this computer. What is decided here is only what can
- * never work: a shared provider is not a computer of this account and never offers plugin engines.
- * The model stays the engine's own value; a reasoning level is kept as chosen (the engine keeps its
- * own when it does not offer that level); Fast does not apply.
+ * The engine belongs to another computer or a shared provider (`body.agentDeviceId`): the plugin
+ * need not be installed here, so this computer cannot check the engine itself. Whether that host
+ * offers it (plugin supports remote/guest workspace, engine available, opened for remote use, and
+ * active share grant) is decided there when the task starts; a refusal surfaces as the start error
+ * and never falls back to an engine of this computer.
  */
 function admitPluginEngineSessionElsewhere(body: SessionOpenBody): SessionOpenBody {
-  if (isProviderShareAgentDeviceId(body.agentDeviceId)) {
-    throw new Error('别人分享的供应商不提供插件引擎。请选择你自己电脑上的插件引擎。');
+  if (typeof body.agentDeviceId === 'string'
+    && (isSharedTaskPeer(body.agentDeviceId) || Boolean(parseProviderSharePeer(body.agentDeviceId)))) {
+    throw new Error('无效的插件引擎运行位置。请重新选择插件引擎。');
   }
   const model = typeof body.model === 'string' && body.model.trim() ? body.model : PLUGIN_ENGINE_DEFAULT_MODEL;
   return { ...body, model, effort: isPluginEngineEffort(body.effort) ? body.effort : '', fastMode: false };
@@ -104,6 +102,10 @@ export function admitPluginEngineSwitchTarget(
     throw new Error(hint ? `${engine.name} 当前不可用：${hint}` : `${engine.name} 当前不可用。`);
   }
   const model = target.model.trim() ? target.model : PLUGIN_ENGINE_DEFAULT_MODEL;
+  if (engine.defaultModelAllowed === false
+    && (model === PLUGIN_ENGINE_DEFAULT_MODEL || !engine.models.some((item) => item.id === model))) {
+    throw new Error(`${engine.name} 当前没有开放这个模型。请重新选择模型。`);
+  }
   const offered = engine.models.find((item) => item.id === model)?.efforts ?? [];
   const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort : '';
   const permissionMode = engine.permissionModes.find((mode) => mode.id === target.permissionMode)?.id

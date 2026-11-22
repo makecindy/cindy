@@ -41,14 +41,14 @@ export function InputHandoffDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           aria-describedby={undefined}
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(440px,calc(100vw-32px))] flex-col gap-4 overflow-hidden p-6 outline-none"
+          className="modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] w-[min(440px,calc(100vw-32px))] flex-col gap-4 overflow-hidden p-6 outline-none"
           data-testid="input-handoff-dialog"
         >
           <div className="shrink-0"><InputHandoffDialogHeader snapshot={snapshot} /></div>
@@ -79,7 +79,7 @@ function InputHandoffDialogHeader({ snapshot }: { snapshot: InputHandoffSnapshot
   const Icon = inputHandoffIcon(snapshot);
   return (
     <div className="flex flex-col items-center gap-2 text-center">
-      <span className="flex size-12 items-center justify-center rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
+      <span className="flex size-12 items-center justify-center rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
         <Icon size={22} aria-hidden />
       </span>
       <InputHandoffPlace label={place.label} secure={place.secure} />
@@ -121,7 +121,7 @@ function InputHandoffDialogDetails({
       {warnings.map((warning) => (
         <p
           key={warning}
-          className="flex w-full items-start gap-1.5 rounded-[8px] bg-[var(--warning-bg-soft)] px-2.5 py-1.5 text-left text-12 text-[var(--text-primary)]"
+          className="flex w-full items-start gap-1.5 rounded-lg bg-[var(--warning-bg-soft)] px-2.5 py-1.5 text-left text-12 text-[var(--text-primary)]"
         >
           <AlertTriangle size={14} className="mt-px shrink-0 text-[var(--warning-fg)]" aria-hidden />
           <span>{warning}</span>

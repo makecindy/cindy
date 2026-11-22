@@ -1,3 +1,4 @@
+import { mayRecordTurnUsage, turnUsageBroadcastScope } from './usage/turnUsageAdmission.js';
 /**
  * sessionSpendBroadcaster — main 端单一负责 session 级 usage 持久化。
  *
@@ -141,7 +142,6 @@ export async function recordSessionTurnSpend(
           ? addRegionalMoney([legacy, current])
           : current
         : (current ?? legacy);
-    if (!isOwnerScopeCurrent(ownerScope)) return;
     broadcastSessionSpend(
       {
       sessionId,
@@ -156,7 +156,8 @@ export async function recordSessionTurnSpend(
 }
 
 export function broadcastSessionSpend(payload: SessionSpendPayload, ownerScope: OwnerScope | null = null): void {
-  if (!isOwnerScopeCurrent(ownerScope)) return;
+  ownerScope = turnUsageBroadcastScope(ownerScope, captureOwnerScope);
+  if (!mayRecordTurnUsage() || !isOwnerScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   // device-link 旁路:控制端经 sessions topic(列表订阅常开,会话未打开也不丢)收到
   // 累计 cost 镜像(本模块走裸 UPDATE、不发 sessions:patched,没有这条 tap 控制端的
@@ -197,7 +198,6 @@ export async function recordSessionTurnTokens(
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
-    if (!isOwnerScopeCurrent(ownerScope)) return;
     broadcastSessionTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnTokens failed:', err instanceof Error ? err.message : String(err));
@@ -205,7 +205,8 @@ export async function recordSessionTurnTokens(
 }
 
 export function broadcastSessionTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
-  if (!isOwnerScopeCurrent(ownerScope)) return;
+  ownerScope = turnUsageBroadcastScope(ownerScope, captureOwnerScope);
+  if (!mayRecordTurnUsage() || !isOwnerScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   if (ownerScope === null) {
     broadcastTap.tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload);

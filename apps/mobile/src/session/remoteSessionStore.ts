@@ -6365,6 +6365,14 @@ export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getVisibleSessions);
 }
 
+/** Native deep links must resolve hidden/detail-only sessions after the mirror hydrates. */
+export function useRemoteSessionLinkTarget(sessionId: string): RemoteSession | null {
+  const read = useCallback(() => remoteSessionStore.getSessions().find(session =>
+    session.id === sessionId,
+  ) ?? null, [sessionId]);
+  return usePausableRemoteSessionStoreSnapshot(read, read);
+}
+
 /** Link chips observe only their visible targets, not every task's activity. */
 export function useRemoteSessionTitles(ids: readonly string[]): Record<string, string> | undefined {
   const read = useCallback(() => {

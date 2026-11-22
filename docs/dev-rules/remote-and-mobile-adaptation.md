@@ -7,6 +7,48 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 手机 Agent-Net 冷启动并行与前台直连快恢复（2026-11-22）
+
+手机 `openMobileAgentNetSocket` 在官方网络下将 `/api/device-link/devices` 准入列表预取（3 秒上限）
+与本机 IP 读取提前到与 Keystore 身份准备并行启动，仍在 `AgentNetSocket.openWithBindings` 接收或
+拨出任何连接前收口 `peerRule`，不放宽已移除设备的拒绝边界。后台挂起再回前台时，仅在本进程内存保留
+上一条已通过加密握手验证的对端 UDP 直连地址；当本机局域网 IP 未变且存在缓存目录时，先以
+`deferRelay: true` 和 350 毫秒短预算直拨该候选，中转 WebSocket 与中转 UDP 注册在后台并行完成。
+私网记忆地址不落盘，物理切网（`routeChanged`）、本机 IP 变化、退出账号、切换自建中转或修改偏好时立即清空。
+
+`AgentNetSocket` 在对端首拨或初始 `openingRelay` 尚未结算前，不再提前投递 `presence-changed { online: false }`
+污染 `peerOfflineGate`；确认目录离线或首拨失败后才发出离线事件。`canConnectSession` 供手机会话层识别
+正在首拨／等待初始中转握手的 V2 对端，既有 `supports()` 语义保持不变。`PortableUplink` 对齐桌面端发送队列：
+仅在运行时提供数值型 `ws.bufferedAmount` 时启用排空监测（React Native 自带 `WebSocket` 该字段为 `undefined`，按 `0` 处理避免误拦截发包），
+持续 1 秒未排空时丢弃新中转封装包，持续 45 秒未排空且无入站排空时主动关闭半开连接交由 `AgentNetSocket` 重连，
+不向旧版中转发送非 `presence` 文本心跳帧（旧中转会以 `1008 invalid control` 断开）。手机初始中转握手失败且未开「仅使用加密连接」时，
+通过一次 `/directory` 校验是否属 401/403 身份撤销（`mobileAgentNetIdentityRefused`），被拒时关闭缓存虚活连接回退到 Device Link，
+纯网络离线（`status: 0`）仍保留缓存直连模式。
+
+故障半径：① 失效记忆候选（对端重启换端口）或单条半开中转 WebSocket 属于单路径传输层陈旧状态，不等于账号或对端离线；
+② 失效记忆候选仅在 350 毫秒后退役该对端候选并回退当前中转重拨，半开 WebSocket 仅替换中转上行连接，不关闭已建立的直连加密通道、不重放业务写操作；
+③ 多对端拓扑下 `c-stale` 回退中转与 `e-fail` 首拨失败互不波及已直连的 `b-live`，未启用 Agent-Net、旧版 Device Link 与未升级自建中转行为完全不变。
+
+实现与回归：`packages/agent-net/src/{portableSocket,portableClient,nativeTransport}.ts`、
+`apps/mobile/src/device-link/agentNetRuntime.ts`，以及 `portableSocket.test.ts`、`portableClient.test.ts`、
+`nativeTransport.test.ts`、`agentNetRuntime.test.ts`。
+
+## 手机首次建链失败与中继累计确认滞后（2026-11-21）
+
+Agent-Net 名册报告同账号设备在线时，负责先拨号的一端如果首次握手失败，复用该对端已有的退避重拨。
+计时到期再检查在线与授权状态；收到新的在线名册时仍立即尝试连接。测试从首次失败和已连接后断开两种入口验证。
+Device Link 的网络提示在防抖期间收到有效帧，就已取得该提示之后的中继可达证据，后台读取可以继续。
+中继可靠流队头尚未确认时，后面的已发送推送最多提前重传一次；累计确认推进后，新的队头恢复正常重传。
+积压只影响这一个目标流，业务结果仍按原期限和预算发送；不重置共享连接，不引入应用操作重放，不改 wire。
+
+自建中转兼容：本次仅调整客户端拨号、发送侧重传调度与后台请求准入，沿用已有帧、累计确认、
+设备签名和能力协商；`packages/device-link-relay` 的通用转发无需识别这些本地时序，
+已部署中转可继续使用，无需服务端同步修改或版本升级。
+2026-11-22 在本 PR 分支实测：共享客户端 `pnpm --filter @cindy/device-link test` 1347 项、
+自建中转 `pnpm --filter @cindy/device-link-relay test` 61 项及
+`pnpm --filter @cindy/device-link-relay run interop` 2 项均通过；
+互通覆盖真实自建中转的加入、设备签名通信、自动重连与 SDK 版本矩阵。
+
 ## 远程 Agent 控制请求与发送取消（2026-11-18）
 
 `maker:remote-agent:v1` 按请求内容区分优先级：发送、插话、停止、关闭以及内联交互／回调／错误回复
@@ -877,6 +919,21 @@ mDNS 名，解析要靠双方都能收发组播；跨网段、组播被过滤或
   缺 `NSLocalNetworkUsageDescription` 时系统不弹授权、直接拒绝；正式包由 `forge.config.ts`
   声明，个人版由 `scripts/personal-build/native-capabilities.mjs` 写入运行时，改动后要用
   更新过的构建工具重新生成运行时才生效。
+- **应用内检测与提醒（2026-11-22）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
+  与「已拒绝」。Main 的 [`local-network/access.ts`](../../apps/desktop/src/main/local-network/access.ts)
+  向物理网卡的默认网关（默认路由在 VPN 上时取 `route -n get -ifscope <en*> default`）发一次
+  TCP/53 连接：立即 `EHOSTUNREACH` 判为 `denied`，连通、拒绝或超时判为 `granted`，没有局域网网关
+  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测本身也是未决定的 App 触发系统询问的
+  方式；系统已有决定（含缺 `NSLocalNetworkUsageDescription` 时被静默拒绝的旧安装）就不会再询问，
+  所以「去授权」在约 1.2 秒后仍被拒时打开「系统设置 › 隐私与安全性 › 本地网络」，并在 3 分钟内
+  每 2 秒复查一次。由拒绝变为允许时，Device Link 调用与网卡变化相同的 `notifyNetworkChanged()` /
+  `agentNetNetworkChanged()`，立即重试直连，不需要重启。缺许可时 LAN 信标收发都被拦住，「对端是否
+  在同一局域网」无从观察，所以侧边栏只在两种可观察的代价出现时提醒
+  （[`local-network/reminder.ts`](../../apps/desktop/src/main/local-network/reminder.ts)）：用户刚打开
+  「允许同账号设备控制本机」（10 分钟内），或 Agent-Net 显示同账号设备已连上却只走中转。关闭提醒
+  后，只有再次打开被控开关或出现新的只走中转的设备才会重新出现。设置页「本机」卡片常驻显示该
+  许可的状态。IPC `local-network:*` 只给本机窗口，不在远程调用白名单里。Host 客户端模式下 Device
+  Link 跑在 Host 进程，本次只接了桌面 Main 的提醒与重试，设置页状态仍可用。
 - **故障记录。** 2026-11 两台同一局域网的电脑，控制通道直连，文件却走 TURN（往返 430–580 ms，
   每秒 5–8 KB）。文件连接的统计里本端有 4 个 host 候选，对端一个也没有；其中一台的 App 没有
   本地网络许可，既发不出组播，也不能主动连对端。两处都要修：文件窗口公布真实地址，该 App
@@ -1698,8 +1755,11 @@ userData 的 `logs/`。按 `sessionRef`（任务 ID 前 8 位）与 `runRef`（r
 每阶段先输出 `status=started`，结束输出 `ok` / `failed`、`durationMs` 和 `elapsedMs`；
 `stage=total` 汇总本端总耗时与 `stagesMs`。使用各端自己的单调时钟，不相减不同电脑的
 墙钟；`remote-open` 包含 transport 与 host 的等待，不能把三侧耗时相加。配置收集仍为
-best-effort，因此某项失败而总启动成功是合法结果。只记录固定阶段名、关联标识、结果和
-耗时，不记录配置正文、路径、消息、凭证或错误正文，不改变日志上报白名单。
+best-effort，因此某项失败而总启动成功是合法结果。只记录固定阶段名、关联标识、结果、
+耗时及下列固定诊断计数，不记录配置正文、路径、消息、凭证或错误正文，不改变日志上报白名单。
+控制端 `side=transport` 的 `stage=total` 可带 `payload`。其中 `uploadBytes` 和 `chunks` 是
+计划上传的 gzip 字节数与分段数，分段准备完成后，即使上传失败也会记录。内联载荷两项均为
+零，分段准备失败时省略未知的值。`fieldBytes` 记录固定载荷字段各自序列化后的 UTF-8 字节数。
 运行端 `stage=total` 另带 `execServer`：`shortcutEnabled`、`ancestorLevels`（收到的祖先快照层数）、
 `connections`（识别到的执行环境连接数）、`answered`（本地回答数）、`forwarded`（转发消息数）。
 计数仅覆盖创建至 started/失败，不含首轮消息及后续工具调用；只含布尔值和计数，无路径与 RPC 内容。

@@ -114,6 +114,9 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     // - a teammate's own sessions widen the recalled history; the Host refuses teammate tasks, so a
     //   recovery reads only the current conversation, as the desktop does for an ordinary task.
     listCompanionSessionIds: undefined,
+    // - Host sessions carry no host-reconciled send_to_session route (coordinator-deps.ts), so a
+    //   replayed source note adds no reply route.
+    sendToSessionHint: undefined,
     // - a subscription account change that needs a native session handoff: the Host has no
     //   subscription account handoff before a send yet (release table, row 30), so none is reported.
     needsNativeSessionHandoff: undefined,

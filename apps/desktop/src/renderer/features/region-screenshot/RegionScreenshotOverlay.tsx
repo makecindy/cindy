@@ -1359,7 +1359,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
           }}
         />
       )}
-      {session && !imageEditor && activeDisplay && <div className="absolute z-20 w-max -translate-x-1/2" style={{ left: modeBarCenter ?? safe.x + safe.width / 2, top: safe.y + 12, maxWidth: safe.width - 24 }} onPointerEnter={() => setOverToolbar(true)} onPointerLeave={() => setOverToolbar(false)}>
+      {session && !imageEditor && activeDisplay && <div className="absolute z-page-float w-max -translate-x-1/2" style={{ left: modeBarCenter ?? safe.x + safe.width / 2, top: safe.y + 12, maxWidth: safe.width - 24 }} onPointerEnter={() => setOverToolbar(true)} onPointerLeave={() => setOverToolbar(false)}>
         <ScreenshotModeBar mode={captureMode} finished={!!longResult} canAsk={isSelected && !dragging} aiMenuOpen={aiMenuOpen}
           {...translationProps}
           area={safe} onPositionChange={setModeBarCenter}

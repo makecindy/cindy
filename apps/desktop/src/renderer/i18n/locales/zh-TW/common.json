@@ -563,7 +563,8 @@
       "calloutUnknown": "如果你不認識申請人，請拒絕；拒絕後這條連結作廢。",
       "approve": "同意分享",
       "reject": "拒絕申請",
-      "later": "稍後處理"
+      "later": "稍後處理",
+      "calloutPluginEngine": "{{name}} 使用時無需在自己的電腦上安裝插件或 CLI，會使用這台電腦上的 CLI 登入和配額。"
     },
     "apply": {
       "loading": "正在讀取分享連結…",
@@ -3716,6 +3717,7 @@
         "connecting": "正在連線…",
         "rename": "重新命名",
         "suspended": "已停用",
+        "hidden": "已隱藏",
         "unconfigured": "未設定"
       },
       "button": {
@@ -3726,7 +3728,9 @@
         "cancel": "取消",
         "retry": "重新取得模型清單",
         "retrying": "正在重新取得…",
-        "enableProvider": "啟用供應商"
+        "enableProvider": "啟用供應商",
+        "showProvider": "顯示",
+        "hideInstead": "改為隱藏"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4106,7 +4110,7 @@
         "paymentRequired": "付費",
         "paymentUnlock": "付費解鎖",
         "enableModel": "啟用此模型",
-        "capabilityGroupHint": "不會出現在對話模型選擇中；開關控制對應功能是否列出",
+        "capabilityGroupHint": "不會出現在模型選擇器裡；開關決定對應功能能否使用這款模型",
         "accessWriteFailed": "停用設定未能儲存，請重試",
         "visibilityWriteFailed": "模型顯示設定未能儲存，請重試；如果仍然失敗，請重新啟動 Cindy。",
         "disabledGroup": "已停用",
@@ -4250,22 +4254,22 @@
           "aria": "依模型類型篩選",
           "chat": "對話"
         },
-        "hiddenGroup": "未顯示",
+        "hiddenGroup": "已隱藏",
         "management": {
           "brand": "廠商"
         },
         "manage": {
           "title": "模型",
-          "selected": "已選 {{count}} 個",
-          "hint": "用開關選擇常用的對話模型。",
+          "selected": "顯示 {{count}} 個",
+          "hint": "開關決定模型是否出現在模型選擇器裡。關掉只是隱藏，仍可在選擇器底部的「已隱藏」裡選用。",
           "menu": "管理",
           "arrange": "列表排列",
           "byBrand": "依廠商分組",
           "byName": "依模型名稱排列",
-          "selection": "常用模型",
-          "showAll": "選用全部模型",
-          "hideAll": "取消全部選擇",
-          "reset": "恢復預設選擇",
+          "selection": "在模型選擇器中顯示",
+          "showAll": "全部顯示",
+          "hideAll": "全部隱藏",
+          "reset": "恢復預設顯示",
           "connectionRequired": "連線後可用，已選模型會保留。"
         }
       },
@@ -4279,7 +4283,8 @@
         "groupBadge_other": "供應商組 · {{count}} 台電腦",
         "groupNote": "{{device}} 把這個供應商建成了供應商組。在模型列表裡選它新建任務時，{{device}} 會依組策略把任務分給下面的一台電腦執行，那台出問題時自動換一台繼續。{{device}} 在線時，你可以從這裡的「遠端與分享」管理這個組和分享。",
         "groupMembersTitle": "組內電腦",
-        "groupMembersFailed": "暫時讀不到組內電腦的狀態。"
+        "groupMembersFailed": "暫時讀不到組內電腦的狀態。",
+        "hiddenBanner": "已從這台電腦的模型選擇器中隱藏。收藏和正在使用它的任務不受影響。"
       },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
@@ -4323,7 +4328,8 @@
           "rejected": "該供應商拒絕了這次請求，下面是上次取得的模型列表。請稍後重試或改用其他供應商。",
           "empty": "該供應商這次沒有傳回任何可用模型，下面是上次取得的列表。請確認帳號權限後重試。"
         },
-        "suspendedBanner": "該供應商已停用，憑證已保留；啟用後其模型才會重新可用",
+        "suspendedBanner": "該供應商已停用，新任務和背景功能都不會再使用它，憑證已保留。如果只是不想在模型選擇器裡看到它，可以改為隱藏。",
+        "hiddenBanner": "已從模型選擇器中隱藏。正在使用它的任務和背景功能不受影響，需要時仍可在選擇器底部的「已隱藏」裡選用。",
         "remoteAccess": {
           "label": "允許遠端呼叫",
           "description": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，Agent 在這台電腦上執行，使用這台電腦的登入和配額。",
@@ -4533,7 +4539,9 @@
       },
       "menu": {
         "disableProvider": "停用此供應商",
-        "enableProvider": "啟用此供應商"
+        "enableProvider": "啟用此供應商",
+        "hideProvider": "在模型選擇器中隱藏",
+        "showProvider": "在模型選擇器中顯示"
       },
       "builtinApiKey": {
         "subtitle": "API key 連線",
@@ -7000,7 +7008,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已包含在隱私畫面中：電腦不會進入睡眠。"
+      "keepAwakeIncluded": "已包含在隱私畫面中：電腦不會進入睡眠。",
+      "localNetwork": {
+        "label": "區域網路",
+        "deniedHint": "沒有這個權限時，同一網路下的電腦和手機無法直接連線這台電腦，只能經中繼，速度會變慢。",
+        "settingsHint": "請在「系統設定 › 隱私權與安全性 › 區域網路」裡開啟 Cindy，回到這裡會自動生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8516,7 +8529,8 @@
           "description": "開啟後，你的其他電腦可以用這個引擎執行任務。Agent 在這台電腦上執行，使用這台電腦的登入和配額；檔案和指令仍留在任務所在的電腦上。",
           "unsupported": "這個插件還不支援讓其他電腦使用它的引擎。",
           "remoteControlOff": "這台電腦還沒有允許同帳號裝置遠端控制，其他電腦不能使用這個引擎。",
-          "ariaLabel": "允許你的其他電腦使用 {{engine}}"
+          "ariaLabel": "允許你的其他電腦使用 {{engine}}",
+          "descriptionShareable": "開啟後，你的其他電腦和分享的好友無需安裝插件即可用這個引擎執行任務。Agent 在這台電腦上執行，使用這台電腦的登入和配額；檔案和指令仍留在任務所在的電腦上。"
         },
         "githubRelease": {
           "title": "插件更新",
@@ -10895,6 +10909,13 @@
         "enabled": "已開啟"
       },
       "close": "關閉"
+    },
+    "localNetwork": {
+      "title": "開啟區域網路權限",
+      "relayOnly": "你的其他裝置現在只能經中繼連線這台電腦，速度較慢。開啟後，同一網路下可以直接連線。",
+      "controlEnabled": "同一網路下的裝置要直接控制這台電腦，需要區域網路權限，否則只能經中繼。",
+      "allow": "開啟",
+      "dismiss": "暫不開啟"
     }
   },
   "bots": {
@@ -14118,6 +14139,8 @@
         "remoteFavoriteUnavailable": "{{source}} · 暫時讀不到那臺電腦的模型",
         "favoritesGroup": "收藏",
         "recentGroup": "最近",
+        "hiddenGroup": "已隱藏（{{count}}）",
+        "hiddenGroupHint": "已隱藏的供應商和模型仍然可以選用",
         "recentEmpty": "還沒有最近使用——選一個模型後，它會出現在這裡",
         "favoritesSaveFailed": "未能儲存收藏變更",
         "favoritesCleanupFailed": "未能清理已失效的分享模型收藏",
@@ -17431,7 +17454,8 @@
         "title": "匯入儲存庫自動化",
         "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增的自動化，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
         "accept": "確認匯入",
-        "removed": "將刪除：{{names}}"
+        "removed": "將刪除：{{names}}",
+        "fileMissing": "找不到「{{projectName}}」中的自動化檔案，已略過匯入"
       },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 刪除 {{deleted}}",
@@ -17528,6 +17552,7 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
         "success": "成功",
@@ -21456,6 +21481,7 @@
       "reviewed": "已審核",
       "verified-publisher": "發佈者已驗證"
     },
+    "viewLimit": "同時開啟的頁面太多。捲動或收合其他頁面後，這裡會自動開啟。",
     "pluginRevoked": "插件已停用或發生變更，此頁面已失效",
     "pluginCspRejected": "頁面要求未宣告的網域，已拒絕載入",
     "filesOnExecutionComputer": "檔案內容請在執行電腦查看",
