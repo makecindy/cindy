@@ -340,7 +340,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
         }
       : {}),
   });
-  relay?.uplink.onDatagram((relayId, datagram) => linkFor(relayId).deliver(datagram));
+  relay?.uplink.onDatagram((relayId, datagram) => { relayUdp?.noteInbound(false); linkFor(relayId).deliver(datagram); });
   if (udp && relay?.udpCredentials && options.relayUdpServer) {
     const credentials = relay.udpCredentials;
     relayUdp = new RelayUdpPath({
@@ -410,7 +410,9 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     relayRoute() {
       if (!relay || closed) return null;
       // 和 linkFor 里发数据报的判断是同一个：UDP 通着就走 UDP，否则走中转 WebSocket。
-      return relayUdp?.up ? { via: 'udp', rttMs: relayUdp.rttMs } : { via: 'websocket', rttMs: null };
+      if (relayUdp?.up) return { via: 'udp', rttMs: relayUdp.rttMs };
+      const suspension = relayUdp?.suspension;
+      return suspension ? { via: 'websocket', rttMs: null, udpSuspension: suspension } : { via: 'websocket', rttMs: null };
     },
     async close() {
       closed = true; stun?.close();

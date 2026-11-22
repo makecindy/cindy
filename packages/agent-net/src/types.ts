@@ -60,6 +60,8 @@ export const DRAIN_LOW_WATER_BYTES = 128 * 1024;
 export interface RelayRoute {
   via: 'udp' | 'websocket';
   rttMs: number | null;
+  /** On the WebSocket because the relay UDP carried registrations but no data (relayUdp.ts); retried after `cooldownMs`. */
+  udpSuspension?: { reason: 'data-silence'; cooldownMs: number };
 }
 export interface Transport {
   readonly id: string;

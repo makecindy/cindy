@@ -223,7 +223,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     this.relayUdpRtt = typeof rtt === 'number' && Number.isFinite(rtt) && rtt >= 0 ? rtt : null;
     if (via === this.relayVia) return;
     this.relayVia = via;
-    this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}`);
+    const suspension = via === 'websocket' ? reported?.udpSuspension : undefined;
+    const why = suspension?.reason === 'data-silence' && typeof suspension.cooldownMs === 'number'
+      ? ` (relay UDP answered registrations but carried no data back; retrying UDP in ${Math.round(suspension.cooldownMs / 1000)}s)`
+      : '';
+    this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}${why}`);
     this.emit('relay-route', via);
   }
   private readonly pingSentAt = new WeakMap<WebSocket, number>();

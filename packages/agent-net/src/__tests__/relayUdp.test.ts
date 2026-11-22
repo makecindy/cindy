@@ -9,15 +9,17 @@
  *   2026-11-17 审查：重放或晚到的旧确认会让本机以为 UDP 还通；中转要地址凭证后，换了地址的设备要马上带上新凭证；
  *   中转地址启动时解析失败就一直不再解析。
  *   2026-11-18 用户要求：中转走 UDP 时远程连接页显示 UDP 的往返（`rttMs`，登记到确认），原来显示的是 WebSocket 心跳的。
+ *   2026-11-22：VPN 透明代理接管了到中继 UDP 端口的流量，登记照常确认、会话数据几个小时一个都没回来，本机一直不退回
+ *   WebSocket，与同账号所有设备的会话都超时；关掉 VPN 立即恢复。
  * - 覆盖缺口：中转集成测试只验证中转一侧；压测只交换公网地址，不会出现直连包；连接号随机，集成测试不一定撞上。
  * - 最小失败输入：首字节 0xA1 的核心数据包；确认中断 4 秒；一个过期的确认；一个没认定地址的确认；一次解析失败；
- *   一次登记晚 37 毫秒确认（往返要是 37，确认断了以后不再报旧值）。
+ *   一次登记晚 37 毫秒确认（往返要是 37，确认断了以后不再报旧值）；登记一直被确认、数据发了 4 次跨 3 秒却一个都没回来。
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
-import { encodeUdpRegisterAck, verifyUdpRegister, verifyUdpUp, type UdpRelayCredentials } from '@cindy/agent-net-relay';
-import { UDP_RELAY_DOWN, UDP_RELAY_REGISTER_ACK } from '@cindy/agent-net-relay/client';
-import { RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
+import { encodeUdpDown, encodeUdpRegisterAck, verifyUdpRegister, verifyUdpUp, type UdpRelayCredentials } from '@cindy/agent-net-relay';
+import { UDP_RELAY_DOWN, UDP_RELAY_REGISTER_ACK, udpRelayPeerHash } from '@cindy/agent-net-relay/client';
+import { RELAY_UDP_DATA_COOLDOWNS_MS, RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
 
 const paths: RelayUdpPath[] = [];
 afterEach(() => { for (const path of paths.splice(0)) path.close(); vi.useRealTimers(); });
@@ -193,4 +195,81 @@ it('keeps resolving the relay address after a failed lookup and then registers',
   reachable = true;
   await vi.advanceTimersByTimeAsync(10_000);
   expect(registrations().length).toBeGreaterThan(0);
+});
+
+/** A relay whose UDP port answers every registration at once but never forwards data back (2026-11-22 VPN proxy). */
+async function upWithAckingRelay(fill: number) {
+  fakeTimers();
+  const credentials = { session: new Uint8Array(8).fill(fill), key: new Uint8Array(32).fill(fill + 1) };
+  const opened = open(credentials);
+  let acked = 0n;
+  const ackAll = () => {
+    for (const r of opened.registrations()) {
+      if (r.counter <= acked) continue;
+      acked = r.counter;
+      opened.path.intercept(encodeUdpRegisterAck(credentials, r.counter, true, COOKIE));
+    }
+  };
+  const step = (ms: number) => { for (let t = 0; t < ms; t += 250) { vi.advanceTimersByTime(250); ackAll(); } };
+  await vi.waitFor(() => expect(opened.registrations()).toHaveLength(1));
+  ackAll();
+  ackAll();
+  expect(opened.path.send('member', new Uint8Array(100))).toBe(true);
+  const reply = () => opened.path.intercept(encodeUdpDown(credentials.key, udpRelayPeerHash('member'), new Uint8Array(64)));
+  return { ...opened, step, reply };
+}
+/** The core keeps resending an unanswered packet: three more sends across three seconds. */
+function resendUnanswered(path: RelayUdpPath, step: (ms: number) => void) {
+  for (let i = 0; i < 3; i++) { step(1_000); path.send('member', new Uint8Array(1_350)); }
+}
+
+it('leaves relay UDP when registrations are acked but no data comes back, tells the relay, and retries after a growing cooldown', async () => {
+  const { path, registrations, step, reply } = await upWithAckingRelay(3);
+  resendUnanswered(path, step);
+  // Checked on the 1 s tick: a 4 s silence is acted on within 5 s of the first unanswered send.
+  step(2_000);
+  expect(path.send('member', new Uint8Array(100))).toBe(false);
+  expect(path.suspension).toEqual({ reason: 'data-silence', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
+  expect(registrations().at(-1)!.receiving).toBe(false);
+
+  // While suspended the acks must not bounce registrations back and forth at round-trip speed.
+  const before = registrations().length;
+  step(10_000);
+  expect(registrations().length - before).toBeLessThanOrEqual(1);
+
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  expect(registrations().at(-1)!.receiving).toBe(true);
+
+  // Still no data: the next cooldown is longer.
+  resendUnanswered(path, step);
+  step(2_000);
+  expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
+
+  // Once data does arrive over UDP, a later failure starts from the first cooldown again.
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  reply();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  resendUnanswered(path, step);
+  step(2_000);
+  expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
+});
+
+it('stays on relay UDP for an unanswered pure ACK, and while replies keep arriving over UDP or the WebSocket', async () => {
+  const { path, step, reply } = await upWithAckingRelay(5);
+  // A single packet nobody answers (an ACK-only datagram) is not evidence of a broken path.
+  step(10_000);
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  expect(path.suspension).toBeNull();
+
+  // Replies coming back over UDP, or relayed over the WebSocket instead, keep UDP in use.
+  for (let i = 0; i < 8; i++) {
+    step(1_000);
+    path.send('member', new Uint8Array(1_350));
+    if (i % 2 === 0) reply(); else path.noteInbound(false);
+  }
+  step(1_000);
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  expect(path.suspension).toBeNull();
 });
