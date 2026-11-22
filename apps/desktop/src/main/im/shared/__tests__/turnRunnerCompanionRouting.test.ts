@@ -785,15 +785,17 @@ describe('turnRunner: connection handed to a companion bot', () => {
 
   // Bug: an unresolvable companion (paused, canonical task changing, no model for a new
   // group) used to fall back to a plain channel task that answered under another identity.
-  // A companion connection must reject with the same notice as the pre-send guard, never
-  // start or persist anything, and only tell the owner internal details.
+  // A companion connection must reject with the same notice as the pre-send guard and never
+  // start or persist anything. In a group nobody, the owner included, sees internal details.
   it.each([
     { name: 'paused owner DM', userId: OWNER, owner: true, errorCode: 'TARGET_BOT_INACTIVE',
       says: 'Bot 当前未启用', hides: null },
     { name: 'no model, member in a new group', userId: 'g/-100123', owner: false, errorCode: 'NO_MODEL',
       says: '请稍后再试', hides: '模型' },
     { name: 'no model, owner in a new group', userId: 'g/-100123', owner: true, errorCode: 'NO_MODEL',
-      says: '伙伴还没有可用的模型', hides: null },
+      says: '请稍后再试', hides: '模型' },
+    { name: 'paused, member in a group', userId: 'g/-100123', owner: false, errorCode: 'BOT_UNAVAILABLE',
+      says: 'Bot 当前未启用', hides: null },
     { name: 'resolver threw', userId: 'g/-100123', owner: false, errorCode: 'THROW',
       says: '请稍后再试', hides: 'db exploded' },
   ])('rejects instead of using the channel’s own routing: $name', async ({ userId, owner, errorCode, says, hides }) => {

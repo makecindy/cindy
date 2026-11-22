@@ -13332,8 +13332,7 @@
           "approve": "approuver"
         },
         "companion": {
-          "retryLater": "veuillez réessayer plus tard",
-          "noModel": "aucun modèle utilisable pour l'instant. Choisissez-en un dans ses réglages dans Cindy"
+          "retryLater": "veuillez réessayer plus tard"
         }
       },
       "hook": {

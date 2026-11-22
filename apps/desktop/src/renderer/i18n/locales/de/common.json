@@ -13221,8 +13221,7 @@
           "approve": "genehmigen"
         },
         "companion": {
-          "retryLater": "bitte versuche es später noch einmal",
-          "noModel": "es gibt noch kein nutzbares Modell. Wähle eines in seinen Einstellungen in Cindy aus"
+          "retryLater": "bitte versuche es später noch einmal"
         }
       },
       "hook": {

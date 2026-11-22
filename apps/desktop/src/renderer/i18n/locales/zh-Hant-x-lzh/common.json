@@ -13168,8 +13168,7 @@
           "approve": "批准"
         },
         "companion": {
-          "retryLater": "請少頃再試",
-          "noModel": "尚無可用之模型，請於 Cindy 同伴設定中擇之"
+          "retryLater": "請少頃再試"
         }
       },
       "hook": {

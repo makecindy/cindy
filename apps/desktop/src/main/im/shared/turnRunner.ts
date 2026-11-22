@@ -529,12 +529,12 @@ const COMPANION_TRANSIENT_ERROR_CODES = new Set(['TARGET_CANONICAL_UNAVAILABLE',
 const COMPANION_TRANSIENT_RETRY_DELAYS_MS = [200, 600] as const;
 
 /**
- * 回给 IM 的原因。暂停沿用发送前守卫的原句(群里本来就看得到); 「没有可用模型」只告诉
- * 主人本人; 其余(含内部异常)对谁都只说稍后再试, 不把内部细节发进群。
+ * 回给 IM 的原因。暂停 / 归档沿用已有专线发送前守卫的原句(群里本来就这样说); 其余
+ * (没有可用模型、主任务正在变化、内部异常)一律只说稍后再试: 群里不论谁发言都不透露
+ * 内部细节。主人私聊只解析伙伴主任务, 不会遇到「没有可用模型」, 所以也不另给详细原因。
  */
-function companionUnavailableReason(unavailable: CompanionRouteUnavailable, requesterIsOwner: boolean): string {
+function companionUnavailableReason(unavailable: CompanionRouteUnavailable): string {
   if (COMPANION_INACTIVE_ERROR_CODES.has(unavailable.errorCode)) return BOT_INACTIVE_INPUT_MESSAGE;
-  if (requesterIsOwner && unavailable.errorCode === 'NO_MODEL') return imText('imBot.text.shared.companion.noModel');
   return imText('imBot.text.shared.companion.retryLater');
 }
 
@@ -1045,8 +1045,7 @@ export function createTurnRunner(
     ): 'unbound' | 'owner-dm' | 'rotated' | { unavailable: string } => {
       if (target && target !== 'absent' && 'kind' in target) {
         // 伙伴解析不出: 不退回渠道自己的 `/new`(那会新建另一个身份的任务), 与消息路由同口径拒绝。
-        // 命令上下文不带发言人身份, 按非主人口径给原因。
-        return { unavailable: companionUnavailableText(target, false) };
+        return { unavailable: companionUnavailableText(target) };
       }
       return routeTargetOnly(target) ? ok : 'unbound';
     };
@@ -1060,8 +1059,8 @@ export function createTurnRunner(
     return settle(await resolveCompanionRouteTarget(botContextId, userId, undefined, true), 'rotated');
   }
 
-  function companionUnavailableText(unavailable: CompanionRouteUnavailable, requesterIsOwner: boolean): string {
-    const reason = companionUnavailableReason(unavailable, requesterIsOwner);
+  function companionUnavailableText(unavailable: CompanionRouteUnavailable): string {
+    const reason = companionUnavailableReason(unavailable);
     return ui.agent.companionUnavailable?.(reason) ?? ui.agent.runtimeError(reason);
   }
 
@@ -1177,7 +1176,7 @@ export function createTurnRunner(
       : await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, { createCompanion: true });
     if (routed && 'kind' in routed) {
       // 伙伴连接上伙伴解析不出: 与已有专线的发送前守卫同一口径拒绝, 不建渠道自己的任务。
-      const notice = companionUnavailableText(routed, args.requesterIsOwner === true);
+      const notice = companionUnavailableText(routed);
       if (args.queueMode === 'internal') {
         try {
           const consumed = (await args.onEarlyReject?.('companion_unavailable', notice)) ?? false;
