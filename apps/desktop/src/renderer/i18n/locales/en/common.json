@@ -9714,7 +9714,8 @@
     "title": "Terms Updated",
     "body": "We've updated Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>. Agree to keep using Cindy, or log out.",
     "agree": "Agree",
-    "disagree": "Logout"
+    "disagree": "Logout",
+    "detachedBody": "Review and agree in the main Cindy window to keep using Cindy."
   },
   "legacyMigration": {
     "title": "Migrate data from the previous version",

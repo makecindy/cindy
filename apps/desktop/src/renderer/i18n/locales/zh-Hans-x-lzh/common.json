@@ -9671,7 +9671,8 @@
     "title": "服务条款与隐私政策已更",
     "body": "Cindy 之<terms>服务条款</terms>与<privacy>隐私政策</privacy>已更，请阅而允之，方可续用。",
     "agree": "允",
-    "disagree": "辞出"
+    "disagree": "辞出",
+    "detachedBody": "请于 Cindy 主窗阅而允之，方可续用。"
   },
   "legacyMigration": {
     "title": "迁旧版之数据",

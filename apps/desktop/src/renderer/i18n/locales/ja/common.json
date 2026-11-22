@@ -9671,7 +9671,8 @@
     "title": "利用規約を更新しました",
     "body": "Cindyの<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を更新しました。引き続き利用するには同意してください。",
     "agree": "同意する",
-    "disagree": "ログアウト"
+    "disagree": "ログアウト",
+    "detachedBody": "Cindyのメインウィンドウで内容を確認し、同意してください。"
   },
   "legacyMigration": {
     "title": "旧バージョンのデータを移行",

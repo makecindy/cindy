@@ -30,7 +30,10 @@ import {
 import { acceptCurrentLegalTerms, readLegalTermsConsentStatus } from './legal-terms-store';
 import { createLogger } from './logger';
 import { onQuit } from './lifecycle';
-import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedTopLevelCindyRendererEvent,
+} from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
@@ -351,6 +354,13 @@ export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
     writeOrThrowIpcError(() => acceptCurrentLegalTerms(), 'record legal terms consent failed');
     broadcastSettingsChange();
     return analyticsSettingsPayload();
+  });
+
+  // 分离侧栏 / 单页签窗口的只读查询:它们的专用 preload 不带设置与登录能力,只需知道是否要挡住
+  // 界面(确认与退出登录都在主窗口完成),所以只回一个布尔,判据放宽到「Cindy 自有顶层页面」。
+  ipcMain.handle('legal-terms:update-required-get', (event) => {
+    if (!isTrustedTopLevelCindyRendererEvent(event)) throwIpcError('PERMISSION_DENIED', 'untrusted renderer');
+    return analyticsSettingsPayload().legalTermsUpdateRequired;
   });
 
   onQuit('analytics-settings', () => {

@@ -9671,7 +9671,8 @@
     "title": "약관이 업데이트되었습니다",
     "body": "Cindy의 <terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>이 업데이트되었습니다. 계속 사용하려면 동의해 주세요.",
     "agree": "동의",
-    "disagree": "로그아웃"
+    "disagree": "로그아웃",
+    "detachedBody": "계속 사용하려면 Cindy 기본 창에서 확인하고 동의해 주세요."
   },
   "legacyMigration": {
     "title": "이전 버전 데이터 마이그레이션",

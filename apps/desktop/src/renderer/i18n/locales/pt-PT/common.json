@@ -9786,7 +9786,8 @@
     "title": "Termos atualizados",
     "body": "Atualizámos os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy. Aceite para continuar a utilizar ou termine sessão.",
     "agree": "Aceitar",
-    "disagree": "Terminar sessão"
+    "disagree": "Terminar sessão",
+    "detachedBody": "Leia e aceite na janela principal da Cindy para continuar a utilizar."
   },
   "legacyMigration": {
     "title": "Migrar dados da versão anterior",

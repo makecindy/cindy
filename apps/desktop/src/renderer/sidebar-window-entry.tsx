@@ -34,7 +34,7 @@ import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
 import { PluginModelPickerHost } from './cindy-brain/PluginModelPickerHost';
-import { LegalTermsUpdateGate } from './components/auth/LegalTermsUpdateGate';
+import { DetachedLegalTermsUpdateBlocker } from './components/auth/DetachedLegalTermsUpdateBlocker';
 
 document.documentElement.dataset.platform = window.electronAPI.platform;
 installHiddenAnimationGate();
@@ -64,8 +64,8 @@ createRoot(rootElement).render(
           <WallpaperSettingsProvider desktopBackground={false} onAppearanceChange={presentAppearance}>
             {isSidebarTabWindow() ? <SidebarTabWindowLayout /> : <SidebarWindowLayout />}
             <PluginModelPickerHost bootstrapCatalog />
-            {/* 独立侧栏 / 单页签窗口不经过 MainLayout,协议更新确认在这里同样挡住。 */}
-            <LegalTermsUpdateGate />
+            {/* 独立侧栏 / 单页签窗口不经过 MainLayout:协议待确认时挡住界面,确认在主窗口完成。 */}
+            <DetachedLegalTermsUpdateBlocker />
           </WallpaperSettingsProvider>
         </AuthProvider>
       </ConfirmDialogProvider>
