@@ -1,3 +1,4 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { GhostCardSessionLink } from './GhostCardSessionLink';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { createRoot } from 'react-dom/client';
@@ -225,14 +226,14 @@ function useRemoteCardSource(callId: string): GhostRemoteCardSource | undefined 
 }
 
 /** A second view of the same card; actions keep the original call identity. */
-export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef, inDialog }: {
-  callId: string; ghostId: string; html: string; sessionId: string; inDialog?: boolean; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
+export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef }: {
+  callId: string; ghostId: string; html: string; sessionId: string; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const themeVars = useGhostCardThemeVars();
   const { t, i18n } = useTranslation();
   const { name, externalLinks } = useGhostCardOwner(callId, ghostId, i18n.language);
   return <GhostCardCanvas callId={callId} html={html} height={GHOST_CARD_HEIGHT_MIN}
-    sessionId={sessionId} themeVars={themeVars} running={false} persistHeight={false} inDialog={inDialog} onEscape={onEscape} settingsButtonRef={settingsButtonRef}
+    sessionId={sessionId} themeVars={themeVars} running={false} persistHeight={false} onEscape={onEscape} settingsButtonRef={settingsButtonRef}
     ariaTitle={t('chat.ghostCall.cardAria', { name, tool: '' })}
     allowExternalLinks={externalLinks} />;
 }
@@ -254,7 +255,6 @@ function GhostCardCanvas({
   allowExternalLinks,
   mailPanel = false,
   persistHeight = true,
-  inDialog = false,
   onEscape,
   settingsButtonRef,
 }: {
@@ -271,7 +271,6 @@ function GhostCardCanvas({
   allowExternalLinks?: boolean;
   mailPanel?: boolean;
   persistHeight?: boolean;
-  inDialog?: boolean;
   onEscape?: () => void;
   settingsButtonRef?: RefObject<HTMLButtonElement | null>;
 }): ReactNode {
@@ -1097,10 +1096,10 @@ function GhostCardCanvas({
         />
       ) : null}
       {remotePrompt?.kind === 'model' ? (
-        <RemoteCardModelRequest key={remotePrompt.request.requestId} prompt={remotePrompt} inDialog={inDialog} />
+        <RemoteCardModelRequest key={remotePrompt.request.requestId} prompt={remotePrompt} />
       ) : null}
       {modelAsk ? (
-        <GhostCardModelSelect inDialog={inDialog}
+        <GhostCardModelSelect
           rect={modelAsk.rect}
           initial={modelAsk.initial}
           onSelect={(route) => {
@@ -1137,6 +1136,7 @@ function GhostCardCanvas({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            <DownloadImageMenuItem src={imgMenu.src} />
             <DropdownMenuItem onClick={() => void copyMenuImage()}>
               <Copy className="mr-2 h-4 w-4" />
               {t('chat.media.copyImage')}

@@ -13,6 +13,7 @@ import {
 import { CodexForkError } from './fork-error.js';
 import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
+import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
 import { assembleSystemPromptSections } from '../shared/system-prompt-sections.js';
 import { Method, type CodexErrorInfo, type TurnStartParams } from './app-server/protocol.js';
@@ -7382,7 +7383,8 @@ describe('CodexAgent fast mode service tier', () => {
   it.each(['standard', 'priority'] as const)('prices the actual proxy execution (%s) without clearing Fast', async priceVariant => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'turn-1' } } : undefined);
-    const resolveUsagePriceVariant = vi.fn(() => priceVariant);
+    const reportedModel = priceVariant === 'priority' ? 'served-model' : undefined;
+    const resolveUsagePriceVariant = vi.fn(() => reportedModel ? { priceVariant, model: reportedModel } : priceVariant);
     const handle = await agent.startSession({ sessionId: 'session-xai-pricing', model: 'xai/grok-4.7',
       fastMode: true, workingDir: '/repo', resolveUsagePriceVariant });
     const handlers = host.getThreadHandlers()!;
@@ -7398,9 +7400,13 @@ describe('CodexAgent fast mode service tier', () => {
     handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
     await sending;
     await waitForExpectation(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(events.find(e => e.type === 'done')?.data?.usage?.execution).toMatchObject({
+      model: 'xai/grok-4.7', providerId: null, credentialMode: 'provider-oauth',
+    });
     expect(resolveUsagePriceVariant).toHaveBeenCalledWith({ threadId: 'start-thread-id', inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
     expect((events.find(e => e.type === 'done')?.data as { usage: { segments: unknown[] } }).usage.segments)
-      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant })]);
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant,
+        model: reportedModel ?? 'xai/grok-4.7', modelConfirmed: Boolean(reportedModel) })]);
     expect(handle.getFastMode?.()).toBe(true);
     await handle.close();
   });
@@ -8934,6 +8940,78 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     },
   );
+
+  // #9450/#7637: exercise send -> turn/start, not a copy of the slash parser.
+  // Existing bare-command coverage cannot catch host notes plus library mapping.
+  // Unit tier: in-memory app-server, synthetic paths; no model or SkillHub calls.
+  it.each([
+    { command: '/learn hub:team:aihot', notes: true, library: true },
+    { command: '/skill:learn hub:market:browser-automation', notes: true, library: true },
+    { command: '/learn 学习之前讨论的文章', notes: true, library: false },
+    { command: '/learn summarize', notes: false, library: true },
+  ])('preserves pinned command context: $command (notes=$notes, library=$library)', async ({ command, notes, library }) => {
+    const libraryRoot = path.join(os.tmpdir(), 'cindy-pinned-learn-library');
+    const pinnedPath = path.join(os.tmpdir(), 'cindy-managed-skills', 'learn', 'SKILL.md');
+    const source = `${command} library:assets/aa/${'a'.repeat(64)}/blob.md`;
+    const wire = notes ? `[UI language] 简体中文\n\n[Task delivery] Retain delivery context.\n\n${source}` : source;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-pinned-learn-context',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      ...(library ? { extraDirs: [libraryRoot], [LIBRARY_READ_ROOT]: libraryRoot } : {}),
+    });
+    try {
+      await handle.send({ type: 'user', content: wire }, {
+        [PINNED_SKILL_INVOCATION]: { name: 'learn', path: pinnedPath },
+        [AUTO_REVIEW_SOURCE_CONTENT]: source,
+      });
+      const turnStart = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as TurnStartParams;
+      const expectedWire = notes ? wire : wire.slice(wire.indexOf(' ') + 1);
+      expect(turnStart.input).toEqual([
+        { type: 'skill', name: 'learn', path: pinnedPath },
+        { type: 'text', text: withLibraryNativeReadContext(expectedWire, library ? libraryRoot : undefined, library ? [libraryRoot] : []) },
+      ]);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      expect(host.request.mock.calls.some(([method]) => method === Method.SkillsList)).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    { source: 'Read this: /learn release flow', wire: '/learn release flow' },
+    { source: '/other release flow', wire: '[UI language] 简体中文\n\n/learn release flow' },
+    { source: undefined, wire: '[UI language] 简体中文\n\n/learn release flow' },
+  ])('rejects a pinned Skill without a matching leading source command: $source', async ({ source, wire }) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({ sessionId: 'session-pinned-source-mismatch', model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      await expect(handle.send({ type: 'user', content: wire }, {
+        [PINNED_SKILL_INVOCATION]: { name: 'learn', path: path.join(os.tmpdir(), 'learn', 'SKILL.md') },
+        ...(source === undefined ? {} : { [AUTO_REVIEW_SOURCE_CONTENT]: source }),
+      })).rejects.toThrow('The pinned Skill does not match the dispatched command');
+      expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not treat source metadata as a Skill command without a Host pin', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({ sessionId: 'session-unpinned-source', model: 'gpt-5.4', workingDir: '/repo' });
+    const wire = '[UI language] 简体中文\n\nRead the release notes';
+    try {
+      await handle.send({ type: 'user', content: wire }, { [AUTO_REVIEW_SOURCE_CONTENT]: '/learn release flow' });
+      const turnStart = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as TurnStartParams;
+      expect(turnStart.input).toEqual([{ type: 'text', text: wire }]);
+    } finally {
+      await handle.close();
+    }
+  });
 
   it.each(['system', 'admin'] as const)(
     'keeps a palette-hidden %s Skill directly invocable',
@@ -27527,6 +27605,8 @@ describe('CodexAgent turn lifecycle', () => {
   it.each([
     { additionalDetails: "unexpected status 400 Bad Request: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.", status: 400 },
     { additionalDetails: 'unexpected status 403 Forbidden: user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model', status: 403 },
+    // #11484: same current-turn/late-event guards must protect the nested 407.
+    { additionalDetails: 'HTTP 407: ' + JSON.stringify({ error: { code: '407', message: 'NovaException - ' + JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply' } }) } }), status: 407 },
   ])('interrupts a retrying turn on explicit model rejection ($status)', async ({ additionalDetails, status }) => {
     const interruptAck = deferred<Record<string, never>>();
     const agent = new CodexAgent(createDeps());
@@ -27560,8 +27640,8 @@ describe('CodexAgent turn lifecycle', () => {
       expect(await nextEvent(iterator)).toMatchObject({
         type: 'error',
         data: {
-          message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
-          reason: 'model_unavailable', isTerminal: true, willRetry: false,
+          message: expect.stringContaining(status === 407 ? 'https://example.invalid/apply' : '[MODEL_SELECTION_UNAVAILABLE]'),
+          reason: status === 407 ? 'account_access_denied' : 'model_unavailable', isTerminal: true, willRetry: false,
         },
       });
       expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: false } });
@@ -27569,6 +27649,43 @@ describe('CodexAgent turn lifecycle', () => {
 
       expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(1);
       await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // Native can report the denial with a retry, with a terminal notification, or only on completion.
+  it.each([
+    ['retry', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['retry', 'selected', 'http', 'model_unavailable'],
+    ['retry', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+  ] as const)('attributes a %s denial of %s via %s to the correct model', async (notification, rejected, transport, reason) => {
+    const agent = new CodexAgent(createDeps({}, {
+      getRejectedCodexDownshiftModel: (session, thread, turn) =>
+        session === 'downshift' && thread === 'start-thread-id' && turn === 'turn-1' ? { model: rejected, transport } : undefined,
+    }));
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? {} : undefined);
+    const handle = await agent.startSession({ sessionId: 'downshift', model: 'selected', workingDir: '/repo' });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      const error = { message: transport === 'bridge'
+        ? 'Native provider request failed [phase=adapter-event; HTTP 403; category=permission; request=fixture]'
+        : 'unexpected status 403: {"error":{"code":"user_model_access_denied"}}' };
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      if (notification === 'completed') {
+        handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'failed', error } });
+      } else {
+        handlers.error?.({ threadId, turnId, willRetry: notification === 'retry', error });
+      }
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { reason, isTerminal: true } });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(notification === 'retry' ? 1 : 0);
     } finally {
       await handle.close();
     }
@@ -29506,6 +29623,53 @@ describe('CodexAgent turn lifecycle', () => {
     });
     expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
     await handle.close();
+  });
+
+  // #8309 / unit: notifications and failed completion snapshots share the
+  // diagnosis without adding turn/start calls. Existing tests only cover
+  // context overflow in the completion-only path, not nested exhausted 529.
+  it.each(['notification', 'completion-only'])('keeps nested overload terminal through %s', async delivery => {
+    vi.useFakeTimers();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart
+      ? { turn: { id: 'turn-1' } } : undefined);
+    const handle = await agent.startSession({ sessionId: `session-nested-overload-${delivery}`,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      const handlers = (host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>)[0]![1];
+      const events: AgentEvent[] = [];
+      void (async () => { for await (const event of handle.events()) events.push(event); })();
+      await handle.send({ type: 'user', content: 'check the workspace' });
+      const error = { message: 'stream disconnected before completion',
+        codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 529 } } as const,
+        additionalDetails: 'HTTP 529: server_is_overloaded' };
+      const turnId = handle.getCurrentTurnId?.() ?? 'turn-1';
+      if (delivery === 'notification') {
+        handlers.error?.({ threadId: 'start-thread-id', turnId, willRetry: false, error });
+      } else {
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: turnId, status: 'failed', error } });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events.filter(event => event.type === 'error')).toEqual([expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        reason: 'UPSTREAM_OVERLOADED', codexErrorInfo: 'responseTooManyFailedAttempts', isTerminal: true,
+      }) })]);
+      if (delivery === 'notification') {
+        expect(events.filter(event => event.type === 'status' &&
+          (event.data as { isRunning?: boolean }).isRunning === false)).toHaveLength(1);
+        // The notification settles the turn; its subsequent completion must not
+        // emit a second terminal error or restart the failed request.
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: turnId, status: 'failed', error } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+      } else {
+        expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      }
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
   });
 
   it('preserves structured Codex error info when failed turn only reports it on turn/completed', async () => {
@@ -37419,11 +37583,11 @@ describe('expected helper normal and failure boundaries', () => {
       await handle.close();
       const events = [];
       for await (const event of handle.events()) events.push(event);
-      const errors = events.filter(event => event.type === 'error');
-      expect(errors).toHaveLength(['partial', 'no-tools', 'probe-error'].includes(mode) ? 1 : 0);
+      const expectedNotices = ['partial', 'no-tools'].includes(mode) ? 1 : 0;
+      expect(events.filter(event => event.type === 'error')).toHaveLength(expectedNotices);
+      expect(events.filter(event => event.standaloneText)).toHaveLength(expectedNotices);
       if (mode === 'probe-error') {
-        expect(errors[0].data).toMatchObject({ code: 'CINDY_EXPECTED_HELPER_UNVERIFIED', message: expect.stringContaining('Could not verify') });
-        expect(JSON.stringify(errors)).not.toContain('sensitive transport details');
+        expect(warn).toHaveBeenCalledWith('Codex expected helper readiness check failed', { threadId: handle.id, state: 'unverified' });
         expect(JSON.stringify(warn.mock.calls)).not.toContain('sensitive transport details');
       }
       expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList))
@@ -37565,16 +37729,28 @@ describe('failed expected helper recovery', () => {
       resumeSessionId: threadId, model: 'gpt-5.4', workingDir: '/repo' });
     return { agent, host, handle };
   }
-  it('rechecks a transient status probe failure on the next send before recovering', async () => {
+  // A status query timed out on startup while the same task could use its helper.
+  // Exercise the next ordinary send and both task-visible notice channels.
+  it.each(['connected', 'failed'] as const)('rechecks an inconclusive probe and reports only a confirmed failure (%s)', async state => {
     let checks = 0;
     const { agent, host, handle } = await setup(() => {
       if (checks++ === 0) throw new Error('fixture transient status failure');
-      return 'failed';
+      return state;
     });
     try {
       await handle.send({ type: 'user', content: 'retry after service returned' });
-      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+      expect(checks).toBe(2);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(state === 'failed' ? 2 : 1);
       expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      await handle.close();
+      const events = [];
+      for await (const event of handle.events()) events.push(event);
+      const notices = events.filter(event => event.type === 'error' || event.standaloneText);
+      const unavailable = { code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE' };
+      expect(notices).toMatchObject(state === 'failed' ? [
+        { type: 'error', data: unavailable },
+        { type: 'text', standaloneText: true, data: unavailable },
+      ] : []);
     } finally { await agent.dispose(); }
   });
 
@@ -37753,8 +37929,8 @@ describe('failed expected helper recovery', () => {
 
 describe('expected helper runtime lifecycle', () => {
   // #10499 review: scheduler recovery and helper diagnostics share a cold resume.
-  // Unit tier, real Agent lifecycle; no timers/processes. One durable warning per
-  // resume must survive, without checking the same recovered catalog twice.
+  // Unit tier, real Agent lifecycle; no timers/processes. Warn once for a
+  // confirmed absence without checking the recovered catalog twice.
   it.each(['missing', 'healthy', 'unverified'] as const)(
     'checks helper once after scheduler cold recovery (%s)', async (mode) => {
       const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -37786,11 +37962,10 @@ describe('expected helper runtime lifecycle', () => {
       for await (const event of handle.events()) events.push(event);
       expect(resumeCount).toBe(2);
       const notices = events.filter(event => event.standaloneText);
-      expect(notices).toHaveLength(mode === 'healthy' ? 0 : 1);
-      expect(events.filter(event => event.type === 'error')).toHaveLength(mode === 'healthy' ? 0 : 1);
-      if (mode !== 'healthy') expect(notices[0].data).toMatchObject({
-        code: mode === 'unverified' ? 'CINDY_EXPECTED_HELPER_UNVERIFIED' : 'CINDY_EXPECTED_HELPER_UNAVAILABLE',
-      });
+      const expectedNotices = mode === 'missing' ? 1 : 0;
+      expect(notices).toHaveLength(expectedNotices);
+      expect(events.filter(event => event.type === 'error')).toHaveLength(expectedNotices);
+      if (mode === 'missing') expect(notices[0].data).toMatchObject({ code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE' });
       // Initial scheduler check, recovered scheduler check, then one helper check.
       expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(3);
       await agent.dispose();

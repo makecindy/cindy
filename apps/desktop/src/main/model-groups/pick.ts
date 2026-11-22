@@ -30,6 +30,8 @@ export interface ModelGroupCandidateFacts {
   price?: number | null;
   /** 这个模型能不能看图；读不到按不能。 */
   acceptsImage?: boolean;
+  /** Route effort supported by this exact provider, model and harness. */
+  effort?: string;
 }
 
 export interface ModelGroupPick {

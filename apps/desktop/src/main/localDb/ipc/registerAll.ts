@@ -1,3 +1,4 @@
+import { refineCreatedTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
 import { isTaskBusyForArchive } from '../../task-management/service.js';
 import { reconcileDeletedTaskViewState } from '../../mcp-apps/viewStateStore.js';
 import { registerCompanionImport } from '../../bot-import/registration.js';
@@ -43,6 +44,7 @@ import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
+import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../../shared/dataOwnerPush.js';
 import { createOwnerEnsureCoordinator } from './ownerEnsureCoordinator';
 import { replyToEnsureReady, type EnsureReadyReply } from '../ensureReadyReply.js';
 import { reconcileSessionMediaRefsForDeletedSessions } from '../../cindy-media/sessionCleanup';
@@ -93,11 +95,11 @@ export interface RegisterLocalDbIpcOpts {
   readHistoryLiveMessages?: (sessionId: string) => import('../../../renderer/lib/ccAgent.types').Message[];
   resolveContextWindow?: RegisterSessionIpcOpts['resolveContextWindow'];
   /** Current stable app-session owner. False makes queued/in-flight work stale. */
-  isOwnerCurrent?: (userId: string) => boolean;
+  isOwnerCurrent?: (userId: string, recovery?: DataOwnerPushStamp) => boolean;
   /** Dispose any secondary DB client committed by a stale onReady callback. */
   discardStaleOwner?: (userId: string) => void | Promise<void>;
   /** ensureReady 打开/创建目标库前执行；失败时阻断，避免跳过认领后创建空库。 */
-  beforeEnsureReady?: (userId: string) => void | Promise<void>;
+  beforeEnsureReady?: (userId: string, recovery?: DataOwnerPushStamp) => void | Promise<void>;
   /** Record worktree recycle intent before a terminal session status is persisted. */
   requestWorktreeRecycle?: SessionWorktreeRecycle;
   /** 当前 worktree 绑定（worktreeStore 是 source of truth，DB 只存反范式快照）。 */
@@ -136,6 +138,8 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     isOwnerCurrent: opts.isOwnerCurrent ?? (() => true),
     beforeEnsureReady: opts.beforeEnsureReady,
     ensureReady,
+    getCorruptionError: (userId) => getCurrentDbClientUserId() === userId
+      ? tryGetDbClient()?.corruptionError ?? null : null,
     onReady: async (userId) => {
       await opts.onReady?.(userId);
       const client = tryGetDbClient();
@@ -209,9 +213,14 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       await opts.discardStaleOwner?.(userId);
     },
   });
-  ipcMain.handle('local-db:ensure-ready', (_e, userId: unknown) =>
+  ipcMain.handle('local-db:ensure-ready', (_e, userId: unknown, recovery: unknown) =>
     replyToEnsureReady(userId, {
-      run: (id) => runEnsureReady(id) as Promise<EnsureReadyReply>,
+      run: (id) => {
+        if (recovery !== undefined && (!isDataOwnerPushStamp(recovery) || recovery.dataOwnerId !== id)) {
+          return Promise.resolve({ ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid database recovery request' } });
+        }
+        return runEnsureReady(id, recovery) as Promise<EnsureReadyReply>;
+      },
       record: recordDesktopDevLocalDbStartupResult as (result: EnsureReadyReply) => void,
       log,
     }));
@@ -226,7 +235,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
   registerHistoryQueryIpc();
-  registerBotIpc();
+  registerBotIpc((id, subject, initialTitle) => { void refineCreatedTaskTitle(id, subject, { initialTitle }); });
   registerBotSkillSettingsIpc();
   registerCompanionImport();
   registerBotRemoteResourceProvider(botRemoteManagement);

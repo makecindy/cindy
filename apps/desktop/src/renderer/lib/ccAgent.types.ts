@@ -442,9 +442,15 @@ export interface Session {
   agentKind: AgentKind;
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
+  /** This follow-up is also visible as an independent task. */
+  sideChatPromoted?: true;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
   companion?: { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
+  /** Owning Lead on this device, when the active team is known. */
+  orcaLeadSessionId?: string;
+  /** Live Worker question state, independent of Agent Island visibility. */
+  orcaHasPendingQuestion?: boolean;
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */
   parentSessionId?: string | null;
@@ -572,8 +578,12 @@ export type MessageRole =
  * 不作为对话正文渲染,也绝不回发给 agent(注入走 main 的 wire 前缀通道)。
  */
 export interface AgentSwitchContent {
-  fromAgentKind: 'cc' | 'codex' | 'pi';
-  toAgentKind: 'cc' | 'codex' | 'pi';
+  /** 'acp' = 插件引擎；名称见 fromEngineName / toEngineName。 */
+  fromAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  toAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  /** 插件引擎那一侧在切换时的名称快照。 */
+  fromEngineName?: string;
+  toEngineName?: string;
   fromModel: string | null;
   toModel: string | null;
   /** Agent 切换时的来源快照；缺失表示旧版边界数据。 */

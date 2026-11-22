@@ -22,6 +22,7 @@ import { t } from '../i18n.desktop';
 import { createHash, randomBytes } from 'node:crypto';
 import { ipcMain, shell, clipboard, dialog, BrowserWindow } from 'electron';
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines } from '../../shared/pluginEngines.js';
 import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/desktopIdentity.js';
 import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
 import { getDeviceId } from '../authManager.js';
@@ -255,7 +256,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
-    getPeerLinks: getDeviceLinkPeerLinks,
+    getPeerLinks: () => getDeviceLinkPeerLinks(true),
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
@@ -1088,11 +1089,16 @@ const PROVIDER_SHARE_RENDERER_CHANNELS: ReadonlySet<string> = new Set([
   'maker:get-capabilities',
   'maker:list-available-agents',
   'maker:agent:status',
+  PLUGIN_ENGINES_INVOKE.LIST,
+  PLUGIN_ENGINES_INVOKE.REFRESH,
 ]);
 
 function projectProviderShareResult(channel: string, value: unknown): unknown {
   // 分享者电脑已去掉账号身份；受邀者这边再过一遍，旧版本分享者也不会把登录邮箱带进界面。
   if (channel === 'maker:provider:list') return scrubSharedProviderCatalog(value);
+  if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+    return parseOfferedPluginEngines(value).map(({ reportsUsage: _reportsUsage, ...rest }) => rest);
+  }
   if (channel === 'maker:agent:status') {
     // 只认 Agent 是否装好：就绪以分享的模型目录为准，不带对方的登录状态、本机路径与身份。
     const status = value && typeof value === 'object' ? value as { binaryReady?: unknown } : {};

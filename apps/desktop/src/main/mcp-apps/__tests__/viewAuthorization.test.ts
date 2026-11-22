@@ -35,7 +35,8 @@ it.each([true, false])('enforces plugin CSP subset and revokes opened Views (dec
     _meta: { ui: { csp: { connectDomains: [declared ? 'https://allowed.example' : 'https://blocked.example'] } } },
   }] } });
   const owner = {};
-  const host = new McpAppsHost({ owner: () => owner, config: () => config, connection: () => connection,
+  const disposeDocument = vi.fn();
+  const host = new McpAppsHost({ owner: () => owner, config: () => config, connection: () => connection, disposeDocument,
     readCard: async () => ({ version: 1, serverId: config.id, serverRevision: appServerRevision(config), resourceUri: 'ui://form', tool, arguments: {}, result: { content: [] } }),
     writeCard: async () => {}, authorizeTool: async () => {}, sendMessage: async () => {},
   });
@@ -52,6 +53,7 @@ it.each([true, false])('enforces plugin CSP subset and revokes opened Views (dec
     await Promise.resolve(); expect(uninstalled).toBe(false);
     exited.resolve(); await Promise.all([disabled, uninstalling]);
     expect(uninstalled).toBe(true);
+    expect(disposeDocument).toHaveBeenCalledExactlyOnceWith(document.viewId, 'MCP_PLUGIN_UNAVAILABLE');
     await expect(host.poll('renderer:1', 'task', document.viewId, 0)).rejects.toThrow();
     expect(connection.isClosed).toBe(true);
   }
@@ -65,7 +67,7 @@ it('reuses prepared resources for a version and owner, then invalidates both bou
   const tool = { name: 'form', inputSchema: { type: 'object' as const }, _meta: { ui: { resourceUri: 'ui://form' } } };
   const record = () => ({ version: 1 as const, serverId: config.id, serverRevision: appServerRevision(config), resourceUri: 'ui://form', tool, arguments: {}, result: { content: [] } });
   const resource = vi.fn(async () => ({ result: { contents: [{ uri: 'ui://form', mimeType: 'text/html;profile=mcp-app', text: '<p>cached</p>' }] } }));
-  const connection = { getClient: async () => ({ getServerCapabilities: () => ({}) }), tools: async () => [tool], resource,
+  const connection = { config, getClient: async () => ({ getServerCapabilities: () => ({}) }), tools: async () => [tool], resource,
     listen: () => () => {}, close: async () => {} } as unknown as AppConnection;
   const host = new McpAppsHost({ owner: () => owner, config: () => config, connection: () => connection,
     readCard: async () => record(), writeCard: async () => {}, authorizeTool: async () => {}, sendMessage: async () => {} });

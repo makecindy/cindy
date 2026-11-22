@@ -20,7 +20,7 @@ export function PluginUiView({ ghost, viewId, sessionId: requestedSessionId, inp
   ghost: InstalledGhost; viewId: string; sessionId: string | null; context?: Record<string, unknown> | (() => Record<string, unknown>);
   input?: Record<string, unknown>;
   onUnavailable?(): void;
-  chrome?: 'card' | 'panel'; sizing?: 'content' | 'fill';
+  chrome?: 'card' | 'panel'; sizing?: 'content' | 'fill' | 'sidebar-section';
 }) {
   const host = getApprovedGhostHostUi(ghost);
   const view = host?.views?.find(view => view.id === viewId);

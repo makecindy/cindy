@@ -8,7 +8,6 @@ import { deviceDisplayName } from '@/lib/deviceName';
  *     · displayName Inter 14 / 500 #262626 (Light) / #f5f5f5 (Dark)
  *     · 整行 hover 高亮 sidebar-item-hover
  *   - Project Sessions：padding [2, 0, 0, 0] / gap 2 vertical
- *     子层级缩进 8px：文字行由 SessionItem 的 indented padding 承担，卡片由本容器承担。
  *     折叠时不渲染该容器
  *
  * 交互：
@@ -194,19 +193,14 @@ export const ProjectNode = memo(function ProjectNode({
         onArchiveAll={onArchiveAll}
       />
 
-      {/* Project Sessions（容器只负责 gap + 顶部 padding；左缩进由 SessionItem 自身承担）
+      {/* Project Sessions
           展开/收起走 SectionCollapse 高度动画；「显示全部」在收起动画结束后复位。
           data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
           被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
           SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
       <SectionCollapse collapsed={isCollapsed} data-no-drag>
         {/* 组间留白由外层树的 4px gap 承担，组内任务保持 2px 间隔。 */}
-        <div
-          className={cn(
-            'flex flex-col gap-0.5 pt-0.5 pr-0',
-            sessionVariant === 'list' ? 'pl-2' : 'pl-0',
-          )}
-        >
+        <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
             sessions={displaySessions ?? project.sessions}
             activeSessionId={activeSessionId}
@@ -227,7 +221,6 @@ export const ProjectNode = memo(function ProjectNode({
             onMoveSession={onMoveSession}
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
-            indented
             sessionVariant={sessionVariant}
           />
         </div>

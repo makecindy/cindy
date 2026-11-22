@@ -9,6 +9,8 @@
  * 灵动岛不展示 rest;它自己的短暂置顶 / 展开钉住顺序叠在这把尺子外面。
  */
 
+import type { TeammateStatus } from './teammateStatus';
+
 export const LIVE_TASK_PRIORITY = {
   waiting: 0,
   unread: 1,
@@ -72,6 +74,24 @@ export function taskInboxSection(
 }
 
 /**
+ * A teammate's main conversation is one inbox row, sorted like a task by whose turn it is
+ * (2026-11-20 user decision): Pending while it waits for the user, failed or has an unread reply,
+ * Working while it runs, and left out (null) once it is read and idle, so idle teammates never
+ * pile up; the teammate section keeps listing all of them. Reading settles it: there is nothing
+ * to archive. A snooze is kept on the conversation's Session and wakes on new input like a task's.
+ * Callers resolve `status` with a quiet offline state: an unreachable computer is not a request.
+ */
+export function teammateInboxSection(
+  status: TeammateStatus,
+  snooze: TaskInboxState | null | undefined,
+  nowMs: number,
+): TaskInboxSection | null {
+  if (snooze && taskSnoozeUntil(snooze) > nowMs) return 'snoozed';
+  if (status === 'running') return 'working';
+  return status === 'idle' ? null : 'inbox';
+}
+
+/**
  * Signals for taskInboxSection. The viewed task keeps a held unread / waiting rank until the
  * user leaves it, but running always comes from the natural rank: a task that finishes while
  * open must leave working at once instead of staying there until another task is opened.
@@ -87,11 +107,14 @@ export function taskInboxSignalsFromRank(
   };
 }
 
+/** Reserved ISO value so older inbox clients still classify the task as snoozed. */
+export const INDEFINITE_SNOOZE_UNTIL = '9999-12-31T23:59:59.999Z';
+
 /** A new input (including an automation trigger) returns the task to its live section. */
 export function taskSnoozeUntil(task: TaskInboxState): number {
   const until = Date.parse(task.snoozedUntil ?? '');
   const at = Date.parse(task.snoozedAt ?? '');
   const sent = Date.parse(task.userSendAt ?? '');
   if (!Number.isFinite(until) || (Number.isFinite(at) && sent > at)) return 0;
-  return until;
+  return task.snoozedUntil === INDEFINITE_SNOOZE_UNTIL ? Infinity : until;
 }

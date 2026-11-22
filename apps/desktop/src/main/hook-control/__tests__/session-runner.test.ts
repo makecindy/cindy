@@ -150,6 +150,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isAutoReviewNoAvailableModelNotice: actual.isAutoReviewNoAvailableModelNotice,
+    isAutoReviewQuotaExhaustedNotice: actual.isAutoReviewQuotaExhaustedNotice,
     isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
     autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
     AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -166,6 +167,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
+vi.mock('../../maker-ipc/createdTaskTitles.js', () => ({ refineCreatedTaskTitle: vi.fn() }));
 vi.mock('../../maker-ipc/register.js', () => ({
   acquirePendingAgentSwitchForImSend: h.acquirePendingAgentSwitch,
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
@@ -1021,6 +1023,21 @@ describe('hook session 精确接管边界', () => {
     const runner = createMakerHookSessionRunner({ log });
 
     await expect(runner.inspect('session-under-test')).rejects.toThrow('metadata unavailable');
+  });
+
+  it.each([
+    { status: 'archived', workDir: process.cwd(), canResume: true },
+    { status: 'archived', workDir: path.join(process.cwd(), 'package.json'), canResume: false },
+    { status: 'deleted', workDir: process.cwd(), canResume: false },
+  ])('归档绑定能否续聊取决于任务状态和目录 ($status, $canResume)', async ({ status, workDir, canResume }) => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status, workingDir: workDir, title: null, userSendAt: null, workspaceKind: 'project', providerId: null,
+    });
+    fakeMaker.getSessionMeta.mockResolvedValueOnce({ ...await fakeMaker.getSessionMeta(), workDir });
+    const info = await createMakerHookSessionRunner({ log }).inspect('previous', () => true);
+    expect(info?.usable).toBe(false);
+    expect(info?.resumableArchive === true).toBe(canResume);
   });
 
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
@@ -2913,6 +2930,34 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
+  // #8706 unit: the Hook observer has its own maker-core mock. Existing overload
+  // cases missed quota notices; one nonterminal event must show safe guidance
+  // through the real observer/presenter without ending the running turn.
+  it('配额故障通过官方 Hook 过程区显示安全提示，不收口', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({ onProgress: (text: string) => emitted.push(text) }));
+      await vi.waitFor(() => expect(h.eventCbs.get('sess-new')).toBeDefined());
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'error', data: {
+        message: '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_UPSTREAM_BODY', isTerminal: false,
+      } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted.join('\n')).toContain('配额已耗尽');
+      expect(emitted.join('\n')).not.toMatch(/PRIVATE_UPSTREAM_BODY|完全访问/);
+      cb({ type: 'done', data: null });
+      expect((await pending).status).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /**
    * 本 describe 的核心回归: 过载重投只在**零产出**时发生, 那时过程区与正文都是
    * 空的。若非终止 error 不进过程区, 整个退避窗口(~22-38s)一帧 turn.progress 都
@@ -3059,7 +3104,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     }
   });
 
-  it('重试耗尽的终态过载错误换成可操作说明(桌面端重试不回流, 必须说清)', async () => {
+  it('重试耗尽的嵌套 529 终态 reason 在官方 Hook 中换成可操作说明', async () => {
     setMainLocale('zh-CN');
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
@@ -3071,7 +3116,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     cb({
       type: 'error',
       data: {
-        message: 'Selected model is at capacity. Please try a different model.',
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
         isTerminal: true,
       },
     });
@@ -3079,8 +3125,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.status).toBe('error');
     expect(outcome.errorMessage).toContain('模型服务繁忙');
     expect(outcome.errorMessage).toContain('在这里重发这条消息');
-    // 上游原文不外发到渠道, 只留在本地日志里。
-    expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
+    // The generic transport message must not replace the user-facing overload diagnosis.
+    expect(outcome.errorMessage).not.toContain('stream disconnected before completion');
   });
 
   it.each([
@@ -4278,6 +4324,26 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
 
   // 评审 #11136: 回复里引用的本机图片超过导入上限(20 MiB)时不入库, 也走不到压缩, 提示里只有图片名。
   // 入口: watchContinuation 收口; 可观察结果: 正文末尾的提示写明上限。既有用例只覆盖「文件被删」(unit)。
+  // #11607 review: importer rejection must not trigger a second network
+  // access from the official hook's size diagnostic (unit, real finalization).
+  it('does not stat a rejected hostless network image while finalizing the reply', async () => {
+    const source = 'xdt-image:////attacker/share/100%.png';
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(async (_id, text) =>
+      ({ text, replacements: new Map<string, string>(), failures: [source] }));
+    const stat = vi.spyOn(fs, 'stat').mockRejectedValue(new Error('NETWORK_ACCESS_FORBIDDEN'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `Result: ![network](<${source}>)`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      expect(stat.mock.calls.filter(([file]) => String(file).includes('attacker'))).toEqual([]);
+      expect(onEnd.mock.calls[0]![0].attachments ?? []).toEqual([]);
+    } finally { snapshot.mockRestore(); stat.mockRestore(); }
+  });
+
   it('says why a local image over the import limit was not sent', async () => {
     const source = '/private/task/huge.png';
     const materialize = vi.fn(async (_id: string, text: string) =>

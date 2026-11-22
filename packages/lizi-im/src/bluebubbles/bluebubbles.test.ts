@@ -13,13 +13,14 @@ import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 // handling and requester identity absent from other transports' tests; no real contacts.
 const connections: BlueBubblesIM[] = [];
 afterEach(async () => { await Promise.all(connections.splice(0).map(im => im.dispose())); });
-async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false, files?: IMHost['files']) {
+async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false,
+  files?: IMHost['files'], groups = false) {
   const secrets = new Map<string, string>();
   let saved: BlueBubblesState | null = initialState;
   let callbackUrl = '';
   let now = 1_000;
-  const chat = { guid: 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
-  const otherChat = { guid: 'any;-;other@example.test', participants: [{ address: 'other@example.test', service: 'iMessage' }] };
+  const chat = { guid: groups ? 'any;+;example-group' : 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
+  const otherChat = { guid: groups ? 'any;+;other-group' : 'any;-;other@example.test', participants: [{ address: 'other@example.test', service: 'iMessage' }] };
   const messages = new Map<string, BlueBubblesMessage>();
   const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only');
   vi.spyOn(api, 'info').mockResolvedValue({ server_version: '1.9.9' });
@@ -61,6 +62,22 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  it('keeps confirmed parent lookups scoped through duplicate receipts and a failed echo', async () => {
+    const f = await fixture(null, undefined, true, undefined, true);
+    const receipts = new BlueBubblesReceipts(f.storage, 1_000);
+    const sent = { chatId: f.chat.guid, state: 'sent' as const, messageId: 'confirmed-parent' };
+    receipts.outgoing('first', sent);
+    receipts.outgoing('second', sent);
+    const restored = new BlueBubblesReceipts(f.storage, 1_000);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(true);
+    expect(restored.hasSentMessage(f.otherChat.guid, sent.messageId)).toBe(false);
+    restored.recordEcho(f.chat.guid, sent.messageId, 'first', true);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(true);
+    restored.recordEcho(f.chat.guid, sent.messageId, 'second', true);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(false);
+    expect(new BlueBubblesReceipts(f.storage, 1_000).hasSentMessage(f.chat.guid, sent.messageId)).toBe(false);
+  });
+
   it('loads selected history and the inline reply from the connected chat, including image-only messages', async () => {
     const cacheImage = vi.fn(async ({ token }: { token: string }) => ({ absPath: `/media/${token}`, url: `cindy-media://${token}` }));
     const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, true);
@@ -128,6 +145,78 @@ describe('BlueBubbles local ingress', () => {
       { staging: true, shouldReuse: expect.any(Function) });
     expect(download).not.toHaveBeenCalled();
     expect(cacheImage).not.toHaveBeenCalled();
+  });
+
+  it('invokes group replies only for a direct parent confirmed sent by this connection in this chat', async () => {
+    const f = await fixture(null, undefined, true, undefined, true);
+    f.im.onMessage(event => event.delivery?.accept());
+    const another = await fixture(null, undefined, false, undefined, true);
+    f.send.mockResolvedValueOnce({ guid: 'direct-parent' });
+    await f.im.sendText(f.chat.guid, 'confirmed');
+    another.send.mockResolvedValueOnce({ guid: 'other-connection-parent' });
+    await another.im.sendText(another.chat.guid, 'other connection');
+    const receipts = new BlueBubblesReceipts(f.storage, 1_000);
+    receipts.outgoing('unknown-attempt', { chatId: f.chat.guid, state: 'unknown', messageId: 'unknown-parent' });
+    receipts.outgoing('pending-attempt', { chatId: f.chat.guid, state: 'sending', messageId: 'pending-parent' });
+    await f.im.init();
+
+    f.message('direct', { replyToGuid: 'direct-parent' });
+    f.message('both', { replyToGuid: 'direct-parent', text: '@Cindy help' });
+    f.message('nested', { replyToGuid: 'other-member-parent', threadOriginatorGuid: 'direct-parent' });
+    f.message('root-only', { threadOriginatorGuid: 'direct-parent' });
+    f.message('cross-chat', { replyToGuid: 'direct-parent', chats: [f.otherChat] });
+    f.message('other-connection', { replyToGuid: 'other-connection-parent' });
+    f.message('unknown', { replyToGuid: 'unknown-parent' });
+    f.message('pending', { replyToGuid: 'pending-parent' });
+    f.message('plain-text', { text: '@Cindy help' });
+    f.message('quote-text', { text: '> @Cindy help' });
+    f.message('not-allowed', { replyToGuid: 'direct-parent', chats: [{ guid: 'any;+;not-allowed' }] });
+    await Promise.all([f.webhook('direct'), f.webhook('both'), f.webhook('direct'), f.webhook('both')]);
+    await f.im.reconcile();
+    await f.im.reconcile();
+    expect(f.received.filter(event => event.invoked).map(event => event.messageId).sort()).toEqual(['both', 'direct', 'plain-text']);
+    expect(f.received.filter(event => event.ambient).map(event => event.messageId).sort()).toEqual([
+      'cross-chat', 'nested', 'other-connection', 'pending', 'quote-text', 'root-only', 'unknown',
+    ]);
+    expect(f.state().inbox['not-allowed']?.state).toBe('ignored');
+  });
+
+  it('uses only the connected server’s verified address for native mentions and falls back safely when unavailable', async () => {
+    const f = await fixture(null, undefined, false, undefined, true);
+    f.im.onMessage(event => event.delivery?.accept());
+    vi.mocked(f.api.info).mockResolvedValue({ private_api: true, helper_connected: true });
+    const account = vi.spyOn(f.api, 'iMessageAccount').mockResolvedValue({ vetted_aliases: [
+      { Alias: 'Partner@example.test' }, { Alias: '+15551234567' }, { Alias: 'Display Name' }, null,
+    ] });
+    const mention = (address: string) => [{ runs: [] }, { runs: [null, { attributes: {} }, {
+      attributes: { __kIMMentionConfirmedMention: address },
+    }] }];
+    f.message('unconfigured-address', { attributedBody: mention('partner@example.test') });
+    await f.im.reconcile();
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'unconfigured-address', ambient: true });
+    expect(account).not.toHaveBeenCalled();
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(), mentionAddress: 'Partner@example.test' });
+    f.message('right-address', { text: 'Partner help', attributedBody: mention('partner@example.test') });
+    f.message('unbound-alias', { attributedBody: mention('+15551234567') });
+    f.message('wrong-person', { text: 'Partner help', attributedBody: mention('another@example.test') });
+    f.message('wrong-phone', { attributedBody: mention('+15551234568') });
+    f.message('configured-owner', { attributedBody: mention('owner@example.test') });
+    f.message('display-name', { attributedBody: mention('Display Name') });
+    f.message('bold-text', { text: 'Partner help', attributedBody: [{ runs: [{ attributes: { bold: true } }] }] });
+    await f.im.reconcile();
+    expect(f.received.filter(event => event.invoked).map(event => event.messageId)).toEqual(['right-address']);
+    expect(f.received.filter(event => event.ambient)).toHaveLength(7);
+
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(), mentionAddress: '+15551234567' });
+    f.message('bound-phone', { attributedBody: mention('+15551234567') });
+    await f.im.reconcile();
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'bound-phone', invoked: true });
+    account.mockRejectedValue(new Error('helper unavailable'));
+    f.message('unverified-address', { attributedBody: mention('+15551234567') });
+    f.message('text-still-works', { text: '@Cindy help' });
+    await f.im.reconcile();
+    expect(f.received.at(-2)).toMatchObject({ messageId: 'unverified-address', ambient: true, invoked: false });
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'text-still-works', ambient: false, invoked: true });
   });
 
   // Tier 1, PR #10241/r4556881876: a failed candidate edit used to permanently

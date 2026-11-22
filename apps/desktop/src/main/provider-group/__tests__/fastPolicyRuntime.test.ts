@@ -46,6 +46,7 @@ const state = vi.hoisted(() => ({
   warnings: [] as unknown[][],
   failGrantError: undefined as Error | undefined,
   supportsDirect: true,
+  agentNetStandby: false,
   supportsFastCache: false,
   delegateCalls: [] as RemoteAgentRequest[],
   accountView: undefined as unknown,
@@ -83,11 +84,16 @@ vi.mock('../../device-link/providerShareApi.js', () => ({
   },
 }));
 vi.mock('../../device-link/settings-store.desktop.js', () => ({
-  readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: state.revoked }),
+  readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: state.revoked, agentNetEnabled: state.agentNetStandby }),
   onDeviceLinkSettingChanged: () => () => {},
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: () => true,
+  remoteProviderAccessEpoch: () => 'current',
+}));
+vi.mock('../../device-link/agentNetSharing.js', () => ({
+  agentNetSharingRoute: () => state.agentNetStandby ? { resourceId: 'share' } : null,
+  agentNetProviderExecutorProof: () => state.agentNetStandby && state.pair ? { ...state.pair, delegation: { id: 'test-signed' } } : null,
 }));
 vi.mock('../../device-link/providerShareHost.js', () => ({
   getProviderShareHostLoadedSnapshot: ownedShareSnapshot,
@@ -121,6 +127,7 @@ vi.mock('../../remote-agent/host/runHost.js', () => ({
 }));
 vi.mock('../../remote-agent/controller/runClient.js', () => ({
   RemoteAgentRunClient: { caps: async () => ({ directGuestExecution: state.supportsDirect, guestRelay: state.supportsDirect,
+    directGuestStandby: state.agentNetStandby,
     ...(state.supportsFastCache ? { subscriptionFastPolicyCache: true } : {}) }) },
 }));
 vi.mock('../../remote-agent/controller/service', () => ({ remoteAgentPollerFor: vi.fn() }));
@@ -161,6 +168,7 @@ vi.mock('../../usage/providerPartyUsageStore.js', () => ({
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-fast-sync-'));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn(...args: unknown[]) { state.warnings.push(args); }, error() {} }) }));
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   activeOwnerScopeKey: () => state.owner,
   ownerScopedUserDataPath: (file: string) => path.join(temporary, state.owner, file),
   isAppSessionBoundaryPending: () => false,
@@ -242,11 +250,12 @@ beforeEach(() => {
   state.warnings = [];
   state.failGrantError = undefined;
   state.supportsDirect = true;
+  state.agentNetStandby = false;
   state.supportsFastCache = false;
   state.delegateCalls = [];
   state.usage = undefined;
   state.check.mockReset().mockImplementation(async ({ executorDeviceId }) =>
-    state.pair?.executorDeviceId === executorDeviceId ? { active: true, ...state.pair } : { active: false });
+    state.pair?.executorDeviceId === executorDeviceId ? { active: true, ...state.pair, ...(state.agentNetStandby ? { proofId: 'test-signed' } : {}) } : { active: false });
   state.owner = `owner-${++sequence}`;
   state.shareOwner = state.owner;
   state.shares = [{ shareId: 'share', providerId: 'openai', providerLabel: 'OpenAI', hostDeviceId: 'self',
@@ -391,6 +400,30 @@ it('waits for retired hosts before dispatching and rejects an obsolete replaceme
 describe('durable direct task routing', () => {
   const locate = (sessionId: string, peer = guestPeer) => state.hostDeps!.directGuestExecution!.locate!(peer,
     { op: 'direct-locate', sessionId });
+  // Unit integration: O prepares a spare without reserving a turn or creating
+  // native task history. M permits only a separate admitted task under that grant.
+  it('prepares a standby for a guest whose tasks normally run on the owner', async () => {
+    state.agentNetStandby = true;
+    await installDirectHost();
+    const direct = state.hostDeps!.directGuestExecution!;
+    state.plan.mockResolvedValueOnce({ kind: 'local' });
+    const task = { agentKind: 'codex' as const, model: 'gpt-5' };
+    await expect(direct.allocate(guestPeer, { op: 'allocate', ...task, sessionId: 'owner-task', prepareStandby: true }))
+      .resolves.toEqual({ canPrepareStandby: true });
+    const sessionId = randomUUID();
+    await expect(direct.allocate(guestPeer, { op: 'standby-prepare', ...task, sessionId }))
+      .resolves.toMatchObject({ deviceId: 'one', standby: true });
+    expect(state.plan.mock.lastCall![0]).toMatchObject({ reserve: false });
+    expect(await locate(sessionId)).toBeNull();
+    expect(delegation.delegatedProviderShareSessionAllowed(guestPeer, sessionId)).toBe(false);
+    const admissionId = randomUUID();
+    expect(await delegation.admitAgentNetProviderStandby(guestPeer, { op: 'standby-admit', ...task,
+      sessionId: 'offline-task', sourceSessionId: sessionId, admissionId }, async () => new Map())).toMatchObject({ generation: admissionId });
+    expect(delegation.delegatedProviderShareSessionAllowed(guestPeer, 'offline-task')).toBe(true);
+    state.failGrantError = Object.assign(new Error('sharing control unavailable'), { status: 503 });
+    await expect(direct.allocate(guestPeer, { op: 'allocate', ...task, sessionId: 'during-outage', prepareStandby: true }))
+      .resolves.toEqual({ standbyRetry: true });
+  });
   // Unit integration: O's live budget has no offline delegated enforcement.
   // Exercise real allocation, policy callback and M lease revocation together.
   it('withdraws direct leases when a member requires live budget checks, preserving history affinity', async () => {
@@ -461,13 +494,15 @@ describe('durable direct task routing', () => {
     const direct = state.hostDeps!.directGuestExecution!;
     const { token } = await direct.switch(guestPeer, { op: 'direct-switch', sessionId: 'history' });
     expect(token).toBeTruthy();
+    await expect(direct.switched!(guestPeer, 'history', 'wrong-token')).resolves.toBe(false);
     expect(await locate('history')).toEqual({ deviceId: 'one' });
     const handoff = vi.spyOn(state.usage!, 'markDirectTaskRelayed')
       .mockRejectedValueOnce(Error('handoff journal write failed'));
     await expect(direct.switched!(guestPeer, 'history', token!)).rejects.toThrow('handoff journal write failed');
     expect(await locate('history')).toEqual({ deviceId: 'one' });
     handoff.mockRestore();
-    await direct.switched!(guestPeer, 'history', token!);
+    await expect(direct.switched!(guestPeer, 'history', token!)).resolves.toBe(true);
+    await expect(direct.switched!(guestPeer, 'history', token!)).resolves.toBe(true);
     disposeRemoteAgentHost();
     await state.usage!.flush();
     await installDirectHost();
@@ -544,7 +579,8 @@ describe('durable direct task routing', () => {
     await installDirectHost();
     const first = await allocate('history');
     const direct = state.hostDeps!.directGuestExecution!;
-    await direct.release(guestPeer, { op: 'direct-release', sessionId: 'history', generation: first!.generation });
+    if (!first?.generation) throw new Error('Expected a direct task grant');
+    await direct.release(guestPeer, { op: 'direct-release', sessionId: 'history', generation: first.generation });
     expect(await locate('history')).toEqual({ deviceId: 'one' });
     await expect(direct.acceptRelay!(guestPeer, 'history', true)).rejects.toThrow();
     await direct.acceptRelay!(guestPeer, 'history', false);
@@ -1256,4 +1292,20 @@ it('restores the previous authorized model after one failed renewal commit', asy
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({ sessionId: 'renewal', model: 'gpt-5' });
   expect(rows[0].generation).not.toBe(first!.generation);
+});
+
+// Unit: a same-model renewal may change the receipt generation while preserving
+// the standby scope. A failed journal commit must still allow the prepared fallback.
+it('restores standby authority after one failed same-model renewal commit', async () => {
+  state.agentNetStandby = true;
+  await installDirectHost();
+  const sourceSessionId = randomUUID();
+  expect(await allocate(sourceSessionId)).toMatchObject({ deviceId: 'one' });
+  const commit = state.usage!.commitDirectReceiptRoute.bind(state.usage!);
+  vi.spyOn(state.usage!, 'commitDirectReceiptRoute').mockRejectedValueOnce(new Error('injected commit failure')).mockImplementation(commit);
+  expect(await allocate(sourceSessionId)).toBeNull();
+  const admissionId = randomUUID();
+  await expect(delegation.admitAgentNetProviderStandby(guestPeer, {
+    op: 'standby-admit', sourceSessionId, sessionId: 'after-rollback', admissionId, agentKind: 'codex', model: 'gpt-5',
+  }, async () => new Map())).resolves.toMatchObject({ generation: admissionId });
 });

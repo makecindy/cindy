@@ -224,6 +224,13 @@ export function allDeepLinkSchemes(identity: BrandIdentity = BRAND_IDENTITY): re
   return [identity.primaryScheme, ...identity.legacySchemes];
 }
 
+/** Keep both identifiers intact when a copied task link is pasted into prose or Markdown. */
+export function buildTaskDeepLink(sessionId: string, deviceId?: string | null): string {
+  const part = (value: string) => encodeURIComponent(value).replace(/[.!'()*]/g,
+    char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${BRAND_IDENTITY.primaryScheme}://session/${part(sessionId)}${deviceId ? `?device=${part(deviceId)}` : ''}`;
+}
+
 /**
  * 按路径识别本产品 userData 的全部目录名(本区域当前 + 本区域明确拥有的历史名)，
  * 本区域目录名恒为首位。⚠️ 故意**不包含另一区域当前或历史使用的目录**：同机双装

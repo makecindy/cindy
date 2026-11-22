@@ -5,10 +5,16 @@
  * deps 注入内存实现验证调用序列、期望值传递、归属表生命周期与失败重试语义。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getCurrentDbClientSnapshot } from '../../localDb/client/current.js';
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() }),
 }));
+
+vi.mock('../../localDb/client/current.js', () => {
+  const owner = { userId: 'title-test' };
+  return { getCurrentDbClientSnapshot: () => owner };
+});
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getOverwritableAutoTitle: vi.fn(async () => ({
@@ -228,7 +234,7 @@ describe('runSessionAutoTitle — 用户一个字没写(合成描述)', () => {
     const deps = makeDeps({
       // 模型返回前用户按下了保存(标题与占位一模一样)。
       generateTitle: vi.fn(async () => {
-        notify?.('s1');
+        notify?.('s1', getCurrentDbClientSnapshot());
         return '登录失败排查';
       }),
     });
@@ -272,7 +278,7 @@ describe('runSessionAutoTitle — 用户一个字没写(合成描述)', () => {
   it('用户改过名的会话:后续消息一律不再起名', async () => {
     const { setOnUserSessionTitleWritten } = await import('../../localDb/ipc/sessions.js');
     registerSessionAutoTitleHooks();
-    vi.mocked(setOnUserSessionTitleWritten).mock.calls.at(-1)?.[0]?.('s1');
+    vi.mocked(setOnUserSessionTitleWritten).mock.calls.at(-1)?.[0]?.('s1', getCurrentDbClientSnapshot());
 
     const deps = makeDeps();
     const result = await runSessionAutoTitle(

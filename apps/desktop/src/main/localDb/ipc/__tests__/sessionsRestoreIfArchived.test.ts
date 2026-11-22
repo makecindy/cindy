@@ -94,6 +94,8 @@ function createDb(): void {
   h.sqlite?.close();
   const sqlite = new Database(':memory:');
   sqlite.exec(`
+    CREATE TABLE orca_teams(id TEXT, lead_session_id TEXT, status TEXT);
+    CREATE TABLE orca_workers(session_id TEXT, team_id TEXT);
     CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
     CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
     CREATE TABLE task_tags(id TEXT PRIMARY KEY,name TEXT,color TEXT,favorite_order INTEGER,sort_order INTEGER,revision INTEGER,name_customized INTEGER NOT NULL DEFAULT 0);
@@ -131,6 +133,8 @@ function createDb(): void {
       forked_at_message_id TEXT,
       worktree_path TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       feishu_open_id TEXT,
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
@@ -447,7 +451,8 @@ describe('bounded reconciliation read', () => {
     const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
     const get = h.handlers.get('local-db:sessions:get')!;
     const batch = h.handlers.get('local-db:sessions:get-many')!;
-    const expected = await get({}, 'target');
+    const { turnElapsedMs, ...expected } = await get({}, 'target') as Record<string, unknown>;
+    expect(turnElapsedMs).toBeNull();
     const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
       () => batch({}, ['target', 'missing', 'target']));
     expect(result).toEqual([expected]);

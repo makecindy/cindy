@@ -22,6 +22,9 @@ import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
   effectiveSourceIdForModel,
@@ -111,7 +114,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
 });
 
 const POPOVER_BASE = cn(
-  'z-[10010] rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
+  'rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
   'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]',
 );
 
@@ -240,7 +243,7 @@ export function ScheduleSettingsButton({
         )}
 
         {!lockEnabled && (
-        <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-[10020]">
+        <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-modal-popover-nested">
           <label
             className={cn(
               'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
@@ -393,7 +396,7 @@ export function ScheduleChip({
         align="start"
         sideOffset={8}
         collisionPadding={16}
-        className="z-[10010] w-[600px] rounded-xl bg-transparent p-0 shadow-none border-0"
+        className="w-[600px] rounded-xl bg-transparent p-0 shadow-none border-0"
         onWheel={stopWheel}
       >
         <div
@@ -434,7 +437,7 @@ export function ScheduleChip({
           </div>
           <div className="flex items-start gap-2">
             <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-              <div className="flex flex-col gap-[2px]">
+              <div className="flex flex-col gap-0.5">
                 {availableModes.map((mode) => {
                 const active = activeMode === mode;
                 return (
@@ -840,7 +843,7 @@ function TimePicker({
         align="end"
         sideOffset={6}
         collisionPadding={16}
-        className={cn(POPOVER_BASE, 'z-[10020] w-[168px]')}
+        className={cn(POPOVER_BASE, 'z-modal-popover-nested w-[168px]')}
         onWheel={stopWheel}
       >
         <div className="grid grid-cols-2 gap-1.5">
@@ -1029,6 +1032,7 @@ function previewConfigFor(mode: EditableScheduleMenuMode, current: CodexSchedule
 export function ModelEffortChip({
   onSelect,
   onFollowSession,
+  hostOnly,
   agentKind,
   agentDeviceId,
   modelValue,
@@ -1042,9 +1046,11 @@ export function ModelEffortChip({
   onNavigateToProviders,
   fastMode,
   onChangeFast,
+  pluginEngines,
 }: {
   onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
   onFollowSession: () => void;
+  hostOnly?: boolean;
   agentKind: AgentKind;
   agentDeviceId?: string;
   modelValue: string;
@@ -1063,6 +1069,11 @@ export function ModelEffortChip({
   /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。绑定任务同样保存，下一次触发时应用。 */
   fastMode?: boolean | 'ultrafast';
   onChangeFast?: (v: boolean | 'ultrafast') => void;
+  /**
+   * 本机的插件引擎(docs/plans/acp-plugin-bridge.md)，只给每次新建任务、在本机运行的自动任务传。
+   * active 有值时触发器显示「引擎 · 模型 · 思考深度」。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1155,14 +1166,34 @@ export function ModelEffortChip({
   const agentDeviceTitle = agentDeviceName
     ? t('newChat.modelSelector.trigger.agentDevice', { device: agentDeviceName })
     : null;
+  // 选中插件引擎时触发器写引擎自己的名字、模型与档位(插件停用后用通用名称)，不画内置 Harness 的标志。
+  const activeEngineSelection = pluginEngines?.active ?? null;
+  const activeEngine = activeEngineSelection
+    ? pluginEngines?.engines.find((engine) => engine.providerId === activeEngineSelection.providerId) ?? null
+    : null;
+  const engineDisplay = activeEngineSelection
+    ? [
+        activeEngine?.name ?? t('newChat.pluginEngines.genericName'),
+        pluginEngineModelName(activeEngine, activeEngineSelection.modelId)
+          ?? (activeEngineSelection.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+            ? t('newChat.pluginEngines.defaultModel')
+            : t('newChat.modelSelector.trigger.unresolved')),
+        (() => {
+          const level = resolvePluginEngineEffort(activeEngine, activeEngineSelection.modelId, activeEngineSelection.effort);
+          return level ? effortLabel(level as EffortValue) : null;
+        })(),
+      ].filter(Boolean).join(' · ')
+    : null;
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <ChipButton
-          icon={agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
-          label={display}
-          title={agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
+          icon={engineDisplay
+            ? <PluginEngineIcon size={14} iconDataUrl={activeEngine?.iconDataUrl} className='text-current' />
+            : agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
+          label={engineDisplay ?? display}
+          title={engineDisplay ? engineDisplay : agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
           active={open}
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
@@ -1173,9 +1204,9 @@ export function ModelEffortChip({
         sideOffset={8}
         collisionPadding={16}
         className={cn(
-          // z-[10010]:本 chip 在 ScheduleFormDialog 内,弹层必须盖过对话框(沿用原
-          // POPOVER_BASE 的层级——丢了它会渲染在对话框下层、点了"没反应")。
-          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-[shadow:var(--shadow-menu)]',
+          // 本 chip 在 ScheduleFormDialog 内:共享 PopoverContent 默认在 dropdown 层
+          // (10010),已盖过对话框;不要再局部降层,否则会渲染在对话框下层、点了"没反应"。
+          'overflow-hidden rounded-xl p-0 shadow-[shadow:var(--shadow-menu)]',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
           'w-auto',
@@ -1185,6 +1216,7 @@ export function ModelEffortChip({
         {/* 直接复用聊天的下拉内容本体(唯一真源:聊天选择器改了这里跟着变)。
             来源轨 / 模型分组 / 搜索 / effort / 空态全套自带;followSession 行为 opt-in。 */}
         <ModelRouteSelectorContent
+          hostOnly={hostOnly}
           agentDeviceId={agentDeviceId || null}
           fastModeConfigurable={['codex', 'pi']}
           unifiedAgents={pickerAgents}
@@ -1210,8 +1242,9 @@ export function ModelEffortChip({
           // An explicit selection always pins the connection, including the native default.
           reselectEmitsChange
           selectedRowClickOpensConfiguration
-          overlayContentClassName="z-[10020]"
+          overlayContentClassName="z-modal-popover-nested"
           discoveringModels={discovery.pending}
+          {...(pluginEngines ? { pluginEngines } : {})}
           followSession={
             followSession
               ? {

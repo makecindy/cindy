@@ -217,7 +217,6 @@ void mountPage({
   render: () => {
     (window as unknown as { __composerImageCache: typeof imageCache }).__composerImageCache = imageCache;
     // The preference is local state; seed it per variant the way the product stores it.
-    localStorage.removeItem('chat.followUpHint.dismissed');
     if (ctx.data.followUp === 'steer') localStorage.setItem('chat.followUpBehavior', 'steer');
     else localStorage.removeItem('chat.followUpBehavior');
     if (ctx.data.sendKey === 'modifier-enter') localStorage.setItem('chat.sendShortcutPreference', 'modifier-enter');

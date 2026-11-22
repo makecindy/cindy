@@ -12,10 +12,23 @@ export default {
   },
   cases: {
     default: { about: 'Missing authored link remains clickable, explains failure, offers a copy menu and requests a fresh lookup after restoration' },
+    'html-shortcut': { about: 'Cmd-click opens a restored relative HTML link in the system browser' },
     remote: { about: 'Missing remote link remains clickable without local filesystem access' },
     untrusted: { about: 'Content without privileged file access stays inert' },
   },
   async check(page, ui) {
+    if (ui.case === 'html-shortcut') {
+      // DESIGN §14.5: unlike the DOM tests, this browser run sends a real
+      // modified pointer click to MarkdownRenderer and observes the host boundary.
+      await page.evaluate(() => localStorage.setItem('chat.localLinkOpenPreference', 'sidebar'));
+      await page.getByTestId('restore-file').click();
+      const demo = page.getByRole('link', { name: 'demo.html', exact: true });
+      await demo.click({ modifiers: ['Meta'] });
+      await page.waitForFunction(() =>
+        document.documentElement.dataset.openedInBrowser === '/fixture/documents/demo.html',
+      );
+      return;
+    }
     const report = page.getByRole('link', { name: '查看报告', exact: true });
     if (ui.case === 'untrusted') {
       assert.equal(await report.count(), 0);

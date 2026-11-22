@@ -17,23 +17,49 @@ const logger: Logger = {
   trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
 };
 
-it.skipIf(!binaryPath).each([true, false])('native auto-compaction with model denial=%s', async (deny) => {
+// #11484: nested gateway 407 must stop native requests, not just change the UI.
+it.skipIf(!binaryPath).each([{ deny: 403, compact: true }, { deny: 407, compact: true },
+  { deny: 407, compact: false }, { deny: 0, compact: true },
+  { deny: 403, compact: true, bridge: 'http' }, { deny: 403, compact: true, bridge: 'sse' },
+])('native access denial=$deny compact=$compact bridge=$bridge', async ({ deny, compact, bridge }) => {
   const root = await mkdtemp(path.join(tmpdir(), 'cindy-model-denial-'));
   const home = path.join(root, 'codex');
   const work = path.join(root, 'work');
   const events: AgentEvent[] = [];
   let requests = 0;
   let deniedRequests = 0;
-  let compactPhase = false;
+  let compactPhase = !compact;
   const server = createServer(async (req, res) => {
     for await (const _ of req) { /* drain the synthetic request */ }
     if (!req.url?.endsWith('/responses')) { res.writeHead(404).end(); return; }
     requests++;
     if (compactPhase && deny) {
       deniedRequests++;
-      res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: {
+      if (bridge === 'sse') {
+        const response = { id: 'bridge-failed', status: 'failed', error: { code: 'upstream_stream_error',
+          message: 'Native provider request failed [phase=adapter-event; HTTP 403; category=permission; request=fixture]',
+        } };
+        res.writeHead(200, { 'content-type': 'text/event-stream' }).end(
+          `event: response.failed\ndata: ${JSON.stringify({ type: 'response.failed', response })}\n\n`,
+        );
+        return;
+      }
+      if (deny === 407) {
+        res.writeHead(407, { 'content-type': 'application/json' }).end(JSON.stringify({ error: {
+          code: '407', message: 'litellm.APIError: APIError: NovaException - ' + JSON.stringify({ error: {
+            code: 'ACCOUNT_SHARING_ACCESS_DENIED',
+            message: 'Apply for model access: https://example.invalid/apply',
+          } }),
+        } }));
+        return;
+      }
+      const denied = { error: {
         code: 'user_model_access_denied', message: 'user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model',
-      } }));
+      } };
+      const body = bridge === 'http'
+        ? { error: { code: 'upstream_error', type: 'authentication_error', message: JSON.stringify(denied) } }
+        : denied;
+      res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify(body));
       return;
     }
     const id = `response-${requests}`;
@@ -68,6 +94,9 @@ it.skipIf(!binaryPath).each([true, false])('native auto-compaction with model de
       resolveCodexLocalAuthPolicy: () => 'isolated',
       resolveModelContextLimit: () => 8192,
       resolveModelCompactionPct: () => 90,
+      getRejectedCodexDownshiftModel: () => bridge && deniedRequests
+        ? { model: 'fixture-old-model', transport: 'bridge' }
+        : undefined,
       prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {}, codexProxyActive: true }),
       auth: {
         getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
@@ -84,17 +113,22 @@ it.skipIf(!binaryPath).each([true, false])('native auto-compaction with model de
     pump = (async () => { for await (const event of handle.events()) events.push(event); })();
     const doneCount = () => events.filter(e => e.type === 'done').length;
     await handle.send({ type: 'user', content: 'Return a synthetic answer without tools.' }, { throwOnStartFailure: true });
-    await vi.waitFor(() => expect(doneCount()).toBe(1), { timeout: 15_000 });
-    compactPhase = true;
-    await handle.send({ type: 'user', content: 'Continue without tools.' }, { throwOnStartFailure: true });
+    if (compact) {
+      await vi.waitFor(() => expect(doneCount()).toBe(1), { timeout: 15_000 });
+      compactPhase = true;
+      await handle.send({ type: 'user', content: 'Continue without tools.' }, { throwOnStartFailure: true });
+    }
     if (deny) {
+      const reason = bridge ? 'codex_compaction_model_unavailable'
+        : deny === 407 ? 'account_access_denied' : 'model_unavailable';
+      const message = bridge ? '[CONTEXT_COMPACTION_MODEL_UNAVAILABLE]'
+        : deny === 407 ? 'https://example.invalid/apply' : '[MODEL_SELECTION_UNAVAILABLE]';
       await vi.waitFor(() => expect(events.some(e => e.type === 'error' &&
-        (e.data as { reason?: string }).reason === 'model_unavailable')).toBe(true), { timeout: 30_000 });
+        (e.data as { reason?: string }).reason === reason)).toBe(true), { timeout: 30_000 });
       await vi.waitFor(() => expect(handle.isTurnRunning?.()).toBe(false));
       expect(deniedRequests).toBe(1);
       expect(events.filter(e => e.type === 'error')).toEqual([expect.objectContaining({ data: expect.objectContaining({
-        reason: 'model_unavailable', isTerminal: true, willRetry: false,
-        message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
+        reason, isTerminal: true, willRetry: false, message: expect.stringContaining(message),
       }) })]);
     } else {
       await vi.waitFor(() => expect(doneCount()).toBe(2), { timeout: 15_000 });

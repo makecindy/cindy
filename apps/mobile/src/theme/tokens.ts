@@ -150,6 +150,8 @@ export interface ThemeColors {
   warningFg: string;
   /** 额度黄（剩余不超过 30%，@cindy/maker-shared/quota-level）；仅额度使用，双模式同值。 */
   quotaBarWarn: string;
+  /** Normal liquid in the widget-style quota tubes, shared with WidgetPalette.plenty. */
+  quotaWidgetPlenty: string;
   /** 额度红（剩余不超过 10%）#EF4444，与 Desktop --quota-bar-crit、Mac 面板、iPhone 组件同值。 */
   quotaBarCrit: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
@@ -486,6 +488,7 @@ export const lightColors: ThemeColors = {
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
   quotaBarWarn: '#F3A115',
+  quotaWidgetPlenty: '#14B8A6',
   quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
@@ -587,6 +590,7 @@ export const darkColors: ThemeColors = {
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
   quotaBarWarn: '#F3A115',
+  quotaWidgetPlenty: '#2DD4BF',
   quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
@@ -620,6 +624,94 @@ export const palettes: Record<ThemeMode, ThemeColors> = {
 };
 
 // —— 以下为主题无关(light / dark 一致)的不变量阶梯 ——
+
+/** Fixed pigments sampled for each physical keyboard. App appearance only affects the software keyboard. */
+export const retroKeyboardMaterials = {
+  iceblue: {
+    ink: '#354c55',
+    secondaryInk: '#495e68',
+    wellTint: 'rgba(179, 197, 201, 0.88)',
+    contact: 'rgba(65, 86, 96, 0.40)',
+    skirtLight: '#edf3f3',
+    skirtMid: '#c0ced2',
+    skirtShade: '#9aaeb5',
+    skirtFoot: '#81969e',
+    faceShade: '#cad7da',
+    face: '#e9eff0',
+    faceLight: '#f4f7f6',
+    modifierTint: 'transparent',
+  },
+  ivory: {
+    ink: '#483d30',
+    secondaryInk: '#615546',
+    wellTint: 'rgba(128, 111, 83, 0.52)',
+    contact: 'rgba(62, 50, 33, 0.50)',
+    skirtLight: '#eee4cf',
+    skirtMid: '#c2b398',
+    skirtShade: '#a49479',
+    skirtFoot: '#8a7b62',
+    faceShade: '#d2c5ad',
+    face: '#e7dcc6',
+    faceLight: '#f3ead6',
+    modifierTint: 'rgba(116, 90, 51, 0.14)',
+  },
+  platinum: {
+    ink: '#3d3e3b',
+    secondaryInk: '#555852',
+    wellTint: 'rgba(122, 122, 114, 0.63)',
+    contact: 'rgba(54, 55, 49, 0.48)',
+    skirtLight: '#e1e1d8',
+    skirtMid: '#b9b9ae',
+    skirtShade: '#97998d',
+    skirtFoot: '#7c7e75',
+    faceShade: '#c0c2b7',
+    face: '#d9dad1',
+    faceLight: '#e9eae1',
+    modifierTint: 'rgba(70, 75, 60, 0.13)',
+  },
+  powerbook: {
+    ink: '#ece5d9',
+    secondaryInk: '#d0cabd',
+    wellTint: 'rgba(57, 54, 57, 0.48)',
+    contact: 'rgba(15, 14, 18, 0.75)',
+    skirtLight: '#5c5b60',
+    skirtMid: '#39383d',
+    skirtShade: '#2e2c31',
+    skirtFoot: '#232226',
+    faceShade: '#414045',
+    face: '#504e53',
+    faceLight: '#626065',
+    modifierTint: 'transparent',
+  },
+  thinkpad: {
+    ink: '#e4e6df',
+    secondaryInk: '#adc3cd',
+    wellTint: 'rgba(33, 35, 37, 0.47)',
+    contact: 'rgba(5, 8, 10, 0.85)',
+    skirtLight: '#45484b',
+    skirtMid: '#292b2e',
+    skirtShade: '#1b1e20',
+    skirtFoot: '#161819',
+    faceShade: '#292b2c',
+    face: '#333638',
+    faceLight: '#45484a',
+    modifierTint: 'transparent',
+  },
+  macbook: {
+    ink: '#edf0ef',
+    secondaryInk: '#c6cdce',
+    wellTint: '#a1a3a3',
+    contact: 'rgba(36, 39, 40, 0.68)',
+    skirtLight: '#4a4c4d',
+    skirtMid: '#313335',
+    skirtShade: '#242628',
+    skirtFoot: '#1c1e20',
+    faceShade: '#303234',
+    face: '#343638',
+    faceLight: '#414345',
+    modifierTint: 'transparent',
+  },
+} as const;
 
 /** 间距阶梯,基数 4。 */
 export const spacing = {

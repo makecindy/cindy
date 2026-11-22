@@ -360,11 +360,11 @@ export function TaskMigrationDialog({
     >
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           onClick={(e) => e.stopPropagation()}
         />
         <Dialog.Content
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[calc(100%-32px)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 p-4 [-webkit-app-region:no-drag]"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal w-[calc(100%-32px)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 p-4 [-webkit-app-region:no-drag]"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}

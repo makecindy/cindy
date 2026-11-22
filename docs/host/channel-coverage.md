@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`cadb0c4f1b`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`9b0bbf728e`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
@@ -10,33 +10,38 @@
 
 ## 总口径
 
-**真正要 Host 做的 = A + C-后台 + C-两段式 = 934 + 32 + 43 = 1009**；巡检实际调用到 **131** 个（666 次，其中 A 129）。
+**真正要 Host 做的 = A + C-后台 + C-两段式 = 940 + 32 + 50 = 1022**；巡检实际调用到 **131** 个（666 次，其中 A 129）。
 同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。
 
 | 分类 | 含义 | 通道数 |
 |---|---|---:|
-| contract | 已在 Host 通道合同或通用路由登记表里，窗口做客户端时转发给 Host | 83（巡检调用 35） |
+| contract | 已在 Host 通道合同或通用路由登记表里，窗口做客户端时转发给 Host | 84（巡检调用 35） |
 | client | 客户端模式自己的通道（连接状态、重连） | 2（巡检调用 1） |
-| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 934（巡检调用 128） |
-| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 359（巡检调用 70） |
+| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | 940（巡检调用 128） |
+| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 363（巡检调用 70） |
 | **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 5（巡检调用 1） |
 | **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
 | 　S·本地 | 同步·本地（窗口读 profile：界面设置与首帧提示） | 8（巡检调用 8） |
 | 　S·镜像 | 同步·数据归 Host（需窗口缓存镜像） | 6（巡检调用 3） |
 | **R** | 回执通道：主进程向界面要数据，界面回执；先不排期 | 6（巡检调用 2） |
-| **C** | 跨两边，按处理方式分四种 | 90（巡检调用 4） |
+| **C** | 跨两边，按处理方式分四种 | 97（巡检调用 4） |
 | 　C-后台 | | 32（巡检调用 2） |
-| 　C-两段式（窗口做界面动作，数据调 Host） | | 43（巡检调用 0） |
+| 　C-两段式（窗口做界面动作，数据调 Host） | | 50（巡检调用 0） |
 | 　C-窗口本地 | | 11（巡检调用 2） |
 | 　C-专项设计（安全边界） | | 4（巡检调用 0） |
-| 合计 | | 1493 |
+| 合计 | | 1511 |
 
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
-已注册 **373**（其中 10 个只有源码判定，客户端快照里还没有）、未注册 **0**（今天被拒或无人监听，见下文）、快照无法判断 10。
+已注册 **373**（其中 10 个只有源码判定，客户端快照里还没有）、未注册 **0**（今天被拒或无人监听，见下文）、快照无法判断 14。
 
-判定依据：A:default 125、A:rule 809、B:rule 359、C:dependency 20、C:rule 70、R:rule 6、S:dependency 14、W:rule 5（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
+判定依据：A:default 131、A:rule 809、B:rule 363、C:dependency 27、C:rule 70、R:rule 6、S:dependency 14、W:rule 5（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
 
 合同一侧（`hostChannelContract.ts`、`host-delegation.ts`、客户端模式预取、Host 通用路由的登记表 `hostIpcEntries/`）的通道名全部静态解析：解析不出任何一个时脚本直接失败，不会生成本清单。
+
+未能静态解析通道名的注册点 2 处（不计入上表）：
+
+- `device-link/linkTraffic.desktop.ts` — `channels.REGISTER`
+- `device-link/linkTraffic.desktop.ts` — `channels.TRAFFIC`
 
 转发适配器 2 处（把通道原样转给另一个注册表，通道已在调用处计入）：
 `maker-ipc/electronIpcRegistry.ts`、`maker-ipc/register.ts`
@@ -58,7 +63,7 @@
 |---|---|---|---|
 | B | 窗口外壳、窗口布局与多窗口 | <code>^(window[-:]&#124;window$&#124;win:&#124;titlebar&#124;fullscreen&#124;toggle-fullscreen&#124;get-fullscreen-state&#124;find-in-page&#124;page-zoom&#124;theme:&#124;app-menu:&#124;app-locale:&#124;startup-gate&#124;maker:open-session-in-new-window&#124;maker:session-drag-preview&#124;maker:sidebar-tab-drag-preview&#124;maker:sidebar-tab-window&#124;sidebar-tab-window&#124;maker:rsb-window&#124;rsb-window&#124;resource-usage-window&#124;agent-island&#124;menubar)</code> | <code>^(sidebar-tab-window&#124;sidebarWindowExpansionIpc&#124;right-sidebar-window&#124;resource-usage-window&#124;agent-island&#124;menubar)&#92;b</code> |
 | B | 原生对话框、剪贴板、系统外壳与通知 | <code>^(dialog:&#124;show-open-directory-dialog&#124;clipboard:&#124;shell:&#124;open-with:&#124;notification:&#124;media:copy-(png-)?to-clipboard&#124;media:open-with-default-app&#124;media:save-as&#124;chat-attachment:save-as&#124;login-item:&#124;accessibility-support)</code> | <code>^(notificationService&#124;appBadgeService&#124;login-item-ipc&#124;accessibility-support-ipc)&#92;b</code> |
-| B | 本机屏幕截取、录制与远程桌面 | <code>^(region-screenshot&#124;recording-preview&#124;recording-audio&#124;remote-desktop&#124;away-guard)</code> | <code>^(region-screenshot&#124;remote-desktop&#124;remote-desktop-viewer)&#92;b</code> |
+| B | 本机屏幕截取、录制、远程桌面与本机隐私权限 | <code>^(region-screenshot&#124;recording-preview&#124;recording-audio&#124;remote-desktop&#124;away-guard&#124;local-network:)</code> | <code>^(region-screenshot&#124;remote-desktop&#124;remote-desktop-viewer&#124;local-network)&#92;b</code> |
 | B | 图形能力，由窗口替 Agent 执行（平台 RPC） | <code>^(maker:computer&#124;browser-backend&#124;rsb-browser-bridge&#124;rsb-native-popup)</code> | <code>^(rsb-browser-bridge)&#92;b</code> |
 | B | 本机输入设备与语音 | <code>^(voice-input&#124;voice-conversation&#124;xbox-gamepad&#124;worklouder-codex&#124;codex-micro-guard&#124;app-shortcuts:set-recording)</code> | <code>^(voice-input&#124;voice-conversation&#124;xbox-gamepad&#124;worklouder-codex)&#92;b</code> |
 | B | 桌面安装包自身：更新、版本、日志与诊断 | <code>^(update-(?!relaunch:)&#124;get-app-version&#124;get-app-display-version-info&#124;get-os-release&#124;release-notes:&#124;app:get-arm64-translation&#124;app:open-logs-dir&#124;crash-diagnosis&#124;log-upload&#124;performance-trace&#124;renderer:log&#124;dev:&#124;cc:set-debug-net&#124;deep-link:)</code> | <code>^(updateService&#124;crash-diagnosis&#124;log-upload&#124;performance-trace)&#92;b</code> |
@@ -95,12 +100,12 @@
 | # | 领域 | 通道数 | 巡检调用到 | 调用次数 | 主要模块 |
 |---:|---|---:|---:|---:|---|
 | 1 | 伙伴与 IM | 137 | 22 | 128 | im 60、maker-ipc 40、localDb 28 |
-| 2 | 任务、消息与输入队列 | 111 | 17 | 123 | maker-ipc 69、localDb 25、bootstrap-electron 12 |
-| 3 | 插件、技能与 MCP | 149 | 16 | 93 | cindy-brain 53、skillhub 41、plugin-market 19 |
-| 4 | 供应商与模型 | 79 | 14 | 79 | maker-ipc 52、local-model-runtime 19、bootstrap-electron 4 |
-| 5 | git 与工作树 | 65 | 9 | 75 | git-context 21、git-review 21、worktree 13 |
-| 6 | 设备互联与远程执行 | 75 | 7 | 66 | device-link 41、remote-ssh 29、bootstrap-electron 4 |
-| 7 | 未登记前缀 | 125 | 17 | 29 | maker-ipc 57、bootstrap-electron 24、billing 21 |
+| 2 | 任务、消息与输入队列 | 114 | 17 | 123 | maker-ipc 70、localDb 27、bootstrap-electron 12 |
+| 3 | 插件、技能与 MCP | 151 | 16 | 93 | cindy-brain 56、skillhub 41、plugin-market 19 |
+| 4 | 供应商与模型 | 80 | 14 | 79 | maker-ipc 52、local-model-runtime 19、bootstrap-electron 4 |
+| 5 | git 与工作树 | 66 | 9 | 75 | git-context 22、git-review 21、worktree 13 |
+| 6 | 设备互联与远程执行 | 72 | 7 | 66 | device-link 38、remote-ssh 29、bootstrap-electron 4 |
+| 7 | 未登记前缀 | 134 | 17 | 29 | maker-ipc 58、billing 26、bootstrap-electron 25 |
 | 8 | 记忆、学习与钩子 | 42 | 4 | 24 | hook-control 27、learn-host 6、maker-ipc 6 |
 | 9 | 账号与凭据 | 40 | 4 | 17 | bootstrap-electron 30、device-link 7、subscription-accounts 2 |
 | 10 | 设置与偏好 | 34 | 9 | 15 | bootstrap-electron 9、appearance-settings-ipc 8、maker-ipc 6 |
@@ -259,9 +264,9 @@ S·本地：界面设置与登录首帧提示，由窗口本地读同一份 prof
 
 | 通道 | 类型 | 归属 | 原因 | 调用次数 | 注册文件 |
 |---|---|---|---|---:|---|
-| `sidebar-settings:load-snapshot-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 21 | `sidebarSettingsStore.ts` |
+| `sidebar-settings:load-snapshot-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 21 | `sidebarSettingsStore.desktop.ts` |
 | `ghosts:recommendations` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 8 | `cindy-brain/index.ts` |
-| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 8 | `sidebarSettingsStore.ts` |
+| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 8 | `sidebarSettingsStore.desktop.ts` |
 | `auth:has-persisted-session-hint-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·账号提示：只读 profile 里的首帧提示（事件流连上之前就要回答），登录状态仍以 Host 为准 | 4 | `bootstrap-electron.ts` |
 | `appearance-settings:get-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `appearance-settings-ipc.ts` |
 | `layout:get` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `layout/index.ts` |
@@ -287,7 +292,7 @@ S·本地：界面设置与登录首帧提示，由窗口本地读同一份 prof
 | `model-favorites:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `maker-ipc/modelFavoritesSync.ts` |
 | `setup-migration:host-reply` | event | R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | 0 | `setup-migration/rendererPrefsHost.ts` |
 
-## C 类全量（90）
+## C 类全量（97）
 
 C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做的（终端优先级低）。C-两段式：窗口保留处理者做界面动作，数据那一半调 Host，每个需要一个 Host 接口，计入但低频、排在后面。C-窗口本地：路径来自用户在本窗口的选择，客户端模式下照常注册，不计入。C-专项设计：安全边界，先读 docs/product-rules/input-handoff.md，方案出来前不动。
 
@@ -316,13 +321,17 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `device-link:pick-plugin-package` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `device-link/ipc.ts` |
 | `dialogue-workspace:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
 | `file-browser:remote-op` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/device-op.ts` |
+| `file:system-preview` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 未登记前缀，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host | 0 | `bootstrap-electron.ts` |
 | `file:thumbnail` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
 | `fs:list-dir` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `fsBrowse/ipc.ts` |
 | `fs:mkdir-p` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `fsBrowse/ipc.ts` |
 | `fs:resolve-path` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
 | `fs:stat-path` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `fsBrowse/ipc.ts` |
 | `ghosts:background-tasks:reveal` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | 0 | `maker-ipc/register.ts` |
+| `ghosts:card:remote-mail-attachment` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
 | `ghosts:export` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
+| `ghosts:github-release` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
+| `ghosts:install-github-release` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-delete` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-pick-location` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-reattach-legacy` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `cindy-brain/index.ts` |
@@ -359,17 +368,20 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:file-browser:stat` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
 | `maker:file-browser:stop-watch` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
 | `maker:file-browser:write-file` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/index.ts` |
+| `maker:get-plugin-write-access-recovery` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 未登记前缀，但处理函数用到窗口 API：dialog；窗口做界面动作，数据那一半调 Host | 0 | `maker-ipc/register.ts` |
 | `maker:html-preview:cancel` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/html-preview-ipc.ts` |
 | `maker:html-preview:open` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/html-preview-ipc.ts` |
 | `maker:mcp-apps:v1` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、shell；窗口做界面动作，数据那一半调 Host | 0 | `mcp-apps/ipc.ts` |
 | `maker:mcp:duplicates:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `maker-ipc/mcpHandlers.ts` |
 | `maker:remote-ssh:review-host-key` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 设备互联与远程执行，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `remote-ssh/index.ts` |
+| `maker:retry-plugin-write-access` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 未登记前缀，但处理函数用到窗口 API：dialog；窗口做界面动作，数据那一半调 Host | 0 | `maker-ipc/register.ts` |
 | `maker:search:cancel` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/search/index.ts` |
 | `maker:search:start` | invoke | C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | 0 | `file-browser/search/index.ts` |
 | `peek-file-header` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
 | `plugin-market:pick-local-source` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `plugin-market/registerIpc.ts` |
 | `profile:choose-avatar` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
 | `projects-root:choose` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `bootstrap-electron.ts` |
+| `provider-share:export-roster` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 供应商与模型，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host | 0 | `device-link/providerShareRuntime.ts` |
 | `read-file-bytes` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
 | `read-file-for-attachment` | invoke | C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | 0 | `bootstrap-electron.ts` |
 | `skillhub:pick-local` | invoke | C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | 0 | `skillhub/registerIpc.ts` |
@@ -395,32 +407,32 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 |---|---:|
 | 窗口本地照常处理 | 363 |
 | 窗口本地照常处理（源码判定：客户端分支调用其注册函数；客户端快照早于这次改动，未实测） | 10 |
-| 两次快照都未注册（按需注册或未走到） | 8 |
+| 两次快照都未注册（按需注册或未走到） | 12 |
 | 注册在插件页面的 webContents.ipc 上，主进程快照不覆盖 | 2 |
 
-快照无法判断的窗口类通道（10）：`ghost-page:cancel-model-picker`（注册在插件页面的 webContents.ipc 上，主进程快照不覆盖）、`ghost-page:pick-model`（注册在插件页面的 webContents.ipc 上，主进程快照不覆盖）、`live-screen-embed:channel-reply`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:close`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:ice`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:open`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:request`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:frame`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:host`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:state`（两次快照都未注册（按需注册或未走到））
+快照无法判断的窗口类通道（14）：`ghost-page:cancel-model-picker`（注册在插件页面的 webContents.ipc 上，主进程快照不覆盖）、`ghost-page:pick-model`（注册在插件页面的 webContents.ipc 上，主进程快照不覆盖）、`app-locale:preference`（两次快照都未注册（按需注册或未走到））、`local-network:request`（两次快照都未注册（按需注册或未走到））、`local-network:status`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:channel-reply`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:close`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:ice`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:open`（两次快照都未注册（按需注册或未走到））、`live-screen-embed:request`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:frame`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:host`（两次快照都未注册（按需注册或未走到））、`live-screen-relay:state`（两次快照都未注册（按需注册或未走到））、`rsb-browser-bridge:report-file-preview-opener`（两次快照都未注册（按需注册或未走到））
 
 ## 按注册模块
 
 | 模块 | 已代理 | A | B | W | S | R | C | 合计 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| maker-ipc | 28 | 302 | 10 | 0 | 0 | 3 | 14 | 357 |
-| bootstrap-electron | 5 | 128 | 61 | 0 | 1 | 0 | 20 | 215 |
+| maker-ipc | 29 | 301 | 10 | 0 | 0 | 3 | 16 | 359 |
+| bootstrap-electron | 5 | 128 | 61 | 0 | 1 | 0 | 21 | 216 |
 | im | 0 | 60 | 0 | 0 | 0 | 0 | 1 | 61 |
-| localDb | 30 | 56 | 1 | 0 | 0 | 0 | 4 | 91 |
-| cindy-brain | 7 | 49 | 2 | 0 | 6 | 0 | 5 | 69 |
-| device-link | 0 | 49 | 0 | 0 | 0 | 0 | 3 | 52 |
+| localDb | 30 | 58 | 1 | 0 | 0 | 0 | 4 | 93 |
+| cindy-brain | 7 | 49 | 2 | 0 | 6 | 0 | 8 | 72 |
+| device-link | 0 | 46 | 0 | 0 | 0 | 0 | 4 | 50 |
 | skillhub | 0 | 40 | 0 | 0 | 0 | 0 | 2 | 42 |
 | remote-ssh | 0 | 28 | 0 | 0 | 0 | 0 | 1 | 29 |
 | hook-control | 0 | 27 | 0 | 0 | 0 | 0 | 0 | 27 |
-| billing | 0 | 21 | 0 | 0 | 0 | 0 | 2 | 23 |
-| git-context | 0 | 21 | 0 | 0 | 0 | 0 | 0 | 21 |
+| billing | 0 | 26 | 0 | 0 | 0 | 0 | 2 | 28 |
+| git-context | 0 | 22 | 0 | 0 | 0 | 0 | 0 | 22 |
 | git-review | 0 | 20 | 0 | 0 | 0 | 0 | 1 | 21 |
 | local-model-runtime | 0 | 19 | 0 | 0 | 0 | 0 | 0 | 19 |
 | plugin-market | 0 | 19 | 0 | 0 | 0 | 0 | 1 | 20 |
 | plugin-contributions | 0 | 13 | 0 | 0 | 0 | 0 | 0 | 13 |
 | worktree | 0 | 13 | 0 | 0 | 0 | 0 | 1 | 14 |
-| model-groups | 0 | 7 | 0 | 0 | 0 | 0 | 0 | 7 |
+| model-groups | 0 | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
 | learn-host | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 6 |
 | setup-migration | 0 | 6 | 0 | 0 | 0 | 2 | 0 | 8 |
 | plugin-publisher | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
@@ -442,6 +454,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | local-agent | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | model-access | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 3 |
 | provider-group | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| quota-overview | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | settingsNavigationIpc | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | task-management | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | task-migration | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
@@ -451,10 +464,12 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | appBadgeService | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 3 |
 | clientEndpointsService | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | crash-diagnosis | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 3 |
+| display-language-preference | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | file-browser | 0 | 0 | 0 | 0 | 0 | 0 | 24 | 24 |
 | fsBrowse | 0 | 0 | 0 | 0 | 0 | 0 | 3 | 3 |
 | ipc | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
 | layout | 2 | 0 | 0 | 0 | 1 | 0 | 0 | 3 |
+| local-network | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
 | log-upload | 0 | 0 | 4 | 0 | 0 | 0 | 0 | 4 |
 | login-item-ipc | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 2 |
 | maker-host | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
@@ -469,9 +484,9 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | remote-desktop-viewer | 0 | 0 | 25 | 0 | 0 | 0 | 0 | 25 |
 | resource-usage-window | 0 | 0 | 4 | 0 | 0 | 0 | 0 | 4 |
 | right-sidebar-window | 0 | 0 | 11 | 0 | 0 | 0 | 0 | 11 |
-| rsb-browser-bridge | 0 | 0 | 12 | 0 | 0 | 0 | 0 | 12 |
+| rsb-browser-bridge | 0 | 0 | 13 | 0 | 0 | 0 | 0 | 13 |
 | sidebar-tab-window | 0 | 0 | 10 | 0 | 0 | 0 | 0 | 10 |
-| sidebarSettingsStore | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 5 |
+| sidebarSettingsStore.desktop | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 5 |
 | sidebarWindowExpansionIpc | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | updateService | 0 | 0 | 17 | 0 | 0 | 0 | 0 | 17 |
 | voice-conversation | 0 | 0 | 22 | 0 | 0 | 0 | 0 | 22 |
@@ -564,15 +579,18 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `billing:cancel-plan-change` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:cancel-topup` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:confirm-plan-change` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
+| `billing:create-gift-card-order` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:create-subscription` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:create-topup` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:get-balance` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:get-catalog` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:get-credit-usage` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:get-current-subscription` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
+| `billing:get-gift-card-purchase-policy` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:get-order` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:list-orders` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:list-payment-history` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
+| `billing:list-purchased-gift-cards` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:open-payment-redirect` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `billing/index.ts` |
 | `billing:open-subscription-portal` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `billing/index.ts` |
 | `billing:preview-gift-card` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
@@ -583,6 +601,8 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `billing:refresh-topup` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:resume-current-subscription` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 | `billing:retry-topup` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
+| `billing:reveal-purchased-gift-card` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
+| `billing:send-purchased-gift-card-email` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `billing/index.ts` |
 
 ### bootstrap-electron
 
@@ -672,6 +692,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `dialogue-workspace:get` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 1 | `bootstrap-electron.ts` |
 | `dialogue-workspace:open` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `bootstrap-electron.ts` |
 | `dialogue-workspace:reset` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `bootstrap-electron.ts` |
+| `file:system-preview` | invoke | C-两段式（窗口做界面动作，数据调 Host）（未登记前缀，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host） | 0 | `bootstrap-electron.ts` |
 | `file:thumbnail` | invoke | C-窗口本地（用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册） | 0 | `bootstrap-electron.ts` |
 | `find-in-page:start` | invoke | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
 | `find-in-page:stop` | event | B（窗口外壳、窗口布局与多窗口） | 0 | `bootstrap-electron.ts` |
@@ -826,6 +847,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `ghosts:card:get` | invoke | contract | 0 | `cindy-brain/index.ts` |
 | `ghosts:card:get-remote` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:card:list-by-session` | invoke | contract | 13 | `cindy-brain/index.ts` |
+| `ghosts:card:remote-mail-attachment` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：dialog；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
 | `ghosts:card:report-height` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:clear-unread` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:composer-list` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
@@ -837,12 +859,14 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `ghosts:errand-prefs` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 0 | `cindy-brain/index.ts` |
 | `ghosts:errand-prefs:set` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:export` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
+| `ghosts:github-release` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
 | `ghosts:handoff-delete` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:handoff-folder` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:handoff-list` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:inspect` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:install` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:install-consent:resolve` | invoke | contract | 0 | `cindy-brain/index.ts` |
+| `ghosts:install-github-release` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.getFocusedWindow；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
 | `ghosts:legacy-recovery-status` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-bind` | invoke | A（插件、技能与 MCP） | 0 | `cindy-brain/index.ts` |
 | `ghosts:library-delete` | invoke | C-两段式（窗口做界面动作，数据调 Host）（插件、技能与 MCP，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `cindy-brain/index.ts` |
@@ -949,11 +973,9 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `device-link:topic-subscribe` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:topic-unsubscribe` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `direct-link:host:event` | invoke | A（设备互联与远程执行） | 0 | `device-link/directLink.ts` |
-| `direct-link:host:register` | invoke | A（设备互联与远程执行） | 0 | `device-link/directLink.ts` |
 | `file-peer:host:closed` | invoke | A（设备互联与远程执行） | 0 | `device-link/filePeer.ts` |
 | `file-peer:host:invoke` | invoke | A（设备互联与远程执行） | 0 | `device-link/filePeer.ts` |
 | `file-peer:host:read` | invoke | A（设备互联与远程执行） | 0 | `device-link/filePeer.ts` |
-| `file-peer:host:register` | invoke | A（设备互联与远程执行） | 0 | `device-link/filePeer.ts` |
 | `file-peer:host:reply` | invoke | A（设备互联与远程执行） | 0 | `device-link/filePeer.ts` |
 | `file-peer:host:write` | invoke | A（设备互联与远程执行） | 0 | `device-link/filePeer.ts` |
 | `maker:provider-share:received-catalogs` | invoke | A（供应商与模型） | 0 | `device-link/providerShareRuntime.ts` |
@@ -970,8 +992,15 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `plugin-oauth:submit-input` | invoke | A（账号与凭据） | 0 | `device-link/ipc.ts` |
 | `plugin-oauth:submit-secret` | invoke | A（账号与凭据） | 0 | `device-link/ipc.ts` |
 | `provider-share:command` | invoke | A（供应商与模型） | 4 | `device-link/providerShareRuntime.ts` |
+| `provider-share:export-roster` | invoke | C-两段式（窗口做界面动作，数据调 Host）（供应商与模型，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `device-link/providerShareRuntime.ts` |
 | `self-hosted-relay:command` | invoke | A（设备互联与远程执行） | 3 | `device-link/selfHostedRelayRuntime.ts` |
 | `shared-task:account` | invoke | A（设备互联与远程执行） | 0 | `device-link/sharedTaskIpc.ts` |
+
+### display-language-preference
+
+| 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
+|---|---|---|---:|---|
+| `app-locale:preference` | invoke | B（窗口外壳、窗口布局与多窗口） | 0 | `display-language-preference.ts` |
 
 ### file-browser
 
@@ -1017,6 +1046,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `git-context:find-linked-worktree` | invoke | A（git 与工作树） | 17 | `git-context/ipc.ts` |
 | `git-context:get` | invoke | A（git 与工作树） | 0 | `git-context/ipc.ts` |
 | `git-context:get-for-session` | invoke | A（git 与工作树） | 19 | `git-context/ipc.ts` |
+| `git-context:github-app:access` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
 | `git-context:github-app:connect` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
 | `git-context:github-app:disconnect` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
 | `git-context:github-app:install` | invoke | A（git 与工作树） | 0 | `git-context/githubSetupIpc.ts` |
@@ -1223,6 +1253,13 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:local-model:start` | invoke | A（供应商与模型） | 0 | `local-model-runtime/ipc.ts` |
 | `maker:local-model:status` | invoke | A（供应商与模型） | 0 | `local-model-runtime/ipc.ts` |
 
+### local-network
+
+| 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
+|---|---|---|---:|---|
+| `local-network:request` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `local-network/index.ts` |
+| `local-network:status` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `local-network/index.ts` |
+
 ### local-themes
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
@@ -1307,6 +1344,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `local-db:session-share:unlock` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/session-share.ts` |
 | `local-db:sessions:ack-interrupted` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:create` | invoke | contract | 1 | `localDb/ipc/sessions.ts` |
+| `local-db:sessions:discard-unused` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:dismiss-pending-alerts` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:error-tail-pending` | invoke | contract | 36 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:get` | invoke | contract | 32 | `localDb/ipc/sessions.ts` |
@@ -1315,6 +1353,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `local-db:sessions:interrupted-resume-candidates` | invoke | contract | 1 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:list` | invoke | contract | 12 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:patch-meta` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/sessions.ts` |
+| `local-db:sessions:project-archive` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:resolve-references` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:restore-if-archived` | invoke | A（任务、消息与输入队列） | 0 | `localDb/ipc/sessions.ts` |
 | `local-db:sessions:set-pinned-card-summaries` | invoke | A（任务、消息与输入队列） | 1 | `localDb/ipc/sessions.ts` |
@@ -1475,7 +1514,8 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:get-new-maker-defaults` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/register.ts` |
 | `maker:get-new-maker-worktree-branch-pref` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/newMakerWorktreeBranchPreferenceHandler.ts` |
 | `maker:get-pending-interactions` | invoke | contract | 30 | `maker-ipc/register.ts` |
-| `maker:get-plugin-write-access-recovery` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/register.ts` |
+| `maker:get-plugin-engine-usage` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/pluginEnginesIpc.ts` |
+| `maker:get-plugin-write-access-recovery` | invoke | C-两段式（窗口做界面动作，数据调 Host）（未登记前缀，但处理函数用到窗口 API：dialog；窗口做界面动作，数据那一半调 Host） | 0 | `maker-ipc/register.ts` |
 | `maker:get-session-agent-switch-intent` | invoke | A（任务、消息与输入队列） | 16 | `maker-ipc/sessionAgentSwitchHandler.ts` |
 | `maker:get-session-tree` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:get-workflow-progress` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/register.ts` |
@@ -1514,6 +1554,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:list-available-agents` | invoke | contract | 11 | `maker-ipc/register.ts` |
 | `maker:list-customizations` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/register.ts` |
 | `maker:list-desktop-commands` | invoke | A（任务、消息与输入队列） | 47 | `maker-ipc/register.ts` |
+| `maker:list-plugin-engines` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/pluginEnginesIpc.ts` |
 | `maker:machine:status` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/register.ts` |
 | `maker:maker-memory:reset` | invoke | A（记忆、学习与钩子） | 0 | `maker-ipc/register.ts` |
 | `maker:maker-memory:set-enabled` | invoke | A（记忆、学习与钩子） | 0 | `maker-ipc/register.ts` |
@@ -1596,14 +1637,15 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:provider:remote-access:set` | invoke | A（供应商与模型） | 0 | `maker-ipc/providerHandlers.ts` |
 | `maker:provider:run-location:set` | invoke | A（供应商与模型） | 0 | `maker-ipc/providerHandlers.ts` |
 | `maker:provider:test-connection` | invoke | A（供应商与模型） | 0 | `maker-ipc/providerHandlers.ts` |
+| `maker:refresh-plugin-engines` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/pluginEnginesIpc.ts` |
 | `maker:regenerate-title` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/title.ts` |
 | `maker:resolve-interaction` | invoke | contract | 0 | `maker-ipc/register.ts` |
-| `maker:retry-plugin-write-access` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/register.ts` |
+| `maker:retry-plugin-write-access` | invoke | C-两段式（窗口做界面动作，数据调 Host）（未登记前缀，但处理函数用到窗口 API：dialog；窗口做界面动作，数据那一半调 Host） | 0 | `maker-ipc/register.ts` |
 | `maker:review:start` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/reviewStartHandler.ts` |
 | `maker:rewind:commit` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/rewind.ts` |
 | `maker:rewind:preview` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/rewind.ts` |
 | `maker:run` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/register.ts` |
-| `maker:runtime-plugins` | invoke | A（插件、技能与 MCP） | 0 | `maker-ipc/register.ts` |
+| `maker:runtime-plugins` | invoke | contract | 0 | `maker-ipc/register.ts` |
 | `maker:scan-at-resources` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/register.ts` |
 | `maker:schedule:create` | invoke | A（自动化） | 0 | `maker-ipc/schedule.ts` |
 | `maker:schedule:create-from-template` | invoke | A（自动化） | 0 | `maker-ipc/schedule.ts` |
@@ -1656,6 +1698,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:set-model` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/sessionSetModelHandler.ts` |
 | `maker:set-permission-mode` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:set-plan-mode` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
+| `maker:set-plugin-engine-remote-use` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/pluginEnginesIpc.ts` |
 | `maker:set-session-model-pref` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:set-thinking-enabled` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:set-writable-dirs` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
@@ -1755,6 +1798,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `model-groups:decisions` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/decisionIpc.ts` |
 | `model-groups:get` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
 | `model-groups:resolve` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
+| `model-groups:route-note` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
 | `model-groups:set` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
 | `model-groups:switch-offer` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `model-groups/ipc.ts` |
 
@@ -1846,58 +1890,64 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 |---|---|---|---:|---|
 | `provider-group:command` | invoke | A（供应商与模型） | 16 | `provider-group/ipc.ts` |
 
+### quota-overview
+
+| 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
+|---|---|---|---:|---|
+| `quota-tray:event` | event | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `quota-overview/windowsPanel.ts` |
+
 ### region-screenshot
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `recording-audio:data` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingAudio.ts` |
-| `recording-audio:register` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingAudio.ts` |
-| `recording-audio:state` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingAudio.ts` |
-| `recording-preview:close` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingPreview.ts` |
-| `recording-preview:copy` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingPreview.ts` |
-| `recording-preview:failed` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingPreview.ts` |
-| `recording-preview:minimize` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingPreview.ts` |
-| `recording-preview:painted` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingPreview.ts` |
-| `recording-preview:ready` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingPreview.ts` |
-| `recording-preview:save` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/recordingPreview.ts` |
-| `region-screenshot-editor:cancel` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/editor.ts` |
-| `region-screenshot-editor:export` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/editor.ts` |
-| `region-screenshot-editor:failed` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/editor.ts` |
-| `region-screenshot-editor:minimize` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/editor.ts` |
-| `region-screenshot-editor:painted` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/editor.ts` |
-| `region-screenshot-editor:ready` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/editor.ts` |
-| `region-screenshot-editor:set-translation-language` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/editor.ts` |
-| `region-screenshot-pin:command` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot-pin:drag-move` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot-pin:drag-start` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot-pin:menu` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot-pin:opacity` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot-pin:painted` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot-pin:shell-ready` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot-pin:unlock-hover` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot-pin:zoom` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/pins.ts` |
-| `region-screenshot:abandon` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:audio-read` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:audio-start` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:audio-stop` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:auto-scroll` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:cancel` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:compose-take` | invoke | B（本机屏幕截取、录制与远程桌面） | 1 | `region-screenshot/compose.ts` |
-| `region-screenshot:copy-text` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:elements-at` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:export` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:focused` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:live-edit` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:live-frame` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:live-hold` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:live-save` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:live-start` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:painted` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:recording-controls` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:recording-preview` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:selection-start` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:set-translation-language` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
-| `region-screenshot:shell-ready` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `region-screenshot/index.ts` |
+| `recording-audio:data` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingAudio.ts` |
+| `recording-audio:register` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingAudio.ts` |
+| `recording-audio:state` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingAudio.ts` |
+| `recording-preview:close` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingPreview.ts` |
+| `recording-preview:copy` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingPreview.ts` |
+| `recording-preview:failed` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingPreview.ts` |
+| `recording-preview:minimize` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingPreview.ts` |
+| `recording-preview:painted` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingPreview.ts` |
+| `recording-preview:ready` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingPreview.ts` |
+| `recording-preview:save` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/recordingPreview.ts` |
+| `region-screenshot-editor:cancel` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/editor.ts` |
+| `region-screenshot-editor:export` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/editor.ts` |
+| `region-screenshot-editor:failed` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/editor.ts` |
+| `region-screenshot-editor:minimize` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/editor.ts` |
+| `region-screenshot-editor:painted` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/editor.ts` |
+| `region-screenshot-editor:ready` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/editor.ts` |
+| `region-screenshot-editor:set-translation-language` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/editor.ts` |
+| `region-screenshot-pin:command` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot-pin:drag-move` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot-pin:drag-start` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot-pin:menu` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot-pin:opacity` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot-pin:painted` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot-pin:shell-ready` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot-pin:unlock-hover` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot-pin:zoom` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/pins.ts` |
+| `region-screenshot:abandon` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:audio-read` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:audio-start` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:audio-stop` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:auto-scroll` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:cancel` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:compose-take` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 1 | `region-screenshot/compose.ts` |
+| `region-screenshot:copy-text` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:elements-at` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:export` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:focused` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:live-edit` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:live-frame` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:live-hold` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:live-save` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:live-start` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:painted` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:recording-controls` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:recording-preview` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:selection-start` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:set-translation-language` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
+| `region-screenshot:shell-ready` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `region-screenshot/index.ts` |
 
 ### relaunchBusyActivityIpc
 
@@ -1910,56 +1960,56 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `away-guard:get-state` | invoke | B（本机屏幕截取、录制与远程桌面） | 2 | `remote-desktop/awayGuardService.ts` |
-| `away-guard:preview` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/awayGuardService.ts` |
-| `away-guard:set-delay` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/awayGuardService.ts` |
-| `away-guard:set-enabled` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/awayGuardService.ts` |
-| `remote-desktop:capture-stop` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:channel-request` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:dismiss-permission-guide` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:enable` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:host-input` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:host-reply` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:live-screen-frames` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:native-audio` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:native-frame` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:open-permission` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:permissions` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:register-host` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:state` | invoke | B（本机屏幕截取、录制与远程桌面） | 246 | `remote-desktop/index.ts` |
-| `remote-desktop:stop` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:view-heartbeat` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
-| `remote-desktop:windows-support` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop/index.ts` |
+| `away-guard:get-state` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 2 | `remote-desktop/awayGuardService.ts` |
+| `away-guard:preview` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/awayGuardService.ts` |
+| `away-guard:set-delay` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/awayGuardService.ts` |
+| `away-guard:set-enabled` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/awayGuardService.ts` |
+| `remote-desktop:capture-stop` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:channel-request` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:dismiss-permission-guide` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:enable` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:host-input` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:host-reply` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:live-screen-frames` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:native-audio` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:native-frame` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:open-permission` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:permissions` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:register-host` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:state` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 246 | `remote-desktop/index.ts` |
+| `remote-desktop:stop` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:view-heartbeat` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
+| `remote-desktop:windows-support` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop/index.ts` |
 
 ### remote-desktop-viewer
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `live-screen-embed:channel-reply` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `live-screen-embed:close` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `live-screen-embed:ice` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `live-screen-embed:open` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `live-screen-embed:request` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `live-screen-relay:frame` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `live-screen-relay:host` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `live-screen-relay:state` | event | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:channel-reply` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:clipboard` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:clipboard-sync` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:close` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:credential` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:fullscreen` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:ice` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:input-focus` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:open` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:preferences` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:presented` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:ready` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:request` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:resize` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:resolution` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:safety` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
-| `remote-desktop-viewer:state` | invoke | B（本机屏幕截取、录制与远程桌面） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:channel-reply` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:close` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:ice` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:open` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-embed:request` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-relay:frame` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-relay:host` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `live-screen-relay:state` | event | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:channel-reply` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:clipboard` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:clipboard-sync` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:close` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:credential` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:fullscreen` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:ice` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:input-focus` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:open` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:preferences` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:presented` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:ready` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:request` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:resize` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:resolution` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:safety` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
+| `remote-desktop-viewer:state` | invoke | B（本机屏幕截取、录制、远程桌面与本机隐私权限） | 0 | `remote-desktop-viewer/windows.ts` |
 
 ### remote-ssh
 
@@ -2037,6 +2087,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `rsb-browser-bridge:force-kill` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `rsb-browser-bridge/ipc.ts` |
 | `rsb-browser-bridge:release` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `rsb-browser-bridge/ipc.ts` |
 | `rsb-browser-bridge:report` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `rsb-browser-bridge/ipc.ts` |
+| `rsb-browser-bridge:report-file-preview-opener` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `rsb-browser-bridge/ipc.ts` |
 | `rsb-browser-bridge:set-foreground` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `rsb-browser-bridge/ipc.ts` |
 | `rsb-browser-bridge:snapshot` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 1 | `rsb-browser-bridge/ipc.ts` |
 | `rsb-browser-bridge:tab-op-result` | invoke | B（图形能力，由窗口替 Agent 执行（平台 RPC）） | 0 | `rsb-browser-bridge/renderer-bridge.ts` |
@@ -2089,15 +2140,15 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `sidebar-tab-window:presentation-ready` | invoke | B（窗口外壳、窗口布局与多窗口） | 0 | `sidebar-tab-window/ipc.ts` |
 | `sidebar-tab-window:renderer-ready` | invoke | B（窗口外壳、窗口布局与多窗口） | 1 | `sidebar-tab-window/ipc.ts` |
 
-### sidebarSettingsStore
+### sidebarSettingsStore.desktop
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 8 | `sidebarSettingsStore.ts` |
-| `sidebar-settings:load-snapshot-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 21 | `sidebarSettingsStore.ts` |
-| `sidebar-settings:save-pinned-order` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
-| `sidebar-settings:set-main-view-hidden` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
-| `sidebar-settings:set-project-hidden` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
+| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 8 | `sidebarSettingsStore.desktop.ts` |
+| `sidebar-settings:load-snapshot-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 21 | `sidebarSettingsStore.desktop.ts` |
+| `sidebar-settings:save-pinned-order` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.desktop.ts` |
+| `sidebar-settings:set-main-view-hidden` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.desktop.ts` |
+| `sidebar-settings:set-project-hidden` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.desktop.ts` |
 
 ### sidebarWindowExpansionIpc
 

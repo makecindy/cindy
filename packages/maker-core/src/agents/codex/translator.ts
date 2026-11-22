@@ -43,6 +43,7 @@ import {
 import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData, GeneratedImageEventData } from '../../types/events.js';
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import type { CodexDownshiftModelRejection } from '../base-agent.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import {
@@ -109,6 +110,7 @@ export interface CodexRuntimeState {
   generationStartedAt: number | null;
   /** Tool/approval boundaries currently owning the turn. Generation resumes after all finish. */
   generationPendingToolIds: Set<string>;
+  generationStreamItemIds: Set<string>;
   /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
   generationDurationMs: number;
   /** Model time sampled with the latest accepted output usage. */
@@ -169,6 +171,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationSegmentComplete: true,
     generationStartedAt: null,
     generationPendingToolIds: new Set(),
+    generationStreamItemIds: new Set(),
     generationDurationMs: 0,
     generationOutputDurationMs: 0,
     generationOutputTokens: 0,
@@ -255,6 +258,7 @@ export function settleCodexSpeedUsage(
   last: { outputTokens: number; reasoningOutputTokens?: number },
   now = Date.now(),
 ): SpeedCalibrationReport | undefined {
+  rt.generationStreamItemIds.clear();
   rt.generationOutputTokens += last.outputTokens;
   const pairedDurationMs = sampleGenerationDuration(rt.generationDurationMs, rt.generationStartedAt, now);
   const responseWallMs = pairedDurationMs - rt.generationOutputDurationMs;
@@ -284,6 +288,7 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed 
   rt.generationSegmentComplete = true;
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
+  rt.generationStreamItemIds.clear();
   rt.generationDurationMs = 0;
   rt.generationOutputDurationMs = 0;
   rt.generationOutputTokens = 0;
@@ -417,8 +422,10 @@ function noteCodexGenerationBoundary(
   }
   // The speed clock runs from the response's first streamed item, not from the request.
   if (phase === 'started' && rt.generationPendingToolIds.size === 0) {
-    if (item.type === 'reasoning') rt.tokenSpeed.start(receivedAt, 'thinking');
-    if (item.type === 'agentMessage') rt.tokenSpeed.start(receivedAt, 'visible');
+    if (item.type === 'reasoning' || item.type === 'agentMessage') {
+      if (typeof item.id === 'string') rt.generationStreamItemIds.add(item.id);
+      rt.tokenSpeed.start(receivedAt, item.type === 'reasoning' ? 'thinking' : 'visible');
+    }
   }
   if (
     typeof item.type !== 'string' ||
@@ -455,6 +462,7 @@ export interface CodexTranslateContext {
   background?: boolean;
   /** Host denial paired by thread, turn and item; never inferred from empty output. */
   approvalDenialReason?: string;
+  previousCompactionModelRejection?: CodexDownshiftModelRejection;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
   onSamplingAttemptFailed?: () => void;
   /**
@@ -597,11 +605,15 @@ export function translateItemNotification(
   ctx.onItemBoundary?.();
   switch (itemType) {
     case 'agentMessage':
-      handleAgentMessage(phase, item as unknown as AgentMessageItem, queue, ctx);
+    case 'reasoning': {
+      if (itemType === 'agentMessage') handleAgentMessage(phase, item as unknown as AgentMessageItem, queue, ctx);
+      else handleReasoning(phase, item as ReasoningItem, queue, ctx);
+      // A usage report or tool start may arrive well after the last model byte.
+      // Count any final text in this item before closing the last open stream.
+      if (!ctx.background && phase === 'completed' && ctx.rt.generationStreamItemIds.delete(item.id) &&
+          ctx.rt.generationStreamItemIds.size === 0) ctx.rt.tokenSpeed.pause();
       return;
-    case 'reasoning':
-      handleReasoning(phase, item as unknown as ReasoningItem, queue, ctx);
-      return;
+    }
     case 'commandExecution':
       handleCommandExecution(phase, item as unknown as CommandExecutionItem, queue, ctx);
       return;
@@ -764,9 +776,61 @@ type CodexErrorInput = {
   codexErrorInfo?: CodexErrorInfo | null;
 };
 
+export const CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON = 'codex_compaction_model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_REASON = 'model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
   '[MODEL_SELECTION_UNAVAILABLE] The selected model is unavailable for this connection. Choose another available model and retry.';
+
+export const CODEX_ACCOUNT_ACCESS_DENIED_REASON = 'account_access_denied';
+
+/** Only traverse provider error envelopes, never arbitrary metadata or quoted prose. */
+function accountAccessDenial(value: unknown, depth = 0): { message: string } | null {
+  if (depth > 8) return null;
+  if (typeof value === 'string') {
+    if (value.length > 8192) return null;
+    const start = value.indexOf('{');
+    const end = value.lastIndexOf('}');
+    if (start < 0 || end < start) return null;
+    try { return accountAccessDenial(JSON.parse(value.slice(start, end + 1)), depth + 1); }
+    catch { return null; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (body.code === 'ACCOUNT_SHARING_ACCESS_DENIED') {
+    // Promote only the bounded, redacted explanation. Transport details, sibling
+    // fields and credentials must not enter persisted events or logs.
+    const message = typeof body.message === 'string' && body.message.length <= 1500
+      ? redactSensitiveText(body.message) : 'The upstream account does not have access to this model.';
+    return { message };
+  }
+  return accountAccessDenial(body.error, depth + 1) ?? accountAccessDenial(body.message, depth + 1);
+}
+
+function codexAccountAccessDenial(error: CodexErrorInput | null | undefined): { message: string } | null {
+  const tag = codexErrorInfoTag(error?.codexErrorInfo);
+  if (tag && !['other', 'httpConnectionFailed', 'responseStreamConnectionFailed',
+    'responseStreamDisconnected', 'responseTooManyFailedAttempts'].includes(tag)) return null;
+  const info = error?.codexErrorInfo;
+  const status = info && typeof info === 'object'
+    ? (Object.values(info)[0] as { httpStatusCode?: number | null })?.httpStatusCode : undefined;
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const textStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i;
+  const match = textStatus.exec(message.slice(0, 8192)) ?? textStatus.exec(details.slice(0, 8192));
+  const effectiveStatus = status ?? (match ? Number(match[1]) : undefined);
+  if (effectiveStatus !== undefined && ![400, 403, 407].includes(effectiveStatus)) return null;
+  if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return null;
+  return accountAccessDenial(message) ?? accountAccessDenial(details);
+}
+
+/** Both denials reuse the current-turn interrupt and exclude automatic replay. */
+export function isCodexAccessRejectedError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): boolean {
+  return codexAccountAccessDenial(error) !== null
+    || isCodexModelUnavailableError(error, previousCompactionModelRejection);
+}
 
 function hasModelRejection(text: string, status: number | undefined): boolean {
   // Native reconnect notifications flatten gateway JSON into this exact phrase.
@@ -789,7 +853,10 @@ function hasModelRejection(text: string, status: number | undefined): boolean {
 }
 
 /** Require an explicit model rejection. A generic reconnect or HTTP 404 is ambiguous. */
-export function isCodexModelUnavailableError(error: CodexErrorInput | null | undefined): boolean {
+export function isCodexModelUnavailableError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): boolean {
   const message = typeof error?.message === 'string' ? error.message.slice(0, 8192) : '';
   const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails.slice(0, 8192) : '';
 
@@ -806,6 +873,11 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
   const match = textStatus.exec(message) ?? textStatus.exec(details);
   const status = httpInfo?.httpStatusCode ?? (match ? Number(match[1]) : undefined);
   if (status !== undefined && status !== 400 && status !== 403 && status !== 404) return false;
+  // Bridges can wrap the body's code or omit it entirely. Only the matching
+  // bridge receipt can refine those generic errors into a model denial.
+  const wrappedBridgeError = /\bupstream_error\b|\bNative provider request failed \[phase=(?:adapter-event|stream-read); HTTP (?:400|403|404);/;
+  if (previousCompactionModelRejection?.transport === 'bridge'
+    && (wrappedBridgeError.test(message) || wrappedBridgeError.test(details))) return true;
   if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return false;
   return hasModelRejection(message, status) || hasModelRejection(details, status);
 }
@@ -815,18 +887,35 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
  * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
  * 模型拒绝和远端 compact 密文 400 也识别 additionalDetails 中明确的错误信号。
  */
-export function classifyCodexError(error: CodexErrorInput | null | undefined): ClassifiedCodexError {
+export function classifyCodexError(
+  error: CodexErrorInput | null | undefined,
+  previousCompactionModelRejection?: CodexDownshiftModelRejection,
+): ClassifiedCodexError {
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
-  if (isCodexModelUnavailableError(error)) {
+  const accountDenial = codexAccountAccessDenial(error);
+  if (accountDenial) {
+    // Keep the existing provider-explanation renderer and its actionable links.
+    const message = JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: accountDenial.message } });
     return {
-      message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+      message, usageLimit: false, isCapacityError: false,
+      reason: CODEX_ACCOUNT_ACCESS_DENIED_REASON,
+      data: { message, reason: CODEX_ACCOUNT_ACCESS_DENIED_REASON, willRetry: false },
+    };
+  }
+  if (isCodexModelUnavailableError(error, previousCompactionModelRejection)) {
+    const reason = previousCompactionModelRejection ? CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON : CODEX_MODEL_UNAVAILABLE_REASON;
+    const message = previousCompactionModelRejection
+      ? '[CONTEXT_COMPACTION_MODEL_UNAVAILABLE] Context compaction failed during the switch because this connection cannot use the previous model.'
+      : CODEX_MODEL_UNAVAILABLE_MESSAGE;
+    return {
+      message,
       ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
       usageLimit: false,
       isCapacityError: false,
-      reason: CODEX_MODEL_UNAVAILABLE_REASON,
+      reason,
       data: {
-        message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
-        reason: CODEX_MODEL_UNAVAILABLE_REASON,
+        message,
+        reason,
         ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
       },
     };
@@ -871,7 +960,16 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
       ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
       : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
         ? CONTEXT_OVERFLOW_REASON
-        : undefined;
+        // Preserve a diagnosis that native only provided inside its exhausted
+        // transport wrapper. This reason is presentation-only: upstream-overload
+        // and errorStatus=529 also authorize host/goal retries. Do not promote
+        // nested diagnostics into those control signals or expose the body.
+        // Restrict this to the confirmed opaque stream wrapper; recognized
+        // timeout/network messages retain their existing recovery policy.
+        : rawMessage === 'stream disconnected before completion' && errorInfoTag === 'responseTooManyFailedAttempts' && gatewayStatus === 529
+          && errorStatus === undefined && !usageLimit && !hasMissingBearer && !hasAuthErrorMarker
+          ? 'UPSTREAM_OVERLOADED'
+          : undefined;
   return {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
@@ -895,7 +993,7 @@ export function translateErrorNotification(
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  const classified = classifyCodexError(params.error);
+  const classified = classifyCodexError(params.error, ctx.previousCompactionModelRejection);
   const safeMessage = classified.message;
   const errorStatus = classified.errorStatus;
   const isCapacityError = classified.isCapacityError;

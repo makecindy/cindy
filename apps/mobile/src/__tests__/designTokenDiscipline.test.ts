@@ -82,6 +82,16 @@ const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
     snippet: 'strokeWidth={1.4}',
     reason: '远程标记波纹:16 单位 viewBox 内的图形几何(移植桌面同值,随图标缩放),非阶梯图标描边',
   },
+  {
+    file: 'src/widgets/UsageQuotaColumns.tsx',
+    snippet: 'strokeWidth={source.emphasized ? 1.25 : 1}',
+    reason: '额度管管壁:对齐小组件的 1pt 细线(强调态 1.25pt),图形几何,非阶梯图标描边',
+  },
+  {
+    file: 'src/widgets/UsageWidgetGuide.tsx',
+    snippet: 'strokeWidth={3.5}',
+    reason: '小组件指引图例的余量环:环带宽度即描边宽度,图形几何,非阶梯图标描边',
+  },
 ];
 
 function collectFiles(): string[] {

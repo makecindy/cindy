@@ -1,3 +1,4 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkChip } from './SettingsLinkChip';
 import '@/styles/chatContentDirection.css';
@@ -143,7 +144,7 @@ import {
   activateMessageUrl,
 } from './messageLinkActions';
 import { useOpenWithMenu } from './useOpenWithMenu';
-import { activateInlineLinkFromKeyboard } from './linkInteraction';
+import { activateInlineLinkFromKeyboard, isSeparateLinkActivation } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
 /**
@@ -995,6 +996,7 @@ function LightboxImage({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            {src && <DownloadImageMenuItem src={src} />}
             {canCopy && (
               <DropdownMenuItem onClick={handleCopyImage}>
                 <Copy className="mr-2 h-4 w-4" />
@@ -1580,7 +1582,7 @@ function MarkdownTargetLink({
     return allowPrivilegedLinks ? target : stripPrivilegedMarkdownTarget(target);
   }, [href, localFileRefs, allowPrivilegedLinks]);
   const target = useResolvedMarkdownTarget(initialTarget, workingDir, isStreaming);
-  const openInlineTarget = async () => {
+  const openInlineTarget = async (browserTarget?: 'external') => {
     if (target.kind === 'anchor') {
       if (!target.id) return;
       const element = document.getElementById(target.id);
@@ -1632,7 +1634,9 @@ function MarkdownTargetLink({
           return;
         }
         if (resolved.localKind !== 'directory' && isHtmlFilePath(resolved.absPath) && sidebarTargetSessionId) {
-          await openHtmlFileByPreference(sidebarTargetSessionId, resolved.absPath, t, fileCtx);
+          await openHtmlFileByPreference(
+            sidebarTargetSessionId, resolved.absPath, t, fileCtx, browserTarget,
+          );
         } else {
           await activateResolvedLocalTarget(
             resolved, { ...fileCtx, sidebarTargetSessionId },
@@ -1644,6 +1648,14 @@ function MarkdownTargetLink({
       }
     }
   };
+  const activate = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (target.kind === 'external') {
+      return activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
+    }
+    event.preventDefault();
+    // Preserve the browser choice while an authored file link retries path resolution.
+    return openInlineTarget(isSeparateLinkActivation(event) ? 'external' : undefined);
+  };
   const inlineMenu = useLinkContextMenu(href ?? '', [{
     label: t('chat.markdownRenderer.openLink'),
     icon: <ArrowUpRight className="mr-2 h-4 w-4" />,
@@ -1651,7 +1663,9 @@ function MarkdownTargetLink({
   }]);
 
   if (target.kind === 'audio') {
-    return <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin)} />;
+    const normalized = normalizeMarkdownImageSrc(target.href, workingDir, allowPrivilegedLinks,
+      remoteMediaOrigin ?? (sessionId && fileCtx.localConfirmed !== true ? null : undefined));
+    return normalized ? <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)} /> : null;
   }
 
   if (target.kind === 'plain-text') {
@@ -1720,24 +1734,9 @@ function MarkdownTargetLink({
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
-      onClick={async (e) => {
-        e.preventDefault();
-
-        if (target.kind === 'external') {
-          // 有会话上下文:左键按用户偏好直开(内置侧边栏 / 系统浏览器,设置 →
-          // 个性化 → 链接打开方式);右键弹"打开方式"菜单临时选另一种。
-          // 修饰键点击(macOS ⌘ / Windows Ctrl)临时强制走系统浏览器,不改偏好。
-          // 无会话上下文(Market 预览等)保持原有直开默认浏览器。
-          await activateMessageUrl(e, sidebarTargetSessionId, target.href, t);
-          return;
-        }
-        openInlineTarget();
-      }}
+      onClick={activate}
       onAuxClick={(event) => {
-        if (event.button !== 1) return;
-        event.preventDefault();
-        if (target.kind === 'external') void activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
-        else openInlineTarget();
+        if (event.button === 1) void activate(event);
       }}
       onContextMenu={(e) => {
         if (target.kind === 'external') openWith.onContextMenu(e, target.href);
@@ -1936,8 +1935,9 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             streaming={embeddedMediaStreaming}
           >
             {(localSrc) => {
-              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks);
               const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin, workingDir);
+              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks,
+                mediaOrigin ?? (currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
@@ -2177,13 +2177,14 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     return (
       <WorkspaceMediaSrc src={raw} workingDir={props.workingDir} enabled={resolveInWorkspace} streaming={props.isStreaming ?? false}>
         {(localSrc = raw) => {
-          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks);
+          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
+          const normalized = normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks,
+            mediaOrigin ?? (props.currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
           if (!normalized) return null;
           // Local audio has its own extension-checked protocol; xdt-file serves
           // images/documents/video and rejects MP3. Preserve the encoded path and
           // select the handler before wrapping the URL for a remote source device.
           const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
-          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
           const src = rewriteToRemoteMediaOrigin(playable, mediaOrigin);
           // ChatVideoView 会按 sessionId 再改写一次;不改写的来源(file://host)不能让它补上。
           return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={mediaOrigin ? props.currentSessionId : undefined} />;

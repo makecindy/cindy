@@ -147,13 +147,13 @@ export function PluginPublishDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onCloseAutoFocus={() => {
             if (!pickerContext.current.open) onClosed();
           }}
           onInteractOutside={event => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col p-4">
+          className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[85vh] w-[calc(100vw-32px)] max-w-[460px] -translate-x-1/2 -translate-y-1/2 flex-col p-4">
           <Dialog.Title className="text-18 font-medium text-[var(--text-primary)]">
             {t(`${copy}.publishPlugin`)}
           </Dialog.Title>

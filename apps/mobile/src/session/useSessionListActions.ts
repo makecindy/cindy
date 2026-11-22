@@ -1,4 +1,5 @@
 import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { patchSessionWithDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -131,15 +132,19 @@ export function useSessionListActions(options?: {
       if (patch.status !== undefined || patch.pinnedAt !== undefined || patch.snoozedUntil !== undefined) await updateList(applyOptimistic);
       else applyOptimistic();
       if (!applied) return;
+      const deleteTarget = patch.status === 'deleted'
+        ? session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined
+        : undefined;
       const updated = await withNewSessionCreationRemoval(session.id, rpcDeviceId, patch.status,
         () => sessionMetaWriteQueue.enqueue(session.id, fields, () => retryPatchWhileLatest(
         write.isLatest,
-        (assertStillLatest) => invoke<RemoteSession>(
+        (assertStillLatest) => patchSessionWithDeleteTarget(patch, deleteTarget, body => invoke<RemoteSession>(
           rpcDeviceId,
           'local-db:sessions:patch-meta',
-          [session.id, patch],
+          [session.id, body],
           { preSend: assertStillLatest },
-        ),
+        )),
+        deleteTarget ? 1 : undefined,
       )), write.isLatest);
       if (patch.snoozedUntil !== undefined && write.isLatest() && updated?.snoozedUntil !== patch.snoozedUntil) {
         throw new Error('UNSUPPORTED_CAPABILITY');

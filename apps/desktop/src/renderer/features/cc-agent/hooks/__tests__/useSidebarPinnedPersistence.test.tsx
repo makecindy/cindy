@@ -8,8 +8,9 @@ import {
   setDataOwnerGeneration,
   __testing as dataOwnerTesting,
 } from '@/contexts/dataOwnerGeneration';
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { __testing as sidebarOwnerTesting } from '@/lib/sidebarOwnerStorage';
-import { MANUAL_PINNED_ORDER_KEY, useSidebarFilter } from '../useSidebarFilter';
+import { MANUAL_PINNED_ORDER_KEY, useSidebarFilter, useSidebarFilterGc } from '../useSidebarFilter';
 import { PINNED_SORT_BY_KEY } from '../helpers/sidebarFilterCore';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
 import {
@@ -121,6 +122,77 @@ beforeEach(() => {
 function renderFilter() {
   return renderHook(() => useSidebarFilter(new Set(), SNAPSHOT));
 }
+
+// Regression: mode switches used to reuse one saved set of project, creator, harness and time filters.
+it('restores separate sidebar filters across mode switches, resets and remounts', () => {
+  const mode = renderHook(useTaskListMode);
+  act(() => mode.result.current.setMode('tasks'));
+  const view = renderFilter();
+  act(() => {
+    view.result.current.toggleProject('/ordinary');
+    view.result.current.toggleCreator('teammate-a');
+    view.result.current.setVendor('pi');
+    view.result.current.setLastActivity('30d');
+    view.result.current.setHideAutomations(true);
+  });
+  const ordinary = { projects: ['local:/ordinary'], creators: ['teammate-a'], vendor: 'pi', lastActivity: '30d', hideAutomations: true };
+  const unrestricted = { projects: 'all', creators: 'all', vendor: 'all', lastActivity: 'all', hideAutomations: false };
+  act(() => mode.result.current.setMode('inbox'));
+  expect(view.result.current).toMatchObject(unrestricted);
+  act(() => {
+    view.result.current.toggleProject('/triage');
+    view.result.current.setCreatorsNone();
+    view.result.current.setVendor('codex');
+    view.result.current.setLastActivity('7d');
+    view.result.current.setHideAutomations(true);
+  });
+  const inbox = { projects: ['local:/triage'], creators: 'none', vendor: 'codex', lastActivity: '7d', hideAutomations: true };
+  view.unmount();
+  const reopened = renderFilter();
+  expect(reopened.result.current).toMatchObject(inbox);
+  act(() => mode.result.current.setMode('tasks'));
+  expect(reopened.result.current).toMatchObject(ordinary);
+  act(() => reopened.result.current.resetContentFilters());
+  act(() => mode.result.current.setMode('inbox'));
+  expect(reopened.result.current).toMatchObject(inbox);
+  act(() => reopened.result.current.resetContentFilters());
+  expect(reopened.result.current).toMatchObject(unrestricted);
+  act(() => mode.result.current.setMode('tasks'));
+  expect(reopened.result.current).toMatchObject(unrestricted);
+});
+
+// Production entry: sidebar GC + useSidebarFilter; stale project filters fall back
+// to all after switching modes (PR #11559 / Greptile P2). Existing mode tests only
+// restore/reset filters and never run the orchestration guard. Minimal unit input:
+// two saved filters and different complete catalogues; also wait through empty load.
+// Standalone file: 2.48s (22 tests, default TMPDIR unset; LANG=zh_CN.UTF-8).
+it.each(['tasks', 'inbox'] as const)('cleans each mode independently when starting in %s', (initialMode) => {
+  const mode = renderHook(useTaskListMode);
+  const otherMode = initialMode === 'tasks' ? 'inbox' : 'tasks';
+  act(() => mode.result.current.setMode(otherMode));
+  const seed = renderFilter();
+  act(() => seed.result.current.toggleProject('/removed'));
+  act(() => mode.result.current.setMode(initialMode));
+  act(() => seed.result.current.toggleProject('/kept'));
+  seed.unmount();
+
+  const catalogues = {
+    [initialMode]: ['local:/kept'],
+    [otherMode]: ['local:/other-only'],
+  };
+  const view = renderHook(({ ready }) => {
+    const filter = useSidebarFilter(new Set(), SNAPSHOT);
+    const { mode: currentMode } = useTaskListMode();
+    useSidebarFilterGc(currentMode, ready ? catalogues[currentMode] : [], filter.gc);
+    return filter;
+  }, { initialProps: { ready: false } });
+  expect(view.result.current.projects).toEqual(['local:/kept']);
+  view.rerender({ ready: true });
+  act(() => mode.result.current.setMode(otherMode));
+  expect(view.result.current.projects).toBe('all');
+  act(() => mode.result.current.setMode(initialMode));
+  expect(view.result.current.projects).toEqual(['local:/kept']);
+});
 
 describe('pinned sidebar persistence', () => {
   // 用户回归：最近活动下拖拽把显示顺序写成手动顺序。现有用例只测切换偏好，

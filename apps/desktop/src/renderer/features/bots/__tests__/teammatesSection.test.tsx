@@ -186,12 +186,38 @@ beforeEach(() => {
   });
 });
 
+// Unit regression: dragging the name inside a companion button must carry
+// that chat to the split/window receiver without producing a bogus task link.
+it('starts a task-style window drag from the companion name', async () => {
+  mocks.profiles = [bot({ id: 'mate', name: 'Mate' })];
+  const { getByText } = await renderSidebar();
+  const data = new Map<string, string>();
+  const name = getByText('Mate');
+  const row = name.closest('button')!;
+  expect(row.draggable).toBe(true);
+  fireEvent.dragStart(name, { dataTransfer: { setData: (key: string, value: string) => data.set(key, value) } });
+  expect([...data.values()]).toEqual(['/bots/mate']);
+  fireEvent.dragEnd(row);
+});
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
 });
 
 describe('one Cindy entry across devices', () => {
+  // #8585, unit: two legacy Cindy choices must not absorb the newly reachable
+  // same-home cloud recovery row, which is intentionally outside their picker.
+  it('keeps cloud recovery separate from the legacy Cindy picker', async () => {
+    mocks.profiles = [{ ...bot({ id: 'legacy-local', name: 'Legacy local' }), templateId: 'cindy' },
+      bot({ id: 'cindy-default', name: 'Recovered Cindy' })];
+    mocks.remoteBots = [{ ...remote('legacy-desk', 'Legacy desk'), id: 'legacy-remote', templateId: 'cindy' }];
+    mocks.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['cindy-default'], actors: [
+      { id: 'actor-cindy', externalId: 'cindy-default', name: 'Recovered Cindy', avatar: null, homeDeviceId: 'desk' }] };
+    await renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: /Recovered Cindy/ }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/desk/cindy-default');
+  });
   const remote = (deviceId: string, deviceName: string, extra = {}) => ({
     id: 'cindy-default', deviceId, deviceName, name: 'Cindy', avatar: '🤖', avatarColor: 'violet',
     description: '', preview: `${deviceName} preview`, activityAt: 1, sessionId: `${deviceId}-chat`, online: true, ...extra,

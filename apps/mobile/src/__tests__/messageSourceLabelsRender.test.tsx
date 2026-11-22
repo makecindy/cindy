@@ -3,7 +3,7 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useImperativeHandle, useMemo, useState } from "react";
+import { act, createElement, useContext, useImperativeHandle, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 // This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
@@ -51,11 +51,16 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
 // Card previews have their own regression suite; this suite preserves the message/source-label assertions.
 vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
+// Model selection has its own card regression; keep native catalogs out of this source-label test.
+vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null }));
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
+import { MessageListVisibilityContext, type MessageListVisibility } from '@/session/messageListVisibility';
 const viewportHarness = vi.hoisted(() => ({
   list: null as any,
+  visibility: null as MessageListVisibility | null,
+  bottom: 800,
   finishReveal: null as any,
   renders: 0,
   captureNativeOpacity: false,
@@ -155,9 +160,11 @@ vi.mock("react-native", async () => {
 });
 vi.mock("@legendapp/list/react-native", () => ({
   LegendList: ({ data, renderItem, ref, ...props }: any) => {
+    viewportHarness.visibility = useContext(MessageListVisibilityContext);
     viewportHarness.renders += 1;
     viewportHarness.list = { ...props, data };
     useImperativeHandle(ref, () => ({
+      getNativeScrollRef: () => ({ getBoundingClientRect: () => ({ top: 0, bottom: viewportHarness.bottom }) }),
       scrollToEnd() {},
       scrollToOffset() {},
       getState() {
@@ -344,6 +351,7 @@ vi.mock("@/session/messageActions", async (original) => ({
 
 import { i18n } from "@/i18n";
 import { MessageRenderer } from "@/session/MessageRenderer";
+import { writeClipboardText } from "@/session/messageActions";
 import { buildMobileMessageRenderItems } from "@/session/messageRenderModel";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
 import type { RemoteMessage } from "@/session/types";
@@ -388,6 +396,25 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+// Unit, PR #11917: a card inside a long, still-visible row must see fresh geometry
+// from the mounted LegendList, even when the set of visible row ids stays constant.
+it('publishes viewport geometry on native scroll, list layout and content resize', () => {
+  const h = mount([msg('long-row', 'Retained row', {})]);
+  const measured: number[] = [];
+  const list = viewportHarness.visibility!;
+  const unsubscribe = list.onViewportChange(() => measured.push(list.viewport!()!.bottom));
+  try {
+    const callbacks = viewportHarness.list;
+    viewportHarness.bottom = 600;
+    act(() => callbacks.onScroll({ nativeEvent: { contentOffset: { y: 120 }, contentSize: { height: 1500 }, layoutMeasurement: { height: 600 } } }));
+    viewportHarness.bottom = 400;
+    act(() => callbacks.onLayout({ nativeEvent: { layout: { height: 400 } } }));
+    viewportHarness.bottom = 700;
+    act(() => callbacks.onContentSizeChange(400, 1800));
+    expect(measured).toEqual([600, 400, 700]);
+  } finally { unsubscribe(); h.unmount(); viewportHarness.bottom = 800; }
 });
 
 it('updates retained companion cells when topic replies change without new messages', () => {
@@ -979,6 +1006,28 @@ describe("table-heavy assistant replies", () => {
   const table = (rows: number) => ["| a | b | c |", "| --- | --- | --- |",
     ...Array.from({ length: rows }, (_, i) => `| ${i === 0 ? '甲春风乙' : `r${i}`} | x | y |`)].join("\n");
   const rich = "```cindy-ui\n" + JSON.stringify({ version: 1, seq: 1, op: "create", id: "h", kind: "heading", props: { text: "Mid" } }) + "\n```";
+
+  // Batfree feedback: native ranges stop at each table cell. The real message
+  // must expose an independent whole-table copy action; existing tests only
+  // exercised a cell's quote menu. Unit: prose + a 2x3 table + trailing prose,
+  // with formatted/empty cells, must copy all cells as TSV without surrounding prose.
+  it("copies every table cell while retaining local selection", async () => {
+    vi.mocked(writeClipboardText).mockResolvedValue(undefined);
+    const markdown = ["Before the table", "", "| Name | Value | Note |", "| --- | --- | --- |",
+      "| **甲春风乙** | `42` | |", "| [Beta](https://example.com) | 7 | Final |", "", "After the table"].join("\n");
+    const h = mount([{ ...msg("copy-table", markdown, { turnCompleted: true }), role: "assistant" }]);
+    try {
+      const copy = h.host.querySelector<HTMLElement>('[data-testid="message.markdownTableCopyButton"]');
+      expect(copy).not.toBeNull();
+      await act(async () => copy!.click());
+      expect(writeClipboardText).toHaveBeenLastCalledWith("Name\tValue\tNote\n甲春风乙\t42\t\nBeta\t7\tFinal");
+      expect(copy!.getAttribute('aria-label')).toBe(i18n.t('message.renderer.copyStateCopied'));
+      const cell = [...h.host.querySelectorAll<HTMLElement>(
+        '[data-testid="message.markdownTable"] [data-selectable="true"]',
+      )].find(node => node.textContent === '甲春风乙');
+      expect(cell).toBeDefined();
+    } finally { h.unmount(); }
+  });
 
   // PR #7723's >120-cell fallback removed partial selection and native menu actions.
   // Existing selectionQuote tests cover menu dispatch in isolation, not whether a large

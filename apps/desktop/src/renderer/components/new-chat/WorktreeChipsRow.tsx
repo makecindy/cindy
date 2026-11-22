@@ -905,7 +905,7 @@ export function BranchWorktreeChip({
             type="button"
             onClick={onRetryBranches}
             className={cn(
-              'w-full cursor-pointer rounded-[8px] px-3 py-1.5 text-left text-13 text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              'w-full cursor-pointer rounded-lg px-3 py-1.5 text-left text-13 text-muted-foreground hover:bg-accent hover:text-accent-foreground',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             )}
           >
@@ -995,7 +995,7 @@ export function BranchWorktreeChip({
                           onMouseMove={() => setActiveBranchIndex(index)}
                           onClick={() => pickBranch(b)}
                           className={cn(
-                            'cursor-pointer break-words rounded-[8px] px-3 py-1.5 text-13 text-foreground',
+                            'cursor-pointer break-words rounded-lg px-3 py-1.5 text-13 text-foreground',
                             optionDisabledReason?.(b) && 'cursor-default opacity-60',
                             index === clampedActiveIndex
                               ? 'bg-accent text-accent-foreground'

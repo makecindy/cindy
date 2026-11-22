@@ -82,7 +82,7 @@ import {
 import { createProjectWorkspaceSync } from './projectWorkspaceSync.js';
 import { loadImProjectCatalog, registerImProjectDirectory } from './projectCatalog.js';
 import { onProjectCatalogChanged } from '../projectCatalogEvents.js';
-import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
+import { patchSessionMetaInDb, restoreArchivedSessionForSend } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
   dialogueWorkspaceRoots,
@@ -743,6 +743,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       stopSessionExplicitly: (sessionId) => stopSessionTurnExplicitly(sessionId),
       // session.archive 的归档出口: 与 device-link 远程归档同一条
       // patchSessionMetaInDb 路径(落库 + sessions:patched 广播, sidebar 即时移出)
+      restoreArchivedSession: restoreArchivedSessionForSend,
       archiveSessionRow: async (sessionId) => {
         await patchSessionMetaInDb(sessionId, { status: 'archived' });
       },

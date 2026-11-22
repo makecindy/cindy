@@ -20,6 +20,7 @@ import type { PermissionMode } from '../../../types/common.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
+import type { ContextUsageData } from '../../../types/context-usage.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -197,6 +198,56 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent plan mode', () => {
+  // #11491: startSession -> getContextUsage must not label inline MCP tools as
+  // deferred. Existing spawn tests only check ENABLE_TOOL_SEARCH, not the result
+  // seen by Desktop/Mobile. Minimal failure: isLoaded=false with a used MCP row.
+  // Unit tier: SDK boundary fake; no process or network. Keep all token math intact.
+  it.each([
+    { mode: 'false', deferred: false, shape: 'legacy' },
+    { mode: 'true', deferred: true, shape: 'legacy' },
+    { mode: 'true', deferred: false, shape: 'legacy' }, // Model/endpoint can disable search.
+    { mode: 'auto', deferred: false, shape: 'legacy' }, // Below the threshold, schemas are inline.
+    { mode: 'auto:1', deferred: true, shape: 'legacy' },
+    { mode: undefined, deferred: false, shape: 'unknown' },
+    { mode: 'auto', deferred: true, shape: 'modern' },
+    { mode: 'false', deferred: false, shape: 'modern' },
+  ])('uses runtime MCP classification for context labels ($mode, $shape, deferred=$deferred)', async ({ mode, deferred, shape }) => {
+    const { handle, fakeQuery } = await startPlanSession(false, {
+      runtimeConfig: { behaviorFlags: mode === undefined ? {} : { ENABLE_TOOL_SEARCH: mode } },
+    });
+    const mcpCategory = shape === 'modern'
+      ? { name: 'Localized MCP label', id: deferred ? 'mcp_tools_deferred' : 'mcp_tools',
+        kind: deferred ? 'deferred' : 'used', tokens: 600, color: 'inactive' }
+      : { name: deferred ? 'MCP tools (deferred)' : 'MCP tools', tokens: 600, color: 'inactive', isDeferred: deferred };
+    const usage: ContextUsageData = {
+      categories: [
+        ...(shape === 'unknown' ? [] : [mcpCategory]),
+        { name: 'System tools (deferred)', tokens: 100, color: 'inactive', isDeferred: true },
+      ],
+      totalTokens: 2000, maxTokens: 200000, rawMaxTokens: 200000, percentage: 1,
+      gridRows: [], model: 'claude-opus-4-6', memoryFiles: [], agents: [],
+      mcpTools: [
+        { name: 'search', serverName: 'probe', tokens: 600, isLoaded: false },
+        { name: 'read', serverName: 'probe', tokens: 10, isLoaded: true },
+        { name: 'unknown', serverName: 'probe', tokens: 0 },
+      ],
+      isAutoCompactEnabled: true,
+      apiUsage: { input_tokens: 200, output_tokens: 10, cache_creation_input_tokens: 1800, cache_read_input_tokens: 0 },
+    };
+    Object.assign(fakeQuery, { getContextUsage: async () => usage });
+    try {
+      const result = await handle.getContextUsage!();
+      expect(result.mcpTools[0]?.isLoaded).toBe(deferred ? false : undefined);
+      expect(result).toEqual({ ...usage, mcpTools: [
+        { ...usage.mcpTools[0], isLoaded: deferred ? false : undefined },
+        usage.mcpTools[1], usage.mcpTools[2],
+      ] });
+      expect(usage.mcpTools[0]?.isLoaded).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('encodes the same image bytes that passed validation', async () => {
     const workingDir = await makeTempDir();
     const imagePath = path.join(workingDir, 'race.png');

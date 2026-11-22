@@ -107,12 +107,13 @@ it.each(['installed', 'update-without-remote', 'other-source', 'lookup-unavailab
     for (let i = 0; i < 4; i++) await settle();
     expect(install).not.toHaveBeenCalled();
     expect(setEnabled).not.toHaveBeenCalled();
-    expect(navigate).not.toHaveBeenCalled();
     expect(openTab).not.toHaveBeenCalled();
     if (state === 'lookup-unavailable') {
-      expect(toasts.error).toHaveBeenLastCalledWith(i18n.t('settings.ghosts.market.errors.generic'));
+      expect(navigate).toHaveBeenCalledExactlyOnceWith('/plugins?ghost=_root__cindy-simulator');
+      expect(toasts.error).not.toHaveBeenCalled();
       expect(toasts.info).not.toHaveBeenCalled();
     } else {
+      expect(navigate).not.toHaveBeenCalled();
       expect(toasts.info).toHaveBeenLastCalledWith(i18n.t('remoteDesktop.liveScreenPlugin.unsupported.unavailable'));
     }
     expect(notice()).not.toBeNull();

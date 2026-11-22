@@ -21,6 +21,7 @@ vi.mock('../../usage/referenceModelPricing', () => ({
   readModelPriceOverridesSnapshot: vi.fn(),
 }));
 
+import { tx } from '../worker/opHandlers/tx.js';
 import * as schema from '../schema';
 import type { DbClient } from '../client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
@@ -70,7 +71,7 @@ function createHarness() {
   const sqlite = new Database(':memory:');
   sqlite.exec(DDL);
   const db = drizzle(sqlite, { schema });
-  const dbClient = { drizzle: db } as unknown as DbClient;
+  const dbClient = { drizzle: db, tx: (name: string, args: unknown) => tx(sqlite, { name, args }) } as unknown as DbClient;
   setCurrentDbClient(dbClient, 'test-user');
   return {
     sqlite,
