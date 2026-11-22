@@ -7,7 +7,7 @@ export interface GroupContinuityGrant {
   group: string;
   controller: string;
   providerId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   model: string;
   fastPolicyRequired: boolean;
   remainingMs: number;

@@ -12,9 +12,10 @@ import { readNativeHistoryBackupEndpoint } from './nativeHistoryBackup';
 export function createNativeHistoryRelocator(userDataDir: string, invoke: DeviceAgentServiceDeps['remoteInvoke']) {
   const local = createNativeHistoryTransfer(path.join(userDataDir, 'native-history-transfers'), nativeHistoryStorage(userDataDir));
   return async (input: {
-    sessionId: string; kind: 'claude-code' | 'codex' | 'pi'; nativeId: string; workingDir: string;
+    sessionId: string; kind: 'claude-code' | 'codex' | 'pi' | 'antigravity'; nativeId: string; workingDir: string;
     fromDevice: string | null; toDevice: string | null; assertCurrent(): void;
   }): Promise<string | null> => {
+    if (input.kind === 'antigravity') return null;
     // Sharing relays have different ownership and storage. They retain the existing handoff fallback.
     if ([input.fromDevice, input.toDevice].some(device =>
       isProviderShareAgentDeviceId(device) || isProviderSharePeer(device))) return null;

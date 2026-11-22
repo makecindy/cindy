@@ -56,7 +56,7 @@ import type { LiziMcpSessionContext, SchedulerMcpDeps } from './types.js';
  * resolveLiziMcpSessionContext 补回当前 thread 的 ctx。
  */
 export interface SchedulerMcpSessionCtx {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   workingDir: string;
   getSessionContext?: () => LiziMcpSessionContext | undefined;
   sessionId?: string;

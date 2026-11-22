@@ -32,7 +32,7 @@ export interface RemoteSessionHandoffRequest {
 export type RemoteSessionHandoffResult =
   | ({
       ok: true;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
       wakeKind: 'resumed' | 'already-active' | 'queued' | 'created';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -71,7 +71,7 @@ const TARGET_REJECTIONS = new Set<string>([
   'BUDGET_MODEL_REQUIRES_API_MODE',
   'PROVIDER_ROUTE_UNAVAILABLE',
 ]);
-const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
+const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi', 'antigravity']);
 const WAKE_KINDS = new Set(['resumed', 'already-active', 'queued']);
 
 function encodedIpcCode(message: string): string | null {
@@ -162,7 +162,27 @@ export function createRemoteSessionHandoff(deps: {
     try {
       assertCurrent = deps.captureAccess();
       sender = await request.sender();
-      if (request.create) creation = remoteSessionCreationSchema.parse(await request.create());
+      assertCurrent();
+    } catch {
+      return notSent();
+    }
+    if (request.create) {
+      try {
+        creation = remoteSessionCreationSchema.parse(await request.create());
+      } catch (error) {
+        try { assertCurrent(); } catch { return notSent(); }
+        const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined;
+        const message = error instanceof Error ? error.message : 'Invalid remote task creation request';
+        if (code === 'PROVIDER_ROUTE_UNAVAILABLE' || code === 'UNSUPPORTED_CAPABILITY' || code === 'INVALID_ARGS') {
+          return { ok: false, errorCode: code, message };
+        }
+        if (message.includes('ANTIGRAVITY_LOCAL_ONLY')) {
+          return { ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message };
+        }
+        return { ok: false, errorCode: 'INVALID_ARGS', message };
+      }
+    }
+    try {
       if ('sessionId' in sender) captured = await deps.captureRequest?.(sender.sessionId, request.message, { sessionId: target.sessionId });
       assertCurrent();
     } catch {
@@ -294,7 +314,7 @@ export function createRemoteSessionHandoff(deps: {
         fastMode: remoteSessionCreationSchema.shape.fast.safeParse(result.fastMode).data ?? false,
       } : {}),
       ok: true,
-      agentKind: result.agentKind as 'claude-code' | 'codex' | 'pi',
+      agentKind: result.agentKind as 'claude-code' | 'codex' | 'pi' | 'antigravity',
       wakeKind: result.wakeKind as 'resumed' | 'already-active' | 'queued' | 'created',
       targetTitle: typeof result.targetTitle === 'string' ? result.targetTitle : null,
       targetLastUserSendAt:

@@ -8,6 +8,7 @@ import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
 import { matchScopedWindowForModel } from '@cindy/maker-shared/subscription-usage';
+import { hasUsableCodexCredits } from '@cindy/maker-shared/subscription-selection';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   bindNativeProviderAuth,
@@ -1896,7 +1897,7 @@ export async function readSubscriptionSessionAccount(
         ? 'unavailable'
         : !info.auth.authenticated
           ? 'signed-out'
-          : usage.limited
+          : usage.limited && !(provider === 'openai' && hasUsableCodexCredits(info.usage?.codexCredits))
             ? 'limited'
             : 'ready',
       ...(info.auth.authenticated ? accountUsage(info.usage) : {}),
@@ -1951,7 +1952,9 @@ export async function readSubscriptionPoolUsage(
         ...a,
         key: a.id,
         accountKey: infos[i].auth.authenticated && !infos[i].unavailable ? infos[i].accountKey : undefined,
-        usable: infos[i].auth.authenticated && !usage.limited,
+        usable: infos[i].auth.authenticated && (
+          !usage.limited || (provider === 'openai' && hasUsableCodexCredits(infos[i].usage?.codexCredits))
+        ),
         running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
         // Quota reads reserve nothing: busy accounts still have quota. Only
         // acquireSubscriptionAccount applies the hard concurrency admission.
@@ -2053,6 +2056,12 @@ export async function readSubscriptionPoolAccountUsages(
     usage: group[0].usage,
   }));
 }
+function hasSpendControlReached(credits: Usage['codexCredits'] | undefined): boolean {
+  return Boolean(
+    credits && typeof credits === 'object' && 'spendControlReached' in credits && credits.spendControlReached === true,
+  );
+}
+
 function accountUsage(usage: Usage | undefined): { usage?: SubscriptionAccountUsage } {
   if (usage?.claudeUsage) return { usage: { claude: usage.claudeUsage } };
   const buckets = usage?.codexUsage?.appServerBuckets;
@@ -2176,7 +2185,7 @@ async function readSubscriptionPoolView(
               ? ('unavailable' as const)
               : !info.auth.authenticated
                 ? ('signed-out' as const)
-                : usage.limited
+                : usage.limited && !(provider === 'openai' && hasUsableCodexCredits(info.usage?.codexCredits))
                   ? ('limited' as const)
                   : ('ready' as const),
         running: state.running.get(keyOf(provider, account.id))?.size ?? 0,

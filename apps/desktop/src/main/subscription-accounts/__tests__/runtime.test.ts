@@ -5993,6 +5993,79 @@ describe('disabled task account recovery before send', () => {
     expect(send).not.toHaveBeenCalled();
     await handle.close();
   });
+
+  /* 测试价值
+   * - 生产入口与可观察结果：readSubscriptionPool / readSubscriptionSessionAccount / readSubscriptionPoolUsage / acquireSubscriptionAccount
+   *   在 OpenAI 套餐主窗口 usedPercent=100% 且存在或耗尽 Credits 时的状态、聚合选择与新任务准入。
+   * - Bug／规则依据：OpenAI 订阅周额度用满 100% 但仍有大量 Credits（如 60314.38）时，账号状态与池选择应保持可用；
+   *   spendControlReached=true 时应保持拦截。
+   * - 现有覆盖缺口：已有用例未检查 readSubscriptionPoolUsage / readSubscriptionPool / readSubscriptionSessionAccount 在
+   *   主窗口 100% + Credits 场景下的 status='ready' 与 pool usage 优选，也未覆盖 spendControlReached=true。
+   * - 最小失败输入：OpenAI 账号 secondary.usedPercent=100 且 codexCredits={ hasCredits: true, unlimited: false, balance: '60314.38' }。
+   * - tier：unit（复用本文件内存 fake，无外部进程）。
+   */
+  it.each([
+    { credits: { hasCredits: true, unlimited: false, balance: '60314.38' }, expectedStatus: 'ready' as const, acquires: true },
+    { credits: { hasCredits: true, unlimited: true, balance: null }, expectedStatus: 'ready' as const, acquires: true },
+    { credits: { hasCredits: true, unlimited: false, balance: '0' }, expectedStatus: 'limited' as const, acquires: true },
+    { credits: { hasCredits: false, unlimited: false, balance: '60314.38' }, expectedStatus: 'limited' as const, acquires: true },
+    { credits: null, expectedStatus: 'limited' as const, acquires: true },
+    { credits: { hasCredits: true, unlimited: false, balance: '60314.38', spendControlReached: true }, expectedStatus: 'limited' as const, acquires: false },
+  ])('handles OpenAI 100% window with credits=%j across pool view, session view and acquisition', async ({ credits, expectedStatus, acquires }) => {
+    const now = Date.now();
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.usage.mockResolvedValue({
+      codexUsage: {
+        appServerBuckets: {
+          codex: {
+            limitId: 'codex',
+            updatedAt: now,
+            primary: { usedPercent: 100, windowMinutes: 300, resetsAt: now / 1000 + 3600 },
+            secondary: { usedPercent: 100, windowMinutes: 10080, resetsAt: now / 1000 + 86400 },
+          },
+        },
+        webSnapshot: null,
+      },
+      codexCredits: credits as NonNullable<Awaited<ReturnType<typeof h.usage>>>['codexCredits'],
+    });
+    const pool = await readSubscriptionPool('openai');
+    expect(pool.accounts[0].status).toBe(expectedStatus);
+
+    h.bindings.set('task:credits-task', { providerId: 'openai', accountId: 'default' });
+    const sessionView = await readSubscriptionSessionAccount('openai', { sessionId: 'credits-task' });
+    expect(sessionView).toMatchObject({ state: 'bound', account: { status: expectedStatus } });
+
+    if (acquires) {
+      const lease = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+      expect(lease?.accountId).toBe('default');
+      lease?.release();
+    } else {
+      await expect(acquireSubscriptionAccount('openai', 'gpt-6', [])).rejects.toThrow('No subscription account is available');
+    }
+  });
+
+  it('prefers the OpenAI account with usable credits in readSubscriptionPoolUsage when all windows are exhausted', async () => {
+    const now = Date.now();
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({
+      codexUsage: {
+        appServerBuckets: {
+          codex: {
+            limitId: 'codex',
+            updatedAt: now,
+            primary: { usedPercent: dir.endsWith('default') ? 100 : 25, windowMinutes: 300, resetsAt: now / 1000 + 3600 },
+            secondary: { usedPercent: 100, windowMinutes: 10080, resetsAt: now / 1000 + 86400 },
+          },
+        },
+        webSnapshot: null,
+      },
+      codexCredits: dir.endsWith('default')
+        ? { hasCredits: false, unlimited: false, balance: '0' }
+        : { hasCredits: true, unlimited: false, balance: '60314.38' },
+    }));
+    const usage = await readSubscriptionPoolUsage('openai');
+    expect(usage?.codexUsage?.appServerBuckets?.codex?.primary?.usedPercent).toBe(25);
+  });
 });
 
 // Integration (in-memory native/credential/storage boundaries, NOT real-device E2E).

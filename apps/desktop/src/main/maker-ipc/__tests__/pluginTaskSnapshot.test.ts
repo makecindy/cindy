@@ -430,7 +430,7 @@ it.each(['provider', 'receipt', 'directory', 'creator'])('keeps default-route co
         readProviderRouting: async () => {
           if (++lookups === 1 && phase === 'provider') change();
           const providers = ['one','two'].map(id => ({ id, name: id, models: ['model','other'] }));
-          return { availability: { 'claude-code': providers, codex: providers, pi: providers }, resolveDefaultProviderIdForModel: () => 'one' };
+          return { availability: { antigravity: [], 'claude-code': providers, codex: providers, pi: providers }, resolveDefaultProviderIdForModel: () => 'one' };
         },
       }),
       routeUnavailable: () => { throw Error('unavailable'); },

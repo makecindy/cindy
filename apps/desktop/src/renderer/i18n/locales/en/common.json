@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google usage",
+    "quotaUnavailable": "Account quota is currently unavailable",
+    "quotaGuide": "This ACP version does not expose account quota or reset times. View them with /usage in the official Antigravity CLI.",
+    "openQuotaGuide": "How to view official quota",
+    "moneyUnavailable": "Credits balance and cash charges are not reported by this interface.",
+    "context": "Session context (latest report)",
+    "lastTurnTokens": "Last turn tokens",
+    "unavailable": "Unavailable",
+    "modelControlsThinking": "Reasoning effort is managed by this model.",
+    "noFastMode": "This source does not expose a separate Fast / Standard switch."
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
@@ -4333,6 +4345,27 @@
         "groupMembersTitle": "Computers in the Group",
         "groupMembersFailed": "Couldn’t get the status of the computers in the group right now.",
         "hiddenBanner": "Hidden from the model picker on this computer. Favorites and sessions that use it are unaffected."
+      },
+      "antigravity": {
+        "configure": "Connect manually",
+        "install": "Install and connect",
+        "update": "Update Antigravity CLI",
+        "installing": "Installing…",
+        "setupHint": "Cindy downloads and verifies the official Antigravity CLI. Google AI requests use subscription quota only.",
+        "activeAccount": "Active Google account",
+        "existing": "Local default account",
+        "removeAccount": "Remove account",
+        "removeDescription": "Cindy will delete this account’s local sign-in and settings. Your Cindy conversations will stay available.",
+        "removeDefaultDescription": "Cindy will disconnect this account. Your Google sign-in on this Mac and your Cindy conversations will stay available.",
+        "accountBusy": "A Google task or account change is still in progress. Try again when it finishes.",
+        "account": "Google account {{number}}",
+        "refreshQuota": "Refresh quota",
+        "legacyQuota": "Add a Google account to view its quota in Cindy.",
+        "noQuota": "Google quota is currently unavailable.",
+        "failed": "Could not complete the Google account operation.",
+        "installConfirmTitle": "Install Antigravity CLI?",
+        "installConfirmDescription": "Antigravity CLI is not installed on this computer yet. Download and install the latest version now, then continue to Google sign-in?",
+        "installConfirmButton": "Install & Sign in"
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
@@ -11091,6 +11124,18 @@
     "nameLabel": "What Should We Call Them?",
     "close": "Close",
     "list": {
+      "folders": {
+        "create": "New department",
+        "rename": "Rename department",
+        "dissolve": "Dissolve department",
+        "name": "Department name",
+        "move": "Move to department",
+        "unfiled": "Remove from department",
+        "up": "Move up",
+        "down": "Move down",
+        "actions": "Actions for {{name}}",
+        "saveFailed": "Couldn’t save departments."
+      },
       "createMenu": "Create",
       "createTeammate": "New buddy",
       "joinWithLink": "Enter Invite Link…",
@@ -14260,6 +14305,24 @@
       "listAria": "Permission modes",
       "autoFallback": "Auto-review is temporarily unavailable. Switched to Default permissions and will ask when needed.",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "Default permissions",
+            "description": "You approve edits and commands when needed."
+          },
+          "acceptEdits": {
+            "label": "Auto accept edits",
+            "description": "File edits are allowed directly; you approve other actions when needed."
+          },
+          "auto": {
+            "label": "Auto-review",
+            "description": "Automatically edit the workspace and run safe commands; high-risk actions still ask for approval."
+          },
+          "bypassPermissions": {
+            "label": "Full access",
+            "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Default permissions",

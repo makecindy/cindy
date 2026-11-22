@@ -5,7 +5,7 @@
  * 故意保持兼容以便 desktop adapter 层零代码翻译。
  */
 
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'antigravity';
 
 /**
  * Engines a local task can run on: the three built-in harnesses plus the
@@ -15,7 +15,7 @@ export type AgentKind = 'claude-code' | 'codex' | 'pi';
  */
 export type EngineKind = AgentKind | 'acp';
 
-const BUILTIN_AGENT_KINDS: ReadonlySet<string> = new Set<AgentKind>(['claude-code', 'codex', 'pi']);
+const BUILTIN_AGENT_KINDS: ReadonlySet<string> = new Set<AgentKind>(['claude-code', 'codex', 'pi', 'antigravity']);
 
 export function isBuiltinAgentKind(kind: unknown): kind is AgentKind {
   return typeof kind === 'string' && BUILTIN_AGENT_KINDS.has(kind);
@@ -83,6 +83,8 @@ export interface AuthState {
   expiresAt?: number;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  /** Safe subscription eligibility returned by the native provider; never credentials. */
+  subscriptionTier?: { id: string; name: string };
   oauthWritesBlocked?: boolean;
   /**
    * Codex OAuth 凭证当前的物理存储范围。

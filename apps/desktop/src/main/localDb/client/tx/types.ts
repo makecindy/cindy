@@ -1545,7 +1545,7 @@ export type SessionImportTransactionArgs =
         status: 'active' | 'archived';
         tokensUsed: number;
         userSendAt: number;
-        agentKind: 'cc' | 'codex' | 'pi';
+        agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
         createdAt: number;
         updatedAt: number;
       };

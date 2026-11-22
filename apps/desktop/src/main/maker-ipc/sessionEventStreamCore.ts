@@ -99,7 +99,7 @@ export function persistSessionStreamEventCore(
     // A plugin engine's reply between turns has no done to commit it; its final
     // segment (closed by maker-core once the agent pauses) is the whole message.
     if (
-      session.agentKind === 'acp' && event.turnScope === 'background'
+      (session.agentKind === 'acp' || session.agentKind === 'antigravity') && event.turnScope === 'background'
       && td?.isFinal === true && td.isFullText === true
     ) {
       flushAssistantBlock(session.id, eventAgentMeta);
@@ -108,7 +108,7 @@ export function persistSessionStreamEventCore(
     // tool_use 边界:先 flush 在飞 assistant(保证 assistant 行先于其 tool_use 入队
     // 落库),再落 tool_use 本身,拿回 persistId 盖进 payload。两者都只入队、不阻塞。
     const data = event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown; acpInputPatch?: unknown };
-    const acpTool = session.agentKind === 'acp';
+    const acpTool = session.agentKind === 'acp' || session.agentKind === 'antigravity';
     persistedOnly = acpTool && data.acpInputPatch === true;
     if (!persistedOnly && event.turnScope !== 'background') flushAssistantBlock(session.id, eventAgentMeta);
     persistId = onToolUseEvent(

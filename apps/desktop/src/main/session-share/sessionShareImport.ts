@@ -107,7 +107,7 @@ function sweepExpiredDrafts(): void {
 
 export interface SharePreview {
   title: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
   exportedAt: string;
@@ -291,7 +291,7 @@ export interface CommitShareImportRuntimeScope {
     sessionId: string;
     workingDir: string;
     workers?: Array<{ sourceSessionId: string; sessionId: string; workingDir: string }>;
-    agentPrefs?: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>>;
+    agentPrefs?: Partial<Record<'cc' | 'codex' | 'pi' | 'antigravity', ShareImportDraftPrefs>>;
     /** Transcript ref path → delivered file, for transcripts the exporter kept out of the zip. */
     externalTranscripts?: ReadonlyMap<string, string>;
   };
@@ -556,7 +556,7 @@ export async function commitShareImport(
     if (plan.manifest.agentKind === 'pi') registerPiTargets(plan.bundledTranscripts ?? []);
   }
   const resolveActiveSdkSessionId = (
-    agentKind: 'cc' | 'codex' | 'pi',
+    agentKind: 'cc' | 'codex' | 'pi' | 'antigravity',
     portableId: string | null,
   ): string | null =>
     agentKind === 'pi'
@@ -787,7 +787,7 @@ export async function commitShareImport(
 
     // 会话级还原描述:lead + 全部 Worker 走同一套转录/rollout 落位流程。
     const restorePlans: Array<{
-      agentKind: 'cc' | 'codex' | 'pi';
+      agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
       prefix: string;
       title: string;
       bundled: BundledTranscript[];
@@ -966,7 +966,7 @@ export async function commitShareImport(
     const rewriteRules = urlMap.size > 0 ? { urlMap } : {};
     const toDbMessages = (
       rows: BundleMessageRow[],
-      agentKind: 'cc' | 'codex' | 'pi',
+      agentKind: 'cc' | 'codex' | 'pi' | 'antigravity',
     ): SessionImportShareMessageRow[] =>
       rows.map((m) => ({
         id: randomUUID(),
@@ -1482,9 +1482,9 @@ type ImportFallbackRoute = { model: string; providerId: string } | null;
  * 不写死型号;解析不到则留空,由用户在任务里选。
  */
 async function resolveImportFallbackRoutes(
-  agentKinds: Iterable<'cc' | 'codex' | 'pi'>,
-): Promise<Map<'cc' | 'codex' | 'pi', ImportFallbackRoute>> {
-  const routes = new Map<'cc' | 'codex' | 'pi', ImportFallbackRoute>();
+  agentKinds: Iterable<'cc' | 'codex' | 'pi' | 'antigravity'>,
+): Promise<Map<'cc' | 'codex' | 'pi' | 'antigravity', ImportFallbackRoute>> {
+  const routes = new Map<'cc' | 'codex' | 'pi' | 'antigravity', ImportFallbackRoute>();
   for (const kind of new Set(agentKinds)) {
     routes.set(
       kind,
@@ -1509,7 +1509,7 @@ async function resolveImportFallbackRoutes(
  */
 function buildSessionRow(params: {
   newId: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
   title: string;
   workspaceKind: string;
   orcaRole: 'lead' | 'worker' | null;

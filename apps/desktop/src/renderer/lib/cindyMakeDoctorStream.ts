@@ -74,7 +74,7 @@ export function startMakeCodeSession(sessionId: string, runId: string): Promise<
 /** Cindy Make tasks run on built-in engines only; plugin engines ('acp') are not offered here. */
 type MakeTaskCreateOptions =
   | (Omit<NonNullable<Parameters<typeof sessionService.create>[0]>, 'agentKind'> & {
-      agentKind?: 'cc' | 'codex' | 'pi';
+      agentKind?: 'cc' | 'codex' | 'pi' | 'antigravity';
     })
   | undefined;
 

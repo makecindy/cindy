@@ -1,7 +1,7 @@
 import type { ScheduleWebhookSource } from './webhook-formats.js';
 
 export type ScheduleKind = 'cron';
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'antigravity';
 /**
  * The engine a schedule runs on: a built-in Harness, or 'acp' = a plugin-provided engine on the
  * automation host (docs/plans/acp-plugin-bridge.md). A plugin engine always comes with its

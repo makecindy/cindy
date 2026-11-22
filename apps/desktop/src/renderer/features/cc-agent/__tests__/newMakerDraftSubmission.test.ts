@@ -230,7 +230,7 @@ async function submit(options: {
       effortMetaByModel: Object.fromEntries((p.models[agent] ?? []).map(m => [m.id, m])),
     }));
   const routing = {
-    availability: {
+    availability: { antigravity: [],
       pi: availableProviders('pi'), codex: availableProviders('codex'),
       'claude-code': availableProviders('claude-code'),
     },

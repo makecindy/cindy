@@ -12,7 +12,7 @@ function isPluginEngineProviderId(value: unknown): value is string {
  * No credentials or provider metadata belong in this record.
  */
 export interface ModelRoute {
-  harness: 'claude' | 'codex' | 'pi';
+  harness: 'claude' | 'codex' | 'pi' | 'antigravity';
   model: string;
   providerId: string | null;
   effort: string;
@@ -56,6 +56,7 @@ export function normalizeCompanionModelRoute(value: unknown): CompanionModelRout
   if (typeof record.model !== 'string' || !record.model.trim()) return null;
   if (record.agentDeviceId != null && (typeof record.agentDeviceId !== 'string'
     || !/^[A-Za-z0-9_.:-]{1,128}$/.test(record.agentDeviceId))) return null;
+  if (record.harness === 'antigravity' && (record.providerId !== 'google-antigravity-subscription' || record.agentDeviceId)) return null;
   const providerId = typeof record.providerId === 'string' && record.providerId.trim() ? record.providerId.trim() : null;
   const agentDeviceId = typeof record.agentDeviceId === 'string' ? record.agentDeviceId.trim() : undefined;
   const modelGroup = modelGroupId(record.modelGroup);
@@ -73,7 +74,7 @@ export function normalizeCompanionModelRoute(value: unknown): CompanionModelRout
   }
   if (providerId?.startsWith(ACP_PLUGIN_PROVIDER_PREFIX)) return null;
   return {
-    harness: record.harness === 'codex' || record.harness === 'pi' ? record.harness : 'claude',
+    harness: record.harness === 'codex' || record.harness === 'pi' || record.harness === 'antigravity' ? record.harness : 'claude',
     model: record.model.trim(),
     providerId,
     effort: typeof record.effort === 'string' ? record.effort : '',

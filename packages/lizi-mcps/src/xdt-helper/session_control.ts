@@ -468,7 +468,7 @@ export function registerSetSessionRuntimeTool(
       '省略 harness 保持临时调整语义；但目标任务已有等待下一条消息生效的选择时，省略 harness 改为修改那次选择（未提供的字段沿用它），同样返回 next_send。' +
       '协同 Worker 出错或撞用量上限时，登记新选择后用 send_to_worker 发下一条消息：宿主先换到新路线再启动，不会先用旧路线。不修改全局默认选择。',
     inputShape: {
-      harness: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
+      harness: z.enum(['claude-code', 'codex', 'pi', 'antigravity']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
       session_id: z.string().min(1).optional().describe('目标 session id；省略时使用当前任务。'),
       provider_id: z
         .string()

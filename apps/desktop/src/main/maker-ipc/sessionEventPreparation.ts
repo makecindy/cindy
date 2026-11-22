@@ -30,7 +30,7 @@ import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
-import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
+import { noteClaudeSessionTurnState, observePluginEngineEvent } from '../maker-host/claude-session-background-activity.js';
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
@@ -143,6 +143,11 @@ export function prepareSessionEvent(
     Object.prototype.hasOwnProperty.call(event, 'backgroundTurnStartedAt') &&
     backgroundTurnPredatesSessionClear(session.id, event.backgroundTurnStartedAt)
   ) {
+    return;
+  }
+  if (event.type === 'antigravity_tool_activity') {
+    // Native command receipts and process exit only update host activity.
+    if (session.agentKind === 'antigravity') observePluginEngineEvent(session.id, event);
     return;
   }
   if (deps.isFencedStaleSessionTerminal(session.id, event)) {

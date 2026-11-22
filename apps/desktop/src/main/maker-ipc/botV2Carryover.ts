@@ -88,7 +88,7 @@ function onceCron(at: number, timezone: string): string | null {
  * provider to be named there; without one it cannot be kept (null), never silently run here.
  */
 export function automationModelFields(choice: {
-  agentKind: 'claude-code' | 'codex' | 'pi'; model: string; providerId?: string | null;
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity'; model: string; providerId?: string | null;
   effort?: string | null; fastMode?: boolean | 'ultrafast'; agentDeviceId?: string | null;
 }): Partial<ProjectScheduleConfig> | null {
   const fields: Partial<ProjectScheduleConfig> = {

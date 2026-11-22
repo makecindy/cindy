@@ -519,13 +519,13 @@ export interface ProviderGroupUsagePartAck {
 
 export type ProviderGroupRemoteRequest =
   /** 新任务该用组里哪台；选中即给那台记一个短暂的占用，同时开的几个任务不会全落到同一台。 */
-  | { action: 'pick'; sessionId: string; providerId: string; agentKind: 'claude-code' | 'codex' | 'pi'; model: string; exclude: string[]; quotaRebalance?: string }
+  | { action: 'pick'; sessionId: string; providerId: string; agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity'; model: string; exclude: string[]; quotaRebalance?: string }
   /** 那台电脑出了问题(用量上限、登录失效、服务繁忙)：组所在电脑冷却它，不再分新任务。 */
   | { action: 'cool' | 'cool-model'; providerId: string; memberKey: string; cause: ProviderGroupRemoteCoolCause; resetAt?: number; model?: string }
   /** 这台电脑经组运行、正在跑的任务(整体替换上一份；seq 只增，乱序到达的旧份丢弃)。 */
   | { action: 'leases'; seq: number; entries: ProviderGroupRemoteLease[] }
   /** 组内电脑的状态(发送前检查、设置页展示)。 */
-  | { action: 'view'; providerId: string; model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: true }
+  | { action: 'view'; providerId: string; model?: string; agentKind?: 'claude-code' | 'codex' | 'pi' | 'antigravity'; includeGuestSupport?: true }
   /**
    * 这台电脑经组、在组里别的电脑上运行的用量(组所在电脑经手不到)：整体替换这台从 sinceDay 起(含；null = 全部)
    * 报过的行。seq 只增，乱序到达的旧份丢弃。
@@ -631,7 +631,7 @@ export function parseProviderGroupRemoteRequest(raw: unknown): ProviderGroupRemo
         action: 'pick',
         sessionId: remoteSessionId(value.sessionId),
         providerId: remoteProviderId(value.providerId),
-        agentKind: agentKind as 'claude-code' | 'codex' | 'pi',
+        agentKind: agentKind as 'claude-code' | 'codex' | 'pi' | 'antigravity',
         model: value.model,
         exclude: exclude.map(remoteMemberKey),
         ...(value.quotaRebalance !== undefined ? { quotaRebalance: remoteMemberKey(value.quotaRebalance) } : {}),
@@ -682,7 +682,7 @@ export function parseProviderGroupRemoteRequest(raw: unknown): ProviderGroupRemo
         action: 'view',
         providerId: remoteProviderId(value.providerId),
         ...(value.model !== undefined ? { model: value.model } : {}),
-        ...(value.agentKind !== undefined ? { agentKind: value.agentKind as 'claude-code' | 'codex' | 'pi' } : {}),
+        ...(value.agentKind !== undefined ? { agentKind: value.agentKind as 'claude-code' | 'codex' | 'pi' | 'antigravity' } : {}),
         ...(value.includeGuestSupport === true ? { includeGuestSupport: true } : {}),
       };
     }

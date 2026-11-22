@@ -1,4 +1,5 @@
 import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { summarizeAntigravityQuota, type AntigravityAccountsView } from '../../shared/antigravityAccounts.js';
 import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
@@ -83,6 +84,7 @@ export interface MenubarCollectDeps {
   readSubscriptionPool?(providerId: string): Promise<SubscriptionPoolView | null>;
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
+  readAntigravity?(): Promise<AntigravityAccountsView | null>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
   readClaude(providerId: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXai(providerId: string): Promise<XaiSubscriptionUsageSnapshot | null>;
@@ -176,6 +178,10 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     if (kind === 'xai') {
       const snapshot = await safe(`xai:${provider.id}`, () => deps.readXai(provider.id), null);
       return xaiSource(provider, snapshot, deps.nowMs);
+    }
+    if (kind === 'antigravity') {
+      const view = await safe(`antigravity:${provider.id}`, async () => await deps.readAntigravity?.() ?? null, null);
+      return antigravitySource(provider, view, deps.nowMs);
     }
     return paygSource(provider);
   });
@@ -850,5 +856,67 @@ export function opencodeGoSource(provider: ProviderView, result: ProviderAccount
       windowMinutes: opencodeGoUsageWindowMinutes(w.id) ?? 0,
     })) ?? [],
     credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: snapshot?.fetchedAt ?? null,
+  };
+}
+
+export function antigravitySource(
+  provider: ProviderView,
+  view: AntigravityAccountsView | null,
+  nowMs: number,
+): MenubarSubscriptionInput {
+  const activeAccount = view?.accounts.find((account) => account.id === view.activeId);
+  const identity = activeAccount?.identity?.trim() || null;
+  const buckets = view?.usage ?? [];
+  const summary = summarizeAntigravityQuota(buckets, nowMs);
+  const sessionWindow = windowFromCodex(summary.primary, nowMs);
+  const weekWindow = windowFromCodex(summary.secondary, nowMs);
+  const scopedWindows: MenubarWindowInput[] = [];
+  let updatedAtMs: number | null = null;
+  for (const bucket of buckets) {
+    if (typeof bucket.updatedAt === 'number' && Number.isFinite(bucket.updatedAt)) {
+      updatedAtMs = updatedAtMs === null ? bucket.updatedAt : Math.max(updatedAtMs, bucket.updatedAt);
+    }
+    const toRateWindow = (value: typeof bucket.primary) =>
+      value && typeof value.usedPercent === 'number' && Number.isFinite(value.usedPercent)
+        ? { ...value, usedPercent: value.usedPercent }
+        : null;
+    const primary = windowFromCodex(toRateWindow(bucket.primary), nowMs);
+    const secondary = windowFromCodex(toRateWindow(bucket.secondary), nowMs);
+    if (bucket.limitName) {
+      const tightest = secondary && primary
+        ? (secondary.usedPercent >= primary.usedPercent ? secondary : primary)
+        : (secondary ?? primary);
+      if (tightest) {
+        scopedWindows.push({
+          ...tightest,
+          kind: 'scoped',
+          label: bucket.limitName,
+        });
+      }
+    }
+  }
+  const windows: MenubarWindowInput[] = [
+    ...(sessionWindow ? [{ ...sessionWindow, kind: 'session' as const }] : []),
+    ...(weekWindow ? [{ ...weekWindow, kind: 'week' as const }] : []),
+    ...(buckets.length > 1 ? scopedWindows : []),
+  ];
+  const accountKeys: string[] = [];
+  if (identity) accountKeys.push(`gemini:identity:${identity.toLowerCase()}`);
+  if (view?.activeId) accountKeys.push(`gemini:profile:${view.activeId}`);
+  return {
+    kind: 'subscription',
+    id: provider.id,
+    providerId: provider.id,
+    family: 'gemini',
+    logoSvg: familyLogo('gemini'),
+    brand: 'Gemini',
+    account: identity,
+    plan: provider.access?.kind === 'subscription' ? (provider.access.product ?? null) : null,
+    windows,
+    credits: null,
+    creditsUnlimited: false,
+    prepaidUsd: null,
+    updatedAtMs,
+    ...(accountKeys.length > 0 ? { accountKeys } : {}),
   };
 }

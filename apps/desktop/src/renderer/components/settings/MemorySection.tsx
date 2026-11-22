@@ -33,7 +33,7 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const log = createLogger('MemorySection');
 
-type AgentKind = 'claude-code' | 'codex' | 'pi';
+type AgentKind = 'claude-code' | 'codex' | 'pi' | 'antigravity';
 
 interface AgentDescriptor {
   kind: AgentKind;
@@ -82,6 +82,7 @@ export function MemorySection() {
     'claude-code': INITIAL,
     codex: INITIAL,
     pi: INITIAL,
+    antigravity: INITIAL,
   });
   // pending 飞行中跳过 reload — 否则 toggle/reset 飞行期间 focus 触发 reload 会
   // 把用户刚改的乐观值或回滚状态覆盖掉。任一 slot pending 都跳过整轮 reload。

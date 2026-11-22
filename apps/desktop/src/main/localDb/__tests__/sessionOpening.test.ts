@@ -40,7 +40,7 @@ beforeEach(() => {
   setSessionOpeningModelAdmission(async request => {
     const route = resolveSessionExecutionSelection({ selection: request,
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [] }], hasCindyAiApiKey: false,
-      providerRouting: { availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'] }] },
+      providerRouting: { availability: { antigravity: [], 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'] }] },
         resolveDefaultProviderIdForModel: () => 'connected' } });
     return { ...request, model: route.model, providerId: route.providerId, effort: route.effort ?? '' };
   });
@@ -142,7 +142,7 @@ it.each(['medium', 'low', ''] as const)('returns the execution provider admitted
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: ['high'], defaultEffort: 'high' }],
       hasCindyAiApiKey: false,
       providerRouting: {
-        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
+        availability: { antigravity: [], 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
           effortMetaByModel: { model: { efforts: effort ? [effort] : [], defaultEffort: effort || null } } }] },
         resolveDefaultProviderIdForModel: () => 'connected',
       },
@@ -165,7 +165,7 @@ it.each([
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [], supportsFastMode: true }],
       hasCindyAiApiKey: false,
       providerRouting: {
-        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
+        availability: { antigravity: [], 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
           fastModels: supportsFast ? ['model'] : [] }] },
         resolveDefaultProviderIdForModel: () => 'connected',
       },
@@ -185,7 +185,7 @@ it('keeps the current unsupported explicit Fast rejection before remote persiste
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [], supportsFastMode: true }],
       hasCindyAiApiKey: false,
       providerRouting: {
-        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'], fastModels: [] }] },
+        availability: { antigravity: [], 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'], fastModels: [] }] },
         resolveDefaultProviderIdForModel: () => 'connected',
       },
     });

@@ -1,6 +1,6 @@
 /** Public request languages. SDK/platform adapter IDs are implementation details. */
 export type CompatibilityProtocol = 'openai-responses' | 'openai-chat' | 'anthropic' | 'google';
-export type CompatibilityHarness = 'codex' | 'claude-code' | 'pi';
+export type CompatibilityHarness = 'codex' | 'claude-code' | 'pi' | 'antigravity';
 
 export function compatibilityProtocol(api: string | null | undefined): CompatibilityProtocol | null {
   switch (api) {

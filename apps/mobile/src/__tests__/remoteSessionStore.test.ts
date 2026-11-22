@@ -4130,6 +4130,44 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
   });
 
+  // Unit, Antigravity background activity regression. Adjacent boundary tests do
+  // not deliver a reply between activity frames. A done, running activity, and
+  // one background full-text push exercise the production mobile push consumer
+  // and prove the reply is available before the background indicator clears.
+  it('shows the Antigravity reply while background activity remains active after done', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    pushMakerStatus('s1', { isRunning: true });
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', event: { source: 'antigravity', type: 'done', data: { status: 'completed' } },
+    });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:activity', {
+      sessionId: 's1', phase: 'running', workingPhase: 'processing',
+    });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+
+    const reply = { ...message('reply', 's1'), content: 'The command finished.' };
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', persistId: reply.clientId,
+      event: {
+        source: 'antigravity', type: 'text', turnScope: 'background',
+        data: { text: reply.content, isFinal: true, isFullText: true },
+      },
+    });
+    expect(remoteSessionStore.getMessages('s1')).toMatchObject([{ clientId: reply.clientId, content: reply.content }]);
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', message: reply });
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:activity', {
+      sessionId: 's1', phase: 'completed', attention: false,
+    });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+    expect(remoteSessionStore.getMessages('s1')).toEqual([reply]);
+  });
+
   // Unit, #8147 r4427259022: soft offline must retain the known failure ID;
   // reconnect restores the projection but does not replay the terminal event.
   it('keeps terminal prediction eligibility and identity through acknowledgement and reconnect until the next run', () => {

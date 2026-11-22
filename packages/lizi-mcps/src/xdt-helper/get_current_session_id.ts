@@ -11,7 +11,7 @@ export interface GetCurrentSessionIdDeps {
   }>;
   getSessionContext: () => {
     sessionId?: string;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
     workingDir: string;
     vendorOptions?: Record<string, unknown>;
   };

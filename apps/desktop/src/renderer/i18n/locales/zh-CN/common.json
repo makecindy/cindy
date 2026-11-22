@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google 用量",
+    "quotaUnavailable": "账号剩余额度暂无法获取",
+    "quotaGuide": "此版本 ACP 未提供账号额度及重置时间，可在官方 Antigravity CLI 输入 /usage 查看。",
+    "openQuotaGuide": "查看官方额度查询方法",
+    "moneyUnavailable": "当前接口未提供 credits 余额及实际费用。",
+    "context": "本会话上下文（最近上报）",
+    "lastTurnTokens": "最近一轮 Tokens",
+    "unavailable": "暂无法获取",
+    "modelControlsThinking": "此模型自行控制推理强度。",
+    "noFastMode": "此来源未提供独立的 Fast / Standard 切换。"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
@@ -4290,6 +4302,27 @@
         "groupMembersTitle": "组内电脑",
         "groupMembersFailed": "暂时读不到组内电脑的状态。",
         "hiddenBanner": "已从这台电脑的模型选择器中隐藏。收藏和正在使用它的任务不受影响。"
+      },
+      "antigravity": {
+        "configure": "手动接入",
+        "install": "一键安装并接入",
+        "update": "更新 Antigravity CLI",
+        "installing": "正在安装…",
+        "setupHint": "Cindy 会下载并验证官方 Antigravity CLI，并仅使用 Google AI 订阅额度。",
+        "activeAccount": "当前 Google 账号",
+        "existing": "本机默认账号",
+        "removeAccount": "删除账号",
+        "removeDescription": "将删除此账号在 Cindy 中的本机授权和配置，并保留 Cindy 对话记录。",
+        "removeDefaultDescription": "Cindy 将解除此账号的连接，并保留这台 Mac 上的 Google 登录和 Cindy 对话记录。",
+        "accountBusy": "Google 任务或账号操作正在进行，请结束后再试。",
+        "account": "Google 账号 {{number}}",
+        "refreshQuota": "刷新额度",
+        "legacyQuota": "添加 Google 账号后，即可在 Cindy 中查看该账号的额度。",
+        "noQuota": "暂时无法读取 Google 额度。",
+        "failed": "未能完成 Google 账号操作。",
+        "installConfirmTitle": "安装 Antigravity CLI？",
+        "installConfirmDescription": "本机尚未安装 Antigravity CLI。确定后将自动下载并安装最新版，安装完成后立即打开 Google 登录。",
+        "installConfirmButton": "安装并登录"
       },
       "genericOAuth": {
         "subtitle": "订阅账号",
@@ -11046,6 +11079,18 @@
     "nameLabel": "怎么称呼",
     "close": "关闭",
     "list": {
+      "folders": {
+        "create": "新建部门",
+        "rename": "重命名部门",
+        "dissolve": "解散部门",
+        "name": "部门名称",
+        "move": "移到部门",
+        "unfiled": "移出部门",
+        "up": "上移",
+        "down": "下移",
+        "actions": "{{name}}的操作",
+        "saveFailed": "无法保存部门。"
+      },
       "createMenu": "新建",
       "createTeammate": "新建伙伴",
       "joinWithLink": "输入邀请链接…",
@@ -14206,6 +14251,24 @@
       "listAria": "权限模式",
       "autoFallback": "自动审批暂时不可用，已切换为默认权限；需要时会询问你。",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "默认权限",
+            "description": "编辑和命令操作按需由你审批。"
+          },
+          "acceptEdits": {
+            "label": "允许编辑",
+            "description": "文件编辑直接允许，其他操作按需由你审批。"
+          },
+          "auto": {
+            "label": "自动审批",
+            "description": "工作区内自动编辑并执行安全命令；高风险操作仍需确认。"
+          },
+          "bypassPermissions": {
+            "label": "完全访问",
+            "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "默认权限",

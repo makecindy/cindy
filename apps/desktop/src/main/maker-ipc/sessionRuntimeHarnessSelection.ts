@@ -111,7 +111,7 @@ export async function setSessionRuntimeHarness(
   const revisingStaged = patch.harness === undefined;
   if (revisingStaged
     ? patch.model !== undefined && !patch.model.trim()
-    : !['claude-code', 'codex', 'pi'].includes(patch.harness!) || !patch.model?.trim()) {
+    : !['claude-code', 'codex', 'pi', 'antigravity'].includes(patch.harness!) || !patch.model?.trim()) {
     return {
       ok: false,
       errorCode: 'INVALID_ARGS',

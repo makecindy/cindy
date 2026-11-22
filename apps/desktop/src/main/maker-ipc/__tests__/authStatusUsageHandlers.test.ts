@@ -294,6 +294,31 @@ describe('maker auth IPC handlers', () => {
     expect(triggerAgentLogin).not.toHaveBeenCalled();
   });
 
+  // Unit: the Google settings page sends a window login token and the displayed
+  // account. Codex-only token tests miss the Google rejection and stale-profile race.
+  it('accepts an owned Google login only for the still-selected account', async () => {
+    const owner = vi.spyOn(appSessionState, 'getActiveAppSession')
+      .mockReturnValue({ mode: 'cloud', dataOwnerId: 'test-owner', generation: 6 });
+    try {
+      const harness = new IpcHarness();
+      const triggerAgentLogin = vi.fn().mockResolvedValue({ authenticated: true, authSource: 'oauth' });
+      const assertActiveAccount = (id: string) => {
+        if (id !== 'selected') throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
+      };
+      registerMakerAuthHandlers(harness, createMakerStub({ triggerAgentLogin }), vi.fn(), () => null,
+        undefined, undefined, { assertRenderer: vi.fn(), assertActiveAccount });
+      const googleTarget = { accountId: 'selected', dataOwnerId: 'test-owner', ownerGeneration: 6 };
+      await expect(harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'antigravity', {
+        ownerId: 'google-window', googleTarget: { ...googleTarget, accountId: 'previous' },
+      })).rejects.toThrow('ANTIGRAVITY_CONNECTION_CHANGED');
+      expect(triggerAgentLogin).not.toHaveBeenCalled();
+      await expect(harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'antigravity', {
+        ownerId: 'google-window', googleTarget,
+      })).resolves.toMatchObject({ authenticated: true });
+      expect(triggerAgentLogin).toHaveBeenCalledOnce();
+    } finally { owner.mockRestore(); }
+  });
+
   it('keeps login successful and requests disk fallback when live model refresh fails', async () => {
     const harness = new IpcHarness();
     const onCodexAuthChange = vi.fn().mockResolvedValue(undefined);

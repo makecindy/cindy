@@ -17,7 +17,7 @@ export interface WorkerInfo {
   sessionId: string;
   role: string;
   /** 'acp' = 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)；providerId 指出是哪一个引擎。 */
-  agent: 'claude-code' | 'codex' | 'pi' | 'acp';
+  agent: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'acp';
   providerId?: string;
   model: string;
   effort: string | null;

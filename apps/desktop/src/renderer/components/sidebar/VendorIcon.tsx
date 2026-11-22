@@ -1,3 +1,4 @@
+import { Sparkles } from 'lucide-react';
 /**
  * VendorIcon — sidebar session 行的 Agent 身份 + running 状态指示器
  * ---------------------------------------------------------------------------
@@ -28,7 +29,7 @@ import { Puzzle } from 'lucide-react';
 import { usePluginIconSilhouette } from '@/components/icons/pluginIconSilhouette';
 import { isPluginEngineKind } from '../../../shared/pluginEngines';
 
-export type VendorIconKind = 'cc' | 'codex' | 'pi';
+export type VendorIconKind = 'cc' | 'codex' | 'pi' | 'antigravity';
 
 /**
  * 任务身份图标的种类：内置三种 Harness，加上插件提供的执行引擎('acp',
@@ -45,6 +46,7 @@ const REMOTE_SIGNAL_ANCHOR: Record<EngineIconKind, { x: number; y: number }> = {
   cc: { x: 0.95, y: 0.13 },
   codex: { x: 0.9, y: 0.1 },
   pi: { x: 0.83, y: 0.36 },
+  antigravity: { x: 0.9, y: 0.1 },
   acp: { x: 0.9, y: 0.12 },
 };
 
@@ -183,7 +185,7 @@ export function VendorIcon({
         ) : (
           <Puzzle size={size} aria-hidden strokeWidth={1.75} />
         )
-      ) : vendor === 'codex' ? (
+      ) : vendor === 'antigravity' ? <Sparkles size={size} /> : vendor === 'codex' ? (
         <CodexMark size={size} />
       ) : vendor === 'pi' ? (
         <span

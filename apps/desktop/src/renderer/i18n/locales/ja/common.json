@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google の使用量",
+    "quotaUnavailable": "現在、アカウントの利用枠を取得できません",
+    "quotaGuide": "この ACP バージョンでは利用枠やリセット時刻を取得できません。公式 Antigravity CLI の /usage で確認できます。",
+    "openQuotaGuide": "公式の利用枠を確認する方法",
+    "moneyUnavailable": "このインターフェースではクレジット残高や実際の請求額を確認できません。",
+    "context": "セッションのコンテキスト（最新の報告）",
+    "lastTurnTokens": "前のターンのトークン数",
+    "unavailable": "取得できません",
+    "modelControlsThinking": "このモデルは推論の強度を自動で調整します。",
+    "noFastMode": "この接続では高速モードと標準モードを個別に切り替えられません。"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
@@ -4290,6 +4302,27 @@
         "groupMembersTitle": "グループ内のパソコン",
         "groupMembersFailed": "グループ内のパソコンの状態を今は取得できません。",
         "hiddenBanner": "このコンピューターのモデル選択で非表示になっています。お気に入りや使用中のセッションには影響しません。"
+      },
+      "antigravity": {
+        "configure": "手動で接続",
+        "install": "インストールして接続",
+        "update": "Antigravity CLI を更新",
+        "installing": "インストール中…",
+        "setupHint": "Cindy が公式の Antigravity CLI をダウンロードして検証します。Google AI サブスクリプションの利用枠のみを使用します。",
+        "activeAccount": "使用中の Google アカウント",
+        "existing": "この Mac の既定のアカウント",
+        "removeAccount": "アカウントを削除",
+        "removeDescription": "Cindy に保存されたこのアカウントのログイン情報と設定を削除します。Cindy の会話は残ります。",
+        "removeDefaultDescription": "Cindy でこのアカウントの接続を解除します。この Mac の Google ログインと Cindy の会話は残ります。",
+        "accountBusy": "Google のタスクまたはアカウント操作を実行中です。完了後に再度お試しください。",
+        "account": "Google アカウント {{number}}",
+        "refreshQuota": "利用枠を更新",
+        "legacyQuota": "Google アカウントを追加すると、Cindy で利用枠を確認できます。",
+        "noQuota": "Google の利用枠を現在取得できません。",
+        "failed": "Google アカウントの操作を完了できませんでした。",
+        "installConfirmTitle": "Antigravity CLI をインストールしますか？",
+        "installConfirmDescription": "このコンピューターには Antigravity CLI がまだインストールされていません。最新版を自動インストールして Google ログインに進みますか？",
+        "installConfirmButton": "インストールしてログイン"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプションアカウント",
@@ -11046,6 +11079,18 @@
     "nameLabel": "呼び名",
     "close": "閉じる",
     "list": {
+      "folders": {
+        "create": "新しい部門",
+        "rename": "部門名を変更",
+        "dissolve": "部門を解散",
+        "name": "部門名",
+        "move": "部門に移動",
+        "unfiled": "部門から外す",
+        "up": "上に移動",
+        "down": "下に移動",
+        "actions": "{{name}}の操作",
+        "saveFailed": "部門を保存できませんでした。"
+      },
       "createMenu": "新規作成",
       "createTeammate": "仲間を作成",
       "joinWithLink": "招待リンクを入力…",
@@ -14206,6 +14251,24 @@
       "listAria": "権限モード",
       "autoFallback": "自動レビューは一時的に利用できないため、デフォルト権限に切り替えました。必要な操作は確認します。",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "デフォルト権限",
+            "description": "編集やコマンドの実行は、必要に応じてあなたが承認します。"
+          },
+          "acceptEdits": {
+            "label": "編集を自動承認",
+            "description": "ファイルの編集は直接許可されます。その他の操作は必要に応じてあなたが承認します。"
+          },
+          "auto": {
+            "label": "自動レビュー",
+            "description": "ワークスペース内の編集と安全なコマンドを自動で実行します。リスクの高い操作は引き続き確認を求めます。"
+          },
+          "bypassPermissions": {
+            "label": "フルアクセス",
+            "description": "通常の操作を直接許可し、ワークスペース外のファイルへのアクセスや、ネットワークを使うコマンドの実行も許可します。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "デフォルト権限",

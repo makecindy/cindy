@@ -88,4 +88,15 @@ describe('buildAgentIslandQuota', () => {
     ]);
     expect(items[0]!.textWidth).toBeLessThan(items[0]!.width);
   });
+
+  it('包含 Gemini 订阅余量项并保持菜单栏顺序与级别', () => {
+    const items = buildAgentIslandQuota(view([
+      cell({ id: 'anthropic', value: '82', valueUnit: '%', fill: 0.82 }),
+      cell({ id: 'google-antigravity-subscription', name: 'Gemini', value: '64', valueUnit: '%', fill: 0.64 }),
+    ]));
+    expect(items.map(({ id, text, level }) => ({ id, text, level }))).toEqual([
+      { id: 'anthropic', text: '82%', level: 'normal' },
+      { id: 'google-antigravity-subscription', text: '64%', level: 'normal' },
+    ]);
+  });
 });

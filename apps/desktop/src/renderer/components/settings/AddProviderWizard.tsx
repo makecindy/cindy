@@ -32,6 +32,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
 import { GEMINI_API_PRESET_ID, newGeminiConnectionId } from '../../../shared/geminiApiConnection';
 import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, builtinChoiceMeta, type ProviderSearchTarget } from './providerSearch';
+import { ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID } from '../../../shared/antigravityAccounts';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
@@ -96,6 +97,7 @@ interface AddProviderWizardProps {
   onEntryUnavailable?: (reason?: 'target-unavailable' | 'connection-failed') => void;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
   onOpenCustomForm: () => void;
+  onOpenAntigravity?: () => void;
   onClose: () => void;
   /** 完成(授权成功 / 预设创建成功);providerId 用于左栏选中新供应商。 */
   onDone: (providerId?: string) => void;
@@ -114,6 +116,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  antigravity: 'Antigravity',
 };
 
 function presetRuntimeBaseUrl(
@@ -310,6 +313,7 @@ export function AddProviderWizard({
   entry,
   onEntryUnavailable,
   onOpenCustomForm: openCustomForm,
+  onOpenAntigravity,
   onClose: notifyClosed,
   onDone: notifyDone,
 }: AddProviderWizardProps) {
@@ -337,7 +341,9 @@ export function AddProviderWizard({
   const [query, setQuery] = useState('');
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
-    entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
+    entry?.kind === 'builtin' && entry.providerId !== ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID
+      ? providers.find((x) => x.id === entry.providerId)
+      : undefined;
   const [sel, setSel] = useState<Selection | null>(() => {
     if (detected) return { kind: 'preset', preset: detected.preset };
     if (!entryProvider) return null;
@@ -604,6 +610,10 @@ export function AddProviderWizard({
 
   const pickOauth = useCallback((provider: ProviderView) => {
     if (savingRef.current) return;
+    if (provider.id === ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID) {
+      if (onOpenAntigravity) dialog.close(onOpenAntigravity);
+      return;
+    }
     consumePresetEntry();
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
@@ -613,7 +623,7 @@ export function AddProviderWizard({
     setSel({ kind: 'oauth', provider });
     setApiKey('');
     setStep(2);
-  }, [consumePresetEntry]);
+  }, [consumePresetEntry, dialog.close, onOpenAntigravity]);
   const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
     if (savingRef.current) return;
     consumePresetEntry();

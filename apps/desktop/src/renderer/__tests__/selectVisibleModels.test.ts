@@ -349,6 +349,29 @@ describe('filterChatBridgedCodexProviders — provider source sections', () => {
       .toEqual(['account-only']);
   });
 
+  it('returns remote antigravity models from device capabilities or provider catalog', () => {
+    const agyProvider = {
+      ...provider('google-antigravity-subscription', 'antigravity', ['gemini-4-neon']),
+      connected: true,
+    } as ProviderView;
+    expect(ids(selectVisibleModels({
+      agentKind: 'antigravity',
+      deviceId: 'host',
+      providers: [agyProvider],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+      deviceAntigravityModels: [devModel('gemini-4-neon')],
+    }))).toEqual(['gemini-4-neon']);
+    expect(ids(selectVisibleModels({
+      agentKind: 'antigravity',
+      deviceId: 'host',
+      providers: [agyProvider],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+      deviceAntigravityModels: [],
+    }))).toEqual(['gemini-4-neon']);
+  });
+
   it('SSH exclusion removes bridged Codex sources from section inputs', () => {
     expect(filterChatBridgedCodexProviders([bridged, native], 'codex', true).map((p) => p.id)).toEqual(['native']);
   });

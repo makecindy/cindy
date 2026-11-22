@@ -1,6 +1,8 @@
 import { applyProjectDirectoriesForTurn } from '../projectDirectoryRuntime.js';
 import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
 import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
+import { buildAntigravityAgent } from './antigravity-host.js';
+import { ANTIGRAVITY_ACCOUNT_BUSY } from '../../shared/antigravityAccounts.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
 import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
 import { refreshCodexGatewayRuntime } from './codexGatewayRefresh.js';
@@ -2442,6 +2444,41 @@ export function getMaker(): Maker {
         return getRemoteAgentProxyEnv(remoteHost);
       },
     });
+    const antigravityAgent = buildAntigravityAgent(app.getPath('userData'), desktopMakerLogger.child('antigravity'), async (opts) => {
+      const bridge = await getPiExtraSpawnConfig(piMcpProviders, desktopMakerLogger, {
+        agentKind: 'antigravity', sessionId: opts.sessionId, sessionInstanceId: opts.sessionInstanceId,
+        workingDir: opts.workingDir, vendorOptions: opts.vendorOptions,
+        memoryScopeKey: opts.makerMemoryScopeKey, memoryEnabled: opts.makerMemoryEnabled,
+        mcpCallerKind: 'root', mcpCallerAttested: true,
+      });
+      const mcpServers = (bridge?.mcpBridge?.servers ?? []).map(server => {
+        const headers = server.remote
+          ? Object.entries(server.remote.headerEnvVars).map(([name, key]) => ({ name, value: bridge?.mcpEnv?.[key] ?? '' }))
+          : [{ name: 'Authorization', value: `Bearer ${bridge?.mcpBridge?.token ?? ''}` }];
+        return { type: 'http', name: server.name, url: server.url, headers };
+      });
+      return { mcpServers, dispose: () => bridge?.disposeSessionCtx?.() };
+    }, async () => {
+      const maker = _maker;
+      if (!maker) return;
+      const sessions = maker.listActiveSessions().filter(session => session.agentKind === 'antigravity');
+      await Promise.all(sessions.map(session => withRehydrateCloseSuppressed(session.id, () =>
+        maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true }))));
+      if (sessions.some(session => maker.getSession(session.id) === session)) {
+        throw new Error(ANTIGRAVITY_ACCOUNT_BUSY);
+      }
+    });
+    if (antigravityAgent) _mcpProviders.antigravity = piMcpProviders;
+    if (antigravityAgent) {
+      makerAgents.antigravity = antigravityAgent;
+      const googleOwnerScope = activeOwnerScopeKey();
+      void antigravityAgent.getAuthState().then(state => {
+        if (activeOwnerScopeKey() !== googleOwnerScope) return;
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.AUTH_STATE_CHANGED, { agentKind: 'antigravity', ...state });
+        }
+      }).catch(() => {});
+    }
     const piAgent = buildPiAgentForDesktop();
     if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent);
 

@@ -2723,7 +2723,8 @@ function CCAgentSessionContent({
   // 插件引擎回答完仍在自己干活:状态栏用插件引擎文案,消息流按进行中显示
   // (Agent 还没报完成的工具调用带转圈)。内置引擎的后台子任务 / 命令不走这里。
   const pluginEngineBackgroundWork =
-    backgroundTasksActive && backgroundModelActive && isPluginEngineKind(session?.agentKind);
+    backgroundTasksActive && backgroundModelActive &&
+    (isPluginEngineKind(session?.agentKind) || session?.agentKind === 'antigravity');
   // SSH 与 device-link 镜像的 task 终态都可能在断连窗口丢失，不能用本地事件永久撑住状态栏。
   const runningWorkflow = useMemo(
     () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),
@@ -2756,24 +2757,26 @@ function CCAgentSessionContent({
     () => hasTurnResponse(messages, startingInputClientId), [messages, startingInputClientId],
   );
   const receivedTerminalStatus = Boolean(sessionId && hasStartingTerminal(sessionId));
+  const watchesStarting = Boolean(statusAgentDeviceId)
+    || (displayAgentKind === 'antigravity' && !remoteDeviceId && !isRemoteSession);
   // A retained error belongs to the previous turn until running clears it.
   // Only a newly received terminal event may settle this send's preparation.
   const settledStartingSessions = useMemo(() => new Set(
-    statusAgentDeviceId && sessionId && (agentStatus.isRunning || receivedRemoteResponse || receivedTerminalStatus
+    watchesStarting && sessionId && (agentStatus.isRunning || receivedRemoteResponse || receivedTerminalStatus
       || queuePaused || credentialSwitchWait
       || pendingPermission || pendingAskUser || pendingPluginSetup || pendingPlanReview)
       ? [sessionId] : [],
-  ), [statusAgentDeviceId, sessionId, agentStatus.isRunning, receivedRemoteResponse, receivedTerminalStatus,
+  ), [watchesStarting, sessionId, agentStatus.isRunning, receivedRemoteResponse, receivedTerminalStatus,
     queuePaused, credentialSwitchWait,
     pendingPermission, pendingAskUser, pendingPluginSetup, pendingPlanReview]);
   const startingSessions = useStartingSessionIds(settledStartingSessions);
-  const waitingRemoteStart = Boolean(statusAgentDeviceId && sessionId
+  const waitingForStart = Boolean(watchesStarting && sessionId
     && startingSessions.has(sessionId) && !settledStartingSessions.has(sessionId));
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
-    : waitingRemoteStart ? 'Waiting for remote response' : remoteResponsePendingStatus(
+    : waitingForStart ? (statusAgentDeviceId ? 'Waiting for remote response' : 'Thinking...') : remoteResponsePendingStatus(
         agentStatus.status, statusAgentDeviceId, agentStatus.isRunning,
         messages,
       );
@@ -3378,7 +3381,7 @@ function CCAgentSessionContent({
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
   // 切换协同走 IPC enableOrca / disableOrca,失败时 toast。
-  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi'>('codex');
+  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi' | 'antigravity'>('codex');
   // enableBusy 只盖"开启协同"路径;关闭走 useStopOrcaCollab hook 自己管 busy。
   const [enableBusy, setEnableBusy] = useState(false);
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
@@ -6522,13 +6525,13 @@ function CCAgentSessionContent({
                   endedAt={session?.id === sessionId ? session?.lastTurnEndedAt ?? null : null}
                   status={composerStatus}
                   reconnectStatus={reconnectStatus}
-                  preparing={waitingRemoteStart}
-                  tokenUsage={waitingRemoteStart ? 0 : agentStatus.tokenUsage}
-                  outputTokens={waitingRemoteStart ? 0 : agentStatus.outputTokens ?? 0}
-                  generationDurationMs={waitingRemoteStart ? 0 : agentStatus.generationDurationMs ?? 0}
-                  generationReliable={!waitingRemoteStart && (agentStatus.generationReliable ?? true)}
-                  tokenSpeed={waitingRemoteStart ? undefined : agentStatus.tokenSpeed}
-                  startedAt={waitingRemoteStart ? null : agentStatus.startedAt}
+                  preparing={waitingForStart}
+                  tokenUsage={waitingForStart ? 0 : agentStatus.tokenUsage}
+                  outputTokens={waitingForStart ? 0 : agentStatus.outputTokens ?? 0}
+                  generationDurationMs={waitingForStart ? 0 : agentStatus.generationDurationMs ?? 0}
+                  generationReliable={!waitingForStart && (agentStatus.generationReliable ?? true)}
+                  tokenSpeed={waitingForStart ? undefined : agentStatus.tokenSpeed}
+                  startedAt={waitingForStart ? null : agentStatus.startedAt}
                   visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
@@ -7132,6 +7135,8 @@ function CCAgentSessionContent({
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
                       <TodaySpendChip
+                        contextUsage={agentStatus.contextWindowFromRuntime ? { used: agentStatus.contextTokens, size: agentStatus.contextWindow } : undefined}
+                        turnTokens={agentStatus.tokenUsage}
                         vendorKey={normalizeDbAgentKind(displayAgentKind)}
                         modelId={agentSwitchIntent?.model ?? session?.model ?? null}
                         providerId={usageChipProviderId}

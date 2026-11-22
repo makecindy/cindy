@@ -8046,7 +8046,7 @@ export type GhostAgentModelsResult =
         visible?: boolean;
         id: string;
         name: string;
-        agent: 'codex' | 'claude-code' | 'pi';
+        agent: 'codex' | 'claude-code' | 'pi' | 'antigravity';
         providerId: string;
         providerName: string;
         efforts: string[];
@@ -8083,7 +8083,7 @@ export type GhostAgentModelsResult =
 export interface GhostModelPreferenceItem {
   providerId: string;
   modelId: string;
-  agent: 'cc' | 'codex' | 'pi';
+  agent: 'cc' | 'codex' | 'pi' | 'antigravity';
   effort?: string;
   fast?: true | 'ultrafast';
 }

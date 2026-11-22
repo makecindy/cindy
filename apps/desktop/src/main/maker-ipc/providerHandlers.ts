@@ -2161,7 +2161,7 @@ export function registerProviderHandlers(
     return { ok: true };
   });
 
-  const parsePriceTarget = (value: unknown): ModelPriceOverrideTarget => {
+  const parsePriceTarget = (value: unknown, allowAntigravity = false): ModelPriceOverrideTarget => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throwIpcError('INVALID_PARAMS', 'price override target must be an object');
     }
@@ -2170,7 +2170,7 @@ export function registerProviderHandlers(
       typeof target.providerId !== 'string' ||
       target.providerId.length === 0 ||
       target.providerId.length > MAX_DISABLE_ID_LENGTH ||
-      !VALID_AGENTS.includes(String(target.agent)) ||
+      !(VALID_AGENTS.includes(String(target.agent)) || (allowAntigravity && target.agent === 'antigravity')) ||
       typeof target.modelId !== 'string' ||
       target.modelId.length === 0 ||
       target.modelId.length > MAX_DISABLE_ID_LENGTH
@@ -2323,13 +2323,13 @@ export function registerProviderHandlers(
   // 复用价格 override 的 target 解析与写入串行队列:两者都是 (provider, agent, model)
   // 粒度的设置类写入,同一把队列避免两种 override 交错落盘。
   const parseContextTargets = (input: unknown): ModelPriceOverrideTarget[] => {
-    const target = parsePriceTarget(input);
+    const target = parsePriceTarget(input, true);
     const related = (input as { relatedTargets?: unknown }).relatedTargets;
     if (related === undefined) return [target];
     if (!Array.isArray(related) || related.length > 2) {
       throwIpcError('INVALID_PARAMS', 'invalid related context targets');
     }
-    const targets = [target, ...related.map(parsePriceTarget)];
+    const targets = [target, ...related.map((entry) => parsePriceTarget(entry, true))];
     if (targets.some((t) => t.providerId !== target.providerId) ||
         new Set(targets.map((t) => t.agent)).size !== targets.length) {
       throwIpcError('INVALID_PARAMS', 'context targets must name distinct harnesses of one provider');

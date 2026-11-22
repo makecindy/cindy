@@ -102,6 +102,7 @@ vi.mock('../BotDeleteDialog', () => ({
     bot ? <div data-testid="bot-delete-dialog">{bot.name}</div> : null,
 }));
 
+import { writeTeammateFolders } from '../teammatesSectionPrefs';
 import { TeammatesSection } from '../TeammatesSection';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
@@ -1213,6 +1214,41 @@ describe('cloud companions in the roster', () => {
     expect(screen.queryByTestId('cindy-device-row')).toBeNull();
     expect(screen.getByText('Laptop preview')).toBeTruthy();
   });
+});
+
+// Unit: rendering and dissolving a persisted folder must retain the buddy and
+// its navigation across remounts. Existing roster cases only exercise flat lists.
+it('collapses a saved folder across remounts and dissolves it back into the roster', async () => {
+  mocks.profiles = [bot({ id: 'guide', name: 'Guide' })];
+  expect(writeTeammateFolders('fixture-owner', { unfiled: [], folders: [
+    { id: 'research', name: 'Research', collapsed: false, members: ['local:guide'] },
+  ] })).toBe(true);
+  const first = await renderSidebar();
+  const folder = screen.getByRole('button', { name: 'Research' });
+  expect(folder.parentElement?.parentElement?.textContent).toContain('Guide');
+  fireEvent.click(folder);
+  expect(screen.queryByText('Guide')).toBeNull();
+  first.unmount();
+  await renderSidebar();
+  expect(screen.getByRole('button', { name: 'Research' }).getAttribute('aria-expanded')).toBe('false');
+  const actions = screen.getByRole('button', { name: /bots.list.folders.actions/ });
+  fireEvent.keyDown(actions, { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'bots.list.folders.dissolve' }));
+  expect(screen.queryByRole('button', { name: 'Research' })).toBeNull();
+  fireEvent.click(screen.getByText('Guide').closest('button')!);
+  expect(mocks.navigate).toHaveBeenCalledWith('/bots/guide');
+});
+
+// Unit: after installation the sidebar showed the normal creation menu while
+// the folder entry lived in View style. Exercise the actual Plus menu and form.
+it('creates a visible folder from the sidebar creation menu', async () => {
+  await renderSidebar();
+  const create = screen.getByRole('button', { name: 'bots.list.createMenu' });
+  fireEvent.keyDown(create, { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'bots.list.folders.create' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'bots.list.folders.name' }), { target: { value: 'Research' } });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.save' }));
+  expect(screen.getByRole('button', { name: 'Research' }).getAttribute('aria-expanded')).toBe('true');
 });
 
 // #9978 / unit: mount the production sidebar with its real store. Existing row

@@ -9,7 +9,7 @@ export type PluginTaskMessageRelay = MessageSourcePluginRelay;
 export interface PluginTaskRoute {
   /** Omitted = plugin host; a paired computer or share:<id> selects remote Agent execution. */
   agentDeviceId?: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
   providerId: string;
   model: string;
   effort: string;

@@ -74,7 +74,7 @@ const MB = 1024 * 1024;
 /** 结果里「可以继续」超过这么多条时折叠成一行。 */
 const READY_COLLAPSE_AT = 8;
 
-const HARNESS_LABEL: Record<NativeHarness, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi' };
+const HARNESS_LABEL: Record<NativeHarness, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi', antigravity: 'Antigravity' };
 
 /** 离开页面再回来时直接显示上次扫描结果，后台再刷新。 */
 let cachedScan: ImportScanResult | null = null;

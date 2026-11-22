@@ -3,6 +3,8 @@ import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastC
 import { ProvidersSection } from '../../../src/renderer/components/settings/ProvidersSection';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 import type { SubscriptionAccountCommand } from '../../../src/shared/subscriptionAccounts';
+import type { AntigravityAccountCommand, AntigravityOwnerScope } from '../../../src/shared/antigravityAccounts';
+import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 
 // The isolated HTTP fixture lacks secure-context randomUUID. These are only
 // correlation IDs for mock login/cancel commands; no credential is generated.
@@ -96,7 +98,25 @@ mountPage({
       ...provider('anthropic'), id: 'gemini', name: 'Gemini', connected: false,
       agents: [], auth: { method: 'apiKey' }, audioModels: [{ id: 'fixture-media', name: 'Fixture' }],
     });
+    const google = ctx.case === 'google-accounts';
+    let googleAccounts = [{ id: 'default' }, { id: 'fixture-google', identity: 'alex@example.test' }];
+    if (google) {
+      setDataOwnerGeneration('fixture-owner', 1);
+      snapshot.providers.push({
+        ...provider('anthropic'), id: 'google-antigravity-subscription', name: 'Google AI · Antigravity',
+        agents: ['antigravity'], auth: { method: 'oauth' }, routing: {}, models: { antigravity: [] },
+        connected: false, remoteInvocationEnabled: false,
+      });
+      snapshot.providerOrder.push('google-antigravity-subscription');
+    }
     return {
+      ...(google && {
+        antigravityAccounts: async (command: AntigravityAccountCommand, scope: AntigravityOwnerScope) => {
+          if (scope.dataOwnerId !== 'fixture-owner' || scope.ownerGeneration !== 1) throw new Error('Unexpected fixture owner');
+          if (command.action === 'remove') googleAccounts = googleAccounts.filter(account => account.id !== command.id);
+          return { configured: true, connected: false, activeId: 'default', accounts: googleAccounts };
+        },
+      }),
       subscriptionAccounts: {
         command: async (command: SubscriptionAccountCommand) => {
           subscriptionControl.commands.push(command);
@@ -143,6 +163,7 @@ mountPage({
         await new Promise<void>(resolve => { keySaveControl.release = () => { keySaveControl.pending = false; resolve(); }; });
       },
       maker: {
+        ...(google && { auth: { onStateChanged: subscription('makerAuthChanged') } }),
         listProviders: async () => snapshot,
         scanLocalCli: async () => ({ detections: [] }),
         requestProviderModelsAutoRefresh: async () => ({ ok: true }),

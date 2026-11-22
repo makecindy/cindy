@@ -155,6 +155,14 @@ describe('cindy_helper session control tools', () => {
     expect(deps.steerSession).toHaveBeenCalledWith({ callerSessionId: undefined, targetSessionId: 'target', message: 'continue' });
   });
 
+  it('preserves a Google subscription runtime selection through the formal schema', async () => {
+    const { deps, registry } = setup();
+    await registry.call('set_session_runtime', { harness: 'antigravity', model: 'gemini-4-hydrogen',
+      provider_id: 'google-antigravity-subscription', expected_generation: 1 });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith(expect.objectContaining({ patch: expect.objectContaining({
+      harness: 'antigravity', model: 'gemini-4-hydrogen', providerId: 'google-antigravity-subscription',
+    }) }));
+  });
   it('forwards a complete harness selection and reports the next-send boundary', async () => {
     const { deps, registry } = setup();
     const old = { agentKind: 'claude-code' as const, model: 'claude-fable-5', providerId: null, effort: 'high' as const, fastMode: false };

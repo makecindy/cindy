@@ -294,7 +294,7 @@ function PrefsField({
 }
 
 /** hook prefs 的 agentKind → 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' | 'antigravity' {
   return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
 }
 

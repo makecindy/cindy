@@ -93,6 +93,47 @@ afterEach(() => {
 });
 
 describe('provider weekly quota identity and windows', () => {
+  // Renderer unit: an account summary took the most depleted bucket across
+  // families, and a Gemini Pro row could match another family's "Pro" label.
+  it('shows Gemini balances on the rail and model rows as soon as the picker mounts', async () => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    setDataOwnerGeneration('gemini-owner', 7);
+    const providerId = 'google-antigravity-subscription';
+    const providers = [provider(providerId)];
+    const antigravityAccounts = vi.fn().mockResolvedValue({
+      configured: true, connected: true, activeId: 'gemini', accounts: [{ id: 'gemini' }],
+      usage: [
+        { limitId: '0', limitName: 'Claude Pro Models', secondary: { usedPercent: 95, windowMinutes: 10_080 } },
+        { limitId: '1', limitName: 'Gemini Flash Models', secondary: { usedPercent: 45, windowMinutes: 10_080 } },
+        { limitId: '2', limitName: 'Gemini Pro Models', secondary: { usedPercent: 30, windowMinutes: 10_080 } },
+        { limitId: '3', limitName: 'Gemini Models', secondary: { usedPercent: 100, windowMinutes: 10_080, resetsAt: 1 } },
+      ],
+    });
+    Object.assign(window, { electronAPI: { antigravityAccounts } });
+    const view = render(<ModelSourceUsageProvider providers={providers} scope={{ deviceId: null }}>
+      <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
+        providers={providers} providerLabel={() => 'Google' } onSelect={() => {}} providerUsage={{ deviceId: null }} />
+      <ModelSourceDetails providerId={providerId} label="Google" modelId="gemini-pro" />
+      <ModelSourceDetails providerId={providerId} label="Google" modelId="gemini-4-hydrogen" />
+      <ModelSourceDetails providerId={providerId} label="Google" modelId="claude-sonnet" />
+    </ModelSourceUsageProvider>);
+    try {
+      await act(async () => {});
+      const rail = screen.getByRole('button', { name: 'Google' });
+      expect(rail.querySelector('[data-weekly-remaining="55"]')).not.toBeNull();
+      const [pro, hydrogen, claude] = view.container.querySelectorAll('[data-model-source-details]');
+      expect(pro.textContent).toContain('70%');
+      expect(hydrogen.textContent).toContain('55%');
+      expect(claude.textContent).toMatch(/\b5%/);
+      expect(antigravityAccounts).toHaveBeenCalledExactlyOnceWith(
+        { action: 'usage' }, { dataOwnerId: 'gemini-owner', ownerGeneration: 7 },
+      );
+    } finally {
+      view.unmount();
+      setDataOwnerGeneration(null, 0);
+    }
+  });
+
   // User report / unit: created OpenAI providers lost rail and summary quotas
   // when the connection ID was treated as the account kind. Existing pool
   // fixtures carry both Claude and Codex windows, hiding that mismatch;
@@ -466,6 +507,7 @@ describe('provider weekly quota identity and windows', () => {
     ).toBe('codex');
     expect(providerWeeklyQuotaSource(provider('anthropic'))).toBe('claude');
     expect(providerWeeklyQuotaSource(provider('xai'))).toBe('xai');
+    expect(providerWeeklyQuotaSource(provider('google-antigravity-subscription'))).toBe('antigravity');
     expect(providerWeeklyQuotaSource(provider('opencode-go', {
       source: 'user',
       auth: { method: 'apiKey' },

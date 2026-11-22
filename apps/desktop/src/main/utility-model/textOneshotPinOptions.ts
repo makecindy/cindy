@@ -118,6 +118,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
   pi: 'Pi',
+  antigravity: 'Antigravity',
 };
 
 /**

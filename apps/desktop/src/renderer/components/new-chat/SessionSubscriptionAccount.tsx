@@ -113,7 +113,7 @@ const Context = createContext<ContextValue | null>(null);
  * 旧 Codex 空来源可显式开启任务绑定探测，消费端仍须确认订阅形态，不能据此推断默认账号。
  */
 export function sessionSubscriptionPoolProvider(
-  agent: 'cc' | 'codex' | 'pi',
+  agent: 'cc' | 'codex' | 'pi' | 'antigravity',
   providerId: string | null | undefined,
   remoteHostId?: string | null,
   provider?: ProviderView,

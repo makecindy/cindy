@@ -723,6 +723,7 @@ import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
 import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
+import { registerAntigravityAccountsIpc } from './maker-host/antigravity-accounts-ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
 import { acquireSubscriptionAccount, attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
@@ -10933,6 +10934,7 @@ app.on('ready', async () => {
   // 同账号电脑远程切换这台电脑的 Agent-Net(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)。
   setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
   registerProviderGroupIpc({ reshare: providerGroupReshare });
+  registerAntigravityAccountsIpc();
   registerSubscriptionAccountsIpc();
   // 0.1.137–0.1.139 拆坏的内置订阅供应商自动并回(subscription-account-pools.md「升级拆坏的自动并回」)。
   // 这是写操作，归窗口进程；Host 客户端模式不补做(docs/host/personal-migration-release-table.md)。

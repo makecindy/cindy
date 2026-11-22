@@ -27,7 +27,7 @@ export interface AppPreferenceRequest {
   ownerStamp: DataOwnerPushStamp;
   expiresAt: number;
   operation: 'get' | 'update' | 'reset' | 'model-visibility' | 'refresh-themes';
-  modelVisibility?: { target: { providerId: string; agent: 'claude-code' | 'codex' | 'pi'; modelId: string }; visible: boolean | null; defaultEnabled?: boolean };
+  modelVisibility?: { target: { providerId: string; agent: 'claude-code' | 'codex' | 'pi' | 'antigravity'; modelId: string }; visible: boolean | null; defaultEnabled?: boolean };
   patch?: AppPreferencePatch;
 }
 export interface AppPreferenceReply {

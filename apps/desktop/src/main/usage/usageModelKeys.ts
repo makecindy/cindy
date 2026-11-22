@@ -54,7 +54,7 @@ export function piSubscriptionUsageModelKey(model: string): string {
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 export function getSubscriptionValuePriceFor(
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'media' | 'auxiliary',
   model: string,
   pricing: ModelPricingMap | null,
   at?: string | Date,

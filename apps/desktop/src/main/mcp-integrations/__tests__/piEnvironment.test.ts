@@ -374,6 +374,31 @@ describe('piEnvironment per-session identity', () => {
     expect(after.status).toBe(401);
     await after.text();
   });
+  it('binds native Google helper calls to the actual teammate session instead of losing the caller', async () => {
+    const provider: McpProvider = { name: 'custom_google_identity', toClaudeSdkConfig: ctx => {
+      const server = new McpServer({ name: 'custom_google_identity', version: '1' });
+      server.tool('identity', 'Read the bound execution identity', {}, async () => {
+        const active = ctx.getSessionContext?.();
+        return { content: [{ type: 'text', text: JSON.stringify({ agentKind: active?.agentKind,
+          sessionId: active?.sessionId, instance: active?.sessionInstanceId, workingDir: active?.workingDir,
+          caller: active?.mcpCallerKind, attested: active?.mcpCallerAttested }) }] };
+      });
+      return { type: 'sdk', instance: server };
+    } };
+    const config = await getPiExtraSpawnConfig([provider], noopLogger(), { agentKind: 'antigravity',
+      sessionId: 'google-teammate', sessionInstanceId: 'google-instance', workingDir: '/teammate/workspace',
+      mcpCallerKind: 'root', mcpCallerAttested: true });
+    const client = new Client({ name: 'google-identity-test', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(config!.mcpBridge!.servers[0]!.url), {
+      requestInit: { headers: { Authorization: `Bearer ${config!.mcpBridge!.token}` } },
+    }));
+    try {
+      const result = await client.callTool({ name: 'identity', arguments: {} });
+      expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual({ agentKind: 'antigravity',
+        sessionId: 'google-teammate', instance: 'google-instance', workingDir: '/teammate/workspace',
+        caller: 'root', attested: true });
+    } finally { await client.close(); config!.disposeSessionCtx?.(); }
+  });
 
   /**
    * Cindy Bot 会话的 Maker Memory scope key(`bot:<botId>`)必须随注册的 ctx

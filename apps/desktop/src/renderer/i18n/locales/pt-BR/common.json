@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Uso do Google",
+    "quotaUnavailable": "A cota da conta está indisponível no momento",
+    "quotaGuide": "Esta versão do ACP não informa a cota nem o horário de redefinição. Consulte esses dados com /usage na CLI oficial do Antigravity.",
+    "openQuotaGuide": "Como consultar a cota oficial",
+    "moneyUnavailable": "Esta interface não informa o saldo de créditos nem as cobranças reais.",
+    "context": "Contexto da sessão (último relatório)",
+    "lastTurnTokens": "Tokens do último turno",
+    "unavailable": "Indisponível",
+    "modelControlsThinking": "Este modelo gerencia o próprio esforço de raciocínio.",
+    "noFastMode": "Esta fonte não oferece uma opção separada entre os modos rápido e padrão."
+  },
   "runtimePlugins": {
     "save": "Salvar",
     "promptUnsupported": "Este local de execução do Pi não oferece suporte a trechos de instruções de sistema.",
@@ -4389,6 +4401,27 @@
         "groupMembersFailed": "Não foi possível obter o status dos computadores do grupo agora.",
         "groupBadge_many": "Grupo de provedores · {{count}} computadores",
         "hiddenBanner": "Oculto do seletor de modelos neste computador. Os favoritos e as sessões que o usam não são afetados."
+      },
+      "antigravity": {
+        "configure": "Conectar manualmente",
+        "install": "Instalar e conectar",
+        "update": "Atualizar Antigravity CLI",
+        "installing": "Instalando…",
+        "setupHint": "A Cindy baixa e verifica o Antigravity CLI oficial e usa apenas a cota da assinatura do Google AI.",
+        "activeAccount": "Conta do Google ativa",
+        "existing": "Conta local padrão",
+        "removeAccount": "Remover conta",
+        "removeDescription": "O Cindy excluirá o login local e as configurações desta conta. Suas conversas no Cindy serão mantidas.",
+        "removeDefaultDescription": "O Cindy desconectará esta conta. O login do Google neste Mac e suas conversas no Cindy serão mantidos.",
+        "accountBusy": "Uma tarefa do Google ou alteração de conta está em andamento. Tente novamente quando terminar.",
+        "account": "Conta do Google {{number}}",
+        "refreshQuota": "Atualizar cota",
+        "legacyQuota": "Adicione uma conta do Google para ver a cota dela na Cindy.",
+        "noQuota": "A cota do Google está indisponível no momento.",
+        "failed": "Não foi possível concluir a operação da conta do Google.",
+        "installConfirmTitle": "Instalar o Antigravity CLI?",
+        "installConfirmDescription": "O Antigravity CLI ainda não está instalado neste computador. Deseja baixar e instalar a versão mais recente e continuar para o login do Google?",
+        "installConfirmButton": "Instalar e entrar"
       },
       "genericOAuth": {
         "subtitle": "Conta de assinatura",
@@ -11175,6 +11208,18 @@
     "nameLabel": "Como devemos chamar esse amigo?",
     "close": "Fechar",
     "list": {
+      "folders": {
+        "create": "Novo departamento",
+        "rename": "Renomear departamento",
+        "dissolve": "Dissolver departamento",
+        "name": "Nome do departamento",
+        "move": "Mover para departamento",
+        "unfiled": "Remover do departamento",
+        "up": "Mover para cima",
+        "down": "Mover para baixo",
+        "actions": "Ações para {{name}}",
+        "saveFailed": "Não foi possível salvar os departamentos."
+      },
       "createMenu": "Criar",
       "createTeammate": "Novo amigo",
       "joinWithLink": "Inserir link de convite…",
@@ -14375,6 +14420,24 @@
       "listAria": "Modos de permissão",
       "autoFallback": "A revisão automática está temporariamente indisponível. As permissões foram alteradas para Padrão e será solicitada confirmação quando necessário.",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "Permissões padrão",
+            "description": "Você aprova as edições e os comandos quando necessário."
+          },
+          "acceptEdits": {
+            "label": "Aceitar edições automaticamente",
+            "description": "Os arquivos podem ser editados diretamente. Você aprova as outras ações quando necessário."
+          },
+          "auto": {
+            "label": "Revisão automática",
+            "description": "Edita automaticamente o espaço de trabalho e executa comandos seguros. As ações de alto risco ainda exigem aprovação."
+          },
+          "bypassPermissions": {
+            "label": "Acesso total",
+            "description": "As ações comuns são permitidas diretamente, incluindo o acesso a arquivos fora do espaço de trabalho e a execução de comandos de rede."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Permissões padrão",

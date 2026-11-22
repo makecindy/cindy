@@ -26,11 +26,29 @@ export default {
     'never-signed-in': { about: 'Anthropic was never signed in here; it is still listed, stays on this computer, and MBP-M5 is offered as a choice' },
     'single-computer': { about: 'No other computer offers the provider: the row is hidden' },
     'local-management': { about: 'Five saved local accounts retain management and inline recovery while using remote models' },
+    'google-accounts': { about: 'Remove a spare Google account by email while keeping the local default selected' },
   },
   async ready(page) {
     await page.getByRole('heading').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'google-accounts') {
+      await page.locator('button[data-settings-search-action="Select the provider whose details are displayed"]')
+        .filter({ hasText: 'Google AI · Antigravity' }).click();
+      const remove = page.getByRole('button', { name: await ui.t('settings.providers.antigravity.removeAccount') });
+      await remove.click();
+      await page.getByRole('menuitem', { name: 'alex@example.test' }).click();
+      const dialog = page.getByRole('alertdialog');
+      await dialog.getByText(await ui.t('settings.providers.antigravity.removeDescription')).waitFor();
+      await ui.capture('remove-google-account-confirmation');
+      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.placement.deleteConfirm'), exact: true }).click();
+      await remove.click();
+      await page.getByRole('menuitem', { name: await ui.t('settings.providers.antigravity.existing') }).waitFor();
+      assert.equal(await page.getByRole('menuitem', { name: 'alex@example.test' }).count(), 0);
+      await page.keyboard.press('Escape');
+      await ui.capture('google-account-kept');
+      return;
+    }
     const row = page.getByTestId('provider-run-location');
     if (ui.case === 'recovery-pinned') {
       await row.waitFor();

@@ -21,6 +21,12 @@ export function createRemoteSessionExecutionResolver(deps: {
     const defaults = deps.readDefault();
     const agentKind = input.agentKind ?? defaults?.agentKind;
     if (!agentKind) throw new Error('Select an agent for the remote provider');
+    if (agentKind === 'antigravity') {
+      throw Object.assign(
+        new Error('ANTIGRAVITY_LOCAL_ONLY: Antigravity only runs with the destination computer’s local Google subscription.'),
+        { code: 'PROVIDER_ROUTE_UNAVAILABLE' },
+      );
+    }
     let routing: Awaited<ReturnType<typeof deps.readRemoteRouting>>;
     try { routing = await deps.readRemoteRouting(deviceId, agentKind); }
     catch (error) {

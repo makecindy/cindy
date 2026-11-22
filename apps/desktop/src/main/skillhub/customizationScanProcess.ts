@@ -32,6 +32,10 @@ parentPort?.once('message', async ({ data: request }) => {
     codex: scanCodexCustomizations,
     pi: scanPiCustomizations,
   };
+  if (request.engine === 'antigravity') {
+    parentPort.postMessage({ kind: 'result', id: request.id, result: { items: [], errors: [] } });
+    return;
+  }
   if (!Object.hasOwn(scanners, request.engine)) return;
   try {
     const result = await scanners[request.engine](request.options);

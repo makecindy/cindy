@@ -33,7 +33,7 @@ export function createRuntimePluginTaskPrompt({ maker, ghostTaskSystemPrompt, re
     const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';
     if (!taskPrompt) return maker.createSession(o, signal);
     const runtimeOpts = { ...o,
-      ...(o.agentKind === 'pi' ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
+      ...((o.agentKind === 'pi' || o.agentKind === 'antigravity') ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
         userPrompt: assembleSystemPromptSections(o.userPrompt?.trim() ?? '', [{ name: 'task', order: 0, text: taskPrompt }]),
       }),
     };

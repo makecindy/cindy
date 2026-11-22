@@ -501,7 +501,7 @@ type DiscordBotChannelListingWire = {
 type DiscordBotSessionAuthCheckWire = {
   ok: boolean;
   missing: 'gateway-key' | 'agent-oauth' | 'provider-key' | 'provider-disconnected' | null;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   model: string;
   providerId: string | null;
   providerLabel: string | null;
@@ -3049,12 +3049,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     selectedRoute?: import('../shared/botModelChain').BotModelRoute;
     lastByVendor: Partial<
       Record<
-        'cc' | 'codex' | 'pi',
+        'cc' | 'codex' | 'pi' | 'antigravity',
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
     /** 每个 vendor 是否由用户在 New Maker 中明确选过模型；device-link 默认校准据此保护显式选择。 */
-    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
+    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi' | 'antigravity', boolean>>;
     fastModeByModel: Record<string, boolean | 'ultrafast'>;
     effortByModel: Record<string, string>;
     providerModelMemory?: Record<
@@ -5271,6 +5271,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onReshareRequested: fanOutProviderShareReshareRequested,
   },
   // 供应商组：这台电脑上某个供应商的组设置(只接受本机应用窗口)。
+  antigravityAccounts: (command: import('../shared/antigravityAccounts').AntigravityAccountCommand, scope: import('../shared/antigravityAccounts').AntigravityOwnerScope): Promise<import('../shared/antigravityAccounts').AntigravityAccountsView> =>
+    ipcRenderer.invoke('maker:antigravity-accounts', command, scope),
   subscriptionAccounts: {
     onChanged: fanOutSubscriptionAccountsChanged,
     command: (command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView> =>
@@ -6807,7 +6809,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ─── Maker Core IPC ─────────────────────────────────────────────────────
   // renderer 通过统一 maker API 按 agentKind 调用 Claude Code / Codex / Pi。
   maker: {
-    listAvailableAgents: (): Promise<Array<'claude-code' | 'codex' | 'pi'>> =>
+    listAvailableAgents: (): Promise<Array<'claude-code' | 'codex' | 'pi' | 'antigravity'>> =>
       ipcRenderer.invoke('maker:list-available-agents'),
     listPluginEngines: (): Promise<import('../shared/pluginEngines.js').PluginEngineView[]> =>
       ipcRenderer.invoke('maker:list-plugin-engines'),
@@ -6826,7 +6828,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:set-plugin-engine-prefs', input),
     onPluginEnginesChanged: fanOutPluginEnginesChanged,
     onAgentsChanged: fanOutMakerAgentsChanged,
-    getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+    getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity'): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-capabilities', agentKind),
     listBotDelegations: (
       parentSessionId: string,
@@ -7035,13 +7037,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-      keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
+      keys: Partial<Record<'claude-code' | 'codex' | 'pi' | 'antigravity', string>>,
       options?: CustomProviderUpdateOptions,
     ): Promise<CustomProviderUpdateResult> =>
       ipcRenderer.invoke('maker:provider:custom:create', config, keys, options),
     updateCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-      keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
+      keys: Partial<Record<'claude-code' | 'codex' | 'pi' | 'antigravity', string>>,
       options?: CustomProviderUpdateOptions,
     ): Promise<CustomProviderUpdateResult> =>
       ipcRenderer.invoke('maker:provider:custom:update', config, keys, options),
@@ -7077,7 +7079,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchProviderAccountUsage: (input: {
       providerId: string;
       forceRefresh?: boolean;
-      agent?: 'claude-code' | 'codex' | 'pi';
+      agent?: 'claude-code' | 'codex' | 'pi' | 'antigravity';
     }): Promise<
       import('../shared/providerAccountUsage').ProviderAccountUsageResult
     > => ipcRenderer.invoke('maker:provider:account-usage', input),
@@ -7086,7 +7088,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 结构化结果：ok=true 带 models；失败 code 走 providerError.* i18n。
      */
     detectProvider: (input: ({ requestId: string; cancel: true } | {
-      requestId: string; agent: 'claude-code' | 'codex' | 'pi'; baseUrl: string;
+      requestId: string; agent: 'claude-code' | 'codex' | 'pi' | 'antigravity'; baseUrl: string;
       authMethod: 'apiKey' | 'none'; apiKey?: string | null; headers?: Record<string, string>;
       wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
     })): Promise<import('../shared/providerDetection').DeploymentDetectionResult> =>
@@ -7094,7 +7096,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchProviderModels: (input: {
       allowEmpty?: boolean;
       redirect?: 'error';
-      agent: 'claude-code' | 'codex' | 'pi';
+      agent: 'claude-code' | 'codex' | 'pi' | 'antigravity';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
       wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
@@ -7494,7 +7496,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ ok: true; runId: string; reviewerSessionId: string }> =>
       ipcRenderer.invoke('maker:review:start', input),
     listAgentCommands: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
       params: { sessionId?: string; allowManagedPiPackagePreview?: boolean } = {},
     ): Promise<{
       success: boolean;
@@ -7504,7 +7506,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:list-agent-commands', agentKind, params),
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
       params: {
         workingDir?: string;
         remoteHostId?: string;
@@ -7623,7 +7625,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onGoalStatusChanged: fanOutGoalStatusChanged,
 
     scanAtResources: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
       params: { workingDir: string; cap?: number; query?: string },
     ): Promise<{
       success: boolean;
@@ -7656,7 +7658,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createSession: (opts: {
       /** 可选: 复用外部 sessionId(本端 chat 用 local-db:sessions:create 拿到的 id) */
       id?: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
       workingDir: string;
       model: string;
       title?: string;
@@ -7774,7 +7776,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       message:
         string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> },
       createOpts?: {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
         workingDir: string;
         model: string;
         orcaRole?: 'lead' | 'worker' | null;
@@ -7819,7 +7821,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getContextUsage: (
       sessionId: string,
       createOpts?: {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
         workingDir: string;
         model: string;
         orcaRole?: 'lead' | 'worker' | null;
@@ -7861,7 +7863,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listActive: (): Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
@@ -7972,7 +7974,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     switchSessionAgent: (
       sessionId: string,
       // 'acp' = 插件引擎(providerId 为 acp-plugin:<插件>:<引擎>，只限本机任务)。
-      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'acp',
       model: string,
       providerId?: string | null,
       effort?: string,
@@ -7982,7 +7984,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       thinking?: boolean,
     ): Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'acp';
       model: string;
       engineReady: boolean;
       deferred?: boolean;
@@ -8016,7 +8018,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getSessionAgentSwitchIntent: (
       sessionId: string,
     ): Promise<{
-      targetAgentKind: 'claude-code' | 'codex' | 'pi';
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
       model: string;
       providerId: string | null;
       effort?: string;
@@ -8081,14 +8083,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Memory 控制 (Personalization → Memory section)。
     // 由 BaseAgent 子类落地; UI 层负责 Reset 前 confirm dialog。
     memoryGet: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
     ): Promise<{
       enabled: boolean;
       source: 'agent-default' | 'host-runtime' | 'user-config';
       stats?: { entryCount?: number; sizeBytes?: number; storagePath?: string };
     }> => ipcRenderer.invoke('maker:memory:get', agentKind),
     memorySet: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
       enabled: boolean,
     ): Promise<{
       effective: 'immediate' | 'next-session';
@@ -8097,7 +8099,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
     }> => ipcRenderer.invoke('maker:memory:set', agentKind, enabled),
     memoryReset: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
     ): Promise<{
       removedEntries?: number;
       removedBytes?: number;
@@ -8542,7 +8544,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Stage 2 C1: chat utility (前身 cc-agent:generate-title / cc-agent:plan-file-write)
     generateTitle: (
       message: string,
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
       sessionId?: string,
     ): Promise<{ title: string | null }> =>
       ipcRenderer.invoke('maker:generate-title', { message, agentKind, sessionId }),
@@ -8557,14 +8559,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoTitle: (request: {
       sessionId: string;
       text: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
       isUserText?: boolean;
     }): Promise<{ applied: boolean; done: boolean }> =>
       ipcRenderer.invoke('maker:auto-title', request),
     /** 输入框推荐提示词:turn 结束后预测用户下一步输入(turn 完成 → 调 IPC → 返回预测文本)。 */
     predictNextPrompt: (request: {
       sessionId: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
       messages: Array<{ role: string; content: string }>;
       workingDir?: string;
       turnGen: number;
@@ -8634,19 +8636,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 鉴权 (取代老 electronAPI.codex.auth.*) ────────────────────────
     auth: {
-      getState: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getState: (agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity'): Promise<unknown> =>
         ipcRenderer.invoke('maker:auth:get-state', agentKind),
       triggerLogin: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
-        options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string },
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
+        options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string; googleTarget?: import('../shared/antigravityAccounts').AntigravityLoginTarget },
       ): Promise<unknown> => ipcRenderer.invoke('maker:auth:trigger-login', agentKind, options),
       cancelLogin: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
         options?: { releaseOwner?: boolean; ownerId?: string },
       ): Promise<void> => ipcRenderer.invoke('maker:auth:cancel-login', agentKind, options),
       logout: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
-        ownerScope?: { dataOwnerId: string | null; ownerGeneration: number },
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
+        ownerScope?: { dataOwnerId: string | null; ownerGeneration: number; accountId?: string },
       ): Promise<void> => ipcRenderer.invoke('maker:auth:logout', agentKind, ownerScope),
       onStateChanged: fanOutMakerAuthStateChanged,
       onLoginProgress: fanOutMakerAuthLoginProgress,
@@ -8663,14 +8665,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 联合状态 (取代老 electronAPI.codex.binary.getStatus) ──────────
     agent: {
-      getStatus: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getStatus: (agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity'): Promise<unknown> =>
         ipcRenderer.invoke('maker:agent:status', agentKind),
       /** spawn 当前应用使用的 binary `--version`, 进程内缓存。About 面板用。 */
       getBinaryVersion: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
         options?: { checkLatest?: boolean },
       ): Promise<{
-        kind: 'claude-code' | 'codex' | 'pi';
+        kind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
         binaryPath: string | null;
         version: string | null;
         latestVersion: string | null;
@@ -8682,10 +8684,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 今日累计 (取代老 electronAPI.codex.usage.* + electronAPI.onUsageTodaySpendChanged) ─
     usage: {
-      getToday: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getToday: (agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity'): Promise<unknown> =>
         ipcRenderer.invoke('maker:usage:today', agentKind),
       getAccount: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
         providerId?: string,
       ): Promise<unknown> => ipcRenderer.invoke('maker:usage:account', agentKind, providerId),
       /** Codex app-server authoritative windows and banked reset-credit metadata. */

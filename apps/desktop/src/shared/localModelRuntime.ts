@@ -455,8 +455,8 @@ export function resolveManagedOllamaAgents(input: {
   version?: string;
   capabilities?: string[];
   requires?: string;
-}): Array<'pi' | 'claude-code' | 'codex'> {
-  const agents: Array<'pi' | 'claude-code' | 'codex'> = ['pi'];
+}): Array<'pi' | 'claude-code' | 'codex' | 'antigravity'> {
+  const agents: Array<'pi' | 'claude-code' | 'codex' | 'antigravity'> = ['pi'];
   if (input.requires && input.version && !ollamaVersionGte(input.version, input.requires)) {
     return agents;
   }

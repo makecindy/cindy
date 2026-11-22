@@ -67,7 +67,7 @@ export interface ReadCreateSessionOptsDeps {
 }
 
 function readAgentKind(value: unknown): EngineKind {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  if (value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'antigravity') return value;
   // Plugin ACP engine (docs/plans/acp-plugin-bridge.md); further checks in readCreateSessionOpts.
   if (value === 'acp') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
@@ -119,6 +119,9 @@ export function readCreateSessionOpts(
     throwIpcError('INVALID_PARAMS', 'extraDirs must not contain Host-owned library slots');
   }
   const agentKind = readAgentKind(body.agentKind);
+  if (agentKind === 'antigravity' && (body.remoteHostId || body.agentDeviceId || body.providerId !== 'google-antigravity-subscription')) {
+    throwIpcError('INVALID_PARAMS', 'Antigravity currently supports local ordinary tasks with its Google subscription source.');
+  }
   const model = requireString(body.model, 'model');
   const workspaceKind = readWorkspaceKind(body.workspaceKind);
   const explicitWorkingDir = readExplicitWorkingDir(body.workingDir);

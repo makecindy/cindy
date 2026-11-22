@@ -7,6 +7,7 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOver
 beforeEach(() => { disabled.providers = {}; });
 
 import {
+  antigravitySource,
   kimiSource,
   claudeSource,
   codexSource,
@@ -704,4 +705,54 @@ it('includes auxiliary tokens in widget totals without inventing a Claude harnes
   expect(scope.models['30']).toEqual([]);
   expect(scope.modelSeries?.models).toEqual([{ name: 'helper', harness: 'auxiliary' }]);
   expect(scope.modelSeries?.tokens).toEqual([[1100, 0]]);
+});
+
+// Unit: the menu bar and island share this projection. A more depleted Claude
+// bucket used to override Gemini, and must only supply the summary on its own.
+it.each(['mixed', 'claude-only', 'expired-gemini'] as const)('projects Antigravity quota for the menu bar and island (%s)', (mode) => {
+  const account = provider({
+    id: 'google-antigravity-subscription',
+    name: 'Google AI · Antigravity',
+    auth: { method: 'oauth' },
+    access: { kind: 'subscription', product: 'Google AI Pro' },
+  });
+  const source = antigravitySource(account, {
+    configured: true,
+    connected: true,
+    activeId: 'prof-1',
+    accounts: [{ id: 'prof-1', identity: 'gemini@example.test' }],
+    usage: [
+      {
+        limitId: '0',
+        limitName: 'Claude Models',
+        updatedAt: NOW,
+        primary: { usedPercent: 50, windowMinutes: 300, resetsAt: nowSec + 3600 },
+        secondary: { usedPercent: 60, windowMinutes: 10_080, resetsAt: nowSec + 86_400 },
+      },
+      ...(mode === 'claude-only' ? [] : [{
+        limitId: '1',
+        limitName: 'Gemini Models',
+        updatedAt: NOW,
+        primary: { usedPercent: 25, windowMinutes: 300, resetsAt: mode === 'mixed' ? nowSec + 3600 : nowSec },
+        secondary: { usedPercent: 40, windowMinutes: 10_080, resetsAt: mode === 'mixed' ? nowSec + 86_400 : nowSec },
+      }]),
+    ],
+  }, NOW);
+  expect(source).toMatchObject({
+    family: 'gemini',
+    brand: 'Gemini',
+    account: 'gemini@example.test',
+    plan: 'Google AI Pro',
+    updatedAtMs: NOW,
+  });
+  const summary = source.windows.filter(w => w.kind !== 'scoped');
+  expect(summary.map(w => [w.kind, w.usedPercent, w.windowMinutes])).toEqual(
+    mode === 'expired-gemini' ? [] : [
+      ['session', mode === 'mixed' ? 25 : 50, 300],
+      ['week', mode === 'mixed' ? 40 : 60, 10_080],
+    ],
+  );
+  expect(source.windows.filter(w => w.kind === 'scoped').map(w => w.label)).toEqual(
+    mode === 'mixed' ? ['Claude Models', 'Gemini Models'] : mode === 'expired-gemini' ? ['Claude Models'] : [],
+  );
 });

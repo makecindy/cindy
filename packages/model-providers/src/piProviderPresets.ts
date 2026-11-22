@@ -108,7 +108,7 @@ export function appendPiProviderPresets(presets: readonly ProviderPreset[]): Pro
   return out.map(preset => ({ ...preset, runtimes: Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => {
     if (!runtime) return [agent, runtime];
     return [agent, { ...runtime, models: runtime.models.map(originalModel => {
-      const model = providerInterfaceModelRoute(originalModel, agent as 'claude-code' | 'codex' | 'pi', preset.id, runtime.baseUrl, true);
+      const model = providerInterfaceModelRoute(originalModel, agent as 'claude-code' | 'codex' | 'pi' | 'antigravity', preset.id, runtime.baseUrl, true);
       if ('selectedInterface' in model && model.selectedInterface) return model;
       if (runtime.requestPath || (model.route && 'requestPath' in model.route && model.route.requestPath)) return model;
       const routeOf = (rt: typeof runtime, m: typeof model) => {

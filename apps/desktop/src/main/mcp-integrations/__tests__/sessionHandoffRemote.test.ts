@@ -321,4 +321,42 @@ describe('cross-device send_to_session sender', () => {
     expect(late).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });
     expect(JSON.stringify(late)).not.toContain('old account task');
   });
+
+  it('accepts remote antigravity task creation and does not map ANTIGRAVITY_LOCAL_ONLY to HOST_NOT_READY', async () => {
+    const target = { deviceId: 'mac-mini', sessionId: '11111111-1111-4111-8111-111111111111' };
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      const payload = args[0] as { action?: string };
+      if (payload.action === 'task-action-capability') {
+        return { ok: true, result: { taskActionVersion: 1, plainRequestBody: 1, ordinaryCreateVersion: 1, ordinaryCreateAutoTitle: 1 } };
+      }
+      return {
+        ok: true,
+        result: {
+          ok: true,
+          targetSessionId: target.sessionId,
+          agentKind: 'antigravity',
+          wakeKind: 'created',
+          targetTitle: 'Remote Gemini',
+          targetLastUserSendAt: null,
+          model: 'gemini-4-neon',
+          providerId: 'google-antigravity-subscription',
+          workingDir: '/remote/work',
+        },
+      };
+    });
+    const handoff = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+    const created = await handoff(target, {
+      message: 'Run Gemini on target',
+      sender: async () => ({ sessionId: 'me' }),
+      create: async () => ({ agentKind: 'antigravity', model: 'gemini-4-neon', permissionMode: 'auto' }),
+    });
+    expect(created).toMatchObject({ ok: true, agentKind: 'antigravity', wakeKind: 'created', model: 'gemini-4-neon' });
+
+    const rejected = await handoff(target, {
+      message: 'Borrow credentials',
+      sender: async () => ({ sessionId: 'me' }),
+      create: async () => { throw new Error('ANTIGRAVITY_LOCAL_ONLY'); },
+    });
+    expect(rejected).toMatchObject({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE' });
+  });
 });

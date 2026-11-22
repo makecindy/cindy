@@ -16,7 +16,7 @@ export interface GhostModelsNeeds {
 
 /** Explicit model route shared by new-task, turn and request control points. */
 export interface GhostModelRoute {
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
   model: string;
   providerId: string;
   agentDeviceId?: string;

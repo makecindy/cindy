@@ -823,30 +823,41 @@ describe('stale device directory', () => {
   // 分片,每片到点按墙上时钟重新核对(Codex review #9360)。
   it('chunks a retry deadline beyond the 32-bit timer limit instead of tight-looping', async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
-    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
-    const deadline = Date.now() + 3_000_000_000; // > 2^31 - 1(~24.8 天)
-    listDevices.mockImplementation(async () => ({
-      devices: stalePeers(), stale: true, retryAtMs: deadline,
-    }));
-    renderHook(() => useDeviceLinkRemoteProjects());
-    await settle();
-    // 任何一片的延时都不该越过 32 位上限(溢出 = 立刻触发 = 紧追循环)。
-    const delays = setTimeoutSpy.mock.calls
-      .map((call) => call[1])
-      .filter((value): value is number => typeof value === 'number');
-    expect(delays.length).toBeGreaterThan(0);
-    expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647);
-    const initial = listDevices.mock.calls.length;
-    // 上限之内的推进不触发重读。
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000_000);
-    });
-    expect(listDevices.mock.calls.length).toBe(initial);
-    // 分片走完、墙上期限到点之后,重读恢复(之后按自己的退避阶梯继续,这里不逐一数)。
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000_000_000);
-    });
-    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+      const maxDelay = 2_147_483_647;
+      const retryDelay = 3_000_000_000;
+      const deadline = Date.now() + retryDelay;
+      listDevices.mockImplementation(async () => ({
+        devices: stalePeers(), stale: true, retryAtMs: deadline,
+      }));
+      renderHook(() => useDeviceLinkRemoteProjects());
+      await settle();
+
+      // Ordinary mirror reconciliation has its own test. Clear its interval so
+      // async fake time can cross 35 days without running hundreds of thousands of passes.
+      for (const result of setIntervalSpy.mock.results) {
+        if (result.type === 'return') clearInterval(result.value);
+      }
+      const delays = () => setTimeoutSpy.mock.calls
+        .map((call) => call[1])
+        .filter((value): value is number => typeof value === 'number');
+      expect(Math.max(...delays())).toBe(maxDelay);
+      const initial = listDevices.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(maxDelay);
+      });
+      expect(listDevices).toHaveBeenCalledTimes(initial);
+      expect(delays()).toContain(retryDelay - maxDelay);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(retryDelay - maxDelay);
+      });
+      expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+    } finally {
+      setIntervalSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   // 账号边界:main 侧按 owner 记限流期限,渲染侧也得跟着清 —— 否则新账号的目录读失败时,

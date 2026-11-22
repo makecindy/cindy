@@ -95,6 +95,22 @@ function recentOf(over: Partial<RecentModelItem> = {}): RecentModelItem {
 }
 
 describe('resolveUnifiedRowConfig', () => {
+  it.each(['claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-oss-120b-medium'])('does not infer another engine or provider from subscription model %s', modelId => {
+    const efforts: UnifiedAgentCapability['efforts'] = modelId === 'gpt-oss-120b-medium' ? [] : ['low', 'medium', 'high'];
+    const entry = entryOf({ providerId: 'google-antigravity-subscription', modelId, candidates: ['antigravity'], recommended: 'antigravity', nativeAgent: 'antigravity',
+      capabilities: { antigravity: capability('antigravity', { wireModelId: modelId, efforts, defaultEffort: efforts.length ? 'medium' : null }) } });
+    const selected = resolveUnifiedRowConfig({ entry, memoryEffort: () => 'high', memoryFast: () => true, agentFastModeCapable: () => false });
+    expect(selected).toMatchObject({ agent: 'antigravity', engine: 'antigravity', fast: false, effort: efforts.length ? 'high' : null });
+    expect(wireModelIdOf(entry, selected.agent)).toBe(modelId);
+  });
+  it('uses native Google thought levels and keeps fixed Orchestrator and Fast availability separate', () => {
+    const google = entryOf({ providerId: 'google-antigravity-subscription', modelId: 'gemini-4-hydrogen', candidates: ['antigravity'], recommended: 'antigravity', nativeAgent: 'antigravity',
+      capabilities: { antigravity: capability('antigravity', { efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', wireModelId: 'gemini-4-hydrogen' }) } });
+    const hydrogen = resolveUnifiedRowConfig({ entry: google, memoryEffort: () => 'xhigh', memoryFast: () => true, agentFastModeCapable: () => false });
+    expect(hydrogen).toMatchObject({ agent: 'antigravity', effort: 'xhigh', fast: false, fastCapable: false });
+    const fixed = resolveUnifiedRowConfig({ entry: { ...google, modelId: 'gemini-pro-orchestrator-g1-pro', capabilities: { antigravity: capability('antigravity', { efforts: [], defaultEffort: null }) } }, memoryEffort: () => 'high' });
+    expect(fixed.efforts).toEqual([]); expect(fixed.effort).toBeNull();
+  });
   it('无 override 时落推荐引擎与目录默认档', () => {
     const config = resolveUnifiedRowConfig({ entry: entryOf() });
     expect(config.engine).toBe('cc');

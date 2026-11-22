@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Utilisation de Google",
+    "quotaUnavailable": "Le quota du compte est temporairement indisponible",
+    "quotaGuide": "Cette version d’ACP ne fournit ni le quota ni son heure de réinitialisation. Consultez-les avec /usage dans la CLI officielle d’Antigravity.",
+    "openQuotaGuide": "Comment consulter le quota officiel",
+    "moneyUnavailable": "Cette interface ne fournit ni le solde de crédits ni les frais réels.",
+    "context": "Contexte de la session (dernier rapport)",
+    "lastTurnTokens": "Jetons du dernier tour",
+    "unavailable": "Indisponible",
+    "modelControlsThinking": "Ce modèle gère son propre effort de raisonnement.",
+    "noFastMode": "Cette source ne propose pas de sélection distincte entre les modes rapide et standard."
+  },
   "runtimePlugins": {
     "save": "Enregistrer",
     "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
@@ -4389,6 +4401,27 @@
         "groupMembersFailed": "Impossible d'obtenir pour le moment l'état des ordinateurs du groupe.",
         "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs",
         "hiddenBanner": "Masqué dans le sélecteur de modèles sur cet ordinateur. Les favoris et les sessions qui l'utilisent ne sont pas affectés."
+      },
+      "antigravity": {
+        "configure": "Connecter manuellement",
+        "install": "Installer et connecter",
+        "update": "Mettre à jour Antigravity CLI",
+        "installing": "Installation…",
+        "setupHint": "Cindy télécharge et vérifie la CLI officielle d’Antigravity et utilise uniquement le quota de l’abonnement Google AI.",
+        "activeAccount": "Compte Google actif",
+        "existing": "Compte local par défaut",
+        "removeAccount": "Supprimer le compte",
+        "removeDescription": "Cindy supprimera la connexion locale et les réglages de ce compte. Vos conversations Cindy seront conservées.",
+        "removeDefaultDescription": "Cindy déconnectera ce compte. La connexion à Google sur ce Mac et vos conversations Cindy seront conservées.",
+        "accountBusy": "Une tâche Google ou une modification de compte est en cours. Réessayez une fois celle-ci terminée.",
+        "account": "Compte Google {{number}}",
+        "refreshQuota": "Actualiser le quota",
+        "legacyQuota": "Ajoutez un compte Google pour afficher son quota dans Cindy.",
+        "noQuota": "Le quota Google est temporairement indisponible.",
+        "failed": "Impossible de terminer l’opération sur le compte Google.",
+        "installConfirmTitle": "Installer Antigravity CLI ?",
+        "installConfirmDescription": "Antigravity CLI n’est pas encore installé sur cet ordinateur. Télécharger et installer la dernière version puis ouvrir la connexion Google ?",
+        "installConfirmButton": "Installer et se connecter"
       },
       "genericOAuth": {
         "subtitle": "Compte d'abonnement",
@@ -11175,6 +11208,18 @@
     "nameLabel": "Comment l'appeler ?",
     "close": "Fermer",
     "list": {
+      "folders": {
+        "create": "Nouveau département",
+        "rename": "Renommer le département",
+        "dissolve": "Dissoudre le département",
+        "name": "Nom du département",
+        "move": "Déplacer vers le département",
+        "unfiled": "Retirer du département",
+        "up": "Déplacer vers le haut",
+        "down": "Déplacer vers le bas",
+        "actions": "Actions pour {{name}}",
+        "saveFailed": "Impossible d’enregistrer les départements."
+      },
       "createMenu": "Créer",
       "createTeammate": "Nouvel ami",
       "joinWithLink": "Saisir un lien d'invitation…",
@@ -14375,6 +14420,24 @@
       "listAria": "Modes d'autorisation",
       "autoFallback": "La revue automatique est temporairement indisponible. Passage aux autorisations par défaut ; une confirmation sera demandée si nécessaire.",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "Autorisations par défaut",
+            "description": "Vous approuvez les modifications et les commandes lorsque nécessaire."
+          },
+          "acceptEdits": {
+            "label": "Modifications acceptées",
+            "description": "Les fichiers peuvent être modifiés directement. Vous approuvez les autres actions lorsque nécessaire."
+          },
+          "auto": {
+            "label": "Revue auto",
+            "description": "Les modifications dans l’espace de travail et les commandes sûres sont automatiques. Les actions à haut risque demandent toujours votre approbation."
+          },
+          "bypassPermissions": {
+            "label": "Accès complet",
+            "description": "Les opérations courantes sont autorisées directement, y compris l’accès aux fichiers hors de l’espace de travail et l’exécution de commandes réseau."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Autorisations par défaut",

@@ -1,5 +1,31 @@
 import { resetTimeLevel, willLeaveQuotaUnused } from './quotaLevel';
 
+export interface CodexCreditsUsabilityInput {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  balance?: string | number | null;
+  spendControlReached?: boolean;
+}
+
+/** Whether an OpenAI subscription account still has spendable prepaid credits. */
+export function hasUsableCodexCredits(
+  credits: CodexCreditsUsabilityInput | null | undefined,
+): boolean {
+  if (!credits || credits.hasCredits !== true || credits.spendControlReached === true) {
+    return false;
+  }
+  if (credits.unlimited === true) return true;
+  const rawBalance =
+    typeof credits.balance === "string"
+      ? credits.balance.trim().replace(/,/g, "")
+      : credits.balance;
+  const balance =
+    rawBalance !== null && rawBalance !== undefined && rawBalance !== ""
+      ? Number(rawBalance)
+      : NaN;
+  return Number.isFinite(balance) && balance > 0;
+}
+
 /** A picker previews candidate accounts. It never reserves or rebinds a task. */
 export function selectableSubscriptionAccount<
   T extends {
@@ -9,6 +35,11 @@ export function selectableSubscriptionAccount<
     running: number;
     limit: number;
     identity?: string;
+    usage?: {
+      codex?: {
+        credits?: CodexCreditsUsabilityInput | null;
+      } | null;
+    } | null;
   },
 >(
   pool: {
@@ -30,7 +61,9 @@ export function selectableSubscriptionAccount<
   const available = pool.accounts.filter(
     (account) =>
       !account.paused &&
-      account.status === "ready" &&
+      (account.status === "ready" ||
+        (account.status === "limited" &&
+          hasUsableCodexCredits(account.usage?.codex?.credits))) &&
       account.running < account.limit,
   );
   return available.length === 1 && available[0].identity?.trim()

@@ -12,6 +12,7 @@ let current: DataOwnerGeneration = {
   dataOwnerId: null,
   generation: 0,
 };
+const listeners = new Set<() => void>();
 
 const listeners = new Set<() => void>();
 export function subscribeDataOwnerGeneration(listener: () => void): () => void {
@@ -35,6 +36,11 @@ export function setDataOwnerGeneration(dataOwnerId: string | null, generation?: 
 
 export function getDataOwnerGeneration(): DataOwnerGeneration {
   return current;
+}
+
+export function subscribeDataOwnerGeneration(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
 }
 
 export function isDataOwnerGenerationCurrent(

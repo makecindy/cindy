@@ -31,7 +31,7 @@ interface ReviewRow {
   permissionMode: string;
   planModeEnabled: number;
   status: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
   providerId: string | null;
   model: string;
   effort: string;

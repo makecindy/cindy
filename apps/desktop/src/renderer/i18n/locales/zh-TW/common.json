@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google 用量",
+    "quotaUnavailable": "帳號剩餘額度暫時無法取得",
+    "quotaGuide": "此版本 ACP 未提供帳號額度及重設時間，可在官方 Antigravity CLI 輸入 /usage 查看。",
+    "openQuotaGuide": "查看官方額度查詢方法",
+    "moneyUnavailable": "目前介面未提供 credits 餘額及實際費用。",
+    "context": "本工作階段上下文（最近回報）",
+    "lastTurnTokens": "最近一輪 Tokens",
+    "unavailable": "暫時無法取得",
+    "modelControlsThinking": "此模型自行控制推理強度。",
+    "noFastMode": "此來源未提供獨立的 Fast / Standard 切換。"
+  },
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
@@ -4290,6 +4302,27 @@
         "groupMembersTitle": "組內電腦",
         "groupMembersFailed": "暫時讀不到組內電腦的狀態。",
         "hiddenBanner": "已從這台電腦的模型選擇器中隱藏。收藏和正在使用它的任務不受影響。"
+      },
+      "antigravity": {
+        "configure": "手動連接",
+        "install": "一鍵安裝並連線",
+        "update": "更新 Antigravity CLI",
+        "installing": "正在安裝…",
+        "setupHint": "Cindy 會下載並驗證官方 Antigravity CLI，並僅使用 Google AI 訂閱額度。",
+        "activeAccount": "目前的 Google 帳號",
+        "existing": "本機預設帳號",
+        "removeAccount": "刪除帳號",
+        "removeDescription": "將刪除此帳號在 Cindy 的本機授權和設定，並保留 Cindy 對話記錄。",
+        "removeDefaultDescription": "Cindy 將解除此帳號的連線，並保留這台 Mac 上的 Google 登入和 Cindy 對話記錄。",
+        "accountBusy": "Google 任務或帳號操作正在進行，請稍後再試。",
+        "account": "Google 帳號 {{number}}",
+        "refreshQuota": "重新整理額度",
+        "legacyQuota": "新增 Google 帳號後，即可在 Cindy 中查看該帳號的額度。",
+        "noQuota": "暫時無法讀取 Google 額度。",
+        "failed": "無法完成 Google 帳號操作。",
+        "installConfirmTitle": "安裝 Antigravity CLI？",
+        "installConfirmDescription": "本機尚未安裝 Antigravity CLI。確定後將自動下載並安裝最新版，安裝完成後立即開啟 Google 登入。",
+        "installConfirmButton": "安裝並登入"
       },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
@@ -11046,6 +11079,18 @@
     "nameLabel": "怎麼稱呼",
     "close": "關閉",
     "list": {
+      "folders": {
+        "create": "新建部門",
+        "rename": "重新命名部門",
+        "dissolve": "解散部門",
+        "name": "部門名稱",
+        "move": "移到部門",
+        "unfiled": "移出部門",
+        "up": "上移",
+        "down": "下移",
+        "actions": "{{name}}的操作",
+        "saveFailed": "無法儲存部門。"
+      },
       "createMenu": "新增",
       "createTeammate": "新增夥伴",
       "joinWithLink": "輸入邀請連結…",
@@ -14206,6 +14251,24 @@
       "listAria": "權限模式",
       "autoFallback": "自動審核暫時不可用，已切換為預設權限；需要時會詢問你。",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "預設權限",
+            "description": "編輯和指令操作按需由你核准。"
+          },
+          "acceptEdits": {
+            "label": "允許編輯",
+            "description": "可直接編輯檔案，其他操作按需由你核准。"
+          },
+          "auto": {
+            "label": "自動審核",
+            "description": "可自動編輯工作區內的檔案及執行安全指令，高風險操作仍需確認。"
+          },
+          "bypassPermissions": {
+            "label": "完全訪問",
+            "description": "一般操作直接允許，可存取工作區外的檔案及連網執行指令。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "預設權限",

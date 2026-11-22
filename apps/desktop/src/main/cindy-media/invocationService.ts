@@ -1293,6 +1293,7 @@ async function prepareInvocation(
     if (providerModel.guideDriven) {
       const candidates = providerModel.sourceAgents ?? (providerModel.sourceAgent ? [providerModel.sourceAgent] : []);
       const agent = sourceAgent ?? providerModel.sourceAgent ?? (candidates.length === 1 ? candidates[0] : undefined);
+      if (agent === 'antigravity') return failure('CONNECTION_UNAVAILABLE', 'ACP does not provide HTTP media connections');
       if (!agent) return failure('CONNECTION_AMBIGUOUS', '这个型号有多个实际连接，请选择 source_agent 后再 prepare', false, { source_agents: candidates });
       if (!candidates.includes(agent)) return failure('CONNECTION_UNAVAILABLE', '指定引擎没有这个媒体型号的可用连接');
       const connection = await resolveProviderHttpConnection(model.providerId, resolvedModelId, capability, agent);

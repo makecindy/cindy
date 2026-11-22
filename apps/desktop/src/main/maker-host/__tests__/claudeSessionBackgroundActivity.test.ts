@@ -9,8 +9,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from '@cindy/maker-core';
+import { ANTIGRAVITY_NATIVE_TOOL_NAME, type AgentEvent } from '@cindy/maker-core';
 import {
+  clearAntigravityProcessActivity,
   clearClaudeSessionBackgroundActivity,
   createClaudeSessionActivityResponseObserver,
   getClaudeSessionBackgroundActivity,
@@ -169,6 +170,36 @@ describe('claude-session-background-activity', () => {
       setPluginEngineBackgroundWorkListener((id, active, options) => island.push([id, active, options.turnStarting]));
     });
 
+    // Unit: the 2026-11-22 incident left a native "Run schedule" card unpaired
+    // at done. Existing unpaired-call tests covered work, not a passive timer.
+    it.each([
+      { toolName: 'Run schedule' },
+      { toolName: 'schedule' },
+      { toolName: 'Set a timer', nativeToolName: 'schedule' },
+    ])('keeps $toolName idle until the engine emits wake output', ({ toolName, nativeToolName }) => {
+      const sid = 'agy-timer';
+      const scheduled = (toolUseId: string, turnScope?: 'background'): AgentEvent => ({
+        ...toolUse(toolUseId, turnScope),
+        source: 'antigravity',
+        [ANTIGRAVITY_NATIVE_TOOL_NAME]: nativeToolName,
+        data: { toolUseId, toolName, input: { DurationSeconds: 60, Prompt: 'Continue' } },
+      });
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, scheduled('timer'));
+      noteClaudeSessionTurnState(sid, false);
+      observePluginEngineEvent(sid, scheduled('another-timer', 'background'));
+      vi.advanceTimersByTime(60_000);
+      expect(broadcasts).toEqual([]);
+      expect(island).toEqual([]);
+
+      observePluginEngineEvent(sid, {
+        type: 'text', source: 'antigravity', turnScope: 'background', data: { text: 'Woke.' },
+      });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
+
     it('回合结束仍有未完成的工具调用立即点亮,结果到达后按静默窗熄灭;没有回合外工作不触发', () => {
       noteClaudeSessionTurnState('quiet', true);
       observePluginEngineEvent('quiet', toolUse('read'));
@@ -205,10 +236,137 @@ describe('claude-session-background-activity', () => {
       expect(island).toEqual([[sid, true, false], [sid, false, true]]);
 
       noteClaudeSessionTurnState(sid, false);
-      observePluginEngineEvent(sid, toolUse('wait-for-ci', 'background'));
+      observePluginEngineEvent(sid, { ...toolUse('wait-for-ci', 'background'), source: 'antigravity' });
       vi.advanceTimersByTime(31 * 60_000 - 1_000);
       expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
       vi.advanceTimersByTime(1_100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      // Unit: an expired, still-unpaired ID must not make a later turn look busy.
+      // The old test only covered the off edge, before the next pair of turn events.
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
+
+    // Unit, cd245937: replay a second turn ending before the first call's cap.
+    // The existing expiry test only covered turns that start after the cap.
+    it('does not relight an unexpired Antigravity call when a later turn completes', () => {
+      const sid = 'agy';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, { ...toolUse('old-command'), source: 'antigravity' });
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+
+      vi.advanceTimersByTime(1_053_350);
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, { ...toolUse('new-command'), source: 'antigravity' });
+      observePluginEngineEvent(sid, { ...toolResult('new-command'), source: 'antigravity' });
+      vi.advanceTimersByTime(58_765);
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+
+      expect(broadcasts).toEqual([{ sessionId: sid, active: true }, { sessionId: sid, active: false }]);
+      expect(island).toEqual([[sid, true, false], [sid, false, true]]);
+
+      observePluginEngineEvent(sid, {
+        type: 'text', source: 'antigravity', turnScope: 'background', data: { text: 'Other work.' },
+      });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+
+      observePluginEngineEvent(sid, { ...toolResult('old-command', 'background'), source: 'antigravity' });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
+
+    // Unit, cd245937: matching progress in the next turn can still prove work.
+    // A different old ID in the same session must stay quiet when that work ends.
+    it('relights only the Antigravity call that made progress during the later turn', () => {
+      const sid = 'agy';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, { ...toolUse('quiet'), source: 'antigravity' });
+      observePluginEngineEvent(sid, { ...toolUse('working'), source: 'antigravity' });
+      noteClaudeSessionTurnState(sid, false);
+      vi.advanceTimersByTime(5_000);
+
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, {
+        type: 'antigravity_tool_activity', source: 'antigravity', turnScope: 'background',
+        data: { kind: 'tool_progress', toolUseId: 'working' },
+      });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+
+      observePluginEngineEvent(sid, { ...toolResult('working', 'background'), source: 'antigravity' });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(island).toEqual([[sid, true, false], [sid, false, true], [sid, true, false], [sid, false, false]]);
+    });
+
+    // Unit, cd245937: a native shell exit can precede ACP tool results. Two
+    // concurrent commands expose a session-wide clear or mixing the two IDs.
+    it('clears only the Antigravity call linked to the native task that exited', () => {
+      const sid = 'agy';
+      const exit = (taskId: string, toolUseId: string) => observePluginEngineEvent(sid, {
+        type: 'antigravity_tool_activity', source: 'antigravity', turnScope: 'background',
+        data: { kind: 'command_exited', taskId, toolUseId },
+      });
+      noteClaudeSessionTurnState(sid, true);
+      for (const i of ['1', '2']) {
+        observePluginEngineEvent(sid, { ...toolUse(`call-${i}`), source: 'antigravity' });
+      }
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+
+      exit('task-1', 'call-1');
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      exit('task-2', 'call-2');
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
+
+    // Unit: the 2026-11-22 incident exposed a missing process-wide off edge.
+    // A live command plus recent output outlasts individual result pairing.
+    it('clears only the exited Antigravity session and stays quiet for late results', () => {
+      const sid = 'agy-exit';
+      const other = 'agy-live';
+      for (const sessionId of [sid, other]) {
+        noteClaudeSessionTurnState(sessionId, true);
+        observePluginEngineEvent(sessionId, {
+          type: 'tool_use', source: 'antigravity', sessionInstanceId: 'current',
+          data: { toolUseId: 'command', toolName: 'Run run_command' },
+        });
+        noteClaudeSessionTurnState(sessionId, false);
+        expect(getClaudeSessionBackgroundActivity(sessionId)).toBe(true);
+      }
+      observePluginEngineEvent(sid, {
+        type: 'text', source: 'antigravity', turnScope: 'background', sessionInstanceId: 'current',
+        data: { text: 'Finishing.' },
+      });
+      clearAntigravityProcessActivity(sid, 'retired');
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      observePluginEngineEvent(sid, {
+        type: 'antigravity_tool_activity', source: 'antigravity', turnScope: 'background', sessionInstanceId: 'current',
+        data: { kind: 'process_exited' },
+      });
+      observePluginEngineEvent(sid, { ...toolResult('command', 'background'), source: 'antigravity' });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(getClaudeSessionBackgroundActivity(other)).toBe(true);
+      expect(broadcasts.at(-1)).toEqual({ sessionId: sid, active: false });
+      expect(island.at(-1)).toEqual([sid, false, false]);
+    });
+
+    // Unit: one post-turn text event is enough to extend a live ACP tool's
+    // quiet window, even though Antigravity's unmatched IDs have a fixed cap.
+    it('preserves the rolling quiet window for ACP with new background output', () => {
+      const sid = 'acp';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('long-tool'));
+      noteClaudeSessionTurnState(sid, false);
+      vi.advanceTimersByTime(20 * 60_000);
+      observePluginEngineEvent(sid, { type: 'text', turnScope: 'background', data: { text: 'Working.' } });
+      vi.advanceTimersByTime(20 * 60_000);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      vi.advanceTimersByTime(11 * 60_000 + 100);
       expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
     });
   });

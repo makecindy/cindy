@@ -19,6 +19,9 @@ import { refreshDiscoveredCodexModels } from '../maker-host/createDesktopProvide
 import { requestCodexModelBackfill } from '../maker-host/index.js';
 import { syncOpenAiMediaAfterCodexAuthChange } from '../maker-host/model-discovery/openai-media.js';
 import { registerMakerAuthHandlers } from './authHandlers.js';
+import { getAntigravityAccounts } from '../maker-host/antigravity-host.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import type { IpcMainInvokeEvent } from 'electron';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 
 const log = createLogger('maker-ipc:auth');
@@ -64,6 +67,15 @@ export function registerMakerAuthIpc(maker: Maker): void {
         await requestCodexModelBackfill();
       }
       syncOpenAiMediaAfterCodexAuthChange();
+    },
+    undefined,
+    {
+      assertRenderer: event => assertTrustedAppRendererEvent(event as IpcMainInvokeEvent),
+      assertActiveAccount(id) {
+        const accounts = getAntigravityAccounts();
+        if (!accounts) throw new Error('ANTIGRAVITY_UNAVAILABLE');
+        accounts.assertActiveAccount(id);
+      },
     },
   );
 

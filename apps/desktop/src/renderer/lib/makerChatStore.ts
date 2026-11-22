@@ -801,7 +801,7 @@ export interface ChatMessage {
 export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface AgentTaskUpdate {
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   taskId: string;
   parentToolUseId?: string;
   status: AgentTaskStatus;
@@ -2580,7 +2580,7 @@ export interface AgentSwitchIntentRecord {
    * 'acp' = 切到插件引擎(docs/plans/acp-plugin-bridge.md)，providerId 是 acp-plugin:<插件>:<引擎>。
    * 内置引擎的展示与切换链路只读 builtinAgentSwitchIntent()，插件引擎由选择器单独呈现。
    */
-  target: 'claude-code' | 'codex' | 'pi' | 'acp';
+  target: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'acp';
   model: string;
   providerId: string | null;
   effort?: string;
@@ -2627,7 +2627,7 @@ export interface SessionChatState {
    * Codex reducer。ensureInitialMessages 从 DB sessions.agent_kind 读出来灌进。
    * 默认 'claude-code' 兼容老路径(老 session row 没有此字段时按 Claude 处理)。
    */
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   /** 下一条消息发送时才由 main 应用的跨引擎切换意图。 */
   agentSwitchIntent: AgentSwitchIntentRecord | null;
   /**
@@ -7903,7 +7903,7 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex' | 'pi';
+    source?: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
     turnScope?: 'turn' | 'background';
@@ -7955,7 +7955,7 @@ type PendingTextDeltaBatch = {
   text: string;
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'vision-bridge';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -11046,7 +11046,7 @@ setRemoteTerminalErrorProbe(hasSessionTerminalError);
 
 interface ActiveSessionSnapshot {
   sessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   isTurnRunning: boolean;
 }
 
@@ -11096,7 +11096,7 @@ function isActiveSessionSnapshot(value: unknown): value is ActiveSessionSnapshot
   const item = value as Record<string, unknown>;
   return (
     typeof item.sessionId === 'string' &&
-    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi') &&
+    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi' || item.agentKind === 'antigravity') &&
     typeof item.isTurnRunning === 'boolean'
   );
 }
@@ -11183,11 +11183,17 @@ function syncActiveTurnsFromMain(): void {
   const listActive = window.electronAPI?.maker?.listActive;
   if (typeof listActive !== 'function') return;
 
+  const owner = getDataOwnerGeneration();
+  const statusAtRequest = new Map([...sessions].map(([id, session]) => [id, session.agentStatus]));
+  const incarnationsAtRequest = new Map(sessionIncarnations);
   void listActive()
     .then((items) => {
-      if (!Array.isArray(items)) return;
+      if (getDataOwnerGeneration() !== owner || !Array.isArray(items)) return;
       const active = items.filter(isActiveSessionSnapshot);
       for (const item of active) {
+        if (item.agentKind === 'antigravity' &&
+          (sessions.get(item.sessionId)?.agentStatus !== statusAtRequest.get(item.sessionId)
+            || sessionIncarnations.get(item.sessionId) !== incarnationsAtRequest.get(item.sessionId))) continue;
         setState(item.sessionId, (s) => {
           const agentKindPatch = s.agentKind === item.agentKind ? null : item.agentKind;
           if (!item.isTurnRunning) {
@@ -11207,7 +11213,9 @@ function syncActiveTurnsFromMain(): void {
             errorRetryText: null,
             agentStatus: {
               ...s.agentStatus,
-              status: s.agentStatus.status || 'Running',
+              status: item.agentKind === 'antigravity' && !s.agentStatus.isRunning
+                ? 'Thinking...'
+                : s.agentStatus.status || 'Running',
               isRunning: true,
               // Reload recovery of a turn this window never saw start. Stamp a
               // fresh clock; the previous turn's leftover would make this
@@ -12286,8 +12294,8 @@ function retryInvalidatedInitialHistoryFetchIfNeeded(
  */
 function dbAgentKindToMakerKind(
   dbKind: string | null | undefined,
-  fallback: 'claude-code' | 'codex' | 'pi' = 'claude-code',
-): 'claude-code' | 'codex' | 'pi' {
+  fallback: 'claude-code' | 'codex' | 'pi' | 'antigravity' = 'claude-code',
+): 'claude-code' | 'codex' | 'pi' | 'antigravity' {
   if (dbKind === 'codex') return 'codex';
   if (dbKind === 'cc') return 'claude-code';
   if (dbKind === 'pi') return 'pi';
@@ -15735,7 +15743,7 @@ function autoTitleFallbackLabels(): AutoTitleFallbackLabels {
 function scheduleAutoName(
   sessionId: string,
   text: string,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
   isUserText = true,
 ): void {
   // 与 main 共用 normalizeAutoTitle,两端算出的占位串逐字一致,回流时不跳变。
@@ -15851,7 +15859,7 @@ function clearAutoTitlePreviewSafely(sessionId: string): void {
 function maybeAutoNameUnnamedSession(
   sessionId: string,
   seed: AutoTitleSeed | null,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
 ): void {
   if (!seed?.isUserText) return;
   if (sessions.get(sessionId)?.autoTitleDisabled === true) return;
@@ -16275,7 +16283,7 @@ async function sendMessageCore(
       // 用会话真实 agentKind 起名 — 之前写死 'claude-code',导致 Codex 会话也
       // 用 Claude haiku 起标题:纯 Codex 用户(无 Claude 鉴权)会 oneShot 失败 →
       // fallback 原话,表现为"Codex 会话标题没有智能总结"。current.agentKind 已是
-      // maker 格式('claude-code' | 'codex' | 'pi'),直接透传。起名走立即占位 + 后台覆盖。
+      // maker 格式('claude-code' | 'codex' | 'pi' | 'antigravity'),直接透传。起名走立即占位 + 后台覆盖。
       if (autoTitleSeed) {
         scheduleAutoName(
           sessionId,
@@ -18882,7 +18890,7 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
  * sdkSessionId——否则 buildCreateOpts 会把旧引擎的原生会话 id 当 resume 目标
  * (main 侧 reconcileCreateOptsWithDb 是兜底,这里是第一现场收敛)。
  */
-function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi'): void {
+function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity'): void {
   if (!sessionId) return;
   setState(sessionId, (s) => {
     const nextProviderId = s.agentSwitchIntent ? s.agentSwitchIntent.providerId : s.sessionProviderId;
@@ -18914,7 +18922,7 @@ function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex'
  */
 function noteAgentSwitchIntent(
   sessionId: string,
-  target: 'claude-code' | 'codex' | 'pi',
+  target: 'claude-code' | 'codex' | 'pi' | 'antigravity',
   opts: {
     model: string;
     providerId: string | null;
@@ -19042,7 +19050,7 @@ function mirrorAgentSwitchIntent(sessionId: string, value: unknown): void {
 function setSessionRuntime(
   sessionId: string,
   opts: {
-    agentKind?: 'claude-code' | 'codex' | 'pi';
+    agentKind?: 'claude-code' | 'codex' | 'pi' | 'antigravity';
     fastMode?: boolean | 'ultrafast';
     planModeEnabled?: boolean;
     /** Seed before SessionView hydrates the DB row; sendMessage reads this for SSH routing. */

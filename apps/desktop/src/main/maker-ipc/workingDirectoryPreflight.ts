@@ -49,7 +49,7 @@ export function createWorkingDirectoryPreflight(deps: WorkingDirectoryPreflightD
     // Event source names built-in engines only; plugin-engine tasks carry none.
     const source: AgentKind | undefined = agentKind === 'acp'
       ? undefined
-      : agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+      : agentKind === 'codex' || agentKind === 'pi' || agentKind === 'antigravity' ? agentKind : 'claude-code';
     // suppressMissingBroadcast: 调用方(SEND 事务)手里还有 DB 权威值可兜底时,
     // 首检失败只记日志不广播错误横幅——兜底成功的话用户不该看到假错误。
     const suppress = opts?.suppressMissingBroadcast === true;

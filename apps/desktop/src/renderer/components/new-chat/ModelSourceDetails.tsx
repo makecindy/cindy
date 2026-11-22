@@ -18,11 +18,14 @@ import { matchScopedWindowForModel } from '../../../shared/claudeSubscriptionUsa
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { CHATGPT_MODEL_PREFIX } from '../../../shared/subscriptionModels';
+import { preferredAntigravityBuckets } from '../../../shared/antigravityAccounts';
+import type { SubscriptionCodexUsageBucket } from '../../../shared/subscriptionAccounts';
 import { RESET_PENDING_MAX_MS } from '../status/quotaResetRollup';
 import {
   providerWeeklyQuotaSource,
   poolCodexBuckets,
   useProviderUsageSnapshots,
+  weeklyQuota,
   type ProviderGroupUsage,
   type ProviderUsageScope,
   type ProviderUsageSnapshots,
@@ -54,7 +57,7 @@ function SourceUsageProvider({
   children: ReactNode;
 }) {
   const parent = useContext(UsageContext);
-  const { source, codex, claude, xai, kimi, opencodeGo } = useProviderUsageSnapshots(
+  const { source, codex, claude, xai, kimi, opencodeGo, antigravity } = useProviderUsageSnapshots(
     provider,
     scope,
     { web: true },
@@ -62,9 +65,9 @@ function SourceUsageProvider({
   const value = useMemo(() => {
     if (!source) return parent;
     const next = new Map(parent);
-    next.set(usageKey, { source, codex, claude, xai, kimi, opencodeGo });
+    next.set(usageKey, { source, codex, claude, xai, kimi, opencodeGo, antigravity });
     return next;
-  }, [parent, usageKey, source, codex, claude, xai, kimi, opencodeGo]);
+  }, [parent, usageKey, source, codex, claude, xai, kimi, opencodeGo, antigravity]);
   return <UsageContext.Provider value={value}>{children}</UsageContext.Provider>;
 }
 
@@ -160,6 +163,41 @@ interface QuotaWindow {
   windowMinutes?: number | null;
 }
 
+function matchAntigravityBucketForModel(
+  buckets: readonly SubscriptionCodexUsageBucket[],
+  modelId: string,
+  nowMs: number,
+) {
+  if (buckets.length === 0) return null;
+  if (buckets.length === 1) return buckets[0]!;
+  const id = modelId.toLowerCase();
+  const byName = (pattern: RegExp) => buckets.find((bucket) => bucket.limitName && pattern.test(bucket.limitName));
+  if (id.includes('claude')) {
+    const matched = byName(/claude/i);
+    if (matched) return matched;
+  }
+  if (id.includes('gpt')) {
+    const matched = byName(/gpt/i);
+    if (matched) return matched;
+  }
+  const preferred = preferredAntigravityBuckets(buckets);
+  if (id.includes('gemini')) {
+    const variant = /\b(flash|pro|ultra)\b/.exec(id)?.[1];
+    if (variant) {
+      const pattern = new RegExp(`\\b${variant}\\b`, 'i');
+      const matched = preferred.find(bucket => pattern.test(bucket.limitName ?? ''));
+      if (matched) return matched;
+    }
+  }
+  const liveUsage = (bucket: SubscriptionCodexUsageBucket) => Math.max(
+    weeklyQuota(bucket.primary?.usedPercent, bucket.primary?.resetsAt, nowMs)?.usedPercent ?? -1,
+    weeklyQuota(bucket.secondary?.usedPercent, bucket.secondary?.resetsAt, nowMs)?.usedPercent ?? -1,
+  );
+  return preferred.reduce((tightest, bucket) => {
+    return liveUsage(bucket) > liveUsage(tightest) ? bucket : tightest;
+  });
+}
+
 function modelSourceQuota(
   usage: SourceUsage | undefined,
   modelId: string,
@@ -169,6 +207,26 @@ function modelSourceQuota(
   windows: QuotaWindow[];
 } {
   if (!usage) return { plan: null, windows: [] };
+  if (usage.source === 'antigravity') {
+    const buckets = usage.antigravity?.usage ?? [];
+    const bucket = matchAntigravityBucketForModel(buckets, modelId, nowMs);
+    const windows: QuotaWindow[] = [];
+    if (bucket?.primary && typeof bucket.primary.usedPercent === 'number' && Number.isFinite(bucket.primary.usedPercent)) {
+      windows.push({
+        usedPercent: bucket.primary.usedPercent,
+        resetsAt: bucket.primary.resetsAt,
+        windowMinutes: bucket.primary.windowMinutes ?? FIVE_HOUR_WINDOW_MINUTES,
+      });
+    }
+    if (bucket?.secondary && typeof bucket.secondary.usedPercent === 'number' && Number.isFinite(bucket.secondary.usedPercent)) {
+      windows.push({
+        usedPercent: bucket.secondary.usedPercent,
+        resetsAt: bucket.secondary.resetsAt,
+        windowMinutes: bucket.secondary.windowMinutes ?? WEEKLY_WINDOW_MINUTES,
+      });
+    }
+    return { plan: null, windows };
+  }
   if (usage.source === 'kimi')
     return {
       plan: null,
@@ -263,6 +321,10 @@ export function ModelSourceDetails({
   const pickerAccount = useModelPickerAccount(providerId);
   // Created subscription providers (2026-11-13) report their pool kind; built-ins are their own.
   const codex = (pickerAccount?.kind ?? providerId) === 'openai';
+  const sourceUsage = usages.get(providerId);
+  const antigravityIdentity = sourceUsage?.source === 'antigravity'
+    ? sourceUsage.antigravity?.accounts.find((account) => account.id === sourceUsage.antigravity?.activeId)?.identity
+    : undefined;
   const poolParts = pickerAccount?.members?.map((account, index) => {
     const view = modelSourceQuota(
       {
@@ -354,7 +416,7 @@ export function ModelSourceDetails({
     ? undefined
     : pickerAccount
       ? pickerAccount.identity
-      : accountIdentity;
+      : (accountIdentity ?? antigravityIdentity);
   const source = [providerAccountLabel(label, identity), plan].filter(Boolean).join(' · ');
   return (
     <div

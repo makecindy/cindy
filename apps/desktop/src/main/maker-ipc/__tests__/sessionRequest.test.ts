@@ -1,9 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 
+import { dbToMakerAgentKind, makerToDbAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { readCreateSessionOpts, withCreateSessionStderr } from '../sessionRequest';
 
 describe('session IPC request parsing', () => {
+  // First ACP engine: identity must survive the real IPC parser and DB mapping;
+  // unsupported execution locations must fail before allocating any workspace (unit).
+  it('preserves the Antigravity subscription engine across create and persisted identity', () => {
+    const opts = readCreateSessionOpts({ agentKind: 'antigravity', model: 'gemini-test', workingDir: '/workspace', providerId: 'google-antigravity-subscription', permissionMode: 'ask' });
+    expect(opts.agentKind).toBe('antigravity');
+    expect(dbToMakerAgentKind(makerToDbAgentKind(opts.agentKind))).toBe('antigravity');
+    expect(normalizeDbAgentKind('antigravity')).toBe('antigravity');
+  });
+  it.each([{ agentDeviceId: 'another-device' }, { remoteHostId: 'ssh' }, { providerId: 'openai' }])('rejects unsupported ACP route before workspace allocation: %j', patch => {
+    const allocateDialogueWorkspace = vi.fn();
+    expect(() => readCreateSessionOpts({ agentKind: 'antigravity', model: 'gemini-test', workspaceKind: 'dialogue', providerId: 'google-antigravity-subscription', permissionMode: 'ask', ...patch }, { allocateDialogueWorkspace })).toThrow('[INVALID_PARAMS]');
+    expect(allocateDialogueWorkspace).not.toHaveBeenCalled();
+  });
   it.each(['cindy-library:/outside', '  cindy-library:/outside  '])(
     'rejects external Host-owned slots: %s', (dir) => {
       expect(() => readCreateSessionOpts({

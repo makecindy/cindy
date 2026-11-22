@@ -3,6 +3,9 @@ import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import { PROVIDER_MEDIA_FIELDS, presetDisplayName, providerPresetOAuth, isMimoTokenPlanPreset, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { LOCAL_CONNECT_PRESET_IDS, LOCAL_ADVANCED_PRESET_IDS, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
+import { ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID } from '../../../shared/antigravityAccounts';
+
+const MANAGED_SUBSCRIPTION_IDS = new Set(['anthropic', 'openai', 'xai', ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID]);
 
 export type ProviderSearchTarget =
   | { kind: 'builtin'; providerId: string }
@@ -14,9 +17,9 @@ export function hasRetainedBuiltinConnection(provider: ProviderView): boolean {
   return !provider.removed && (provider.connected || provider.removed === false);
 }
 export function isWizardOAuthChoice(p: ProviderView): boolean {
+  const managed = MANAGED_SUBSCRIPTION_IDS.has(p.id);
   return p.id !== 'xd' && p.source === 'builtin' &&
-    (!hasRetainedBuiltinConnection(p) || ['anthropic', 'openai', 'xai'].includes(p.id)) &&
-    (['anthropic', 'openai', 'xai'].includes(p.id) || (p.auth.method === 'oauth' && !!p.auth.oauth));
+    (managed || (!hasRetainedBuiltinConnection(p) && p.auth.method === 'oauth' && !!p.auth.oauth));
 }
 export function isWizardApiKeyChoice(p: ProviderView): boolean {
   return p.source === 'builtin' && p.auth.method === 'apiKey' &&

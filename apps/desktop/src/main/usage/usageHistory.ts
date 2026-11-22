@@ -101,11 +101,11 @@ export interface UsageHistoryDay {
 }
 
 function usageAgentKind(value: string): UsageHistoryModel['agentKind'] {
-  return value === 'codex' || value === 'pi' || value === 'media' || value === 'auxiliary' ? value : 'claude-code';
+  return value === 'codex' || value === 'pi' || value === 'antigravity' || value === 'media' || value === 'auxiliary' ? value : 'claude-code';
 }
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'media' | 'auxiliary';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -123,7 +123,7 @@ export interface UsageHistoryModelDay {
   source?: string;
   providerId?: string;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'media' | 'auxiliary';
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;

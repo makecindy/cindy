@@ -49,7 +49,7 @@ function refreshRemoteCapabilitiesOnce(deviceId: string): void {
   remoteCapabilitiesRefreshInFlight.set(deviceId, pending);
 }
 
-type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi';
+type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi' | 'antigravity';
 
 /** runtime agent id → NewMaker vendor(其余保持同名)。 */
 function toVendor(agent: RuntimeAgentKind): MakerVendor {
@@ -333,7 +333,7 @@ export function __resetAvailableAgentsCacheForTest(): void {
 export function useModelPickerAgents(current: RuntimeAgentKind, deviceId?: string | null): readonly RuntimeAgentKind[] | undefined {
   const { availableVendors, loaded } = useAvailableAgents(deviceId);
   if (!loaded) return undefined;
-  return (['claude-code', 'codex', 'pi'] as const).filter(
+  return (['claude-code', 'codex', 'pi', 'antigravity'] as const).filter(
     (agent) => agent === current || availableVendors.has(toVendor(agent)),
   );
 }

@@ -1151,15 +1151,38 @@ describe('production Session event pipeline', () => {
 
   // PR #11776 review: a plugin engine's reply between turns has no done to commit it, so it stayed
   // in memory and was lost on restart. Its final segment commits it; deltas and turn text do not.
-  it('commits a plugin engine reply written between turns at its final segment only', async () => {
+  it.each(['acp', 'antigravity'] as const)('commits a %s reply written between turns at its final segment only', async (engine) => {
     const h = harness();
-    Object.defineProperty(h.session, 'agentKind', { value: 'acp' });
+    Object.defineProperty(h.session, 'agentKind', { value: engine });
     try {
       h.emit(event('text', { text: 'The content', isFinal: false }, { turnScope: 'background' }));
       h.emit(event('text', { text: 'In a turn', isFinal: true, isFullText: true }));
       expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
       h.emit(event('text', { text: 'The content is `finished`', isFinal: true, isFullText: true }, { turnScope: 'background' }));
       expect(effects.fn('flushAssistantBlock')).toHaveBeenCalledOnce();
+      expect(effects.fn('observePluginEngineEvent')).toHaveBeenCalledWith('task', expect.objectContaining({ turnScope: 'background' }));
+    } finally {
+      await h.dispose();
+    }
+  });
+
+  // Unit, cd245937 and the 2026-11-22 stuck-activity incident: a native command
+  // receipt or a process exit reaches the tracker without escaping to chat.
+  it.each([
+    { kind: 'command_exited', taskId: 'native-1', toolUseId: 'call-1' },
+    { kind: 'process_exited' },
+  ])('keeps Antigravity $kind lifecycle events in the host', async (data) => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'antigravity' });
+    try {
+      const progress = event('antigravity_tool_activity', data, {
+        source: 'antigravity', turnScope: 'background',
+      });
+      h.emit(progress);
+      expect(effects.fn('observePluginEngineEvent')).toHaveBeenCalledWith('task', expect.objectContaining({
+        type: progress.type, data: progress.data,
+      }));
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
     } finally {
       await h.dispose();
     }

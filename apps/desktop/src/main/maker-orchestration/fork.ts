@@ -110,7 +110,7 @@ function normalizePositiveInt(value: unknown): number {
 
 const messageRowid = sql<number>`rowid`;
 
-type DbAgentKind = 'cc' | 'codex' | 'pi';
+type DbAgentKind = 'cc' | 'codex' | 'pi' | 'antigravity';
 
 interface MessagePosition {
   createdAt: number;
@@ -1021,6 +1021,7 @@ export async function forkSessionAtMessage(
     (usesTailTurnFork || assistantUuid)
   ) {
     const agentKind = dbToMakerAgentKind(forkSource.agentKind);
+    if (agentKind === 'antigravity') throw new Error('ANTIGRAVITY_FORK_NOT_SUPPORTED');
     const sourceSdkSessionId = forkSource.sdkSessionId;
     const forkOptions = {
       sourceSdkSessionId,

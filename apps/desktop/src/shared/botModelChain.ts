@@ -15,7 +15,7 @@ export function botModelRouteRuntimeKey(
 }
 
 export function normalizeBotHarness(value: unknown): BotHarness {
-  return value === 'codex' || value === 'pi' || value === 'claude' || value === 'acp' ? value : 'claude';
+  return value === 'codex' || value === 'pi' || value === 'claude' || value === 'acp' || value === 'antigravity' ? value : 'claude';
 }
 
 export const normalizeBotModelRoute = normalizeCompanionModelRoute;

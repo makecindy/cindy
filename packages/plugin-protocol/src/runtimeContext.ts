@@ -6,7 +6,7 @@ export interface GhostSystemPromptFragment {
   text: string;
   order: number;
   scope: 'selected-task';
-  agentKinds?: Array<'cc' | 'codex' | 'pi'>;
+  agentKinds?: Array<'cc' | 'codex' | 'pi' | 'antigravity'>;
 }
 export const GHOST_CONTEXT_MAX_CHARS = 32768;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);

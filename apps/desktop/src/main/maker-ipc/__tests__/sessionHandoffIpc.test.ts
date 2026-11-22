@@ -163,7 +163,7 @@ describe('maker:session:handoff (receiving computer)', () => {
         defaultEffort: 'medium', supportsFastMode: true }));
       const readRemoteRouting = vi.fn(async () => {
         if (scenario === 'offline') throw Object.assign(new Error('Device offline'), { code: 'DEVICE_OFFLINE' });
-        return { availability: { 'claude-code': [], pi: [], codex: [{ id: 'remote-provider', name: 'Remote', models: models.map(m => m.id),
+        return { availability: { antigravity: [], 'claude-code': [], pi: [], codex: [{ id: 'remote-provider', name: 'Remote', models: models.map(m => m.id),
           fastModels: models.map(m => m.id) }] }, remoteCodexModels: models,
           resolveDefaultProviderIdForModel: () => 'remote-provider' };
       });

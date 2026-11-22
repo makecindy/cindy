@@ -36,7 +36,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'media' | 'auxiliary';
   model: string;
   money: RegionalMoney;
   estimatedMoney: RegionalMoney | null;
@@ -52,7 +52,7 @@ export interface UsageHistoryModelDay {
   providerId?: string;
   requestCount?: number;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | 'media' | 'auxiliary';
   model: string;
   money: RegionalMoney;
   apiMoney: RegionalMoney;

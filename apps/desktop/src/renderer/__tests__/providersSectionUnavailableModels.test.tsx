@@ -16,7 +16,7 @@ import { remoteProviderDisableKey } from '@cindy/model-providers';
 import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
-import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
@@ -296,6 +296,84 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // Renderer unit: direct remove button deletes the active Google account cleanly
+  // without opening an account menu, no manual update button is shown, and login
+  // prompts before installing the CLI when unconfigured.
+  it('deletes the active Google account directly, hides manual update, and confirms install on login', async () => {
+    const providerId = 'google-antigravity-subscription';
+    providerSnapshotState.customOverride = {
+      id: providerId, name: 'Google AI · Antigravity', source: 'builtin', agents: ['antigravity'],
+      auth: { method: 'oauth' }, routing: {}, models: { antigravity: [] }, connected: false,
+    };
+    providerSnapshotState.order = [providerId, 'xd', 'anthropic'];
+    const active = { id: 'active-1', identity: 'active@example.test' };
+    const spare = { id: 'spare', identity: 'spare@example.test' };
+    let accounts: Array<{ id: string; identity?: string }> = [active, spare];
+    let activeId: string | null = active.id;
+    let configured = true;
+    const api = vi.fn<NonNullable<typeof window.electronAPI.antigravityAccounts>>(async command => {
+      if (command.action === 'remove') {
+        accounts = accounts.filter(a => a.id !== command.id);
+        activeId = accounts[0]?.id ?? null;
+      } else if (command.action === 'install') {
+        configured = true;
+        activeId = 'installed-1';
+        accounts = [{ id: 'installed-1' }];
+      }
+      return { configured, connected: false, activeId, accounts };
+    });
+    const triggerLogin = vi.fn(async () => ({ authenticated: true }));
+    window.electronAPI.antigravityAccounts = api;
+    window.electronAPI.maker.auth = {
+      onStateChanged: vi.fn(() => () => {}),
+      triggerLogin,
+      cancelLogin: vi.fn(async () => {}),
+      logout: vi.fn(async () => {}),
+    } as unknown as typeof window.electronAPI.maker.auth;
+    const view = render(<MemoryRouter initialEntries={[`/settings?connect=${providerId}`]}><ProvidersSection /></MemoryRouter>);
+    const removeButton = await screen.findByRole('button', { name: 'settings.providers.antigravity.removeAccount' });
+    // Item 4: manual update button is removed.
+    expect(screen.queryByRole('button', { name: 'settings.providers.antigravity.update' })).toBeNull();
+    // Item 2: primary CTA says login, not long install copy.
+    expect(screen.getByRole('button', { name: 'subscriptionAccounts.login' })).toBeTruthy();
+
+    await act(async () => { fireEvent.click(removeButton); });
+    await waitFor(() => expect(removeButton.hasAttribute('disabled')).toBe(false));
+    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({
+      description: 'settings.providers.antigravity.removeDescription',
+      confirmVariant: 'destructive',
+    }));
+    expect(api.mock.calls.some(([command]) => command.action === 'remove')).toBe(false);
+
+    confirmSpy.mockResolvedValue(true);
+    await act(async () => { fireEvent.click(removeButton); });
+    await waitFor(() => expect(api).toHaveBeenCalledWith({ action: 'remove', id: active.id }, {
+      dataOwnerId: 'owner-1', ownerGeneration: getDataOwnerGeneration().generation,
+    }));
+    await waitFor(() => expect(screen.getByText('spare@example.test')).toBeTruthy());
+
+    // Item 2: when CLI is not installed, clicking Login confirms install, then runs install + triggerLogin.
+    configured = false;
+    activeId = null;
+    accounts = [];
+    view.unmount();
+    const { clearCachedAntigravityView } = await import('@/hooks/useAntigravityUsage');
+    clearCachedAntigravityView();
+    confirmSpy.mockReset();
+    confirmSpy.mockResolvedValueOnce(true);
+    render(<MemoryRouter initialEntries={[`/settings?connect=${providerId}`]}><ProvidersSection /></MemoryRouter>);
+    const loginButton = await screen.findByRole('button', { name: 'subscriptionAccounts.login' });
+    await act(async () => { fireEvent.click(loginButton); });
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'settings.providers.antigravity.installConfirmTitle',
+      confirmText: 'settings.providers.antigravity.installConfirmButton',
+    })));
+    await waitFor(() => expect(api).toHaveBeenCalledWith({ action: 'install' }, expect.anything()));
+    await waitFor(() => expect(triggerLogin).toHaveBeenCalledWith('antigravity', expect.objectContaining({
+      googleTarget: expect.objectContaining({ accountId: 'installed-1' }),
+    })));
+  });
+
   // Reuse receiver-side disable, retaining the settings row for re-enabling.
   it('disables an extra remote provider and re-enables it from the same action menu after reopening', async () => {
     ownDevicesState.devices = [{ deviceId: 'peer', name: 'Other computer', platform: 'darwin' }];

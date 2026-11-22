@@ -141,7 +141,7 @@ export function deliverSessionEvent(
   }
   // 插件引擎回合外的工作(及回合结束时仍未完成的工具调用)点亮「后台活动」。放在广播与
   // Agent Island 之前:岛先被点亮为运行中,这条回合外的工具调用才能显示为当前动作。
-  if (session.agentKind === 'acp') observePluginEngineEvent(session.id, event);
+  if (session.agentKind === 'acp' || session.agentKind === 'antigravity') observePluginEngineEvent(session.id, event);
   if (suppressOverflowBroadcast) {
     deps.overflowSuppressedBroadcasts.set(session.id, {
       sessionId: session.id,

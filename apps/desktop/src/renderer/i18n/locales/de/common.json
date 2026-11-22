@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google-Nutzung",
+    "quotaUnavailable": "Das Kontingent des Kontos ist derzeit nicht verfügbar",
+    "quotaGuide": "Diese ACP-Version meldet kein Kontingent und keine Rücksetzzeit. Verwende /usage in der offiziellen Antigravity CLI.",
+    "openQuotaGuide": "Offizielle Kontingentabfrage öffnen",
+    "moneyUnavailable": "Diese Schnittstelle meldet weder Guthaben noch tatsächliche Kosten.",
+    "context": "Kontext der Sitzung (zuletzt gemeldet)",
+    "lastTurnTokens": "Tokens der letzten Runde",
+    "unavailable": "Nicht verfügbar",
+    "modelControlsThinking": "Dieses Modell steuert den Denkaufwand selbst.",
+    "noFastMode": "Diese Quelle bietet keinen separaten Wechsel zwischen Schnell und Standard."
+  },
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
@@ -4333,6 +4345,27 @@
         "groupMembersTitle": "Computer in der Gruppe",
         "groupMembersFailed": "Der Status der Computer in der Gruppe konnte gerade nicht abgerufen werden.",
         "hiddenBanner": "In der Modellauswahl auf diesem Computer ausgeblendet. Favoriten und Sitzungen, die ihn verwenden, sind nicht betroffen."
+      },
+      "antigravity": {
+        "configure": "Manuell verbinden",
+        "install": "Installieren und verbinden",
+        "update": "Antigravity CLI aktualisieren",
+        "installing": "Wird installiert…",
+        "setupHint": "Cindy lädt die offizielle Antigravity CLI herunter und prüft sie. Es gilt ausschließlich das Kontingent des Google-AI-Abos.",
+        "activeAccount": "Aktives Google-Konto",
+        "existing": "Lokales Standardkonto",
+        "removeAccount": "Konto entfernen",
+        "removeDescription": "Cindy löscht die lokale Anmeldung und die Einstellungen für dieses Konto. Deine Cindy-Unterhaltungen bleiben erhalten.",
+        "removeDefaultDescription": "Cindy trennt dieses Konto. Die Google-Anmeldung auf diesem Mac und deine Cindy-Unterhaltungen bleiben erhalten.",
+        "accountBusy": "Eine Google-Aufgabe oder Kontoänderung läuft noch. Versuche es danach erneut.",
+        "account": "Google-Konto {{number}}",
+        "refreshQuota": "Kontingent aktualisieren",
+        "legacyQuota": "Füge ein Google-Konto hinzu, um sein Kontingent in Cindy zu sehen.",
+        "noQuota": "Das Google-Kontingent ist derzeit nicht verfügbar.",
+        "failed": "Der Vorgang für das Google-Konto konnte nicht abgeschlossen werden.",
+        "installConfirmTitle": "Antigravity CLI installieren?",
+        "installConfirmDescription": "Antigravity CLI ist auf diesem Computer noch nicht installiert. Jetzt die neueste Version herunterladen, installieren und mit Google anmelden?",
+        "installConfirmButton": "Installieren & anmelden"
       },
       "genericOAuth": {
         "subtitle": "Abonnementkonto",
@@ -11091,6 +11124,18 @@
     "nameLabel": "Wie sollen wir den Freund nennen?",
     "close": "Schließen",
     "list": {
+      "folders": {
+        "create": "Neue Abteilung",
+        "rename": "Abteilung umbenennen",
+        "dissolve": "Abteilung auflösen",
+        "name": "Abteilungsname",
+        "move": "In Abteilung verschieben",
+        "unfiled": "Aus Abteilung entfernen",
+        "up": "Nach oben verschieben",
+        "down": "Nach unten verschieben",
+        "actions": "Aktionen für {{name}}",
+        "saveFailed": "Abteilungen konnten nicht gespeichert werden."
+      },
       "createMenu": "Erstellen",
       "createTeammate": "Neuer Freund",
       "joinWithLink": "Einladungslink eingeben…",
@@ -14260,6 +14305,24 @@
       "listAria": "Berechtigungsmodi",
       "autoFallback": "Die automatische Prüfung ist vorübergehend nicht verfügbar. Auf Standardberechtigungen umgestellt; bei Bedarf wirst du gefragt.",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "Standardberechtigungen",
+            "description": "Du genehmigst Änderungen und Befehle bei Bedarf."
+          },
+          "acceptEdits": {
+            "label": "Änderungen automatisch akzeptieren",
+            "description": "Dateien dürfen direkt bearbeitet werden. Andere Aktionen genehmigst du bei Bedarf."
+          },
+          "auto": {
+            "label": "Automatische Prüfung",
+            "description": "Änderungen im Arbeitsbereich und sichere Befehle werden automatisch ausgeführt. Aktionen mit hohem Risiko benötigen weiterhin deine Freigabe."
+          },
+          "bypassPermissions": {
+            "label": "Vollzugriff",
+            "description": "Gewöhnliche Aktionen sind direkt erlaubt. Dazu gehören der Zugriff auf Dateien außerhalb des Arbeitsbereichs und die Ausführung von Netzwerkbefehlen."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Standardberechtigungen",

@@ -22,7 +22,7 @@ import type { ModelMetadata } from "./modelMetadataLayers.js";
 import type { ModelRegistry } from "./modelAccessBean.js";
 
 /** 承载模型的 agent runtime —— 与 maker-core AgentKind 对齐。 */
-export type AgentKind = "claude-code" | "codex" | "pi";
+export type AgentKind = "claude-code" | "codex" | "pi" | "antigravity";
 
 /** 推理强度档位 —— 与 maker-core Effort 对齐。 */
 export type Effort =
@@ -191,6 +191,8 @@ export type OAuthProviderDescriptor =
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  /** Native agent protocol; never convert to an HTTP model request. */
+  transport?: "acp";
   /** Verified public connection preset for aggregate usage reporting. */
   usagePresetId?: string;
   modelInterface?: ModelInterfaceSnapshot;

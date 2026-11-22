@@ -40,15 +40,15 @@ import { isPluginEngineEffort } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useBotTranslation } from './botPronounContext';
 
-function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
+function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' | 'antigravity' {
   return harness === 'claude' ? 'cc' : harness === 'acp' ? 'pi' : harness;
 }
 
-function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
+function harnessFor(vendor: 'cc' | 'codex' | 'pi' | 'antigravity'): BotHarness {
   return vendor === 'cc' ? 'claude' : vendor;
 }
 
-function agentKindFor(vendor: 'cc' | 'codex' | 'pi'): AgentKind {
+function agentKindFor(vendor: 'cc' | 'codex' | 'pi' | 'antigravity'): AgentKind {
   return vendor === 'cc' ? 'claude-code' : vendor;
 }
 
@@ -101,8 +101,8 @@ export function BotModelChainEditor({
   const onChange = (next: BotModelRoute[]) => {
     if (!disabled) onValueChange(next);
   };
-  const visibleVendors = (['pi', 'codex', 'cc'] as const)
-    .filter((vendor) => !hiddenVendors.includes(vendor));
+  const visibleVendors = (['pi', 'codex', 'cc', 'antigravity'] as const)
+    .filter((vendor) => !hiddenVendors.includes(vendor) && (vendor !== 'antigravity' || (!remote && !deviceId)));
   const unifiedAgents = visibleVendors.map(agentKindFor);
   const selfDeviceId = useOptionalAuthDeviceId();
   const { devices: selectableDevices } = useSelectableDevices();

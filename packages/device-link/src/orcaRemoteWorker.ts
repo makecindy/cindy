@@ -82,7 +82,7 @@ export function parseOrcaRemoteWorkerBridgeRequest(raw: unknown): OrcaRemoteWork
 }
 
 export interface OrcaRemoteWorkerModelsRequest {
-  agent?: OrcaRemoteWorkerAgentKind;
+  agent?: OrcaRemoteWorkerAgentKind | 'antigravity';
   /** Omitted/null means the execution computer, never the Lead’s Agent. */
   agentDeviceId?: string | null;
 }
@@ -93,6 +93,7 @@ export interface OrcaRemoteWorkerModelsResult {
   codex?: OrcaRemoteWorkerModel[];
   claude_code?: OrcaRemoteWorkerModel[];
   pi?: OrcaRemoteWorkerModel[];
+  antigravity?: OrcaRemoteWorkerModel[];
 }
 
 export interface OrcaRemoteWorkerModel {
@@ -173,11 +174,15 @@ function parseAgentDeviceId(value: unknown): string | null {
 
 export function parseOrcaRemoteWorkerModelsRequest(raw: unknown): OrcaRemoteWorkerModelsRequest {
   if (!isRecord(raw)) throw new Error('[INVALID_PARAMS] models request must be an object');
-  if (raw.agent !== undefined && !ORCA_REMOTE_WORKER_AGENT_KINDS.includes(raw.agent as OrcaRemoteWorkerAgentKind)) {
+  if (
+    raw.agent !== undefined &&
+    raw.agent !== 'antigravity' &&
+    !ORCA_REMOTE_WORKER_AGENT_KINDS.includes(raw.agent as OrcaRemoteWorkerAgentKind)
+  ) {
     throw new Error('[INVALID_PARAMS] invalid Agent kind');
   }
   return {
-    ...(raw.agent !== undefined ? { agent: raw.agent as OrcaRemoteWorkerAgentKind } : {}),
+    ...(raw.agent !== undefined ? { agent: raw.agent as OrcaRemoteWorkerAgentKind | 'antigravity' } : {}),
     ...(raw.agentDeviceId !== undefined ? { agentDeviceId: parseAgentDeviceId(raw.agentDeviceId) } : {}),
   };
 }

@@ -1202,8 +1202,12 @@ export class AgentIslandService {
     // completion tail from the interrupted turn. Keep completion suppressed
     // after the replacement prompt until that FIFO start marker arrives.
     if (this.replacementTurnPendingSessionIds.has(hydrated.sessionId)) {
-      if (isCompletionDoneEvent(event)) return;
-      if (isRunningStatusEvent(event)) {
+      const completesDispatchedAntigravityTurn = event.source === 'antigravity'
+        && event.turnScope !== 'background'
+        && isCompletionDoneEvent(event)
+        && this.replacementTurnDispatchingSessionIds.has(hydrated.sessionId);
+      if (isCompletionDoneEvent(event) && !completesDispatchedAntigravityTurn) return;
+      if (isRunningStatusEvent(event) || completesDispatchedAntigravityTurn) {
         this.replacementTurnPendingSessionIds.delete(hydrated.sessionId);
         this.replacementTurnDispatchingSessionIds.delete(hydrated.sessionId);
       }

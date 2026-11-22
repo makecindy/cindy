@@ -1349,7 +1349,7 @@ describe('AddProviderWizard — preset 直达', () => {
     // 同一 model id 在两端窗口可以不同(如 cc=1M / codex=272K):共享一个发现值
     // 会让其中一端显示与压缩阈值双错,必须按 agent 分槽各取各的端点上报值。
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
-      async ({ agent }: { agent: 'claude-code' | 'codex' | 'pi' }) => ({
+      async ({ agent }: { agent: 'claude-code' | 'codex' | 'pi' | 'antigravity' }) => ({
         ok: true,
         models: [
           {
@@ -1574,6 +1574,20 @@ describe('AddProviderWizard — preset 直达', () => {
     );
     expect(screen.queryByText('settings.providers.wizard.nameLabel')).toBeNull();
   });
+});
+
+// Tier: renderer unit. Antigravity owns its credential setup outside generic OAuth.
+it('opens the Google subscription card from the add catalog without reporting a completed connection', async () => {
+  const provider = { ...anthropicProvider, id: 'google-antigravity-subscription',
+    name: 'Google AI · Antigravity', removed: true, connected: false } as ProviderView;
+  const onOpenAntigravity = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[provider]} onOpenAntigravity={onOpenAntigravity}
+    onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+  await screen.findByText('DeepSeek');
+  fireEvent.click(screen.getByRole('button', { name: /Google AI · Antigravity/ }));
+  await waitFor(() => expect(onOpenAntigravity).toHaveBeenCalledOnce());
+  expect(onDone).not.toHaveBeenCalled();
 });
 
 it.each(['apiKey', 'oauth'] as const)('keeps retained single-instance %s connections out of the add list across disconnect and delete', async (method) => {

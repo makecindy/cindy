@@ -1,6 +1,6 @@
 /**
- * agentKindConversion —— DB/renderer 形态('cc' | 'codex' | 'pi')与 maker-core
- * 形态('claude-code' | 'codex' | 'pi')的唯一双向映射。
+ * agentKindConversion —— DB/renderer 形态('cc' | 'codex' | 'pi' | 'antigravity')与 maker-core
+ * 形态('claude-code' | 'codex' | 'pi' | 'antigravity')的唯一双向映射。
  *
  * 背景:sessions.agent_kind 历史上存 renderer 形态('cc' 起家,default 'cc'),
  * maker-core 用 'claude-code'。三值化前全仓散落 `x === 'cc' ? 'claude-code' :
@@ -9,25 +9,31 @@
  */
 
 /** DB(sessions.agent_kind)与 renderer 侧的 agent 形态。 */
-export type DbAgentKind = 'cc' | 'codex' | 'pi';
+export type DbAgentKind = 'cc' | 'codex' | 'pi' | 'antigravity';
 /** maker-core / IPC 契约侧的 agent 形态。 */
-export type MakerAgentKindWire = 'claude-code' | 'codex' | 'pi';
+export type MakerAgentKindWire = 'claude-code' | 'codex' | 'pi' | 'antigravity';
+export const DB_AGENT_KINDS = ['cc', 'codex', 'pi', 'antigravity'] as const satisfies readonly DbAgentKind[];
+export function isDbAgentKind(value: unknown): value is DbAgentKind {
+  return typeof value === 'string' && (DB_AGENT_KINDS as readonly string[]).includes(value);
+}
 
 export function dbToMakerAgentKind(db: string | null | undefined): MakerAgentKindWire {
   if (db === 'codex') return 'codex';
+  if (db === 'antigravity') return 'antigravity';
   if (db === 'pi') return 'pi';
   return 'claude-code'; // 'cc' 与历史缺省
 }
 
 export function makerToDbAgentKind(maker: string | null | undefined): DbAgentKind {
   if (maker === 'codex') return 'codex';
+  if (maker === 'antigravity') return 'antigravity';
   if (maker === 'pi') return 'pi';
   return 'cc'; // 'claude-code' 与历史缺省
 }
 
 /** 宽输入归一成 DbAgentKind;非法值回落 'cc'(与 sessions 表 default 同语义)。 */
 export function normalizeDbAgentKind(value: string | null | undefined): DbAgentKind {
-  return value === 'codex' || value === 'pi' ? value : 'cc';
+  return value === 'codex' || value === 'pi' || value === 'antigravity' ? value : 'cc';
 }
 
 /**

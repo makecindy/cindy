@@ -260,6 +260,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   const startAttempt = async (input: StartInput, skipDirect: boolean,
     attempt: ReturnType<typeof registerPendingRemoteStart>, recoverLostHistoryGrant = true,
     reissuedHistory = false): Promise<AgentSessionHandle> => {
+    if (input.agentKind === 'antigravity') throw new Error('ANTIGRAVITY_LOCAL_ONLY');
     const initialShareId = parseProviderShareAgentDeviceId(input.deviceId);
     // 下面的分享组分配、直连与备用记录只认内置引擎；插件引擎走分享者本机直连，这里给内置分支一个兜底种类。
     const agentKind: AgentKind = input.agentKind === 'acp' ? 'pi' : input.agentKind;

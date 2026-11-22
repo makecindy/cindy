@@ -864,8 +864,8 @@ export async function reconcileBotProfileFolder(
   return derived;
 }
 
-function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' | 'acp' {
-  return config.harness === 'codex' || config.harness === 'pi' || config.harness === 'acp' ? config.harness : 'cc';
+function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' | 'acp' | 'antigravity' {
+  return config.harness === 'codex' || config.harness === 'pi' || config.harness === 'acp' || config.harness === 'antigravity' ? config.harness : 'cc';
 }
 
 function defaultBotModelForConfig(config: Record<string, unknown>): string {
@@ -1282,7 +1282,7 @@ async function readProfile(
       fastMode: primaryModelRoute?.fastMode ?? config.fastMode === true,
       harness:
         primaryModelRoute?.harness ??
-        (config.harness === 'codex' || config.harness === 'pi' || config.harness === 'acp' ? config.harness : 'claude'),
+        (config.harness === 'codex' || config.harness === 'pi' || config.harness === 'acp' || config.harness === 'antigravity' ? config.harness : 'claude'),
       modelChain,
       modelChainOverride: Array.isArray(config.modelChainOverride)
         ? normalizeBotModelChain(config.modelChainOverride)

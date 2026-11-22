@@ -83,6 +83,29 @@ async function reloadModule() {
   return draftStore;
 }
 
+describe('Google subscription draft permissions', () => {
+  it('restores chosen automatic and plan settings without altering other engines', async () => {
+    memStorage.setItem(draftStore.__STORAGE_KEY, JSON.stringify({
+      vendor: 'antigravity', newChatDefaultPermissionMode: 'auto',
+      lastByVendor: {
+        antigravity: { model: 'gemini-3.8-flash', providerId: 'google-antigravity-subscription', permissionMode: 'auto', planMode: true },
+        codex: { model: 'gpt-6', permissionMode: 'auto' },
+      },
+    }));
+    const m = await reloadModule();
+    expect(m.getDraft().lastByVendor.antigravity).toMatchObject({ model: 'gemini-3.8-flash', providerId: 'google-antigravity-subscription', permissionMode: 'auto', planMode: true });
+    const { readCreateSessionOpts } = await import('../../main/maker-ipc/sessionRequest');
+    const google = m.getDraft().lastByVendor.antigravity;
+    expect(readCreateSessionOpts({ agentKind: 'antigravity', model: google.model, providerId: google.providerId, permissionMode: google.permissionMode, planMode: google.planMode, workingDir: '/workspace' }))
+      .toMatchObject({ agentKind: 'antigravity', model: 'gemini-3.8-flash', providerId: 'google-antigravity-subscription', permissionMode: 'auto', planMode: true });
+    expect(m.getDraft().lastByVendor.codex.permissionMode).toBe('auto');
+    m.patchVendorPrefs('antigravity', { permissionMode: 'bypassPermissions', planMode: true });
+    expect(m.getDraft().lastByVendor.antigravity).toMatchObject({ permissionMode: 'bypassPermissions', planMode: true });
+    m.setNewChatDefaultPermissionMode('bypassPermissions');
+    expect(m.getDraft().lastByVendor.antigravity.permissionMode).toBe('bypassPermissions');
+  });
+});
+
 /** 另一个 renderer 窗口此刻打开:独立内存,从共享 localStorage 加载。 */
 async function openSecondWindow() {
   secondWindow.__reloadForTest();

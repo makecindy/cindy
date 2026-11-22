@@ -112,7 +112,7 @@ export interface MessagePersistencePorts {
 export interface DeferredTurnErrorRow {
   content: Record<string, unknown>;
   agentMeta: AgentMeta | null;
-  agentKind: 'cc' | 'codex' | 'pi' | 'acp' | undefined;
+  agentKind: 'cc' | 'codex' | 'pi' | 'antigravity' | 'acp' | undefined;
   turnStartedAt: number;
   occurredAt: number;
 }
@@ -448,9 +448,9 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    * clearSessionPersistState 时清理。
    */
   // 'acp' = plugin engine task (docs/plans/acp-plugin-bridge.md); its rows carry no vendor meta.
-  const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi' | 'acp'>();
+  const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi' | 'antigravity' | 'acp'>();
 
-  function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi' | 'acp'): void {
+  function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi' | 'antigravity' | 'acp'): void {
     // Called once per newly bound Session instance; beginBinding filters repeat wiring.
     // A replacement can have the same business id AND agent kind, but owns no old items.
     if (dbAgentKindBySession.get(sessionId) === 'codex' || dbAgentKind === 'codex') {
@@ -467,7 +467,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     dbAgentKindBySession.set(sessionId, dbAgentKind);
   }
 
-  function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | 'acp' | null {
+  function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | 'antigravity' | 'acp' | null {
     return dbAgentKindBySession.get(sessionId) ?? null;
   }
 
@@ -1230,11 +1230,12 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function preserveTurnPersistStateForBackground(sessionId: string): void {
     const knownToolUseIds = knownToolUseIdsBySession.get(sessionId) ?? new Set<string>();
     const toolUseInfo = toolUseInfoBySession.get(sessionId);
-    const pluginEngine = getSessionDbAgentKind(sessionId) === 'acp';
+    const agentKind = getSessionDbAgentKind(sessionId);
+    const acpEngine = agentKind === 'acp' || agentKind === 'antigravity';
     const collabToolUseIds = new Set(
       [...knownToolUseIds].filter(
         (toolUseId) =>
-          pluginEngine || toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
+          acpEngine || toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
       ),
     );
     const resultIds = toolResultIdByToolUseId.get(sessionId) ?? new Map<string, string>();
@@ -3247,7 +3248,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     row: {
       content: Record<string, unknown>;
       agentMeta: AgentMeta | null;
-      agentKind: 'cc' | 'codex' | 'pi' | 'acp' | undefined;
+      agentKind: 'cc' | 'codex' | 'pi' | 'antigravity' | 'acp' | undefined;
       /** 行的排序时间上界(通常是错误到达的时刻)。 */
       orderedAt: number;
       turnStartedAt: number;

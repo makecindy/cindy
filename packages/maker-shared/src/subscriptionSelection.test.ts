@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { subscriptionQuotaOverview } from './subscriptionSelection';
+import {
+  hasUsableCodexCredits,
+  selectableSubscriptionAccount,
+  subscriptionQuotaOverview,
+} from './subscriptionSelection';
 
 // Unit: chosen picker design C needs a common display rule on Desktop/Mobile.
 // Previous coverage had only independent quotas, no average or reset reminder.
@@ -50,5 +54,39 @@ describe('weekly account-pool overview', () => {
   it('allows a known percentage with no reset time but never invents a deadline', () => {
     expect(subscriptionQuotaOverview([{remaining:80}],now)).toMatchObject({average:80,resetSoonCount:0});
     expect(subscriptionQuotaOverview([],now)).toMatchObject({average:null,resetSoonCount:0});
+  });
+});
+
+/* 测试价值
+ * - 生产入口与可观察结果：selectableSubscriptionAccount / hasUsableCodexCredits 对单账号 OpenAI 池的选中预览结果。
+ * - Bug／规则依据：OpenAI 订阅周额度 100% 但仍有可用 Credits（如 60314.38）时，不应被当作不可用而返回 null。
+ * - 现有覆盖缺口：原单测只测 subscriptionQuotaOverview，未覆盖 Credits 对 selectableSubscriptionAccount 的放行与拦截。
+ * - 最小失败输入：status='limited' 且 usage.codex.credits={ hasCredits: true, unlimited: false, balance: '60314.38' }。
+ * - tier：unit（纯函数状态矩阵，无 I/O）。
+ */
+describe('OpenAI credits usability in selectableSubscriptionAccount', () => {
+  it.each([
+    [{ hasCredits: true, unlimited: false, balance: '60314.38' }, true],
+    [{ hasCredits: true, unlimited: true, balance: null }, true],
+    [{ hasCredits: true, unlimited: false, balance: '1,234.50' }, true],
+    [{ hasCredits: true, unlimited: false, balance: '0' }, false],
+    [{ hasCredits: true, unlimited: false, balance: '-1' }, false],
+    [{ hasCredits: false, unlimited: false, balance: '60314.38' }, false],
+    [{ hasCredits: true, unlimited: false, balance: '60314.38', spendControlReached: true }, false],
+    [null, false],
+    [undefined, false],
+  ])('treats status=limited account with credits=%j as selectable=%s', (credits, expected) => {
+    expect(hasUsableCodexCredits(credits)).toBe(expected);
+    const account = {
+      id: 'default',
+      paused: false,
+      status: 'limited',
+      running: 0,
+      limit: 4,
+      identity: 'user@example.test',
+      usage: credits === undefined ? undefined : { codex: { credits } },
+    };
+    const picked = selectableSubscriptionAccount({ configured: true, accounts: [account] });
+    expect(picked).toBe(expected ? account : null);
   });
 });

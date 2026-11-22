@@ -4,6 +4,12 @@ import { createWorkingDirectoryPreflight } from '../workingDirectoryPreflight';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
 
 describe('working directory send preflight', () => {
+  it('attributes missing Google session directories to the Google engine', async () => {
+    const h = createPreflightHarness();
+    h.io.stat.mockResolvedValue({ ...h.directoryStat, isDirectory: () => false });
+    await expect(h.check('s', h.dir, 'antigravity')).resolves.toBe(false);
+    expect(h.emitMissing).toHaveBeenCalledWith('s', h.dir, 'antigravity', 'not-dir');
+  });
   it('allows a bound timeout without missing, recovery, or a second bootstrap observation', async () => {
     const h = createPreflightHarness();
     h.io.stat.mockRejectedValue(filesystemError('WORKDIR_PROBE_TIMEOUT'));

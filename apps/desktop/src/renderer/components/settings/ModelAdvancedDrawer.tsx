@@ -1,3 +1,4 @@
+import { Sparkles } from 'lucide-react';
 import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
@@ -89,12 +90,14 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  antigravity: 'Antigravity',
 };
 
 const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
   'claude-code': (size) => <ClaudeMark size={size} />,
   codex: (size) => <CodexMark size={size} />,
   pi: (size) => <PiMark size={size} />,
+  antigravity: (size) => <Sparkles size={size} />,
 };
 
 /** 抽屉里的档位顺序 = 目录枚举顺序（弱到强）。ultra 只在模型真的提供时出现。 */

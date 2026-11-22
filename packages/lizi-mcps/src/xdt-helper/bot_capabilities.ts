@@ -55,7 +55,7 @@ export interface BotCapabilityCallbacks {
 export type TeammateCapabilityKind = "skill" | "mcp" | "toolset" | "feature";
 
 export interface AppDefaultModelRoute {
-  harness: 'claude' | 'codex' | 'pi'; providerId: string | null;
+  harness: 'claude' | 'codex' | 'pi' | 'antigravity'; providerId: string | null;
   model: string; effort: string; fastMode: boolean | 'ultrafast';
 }
 

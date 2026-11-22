@@ -799,6 +799,21 @@ describe('same-engine selection at send', () => {
 });
 
 describe('performSessionAgentSwitch', () => {
+  // PR #11135: leaving a Fast route must explicitly clear the persisted mode,
+  // including immediate apply and the staged same-engine picker entry.
+  it.each(['pending', 'immediate', 'same-engine'] as const)('clears Fast for Google via %s', async route => {
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    const selectSameAgentModel = vi.fn(async () => ({ deferred: true }));
+    const { deps } = makeDeps({ pendingSwitches, selectSameAgentModel,
+      getSessionRow: vi.fn(async () => makeRow({ agentKind: route === 'same-engine' ? 'antigravity' : 'cc' })) });
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'antigravity',
+      providerId: 'google-antigravity-subscription', model: 'gemini-4-hydrogen',
+      ...(route === 'immediate' ? { applyNow: true, skipBootstrap: true } : {}) });
+    if (route === 'same-engine') expect(selectSameAgentModel).toHaveBeenCalledWith('s1', expect.objectContaining({ fastMode: false }), false, undefined, undefined);
+    else if (route === 'pending') expect(pendingSwitches.get('s1')).toMatchObject({ fastMode: false });
+    else expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ fastMode: false }));
+  });
+
   it('stages and forwards the Pi thinking intent across an engine switch', async () => {
     let row = makeRow();
     const bootstraps: Array<{ thinkingEnabled?: boolean } | undefined> = [];

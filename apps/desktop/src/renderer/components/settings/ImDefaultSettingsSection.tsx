@@ -41,7 +41,7 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { Button } from '@/components/ui/button';
 import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
 
-function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
+function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' | 'antigravity' {
   return agentKind === 'claude-code' ? 'cc' : agentKind;
 }
 

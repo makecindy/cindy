@@ -1358,6 +1358,17 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  it('preserves Antigravity as the session and pending engine identity', () => {
+    expect(resolveModelSelectorAgentIdentity('antigravity', null)).toEqual({ vendorKey: 'antigravity', state: 'current' });
+    expect(resolveModelSelectorAgentIdentity('codex', 'antigravity')).toEqual({ vendorKey: 'antigravity', state: 'pending' });
+    render(React.createElement(ModelSelector, {
+      remoteAgent: undefined, modelId: 'gemini-3.8-flash', effort: 'high' as Effort,
+      onModelChange: vi.fn(), onEffortChange: vi.fn(),
+      vendorKey: 'antigravity', agentIdentity: resolveModelSelectorAgentIdentity('antigravity', null),
+    }));
+    expect(screen.getByRole('button', { name: /Google Antigravity/ })).toBeTruthy();
+  });
+
   it('does not infer a current Agent from the fallback vendor before session identity loads', () => {
     render(
       React.createElement(ModelSelector, {
@@ -1377,7 +1388,7 @@ describe('ModelSelector trigger variants', () => {
   });
 
   it.each([
-    ['claude-code', false], ['claude-code', true], ['codex', false], ['codex', true],
+    ['claude-code', false], ['claude-code', true], ['codex', false], ['codex', true], ['antigravity', false],
   ] as const)('keeps target identity and current/next context in a narrow composer (current=%s, ultra=%s)', (currentAgent, ultra) => {
     providersRef.providers = [{
       id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'], routing: { codex: {} },
@@ -1398,6 +1409,7 @@ describe('ModelSelector trigger variants', () => {
       };
       const view = render(React.createElement(ModelSelector, props));
       const trigger = screen.getByRole('button', { name: /Current:.*Previous model/ });
+      if (currentAgent === 'antigravity') expect(trigger.title).toContain('Google Antigravity · Previous model');
       expect(trigger.title).not.toContain('previous-model');
       expect(trigger.title).toContain('Next message: Codex · GPT-6 Astra');
       expect(trigger.title.split('Next message:')[1]).not.toContain('快速');
@@ -3184,6 +3196,25 @@ describe('ModelSelector trigger variants', () => {
     fireEvent.pointerEnter(opusRow);
     expect(onProviderChange).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('group', { name: /Opus 4\.8/ })).toBeNull();
+  });
+
+  it('clicking a Google subscription model keeps its engine and exact route', async () => {
+    providersRef.providers = [...providersRef.DEFAULT_PROVIDERS, {
+      id: 'google-antigravity-subscription', name: 'Google AI · Antigravity', connected: true,
+      agents: ['antigravity'], routing: { antigravity: {} },
+      models: { antigravity: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', contextWindow: 100000, efforts: [], defaultEffort: null }] },
+    }];
+    const onSwitch = vi.fn();
+    try {
+      render(React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined, modelId: 'claude-opus-4-8', effort: 'medium', onModelChange: vi.fn(),
+        onEffortChange: vi.fn(), vendorKey: 'cc', currentProviderId: 'anthropic', onProviderChange: vi.fn(),
+        agentSwitch: { currentVendor: 'cc', onSwitch },
+      }));
+      fireEvent.click(screen.getByRole('tab', { name: /Antigravity/ }));
+      fireEvent.click(await screen.findByRole('option', { name: /Gemini 3\.8 Flash/ }));
+      await waitFor(() => expect(onSwitch).toHaveBeenCalledWith('antigravity', 'gemini-3.8-flash', 'google-antigravity-subscription'));
+    } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
   });
 
   it('keeps target-agent provider rows and effort memory configurable while browsing Codex', async () => {

@@ -35,7 +35,7 @@ export function modelProtocolComparison(
     ? declaredApis[0] : null : reference ? [reference] : null;
   const protocolOf = (api: string | null | undefined) => compatibilityProtocol(api) ?? api ?? null;
   const harnessApi = (agent: AgentKind, api: PiModelApi | null): PiModelApi | null =>
-    agent === 'pi' ? api : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
+    agent === 'antigravity' ? null : agent === 'pi' ? api : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
   /** Compatibility mode means Cindy's local conversion only; any API the upstream offers is used as is. */
   const pathFor = (agent: AgentKind, api: PiModelApi | null | undefined): 'direct' | 'local' | 'unknown' => {
     if (!api) return 'unknown';
@@ -49,6 +49,7 @@ export function modelProtocolComparison(
     const model = models[agent];
     if (!model) return null;
     const routing = provider.routing?.[agent];
+    if (routing?.transport === 'acp') return { harness: null, outbound: null, localConversion: false, path: 'unknown' as const, mode: 'unknown' as const };
     const explicit = model.api ?? (agent === 'pi' ? model.piApi : undefined);
     const outbound = explicit ?? (subscriptionBridge && reference ? reference : (
       agent === 'pi'
@@ -103,6 +104,7 @@ export function nativeModelAgents(
   const comparison = modelProtocolComparison(provider, models);
   return (Object.keys(models) as AgentKind[]).filter(agent => {
     const protocol = comparison.forAgent(agent);
+    if (provider.routing?.[agent]?.transport === 'acp') return true;
     return !!protocol?.outbound && protocol.mode === 'matching';
   });
 }

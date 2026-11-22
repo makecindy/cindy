@@ -77,5 +77,5 @@ export interface TerminateAgentProcessRequest {
 /** terminate 成功返回(失败一律走 IPC 错误协议 throwIpcError)。 */
 export interface TerminateAgentProcessResult {
   pid: number;
-  kind: 'claude' | 'codex' | 'pi';
+  kind: 'claude' | 'codex' | 'pi' | 'antigravity';
 }
