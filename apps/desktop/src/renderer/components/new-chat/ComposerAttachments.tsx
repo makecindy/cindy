@@ -79,7 +79,7 @@ export function AttachmentRejectionStrip({
 // ── Thumbnail components (F-FI-3/4/5) ──
 
 /**
- * 标注编辑保存回调(惰性烧录):只把矢量笔迹写回附件——url/base64 保持原图
+ * 标注编辑写回回调(惰性烧录):每笔变化与最终保存都只把矢量笔迹写回附件——url/base64 保持原图
  * 不变,烧录位图在发送消息时由 materializeAnnotatedAttachmentsForSend 统一
  * 生成。空笔迹 = 清掉标注字段,附件回到普通图片。
  */
@@ -120,6 +120,8 @@ export function ThumbnailStrip({
               ? {
                   annotationEdit: {
                     initialStrokes: file.annotationStrokes,
+                    onDraftChange: (result: { strokes: ImageAnnotationStroke[] }) =>
+                      applyAnnotationEdit(file, result, onUpdate),
                     onSave: (result: { strokes: ImageAnnotationStroke[] }) =>
                       applyAnnotationEdit(file, result, onUpdate),
                   },
@@ -384,6 +386,7 @@ function ThumbnailItem({
             file.category === 'image' && (file.url || file.base64)
               ? {
                   initialStrokes: file.annotationStrokes,
+                  onDraftChange: (result) => applyAnnotationEdit(file, result, onUpdate),
                   onSave: (result) => applyAnnotationEdit(file, result, onUpdate),
                 }
               : undefined

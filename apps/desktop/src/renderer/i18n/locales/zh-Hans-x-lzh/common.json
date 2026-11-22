@@ -12487,6 +12487,7 @@
           "listenPortLabel": "本机侦听端口",
           "listenPortPlaceholder": "18747",
           "hint": "于本地网络接 BlueBubbles，仅理所选言谈。接入前，须先停此等言谈中其余自动应答程序。",
+          "automationDenied": "发讯时，macOS 禁 BlueBubbles 控制“信息”。请于运行 BlueBubbles 之 Mac 查“系统设置 → 隐私与安全性 → 自动化”。",
           "uncertain": "{{count}} 则讯尚待核验。先查言谈记录，再议重试，勿重答。"
         }
       },
@@ -15040,7 +15041,6 @@
     "runningStatus": {
       "currentRate": "近速",
       "lastRequestRate": "前请均速",
-      "recentTokenRate": "近速 {{rate}} tok/s",
       "waitingSample": "方采样",
       "averageRate": "本轮均速",
       "rateHistory": "生成速率史",
@@ -15811,7 +15811,7 @@
       "viewThread": "览 thread 上下文 ({{count}})",
       "memberFromGroup": "{{name}} · 自 {{platform}} 群议「{{group}}」来",
       "memberFromPlatform": "{{name}} · 自 {{platform}} 群议来",
-      "guestFromDm": "{{name}} · 自 {{platform}} 私讯来（非主人）",
+      "guestFromDm": "{{name}} · 自 {{platform}} 私讯来",
       "unknownSender": "群议中人"
     },
     "rewind": {

@@ -38,8 +38,8 @@ import { usePreviewFocusReturn } from './PreviewChrome';
  *   卸载时还给打开前的焦点元素。
  * - 换图：宿主把 `src` 指向新图时先走同一套未保存标注确认,再以新源重建内容;
  *   复制、另存、发送到对话始终指向当前显示的图。
- * - 未保存标注：默认仍开放背景;有未落盘笔迹时临时阻止会清空托盘或卸载浮窗的
- *   背景操作,直到用户保存、放弃或继续编辑。
+ * - 未保存标注：每笔提交、撤销、重做或放弃都立即写回待发附件草稿;发送/清空
+ *   托盘或卸载浮窗都不会只剩 viewer-local 笔迹,背景交互无需临时守卫。
  * - 背景滚动：不锁定 `[data-scroll-container]`,预览窗之外的聊天仍可滚动。
  * - 关闭按钮：标题栏常驻关闭按钮,避免非模态浮窗只能靠 Esc 退出。
  * - 会话画廊：`enableGallery` 开启后，可用 ←/→ 或屏幕箭头在会话图片间翻页，并显示
@@ -56,7 +56,7 @@ import {
   type PreviewResizeDirection,
   type PreviewWindowMode,
 } from './imagePreviewWindow';
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Button } from '@/components/ui/button';
@@ -88,12 +88,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
-import {
-  isLightboxCovered,
-  isPreviewMenuTarget,
-  lightboxOwnsInteractionTarget,
-  lightboxOwnsShortcutTarget,
-} from '@/lib/lightboxLayer';
+import { isLightboxCovered, lightboxOwnsShortcutTarget } from '@/lib/lightboxLayer';
 import { extractIpcError } from '@/utils/ipcError';
 import { getMimeType, extractExt, type AttachedFile } from '@/lib/fileTypes';
 import {
@@ -360,6 +355,8 @@ interface ImageLightboxProps {
    */
   annotationEdit?: {
     initialStrokes?: readonly AnnotationStroke[];
+    /** 每笔提交、撤销、重做或放弃都先写回附件草稿;发送/清空托盘不会只剩浮窗里的笔迹。 */
+    onDraftChange?: (result: { strokes: AnnotationStroke[] }) => void;
     /** 保存 = 只回传矢量笔迹(空数组 = 撤光恢复原图)。惰性烧录:位图在
      *  发送消息时才由 materializeAnnotatedAttachmentsForSend 统一生成。 */
     onSave: (result: { strokes: AnnotationStroke[] }) => void | Promise<void>;
@@ -529,9 +526,6 @@ function ImageLightboxContent({
   leaveGuardRef,
 }: ImageLightboxContentProps) {
   const { t } = useTranslation();
-  // Stable identity for this preview's portaled menus; the interaction guard
-  // uses it to distinguish our menus from the conversation behind the float.
-  const previewScopeId = useId();
   // 会话全量图片列表(MessageStream 下发);非聊天场景无 Provider 时为 null。
   const restorePreviewFocus = usePreviewFocusReturn();
   const sessionImages = useContext(ImageGalleryContext);
@@ -720,25 +714,28 @@ function ImageLightboxContent({
       )
     : null;
 
-  /** 同步更新 ref 与 state:连续快捷键(按键连发)在重渲染前也读到最新笔迹。 */
-  const replaceStrokes = useCallback((next: AnnotationStroke[]) => {
+  /** Single writer for viewer strokes and the owning attachment draft. */
+  const syncAnnotationDraft = useCallback((next: AnnotationStroke[]) => {
     strokesRef.current = next;
     setStrokes(next);
-  }, []);
+    annotationEdit?.onDraftChange?.({
+      strokes: next.map((stroke) => ({ points: [...stroke.points] })),
+    });
+  }, [annotationEdit]);
 
   const undoLastStroke = useCallback(() => {
     const current = strokesRef.current;
     if (current.length === 0) return;
     setRedoStack([...redoStackRef.current, current[current.length - 1]]);
-    replaceStrokes(current.slice(0, -1));
-  }, [replaceStrokes, setRedoStack]);
+    syncAnnotationDraft(current.slice(0, -1));
+  }, [syncAnnotationDraft, setRedoStack]);
 
   const redoStroke = useCallback(() => {
     const redo = redoStackRef.current;
     if (redo.length === 0) return;
     setRedoStack(redo.slice(0, -1));
-    replaceStrokes([...strokesRef.current, redo[redo.length - 1]]);
-  }, [replaceStrokes, setRedoStack]);
+    syncAnnotationDraft([...strokesRef.current, redo[redo.length - 1]]);
+  }, [syncAnnotationDraft, setRedoStack]);
 
   /**
    * 放弃标注:恢复到打开时的笔迹(编辑模式=上次保存的;发送模式=空)并退出
@@ -755,7 +752,7 @@ function ImageLightboxContent({
     }
     resetDraftStroke();
     setRedoStack([]);
-    replaceStrokes([...baselineStrokesRef.current]);
+    syncAnnotationDraft([...baselineStrokesRef.current]);
     setIsAnnotating(false);
   };
 
@@ -837,8 +834,8 @@ function ImageLightboxContent({
         return true;
       }
       if (choice === 'confirm') {
-        if (annotationEdit) return handleAnnotationSave(leave);
-        return handleSendToChat(leave);
+        if (annotationEdit) return await handleAnnotationSave(leave);
+        return await handleSendToChat(leave);
       }
       return false;
     } finally {
@@ -944,7 +941,7 @@ function ImageLightboxContent({
     );
     resetDraftStroke();
     setRedoStack([]);
-    replaceStrokes([...baselineStrokesRef.current]);
+    syncAnnotationDraft([...baselineStrokesRef.current]);
     setNaturalSize(null);
     // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 挂载时固定。
   }, [index, resetViewport]);
@@ -1225,7 +1222,7 @@ function ImageLightboxContent({
     }
     if (draft && draft.points.length > 0) {
       setRedoStack([]);
-      replaceStrokes([...strokesRef.current, draft]);
+      syncAnnotationDraft([...strokesRef.current, draft]);
     } else {
       draftPathCacheRef.current = null;
       writeDraftPath('');
@@ -1273,9 +1270,9 @@ function ImageLightboxContent({
     const handler = (e: KeyboardEvent) => {
       // 放弃确认框打开期间,按键归确认框(含关闭它的那次 Esc)。
       if (confirmPendingRef.current || e.defaultPrevented || isEditableKeyboardTarget(e.target)) return;
-      // Portaled menus from this preview own their keyboard work; do not turn
-      // menu arrows/Enter into image shortcuts or a second Escape close.
-      if (isPreviewMenuTarget(e.target, overlayRef.current)) return;
+      // Portaled Radix menus own their keyboard work; do not turn menu
+      // arrows/Enter into image shortcuts or a second Escape close.
+      if (e.target instanceof Element && e.target.closest('[role="menu"]')) return;
       if (e.key === 'Escape') {
         const overlay = overlayRef.current;
         if (!overlay || isLightboxCovered(overlay)) return;
@@ -1675,29 +1672,6 @@ function ImageLightboxContent({
     ...WINDOW_NO_DRAG_STYLE,
   } as React.CSSProperties;
 
-  // While strokes are unsaved, background send/switch/remove paths could unmount
-  // this viewer without the leave confirmation. Keep the default non-modal
-  // experience, but temporarily hold interaction on the panel until the user
-  // saves, discards or cancels through the existing annotation flow.
-  const annotationGuardActive = hasUnsavedStrokeChanges();
-  useEffect(() => {
-    if (!annotationGuardActive) return;
-    const panel = overlayRef.current;
-    if (!panel || isLightboxCovered(panel)) return;
-    focusPreviewPanel();
-    const blockBackgroundKeys = (event: KeyboardEvent) => {
-      const activePanel = overlayRef.current;
-      if (!activePanel || isLightboxCovered(activePanel)) return;
-      if (event.key === 'Escape' || confirmPendingRef.current || event.defaultPrevented) return;
-      if (lightboxOwnsInteractionTarget(event.target, activePanel)) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      focusPreviewPanel();
-    };
-    document.addEventListener('keydown', blockBackgroundKeys, true);
-    return () => document.removeEventListener('keydown', blockBackgroundKeys, true);
-  }, [annotationGuardActive, focusPreviewPanel]);
-
   const overlay = (
     // FocusScope 只负责打开时把焦点移入浮窗、卸载时还给触发器;trapped=false
     // 让 Tab 能穿过非模态浮窗进入背景对话。
@@ -1714,7 +1688,6 @@ function ImageLightboxContent({
       ref={overlayRef}
       data-lightbox-layer
       data-preview-window-mode={panelMode}
-      data-preview-scope-id={previewScopeId}
       role="dialog"
       aria-modal={false}
       tabIndex={-1}
@@ -1740,7 +1713,6 @@ function ImageLightboxContent({
           actions={<ImagePreviewWindowActions mode={panelMode} onDock={dock} />}
           isDraggable
           onPointerDown={handleHeaderPointerDown}
-          menuScopeId={previewScopeId}
           onMenuClose={() => {
             lastMenuCloseAt.current = performance.now();
           }}
@@ -1871,7 +1843,7 @@ function ImageLightboxContent({
               baselineStrokesRef.current = EMPTY_STROKES;
               resetDraftStroke();
               setRedoStack([]);
-              replaceStrokes([]);
+              syncAnnotationDraft([]);
               return;
             }
               setLoadFailed(currentSrc);
@@ -1913,7 +1885,6 @@ function ImageLightboxContent({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            data-preview-menu-scope={previewScopeId}
             align="start"
             sideOffset={2}
           >
@@ -1973,7 +1944,7 @@ function ImageLightboxContent({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
-        <PreviewFooter menuScopeId={previewScopeId}>
+        <PreviewFooter>
           <LightboxToolbarButton
             label={t('chat.mermaidLightbox.zoomOut')}
             disabled={scale <= IMAGE_MIN_SCALE}
@@ -2001,7 +1972,7 @@ function ImageLightboxContent({
                 %
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent data-preview-menu-scope={previewScopeId}>
+            <DropdownMenuContent>
               <DropdownMenuItem onClick={resetViewport}>
                 {t('attachmentPreview.fit')}
               </DropdownMenuItem>
@@ -2108,10 +2079,7 @@ function ImageLightboxContent({
             {index + 1} / {galleryItems.length}
           </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  data-preview-menu-scope={previewScopeId}
-                  className="max-h-72 overflow-auto"
-                >
+                <DropdownMenuContent className="max-h-72 overflow-auto">
                   {galleryItems.map((item, itemIndex) => (
                     <DropdownMenuItem
                       key={item.galleryId ?? `${itemIndex}:${item.src}`}
@@ -2139,28 +2107,5 @@ function ImageLightboxContent({
     </FocusScope>
   );
 
-  return createPortal(
-    <>
-      {annotationGuardActive ? (
-        // Transparent, panel-level click blocker: protects unsaved strokes from
-        // background send/clear paths without dimming the conversation.
-        <div
-          aria-hidden
-          data-preview-unsaved-guard
-          className="fixed inset-0"
-          style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: Z_INDEX_LAYERS.fullscreen }}
-          onPointerDown={(event) => {
-            event.preventDefault();
-            focusPreviewPanel();
-          }}
-          onClick={(event) => {
-            event.preventDefault();
-            focusPreviewPanel();
-          }}
-        />
-      ) : null}
-      {overlay}
-    </>,
-    document.body,
-  );
+  return createPortal(overlay, document.body);
 }

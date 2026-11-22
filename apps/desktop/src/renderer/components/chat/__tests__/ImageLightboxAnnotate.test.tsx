@@ -8,12 +8,13 @@
  * - Esc / X:笔迹未偏离基线时行为同旧版(立即退出,不弹确认);有改动时经统一
  *   确认框,关闭确认框的那次 Esc 不会再次触发放弃;
  * - Space / 中键拖拽平移时不落笔;
- * - 笔迹未保存时暂不把背景发送/清空路径暴露给键盘,避免托盘卸载静默丢笔迹;
- *   当前浮窗自己打开的标题栏「更多」与比例菜单仍保留方向键 / Enter。
+ * - 笔迹一经提交就写回待发附件草稿,发送/清空托盘不再依赖浮窗键盘守卫;
+ *   当前浮窗菜单的方向键 / Enter 与缩放快捷键互不抢事件;
+ *   离开确认锁在异步保存完成后才释放。
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { i18n } from '@/i18n';
@@ -420,53 +421,86 @@ describe('ImageLightbox annotate mode', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('guards unsaved strokes from background send/clear paths', () => {
-    const onBackgroundKeyDown = vi.fn();
+  it('writes committed annotation edits to the owning attachment draft', () => {
+    const onDraftChange = vi.fn();
     render(
-      <>
-        <input aria-label="composer input" onKeyDown={onBackgroundKeyDown} />
-        <ImageLightbox
-          src={SRC}
-          onClose={vi.fn()}
-          annotationEdit={{ onSave: vi.fn() }}
-        />
-      </>,
+      <ImageLightbox
+        src={SRC}
+        onClose={vi.fn()}
+        annotationEdit={{ onSave: vi.fn(), onDraftChange }}
+      />,
     );
     loadImage(lightboxImage());
     openAnnotate();
-    drawStroke({ x: 20, y: 20 }, { x: 120, y: 80 });
-    expect(committedPaths('stroke')).toHaveLength(1);
-
-    const guard = document.body.querySelector<HTMLElement>('[data-preview-unsaved-guard]');
-    expect(guard).not.toBeNull();
-    const input = screen.getByRole('textbox', { name: 'composer input' });
-    input.focus();
-    fireEvent.keyDown(input, { key: 'a' });
-    expect(onBackgroundKeyDown).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(document.body.querySelector('[data-lightbox-layer]'));
+    drawStroke({ x: 20, y: 20 }, { x: 100, y: 80 });
+    expect(onDraftChange).toHaveBeenLastCalledWith({
+      strokes: [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.8 }] }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: label('chat.media.annotateUndo') }));
+    expect(onDraftChange).toHaveBeenLastCalledWith({ strokes: [] });
   });
 
-  it.each([
-    ['titlebar more', label('attachmentPreview.more')],
-    ['scale', /%/],
-  ])('keeps %s menu keyboard work inside the unsaved-annotation guard', async (_case, name) => {
+  it('keeps the leave lock until annotation save settles', async () => {
+    let resolveSave!: () => void;
+    const save = new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    });
+    const onSave = vi.fn(() => save);
+    render(
+      <ConfirmDialogProvider>
+        <ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={{ onSave }} />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('chat.lightbox.close') }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: label('chat.media.annotateSave') }));
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label('chat.lightbox.close') }));
+      // The broken early-unlock path needs the confirmation exit animation to finish.
+      // real-wait: confirmation exit animation must finish before another leave.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    const secondDialog = screen.queryByRole('alertdialog');
+    if (secondDialog) {
+      await act(async () => {
+        fireEvent.click(
+          within(secondDialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+        );
+      });
+    }
+    expect(onSave).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveSave();
+      await save;
+    });
+  });
+
+  it('leaves portaled preview menu keys to the menu', () => {
     render(<ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={{ onSave: vi.fn() }} />);
     loadImage(lightboxImage());
     openAnnotate();
     drawStroke({ x: 20, y: 20 }, { x: 120, y: 80 });
-    expect(document.body.querySelector('[data-preview-unsaved-guard]')).not.toBeNull();
 
-    const trigger = screen.getByRole('button', { name });
-    fireEvent.keyDown(trigger, { key: 'Enter' });
-    const menu = await screen.findByRole('menu');
-    const panel = document.body.querySelector<HTMLElement>('[data-lightbox-layer]');
-    expect(menu.getAttribute('data-preview-menu-scope')).toBe(panel?.getAttribute('data-preview-scope-id'));
-
-    const onMenuKeyDown = vi.fn();
-    menu.addEventListener('keydown', onMenuKeyDown);
-    fireEvent.keyDown(menu, { key: 'ArrowDown' });
-    fireEvent.keyDown(menu, { key: 'Enter' });
-    expect(onMenuKeyDown).toHaveBeenCalledTimes(2);
+    // Minimal stand-in for a Radix menu portaled outside the preview panel.
+    const menu = document.createElement('div');
+    menu.setAttribute('role', 'menu');
+    document.body.append(menu);
+    for (const key of ['ArrowDown', 'Enter', '+']) {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      menu.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
   });
 });
 

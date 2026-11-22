@@ -9,12 +9,13 @@
  * changed: an untouched file is updated, a changed one gets the new version beside it
  * (`.cindy/template/`) to merge.
  */
-import { createHash } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { promises as fs, renameSync } from 'node:fs';
 import path from 'node:path';
 import { createTwoFilesPatch } from 'diff';
 import { canonicalJson, COMPANION_VALUE_MAX_BYTES } from '../companion-cloud/uploader.js';
-import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile } from './botSkillStore.js';
+import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile, withBotSkillWrite } from './botSkillStore.js';
+import { PROJECT_SETTINGS_GUIDE, PROJECT_SETTINGS_PATH, isStandardProjectSkill } from './botProjectSettingsGuide.js';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
 export const TEAMMATE_TEMPLATE_VERSION = 10;
@@ -33,11 +34,14 @@ const OWN_RULES_INTRO = 'Rules the owner asked for, or that you settled with the
 const CHANGES_NOTE = 'Changes made to an earlier version of this skill\'s standard, kept when Cindy updated it. Lines starting with + were added and lines starting with - removed; the other lines are that earlier standard, showing where each change was made. Keep the intent of these changes, in the section they were made in, together with the standard above. You may rewrite what still applies as plain rules in this section and then remove this block.';
 const HEADER_NOTE = 'Frontmatter lines from the earlier version of this skill that the updated header does not have (for example a changed standard field). Decide whether to put them back in the header above, then remove this block.';
 const EARLIER_NOTE = 'This skill\'s earlier version, kept when Cindy took over its standard. Keep in this section, as plain rules, only what the owner asked for that the standard above does not already say, then remove this block.';
-const LAYERED_FILES = new Set(['.agents/skills/hand-off/SKILL.md']);
+function isLayeredFile(relative: string): boolean {
+  const match = /^\.agents\/skills\/([^/]+)\/SKILL\.md$/.exec(relative);
+  return !!match && isStandardProjectSkill(match[1]);
+}
 /** The standard text last written to a layered file: what a later change is compared with. */
 const STANDARD_DIR = path.join('.cindy', 'template-standard');
 /** Finds an earlier template file by the hash the record kept (from the project's Git history). */
-export type ReadPreviousTemplate = (relative: string, sha256: string) => Promise<string | null>;
+export type ReadPreviousTemplate = (relative: string, sha256?: string) => Promise<string | null>;
 
 const lf = (text: string) => text.replace(/\r\n?/g, '\n');
 
@@ -148,6 +152,22 @@ function layeredContent(rawCurrent: string, rawPrevious: string | null, next: st
   return sections.length ? `${header.trimEnd()}\n\n${sections.join('\n\n')}\n` : header;
 }
 
+/** Adopt the personal source text when an importer encounters the starter it just installed. */
+export function importedStandardSkill(slug: string) {
+  const relative = `.agents/skills/${slug}/SKILL.md`;
+  if (!isLayeredFile(relative)) return undefined;
+  const standard = teammateTemplateFiles('')[relative];
+  return { standard, layer(source: string) {
+    const content = layeredContent(source, null, standard);
+    if (Buffer.byteLength(parseBotSkillFile(content).body) > BOT_SKILL_MAX_BODY_BYTES
+      || Buffer.byteLength(canonicalJson({ slug, content, enabled: false })) > COMPANION_VALUE_MAX_BYTES)
+      throw new Error('Imported standard skill exceeds portable skill size');
+    return content;
+  } };
+}
+
+const SETTINGS_ROUTE = 'For your own configuration, read `.cindy/settings/README.md`.';
+
 const MEMORY_ROUTE = [
   '<!-- project-memory -->',
   '## Project memory',
@@ -227,8 +247,11 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       `- In a skill that has a "${OWN_RULES_HEADING.replace(/^#+\s*/, '')}" section (such as hand-off), put changes in that section: Cindy replaces the rest of the skill when it updates its standard, and keeps that section.`,
       '- Who the buddy is (name, personality, relationship) stays in its profile, not here.',
       '',
+      SETTINGS_ROUTE,
+      '',
       MEMORY_ROUTE,
     ].join('\n'),
+    [PROJECT_SETTINGS_PATH]: PROJECT_SETTINGS_GUIDE,
     '.cindy/memory/README.md': PROJECT_MEMORY_GUIDE,
     '.agents/skills/hand-off/SKILL.md': [
       '---',
@@ -292,9 +315,16 @@ async function readText(file: string): Promise<string | null> {
 
 async function write(file: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, content, 'utf8');
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  await fs.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx' });
   await fs.rename(tmp, file);
+}
+
+async function exists(file: string): Promise<boolean> {
+  return fs.lstat(file).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  });
 }
 
 /** Whether writing `relative` in the project would go through a link (it could lead anywhere). */
@@ -302,11 +332,59 @@ async function throughLink(workspace: string, relative: string): Promise<boolean
   let current = workspace;
   for (const part of relative.split(/[\\/]/)) {
     current = path.join(current, part);
-    const stat = await fs.lstat(current).catch(() => null);
+    const stat = await fs.lstat(current).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
     if (!stat) return false;
     if (stat.isSymbolicLink()) return true;
   }
   return false;
+}
+
+/** Remove exactly one active personal skill requested in the owner's conversation. */
+export async function removeProjectPersonalSkill(workspace: string, slug: string, assertCurrent: () => void): Promise<boolean> {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug) || isStandardProjectSkill(slug)) throw new Error('PERSONAL_SKILL_REQUIRED');
+  const relative = path.join('.agents', 'skills', slug);
+  const target = path.join(workspace, relative);
+  if (await throughLink(workspace, relative) || await exists(path.join(path.dirname(workspace), 'disabled-skills', slug)))
+    throw new Error('PERSONAL_SKILL_REQUIRED');
+  const entry = await fs.lstat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!entry) return false;
+  if (!entry.isDirectory()) throw new Error('PERSONAL_SKILL_REQUIRED');
+  const retired = path.join(path.dirname(workspace), `.removed-skill-${randomUUID()}`);
+  assertCurrent();
+  renameSync(target, retired);
+  await fs.rm(retired, { recursive: true, force: true });
+  return true;
+}
+
+/** Older template versions could recreate their stock folder beside an explicitly disabled skill.
+ * Keep such a folder, including any extra assets, outside the native active scan. */
+async function standardSkillLocation(workspace: string, relative: string, standard: string, baseline?: string) {
+  const profile = path.dirname(workspace);
+  const slug = path.basename(path.dirname(relative));
+  const shelf = path.join('disabled-skills', slug);
+  if (await throughLink(profile, shelf)) return null;
+  const active = path.join(workspace, relative);
+  if (!await exists(path.join(profile, shelf))) return { target: active, disabled: false, recovered: false };
+  const manifest = path.join(shelf, 'SKILL.md');
+  const lower = path.join(shelf, 'skill.md');
+  if (await throughLink(profile, manifest) || await throughLink(profile, lower)) return null;
+  const target = !await exists(path.join(profile, manifest)) && await exists(path.join(profile, lower))
+    ? path.join(profile, lower) : path.join(profile, manifest);
+  const duplicate = await readText(active);
+  const recovered = duplicate !== null && (duplicate === standard || hash(duplicate) === baseline);
+  if (recovered) {
+    const backup = path.join('disabled-skill-backups', `${slug}-${randomUUID()}`);
+    if (await throughLink(profile, backup)) return null;
+    await fs.mkdir(path.dirname(path.join(profile, backup)), { recursive: true });
+    await fs.rename(path.dirname(active), path.join(profile, backup));
+  }
+  return { target, disabled: true, recovered };
 }
 
 /** The standard a layered file was last written from, or null when it is not known. */
@@ -328,35 +406,66 @@ async function previousStandard(workspace: string, relative: string, current: st
 export async function applyTeammateTemplate(workspace: string, displayName: string,
   version = TEAMMATE_TEMPLATE_VERSION, files = teammateTemplateFiles(displayName),
   readPrevious?: ReadPreviousTemplate): Promise<boolean> {
+  return withBotSkillWrite(path.dirname(workspace), () => applyTemplateFiles(workspace, version, files, readPrevious));
+}
+
+async function applyTemplateFiles(workspace: string, version: number, files: Record<string, string>,
+  readPrevious?: ReadPreviousTemplate): Promise<boolean> {
+  if (await throughLink(workspace, TEAMMATE_TEMPLATE_RECORD)) return false;
   const recordPath = path.join(workspace, TEAMMATE_TEMPLATE_RECORD);
   const recordText = await readText(recordPath);
   let record: TeammateTemplateRecord | null = null;
   try { record = recordText ? JSON.parse(recordText) as TeammateTemplateRecord : null; } catch { record = null; }
+  if (record && record.version > version) return false;
+  if (!record || !Number.isInteger(record.version) || !record.files || typeof record.files !== 'object'
+    || Array.isArray(record.files)) record = null;
   // Routing is additive even for an owner-edited AGENTS.md: the rest of that file is untouched.
   // Codex/Pi may select AGENTS.override.md; Claude may have a custom CLAUDE.md instead of @AGENTS.md.
-  let routed = false;
+  let projectChanged = false;
   for (const relative of ['AGENTS.md', 'AGENTS.override.md', 'CLAUDE.md']) {
     if (await throughLink(workspace, relative)) continue;
     const current = await readText(path.join(workspace, relative));
-    if (current === null || current.includes('<!-- project-memory -->')
-      || (relative === 'CLAUDE.md' && /(?:^|\s)@AGENTS\.md(?:\s|$)/.test(current))) continue;
-    // Still-pristine templates are updated by the normal versioned path below.
+    if (current === null || (relative === 'CLAUDE.md' && /(?:^|\s)@AGENTS\.md(?:\s|$)/.test(current))) continue;
+    // An untouched file can take the complete new template during an upgrade.
     if (relative === 'AGENTS.md' && record?.files[relative] === hash(current) && record.version < version) continue;
-    await write(path.join(workspace, relative), `${current}${current.endsWith('\n') ? '\n' : '\n\n'}${MEMORY_ROUTE}`);
-    routed = true;
+    const missing = [
+      !current.includes('<!-- project-memory -->') && MEMORY_ROUTE,
+      !current.includes(PROJECT_SETTINGS_PATH) && SETTINGS_ROUTE,
+    ].filter(Boolean);
+    if (!missing.length) continue;
+    const updated = `${current}${current.endsWith('\n') ? '\n' : '\n\n'}${missing.join('\n\n')}\n`;
+    await write(path.join(workspace, relative), updated);
+    if (record?.files[relative] === hash(current)) record.files[relative] = hash(updated);
+    projectChanged = true;
   }
-  if (record && record.version >= version) return routed;
+  const currentVersion = record?.version === version;
   const next: TeammateTemplateRecord = { version, files: {}, pending: [] };
   for (const [relative, content] of Object.entries(files)) {
-    const target = path.join(workspace, relative);
+    let target = path.join(workspace, relative);
+    const standardSkill = isLayeredFile(relative);
+    if (currentVersion && !standardSkill && relative !== PROJECT_SETTINGS_PATH) continue;
     // The project linked this place elsewhere (its Skills folder, say): never write through it.
     if (await throughLink(workspace, relative) || await throughLink(workspace, path.join(PENDING_DIR, relative))) continue;
-    const current = await readText(target);
     const base = record?.files[relative];
-    if (LAYERED_FILES.has(relative)) {
+    const location = standardSkill ? await standardSkillLocation(workspace, relative, content, base) : null;
+    if (standardSkill && !location) continue;
+    if (location) target = location.target;
+    if (location?.recovered) projectChanged = true;
+    const current = await readText(target);
+    if (currentVersion && current !== null) {
+      // A receipt written while the disabled shelf was skipped has no baseline for this file.
+      const missedDisabledUpgrade = location?.disabled && (location.recovered || !base || !record?.files[PROJECT_SETTINGS_PATH])
+        && standardPart(current).standard !== standardPart(content).standard;
+      const updatedGuide = relative === PROJECT_SETTINGS_PATH && current !== content && record?.files[relative] === hash(current);
+      if (!missedDisabledUpgrade && !updatedGuide) continue;
+    }
+    if (standardSkill && !location?.disabled && current === null && await exists(path.join(path.dirname(target), 'skill.md'))) continue;
+    if (standardSkill) {
       if (await throughLink(workspace, path.join(STANDARD_DIR, relative))) continue;
-      const written = current === null ? content
-        : layeredContent(current, await previousStandard(workspace, relative, current, base, readPrevious), content);
+      // Only recover this standard skill. A saved personal addition can survive accidental deletion.
+      const last = current ?? (base && readPrevious ? await readPrevious(relative).catch(() => null) : null);
+      const written = last == null ? content
+        : layeredContent(last, await previousStandard(workspace, relative, last, base, readPrevious), content);
       // A skill over the body size every editor and cloud restore accepts, or over what the cloud
       // sync carries without a file store (the whole skill as one preference value), would be
       // unusable or would block a move to another computer: leave that rare file as it is and offer
@@ -389,6 +498,12 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
       next.pending!.push(relative);
     }
     // A file the project had before any template stays its own and is not tracked.
+  }
+  if (currentVersion && record) {
+    Object.assign(record.files, next.files);
+    if (!projectChanged && !Object.keys(next.files).length) return false;
+    await write(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+    return true;
   }
   if (!next.pending!.length) delete next.pending;
   await write(recordPath, `${JSON.stringify(next, null, 2)}\n`);

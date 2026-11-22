@@ -194,6 +194,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
   'src/renderer/__tests__/typographyDiscipline.test.ts',
   'src/renderer/__tests__/designEffectsDiscipline.test.ts',
+  // DESIGN.md §6: only confirm({ blocking: true }) may draw on the modal-blocking layer.
+  'src/renderer/__tests__/modalBlockingLayer.guard.test.ts',
   'src/renderer/__tests__/motionDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.

@@ -202,6 +202,7 @@ function VideoLightboxContent({
       }}
     >
     <div
+      data-lightbox-layer
       className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
