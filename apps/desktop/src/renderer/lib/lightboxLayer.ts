@@ -1,23 +1,47 @@
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
+
+const BASE_LAYER_Z_INDEX = Z_INDEX_LAYERS.fullscreen;
+const FOREGROUND_LAYER_Z_INDEX = Z_INDEX_LAYERS['modal'];
+
 let activationLayerCount = 0;
+
+/** The foreground preview owns both keyboard shortcuts and the highest preview stack. */
+function raiseLightboxLayer(foreground: HTMLElement | null): void {
+  document.querySelectorAll<HTMLElement>('[data-lightbox-layer]').forEach((layer) => {
+    layer.style.zIndex = String(BASE_LAYER_Z_INDEX);
+  });
+  if (foreground) foreground.style.zIndex = String(FOREGROUND_LAYER_Z_INDEX);
+}
 
 /** Activated preview layers own shortcuts until a newer layer is mounted. */
 export function activateLightboxLayer(element: HTMLElement | null): void {
   if (!element) return;
-  activationLayerCount = document.querySelectorAll('[data-lightbox-layer]').length;
-  document
-    .querySelectorAll<HTMLElement>('[data-lightbox-layer][data-preview-active]')
-    .forEach((layer) => {
-      if (layer !== element) layer.removeAttribute('data-preview-active');
-    });
+  const layers = document.querySelectorAll<HTMLElement>('[data-lightbox-layer]');
+  activationLayerCount = layers.length;
+  layers.forEach((layer) => {
+    if (layer !== element) layer.removeAttribute('data-preview-active');
+  });
   element.setAttribute('data-preview-active', '');
+  raiseLightboxLayer(element);
 }
 
 /** A layer mounted after the last activation supersedes the activated layer. */
 function foregroundLayer(): HTMLElement | null {
   const layers = Array.from(document.querySelectorAll<HTMLElement>('[data-lightbox-layer]'));
   const active = document.querySelector<HTMLElement>('[data-lightbox-layer][data-preview-active]');
-  if (active && layers.length <= activationLayerCount) return active;
-  return layers.at(-1) ?? null;
+  let foreground: HTMLElement | null;
+  if (active && layers.length <= activationLayerCount) {
+    foreground = active;
+  } else {
+    foreground = layers.at(-1) ?? null;
+    if (foreground && foreground !== active) {
+      active?.removeAttribute('data-preview-active');
+      foreground.setAttribute('data-preview-active', '');
+      activationLayerCount = layers.length;
+    }
+  }
+  raiseLightboxLayer(foreground);
+  return foreground;
 }
 
 export function isLightboxCovered(element: HTMLElement): boolean {

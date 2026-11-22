@@ -7,7 +7,7 @@ export type AttachmentCollectionItem = PreviewItem & {
   media?: boolean;
   image?: Partial<Pick<
     ComponentProps<typeof ImageLightbox>,
-    'src' | 'annotationEdit' | 'initialStrokes' | 'annotationFallbackSrc'
+    'src' | 'annotationEdit' | 'initialStrokes' | 'annotationFallbackSrc' | 'annotationDisabled'
   >>;
 };
 

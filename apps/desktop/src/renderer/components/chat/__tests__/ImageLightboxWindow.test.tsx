@@ -7,7 +7,7 @@
  *   useImagePreviewWindow 纯几何入口，断言无遮罩、无滚动锁、标题栏拖动移动整个浮窗、
  *   停靠/调整尺寸改变面板矩形、Esc 与关闭按钮仍工作、放大后图片内容仍走 pan；
  *   换图后显示新源、重操作浮窗后键盘焦点归位、Esc 只关最上层、集合方向键不抢背景；
- *   混合集合从图片切到文档后清除旧图片面板的键盘范围。
+ *   混合集合从图片切到文档后清除旧图片面板的键盘范围；激活层同时取得最高叠放层级。
  * - Bug／规则依据：主人 2026-11-20 报告「预览窗无法拖动且盖住主要对话区域」；
  *   #11952 review threads 指出复用浮窗换图、键盘焦点归属、多浮窗 Esc 与集合方向键
  *   的对称路径；后续 thread 指出混合集合卸载时 scopeRef 清理失效。
@@ -359,6 +359,7 @@ describe('ImageLightbox non-modal window', () => {
 
     fireEvent.mouseDown(firstSurface!, { button: 0, clientX: 200, clientY: 200 });
     expect(first.hasAttribute('data-preview-active')).toBe(true);
+    expect(Number(first.style.zIndex)).toBeGreaterThan(Number(second.style.zIndex));
     const secondTransform = secondSurface!.style.transform;
     fireEvent.keyDown(first, { key: '+' });
     expect(firstSurface!.style.transform).not.toBe(secondSurface!.style.transform);
@@ -403,6 +404,7 @@ describe('ImageLightbox non-modal window', () => {
     document.body.append(newer);
     try {
       fireEvent.keyDown(document, { key: 'Escape' });
+      expect(Number(newer.style.zIndex)).toBeGreaterThan(Number(first.style.zIndex));
       await act(async () => {
         vi.advanceTimersByTime(250);
       });

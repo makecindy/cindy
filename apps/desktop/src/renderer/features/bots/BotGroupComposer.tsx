@@ -824,6 +824,7 @@ export function BotGroupComposer({
               attachments={attachmentState.attachments}
               onRemove={sending ? noop : attachmentState.removeFile}
               onUpdate={sending ? noop : attachmentState.updateFile}
+              annotationDisabled={sending || voice.isBusy}
             />
           ) : null}
           {richText ? <Suspense fallback={<Spinner size={16} data-bot-group-composer-loading={!disabled ? '' : undefined} />}><BotGroupTextEditor value={voice.displayText} initialPaste={initialPaste} inputRef={textareaRef}

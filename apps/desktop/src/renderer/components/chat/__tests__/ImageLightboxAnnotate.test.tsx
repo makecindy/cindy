@@ -13,6 +13,7 @@
  *   离开确认锁在异步保存完成后才释放。
  * - 逐笔草稿回写不触发换图确认；换图只由宿主请求的不同图片上下文驱动。
  * - 集合重新挂载图片时读取最新草稿；宿主换图经过当前集合图片的离开守卫。
+ * - 附件更新被锁定时预览只读，不能把空回调当作保存成功。
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
@@ -838,6 +839,36 @@ describe('ImageLightbox annotate mode', () => {
     });
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC);
+  });
+
+  it('keeps a locked attachment preview read-only', () => {
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const props = {
+      src: SRC,
+      onClose: vi.fn(),
+      annotationEdit: { initialStrokes: [], onDraftChange, onSave },
+    };
+    const view = render(
+      <ConfirmDialogProvider>
+        <ImageLightbox {...props} />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    expect(
+      screen.getByRole('button', { name: label('chat.media.annotate') }),
+    ).toBeTruthy();
+
+    view.rerender(
+      <ConfirmDialogProvider>
+        <ImageLightbox {...props} annotationDisabled />
+      </ConfirmDialogProvider>,
+    );
+    expect(
+      screen.queryByRole('button', { name: label('chat.media.annotate') }),
+    ).toBeNull();
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
 

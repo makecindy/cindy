@@ -384,6 +384,8 @@ interface ImageLightboxProps {
    * 这类"光栅化后直奔涂画"的入口用它省一次点击;默认 false 不影响既有场景。
    */
   autoAnnotate?: boolean;
+  /** When the attachment owner cannot accept updates, the preview must stay read-only. */
+  annotationDisabled?: boolean;
   /** Called when a source-retarget leave is rejected; hosts must restore their request to the displayed source snapshot. */
   onSourceChangeCancelled?: (displayed: ImageSourceSnapshot) => void;
 }
@@ -545,31 +547,37 @@ export function ImageLightbox(props: ImageLightboxProps) {
     });
   }, [requestedKey, activeLeaveGuardRef]);
 
+  const annotationDisabled = Boolean(requestedSourceRef.current.annotationDisabled);
   const contentProps: ImageLightboxContentProps = {
     ...activeSource,
     onClose: props.onClose,
+    annotationDisabled,
     // Keep the accepted baseline strokes, but let the latest host callbacks
     // write each draft change back without turning it into a source request.
-    annotationEdit: activeSource.annotationEdit
-      ? {
-          ...activeSource.annotationEdit,
-          onDraftChange:
-            requestedSourceRef.current.annotationEdit?.onDraftChange ??
-            activeSource.annotationEdit.onDraftChange,
-          onSave:
-            requestedSourceRef.current.annotationEdit?.onSave ??
-            activeSource.annotationEdit.onSave,
-        }
-      : undefined,
+    annotationEdit:
+      !annotationDisabled && activeSource.annotationEdit
+        ? {
+            ...activeSource.annotationEdit,
+            onDraftChange:
+              requestedSourceRef.current.annotationEdit?.onDraftChange ??
+              activeSource.annotationEdit.onDraftChange,
+            onSave:
+              requestedSourceRef.current.annotationEdit?.onSave ??
+              activeSource.annotationEdit.onSave,
+          }
+        : undefined,
   };
   const mergeCollectionImageProps = (
     imageProps: CollectionImageProps | undefined,
   ): ImageLightboxContentProps => {
+    const collectionAnnotationDisabled = Boolean(
+      annotationDisabled || imageProps?.annotationDisabled,
+    );
     const latestCallbacks = requestedSourceRef.current.annotationEdit;
     const baseAnnotationEdit = contentProps.annotationEdit;
     const collectionAnnotationEdit = imageProps?.annotationEdit;
     const annotationEdit =
-      baseAnnotationEdit || collectionAnnotationEdit
+      !collectionAnnotationDisabled && (baseAnnotationEdit || collectionAnnotationEdit)
         ? {
             ...(baseAnnotationEdit ?? {}),
             ...(collectionAnnotationEdit ?? {}),
@@ -586,6 +594,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
     return {
       ...contentProps,
       ...imageProps,
+      annotationDisabled: collectionAnnotationDisabled,
       annotationEdit,
     } as ImageLightboxContentProps;
   };
@@ -625,6 +634,7 @@ function ImageLightboxContent({
   initialStrokes,
   annotationFallbackSrc,
   autoAnnotate = false,
+  annotationDisabled = false,
   leaveGuardRef,
 }: ImageLightboxContentProps) {
   const { t } = useTranslation();
@@ -752,7 +762,7 @@ function ImageLightboxContent({
 
   // ---- 标注模式状态(鼠标当笔圈点) ----
   // autoAnnotate 只作初值:打开即进标注,退出/放弃后的行为与手动进入一致。
-  const [isAnnotating, setIsAnnotating] = useState(autoAnnotate);
+  const [isAnnotating, setIsAnnotating] = useState(!annotationDisabled && autoAnnotate);
   // 当前图打开时的基线笔迹:放弃标注(X / Esc)恢复到这里而非一律清空——
   // 画廊翻到持久化标注图后,基线是该图的持久化笔迹。翻页 effect 同步更新。
   const baselineStrokesRef = useRef<readonly AnnotationStroke[]>(
@@ -795,9 +805,20 @@ function ImageLightboxContent({
   const imgRef = useRef<HTMLImageElement>(null);
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
+  const annotationDisabledRef = useRef(false);
   const strokesRef = useRef<AnnotationStroke[]>([]);
   isAnnotatingRef.current = isAnnotating;
+  annotationDisabledRef.current = annotationDisabled;
   strokesRef.current = strokes;
+
+  // A background voice/send lock can arrive while the preview is open. Leave
+  // annotation mode immediately so no in-flight stroke can be saved into a
+  // no-op attachment callback.
+  useEffect(() => {
+    if (!annotationDisabled) return;
+    setIsAnnotating(false);
+    resetDraftStroke();
+  }, [annotationDisabled]);
 
   // 退出标注模式时复位 Space 平移修饰(keyup 可能落在模式切换之后)。
   useEffect(() => {
@@ -821,10 +842,11 @@ function ImageLightboxContent({
   const syncAnnotationDraft = useCallback((next: AnnotationStroke[]) => {
     strokesRef.current = next;
     setStrokes(next);
+    if (annotationDisabled) return;
     annotationEdit?.onDraftChange?.({
       strokes: next.map((stroke) => ({ points: [...stroke.points] })),
     });
-  }, [annotationEdit]);
+  }, [annotationEdit, annotationDisabled]);
 
   const undoLastStroke = useCallback(() => {
     const current = strokesRef.current;
@@ -908,14 +930,15 @@ function ImageLightboxContent({
   /** Single leave guard for close, collection switch, source retarget and unmount. */
   const requestClose = async (leave = handleClose): Promise<PreviewLeaveOutcome> => {
     if (confirmPendingRef.current) return 'busy';
-    if (!hasUnsavedStrokeChanges()) {
+    const unsaved = hasUnsavedStrokeChanges();
+    if (!unsaved) {
       leave();
       return 'applied';
     }
-    if (!confirmDialog) return 'cancelled';
+    if (annotationDisabled || !confirmDialog) return 'cancelled';
     confirmPendingRef.current = true;
     try {
-      const canSave = Boolean(annotationEdit || chatSessionId);
+      const canSave = !annotationDisabled && Boolean(annotationEdit || chatSessionId);
       const choice = canSave
         ? await confirmDialog.confirmThree({
             title: t('chat.media.annotateDiscardConfirmTitle'),
@@ -938,6 +961,7 @@ function ImageLightboxContent({
         return 'applied';
       }
       if (choice === 'confirm') {
+        if (annotationDisabled) return 'cancelled';
         const saved = annotationEdit
           ? await handleAnnotationSave(leave)
           : await handleSendToChat(leave);
@@ -1272,7 +1296,7 @@ function ImageLightboxContent({
    * 抑制原生拖拽 ghost、文字选区;画笔由 pointer 事件负责(鼠标 / 触屏 / 笔统一)。
    */
   function handleAnnotateMouseDown(e: React.MouseEvent) {
-    if (e.button !== 0 && e.button !== 1) return;
+    if (annotationDisabled || (e.button !== 0 && e.button !== 1)) return;
     focusPreviewPanel();
     if (e.button === 1 || (e.button === 0 && spaceHeldRef.current)) {
       // 中键 preventDefault 同时阻止 Windows / Linux 的中键自动滚动。
@@ -1285,7 +1309,7 @@ function ImageLightboxContent({
 
   /** 画笔起笔:仅主键(鼠标左键 / 触屏 / 笔尖接触),平移修饰键按住时不画。 */
   function handleAnnotatePointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.button !== 0 || spaceHeldRef.current) return;
+    if (annotationDisabled || e.button !== 0 || spaceHeldRef.current) return;
     focusPreviewPanel();
     // 多点触控:已有指针在画时忽略其它手指。
     if (drawingPointerIdRef.current !== null) return;
@@ -1304,7 +1328,7 @@ function ImageLightboxContent({
   }
 
   function handleAnnotatePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.pointerId !== drawingPointerIdRef.current) return;
+    if (annotationDisabled || e.pointerId !== drawingPointerIdRef.current) return;
     const draft = draftStrokeRef.current;
     if (!draft) return;
     const point = pointFromClient(e.clientX, e.clientY);
@@ -1316,7 +1340,7 @@ function ImageLightboxContent({
 
   /** 收笔(pointerup / 失去 capture 走这里,较长的 pointercancel 也经此提交;幂等)。 */
   function finishAnnotateStroke(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.pointerId !== drawingPointerIdRef.current) return;
+    if (annotationDisabled || e.pointerId !== drawingPointerIdRef.current) return;
     const draft = draftStrokeRef.current;
     drawingPointerIdRef.current = null;
     draftStrokeRef.current = null;
@@ -1339,7 +1363,7 @@ function ImageLightboxContent({
    * 多指打断共用。
    */
   function cancelAnnotateStroke(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.pointerId !== drawingPointerIdRef.current) return;
+    if (annotationDisabled || e.pointerId !== drawingPointerIdRef.current) return;
     const draft = draftStrokeRef.current;
     const rect = imgRef.current?.getBoundingClientRect();
     if (
@@ -1377,6 +1401,8 @@ function ImageLightboxContent({
       // Portaled Radix menus own their keyboard work; do not turn menu
       // arrows/Enter into image shortcuts or a second Escape close.
       if (e.target instanceof Element && e.target.closest('[role="menu"]')) return;
+      const annotationShortcutsEnabled =
+        !annotationDisabledRef.current && isAnnotatingRef.current;
       if (e.key === 'Escape') {
         const overlay = overlayRef.current;
         if (!overlay || isLightboxCovered(overlay)) return;
@@ -1385,7 +1411,7 @@ function ImageLightboxContent({
         // image previews observe defaultPrevented below and stay open.
         e.preventDefault();
         // 标注模式中 Esc = 放弃标注(清笔迹退出),再按一次才关 lightbox。
-        if (isAnnotatingRef.current) {
+        if (annotationShortcutsEnabled) {
           if (!hasUnsavedStrokeChanges()) performDiscardAnnotation();
           else void requestCloseRef.current();
           return;
@@ -1397,7 +1423,7 @@ function ImageLightboxContent({
       if (!lightboxOwnsShortcutTarget(e.target, overlayRef.current)) return;
       // 标注模式按住 Space = 平移修饰键(焦点在输入 / 按钮类控件上时让位)。
       if (e.code === 'Space' || e.key === ' ') {
-        if (isAnnotatingRef.current && !isSpacePanExemptTarget(e.target)) {
+        if (annotationShortcutsEnabled && !isSpacePanExemptTarget(e.target)) {
           e.preventDefault();
           if (!spaceHeldRef.current) {
             spaceHeldRef.current = true;
@@ -1408,14 +1434,14 @@ function ImageLightboxContent({
       }
       // 标注模式撤销 / 重做(在修饰键放行守卫之前拦截):⌘/Ctrl+Z 撤销,
       // ⇧⌘Z / Ctrl+Shift+Z 重做,非 mac 另支持 Ctrl+Y。
-      if (isAnnotatingRef.current && (e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+      if (annotationShortcutsEnabled && (e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
         if (e.shiftKey) redoStroke();
         else undoLastStroke();
         return;
       }
       if (
-        isAnnotatingRef.current &&
+        annotationShortcutsEnabled &&
         !isMacPlatform() &&
         e.ctrlKey &&
         !e.metaKey &&
@@ -1448,7 +1474,7 @@ function ImageLightboxContent({
       // 稳定的 galleryItems(useState 初始化后不变),所以空依赖 effect 不会拿到
       // 过期的下标。环形翻页,到头/到尾自动绕回。
       // 标注模式中禁用翻页(翻页会清空笔迹,误触代价高)。
-      if (isAnnotatingRef.current) return;
+      if (annotationShortcutsEnabled) return;
       if (galleryItems.length <= 1) return;
       if (e.key === 'ArrowRight') {
         e.preventDefault();
@@ -1524,6 +1550,7 @@ function ImageLightboxContent({
   // 出口是保存,不要求会话。源条件 = 字节可达(五种来源全覆盖:http/remote
   // 经 main 取字节进 canvas,无 taint 问题)。
   const canAnnotate =
+    !annotationDisabled &&
     (annotationEdit ? true : canSendToChat) &&
     naturalSize !== null &&
     isImageBytesReachable(currentSrc);
@@ -1735,7 +1762,7 @@ function ImageLightboxContent({
    * 更新托盘附件。惰性烧录:这里不产位图,发送消息时统一物化。
    */
   async function handleAnnotationSave(afterSave = handleClose): Promise<boolean> {
-    if (!annotationEdit) return false;
+    if (annotationDisabled || !annotationEdit) return false;
     try {
       await annotationEdit.onSave({
         strokes: strokesRef.current.map((stroke) => ({ points: [...stroke.points] })),

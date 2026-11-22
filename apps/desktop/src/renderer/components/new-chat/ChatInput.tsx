@@ -9907,6 +9907,7 @@ export function ChatInput({
                 attachments={attachments}
                 onRemove={composerMutationLocked ? () => undefined : removeFile}
                 onUpdate={composerMutationLocked ? () => undefined : updateFile}
+                annotationDisabled={composerMutationLocked}
               />
             )}
 
