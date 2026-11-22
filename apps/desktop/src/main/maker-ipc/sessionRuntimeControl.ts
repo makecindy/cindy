@@ -140,10 +140,13 @@ export function sessionRuntimeGenerationMatches(
   return expectedGeneration === undefined || (states.get(sessionId)?.generation ?? 0) === expectedGeneration;
 }
 
-export function recordUserSessionRuntimeMutation(sessionId: string): number {
+export function recordUserSessionRuntimeMutation(
+  sessionId: string,
+  options?: { preserveEffective?: boolean },
+): number {
   const state = stateFor(sessionId);
   state.generation += 1;
-  state.effectiveOverride = null;
+  if (!options?.preserveEffective) state.effectiveOverride = null;
   state.pending = null;
   state.pendingRouteExplicit = true;
   state.fallbackHop = 0;

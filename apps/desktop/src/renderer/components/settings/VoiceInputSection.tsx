@@ -1,3 +1,4 @@
+import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
 import { voiceInputSettings } from './VoiceInputSection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
@@ -1996,7 +1997,12 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     label={t('settings.voiceInput.permissions.accessibility.label')}
                     granted={permissions.accessibility.ok}
                     onGrant={() => void requestPermission('accessibility')}
-                    tooltip={t('settings.voiceInput.permissions.accessibility.tooltip')}
+                    tooltip={[
+                      t('settings.voiceInput.permissions.accessibility.tooltip'),
+                      !permissions.accessibility.ok && usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease)
+                        ? t('macControlPermission.selectApp', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+                        : '',
+                    ].filter(Boolean).join(' ')}
                   />
                 )}
             </span>
@@ -2214,14 +2220,14 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     <Dialog.Portal>
                       <Dialog.Overlay
                         className={cn(
-                          'modal-scrim fixed inset-0 z-50',
+                          'modal-scrim fixed inset-0 z-modal',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       />
                       <Dialog.Content
                         onPointerDownOutside={(event) => event.preventDefault()}
                         className={cn(
-                          'modal-panel fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
+                          'modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
                           'p-5 outline-none',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}

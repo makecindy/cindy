@@ -210,3 +210,17 @@ describe('opening motion', () => {
     }
   });
 });
+
+// Drawer card before any reading (unit, rendered DrawerUsage). The card used to say "no account
+// quota" for both cases; a computer that is too old must instead say that updating it helps.
+describe('drawer without a reading', () => {
+  it.each([
+    [null, 'devices.usageWaiting'],
+    [{ kind: 'update-desktop', receivedAtMs: 1 }, 'devices.usageUpdateDesktop'],
+  ])('explains what brings the usage in (%o)', (state, copy) => {
+    sync.state = state;
+    const html = renderToStaticMarkup(<DrawerUsage onOpen={() => {}} />);
+    expect(html).toContain(copy);
+    expect(html).not.toContain('session.menu.usage.quotaUnavailable');
+  });
+});

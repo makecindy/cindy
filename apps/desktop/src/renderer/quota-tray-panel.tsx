@@ -6,7 +6,7 @@ import type { MenubarView } from '../shared/menubarQuota';
 import { QUOTA_PANEL_DESIGN } from '../shared/quotaPanelDesign';
 import type { QuotaTrayBridge } from '../shared/quotaTray';
 import { Chart, Logo, Manage, Detail, Usage, money, relative } from './quota-tray-pages';
-import { CountUp, Tube } from './quota-tray-tube';
+import { CountUp, SourceValue, Tube } from './quota-tray-tube';
 import './styles/quota-tray.css';
 
 declare global { interface Window { quotaTray: QuotaTrayBridge } }
@@ -97,6 +97,7 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     time: relative(view, row.lastActivityAtMs, now), pulse: row.phase === 'running',
   }));
   const daily = view.usage.scopes[view.settings.scope].daily.slice(-30);
+  const measured = view.sources.filter(source => source.fill !== null);
   const style = Object.fromEntries(Object.entries(design.colors).map(([name, pair]) => ['--' + name, `light-dark(${pair[0]}, ${pair[1]})`])) as CSSProperties;
   const tubeHeight = short ? design.metrics.tubeShort : design.metrics.tubeTall;
   Object.assign(style, { '--tube-height': tubeHeight + 'px',
@@ -108,9 +109,9 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     <div className="headline"><h1>{view.gate ? s.gateTitle : view.headlinePrimary}</h1>
       <p className="secondary" data-alert={!view.gate && view.headlineAlert}>{view.gate ? s.gateBody : view.headlineSecondary}</p></div>
     {!view.gate && <>
-      <section className="sources">{view.sources.filter(source => source.fill !== null).map((source, index) =>
+      <section className="sources" data-dense={measured.length > 6}>{measured.map((source, index) =>
         <button key={source.id} className="source" style={{ animationDelay: (index * 60) + 'ms' }} aria-label={source.accessibilityLabel} onClick={() => go('detail:' + source.id)}>
-          <b className="metric">{source.value ? <CountUp text={source.value} locale={view.locale} visible={!hidden} delay={index * 0.06}/> : source.valueLabel}<small>{source.valueUnit}</small></b>
+          <SourceValue source={source} locale={view.locale} visible={!hidden} delay={index * 0.06}/>
           <Tube fill={source.fill ?? 0} index={index} active={source.active} visible={!hidden} height={tubeHeight} emphasized={source.emphasized} level={source.level}/>
           <Logo svg={source.logoSvg}/><span>{source.name}</span><small data-level={source.whenLevel}>{source.when}</small>
         </button>)}</section>

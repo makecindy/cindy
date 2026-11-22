@@ -121,7 +121,7 @@ export function WebhookEventSelect({ preset, value, onChange }: Props) {
               sideOffset={8}
               collisionPadding={16}
               aria-label={t(`${key}.choose`)}
-              className="z-[10010] flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] min-w-0 max-w-[calc(100vw-32px)] flex-col gap-3 p-3"
+              className="flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] min-w-0 max-w-[calc(100vw-32px)] flex-col gap-3 p-3"
             >
               <Input
                 size="md"

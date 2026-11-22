@@ -95,7 +95,7 @@ export function AttachmentCollectionPreview({
                 <>
                   <PreviewScrim onClose={close} />
                   <div
-                    className={`z-[9999] flex items-center justify-center ${PREVIEW_PANEL_CLASS}`}
+                    className={`z-fullscreen flex items-center justify-center ${PREVIEW_PANEL_CLASS}`}
                     style={PREVIEW_PANEL_STYLE}
                   >
                     <PreviewHeader name={item.name} onClose={close} />

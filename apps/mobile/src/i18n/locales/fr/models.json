@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "Le changement de fournisseur de modèles est désormais effectif.",
-    "failed": "Échec du changement de fournisseur de modèles. Choisissez à nouveau le modèle."
+    "failed": "Échec du changement de fournisseur de modèles. Choisissez à nouveau le modèle.",
+    "previousSettingsRetained": "Le changement n’a pas abouti. La tâche continuera d’utiliser ses paramètres précédents."
   },
   "agentSwitch": {
     "browseAccessibility": "Parcourir les modèles {{agent}}"

@@ -2017,6 +2017,7 @@ function CCAgentSessionContent({
     // F-QUEUE-DEFER
     pendingQueue,
     steeringQueueClientIds,
+    steerUnsupported,
     queuePaused,
     queueEditLocks,
     queueInteractionLocks,
@@ -2286,7 +2287,8 @@ function CCAgentSessionContent({
     && !session.remoteHostId;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && (session.source ?? 'desktop') === 'desktop' && session.status !== 'archived';
+    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot')
+    && session.status !== 'archived';
   const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
   const remotePluginCatalogue = useRemotePluginEngines(
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
@@ -5974,7 +5976,7 @@ function CCAgentSessionContent({
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}
       simplifiedBotConversation={Boolean(botChatIdentity)} localSend={isLocalUserSend(entry.clientId)} onEdit={beginQueueComposerEdit}
-      onSteer={steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
+      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
   };
   const showErrorTailBanner = !readOnly && !!errorTailMsg && !errorTailBannerHidden
     && !syntheticContinuationPending && !error && !credentialSwitchWait
@@ -5997,6 +5999,7 @@ function CCAgentSessionContent({
               等待态由 main 权威维护,error 为空。 */}
             {credentialSwitchWait && !error && (
               <CredentialSwitchWaitBanner
+                sessionId={sessionId}
                 blockedBySessionIds={credentialSwitchWait.blockedBySessionIds}
                 onCancel={(() => {
                   // 取消目标 = 等待中的那条消息(clientId 绑定);老被控端缺省时回落队首。
@@ -6153,6 +6156,11 @@ function CCAgentSessionContent({
           <span>{t('newChat.pendingQueue.pausedFooter')}</span>
           <button type="button" disabled={readOnly} onClick={resumeQueue} className="min-h-8 rounded-lg px-2 hover:bg-[var(--surface-hover)]">{t('newChat.pendingQueue.resumeAction')}</button>
         </div>}
+        {steerUnsupported && pendingQueue.length > 0 && agentStatus.isRunning && !queuePaused && !queueAbortPending && (
+          <div role="status" className="flex min-h-8 items-center py-2 text-12 text-[var(--text-secondary)]">
+            {t('newChat.pendingQueue.steerUnsupportedNotice')}
+          </div>
+        )}
         {pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} teammate={!!botChatIdentity} /> : null}
       </>}
       key={sessionId}
@@ -6439,7 +6447,7 @@ function CCAgentSessionContent({
           instead of floating over old messages. */}
         {isDragOver && (
           <div
-            className="pointer-events-none absolute inset-0 z-50"
+            className="pointer-events-none absolute inset-0 z-float"
             style={{
               backgroundColor: 'var(--drop-overlay-bg)',
               border: '2px dashed var(--drop-overlay-border)',
@@ -6562,7 +6570,7 @@ function CCAgentSessionContent({
               ) : null}
               <div
                 data-composer-center-group="true"
-                className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
+                className="pointer-events-none relative z-raised col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
               >
                 <PinnedPlanPanel
                   sessionId={sessionId ?? null}
@@ -6907,7 +6915,8 @@ function CCAgentSessionContent({
                   queueEditingClientId={activeQueueComposerEdit?.clientId ?? null}
                   onQueueEditSubmit={submitQueueComposerEdit}
                   onQueueEditCancel={cancelQueueComposerEdit}
-                  onQueueSteer={steerQueuedMessage}
+                  // Without same-turn input, Enter and Cmd/Ctrl+Enter both queue and the send tip offers no steer.
+                  onQueueSteer={steerUnsupported ? undefined : steerQueuedMessage}
                   steeringQueueClientIds={steeringQueueClientIds}
                   messages={sideChatMessages}
                   placeholder={
@@ -7273,7 +7282,7 @@ function CCAgentSessionContent({
           onClick={() => navigate('/cc-agent/scheduled')}
           aria-label={t('ccAgent.layout.backToAutomations')}
           className={cn(
-            'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
+            'absolute left-[14px] top-[14px] z-page-top inline-flex items-center justify-center',
             'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
           )}
         >
@@ -7287,7 +7296,7 @@ function CCAgentSessionContent({
           aria-label={t('ccAgent.layout.backToReviewSource')}
           title={t('ccAgent.layout.backToReviewSource')}
           className={cn(
-            'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
+            'absolute left-[14px] top-[14px] z-page-top inline-flex items-center justify-center',
             'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
           )}
         >

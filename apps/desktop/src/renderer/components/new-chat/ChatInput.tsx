@@ -431,6 +431,7 @@ import {
 import type { MessageDeliveryMode, QueuedMessage } from '@/lib/makerChatStore';
 import {
   builtinAgentSwitchIntent,
+  isSameEngineNonPiModelIntent,
   isRemoteOptimisticComposerTransitionActive,
   isRemoteOptimisticDataOwnerBoundaryError,
   isRemoteOptimisticSessionPurgedError,
@@ -445,6 +446,7 @@ import {
 } from '../../../shared/modelSwitchAssessment';
 import { ComposerRecordingBars, type RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
+import { retainDictationInputContext } from '@/voice-input/retainDictationInputContext';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
@@ -1342,6 +1344,16 @@ export function ChatInput({
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
+  const taskEngine = runtimeAgentKind ?? runtimeEffective?.agentKind;
+  const usesDeferredCredentialCommit = taskEngine === 'claude-code' || taskEngine === 'codex';
+  const credentialFailureKey = useCallback((failure: {
+    reason: 'apply-failed' | 'rollback-failed';
+    previousSettingsRetained?: boolean;
+  }) => usesDeferredCredentialCommit && failure.reason === 'apply-failed' && failure.previousSettingsRetained === true
+      ? 'newChat.chatInput.credentialSwitchKeptSettings'
+      : 'newChat.chatInput.credentialSwitchFailed',
+  [usesDeferredCredentialCommit]);
+
   const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
   // The host owns model, Agent and reasoning settings; guests can still send input.
   const settingsLocked = settingsLockedProp || sharedGuest;
@@ -1506,19 +1518,19 @@ export function ChatInput({
     return window.electronAPI.maker.onSessionCredentialSwitchFailed((payload) => {
       if (payload.sessionId !== sessionId) return;
       if (deviceLinkDeviceId || getSessionDeviceId(sessionId)) return;
-      toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+      toast.error(t(credentialFailureKey(payload)), { duration: 6000 });
     });
-  }, [deviceLinkDeviceId, sessionId, t]);
+  }, [credentialFailureKey, deviceLinkDeviceId, sessionId, t]);
   useEffect(() => {
     if (!sessionId) return;
     return subscribeRemoteCredentialSwitchOutcome(sessionId, deviceLinkDeviceId ?? undefined, (outcome) => {
       if (outcome.kind === 'applied') {
         toast.success(t('newChat.chatInput.credentialSwitchApplied'), { duration: 3000 });
       } else {
-        toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+        toast.error(t(credentialFailureKey(outcome)), { duration: 6000 });
       }
     });
-  }, [deviceLinkDeviceId, sessionId, t]);
+  }, [credentialFailureKey, deviceLinkDeviceId, sessionId, t]);
   // F-QUEUE-1 — preserve prior semantics
   const showStopButton = isAgentBusy ?? isStreaming;
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -1838,8 +1850,10 @@ export function ChatInput({
   // SessionChatState 独立槽位,登记/撤销通过 setState 驱动重渲染,不会改真实
   // agentKind reducer 路由。device-link 远程会话同样适用:意图的权威态在被控端
   // main,控制端 store 里这份是它的镜像(登记时乐观写、重连时读回、push 回流覆盖)。
-  const storedAgentSwitchIntent =
-    sessionId && !remoteHostId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
+  const storedIntent = sessionId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
+  const storedAgentSwitchIntent = !remoteHostId ||
+    (runtimeAgentKind && isSameEngineNonPiModelIntent(builtinAgentSwitchIntent(storedIntent), runtimeAgentKind))
+    ? storedIntent : null;
   // 待切到插件引擎(docs/plans/acp-plugin-bridge.md)的意图由选择器单独呈现；下面内置引擎的展示、
   // 档位与切换链路只看切到内置引擎的意图，行为与没有插件引擎时一致。
   const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
@@ -2313,7 +2327,11 @@ export function ChatInput({
   // 关键:这里**绝不**把"跟随默认"具体化成原生默认 id(如 'xd')——默认 cohort 必须保持
   //   providerId=null,路由才回落 spawn-aware 默认(字节级不变,no-break);写成显式 'xd'
   //   会改走 catalog gateway-key 路由(见 provider-route.ts),破坏默认 cohort 的路由/缓存基线。
-  const sendProviderId = activeProviderId || null;
+  // The same-engine picker is a preview; the host admits the actual switch.
+  const sendCurrentSelection = isSameEngineNonPiModelIntent(agentSwitchIntent, composerSelection.current.agentKind);
+  const sendModel = sendCurrentSelection ? composerSelection.current.model : activeModel;
+  const sendEffort = sendCurrentSelection ? composerSelection.current.effort ?? '' : selectedEffort;
+  const sendProviderId = (sendCurrentSelection ? composerSelection.current.providerId : activeProviderId) || null;
 
   // 模型预设采用「全局默认 + 已创建会话保护」:
   //   - 本地草稿 / 已创建会话的**非选中行**都读写 providerModelMemory,所以同一
@@ -3545,9 +3563,19 @@ export function ChatInput({
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
-  const composerTypingLocked =
-    disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend) || voiceBusyOnCurrentComposer;
+  const typingLockedOutsideDictation =
+    disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend);
+  const composerTypingLocked = typingLockedOutsideDictation || voiceBusyOnCurrentComposer;
+  const retainVoiceInputContext =
+    voiceBusyOnCurrentComposer && !typingLockedOutsideDictation && window.electronAPI?.platform === 'darwin';
   composerMutationLockedRef.current = composerTypingLocked;
+  // Attach before the effect that makes the focused editor read-only. A change
+  // in lock ownership alone must not emit another Tiptap document update.
+  useEffect(() => {
+    if (retainVoiceInputContext && editor && !editor.isDestroyed) {
+      return retainDictationInputContext(editor);
+    }
+  }, [editor, retainVoiceInputContext]);
   useEffect(() => {
     editor?.setEditable(!composerTypingLocked);
   }, [composerTypingLocked, editor]);
@@ -5924,7 +5952,7 @@ export function ChatInput({
               model: activeModel,
               effort: selectedEffort,
               permissionMode: activePermissionMode,
-              providerId: sendProviderId,
+              providerId: activeProviderId || null,
               fastMode,
               planModeEnabled: planModeEntry?.enabled ?? false,
             },
@@ -6508,7 +6536,7 @@ export function ChatInput({
           }
         }
         let result: boolean | void;
-        let effortForSend = selectedEffort;
+        let effortForSend = sendEffort;
         try {
           if (sessionId) {
             const coordinator = effortChangeCoordinatorRef.current;
@@ -6546,11 +6574,11 @@ export function ChatInput({
             }
             // 等待 commit 后，闭包里的 activeEffort 可能仍是旧 props；以该 session 已提交的
             // 选择发送，保证本 turn 与 UI/SQLite 的 effort 相同。
-            effortForSend = coordinator.getCommittedEffort(sessionId) ?? selectedEffort;
+            effortForSend = coordinator.getCommittedEffort(sessionId) ?? sendEffort;
           }
           result = await onSend(
             routedText,
-            activeModel,
+            sendModel,
             effortForSend,
             activePermissionMode,
             filesToSend,
@@ -6609,7 +6637,8 @@ export function ChatInput({
       sessionId,
       onSend,
       activeModel,
-      selectedEffort,
+      sendModel,
+      sendEffort,
       activePermissionMode,
       sendProviderId,
       selectedSourceDisconnected,
@@ -9542,7 +9571,7 @@ export function ChatInput({
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
-        <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
+        <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
             <VoiceInputStatusNotice message={voiceInput.lastError} />
           ) : showSpeakerFilteredNotice ? (
@@ -9732,7 +9761,7 @@ export function ChatInput({
             {(isDragOver || externalDragOver) && (
               <div
                 className={cn(
-                  'pointer-events-none absolute inset-0 z-10',
+                  'pointer-events-none absolute inset-0 z-raised',
                   // 输入框卡片圆角与对话页统一为 12px(用户定稿 2026-07-22);create-agent
                   // 不再用 Figma 的 6px,避免新建/对话两个框圆角不一致。
                   'rounded-xl',
@@ -9777,7 +9806,7 @@ export function ChatInput({
                   {/* hover 预览:逐条评论(截图缩略 + 标签 + 文字),行内可单删。
                   与 quotes 预览不同,这里是可交互面板(pointer-events 开)。 */}
                   <div
-                    className="absolute bottom-full left-0 z-30 mb-2 hidden max-h-72 w-80 max-w-[70vw] flex-col gap-2 overflow-y-auto rounded-xl border p-3 group-hover/bcomment:flex"
+                    className="absolute bottom-full left-0 z-page-overlay mb-2 hidden max-h-72 w-80 max-w-[70vw] flex-col gap-2 overflow-y-auto rounded-xl border p-3 group-hover/bcomment:flex"
                     style={{
                       backgroundColor: 'var(--surface-elevated)',
                       borderColor: 'var(--border-default)',

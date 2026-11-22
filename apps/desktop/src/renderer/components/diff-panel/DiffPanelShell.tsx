@@ -216,8 +216,8 @@ export function DiffPanelShell({
       <div
         className={cn(
           isFloating
-            ? 'absolute inset-0 z-30 bg-[var(--overlay-modal)] transition-opacity duration-200'
-            : 'fixed inset-0 z-30 bg-black/10 transition-opacity duration-200',
+            ? 'absolute inset-0 z-page-overlay bg-[var(--overlay-modal)] transition-opacity duration-200'
+            : 'fixed inset-0 z-page-overlay bg-black/10 transition-opacity duration-200',
           open ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
         onClick={onClose}
@@ -226,7 +226,7 @@ export function DiffPanelShell({
 
       <aside
         className={cn(
-          isFloating ? 'absolute z-40' : 'fixed z-40',
+          isFloating ? 'absolute z-page-top' : 'fixed z-page-top',
           isFloating
             ? 'right-3 top-3 bottom-3 overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)]'
             : 'right-0 top-[46px] bottom-0 border-l border-border bg-popover text-popover-foreground',
@@ -254,7 +254,7 @@ export function DiffPanelShell({
               onMouseDown={onResizeStart}
               onDoubleClick={onResizeDoubleClick}
               onKeyDown={onResizeKeyDown}
-              className="absolute -left-px top-0 z-50 m-0 h-full w-[4px] cursor-col-resize border-0 bg-transparent transition-shadow hover:shadow-[inset_1px_0_0_var(--sidebar-action-icon)] focus-visible:outline-none focus-visible:shadow-[inset_1px_0_0_var(--focus-ring)]"
+              className="absolute -left-px top-0 z-float m-0 h-full w-[4px] cursor-col-resize border-0 bg-transparent transition-shadow hover:shadow-[inset_1px_0_0_var(--sidebar-action-icon)] focus-visible:outline-none focus-visible:shadow-[inset_1px_0_0_var(--focus-ring)]"
             />
           </>
         )}

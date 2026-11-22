@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { usesMacProtectionOverride } from '../../shared/macControlPermission';
 import {
   useCallback,
   useEffect,
@@ -1663,12 +1664,15 @@ export function VoiceInputOverlay() {
   }, [hasBlockingError, hasPasteError, hasPermissionPrompt, pasteErrorCode, state, showProcessing, t]);
   // The retained-transcript panel shows the session's own error (cause + "text
   // was kept"); every other code is an actual paste failure with its own hint.
+  const controlHint = (pasteErrorCode === 'permission' || permissionPrompt === 'accessibility')
+    && usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease)
+    ? t('macControlPermission.selectApp', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+    : '';
   const pasteFailureHint = pasteErrorCode === 'retained'
     ? error ?? t('voiceInputOverlay.status.transcriptKept')
-    : t(getPasteErrorHintKey(pasteErrorCode));
-  const permissionPromptHint = permissionPrompt
-    ? t(`voiceInputOverlay.permissionPrompts.${permissionPrompt}.hint`)
-    : '';
+    : (pasteErrorCode === 'permission' && controlHint) || t(getPasteErrorHintKey(pasteErrorCode));
+  const permissionPromptHint = permissionPrompt &&
+    ((permissionPrompt === 'accessibility' && controlHint) || t(`voiceInputOverlay.permissionPrompts.${permissionPrompt}.hint`));
   const transcriptClassName = hasPasteError || hasPermissionPrompt || hasSettingsRecovery
     ? 'min-h-[44px] max-h-[72px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]'
     : 'h-[88px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]';
