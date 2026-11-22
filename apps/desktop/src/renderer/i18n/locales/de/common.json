@@ -16484,6 +16484,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "Cloud-Computer hinzufügen",
+        "preparingCloud": "Cloud-Computer wird vorbereitet",
+        "manageCloud": "Cloud-Computer verwalten",
         "allMachines": "Alle",
         "localMachine": "Lokal",
         "connecting": "Verbindung wird hergestellt…",

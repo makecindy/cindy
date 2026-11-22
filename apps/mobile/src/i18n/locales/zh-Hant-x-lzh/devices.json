@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "更新電腦之 Cindy，即可觀之",
   "usageUpdateDesktopCopy": "電腦之 Cindy 版本稍舊，耗用未能傳至手機；更新之後，自當顯現。",
   "management": {
+    "addCloud": "增雲機",
+    "preparingCloud": "雲機備置中",
+    "manageCloud": "理雲機",
     "title": "器物總管",
     "openDevice": "察 {{name}} 之詳情",
     "details": "器物詳情",

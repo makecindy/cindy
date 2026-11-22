@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "Actualiza Cindy en tu computadora",
   "usageUpdateDesktopCopy": "La versión de Cindy en tu computadora es demasiado antigua para enviar el uso a tu móvil. Aparecerá aquí automáticamente después de actualizar.",
   "management": {
+    "addCloud": "Añadir equipo en la nube",
+    "preparingCloud": "Preparando el equipo en la nube",
+    "manageCloud": "Gestionar equipo en la nube",
     "title": "Gestión de dispositivos",
     "openDevice": "Ver detalles de {{name}}",
     "details": "Detalles del dispositivo",
