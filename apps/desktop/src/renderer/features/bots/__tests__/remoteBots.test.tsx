@@ -399,18 +399,53 @@ it('reads attribution only for cached teammates that do not have it yet', async 
   expect(h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list')).toEqual([['b', 'maker:bot-delegations:list', ['canonical']]]);
 });
 
-// Unit, same rule: a host that never answers holds the read for 10 s, not the 30 s invoke
-// budget; the next teammate is not queued behind the stalled request while it may still run,
-// later rounds read the others, and the stalled one waits 5 minutes. Minimal input: two
-// teammates on one host, the first read never answers.
-it('stops waiting for a stalled attribution read, pauses the host, then reads the others first', async () => {
-  h.devices = [host('a')];
-  const two = collection();
-  two.items.push({ ...two.items[0], ref: { ...two.items[0].ref, id: 'second-bot' },
+/** Roster A (`same-bot`, chat `canonical`) then B (`second-bot`, chat `second`), both unknown. */
+const teammatesAB = () => {
+  const roster = collection();
+  roster.items.push({ ...roster.items[0], ref: { ...roster.items[0].ref, id: 'second-bot' },
     links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'second' } }] });
+  return roster;
+};
+const createdBy = (sessionId: string) => ({ ok: true, delegations: [
+  { requestingBotId: sessionId === 'canonical' ? 'same-bot' : 'second-bot', childSessionId: `${sessionId}-child` }] });
+const taskTargets = () => h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list').map(call => call[2][0]);
+
+// Unit, same rule (#12001 review, timing 1): a roster push starts a new round, the old round's
+// attribution read then times out, and only afterwards the new roster arrives. The superseded
+// round must not pause the recovered host. Minimal input: A's first read never answers.
+it('a superseded round timing out late cannot pause the round that replaced it', async () => {
+  h.devices = [host('a')];
+  let finishRoster!: (value: unknown) => void;
+  let rosterCalls = 0;
+  let aReads = 0;
+  h.invoke.mockImplementation((_device, channel, args) => {
+    if (channel === REMOTE_RESOURCE_LIST_CHANNEL) {
+      return ++rosterCalls === 2 ? new Promise(resolve => { finishRoster = resolve; }) : Promise.resolve(teammatesAB());
+    }
+    return args[0] === 'canonical' && ++aReads === 1 ? new Promise(() => {}) : Promise.resolve(createdBy(args[0]));
+  });
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(rosterReads()).toBe(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(9_500); }); // the old read times out
+    await act(async () => { finishRoster(teammatesAB()); await vi.advanceTimersByTimeAsync(0); });
+    expect(taskTargets()).toEqual(['canonical', 'canonical', 'second']);
+    expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([['canonical-child'], ['second-child']]);
+  } finally { vi.useRealTimers(); }
+});
+
+// Unit, same rule (#12001 review, timing 2): a host that never answers holds the read for 10 s,
+// not the 30 s invoke budget, and the round stops so nothing queues behind it. A stalled
+// teammate must not keep the next one on that host from ever being read. Minimal input: fixed
+// order A, B, both unknown, only A keeps timing out, one ordinary refresh 5 minutes later.
+it('stops waiting for a stalled attribution read, pauses the host, and does not starve later teammates', async () => {
+  h.devices = [host('a')];
   h.invoke.mockImplementation((_device, channel, args) => channel === REMOTE_RESOURCE_LIST_CHANNEL
-    ? Promise.resolve(two) : args[0] === 'canonical' ? new Promise(() => {})
-      : Promise.resolve({ ok: true, delegations: [{ requestingBotId: 'second-bot', childSessionId: 'second-child' }] }));
+    ? Promise.resolve(teammatesAB()) : args[0] === 'canonical' ? new Promise(() => {}) : Promise.resolve(createdBy(args[0])));
   const online = async () => {
     act(() => h.status({ status: 'online' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -419,20 +454,14 @@ it('stops waiting for a stalled attribution read, pauses the host, then reads th
   try {
     const { result } = renderHook(useRoster);
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-    expect(taskReads()).toBe(1);
     await online();
     expect(rosterReads()).toBe(2);
-    expect(taskReads()).toBe(1);
+    expect(taskTargets()).toEqual(['canonical']);
     expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([undefined, undefined]);
-    // Once the abandoned request's 30 s budget is over, the stalled teammate no longer blocks the rest.
-    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
-    await online();
-    expect(taskReads()).toBe(2);
-    expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([undefined, ['second-child']]);
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
     await online();
-    expect(h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list').map(call => call[2][0]))
-      .toEqual(['canonical', 'second', 'canonical']);
+    expect(taskTargets()).toEqual(['canonical', 'second', 'canonical']);
+    expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([undefined, ['second-child']]);
   } finally { vi.useRealTimers(); }
 });
 

@@ -172,12 +172,16 @@ export function useRemoteBotSync(): void {
         // per host; never per task row. Stored rows no longer change, so an ordinary refresh
         // only reads a teammate whose attribution is unknown or whose main chat changed. A failed
         // read stays unconfirmed (its retry entry) until one succeeds, even though the row already
-        // carries the new main chat next to the previous attribution.
-        for (const bot of bots) {
+        // carries the new main chat next to the previous attribution. Teammates whose read failed
+        // go last, so one that keeps stalling cannot stop the round before the others are read.
+        const retryKeyOf = (bot: RemoteBot) => `${deviceId}\n${bot.id}\n${bot.sessionId}`;
+        const readOrder = [...bots.filter(bot => !delegationRetryAt.has(retryKeyOf(bot))),
+          ...bots.filter(bot => delegationRetryAt.has(retryKeyOf(bot)))];
+        for (const bot of readOrder) {
           if (!current() || generations.get(deviceId) !== epoch) return;
           if (!bot.sessionId) continue;
           const old = previous.get(bot.id);
-          const retryKey = `${deviceId}\n${bot.id}\n${bot.sessionId}`;
+          const retryKey = retryKeyOf(bot);
           if (!refreshTasks && ((old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId && !delegationRetryAt.has(retryKey))
             || Math.max(delegationRetryAt.get(retryKey) ?? 0, delegationRetryAt.get(deviceId) ?? 0) > Date.now())) continue;
           try {
@@ -194,7 +198,7 @@ export function useRemoteBotSync(): void {
             if (!current() || generations.get(deviceId) !== epoch) return;
             delegationRetryAt.set(retryKey, Date.now() + DELEGATION_RETRY_MS);
             // The host still holds that request until its invoke budget ends: do not queue the next
-            // teammate behind it. Later rounds skip this teammate and read the others.
+            // teammate behind it. Later rounds read the others before retrying this one.
             if (error === DELEGATION_READ_TIMEOUT) { delegationRetryAt.set(deviceId, Date.now() + DELEGATION_HOST_PAUSE_MS); break; }
           }
         }
