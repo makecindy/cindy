@@ -153,13 +153,15 @@
   请求还在业务里时收到 `cancel`，结果不再发回（v1 照发，调用方忽略）。
 - **上限**：接收方同时最多 1024 条还没交出的正文，正文字节算在 64 MiB 的积压里；本端会话还没准备好时先到的正文与会话流共用 16 MiB，
   每个正文事件（连只有结束的）另计 64 字节（2026-11-22 审查：结束事件原来不计，不挂会话的对端可以一直开空流）。
-  手机一条连接同时最多 32 条正文流（核心每条连接 64 条流，通道自己用 5 条），超过时照 v1 走通道。没有 `stream-retired` 的原生库
-  只报前 16 条本端流、收回的也占着名额，这样的手机每条连接最多开 11 条正文流，之后这条连接照 v1（不然后开的流会被当成已经发完，积压漏算）。
+  手机一条连接同时最多 32 条正文流（核心每条连接 64 条流，通道自己用 5 条），超过时照 v1 走通道。
 - **积压读数**：控制、普通通道的正文流和它们的通道一样，算 JS 这边与核心里还没发出、还没确认的字节；后台的只算 JS 这边。
 - **Node 驱动**：`agent-net-core/wasm/node.mts` 里写完（连结束标记都交给核心）或放弃了的流不再留在连接的表里：一条大消息一条流，
   长连着的连接上这张表原来只增不减，驱动每一轮都要遍历它。进度、缓冲与放弃照样按流号问核心。
-- **手机原生库**：正文流只用开流、写、结束，所有原生库都有。带 `stream-levels` 的原生库放弃时用 `abandon`；更早的只能结束（已经交给引擎的照发，
-  接收方同样看出不全）。带 `stream-retired` 的原生库按流报缓冲时，核心收回了的流报一次就不再报（`MAX_REPORTED_STREAMS` 为 40）。
+- **手机原生库**：只有报告 `probe-grants` 的原生库才读、开正文流（`nativeTransport.ts` 的 `bodies`），否则这部手机不宣告 v2，照 v1 走。
+  原因在核心：更早的核心回对端探测的确认只带编号最小的两条流的额度，正文流是一条连接的第 6 条流，它最初那几份额度没送到时，对端一直停在
+  128 个分片（约 160 KB）上，15 秒后报停住（2026-11-22 CI，手机轮询慢时必现；核心已改，见 `packages/agent-net-core/README.md`「额度跟着确认出去」）。
+  手机 JS 热更新、原生库随安装包，旧安装包配新 JS 因此仍是 v1。报告 `probe-grants` 的原生库也都有 `stream-levels`（放弃用 `abandon`）
+  和 `stream-retired`（核心收回了的流报一次就不再报，`MAX_REPORTED_STREAMS` 为 40）。Desktop、Node Host 的核心随 JS 一起发布，不需要判断。
 - **中转**：不变，只转发密文数据报。
 - **兼容组合**：v2 对 v2 走正文流；v2 对 v1、v1 对 v1、任一端通道不能读时都是 v1。v1 的会话端不认 `z`、`x`、`y`，但收不到它们：
   只有对端宣告了 v2 才发。
@@ -172,7 +174,8 @@ on the native engine」（结束、写之前放弃、结束后放弃、开流暂
 session between two new nodes alongside Device Link frames」（真实核心上 300 KB 结果走正文流，夹在两条推送之间，积压读数算上它；
 240 KB 文件块的 base64 按字节过线）、
 「lets go of streams the Node driver has handed over…」（300 条写完的流和一条放弃的流都不留在驱动的表里）；
-`native.integration.test.ts`「carries sessions on the real native engine…」（真实原生库的三种构建上，大结果两个方向都走正文流）。
+`native.integration.test.ts`「carries sessions on the real native engine…」（真实原生库上大结果两个方向都走正文流，其中一种构建每次调用晚 5 毫秒
+回来，像 JS 线程忙的手机；不报能力的旧构建照 v1）；核心 `sim/tests/streams.rs`「a_later_stream_gets_its_lost_credit_back」。
 
 ### 自建中继上的新分享
 

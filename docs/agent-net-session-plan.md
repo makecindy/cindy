@@ -257,6 +257,8 @@ Device Link 只为两类对端保留：还是旧版本的 Cindy，以及没打�
    **2026-11-22**：WASM 导出 `conn_open_stream_level`、`conn_set_level`、`conn_abandon`、`conn_stream_progress`、`conn_send_progress`，
    `node.mts` 按导出在不在判断（`Connection.supportsLevels`、`SendStream.abandon/progress/setLevel`、`Connection.sendProgress`）；
    手机原生库报告 `stream-levels`：`openStream` 认 `level`、新增 `abandon`，`buffered` 每项后面多两项累计确认字节与停顿毫秒。
+   同日 v2-2 在 CI 上查出核心回探测的确认只带两条流的额度，后开的流可能一直停在初始额度上；核心改为回探测时带上所有流的额度，
+   手机原生库报告 `probe-grants`，只有这样的手机才用会话 v2（见 `dev-rules/protocol-compatibility/agent-net-session.md`）。
 
 7. **对抖动不敏感的起速。** 阶段 0 查清了「经中转速度跑不上去」的原因（见基线报告「速度为什么跑不上去」）：
    核心把往返比最低值高出 4–16 毫秒当成排队，判定排队后巡航只发 90%、不再探测余量；抖动估计取相邻样本之差，

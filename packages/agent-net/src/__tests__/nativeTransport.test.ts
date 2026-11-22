@@ -690,18 +690,19 @@ it('honors a custom dial timeoutMs budget and reports directAddress updates when
 
 /** 测试价值（会话 v2 在手机上）
  * - 生产入口与可观察结果：手机 NativeChannel 的会话 v2 流（`sessionWire().openBody` / `onBody`），引擎收到的命令。一条大消息开一条
- *   自己的流，先写 0x33 和键，写完就结束；调用方放弃时这里排着的不再写，流随即结束（引擎有 `stream-levels` 时用 `abandon`，
- *   连已经交给核心、还没发出的也不发；没有时用 `finish`），已经结束的流有 `stream-levels` 才补一个 `abandon`；引擎暂时开不出流
+ *   自己的流，先写 0x33 和键，写完就结束；调用方放弃时这里排着的不再写，流随即结束（`abandon`，连已经交给核心、还没发出的
+ *   也不发），已经结束的流补一个 `abandon`；引擎暂时开不出流
  *   （`STREAM_LIMIT`）时这条连接照常，下一轮再开。还没交给引擎的字节算在会话积压里。对端的流：键分在两片里到也认得出，
- *   流结束时报 `null`。
- * - Bug／规则依据：docs/agent-net-session-plan.md 第 7 节 v2-2；开流失败原来会关掉整条连接（plan 里的异常）。
+ *   流结束时报 `null`。引擎没有 `probe-grants`（核心回探测只带两条流的额度）时不用正文流，照 v1 走通道。
+ * - Bug／规则依据：docs/agent-net-session-plan.md 第 7 节 v2-2；开流失败原来会关掉整条连接（plan 里的异常）；2026-11-22 CI：
+ *   没有 `probe-grants` 的核心上正文流（第 6 条流）停在 128 个分片。
  * - 现有覆盖缺口：原生集成测试只走正常写完的流，不覆盖放弃、开流失败和分片的键。
- * - 最小失败输入：200 KB 的消息写完；写之前就放弃；结束后再放弃（有、没有 `stream-levels`）；第一次开流报 `STREAM_LIMIT`；
+ * - 最小失败输入：200 KB 的消息写完；写之前就放弃；结束后再放弃；第一次开流报 `STREAM_LIMIT`；
  *   对端一条流的头五个字节分成 3 + 2 到达；本端没宣告 v2 时对端开正文流（同旧节点，关连接）；本端会话还没挂上时对端开 200 条
  *   只有键和结束的流，再来一条正好让「字节 + 每个事件 64」超过 16 MiB 的（审查 #12063：结束事件原来不计，可以无限堆）；
- *   没有 `stream-retired` 的原生库上开第 12 条正文流（它只报前 16 条本端流，收回的也占着名额，再开的会被当成已经发完）。
+ *   引擎只少 `probe-grants` 时开正文流。
  * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身，假计时器。 */
-it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-older', 'stream-limit', 'undeclared', 'early-budget', 'legacy-cap'] as const)(
+it.each(['finish', 'abandon-first', 'abandon-after-end', 'stream-limit', 'undeclared', 'early-budget', 'without-probe-grants'] as const)(
   'opens, ends and gives up session v2 body streams on the native engine: %s', async mode => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
   const local = generateIdentity('native'), remote = generateIdentity('remote');
@@ -715,7 +716,7 @@ it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-olde
       ops.push({ op: command.op as string, stream: command.stream as number | undefined });
       let value: unknown;
       if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null,
-        features: mode === 'abandon-after-end-older' ? [] : mode === 'legacy-cap' ? ['stream-levels'] : ['stream-levels', 'stream-retired'] };
+        features: ['stream-levels', 'stream-retired', ...(mode === 'without-probe-grants' ? [] : ['probe-grants'])] };
       if (command.op === 'poll') {
         value = { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false, unacked: false,
           remoteKey: remote.transportKey, ...inbound, rttUs: 0, sent: 0, received: 0, rotations: 0 }] };
@@ -743,7 +744,7 @@ it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-olde
       onIncoming: channel => { channels.push(channel); } });
     await vi.advanceTimersByTimeAsync(100);
     const channel = channels[0], wire = channel.sessionWire!()!;
-    expect(channel.sessionBodies).toBe(true);
+    expect(channel.sessionBodies).toBe(mode !== 'without-probe-grants');
     const peerBody = (stream: number, key: number, bytes: Buffer = Buffer.alloc(0)) => [{ stream, data: Buffer.concat([Buffer.from([0x33]),
       Buffer.from(Uint32Array.of(key).buffer).reverse(), bytes]).toString('base64url') }];
     if (mode === 'undeclared') {
@@ -752,12 +753,11 @@ it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-olde
       expect(ops.filter(op => op.op === 'close')).toHaveLength(1);
       return;
     }
-    channel.declareSessions!(['agent-net-session-v2']);
-    if (mode === 'legacy-cap') {
-      const writers = Array.from({ length: 12 }, (_, index) => wire.openBody!('normal', index + 1));
-      expect(writers.map(writer => writer !== null)).toEqual([...Array(11).fill(true), false]);
+    if (mode === 'without-probe-grants') {
+      expect(wire.openBody!('normal', 1)).toBeNull();
       return;
     }
+    channel.declareSessions!(['agent-net-session-v2']);
     if (mode === 'early-budget') {
       for (let round = 0; round < 2; round++) {
         const streams = Array.from({ length: 100 }, (_, index) => 100 + round * 100 + index);
@@ -798,10 +798,10 @@ it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-olde
       // Data, control, three lanes, the body's refused open, then its open on the next turn.
       expect(opened).toBe(mode === 'stream-limit' ? 7 : 6);
     }
-    if (mode === 'abandon-after-end' || mode === 'abandon-after-end-older') {
+    if (mode === 'abandon-after-end') {
       body.abandon();
       await vi.advanceTimersByTimeAsync(100);
-      expect(ends()).toEqual(mode === 'abandon-after-end' ? [['finish', stream], ['abandon', stream]] : [['finish', stream]]);
+      expect(ends()).toEqual([['finish', stream], ['abandon', stream]]);
     }
     // The peer's body stream, its kind and key split over two chunks.
     inbound = { events: [{ kind: 'open', stream: 72 }], data: [{ stream: 72, data: Buffer.from([0x33, 0, 0]).toString('base64url') },

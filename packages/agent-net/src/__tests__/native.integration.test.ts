@@ -499,7 +499,8 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
   }) });
   hello(host);
   const phoneLarge = 'phone-session-result-'.repeat(40_000);
-  // Body streams are read on both sides (v2 is declared and used whenever both ends read them).
+  // Body streams are read on both sides (v2 is declared and used whenever both ends read them; on the phone, only on an engine with
+  // `probe-grants`).
   const bodies = vi.spyOn(SessionLanes.prototype, 'receiveBody');
   cleanups.push(async () => { bodies.mockRestore(); });
   for (const build of ['current', 'older', 'binary'] as const) {
@@ -520,8 +521,13 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
       const had = work; work = false;
       return had;
     };
-    // `current`: this binary behind an adapter without `io` (as an app module from before it); `binary`: the whole of it.
-    const port: NativeEnginePort = build === 'current' ? { command: value => peer.call(value), destroy: () => peer.destroy() } : build === 'binary' ? {
+    // `current`: this binary behind an adapter without `io` (as an app module from before it), each call answered 5 ms late as on a
+    // phone whose JS thread is busy: the computer's probe then arrives with the first window of a large result, and a core that
+    // answered it with the two lowest streams' credit only left the body (the sixth stream) at 128 segments (2026-11-22, CI).
+    // `binary`: the whole of it.
+    const port: NativeEnginePort = build === 'current' ? {
+      command: async value => { await new Promise(resolve => setTimeout(resolve, 5)); return peer.call(value); },
+      destroy: () => peer.destroy() } : build === 'binary' ? {
       command: value => { commands.push(String(value.op)); return peer.call(value); },
       wait: waitForWork,
       async io(input, waitMs = 0, kick = false) {
@@ -577,10 +583,11 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
     const before = relayedOverWebSocket, bodyBytes = () => bodies.mock.calls.filter(([, bytes]) => bytes).length;
     const bodiesBefore = bodyBytes();
     await expect(session.request('test:large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: large });
-    expect(bodyBytes()).toBeGreaterThan(bodiesBefore);
+    // An engine without `probe-grants` (here the older build, which reports no features) keeps to v1: no body streams.
+    if (build === 'older') expect(bodyBytes()).toBe(bodiesBefore); else expect(bodyBytes()).toBeGreaterThan(bodiesBefore);
     const fromPhone = bodyBytes();
     await expect(host.session(member.deviceId)!.request('test:phone-large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: phoneLarge });
-    expect(bodyBytes()).toBeGreaterThan(fromPhone);
+    if (build === 'older') expect(bodyBytes()).toBe(fromPhone); else expect(bodyBytes()).toBeGreaterThan(fromPhone);
     if (build === 'older') { expect(newOps).toEqual([]); expect(relayedOverWebSocket - before).toBeGreaterThan(large.length / 2); }
     else expect(relayedOverWebSocket - before).toBeLessThan(256 * 1024);
     if (build === 'binary') {

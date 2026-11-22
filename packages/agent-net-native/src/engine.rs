@@ -26,8 +26,9 @@ const MAX_REPORTED_STREAMS: usize = 40;
 /// `stream-levels`（2026-11-22）：`openStream` 认 `level`（核心的八档，0 最急），`abandon` 放弃一条流，`buffered` 的每一项
 /// 在 `[流, 缓冲字节]` 后面多两项 `[累计确认字节, 停顿毫秒]`（只读前两项的旧 JS 不受影响）。
 /// `stream-retired`（2026-11-22）：`buffered` 里核心已经收回的流报一次就不再报，名额（`MAX_REPORTED_STREAMS`）留给新开的流。
-/// 没有它的引擎最多报 16 条、收回的也一直占着，JS 在这样的引擎上每条连接最多开 11 条会话正文流（nativeTransport.ts）。
-const FEATURES: [&str; 7] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired"];
+/// `probe-grants`（2026-11-22）：核心回对端探测的确认带上所有流的额度。没有它的核心只带编号最小的两条，对端开的第 6 条流
+/// 最初的额度没送到时一直停在 128 个分片上；JS 只在有它的引擎上用会话 v2 的正文流（nativeTransport.ts `bodies`）。
+const FEATURES: [&str; 8] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired", "probe-grants"];
 /// Relayed datagrams the application still has to carry over its relay WebSocket; beyond this the oldest go (the
 /// transport resends them). Only fills while the application does not poll.
 const MAX_OUTBOX: usize = 1024;
