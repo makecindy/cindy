@@ -14,7 +14,8 @@
  * - 覆盖缺口：中转集成测试只验证中转一侧；压测只交换公网地址，不会出现直连包；连接号随机，集成测试不一定撞上。
  * - 最小失败输入：首字节 0xA1 的核心数据包；确认中断 4 秒；一个过期的确认；一个没认定地址的确认；一次解析失败；
  *   一次登记晚 37 毫秒确认（往返要是 37，确认断了以后不再报旧值）；登记一直被确认、数据发了 4 次跨 3 秒却一个都没回来；
- *   对端一直重发（总有数据进来）而本机发往它的请求 60 秒内超时两次。
+ *   对端一直重发（总有数据进来）而本机发往它的请求 60 秒内超时两次；本机只被控、请求一直进得来，自己发出的结果在
+ *   中转连接上 5 秒里重传 10 个分片、占发出包数一半（审查 P1：只切控制端，被控端仍沿坏掉的上行回结果）。
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
@@ -199,10 +200,10 @@ it('keeps resolving the relay address after a failed lookup and then registers',
 });
 
 /** A relay whose UDP port answers every registration at once but never forwards data back (2026-11-22 VPN proxy). */
-async function upWithAckingRelay(fill: number) {
+async function upWithAckingRelay(fill: number, options: Partial<RelayUdpOptions> = {}) {
   fakeTimers();
   const credentials = { session: new Uint8Array(8).fill(fill), key: new Uint8Array(32).fill(fill + 1) };
-  const opened = open(credentials);
+  const opened = open(credentials, options);
   let acked = 0n;
   const ackAll = () => {
     for (const r of opened.registrations()) {
@@ -294,4 +295,28 @@ it('leaves relay UDP after two session request timeouts within a minute even whi
   // A timeout reported while UDP is not in use is not about UDP.
   path.noteStall();
   expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
+});
+
+it('leaves relay UDP when its own relayed sends go unacknowledged, even as a controlled host that only receives requests', async () => {
+  const counters = { retransmitted: 0, sent: 0 };
+  const { path, registrations, step, reply } = await upWithAckingRelay(9, { relayedSendCounters: () => ({ ...counters }) });
+  // Requests keep arriving (so the silence check stays clear) and this side never sends a request of its own.
+  const receiving = (retransmitted: number, sent: number) => {
+    for (let i = 0; i < 6; i++) {
+      step(1_000); reply(); path.send('member', new Uint8Array(1_350));
+      counters.retransmitted += retransmitted; counters.sent += sent;
+    }
+  };
+  // Lossy but working: 10 resent in 5 s is enough segments, yet only a tenth of what was sent, so UDP stays.
+  receiving(2, 20);
+  expect(path.suspension).toBeNull();
+  // A connection closing makes the sums drop: start counting again rather than reading a negative delta.
+  counters.retransmitted = 0; counters.sent = 0;
+  step(1_000);
+  expect(path.suspension).toBeNull();
+  // The results this host sends back are never acknowledged: the core resends half of what it sends.
+  receiving(2, 4);
+  expect(path.send('member', new Uint8Array(100))).toBe(false);
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
+  expect(registrations().at(-1)!.receiving).toBe(false);
 });

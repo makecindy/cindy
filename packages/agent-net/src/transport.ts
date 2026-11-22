@@ -349,6 +349,18 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       credentials: () => credentials(),
       peers: () => (options.admittedPeers?.() ?? []).map((peer) => peer.relayId),
       deliver: (relayId, datagram) => linkFor(relayId).deliver(datagram),
+      // 只算走中转的连接：直连的丢包与中转 UDP 无关。
+      relayedSendCounters: () => {
+        let retransmitted = 0, sent = 0;
+        for (const channel of channels) {
+          if (channel.addressKind() !== 'relay') continue;
+          const stats = channel.stats();
+          if (!stats) continue;
+          retransmitted += stats.retransmittedSegments ?? 0;
+          sent += stats.packetsSent ?? 0;
+        }
+        return { retransmitted, sent };
+      },
     });
   }
   const publicOnly = options.publicCandidatesOnly === true;

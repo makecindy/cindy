@@ -53,6 +53,10 @@
     此刻走中转的对端的请求超时，就报给承载它的连接（Desktop `agentNetRelayStalled`，Host `node.relayStalled`，经 worker 的
     `relay-stalled` 消息到传输层）；走 UDP 时 60 秒内两次，按同样的冷却退回 WebSocket，日志原因写作
     `session requests over it timed out`。直连的对端超时不报，UDP 没在用时报了也不算。
+  - **被控端自己也要能发现上行坏了。** 中继按接收方的登记选下行，控制端退回 WebSocket 不会让被控端改走：被控端请求照收
+    （静默判断被清掉）、自己不发请求（没有超时可报），结果仍沿坏掉的上行发出（审查 P1）。所以设备还看自己的发送：中转 UDP 在用时，
+    走中转的连接（核心连接统计，`addressKind() === 'relay'`）最近 5 秒重传了至少 6 个分片、且占发出包数至少四分之一，就按同样的
+    冷却退回，日志原因写作 `packets sent over it went unacknowledged`。直连连接不计；连接关闭导致计数变小时从头算。
     事故：一台 Mac 上的 VPN 透明代理接管了到中继 UDP 端口（`:3479`）的流量，登记照常确认；13 分钟里这条 UDP 流收了约 30 MB、
     只发出约 2.6 MB，这台电脑与同账号所有设备的会话都超时（另一台电脑发给它的请求 3 次有回复、15 次超时），界面只显示
     「正在自动重试」；关掉 VPN、改走 WebSocket 后同一时段 85 次有回复、0 次超时。
