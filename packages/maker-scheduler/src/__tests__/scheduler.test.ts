@@ -2696,10 +2696,10 @@ describe('Scheduler', () => {
     }
   });
 
-  // Codex P1 on #12087(第五轮复评):退役写入的指纹不能只是 nextFireAt 的数值。
-  // 旧补排把时间 X 写进库、用户随后改了 cadence 却恰好算出同一个 X 时,只比数值会把
-  // 用户那一版当成退役写入接管掉,用户选中的那个排期被换掉。指纹必须绑在写入时那一版
-  // 的 CAS 身份上:身份一致才是「行里这个值是我们写下的」。
+  // Codex P1 on #12087(第五、六轮复评):退役写入的指纹不能只是 nextFireAt 或 CAS 字段。
+  // 用户把 cadence 改走再改回原值时,CAS 字段与 nextFireAt 都能回到收据中的值(ABA),
+  // 但 updatedAt 已推进;不能把用户那一版当成退役写入接管掉,静默跳过用户选中的排期。
+  // 本用例经公开 Scheduler.update 入口验证该用户可观察行为。
   it('does not take over a schedule the user edited into the same next fire time', async () => {
     vi.useFakeTimers();
     try {
@@ -2795,17 +2795,23 @@ describe('Scheduler', () => {
       // 第二次补排的写正在等:旧的那条已经落笔(行里是它按故障前时刻算出的排期)。
       await oldWriteLandedSignalPromise;
 
-      // 用户改了 cadence —— 恰好算出**同一个**排期值(新的 cadence 起算点变了)。
-      h.clock.advance(300_000);
-      const userInterval = retiredValue - h.clock.now();
-      expect(userInterval).toBeGreaterThan(0);
+      // 用户把 cadence 先改走、再改回原值。nextFireAt 与收据完全一致,其余 CAS 字段
+      // 也都回到旧值;只有 updateSchedule 写入的 updatedAt 前进了(ABA)。
+      const rowBeforeEdit = h.storage.schedules.get(sch.id)!;
+      retiredValue = rowBeforeEdit.nextFireAt!;
+      h.clock.setTo(retiredValue - 600_000);
+      expect(h.clock.now()).toBeGreaterThan(rowBeforeEdit.updatedAt);
       performingUserEdit = true;
       try {
-        await h.scheduler.update(sch.id, { intervalMs: userInterval });
+        await h.scheduler.update(sch.id, { intervalMs: 123_000 });
+        await h.scheduler.update(sch.id, { intervalMs: 600_000 });
       } finally {
         performingUserEdit = false;
       }
-      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBe(retiredValue);
+      const userEdited = h.storage.schedules.get(sch.id)!;
+      expect(userEdited.nextFireAt).toBe(retiredValue);
+      expect(userEdited.intervalMs).toBe(rowBeforeEdit.intervalMs);
+      expect(userEdited.updatedAt).toBeGreaterThan(rowBeforeEdit.updatedAt);
       userEditDone();
 
       await vi.advanceTimersByTimeAsync(200);
@@ -2849,15 +2855,23 @@ describe('Scheduler', () => {
       const inReplanPath = () => (new Error().stack ?? '').includes('applyStalledClaimReplan');
       let replanReads = 0;
       let wedgedReads = 0;
+      let inFlightReads = 0;
+      const wedgedReadResolvers: Array<(value: Schedule | null) => void> = [];
       vi.spyOn(h.storage, 'get').mockImplementation((id: string) => {
         if (id !== sch.id) return realGet(id);
         if (!inReplanPath()) return realGet(id);
         replanReads += 1;
         // 第一次补排的回读失败 → 凭据上膛。
         if (replanReads === 1) return Promise.reject(new Error('storage unavailable'));
-        // 这条路径之后的回读一律卡死:通道对它一直不答。
+        // 这条路径之后的回读一律卡死,除非用例显式放回一条真实在途读。
         wedgedReads += 1;
-        return new Promise<Schedule | null>(() => {});
+        inFlightReads += 1;
+        return new Promise<Schedule | null>((resolve) => {
+          wedgedReadResolvers.push((value) => {
+            inFlightReads -= 1;
+            resolve(value);
+          });
+        });
       });
       let bulkFailed = false;
       vi.spyOn(h.storage, 'listActive').mockImplementation(() =>
@@ -2890,20 +2904,48 @@ describe('Scheduler', () => {
       }
       expect(wedgedReads).toBe(3);
 
-      // 批量读一直有回包(存储整体是活的),但这条路径的回读一直卡死。代次每次前进
-      // 都会换发一条补排 —— 探测可以有,但**真实在途**的读必须有硬上限:被探测退役的
-      // 那些底层 promise 取消不了,记账上摘掉不等于少了一条在途调用。
-      for (let i = 0; i < 8; i += 1) {
+      // 两轮探测后真实在途为 5(3 个 live + 2 个退役孤儿)。让最早的孤儿迟到回包:
+      // 它会清掉退避状态,但另一个孤儿仍在途;预算不能随退避状态一起清零。
+      bulkFailed = true;
+      h.clock.advance(30_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      bulkFailed = false;
+      h.clock.advance(11 * 60_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(wedgedReads).toBe(4);
+
+      bulkFailed = true;
+      h.clock.advance(30_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      bulkFailed = false;
+      h.clock.advance(6 * 60_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(wedgedReads).toBe(5);
+      expect(inFlightReads).toBe(5);
+
+      // 放回第一条退役读,但保留另一条孤儿,同时确实触发探测退避复位。
+      wedgedReadResolvers[0]!(await realGet(sch.id));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(inFlightReads).toBe(4);
+
+      // settle 后代次前进会再触发探测。首轮可以把剩余孤儿数补到 2,之后必须停在
+      // 5 条真实在途;旧实现只在途状态而不按剩余孤儿记账,这里会走到第 6 条。
+      for (let i = 0; i < 2; i += 1) {
         bulkFailed = true;
         h.clock.advance(30_000);
         void h.scheduler.tick();
         await vi.advanceTimersByTimeAsync(100);
         bulkFailed = false;
-        h.clock.advance(15 * 60_000);
+        h.clock.advance(6 * 60_000);
         void h.scheduler.tick();
         await vi.advanceTimersByTimeAsync(100);
       }
-      expect(wedgedReads).toBeLessThanOrEqual(5);
+      expect(inFlightReads).toBe(5);
+      expect(wedgedReads).toBe(6);
 
       await h.scheduler.stop();
     } finally {

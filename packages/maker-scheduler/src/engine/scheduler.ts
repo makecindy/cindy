@@ -520,8 +520,8 @@ const OUTSTANDING_PROBE_MAX_MS = 30 * 60_000;
  *
  * 所以:被探测退役的请求照样计入真实在途量(见 outstandingOrphans),每条路径的
  * 真实在途因此有硬上限 —— MAX_OUTSTANDING_STORAGE_REQUESTS + MAX_OUTSTANDING_PROBES
- * 条。通道给出新回包(任意一条请求 settle)时预算复位,恢复后的通道照样能自己
- * 走通(Codex P2 on #12087)。
+ * 条。探测额度按**退役仍在途**的真实条数算:探测自己随通道回包离场,额度自然还
+ * 回来;留下的孤儿照样占着额度,恢复后的通道照样能自己走通(Codex P2 on #12087)。
  */
 const MAX_OUTSTANDING_PROBES = 2;
 
@@ -639,10 +639,14 @@ export class Scheduler extends EventEmitter {
   private readonly outstandingOrphans = new Map<string, Set<{ issuedAt: number }>>();
   /**
    * 每条路径的探测节奏(见 mayIssueStorageRequest):到顶之后允许放一条新请求去试
-   * 通道是否恢复,探测之间按退避拉开间隔,通道有响应就复位。`probes` 是通道没有
-   * 给出新回包之前已经发出去的探测条数(硬上限见 MAX_OUTSTANDING_PROBES)。
+   * 通道是否恢复,探测之间按退避拉开间隔,通道有响应就复位。
+   *
+   * 探测预算**不**记在这里:预算按 outstandingOrphans 的真实条数算(硬上限见
+   * MAX_OUTSTANDING_PROBES)—— 记成退避轮次里的计数,任何一条请求 settle 时删掉
+   * 整份状态就把预算清零,而留下的孤儿不参与计数,下一轮又能退役两条 live
+   * (Codex P1 on #12087 的第六轮复评)。
    */
-  private readonly outstandingProbes = new Map<string, { nextProbeAt: number; backoffMs: number; probes: number }>();
+  private readonly outstandingProbes = new Map<string, { nextProbeAt: number; backoffMs: number }>();
   /**
    * 最近一次**存储确实回包**的时刻(成功的批量读,或任意一条在途请求 settle)。
    *
@@ -783,14 +787,15 @@ export class Scheduler extends EventEmitter {
    *
    * 光比 nextFireAt 的**数值**也不够:旧补排把时间 X 写进库、用户随后改了 cadence
    * 却恰好算出同一个 X 时,只比数值会把用户那一版误判成退役写入,接管过去就把用户
-   * 这次的触发静默跳过。指纹因此绑在写入时那一版的 **CAS 身份**上(见
-   * replanWriteIdentity):身份一致 = 行里这个值确实是我们写下的那一个。
+   * 这次的触发静默跳过。指纹因此绑在写入时那一版的 **CAS 身份 + 行修订**上(见
+   * replanWriteIdentity):身份一致 = 行里这个值确实是我们写下的那一个,且行没有
+   * 被后续更新推进过(防 ABA)。
    */
   private readonly replanWriteReceipts = new Map<string, Array<{
     value: number;
     issueSeq: number;
     generation: number;
-    /** 写入时那一版的 CAS 身份(见 replanWriteIdentity)。 */
+    /** 写入时那一版的 CAS 身份 + 行修订(见 replanWriteIdentity)。 */
     identity: string;
   }>>();
   /** 补排签发序号(单调递增,见 replanLatestIssue)。 */
@@ -1750,7 +1755,8 @@ export class Scheduler extends EventEmitter {
         orphans.delete(token);
         if (orphans.size === 0) this.outstandingOrphans.delete(key);
       }
-      // 通道有回包(成功或失败都算)→ 探测退避与预算复位。
+      // 通道有回包(成功或失败都算)→ 探测退避复位(额度不在这里复位:它按
+      // outstandingOrphans 的真实条数算,见 mayIssueStorageRequest)。
       this.lastStorageResponseAt = this.clock.now();
       this.outstandingProbes.delete(key);
     };
@@ -1780,8 +1786,11 @@ export class Scheduler extends EventEmitter {
    *    永挂请求)。所以退役的 token 挪进 outstandingOrphans **照样计入**真实在途,
    *    每条路径的真实在途因此有硬上限(在途 3 + 退役 2)。
    * ② **通道确实在应答才发探测**:存储整体还死着时再挂一条只会多一条永挂请求;
-   *    有回包才说明楔住的是这一条 RPC,探测大概率能走通。任何一条请求 settle 都
-   *    复位预算,恢复后的通道照样能自己走通。
+   *    有回包才说明楔住的是这一条 RPC,探测大概率能走通。
+   * ③ **探测额度按退役仍在途的条数算**(Codex P1 on #12087 的第六轮复评):记成
+   *    退避轮次里的计数,任意一条请求 settle 删掉整份状态就把额度清零,留下的孤儿
+   *    不参与计数 —— 下一轮又能退役两条 live,真实在途突破 3 + 2。所以额度直接看
+   *    outstandingOrphans:探测自己回来额度就还回来,还在挂着的孤儿继续占额度。
    */
   private mayIssueStorageRequest(key: string): boolean {
     const live = this.outstandingRequests.get(key);
@@ -1793,9 +1802,10 @@ export class Scheduler extends EventEmitter {
     if (now - oldest.issuedAt < OUTSTANDING_REQUEST_ORPHAN_MS) return false;
     const probe = this.outstandingProbes.get(key);
     if (probe && now < probe.nextProbeAt) return false;
-    // 探测预算:通道没有给出新回包之前,这条路径最多再挂 MAX_OUTSTANDING_PROBES 条
-    // 探测 —— 真实在途量因此有硬上限,不会随退避到期一条条堆下去。
-    if ((probe?.probes ?? 0) >= MAX_OUTSTANDING_PROBES) return false;
+    // 探测预算看**退役仍在途**的真实条数,不看退避轮次:探测随通道回包离开
+    // outstandingOrphans,额度自然还回来;留下的孤儿照样占着额度,不会再退役 live
+    // 把真实在途推过「在途 3 + 退役 2」(Codex P1 on #12087 的第六轮复评)。
+    if ((this.outstandingOrphans.get(key)?.size ?? 0) >= MAX_OUTSTANDING_PROBES) return false;
     // 通道确实在应答才发探测:存储整体还死着时再挂一条只会多一条永挂请求。
     if (this.lastStorageResponseAt === 0 || now - this.lastStorageResponseAt > OUTSTANDING_PROBE_MAX_MS) {
       return false;
@@ -1804,7 +1814,6 @@ export class Scheduler extends EventEmitter {
     this.outstandingProbes.set(key, {
       nextProbeAt: now + backoffMs,
       backoffMs: Math.min(backoffMs * 2, OUTSTANDING_PROBE_MAX_MS),
-      probes: (probe?.probes ?? 0) + 1,
     });
     // 退役最老那条孤儿,腾一个位给探测请求。被退役的那条**底层请求仍在途**,
     // 记账挪进「退役仍在途」集合 —— 真实在途量不因探测而少算。
@@ -1817,7 +1826,7 @@ export class Scheduler extends EventEmitter {
       key,
       oldestAgeMs: now - oldest.issuedAt,
       cap: MAX_OUTSTANDING_STORAGE_REQUESTS,
-      probes: (probe?.probes ?? 0) + 1,
+      orphans: orphans.size,
     });
     return true;
   }
@@ -4361,8 +4370,10 @@ export class Scheduler extends EventEmitter {
    *
    * 光比 nextFireAt 的**数值**同样不够:旧补排写入的时间 X 与用户改 cadence 后恰好
    * 算出的时间值可能相同,只比数值会把用户那一版当成退役写入接管掉,静默跳过用户
-   * 这次的触发。指纹因此绑在写入时那一版的 CAS 身份上(Codex P1 on #12087 的第五轮
-   * 复评)。
+   * 这次的触发。指纹因此绑在写入时那一版的 CAS 身份 + 行修订上(Codex P1 on #12087
+   * 的第五、六轮复评):CAS 字段存在 ABA —— 用户改走 cadence 再改回原表达式时,
+   * 这些字段与 nextFireAt 可能再次与旧收据相同,只有 `updatedAt` 被用户那次更新
+   * 推进过。
    */
   private isRetiredReplanWrite(scheduleId: string, row: Schedule | undefined): boolean {
     if (!row || row.nextFireAt === undefined) return false;
@@ -4380,7 +4391,8 @@ export class Scheduler extends EventEmitter {
    * 记下这次补排写下的排期(签发收据),供后续补排识别退役写入。
    *
    * `base` 是发起这次写入时读到的那一版:写入只改 nextFireAt,落库后那一版的 CAS
-   * 身份就是「base 换上这个值」—— 收据记的是它,不是光记一个数值。
+   * 身份就是「base 换上这个值」,行修订 `updatedAt` 原样沿用(补排自己不动它)——
+   * 收据记的是这两样,不是光记一个数值。
    */
   private recordReplanWrite(scheduleId: string, value: number, issueSeq: number, base: Schedule): void {
     const receipts = this.replanWriteReceipts.get(scheduleId) ?? [];
@@ -4693,8 +4705,19 @@ export class Scheduler extends EventEmitter {
  * 写下的」与「用户改了 cadence、恰好算出同一个时间值」,后者被误判成退役写入就
  * 会把用户这次的触发静默跳过(Codex P1 on #12087 的第五轮复评)。
  */
+/**
+ * 收据指纹:写入时那一版的「行修订 + CAS 身份」。
+ *
+ * CAS 身份那几项与 storage.update 的 expected 同源,说明行里这个值确实是补排写下的
+ * 那一个;**行修订 `updatedAt` 也要带上**:用户把 cadence 改走再改回原表达式时,
+ * 落库后的 CAS 字段与 nextFireAt 可能再次与旧收据逐项相同(ABA),只有 `updatedAt`
+ * 被用户那次更新推进过 —— 不带修订就会把用户改回来的新版认成退役写入,接管到
+ * 下个槽位、静默跳过 X(Codex P1 on #12087 的第六轮复评)。补排自己只写 nextFireAt,
+ * 不动 `updatedAt`,所以收据记的修订就是落库后那一行的修订。
+ */
 function replanWriteIdentity(row: Schedule): string {
   return JSON.stringify([
+    row.updatedAt,
     row.lastFiredAt ?? null,
     row.nextFireAt ?? null,
     row.status,
