@@ -74,6 +74,7 @@ import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconcile
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { getSessionProvider, setSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { getSessionEffort, getSessionFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.ts';
 import { watchCredentialGrantRevocation } from '../../../desktop/src/main/remote-agent/executor/credentialGrants.ts';
 import { withSessionPermissionChange } from '../../../desktop/src/main/maker-ipc/sessionPermissionChange.ts';
 import { createUserInputEnqueue } from './user-input.ts';
@@ -6327,6 +6328,86 @@ for (const boundary of [
     assert.deepEqual(first.sent, ['followup']);
     assert.deepEqual([first.model, first.options.providerId, first.options.effort, first.options.fastMode],
       ['small', provider, effort, fastMode]);
+  });
+}
+
+// #12020, database tier. The existing late-axis tests land the requested model. Here the
+// requested model is disabled while pending, so Host's permit settles onto the exact old route.
+// Its defaults used to overwrite an independent SQLite write, even if the value matched the snapshot.
+for (const [name, { effortWrites = [], fastWrites = [], unsupported = null, effort, fastMode = false }] of [
+  ['same effort', { effortWrites: ['high'], effort: 'high', fastMode: true }],
+  ['changed effort then restored', { effortWrites: ['medium', 'high'], effort: 'high', fastMode: true }],
+  ['effort no longer supported', { effortWrites: ['low'], unsupported: 'effort', effort: 'low' }],
+  ['no late write', { effort: 'medium', fastMode: true }],
+  ['Fast enabled', { fastWrites: [true], effort: 'medium', fastMode: true }],
+  ['Fast restored to off', { fastWrites: [true, false], effort: 'medium' }],
+  ['Fast no longer supported', { fastWrites: [true], unsupported: 'fastMode', effort: 'high', fastMode: true }],
+]) {
+  test(`deferred credential fallback preserves committed Host axes: ${name}`, async t => {
+    const agent = 'codex';
+    const r = await modelChangeRuntime(t, { agent });
+    const id = 'deferred-credential-fallback';
+    const model = id => ({
+      ...switchModel(id), efforts: ['low', 'medium', 'high'], defaultEffort: 'medium', supportsFastMode: true,
+    });
+    const original = { ...switchViews(agent)[0], models: { [agent]: [model('big')] } };
+    const target = { ...original, id: 'prov-b', models: { [agent]: [model('small')] } };
+    r.views.current = [original, target];
+    await r.createTask(id);
+    await r.selection.setEffort(id, 'high');
+    await enqueue(r.h, id, { clientId: 'work', text: 'work' });
+    const live = r.h.maker.getSession(id);
+    live.requiresModelSwitchRebuild = async () => true;
+    assert.equal((await r.selection.setModel(id, 'small', 'prov-b', undefined,
+      { effort: 'medium', fastMode: true })).pendingUntilSend, true);
+    const isRunning = live.isTurnRunning.bind(live);
+    let checks = 0;
+    live.isTurnRunning = () => ++checks === 1 ? false : isRunning();
+    try {
+      await assert.rejects(r.selection.applyPendingAgentSwitch(id), CredentialModeSwitchBusyError);
+    } finally {
+      live.isTurnRunning = isRunning;
+    }
+    assert.equal(r.selection.hasPendingCredentialSwitch(id), true);
+    assert.deepEqual([r.row(id).model, r.row(id).provider_id], ['big', 'prov-a']);
+
+    for (const saved of effortWrites) await r.selection.setEffort(id, saved);
+    for (const saved of fastWrites) await r.selection.setFastMode(id, saved);
+    const settings = () => {
+      const row = r.row(id);
+      return [row.model, row.provider_id, row.effort, row.fast_mode === 1];
+    };
+    assert.deepEqual(settings(), ['big', 'prov-a', effortWrites.at(-1) ?? 'high', fastWrites.at(-1) ?? false]);
+    await r.h.queue.enqueue(id, { clientId: 'followup', text: 'followup' });
+    assert.deepEqual(live.sent, ['work']);
+
+    r.views.current = [{
+      ...original,
+      models: { [agent]: [{
+        ...model('big'),
+        ...(unsupported === 'effort' ? { efforts: ['medium'] } : {}),
+        ...(unsupported === 'fastMode' ? { supportsFastMode: false } : {}),
+      }] },
+    }, { ...target, models: { [agent]: [{ ...model('small'), disabled: true }] } }];
+    const eventStart = r.h.events.length;
+    live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+    const events = kind => r.h.events.slice(eventStart).filter(
+      event => event.channel === `maker:session-credential-switch-${kind}` && event.payload.sessionId === id,
+    );
+    await settleUntil(() => events('applied').length + events('failed').length > 0, 'Host settlement completed');
+    assert.deepEqual(settings(), ['big', 'prov-a', effort, fastMode], 'SQLite preserves the committed axes');
+    assert.deepEqual([events('applied').length, events('failed').length], unsupported ? [0, 1] : [1, 0]);
+    assert.equal(r.selection.hasPendingCredentialSwitch(id), false);
+    assert.equal(r.selection.projectIntent(id), null);
+    if (unsupported) {
+      assert.deepEqual(events('failed')[0].payload, { sessionId: id, reason: 'apply-failed' });
+      return;
+    }
+    assert.deepEqual([getSessionProvider(id), getSessionEffort(id), getSessionFastMode(id)], ['prov-a', effort, fastMode]);
+    await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('followup'), 'the queued input dispatches');
+    const first = r.h.maker.getSession(id);
+    assert.deepEqual([first.model, first.options.providerId, first.options.effort, first.options.fastMode], settings());
+    assert.deepEqual(first.sent.filter(text => text === 'followup'), ['followup']);
   });
 }
 

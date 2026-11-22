@@ -182,6 +182,19 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
           finalEffort = isSupportedRuntimeEffort(staged.effort) ? staged.effort : null;
         }
         if (staged && (staged.explicitAxes?.fastMode ?? true) && !fastEdited) finalFastMode = staged.fastMode;
+        // A fallback to the same route must validate committed edits before using route defaults.
+        const restoringDeferredRoute = restoringPreviousRoute &&
+          (staged?.agentKind === 'claude-code' || staged?.agentKind === 'codex');
+        const restoreCommittedEffort = restoringDeferredRoute && state?.written.effort === true;
+        const restoreCommittedFastMode = restoringDeferredRoute && state?.written.fastMode !== undefined;
+        if (restoreCommittedEffort) {
+          if (!isSupportedRuntimeEffort(desiredRow?.effort)) {
+            throw new CredentialRouteNotCommittedError('cannot verify the committed effort');
+          }
+          finalEffort = desiredRow.effort;
+        }
+        if (restoreCommittedFastMode && desiredRow) finalFastMode = desiredRow.fastMode;
+
         if (agentKind && finalModel) {
           const runtimeAgentKind = dbToMakerAgentKind(agentKind);
           const providers = await getDesktopProviderService().listProviders({
@@ -198,6 +211,9 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
           const catalogModel = findCatalogModel(finalProvider, finalModel, runtimeAgentKind, {
             exact: true,
           });
+          if (!catalogModel && (restoreCommittedEffort || restoreCommittedFastMode)) {
+            throw new CredentialRouteNotCommittedError('cannot verify the committed axes on the original route');
+          }
           if (catalogModel) {
             const axes = resolveSessionRuntimeAxes({
               model: catalogModel,
