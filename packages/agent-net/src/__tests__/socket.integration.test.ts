@@ -694,12 +694,14 @@ it('fails frames waiting for a member the host rule then refuses, and never send
  * - 现有覆盖缺口：新能力，单元测试只覆盖通道排序与会话协议，没有真实核心上的协商与收发。
  * - 最小失败输入：一次建链、一次请求、一次推送、一条 Device Link 推送；只有一端启用会话时不出现会话
  *   （对端没人读会话还先宣告的话，这一端的建链要等到超时）。会话 v2（两端都是新版）：推送、300 KB 结果、推送，结果走自己的流
- *   （真实核心上流的键分片到达、流的结束），业务拿到的先后不变，结果在流上时也算在会话积压里。
+ *   （真实核心上流的键分片到达、流的结束），业务拿到的先后不变，结果在流上时也算在会话积压里；240 KB 文件块的 base64
+ *   按字节过线（约 240 KB，不是 320 KB），收到的字符串与原来相同。
  * - tier：integration，真实回环 WS 中转，不开 UDP。 */
 it('carries an independent session between two new nodes alongside Device Link frames', async () => {
   const f = await network(false); f.host.stop(); f.controller.stop();
   const laneFor = (channel: string) => (channel === 'test:interactive' ? 'control' as const : 'normal' as const);
   const pushes: unknown[] = [], large = 'large-session-result-'.repeat(15_000);
+  const file = randomBytes(240_000).toString('base64');
   let backlog = -1;
   const a = await AgentNetSocket.open({ client: f.a, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
   const b = await AgentNetSocket.open({ client: f.b, userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false });
@@ -709,7 +711,8 @@ it('carries an independent session between two new nodes alongside Device Link f
     onRequest: (request) => {
       const session = a.session('b-controller')!;
       if (request.channel === 'test:large') session.push('test:before', 1);
-      session.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : [request.channel, ...request.args] });
+      session.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : request.channel === 'test:file' ? { data: file }
+        : [request.channel, ...request.args] });
       if (request.channel === 'test:large') { backlog = session.bufferedAmount; session.push('test:after', 2); }
     },
   }) });
@@ -738,6 +741,10 @@ it('carries an independent session between two new nodes alongside Device Link f
   expect(bodies.mock.calls.some(([, bytes]) => bytes === null)).toBe(true);
   // The body on its own stream still counts in the session's backlog, as it would on its lane.
   expect(backlog).toBeGreaterThanOrEqual(large.length);
+  // A file block's base64 crosses as its bytes and comes back as the same string.
+  const bodyBytes = () => bodies.mock.calls.reduce((total, [, bytes]) => total + (bytes?.length ?? 0), 0), before = bodyBytes();
+  await expect(session.request('test:file', [], { timeoutMs: 10_000 })).resolves.toEqual({ ok: true, result: { data: file } });
+  expect(bodyBytes() - before).toBeLessThan(250_000);
   const delivered = new Promise<Envelope>((resolve) => b.on('message', (raw) => {
     const frame = JSON.parse(raw.toString()) as Envelope; if (frame.kind === 'push') resolve(frame);
   }));

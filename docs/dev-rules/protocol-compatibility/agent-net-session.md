@@ -136,6 +136,10 @@
   再是消息的 UTF-8 JSON，写完流就结束；核心优先级同它本该走的那条通道。通道上原来放这条消息的位置换成占位
   `{c, p?, r?, b?, o?, z: [键, 正文字节数], i?}`：计数（`p`、`r`、`b`、`o`）与 v1 相同，`i` 只在结果上，是请求号。键由发送方从随机起点递增，
   一个会话里不重复。正文流开不出来（流数到了上限）时这条消息照 v1 整条写在通道上。
+- **正文里的字节**（`session/binarySegments.ts`）：正文 JSON 里 16 KiB 及以上、恰好是规范 base64（标准字母表、带填充、末尾多余位为 0）的字符串
+  （文件块、远程任务上传块）按它编码的字节写在 JSON 后面，少约四分之一；占位多一项 `y: [JSON 字节数, 各段字节数…]`，各项之和等于 `z` 里的长度。
+  JSON 里原处换成 `"\u0000\u0001b#序号"`；消息里本来就以 `"\u0000\u0001b"` 开头的字符串写成 `"\u0000\u0001b="` 加原文，所以每个字符串都原样
+  还原。接收方把字节重新编成同一个 base64 字符串交给业务，业务看不出差别。不规范的 base64、URL 字母表、短字符串和对象的键都照原样留在 JSON 里。
 - **先后**：占位停在它的通道头，直到正文收齐才交出，所以先后与 v1 相同（列表结果与它之后的补丁推送照旧不乱）。变化只在传输：
   正文不占着通道，接收方从正文的第一个字节就知道这条结果在来。
 - **按进展判超时**：结果的正文开始到达后（占位里的 `i` 对上调用方在等的请求），请求自己的时限不再算，改成 15 秒没有新字节才报
@@ -152,14 +156,16 @@
 - **手机原生库**：正文流只用开流、写、结束，所有原生库都有。带 `stream-levels` 的原生库放弃时用 `abandon`；更早的只能结束（已经交给引擎的照发，
   接收方同样看出不全）。原生库按流报缓冲时，核心收回了的流报一次就不再报（`MAX_REPORTED_STREAMS` 为 40）。
 - **中转**：不变，只转发密文数据报。
-- **兼容组合**：v2 对 v2 走正文流；v2 对 v1、v1 对 v1、任一端通道不能读时都是 v1。v1 的会话端不认 `z`、`x`，但收不到它们：
+- **兼容组合**：v2 对 v2 走正文流；v2 对 v1、v1 对 v1、任一端通道不能读时都是 v1。v1 的会话端不认 `z`、`x`、`y`，但收不到它们：
   只有对端宣告了 v2 才发。
 
 回归：`packages/agent-net/src/__tests__/sessionLanes.test.ts` 的「v2:」几条（先后与进展、放弃通知先到、后到、流头都没发出、正文提前结束、
-上千次放弃以后会话照常、对 v1 和小消息逐字节相同、按进展判超时与停住、业务里的请求被取消后不发结果）；`portableSocket.test.ts`「opens body streams
+上千次放弃以后会话照常、对 v1 和小消息逐字节相同、按进展判超时与停住、业务里的请求被取消后不发结果、正文里的字节与各种字符串原样还原、
+`Buffer`／`atob`／查表三种编解码一致）；`portableSocket.test.ts`「opens body streams
 only to a peer that declared session v2, on a channel that reads them」；`nativeTransport.test.ts`「opens, ends and gives up session v2 body streams
 on the native engine」（结束、写之前放弃、结束后放弃、开流暂时失败、对端流的键分片到达）；`socket.integration.test.ts`「carries an independent
-session between two new nodes alongside Device Link frames」（真实核心上 300 KB 结果走正文流，夹在两条推送之间，积压读数算上它）、
+session between two new nodes alongside Device Link frames」（真实核心上 300 KB 结果走正文流，夹在两条推送之间，积压读数算上它；
+240 KB 文件块的 base64 按字节过线）、
 「lets go of streams the Node driver has handed over…」（300 条写完的流和一条放弃的流都不留在驱动的表里）；
 `native.integration.test.ts`「carries sessions on the real native engine…」（真实原生库的三种构建上，大结果两个方向都走正文流）。
 

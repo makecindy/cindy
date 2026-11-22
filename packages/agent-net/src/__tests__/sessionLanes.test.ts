@@ -10,6 +10,7 @@
  * - tier：unit，内存里的字节，默认按 1、5、64、3 字节轮流拆开喂。 */
 import { afterEach, expect, it, vi } from 'vitest';
 import { SessionLanes, type SessionLane } from '../session/lanes.js';
+import { base64Codec, type Base64Platform } from '../session/binarySegments.js';
 import { RESULT_STALL_MS, SessionPeer, type SessionHandle, type SessionRole } from '../session/peer.js';
 import { serveWorkerSessions, WorkerSessions, SESSION_BACKLOG_REPORT_MS } from '../session/workerSessions.js';
 
@@ -300,7 +301,7 @@ const sizeOf = (chunks: Uint8Array[]) => chunks.reduce((total, chunk) => total +
 
 it('v2: carries a large result on a stream of its own, reports its progress and hands it over in v1 order', () => {
   const { sender, wire, streams, delivered, progress, arrive, arriveBody } = bodyPair();
-  const result = { listed: 'r'.repeat(100_000) };
+  const result = { listed: 'row '.repeat(25_000) };
   sender.send('normal', 'push', 'push-1');
   sender.send('normal', 'result', result, { id: 'call-1' });
   sender.send('normal', 'push', 'push-2');
@@ -451,4 +452,46 @@ it('v2: does not send the result of a request its caller gave up on while the bu
   callee.respond(requests[0], { ok: true, result: 'e'.repeat(500_000) });
   expect(bodies.size).toBe(0);
   expect(sentToCaller()).toBe(before);
+});
+
+/** 测试价值（会话 v2 正文里的字节）
+ * - 生产入口与可观察结果：`SessionLanes` 的正文流（两端都是 v2）。消息里长的、规范的 base64 字符串（文件块、远程任务的上传块）按它编码的
+ *   字节传，正文比原来少约四分之一；对端交给业务的消息与发出的逐字符相同，包括不规范的 base64、短的、恰好以内部标记开头的字符串。
+ *   手机没有 Node 的 `Buffer`：只有 `atob`／`btoa`、两样都没有时，编解码结果与 `Buffer` 相同。
+ * - Bug／规则依据：docs/agent-net-session-plan.md 10.2「消息是头 + 二进制正文」；v1 里文件块、上传块都是 base64 文本，线上多三分之一。
+ * - 现有覆盖缺口：新能力。
+ * - 最小失败输入：一条结果里有 300 KB 的规范 base64、末尾多余位不为 0 的、用 URL 字符的、缺填充的、短的、以标记开头的字符串，
+ *   以及把 base64 当键的对象；三种编解码环境下随机长度 0–70 KB 的字节。
+ * - tier：unit，内存里的字节。 */
+it('v2: carries long base64 strings as their bytes and hands every string back exactly', () => {
+  const { sender, streams, delivered, arrive, arriveBody } = bodyPair();
+  const random = (length: number) => Buffer.from(Array.from({ length }, (_, index) => (index * 7919 + length) % 251));
+  const file = random(300_000).toString('base64');
+  const nonCanonical = random(30_001).toString('base64').replace(/.(=+)$/, (_, padding: string) => 'B' + padding);
+  const message = {
+    data: file, nonCanonical, urlSafe: random(30_000).toString('base64url'), unpadded: random(30_001).toString('base64').replace(/=+$/, ''),
+    short: random(3_000).toString('base64'), marked: '\u0000\u0001b#0', markedEscape: '\u0000\u0001b=x', nested: [{ again: file }],
+    [random(20_000).toString('base64')]: 'base64 as a key',
+  };
+  expect(Buffer.from(nonCanonical, 'base64').toString('base64')).not.toBe(nonCanonical);
+  sender.send('normal', 'result', message, { id: 'read-1' });
+  const [key] = streams.keys(), sent = sizeOf(streams.get(key)!.bytes);
+  arrive('normal');
+  arriveBody(key, Infinity, true);
+  expect(delivered).toEqual([message]);
+  // Both 300 KB copies go as bytes: the body is well under the JSON it replaces.
+  expect(sent).toBeLessThan(JSON.stringify(message).length - 2 * (file.length - file.length * 3 / 4) + 1024);
+});
+
+it.each(['buffer', 'atob', 'table'] as const)('v2: encodes and decodes body bytes the same with %s', (mode) => {
+  const platform = mode === 'buffer' ? { Buffer } : mode === 'atob' ? { atob, btoa } : {};
+  const { base64Of, canonicalBase64Bytes } = base64Codec(platform as Base64Platform);
+  for (const length of [0, 1, 2, 3, 4, 5, 8191, 8192, 8193, 70_001]) {
+    const bytes = Uint8Array.from({ length }, (_, index) => (index * 131 + length) % 256);
+    const text = base64Of(bytes);
+    expect(text).toBe(Buffer.from(bytes).toString('base64'));
+    expect(canonicalBase64Bytes(text)).toEqual(bytes);
+  }
+  expect(canonicalBase64Bytes('QQ==')).toEqual(Uint8Array.of(65));
+  for (const bad of ['QR==', 'QUJ=x', 'QUI', 'QU-_', 'Q===']) expect(canonicalBase64Bytes(bad)).toBeNull();
 });

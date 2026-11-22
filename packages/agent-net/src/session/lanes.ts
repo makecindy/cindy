@@ -29,6 +29,8 @@
  * times out a large result it is visibly receiving), and the sender can drop a result its caller gave up on (`abandonResult`).
  */
 
+import { extractSegments, MAX_BINARY_SEGMENTS, restoreSegments } from './binarySegments.js';
+
 export const SESSION_LANES = ['control', 'normal', 'background'] as const;
 export type SessionLane = typeof SESSION_LANES[number];
 /** `push` and `request` are counted; `result` and interactive (control-lane) `request` wait on those counts. */
@@ -59,9 +61,13 @@ const encoder = new TextEncoder(), decoder = new TextDecoder();
 /**
  * Wire record: the message plus what it waits for. `p`: pushes delivered per lane; `r`: normal-lane requests delivered;
  * `b`: size-moved requests delivered; `o`: this is a size-moved request. Session v2: `z` [key, length] instead of `m`, the
- * message is the body stream with that key; `i` on a result is its request id, for the receiver's progress.
+ * message is the body stream with that key; `i` on a result is its request id, for the receiver's progress; `y` [JSON bytes,
+ * segment bytes...]: the body is that much JSON, then the bytes of its long base64 strings (binarySegments.ts).
  */
-interface Frame { m?: unknown; c: SessionMessageClass; p?: [number, number, number]; r?: number; b?: number; o?: 1; z?: [number, number]; i?: string; x?: number }
+interface Frame {
+  m?: unknown; c: SessionMessageClass; p?: [number, number, number]; r?: number; b?: number; o?: 1; z?: [number, number]; i?: string; x?: number;
+  y?: number[];
+}
 
 function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -69,7 +75,7 @@ function isCount(value: unknown): value is number {
 
 function isFrame(value: unknown, lane: SessionLane): value is Frame {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const { m, c, p, r, b, o, z, i, x } = value as Record<string, unknown>;
+  const { m, c, p, r, b, o, z, i, x, y } = value as Record<string, unknown>;
   // Session v2: `x` alone on the control lane: the sender gave up the body with this key (see `abandonResult`).
   if (x !== undefined) return c === 'control' && lane === 'control' && m === undefined && z === undefined && isCount(x) && x > 0;
   return (c === 'control' || c === 'request' || c === 'result' || c === 'push')
@@ -78,7 +84,9 @@ function isFrame(value: unknown, lane: SessionLane): value is Frame {
     && (b === undefined || isCount(b))
     && (o === undefined || (o === 1 && c === 'request' && lane === 'background'))
     && (z === undefined || (m === undefined && Array.isArray(z) && z.length === 2 && z.every(isCount) && (z[1] as number) <= MAX_SESSION_MESSAGE_BYTES))
-    && (i === undefined || (z !== undefined && c === 'result' && typeof i === 'string' && i.length <= 256));
+    && (i === undefined || (z !== undefined && c === 'result' && typeof i === 'string' && i.length <= 256))
+    && (y === undefined || (z !== undefined && Array.isArray(y) && y.length >= 2 && y.length <= MAX_BINARY_SEGMENTS + 1 && y.every(isCount)
+      && (y as number[]).reduce((total, part) => total + part, 0) === (z as number[])[1]));
 }
 /** See the module comment. `id`: a result's request id (session v2 progress and `abandonResult`). */
 export interface SessionSendOptions { unordered?: boolean; afterEarlier?: boolean; id?: string }
@@ -150,11 +158,16 @@ export class SessionLanes {
       const writer = this.options.openBody(lane, key);
       if (writer) {
         this.nextBodyKey = this.nextBodyKey >= 0x7fffffff ? 1 : this.nextBodyKey + 1;
-        const content = encoder.encode(json);
+        // Long base64 strings go as their bytes (binarySegments.ts), after the rest of the message.
+        const { json: text, segments } = extractSegments(message, json);
+        const content = encoder.encode(text);
+        const total = segments.reduce((sum, segment) => sum + segment.length, content.length);
         const { m: _message, ...stamps } = frame;
-        const stub: Frame = { ...stamps, z: [key, content.length], ...(kind === 'result' && options.id ? { i: options.id } : {}) };
+        const stub: Frame = { ...stamps, z: [key, total], ...(kind === 'result' && options.id ? { i: options.id } : {}),
+          ...(segments.length ? { y: [content.length, ...segments.map(segment => segment.length)] } : {}) };
         this.writeFrame(lane, encoder.encode(JSON.stringify(stub)));
         writer.write(content);
+        for (const segment of segments) writer.write(segment);
         writer.finish();
         if (kind === 'result' && options.id) {
           if (this.outgoingBodies.size >= MAX_ABANDONABLE_BODIES) this.outgoingBodies.delete(this.outgoingBodies.keys().next().value as string);
@@ -324,8 +337,15 @@ export class SessionLanes {
               // Ended short: the sender gave it up because its caller had (a result, `abandonResult`). Nothing waits for it, and it
               // still counts as handed over, so what waits on its lane's counts goes on.
               if (body.length < total) { this.delivered(lane, head.frame); this.pumpAgain = true; continue; }
-              try { message = JSON.parse(decoder.decode(join(body.chunks, body.length))); }
-              catch { this.fail(new Error('AGENT_NET_SESSION_FRAME_INVALID')); return; }
+              try {
+                const bytes = join(body.chunks, body.length), y = head.frame.y;
+                if (!y) message = JSON.parse(decoder.decode(bytes));
+                else {
+                  const segments: Uint8Array[] = [];
+                  for (let index = 1, offset = y[0]; index < y.length; offset += y[index], index++) segments.push(bytes.subarray(offset, offset + y[index]));
+                  message = restoreSegments(decoder.decode(bytes.subarray(0, y[0])), segments);
+                }
+              } catch { this.fail(new Error('AGENT_NET_SESSION_FRAME_INVALID')); return; }
             }
             state.busy = true;
             let result: void | Promise<void> = undefined;
