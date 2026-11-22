@@ -89,6 +89,9 @@ export interface BotProfileRuntimeSnapshot {
   memoryRefs: BotMemoryRuntimeRef[];
   /** True when the permanent canonical Chat must rebuild its live runtime. */
   runtimeEpochChanged: boolean;
+  /** True only when `runtimeEpochChanged` came from comparing against an
+   * applied/degraded snapshot. Without that baseline "unchanged" is unknown. */
+  runtimeEpochBaseline: boolean;
 }
 
 export interface BotMemoryRuntimeRef {
@@ -1223,7 +1226,8 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
+  const runtimeEpochBaseline = followsProfile && previousSnapshot !== undefined;
+  const runtimeEpochChanged = runtimeEpochBaseline && previousSnapshot
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256
     : false;
@@ -1299,5 +1303,6 @@ export async function hydrateBotProfileRuntime(
     toolsetMode,
     memoryRefs,
     runtimeEpochChanged,
+    runtimeEpochBaseline,
   };
 }
