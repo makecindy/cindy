@@ -19829,6 +19829,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const sess = getStableSessionForTurnBoundary(sessionId);
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
     },
+    // Read on every queue projection: stay quiet while the account owner is being replaced.
+    supportsSameTurnSteer: (sessionId) => {
+      try {
+        const sess = sessionBindings.getSession(sessionId) ?? maker.getSession(sessionId);
+        return sess ? sess.capabilities.sameTurnSteer.supported : null;
+      } catch {
+        return null;
+      }
+    },
     isLiveTurnRunning: (sessionId) => {
       const lookup = lookupStableSessionForTurnBoundary(sessionId);
       if (lookup.status === 'unavailable') return undefined;

@@ -380,6 +380,11 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
+  /**
+   * Whether the live Session can take input into its running turn (`sameTurnSteer`).
+   * null / undefined = no live Session or probe unavailable; only `false` changes steer.
+   */
+  supportsSameTurnSteer?: (sessionId: string) => boolean | null | undefined;
   /** Live Session only — must not OR the desktop tracker. undefined = probe unavailable. */
   isLiveTurnRunning?: (sessionId: string) => boolean | undefined;
   /**
@@ -2870,6 +2875,17 @@ export class AgentInputCoordinator {
       return true;
     }
 
+    // An engine without same-turn input (a plugin engine whose agent does not offer
+    // steering) sends it after this turn instead of failing. Clients that know show a
+    // notice and no steer action; older clients still reach this path.
+    if (this.deps.supportsSameTurnSteer?.(sessionId) === false) {
+      if (opts?.fallbackToTurn === false) return false;
+      log.info('steer unsupported by engine; queued for after this turn', { sessionId, clientId: item.clientId });
+      this.fallbackPreparedAsTurn(sessionId, item, opts?.removeFromQueue === true);
+      if (opts?.touchUserSend) this.touchUserSend(sessionId);
+      return true;
+    }
+
     // 插话统一为同轮注入(2026-07-12 产品决策):Claude 与 Codex 都走
     // steerToAgent 把消息注入正在跑的 turn,不打断当前工作。需要打断的用户
     // 自己点 Stop。(历史:PR #394 曾把 Claude 改成 abort+新 turn,现回退。)
@@ -5163,6 +5179,7 @@ export class AgentInputCoordinator {
           ? state.activeTurn.item.clientId
           : null,
       continuationTurnClientId: state.activeTurn?.continuationOwnerClientId ?? null,
+      ...(this.deps.supportsSameTurnSteer?.(sessionId) === false ? { steerUnsupported: true } : {}),
       steeringQueueClientIds: [...state.steeringQueueClientIds],
       queuePaused: state.queuePaused,
       queueExpanded: state.queueExpanded,

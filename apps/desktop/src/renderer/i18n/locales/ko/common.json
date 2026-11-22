@@ -14319,6 +14319,8 @@
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
+
+      "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
       "resumeAction": "계속 전송",
       "resumeAria": "대기열 메시지 전송 계속",
       "showMore_one": "{{count}}개 더 있음",
