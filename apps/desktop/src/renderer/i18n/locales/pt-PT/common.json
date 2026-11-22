@@ -11194,6 +11194,11 @@
       "pinned": "Fixadas",
       "needsAttention": "Precisa de atenção",
       "duplicate": "Duplicar amigo",
+      "duplicating": "A duplicar o amigo…",
+      "duplicateFailed": "Não foi possível duplicar o amigo.",
+      "duplicateModelRequired": "Para duplicar este amigo, escolha primeiro um modelo predefinido para amigos nas Definições.",
+      "pinFailed": "Não foi possível alterar a fixação do amigo.",
+      "hideFailed": "Não foi possível ocultar ou mostrar o amigo.",
       "moreActions": "Mais ações para {{name}}",
       "viewIcons": "Ícones",
       "showCollapsedTeammateAvatars": "Mostrar avatares quando recolhido",
@@ -12243,46 +12248,15 @@
     },
     "guided": {
       "title": "Criar um amigo",
-      "reviewTitle": "O teu novo amigo",
-      "question": "Descreva brevemente as suas expectativas.",
-      "placeholder": "Por exemplo, ajudar-me a praticar inglês através de conversas do dia a dia e correções cuidadas.",
       "generate": "Criar amigo",
-      "generating": "A dar forma ao teu amigo…",
-      "generationFailed": "Não foi possível gerar o teu amigo. A tua ideia continua aqui; tenta novamente.",
       "modelRequired": "Escolha um modelo disponível acima para continuar.",
       "modelFollowsDefault": "Segue o modelo predefinido para amigos.",
       "modelForThisBot": "Esta seleção aplica-se apenas a este amigo.",
-      "cindyDescription": "Posso ajudar a utilizar Cindy, ligar as suas ferramentas e realizar tarefas em conjunto.",
-      "cindySummary": "Gerir Cindy, ligar ferramentas e realizar tarefas.",
-      "openCindy": "Abrir Cindy",
-      "addCindy": "Adicionar Cindy",
-      "done": "Concluído",
-      "editName": "Editar nome",
       "duplicateName": "Esse nome já está a ser utilizado. Escolha um nome que consiga distinguir facilmente.",
-      "introduction": "Sobre mim",
-      "editIntroduction": "Editar apresentação",
-      "refine": "Ajustar amigo",
-      "refinePlaceholder": "O que mudaria? Por exemplo, menos formal e um pouco mais divertido.",
-      "back": "Voltar",
-      "invite": "Convidar amigo",
       "portrait": "Retrato {{number}}",
       "upload": "Carregar imagem",
       "generateAvatar": "Gerar retrato",
-      "useAvatar": "Utilizar este retrato",
-      "examples": {
-        "english": {
-          "label": "Praticar inglês",
-          "prompt": "Pratica inglês comigo através de conversas do dia a dia. Tem paciência e corrige com cuidado as expressões pouco naturais."
-        },
-        "ideas": {
-          "label": "Explorar ideias",
-          "prompt": "Um parceiro criativo e imaginativo, com opiniões próprias, que me ajuda a transformar ideias de escrita e de produtos em planos práticos."
-        },
-        "life": {
-          "label": "Falar sobre a vida",
-          "prompt": "Um amigo afetuoso e divertido que ouve as pequenas coisas da minha vida sem se apressar a dar conselhos."
-        }
-      }
+      "useAvatar": "Utilizar este retrato"
     },
     "import": {
       "title": "Importar um amigo",

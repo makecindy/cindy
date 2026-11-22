@@ -11110,6 +11110,11 @@
       "pinned": "Pinned",
       "needsAttention": "Needs attention",
       "duplicate": "Duplicate buddy",
+      "duplicating": "Duplicating buddy…",
+      "duplicateFailed": "Couldn’t duplicate the buddy.",
+      "duplicateModelRequired": "To duplicate this buddy, first choose a default model for buddies in Settings.",
+      "pinFailed": "Couldn’t change the buddy’s pin.",
+      "hideFailed": "Couldn’t change whether the buddy is hidden.",
       "moreActions": "More actions for {{name}}",
       "viewIcons": "Icons",
       "showCollapsedTeammateAvatars": "Show avatars when collapsed",
@@ -12144,46 +12149,15 @@
     },
     "guided": {
       "title": "Create a buddy",
-      "reviewTitle": "Your new buddy",
-      "question": "Briefly describe your expectations.",
-      "placeholder": "For example, help me practice English through everyday conversation and thoughtful corrections.",
       "generate": "Create buddy",
-      "generating": "Shaping your buddy…",
-      "generationFailed": "Could not generate your buddy. Your idea is still here; try again.",
       "modelRequired": "Choose an available model above to continue.",
       "modelFollowsDefault": "Follows the default buddy model.",
       "modelForThisBot": "This selection applies only to this buddy.",
-      "cindyDescription": "I can help you use Cindy, connect your tools, and get things done together.",
-      "cindySummary": "Manage Cindy, connect tools, and get things done.",
-      "openCindy": "Open Cindy",
-      "addCindy": "Add Cindy",
-      "done": "Done",
-      "editName": "Edit name",
       "duplicateName": "That name is taken. Choose a name you can easily tell apart.",
-      "introduction": "About me",
-      "editIntroduction": "Edit introduction",
-      "refine": "Adjust buddy",
-      "refinePlaceholder": "What would you change? For example, less formal and a little more playful.",
-      "back": "Back",
-      "invite": "Invite buddy",
       "portrait": "Portrait {{number}}",
       "upload": "Upload image",
       "generateAvatar": "Generate portrait",
-      "useAvatar": "Use this portrait",
-      "examples": {
-        "english": {
-          "label": "Practice English",
-          "prompt": "Practice English with me through everyday conversation. Be patient and correct unnatural expressions thoughtfully."
-        },
-        "ideas": {
-          "label": "Explore ideas",
-          "prompt": "An imaginative creative partner with opinions, helping me develop writing and product ideas into practical plans."
-        },
-        "life": {
-          "label": "Talk about life",
-          "prompt": "A warm, funny companion who listens to the little things in my life without rushing to give advice."
-        }
-      }
+      "useAvatar": "Use this portrait"
     },
     "import": {
       "title": "Import a buddy",

@@ -11065,6 +11065,11 @@
       "pinned": "已置頂",
       "needsAttention": "需要處理",
       "duplicate": "複製夥伴",
+      "duplicating": "正在複製夥伴…",
+      "duplicateFailed": "未能複製夥伴",
+      "duplicateModelRequired": "複製前請先在設定中為夥伴選擇預設模型",
+      "pinFailed": "未能變更夥伴的置頂狀態",
+      "hideFailed": "未能變更夥伴的隱藏狀態",
       "moreActions": "{{name}} 的更多操作",
       "viewIcons": "圖示",
       "showCollapsedTeammateAvatars": "收起時顯示頭像",
@@ -12099,46 +12104,15 @@
     },
     "guided": {
       "title": "建立夥伴",
-      "reviewTitle": "你的新夥伴",
-      "question": "簡單描述一下你的期待",
-      "placeholder": "例如，陪我練英語，能聊生活，也能認真糾正我的表達。",
       "generate": "產生夥伴",
-      "generating": "正在構思夥伴…",
-      "generationFailed": "暫時無法產生夥伴。你的想法仍保留著，請再試一次。",
       "modelRequired": "請在上方選擇可用模型後繼續。",
       "modelFollowsDefault": "跟隨夥伴預設模型。",
       "modelForThisBot": "此選擇僅用於這位夥伴。",
-      "cindyDescription": "我會幫你使用 Cindy、連接工具，也會和你一起把事情做完。",
-      "cindySummary": "管理 Cindy，連接工具，把事情做完。",
-      "openCindy": "開啟 Cindy",
-      "addCindy": "加入 Cindy",
-      "done": "完成",
-      "editName": "編輯名字",
       "duplicateName": "已有同名夥伴，換一個更容易分辨的名字吧。",
-      "introduction": "自我介紹",
-      "editIntroduction": "編輯自我介紹",
-      "refine": "調整夥伴",
-      "refinePlaceholder": "還想改哪裡？例如，少一點客套，多一點幽默。",
-      "back": "返回",
-      "invite": "邀請夥伴",
       "portrait": "頭像 {{number}}",
       "upload": "上傳圖片",
       "generateAvatar": "產生頭像",
-      "useAvatar": "使用這張",
-      "examples": {
-        "english": {
-          "label": "練習英語",
-          "prompt": "陪我練英語，從日常話題開始，耐心但不敷衍，認真糾正不自然的表達。"
-        },
-        "ideas": {
-          "label": "一起想點子",
-          "prompt": "一個有想像力也有主見的創作夥伴，陪我討論寫作和產品點子，幫我把想法變成具體方案。"
-        },
-        "life": {
-          "label": "聊聊生活",
-          "prompt": "一個溫暖、幽默的夥伴，願意聽我說生活中的小事，不急著給建議。"
-        }
-      }
+      "useAvatar": "使用這張"
     },
     "import": {
       "title": "匯入夥伴",

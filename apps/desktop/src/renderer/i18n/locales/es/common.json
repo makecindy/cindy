@@ -11194,6 +11194,11 @@
       "pinned": "Fijado",
       "needsAttention": "Necesita atención",
       "duplicate": "Duplicar amigo",
+      "duplicating": "Duplicando amigo…",
+      "duplicateFailed": "No se pudo duplicar el amigo.",
+      "duplicateModelRequired": "Para duplicar este amigo, primero elige un modelo predeterminado para los amigos en Configuración.",
+      "pinFailed": "No se pudo cambiar la fijación del amigo.",
+      "hideFailed": "No se pudo ocultar ni mostrar el amigo.",
       "moreActions": "Otras acciones para {{name}}",
       "viewIcons": "Iconos",
       "showCollapsedTeammateAvatars": "Mostrar avatares al contraer",
@@ -12243,46 +12248,15 @@
     },
     "guided": {
       "title": "Crear un amigo",
-      "reviewTitle": "Tu nuevo amigo",
-      "question": "Describe brevemente tus expectativas.",
-      "placeholder": "Por ejemplo, ayúdame a practicar inglés con conversaciones cotidianas y correcciones cuidadosas.",
       "generate": "Crear amigo",
-      "generating": "Dando forma a tu amigo…",
-      "generationFailed": "No se pudo generar tu amigo. Tu idea sigue aquí; vuelve a intentarlo.",
       "modelRequired": "Elige un modelo disponible arriba para continuar.",
       "modelFollowsDefault": "Usa el modelo predeterminado para amigos.",
       "modelForThisBot": "Esta selección se aplica solo a este amigo.",
-      "cindyDescription": "Puedo ayudarte a usar Cindy, conectar tus herramientas y hacer cosas juntos.",
-      "cindySummary": "Administra Cindy, conecta herramientas y haz las cosas.",
-      "openCindy": "Abrir Cindy",
-      "addCindy": "Agregar Cindy",
-      "done": "Listo",
-      "editName": "Editar nombre",
       "duplicateName": "Ese nombre ya está en uso. Elige un nombre que puedas distinguir fácilmente.",
-      "introduction": "Sobre mí",
-      "editIntroduction": "Editar presentación",
-      "refine": "Ajustar amigo",
-      "refinePlaceholder": "¿Qué cambiarías? Por ejemplo, menos formal y un poco más divertido.",
-      "back": "Atrás",
-      "invite": "Invitar amigo",
       "portrait": "Retrato {{number}}",
       "upload": "Subir imagen",
       "generateAvatar": "Generar retrato",
-      "useAvatar": "Usar este retrato",
-      "examples": {
-        "english": {
-          "label": "Practicar inglés",
-          "prompt": "Practica inglés conmigo mediante conversaciones cotidianas. Ten paciencia y corrige con cuidado las expresiones poco naturales."
-        },
-        "ideas": {
-          "label": "Explorar ideas",
-          "prompt": "Un amigo creativo e imaginativo con opiniones propias, que me ayuda a convertir ideas de escritura y de productos en planes prácticos."
-        },
-        "life": {
-          "label": "Hablar de la vida",
-          "prompt": "Un amigo cálido y divertido que escucha los pequeños detalles de mi vida sin apresurarse a dar consejos."
-        }
-      }
+      "useAvatar": "Usar este retrato"
     },
     "import": {
       "title": "Importar un amigo",
