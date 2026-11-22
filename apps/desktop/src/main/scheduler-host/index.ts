@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { Scheduler, type Logger, type FireContext, type PreRunPluginConfig, type Schedule, type ScheduleRunner, type Notifier } from '@cindy/maker-scheduler';
+import { isGitlabMrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import type { Maker } from '@cindy/maker-core';
 import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
 import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
@@ -104,10 +105,12 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         withScheduleLock(schedule.id, ctx.signal, async () => {
           ctx.assertFireContext?.();
           // A timed reconciliation samples the same observer as App and foreground updates.
-          // Existing all-change checks retain their own polling and review/CI pacing.
-          if (ctx.timed && schedule.prTrigger && !(schedule.prTrigger.change === 'any' && schedule.preRunHook)) {
+          // GitHub follow scripts already do their own polling. MR timers sample status
+          // even with a pre-run hook; the hook runs when the observer dispatches work.
+          const trigger = schedule.prTrigger;
+          if (ctx.timed && trigger && (isGitlabMrTriggerUrl(trigger.url) || trigger.change !== 'any' || !schedule.preRunHook)) {
             if (!deps.refreshSchedulePr) throw new Error('PR status lookup is unavailable on this host');
-            await deps.refreshSchedulePr(schedule.prTrigger.url, schedule);
+            await deps.refreshSchedulePr(trigger.url, schedule);
             return { sessionId: '', skipped: true };
           }
           // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。

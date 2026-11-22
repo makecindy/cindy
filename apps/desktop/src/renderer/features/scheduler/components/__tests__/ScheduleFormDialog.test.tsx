@@ -323,6 +323,21 @@ it('saves a single PR with optional timed checks and can remove the rule', async
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
 });
 
+// #12168, unit/jsdom: unlike GitHub, an MR needs a background check even with the task page closed.
+it('enables periodic checks when a GitLab MR is entered in the PR editor', async () => {
+  const form = mount(schedule({}));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));
+  const url = 'https://git.example.test/team/repo/-/merge_requests/7';
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  const timed = screen.getByRole('checkbox', { name: 'scheduler.prTrigger.timed' }) as HTMLInputElement;
+  expect(timed.checked).toBe(true);
+  expect(timed.disabled).toBe(true);
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    manual: false, recurring: true, intervalMs: 300_000, cronExpr: '*/5 * * * *', prTrigger: { url, change: 'any' },
+  }), true));
+});
+
 // PR 11309, unit/jsdom: an event-only PR automation created via the API can have recurring=false.
 // Saving from the real editor must send a valid recurring schedule when timed checks are enabled.
 it('enables recurring timed checks for a saved event-only PR automation', async () => {

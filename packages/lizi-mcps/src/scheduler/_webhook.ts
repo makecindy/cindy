@@ -31,4 +31,4 @@ export function assertWebhookReceiverAvailable(deps: Pick<SchedulerMcpDeps, 'web
 export const schedulePrTriggerSchema = z.strictObject({
   url: z.string().url(),
   change: z.enum(['any', 'merged', 'review', 'ci']),
-}).nullable().optional().describe('在指定 GitHub PR 或 GitLab MR 变化时提前运行。any 包含评论和状态；merged 只在合并时，review 在评审时，ci 在检查变化时。可与重复定时检查并用。null 关闭 PR 提前触发。');
+}).nullable().optional().describe('在指定 GitHub PR 或 GitLab MR 变化时提前运行。any 包含评论和状态；merged 只在合并时，review 在评审时，ci 在检查变化时。GitHub 可选周期补查；GitLab 必须启用重复定时检查（recurring=true、manual=false）。null 关闭 PR 提前触发。');

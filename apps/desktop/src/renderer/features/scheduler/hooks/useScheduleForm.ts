@@ -38,7 +38,7 @@ export { EFFORT_VALUES, isEffortValue } from '../lib/scheduleFormLogic';
 export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFormLogic';
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 
-import { normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
 
 function prFields(schedule: Schedule): Partial<ScheduleFormState> {
   if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
@@ -374,8 +374,19 @@ export interface UseScheduleFormResult {
   validate: () => { key: string; values?: Record<string, string> } | null;
 }
 
+function withMrTiming(form: ScheduleFormState): ScheduleFormState {
+  if (!form.prEnabled || !isGitlabMrTriggerUrl(form.prUrl) || (!form.manual && form.recurring)) return form;
+  // A manual schedule has no active cadence. Start with the MR card's five-minute check.
+  return {
+    ...form,
+    manual: false,
+    recurring: true,
+    ...(form.manual ? { cronExpr: '*/5 * * * *', intervalMs: 300_000 } : {}),
+  };
+}
+
 export function useScheduleForm(initial: Schedule | null = null): UseScheduleFormResult {
-  const [form, setForm] = useState<ScheduleFormState>(() => makeFormFromSchedule(initial));
+  const [form, setForm] = useState<ScheduleFormState>(() => withMrTiming(makeFormFromSchedule(initial)));
   // "记住的真实绑定"快照:三态来回切换(bound → fresh/persistent → bound)时
   // 不丢用户已选/任务已有的绑定 —— 表单切换是非破坏性的,只有保存才落库。
   // 快照含 model/effort 等关联字段:切到 fresh 后空 model 会被回填 effect 填成
@@ -387,7 +398,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
 
   const setField = useCallback(
     <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => {
-      setForm((f) => ({ ...f, [k]: v }));
+      setForm((f) => withMrTiming({ ...f, [k]: v }));
     },
     [],
   );
@@ -417,7 +428,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       next.boundAgent = { sessionId: next.targetSessionId, agentKind: s && s.agentKind !== 'acp' ? s.agentKind : next.agentKind };
     }
     lastBindingRef.current = captureBinding(next);
-    setForm(next);
+    setForm(withMrTiming(next));
   }, []);
 
   const selectPluginEngine = useCallback((selection: PluginEngineSelection) => {

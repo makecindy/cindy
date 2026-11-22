@@ -138,6 +138,19 @@ it('hands a runNow trigger to the runner and leaves manual runs unmarked', async
   await h.scheduler.stop();
 });
 
+// #12168, unit: a manual GitLab MR has no event source once its task page is closed.
+// Exercise both writes, including a timing-only patch that omits the saved trigger.
+it('requires periodic checks when creating or updating a GitLab MR trigger', async () => {
+  const h = makeHarness();
+  const prTrigger = { url: 'https://git.example.test/team/repo/-/merge_requests/7', change: 'any' as const };
+  await expect(h.scheduler.create({ ...baseInput, prTrigger, manual: true })).rejects.toThrow(/recurring/i);
+  const schedule = await h.scheduler.create({ ...baseInput, prTrigger });
+  expect(schedule.nextFireAt).toBeDefined();
+  await expect(h.scheduler.update(schedule.id, { manual: true })).rejects.toThrow(/recurring/i);
+  await expect(h.scheduler.update(schedule.id, { recurring: false })).rejects.toThrow(/recurring/i);
+  expect(await h.storage.get(schedule.id)).toMatchObject({ nextFireAt: schedule.nextFireAt, recurring: true });
+});
+
 // Regression: quitting while a runner is active must preserve an interrupted run,
 // even when closing the provider produces a late rejection. Unit, in-memory I/O.
 it('preserves interrupted runs on app exit instead of recording a provider-close failure', async () => {

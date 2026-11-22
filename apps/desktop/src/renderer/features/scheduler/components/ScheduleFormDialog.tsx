@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { Select } from '@/components/ui/select';
-import { PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
+import { isGitlabMrTriggerUrl, PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -1314,7 +1314,7 @@ export function ScheduleFormDialog({
                               onValueChange={value => setField('prChange', value as PrChange)} />}
                           </FormField>
                           <label className="flex items-center gap-2 text-13 text-[var(--text-primary)]">
-                            <Checkbox checked={!form.manual} onChange={event => {
+                            <Checkbox disabled={isGitlabMrTriggerUrl(form.prUrl)} checked={!form.manual} onChange={event => {
                               const enabled = event.currentTarget.checked;
                               setField('manual', !enabled);
                               if (enabled) setField('recurring', true);
