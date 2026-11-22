@@ -295,6 +295,16 @@ export async function stopBotImConnections(): Promise<void> {
 
 /** Match an existing session link against the verified, currently connected direct chat. */
 export function getBotIMessageDirectTarget(botId: string, routeKey: string | null) {
+  const target = resolveBotIMessageTarget(botId, routeKey);
+  return target && /^(?:any|iMessage);-;/.test(target.chat) && !target.im.isGroup(target.chat) ? target : null;
+}
+
+/** The connected iMessage chat a teammate's channel lane (private chat or group) talks in. */
+export function getBotIMessageLaneTarget(botId: string, routeKey: string) {
+  return resolveBotIMessageTarget(botId, routeKey);
+}
+
+function resolveBotIMessageTarget(botId: string, routeKey: string | null) {
   const connections = listBotImConnectionsForBot(botId).filter(record => record.channel === 'imessage');
   // The canonical task has no connection identity of its own.
   if (routeKey === null && connections.length !== 1) return null;
@@ -305,9 +315,7 @@ export function getBotIMessageDirectTarget(botId: string, routeKey: string | nul
     const { im, orchestrator } = live.transport;
     if (im.getStatus().kind !== 'connected' || !im.connectedOrigin) continue;
     const chat = routeKey === null ? im.getOwnerUserId() : orchestrator.adapter.connectedChatForLane?.(botId, routeKey);
-    if (chat && /^(?:any|iMessage);-;/.test(chat) && !im.isGroup(chat)) {
-      matches.push({ im, chat, connection: record.id, origin: im.connectedOrigin });
-    }
+    if (chat) matches.push({ im, chat, connection: record.id, origin: im.connectedOrigin });
   }
   return matches.length === 1 ? matches[0] : null;
 }
