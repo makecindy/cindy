@@ -769,7 +769,7 @@ interface ActiveTurn {
   /** maker-core turn generation captured at vendor dispatch; leftover reclaim must match it. */
   vendorTurnGeneration: number | null;
   /** Already-durable Worker input for stream failure while a steer row is still being saved. */
-  workerRecoverySource?: { runtime: object; item: AgentInputQueuedMessage };
+  workerRecoverySource?: { runtime: object; item: AgentInputQueuedMessage; signal: AbortSignal };
   /**
    * `vendorTurnGeneration` before a host continuation adopted a newer one
    * (见 noteHostTurnContinuation)。续跑 send 在派发确认前失败时用它还原绑定；
@@ -2931,6 +2931,7 @@ export class AgentInputCoordinator {
     }
     const steerAbort = new AbortController();
     const inputBoundarySignal = this.getInputAbortSignal(sessionId, steerGeneration);
+    let workerRecoverySource: ActiveTurn['workerRecoverySource'];
     this.registerSteerAbortController(sessionId, item.clientId, steerAbort);
     // Steering may be accepted without an observable ACK. Persist the report as
     // non-replayable before handing it to the provider, including crash windows.
@@ -3067,6 +3068,28 @@ export class AgentInputCoordinator {
         taskActionInputGuard(sessionId, item),
         beforeMutation ? assertSteerAuthority : undefined,
       );
+      const workerInputs = this.deps.workerInputs;
+      if (workerInputs && steerVendorTurnGeneration !== null && steerRuntime &&
+          this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration &&
+          this.deps.getTurnSessionIdentity?.(sessionId) === steerRuntime) {
+        // Carry host verification across an accepted same-turn input replacement.
+        // Direct assignments do not have an active coordinator item until steered.
+        const previous = current.activeTurn;
+        const receipt = this.directWorkerReceipts.get(steerRuntime);
+        let workerSource: AgentInputQueuedMessage | null | undefined;
+        if (previous) {
+          if (previous.vendorTurnGeneration === steerVendorTurnGeneration && !previous.stopped) {
+            const durableSource = previous.workerRecoverySource;
+            workerSource = previous.persisted ? previous.item
+              : durableSource?.runtime === steerRuntime && !durableSource.signal.aborted ? durableSource.item : null;
+          }
+        } else if (receipt && receipt.generation === steerVendorTurnGeneration && !receipt.signal.aborted) {
+          workerSource = receipt.item;
+        }
+        if (workerSource && workerInputs.has(workerSource.createOpts)) {
+          workerRecoverySource = { runtime: steerRuntime, item: workerSource, signal: inputBoundarySignal };
+        }
+      }
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts, {
         sendToSession: this.deps.sendToSessionHint?.(sessionId, 'live'),
       }), {
@@ -3265,7 +3288,12 @@ export class AgentInputCoordinator {
       steerGeneration,
       steerRequestToken,
     );
-    if (!ownsCurrentSteerMarker) {
+    const preservesWorkerRecovery = workerRecoverySource !== undefined &&
+      accepted.recovery?.kind === 'active-turn' &&
+      accepted.recovery.item?.clientId === workerRecoverySource.item.clientId &&
+      this.isContinuationOnlyAutoResume(sessionId);
+    if (!ownsCurrentSteerMarker || preservesWorkerRecovery) {
+      this.clearSteeringMarker(accepted, item.clientId, { generation: steerGeneration, token: steerRequestToken });
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
       if (
         accepted.generation !== steerGeneration ||
@@ -3312,6 +3340,7 @@ export class AgentInputCoordinator {
         continuationOwnerClientId: null,
         vendorTurnGeneration:
           typeof steerVendorTurnGeneration === 'number' ? steerVendorTurnGeneration : null,
+        workerRecoverySource,
       };
       const persisted = await this.persistAcceptedUserMessage(sessionId, detachedAcceptedTurn);
       if (opts?.touchUserSend && persisted === 'persisted') this.touchUserSend(sessionId);
@@ -3353,28 +3382,11 @@ export class AgentInputCoordinator {
     const sameVendorTurn =
       steerVendorTurnGeneration !== null &&
       this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
-    const workerInputs = this.deps.workerInputs;
-    let workerRecoverySource: ActiveTurn['workerRecoverySource'];
-    if (workerInputs && sameVendorTurn && steerRuntime &&
-        this.deps.getTurnSessionIdentity?.(sessionId) === steerRuntime) {
-      // Carry host verification across an accepted same-turn input replacement.
-      // Direct assignments do not have an active coordinator item until steered.
-      const previous = accepted.activeTurn;
-      const receipt = this.directWorkerReceipts.get(steerRuntime);
-      let workerSource: AgentInputQueuedMessage | null | undefined;
-      if (previous) {
-        if (previous.vendorTurnGeneration === steerVendorTurnGeneration && !previous.stopped) {
-          const durableSource = previous.workerRecoverySource;
-          workerSource = previous.persisted ? previous.item
-            : durableSource?.runtime === steerRuntime ? durableSource.item : null;
-        }
-      } else if (receipt && receipt.generation === steerVendorTurnGeneration && !receipt.signal.aborted) {
-        workerSource = receipt.item;
-      }
-      if (workerSource && workerInputs.has(workerSource.createOpts)) {
-        workerInputs.add(item.createOpts);
-        workerRecoverySource = { runtime: steerRuntime, item: workerSource };
-      }
+    if (sameVendorTurn && workerRecoverySource && !workerRecoverySource.signal.aborted &&
+        this.deps.getTurnSessionIdentity?.(sessionId) === workerRecoverySource.runtime) {
+      this.deps.workerInputs?.add(item.createOpts);
+    } else {
+      workerRecoverySource = undefined;
     }
     accepted.activeTurn = {
       // Only accepted steering participates. Pending/rejected delivery cannot claim an unrelated final.
@@ -3506,6 +3518,8 @@ export class AgentInputCoordinator {
     if (state.autoResumePending?.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) state.autoResumePending = null;
     this.cancelPreparedAutoResume(sessionId, state);
     if (state.activeTurn?.reconnectRecovery) state.activeTurn.stopped = true;
+    const activeWorkerSteer = state.activeTurn?.workerRecoverySource && state.activeTurn.item;
+    if (activeWorkerSteer) this.deps.workerInputs?.delete(activeWorkerSteer.createOpts);
     this.abortInputBoundary(sessionId);
     this.abortSteerTransactions(sessionId);
     this.clearAbortReconcileRetry(state);
@@ -4728,7 +4742,8 @@ export class AgentInputCoordinator {
       // already-durable input of this turn without waiting for the steer row.
       const steerRecovery = active?.workerRecoverySource;
       const pendingSteerWorkerItem =
-        active && !active.persisted && !active.stopped && steerRecovery && runtime === steerRecovery.runtime &&
+        active && !active.persisted && !active.stopped && steerRecovery && !steerRecovery.signal.aborted &&
+        runtime === steerRecovery.runtime &&
         meta?.sessionInstanceId && meta.sessionInstanceId === readSessionInstanceId(runtime) &&
         meta.sessionTurnGeneration === active.vendorTurnGeneration &&
         isUnexpectedWorkerStreamEnd({ ...signals, message })

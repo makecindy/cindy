@@ -14576,7 +14576,10 @@ describe('Orca report durable recovery', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it.each(['write-succeeds', 'write-fails', 'failed-before-eof', 're-steered-after-write-failure', 'requested-close'] as const)(
+  it.each([
+    'write-succeeds', 'write-fails', 'failed-before-eof', 're-steered-after-write-failure',
+    'requested-close', 'stop-before-eof',
+  ] as const)(
     'settles Worker EOF during an accepted steer write (%s)', async outcome => {
       vi.useFakeTimers();
       const steerWrite = deferred<void>();
@@ -14611,6 +14614,7 @@ describe('Orca report durable recovery', () => {
             { session: runtime, turnGeneration: 1 })).resolves.toBe('steered');
         }
 
+        if (outcome === 'stop-before-eof') h.coordinator.stop('worker');
         h.setRunning(false);
         h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
           { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
@@ -14623,7 +14627,7 @@ describe('Orca report durable recovery', () => {
         else steerWrite.resolve();
         await expect(steering).resolves.toBe('steered');
         await vi.advanceTimersByTimeAsync(10_000);
-        if (outcome === 'requested-close') {
+        if (outcome === 'requested-close' || outcome === 'stop-before-eof') {
           expect(h.sendToAgent).not.toHaveBeenCalled();
           return;
         }
@@ -14635,6 +14639,48 @@ describe('Orca report durable recovery', () => {
       }
     },
   );
+
+  it.each([false, true])('retains Worker recovery after an EOF races steer ACK (runtime closed: %s)', async closes => {
+    vi.useFakeTimers();
+    const ack = deferred<void>();
+    try {
+      const workerInputs = new WeakSet<object>();
+      const h = createHarness({ workerInputs });
+      wireHostReportRecovery(h, workerInputs);
+      const runtime = { instanceId: 'worker-runtime' };
+      h.setTurnSessionIdentity(runtime);
+      h.setTurnGeneration(1);
+      h.setRunning(true);
+      const assignment = makeItem('assignment', 'Apply the approved change');
+      assignment.createOpts.orcaRole = 'worker';
+      workerInputs.add(assignment.createOpts);
+      h.coordinator.rememberDirectWorkerInput(runtime, 1, assignment, h.coordinator.getInputAbortSignal('worker'));
+      const atProvider = deferred<void>();
+      h.steerToAgent.mockImplementationOnce(async () => {
+        atProvider.resolve();
+        await ack.promise;
+      });
+      const steering = h.coordinator.steerControlInput('worker',
+        { item: makeItem('steer', 'Clarify the assignment') }, { session: runtime, turnGeneration: 1 });
+      await atProvider.promise;
+      h.setRunning(false);
+      h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
+        { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
+      if (closes) {
+        h.coordinator.onSessionClosed('worker', { preserveAutoResumeIntent: true });
+        h.setTurnSessionIdentity({ instanceId: 'replacement' });
+      }
+      mocks.createMessage.mockRejectedValueOnce(new Error('steer row unavailable'));
+      ack.resolve();
+      await expect(steering).resolves.toBe('steered');
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+      expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+    } finally {
+      ack.resolve();
+      vi.useRealTimers();
+    }
+  });
 
   it.each(['ordinary-task', 'stopped', 'replaced-runtime', 'new-turn'] as const)(
     'does not transfer Worker recovery to an accepted steer after %s', async boundary => {
