@@ -3,13 +3,13 @@ import os from 'node:os';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ rows: [] as unknown[][] }));
+const state = vi.hoisted(() => ({ rows: [] as unknown[][], snapshots: [] as Array<{ resolvedJson: string }> }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: { select: () => {
   const q: Record<string, unknown> = {};
   for (const method of ['from', 'innerJoin', 'leftJoin', 'where', 'orderBy']) q[method] = () => q;
   q.limit = async () => state.rows.shift() ?? [];
   return q;
-} } }) }));
+} }, tx: async (_name: string, payload: { snapshot: { resolvedJson: string } }) => { state.snapshots.push(payload.snapshot); } }) }));
 
 import { hydrateBotProfileRuntime } from '../botProfileRuntime';
 import { MemoryStorage, memoryScopeDirName, resolveMemoryScopeKey } from '@cindy/maker-core';
@@ -424,6 +424,60 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(classic.botRuntimeProfile?.projectContext).toBeUndefined();
     expect(classic.makerMemoryScopeKey).toBe('bot:bot');
     expect(classic.extraDirs).toBeUndefined();
+  });
+
+  // A V2 session mounts the ordinary task's MCP and plugins, so its own catalogs only shape the snapshot:
+  // an unreadable catalog must not keep the teammate from answering. A classic teammate still fails closed.
+  it('starts a V2 teammate when its capability catalogs cannot be read, classic teammates still refuse', async () => {
+    const deps = {
+      readProfileFolder: async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' }),
+      listMcpServers: async () => { throw new Error('catalog offline'); },
+      listToolsets: async () => { throw new Error('registry offline'); },
+    };
+    seed('canonical', null, { memory: false, projectMode: true });
+    const v2 = { id: 'main', agentKind: 'codex', workingDir: path.resolve('/bots/bot/workspace'), model: 'm' } as MakerSessionCreateOpts;
+    await expect(hydrateBotProfileRuntime(v2, deps, { persistSnapshot: false })).resolves.not.toBeNull();
+    expect(v2.botRuntimeProfile?.projectContext).toBe(true);
+    seed('canonical', null, { memory: false });
+    const classic = { id: 'main', agentKind: 'codex', workingDir: path.resolve('/bots/bot/workspace'), model: 'm' } as MakerSessionCreateOpts;
+    await expect(hydrateBotProfileRuntime(classic, deps, { persistSnapshot: false })).rejects.toThrow('MCP 能力目录');
+  });
+
+  // Review (#12145): an unreadable catalog must not look like a change. Otherwise a working V2 session is
+  // rebuilt at the next send, and again once the catalog recovers. Last known resources are kept.
+  it('keeps the runtime epoch of a V2 teammate across an unreadable catalog and its recovery', async () => {
+    const healthy = {
+      readProfileFolder: async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' }),
+      listMcpServers: async () => [{ name: 'cindy_helper', available: true, generation: 'g1' }],
+      listToolsets: async () => [{ id: 'docs', name: 'Docs', available: true, version: '1' }],
+    };
+    const broken = { ...healthy,
+      listMcpServers: async () => { throw new Error('catalog offline'); },
+      listToolsets: async () => { throw new Error('registry offline'); } };
+    const run = async (deps: typeof healthy, previous?: string) => {
+      seed('canonical', null, { memory: false, projectMode: true });
+      state.rows.push(previous ? [{ profileVersion: 3, resolvedJson: previous }] : []);
+      const opts = { id: 'main', agentKind: 'codex', workingDir: path.resolve('/bots/bot/workspace'), model: 'm' } as MakerSessionCreateOpts;
+      const snapshot = await hydrateBotProfileRuntime(opts, deps as never);
+      return { changed: snapshot?.runtimeEpochChanged, resolvedJson: state.snapshots.at(-1)!.resolvedJson };
+    };
+    const first = await run(healthy);
+    const failed = await run(broken, first.resolvedJson);
+    expect(failed.changed).toBe(false);
+    const failedAgain = await run(broken, failed.resolvedJson);
+    expect(failedAgain.changed).toBe(false);
+    expect((await run(healthy, failedAgain.resolvedJson)).changed).toBe(false);
+  });
+
+  // Review (#12145): the toolset branch on its own still fails closed for a classic teammate.
+  it('refuses a classic teammate whose toolset catalog alone cannot be read', async () => {
+    seed('canonical', null, { memory: false });
+    const classic = { id: 'main', agentKind: 'codex', workingDir: path.resolve('/bots/bot/workspace'), model: 'm' } as MakerSessionCreateOpts;
+    await expect(hydrateBotProfileRuntime(classic, {
+      readProfileFolder: async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' }),
+      listMcpServers: async () => [],
+      listToolsets: async () => { throw new Error('registry offline'); },
+    }, { persistSnapshot: false })).rejects.toThrow('工具能力目录');
   });
 
   it('still refuses read-only history links', async () => {
