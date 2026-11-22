@@ -1793,6 +1793,244 @@ describe('Scheduler', () => {
     await local.scheduler.stop();
   });
 
+  // Greptile P1 on #12087:退役只换了登记,没作废旧读已挂上的迟到收口。恢复轮
+  // 发出新读 C 等待期间,旧读 B 先返回同版本的另一对象 —— 收口把守卫换成 B,
+  // 随后 C 的更新回包因身份闸(`=== previous`)失败被丢,守卫停在旧 deadline,
+  // 排队中的 run 在用户过期之后仍被放行,直到下一轮同步。
+  it('drops a retired guard read that settles while the replacement is in flight', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      logger: { warn: vi.fn() },
+      runnerImpl: async () => new Promise<FireResult>(() => {}),
+    });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 15_000, expireAt: createdAt + 180_000,
+    });
+
+    local.clock.setTo(schedule.nextFireAt!);
+    void local.scheduler.tick().catch(() => undefined);
+    for (let i = 0; i < 100 && local.fireCalls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(local.fireCalls).toHaveLength(1);
+
+    const expiredRow: Schedule = {
+      ...schedule,
+      status: 'expired',
+      nextFireAt: undefined,
+      expireAt: createdAt + 60_000,
+      updatedAt: createdAt + 90_000,
+    };
+    // 同版本的另一对象:updatedAt/expireAt 与本地守卫一致,只是对象不同。
+    const sameVersionTwin: Schedule = { ...schedule };
+
+    let resolveOrphan!: (value: Schedule | null) => void;
+    let resolveReplacement!: (value: Schedule | null) => void;
+    let recovered = false;
+    let reads = 0;
+    vi.spyOn(local.storage, 'listActive').mockImplementation(() =>
+      recovered ? Promise.resolve([]) : new Promise<Schedule[]>(() => {}));
+    vi.spyOn(local.storage, 'get').mockImplementation((id: string) => {
+      if (id !== schedule.id) return Promise.resolve(null);
+      reads += 1;
+      if (reads === 1) {
+        return new Promise<Schedule | null>((resolve) => { resolveOrphan = resolve; });
+      }
+      return new Promise<Schedule | null>((resolve) => { resolveReplacement = resolve; });
+    });
+
+    // 楔住:孤儿读 B 发出并挂上收口。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(reads).toBe(1);
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+
+    // 恢复:listActive 应答(行已过期不在结果里),换发新读 C —— C 还在途。
+    recovered = true;
+    local.storage.schedules.set(schedule.id, expiredRow);
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(reads).toBe(2);
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(true);
+
+    // 旧读 B 在 C 等待期间返回同版本的另一对象:它的收口必须作废。
+    resolveOrphan(sameVersionTwin);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 新读 C 带回过期行:身份闸必须仍然成立(守卫没被 B 换掉)。
+    resolveReplacement(expiredRow);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(local.fireCalls[0]!.ctx.canDispatch?.()).toBe(false);
+    await local.scheduler.stop();
+  });
+
+  // Codex P2 on #12087:过期写入的压制登记只有 settle/stop 才清。写入永不 settle、
+  // 而 listActive 恢复后仍返回同版本的 active 行(写入没落地)时,恢复后的每个
+  // tick 都在「还有在途写入」处退出,过期写入永远发不出去 —— 持久行和 changed
+  // 事件保持 active 直到重启。
+  it('re-issues an expire write after listActive recovers with the row still active', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 30, logger: { warn: vi.fn() } });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    const schedule = await local.scheduler.create({
+      ...baseInput, intervalMs: 3_600_000, expireAt: createdAt + 2_000,
+    });
+
+    const realUpdate = local.storage.update.bind(local.storage);
+    let expireWrites = 0;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) => {
+      if (patch.status === 'expired') {
+        expireWrites += 1;
+        // 第一次过期写入永不 settle(存储局部挂死的形态);listActive 仍正常应答。
+        if (expireWrites === 1) return new Promise<Schedule | null>(() => {});
+      }
+      return realUpdate(id, patch, expected);
+    });
+
+    // 第一轮:到点 → 过期写入发起后卡死;批量读仍返回同版本的 active 行。
+    local.clock.setTo(createdAt + 2_000);
+    await local.scheduler.tick();
+    expect(expireWrites).toBe(1);
+    expect((await local.storage.get(schedule.id))?.status).toBe('active');
+
+    // 恢复轮:listActive 应答且仍含同版本的 active 行 → 孤儿写入必须被淘汰,
+    // 同一轮里重新发出过期写入(这次成功)。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(expireWrites).toBe(2);
+    expect((await local.storage.get(schedule.id))?.status).toBe('expired');
+
+    await local.scheduler.stop();
+  });
+
+  // Codex P2 on #12087:清扫的单飞登记没有代次。markRunningAsInterrupted 永不
+  // settle、listActive 随后从失败恢复时,在途的那份孤儿清扫把之后每个 30 秒同步
+  // 挡在门外,别的实例崩溃留下的 running 行与认领后 nextFireAt 为空的任务永远无人收。
+  it('re-starts the stale-run sweep after listActive recovers past a wedged sweep', async () => {
+    const local = makeHarness({
+      preGateStorageTimeoutMs: 30,
+      logger: { warn: vi.fn(), info: vi.fn() },
+    });
+    await local.scheduler.start();
+    await local.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+
+    let sweepCalls = 0;
+    vi.spyOn(local.storage, 'markRunningAsInterrupted').mockImplementation(() => {
+      sweepCalls += 1;
+      return new Promise<string[]>(() => {});
+    });
+    let bulkFailed = false;
+    const realListActive = local.storage.listActive.bind(local.storage);
+    vi.spyOn(local.storage, 'listActive').mockImplementation(() =>
+      bulkFailed ? new Promise<Schedule[]>(() => {}) : realListActive());
+
+    // 与既有 single-flight 用例同序:先推进 lastTickAt,再让清扫在窗口内发出并卡死。
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(sweepCalls).toBe(0);
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(sweepCalls).toBe(1);
+
+    // 批量读也挂死一代(代次冻结,在途清扫仍被压制)。
+    bulkFailed = true;
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(sweepCalls).toBe(1);
+
+    // 批量读从失败恢复 → 代次前进,孤儿清扫退役,重新发起。
+    bulkFailed = false;
+    local.clock.advance(30_000);
+    await local.scheduler.tick();
+    expect(sweepCalls).toBe(2);
+
+    await local.scheduler.stop();
+  });
+
+  // Codex P2 on #12087:补排的在途登记没有代次。同一凭据的补排永不 settle、
+  // listActive 随后从失败恢复时,后续每个 tick 都跳过同一凭据 —— 认领过的任务
+  // nextFireAt 已空,批量重载不会重算,周期任务停摆到进程重启。
+  it('retries the same replan credential after listActive recovers past a wedged attempt', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        runnerImpl: (_s, ctx) => new Promise<FireResult>(() => {
+          ctx.signal.addEventListener('abort', () => {});
+        }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      const realGet = h.storage.get.bind(h.storage);
+      const realListActive = h.storage.listActive.bind(h.storage);
+      let replanReads = 0;
+      // 'fail' 这次没做成(凭据上膛)、'wedge' 永久挂死、'retry' 恢复后照常。
+      let getMode: 'fail' | 'wedge' | 'retry' | 'real' = 'real';
+      let bulkFailed = false;
+      vi.spyOn(h.storage, 'get').mockImplementation((id: string) => {
+        if (id !== sch.id) return realGet(id);
+        // 只拦补排路径:强杀后 fireOne 仍挂着,遗留派发守卫在 listActive 超时时
+        // 会走 getGuardFallbackRead,那条读不该计入补排计数、也不该被楔住。
+        if (!(new Error().stack ?? '').includes('applyStalledClaimReplan')) return realGet(id);
+        if (getMode === 'real') return realGet(id);
+        replanReads += 1;
+        if (getMode === 'fail') {
+          getMode = 'wedge';
+          return Promise.reject(new Error('storage unavailable'));
+        }
+        if (getMode === 'wedge') return new Promise<Schedule | null>(() => {});
+        return realGet(id);
+      });
+      vi.spyOn(h.storage, 'listActive').mockImplementation(() =>
+        bulkFailed ? new Promise<Schedule[]>(() => {}) : realListActive());
+
+      // 第一轮 run:跑挂 → 强制收口那次的补排失败(凭据上膛)。
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      getMode = 'fail';
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(replanReads).toBe(1);
+
+      // 补排重试永久挂死:登记留下,同凭据不再重发(批量读也还健康,代次未动)。
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanReads).toBe(2);
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+
+      // 批量读失败一代(代次冻结,在途补排仍被压制)。DB sync 每 30s 才跑,
+      // 必须推进调度器时钟让这一轮真正读到 listActive。
+      bulkFailed = true;
+      h.clock.advance(30_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanReads).toBe(2);
+
+      // 批量读从失败恢复 → 代次前进,同一凭据必须重试并补上排期。
+      bulkFailed = false;
+      getMode = 'retry';
+      h.clock.advance(30_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanReads).toBe(3);
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toEqual(expect.any(Number));
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Codex P2 on #11577:守卫回读按任务单飞之后,在途的那一次读可能发端于本地快照
   // 前进之前。用户改短截止时间,update() 换掉 automaticDispatchSchedules 里的那一版
   // (updatedAt 前进),而单飞复用的旧读回来的是改期前那一行(更长的 expireAt);

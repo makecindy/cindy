@@ -596,13 +596,24 @@ export class Scheduler extends EventEmitter {
   private readonly passive: boolean;
   private lastDbSyncAt = 0;
   /**
-   * 成功 `listActive()` 的代次(见 tick 的 DB sync 块)。在途单飞回读按登记时的
-   * 代次比:登记之后 listActive 成功过,那份读就可能已是永不 settle 的孤儿,下次
-   * 需要时退役换新(getGuardFallbackRead / getExpiryFallbackRead)。存储整体楔住时
-   * listActive 不成功、代次不前进,单飞复用照旧 —— 故障期间未完成的 RPC 仍是一条
-   * 任务一份(Codex P2 on #11577)。
+   * `listActive()` **从失败恢复成功**时前进的代次(见 tick 的 DB sync 块)。
+   *
+   * 只在「上次失败、这次成功」时 +1:存储一直健康时它不动,单飞登记照旧只等
+   * settle —— listActive 正常而某一条 RPC 挂死属于局部故障,那期间未完成的调用
+   * 仍是一条任务一份,不重新打开无界增长的口子(Codex P2 on #11577 的既有回归)。
+   * 整体楔住期间它冻结,恢复的那一次让它前进,登记在旧代次上的孤儿
+   * (守卫回读 / 过期写入压制 / 清扫 / 补排)下次被需要时退役换新
+   * (Codex P2 on #12087)。
    */
   private listActiveGeneration = 0;
+  /** 上一次 `listActive()` 是否失败;恢复成功时翻回 false 并推进代次。 */
+  private listActiveFailed = false;
+  /**
+   * 每条任务最近一次**发出**的守卫回读的签发记号(见 armGuardLateApply)。
+   * getGuardFallbackRead 发新读时换新;读 settle 后不删 —— 它要活到旧读的
+   * 迟到收口跑完,才能把已退役读的回调作废(Greptile P1 on #12087)。
+   */
+  private readonly guardReadIssueTokens = new Map<string, object>();
 
   // ── 并发闸门状态 ──────────────────────────────────────────────────────────
   // fireOne / runNow 包装层在第一次 await 前同步写入 attempts，tick 直接读取 Map.size。
@@ -662,7 +673,11 @@ export class Scheduler extends EventEmitter {
    * 顶替了旧条目,旧那一轮还挂在存储里的补排不能继续把新 run 的补排挡掉
    * (Codex P1 on #11577)。
    */
-  private readonly inFlightReplans = new Map<string, { startedAt: number; attempt: Promise<void> }>();
+  private readonly inFlightReplans = new Map<string, {
+    startedAt: number;
+    attempt: Promise<void>;
+    generation: number;
+  }>();
   /**
    * 在途的派发守卫回读(key = scheduleId)。批量 listActive 超时后每条守卫都要
    * 回读一次(Codex P2 on #11577),而读同样可能挂死:不登记在途读的话,之后每个
@@ -677,9 +692,11 @@ export class Scheduler extends EventEmitter {
    * 在途的僵尸清扫。与 inFlightReplans 同一类问题:markRunningAsInterrupted 永不
    * settle 时,预闸门超时只放弃「等」,活儿还在跑 —— 而清扫挂在每个 30 秒的 DB sync
    * 块里,之后每一轮都会再起一份,存储故障期间挂起的 DB/RPC 工作无界增长,把认领和
-   * 过期写入的调用也挤掉(Codex P2 on #11577)。在途的那一份不再重入,settle 后清位。
+   * 过期写入的调用也挤掉(Codex P2 on #11577)。在途的那一份不再重入,settle 后清位;
+   * 值带登记时的恢复代次:listActive 从失败恢复后,登记在旧代次上的孤儿清扫退役换新
+   * (Codex P2 on #12087)。
    */
-  private inFlightSweep: Promise<void> | undefined;
+  private inFlightSweep: { sweep: Promise<void>; generation: number } | undefined;
   /**
    * 严格 cron 解析上线前可能落库的畸形 active 任务。清空 nextFireAt 若遇到存储故障，
    * 周期 DB 同步仍会读回旧的到期时间；在用户修正表达式前必须持续把它们隔离在内存里。
@@ -915,6 +932,8 @@ export class Scheduler extends EventEmitter {
     // 在途的守卫回读同理:挂死的读不能跨生命周期留着,否则新主人一直复用上一段
     // 生命周期那一份永远不 settle 的读。
     this.inFlightGuardReads.clear();
+    this.guardReadIssueTokens.clear();
+    this.listActiveFailed = false;
     this.emitRuntimeState();
     await Promise.all(interrupted.map(async (run) => {
       await this.storage.updateRun(run.runId, {
@@ -966,14 +985,22 @@ export class Scheduler extends EventEmitter {
             'listActive',
           );
         } catch (err) {
-          if (!(err instanceof StorageAwaitTimeoutError)) throw err;
+          if (!(err instanceof StorageAwaitTimeoutError)) {
+            this.listActiveFailed = true;
+            throw err;
+          }
           listActiveTimeout = err;
         }
         if (this.tickHandle !== tickHandle) return;
         if (actives) {
-          // 批量读成功落地 = 存储至少应答过一次。代次前进,此前登记的在途单飞读
-          // 在下次被需要时退役(见 getGuardFallbackRead / getExpiryFallbackRead)。
-          this.listActiveGeneration += 1;
+          // 从失败恢复:上次 listActive 没应答、这次应答了 = 存储整体恢复。
+          // 代次前进,登记在旧代次上的在途孤儿(单飞读 / 过期写压制 / 清扫 /
+          // 补排)下次被需要时退役换新(Codex P2 on #12087)。一直健康时不动,
+          // 局部单条 RPC 挂死仍走单飞压制(Codex P2 on #11577)。
+          if (this.listActiveFailed) {
+            this.listActiveGeneration += 1;
+            this.listActiveFailed = false;
+          }
           const previousSchedules = new Map(this.activeSchedules);
           this.activeSchedules.clear();
           const activeIds = new Set(actives.map((sch) => sch.id));
@@ -981,6 +1008,14 @@ export class Scheduler extends EventEmitter {
             if (!activeIds.has(scheduleId)) this.invalidScheduleIds.delete(scheduleId);
           }
           for (const sch of actives) {
+            // 存储能应答、批量结果仍含同版本的 active 行 = 那次过期写入没落地
+            // (可能是永不 settle 的孤儿)。压制登记只有 settle/stop 才清,不淘汰
+            // 的话恢复后每个 tick 都在「还有在途写入」处退出,过期写入永远发不出去
+            // (Codex P2 on #12087)。写入若即将落地,重复一次 UPDATE 由版本判据兜住。
+            const pendingWrite = this.pendingExpireWrites.get(sch.id);
+            if (pendingWrite && pendingWrite.version <= sch.updatedAt) {
+              this.pendingExpireWrites.delete(sch.id);
+            }
             const previous = previousSchedules.get(sch.id);
             const cadenceChanged =
               !previous ||
@@ -991,6 +1026,9 @@ export class Scheduler extends EventEmitter {
             const current = this.keepInvalidScheduleQuarantined(sch, now, cadenceChanged);
             this.activeSchedules.set(current.id, current);
           }
+        } else {
+          // 批量读超时:存储没能应答,标失败;下次成功时按恢复推进代次。
+          this.listActiveFailed = true;
         }
         // Other instances can edit the deadline while a claimed run waits in
         // its runner. Include rows that have just left listActive after expiry.
@@ -1337,10 +1375,10 @@ export class Scheduler extends EventEmitter {
    * 取一条任务在途的过期回读(CAS 败者后的那一次)。同一任务只保留一份:回读卡死
    * 时后续 tick 复用它,既不丢它最终的结果,也不堆出无界的读(Codex P1 on #11577)。
    *
-   * 复用只在「登记之后 listActive 没有成功过」时成立。代次前进说明存储已经能应答,
-   * 此时还抱着那份可能永不 settle 的孤儿读,这一行的最新状态就永远对齐不进来
-   * (Codex P2 on #11577)。代次不前进(存储整体楔住)时照旧复用:故障期间未完成
-   * 的 RPC 仍是一条任务一份,不重新打开无界增长的口子。
+   * 复用只在「登记之后 listActive 没有从失败恢复」时成立。代次前进说明存储从
+   * 故障中恢复应答,此时还抱着那份可能永不 settle 的孤儿读,这一行的最新状态就
+   * 永远对齐不进来(Codex P2 on #11577 / #12087)。代次不前进(一直健康或整体
+   * 楔住)时照旧复用:未完成的 RPC 仍是一条任务一份,不重新打开无界增长的口子。
    */
   private getExpiryFallbackRead(scheduleId: string): Promise<Schedule | null> {
     const existing = this.pendingExpireReads.get(scheduleId);
@@ -1371,6 +1409,9 @@ export class Scheduler extends EventEmitter {
     const existing = this.inFlightGuardReads.get(scheduleId);
     if (existing && existing.generation >= this.listActiveGeneration) return existing.read;
     const read = this.storage.get(scheduleId);
+    // 换发新读 = 退役旧读:签发记号换新,旧读已挂上的迟到收口在回包时作废
+    // (Greptile P1 on #12087)。
+    this.guardReadIssueTokens.set(scheduleId, {});
     this.inFlightGuardReads.set(scheduleId, { read, generation: this.listActiveGeneration });
     const clear = () => {
       const current = this.inFlightGuardReads.get(scheduleId);
@@ -1392,9 +1433,16 @@ export class Scheduler extends EventEmitter {
    * expireAt,canDispatch 在用户新截止时间之后仍放行(Codex P2 on #11577)。
    */
   private armGuardLateApply(runId: string, previous: Schedule, read: Promise<Schedule | null>): void {
+    // 挂载时抄下签发记号:回包时记号已被换新 = 这份读在回包之前就退役了,它的
+    // 迟到收口必须作废 —— 否则旧回包先把守卫换成同版本的另一对象,随后新读的
+    // 更新回包因身份闸(`=== previous`)失败被丢,守卫停在旧 deadline,排队中的
+    // run 在用户过期之后仍被放行(Greptile P1 on #12087)。用户编辑保护仍由下面
+    // 两道闸负责,不因退役作废而放宽。
+    const token = this.guardReadIssueTokens.get(previous.id);
     void read.then(
       (value) => {
         if (!value) return;
+        if (this.guardReadIssueTokens.get(previous.id) !== token) return;
         if (this.automaticDispatchSchedules.get(runId) !== previous) return;
         if (this.isSupersededSnapshot(value)) return;
         this.automaticDispatchSchedules.set(runId, value);
@@ -2817,11 +2865,16 @@ export class Scheduler extends EventEmitter {
    * promise,反复 await 同一个失败只会把每个 tick 都拖进同一条错误。
    */
   private runSweepSingleFlight(now: number): Promise<void> {
-    if (this.inFlightSweep) return Promise.resolve();
+    const existing = this.inFlightSweep;
+    // 代次前进(listActive 从失败恢复)后,在途的那一份可能是永不 settle 的孤儿:
+    // 不清退的话之后每个 30 秒同步都在这里直接返回,僵尸清扫永远发不出去
+    // (Codex P2 on #12087)。代次不前进(一直健康或整体楔住)时照旧压制,
+    // 故障期间仍是一份在途,不重新打开无界增长的口子。
+    if (existing && existing.generation >= this.listActiveGeneration) return Promise.resolve();
     const sweep = this.sweepStaleRunningRuns(now);
-    this.inFlightSweep = sweep;
+    this.inFlightSweep = { sweep, generation: this.listActiveGeneration };
     const clear = () => {
-      if (this.inFlightSweep === sweep) this.inFlightSweep = undefined;
+      if (this.inFlightSweep?.sweep === sweep) this.inFlightSweep = undefined;
     };
     void sweep.then(clear, clear);
     return sweep;
@@ -4031,9 +4084,21 @@ export class Scheduler extends EventEmitter {
       // 任务被编辑重新触发又跑挂了新一轮,凭据已经换成新的,旧那一轮还挂在存储里
       // 的补排若还算数,新凭据的补排永远发不出去(Codex P1 on #11577)。尺子与
       // ownsPendingReplan 同一条 —— 按登记时刻比,不按 scheduleId 一棍子打死。
-      if (inFlight && inFlight.startedAt >= pending.startedAt) continue;
+      // 另外代次前进(listActive 从失败恢复)后,在途的那一次可能是永不 settle 的
+      // 孤儿:同一凭据会被它永久挡住,补排永远发不出去 —— 认领过的任务 nextFireAt
+      // 已空,批量重载不会重算,周期任务停摆到进程重启(Codex P2 on #12087)。
+      // 迟到结果仍由 ownsPendingReplan 与 replanWatermark 拦在凭据外面。
+      if (
+        inFlight &&
+        inFlight.startedAt >= pending.startedAt &&
+        inFlight.generation >= this.listActiveGeneration
+      ) continue;
       const attempt = this.replanAfterStalledClaim(pending, now);
-      this.inFlightReplans.set(pending.scheduleId, { startedAt: pending.startedAt, attempt });
+      this.inFlightReplans.set(pending.scheduleId, {
+        startedAt: pending.startedAt,
+        attempt,
+        generation: this.listActiveGeneration,
+      });
       try {
         await attempt;
       } finally {
