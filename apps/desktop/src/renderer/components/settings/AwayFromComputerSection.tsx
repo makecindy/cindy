@@ -104,7 +104,12 @@ export function AwayFromComputerSection() {
                     ? t('macControlPermission.review', { app: appPath?.split('/').pop() ?? 'Cindy' })
                     : t('settings.windowBehavior.awayGuard.permission')}</span>}
                   actions={
-                    <Button variant="secondary" size="sm" onClick={() => void openPermission()}>
+                    <Button
+                      data-settings-search-action="Opens macOS System Settings for the privacy screen control permission"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void openPermission()}
+                    >
                       {t('regionScreenshot.permission.openSettings')}
                     </Button>
                   }
@@ -118,7 +123,12 @@ export function AwayFromComputerSection() {
                   role="alert"
                   message={t(permissionUnknown ? 'settings.windowBehavior.awayGuard.checkFailed' : 'settings.windowBehavior.awayGuard.previewUnavailable')}
                   actions={permissionUnknown && (
-                    <Button variant="secondary" size="sm" onClick={() => void awayGuard.refresh()}>
+                    <Button
+                      data-settings-search-action="Checks the current system permission again after a failed read"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void awayGuard.refresh()}
+                    >
                       {t('remoteDesktop.recheckPermissions')}
                     </Button>
                   )}
