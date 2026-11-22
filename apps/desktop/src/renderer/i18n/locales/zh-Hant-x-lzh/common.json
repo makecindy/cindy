@@ -1803,6 +1803,8 @@
       "other": "其餘",
       "lowAlert": "將盡時告",
       "privacy": "隱去私人資訊",
+      "automaticCurrency": "自擇",
+      "usageCurrency": "計費幣種",
       "usageScope": "耗用計算之域",
       "manageFoot": "管理模型供方",
       "showSource": "於選單中顯 {{name}}",
@@ -11015,7 +11017,7 @@
         "memoryReviewName": "{{name}} · 理記",
         "carryover": {
           "title": "升級前未竟之事",
-          "intro": "同僚升級之時尚未了結者。有用者續之，無用者刪之。舊錄全存於同僚卷匣之 v1-archive。",
+          "intro": "同伴升級之時尚未了結者。有用者續之，無用者刪之。舊錄全存於同伴卷匣之 v1-archive。",
           "todos": "待辦",
           "work": "案頭",
           "threads": "進行中",
@@ -11506,7 +11508,7 @@
         "stepTimeout": "{{name}}久未竟，此步暫止",
         "stepUnavailable": "{{name}}今不可用，此步無從行",
         "runtimeFailureReason": {
-          "unclaimed_timeout": "{{name}}逾候未始處理，此請已終。\n請同僚之主查其機上之 Cindy 是否運行、網路是否連線。"
+          "unclaimed_timeout": "{{name}}逾候未始處理，此請已終。\n請同伴之主查其機上之 Cindy 是否運行、網路是否連線。"
         },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回覆：同伴所在裝置所留之遠端差事數已達上限。\n請同伴之主封存暫不用之差事，或請遠方之機之主於「遠端與分享」中提高上限。",
@@ -11599,7 +11601,7 @@
         "groupDissolved": "群議已散，仍可覽有權存取之舊訊。",
         "lastOwner": "請先轉讓群主或解散群議，再退出。",
         "allBotsMentionDisabled": "群主尚未啟 @諸同伴。",
-        "turnAlreadyStarted": "此同僚已始行，不可略過"
+        "turnAlreadyStarted": "此同伴已始行，不可略過"
       },
       "organizer": "主事",
       "plan": {
@@ -11895,7 +11897,7 @@
           "projectDirHint": "唯此機有效。",
           "projectDirClearHint": "復為自動擇項",
           "project": "案",
-          "projectCaption": "同僚於群中應答、分工，皆於此案行之。庫為全群所共，資料夾唯存此機。",
+          "projectCaption": "同伴於群中應答、分工，皆於此案行之。庫為全群所共，資料夾唯存此機。",
           "githubRepo": "GitHub 庫",
           "githubRepoHint": "GitHub · owner/name",
           "repository": "代碼之庫",
@@ -12025,12 +12027,12 @@
         "title": "代書",
         "description": "遇須君親書之登入資訊、密碼或驗證碼，許此同伴請君於任一裝置填之。君所填者不交予它。"
       },
-      "intro": "擇此同僚可用之技藝、器具與 MCP，自下一訊始行。",
+      "intro": "擇此同伴可用之技藝、器具與 MCP，自下一訊始行。",
       "alwaysOn": "常開",
       "core": {
         "group": "本技",
-        "name": "同僚本技",
-        "hint": "開差事、聯同僚、易模型、用器具與法器、記事。隨 Cindy 更。",
+        "name": "同伴本技",
+        "hint": "開差事、聯同伴、易模型、用器具與法器、記事。隨 Cindy 更。",
         "meta": "諸伴共之 · 常開 · 隨 Cindy 更",
         "note": "諸伴皆有之調度之能，不可關，不可改。欲其易法，於言談中告之，彼自記為己之技藝。",
         "covers": "所含",
@@ -12041,8 +12043,8 @@
             "body": "知可掌之差事與可用之機，依君之命布置、跟進，攜其果歸；跨機行事前，先查所能。"
           },
           "teammates": {
-            "title": "聯同僚",
-            "body": "致書他同僚，或為君新立一同僚。"
+            "title": "聯同伴",
+            "body": "致書他同伴，或為君新立一同伴。"
           },
           "models": {
             "title": "模型與器具",
@@ -12073,7 +12075,7 @@
         "saveFailed": "未能存，稍後再試。",
         "deleteFailed": "未能刪，稍後再試。",
         "deleteTitle": "刪「{{name}}」乎？",
-        "deleteBody": "刪後此同僚不復用此技藝，其文不可復原。後若需之，可於言談中令其復記。",
+        "deleteBody": "刪後此同伴不復用此技藝，其文不可復原。後若需之，可於言談中令其復記。",
         "unsavedTitle": "尚有未存之修改",
         "unsavedDescription": "離去則捨此番於技藝之修改。",
         "discard": "棄其修改",
@@ -12756,7 +12758,7 @@
           "detachedBySlash": "🚪 接掌已罷，歸於 Discord 私訊。他日欲遠端操持 desktop，再遣 /ctr",
           "detachedByRevoke": "⚠️ 君已於 desktop 收回接掌，此後之訊歸於你我之 Discord 私訊。",
           "notAttached": "🤷 君今未接掌何差事，/exctr 閒而無所事。",
-          "companionManagedCommand": "🧭 此 bot 已託付同僚 — 模型、權柄與工作目錄皆從同僚之設，欲改，請至 Cindy 同僚之設中調之~"
+          "companionManagedCommand": "🧭 此 bot 已託付同伴 — 模型、權柄與工作目錄皆從同伴之設，欲改，請至 Cindy 同伴之設中調之~"
         },
         "agent": {
           "completedNoText": "✅ 畢矣（此輪 Agent 未發一言）",
@@ -12944,13 +12946,13 @@
           "help": "🤖 吾所能為者如下：\n\n/new         立新差事（舊者仍存；群中依當前群話題而立）\n/project     移至某案之目錄行事（於 bot 此端運行，不接掌桌面端）\n/session     列桌面端近日差事，擇其一即接掌續談\n/model       換一模型登場\n/permission  調權柄之式（auto / bypass / ask 等）\n/settings    覽今之案、Agent、模型、思之深淺、權柄\n/ctr         遠端接掌桌面端之某案（接掌中再遣，可徑換差事）\n/exctr       罷接掌，歸 Telegram 言談\n/help        覽吾所能\n\n有事方行而欲止之？遣 /stop（或 `!stop`），吾即止當前所行，並撤排隊之訊；差事仍存，可續為之。\n\n私訊徑遣訊即可；群中須 @ 吾或回覆吾之訊，吾方應之。群中近日之訊，吾亦記之以為上下文~",
           "unknownCommand": "`{{cmd}}` 此令，吾未識也 🤔\n吾所能解者：/new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help",
           "settings": "⚙️ 今之所設\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深淺：{{effort}}\n權柄：{{permission}}\n\n欲改則遣 /project、/model、/permission～",
-          "settingsCompanion": "⚙️ 今之所設（同僚）\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深淺：{{effort}}\n權柄：{{permission}}\n\n模型、權柄與工作目錄皆從同僚之設，請於 Cindy 之同僚規制中修之。",
+          "settingsCompanion": "⚙️ 今之所設（同伴）\n\n案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n思之深淺：{{effort}}\n權柄：{{permission}}\n\n模型、權柄與工作目錄皆從同伴之設，請於 Cindy 之同伴規制中修之。",
           "detachedBySlash": "🚪 接掌已罷，吾等歸 Telegram 言談。他日欲遠端操持桌面端，再遣 /ctr",
           "detachedByRevoke": "⚠️ 君已於桌面端收回接掌，其後之訊歸 Telegram 言談。",
           "notAttached": "🤷 君今未接掌任何差事，/exctr 閒而無事可為。",
-          "companionDmNew": "🧭 此乃同僚之主言談，綿延不絕，不另開新差事。欲易話題，徑言之可也；須另行之事，同僚自開背景差事。",
+          "companionDmNew": "🧭 此乃同伴之主言談，綿延不絕，不另開新差事。欲易話題，徑言之可也；須另行之事，同伴自開背景差事。",
           "companionLaneNew": "🌱 已為此群開新言談，前之上下文已收，自頭始之~",
-          "companionManagedCommand": "🧭 此連線已付同僚，模型、權柄與工作目錄皆從同僚之設。請於 Cindy 之同僚規制中修之。"
+          "companionManagedCommand": "🧭 此連線已付同伴，模型、權柄與工作目錄皆從同伴之設。請於 Cindy 之同伴規制中修之。"
         },
         "agent": {
           "completedNoText": "✅ 畢矣（此輪 Agent 未發一言）",
@@ -12968,7 +12970,7 @@
           "scheduledTaskHeaderNamed": "🤖 自運「{{name}}」",
           "unsupportedOnly": "🙏 此訊吾不能納：\n{{list}}\n\n吾所能納者：文字、圖（jpg/png/gif/webp）、PDF、程式碼與設定類文字卷。",
           "unsupportedNotice": "ℹ️ 下列之物吾不能納，暫置一旁：\n{{list}}\n\n餘者已收，方理之~",
-          "companionUnavailable": "⏸ 同僚今不能受訊：{{reason}}",
+          "companionUnavailable": "⏸ 同伴今不能受訊：{{reason}}",
           "authMissing": {
             "currentProvider": "當前供方",
             "reasonGatewayKey": "須先設 Cindy AI Key",
@@ -13165,7 +13167,7 @@
         },
         "slash": {
           "detachFailed": "❌ 結束接管未成：{{error}}",
-          "companionManaged": "🧭 此連線已付同僚，模型、權柄與工作目錄皆從同僚之規制。請於 Cindy 同僚規制中更之。"
+          "companionManaged": "🧭 此連線已付同伴，模型、權柄與工作目錄皆從同伴之規制。請於 Cindy 同伴規制中更之。"
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 群議中之差事待君授權。授權之卡不發於群，於此確認即可。",
@@ -13238,7 +13240,7 @@
           "detachedBySlash": "🚪 接管已罷，後訊歸企業微信言談。",
           "detachedByRevoke": "⚠️ 桌面端已收回接管，後訊歸企業微信言談。",
           "notAttached": "今無接管之差事。",
-          "companionManagedCommand": "🧭 此連線已付同僚，模型、權柄與工作目錄皆從同僚之設。請於 Cindy 同僚之設中改之。"
+          "companionManagedCommand": "🧭 此連線已付同伴，模型、權柄與工作目錄皆從同伴之設。請於 Cindy 同伴之設中改之。"
         },
         "agent": {
           "completedNoText": "✅ 差事已畢（此輪無文字）",
@@ -13380,9 +13382,9 @@
           "detachedBySlash": "🚪 接掌已罷，歸於私聊。他日欲遠端操持桌面端，再發 /ctr 可也",
           "detachedByRevoke": "⚠️ 君已於桌面端收回接掌，此後之訊歸於私聊。",
           "notAttached": "🤷 君今未接掌何差事，/exctr 閒而無所事。",
-          "companionDmNew": "🧭 此乃同僚之主言談，一以貫之，不另開差事。欲易話頭，徑言即可；需別辦之事，同僚自開幕後差事。",
+          "companionDmNew": "🧭 此乃同伴之主言談，一以貫之，不另開差事。欲易話頭，徑言即可；需別辦之事，同伴自開幕後差事。",
           "companionLaneNew": "🌱 已為此群另啟言談，前文收之，從頭來過~",
-          "companionManagedCommand": "🧭 此連線已付同僚，模型、權柄與工作目錄皆從同僚之設。請於 Cindy 同僚之設中修改。"
+          "companionManagedCommand": "🧭 此連線已付同伴，模型、權柄與工作目錄皆從同伴之設。請於 Cindy 同伴之設中修改。"
         },
         "agent": {
           "completedNoText": "✅ 畢矣（此輪 Agent 未發一言）",
@@ -13401,7 +13403,7 @@
           "scheduledTaskHeaderNamed": "🤖 自運「{{name}}」",
           "unsupportedOnly": "🙏 此訊吾不能納：\n{{items}}\n\n吾所能納者：文字、圖（jpg/png/gif/webp）、PDF、程式碼與設定類文字檔。",
           "unsupportedNotice": "ℹ️ 下列諸物吾不能納，暫置之：\n{{items}}\n\n餘者已收，方理之~",
-          "companionUnavailable": "⏸ 同僚今不能受訊：{{reason}}",
+          "companionUnavailable": "⏸ 同伴今不能受訊：{{reason}}",
           "authMissing": {
             "defaultProvider": "當前供方",
             "message": "⚠️ 今言談用供方「{{provider}}」（{{model}}），{{reason}}。",
@@ -13656,18 +13658,18 @@
           "delayedReplyQuestion": "原訊：{{question}}",
           "stillProcessing": "差事猶在理中…",
           "ownerOnlyCommands": "唯主人可用機器人之令。",
-          "companionManagedCommand": "請於 Cindy 開此同僚：模型於同僚之設中調之，權柄於言談輸入框下易之。",
+          "companionManagedCommand": "請於 Cindy 開此同伴：模型於同伴之設中調之，權柄於言談輸入框下易之。",
           "help": "可用之令：/new 新開言談；/stop 止當前之行；/stop all 盡止諸行；/status 觀其狀；/help 觀說明。",
           "status_one": "Cindy 微信連線無恙，今候列 {{count}} 則。",
           "status_other": "Cindy 微信連線無恙，今候列 {{count}} 則。",
           "stopped": "差事已止。",
-          "companionDmNew": "此處與同僚共一長久差事，記錄與記憶皆存。欲理上下文，請於 Cindy 重啟同僚。",
+          "companionDmNew": "此處與同伴共一長久差事，記錄與記憶皆存。欲理上下文，請於 Cindy 重啟同伴。",
           "newConversation": "已開新言談。",
           "unknownCommand": "未識之令。發 /help 以觀可用之令。",
           "overloaded": "今微信差事甚繁，請稍後再試。"
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "此訊須逐次確認權柄，然同僚當前之模型或權柄之式不支援，訊不能啟。\n請主人於 Cindy 開此同僚，察同僚之設中之模型，並於言談輸入框下擇「預設權柄」或「自審」。",
+          "companionPermissionUnsupported": "此訊須逐次確認權柄，然同伴當前之模型或權柄之式不支援，訊不能啟。\n請主人於 Cindy 開此同伴，察同伴之設中之模型，並於言談輸入框下擇「預設權柄」或「自審」。",
           "missingAuth": "當前 Agent 尚未授權，請先於 Cindy 連接模型之服。",
           "generic": "此訊暫不能啟，請稍後重試。"
         },
@@ -14489,6 +14491,7 @@
       "steerNotSent": "未遣，暫不能插話，草稿已留",
       "credentialSwitchApplied": "模型所出已易，即行生效。",
       "credentialSwitchFailed": "模型來源切換未成，請重擇。",
+      "credentialSwitchKeptSettings": "此次更易未成，任務仍循舊設。",
       "modelSwitchContextGuard": {
         "warnToast": "此段言談已用 {{used}}，換過去約佔新模型容量（{{total}}）之 {{pct}}%",
         "condensedToast": "為合新模型之容量，較早之言將壓縮，言談全錄仍可閱。",
@@ -15588,7 +15591,7 @@
           "plugins": "法器目錄",
           "memoryRules": "記憶規約",
           "memoryIndex": "記憶索引",
-          "profile": "同僚資料",
+          "profile": "同伴資料",
           "user": "君之指令",
           "directories": "附加目錄",
           "native": "Pi 原生規約",
@@ -15755,6 +15758,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "上下文已滿，此訊未能處理。後訊仍將依次處理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附 {{name}}",
       "saveAttachmentAs": "另存附卷 {{name}}",
@@ -22070,9 +22074,9 @@
       "pick": "逐一揀選",
       "started": "已於背景開始納入，可於「設定 → 差事匯入」察其進度。",
       "startFailed": "納入未始。可於「設定 → 差事匯入」重新納入。",
-      "teammatesHeading": "同僚",
-      "teammatesHint": "將其他器具中的 Agent 連同記憶、技藝與自動化納為同僚。",
-      "importTeammate": "納為同僚"
+      "teammatesHeading": "同伴",
+      "teammatesHint": "將其他器具中的 Agent 連同記憶、技藝與自動化納為同伴。",
+      "importTeammate": "納為同伴"
     },
     "finish": {
       "title": "諸事已備",

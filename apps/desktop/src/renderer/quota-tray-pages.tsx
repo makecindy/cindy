@@ -10,8 +10,8 @@ export function text(view: MenubarView, key: string, values: Record<string, stri
   return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values[name] ?? ''));
 }
 
-export function money(view: MenubarView, value: number): string {
-  return view.moneySymbol + (value >= 10_000 ? (value / 1000).toFixed(1) + 'k' :
+export function money(view: MenubarView, value: number, symbol = view.moneySymbol): string {
+  return symbol + (value >= 10_000 ? (value / 1000).toFixed(1) + 'k' :
     new Intl.NumberFormat(view.locale, { maximumFractionDigits: value < 100 ? 2 : 0 }).format(value));
 }
 
@@ -90,6 +90,10 @@ export function Manage({ view }: { view: MenubarView }) {
       {(['lowAlert', 'privacy'] as const).map(key => <label className="setting" key={key}>{s[key]}
         <input type="checkbox" role="switch" checked={view.settings[key]}
           onChange={event => bridge.updateSettings({ [key]: event.target.checked })}/></label>)}
+      <label className="setting scope">{s.usageCurrency}
+        <select value={view.settings.currency ?? 'auto'} onChange={event => bridge.updateSettings({ currency: event.target.value as 'auto' | 'USD' | 'CNY' })}>
+          <option value="auto">{s.automaticCurrency}</option><option value="USD">USD</option><option value="CNY">CNY</option>
+        </select></label>
       <label className="setting scope">{s.usageScope}
         <select value={view.settings.scope} onChange={event => bridge.updateSettings({ scope: event.target.value as 'all' | 'local' })}>
           <option value="local">{s.scopeLocal}</option><option value="all">{s.scopeAll}</option>
@@ -157,7 +161,7 @@ export function Usage({ view }: { view: MenubarView }) {
     {list === 'tasks' ? [...view.tasks].sort((a, b) => b.value - a.value).map(task =>
       <button key={task.sessionId} className="task-row" onClick={() => window.quotaTray.openSession(task.sessionId)}>
         <span className="task-icon"><Logo svg={task.logoSvg}/></span>
-        <span className="task-content"><span className="task-title"><strong>{task.title}</strong><small>{money(view, task.value)}</small></span>
+        <span className="task-content"><span className="task-title"><strong>{task.title}</strong><small>{money(view, task.value, view.taskMoneySymbol)}</small></span>
           <span className="task-preview">{[task.running ? view.strings.running : task.idleStatus, task.meta].filter(Boolean).join(' · ')}</span></span>
       </button>) : scope.models[String(range) as '7' | '30' | '90'].slice(0, 5).map((model, i) => <div className="setting" key={i}>
       <span>{model.name}</span><b>{money(view, model.money)}</b>

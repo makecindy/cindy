@@ -66,6 +66,7 @@ export interface RemoteSession {
   totalMoney?: RemoteMoney;
   /** 旧 Desktop / USD 账本兼容字段。 */
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
   contextTokens?: number;
   contextWindow?: number;
   clearedAt?: string | null;

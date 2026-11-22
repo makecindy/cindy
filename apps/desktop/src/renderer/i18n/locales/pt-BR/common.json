@@ -343,7 +343,7 @@
     "invite": "Copiar convite",
     "invitationCopied": "Convite copiado. Cole-o em uma mensagem para seu colega.",
     "tabOwned": "Compartilhadas por mim",
-    "startIntro": "Convide alguém para ler tudo nesta tarefa e trabalhar com o mesmo Agent.",
+    "startIntro": "Convide um colega para ler tudo nesta tarefa e trabalhar com o mesmo Agent.",
     "runsOnThisDevice": "Executado neste dispositivo",
     "inviteNotice": "Qualquer pessoa com o link de convite pode participar após entrar, com o mesmo acesso ao Agent que o anfitrião.",
     "offlineAutoClose": "O compartilhamento termina automaticamente se o computador do anfitrião permanecer offline.",
@@ -356,7 +356,7 @@
     "hostOfflineNote": "O compartilhamento termina automaticamente se este computador permanecer offline. Para retomar, inicie o compartilhamento novamente e envie um novo link de convite.",
     "sharingBadge": "Compartilhando",
     "ownedEmptyTitle": "Nada está sendo compartilhado",
-    "ownedEmptyHint": "Abra qualquer tarefa e clique em “Compartilhar tarefa” para convidar alguém.",
+    "ownedEmptyHint": "Abra qualquer tarefa e clique em “Compartilhar tarefa” para convidar um colega.",
     "closeAll": "Parar todos os compartilhamentos ({{count}})",
     "closeAllTitle": "Parar todos os compartilhamentos?",
     "closeAllBody": "Todos os convidados perderão o acesso às tarefas abaixo, e os links de convite delas expirarão.",
@@ -1865,6 +1865,8 @@
       "other": "Outro",
       "lowAlert": "Notificar quando estiver acabando",
       "privacy": "Ocultar informações pessoais",
+      "automaticCurrency": "Automática",
+      "usageCurrency": "Moeda de uso",
       "usageScope": "O uso abrange",
       "manageFoot": "Gerenciar provedores",
       "showSource": "Mostrar {{name}} no menu",
@@ -11328,7 +11330,7 @@
     "image": "Adicionar imagem",
     "send": "Enviar mensagem",
     "roster": {
-      "create": "Convidar colega",
+      "create": "Convidar amigo",
       "customNamePlaceholder": "Dê um nome ao seu amigo",
       "customTitle": "Conheça alguém novo"
     },
@@ -11640,7 +11642,7 @@
         "stepTimeout": "{{name}} demorou demais, então esta etapa foi interrompida",
         "stepUnavailable": "{{name}} está indisponível e não pode executar esta etapa",
         "runtimeFailureReason": {
-          "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.\nPeça ao proprietário do colega para verificar se a Cindy está funcionando e se o computador está conectado à rede."
+          "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.\nPeça ao proprietário do amigo para verificar se a Cindy está funcionando e se o computador está conectado à rede."
         },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do amigo atingiu o limite de sessões remotas.\nPeça ao proprietário do amigo para arquivar as sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e compartilhamento.",
@@ -12902,7 +12904,7 @@
           "detachedBySlash": "🚪 Controle remoto encerrado — voltamos para nossa DM no Discord. Quando quiser controlar o desktop de novo, é só enviar /ctr.",
           "detachedByRevoke": "⚠️ Você retomou o controle pelo desktop, então as próximas mensagens voltam para nossa DM no Discord.",
           "notAttached": "🤷 Você não está controlando nenhuma sessão agora, então o /exctr não tem nada para fazer.",
-          "companionManagedCommand": "🧭 Este bot foi passado para um colega — modelo, permissões e diretório de trabalho seguem as configurações do colega. Para mudar, vá às configurações do colega no Cindy."
+          "companionManagedCommand": "🧭 Este bot foi passado para um amigo — modelo, permissões e diretório de trabalho seguem as configurações do amigo. Para mudar, vá às configurações do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Pronto (o Agent não disse nada neste turno)",
@@ -13102,13 +13104,13 @@
           "help": "🤖 Veja o que eu posso fazer por você:\n\n/new         Criar uma nova sessão (as antigas são mantidas; nos grupos, é criada para o tópico atual do grupo)\n/project     Trabalhar em uma pasta de projeto (roda aqui no bot, sem assumir o desktop)\n/session     Listar as sessões recentes do desktop; toque em uma para assumir e continuar a conversa\n/model       Colocar outro modelo em campo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/settings    Ver o projeto, o Agent, o modelo, o esforço de raciocínio e as permissões atuais\n/ctr         Assumir remotamente um projeto do desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle e voltar para a conversa do Telegram\n/help        Ver o que eu sei fazer\n\nTem algo rodando que você quer parar? Envie /stop (ou `!stop`) — eu interrompo a execução atual na hora e também retiro as mensagens na fila. A sessão é mantida para você continuar.\n\nNo chat privado, é só me mandar uma mensagem. Nos grupos, eu só respondo quando você me menciona com @ ou responde a uma das minhas mensagens — e também lembro das mensagens recentes do grupo como contexto.",
           "unknownCommand": "Não reconheci o comando `{{cmd}}` 🤔\nComandos que eu entendo: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Configurações atuais\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nPara mudar, envie /project, /model ou /permission.",
-          "settingsCompanion": "⚙️ Configurações atuais (colega)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as configurações do colega. Altere-os nas configurações do colega no Cindy.",
+          "settingsCompanion": "⚙️ Configurações atuais (amigo)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as configurações do amigo. Altere-os nas configurações do amigo no Cindy.",
           "detachedBySlash": "🚪 Controle encerrado — voltamos para a conversa do Telegram. Da próxima vez que quiser controlar o desktop remotamente, envie /ctr",
           "detachedByRevoke": "⚠️ Você retomou o controle pelo desktop. As próximas mensagens voltam para a conversa do Telegram.",
           "notAttached": "🤷 Você não está controlando nenhuma sessão agora, então o /exctr não tem o que fazer.",
-          "companionDmNew": "🧭 Esta é a conversa principal do seu colega: ela segue direto e não abre novas sessões. Se quiser mudar de assunto, é só dizer; para trabalhos à parte, o colega abre tarefas em segundo plano por conta própria.",
+          "companionDmNew": "🧭 Esta é a conversa principal do seu amigo: ela segue direto e não abre novas sessões. Se quiser mudar de assunto, é só dizer; para trabalhos à parte, o amigo abre tarefas em segundo plano por conta própria.",
           "companionLaneNew": "🌱 Uma nova conversa foi iniciada para este grupo. O contexto anterior foi guardado — vamos começar do zero!",
-          "companionManagedCommand": "🧭 Esta conexão foi entregue a um colega, então o modelo, as permissões e o diretório de trabalho seguem as configurações dele. Altere-os nas configurações do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta conexão foi entregue a um amigo, então o modelo, as permissões e o diretório de trabalho seguem as configurações dele. Altere-os nas configurações do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Pronto! (o Agent não disse nada neste turno)",
@@ -13128,7 +13130,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automação “{{name}}”",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{list}}\n\nO que eu consigo processar: texto, imagens (jpg/png/gif/webp), PDF e arquivos de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, então deixei de lado:\n{{list}}\n\nO resto chegou certinho e já estou processando.",
-          "companionUnavailable": "⏸ Seu colega não pode receber mensagens agora: {{reason}}",
+          "companionUnavailable": "⏸ Seu amigo não pode receber mensagens agora: {{reason}}",
           "authMissing": {
             "currentProvider": "provedor atual",
             "reasonGatewayKey": "é preciso configurar uma Cindy AI Key primeiro",
@@ -13325,7 +13327,7 @@
         },
         "slash": {
           "detachFailed": "❌ Não foi possível encerrar o controle: {{error}}",
-          "companionManaged": "🧭 Esta conexão foi entregue a um colega, então o modelo, as permissões e o diretório de trabalho seguem as configurações do colega. Altere-os nas configurações do colega no Cindy."
+          "companionManaged": "🧭 Esta conexão foi entregue a um amigo, então o modelo, as permissões e o diretório de trabalho seguem as configurações do amigo. Altere-os nas configurações do amigo no Cindy."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 Uma tarefa em um chat em grupo precisa da sua autorização. O cartão de autorização não é publicado no grupo: confirme aqui.",
@@ -13402,7 +13404,7 @@
           "detachedBySlash": "🚪 Controle remoto encerrado. As próximas mensagens voltam para a conversa do WeCom.",
           "detachedByRevoke": "⚠️ O controle remoto foi revogado no Cindy Desktop. As próximas mensagens voltam para a conversa do WeCom.",
           "notAttached": "No momento, você não está controlando nenhuma tarefa.",
-          "companionManagedCommand": "🧭 Esta conexão foi entregue a um colega: o modelo, as permissões e o diretório de trabalho seguem as configurações do colega. Altere-os nas configurações do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta conexão foi entregue a um amigo: o modelo, as permissões e o diretório de trabalho seguem as configurações do amigo. Altere-os nas configurações do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Tarefa concluída (sem saída de texto neste turno)",
@@ -13546,9 +13548,9 @@
           "detachedBySlash": "🚪 Controle remoto encerrado — voltamos para a nossa conversa privada. Quando quiser controlar o app desktop de novo, é só mandar /ctr",
           "detachedByRevoke": "⚠️ Você encerrou o controle remoto no app desktop. As próximas mensagens voltam para a nossa conversa privada.",
           "notAttached": "🤷 Você não está controlando nenhuma sessão agora, então /exctr não tem nada para fazer.",
-          "companionDmNew": "🧭 Esta é a conversa principal do seu colega: ela continua sempre e não abre uma nova sessão. Para mudar de assunto, é só falar; para trabalhos separados, o colega abre sozinho uma sessão em segundo plano.",
+          "companionDmNew": "🧭 Esta é a conversa principal do seu amigo: ela continua sempre e não abre uma nova sessão. Para mudar de assunto, é só falar; para trabalhos separados, o amigo abre sozinho uma sessão em segundo plano.",
           "companionLaneNew": "🌱 Comecei uma nova conversa para este grupo e deixei o contexto anterior de lado. Vamos começar do zero!",
-          "companionManagedCommand": "🧭 Esta conexão foi entregue a um colega, então o modelo, as permissões e o diretório de trabalho seguem as configurações dele. Altere nas configurações do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta conexão foi entregue a um amigo, então o modelo, as permissões e o diretório de trabalho seguem as configurações dele. Altere nas configurações do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Pronto (o Agent não disse nada neste turno)",
@@ -13568,7 +13570,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automação “{{name}}”",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{items}}\n\nO que eu consigo processar: texto, imagens (jpg/png/gif/webp), PDF e arquivos de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, então deixei de lado:\n{{items}}\n\nO resto chegou certinho, já estou trabalhando nisso~",
-          "companionUnavailable": "⏸ Seu colega não pode receber mensagens agora: {{reason}}",
+          "companionUnavailable": "⏸ Seu amigo não pode receber mensagens agora: {{reason}}",
           "authMissing": {
             "defaultProvider": "provedor atual",
             "message": "⚠️ Esta conversa usa o provedor “{{provider}}” ({{model}}): {{reason}}.",
@@ -13824,19 +13826,19 @@
           "delayedReplyQuestion": "Mensagem original: {{question}}",
           "stillProcessing": "Ainda processando…",
           "ownerOnlyCommands": "Só o dono pode usar os comandos do bot.",
-          "companionManagedCommand": "Abra este colega no Cindy: o modelo é alterado nas configurações do colega e as permissões, abaixo da caixa de entrada da conversa.",
+          "companionManagedCommand": "Abra este amigo no Cindy: o modelo é alterado nas configurações do amigo e as permissões, abaixo da caixa de entrada da conversa.",
           "help": "Comandos disponíveis: /new nova conversa; /stop parar a execução atual; /stop all parar todas as execuções; /status ver o status; /help ver a ajuda.",
           "status_one": "A conexão do Cindy com o WeChat está funcionando. {{count}} mensagem na fila.",
           "status_other": "A conexão do Cindy com o WeChat está funcionando. {{count}} mensagens na fila.",
           "status_many": "A conexão do Cindy com o WeChat está funcionando. {{count}} mensagens na fila.",
           "stopped": "Tarefa interrompida.",
-          "companionDmNew": "Aqui você compartilha a mesma sessão de longa duração com o colega, então o histórico e a memória são mantidos. Para organizar o contexto, reinicie o colega no Cindy.",
+          "companionDmNew": "Aqui você compartilha a mesma sessão de longa duração com o amigo, então o histórico e a memória são mantidos. Para organizar o contexto, reinicie o amigo no Cindy.",
           "newConversation": "Nova conversa iniciada.",
           "unknownCommand": "Comando desconhecido. Envie /help para ver os comandos disponíveis.",
           "overloaded": "Há muitas tarefas do WeChat no momento. Tente de novo mais tarde."
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "Esta mensagem precisa de confirmação de permissão a cada ação, mas o modelo ou o modo de permissão atual do colega não oferece suporte, então a mensagem não pode ser iniciada.\nO dono deve abrir este colega no Cindy, verificar o modelo nas configurações do colega e escolher “Permissões padrão” ou “Revisão automática” abaixo da caixa de entrada da conversa.",
+          "companionPermissionUnsupported": "Esta mensagem precisa de confirmação de permissão a cada ação, mas o modelo ou o modo de permissão atual do amigo não oferece suporte, então a mensagem não pode ser iniciada.\nO dono deve abrir este amigo no Cindy, verificar o modelo nas configurações do amigo e escolher “Permissões padrão” ou “Revisão automática” abaixo da caixa de entrada da conversa.",
           "missingAuth": "O Agent atual ainda não foi autorizado. Conecte primeiro um serviço de modelos no Cindy.",
           "generic": "Esta mensagem não pode ser iniciada agora. Tente de novo mais tarde."
         },
@@ -14659,6 +14661,7 @@
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; seu rascunho foi mantido.",
       "credentialSwitchApplied": "A troca de provedor de modelo entrou em vigor.",
       "credentialSwitchFailed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
+      "credentialSwitchKeptSettings": "A troca não foi concluída. A tarefa continuará usando as configurações anteriores.",
       "modelSwitchContextGuard": {
         "warnToast": "Esta conversa já usa {{used}} — cerca de {{pct}}% da capacidade de {{total}} do novo modelo",
         "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",
@@ -15933,6 +15936,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "O contexto está cheio, por isso esta mensagem não pôde ser processada. As próximas mensagens serão processadas em ordem.",
       "attachmentPrefix": "Anexos: ",
       "attachmentAttachedAria": "{{name}} anexado",
       "saveAttachmentAs": "Salvar anexo {{name}} como",
@@ -16798,7 +16802,7 @@
       "taskInfo": {
         "harness": "Ícone do harness",
         "project": "Ícone e nome do projeto",
-        "teammate": "Avatar do colega",
+        "teammate": "Avatar do amigo",
         "time": "Tempo",
         "pr": "Status do PR",
         "worktree": "worktree",
@@ -22242,9 +22246,9 @@
       "pick": "Escolher uma a uma",
       "started": "A importação começou em segundo plano. Acompanhe o progresso em Configurações → Importação de sessões.",
       "startFailed": "A importação não começou. Importe novamente em Configurações → Importação de sessões.",
-      "teammatesHeading": "Colegas",
-      "teammatesHint": "Importe um Agent de outra ferramenta como colega, com a memória, as Skills e as automações dele.",
-      "importTeammate": "Importar como colega"
+      "teammatesHeading": "Amigos",
+      "teammatesHint": "Importe um Agent de outra ferramenta como amigo, com a memória, as Skills e as automações dele.",
+      "importTeammate": "Importar como amigo"
     },
     "finish": {
       "title": "Tudo pronto",
