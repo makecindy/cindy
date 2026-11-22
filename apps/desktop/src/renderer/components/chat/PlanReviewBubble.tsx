@@ -168,7 +168,7 @@ export function PlanReviewBubble({
         {showApprovedBadge && (
           <span
             className={cn(
-              'select-none rounded-[6px] px-[8px] py-[2px] text-12 font-medium',
+              'select-none rounded-full px-[8px] py-[2px] text-12 font-medium',
               'bg-[var(--plan-bubble-badge-bg)] text-[var(--plan-bubble-badge-text)]',
             )}
           >
@@ -178,7 +178,7 @@ export function PlanReviewBubble({
         {status === 'revised' && (
           <span
             className={cn(
-              'select-none rounded-[6px] px-[8px] py-[2px] text-12 font-medium',
+              'select-none rounded-full px-[8px] py-[2px] text-12 font-medium',
               'bg-[var(--plan-bubble-badge-bg)] text-[var(--plan-bubble-badge-text)]',
             )}
           >
