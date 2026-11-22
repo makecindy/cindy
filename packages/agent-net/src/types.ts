@@ -59,6 +59,8 @@ export const AGENT_NET_SESSION_V2 = 'agent-net-session-v2';
  */
 export const SESSION_BODY_KIND = 0x33;
 export const SESSION_BODY_HEADER_BYTES = 5;
+/** What each body event that arrives before the session attached costs in MAX_EARLY_SESSION_BYTES, besides its bytes (an end has none). */
+export const EARLY_BODY_EVENT_BYTES = 64;
 /** One message body on a stream of its own (session v2, `SessionWire.openBody`). */
 export interface SessionBodyWriter {
   write(bytes: Uint8Array): void;

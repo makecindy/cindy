@@ -24,7 +24,8 @@ import { StunClient } from './stun.js';
 import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
 import {
-  AGENT_NET_SESSION_V1, ChannelEvents, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES, SESSION_BODY_KIND, SESSION_LANE_KINDS,
+  AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES,
+  SESSION_BODY_KIND, SESSION_LANE_KINDS,
   SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName, type Transport,
   type TransportOptions,
 } from './types.js';
@@ -87,6 +88,8 @@ class CoreChannel implements PeerChannel {
   private readonly bodyStreams = new Set<SendStream>();
   private bodyHandler: ((key: number, bytes: Uint8Array | null) => void) | null = null;
   private earlyBodies: Array<[number, Uint8Array | null]> = [];
+  /** This side declared `AGENT_NET_SESSION_V2`: the peer may open body streams. */
+  private bodiesDeclared = false;
 
   constructor(
     private readonly connection: Connection,
@@ -117,6 +120,8 @@ class CoreChannel implements PeerChannel {
           return;
         }
         if (kind === SESSION_BODY_KIND) {
+          // Only after this side declared v2: before that it is a stream kind this node does not take, as on older nodes.
+          if (!this.bodiesDeclared) { this.close(); return; }
           while (bodyKey === null && chunk.length) { keyBytes.push(chunk[0]); chunk = chunk.subarray(1); if (keyBytes.length === 4) bodyKey = new DataView(Uint8Array.from(keyBytes).buffer).getUint32(0, false); }
           if (bodyKey !== null && chunk.length) this.sessionBody(bodyKey, chunk);
           return;
@@ -219,6 +224,7 @@ class CoreChannel implements PeerChannel {
   declareSessions(features: readonly string[] = []): void {
     if (this.sessionsDeclared || this.events.closed) return;
     this.sessionsDeclared = true;
+    this.bodiesDeclared = features.includes(AGENT_NET_SESSION_V2);
     this.control.write(Buffer.from(`${JSON.stringify({ session: [AGENT_NET_SESSION_V1, ...features] })}\n`));
   }
 
@@ -294,10 +300,9 @@ class CoreChannel implements PeerChannel {
 
   private sessionBody(key: number, bytes: Uint8Array | null): void {
     if (this.bodyHandler) { this.bodyHandler(key, bytes); return; }
-    if (bytes) {
-      this.earlySessionBytes += bytes.length;
-      if (this.earlySessionBytes > MAX_EARLY_SESSION_BYTES) { this.close(); return; }
-    }
+    // Every event counts, an end too: a peer that never attaches its session cannot pile up empty streams for free.
+    this.earlySessionBytes += (bytes?.length ?? 0) + EARLY_BODY_EVENT_BYTES;
+    if (this.earlySessionBytes > MAX_EARLY_SESSION_BYTES) { this.close(); return; }
     this.earlyBodies.push([key, bytes && bytes.slice()]);
   }
 

@@ -442,6 +442,44 @@ it('v2: lets a large result take as long as its bytes keep coming, and gives up 
   await expect(echo).resolves.toEqual({ ok: true, result: 'echo' });
 });
 
+// 2026-11-22 审查（#12063）：收齐的结果在同一通道上等前面一个还在传的大结果时，不能因为自己的字节停了就超时；整个会话都静下来才算。
+it('v2: keeps a complete result waiting behind a larger one still arriving, and fails it only when the session goes quiet', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const { caller, callee, bodies, requests, trickle } = bodyPeers();
+  const larger = { rows: 'r'.repeat(200_000) }, smaller = { rows: 's'.repeat(90_000) };
+  const first = caller.request('test:list', [], { timeoutMs: 10_000 }), second = caller.request('test:list', [], { timeoutMs: 10_000 });
+  callee.respond(requests[0], { ok: true, result: larger });
+  callee.respond(requests[1], { ok: true, result: smaller });
+  const [a, b] = bodies.keys();
+  await trickle(b, 100, 0, true);
+  // The larger one keeps arriving, 10 KB every 5 s, for over a minute: the complete one waits behind it.
+  await trickle(a, 14, 5_000);
+  let settled = false;
+  void second.then(() => { settled = true; });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(settled).toBe(false);
+  await trickle(a, 100, 5_000, true);
+  await expect(first).resolves.toEqual({ ok: true, result: larger });
+  await expect(second).resolves.toEqual({ ok: true, result: smaller });
+
+  // Complete, but behind one whose bytes stopped (its caller set no limit, so nothing gives it up) and nothing else arrives: it fails
+  // once the session has been quiet that long. (Had the one in front timed out, its cancel would have dropped it and let this through.)
+  const third = caller.request('test:list', []), fourth = caller.request('test:list', [], { timeoutMs: 10_000 });
+  callee.respond(requests[2], { ok: true, result: larger });
+  callee.respond(requests[3], { ok: true, result: smaller });
+  const [, , c, d] = bodies.keys();
+  await trickle(d, 100, 0, true);
+  await trickle(c, 1, 1_000);
+  await vi.advanceTimersByTimeAsync(RESULT_STALL_MS - 2_000);
+  let quiet = false;
+  void fourth.then(() => { quiet = true; });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(quiet).toBe(false);
+  await vi.advanceTimersByTimeAsync(2_000);
+  await expect(fourth).resolves.toMatchObject({ ok: false, error: { code: 'INVOKE_TIMEOUT' } });
+  void third;
+});
+
 it('v2: does not send the result of a request its caller gave up on while the business ran it', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
   const { caller, callee, bodies, requests, sentToCaller } = bodyPeers();

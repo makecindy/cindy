@@ -106,6 +106,8 @@ interface Pending {
   resolve(result: SessionResult): void; timer: ReturnType<typeof setTimeout> | null; written: boolean;
   /** Session v2: when bytes of its result last arrived; set once the result started arriving on a body stream. */
   progressAt?: number;
+  /** Session v2: all of its result arrived; it may still wait for messages before it on its lane (v1 order). */
+  complete?: boolean;
 }
 
 /**
@@ -132,6 +134,8 @@ export class SessionPeer {
   private readonly inboundLane = new Map<string, SessionLane>();
   private broken: string | null = null;
   private readonly cancelled = new Set<string>();
+  /** When bytes of anything last arrived on this session (lanes or bodies). */
+  private receivedAt = 0;
   /** Session v2: requests with the business whose caller gave up: their result is not sent (results wait on no count). */
   private readonly cancelledInFlight = new Set<string>();
   /**
@@ -150,10 +154,10 @@ export class SessionPeer {
       deliver: (message, lane) => this.deliver(message as Message, lane),
       onError: (error) => this.dispose(error.message),
       ...(openBody ? { openBody } : {}),
-      onProgress: (id) => this.progress(id),
+      onProgress: (id, received, total) => this.progress(id, received >= total),
     });
-    options.wire.onData((lane, bytes) => this.lanes.receive(lane, bytes));
-    options.wire.onBody?.((key, bytes) => this.lanes.receiveBody(key, bytes));
+    options.wire.onData((lane, bytes) => { this.receivedAt = performance.now(); this.lanes.receive(lane, bytes); });
+    options.wire.onBody?.((key, bytes) => { this.receivedAt = performance.now(); this.lanes.receiveBody(key, bytes); });
   }
 
   get bufferedAmount(): number { return this.options.wire.bufferedAmount; }
@@ -232,16 +236,21 @@ export class SessionPeer {
     entry.resolve(failure('INVOKE_TIMEOUT', message));
   }
 
-  /** Session v2: bytes of the result for `id` arrived on its body stream; from now on only a stall fails it (RESULT_STALL_MS). */
-  private progress(id: string): void {
+  /**
+   * Session v2: bytes of the result for `id` arrived on its body stream; from now on only a stall fails it (RESULT_STALL_MS). Once all
+   * of it arrived it waits for what is before it on its lane (a larger result still arriving, v1 order): then it fails only if nothing
+   * at all arrives on the session for that long.
+   */
+  private progress(id: string, complete: boolean): void {
     const entry = this.pending.get(id);
     if (!entry) return;
     const first = entry.progressAt === undefined;
     entry.progressAt = performance.now();
+    entry.complete ||= complete;
     if (!first || !entry.timer) return;
     clearTimeout(entry.timer);
     const check = () => {
-      const idle = performance.now() - entry.progressAt!;
+      const idle = performance.now() - (entry.complete ? Math.max(entry.progressAt!, this.receivedAt) : entry.progressAt!);
       if (idle >= RESULT_STALL_MS) this.expire(id, entry, `result stalled for ${RESULT_STALL_MS}ms`);
       else entry.timer = setTimeout(check, RESULT_STALL_MS - idle);
     };

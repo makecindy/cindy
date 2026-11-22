@@ -474,6 +474,50 @@ it('tells a directly connected peer right away when the transport closes', async
   await source.close();
   await vi.waitFor(() => expect(closed).toBe(true), { timeout: 2_000 });
 });
+/** 测试价值（Desktop 通道收正文流的边界）
+ * - 生产入口与可观察结果：Desktop worker 与 Node Host 用的 createCoreTransport 通道（CoreChannel）收到对端开的正文流（0x33）。
+ *   本端没宣告 agent-net-session-v2 时和旧节点一样关掉连接；宣告了、本端会话还没挂上时，先存的正文事件连只有键和结束的空流也计入
+ *   16 MiB 的预算（每个事件 64 字节加它的字节），超过就关连接。
+ * - Bug／规则依据：2026-11-22 审查 #12063：结束事件原来不计入预算，一个不挂会话的对端可以一直开空流，占着内存不放。
+ * - 现有覆盖缺口：其它用例里两端都是守规矩的节点。
+ * - 最小失败输入：没宣告时开一条正文流；宣告后开 300 条只有键和结束的流，再写正好让总数超过预算的字节。
+ * - tier：integration，真实核心与 127.0.0.1 UDP，对端是直接用核心开流的端点。 */
+it.each(['undeclared', 'budget'] as const)('closes a connection whose peer opens body streams it may not: %s', async (mode) => {
+  let accept!: (channel: PeerChannel) => void;
+  const accepted = new Promise<PeerChannel>((resolve) => { accept = resolve; });
+  const target = await createCoreTransport({ udp: true, bindAddress: '127.0.0.1', admit: () => true, onIncoming: (channel) => accept(channel) });
+  cleanup.push(() => target.close());
+  const raw = await Endpoint.create({ identity: generateIdentity('a-raw').transportPrivateKey, prologue: 'cindy/agent-net/device-link/2',
+    bind: { address: '127.0.0.1' } });
+  cleanup.push(() => raw.close());
+  const connection = raw.connect(Buffer.from(target.id, 'hex'), (target.dial as { udp: { address: string; port: number } }).udp);
+  const channel = await accepted;
+  let closed = false;
+  channel.onClose(() => { closed = true; });
+  await vi.waitFor(() => expect(connection.established).toBe(true));
+  const body = (key: number, bytes = new Uint8Array(0)) => {
+    const stream = connection.openStream('normal'), head = Buffer.alloc(5);
+    head[0] = 0x33; head.writeUInt32BE(key, 1);
+    stream.write(Buffer.concat([head, bytes]));
+    stream.finish();
+  };
+  if (mode === 'undeclared') {
+    body(1, new Uint8Array(10));
+    await vi.waitFor(() => expect(closed).toBe(true));
+    return;
+  }
+  channel.declareSessions!(['agent-net-session-v2']);
+  for (let round = 0; round < 6; round++) {
+    for (let index = 0; index < 50; index++) body(1 + round * 50 + index);
+    await vi.waitFor(() => expect(connection.drained).toBe(true));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(closed).toBe(false);
+  // 300 ends (300 × 64) and one chunk event (64) of what fills the rest, plus a byte. The bytes alone stay under the budget.
+  body(1000, new Uint8Array(16 * 1024 * 1024 - 301 * 64 + 1));
+  await vi.waitFor(() => expect(closed).toBe(true), { timeout: 10_000 });
+});
+
 /** 测试价值（Node 驱动收回交完的流）
  * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
  *   都交给核心的流，以及放弃了的流，不再留在连接的表里；进度和缓冲照样按流号问核心。

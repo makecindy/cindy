@@ -1,5 +1,6 @@
 import {
-  AGENT_NET_SESSION_V1, ChannelEvents, DRAIN_LOW_WATER_BYTES, MAX_EARLY_SESSION_BYTES, SESSION_BODY_HEADER_BYTES, SESSION_BODY_KIND,
+  AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, DRAIN_LOW_WATER_BYTES, EARLY_BODY_EVENT_BYTES, MAX_EARLY_SESSION_BYTES,
+  SESSION_BODY_HEADER_BYTES, SESSION_BODY_KIND,
   SESSION_LANE_KINDS, SESSION_LANE_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName,
   type SessionWire, type Transport, type TransportOptions,
 } from './types.js';
@@ -96,6 +97,12 @@ const LANE_BY_KIND = new Map<number, SessionLaneName>(Object.entries(SESSION_LAN
  * as in v1. The core allows 64 streams per connection, five of them this channel's own.
  */
 const MAX_NATIVE_BODIES = 32;
+/**
+ * On an engine without `stream-retired`, body streams one connection may ever open: it reports the send buffer of the first 16
+ * streams this side opened and keeps retired ones in that count, so a later stream would read as drained while its bytes are still in
+ * the core (2026-11-22 review). Data, control and the three lanes take five. After that the connection keeps to v1.
+ */
+const LEGACY_REPORTED_BODIES = 11;
 /** Per poll and outgoing stream, at most this many native writes of `WRITE_CHUNK` bytes. */
 const WRITES_PER_STREAM = 8;
 const WRITE_CHUNK = 65_536;
@@ -729,6 +736,8 @@ class NativeChannel implements PeerChannel {
   private lanes: Record<SessionLaneName, Outgoing> | null = null;
   /** Session v2 body streams this side opened, until the core holds nothing of them. */
   private bodies: Body[] = [];
+  /** Session v2 body streams this channel ever opened (LEGACY_REPORTED_BODIES). */
+  private bodiesOpened = 0;
   /** `key`: a body stream's key, once its four bytes arrived after the kind (`head` collects them). */
   private streams = new Map<number, { kind: number | null; text: string; key?: number | null; head?: number[] }>();
   private state: NativeState | null = null;
@@ -747,6 +756,8 @@ class NativeChannel implements PeerChannel {
   private earlySessionBytes = 0;
   private bodyHandler: ((key: number, bytes: Uint8Array | null) => void) | null = null;
   private earlyBodies: Array<[number, Uint8Array | null]> = [];
+  /** This side declared `AGENT_NET_SESSION_V2`: the peer may open body streams. */
+  private bodiesDeclared = false;
   private readonly drainHandlers: Array<() => void> = [];
   private readonly pathHandlers: Array<(path: 'direct' | 'relay' | null) => void> = [];
   private reportedPath = '';
@@ -785,6 +796,7 @@ class NativeChannel implements PeerChannel {
   declareSessions(features: readonly string[] = []): void {
     if (!this.owner.enhanced || this.sessionsDeclared || this.events.closed) return;
     this.sessionsDeclared = true;
+    this.bodiesDeclared = features.includes(AGENT_NET_SESSION_V2);
     this.control.push(utf8(`${JSON.stringify({ session: [AGENT_NET_SESSION_V1, ...features] })}\n`));
     this.owner.wake();
   }
@@ -830,6 +842,8 @@ class NativeChannel implements PeerChannel {
   /** Session v2: a stream of its own for one message body, at its lane's priority; opened in the engine with its first write. */
   private openBody(lane: SessionLaneName, key: number): SessionBodyWriter | null {
     if (!this.owner.enhanced || this.events.closed || this.bodies.length >= MAX_NATIVE_BODIES) return null;
+    if (!this.owner.supports('stream-retired') && this.bodiesOpened >= LEGACY_REPORTED_BODIES) return null;
+    this.bodiesOpened++;
     const body = new Body(SESSION_LANE_PRIORITY[lane], false);
     const head = new Uint8Array(SESSION_BODY_HEADER_BYTES);
     head[0] = SESSION_BODY_KIND;
@@ -860,10 +874,9 @@ class NativeChannel implements PeerChannel {
   }
   private sessionBody(key: number, bytes: Uint8Array | null): void {
     if (this.bodyHandler) { this.bodyHandler(key, bytes); return; }
-    if (bytes) {
-      this.earlySessionBytes += bytes.length;
-      if (this.earlySessionBytes > MAX_EARLY_SESSION_BYTES) { this.close({ drain: false }); return; }
-    }
+    // Every event counts, an end too: a peer that never attaches its session cannot pile up empty streams for free.
+    this.earlySessionBytes += (bytes?.length ?? 0) + EARLY_BODY_EVENT_BYTES;
+    if (this.earlySessionBytes > MAX_EARLY_SESSION_BYTES) { this.close({ drain: false }); return; }
     this.earlyBodies.push([key, bytes && bytes.slice()]);
   }
   private sessionData(lane: SessionLaneName, bytes: Uint8Array): void {
@@ -1011,6 +1024,8 @@ class NativeChannel implements PeerChannel {
       if (stream.kind === null && data.length) { stream.kind = data[0]; data = data.subarray(1); }
       if (stream.kind === DATA) { if (data.length) this.events.data(data); continue; }
       if (stream.kind === SESSION_BODY_KIND && this.owner.enhanced) {
+        // Only after this side declared v2: before that it is a stream kind this node does not take, as on older nodes.
+        if (!this.bodiesDeclared) { this.close({ drain: false }); return; }
         // Its key (4 bytes, big-endian) follows the kind; it may arrive over several chunks.
         stream.head ??= [];
         while (stream.key == null && data.length) {

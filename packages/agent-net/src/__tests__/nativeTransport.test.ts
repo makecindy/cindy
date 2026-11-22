@@ -697,9 +697,11 @@ it('honors a custom dial timeoutMs budget and reports directAddress updates when
  * - Bug／规则依据：docs/agent-net-session-plan.md 第 7 节 v2-2；开流失败原来会关掉整条连接（plan 里的异常）。
  * - 现有覆盖缺口：原生集成测试只走正常写完的流，不覆盖放弃、开流失败和分片的键。
  * - 最小失败输入：200 KB 的消息写完；写之前就放弃；结束后再放弃（有、没有 `stream-levels`）；第一次开流报 `STREAM_LIMIT`；
- *   对端一条流的头五个字节分成 3 + 2 到达。
+ *   对端一条流的头五个字节分成 3 + 2 到达；本端没宣告 v2 时对端开正文流（同旧节点，关连接）；本端会话还没挂上时对端开 200 条
+ *   只有键和结束的流，再来一条正好让「字节 + 每个事件 64」超过 16 MiB 的（审查 #12063：结束事件原来不计，可以无限堆）；
+ *   没有 `stream-retired` 的原生库上开第 12 条正文流（它只报前 16 条本端流，收回的也占着名额，再开的会被当成已经发完）。
  * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身，假计时器。 */
-it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-older', 'stream-limit'] as const)(
+it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-older', 'stream-limit', 'undeclared', 'early-budget', 'legacy-cap'] as const)(
   'opens, ends and gives up session v2 body streams on the native engine: %s', async mode => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
   const local = generateIdentity('native'), remote = generateIdentity('remote');
@@ -713,7 +715,7 @@ it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-olde
       ops.push({ op: command.op as string, stream: command.stream as number | undefined });
       let value: unknown;
       if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null,
-        features: mode === 'abandon-after-end-older' ? [] : ['stream-levels'] };
+        features: mode === 'abandon-after-end-older' ? [] : mode === 'legacy-cap' ? ['stream-levels'] : ['stream-levels', 'stream-retired'] };
       if (command.op === 'poll') {
         value = { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false, unacked: false,
           remoteKey: remote.transportKey, ...inbound, rttUs: 0, sent: 0, received: 0, rotations: 0 }] };
@@ -742,6 +744,33 @@ it.each(['finish', 'abandon-first', 'abandon-after-end', 'abandon-after-end-olde
     await vi.advanceTimersByTimeAsync(100);
     const channel = channels[0], wire = channel.sessionWire!()!;
     expect(channel.sessionBodies).toBe(true);
+    const peerBody = (stream: number, key: number, bytes: Buffer = Buffer.alloc(0)) => [{ stream, data: Buffer.concat([Buffer.from([0x33]),
+      Buffer.from(Uint32Array.of(key).buffer).reverse(), bytes]).toString('base64url') }];
+    if (mode === 'undeclared') {
+      inbound = { events: [{ kind: 'open', stream: 72 }], data: peerBody(72, 9, Buffer.from('{}')) };
+      await vi.advanceTimersByTimeAsync(20);
+      expect(ops.filter(op => op.op === 'close')).toHaveLength(1);
+      return;
+    }
+    channel.declareSessions!(['agent-net-session-v2']);
+    if (mode === 'legacy-cap') {
+      const writers = Array.from({ length: 12 }, (_, index) => wire.openBody!('normal', index + 1));
+      expect(writers.map(writer => writer !== null)).toEqual([...Array(11).fill(true), false]);
+      return;
+    }
+    if (mode === 'early-budget') {
+      for (let round = 0; round < 2; round++) {
+        const streams = Array.from({ length: 100 }, (_, index) => 100 + round * 100 + index);
+        inbound = { events: [...streams.map(stream => ({ kind: 'open', stream })), ...streams.map(stream => ({ kind: 'finish', stream }))],
+          data: streams.flatMap(stream => peerBody(stream, stream)) };
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      expect(ops.filter(op => op.op === 'close')).toEqual([]);
+      inbound = { events: [{ kind: 'open', stream: 300 }], data: peerBody(300, 300, Buffer.alloc(16 * 1024 * 1024 - 201 * 64 + 1)) };
+      await vi.advanceTimersByTimeAsync(20);
+      expect(ops.filter(op => op.op === 'close')).toHaveLength(1);
+      return;
+    }
     const received: Array<[number, string | null]> = [];
     wire.onData(() => {});
     wire.onBody!((bodyKey, bytes) => { received.push([bodyKey, bytes && Buffer.from(bytes).toString()]); });
