@@ -130,11 +130,14 @@ export function registerMcpAppsIpc(
       if (size !== bytes.byteLength || size < 1 || size > 64 * 1024 * 1024) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
       const validated = validateComposerAttachment(bytes, mimeType);
       const { category, mimeType: normalizedMimeType } = validated;
-      const ext = (() => {
-        const base = name.split(/[\\/]/).pop() ?? name;
-        const dot = base.lastIndexOf('.');
-        return dot > 0 ? base.slice(dot).toLowerCase() : category === 'pdf' ? '.pdf' : category === 'text' ? '.txt' : '.bin';
-      })();
+      // Images and PDFs take their extension from the validated bytes: sending
+      // treats `.gif` specially, so a display name must not decide the block type.
+      const ext = category === 'image' ? `.${normalizedMimeType === 'image/jpeg' ? 'jpg' : normalizedMimeType.slice('image/'.length)}`
+        : category === 'pdf' ? '.pdf' : (() => {
+          const base = name.split(/[\\/]/).pop() ?? name;
+          const dot = base.lastIndexOf('.');
+          return dot > 0 ? base.slice(dot).toLowerCase() : '.txt';
+        })();
       await assertCurrent();
       const stagedPath = await stageLocalFileToCache({
         ownerId: scope.owner.userId,

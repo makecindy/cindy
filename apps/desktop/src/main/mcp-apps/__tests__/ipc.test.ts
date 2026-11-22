@@ -65,7 +65,8 @@ vi.mock('@cindy/mcps', () => ({
 }));
 vi.mock('../host.js', () => ({
   appServerRevision: (config: unknown) => JSON.stringify(config),
-  validateComposerAttachment: (_bytes: Uint8Array, mimeType: string) => ({ category: 'text', mimeType }),
+  validateComposerAttachment: (_bytes: Uint8Array, mimeType: string) =>
+    ({ category: mimeType.startsWith('image/') ? 'image' : mimeType === 'application/pdf' ? 'pdf' : 'text', mimeType }),
   McpAppsHost: class {
     redeemComposerAttachmentDrag = state.redeem;
     open = state.open;
@@ -76,6 +77,7 @@ vi.mock('../host.js', () => ({
     }
   },
 }));
+vi.mock('../../cindy-media/chatAttachments.js', () => ({ ingestChatImageBuffer: async () => ({ url: 'cindy-media://blobs/preview' }) }));
 vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => state.plugin }));
 vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn(), replacePluginAppServers: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ getMcpAppRevisionKey: state.revisionKey }));
@@ -238,6 +240,32 @@ describe('MCP App persistence and IPC wiring', () => {
       }));
       const stagedPath = send.mock.calls[0]![1].attachment.path as string;
       expect(await fs.readFile(stagedPath)).toEqual(Buffer.from('abc'));
+    } finally {
+      state.userData = '';
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit at the Main IPC boundary. Sending treats `.gif` as a file, so the
+  // extension must follow the validated bytes, not the page-supplied name.
+  // Minimal failing inputs: a GIF without `.gif`, a PNG named `.gif`.
+  it.each([
+    { name: 'animation', mimeType: 'image/gif', ext: '.gif' },
+    { name: 'photo.gif', mimeType: 'image/png', ext: '.png' },
+    { name: 'scan', mimeType: 'image/jpeg', ext: '.jpg' },
+    { name: 'report.txt', mimeType: 'application/pdf', ext: '.pdf' },
+  ])('derives the staged extension from validated content: $name as $mimeType', async ({ name, mimeType, ext }) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-composer-ext-'));
+    state.userData = root;
+    const send = vi.fn();
+    const { webContents } = await import('electron');
+    vi.mocked(webContents.fromId).mockReturnValue({ isDestroyed: () => false, send } as never);
+    try {
+      await state.deps!.sendComposerAttachment!({
+        caller: 'renderer:1', sessionId: 'task', viewId: 'view', resourceKey: `ext-${name}`, name,
+        mimeType, size: 3, bytes: new Uint8Array([1, 2, 3]), assertCurrent: async () => {},
+      });
+      expect(send.mock.calls[0]![1].attachment).toEqual(expect.objectContaining({ name, ext }));
     } finally {
       state.userData = '';
       await fs.rm(root, { recursive: true, force: true });
