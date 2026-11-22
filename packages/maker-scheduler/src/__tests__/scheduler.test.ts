@@ -2860,6 +2860,197 @@ describe('Scheduler', () => {
     }
   });
 
+  // Codex P1 on #12087(第十轮复评):「CAS 落空 → 回读 → 恢复写入」这条路上的写入也可能
+  // 再落空(又一个并发写在回读之后落了 lastFiredAt)。此时不能收尾 —— 收尾会摘掉重试
+  // 凭据,而 runNow 收口与周期 DB sync 都不补 nextFireAt,任务停摆到进程重启。这次没
+  // 做成:凭据继续上膛,由后续 tick 重试。
+  it('keeps the replan credential armed when a second run-now also loses the recovery CAS', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 10_000,
+        runStallAbortGraceMs: 1_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+        runnerImpl: (_s, ctx) => new Promise<FireResult>(() => {
+          ctx.signal.addEventListener('abort', () => {});
+        }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 60_000 });
+      const realGet = h.storage.get.bind(h.storage);
+      const realUpdate = h.storage.update.bind(h.storage);
+      const inReplanPath = () => (new Error().stack ?? '').includes('applyStalledClaimReplan');
+      let staleRow: Schedule | null = null;
+      let replanReads = 0;
+      let replanWrites = 0;
+      vi.spyOn(h.storage, 'get').mockImplementation(async (id: string) => {
+        if (id !== sch.id) return realGet(id);
+        if (!inReplanPath()) return realGet(id);
+        replanReads += 1;
+        // 补排的第一次回读拿到的是**第一个 runNow 落 lastFiredAt 之前**那一版 →
+        // 它的补排 CAS 必然落空。
+        if (replanReads === 1 && staleRow) return { ...staleRow };
+        return realGet(id);
+      });
+      vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+        if (!inReplanPath()) return realUpdate(id, patch, expected);
+        replanWrites += 1;
+        if (replanWrites === 2) {
+          // 又一个并发 runNow 在回读之后、恢复写入之前落了 lastFiredAt → 这次也落空。
+          const row = await realGet(id);
+          if (row) await realUpdate(id, { lastFiredAt: h.clock.now() }, row);
+          return null;
+        }
+        return realUpdate(id, patch, expected);
+      });
+
+      // 第一轮 run:认领之后那一版,再模拟第一个并发 runNow 落 lastFiredAt。
+      h.clock.advance(60_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      staleRow = { ...(await h.storage.get(sch.id))! };
+      const claimed = (await realGet(sch.id))!;
+      await h.storage.update(sch.id, { lastFiredAt: h.clock.now() }, claimed);
+
+      // 强制收口:补排 CAS 落空 → 回读 → 恢复写入也落空。
+      h.clock.advance(10_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(1_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+
+      // 两次写入都落空:行仍是没有排期的周期任务,凭据必须还在。
+      expect(replanWrites).toBe(2);
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBeUndefined();
+
+      // 下一个 tick 的重试把排期补上(凭据没被摘掉)。
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      const replanned = h.storage.schedules.get(sch.id)?.nextFireAt ?? 0;
+      expect(replanned).toBeGreaterThan(h.clock.now());
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Codex P1 on #12087(第十轮复评):退役补排写下的旧排期落库之后,用户只改元数据
+  // (name / prompt)时,行级 updatedAt 被推进而 nextFireAt 原样保留。收据指纹若带上
+  // 行级修订,这份排期就再也认不出来 —— 恢复时按"别人写的排期"保留它,长故障之后
+  // 立即补跑 / 与新一轮重叠。元数据编辑不动作排期语义,收据必须继续有效。
+  it('still takes over a retired replan write after a metadata-only edit', async () => {
+    vi.useFakeTimers();
+    try {
+      let runStarts = 0;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+        runnerImpl: (_s, ctx) => {
+          runStarts += 1;
+          return new Promise<FireResult>(() => {
+            ctx.signal.addEventListener('abort', () => {});
+          });
+        },
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 60_000 });
+      const realGet = h.storage.get.bind(h.storage);
+      const realUpdate = h.storage.update.bind(h.storage);
+      const realListActive = h.storage.listActive.bind(h.storage);
+      const inReplanPath = () => (new Error().stack ?? '').includes('applyStalledClaimReplan');
+      let releaseOldWrite!: () => void;
+      let oldWriteLanded!: () => void;
+      const oldWriteLandedPromise = new Promise<void>((resolve) => { oldWriteLanded = resolve; });
+      let replanReads = 0;
+      let replanWrites = 0;
+      let staleValue = 0;
+      vi.spyOn(h.storage, 'get').mockImplementation((id: string) => {
+        if (id !== sch.id) return realGet(id);
+        if (!inReplanPath()) return realGet(id);
+        replanReads += 1;
+        // 第一次补排的回读失败 → 凭据上膛;之后的回读照常。
+        if (replanReads === 1) return Promise.reject(new Error('storage unavailable'));
+        return realGet(id);
+      });
+      vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+        if (!inReplanPath()) return realUpdate(id, patch, expected);
+        replanWrites += 1;
+        if (replanWrites === 1) {
+          // 被退役的那次补排:写卡住,直到换发出来的那次把它放行。故障持续很久,
+          // 它算出的时刻落地时已经落在过去。落笔时按**当下**那一版 CAS —— 行在
+          // 等待期间被周期 DB sync 推进过,这份旧排期确实落进库里(要接管的正是它)。
+          await new Promise<void>((resolve) => { releaseOldWrite = resolve; });
+          const row = (await realGet(id))!;
+          const out = await realUpdate(id, patch, row);
+          staleValue = out?.nextFireAt ?? 0;
+          oldWriteLanded();
+          return out;
+        }
+        if (replanWrites === 2) {
+          // 换发出来的那次补排:旧的那条先落笔,于是自己的快照 CAS 落空。
+          releaseOldWrite();
+          await oldWriteLandedPromise;
+          // 用户在旧排期落库之后只改了元数据:updatedAt 推进,nextFireAt 原样保留。
+          const row = (await realGet(id))!;
+          await realUpdate(id, { name: 'renamed by the user', updatedAt: h.clock.now() }, row);
+          expect(h.storage.schedules.get(id)?.nextFireAt).toBe(staleValue);
+          return null;
+        }
+        // 接管写:真的落笔。
+        return realUpdate(id, patch, expected);
+      });
+      let bulkFailed = false;
+      vi.spyOn(h.storage, 'listActive').mockImplementation(() =>
+        bulkFailed ? new Promise<Schedule[]>(() => {}) : realListActive());
+
+      // 第一轮 run:跑挂 → 强制收口 → 那次补排的回读失败(凭据上膛)。
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(replanReads).toBe(1);
+
+      // 重试一次补排:回读成功,写排期卡住(旧的那条在途)。
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanReads).toBe(2);
+      expect(replanWrites).toBe(1);
+
+      // 故障持续很久:被退役的那次补排算出的时刻已经落在过去。
+      h.clock.advance(7_200_000);
+
+      // 批量读失败一代(代次冻结)后恢复 → 换发第二次补排:旧的那条先落笔,用户随后
+      // 只改元数据,新的那次 CAS 落空 → 回读仍要认出退役写入并按恢复时刻接管。
+      bulkFailed = true;
+      h.clock.advance(30_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanWrites).toBe(1);
+      bulkFailed = false;
+      h.clock.advance(30_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+
+      const persisted = h.storage.schedules.get(sch.id)?.nextFireAt ?? 0;
+      // 恢复后不得**立即补跑**:退役写入的旧排期按故障前时刻算出,长故障之后已经落在
+      // 过去 —— 一旦被当成「别人写的排期」保留下来,恢复即刻就被认领触发(第二次 run)。
+      expect(runStarts).toBe(1);
+      expect(persisted).toEqual(expect.any(Number));
+      // 不得是「按故障前时刻算出、已经落在过去」的那个排期。
+      expect(persisted).toBeGreaterThan(h.clock.now());
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Codex P1 on #12087(第五、六轮复评):退役写入的指纹不能只是 nextFireAt 或 CAS 字段。
   // 用户把 cadence 改走再改回原值时,CAS 字段与 nextFireAt 都能回到收据中的值(ABA),
   // 但 updatedAt 已推进;不能把用户那一版当成退役写入接管掉,静默跳过用户选中的排期。

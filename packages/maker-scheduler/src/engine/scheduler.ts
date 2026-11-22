@@ -2916,6 +2916,15 @@ export class Scheduler extends EventEmitter {
       this.invalidScheduleIds.delete(id);
       this.activeSchedules.delete(id);
     }
+    // 用户的编辑只要动到排期字段(排期、cron / interval / 时区 / 截止时间 /
+    // recurring / manual / status / lastFiredAt),这一版就不再是任何一次补排写下的
+    // 排期 —— 作废该任务名下的签发收据:用户把 cadence 改走再改回原表达式时,行里的
+    // CAS 身份与 nextFireAt 会重新等于旧收据(ABA),不动作废就会把用户那一版误认成
+    // 退役写入接管掉,静默跳过用户选中的槽位(Codex P1 on #12087 第六、十轮复评)。
+    // 只改 name / prompt 等元数据时排期原样保留,收据继续有效。
+    if (replanWriteIdentity(updated) !== replanWriteIdentity(existing)) {
+      this.invalidateReplanWriteReceipts(id);
+    }
     // DEBUG: 帮排查"编辑后 pending fire 没刷新"问题；只在触发字段变更时打。
     // 看 dev 日志能直接确认 nextFireAt 是否被引擎正确重排。
     if (recomputeFromTo) {
@@ -4447,6 +4456,26 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
+   * 用户改动动到**排期语义**时作废该任务名下的全部补排收据。
+   *
+   * 退役写入的指纹是「写入时那一版的 CAS 身份 + nextFireAt 值」(见
+   * replanWriteIdentity)。用户把 cadence 改走再改回原表达式时,落库后的 CAS 字段
+   * 与 nextFireAt 可能再次与旧收据逐项相同(ABA)—— 所以指纹本身认不出"这行是用户
+   * 改回来的"。解法不在指纹里堆更多字段,而是**在源头作废**:用户的编辑只要改了排期
+   * 字段,这一版就不再是任何一次补排写下的排期,收据全部作废。
+   *
+   * 只改 name / prompt 等元数据时**不动作排期字段**,按语义 nextFireAt 原样保留 ——
+   * 那份排期仍是补排写下的那一个,收据必须继续有效(Codex P1 on #12087 的第十轮复评)。
+   */
+  private invalidateReplanWriteReceipts(scheduleId: string): void {
+    if (this.replanWriteReceipts.delete(scheduleId)) {
+      this.logger?.info?.('scheduler: invalidated replan write receipts after a scheduling edit', {
+        scheduleId,
+      });
+    }
+  }
+
+  /**
    * replanAfterStalledClaim 的函数体。
    *
    * 返回 true = 结论已定(凭据可以摘掉);返回 false = 这次没做成 —— 本次补排已被
@@ -4647,6 +4676,10 @@ export class Scheduler extends EventEmitter {
         const freshNext = computeNextFireAt(fresh, now);
         if (freshNext !== undefined) {
           updated = await this.writeReplanNextFireAt(scheduleId, fresh, freshNext, attempt);
+          // 接管写也落空:行里留着的是按故障前时刻算出的旧排期,长故障之后已经落在
+          // 过去 —— 恢复后立即补跑 / 与新一轮重叠。这次没做成,凭据继续上膛,由后续
+          // tick 重试(Codex P1 on #12087)。
+          if (!updated) return false;
         }
       } else if (
         fresh &&
@@ -4663,6 +4696,11 @@ export class Scheduler extends EventEmitter {
           const freshNext = computeNextFireAt(fresh, now);
           if (freshNext !== undefined) {
             updated = await this.writeReplanNextFireAt(scheduleId, fresh, freshNext, attempt);
+            // 补排写也落空:又一个并发写(再一次 runNow / 用户编辑)在回读之后落了
+            // 一笔,行仍是没有排期的周期任务。收尾会把重试凭据摘掉,而 runNow 收口与
+            // 周期 DB sync 都不补 nextFireAt —— 任务停摆到进程重启。这次没做成,
+            // 凭据继续上膛,由后续 tick 重试(Codex P1 on #12087)。
+            if (!updated) return false;
           }
         } else {
           // 新版是**一次性**任务:用户在补排挂起期间把周期任务改成了一次性(改
@@ -4802,18 +4840,23 @@ export class Scheduler extends EventEmitter {
  * 会把用户这次的触发静默跳过(Codex P1 on #12087 的第五轮复评)。
  */
 /**
- * 收据指纹:写入时那一版的「行修订 + CAS 身份」。
+ * 收据指纹:写入时那一版的 **CAS 身份**(storage.update 的 expected 判据那一组字段:
+ * lastFiredAt / nextFireAt / status / recurring / manual / cronExpr / timezone /
+ * intervalMs / expireAt)。判据一致 = 行里这个值确实是补排写下的那一个,且行没有被
+ * 后续**排期**改动动过。
  *
- * CAS 身份那几项与 storage.update 的 expected 同源,说明行里这个值确实是补排写下的
- * 那一个;**行修订 `updatedAt` 也要带上**:用户把 cadence 改走再改回原表达式时,
- * 落库后的 CAS 字段与 nextFireAt 可能再次与旧收据逐项相同(ABA),只有 `updatedAt`
- * 被用户那次更新推进过 —— 不带修订就会把用户改回来的新版认成退役写入,接管到
- * 下个槽位、静默跳过 X(Codex P1 on #12087 的第六轮复评)。补排自己只写 nextFireAt,
- * 不动 `updatedAt`,所以收据记的修订就是落库后那一行的修订。
+ * 刻意**不带**行级修订 `updatedAt`:它会被任何一次编辑推进 —— 包括只改 name /
+ * prompt 的元数据编辑(那种编辑按语义保留 nextFireAt)。带上它,退役补排写下的旧排期
+ * 会在用户改个名字之后再也认不出来,恢复时按"别人写的排期"保留它,长故障后立即补跑
+ * 或重叠(Codex P1 on #12087 的第十轮复评)。
+ *
+ * 那么 ABA(用户把 cadence 改走再改回原表达式)怎么办?靠**签发账本的作废**:用户
+ * 的编辑只要动到排期字段,updateUnlocked 就作废该任务名下的全部补排收据(见
+ * invalidateReplanWriteReceipts)—— 改回来时收据早已不在,不会把用户那一版误认成
+ * 退役写入。元数据编辑不动作排期字段,收据照旧有效。
  */
 function replanWriteIdentity(row: Schedule): string {
   return JSON.stringify([
-    row.updatedAt,
     row.lastFiredAt ?? null,
     row.nextFireAt ?? null,
     row.status,
