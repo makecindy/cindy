@@ -16566,6 +16566,9 @@
       "taskInfoSummaryNone": "无",
       "taskInfoSummarySeparator": "、",
       "taskInfo": {
+        "harness": "Harness 图标",
+        "project": "案徽与名",
+        "teammate": "同伴像",
         "time": "时",
         "pr": "PR 之状",
         "worktree": "worktree",

@@ -16796,6 +16796,9 @@
       "taskInfoSummaryNone": "Nenhum",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Ícone do harness",
+        "project": "Ícone e nome do projeto",
+        "teammate": "Avatar do colega",
         "time": "Tempo",
         "pr": "Status do PR",
         "worktree": "worktree",
