@@ -1,13 +1,15 @@
 /**
  * Desktop reads behind `[你开出的任务]` (startedTaskStateNote.ts). Every read is bounded: the opener's
- * rows use `idx_messages_session_created` within the window and a row limit, the task rows are a
- * primary-key lookup of at most 20 ids, and the live phase is the
- * in-memory runtime snapshot get_task_digest already reads.
+ * rows use `idx_messages_session_created` within the window and a row limit; the tasks are one
+ * primary-key query for at most STARTED_TASK_LOOKUP_LIMIT ids, and their state comes from the batch
+ * canonical activity reader (one pass over the live list; a task that is not live adds only its
+ * latest-terminal read), the projection the task list and get_task_digest are built on.
  */
 import { and, desc, eq, gte, inArray, isNull, like, or } from 'drizzle-orm';
 
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
+import type { PersistedSessionActivityFacts } from './sessionActivityProjection.js';
 import {
   readStartedTaskStateNote,
   type StartedTaskLive,
@@ -15,7 +17,7 @@ import {
 } from './startedTaskStateNote.js';
 
 export function createDesktopStartedTaskStateNoteReader(
-  readLive: (sessionId: string) => Promise<StartedTaskLive | null>,
+  createActivityReader: (persisted: ReadonlyMap<string, PersistedSessionActivityFacts>) => (sessionId: string) => Promise<StartedTaskLive>,
 ): (sessionId: string, opts: { currentSenderSessionId?: string }) => Promise<string | null> {
   const deps: StartedTaskStateNoteDeps = {
     now: () => Date.now(),
@@ -53,12 +55,23 @@ export function createDesktopStartedTaskStateNoteReader(
     readTasks: async (sessionIds) => {
       const db = getCurrentDbClientSnapshot()?.client.drizzle;
       if (!db || sessionIds.length === 0) return [];
-      return db
-        .select({ id: sessions.id, title: sessions.title, status: sessions.status })
+      const rows = await db
+        .select({
+          id: sessions.id,
+          title: sessions.title,
+          status: sessions.status,
+          startedAt: sessions.activeTurnStartedAt,
+          endedAt: sessions.lastTurnEndedAt,
+          clearedAt: sessions.clearedAt,
+        })
         .from(sessions)
         .where(and(inArray(sessions.id, [...sessionIds]), isNull(sessions.remoteHostId)));
+      const active = rows.filter((row) => row.status === 'active');
+      const readActivity = createActivityReader(new Map(active.map((row) => [row.id, row])));
+      const live = new Map<string, StartedTaskLive | null>();
+      for (const row of active) live.set(row.id, await readActivity(row.id).catch(() => null));
+      return rows.map((row) => ({ id: row.id, title: row.title, status: row.status, live: live.get(row.id) ?? null }));
     },
-    readPhase: readLive,
   };
   return (sessionId, opts) => readStartedTaskStateNote(sessionId, opts, deps);
 }

@@ -499,7 +499,7 @@ import {
   finalizeSessionClose,
   runSessionCloseCleanup,
 } from './sessionBindingLifecycle.js';
-import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
+import { createCanonicalSessionActivityBatchReader, readCanonicalSessionActivity } from './sessionActivityProjection.js';
 import { snapshotSessionBackgroundTasks } from './sessionBackgroundTasksSnapshot.js';
 import {
   listAtBrowserTabs,
@@ -3352,11 +3352,11 @@ let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
 let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 let codexIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
-/** `[你开出的任务]` reader; the live phase is the runtime snapshot get_task_digest also reads. */
-const readStartedTaskStateNoteForOwner = createDesktopStartedTaskStateNoteReader(async (taskId) => {
-  const result = await tryGetOrcaCollabService()?.getSessionRuntime({ targetSessionId: taskId });
-  return result?.ok ? result.runtime : null;
-});
+/**
+ * `[你开出的任务]` reader. The state is the batch canonical activity the task list and get_task_digest
+ * are built on, without the runtime profile and teammate reads getSessionRuntime adds per task.
+ */
+const readStartedTaskStateNoteForOwner = createDesktopStartedTaskStateNoteReader(createCanonicalSessionActivityBatchReader);
 /** A shared task's turns are seen by its guests; the owner's task titles stay out of them. */
 function readStartedTaskStateNote(sessionId: string, opts: { currentSenderSessionId?: string }): Promise<string | null> {
   return isSessionSharedTaskActive(sessionId) ? Promise.resolve(null) : readStartedTaskStateNoteForOwner(sessionId, opts);

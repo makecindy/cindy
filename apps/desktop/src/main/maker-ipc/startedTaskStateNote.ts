@@ -7,7 +7,8 @@
  * 卡在授权或出错都要自己去查，常把旧状态当成最新状态带回主聊天。
  *
  * 数据全部是已有的：开出的任务来自这条对话自己落库的 send_to_session 回执（`wake_kind: created`），
- * 「发回过」来自它收到的、`origin.senderSessionId` 是该任务的来信，状态来自任务运行时快照。读取按
+ * 「发回过」来自它收到的、`origin.senderSessionId` 是该任务的来信，状态来自任务的规范活动快照
+ * （readCanonicalSessionActivity，任务列表与 get_task_digest 同源）。读取按
  * `idx_messages_session_created` 限在最近 {@link STARTED_TASK_NOTE_WINDOW_MS} 与 /clear 之后，最多
  * {@link OPENER_ROW_LIMIT} 行；不新增表、字段或持久状态。说明只进当次 wire 消息，不落库，按
  * wireNoteMemory 的规则内容没变就不重复。
@@ -16,8 +17,8 @@ import { formatSourceRef } from '@cindy/maker-shared/message-source';
 
 export const STARTED_TASK_NOTE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 export const STARTED_TASK_NOTE_MAX_TASKS = 5;
-/** How many unreported tasks are looked up to find the ones worth listing (one primary-key query). */
-const STARTED_TASK_LOOKUP_LIMIT = 20;
+/** How many unreported tasks are looked up to find the ones worth listing (one batch read). */
+export const STARTED_TASK_LOOKUP_LIMIT = 10;
 export const OPENER_ROW_LIMIT = 400;
 
 export interface OpenerMessageRow {
@@ -44,10 +45,11 @@ export interface StartedTaskStateNoteDeps {
   readOpenerRows(sessionId: string, sinceMs: number, limit: number): Promise<OpenerMessageRow[]>;
   /** The opener's /clear boundary; earlier hand-offs are not in its context any more. */
   readClearedAt(sessionId: string): Promise<number | null>;
-  /** Title and record status of local tasks; missing ids are gone. */
-  readTasks(sessionIds: readonly string[]): Promise<Array<{ id: string; title: string | null; status: string }>>;
-  /** Live activity of a local task (the snapshot get_task_digest reads), null when unknown. */
-  readPhase(sessionId: string): Promise<StartedTaskLive | null>;
+  /**
+   * Title, record status and canonical activity (what the task list and get_task_digest show) of
+   * local tasks, read as one batch; missing ids are gone, a missing `live` is unknown.
+   */
+  readTasks(sessionIds: readonly string[]): Promise<Array<{ id: string; title: string | null; status: string; live: StartedTaskLive | null }>>;
 }
 
 function parseJson(value: string | null | undefined): unknown {
@@ -91,16 +93,18 @@ export function collectUnreportedStartedTasks(
   rows: readonly OpenerMessageRow[],
   currentSenderSessionId?: string,
 ): Array<{ sessionId: string; createdAt: number }> {
-  const calls = new Set<string>();
+  // The call's time, not the receipt's: the new task can write back before its receipt is saved.
+  const calls = new Map<string, number>();
   for (const row of rows) {
-    if (row.role === 'tool_use' && row.toolUseId && isSendToSessionCall(row.content)) calls.add(row.toolUseId);
+    if (row.role === 'tool_use' && row.toolUseId && isSendToSessionCall(row.content)) calls.set(row.toolUseId, row.createdAt);
   }
   const created = new Map<string, number>();
   const lastLetter = new Map<string, number>();
   for (const row of rows) {
-    if (row.role === 'tool_result' && row.toolUseId && calls.has(row.toolUseId)) {
+    const calledAt = row.role === 'tool_result' && row.toolUseId ? calls.get(row.toolUseId) : undefined;
+    if (calledAt !== undefined) {
       const id = createdTarget(row.content);
-      if (id) created.set(id, Math.min(created.get(id) ?? row.createdAt, row.createdAt));
+      if (id) created.set(id, Math.min(created.get(id) ?? calledAt, calledAt));
     } else if (row.role === 'user') {
       const sender = letterSender(row.agentMeta);
       if (sender) lastLetter.set(sender, Math.max(lastLetter.get(sender) ?? 0, row.createdAt));
@@ -166,7 +170,7 @@ export async function readStartedTaskStateNote(
     const row = known.get(task.sessionId);
     // Archived or deleted tasks were put away on purpose; do not bring them back up.
     if (!row || row.status !== 'active') continue;
-    const state = startedTaskState(await deps.readPhase(task.sessionId).catch(() => null));
+    const state = startedTaskState(row.live);
     if (state) entries.push({ sessionId: task.sessionId, title: row.title, state });
   }
   return buildStartedTaskStateNote(entries);

@@ -143,8 +143,8 @@ Agent 用 `send_to_session` 把消息发给另一台电脑上的任务时（包�
 各一行「任务「X」(session_id: …)：空闲 / 出错 / 等待主人确认 / 等待主人回答」，最多 5 条，结尾指向 `get_task_digest`。
 它**不是**来源说明，也不回传结果、不唤醒任何任务：只在本来就要发生的一轮里陈述状态事实，所以没有界面标签；界面上的对应物是
 伙伴对话里「↳ 开了任务」链接旁的实时状态（[伙伴运行时](cindy-bots-runtime.md) 6.1）。数据都已有：开出的任务读这条对话落库的
-`send_to_session` 回执（`wake_kind: created`、本机 id），发回过读它收到的 `origin.senderSessionId` 来信（含正在发的这条），状态读
-`get_task_digest` 同一份运行时快照；运行中的、已归档或删除的、另一台电脑上的都不列。读取限最近 3 天且在 `/clear` 之后、最多 400 行，
+`send_to_session` 回执（`wake_kind: created`、本机 id），发回过读它在发起调用之后收到的 `origin.senderSessionId` 来信（以调用时间为界，回执可能晚于对方回信落库；含正在发的这条），状态读
+任务列表与 `get_task_digest` 同源的活动快照（批量读：一次实时列表加一次任务行查询）；运行中的、已归档或删除的、另一台电脑上的都不列。读取限最近 3 天且在 `/clear` 之后、最多 400 行，
 走 `idx_messages_session_created`。说明只进 wire 消息，不落库、不进 `getAgentFacingText`，按 wireNoteMemory 内容没变就不重复，
 原生上下文压缩或交接后重发一次；共享任务的访客那一轮、原生命令轮次和远程主机任务不加。实现见 `startedTaskStateNote.ts`。
 
