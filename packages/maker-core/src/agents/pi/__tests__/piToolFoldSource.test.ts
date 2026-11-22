@@ -230,6 +230,13 @@ describe('cindy-tool-fold extension source', () => {
     expect(callIds(out)).toContain('call-32');
   });
 
+  it('never projects more characters than the request carried', () => {
+    const { context } = loadExtension();
+    const messages = pairs(40);
+    const out = projection(context, messages);
+    expect(JSON.stringify(out).length).toBeLessThan(JSON.stringify(messages).length);
+  });
+
   it('keeps folds sticky and does not rewrite them again until the next batch', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const first = projection(context, pairs(40));
@@ -282,6 +289,32 @@ describe('cindy-tool-fold extension source', () => {
     const released = projection(context, nextTurn);
     expect(callIds(released)).not.toContain('call-5');
     expect(records(released).join('\n')).toContain('call-5');
+  });
+
+  it('clears pins when compaction drops a user message and a new turn replaces it', async () => {
+    const { context, tool } = loadExtension();
+    const base = pairs(40);
+    const turn1 = [{ role: 'user', content: [{ type: 'text', text: 'first turn' }] }, ...base];
+    projection(context, turn1);
+    await tool.execute('t2', { call_id: 'call-5' });
+    expect(callIds(projection(context, turn1))).toContain('call-5');
+    // 压缩掉了旧的 user 消息，新回合又补上一条：条数不变，边界仍必须识别出来，
+    // 否则陈旧的 pin 会跟到新回合里继续占上下文。
+    const turn2 = [...base, { role: 'user', content: [{ type: 'text', text: 'second turn' }] }];
+    expect(callIds(projection(context, turn2))).not.toContain('call-5');
+  });
+
+  it('refuses a recovery the retention budget cannot hold instead of pinning it back', async () => {
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANT_BUDGET: '100000' });
+    const messages = pairs(40);
+    messages[22] = call('too-big', 'bash', { command: 'cat huge.log' });
+    messages[23] = result('too-big', 'bash', 'z'.repeat(200000));
+    projection(context, messages);
+    const read = await tool.execute('t3', { call_id: 'too-big' });
+    expect(read.isError).toBe(true);
+    expect(String(read.content![0].text)).toContain('retention budget');
+    // 转存被拒也不能钉住：否则一次取回就把整段原文塞回请求。
+    expect(callIds(projection(context, messages))).not.toContain('too-big');
   });
 
   it('slices a large folded record without pinning the whole history back in', async () => {
