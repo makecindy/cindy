@@ -407,7 +407,7 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
       ['channel', 'im:imessage:imessage-1:dm:any;-;+8613000000000'],
     ] as const) {
       seed(role, routeKey, { ...narrow, projectMode: true });
-      const lane = { id: 'lane', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+      const lane = { id: 'lane', agentKind: 'pi', workingDir: path.resolve('/bots/bot/workspace'), model: 'm' } as MakerSessionCreateOpts;
       const laneSnapshot = await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
       expect(lane.botRuntimeProfile?.projectContext, routeKey).toBe(true);
       expect(laneSnapshot?.disabledToolsets, routeKey).toEqual([]);
