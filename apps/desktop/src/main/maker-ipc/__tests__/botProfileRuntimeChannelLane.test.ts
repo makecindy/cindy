@@ -57,6 +57,18 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(prompt(opts)).toContain(JSON.stringify(path.resolve('/bots/bot/workspace', '.cindy', 'memory')));
   });
 
+  // Review P2 (#12128): a tools lane without a group project runs in its own dialogue workspace outside
+  // Home. That is not a project, so it keeps the teammate's one project memory instead of a private one.
+  it('keeps the teammate project memory for a group lane in a dialogue workspace', async () => {
+    seed('group', 'group:g1:access:tools:1:mask:member-1', { projectMode: true, memory: true });
+    const opts = { id: 'lane', agentKind: 'codex', workingDir: path.resolve('/dialogues/lane-1'), workspaceKind: 'dialogue', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(opts, {
+      readProfileFolder: async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' }),
+    }, { persistSnapshot: false });
+    expect(opts.botRuntimeProfile?.projectContext).toBe(true);
+    expect(opts.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
+  });
+
   // Integration: rehydrate the same owner group twice with same-named memory records.
   // A replacement of the project scope loses the original record on the first or resumed turn.
   it('preserves separate on-disk group and teammate records across rehydration', async () => {

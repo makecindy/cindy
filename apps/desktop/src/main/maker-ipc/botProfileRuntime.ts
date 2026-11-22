@@ -625,7 +625,10 @@ export async function hydrateBotProfileRuntime(
   const workspaceDir = botHomeDir ? path.join(path.resolve(botHomeDir), 'workspace') : '';
   const inTeammateWorkspace = !!workspaceDir && path.resolve(opts.workingDir) === workspaceDir;
   // A group lane working in the group's project folder on this computer (bot-group-chat.md §7.5).
+  // A lane without a project runs in its own dialogue workspace, also outside Home: that is not a
+  // project, so it keeps the teammate's project memory.
   const groupProjectLane = row.role === 'group' && GROUP_CONVERSATION_LANE.test(row.routeKey ?? '')
+    && opts.workspaceKind !== 'dialogue'
     && !!workspaceDir && !inTeammateWorkspace
     && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);
   // Every session of a V2 teammate runs as an ordinary project task wherever it works: the owner's
