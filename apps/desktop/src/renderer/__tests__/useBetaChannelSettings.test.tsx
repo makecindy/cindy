@@ -58,4 +58,17 @@ describe('useBetaChannelSettings', () => {
     expect(switchConsumer.result.current.state.enableBeta).toBe(false);
     expect(badgeConsumer.result.current.state.enableBeta).toBe(false);
   });
+
+  it('defers the initial read until the hidden settings section is enabled', async () => {
+    const getSettings = window.electronAPI.getUpdateChannelSettings as ReturnType<typeof vi.fn>;
+    const consumer = renderHook(({ enabled }) => useBetaChannelSettings({ enabled }), {
+      initialProps: { enabled: false },
+    });
+
+    expect(getSettings).not.toHaveBeenCalled();
+    consumer.rerender({ enabled: true });
+
+    await waitFor(() => expect(consumer.result.current.state.loading).toBe(false));
+    expect(getSettings).toHaveBeenCalledTimes(1);
+  });
 });

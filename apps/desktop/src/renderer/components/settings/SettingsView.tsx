@@ -626,7 +626,7 @@ function SettingsViewContent() {
 
                           {/* Section — Experimental. */}
                           <section id={generalSettings.experimental.targetId} aria-label={t(generalSettings.experimental.titleKey)}>
-                            <ExperimentalSection />
+                            <ExperimentalSection enabled={advancedOpen} />
                           </section>
                         </div>
                       </SectionCollapse>

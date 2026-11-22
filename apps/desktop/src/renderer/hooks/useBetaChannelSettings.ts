@@ -41,7 +41,7 @@ function publishState(payload: BetaChannelSettingsPayload): void {
  * beta 测试渠道(设备级)开关的状态与写操作。
  * 语义与 auto-update-settings 一致:默认值 + override,恢复默认只删 override。
  */
-export function useBetaChannelSettings(): {
+export function useBetaChannelSettings({ enabled = true }: { enabled?: boolean } = {}): {
   state: BetaChannelSettingsState;
   setEnableBeta: (enabled: boolean) => Promise<void>;
   reset: () => Promise<void>;
@@ -49,6 +49,7 @@ export function useBetaChannelSettings(): {
   const [state, setState] = useState<BetaChannelSettingsState>(INITIAL);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     let latestSeq = 0;
     const applyPayload = (payload: BetaChannelSettingsPayload) => {
@@ -73,7 +74,7 @@ export function useBetaChannelSettings(): {
       stateSubscribers.delete(applyPayload);
       unsubscribe();
     };
-  }, []);
+  }, [enabled]);
 
   const setEnableBeta = useCallback(async (enabled: boolean) => {
     const payload = await window.electronAPI.setUpdateChannelSettings({
