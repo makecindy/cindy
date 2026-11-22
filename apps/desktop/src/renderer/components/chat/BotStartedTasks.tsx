@@ -148,7 +148,8 @@ export function useLinkedTaskStatus(sessionId: string, hostSessionId: string | u
   const attention = useSessionAttentionKind(deviceId ? '' : id);
   const known = useSyncExternalStore(
     (onChange) => sessionsStore.subscribe(onChange),
-    () => !deviceId && sessionsStore.findById(id) !== null,
+    // Archived tasks keep only the link: whether they are cached depends on the archive view being open.
+    () => !deviceId && sessionsStore.findById(id)?.status === 'active',
   );
   return resolveLinkedTaskStatus({
     run,
@@ -166,14 +167,17 @@ const STATUS_LABEL = {
   idle: 'chat.botStartedTasks.status.idle',
 } as const satisfies Record<LinkedTaskStatus, string>;
 
-/** "· Running" after a started task's title; colour only where the owner may need to act. */
+/**
+ * "· Running" after a started task's title, in the secondary ink of the "Started" label beside it: it is
+ * read, not de-emphasized metadata. Colour (a static AttentionDot) only where the owner may need to act.
+ */
 function LinkedTaskStatusLabel({ sessionId, hostSessionId }: { sessionId: string; hostSessionId?: string }) {
   const { t } = useTranslation();
   const status = useLinkedTaskStatus(sessionId, hostSessionId);
   if (!status) return null;
   const dot = STATUS_DOT[status];
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 text-[var(--text-tertiary)]" data-testid="bot-started-task-status" data-status={status}>
+    <span className="inline-flex shrink-0 items-center gap-1 text-[var(--text-secondary)]" data-testid="bot-started-task-status" data-status={status}>
       <span aria-hidden>·</span>
       {dot ? <AttentionDot tone={dot} /> : null}
       <span>{t(STATUS_LABEL[status])}</span>

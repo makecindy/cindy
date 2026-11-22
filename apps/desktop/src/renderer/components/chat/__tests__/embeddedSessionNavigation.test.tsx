@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
     status: 'active',
   })),
   resolveSessionMessageText: vi.fn(async () => 'Target message\nfull text'),
+  listSessions: vi.fn(async (): Promise<unknown[]> => []),
 }));
 
 function deferred<T>() {
@@ -52,7 +53,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     pinSessionOrigin: mocks.pinSessionOrigin,
   },
 }));
-vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession }));
+vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession, list: mocks.listSessions }));
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.error, success: vi.fn() } }));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => 'this-mac' }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
@@ -82,6 +83,7 @@ import { SessionHandoffCard } from '../SessionHandoffCard';
 import { SessionLinkChip } from '../SessionLinkChip';
 import { BotStartedTasks, BotStartedTasksFooter, BotTaskLetterOpen, resolveLinkedTaskStatus } from '../BotStartedTasks';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { sessionsStore } from '@/lib/sessionsStore';
 import { addSessionAttention, clearSessionAttention } from '@/lib/sessionAttentionStore';
 
 function embedded(children: ReactNode, sidebarTargetSessionId?: string) {
@@ -190,6 +192,27 @@ describe('sidebar-embedded session navigation boundary', () => {
       expect(status()).toBe('error');
     } finally {
       act(() => { clearSessionAttention(sessionId, { intent: 'explicit' }); makerChatStore.purgeSession(sessionId); });
+    }
+  });
+
+  // Walk-through for #12051: a task this computer knows reads Idle; an archived one keeps only its
+  // link, instead of reading Idle only when the archive list happens to be loaded. Unit tier.
+  it('reads idle for a known active task and nothing for an archived one', async () => {
+    const now = new Date().toISOString();
+    const rows = [
+      { id: 'known-active', title: 'Active', status: 'active', source: 'desktop', createdAt: now, updatedAt: now },
+      { id: 'known-archived', title: 'Archived', status: 'archived', source: 'desktop', createdAt: now, updatedAt: now },
+    ];
+    mocks.listSessions.mockResolvedValueOnce(rows);
+    await act(async () => { await sessionsStore.ensureByFilter('all', { fresh: true }); });
+    try {
+      render(<BotStartedTasksFooter tasks={[
+        { sessionId: 'known-active', title: 'Active', created: true },
+        { sessionId: 'known-archived', title: 'Archived', created: true },
+      ]} />);
+      expect(screen.getAllByTestId('bot-started-task-status').map((node) => node.getAttribute('data-status'))).toEqual(['idle']);
+    } finally {
+      act(() => sessionsStore.reset());
     }
   });
 
