@@ -29,7 +29,7 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
       return result({ error: 'PERMISSION_DENIED' }, true);
     }
     if (!scope.im.listChats().some(chat => chat.guid === target)) return result({ error: 'CHAT_NOT_CONNECTED' }, true);
-    try { return result(await run(scope, target)); }
+    try { scope.assertCurrent?.(); return result(await run(scope, target)); }
     catch { return result(failure ? { error: failure } : { error: 'IMESSAGE_OPERATION_FAILED', message: '操作未确认完成。发送失败时请先查聊天记录，避免重复发送。' }, true); }
   };
   const chat = z.string().max(512).optional().describe('Default: current chat. Another connected chat requires an owner DM turn.');
@@ -67,6 +67,8 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
         const relative = path.relative(await fs.realpath(workingDir), realFile);
         if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('PERMISSION_DENIED');
       }
+      // A host-resolved lane scope is re-checked after the path checks, right before sending.
+      scope.assertCurrent?.();
       return scope.im.sendFile(target, realFile, name);
     }));
   server.tool('history', 'Read one page of iMessage history from a connected conversation. Returns at most 100 messages; advance offset for the next page.',

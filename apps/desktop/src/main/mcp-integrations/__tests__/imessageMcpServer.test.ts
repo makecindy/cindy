@@ -58,6 +58,10 @@ it('falls back to the lane scope only when no inbound turn is active', async () 
     lane = { channel: 'imessage', im, botId: 'b', laneUserId: 'lane', chatId: 'lane', chatKind: 'direct', requesterIsOwner: true, companion: true };
     expect((await client.callTool({ name: 'send_text', arguments: { text: 'sample ready' } })).isError).not.toBe(true);
     expect(im.sendText).toHaveBeenLastCalledWith('lane', 'sample ready');
+    // A lane scope whose turn has changed sends nothing.
+    lane = { ...lane, assertCurrent: () => { throw new Error('IMESSAGE_LANE_TURN_CHANGED'); } };
+    expect((await client.callTool({ name: 'send_text', arguments: { text: 'stale' } })).isError).toBe(true);
+    expect(im.sendText).not.toHaveBeenCalledWith('lane', 'stale');
     release = beginChannelToolScope({ sessionId: 's', sessionInstanceId: 'i', scope: {
       channel: 'imessage', im, botId: 'b', laneUserId: 'inbound', chatId: 'inbound', chatKind: 'group', requesterIsOwner: false, companion: true,
     } });

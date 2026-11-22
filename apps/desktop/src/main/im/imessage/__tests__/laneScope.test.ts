@@ -10,10 +10,11 @@ const im = { sendText: async () => ({ messageId: 'm' }), sendFile: async () => (
 
 function deps(overrides: {
   origin?: string | null; ownerInput?: boolean; routeKey?: string | null; instanceId?: string; chat?: string | null;
-} = {}): IMessageLaneScopeDeps {
+} = {}, turn = { key: 'turn-1', runId: 'run-1' }): IMessageLaneScopeDeps {
   return {
-    session: () => ({ instanceId: overrides.instanceId ?? 'i', getCurrentTurnOrigin: () => overrides.origin ? { kind: overrides.origin } : null }),
-    input: () => ({ ownerInput: overrides.ownerInput ?? false, boundary: 1 }),
+    session: () => ({ instanceId: overrides.instanceId ?? 'i',
+      getCurrentTurnOrigin: () => overrides.origin ? { kind: overrides.origin, runId: turn.runId } : null }),
+    input: () => ({ ownerInput: overrides.ownerInput ?? false, key: turn.key, boundary: 1 }),
     channelLink: async () => overrides.routeKey === null ? null : { botId: 'bot', routeKey: overrides.routeKey ?? 'im:imessage:ctx:dm:any;-;+100' },
     target: () => overrides.chat === null ? null : { im, chat: overrides.chat ?? 'any;-;+100' },
     boundary: () => 'owner',
@@ -30,6 +31,28 @@ describe('resolveIMessageLaneScope', () => {
   it('scopes a scheduled run to the lane chat without owner authority', async () => {
     expect(await resolveIMessageLaneScope(context, deps({ origin: 'scheduler', chat: 'any;+;chat1' }))).toMatchObject({
       chatId: 'any;+;chat1', chatKind: 'group', requesterIsOwner: false });
+  });
+
+  // Review (#12143): the owner's turn can end while the lane link is looked up, or after the scope was
+  // handed to a tool that is still checking a file path. Either way the old turn's authority is gone.
+  it('drops the scope when the checked turn changes during or after resolution', async () => {
+    const turn = { key: 'turn-1', runId: 'run-1' };
+    const during = deps({ ownerInput: true }, turn);
+    const lookup = during.channelLink;
+    during.channelLink = async id => { turn.key = 'turn-2'; return lookup(id); };
+    expect(await resolveIMessageLaneScope(context, during)).toBeNull();
+
+    turn.key = 'turn-1';
+    const after = deps({ ownerInput: true }, turn);
+    const scope = (await resolveIMessageLaneScope(context, after))!;
+    expect(() => scope.assertCurrent?.()).not.toThrow();
+    turn.key = 'turn-2';
+    expect(() => scope.assertCurrent?.()).toThrow('IMESSAGE_LANE_TURN_CHANGED');
+
+    const scheduledTurn = { key: 'k', runId: 'run-1' };
+    const scheduled = (await resolveIMessageLaneScope(context, deps({ origin: 'scheduler' }, scheduledTurn)))!;
+    scheduledTurn.runId = 'run-2';
+    expect(() => scheduled.assertCurrent?.()).toThrow('IMESSAGE_LANE_TURN_CHANGED');
   });
 
   it.each([
