@@ -137,13 +137,26 @@ interface ConfirmSlot {
   handleOpenChange: (value: boolean) => void;
   /** 当前项显示前的焦点元素;阻断提示关闭后把焦点还给它(见 renderSlot)。 */
   returnFocusTarget: () => HTMLElement | null;
+  /** 有项在显示(含退场动画)或排队。 */
+  isActive: () => boolean;
+  /** 暂停结束后显示下一项(当前没有项在显示时)。 */
+  resume: () => void;
+}
+
+interface ConfirmSlotHooks {
+  /** 返回 true 时不显示下一项:新项只入队,当前项关闭后也不自动推进。 */
+  isPaused?: () => boolean;
+  /** 当前项关闭且队列已空时调用。 */
+  onIdle?: () => void;
 }
 
 /**
  * 一个确认框槽位:自己的队列、当前项与开关状态,同一时刻只显示一个,依次处理。
  * 普通确认与阻断提示各用一个槽位,互不排队(见 ConfirmOptions.blocking)。
  */
-function useConfirmSlot(): ConfirmSlot {
+function useConfirmSlot(hooks: ConfirmSlotHooks = {}): ConfirmSlot {
+  const hooksRef = useRef(hooks);
+  hooksRef.current = hooks;
   const queueRef = useRef<QueueItem[]>([]);
   const currentItemRef = useRef<QueueItem | null>(null);
   const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
@@ -153,6 +166,7 @@ function useConfirmSlot(): ConfirmSlot {
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const processNext = useCallback(() => {
+    if (hooksRef.current.isPaused?.()) return;
     const next = queueRef.current.shift();
     if (next) {
       returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -229,14 +243,22 @@ function useConfirmSlot(): ConfirmSlot {
         currentItemRef.current = null;
         setCurrentItem(null);
         processNext();
+        if (!isShowingRef.current) hooksRef.current.onIdle?.();
       }, 200);
       return () => clearTimeout(timer);
     }
   }, [open, currentItem, processNext]);
 
   const returnFocusTarget = useCallback(() => returnFocusRef.current, []);
+  const isActive = useCallback(() => isShowingRef.current || queueRef.current.length > 0, []);
+  const resume = useCallback(() => {
+    if (!isShowingRef.current) processNext();
+  }, [processNext]);
 
-  return { currentItem, open, enqueue, abort, handleConfirm, handleTertiary, handleOpenChange, returnFocusTarget };
+  return {
+    currentItem, open, enqueue, abort, handleConfirm, handleTertiary, handleOpenChange,
+    returnFocusTarget, isActive, resume,
+  };
 }
 
 export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
@@ -248,10 +270,17 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     cleanupOnceRef.current = true;
     clearStaleSkipsOnce();
   }
-  const regular = useConfirmSlot();
+  // 阻断提示有项(显示中、退场中或排队)时普通槽位暂停:Radix 按挂载顺序管理焦点与 Esc,
+  // 不看 zIndex,阻断提示之后才挂载的普通确认虽在遮罩下面,却会抢走焦点、吃掉 Esc。
+  // 阻断提示打开前已在显示的普通确认先挂载,不受影响。两个槽位互相引用,经 ref 读取。
+  const blockingSlotRef = useRef<ConfirmSlot | null>(null);
+  const regularSlotRef = useRef<ConfirmSlot | null>(null);
+  const regular = useConfirmSlot({ isPaused: () => blockingSlotRef.current?.isActive() ?? false });
   // 阻断提示独占一个槽位:不排在普通确认后面(普通确认可能正被 modal-raised 面板
   // 压着、用户看不见也关不掉),并画在 modal-blocking 层,盖过所有弹窗与浮层。
-  const blocking = useConfirmSlot();
+  const blocking = useConfirmSlot({ onIdle: () => regularSlotRef.current?.resume() });
+  regularSlotRef.current = regular;
+  blockingSlotRef.current = blocking;
   const { enqueue: enqueueRegular, abort: abortRegular } = regular;
   const { enqueue: enqueueBlocking, abort: abortBlocking } = blocking;
 

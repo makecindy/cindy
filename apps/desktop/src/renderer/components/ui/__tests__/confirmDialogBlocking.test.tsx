@@ -104,6 +104,88 @@ describe('confirm({ blocking: true })', () => {
     await expect(second).resolves.toBe(true);
   });
 
+  // Radix 按挂载顺序管理 FocusScope 与 Esc，不看 zIndex：阻断提示打开后再挂载的普通确认
+  // 会抢走焦点和 Esc。阻断期间普通确认只入队不显示（#12118 review）。
+  it('先阻断、后普通：普通确认暂缓，焦点与 Esc 留在阻断提示；阻断关闭后普通确认出现并拿到焦点', async () => {
+    const { confirm } = renderProvider();
+    let expired!: Promise<boolean>;
+    act(() => {
+      expired = confirm(EXPIRED);
+    });
+    const blockingDialog = dialogByTitle(EXPIRED.title)!;
+    await waitFor(() => expect(blockingDialog.contains(document.activeElement)).toBe(true));
+
+    let regular!: Promise<boolean>;
+    act(() => {
+      regular = confirm({ title: '允许插件读取这个文件夹？', confirmText: '允许', cancelText: '拒绝' });
+    });
+    expect(dialogByTitle('允许插件读取这个文件夹？')).toBeNull();
+    expect(blockingDialog.contains(document.activeElement)).toBe(true);
+
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await expect(expired).resolves.toBe(false);
+    await waitFor(() => expect(dialogByTitle(EXPIRED.title)).toBeNull());
+
+    await waitFor(() => expect(dialogByTitle('允许插件读取这个文件夹？')).not.toBeNull());
+    const regularDialog = dialogByTitle('允许插件读取这个文件夹？')!;
+    await waitFor(() => expect(regularDialog.contains(document.activeElement)).toBe(true));
+    fireEvent.click(within(regularDialog).getByRole('button', { name: '允许' }));
+    await expect(regular).resolves.toBe(true);
+  });
+
+  it('普通显示中 → 阻断 → 普通当前项被 abort：下一个普通确认不插进来，焦点留在阻断提示', async () => {
+    const { confirm } = renderProvider();
+    const controller = new AbortController();
+    let first!: Promise<boolean>;
+    act(() => {
+      first = confirm({ title: '第一个普通确认', confirmText: '好' }, controller.signal);
+    });
+    await waitFor(() => expect(dialogByTitle('第一个普通确认')).not.toBeNull());
+
+    let expired!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      expired = confirm(EXPIRED);
+      second = confirm({ title: '第二个普通确认', confirmText: '好' });
+    });
+    const blockingDialog = dialogByTitle(EXPIRED.title)!;
+    await waitFor(() => expect(blockingDialog.contains(document.activeElement)).toBe(true));
+
+    act(() => controller.abort());
+    await expect(first).resolves.toBe(false);
+    await waitFor(() => expect(dialogByTitle('第一个普通确认')).toBeNull());
+    // 等过普通槽位 200ms 的退场计时：下一个普通项仍不显示，焦点没被带走。
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(dialogByTitle('第二个普通确认')).toBeNull();
+    expect(blockingDialog.contains(document.activeElement)).toBe(true);
+
+    fireEvent.click(within(blockingDialog).getByRole('button', { name: '重新登录' }));
+    await expect(expired).resolves.toBe(true);
+    await waitFor(() => expect(dialogByTitle('第二个普通确认')).not.toBeNull());
+    fireEvent.click(within(dialogByTitle('第二个普通确认')!).getByRole('button', { name: '好' }));
+    await expect(second).resolves.toBe(true);
+  });
+
+  it('暂缓中的普通确认被 abort 时直接移出队列并按取消结算', async () => {
+    const { confirm } = renderProvider();
+    let expired!: Promise<boolean>;
+    act(() => {
+      expired = confirm(EXPIRED);
+    });
+    const controller = new AbortController();
+    let queued!: Promise<boolean>;
+    act(() => {
+      queued = confirm({ title: '排队中的普通确认' }, controller.signal);
+    });
+    act(() => controller.abort());
+    await expect(queued).resolves.toBe(false);
+
+    fireEvent.click(within(dialogByTitle(EXPIRED.title)!).getByRole('button', { name: '重新登录' }));
+    await expect(expired).resolves.toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(screen.queryAllByRole('alertdialog')).toHaveLength(0);
+  });
+
   it('盖在打开的 Radix 面板上时按钮能点；Esc 只关阻断提示，不顺带关掉下面的面板', async () => {
     const onPanelOpenChange = vi.fn();
     const { confirm } = renderProvider(
