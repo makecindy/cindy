@@ -26,7 +26,17 @@ vi.mock('@/lib/scrollbarAutoHide', () => ({
   flashScrollbar: () => {},
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+});
+
+/** 越过确认槽位 200ms 的退场计时（fake timers 下推进，不做真实等待）。 */
+function passExitTimer(): void {
+  act(() => {
+    vi.advanceTimersByTime(300);
+  });
+}
 
 type Confirm = ReturnType<typeof useConfirmDialog>['confirm'];
 
@@ -151,13 +161,15 @@ describe('confirm({ blocking: true })', () => {
     const blockingDialog = dialogByTitle(EXPIRED.title)!;
     await waitFor(() => expect(blockingDialog.contains(document.activeElement)).toBe(true));
 
+    // 普通当前项被 abort 后，推进过普通槽位的退场计时：下一个普通项仍不显示，焦点没被带走。
+    vi.useFakeTimers();
     act(() => controller.abort());
     await expect(first).resolves.toBe(false);
-    await waitFor(() => expect(dialogByTitle('第一个普通确认')).toBeNull());
-    // 等过普通槽位 200ms 的退场计时：下一个普通项仍不显示，焦点没被带走。
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    passExitTimer();
+    expect(dialogByTitle('第一个普通确认')).toBeNull();
     expect(dialogByTitle('第二个普通确认')).toBeNull();
     expect(blockingDialog.contains(document.activeElement)).toBe(true);
+    vi.useRealTimers();
 
     fireEvent.click(within(blockingDialog).getByRole('button', { name: '重新登录' }));
     await expect(expired).resolves.toBe(true);
@@ -180,9 +192,11 @@ describe('confirm({ blocking: true })', () => {
     act(() => controller.abort());
     await expect(queued).resolves.toBe(false);
 
+    // 阻断提示关闭并越过退场计时后普通槽位恢复：被 abort 的项已出队，不再出现。
+    vi.useFakeTimers();
     fireEvent.click(within(dialogByTitle(EXPIRED.title)!).getByRole('button', { name: '重新登录' }));
     await expect(expired).resolves.toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    passExitTimer();
     expect(screen.queryAllByRole('alertdialog')).toHaveLength(0);
   });
 
