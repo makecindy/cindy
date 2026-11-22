@@ -18,8 +18,10 @@
  * this runs the entry chunks are already loaded, so app code cannot close it. Where the
  * gate says no, that case is logged as a warning for diagnosis.
  *
- * Location and lifecycle: `userData/main-compile-cache/<build id>/`. Node adds a
- * per-Node/V8-version subdirectory and keys entries by module file name. After the
+ * Location and lifecycle: `userData/main-compile-cache/<build id>/`, where the build id
+ * comes from `mainBundleBuildId`. Node adds a per-Node/V8-version subdirectory and keys
+ * entries by module file name, so a build id that missed a chunk change would let stale
+ * entries pile up in one directory. After the
  * bootstrap chunk loads, directories of other builds are removed, and all of them
  * when this launch does not use the cache, so at most one build's cache stays on
  * disk. It holds only compiled code, no credentials or user data; a missing, corrupt
@@ -31,6 +33,8 @@
  *
  * `NODE_DISABLE_COMPILE_CACHE=1` turns it off.
  */
+import { createHash } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import { constants, enableCompileCache, flushCompileCache, getCompileCacheDir } from 'node:module';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -40,6 +44,27 @@ const log = createLogger('main-compile-cache');
 
 /** Directory under userData that holds one subdirectory per build. */
 const CACHE_ROOT_DIR_NAME = 'main-compile-cache';
+
+/**
+ * Identifies the main bundle build. Every chunk is named after its content hash, so the
+ * set of `.js` names in the bundle directory changes whenever any chunk does, whichever
+ * chunk holds the calling code (today a hashed shared chunk, not the fixed `index.js`
+ * entry). The version keeps release caches apart. Reading the directory is one small
+ * listing before the window exists; if it fails, the id falls back to the version alone.
+ */
+export function mainBundleBuildId(
+  version: string,
+  bundleDir: string,
+  listFiles: (dir: string) => string[] = (dir) => readdirSync(dir),
+): string {
+  let names: string[] = [];
+  try {
+    names = listFiles(bundleDir).filter((name) => name.endsWith('.js')).sort();
+  } catch {
+    // Keep the version-only id; the cache still works, it just cannot tell rebuilds apart.
+  }
+  return `${version}-${createHash('sha256').update(names.join('\n')).digest('hex').slice(0, 12)}`;
+}
 
 const { compileCacheStatus } = constants;
 const STATUS_NAMES: Record<number, string> = {

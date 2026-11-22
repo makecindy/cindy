@@ -24,7 +24,7 @@ import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
 import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
 import { prepareCindyVersionStartup, dispatchCindyVersionStartup } from './cindy-make/versionStartup.js';
-import { startMainCompileCache } from './mainCompileCache.js';
+import { mainBundleBuildId, startMainCompileCache } from './mainCompileCache.js';
 import { markStartupMilestone } from './startupTimeline.js';
 
 if (process.platform === 'linux' && app.isPackaged) {
@@ -342,10 +342,9 @@ if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
 refreshBrowserRuntimeConfigDir();
 
 // After the final userData and before the bootstrap chunk, which is most of the main bundle.
-// The chunk running this file has a content-hashed name, so with the version it identifies the build.
 const mainCompileCache = startMainCompileCache({
   userDataDir: app.getPath('userData'),
-  buildId: `${app.getVersion()}-${path.basename(__filename, '.js')}`,
+  buildId: mainBundleBuildId(app.getVersion(), __dirname),
   isPackaged: app.isPackaged,
   platform: process.platform,
   resourcesPath: process.resourcesPath,

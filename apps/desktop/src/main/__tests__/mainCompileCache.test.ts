@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  mainBundleBuildId,
   mainCompileCacheAllowed,
   startMainCompileCache,
   type MainCompileCacheInstall,
@@ -19,7 +20,8 @@ import {
  *   PR #12070 review：启动环境的 NODE_COMPILE_CACHE 会先于应用代码开启缓存。
  * - 现有覆盖缺口：新模块，无相邻覆盖。
  * - 最小失败输入：macOS 正式版被放行；Windows 同前缀的兄弟目录（C:\Users\me2）被当成用户目录；
- *   清理误删当前构建或漏删未启用时的旧目录；不允许的安装上环境已开启缓存却不报告或被当作自己的缓存。
+ *   清理误删当前构建或漏删未启用时的旧目录；不允许的安装上环境已开启缓存却不报告或被当作自己的缓存；
+ *   只有 bootstrap 块重建时构建标识不变（旧条目在同一目录里累积）。
  * - tier：unit；纯函数加 mkdtemp 下的少量目录，Node 编译缓存经注入的假实现，不影响测试进程。
  * - 实测耗时：单文件约 1 秒（pnpm --dir apps/desktop exec vitest run src/main/__tests__/mainCompileCache.test.ts）。
  */
@@ -40,6 +42,28 @@ describe('mainCompileCacheAllowed', () => {
     ['packaged Linux user install', { isPackaged: true, platform: 'linux', resourcesPath: '/home/me/.local/share/cindy/resources', homeDir: '/home/me' }, false],
   ])('%s', (_name, install, allowed) => {
     expect(mainCompileCacheAllowed(install)).toBe(allowed);
+  });
+});
+
+// PR #12070 review: a build id that misses a chunk change lets stale entries pile up in one
+// directory, because Node keys entries by module file name and pruning keeps the current id.
+describe('mainBundleBuildId', () => {
+  const bundle = ['index.js', 'index-CAagRGb6.js', 'bootstrap-electron-BTXpvRje.js', 'dbWorker.js'];
+  const idOf = (names: string[], version = '0.0.0') => mainBundleBuildId(version, 'bundle', () => names);
+
+  it.each<[string, string[], string, boolean]>([
+    ['only the bootstrap chunk is rebuilt (fixed entry and caller names)', ['index.js', 'index-CAagRGb6.js', 'bootstrap-electron-NEWHASH1.js', 'dbWorker.js'], '0.0.0', false],
+    ['a new release with identical chunk names', bundle, '0.2.0', false],
+    ['the same files listed in another order', [...bundle].reverse(), '0.0.0', true],
+    ['a non-JS file appears (source map)', [...bundle, 'index-CAagRGb6.js.map'], '0.0.0', true],
+  ])('%s', (_name, names, version, same) => {
+    expect(idOf(names, version) === idOf(bundle)).toBe(same);
+  });
+
+  it('falls back to a stable version-only id when the directory cannot be read', () => {
+    const unreadable = () => mainBundleBuildId('0.0.0', 'bundle', () => { throw new Error('EACCES'); });
+    expect(unreadable()).toBe(unreadable());
+    expect(unreadable()).toMatch(/^0\.0\.0-[0-9a-f]{12}$/);
   });
 });
 
