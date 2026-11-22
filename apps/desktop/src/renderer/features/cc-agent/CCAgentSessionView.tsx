@@ -2287,7 +2287,8 @@ function CCAgentSessionContent({
     && !session.remoteHostId;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && (session.source ?? 'desktop') === 'desktop' && session.status !== 'archived';
+    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot')
+    && session.status !== 'archived';
   const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
   const remotePluginCatalogue = useRemotePluginEngines(
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)

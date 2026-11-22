@@ -1194,7 +1194,7 @@
     "title": "Área de trabalho remota",
     "allow": "Permitir área de trabalho remota",
     "allowHint": "Permita que seus dispositivos conectados à conta visualizem e operem todos os apps neste computador. Ative também o controle de dispositivos acima.",
-    "permissionHint": "No computador, permita a gravação de tela e a acessibilidade nas configurações do sistema e reconecte.",
+    "permissionHint": "No computador, permita a gravação de tela e a acessibilidade nas configurações do sistema e reconecte. No macOS 27.3 ou posterior, a permissão de controle fica em “System & App Protection Override”. Nas versões anteriores, abra Acessibilidade.",
     "inputUnsupported": "O ambiente de área de trabalho atual deste computador não oferece suporte ao controle remoto do teclado e do mouse no Cindy.",
     "controlUnavailable": "O controle remoto do teclado e do mouse está temporariamente indisponível. Reconecte para tentar novamente.",
     "beingControlled": "Sua área de trabalho está sendo controlada",
@@ -1311,7 +1311,7 @@
     "privacyScreen": "Tela de privacidade durante a conexão",
     "privacyScreenHint": "Cobre a tela deste computador durante o controle remoto. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
     "privacyActive": "A tela de privacidade está ativada. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
-    "privacyFailed": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível.",
+    "privacyFailed": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível. Se o computador remoto for um Mac, verifique nele a permissão de controle da cópia da Cindy em execução.",
     "hostMute": "Silenciar computador controlado",
     "hostMuteHint": "Silenciar o computador controlado enquanto estiver conectado",
     "hostMuteFailed": "Não foi possível alterar o estado de áudio do computador controlado",
@@ -1341,7 +1341,7 @@
     "credentialSigningRequired": "A versão de desenvolvimento para Mac está sem configuração de assinatura. Reinicie o Cindy no Mac com a assinatura configurada e tente novamente.",
     "credentialPasswordRejected": "A senha de login do Mac não foi aceita. Digite-a novamente.",
     "credentialIdentityChanged": "Não foi possível verificar a identidade do computador. Nenhuma senha foi enviada a um dispositivo não verificado.",
-    "credentialAccessibilityRequired": "Permita o Cindy em Ajustes do Sistema → Privacidade e Segurança → Acessibilidade no Mac e reconecte.",
+    "credentialAccessibilityRequired": "No Mac, verifique a permissão de controle da cópia do Cindy em execução e conecte-se novamente. No macOS 27.3 ou posterior, a permissão de controle fica em “System & App Protection Override”. Nas versões anteriores, abra Acessibilidade.",
     "credentialUnlockUnavailable": "Não foi possível desbloquear este Mac com segurança. Selecione sua conta na tela de bloqueio e reconecte; se ainda falhar, desbloqueie o Mac localmente.",
     "disconnecting": "Desconectando…",
     "loadingDisplayModes": "Carregando resoluções…",
@@ -2541,8 +2541,8 @@
         "hint": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
         "permission": "Permita o Cindy em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade para que ele bloqueie a tela assim que alguém tocar neste Mac. Até lá, a tela apaga e é bloqueada normalmente.",
         "preview": "Testar agora",
-        "previewStarting": "Solte o mouse e o teclado. Em 3 segundos a tela de privacidade aparece; pressione qualquer tecla para bloquear e depois desbloqueie para testar.",
-        "previewUnavailable": "Não foi possível mostrar a tela de privacidade. Reinicie o Cindy e tente de novo.",
+        "previewStarting": "Preparando a tela de privacidade. Solte o mouse e o teclado. Quando a tela estiver coberta, pressione uma tecla para testar o bloqueio.",
+        "previewUnavailable": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
@@ -2553,7 +2553,10 @@
           "system": "Sistema"
         },
         "hintWindows": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com o Windows Hello ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
-        "hintLinux": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador."
+        "hintLinux": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
+        "permissionMissing": "A tela de privacidade está desativada. A Cindy precisa de permissão para bloquear o Mac quando alguém clicar ou pressionar uma tecla.",
+        "checkFailed": "O Cindy não conseguiu verificar as permissões da tela de privacidade neste computador.",
+        "saveFailed": "Não foi possível salvar a configuração da tela de privacidade."
       }
     },
     "agentIsland": {
@@ -18748,7 +18751,7 @@
       "expired": "Entrada manual encerrada por tempo de espera excedido."
     },
     "failure": {
-      "permission": "O Cindy não consegue ler a tela deste computador. Permita o acesso do Cindy em Acessibilidade nas Configurações do Sistema.",
+      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controle da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controle fica em “System & App Protection Override”. Nas versões anteriores, abra Acessibilidade.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler esta tela. Você pode concluir esta etapa no computador host e devolver o controle ao Agent.",
       "action_failed": "Essa ação não teve efeito. Verifique a tela e tente novamente.",
@@ -22769,5 +22772,10 @@
       "auto": "Revisão automática",
       "bypassPermissions": "Acesso total"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "Em “System & App Protection Override”, clique em ⓘ ao lado de {{app}}. Se o app não estiver na lista, use + para adicionar a cópia em execução.",
+    "review": "$t(macControlPermission.selectApp)\nSe a opção estiver disponível, você pode limitar o controle aos apps que escolher. O controle total dá acesso a todos os apps e dados. Se concordar, leia e confirme cada item e permita o acesso no fim da janela."
   }
 }

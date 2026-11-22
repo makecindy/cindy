@@ -625,7 +625,7 @@ import {
   clearAllSessionAttention,
   refreshWindowsAppBadge,
 } from './appBadgeService';
-import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
+import { initNotificationService, showDeviceSessionDesktopEvent, showPrivacyScreenNotification } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import { startAgentIslandQuota } from './agent-island/quota.js';
@@ -1138,6 +1138,7 @@ import {
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   setDeepLinkMainWindow,
+  openMainWindowSettingsNavigation,
   focusMainWindow as activateMainWindow,
   takePendingDeepLinkFromRenderer,
 } from './deepLink.js';
@@ -5342,6 +5343,13 @@ const registerIpcHandlers = () => {
     });
     startAwayGuard({
       excludedWindows: setAwayCaptureExcludedWindows,
+      notifyFailure: (reason) => showPrivacyScreenNotification(
+        t('settings.windowBehavior.awayGuard.label'),
+        t(reason === 'permission' ? 'settings.windowBehavior.awayGuard.permissionMissing' : 'settings.windowBehavior.awayGuard.previewUnavailable'),
+        () => openMainWindowSettingsNavigation({
+          deviceId: authManager.getDeviceId(), tab: 'general', section: 'settings.windowBehavior.awayGuard.label',
+        }),
+      ),
       needsDisplay: () => displayDemand.needed(),
       enabled: () => readWindowBehaviorSettings().awayGuard,
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
