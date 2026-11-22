@@ -79,10 +79,13 @@ export function AuxiliaryModelSection() {
     [t],
   );
 
-  const options = useMemo(
-    () =>
-      (settings?.options ?? []).map((option) => ({
+  const options = useMemo(() => {
+    const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+    return (settings?.options ?? []).map((option) => {
+      const customIcon = providersById.get(option.providerId)?.customIcon;
+      return {
         ...option,
+        ...(customIcon ? { customIcon } : {}),
         // Names follow the existing live catalog, independently of saved choices
         // or an in-flight save whose options may still carry the old locale.
         ...(option.providerId === 'xd' && cindyAiName ? {
@@ -96,9 +99,9 @@ export function AuxiliaryModelSection() {
             id: option.modelId,
             defaultEnabled: option.defaultEnabled,
           }),
-      })),
-    [cindyAiName, cindyAiProvider?.logoKind, modelVisibilityVersion, settings?.options],
-  );
+      };
+    });
+  }, [providers, cindyAiName, cindyAiProvider?.logoKind, modelVisibilityVersion, settings?.options]);
 
   if (!settings) return null;
 

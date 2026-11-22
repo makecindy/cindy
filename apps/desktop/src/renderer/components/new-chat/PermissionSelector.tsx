@@ -221,7 +221,7 @@ export function PermissionSelector({
       {!isIconOnly && (
         // field 形态:chevron 靠右贴边(与 ModelSelector 的 field trigger 同规则),
         // chip 形态维持紧跟文字的历史排布。
-        <div className={cn('pt-[2px]', isFieldTrigger && 'ml-auto')}>
+        <div className={cn('pt-0.5', isFieldTrigger && 'ml-auto')}>
           <ChevronDown
             size={isCreateAgentVariant ? 8 : dense ? 13 : 14}
             className="shrink-0 text-current"
@@ -422,7 +422,7 @@ export function PermissionSelector({
               : 'w-[300px] max-w-[calc(100vw-16px)]',
             // 多行说明会让菜单变高: 高度受可用空间限制, 超出时内部滚动。
             'max-h-[var(--radix-popover-content-available-height)] overflow-y-auto',
-            'rounded-[12px] p-2',
+            'rounded-xl p-2',
             'bg-[var(--model-dropdown-bg)]',
             'border border-[var(--model-dropdown-border)]',
           )}

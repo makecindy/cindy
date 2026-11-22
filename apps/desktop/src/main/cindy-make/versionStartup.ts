@@ -37,6 +37,9 @@ import {
   versionsRoot,
   VERSION_ID,
   ORIGINAL_DEV_ENV_KEYS,
+  ORIGINAL_DEV_ENVIRONMENT_OVERRIDES,
+  DEV_ENVIRONMENT_OVERRIDES_CAPABILITY,
+  supportsDevEnvironmentOverrides,
   withVersionStore,
   writeVersionJson,
   type OriginalVersion,
@@ -338,6 +341,11 @@ export function describeOriginalVersion(node?: string): OriginalVersion {
   }
   const root = path.resolve(app.getAppPath(), '..', '..');
   const previous = readOriginalVersion(profile.userData);
+  const environmentOverrides = Object.fromEntries(
+    Object.keys(ORIGINAL_DEV_ENVIRONMENT_OVERRIDES).flatMap((key) =>
+      process.env[key] === '1' ? [[key, process.env[key]]] : [],
+    ),
+  );
   const original: OriginalVersion = {
     protocol: 1,
     version: app.getVersion(),
@@ -358,11 +366,13 @@ export function describeOriginalVersion(node?: string): OriginalVersion {
               process.env.XDT_DESKTOP_DEV_MODE === 'local'
                 ? ('local' as const)
                 : ('remote' as const),
+            capabilities: { [DEV_ENVIRONMENT_OVERRIDES_CAPABILITY]: true },
             environment: Object.fromEntries(
               ORIGINAL_DEV_ENV_KEYS.flatMap((key) =>
                 process.env[key] !== undefined ? [[key, process.env[key]!]] : [],
               ),
             ),
+            ...(Object.keys(environmentOverrides).length > 0 ? { environmentOverrides } : {}),
           },
         }
       : {}),
@@ -435,6 +445,13 @@ export async function startVersionHandoff(
   const original =
     currentId === 'original' ? describeOriginalVersion() : readOriginalVersion(profile.userData);
   if (!original) throw versionError('unavailable');
+  if (
+    targetId === 'original' &&
+    currentId !== 'original' &&
+    app.isPackaged &&
+    !supportsDevEnvironmentOverrides(process.resourcesPath, original)
+  )
+    throw versionError('incompatible');
   if (targetId !== 'original') await verifyPersonalVersion(profile.userData, targetId, original);
   else if (
     !fs.existsSync(original.executable) ||
@@ -539,7 +556,7 @@ async function launchTarget(
       [path.join(dev.root, 'scripts', 'desktop-dev-runner.mjs'), dev.mode],
       {
         cwd: dev.root,
-        env: { ...environment, ...dev.environment },
+        env: { ...environment, ...dev.environment, ...dev.environmentOverrides },
         name: 'xterm-256color',
         cols: 160,
         rows: 30,

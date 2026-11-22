@@ -352,8 +352,8 @@ function ClosingOverlay({ visible }: { visible: boolean }) {
   if (!visible) return null;
   return createPortal(
     <div
-      // z-[10000]: 高于 splash 的 z-[9999], 保证退出 overlay 永远在最顶层
-      className="fixed inset-0 z-[10000] flex select-none items-center justify-center"
+      // z-modal(10000): 高于 splash 的 fullscreen 层(9999), 保证退出 overlay 永远在最顶层
+      className="fixed inset-0 z-modal flex select-none items-center justify-center"
       style={{ background: 'rgba(0, 0, 0, 0.2)' }}
       role="alertdialog"
       aria-live="polite"

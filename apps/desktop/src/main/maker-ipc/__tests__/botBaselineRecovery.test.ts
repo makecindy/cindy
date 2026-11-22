@@ -247,7 +247,7 @@ it.each(['same-harness', 'same-harness-staged', 'cross-harness', 'back-to-task-d
   const route = { agentDeviceId: null, agentKind: 'pi', model: 'saved', providerId: 'gateway', effort: null, fastMode: false };
   const apply = vi.fn(async () => path === 'same-harness-staged'
     ? { deferred: true, superseded: false, pendingUntilSend: true } : { effectiveProviderId: 'xai' });
-  const switchAgent = vi.fn(async () => {});
+  const switchAgent = vi.fn(async () => ({ switched: false, agentKind: 'pi', model: 'saved', engineReady: true }));
   const stage = registeredFunction('stageSessionRouteSelection', {
     readSessionAgentDeviceId: async () => path === 'back-to-task-device' ? 'other-device' : null,
     performSessionAgentSwitch: switchAgent, agentSwitchDeps: {},

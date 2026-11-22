@@ -559,6 +559,29 @@ describe('provider:list IPC handler', () => {
     });
   });
 
+  // Unit: provider:list serves both local display and remote automatic routing.
+  it('requests offline display models only for the local renderer', async () => {
+    const harness = new IpcHarness();
+    const current = { ...fakeView('openai', false), models: { codex: [] } };
+    const retained = { id: 'gpt-retained', name: 'Retained', contextWindow: 128_000, efforts: [], defaultEffort: null };
+    registerProviderHandlers(harness, makeDeps({
+      isTrustedSender: () => true,
+      listProviders: async opts => [opts?.includeSubscriptionDisplayModels
+        ? { ...current, subscriptionDisplayModels: { codex: [retained] } }
+        : current],
+    }));
+    const invoke = () => harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    expect(await invoke()).toMatchObject({ providers: [{
+      connected: false, models: { codex: [] }, subscriptionDisplayModels: { codex: [retained] },
+    }] });
+    for (const providerPicker of [undefined, 'available'] as const) {
+      const result = await runDeviceLinkInvokeContext({
+        controllerDeviceId: 'paired-device', channel: MAKER_INVOKE.PROVIDER_LIST, providerPicker,
+      }, invoke) as { providers: ProviderView[] };
+      expect(result.providers).toEqual([current]);
+    }
+  });
+
   // #11693: a missing discovered model can still have an explicit hidden preference.
   // Exercise the actual provider:list handler and visibility mirror with an empty service result.
   it('returns the hidden preference for a removed model without publishing sibling preferences', async () => {
@@ -6792,6 +6815,17 @@ describe('remote provider access writes', () => {
   });
 });
 
+// Observes entry into the share-revocation step without replacing it: every other case in this
+// file keeps the real policy.
+const availabilityPolicyEntered = vi.hoisted(() => vi.fn());
+vi.mock('../../device-link/providerShareAvailabilityPolicy.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../device-link/providerShareAvailabilityPolicy.js')>();
+  return { ...actual, withAvailabilityPolicyMutation: <T,>(providerId: string | undefined, work: () => Promise<T>) => {
+    availabilityPolicyEntered(providerId);
+    return actual.withAvailabilityPolicyMutation(providerId, work);
+  } };
+});
+
 describe('receiving-client remote provider disable', () => {
   it('reuses provider overrides with a device-scoped key and never changes host sharing', async () => {
     const harness = new IpcHarness();
@@ -6804,6 +6838,49 @@ describe('receiving-client remote provider disable', () => {
     await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { ...command, disabled: false });
     expect(deps.setProviderDisabled).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), false);
     expect(deps.listRemoteProviders).toHaveBeenCalledOnce();
+  });
+  // Rule (disableOverrides.ts): hiding a provider is presentation, disabling is access. The two
+  // share one channel, so the regression to guard is a hide that also stops the provider (or the
+  // reverse). Minimal input: one hide command for a local provider and one for a peer's.
+  // Tier: unit over the real handler; persistence is covered by model-disable-store.test.ts.
+  it('hides a provider from the picker without touching access, locally and per peer', async () => {
+    const harness = new IpcHarness();
+    const setProviderHidden = vi.fn();
+    const deps = makeDeps({ listProviders: vi.fn(async () => [catalogView('xd', {})]),
+      listRemoteProviders: vi.fn(async () => [catalogView('openai', {})]), setProviderHidden });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: true });
+    expect(setProviderHidden).toHaveBeenLastCalledWith('xd', true);
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET,
+      { kind: 'provider-hidden', providerId: 'openai', remoteDeviceId: 'peer', hidden: true });
+    expect(setProviderHidden).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), true);
+    // Un-hiding clears a stale entry even when the provider is gone from the catalog.
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'gone', hidden: false });
+    expect(setProviderHidden).toHaveBeenLastCalledWith('gone', false);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'gone', hidden: true }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd' }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+  });
+  // PR #11565 review: a hide went through withAvailabilityPolicyMutation, which revokes the
+  // provider's registered standby shares on the server before the local write and fails when the
+  // server is unreachable. Hiding narrows no permission, so it must not enter that step; disabling
+  // still must. Minimal input: one hide and one disable of the same provider. Tier: unit over the
+  // real handler; the policy itself is covered by providerShareAvailability tests.
+  it('hiding does not enter the share-revocation step that disabling requires', async () => {
+    const harness = new IpcHarness();
+    const setProviderHidden = vi.fn();
+    const deps = makeDeps({ listProviders: vi.fn(async () => [catalogView('xd', {})]), setProviderHidden });
+    registerProviderHandlers(harness, deps);
+    availabilityPolicyEntered.mockClear();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: true });
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: false });
+    expect(setProviderHidden).toHaveBeenCalledTimes(2);
+    expect(availabilityPolicyEntered).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider', providerId: 'xd', disabled: true });
+    expect(availabilityPolicyEntered).toHaveBeenCalledExactlyOnceWith('xd');
   });
   it('rejects unknown remote providers but permits clearing a stale stop while offline', async () => {
     const harness = new IpcHarness();

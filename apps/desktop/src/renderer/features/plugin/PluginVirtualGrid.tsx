@@ -118,7 +118,7 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
   return <div ref={setGrid} style={{ height: rows.getTotalSize(), position: 'relative', width: '100%' }}>
     {visible.map(row => <div key={row.key} ref={rows.measureElement} data-index={row.index}
       style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${row.start - margin}px)`,
-        display: 'grid', gridTemplateColumns: groups?.[row.index]?.header !== undefined ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`, gap: 16, paddingBottom: 16 }}>
+        display: 'grid', gridTemplateColumns: groups?.[row.index]?.header !== undefined ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`, gap: 'var(--space-4)', paddingBottom: 'var(--space-4)' }}>
       {groups?.[row.index]?.header !== undefined ? renderGroup?.(groups[row.index]!.header!) : indices(row.index).map(index =>
         <div key={index} className="min-w-0">{renderItem(index)}</div>)}
     </div>)}

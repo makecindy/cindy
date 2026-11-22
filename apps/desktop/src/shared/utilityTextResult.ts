@@ -28,6 +28,8 @@ export type UtilityTextAttempt =
     reason: 'http_error';
     /** Safe transport metadata; response bodies are deliberately never exposed. */
     httpStatus: number;
+    /** Deterministic quota classification only; never upstream text. */
+    quotaExhausted?: true;
   })
   | (UtilityTextAttemptBase & {
     reason: Exclude<UtilityTextAttemptReason, 'http_error'>;

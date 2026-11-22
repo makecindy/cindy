@@ -247,6 +247,14 @@ function reconcileMissingStatusProbeQueue(
   return queue;
 }
 
+/** A completion notification can reach the controller before its schedule mirror updates. */
+export async function readRemoteScheduleIndex(deviceId: string) {
+  const raw = await window.electronAPI.deviceLink.invoke(deviceId, 'maker:schedule:list-sidebar-index-runs', []);
+  const snapshot = raw as Partial<ScheduleSidebarIndexSnapshot> | null;
+  if (!Array.isArray(snapshot?.runs)) throw new Error('Invalid remote schedule index');
+  return projectScheduleSidebarIndex(snapshot.runs);
+}
+
 export async function refreshRemoteDeviceSessions(
   deviceId: string,
   name?: string,
@@ -473,24 +481,10 @@ async function runRefreshRemoteDeviceSessions(
         let scheduleIndexError: unknown;
         try {
           const indexRead = { seq: ++scheduleIndexReadSeq, startedAt: Date.now() };
-          const raw = await window.electronAPI.deviceLink.invoke(
-            deviceId,
-            'maker:schedule:list-sidebar-index-runs',
-            [],
-          );
+          const index = await readRemoteScheduleIndex(deviceId);
           if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))
             return 'superseded';
-          if (
-            !raw ||
-            typeof raw !== 'object' ||
-            !Array.isArray((raw as ScheduleSidebarIndexSnapshot).runs)
-          ) {
-            throw new Error('Invalid remote schedule index');
-          }
-          remoteProjectsStore.setDeviceScheduleIndex(
-            deviceId,
-            projectScheduleSidebarIndex((raw as ScheduleSidebarIndexSnapshot).runs),
-          );
+          remoteProjectsStore.setDeviceScheduleIndex(deviceId, index);
           if (indexRead.seq > (lastScheduleIndexRead.get(deviceId)?.seq ?? 0)) {
             lastScheduleIndexRead.set(deviceId, indexRead);
           }

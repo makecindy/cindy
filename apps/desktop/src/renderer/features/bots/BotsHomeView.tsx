@@ -24,6 +24,9 @@ import { useBotTranslation } from './botPronounContext';
 import { Spinner } from '@/components/ui/spinner';
 import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
+import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { isPluginEngineSelectable } from '@/lib/pluginEngineSelection';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
@@ -58,6 +61,7 @@ import { CindyMergeSetting } from './CindyMergeSetting';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotMemorySettings } from './BotMemorySettings';
 import { CompanionVoiceSettings } from './voice/CompanionVoiceSettings';
@@ -796,6 +800,12 @@ export function BotsHomeView() {
   const profileLoadState = useBotProfilesLoadState();
   const providerOnboarding = useProviderOnboarding({ dismissible: false });
   useProviders();
+  const localPluginEngines = usePluginEngines(true);
+  const { pluginEngineDevices: sharedPluginEngineDevices = [] } = useProviderShareAgentDevices();
+  const { devices: selectableDevices } = useSelectableDevices();
+  const canChoosePluginEngine = localPluginEngines.some(isPluginEngineSelectable)
+    || sharedPluginEngineDevices.length > 0
+    || selectableDevices.some((device) => device.online);
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
   const hiddenVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
@@ -825,7 +835,9 @@ export function BotsHomeView() {
   const needsCanonicalCreation =
     !currentCanonicalId || unavailableCanonicalId === currentCanonicalId;
   const needsModelSelection = needsCanonicalCreation && modelUnavailable;
-  const needsProviderConnection = needsCanonicalCreation && providerOnboarding.visible;
+  const requiresProvider = providerOnboarding.visible && !canChoosePluginEngine
+    && selectedBot?.capabilities.modelChain[0]?.harness !== 'acp';
+  const needsProviderConnection = needsCanonicalCreation && requiresProvider;
   // `?add=1` 是阵容还在弹模态那阵子的入口。阵容页面化之后它只剩兼容职责:
   // 老书签、老深链通过 /bots/roster 复用同一个创建弹窗。
   const addRequested = searchParams.get('add') === '1';
@@ -941,7 +953,7 @@ export function BotsHomeView() {
     let cancelled = false;
     // Read existing history even without a route; only reconstruction needs one.
     const deferReconstruction = () => {
-      if (!providerOnboarding.visible && !modelUnavailable) return false;
+      if (!requiresProvider && !modelUnavailable) return false;
       setUnavailableCanonicalId(canonicalSessionId ?? null);
       return true;
     };
@@ -1035,7 +1047,7 @@ export function BotsHomeView() {
     sessionId,
     settingsOpen,
     navigate,
-    providerOnboarding.visible,
+    requiresProvider,
     needsModelSelection,
     needsProviderConnection,
     modelUnavailable,

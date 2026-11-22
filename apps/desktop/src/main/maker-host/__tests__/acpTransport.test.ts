@@ -6,8 +6,10 @@
  *   入口 stdin 的字节、收到的协议行、断链原因，以及 close() 只在进程确认退出后才 resolve。
  * - 规则依据：设计稿「引擎进程」约定（原样 stdio 子进程，stdin 为 base64 分块）；Maker 启动失败清理
  *   契约（close 成功即退出证明，见 docs/dev-rules/maker-core-and-agent-behavior.md「启动失败与工作目录占用」）。
- * - 现有覆盖缺口：新模块。
- * - 最小失败输入：被切开的多字节字符；进程不响应 stdin 关闭。
+ * - 现有覆盖缺口：新模块；原样 stdio 子进程的 stdin 按帧收 base64，单帧超过 2 MiB 会被
+ *   插件进程整段丢弃（apps/desktop/src/main/cindy-brain/nodeRuntimeWorkerProcess.ts）。
+ * - 最小失败输入：被切开的多字节字符；进程不响应 stdin 关闭；1.33 MB 图片所在的一条 ACP 消息
+ *   （两次 base64 后约 2.48 MB，修前只写一帧，接收端丢弃）。
  * - tier：unit（内存假进程，fake timers，无真实子进程）。
  */
 
@@ -67,6 +69,25 @@ describe('createAcpProcessTransport', () => {
     fake.stdout.emit('data', bytes.subarray(0, 11)); // cuts inside a multi-byte character
     fake.stdout.emit('data', bytes.subarray(11));
     expect(lines).toEqual(['{"text":"你好"}', '{"b":1}']);
+  });
+
+  it('splits an oversized ACP line into base64 frames the worker accepts', () => {
+    const fake = fakeProcess();
+    const transport = createAcpProcessTransport(fake.proc, logger);
+    // 会话续聊带一张约 1.33 MB 的 PNG：图片先内嵌进 ACP 行，整行再 base64，约 2.48 MB。
+    // 修前只写一帧，超过插件进程 2 MiB 的帧上限后被整段丢弃，引擎收不到这一轮。
+    const line = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'session/prompt',
+      params: { content: [{ type: 'image', data: 'A'.repeat(1_800_000) }] },
+    });
+    transport.write(line);
+
+    expect(fake.stdinWrites.length).toBeGreaterThan(1);
+    for (const frame of fake.stdinWrites) expect(frame.length).toBeLessThanOrEqual(2 * 1024 * 1024);
+    const decoded = Buffer.concat(fake.stdinWrites.map((frame) => Buffer.from(frame, 'base64')));
+    expect(decoded.equals(Buffer.from(`${line}\n`, 'utf8'))).toBe(true);
   });
 
   it('reports an endpoint exit as peer-exited and refuses later writes', async () => {

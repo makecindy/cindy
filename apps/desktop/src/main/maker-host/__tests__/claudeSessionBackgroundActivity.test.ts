@@ -4,9 +4,12 @@
  *  2. 静默超窗自动熄灭(定时器路径),期间持续活动则续档;
  *  3. sdkSessionId 粘滞缓存:rewind 换新 id 后,旧 id 的遗留子 agent 请求仍能归因;
  *  4. 重复 not-running 状态不得推后 turn 结束时刻(否则后台活动被永久掩盖)。
+ *  5. 插件引擎回合外工作(回合外输出、回合结束仍未完成的工具调用)点亮同一份状态并通知
+ *     Agent Island;没有回合外工作的插件不触发。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentEvent } from '@cindy/maker-core';
 import {
   clearClaudeSessionBackgroundActivity,
   createClaudeSessionActivityResponseObserver,
@@ -16,10 +19,12 @@ import {
   listClaudeBackgroundCommandWorkSessions,
   noteClaudeSessionBackgroundCommandWork,
   noteClaudeSessionTurnState,
+  observePluginEngineEvent,
   recordClaudeApiActivity,
   resetClaudeBackgroundActivityForTests,
   setClaudeBackgroundActivityBroadcaster,
   setClaudeBackgroundCommandWorkBroadcaster,
+  setPluginEngineBackgroundWorkListener,
 } from '../claude-session-background-activity.js';
 
 vi.mock('../../logger.js', () => ({
@@ -147,6 +152,65 @@ describe('claude-session-background-activity', () => {
     expect(listActiveClaudeBackgroundActivitySessions()).toEqual(['s-b']);
     vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 1_000);
     expect(listActiveClaudeBackgroundActivitySessions()).toEqual([]);
+  });
+
+  // 插件引擎回合外工作(2026-11-20 Antigravity):回答完仍在推分支、建 PR、定时查 CI,
+  // 任务里看不出在跑。最小失败输入:回合结束时还有一条没报完成的工具调用 —— 旧实现在
+  // 回合结束时一律熄灭。从没有回合外工作的插件不得触发。
+  describe('插件引擎回合外工作', () => {
+    let island: Array<[string, boolean, boolean]>;
+    const toolUse = (id: string, turnScope?: 'background'): AgentEvent =>
+      ({ type: 'tool_use', data: { toolUseId: id }, ...(turnScope ? { turnScope } : {}) });
+    const toolResult = (id: string, turnScope?: 'background'): AgentEvent =>
+      ({ type: 'tool_result', data: { toolUseIds: [id] }, ...(turnScope ? { turnScope } : {}) });
+
+    beforeEach(() => {
+      island = [];
+      setPluginEngineBackgroundWorkListener((id, active, options) => island.push([id, active, options.turnStarting]));
+    });
+
+    it('回合结束仍有未完成的工具调用立即点亮,结果到达后按静默窗熄灭;没有回合外工作不触发', () => {
+      noteClaudeSessionTurnState('quiet', true);
+      observePluginEngineEvent('quiet', toolUse('read'));
+      observePluginEngineEvent('quiet', toolResult('read'));
+      noteClaudeSessionTurnState('quiet', false);
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS * 2);
+      expect(getClaudeSessionBackgroundActivity('quiet')).toBe(false);
+
+      const sid = 'agy';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('commit'));
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      expect(broadcasts).toEqual([{ sessionId: sid, active: true }]);
+      expect(island).toEqual([[sid, true, false]]);
+
+      vi.advanceTimersByTime(21_000);
+      observePluginEngineEvent(sid, toolResult('commit', 'background'));
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS - 1_000);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      vi.advanceTimersByTime(1_100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(island.at(-1)).toEqual([sid, false, false]);
+    });
+
+    it('回合外输出点亮、新回合让位;只剩等待中的调用时最多亮到上限', () => {
+      const sid = 'agy';
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionTurnState(sid, false);
+      observePluginEngineEvent(sid, { type: 'text', turnScope: 'background', data: { text: 'Pushing.', isFinal: true } });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      noteClaudeSessionTurnState(sid, true);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(island).toEqual([[sid, true, false], [sid, false, true]]);
+
+      noteClaudeSessionTurnState(sid, false);
+      observePluginEngineEvent(sid, toolUse('wait-for-ci', 'background'));
+      vi.advanceTimersByTime(31 * 60_000 - 1_000);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      vi.advanceTimersByTime(1_100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
   });
 
   // 「后台命令仍在工作」:回合收尾时测试、构建这类命令没跑完,任务列表要显示运行中而不是已结束

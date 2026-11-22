@@ -77,6 +77,15 @@ describe('historical schedule failure notice', () => {
       expect(shouldShowFailedScheduleNotice({ ...state, latestFailedRun: { ...latestFailedRun, finishedAt: undefined } })).toBe(true);
       expect(shouldShowFailedScheduleNotice({ ...state, latestFailedRun: { ...latestFailedRun, errorMsg: 'pre-run hook failed' } })).toBe(true);
     });
+  // Unit regression: a stored unconfirmed-model failure needs guidance before details
+  // expand on both clients; a pre-run script quoting the code remains a precheck failure.
+  it('explains an unconfirmed execution catalog without reclassifying prechecks', () => {
+    const errorMsg = '[MODEL_CATALOG_UNCONFIRMED] Model list could not be confirmed';
+    expect(scheduleFailureMessageKey({ ...run, errorMsg })).toBe('modelCatalogUnconfirmed');
+    expect(scheduleFailureMessageKey({ ...run, errorMsg, failureKind: 'execution' })).toBe('modelCatalogUnconfirmed');
+    expect(scheduleFailureMessageKey({ ...run, errorMsg, failureKind: 'precheck' })).toBe('precheck');
+  });
+
   // Unit: a historical authorization failure used to expose only the generic banner.
   it('explains a host authorization failure without matching quoted script output', () => {
     const errorMsg = 'TASK_ACTION_AUTHORIZATION_EXPIRED';

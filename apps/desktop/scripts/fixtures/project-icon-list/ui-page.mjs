@@ -5,7 +5,9 @@ export default {
   name:'project-icon-list',entry:'./fixture.tsx',viewport:{width:360,height:420},
   real:'ProjectNode, SessionGroupNode, SessionEntryList, SessionItem and ProjectSettingsDialog',
   notCovered:'Full application shell, persisted project settings and device link transport. Example project names and tasks.',
-  stubs:{'src/renderer/contexts/AuthContext':{partial:'export const useAuth = () => ({dataOwnerId: "fixture", isAuthenticated: false});'}},
+  stubs:{
+    'src/renderer/features/bots/botFollowScopes': {partial: `export const useSessionFollowers = session => session.id === 'demo-0-0' ? [{id:'test', name:'Cindy', avatar:'cindy://avatar/preset/cindy', avatarColor:'blue'}] : [];`},
+    'src/renderer/contexts/AuthContext':{partial:'export const useAuth = () => ({dataOwnerId: "fixture", isAuthenticated: false});'}},
   cases:{
     flat:{data:{avatarData,flat:'list'},about:'Project icons beside source labels on task cards'},
     compact:{data:{avatarData,flat:'text'},about:'Project icons beside source labels on compact task rows'},
@@ -157,7 +159,24 @@ export default {
     if(ui.case !== 'default') {
       await page.locator('[data-project-source] img').first().waitFor();
       await page.locator('[data-project-source] [data-project-monogram]').first().waitFor();
+      const row = page.locator('[data-session-id="demo-0-0"]');
+      const title = row.locator('.sidebar-title-marquee__ellipsis');
+      await row.getByTestId('bot-follow-mark').waitFor();
       await ui.capture('project-source-icons');
+      const before = await title.boundingBox();
+      await page.evaluate(() => {
+        const key = 'cc-agent.sidebar.filter.taskInfo';
+        const newValue = JSON.stringify({ version: 2, fields: ['time'] });
+        localStorage.setItem(key, newValue);
+        window.dispatchEvent(new StorageEvent('storage', { key, newValue }));
+      });
+      await row.getByTestId('bot-follow-mark').waitFor({state: 'detached'});
+      const after = await title.boundingBox();
+      if (await row.locator('[data-project-source], [data-testid="bot-follow-mark"]').count()
+          || after.x >= before.x || after.width <= before.width) {
+        throw new Error('Hidden identifiers must release both sides of the title: ' + JSON.stringify({before, after}));
+      }
+      await ui.capture('title-without-identifiers');
       return;
     }
 

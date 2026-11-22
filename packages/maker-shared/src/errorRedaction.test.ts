@@ -4,6 +4,7 @@ import {
   canOfferCodexHistoryRecovery,
   extractNonSecretErrorSignals,
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
@@ -149,6 +150,40 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'exceeded retry limit, last status: 429 Too Many Requests',
   ])('does not treat transient or retry exhaustion as usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(false);
+  });
+});
+
+// Desktop and Mobile showed only "reply failed" for a subscription usage limit, so the cause
+// was hidden behind the details toggle. Entry: the shared predicate both summaries call.
+// Balance, budget and transient rate limits have a different next step and must stay out.
+describe('isAccountUsageLimitReachedText', () => {
+  it.each([
+    "You've hit your session limit · resets 1:20am (Asia/Shanghai)",
+    "You've hit your Claude session limit",
+    "You've hit your weekly limit",
+    "You've hit your 5-hour limit",
+    "You've hit your limit · resets 11pm (UTC)",
+    'You’ve hit your usage limit. Try again at 11:30 PM.',
+    'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.',
+    'Usage limit reached. Try again in 1h.',
+    '{"error":{"type":"usage_limit_reached","resets_at":1790000000}}',
+    'usageLimitExceeded',
+  ])('recognizes an account usage limit: %s', (message) => {
+    expect(isAccountUsageLimitReachedText(message)).toBe(true);
+  });
+
+  it.each([
+    '',
+    'HTTP 429 Too Many Requests',
+    'Rate limit reached for gpt-5.5',
+    // PR #11526: the "hit your" form used the same branch as periodic limits.
+    "You've hit your rate limit",
+    "You've hit your session limit: budget_exceeded",
+    'insufficient_quota: usage limit reached',
+    'You hit your spend cap set by the owner of your workspace.',
+    'Shared task limit reached',
+  ])('leaves other failures to their own guidance: %s', (message) => {
+    expect(isAccountUsageLimitReachedText(message)).toBe(false);
   });
 });
 
@@ -451,7 +486,7 @@ describe('agent error envelopes shared by desktop and mobile', () => {
       'LAZY_CREATE_FAILED: [REMOTE_CODEX_SOURCE_UNSUPPORTED] select the native connection',
     )).toBe(true);
   });
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY', 'SUBSCRIPTION_ACCOUNTS_FULL'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY', 'SUBSCRIPTION_ACCOUNTS_FULL'])(
     'parses %s directly and inside an IPC error', code => {
       for (const prefix of ['', '[IPC_ERROR] ', "Error invoking remote method 'maker:send': Error: ", 'LAZY_CREATE_FAILED: ']) {
         expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });
@@ -490,6 +525,11 @@ describe('subscription account startup guidance', () => {
     });
   it('keeps old ambiguous failures cause-neutral and rejects unrelated messages', () => {
     expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset', t)).toBe('chat.subscriptionAccountError.legacy');
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: No subscription account is available', t)).toBe('chat.subscriptionAccountError.poolUnavailable');
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: [SUBSCRIPTION_POOL_MODEL_LIMITED] diagnostic\nresetAtMs=1900000000000\notherAccountSignedOut=true', t, 'zh-CN'))
+      .toBe(['chat.subscriptionAccountError.poolModelLimited', 'chat.subscriptionAccountError.poolRetryUntil',
+        new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(1900000000000)),
+        'chat.subscriptionAccountError.poolOtherSignedOut'].join(' '));
     expect(localizeSubscriptionAccountError('An upstream diagnostic mentions quota reset', t)).toBeNull();
     expect(localizeSubscriptionAccountError('[REMOTE_FUTURE] quota reset', t)).toBeNull();
   });

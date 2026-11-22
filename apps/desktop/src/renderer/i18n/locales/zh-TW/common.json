@@ -563,7 +563,8 @@
       "calloutUnknown": "如果你不認識申請人，請拒絕；拒絕後這條連結作廢。",
       "approve": "同意分享",
       "reject": "拒絕申請",
-      "later": "稍後處理"
+      "later": "稍後處理",
+      "calloutPluginEngine": "{{name}} 使用時無需在自己的電腦上安裝插件或 CLI，會使用這台電腦上的 CLI 登入和配額。"
     },
     "apply": {
       "loading": "正在讀取分享連結…",
@@ -1164,7 +1165,7 @@
     "title": "遠端桌面",
     "allow": "允許遠端桌面",
     "allowHint": "允許已登入的同帳號裝置檢視和操作這台電腦的所有應用程式。需同時開啟上方的裝置控制。",
-    "permissionHint": "請在電腦的系統設定中允許螢幕錄製和輔助使用，然後重新連線。",
+    "permissionHint": "請在電腦的系統設定中允許螢幕錄製和輔助使用，然後重新連線。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
     "inputUnsupported": "Cindy 暫不支援這台電腦目前桌面環境的遠端鍵鼠控制。",
     "controlUnavailable": "遠端鍵鼠控制暫時無法使用，請重新連線。",
     "beingControlled": "桌面正在被遠端控制",
@@ -1281,7 +1282,7 @@
     "privacyScreen": "連線時開啟隱私畫面",
     "privacyScreenHint": "遠端控制時遮住這台電腦的螢幕。有人在電腦前點按或按鍵時，會先詢問是否中斷連線。",
     "privacyActive": "隱私畫面已開啟。有人在電腦前點按或按鍵時，會先詢問是否中斷連線。",
-    "privacyFailed": "未能開啟隱私畫面，電腦螢幕可能仍可見。",
+    "privacyFailed": "未能開啟隱私畫面，電腦螢幕可能仍可見。如果被控電腦是 Mac，請在那台電腦上檢查執行中的 Cindy 是否有控制權限。",
     "hostMute": "被控端靜音",
     "hostMuteHint": "連線期間將被控電腦靜音",
     "hostMuteFailed": "無法修改被控端靜音狀態",
@@ -1310,7 +1311,7 @@
     "credentialSigningRequired": "Mac 上的開發版缺少簽名設定。請在 Mac 上設定簽名並重新啟動 Cindy，然後重試。",
     "credentialPasswordRejected": "Mac 登入密碼驗證失敗，請重新輸入。",
     "credentialIdentityChanged": "無法確認電腦身分，不會向未經驗證的裝置傳送密碼。",
-    "credentialAccessibilityRequired": "請在 Mac 的系統設定 → 隱私權與安全性 → 輔助使用中允許 Cindy，再重新連線。",
+    "credentialAccessibilityRequired": "請在被控 Mac 上檢查執行中的這份 Cindy 是否有控制權限，再重新連線。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
     "credentialUnlockUnavailable": "暫時無法安全解鎖這台 Mac。請在鎖定畫面選取你的帳號後重新連線；若仍失敗，請在電腦上手動解鎖。",
     "disconnecting": "正在中斷連線…",
     "loadingDisplayModes": "正在讀取解析度…",
@@ -1349,6 +1350,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
     "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
+    "MODEL_CATALOG_UNCONFIRMED": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
     "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
     "INVALID_PARAMS": "輸入無效，請檢查後重試。",
@@ -1801,6 +1803,8 @@
       "other": "其他",
       "lowAlert": "快用完時通知",
       "privacy": "隱藏個人資訊",
+      "automaticCurrency": "自動",
+      "usageCurrency": "用量統計幣別",
       "usageScope": "用量統計範圍",
       "manageFoot": "管理模型供應商",
       "showSource": "在選單裡顯示 {{name}}",
@@ -2469,8 +2473,8 @@
         "hint": "AI 需要使用螢幕時，電腦不關閉螢幕、不鎖定，由隱私畫面遮住螢幕，AI 在後面繼續工作；有人按鍵或點按就立即鎖定，用 Touch ID 或密碼解鎖。沒有任務時照常關閉螢幕並鎖定。遠端控制結束後，也用隱私畫面保護這台電腦。",
         "permission": "需要在「系統設定 → 隱私權與安全性 → 輔助使用」中允許 Cindy，才能在有人碰電腦時立即鎖定螢幕。允許之前，電腦會照常關閉螢幕並鎖定。",
         "preview": "立即試一下",
-        "previewStarting": "請放開滑鼠和鍵盤，3 秒後會蓋上隱私畫面；按任意鍵即可鎖定，再解鎖試試。",
-        "previewUnavailable": "無法開啟隱私畫面，請重新啟動 Cindy 後再試。",
+        "previewStarting": "正在準備隱私畫面。請放開滑鼠和鍵盤，等畫面遮住後再按鍵測試鎖定。",
+        "previewUnavailable": "未能開啟隱私畫面，電腦螢幕可能仍可見。",
         "delay": {
           "30": "30 秒",
           "60": "1 分鐘",
@@ -2481,7 +2485,10 @@
           "system": "跟隨系統"
         },
         "hintWindows": "AI 需要使用螢幕時，電腦不關閉螢幕、不鎖定，由隱私畫面遮住螢幕，AI 在後面繼續工作；有人按鍵或點按就立即鎖定，用 Windows Hello 或密碼解鎖。沒有任務時照常關閉螢幕並鎖定。遠端控制結束後，也用隱私畫面保護這台電腦。",
-        "hintLinux": "AI 需要使用螢幕時，電腦不關閉螢幕、不鎖定，由隱私畫面遮住螢幕，AI 在後面繼續工作；有人按鍵或點按就立即鎖定，用密碼解鎖。沒有任務時照常關閉螢幕並鎖定。遠端控制結束後，也用隱私畫面保護這台電腦。"
+        "hintLinux": "AI 需要使用螢幕時，電腦不關閉螢幕、不鎖定，由隱私畫面遮住螢幕，AI 在後面繼續工作；有人按鍵或點按就立即鎖定，用密碼解鎖。沒有任務時照常關閉螢幕並鎖定。遠端控制結束後，也用隱私畫面保護這台電腦。",
+        "permissionMissing": "隱私畫面未開啟。Cindy 需要系統授權，才能在有人按鍵或點按時鎖定 Mac。",
+        "checkFailed": "目前無法確認這台電腦的隱私畫面權限。",
+        "saveFailed": "無法儲存隱私畫面設定。"
       }
     },
     "agentIsland": {
@@ -3715,6 +3722,7 @@
         "connecting": "正在連線…",
         "rename": "重新命名",
         "suspended": "已停用",
+        "hidden": "已隱藏",
         "unconfigured": "未設定"
       },
       "button": {
@@ -3725,7 +3733,9 @@
         "cancel": "取消",
         "retry": "重新取得模型清單",
         "retrying": "正在重新取得…",
-        "enableProvider": "啟用供應商"
+        "enableProvider": "啟用供應商",
+        "showProvider": "顯示",
+        "hideInstead": "改為隱藏"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4105,7 +4115,7 @@
         "paymentRequired": "付費",
         "paymentUnlock": "付費解鎖",
         "enableModel": "啟用此模型",
-        "capabilityGroupHint": "不會出現在對話模型選擇中；開關控制對應功能是否列出",
+        "capabilityGroupHint": "不會出現在模型選擇器裡；開關決定對應功能能否使用這款模型",
         "accessWriteFailed": "停用設定未能儲存，請重試",
         "visibilityWriteFailed": "模型顯示設定未能儲存，請重試；如果仍然失敗，請重新啟動 Cindy。",
         "disabledGroup": "已停用",
@@ -4249,22 +4259,22 @@
           "aria": "依模型類型篩選",
           "chat": "對話"
         },
-        "hiddenGroup": "未顯示",
+        "hiddenGroup": "已隱藏",
         "management": {
           "brand": "廠商"
         },
         "manage": {
           "title": "模型",
-          "selected": "已選 {{count}} 個",
-          "hint": "用開關選擇常用的對話模型。",
+          "selected": "顯示 {{count}} 個",
+          "hint": "開關決定模型是否出現在模型選擇器裡。關掉只是隱藏，仍可在選擇器底部的「已隱藏」裡選用。",
           "menu": "管理",
           "arrange": "列表排列",
           "byBrand": "依廠商分組",
           "byName": "依模型名稱排列",
-          "selection": "常用模型",
-          "showAll": "選用全部模型",
-          "hideAll": "取消全部選擇",
-          "reset": "恢復預設選擇",
+          "selection": "在模型選擇器中顯示",
+          "showAll": "全部顯示",
+          "hideAll": "全部隱藏",
+          "reset": "恢復預設顯示",
           "connectionRequired": "連線後可用，已選模型會保留。"
         }
       },
@@ -4278,7 +4288,8 @@
         "groupBadge_other": "供應商組 · {{count}} 台電腦",
         "groupNote": "{{device}} 把這個供應商建成了供應商組。在模型列表裡選它新建任務時，{{device}} 會依組策略把任務分給下面的一台電腦執行，那台出問題時自動換一台繼續。{{device}} 在線時，你可以從這裡的「遠端與分享」管理這個組和分享。",
         "groupMembersTitle": "組內電腦",
-        "groupMembersFailed": "暫時讀不到組內電腦的狀態。"
+        "groupMembersFailed": "暫時讀不到組內電腦的狀態。",
+        "hiddenBanner": "已從這台電腦的模型選擇器中隱藏。收藏和正在使用它的任務不受影響。"
       },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
@@ -4322,7 +4333,8 @@
           "rejected": "該供應商拒絕了這次請求，下面是上次取得的模型列表。請稍後重試或改用其他供應商。",
           "empty": "該供應商這次沒有傳回任何可用模型，下面是上次取得的列表。請確認帳號權限後重試。"
         },
-        "suspendedBanner": "該供應商已停用，憑證已保留；啟用後其模型才會重新可用",
+        "suspendedBanner": "該供應商已停用，新任務和背景功能都不會再使用它，憑證已保留。如果只是不想在模型選擇器裡看到它，可以改為隱藏。",
+        "hiddenBanner": "已從模型選擇器中隱藏。正在使用它的任務和背景功能不受影響，需要時仍可在選擇器底部的「已隱藏」裡選用。",
         "remoteAccess": {
           "label": "允許遠端呼叫",
           "description": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，Agent 在這台電腦上執行，使用這台電腦的登入和配額。",
@@ -4532,7 +4544,25 @@
       },
       "menu": {
         "disableProvider": "停用此供應商",
-        "enableProvider": "啟用此供應商"
+        "enableProvider": "啟用此供應商",
+        "hideProvider": "在模型選擇器中隱藏",
+        "showProvider": "在模型選擇器中顯示"
+      },
+      "plugin": {
+        "title": "插件提供的供應商",
+        "badge": "插件",
+        "rowTip": "{{provider}} · 由插件提供",
+        "source": "由插件提供",
+        "declaredName": "插件裡的名稱：{{name}}",
+        "note": "這個供應商由已安裝的插件提供，用插件自己的引擎執行任務。登入和連線在插件裡管理；停用或解除安裝插件後，它會從這裡消失。",
+        "openPlugin": "打開插件",
+        "resetName": "恢復插件裡的名稱",
+        "suspendedBanner": "該供應商已停用，新任務和自動化都不會再使用它，你的其他電腦和分享的人也不能呼叫。插件本身不受影響。如果只是不想在模型選擇器裡看到它，可以改為隱藏。",
+        "hiddenBanner": "已從模型選擇器中隱藏。正在使用它的任務和自動化不受影響。",
+        "unavailableBanner": "插件回報這個引擎暫時無法執行。打開插件可以查看原因。",
+        "unavailableBannerReason": "暫時無法執行：{{reason}}",
+        "modelsEmpty": "這個引擎還沒有列出模型，新任務會使用它自己的預設模型。執行過一次任務後，這裡會列出具體的模型。",
+        "modelSwitchAria": "啟用 {{model}}"
       },
       "builtinApiKey": {
         "subtitle": "API key 連線",
@@ -6999,7 +7029,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "已包含在隱私畫面中：電腦不會進入睡眠。"
+      "keepAwakeIncluded": "已包含在隱私畫面中：電腦不會進入睡眠。",
+      "localNetwork": {
+        "label": "區域網路",
+        "deniedHint": "沒有這個權限時，同一網路下的電腦和手機無法直接連線這台電腦，只能經中繼，速度會變慢。",
+        "settingsHint": "請在「系統設定 › 隱私權與安全性 › 區域網路」裡開啟 Cindy，回到這裡會自動生效。"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8515,7 +8550,10 @@
           "description": "開啟後，你的其他電腦可以用這個引擎執行任務。Agent 在這台電腦上執行，使用這台電腦的登入和配額；檔案和指令仍留在任務所在的電腦上。",
           "unsupported": "這個插件還不支援讓其他電腦使用它的引擎。",
           "remoteControlOff": "這台電腦還沒有允許同帳號裝置遠端控制，其他電腦不能使用這個引擎。",
-          "ariaLabel": "允許你的其他電腦使用 {{engine}}"
+          "ariaLabel": "允許你的其他電腦使用 {{engine}}",
+          "descriptionShareable": "開啟後，你的其他電腦和分享的好友無需安裝插件即可用這個引擎執行任務。Agent 在這台電腦上執行，使用這台電腦的登入和配額；檔案和指令仍留在任務所在的電腦上。",
+          "providerDisabled": "這個供應商已在模型供應商裡停用，其他電腦不能使用這個引擎。",
+          "openProviders": "前往「模型供應商」設定"
         },
         "githubRelease": {
           "title": "插件更新",
@@ -10894,6 +10932,13 @@
         "enabled": "已開啟"
       },
       "close": "關閉"
+    },
+    "localNetwork": {
+      "title": "開啟區域網路權限",
+      "relayOnly": "你的其他裝置現在只能經中繼連線這台電腦，速度較慢。開啟後，同一網路下可以直接連線。",
+      "controlEnabled": "同一網路下的裝置要直接控制這台電腦，需要區域網路權限，否則只能經中繼。",
+      "allow": "開啟",
+      "dismiss": "暫不開啟"
     }
   },
   "bots": {
@@ -13042,6 +13087,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "自動審批模型的配額已耗盡。在執行 Agent 的電腦上檢查用量或計費，或在設定中自訂輔助模型。需要審批的操作仍需由你確認。",
           "autoReviewNoAvailableModel": "沒有可用的自動審批模型。請在執行 Agent 的電腦上，前往「模型供應商」啟用並連接審批供應商，或在設定中自訂「輔助模型」。需要審批的操作仍由你確認。",
           "autoReviewUnavailable": "自動審批暫時無法給出判斷，需要審批的操作已改為由你確認。想少被打斷，可以把任務切到「完全訪問」，但風險更高。",
           "autoReviewUnavailableWechat": "自動審批暫時無法給出判斷，需要審批的操作已改為由你確認。個人微信不能使用「完全訪問」，請直接確認這次操作。",
@@ -14091,6 +14137,8 @@
       "source": {
         "lastConfirmed": "上次重新整理：{{time}}",
         "unconfirmed": "模型清單尚未更新",
+        "unreachable": "連不上 {{source}}",
+        "unreachableDetail": "連不上，請檢查網路",
         "unavailable": "模型無法使用",
         "reconnect": "重新連線",
         "manage": "管理來源",
@@ -14114,6 +14162,8 @@
         "remoteFavoriteUnavailable": "{{source}} · 暫時讀不到那臺電腦的模型",
         "favoritesGroup": "收藏",
         "recentGroup": "最近",
+        "hiddenGroup": "已隱藏（{{count}}）",
+        "hiddenGroupHint": "已隱藏的供應商和模型仍然可以選用",
         "recentEmpty": "還沒有最近使用——選一個模型後，它會出現在這裡",
         "favoritesSaveFailed": "未能儲存收藏變更",
         "favoritesCleanupFailed": "未能清理已失效的分享模型收藏",
@@ -14292,6 +14342,8 @@
       "regionAria": "待傳送訊息佇列",
       "listAria": "佇列訊息",
       "pausedFooter": "任務已停止，佇列暫停",
+
+      "steerUnsupportedNotice": "目前引擎不支援插話，排隊中的訊息會在目前回合結束後送出。",
       "resumeAction": "繼續傳送",
       "resumeAria": "繼續傳送佇列訊息",
       "showMore_one": "還有 {{count}} 條",
@@ -14439,6 +14491,7 @@
       "steerNotSent": "未傳送，暫時無法插話，草稿已保留",
       "credentialSwitchApplied": "模型來源切換已生效。",
       "credentialSwitchFailed": "模型來源切換失敗，請重新選擇。",
+      "credentialSwitchKeptSettings": "這次切換未完成，任務會繼續使用原來的設定。",
       "modelSwitchContextGuard": {
         "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
         "condensedToast": "為了配合新模型，較早的對話會壓縮，完整的對話記錄仍可查看。",
@@ -15060,6 +15113,9 @@
       "usageLimitAutoContinueTitle": "用量上限重置後，如果你還沒處理，這個任務會自動繼續",
       "usageLimitAutoContinueCancel": "取消",
       "usageLimitAutoContinueCancelTitle": "取消自動繼續，錯誤與重試仍保留",
+      "usageLimitReached": "模型帳號已達到用量上限",
+      "usageLimitReachedWithReset": "模型帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
+      "usageLimitReachedNoReset": "模型帳號已達到用量上限。請等待用量上限重置，或切換其他模型後再重試。",
       "codexOrganizationUsageLimitWithReset": "目前連線的是企業 Codex 帳號，已達到用量上限，預計於 {{resetAt}} 恢復。",
       "codexOrganizationUsageLimit": "目前連線的是企業 Codex 帳號，已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
       "codexUsageLimitWithReset": "目前連線的 Codex 帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
@@ -15078,7 +15134,7 @@
       "switchClaudeSubscriptionTitle": "把當前任務切換到 Claude.ai 訂閱並重試",
       "switchingClaudeSubscription": "正在切換到 Claude.ai…",
       "claudeSubscriptionSwitchFailed": "無法切換到 Claude.ai 或重試當前任務：{{msg}}",
-      "codexAppServerRetired": "Codex 服務已重新啟動或更換；目前的請求已中斷，請重新執行。",
+      "codexAppServerRetired": "與 Codex 的連線已中斷，本次請求也已中斷。你可以在目前的任務中繼續。",
       "codexAuthMissing": "遠端 Codex 還沒同步登入狀態（401 Unauthorized）。點選右側「同步登入狀態」把本機 Codex 憑證推送到遠端 Cindy Codex home，然後重試傳送。",
       "codexAuthMissingLocal": "本機的「{{provider}}」連線未通過驗證。請前往該連線的設定檢查登入狀態，修復後回到此任務繼續。",
       "codexSessionExpired": "OpenAI 連線需要更新。重新連線 ChatGPT 後即可繼續；{{appName}} 不會讓系統 Codex CLI 登出，也不會要求你重新連線其他模型來源。",
@@ -15131,6 +15187,7 @@
     },
     "backgroundActivity": {
       "status": "背景子任務執行中，模型用量仍在消耗…",
+      "pluginEngineStatus": "正在背景繼續工作…",
       "bashWorkStatus_one": "正在背景工作（{{count}} 個命令）…",
       "bashServiceStatus_one": "背景服務執行中（{{count}} 個）",
       "bashWorkStatus_other": "正在背景工作（{{count}} 個命令）…",
@@ -15165,6 +15222,7 @@
       "continueFailed_other": "有 {{count}} 個任務未能繼續，可以開啟任務後重試。"
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
       "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
@@ -15708,6 +15766,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "上下文已滿，這則訊息無法處理。後續訊息會繼續依序處理。",
       "attachmentPrefix": "附件：",
       "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",
@@ -15835,11 +15894,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "目前的連線無法使用上一個模型，切換模型時的上下文壓縮失敗。",
       "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
+      "MODEL_CATALOG_UNCONFIRMED": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
       "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法存取本機檔案/圖片附件。請直接貼上內容。",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自動審批模型的配額已耗盡。在執行 Agent 的電腦上檢查用量或計費，或在設定中自訂輔助模型。需要審批的操作仍需由你確認。",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "沒有可用的自動審批模型。請在執行 Agent 的電腦上，前往「模型供應商」啟用並連接審批供應商，或在設定中自訂「輔助模型」。需要審批的操作仍由你確認。",
       "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷，需要審批的操作已改為由你確認。想少被打斷，可以把任務切到「完全訪問」，但風險更高。",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動審批暫時無法給出判斷，需要審批的操作已改為由你確認。個人微信不能使用「完全訪問」，請直接確認這次操作。",
@@ -16056,7 +16118,6 @@
     },
     "sessionLoading": "載入任務中",
     "sideChat": {
-      "openPage": "開啟完整任務頁",
       "returnMain": "返回主任務",
       "new": "新增側邊追問",
       "mainWindowDescription": "側邊追問目前在主視窗中使用。追問記錄仍然保留。",
@@ -16064,6 +16125,14 @@
       "commandDescription": "基於主任務開啟側邊追問。可在命令後附上問題，作為追問草稿。",
       "title": "側邊追問",
       "context": "使用開啟時主任務已完成的上下文。主任務會繼續執行，關閉此分頁前追問記錄都會保留。",
+      "viewCollaboration": "查看協同",
+      "openConversation": "開啟對話",
+      "openFromTaskList": "也可從左側任務列表開啟。",
+      "returnToSideChat": "回到側邊追問",
+      "reopenSideChat": "重新開啟側邊追問",
+      "origin": "這段對話來自側邊追問。",
+      "originNamed": "這段對話來自「{{title}}」的側邊追問。",
+      "originUnavailable": "這段對話來自側邊追問，原任務目前無法開啟。",
       "opening": "正在開啟…",
       "notReady": "請先等待主任務完成一次回答。",
       "unsupported": "此 Agent 的遠端任務暫不支援側邊追問。",
@@ -16072,9 +16141,10 @@
       "mainTaskOnly": "請從主任務開啟側邊追問。",
       "sharedTaskUnavailable": "共享任務不支援側邊追問",
       "archivedTask": "請先取消歸檔，再開啟側邊追問",
-      "closeTitle": "關閉側邊追問？",
-      "closeDescription": "將停止並刪除本次追問，主任務不受影響。",
-      "closeConfirm": "關閉並刪除",
+      "closeTitle": "關閉並封存這則追問？",
+      "closeDescription": "左側任務清單中的這則追問也會封存。",
+      "closeDescriptionRunning": "左側任務清單中的這則追問也會封存，協作 Worker 將停止。",
+      "closeConfirm": "關閉並封存",
       "closeFailed": "刪除追問失敗，請稍後重試。"
     },
     "botStartedTasks": {
@@ -16097,6 +16167,10 @@
       "retryIn": "{{seconds}} 秒後自動重試"
     },
     "subscriptionAccountError": {
+      "poolModelLimited": "目前模型的訂閱額度已達上限。可以先切換模型。",
+      "poolRetryUntil": "可在 {{resetAt}} 後重試。",
+      "poolOtherSignedOut": "另有訂閱帳號已登出，可在執行任務的電腦上重新登入後重試。",
+      "poolUnavailable": "目前模型沒有可用的訂閱帳號。請切換模型，或在執行任務的電腦上檢查帳號狀態。",
       "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。",
       "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。",
       "loginRequired": "此任務使用的訂閱帳號需要重新登入。請在執行任務的電腦上重新登入該帳號，再重試。",
@@ -16358,6 +16432,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "新增雲端主機",
+        "preparingCloud": "雲端主機 · 準備中",
+        "manageCloud": "管理雲端主機",
         "allMachines": "全部",
         "localMachine": "本機",
         "connecting": "連線中…",
@@ -16497,6 +16574,9 @@
       "taskInfoSummaryNone": "無",
       "taskInfoSummarySeparator": "、",
       "taskInfo": {
+        "harness": "Harness 圖示",
+        "project": "專案圖示和名稱",
+        "teammate": "夥伴頭像",
         "time": "時間",
         "pr": "PR 狀態",
         "worktree": "worktree",
@@ -16965,7 +17045,41 @@
             "token": "目前使用備用 Token",
             "recheck": "檢查連接",
             "summary": "管理 GitHub 儲存庫、Issues、PR 和 Actions。",
-            "otherMethods": "其他連線方式"
+            "otherMethods": "其他連線方式",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App 存取權限",
+            "all": "所有儲存庫",
+            "selected": "指定儲存庫",
+            "visible": "目前帳號可見 {{count}} 個儲存庫",
+            "unknownCount": "暫時無法讀取儲存庫數量",
+            "permissions": "權限明細",
+            "read": "唯讀",
+            "write": "可讀寫",
+            "admin": "管理",
+            "loading": "正在讀取授權範圍…",
+            "missing": "在這台電腦連接 GitHub App 後即可查看授權範圍。",
+            "unavailable": "暫時無法讀取授權明細。",
+            "empty": "目前帳號沒有可見的安裝紀錄。",
+            "suspended": "此安裝已暫停",
+            "events": "這台電腦訂閱了 {{count}} 個儲存庫的事件",
+            "manage": "管理儲存庫存取權限",
+            "names": {
+              "actions": "Actions",
+              "administration": "儲存庫管理",
+              "checks": "檢查結果",
+              "contents": "儲存庫內容",
+              "deployments": "部署",
+              "issues": "Issue",
+              "members": "組織成員",
+              "metadata": "儲存庫中繼資料",
+              "organization_events": "組織事件",
+              "pull_requests": "提取要求",
+              "repository_hooks": "儲存庫 Webhook",
+              "statuses": "提交狀態",
+              "workflows": "工作流程檔案"
+            }
           },
           "app": {
             "title": "儲存庫事件",
@@ -16978,6 +17092,21 @@
             "repositories": "選擇儲存庫",
             "disconnect": "中斷事件連線",
             "connect": "連接 GitHub App"
+          },
+          "connection": {
+            "operations": "儲存庫操作",
+            "operationsMissing": "尚未取得儲存庫操作授權",
+            "checking": "正在檢查 GitHub 連線…",
+            "mismatch": "操作帳號與通知帳號不同，請核對後重新連線。",
+            "ready": "GitHub 帳號已連線。",
+            "close": "關閉",
+            "incomplete": "帳號已繫結，請補充此電腦的操作授權。",
+            "eventsOnly": "此帳號用於儲存庫通知；顯示帳號名稱不代表此電腦已取得操作授權。",
+            "connect": "連線 GitHub",
+            "alternative": "使用本機 GitHub 登入",
+            "cliDescription": "可沿用本機登入；個人通知等 GitHub App 不支援的功能仍需要此方式。",
+            "disconnect": "中斷 GitHub App 連線",
+            "repositories": "正在關注 {{count}} 個儲存庫"
           }
         },
         "unresolved": "{{count}} 條未解決的 review 評論",
@@ -17362,7 +17491,8 @@
         "title": "匯入儲存庫自動化",
         "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增的自動化，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
         "accept": "確認匯入",
-        "removed": "將刪除：{{names}}"
+        "removed": "將刪除：{{names}}",
+        "fileMissing": "找不到「{{projectName}}」中的自動化檔案，已略過匯入"
       },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 刪除 {{deleted}}",
@@ -17459,6 +17589,7 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
         "success": "成功",
@@ -18408,7 +18539,7 @@
       "expired": "等待時間過長，代輸入已結束。"
     },
     "failure": {
-      "permission": "Cindy 沒有讀取這台電腦介面的權限。請在系統設定的輔助使用中允許 Cindy。",
+      "permission": "Cindy 無法讀取這台 Mac 的介面。請檢查執行中的這份 Cindy 是否有控制權限。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
       "target_gone": "目標視窗已關閉。",
       "unreadable": "無法讀取這個介面。可以在主機電腦上直接完成，然後交還給 Agent。",
       "action_failed": "剛才的操作沒有生效，請檢查介面後重試。",
@@ -21387,6 +21518,7 @@
       "reviewed": "已審核",
       "verified-publisher": "發佈者已驗證"
     },
+    "viewLimit": "同時開啟的頁面太多。捲動或收合其他頁面後，這裡會自動開啟。",
     "pluginRevoked": "插件已停用或發生變更，此頁面已失效",
     "pluginCspRejected": "頁面要求未宣告的網域，已拒絕載入",
     "filesOnExecutionComputer": "檔案內容請在執行電腦查看",
@@ -22117,6 +22249,7 @@
     "picker": {
       "empty": "還沒有模型組。在設定裡把幾個來源合成一個模式，就能在這裡選它。",
       "manage": "管理模型組",
+      "deviceTitle": "模型組 · {{device}}",
       "switched": "「{{name}}」把這個任務換成了 {{model}}",
       "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
       "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"
@@ -22366,5 +22499,10 @@
       "auto": "自動審核",
       "bypassPermissions": "完全訪問"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "在「System & App Protection Override」找到 {{app}}，按右側的 ⓘ。若清單中沒有，可按「＋」依路徑加入。",
+    "review": "$t(macControlPermission.selectApp)\n系統若提供「選擇 App」，可限定控制範圍。完整控制可存取所有 App 和資料。若同意，請逐項閱讀並按「OK」確認，再按視窗底部的允許按鈕。"
   }
 }

@@ -107,7 +107,15 @@ beforeEach(() => {
     value: { platform: 'darwin' } as unknown as Window['electronAPI'],
   });
 });
-afterEach(() => { remoteProjectsStore.__resetPinnedOriginsForTest(); cleanup(); resetSessionStartingStoreForTests(); vi.useRealTimers(); clearRemoteSessionActivity(); localStorage.clear(); });
+afterEach(() => {
+  remoteProjectsStore.__resetPinnedOriginsForTest();
+  cleanup();
+  resetSessionStartingStoreForTests();
+  vi.useRealTimers();
+  clearRemoteSessionActivity();
+  localStorage.clear();
+  window.dispatchEvent(new StorageEvent('storage', { key: 'sidebar.taskListMode' }));
+});
 
 const phases = ['running', 'needs-interaction', 'error', 'completed'] as const;
 

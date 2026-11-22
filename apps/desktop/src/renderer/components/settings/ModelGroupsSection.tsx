@@ -249,7 +249,7 @@ export function ModelGroupsSection() {
                         <span className="flex items-center gap-3">
                           <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
                           <SettingsRowIcon>
-                            <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind}
+                            <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
                               colorClass="text-[var(--text-primary)]" withMargin={false} />
                           </SettingsRowIcon>
                         </span>

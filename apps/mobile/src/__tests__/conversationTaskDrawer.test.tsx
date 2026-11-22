@@ -7,7 +7,7 @@ import { BotGroupPaneLayout } from '@/session/BotGroupPaneLayout';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useConversationTaskDrawer } from '@/session/useConversationTaskDrawer';
-const state = vi.hoisted(() => ({ gesture: null as any, pane: null as any, persistent: false, instances: 0 }));
+const state = vi.hoisted(() => ({ focused: true, gesture: null as any, pane: null as any, persistent: false, instances: 0 }));
 vi.mock('react-native', () => ({ View: ({ children }: any) => <div>{children}</div>, StyleSheet: { create: (s: any) => s }, Platform: { OS: 'ios' }, BackHandler: { addEventListener: () => ({ remove() {} }) } }));
 vi.mock('@/session/SessionListDrawer', () => ({ SessionListDrawer: (props: any) => { useState(() => ++state.instances); state.pane = props; return null; }, useSessionListDrawerMotion: () => ({}),
   useSessionListDrawerOpenGesture: (props: any) => { state.gesture = props; return props; } }));
@@ -15,7 +15,7 @@ let root: ReturnType<typeof createRoot>, node: HTMLDivElement, drawer: ReturnTyp
 function Probe({ persistent = false, enabled = true }: { persistent?: boolean; enabled?: boolean }) {
   drawer = useConversationTaskDrawer({ enabled, persistent, width: 400 }); return null;
 }
-beforeEach(() => { haptic.mockClear(); (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; node = document.createElement('div'); root = createRoot(node); });
+beforeEach(() => { state.focused = true; haptic.mockClear(); (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; node = document.createElement('div'); root = createRoot(node); });
 afterEach(() => act(() => root.unmount()));
 it('defers the first destination until the drawer is gone, rejecting subsequent taps', () => {
   act(() => root.render(<Probe />)); act(() => drawer.openSessionListDrawer());
@@ -26,6 +26,23 @@ it('defers the first destination until the drawer is gone, rejecting subsequent 
   act(() => drawer.handleSessionListDrawerClosed());
   expect(first).toHaveBeenCalledTimes(1); expect(second).not.toHaveBeenCalled();
   expect(drawer.sessionListDrawerOverlayMounted).toBe(false);
+});
+// A retained task may lose its drawer surface before the exit callback fires.
+it('releases the message and back controls on returning to a covered task', () => {
+  act(() => root.render(<Probe />));
+  act(() => drawer.openSessionListDrawer());
+  const superseded = vi.fn();
+  act(() => drawer.queueDrawerNavigation(superseded));
+  state.focused = false;
+  act(() => root.render(<Probe />));
+  state.focused = true;
+  act(() => root.render(<Probe />));
+
+  expect(drawer.sessionListDrawerOverlayMounted).toBe(false);
+  act(() => drawer.handleSessionListDrawerClosed());
+  expect(superseded).not.toHaveBeenCalled();
+  act(() => drawer.openSessionListDrawer());
+  expect(drawer.sessionListDrawerOpen).toBe(true);
 });
 it('cancels a pull before its opening render without leaving an input blocker', () => {
   act(() => root.render(<Probe />));
@@ -62,7 +79,7 @@ it('does not intercept narrow phones and navigates directly from a docked sideba
 });
 
 vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useLocalSearchParams: () => ({}) }));
-vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => true }));
+vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => state.focused }));
 vi.mock('@/platform/gestureHandler', () => ({ GestureDetector: ({ children }: any) => children }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({ PaneViewportProvider: ({ children }: any) => children,
   useAdaptiveWindow: () => ({ width: 669, height: 951, insets: { top: 88, bottom: 34, left: 0, right: 0 },

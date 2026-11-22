@@ -36,6 +36,7 @@ import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 import { writeTestCindyPackage } from './cindyPackageFixture';
 import { PluginMarketLedger } from '../../plugin-market/ledger';
 import { projectPluginPublishingSource, projectPluginInstallationSource } from '../pluginPublishingSource';
+import * as pluginInstanceRegistry from '../pluginInstanceRegistry';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture';
 import { hasPluginHostToolGroupApproval } from '../taskCapability';
 
@@ -4506,19 +4507,8 @@ describe('GhostManager · list', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 
-  // PR #9754 review, unit: one approved plugin and a failed ledger snapshot.
-  // The custom projector test above misses the production catch branch. Run
-  // that callback through listAsync: transient IO must recover, persistent IO
-  // must reject within the retry limit instead of publishing unavailable sources.
-  // Empty scans and skipped invalid directories need no source evidence at all.
-  it.each(['empty', 'unprojected', 'transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
-    if (failure === 'unprojected') {
-      await fs.promises.mkdir(path.join(rootDir, 'broken'), { recursive: true });
-    } else if (failure !== 'empty') {
-      await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
-    }
-    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
-    manager = productionManager({
+  function listingManager(ledger: PluginMarketLedger): GhostManager {
+    return productionManager({
       // Keep production source callbacks; unrelated app services stay isolated.
       GhostManager: class extends GhostManager {
         constructor(options: GhostManagerOptions) {
@@ -4537,6 +4527,58 @@ describe('GhostManager · list', () => {
       projectPluginPublishingSource,
       projectPluginInstallationSource,
     }).getGhostManager();
+  }
+
+  // #11035, unit: the source helper alone misses the official-trust override in
+  // installed listings. Hold reconciliation at the old revision across the first
+  // frame and a background refresh; the package and market ledger still match.
+  it('shows unknown in installed plugin lists while the approval revision stays out of sync', async () => {
+    const pluginId = `c${'a'.repeat(24)}`;
+    const file = await makeCindy('market.cindy', goodManifest());
+    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+    ledger.upsertInstallation({
+      ghostId: 'hello', pluginId, namespace: null, scope: 'public', organizationId: null,
+      releaseId: 'release', version: '1.0.0', source: 'market', installed: true,
+      sha256: crypto.createHash('sha256').update(await fs.promises.readFile(file)).digest('hex'),
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    manager = listingManager(ledger);
+    const installed = await manager.install(file, {
+      namespace: null, registrySource: 'market', pluginId, trustOverride: 'cindy-official',
+    });
+    if (!('ghost' in installed)) throw new Error('market fixture did not install');
+    expect(manager.list()).toMatchObject([{ installationSource: { kind: 'official' } }]);
+
+    const receipt = manager.readApprovedInstallReceipt(installedGhostStoragePart(installed.ghost));
+    if (!receipt) throw new Error('missing approved receipt');
+    const revision = crypto.randomUUID();
+    const receipts = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    await receipts.write({ ...receipt, revision }, { relId: installedGhostPhysicalRelId(installed.ghost) });
+    const reconcile = vi.spyOn(pluginInstanceRegistry, 'reconcileInstanceReceipt').mockImplementation(record => record);
+    try {
+      const expected = [{
+        enabled: true, approval: { state: 'approved', revision }, installationSource: { kind: 'unknown' },
+      }];
+      expect(manager.list()).toMatchObject(expected);
+      await expect(manager.listAsync()).resolves.toMatchObject(expected);
+    } finally {
+      reconcile.mockRestore();
+    }
+  });
+
+  // PR #9754 review, unit: one approved plugin and a failed ledger snapshot.
+  // The custom projector test above misses the production catch branch. Run
+  // that callback through listAsync: transient IO must recover, persistent IO
+  // must reject within the retry limit instead of publishing unavailable sources.
+  // Empty scans and skipped invalid directories need no source evidence at all.
+  it.each(['empty', 'unprojected', 'transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
+    if (failure === 'unprojected') {
+      await fs.promises.mkdir(path.join(rootDir, 'broken'), { recursive: true });
+    } else if (failure !== 'empty') {
+      await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
+    }
+    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+    manager = listingManager(ledger);
     const unavailable = () => { throw Object.assign(new Error('ledger locked'), { code: 'EBUSY' }); };
     const snapshot = vi.spyOn(ledger, 'createListingLookup');
     try {

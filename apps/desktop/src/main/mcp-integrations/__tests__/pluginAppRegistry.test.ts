@@ -6,7 +6,7 @@ import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { sharedPluginConnection, type AppServerConfig } from '../../mcp-apps/connection.js';
 import { McpAppsHost, appServerRevision } from '../../mcp-apps/host.js';
-import type { InstalledGhost } from '../../../shared/ghost.js';
+import { validateGhostManifest, validateNormalizedGhostManifest, type InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import { publishPluginAppResult } from '../../mcp-apps/pluginCards.js';
@@ -184,6 +184,37 @@ it.each(['unapproved', 'disabled', 'invalid'] as const)(
     f.refresh();
     expect(state.configs.size).toBe(0);
     expect(state.reads).toBe(0);
+  },
+);
+// #11918, unit: use the installed receipt reader, production registry and SDK
+// resource read. Existing discovery tests did not open a historical typed-wrong page.
+it.each([['240', undefined], [-1, 80], [240, 240], [900, 720]] as const)(
+  'opens the approved page and projects its initialHeight %s', async (initialHeight, expected) => {
+    const f = fixture();
+    const uri = 'ui://form';
+    const manifest = { ...f.ghost.manifest, minCindyVersion: '0.1.122-beta',
+      mcpApps: { ui: { resources: [{ uri, file: 'form.html', initialHeight }], tools: { open: { resourceUri: uri } } } } };
+    const installed = validateNormalizedGhostManifest(manifest);
+    if (!installed.ok) throw new Error(installed.reason);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-card-height-'));
+    const client = new Client({ name: 'host', version: '1' });
+    try {
+      await fs.writeFile(path.join(dir, 'form.html'), '<p>Form</p>');
+      state.realFiles = true;
+      f.setGhost({ ...f.ghost, dir, manifest: installed.manifest });
+      f.refresh();
+      const config = readAppServer(pluginAppServerId(f.ghost))!;
+      expect(config.plugin!.revision).toBe('one');
+      await client.connect(config.plugin!.createTransport());
+      const resource = (await client.readResource({ uri })).contents[0];
+      expect(resource).toMatchObject({ uri, text: '<p>Form</p>' });
+      expect(resource._meta?.['cindy/initial-height']).toBe(expected);
+      expect((await client.listTools()).tools[0]._meta?.['cindy/initial-height']).toBe(expected);
+      expect(validateGhostManifest(manifest).ok).toBe(typeof initialHeight === 'number');
+    } finally {
+      await client.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   },
 );
 it('discovers tools with the real SDK without reading HTML during registration or initialization', async () => {

@@ -516,7 +516,7 @@ export function MorphPopover({
         panel.style.width = `${m.w}px`;
         panel.style.height = `${m.h}px`;
         panel.style[dock.prop] = `${dock.value}px`;
-        panel.style.borderRadius = '12px';
+        panel.style.borderRadius = 'var(--radius-xl)';
         panel.style.backgroundColor = endBg;
         panel.style.borderColor = endBorderColor;
         panel.style.boxShadow = 'var(--shadow-menu)';
@@ -740,7 +740,7 @@ export function MorphPopover({
             }}
             // data-[state=closed]:pointer-events-none —— 收合动画期间面板已透明但仍以
             // position:fixed 覆盖视口,不加会拦住底下点击(选完项 / Esc 后那 300ms)。
-            className="group fixed z-50 overflow-hidden border outline-none data-[state=closed]:pointer-events-none"
+            className="group fixed z-dropdown overflow-hidden border outline-none data-[state=closed]:pointer-events-none"
             // 初始几何由 useLayoutEffect 直写;这里只兜首帧不可见位置。
             // Electron 的 app-region 按视口几何命中；矮窗口里面板会顶到标题栏，
             // 必须显式 no-drag 才能保留搜索框和首行模型的 pointer / focus 交互。

@@ -19,7 +19,7 @@ if (ctx.data.idleDisabled) {
 }
 const noop = () => {};
 const examples = [
-  ['Cindy', null, ['完善项目设置界面', '检查手机端交互']],
+  ['Cindy', null, ['完善项目设置界面，让桌面和手机保持一致', '检查手机端交互']],
   ['移动客户端', 'symbol:Smartphone:blue', ['适配窄屏布局']],
   ['设计规范', '🎨', ['整理组件与间距规范']],
   ['品牌网站', 'text:CY:blue', ['更新首页文案']],
