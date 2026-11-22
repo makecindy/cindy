@@ -558,6 +558,11 @@ export interface AgentInputProjection {
    * 「仍在运行」呈现。旧被控端可能缺省，消费方必须按旧端兼容策略处理。
    */
   continuationTurnClientId?: string | null;
+  /**
+   * 当前 Agent 会话不能同轮插话（插件引擎的 Agent 没有声明插话扩展）：插话会排到这一轮
+   * 之后。只在确知不支持时为 true；缺省（含旧被控端、没有 Agent 会话）按支持处理。
+   */
+  steerUnsupported?: boolean;
   steeringQueueClientIds: string[];
   queuePaused: boolean;
   queueExpanded: boolean;

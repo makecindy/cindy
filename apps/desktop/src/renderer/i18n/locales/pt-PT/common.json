@@ -1194,7 +1194,7 @@
     "title": "Ambiente de trabalho remoto",
     "allow": "Permitir ambiente de trabalho remoto",
     "allowHint": "Permitir que os dispositivos com sessão iniciada vejam e controlem todas as aplicações neste computador. Ative também o controlo de dispositivos acima.",
-    "permissionHint": "No computador, permita a gravação do ecrã e a acessibilidade nas definições do sistema e volte a ligar.",
+    "permissionHint": "No computador, permita a gravação do ecrã e a acessibilidade nas definições do sistema e volte a ligar. No macOS 27.3 ou posterior, a permissão de controlo encontra-se em «System & App Protection Override». Nas versões anteriores, abra Acessibilidade.",
     "inputUnsupported": "O ambiente de trabalho atual deste computador não suporta o controlo remoto do teclado e do rato em Cindy.",
     "controlUnavailable": "O controlo remoto do teclado e do rato está temporariamente indisponível. Volte a ligar para tentar novamente.",
     "beingControlled": "O seu ambiente de trabalho está a ser controlado",
@@ -1311,7 +1311,7 @@
     "privacyScreen": "Ecrã de privacidade durante a ligação",
     "privacyScreenHint": "Cobre o ecrã deste computador durante o controlo remoto. Se alguém clicar ou premir uma tecla no computador, pergunta antes de desligar.",
     "privacyActive": "O ecrã de privacidade está ativo. Se alguém clicar ou premir uma tecla no computador, pergunta antes de desligar.",
-    "privacyFailed": "Não foi possível ativar o ecrã de privacidade. O ecrã do computador pode continuar visível.",
+    "privacyFailed": "Não foi possível ativar o ecrã de privacidade. O ecrã do computador pode continuar visível. Se o computador remoto for um Mac, verifique nesse Mac a permissão de controlo da cópia da Cindy em execução.",
     "hostMute": "Silenciar computador controlado",
     "hostMuteHint": "Silenciar o computador controlado durante a ligação",
     "hostMuteFailed": "Não foi possível alterar o estado de silêncio do computador controlado",
@@ -1341,7 +1341,7 @@
     "credentialSigningRequired": "A compilação de desenvolvimento para Mac não tem a configuração de assinatura. Reinicie Cindy no Mac com a assinatura configurada e tente novamente.",
     "credentialPasswordRejected": "A palavra-passe de início de sessão do Mac não foi aceite. Introduza-a novamente.",
     "credentialIdentityChanged": "Não foi possível verificar a identidade do computador. Não foi enviada nenhuma palavra-passe para um dispositivo não verificado.",
-    "credentialAccessibilityRequired": "Permita Cindy em Definições do Sistema → Privacidade e segurança → Acessibilidade no Mac e volte a ligar.",
+    "credentialAccessibilityRequired": "No Mac, verifique a permissão de controlo da cópia do Cindy em execução e volte a ligar. No macOS 27.3 ou posterior, a permissão de controlo encontra-se em «System & App Protection Override». Nas versões anteriores, abra Acessibilidade.",
     "credentialUnlockUnavailable": "Não foi possível desbloquear este Mac em segurança. Selecione a sua conta no ecrã de bloqueio e volte a ligar; se continuar a falhar, desbloqueie o Mac localmente.",
     "disconnecting": "A desligar…",
     "loadingDisplayModes": "A carregar resoluções…",
@@ -2539,8 +2539,8 @@
         "hint": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com Touch ID ou a sua palavra-passe. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador.",
         "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente.",
         "preview": "Experimentar agora",
-        "previewStarting": "Solte o rato e o teclado. Em 3 segundos aparece o ecrã de privacidade; prima qualquer tecla para bloquear e depois desbloqueie para experimentar.",
-        "previewUnavailable": "Não foi possível mostrar o ecrã de privacidade. Reinicie o Cindy e tente novamente.",
+        "previewStarting": "A preparar o ecrã de privacidade. Solte o rato e o teclado. Quando o ecrã estiver tapado, prima uma tecla para testar o bloqueio.",
+        "previewUnavailable": "Não foi possível ativar o ecrã de privacidade. O ecrã do computador pode continuar visível.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
@@ -2551,7 +2551,10 @@
           "system": "Sistema"
         },
         "hintWindows": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com o Windows Hello ou a sua palavra-passe. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador.",
-        "hintLinux": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com a sua palavra-passe. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador."
+        "hintLinux": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com a sua palavra-passe. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador.",
+        "permissionMissing": "O ecrã de privacidade está desativado. A Cindy precisa de autorização para bloquear o Mac quando alguém clica ou prime uma tecla.",
+        "checkFailed": "O Cindy não conseguiu verificar as permissões do ecrã de privacidade neste computador.",
+        "saveFailed": "Não foi possível guardar a definição do ecrã de privacidade."
       }
     },
     "agentIsland": {
@@ -14492,6 +14495,8 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens em fila",
       "pausedFooter": "Tarefa parada, fila em pausa",
+
+      "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar a enviar",
       "resumeAria": "Continuar a enviar mensagens em fila",
       "showMore_one": "mais {{count}}",
@@ -18748,7 +18753,7 @@
       "expired": "Introdução manual terminada por tempo de espera excedido."
     },
     "failure": {
-      "permission": "O Cindy não consegue ler o ecrã deste computador. Autorize o Cindy em Acessibilidade nas Definições do Sistema.",
+      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controlo da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controlo encontra-se em «System & App Protection Override». Nas versões anteriores, abra Acessibilidade.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler este ecrã. Pode concluir este passo no computador anfitrião e depois devolver o controlo ao Agent.",
       "action_failed": "A ação não teve efeito. Verifique o ecrã e tente novamente.",
@@ -22768,5 +22773,10 @@
       "auto": "Revisão automática",
       "bypassPermissions": "Acesso total"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "Em «System & App Protection Override», clique em ⓘ junto de {{app}}. Se a aplicação não constar da lista, adicione a cópia em execução com +.",
+    "review": "$t(macControlPermission.selectApp)\nSe a opção estiver disponível, pode limitar o controlo às aplicações que escolher. O controlo total dá acesso a todas as aplicações e dados. Se concordar, leia e confirme cada item e permita o acesso no fundo da janela."
   }
 }

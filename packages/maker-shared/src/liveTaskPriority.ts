@@ -9,7 +9,9 @@
  * 灵动岛不展示 rest;它自己的短暂置顶 / 展开钉住顺序叠在这把尺子外面。
  */
 
+import { isTeammateProjectPath } from './teammateProject';
 import type { TeammateStatus } from './teammateStatus';
+import { sessionProjectDirectory } from './worktreePaths';
 
 export const LIVE_TASK_PRIORITY = {
   waiting: 0,
@@ -41,6 +43,24 @@ export interface TaskInboxState {
   snoozedUntil?: string | null;
   snoozedAt?: string | null;
   userSendAt?: string | null;
+}
+
+/**
+ * Whether the inbox keeps a task with its teammate (the `teammate` signal below): the teammate's own
+ * conversations (channels, groups, routine runs) and the tasks in its own project. A task a teammate
+ * opened in another project is the owner's work like any other and goes to Pending with its result
+ * (2026-11-22: owner-opened and teammate-opened work should both come back to be finished).
+ * Desktop and phone share this one test.
+ */
+export function isTeammateOwnInboxTask(session: {
+  source?: unknown;
+  companion?: { role?: unknown } | null;
+  projectDir?: string | null;
+  workingDir?: string | null;
+}): boolean {
+  const role = session.companion?.role;
+  return (session.source === 'bot' && (role === 'routine' || role === 'channel' || role === 'group'))
+    || isTeammateProjectPath(sessionProjectDirectory(session));
 }
 
 /**

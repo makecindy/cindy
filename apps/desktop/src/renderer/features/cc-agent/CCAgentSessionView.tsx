@@ -2017,6 +2017,7 @@ function CCAgentSessionContent({
     // F-QUEUE-DEFER
     pendingQueue,
     steeringQueueClientIds,
+    steerUnsupported,
     queuePaused,
     queueEditLocks,
     queueInteractionLocks,
@@ -2286,7 +2287,8 @@ function CCAgentSessionContent({
     && !session.remoteHostId;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && (session.source ?? 'desktop') === 'desktop' && session.status !== 'archived';
+    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot')
+    && session.status !== 'archived';
   const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
   const remotePluginCatalogue = useRemotePluginEngines(
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
@@ -5974,7 +5976,7 @@ function CCAgentSessionContent({
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}
       simplifiedBotConversation={Boolean(botChatIdentity)} localSend={isLocalUserSend(entry.clientId)} onEdit={beginQueueComposerEdit}
-      onSteer={steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
+      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
   };
   const showErrorTailBanner = !readOnly && !!errorTailMsg && !errorTailBannerHidden
     && !syntheticContinuationPending && !error && !credentialSwitchWait
@@ -6153,6 +6155,11 @@ function CCAgentSessionContent({
           <span>{t('newChat.pendingQueue.pausedFooter')}</span>
           <button type="button" disabled={readOnly} onClick={resumeQueue} className="min-h-8 rounded-lg px-2 hover:bg-[var(--surface-hover)]">{t('newChat.pendingQueue.resumeAction')}</button>
         </div>}
+        {steerUnsupported && pendingQueue.length > 0 && agentStatus.isRunning && !queuePaused && !queueAbortPending && (
+          <div role="status" className="flex min-h-8 items-center py-2 text-12 text-[var(--text-secondary)]">
+            {t('newChat.pendingQueue.steerUnsupportedNotice')}
+          </div>
+        )}
         {pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} teammate={!!botChatIdentity} /> : null}
       </>}
       key={sessionId}
@@ -6907,7 +6914,8 @@ function CCAgentSessionContent({
                   queueEditingClientId={activeQueueComposerEdit?.clientId ?? null}
                   onQueueEditSubmit={submitQueueComposerEdit}
                   onQueueEditCancel={cancelQueueComposerEdit}
-                  onQueueSteer={steerQueuedMessage}
+                  // Without same-turn input, Enter and Cmd/Ctrl+Enter both queue and the send tip offers no steer.
+                  onQueueSteer={steerUnsupported ? undefined : steerQueuedMessage}
                   steeringQueueClientIds={steeringQueueClientIds}
                   messages={sideChatMessages}
                   placeholder={

@@ -17046,31 +17046,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const currentDeviceId = await readSessionAgentDeviceId(sessionId);
     if (route.agentDeviceId === undefined && currentDeviceId) return;
     const pluginEngineChanges = route.agentKind === 'acp' && currentProviderId !== undefined && currentProviderId !== route.providerId;
-    if (route.agentKind !== currentAgentKind || pluginEngineChanges || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId) {
-      await performSessionAgentSwitch(agentSwitchDeps, {
+    const samePluginEngine = route.agentKind === 'acp' && currentAgentKind === 'acp'
+      && !pluginEngineChanges && currentDeviceId === (route.agentDeviceId ?? null);
+    if ((samePluginEngine && agentSwitchPending.get(sessionId))
+      || (!samePluginEngine && (route.agentKind !== currentAgentKind || pluginEngineChanges
+        || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId))) {
+      const switched = await performSessionAgentSwitch(agentSwitchDeps, {
         sessionId, targetAgentKind: route.agentKind, model: route.model,
         providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
         ...(route.agentDeviceId !== undefined ? { agentDeviceId: route.agentDeviceId } : {}),
         configStaged: true,
       });
-      const intent = agentSwitchPending.get(sessionId);
-      return intent ? {
-        ...route, agentKind: intent.targetAgentKind, model: intent.model,
-        providerId: intent.providerId ?? null,
-        agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
-      } : route;
-    } else {
-      const result = await applyWithVerifiedModelWindow((confirmedContextWindow) =>
-        applySessionRuntimeSelection(sessionId, route.model, route.providerId,
-          { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode,
-            ...(confirmedContextWindow === undefined ? {} : { confirmedContextWindow }) },
-          { source: 'user', deferWhileRunning: true, sessionLockHeld: true, configStaged: true }));
-      // SET_MODEL stages local user selections without returning their provider.
-      // The pending intent already contains the validated/rebound connection.
-      const intent = result.deferred ? agentSwitchPending.get(sessionId) : undefined;
-      return { ...route, providerId: result.effectiveProviderId === undefined
-        ? (intent ? intent.providerId ?? null : route.providerId) : result.effectiveProviderId };
+      if (switched.sameEngineSuperseded) {
+        throw new ScheduledModelSelectionBusyError('Saved companion route was superseded');
+      }
+      if (!samePluginEngine) {
+        const intent = agentSwitchPending.get(sessionId);
+        return intent ? {
+          ...route, agentKind: intent.targetAgentKind, model: intent.model,
+          providerId: intent.providerId ?? null,
+          agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
+        } : route;
+      }
+      // Reselecting the current plugin clears any older switch before applying its model.
     }
+    const result = await applyWithVerifiedModelWindow((confirmedContextWindow) =>
+      applySessionRuntimeSelection(sessionId, route.model, route.providerId,
+        { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode,
+          ...(confirmedContextWindow === undefined ? {} : { confirmedContextWindow }) },
+        { source: 'user', deferWhileRunning: true, sessionLockHeld: true, configStaged: true }));
+    // SET_MODEL stages local user selections without returning their provider.
+    // The pending intent already contains the validated/rebound connection.
+    const intent = result.deferred ? agentSwitchPending.get(sessionId) : undefined;
+    return { ...route, providerId: result.effectiveProviderId === undefined
+      ? (intent ? intent.providerId ?? null : route.providerId) : result.effectiveProviderId };
   };
   followMovedCindyAutoRoutesNow = async () => {
     const owner = getActiveAppSession();
@@ -19828,6 +19837,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isTurnRunning: (sessionId) => {
       const sess = getStableSessionForTurnBoundary(sessionId);
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
+    },
+    // Read on every queue projection: stay quiet while the account owner is being replaced.
+    supportsSameTurnSteer: (sessionId) => {
+      try {
+        const sess = sessionBindings.getSession(sessionId) ?? maker.getSession(sessionId);
+        return sess ? sess.capabilities.sameTurnSteer.supported : null;
+      } catch {
+        return null;
+      }
     },
     isLiveTurnRunning: (sessionId) => {
       const lookup = lookupStableSessionForTurnBoundary(sessionId);
@@ -23220,6 +23238,7 @@ export function registerComputerUseIpc(): void {
       platform: process.platform,
       showGuide: options.showGuide,
       appBundlePath: getComputerDriverAppBundlePath(),
+      systemVersion: process.getSystemVersion?.(),
     });
     try {
       // Permission snapshots are mutable TCC state and cannot be accepted from

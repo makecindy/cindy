@@ -1194,7 +1194,7 @@
     "title": "Bureau à distance",
     "allow": "Autoriser le bureau à distance",
     "allowHint": "Autorisez vos appareils connectés à voir et utiliser toutes les apps de cet ordinateur. Activez aussi le contrôle de l'appareil ci-dessus.",
-    "permissionHint": "Sur l'ordinateur, autorisez l'enregistrement de l'écran et l'accessibilité dans les réglages système, puis reconnectez-vous.",
+    "permissionHint": "Sur l'ordinateur, autorisez l'enregistrement de l'écran et l'accessibilité dans les réglages système, puis reconnectez-vous. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité.",
     "inputUnsupported": "L'environnement de bureau actuel de cet ordinateur ne prend pas en charge le contrôle à distance du clavier et de la souris dans Cindy.",
     "controlUnavailable": "Le contrôle à distance du clavier et de la souris est temporairement indisponible. Reconnectez-vous pour réessayer.",
     "beingControlled": "Votre bureau est contrôlé à distance",
@@ -1311,7 +1311,7 @@
     "privacyScreen": "Écran de confidentialité pendant la connexion",
     "privacyScreenHint": "Masque l'écran de cet ordinateur pendant la prise en main à distance. Si quelqu'un clique ou appuie sur une touche devant l'ordinateur, une confirmation est demandée avant de se déconnecter.",
     "privacyActive": "L'écran de confidentialité est activé. Si quelqu'un clique ou appuie sur une touche devant l'ordinateur, une confirmation est demandée avant de se déconnecter.",
-    "privacyFailed": "Impossible d'activer l'écran de confidentialité. L'écran de l'ordinateur est peut-être encore visible.",
+    "privacyFailed": "Impossible d'activer l'écran de confidentialité. L'écran de l'ordinateur est peut-être encore visible. Si l’ordinateur distant est un Mac, vérifiez sur celui-ci l’autorisation de contrôle de la copie de Cindy en cours d’exécution.",
     "hostMute": "Couper le son de l'ordinateur contrôlé",
     "hostMuteHint": "Couper le son de l'ordinateur contrôlé pendant la connexion",
     "hostMuteFailed": "Impossible de modifier le son de l'ordinateur contrôlé",
@@ -1341,7 +1341,7 @@
     "credentialSigningRequired": "La build de développement Mac n'a pas de configuration de signature. Redémarrez Cindy sur le Mac avec la signature configurée, puis réessayez.",
     "credentialPasswordRejected": "Le mot de passe de session du Mac n'a pas été accepté. Saisissez-le à nouveau.",
     "credentialIdentityChanged": "Impossible de vérifier l'identité de l'ordinateur. Aucun mot de passe n'a été envoyé à un appareil non vérifié.",
-    "credentialAccessibilityRequired": "Autorisez Cindy dans Réglages Système → Confidentialité et sécurité → Accessibilité sur le Mac, puis reconnectez-vous.",
+    "credentialAccessibilityRequired": "Sur le Mac, vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution, puis reconnectez-vous. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité.",
     "credentialUnlockUnavailable": "Impossible de déverrouiller ce Mac en toute sécurité. Sélectionnez votre compte sur son écran de verrouillage, puis reconnectez-vous ; si cela échoue encore, déverrouillez le Mac sur place.",
     "disconnecting": "Déconnexion…",
     "loadingDisplayModes": "Chargement des résolutions…",
@@ -2539,8 +2539,8 @@
         "hint": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
         "permission": "Autorisez Cindy dans Réglages Système > Confidentialité et sécurité > Accessibilité pour qu'elle verrouille l'écran dès que quelqu'un touche ce Mac. En attendant, l'écran se met en veille et se verrouille comme d'habitude.",
         "preview": "Essayer maintenant",
-        "previewStarting": "Lâchez la souris et le clavier. Dans 3 secondes, l'écran de confidentialité apparaît ; appuyez sur une touche pour verrouiller, puis déverrouillez pour essayer.",
-        "previewUnavailable": "Impossible d'afficher l'écran de confidentialité. Redémarrez Cindy et réessayez.",
+        "previewStarting": "Préparation de l’écran de confidentialité. Relâchez la souris et le clavier. Une fois l’écran masqué, appuyez sur une touche pour tester le verrouillage.",
+        "previewUnavailable": "Impossible d'activer l'écran de confidentialité. L'écran de l'ordinateur est peut-être encore visible.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
@@ -2551,7 +2551,10 @@
           "system": "Système"
         },
         "hintWindows": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Windows Hello ou votre mot de passe. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
-        "hintLinux": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec votre mot de passe. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur."
+        "hintLinux": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec votre mot de passe. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
+        "permissionMissing": "L’écran de confidentialité est inactif. Cindy a besoin de votre autorisation pour verrouiller le Mac en cas de clic ou de pression sur une touche.",
+        "checkFailed": "Cindy n’a pas pu vérifier les autorisations de l’écran de confidentialité sur cet ordinateur.",
+        "saveFailed": "Impossible d’enregistrer le réglage de l’écran de confidentialité."
       }
     },
     "agentIsland": {
@@ -14492,6 +14495,8 @@
       "regionAria": "File d'attente des messages",
       "listAria": "Messages en file d'attente",
       "pausedFooter": "Tâche arrêtée, file d'attente en pause",
+
+      "steerUnsupportedNotice": "Ce moteur ne permet pas de réorienter. Les messages en attente seront envoyés à la fin du tour en cours.",
       "resumeAction": "Reprendre l'envoi",
       "resumeAria": "Reprendre l'envoi des messages en file d'attente",
       "showMore_one": "{{count}} de plus",
@@ -18748,7 +18753,7 @@
       "expired": "Transfert de saisie terminé après une attente trop longue."
     },
     "failure": {
-      "permission": "Cindy ne peut pas lire l'écran de cet ordinateur. Autorisez Cindy dans Accessibilité, dans les Réglages Système.",
+      "permission": "Cindy ne peut pas lire l’interface de ce Mac. Vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité.",
       "target_gone": "La fenêtre cible a été fermée.",
       "unreadable": "Cet écran ne peut pas être lu. Vous pouvez terminer sur l'ordinateur hôte, puis rendre la main à l'Agent.",
       "action_failed": "Cette action n'a pas eu d'effet. Vérifiez l'écran et réessayez.",
@@ -22768,5 +22773,10 @@
       "auto": "Revue auto",
       "bypassPermissions": "Accès complet"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "Dans « System & App Protection Override », cliquez sur ⓘ à côté de {{app}}. Si l’app ne figure pas dans la liste, ajoutez la copie en cours d’exécution avec +.",
+    "review": "$t(macControlPermission.selectApp)\nSi l’option est proposée, vous pouvez limiter le contrôle aux apps de votre choix. Le contrôle intégral donne accès à toutes les apps et données. Si vous acceptez, lisez et confirmez chaque élément, puis autorisez l’accès en bas de la fenêtre."
   }
 }

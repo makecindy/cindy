@@ -211,6 +211,7 @@ vi.mock('../nativeCapture', () => ({
   },
 }));
 vi.mock('../inputHost', () => ({
+  isEditableDesktopPoint: vi.fn(async () => false),
   resolveDesktopInputBinary: vi.fn(async () => '/fake/desktop-input'),
   DesktopInputHost: class {
     constructor(onFailure: () => void) {
