@@ -488,7 +488,10 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           // another writer of the thread (which closed and relinked unchanged sessions).
           const account = getSessionSubscriptionAccount(options.sessionId);
           const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
-          const sameAccount = account && ref && (ref.providerId === ref.kind || ref.ownAccount === account.id);
+          // A provider can hold several accounts; its first (`ownAccount`) is only one of them. The
+          // route stays on the running account when that account belongs to the target provider.
+          const sameAccount = account && ref
+            && (accountProviderId(ref.kind, account.id) === ref.providerId || ref.ownAccount === account.id);
           return target.requiresCodexThreadHostTransfer(sameAccount
             ? { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : options);
         };

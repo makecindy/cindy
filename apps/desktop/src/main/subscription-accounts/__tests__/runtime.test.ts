@@ -2434,6 +2434,29 @@ describe('tasks using imported Codex connections', () => {
     } finally { release(); }
   });
 
+  // Review (#12144): a created provider can hold several accounts; its first account is only one of them.
+  // A session running on another account of that same provider keeps its own host.
+  it('keeps the running account when it is a later account of the target provider', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('second'), account('third'), account('elsewhere')] };
+    h.created.cprov = { kind: 'openai', name: 'Team', account: 'second' };
+    h.placement['openai:second'] = 'cprov';
+    h.placement['openai:third'] = 'cprov';
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = (id: string) => ({ id, configDir: `openai/${id}`, assertCurrent() {}, readState: async () => ({ authenticated: true }) });
+    const third = running('third');
+    let release = registerSessionSubscriptionAccount('lane', third);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(third);
+    } finally { release(); }
+    release = registerSessionSubscriptionAccount('lane', running('elsewhere'));
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
   it('forks old history through the same imported account and reconnects through its old login', async () => {
     h.pools.openai = {
       strategy: 'round', accounts: [account('default'), account('imported')],
