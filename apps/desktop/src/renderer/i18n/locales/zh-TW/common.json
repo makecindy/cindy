@@ -15082,6 +15082,7 @@
       "codexHelperUnverified": "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。",
       "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
       "replyFailed": "回覆未完成",
+      "toolDescriptionTooLong": "工具說明超過目前介面允許的長度。請檢查工具設定或聯絡工具作者，實際長度與上限可在錯誤詳細資訊中查看。",
       "retryTitle": "重新傳送最後一則訊息",
       "cancelTitle": "關閉錯誤提示",
       "retry": "重試",

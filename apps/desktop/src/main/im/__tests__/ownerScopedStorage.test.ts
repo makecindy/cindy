@@ -158,6 +158,39 @@ describe('IM owner-scoped storage', () => {
     expect(() => storage.write('late')).toThrow('DISCORD_ACCOUNT_CHANGED');
     expect(discordFinalTextStorage('personal', true).read()).toBeNull();
   });
+  // Windows CI: filesystem timestamp precision must not hide a same-size credential replacement.
+  it('changes the credential revision even when both writes have identical timestamps and size', () => {
+    setSession('local', 'local-v1');
+    const statSync = fs.statSync;
+    const spy = vi.spyOn(fs, 'statSync').mockImplementation((...args) => {
+      const stat = Reflect.apply(statSync, fs, args);
+      if (!stat) return stat;
+      return Object.assign(stat, { mtimeNs: 1n, ctimeNs: 1n });
+    });
+    try {
+      expect(ownerScopedImSecrets.write('discord-bot-token', 'test-token-a')).toBe(true);
+      const revision = ownerScopedImSecretRevision('discord-bot-token');
+      expect(ownerScopedImSecrets.write('discord-bot-token', 'test-token-b')).toBe(true);
+      expect(ownerScopedImSecretRevision('discord-bot-token')).not.toBe(revision);
+      expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('test-token-b');
+    } finally { spy.mockRestore(); }
+  });
+
+  it('keeps the previous encrypted credential when replacement fails and removes staging files', () => {
+    setSession('local', 'local-v1');
+    expect(ownerScopedImSecrets.write('discord-bot-token', 'test-token-a')).toBe(true);
+    const revision = ownerScopedImSecretRevision('discord-bot-token');
+    const target = __testing.scopedSecretPath('discord-bot-token')!;
+    const files = fs.readdirSync(path.dirname(target));
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw new Error('replacement refused'); });
+    try {
+      expect(ownerScopedImSecrets.write('discord-bot-token', 'test-token-b')).toBe(false);
+      expect(ownerScopedImSecrets.read('discord-bot-token')).toBe('test-token-a');
+      expect(ownerScopedImSecretRevision('discord-bot-token')).toBe(revision);
+      expect(fs.readdirSync(path.dirname(target))).toEqual(files);
+    } finally { spy.mockRestore(); }
+  });
+
   beforeEach(() => {
     mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-owner-scope-'));
     mocks.ownerScopeKey = 'owner-1';

@@ -636,6 +636,7 @@
     "readableHistoryRecoveryDescription": "攜言談錄續行，原差事仍存。請於新差事重遣方才之訊。",
     "requestFormatError": "應用程式所送請求格式有誤，此回覆未能完成。",
     "replyFailed": "回覆未竟",
+    "toolDescriptionTooLong": "工具之說明逾介面所限。請核工具設定，或詢其提供者；實長與上限見錯誤詳情。",
     "usageLimitReached": "模型名籍，耗用已達上限",
     "showErrorDetails": "謬誤詳情",
     "hideErrorDetails": "斂詳情",

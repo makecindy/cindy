@@ -1,3 +1,4 @@
+import { isToolDescriptionTooLongError } from '@cindy/maker-shared/error-redaction';
 import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
 import { isAccountUsageLimitReachedText, parseGeminiInputRateLimit, isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
@@ -129,6 +130,7 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
   const key = code ? `session.remoteError.${code}` : null;
   if (key && i18n.exists(key)) return key;
   if (isResponsesLiteParallelToolCallsError(message)) return 'session.tail.requestFormatError';
+  if (isToolDescriptionTooLongError(message)) return 'session.tail.toolDescriptionTooLong';
   // The account ran out of its periodic allowance: say so instead of "reply failed".
   return isAccountUsageLimitReachedText(message)
     ? 'session.tail.usageLimitReached'

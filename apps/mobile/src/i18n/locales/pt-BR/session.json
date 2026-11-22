@@ -639,6 +639,7 @@
     "readableHistoryRecoveryDescription": "Mantenha seu histórico de conversa e a sessão original. Reenvie sua última mensagem na nova sessão.",
     "requestFormatError": "O aplicativo enviou uma solicitação inválida, por isso não foi possível concluir esta resposta.",
     "replyFailed": "Não foi possível concluir a resposta",
+    "toolDescriptionTooLong": "A descrição de uma ferramenta excede o limite desta API. Verifique a configuração da ferramenta ou contate o fornecedor. Consulte o tamanho informado e o limite nos detalhes do erro.",
     "usageLimitReached": "A conta do modelo atingiu o limite de uso",
     "showErrorDetails": "Detalhes do erro",
     "hideErrorDetails": "Ocultar detalhes",

@@ -636,6 +636,7 @@
     "readableHistoryRecoveryDescription": "带上对话记录继续，原任务保留。请在新任务中重新发送刚才的消息。",
     "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
     "replyFailed": "回复未完成",
+    "toolDescriptionTooLong": "工具说明超过当前接口允许的长度。请检查工具配置或联系工具作者，实际长度和上限可在错误详情中查看。",
     "usageLimitReached": "模型账号已达到用量上限",
     "showErrorDetails": "错误详情",
     "hideErrorDetails": "收起详情",

@@ -6,6 +6,7 @@
  */
 import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type { IMHost, IMSecretReadResult } from '@cindy/im';
@@ -197,7 +198,16 @@ export const ownerScopedImSecrets: ImSecrets = {
       const target = prepareSecretPath(name);
       if (!target) return false;
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, safeStorage.encryptString(plaintext).toString('base64'), 'utf-8');
+      // Replacement gives the credential a new file identity even when Windows
+      // reports identical timestamps for consecutive writes. Encrypt before writing.
+      const encrypted = safeStorage.encryptString(plaintext).toString('base64');
+      const temporary = `${target}.${randomUUID()}.tmp`;
+      try {
+        fs.writeFileSync(temporary, encrypted, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
+        fs.renameSync(temporary, target);
+      } finally {
+        try { fs.unlinkSync(temporary); } catch { /* Already renamed, or cleanup is unavailable. */ }
+      }
       return true;
     } catch {
       return false;

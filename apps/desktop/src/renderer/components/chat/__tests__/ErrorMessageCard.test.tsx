@@ -82,6 +82,17 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText('chat.errorBanner.modelAccessDenied')).toBeTruthy();
     expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
   });
+  // #11544 review: unit, real history card; live-banner coverage cannot protect persisted/read-only rows.
+  it('retains the tool description length explanation in history and exposes original details', () => {
+    const message = "Invalid 'tools[0].description': string too long. Expected a string with maximum length 1048576, but got a string with length 1344337 instead.";
+    render(<ErrorMessageCard message={message} />);
+    expect(screen.getByText('chat.errorBanner.toolDescriptionTooLong')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    expect(screen.queryByText(message)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(message)).toBeTruthy();
+  });
+
   it('shows friendly stream-interrupt copy plus a raw-error expander', () => {
     render(
       createElement(ErrorMessageCard, {

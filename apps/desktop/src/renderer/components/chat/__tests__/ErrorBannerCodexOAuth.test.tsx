@@ -1467,6 +1467,16 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText('chat.errorBanner.codexOrganizationUsageLimitWithReset')).toBeNull();
   });
 
+  // #11544, unit: exercise the live summary and original-error disclosure through the real banner.
+  it('explains a tool description length refusal and preserves its diagnostic details', () => {
+    const error = "Invalid 'tools[0].description': string too long. Expected a string with maximum length 1048576, but got a string with length 1344337 instead.";
+    render(<ErrorBanner error={error} retryText="retry this turn" onRetry={vi.fn()} agentKind="codex" />);
+    expect(screen.getByText('chat.errorBanner.toolDescriptionTooLong')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(error)).toBeTruthy();
+  });
+
   it('keeps a transient Codex 429 on its normal rate-limit path', () => {
     const rawError = 'Too many requests (429)';
     render(

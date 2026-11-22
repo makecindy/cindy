@@ -123,3 +123,5 @@ export function unwrapProviderErrorDisplay(message: string): string {
   if (isLiteLlmEnvelope(rest)) return peelVendorJsonPayload(unwrapLiteLlmInner(rest));
   return message;
 }
+
+export { isToolDescriptionTooLongError } from '@cindy/maker-shared/error-redaction';

@@ -32,7 +32,7 @@ import {
   parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
-import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
+import { isStreamInterruptedErrorMessage, isToolDescriptionTooLongError } from '@/utils/streamInterruptError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
 import { errorReasonI18nKey } from './errorReasonI18n';
@@ -98,9 +98,11 @@ export function ErrorMessageCard({
       ? t('chat.errorBanner.streamInterruptedNoRetry')
       : isGatewayProxyTokenInvalid
         ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-        : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
-          ?? localizedReasonError ?? remoteGuidance
-          ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
+        : isToolDescriptionTooLongError(decoded)
+          ? t('chat.errorBanner.toolDescriptionTooLong')
+          : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+            ?? localizedReasonError ?? remoteGuidance
+            ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
     : geminiGuidance ?? subscriptionGuidance ?? fallbackText;
