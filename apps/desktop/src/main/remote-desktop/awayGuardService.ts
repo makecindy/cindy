@@ -412,7 +412,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         // A late id from a helper this cover already let go of is not published: the
         // prompt has been stopped and its replacement may reuse the number.
         if (generation !== ownerPromptGeneration) return;
-        if (!closedHelper) return;
+        if (!closedHelper || windowId === null) return;
         if (ownerPromptPanelIds.get(closedHelper) === windowId) return;
         ownerPromptPanelIds.set(closedHelper, windowId);
         publishExcludedWindows();
