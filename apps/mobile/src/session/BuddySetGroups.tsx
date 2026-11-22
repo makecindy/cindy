@@ -26,13 +26,16 @@ interface RosterItem extends BuddyRosterRow {
   name: string;
 }
 
-export function BuddySetGroups({ entries, buddySets, onChange, onEditSet, renderRow, query }: {
+export function BuddySetGroups({ entries, buddySets, onChange, onEditSet, renderRow, query, runDisclosure, prepareDisclosure }: {
   entries: readonly TeammateListEntry[];
   buddySets: BuddySetsState;
   onChange: (next: BuddySetsState | ((current: BuddySetsState) => BuddySetsState)) => void;
   onEditSet: (buddySetId: string) => void;
   renderRow: (entry: TeammateListEntry, last: boolean) => React.ReactNode;
   query: string;
+  /** Home's disclosure window must be open before a fold changes the list height. */
+  runDisclosure(apply: () => void): void;
+  prepareDisclosure(): void;
 }) {
   const { t, i18n } = useTranslation();
   const copy = mobileBuddySetCopy(t);
@@ -63,7 +66,8 @@ export function BuddySetGroups({ entries, buddySets, onChange, onEditSet, render
       return <View key={`buddy-set:${set.buddySetId}`} testID={`buddySet.${set.buddySetId}`}>
         <Pressable accessibilityRole="button" accessibilityLabel={`${set.name}, ${collapsed ? copy.expand : copy.collapse}`}
           accessibilityState={{ expanded: !collapsed }}
-          onPress={() => onChange((current) => setBuddySetCollapsed(current, set.buddySetId, !collapsed))}
+          onPress={() => runDisclosure(() => onChange((current) => setBuddySetCollapsed(current, set.buddySetId, !collapsed)))}
+          onPressIn={prepareDisclosure}
           onLongPress={() => onEditSet(set.buddySetId)}
           style={({ pressed }) => [styles.header, pressed && mobileInteractionStyles.pressed]}>
           <Chevron size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />

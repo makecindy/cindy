@@ -244,6 +244,8 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
           onEditSet={(buddySetId) => setBuddySetEdit({ visible: true, buddySetId })}
           renderRow={renderRow}
           query={search}
+          runDisclosure={runDisclosure}
+          prepareDisclosure={prepareDisclosure}
         /> : null}
         {canCreate ? <DisclosureItem exit>{create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
           style={({ pressed }) => [styles.addRow, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesAdd">
@@ -273,6 +275,8 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
           onEditSet={(buddySetId) => setBuddySetEdit({ visible: true, buddySetId })}
           renderRow={(entry, last) => renderRow(entry, last && !hasMore)}
           query={search}
+          runDisclosure={runDisclosure}
+          prepareDisclosure={prepareDisclosure}
         />
         {hasMore ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: showAll }}
           accessibilityLabel={showAll ? t('devices.companions.section.showLess') : t('devices.companions.section.showAllA11y', { count: entries.length })}

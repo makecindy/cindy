@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createContext, createElement as el } from 'react';
+import { act, createContext, createElement as el, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: null as string | null, push: vi.fn(),
@@ -11,9 +11,9 @@ vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { subscribe
 vi.mock('react-native', () => ({
   View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
   ScrollView: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
-  Pressable: ({ children, testID, disabled, onPress, accessibilityLabel }: any) => {
+  Pressable: ({ children, testID, disabled, onPress, onPressIn, accessibilityLabel }: any) => {
     if (testID?.startsWith('home.teammatesStrip.bot.')) h.stripRenders.push(testID);
-    return el('button', { 'data-testid': testID, disabled, onClick: onPress, 'aria-label': accessibilityLabel }, children);
+    return el('button', { 'data-testid': testID, disabled, onClick: onPress, onMouseDown: onPressIn, 'aria-label': accessibilityLabel }, children);
   },
   ActivityIndicator: () => el('i', { 'data-testid': 'spinner' }),
   Keyboard: { dismiss: () => {} },
@@ -70,6 +70,7 @@ vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () =>
   owner: 'owner', teammatesCollapsed: h.collapsed, showCollapsedTeammateAvatars: h.showAvatars, lastTeammate: null,
   setTeammatesCollapsed: async () => {}, openTeammate: h.openTeammate, openCreatedTeammate: async () => {} }) }));
 import { HomeTeammatesSection } from '../session/HomeTeammatesSection';
+import { BuddySetGroups } from '../session/BuddySetGroups';
 import { getHomeViewSession } from '../session/homeViewSession';
 import { CONNECTION_NOTICE_DELAY_MS } from '../components/connectionNoticeDelay';
 
@@ -322,4 +323,40 @@ it('carries unread and pending attention on the hidden header without opening it
   expect(byId('home.teammatesHeader')?.getAttribute('aria-label')).not.toContain('Needs attention');
   expect(byId('home.teammatesAttention')).not.toBeNull();
   expect(byId('home.teammatesStrip')).toBeNull();
+});
+
+// Regression for the P2 review finding on BuddySetGroups.tsx: a fold changes the
+// list height, so it must commit inside the home disclosure window (DESIGN.md
+// §14.4) rather than firing onChange directly on press. Minimal failing input: a
+// controller that records apply without running it. Before the fix the rows vanish
+// in one frame and runDisclosure is never called; after it the rows stay until the
+// window applies. tier: unit, in-memory fakes, no native animation.
+it('defers a buddy set fold into the home disclosure window', async () => {
+  const initial = { version: 1 as const, sets: [{ buddySetId: 'set-1', name: 'Trio', buddyIds: ['bot:host:bot'] }] };
+  const prepareDisclosure = vi.fn();
+  let pendingApply: (() => void) | undefined;
+  const runDisclosure = vi.fn((apply: () => void) => { pendingApply = apply; });
+  function Harness() {
+    const [state, setState] = useState(initial);
+    return el(BuddySetGroups, {
+      entries: [{ kind: 'bot', row: item }], buddySets: state, onChange: setState,
+      onEditSet: () => {}, renderRow: (_entry: unknown) => el('span', { key: 'row', 'data-testid': 'buddy.row' }, 'Mimi'),
+      query: '', runDisclosure, prepareDisclosure,
+    } as any);
+  }
+  await act(async () => root.render(el(Harness)));
+  const header = () => node.querySelector<HTMLElement>('button[aria-label^="Trio"]');
+  expect(byId('buddy.row')).not.toBeNull();
+  expect(header()?.getAttribute('aria-label')).toContain('collapse');
+
+  // Press-in opens the window before the state commit.
+  await act(async () => { header()!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); });
+  expect(prepareDisclosure).toHaveBeenCalledTimes(1);
+  await act(async () => { header()!.click(); });
+  expect(runDisclosure).toHaveBeenCalledTimes(1);
+  // No one-frame jump: the rows stay visible until the window applies the fold.
+  expect(byId('buddy.row')).not.toBeNull();
+  await act(async () => { pendingApply!(); });
+  expect(byId('buddy.row')).toBeNull();
+  expect(header()?.getAttribute('aria-label')).toContain('expand');
 });

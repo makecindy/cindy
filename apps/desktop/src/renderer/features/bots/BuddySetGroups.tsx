@@ -140,7 +140,7 @@ export function BuddySetGroups<T extends BuddySetChatEntry>({
                       <Users size={14} className="mr-2" />
                       {copy.addBuddy}
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
+                    <DropdownMenuSubContent className="max-h-72 max-w-64 overflow-y-auto">
                       {buddies.length === 0 ? (
                         <DropdownMenuItem disabled>{copy.addBuddy}</DropdownMenuItem>
                       ) : buddies.map((buddy) => {
