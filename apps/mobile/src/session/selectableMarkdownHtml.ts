@@ -63,6 +63,13 @@ export interface SelectableMarkdownHtmlOptions {
 interface RenderContext {
   imageSources?: SelectableMarkdownHtmlOptions['imageSources'];
   sessionLinkTitles?: Readonly<Record<string, string>>;
+  /** Trusted chat renderer hook; never receives or executes author HTML. */
+  renderInline?: (inline: MobileMarkdownInline) => string | undefined;
+}
+
+/** A parsed block, sharing the file reader's escaping and code tokenizer. */
+export function buildSelectableMarkdownBlockHtml(block: MobileMarkdownBlock, context: RenderContext = {}): string {
+  return renderBlock(block, context);
 }
 
 export function buildSelectableMarkdownHtml(
@@ -556,6 +563,8 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
       renderInline({ ...inline, marks: undefined }, ctx),
     );
   }
+  const rendered = ctx.renderInline?.(inline);
+  if (rendered !== undefined) return rendered;
   switch (inline.type) {
     case 'text':
       return escapeHtml(inline.text);

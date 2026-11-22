@@ -14,6 +14,12 @@
   "usageOnlyDevice": "仅 {{name}}",
   "usagePlans": "套餐余量",
   "usageBudget": "本期预算剩余",
+  "usageWaiting": "连上电脑后，这里会显示套餐余量和今日用量",
+  "usageUpdateDesktop": "更新电脑上的 Cindy 后即可查看用量",
+  "usageWaitingTitle": "用量会显示在这里",
+  "usageWaitingCopy": "手机连上你的电脑后，会自动同步各账号的套餐余量和每日用量，通常几秒就好。",
+  "usageUpdateDesktopTitle": "更新电脑上的 Cindy 后即可查看",
+  "usageUpdateDesktopCopy": "电脑上的 Cindy 版本较旧，还不能把用量同步到手机。更新后会自动显示。",
   "management": {
     "title": "设备管理",
     "openDevice": "查看 {{name}} 的设备详情",
@@ -440,6 +446,7 @@
       "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。",
       "filterTeammatesHeading": "伙伴",
       "filterAnySource": "全部",
+      "filterHideAutomations": "隐藏自动化任务",
       "filterHideAllTeammates": "都不显示",
       "filterSelectedTeammates": "已选 {{count}} 位",
       "inbox": {

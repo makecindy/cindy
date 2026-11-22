@@ -27,6 +27,19 @@ function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: 
 }
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
+  if (name === 'rename-self') {
+    return { devices: [
+      device({ deviceId: 'self', isSelf: true, name: 'self', selfName: 'Office desktop', platform: 'win32' }),
+      device({ deviceId: 'peer', name: 'MacBook Air' }),
+    ], links: [link('peer', 'direct', 6)], relayRttMs: 18 };
+  }
+  if (name === 'traffic') {
+    return {
+      devices: [SELF, device({ deviceId: 'win', name: 'Work PC', platform: 'win32' }), device({ deviceId: 'mini', name: 'Mac mini' })],
+      links: [link('win', 'direct', 9), { ...link('mini', 'relay', 15), encrypted: false }],
+      relayRttMs: 25,
+    };
+  }
   if (name === 'app-nodes' || name === 'app-nodes-list') {
     return { devices: [SELF,
       device({ deviceId: 'friend', name: 'Friend Mac', app: 'cindy-friend', remoteControlEnabled: false }),
@@ -255,6 +268,11 @@ void mountPage({
       }),
       getPeerLinks: async () => ({
         links: data.links,
+        traffic: {
+          last5m: { 'device-link': { sent: 0, received: 0 }, 'agent-net': { sent: 131072, received: 524288 } },
+          lastHour: { 'device-link': { sent: 524288, received: 1048576 }, 'agent-net': { sent: 2097152, received: 8388608 } },
+          lastDay: { 'device-link': { sent: 8388608, received: 25165824 }, 'agent-net': { sent: 33554432, received: 100663296 } },
+        },
         agentNetRoutes,
         relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
         // Agent-Net 经中转的数据走 UDP;fleet 演示 UDP 不通退回 WebSocket。Device Link 只有 WebSocket。
@@ -269,8 +287,15 @@ void mountPage({
       onControlledState: subscription('controlled'),
       onControlTargetChanged: subscription('controlTarget'),
       setEnabled: forbid('deviceLink.setEnabled'),
-      renameDevice: forbid('deviceLink.renameDevice'),
-      deleteDevice: forbid('deviceLink.deleteDevice'),
+      renameDevice: ctx.case === 'rename-self' ? async (deviceId: string, name: string) => {
+        data.devices = data.devices.map((d) => d.deviceId === deviceId ? { ...d, name } : d);
+        return { deviceId, name };
+      } : forbid('deviceLink.renameDevice'),
+      deleteDevice: async (deviceId: string) => {
+        const index = data.devices.findIndex((d) => d.deviceId === deviceId && !d.online && !d.isSelf);
+        if (index >= 0) data.devices.splice(index, 1);
+        return { deviceId, deleted: index >= 0 };
+      },
     },
     selfHostedRelay: {
       command: async (command: SelfHostedRelayCommand) => ({
@@ -308,7 +333,7 @@ void mountPage({
   },
   render: () => (
     <AppFrame>
-      <div className="mx-auto w-full max-w-[920px] px-6 py-6">
+      <div className={`mx-auto w-full px-6 py-6 ${ctx.case === 'default' ? 'max-w-[1000px]' : 'max-w-[920px]'}`}>
         <RemoteControlSection />
       </div>
     </AppFrame>

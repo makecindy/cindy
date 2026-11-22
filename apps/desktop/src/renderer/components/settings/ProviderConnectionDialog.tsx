@@ -430,10 +430,9 @@ function PresetDropdown({
           if (event.isComposing || event.keyCode === 229) event.preventDefault();
         }}
         className={cn(
-          // z-[10001]: 宿主弹窗 overlay 是 z-[10000],默认 z-50 会被盖住。
           // 底/hover 用 cmd-palette 菜单 token 对——settings-menu-bg-hover 在深色下
           // 与卡片底同色,hover 会看不出来。
-          'z-[10001] max-h-[280px] w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl p-2',
+          'max-h-[280px] w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl p-2',
           'border border-[var(--cmd-palette-border)]',
           'bg-[var(--cmd-palette-bg)] shadow-[shadow:var(--shadow-menu)]',
         )}
@@ -1896,6 +1895,8 @@ export function ProviderConnectionDialog({
         discoverySnapshotId: m.discoverySnapshotId,
         opaqueModelId: m.opaqueModelId || latest?.opaqueModelId,
         nameExplicit: latest?.nameExplicit ?? m.nameExplicit,
+        // Keep the Settings-refresh listing marker (#11298); a picker save is not a new listing.
+        ...(latest?.listedUpstream ? { listedUpstream: true as const } : {}),
         ...(interfaceId ? { interfaceId } : {}),
         ...(api ? { api } : {}),
         ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
@@ -1927,6 +1928,7 @@ export function ProviderConnectionDialog({
           discoveredSource: m.discoveredSource,
           discoverySnapshotId: m.discoverySnapshotId,
           opaqueModelId: m.opaqueModelId,
+          ...(m.listedUpstream ? { listedUpstream: true as const } : {}),
           nameExplicit: m.nameExplicit,
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
@@ -2052,6 +2054,7 @@ export function ProviderConnectionDialog({
           discoverySnapshotId: m.discoverySnapshotId,
           opaqueModelId: m.opaqueModelId,
           nameExplicit: m.nameExplicit,
+          ...(m.listedUpstream ? { listedUpstream: true as const } : {}),
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
           ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
@@ -2437,7 +2440,7 @@ export function ProviderConnectionDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           data-custom-provider-dialog-scrim="true"
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           style={WINDOW_DRAG_STYLE}
         />
       <Dialog.Content
@@ -2480,7 +2483,7 @@ export function ProviderConnectionDialog({
           }
         }}
         className={cn(
-          'modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
+          'modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
           '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
         )}
       >
@@ -2686,7 +2689,7 @@ export function ProviderConnectionDialog({
 
           {/* 当前 Tab 的独立配置面板 */}
           <div
-            className="flex flex-col gap-4 rounded-[12px] p-4"
+            className="flex flex-col gap-4 rounded-xl p-4"
             style={{
               backgroundColor: 'var(--surface)',
               border: '1px solid var(--settings-theme-card-border)',
@@ -2757,6 +2760,7 @@ export function ProviderConnectionDialog({
                   {(control) => (
                     <SettingsTextInput
                       {...control}
+                      data-settings-search-action="Enter the API key of the current provider draft"
                       key={activeTab}
                       surface="ivory"
                       size={simpleAdding ? 'md' : undefined}
@@ -2768,7 +2772,6 @@ export function ProviderConnectionDialog({
                       placeholder={keyPlaceholder}
                       mono={!simpleAdding}
                       secret
-                      secretTipContentClassName="z-[10001]"
                     />
                   )}
                 </FormField>
@@ -3041,7 +3044,6 @@ export function ProviderConnectionDialog({
                       </div>
                       <Tip
                         text={t('settings.providers.custom.fields.removeRow')}
-                        contentClassName="z-[10001]"
                       >
                         <Button
                           variant="secondary"
@@ -3285,7 +3287,7 @@ export function ProviderConnectionDialog({
                             onFocusOutside={(event) => {
                               if (imageGenerationHelpPinned) event.preventDefault();
                             }}
-                            className="z-[10001] w-72 max-w-[calc(100vw-2rem)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 text-12 text-[var(--text-secondary)]"
+                            className="w-72 max-w-[calc(100vw-2rem)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 text-12 text-[var(--text-secondary)]"
                           >
                             {renderImageGenerationHelpContent()}
                           </PopoverContent>
@@ -3440,7 +3442,7 @@ export function ProviderConnectionDialog({
           }}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10002]" />
+            <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal-nested" />
             <Dialog.Content
               aria-describedby="custom-provider-image-generation-reload-description"
               onPointerDownOutside={(event) => event.preventDefault()}
@@ -3456,7 +3458,7 @@ export function ProviderConnectionDialog({
                 if (saving) event.preventDefault();
               }}
               className={cn(
-                'modal-panel fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col p-4 outline-none',
+                'modal-panel fixed inset-0 z-modal-nested m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col p-4 outline-none',
               )}
             >
               <button
@@ -3559,7 +3561,7 @@ export function ModelPickerOverlay({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10001]',
+            'modal-scrim fixed inset-0 z-modal-raised',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -3583,7 +3585,7 @@ export function ModelPickerOverlay({
             returnFocusRef.current?.focus();
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised -translate-x-1/2 -translate-y-1/2',
             'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col outline-none',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}

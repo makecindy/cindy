@@ -18,6 +18,11 @@ const MIME_BY_EXT: Record<string, string> = {
   m4a: 'audio/mp4',
   pdf: 'application/pdf',
   txt: 'text/plain',
+  html: 'text/html',
+  htm: 'text/html',
+  css: 'text/css',
+  js: 'text/javascript',
+  mjs: 'text/javascript',
   json: 'application/json',
 };
 

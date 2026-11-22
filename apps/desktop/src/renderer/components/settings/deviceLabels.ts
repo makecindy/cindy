@@ -3,9 +3,15 @@
  */
 
 import appI18n from 'i18next';
-import { isCindyApp } from '@cindy/maker-shared/device-list';
+import { deviceDisplayName, isCindyApp } from '@cindy/maker-shared/device-list';
 
 type T = (key: string, options?: Record<string, unknown>) => string;
+
+/** The account display name takes precedence over the hostname reported by this computer. */
+export function selfDeviceName(device: Pick<DeviceLinkDeviceView, 'deviceId' | 'name' | 'selfName'>): string {
+  const hostname = device.selfName?.trim() || '';
+  return deviceDisplayName(device.deviceId, device.name, hostname === device.deviceId ? '' : hostname);
+}
 
 /** Known App names are localized; unknown self-reported identifiers remain literal. */
 export function appLabel(app: string | undefined, t: T): string {

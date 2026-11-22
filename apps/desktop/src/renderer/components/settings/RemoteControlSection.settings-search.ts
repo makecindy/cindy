@@ -27,7 +27,18 @@ export const remoteControlSettings = defineSettings({
     targetId: 'settings-search-target-remote-devices',
     titleKey: 'settings.remoteControl.sections.myDevices',
     sectionKey: 'settings.sections.remoteControl',
+    keywordKeys: ['settings.devices.delete', 'settings.devices.deleteTitle'],
     aliases: ['device link', 'devices', '设备互联', '我的设备', '设备列表'],
+  },
+  localNetwork: {
+    id: 'remoteControl.localNetwork',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-devices',
+    titleKey: 'settings.devices.localNetwork.label',
+    descriptionKey: 'settings.devices.localNetwork.deniedHint',
+    sectionKey: 'settings.remoteControl.sections.myDevices',
+    aliases: ['local network', 'LAN', 'direct connection', '本地网络', '局域网', '直连', '本地网络权限'],
   },
   v2: {
     id: 'remoteControl.v2',

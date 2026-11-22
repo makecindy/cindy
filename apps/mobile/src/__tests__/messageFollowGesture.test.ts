@@ -77,6 +77,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     historyAnchorVerifyFrameRef: ref<number | null>(null), queuedLoadEarlierRef: ref(false),
     // Companion receipt behavior is covered by the mounted MessageRenderer tests.
     acknowledgeCompanionReadRef: ref(vi.fn()),
+    messageListVisibility: { viewportChanged() {} },
     shareSelectionActiveRef: ref(false),
     itemsForStructureRef: ref([]),
     scrollMetricsRef: ref({ contentHeight: 2000, offsetY: 1200, viewportHeight: 800 }),

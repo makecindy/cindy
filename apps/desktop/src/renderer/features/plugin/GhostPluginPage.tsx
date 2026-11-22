@@ -123,14 +123,27 @@ import {
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
 import { MyPublishesSection } from './MyPublishesSection';
-import { ignoredRoundStorageKey, isBatchFinished, updateRoundKey } from './lib/updateAllModel';
+import {
+  githubUpdateKey,
+  ignoredRoundStorageKey,
+  isBatchFinished,
+  updateRoundKey,
+  type NamedGithubReleaseUpdate,
+} from './lib/updateAllModel';
 import {
   getUpdateAllBatchState,
+  githubRowOutcome,
   reconcileUpdateAllBatch,
   setUpdateAllBatchHooks,
   startUpdateAllBatch,
   subscribeUpdateAllBatch,
 } from './lib/updateAllController';
+import {
+  githubReleaseTarget,
+  runGithubReleaseUpdate,
+  useGithubReleaseUpdates,
+  type GithubReleaseUpdate,
+} from './lib/githubReleaseUpdates';
 import { formatSetupGateDescription } from './lib/ghostSetupGateModel';
 import {
   PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
@@ -199,6 +212,8 @@ type PresentedGhostPluginItem = GhostPluginListItem & {
   author: string | null;
   /** 市场存在更新时的市场记录;列表卡片据此显示更新徽标与直达入口。 */
   marketUpdate: PluginMarketItem | null;
+  /** 本地插件从 GitHub Release 检查到的新版本;与 marketUpdate 互斥,市场优先。 */
+  githubUpdate: GithubReleaseUpdate | null;
 };
 
 function findInstalledRetirementReplacement(
@@ -679,6 +694,9 @@ function LocalGhostPluginPage({
     requestRestore: requestPluginCatalogScrollRestore,
     clearPendingRestore: clearPluginCatalogScrollRestore,
   } = usePluginListScrollRestoration(pluginCatalogVisible, catalogMemory.scroll);
+  const githubUpdates = useGithubReleaseUpdates(
+    ghosts, active && pluginCatalogVisible, dataOwnerId, dataOwnerGeneration,
+  );
   const [marketBusy, setMarketBusy] = useState<{ pluginId: string; intent: 'detail' | 'install' } | null>(null);
   const marketBusyId = marketBusy?.pluginId ?? null;
   const marketInstallBusyId = marketBusy?.intent === 'install' ? marketBusy.pluginId : null;
@@ -905,6 +923,10 @@ function LocalGhostPluginPage({
   );
   const [addMarketplaceOpen, setAddMarketplaceOpen] = useState(false);
   const [githubInstallOwner, setGithubInstallOwner] = useState<string | null>(null);
+  const githubUpdateByInstanceId = useMemo(
+    () => new Map(githubUpdates.map((update) => [update.instanceId, update])),
+    [githubUpdates],
+  );
   const allInstalledItems = useMemo<PresentedGhostPluginItem[]>(
     () =>
       ghosts
@@ -919,6 +941,7 @@ function LocalGhostPluginPage({
           const marketItem = marketItemForInstalledGhost(marketItems, ghost);
           const presentation = marketPresentationForInstalledGhost(ghost, marketItem);
           const listItem = toGhostPluginListItem(ghost, presentation);
+          const marketUpdate = ghost.retirement ? null : pluginUpdateForInstalledVersion(marketItem);
           return {
             ...listItem,
             origin: marketItem ? pluginPresentationOrigin(marketItem) : listItem.origin,
@@ -932,10 +955,13 @@ function LocalGhostPluginPage({
                 : ghost.manifest.author ?? null,
             // 同版本展示刷新由 main 标成 installed;legacy-unresolved 仍保留
             // update-available,以便用户用市场包替换未验证的本地字节。
-            marketUpdate: ghost.retirement ? null : pluginUpdateForInstalledVersion(marketItem),
+            marketUpdate,
+            githubUpdate: marketUpdate
+              ? null
+              : githubUpdateByInstanceId.get(installedGhostStoragePart(ghost)) ?? null,
           };
         }),
-    [ghosts, marketItems],
+    [ghosts, marketItems, githubUpdateByInstanceId],
   );
   const installedItems = useMemo(
     () =>
@@ -999,10 +1025,18 @@ function LocalGhostPluginPage({
 
   // ── 更新横幅与批量更新：作为自动更新失败／忙碌跳过后的手动重试入口 ──
   const updatableInstalledItems = useMemo(
-    () => installedItems.filter((item) => item.marketUpdate !== null),
+    () => installedItems.filter((item) => item.marketUpdate !== null || item.githubUpdate !== null),
     [installedItems],
   );
-  const currentRoundKey = useMemo(() => updateRoundKey(marketItems), [marketItems]);
+  const githubBannerUpdates = useMemo<NamedGithubReleaseUpdate[]>(
+    () => updatableInstalledItems.flatMap((item) =>
+      item.githubUpdate ? [{ ...item.githubUpdate, name: item.name }] : []),
+    [updatableInstalledItems],
+  );
+  const currentRoundKey = useMemo(
+    () => updateRoundKey(marketItems, githubBannerUpdates),
+    [marketItems, githubBannerUpdates],
+  );
   const handleIgnoreRound = useCallback(() => {
     try {
       window.localStorage.setItem(ignoredRoundKey, currentRoundKey);
@@ -1275,9 +1309,52 @@ function LocalGhostPluginPage({
     if (marketBusyLockRef.current !== null) return;
     startUpdateAllBatch(
       updatableInstalledItems.flatMap((item) => (item.marketUpdate ? [item.marketUpdate] : [])),
+      githubBannerUpdates,
     );
     setUpdateDialogOpen(true);
-  }, [updatableInstalledItems]);
+  }, [githubBannerUpdates, updatableInstalledItems]);
+
+  // GitHub Release 单项更新：借用市场操作的同一把互斥锁（键为 github:<实例>），
+  // 与市场单项更新、批量更新互斥；下载与校验仍在 Main 内按最新检查完成。
+  const handleGithubUpdate = useCallback(
+    async (update: GithubReleaseUpdate) => {
+      if (getUpdateAllBatchState().running) return;
+      const ghost = findInstalledGhostByInstanceId(ghosts, update.instanceId);
+      const target = ghost ? githubReleaseTarget(ghost) : null;
+      if (!ghost || !target) return;
+      const key = githubUpdateKey(update.instanceId);
+      const lease = acquireMarketBusy(key);
+      if (!lease) return;
+      beginPluginInstallProgress(key);
+      try {
+        const reply = await runGithubReleaseUpdate({ target, assetId: update.assetId, progressKey: key });
+        if (!isMarketBusyLeaseActive(lease)) return;
+        const outcome = githubRowOutcome(reply);
+        if (outcome.status === 'failed') {
+          failPluginInstallProgress(key, outcome.errorText);
+          toast.error(outcome.errorText);
+        } else if (outcome.updated) {
+          succeedPluginInstallProgress(key);
+          toast.success(
+            t('settings.ghosts.toast.updated', {
+              name: ghost.manifest.name,
+              version: outcome.version ?? update.version,
+            }),
+          );
+        }
+      } catch (error) {
+        if (isMarketBusyLeaseActive(lease) && extractIpcError(error)?.code !== 'MUTATION_CANCELLED') {
+          const text = t(pluginMarketErrorKey(error));
+          failPluginInstallProgress(key, text);
+          toast.error(text);
+        }
+      } finally {
+        endPluginInstallProgress(key);
+        releaseMarketBusy(lease);
+      }
+    },
+    [acquireMarketBusy, ghosts, isMarketBusyLeaseActive, releaseMarketBusy, t],
+  );
 
   const handlePublish = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
@@ -2221,7 +2298,7 @@ function LocalGhostPluginPage({
                   onIconLoadError={handleMarketIconLoadError} />)}
               </PluginRecommendationSlots>
             </section> : null}
-            {!query.trim() ? <><div ref={secondaryTabs} className="mt-6 h-0" /><div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
+            {!query.trim() ? <><div ref={secondaryTabs} className="mt-6 h-0" /><div className="sticky top-0 z-raised flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
               <SegmentedControl role="tablist" height={38} optionHeight={32}
                 optionClassName="plugin-management-tab min-w-[88px] px-4 text-13" value={catalogTab} onValueChange={value => {
                 setCatalogTab(value);
@@ -2285,7 +2362,7 @@ function LocalGhostPluginPage({
                     </p>
                     <p className="truncate text-12 text-[var(--text-secondary)]">
                       {updatableInstalledItems
-                        .map((item) => `${item.name} v${item.marketUpdate?.version ?? ''}`)
+                        .map((item) => `${item.name} v${item.marketUpdate?.version ?? item.githubUpdate?.version ?? ''}`)
                         .join(' · ')}
                     </p>
                   </div>
@@ -2326,14 +2403,26 @@ function LocalGhostPluginPage({
                         sourceLabel={item.origin ? t(`settings.ghosts.page.origin.${item.origin}`) : undefined}
                         marketItem={item.marketItem}
                         author={item.author}
-                        updateVersion={item.marketUpdate?.version}
+                        updateVersion={item.marketUpdate?.version ?? item.githubUpdate?.version}
                         updateNeedsConsent={item.marketUpdate?.updateRequiresConsent === true}
                         updateBusy={
-                          (item.marketUpdate !== null && marketBusyId !== null) || batchRunning
+                          ((item.marketUpdate !== null || item.githubUpdate !== null) && marketBusyId !== null) ||
+                          batchRunning
                         }
-                        updatePending={item.marketUpdate?.pluginId === marketInstallBusyId}
+                        updatePending={
+                          item.githubUpdate
+                            ? githubUpdateKey(item.githubUpdate.instanceId) === marketInstallBusyId
+                            : item.marketUpdate?.pluginId === marketInstallBusyId
+                        }
+                        updateProgressKey={
+                          item.githubUpdate ? githubUpdateKey(item.githubUpdate.instanceId) : undefined
+                        }
                         onUpdate={
-                          item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
+                          item.marketUpdate
+                            ? () => void handleMarketUpdate(item.id)
+                            : item.githubUpdate
+                              ? () => void handleGithubUpdate(item.githubUpdate!)
+                              : undefined
                         }
                         effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
                         onPrimary={() => handlePrimaryAction(item)}
@@ -2720,6 +2809,7 @@ export function GhostPluginCard({
   updateNeedsConsent = false,
   updateBusy = false,
   updatePending = false,
+  updateProgressKey,
   onUpdate,
   effectiveEnabled,
   onPrimary,
@@ -2738,6 +2828,8 @@ export function GhostPluginCard({
   updateNeedsConsent?: boolean;
   updateBusy?: boolean;
   updatePending?: boolean;
+  /** 不走市场的更新（GitHub Release）用自己的进度键；缺省按市场 pluginId。 */
+  updateProgressKey?: string;
   onUpdate?: () => void;
   effectiveEnabled?: boolean;
   onPrimary: () => void;
@@ -2759,7 +2851,9 @@ export function GhostPluginCard({
   const unread = showLocalUnread && localUnread;
   const unreadSummary = showLocalUnread ? localUnreadSummary : undefined;
   // 更新进度按市场 pluginId 订阅在卡片内:进度变化只重绘这一张卡,不带动整页。
-  const updateProgress = usePluginInstallProgress(readOnly ? null : marketItem?.pluginId);
+  const updateProgress = usePluginInstallProgress(
+    readOnly ? null : updateProgressKey ?? marketItem?.pluginId,
+  );
   const updateFailed = updateProgress?.download.phase === 'failed';
   const updateOffered = Boolean(updateVersion && onUpdate);
   // 失败的圆环只陪着还在的更新按钮出现;更新入口没了就不留一个孤零零的失败标记。

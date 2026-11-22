@@ -152,15 +152,13 @@ export function accountUsageRows(
     });
   }
   for (const amount of account.amounts) {
-    const money: RemoteMoney = {
-      amount: amount.amount,
-      currency: amount.currency,
-      approximate: false,
-      kind: "actual-cost",
-    };
+    const currency = amount.currency;
+    const formatMoney = (value: number) => currency === "USD" || currency === "CNY"
+      ? formatSessionUsageMoney({ amount: value, currency, approximate: false, kind: "actual-cost" })
+      : new Intl.NumberFormat(locale, { style: "currency", currency, currencyDisplay: "code" }).format(value);
     rows.push({
       label: t(`session.menu.usage.${amount.id}`),
-      value: `${formatSessionUsageMoney(money)}${amount.limit === undefined ? "" : ` / ${formatSessionUsageMoney({ ...money, amount: amount.limit })}`}`,
+      value: `${formatMoney(amount.amount)}${amount.limit === undefined ? "" : ` / ${formatMoney(amount.limit)}`}`,
       level:
         amount.id === "balance"
           ? amount.amount <= 0 ? "crit" : "normal"

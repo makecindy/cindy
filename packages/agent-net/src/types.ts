@@ -23,6 +23,10 @@ export interface PeerChannel {
   /** Features the peer declared along with session support. */
   sessionFeatures?(): readonly string[];
   path?(): 'direct' | 'relay' | null;
+  /** The peer's authenticated direct UDP address while `path()` is `'direct'`, so a fast foreground resume can dial it first. */
+  directAddress?(): { address: string; port: number } | null;
+  /** Fires when `path()` or `directAddress()` changes after the channel was adopted (for instance after hole punching). */
+  onPathChange?(handler: (path: 'direct' | 'relay' | null) => void): void;
   stats?(): Record<string, number> | null;
   addressKind?(): 'relay' | 'loopback' | 'private' | 'public' | null;
 }
@@ -68,6 +72,8 @@ export interface Transport {
   close(): Promise<void>;
   /** This computer changed networks: connections send from the new address now (the peer follows) and candidates are gathered again. */
   networkChanged?(): void;
+  /** The roster or the peer rule changed: a transport that mirrors the admitted peers elsewhere (the phone's engine) does it now. */
+  admissionChanged?(): void;
   /**
    * See RelayRoute; null without a relay. Only the UDP round trip is known here (`rttMs` is null for the WebSocket):
    * the WebSocket itself is opened and pinged by the host (workerSocket.ts).
@@ -95,6 +101,7 @@ export interface TransportOptions {
   identity?: KeyObject;
   module?: WebAssembly.Module;
   tap?(datagram: Uint8Array, via: 'udp' | 'relay'): void;
+  udpTraffic?: BigUint64Array;
 }
 /** Early stream events are bounded by the core's receive credit; do not lose them during admission. */
 export class ChannelEvents {

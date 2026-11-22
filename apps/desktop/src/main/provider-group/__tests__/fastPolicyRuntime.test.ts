@@ -168,6 +168,7 @@ vi.mock('../../usage/providerPartyUsageStore.js', () => ({
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-fast-sync-'));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn(...args: unknown[]) { state.warnings.push(args); }, error() {} }) }));
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   activeOwnerScopeKey: () => state.owner,
   ownerScopedUserDataPath: (file: string) => path.join(temporary, state.owner, file),
   isAppSessionBoundaryPending: () => false,

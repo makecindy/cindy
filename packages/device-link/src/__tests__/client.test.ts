@@ -1312,12 +1312,12 @@ class MemoryRelay {
   }
 
   /** 静默掉线（无 link-close）：之后发往该设备的帧在入口处被丢弃。 */
-  disconnect(deviceId: string): void {
+  disconnect(deviceId: string, code = 1006): void {
     const member = this.members.get(deviceId);
     if (!member?.ws) return;
     const ws = member.ws;
     member.ws = null;
-    ws.emit('close', 1006, 'network lost');
+    ws.emit('close', code, code === 1012 ? 'service restart' : 'network lost');
   }
 
   dropNext(predicate: (senderId: string, env: Envelope) => boolean): void {
@@ -8708,6 +8708,23 @@ describe('remote recovery regression', () => {
     } finally { h.client.stop(); await Promise.allSettled(pending); vi.useRealTimers(); }
   });
 
+  // Unit: iOS repeats network hints on an active relay. A valid frame after the
+  // latest hint proves connectivity even while the debounced probe timer exists.
+  it('admits a background read once traffic has answered the latest network hint', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({});
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); const ws = h.current(); ws.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(1);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      const read = h.client.invoke('a', { channel: 'git-context:pr-status', args: [] });
+      const sent = ws.sent.at(-1)!;
+      ws.push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: sent.id, src: 'a', payload: { ok: true, result: 1 } });
+      await expect(read).resolves.toEqual({ ok: true, result: 1 });
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('probes the shared relay once, pauses background work, and keeps healthy peers connected', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 1000, pongMissLimit: 100 } });
@@ -10756,6 +10773,25 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
   });
 
+  // Unit, real relay send queue with a fake clock: small pushes and results shared one
+  // stalled cumulative ACK on iPhone. Existing pacing only covers a large first frame.
+  it('bounds relay push copies until the first outstanding small result is acknowledged', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const ws = h.current();
+      h.client.sendInvokeResult('dev-b', 'first', { ok: true, result: 1 });
+      h.client.sendPush('dev-b', 'maker:schedule:event', { revision: 2 });
+      const head = parseTransportPayload(ws.sent.find(e => e.id === 'first')!.payload)!.meta;
+      await advance(8_000);
+      expect(ws.sent.filter(e => e.id === 'first').length).toBeGreaterThan(2);
+      expect(sendsBySeq(ws, 'push').get(head.seq + 1)).toBe(2);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: head.streamId, ackSeq: head.seq },
+      } });
+      await advance(22_000);
+      expect(sendsBySeq(ws, 'push').get(head.seq + 1)).toBeGreaterThan(2);
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
   it('retries an eligible small request while a large head frame is cooling down', async () => {
     await withFakeTimers(async (h, advance) => {
       h.client.sendInvokeResult('dev-b', 'slow-page', { ok: true, result: 'x'.repeat(200 * 1024) });
@@ -12236,6 +12272,75 @@ describe('confirmed duplicate-open gap repair', () => {
   });
 });
 
+describe('host-triggered recovery of previously reliable links', () => {
+  it.each([1006, 1012])('recovers from relay close %s without replaying writes or disturbing the healthy controller', async (closeCode) => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const relay = new MemoryRelay();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'host');
+    const phone = makeRelayClient(relay, 'phone');
+    const healthy = makeRelayClient(relay, 'healthy');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executed: string[] = [];
+    host.onFrame(env => {
+      if (!env.src || !env.id) return;
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executed.push(env.src + ':' + (env.payload as InvokePayload).channel);
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: 'ready' });
+      }
+    });
+    const open = (c: DeviceLinkClient) => c.openLink('host', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+    try {
+      for (const c of [host, phone, healthy]) c.start();
+      await vi.advanceTimersByTimeAsync(1); await pump();
+      expect(phone.needsLinkRecovery('host')).toBe(false);
+      const opened = Promise.all([open(phone), open(healthy)]); await pump(); await opened;
+      relay.dropNext((src, env) => src === 'host' && env.dst === 'phone' && env.kind === 'invoke-result');
+      const oldWrite = phone.invoke('host', { channel: 'maker:send', args: ['synthetic'] });
+      await pump();
+      expect(executed.filter(x => x === 'phone:maker:send')).toHaveLength(1);
+      relay.disconnect('phone', closeCode);
+      const other = healthy.invoke('host', { channel: 'local-db:sessions:list', args: [] });
+      await vi.advanceTimersByTimeAsync(30);
+      await pump();
+      await expect(other).resolves.toEqual({ ok: true, result: 'ready' });
+      if (closeCode === 1012) {
+        // A service restart applies the 1–5 second reconnect spread even with a short test backoff.
+        expect(phone.getStatus()).toBe('connecting');
+        await vi.advanceTimersByTimeAsync(1_000);
+        await pump();
+      }
+      expect(phone.getStatus()).toBe('online');
+      expect(phone.needsLinkRecovery('host')).toBe(true);
+      // The adapters use this query before admitting fresh work, including a
+      // listing-only subscription, which must reopen its old link.
+      const send = async (channel: string) => {
+        if (phone.needsLinkRecovery('host')) await open(phone);
+        return phone.invoke('host', { channel, args: [] });
+      };
+      const listing = send('device-link:subscribe'); await pump();
+      await expect(listing).resolves.toEqual({ ok: true, result: 'ready' });
+      await expect(oldWrite).resolves.toEqual({ ok: true, result: 'ready' });
+      expect(executed.filter(x => x === 'phone:maker:send')).toHaveLength(1);
+      const input = send('remote-desktop'); await pump();
+      await expect(input).resolves.toEqual({ ok: true, result: 'ready' });
+      expect(executed.filter(x => x === 'phone:remote-desktop')).toHaveLength(1);
+      expect(phone.needsLinkRecovery('host')).toBe(false);
+      expect(host.isLinkReady('healthy')).toBe(true);
+      expect(sockets.mock.calls.filter(x => x[0] === 'host')).toHaveLength(1);
+      expect(sockets.mock.calls.filter(x => x[0] === 'healthy')).toHaveLength(1);
+      phone.closeLink('host', 'user');
+      expect(phone.needsLinkRecovery('host')).toBe(false);
+    } finally {
+      for (const c of [host, phone, healthy]) c.stop();
+      sockets.mockRestore();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
 
 it('stops automatic reconnect after device removal and permits a new login lifecycle', async () => {
   const h = makeHarness();

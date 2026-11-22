@@ -40,6 +40,8 @@ export function pluginMarketErrorKey(error: unknown): string {
       return 'settings.ghosts.market.errors.notConfigured';
     case 'GHOST_FILE_INVALID':
       return 'settings.ghosts.market.errors.invalidPackage';
+    case 'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED':
+      return 'settings.ghosts.market.errors.downloadAuthorizationExpired';
     case 'GHOST_DOWNLOAD_TIMEOUT':
       return 'settings.ghosts.market.errors.downloadTimeout';
     case 'GHOST_DOWNLOAD_FAILED':

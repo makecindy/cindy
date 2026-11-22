@@ -5,6 +5,7 @@
  * 静默(它们的 message 是内部英文串, 外发等于把裸英文推给渠道用户)。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { autoReviewUnavailablePromptLine, permissionPromptDescription } from '../autoReviewUnavailablePrompt';
 import { setMainLocale } from '../../../i18n.desktop';
 
 import {
@@ -29,6 +30,23 @@ it.each([undefined, 'budget', 'rate-limit', 'session-breaker', 'dispatch-not-acc
       .toBe('检测到空响应，自动续跑已暂停。');
   },
 );
+
+// Telegram regression (unit): a provider rejection arrived as a serialized response body.
+it('explains unsupported audio input without hiding other unsupported parameters', () => {
+  const unsupported = 'Audio input is not supported for this request.';
+  const failure = (message: string, code: string | null = 'unsupported_parameter') => ({
+    message: JSON.stringify({
+      type: 'error',
+      error: { message, type: 'invalid_request_error', param: 'input', code },
+      status: 400,
+    }),
+  });
+  expect(terminalErrorText(failure(unsupported))).toContain('转成文字');
+  expect(terminalErrorText(failure('Audio input is not available.', null))).toContain('转成文字');
+  expect(terminalErrorText({ message: unsupported })).toContain('转成文字');
+  const other = failure('Audio output is not supported for this request.');
+  expect(terminalErrorText(other)).toBe(other.message);
+});
 
 describe('turnRetryNotice', () => {
   // #10385, unit: both channel styles must expose recovery, never the provider's raw details.
@@ -195,6 +213,20 @@ describe('terminalErrorText', () => {
     });
     expect(text).toContain('模型服务繁忙');
     expect(text).toContain('在这里重发这条消息');
+  });
+
+  it('nested 529 presentation reason is localized across terminal paths without signaling a retry', () => {
+    // handleTurnErrorAsync, finalizeTranspond, and the official hook all consume this shared mapping.
+    const data = {
+      message: 'stream disconnected before completion',
+      reason: 'UPSTREAM_OVERLOADED',
+    };
+    const text = terminalErrorText(data);
+    expect(text).toContain('模型服务繁忙');
+    expect(text).toContain('在这里重发这条消息');
+    expect(text).not.toContain('stream disconnected before completion');
+    // The classification is presentation-only; it does not become an automatic retry signal.
+    expect(turnRetryNotice(data)).toBeNull();
   });
 
   it('只有状态码带 529 时也命中(errorStatus 不能在取文案时被丢掉)', () => {
@@ -445,4 +477,17 @@ describe('控制文案跟随界面语言', () => {
     setMainLocale('ja');
     expect(overloadRetryNotice(data)).toBe('モデルサービスが混雑しています。自動で再試行しています（1/3）…');
   });
+});
+
+// #8706 unit: IM notice and confirmation are separate real consumers. Neither may leak
+// English/provider text or replace the cause with generic Full access guidance.
+it.each(['telegram', 'wechat'])('explains review quota to %s and strips the fallback once', channel => {
+  const text = turnRetryNotice({ message: '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_BODY' }, { channel });
+  expect(text).toContain('配额已耗尽');
+  expect(text).not.toMatch(/PRIVATE_BODY|完全访问/);
+  const request = { kind: 'permission' as const, requestId: 'quota', toolName: 'Bash', input: {},
+    description: 'Source\nAutomatic review could not finish, so this action needs your confirmation.',
+    metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' } };
+  expect(autoReviewUnavailablePromptLine(request)).toBe(text);
+  expect(permissionPromptDescription(request)).toBe('Source');
 });

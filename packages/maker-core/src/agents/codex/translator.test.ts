@@ -1091,6 +1091,45 @@ describe('translateErrorNotification', () => {
     expect(classifyCodexError({ message: `unexpected status code 502: ${modelCode}` }).reason).toBeUndefined();
   });
 
+  // #8309 / unit: the native stream wrapper loses its nested 529 diagnosis.
+  // Existing capacity tests cover retryable top-level errors, not an exhausted
+  // sampling error. Keep its current terminal behavior and omit private details.
+  it('preserves exhausted nested 529 overload as a presentation-only reason', async () => {
+    const q = createAsyncQueue<AgentEvent>();
+    const takeOver = vi.fn(() => ({ attempt: 1, maxAttempts: 4 }));
+    const error = {
+      message: 'stream disconnected before completion',
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 529 } } as CodexErrorInfo,
+      additionalDetails: 'upstream HTTP 529: server_is_overloaded https://private.invalid/?token=secret',
+    };
+    expect(classifyCodexError(error)).toMatchObject({
+      reason: 'UPSTREAM_OVERLOADED', isCapacityError: false, usageLimit: false,
+    });
+    translateErrorNotification({ threadId: 't1', turnId: 'turn-a', willRetry: false, error }, q, {
+      ...makeCtx(newCodexRuntimeState()), tryTakeOverOverload: takeOver,
+    });
+    const events = await collect(q);
+    expect(events).toEqual([expect.objectContaining({ type: 'error', data: {
+      message: error.message, codexErrorInfo: 'responseTooManyFailedAttempts',
+      reason: 'UPSTREAM_OVERLOADED', isTerminal: true, willRetry: false,
+    } })]);
+    expect(takeOver).not.toHaveBeenCalled();
+    expect(JSON.stringify(events)).not.toMatch(/private|secret|server_is_overloaded/);
+  });
+
+  it.each([
+    ['Request timed out', 529],
+    ['stream disconnected before completion', 503],
+    ['stream disconnected before completion', 401],
+    ['stream disconnected before completion', 429],
+    ['stream disconnected before completion', null],
+    ['stream disconnected before completion', '529'],
+  ])('does not change existing classification for %s / %s', (message, status) => {
+    const classified = classifyCodexError({ message: message as string,
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: status } } as never });
+    expect(classified.reason).toBeUndefined();
+  });
+
   // #11032: native gateway status must survive the real notification translator;
   // details may contain credentials/user content and are never forwarded (unit).
   it.each(['httpConnectionFailed', 'responseStreamConnectionFailed', 'responseStreamDisconnected', 'responseTooManyFailedAttempts'] as const)(
@@ -3046,6 +3085,9 @@ it.each([
     }
     const final = codexSpeedSnapshot(rt);
     expect(final).toMatchObject({ streaming: false, tokens: realOutput });
+    // The tool-loop fixture ends its first text item at 3788 ms, long before
+    // the tool start. Only the final request clears the one-second measurement floor.
+    if (recorded === recordedToolLoop) expect(final?.measurement?.average).toBeCloseTo(367_000 / 7_510, 1);
     expect(final!.average).toBeGreaterThan(slowest);
     expect(final!.average).toBeLessThan(fastest);
     // The answer is read while it streams, at the pace it streams.
@@ -3093,11 +3135,16 @@ describe('codex speed around unpaired output and human waits', () => {
       expect(speed?.streaming).toBe(true);
       expect(speed!.rate).toBeCloseTo(20, 0);
       expect(speed!.tokens).toBe(280);
+      expect(speed!.measurement?.latest).toEqual(source === 'content'
+        ? expect.objectContaining({ kind: 'stream', rate: 20 }) : null);
       // A just-published warm-up must not hide the first reading until the next delta.
       expect(codexUsageRefreshDue(rt, Date.now() - 1, false)).toBe(true);
       expect(codexUsageRefreshDue(rt, Date.now() - 1, true)).toBe(false);
       settleCodexSpeedUsage(rt, { outputTokens: 400, reasoningOutputTokens: 400 });
-      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 400, streaming: false });
+      const settled = codexSpeedSnapshot(rt);
+      expect(settled).toMatchObject({ tokens: 400, streaming: false, measurement: { latest: { kind: 'request' } } });
+      expect(settled?.measurement?.latest?.rate).toBeCloseTo(400 / 14);
+      expect(settled?.measurement?.average).toBeCloseTo(400 / 14);
     } finally {
       vi.useRealTimers();
     }

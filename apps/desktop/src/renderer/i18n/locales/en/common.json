@@ -567,7 +567,8 @@
       "calloutUnknown": "If you don’t recognize this person, decline; the link stops working once declined.",
       "approve": "Approve Sharing",
       "reject": "Decline Request",
-      "later": "Decide Later"
+      "later": "Decide Later",
+      "calloutPluginEngine": "{{name}} can use it without installing the plugin or CLI on their computer, using this computer’s CLI sign-in and quota."
     },
     "apply": {
       "loading": "Reading share link…",
@@ -1176,7 +1177,7 @@
     "title": "Remote desktop",
     "allow": "Allow remote desktop",
     "allowHint": "Allow your signed-in devices to view and operate all apps on this computer. Also enable device control above.",
-    "permissionHint": "On the computer, allow screen recording and accessibility in system settings, then reconnect.",
+    "permissionHint": "On the computer, allow screen recording and accessibility in system settings, then reconnect. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
     "inputUnsupported": "This computer’s current desktop environment does not support remote keyboard and mouse control in Cindy.",
     "controlUnavailable": "Remote keyboard and mouse control is temporarily unavailable. Reconnect to try again.",
     "beingControlled": "Your desktop is being controlled",
@@ -1293,7 +1294,7 @@
     "privacyScreen": "Privacy screen while connected",
     "privacyScreenHint": "Covers this computer’s screen during remote control. If someone clicks or presses a key at the computer, it asks before disconnecting.",
     "privacyActive": "Privacy screen is on. If someone clicks or presses a key at the computer, it asks before disconnecting.",
-    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
+    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible. If the host is a Mac, check the running Cindy app’s control permission on that Mac.",
     "hostMute": "Mute controlled computer",
     "hostMuteHint": "Mute the controlled computer while connected",
     "hostMuteFailed": "Couldn’t change the controlled computer’s mute state",
@@ -1323,7 +1324,7 @@
     "credentialSigningRequired": "The Mac development build is missing its signing configuration. Restart Cindy on the Mac with signing configured, then try again.",
     "credentialPasswordRejected": "The Mac login password was not accepted. Enter it again.",
     "credentialIdentityChanged": "The computer identity could not be verified. No password was sent to an unverified device.",
-    "credentialAccessibilityRequired": "Allow Cindy in System Settings → Privacy & Security → Accessibility on the Mac, then reconnect.",
+    "credentialAccessibilityRequired": "On the Mac, check control access for the running copy of Cindy, then reconnect. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
     "credentialUnlockUnavailable": "Could not safely unlock this Mac. Select your account on its lock screen, then reconnect; if it still fails, unlock the Mac locally.",
     "disconnecting": "Disconnecting…",
     "loadingDisplayModes": "Loading resolutions…",
@@ -1362,6 +1363,7 @@
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
+    "MODEL_CATALOG_UNCONFIRMED": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
     "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
     "INVALID_PARAMS": "Some input isn’t valid. Check it and try again.",
@@ -1425,6 +1427,7 @@
     "UPSTREAM_ERROR": "Upstream server error (5xx). Try again later",
     "UPSTREAM_UNREACHABLE": "Cannot reach the endpoint. Check your network and the base URL",
     "TIMEOUT": "Connection timed out. Check your network and the base URL",
+    "CERT_ERROR": "Certificate verification failed. Check that the base URL hostname matches the certificate, as well as the certificate chain and your organization’s CA trust configuration.",
     "UNKNOWN": "Unknown error. Check the logs for details",
     "upstreamToast": "Provider “{{provider}}” request failed: {{message}}"
   },
@@ -1436,6 +1439,10 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Local database damaged",
+      "description": "Database corruption was detected. Access has stopped to protect your data. You can try reopening local data. If that fails, copy the technical details and contact support. Do not overwrite or delete database files."
+    },
     "schemaLease": {
       "title": "Local data cannot be opened yet",
       "retry": "Reopen Local Data",
@@ -1948,9 +1955,9 @@
       },
       "configWarning": "Cindy cannot evaluate some SSH configuration rules. The host list or connection details may differ from terminal SSH.",
       "configDiagnostic": {
-        "io": "Cindy could not read your SSH configuration. The last successfully loaded hosts are still shown. Check file permissions and reload.",
-        "syntax": "Cindy could not parse your SSH configuration. The last successfully loaded hosts are still shown. Fix the configuration and reload.",
-        "limit": "The SSH configuration is too deeply nested or too large for Cindy to read safely. The last successfully loaded hosts are still shown."
+        "io": "Cindy could not read your SSH configuration. The hosts that loaded last are still shown. Check file permissions and reload.",
+        "syntax": "Cindy could not parse your SSH configuration. The hosts that loaded last are still shown. Fix the configuration and reload.",
+        "limit": "The SSH configuration is too deeply nested or too large for Cindy to read safely. The hosts that loaded last are still shown."
       },
       "empty": {
         "title": "No remote machines yet.",
@@ -2494,8 +2501,8 @@
         "hint": "When AI needs the screen, this computer won't turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password. With no tasks running, the display sleeps and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
         "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
         "preview": "Try it now",
-        "previewStarting": "Let go of the mouse and keyboard. In 3 seconds the privacy screen appears; press any key to lock, then unlock to try it.",
-        "previewUnavailable": "Couldn't show the privacy screen. Restart Cindy and try again.",
+        "previewStarting": "Preparing the privacy screen. Let go of the mouse and keyboard. Once the screen is covered, press a key to test locking.",
+        "previewUnavailable": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
         "delay": {
           "30": "30 sec",
           "60": "1 min",
@@ -2506,7 +2513,10 @@
           "system": "System"
         },
         "hintWindows": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Windows Hello or your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
-        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too."
+        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
+        "permissionMissing": "The privacy screen is off. Cindy needs permission to lock the Mac when someone clicks or presses a key.",
+        "checkFailed": "Cindy couldn’t check the privacy screen permissions on this computer.",
+        "saveFailed": "Could not save the privacy screen setting."
       }
     },
     "agentIsland": {
@@ -2801,7 +2811,7 @@
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
       "analyticsLabel": "Usage statistics",
-      "analyticsDescription": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts. Turning this off stops reporting immediately.",
+      "analyticsDescription": "When this is on, we use aliases in place of your account and device IDs. Return visits and usage totals by model help us improve the product. These statistics don’t include your chats, files or prompts.",
       "analyticsEnabledToast": "Usage statistics enabled",
       "analyticsDisabledToast": "Usage statistics disabled",
       "analyticsSaveFailed": "Failed to save usage statistics settings",
@@ -3715,6 +3725,8 @@
           "edit": "Edit",
           "editFailed": "Check the URL, protocol and key, then retry.",
           "editNote": "Leave the key blank to keep the saved credential. A changed URL or protocol requires a new key.",
+          "useSavedCredential": "Use saved credential",
+          "confirmDestination": "Use the saved Claude Code credential at this address?",
           "name": "Display name",
           "baseUrl": "Base URL",
           "protocol": "API protocol",
@@ -3749,6 +3761,7 @@
         "connecting": "Connecting…",
         "rename": "Rename",
         "suspended": "Disabled",
+        "hidden": "Hidden",
         "unconfigured": "Not configured"
       },
       "button": {
@@ -3759,7 +3772,9 @@
         "cancel": "Cancel",
         "retry": "Retry model discovery",
         "retrying": "Retrying discovery…",
-        "enableProvider": "Enable Provider"
+        "enableProvider": "Enable Provider",
+        "showProvider": "Show",
+        "hideInstead": "Hide Instead"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4117,11 +4132,30 @@
         "refreshFailed": "Model list couldn’t be refreshed — try again later",
         "refreshReconnect": "Model list couldn’t be refreshed. Reconnect this provider, then try again.",
         "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
+        "withdrawn": {
+          "refreshFound": "No longer offered upstream: {{count}}",
+          "refreshAdded": "New models: {{added}}. No longer offered upstream: {{count}}",
+          "refreshSuspicious": "Not returned this time: {{count}}. The upstream list may be incomplete",
+          "refreshAddedSuspicious": "New models: {{added}}. Not returned this time: {{count}}. The upstream list may be incomplete",
+          "review": "Review models",
+          "heading": "Models no longer offered upstream",
+          "intro": "When {{provider}} was refreshed, the upstream service did not return these models. Select the ones to remove. Engines that still list them are not affected.",
+          "suspicious": "An unusually large number of models are missing. The upstream service may have returned an incomplete list. Refresh again later to confirm, or select only models you know were withdrawn.",
+          "selectAll": "Select all",
+          "selected": "Selected {{count}} of {{total}}",
+          "consequence": "Removed models no longer appear in model selection, and places that use them will show them as unavailable. If the upstream service offers them again, refresh to add them back.",
+          "confirm": "Remove models ({{count}})",
+          "cancel": "Keep models",
+          "removed": "Models removed: {{count}}",
+          "cleanupIncomplete": "Models removed: {{count}}. Some visibility or disable settings could not be cleared",
+          "stale": "The connection changed, so there is nothing to remove. Refresh again to review",
+          "removeFailed": "Could not remove models"
+        },
         "disableModel": "Disable This Model",
         "paymentRequired": "Paid",
         "paymentUnlock": "Pay to unlock",
         "enableModel": "Enable This Model",
-        "capabilityGroupHint": "Not shown in the chat model picker. The switch controls visibility in the relevant feature.",
+        "capabilityGroupHint": "Not shown in the model picker. The switch decides whether the relevant feature can use the model.",
         "accessWriteFailed": "Couldn’t save the change. Try again.",
         "visibilityWriteFailed": "Couldn't save the model visibility setting. Try again, or restart Cindy if the problem continues.",
         "disabledGroup": "Disabled",
@@ -4265,22 +4299,22 @@
           "aria": "Filter by model type",
           "chat": "Chat"
         },
-        "hiddenGroup": "Not shown",
+        "hiddenGroup": "Hidden",
         "management": {
           "brand": "Manufacturer"
         },
         "manage": {
           "title": "Models",
-          "selected": "{{count}} selected",
-          "hint": "Use the switches to choose your chat models.",
+          "selected": "{{count}} shown",
+          "hint": "Switches decide which models appear in the model picker. Turning one off only hides it; you can still choose it under Hidden at the bottom of the picker.",
           "menu": "Manage",
           "arrange": "Arrange list",
           "byBrand": "Group by maker",
           "byName": "Order by model name",
-          "selection": "Model selection",
-          "showAll": "Select all models",
-          "hideAll": "Clear selection",
-          "reset": "Restore default selection",
+          "selection": "Show in model picker",
+          "showAll": "Show all models",
+          "hideAll": "Hide all models",
+          "reset": "Restore default visibility",
           "connectionRequired": "Connect to use these models. Your selections are saved."
         }
       },
@@ -4295,7 +4329,8 @@
         "groupBadge_other": "Provider Group · {{count}} computers",
         "groupNote": "{{device}} made this provider a provider group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. While {{device}} is online, use Remote & Sharing here to manage the group and its shares.",
         "groupMembersTitle": "Computers in the Group",
-        "groupMembersFailed": "Couldn’t get the status of the computers in the group right now."
+        "groupMembersFailed": "Couldn’t get the status of the computers in the group right now.",
+        "hiddenBanner": "Hidden from the model picker on this computer. Favorites and sessions that use it are unaffected."
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
@@ -4339,7 +4374,8 @@
           "rejected": "This provider refused the request. The list below is from the last successful refresh. Try again later, or use a different provider.",
           "empty": "This provider returned no usable models this time. The list below is from the last successful refresh. Check your account's access, then retry."
         },
-        "suspendedBanner": "This provider is disabled. Credentials are kept; enable it to use its models again.",
+        "suspendedBanner": "This provider is disabled, so new sessions and background features no longer use it. Credentials are kept. To only keep it out of the model picker, hide it instead.",
+        "hiddenBanner": "Hidden from the model picker. Sessions and background features that use it are unaffected, and you can still choose it under Hidden at the bottom of the picker.",
         "remoteAccess": {
           "label": "Allow remote use",
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
@@ -4406,6 +4442,7 @@
         "authorizedToast": "Signed in to {{name}}",
         "authorizeFailed": "Could not sign in to {{name}}. Try again.",
         "nameLabel": "Display name",
+        "geminiImageKeyNote": "Saving uses this key for chats on this connection and for future Gemini image generation. For images only, leave all chat models unchecked.",
         "onlyAgentNote": "This provider only supports {{agent}}",
         "endpointLabel": "{{agent}} base URL",
         "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
@@ -4548,7 +4585,9 @@
       },
       "menu": {
         "disableProvider": "Disable This Provider",
-        "enableProvider": "Enable This Provider"
+        "enableProvider": "Enable This Provider",
+        "hideProvider": "Hide from Model Picker",
+        "showProvider": "Show in Model Picker"
       },
       "builtinApiKey": {
         "subtitle": "API key connection",
@@ -6799,6 +6838,17 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "traffic": {
+          "title": "Traffic on this computer",
+          "range": "Time range",
+          "last5m": "Last 5 min",
+          "lastHour": "Last hour",
+          "lastDay": "Last 24 h",
+          "sent": "Sent",
+          "received": "Received",
+          "total": "Total",
+          "scope": "Estimated traffic over direct and relay connections, including direct file transfers. Excludes device discovery broadcasts and separate audio, video and HTTP transfers."
+        },
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
@@ -6937,7 +6987,7 @@
     },
     "devices": {
       "title": "Device Link",
-      "description": "Devices signed in with the same Feishu account can discover each other. Once \"Allow control\" is on, your other devices can remotely control {{appName}} on this machine.",
+      "description": "Devices signed in with the same Feishu account can discover each other. Once “Allow control” is on, your other devices can remotely control {{appName}} on this machine.",
       "allowControl": "Allow same-account devices to control this machine",
       "allowControlHint": "When enabled, other devices signed in with the same account can control this machine without per-connection approval. A visible indicator is shown while being controlled, and you can disconnect at any time.",
       "keepAwake": "Keep computer awake",
@@ -7004,7 +7054,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Included in the privacy screen: this computer won't sleep."
+      "keepAwakeIncluded": "Included in the privacy screen: this computer won't sleep.",
+      "localNetwork": {
+        "label": "Local network",
+        "deniedHint": "Without this permission, computers and phones on the same network can't connect to this computer directly. They go through the relay, which is slower.",
+        "settingsHint": "Turn on Cindy in System Settings › Privacy & Security › Local Network. It takes effect as soon as you come back."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -7949,6 +8004,7 @@
           "accessDenied": "This plugin operation is not permitted or was cancelled.",
           "notConfigured": "The plugin market is not available in this environment.",
           "invalidPackage": "This plugin package is invalid and cannot be installed. Contact the publisher.",
+          "downloadAuthorizationExpired": "The plugin download authorization expired. Check the system date and time before starting a new installation attempt.",
           "downloadTimeout": "The plugin download timed out. Try again later.",
           "downloadFailed": "The plugin download failed. Check your connection and try again.",
           "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release.",
@@ -8265,10 +8321,12 @@
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentModelPreferences": "Read and edit your model favorites, and read your recently used models",
         "agentModelPreferencesDetail": "Can read the model favorites and recently used models on this computer, including effort and Fast settings, and add, change or remove favorites. Changes also appear in Cindy’s model picker. Models chosen in the plugin are not added to recently used. Models on your other computers or shared with you are not included, and no credentials are shared.",
+        "harnesses": "Provides task engines: {{names}}",
+        "harnessesDetail": "In your tasks, it can read and write the working directory, run commands and use the same Cindy tools as the built-in Pi.",
         "agentErrand": "Create tasks, perform work, and read results",
         "agentErrandDetail": "Created tasks appear in Cindy’s task list, where you can view progress and continue the conversation.",
         "agentSchedule": "Can ask you to create an automation",
-        "agentScheduleDetail": "It can only open the new-automation panel with the fields filled in; whether it is created is up to you — pick a model and save it yourself. Once created, Cindy runs it on the schedule you set. Model charges may apply.",
+        "agentScheduleDetail": "It can only open the new-automation panel with the fields filled in; whether it is created is up to you — pick a model and save it yourself. Once created, Cindy runs it on the schedule you set. Model charges may apply. For plugins with device sync, you can also confirm which computer runs the automation.",
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
@@ -8512,6 +8570,14 @@
         "openInSidebar": "Open in the sidebar",
         "panelPageHosted": "Opens from the Plugin page · closes when you leave",
         "panelNone": "This plugin has no panel",
+        "engineRemoteUse": {
+          "titleNamed": "{{engine}}: Allow remote use",
+          "description": "When on, your other computers can run tasks with this engine. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on.",
+          "unsupported": "This plugin doesn’t support using its engine from other computers yet.",
+          "remoteControlOff": "This computer doesn’t allow remote control yet, so other computers can’t use this engine.",
+          "ariaLabel": "Allow your other computers to use {{engine}}",
+          "descriptionShareable": "When on, your other computers and people you share with can run tasks with this engine without installing the plugin. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on."
+        },
         "githubRelease": {
           "title": "Plugin updates",
           "installed": "Installed {{version}}",
@@ -8580,6 +8646,8 @@
         "browserUse": "Use this browser extension",
         "browserActivated": "Browser extension selected",
         "browserActivationFailed": "The extension could not be selected. Check that it is enabled and approve any connection switch.",
+        "automationHostSelect": "Use this computer for {{name}}’s automatic tasks?",
+        "automationHostClear": "Clear the primary computer for {{name}}’s automatic tasks?",
         "browserSwitchTitle": "Switch browser extension connection?",
         "browserSwitchMessage": "Use “{{name}}” for this browser connection?",
         "browserSwitchDetail": "Instance: {{instance}}\nRegistration: {{host}}\nThis replaces the current registration. The extension will connect to this plugin.",
@@ -8893,7 +8961,7 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
+        "downloadExplanation": "Cumulative download URL requests. Each package URL that is issued counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
         "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
@@ -10887,6 +10955,13 @@
         "enabled": "Enabled"
       },
       "close": "Close Download Dialog"
+    },
+    "localNetwork": {
+      "title": "Allow local network access",
+      "relayOnly": "Your other devices can only reach this computer through the relay, which is slower. Allow access so devices on the same network connect directly.",
+      "controlEnabled": "Devices on the same network can control this computer directly only with local network access. Otherwise they go through the relay.",
+      "allow": "Allow",
+      "dismiss": "Not now"
     }
   },
   "bots": {
@@ -13045,6 +13120,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewQuotaExhausted": "An automatic review provider has exhausted its quota. Check its usage or billing, or customize Auxiliary models in Settings on the computer running the Agent. Actions that need review still require your confirmation.",
           "autoReviewNoAvailableModel": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
           "autoReviewUnavailable": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
           "autoReviewUnavailableWechat": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
@@ -13054,6 +13130,7 @@
           "overloadRetryingNoCount": "The model service is busy. Retrying automatically…",
           "overloadFailed": "⚠️ The model service is busy — the upstream has no capacity right now. Resend this message here to try again, or switch to another model in Cindy. (Clicking “Retry” in the desktop app also continues the task, but the result won’t come back to this message.)"
         },
+        "audioInputUnavailable": "This model connection can’t read audio directly. Ask Cindy to transcribe the audio first, then continue.",
         "toolLoop": {
           "generic": "The model called tools repeatedly too many times, so Cindy stopped this turn to avoid an infinite loop. Send a new message to continue.",
           "consecutive": "The model called the same tool {{n}} times in a row, so Cindy stopped this turn to avoid an infinite loop. Send a new message to continue.",
@@ -14093,6 +14170,10 @@
         "fastBadge": "Fast"
       },
       "source": {
+        "lastConfirmed": "Last refreshed: {{time}}",
+        "unconfirmed": "Model list not up to date",
+        "unreachable": "Can't reach {{source}}",
+        "unreachableDetail": "Can't connect. Check your network.",
         "unavailable": "Model unavailable",
         "reconnect": "Reconnect",
         "manage": "Manage source",
@@ -14116,6 +14197,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Can't read that computer's models right now",
         "favoritesGroup": "Favorites",
         "recentGroup": "Recent",
+        "hiddenGroup": "Hidden ({{count}})",
+        "hiddenGroupHint": "Hidden providers and models can still be chosen",
         "recentEmpty": "No recent models yet — pick a model and it will show up here",
         "favoritesSaveFailed": "Could not save favorite changes",
         "favoritesCleanupFailed": "Could not remove favorites for revoked provider shares",
@@ -14202,6 +14285,32 @@
             "label": "Full access",
             "description": "Routine actions are allowed directly, including files outside the workspace and network commands."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Ask each time",
+            "description": "You confirm when the Agent asks for permission. Cindy can’t block actions the Agent doesn’t ask about."
+          },
+          "default": {
+            "label": "Default",
+            "description": "Works the agent’s default way; you confirm its permission requests."
+          },
+          "acceptEdits": {
+            "label": "Accept edits",
+            "description": "The agent edits files directly; you confirm its other permission requests."
+          },
+          "auto": {
+            "label": "Auto",
+            "description": "The agent decides what needs confirmation; you confirm the requests it makes."
+          },
+          "plan": {
+            "label": "Plan only",
+            "description": "The agent only analyzes and plans; it does not edit files."
+          },
+          "bypassPermissions": {
+            "label": "Allow all",
+            "description": "Every permission the Agent asks for is granted automatically."
+          }
         }
       }
     },
@@ -14267,6 +14376,8 @@
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
+
+      "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
       "resumeAction": "Continue sending",
       "resumeAria": "Continue sending queued messages",
       "showMore_one": "{{count}} more",
@@ -14669,6 +14780,16 @@
       "nowDefault": "Now the default",
       "switchToSteer": "Steer by default",
       "switchToQueue": "Queue by default"
+    },
+    "pluginEngines": {
+      "group": "Plugin engines",
+      "genericName": "Plugin engine",
+      "defaultModel": "Default model",
+      "defaultModelHint": "Uses the engine’s own default",
+      "unavailable": "Unavailable",
+      "engineMissing": "The plugin that provides this engine is turned off or uninstalled.",
+      "worktreeUnsupported": "Plugin engines can’t start tasks in a worktree yet. Turn off worktree to send.",
+      "modelChangeFailed": "Could not switch the model"
     }
   },
   "onboarding": {
@@ -14994,6 +15115,8 @@
     },
     "runningStatus": {
       "currentRate": "Latest speed",
+      "lastRequestRate": "Last request average",
+      "recentTokenRate": "Recent {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Turn average",
       "rateHistory": "Generation speed history",
@@ -15035,6 +15158,9 @@
       "usageLimitAutoContinueTitle": "If you haven't acted by the time the usage limit resets, this task continues automatically",
       "usageLimitAutoContinueCancel": "Cancel",
       "usageLimitAutoContinueCancelTitle": "Cancel automatic continuation. The error and Retry stay available.",
+      "usageLimitReached": "This model account has reached its usage limit",
+      "usageLimitReachedWithReset": "This model account has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
+      "usageLimitReachedNoReset": "This model account has reached its usage limit. Wait for the limit to reset, or switch to another model before retrying.",
       "codexOrganizationUsageLimitWithReset": "The connected Codex account is managed by your organization and has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
       "codexOrganizationUsageLimit": "The connected Codex account is managed by your organization and has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "codexUsageLimitWithReset": "The connected Codex account has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
@@ -15053,7 +15179,7 @@
       "switchClaudeSubscriptionTitle": "Switch this session to the Claude.ai subscription and retry",
       "switchingClaudeSubscription": "Switching to Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
-      "codexAppServerRetired": "The Codex service was restarted or replaced. The current request was interrupted; run it again.",
+      "codexAppServerRetired": "The connection to Codex was lost. The current request was interrupted. You can continue in this session.",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click “Sync auth” to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "The “{{provider}}” connection on this computer could not authenticate. Check its sign-in status in settings, then return to this task after restoring the connection.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
@@ -15106,6 +15232,7 @@
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
+      "pluginEngineStatus": "Still working in the background…",
       "bashWorkStatus_one": "Working in the background ({{count}} command)…",
       "bashServiceStatus_one": "{{count}} background service running",
       "bashWorkStatus_other": "Working in the background ({{count}} commands)…",
@@ -15140,10 +15267,16 @@
       "continueFailed_other": "{{count}} sessions couldn't resume. Open them to try again."
     },
     "unreadFailedScheduleBanner": {
+      "modelCatalogUnconfirmed": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
       "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
       "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
       "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
       "text": "An automatic run failed.",
+      "prCheck_dns": "{{device}} could not resolve {{host}}. Check the network or DNS on that device if this persists. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_timeout": "The connection to GitHub timed out on {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_auth": "Sign in to GitHub again on {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_rate-limit": "GitHub rate-limited requests from {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
+      "prCheck_unknown": "The PR check failed on {{device}}. See the run details. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
       "precheck": "Automatic checks are temporarily blocked.",
       "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
       "pluginMissing": "Automatic checks are blocked: the {{name}} plugin is not installed. They resume once it is installed.",
@@ -15805,11 +15938,14 @@
     },
     "remoteError": {
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
+      "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Context compaction failed during the switch because this connection cannot use the previous model.",
       "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
+      "MODEL_CATALOG_UNCONFIRMED": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
       "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
       "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
+      "AUTO_REVIEW_UNAVAILABLE_QUOTA": "An automatic review provider has exhausted its quota. Check its usage or billing, or customize Auxiliary models in Settings on the computer running the Agent. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
@@ -15854,6 +15990,9 @@
       "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "This computer cannot resume the task’s previous runtime state. Select a model from another computer or provider to continue with a context handoff. Existing messages are kept.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "The plugin engine could not restore the previous conversation. Your messages are kept. Choose another engine or start a new task.",
+      "PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED": "This plugin engine can’t use the tools of the computer the task is on, so it can’t run this task from another computer yet. Choose another engine or model.",
+      "PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED": "This plugin engine can only run tasks on this computer. Other computers can’t use it yet.",
       "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Allow remote use” for this provider there; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
@@ -16031,7 +16170,6 @@
       "opened": "Opened a preview page"
     },
     "sideChat": {
-      "openPage": "Open full task page",
       "returnMain": "Back to main task",
       "new": "New side chat",
       "mainWindowDescription": "Side chats currently run in the main window. Your conversation is saved.",
@@ -16039,6 +16177,14 @@
       "commandDescription": "Open a side chat with this task's context. Optional text becomes a draft question.",
       "title": "Side chat",
       "context": "Uses completed context from when you opened it. The main task keeps running. History stays until you close this tab.",
+      "viewCollaboration": "View collaboration",
+      "openConversation": "Open conversation",
+      "openFromTaskList": "Also available in the task list on the left.",
+      "returnToSideChat": "Back to side chat",
+      "reopenSideChat": "Reopen side chat",
+      "origin": "This conversation started in a side chat.",
+      "originNamed": "This conversation started in a side chat from “{{title}}”.",
+      "originUnavailable": "This conversation started in a side chat. The original task is unavailable.",
       "opening": "Opening…",
       "notReady": "Wait for the main task to complete its first reply.",
       "unsupported": "This task's agent runs in another execution environment. Side chat is not available here yet.",
@@ -16047,9 +16193,10 @@
       "mainTaskOnly": "Open a side chat from the main task.",
       "sharedTaskUnavailable": "Side chats are not available in shared tasks.",
       "archivedTask": "Unarchive this task to open a side chat.",
-      "closeTitle": "Close side chat?",
-      "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
-      "closeConfirm": "Close and delete",
+      "closeTitle": "Close and archive this follow-up?",
+      "closeDescription": "The matching task in the left sidebar will also be archived.",
+      "closeDescriptionRunning": "The matching task in the left sidebar will also be archived, and its workers will stop.",
+      "closeConfirm": "Close and archive",
       "closeFailed": "Could not close the side chat. Try again."
     },
     "botStartedTasks": {
@@ -16065,9 +16212,19 @@
       "toggle": "Show or hide the reply from “{{title}}”",
       "openTask": "Open task"
     },
+    "geminiRateLimit": {
+      "retried": "Retried automatically after the Gemini rate limit",
+      "title": "Gemini’s per-minute input token limit was reached.",
+      "exhausted": "Gemini is still rate limited after one retry. You can retry manually.",
+      "retryIn": "Retrying automatically in {{seconds}} s"
+    },
     "subscriptionAccountError": {
-      "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
-      "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",
+      "poolModelLimited": "Subscription usage for this model has reached its limit. You can switch models now.",
+      "poolRetryUntil": "Retry after {{resetAt}}.",
+      "poolOtherSignedOut": "Another subscription account is signed out. You can sign in on the computer running the task and retry.",
+      "poolUnavailable": "No subscription account is available for this model. Switch models or check the accounts on the computer running the task.",
+      "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source.",
+      "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source.",
       "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
       "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
       "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
@@ -16301,6 +16458,14 @@
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
       "remoteNativeOauthUnavailable": "Remote tasks can't use a Claude subscription — pick a gateway or API key model",
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
+      "savedModel": {
+        "loading": "Connecting to the selected model…",
+        "checkFailed": "Could not check the selected model",
+        "engine": "The selected engine is unavailable. Choose a model for this task.",
+        "source": "The selected source is unavailable. Choose a model for this task.",
+        "model": "The selected model is unavailable. Choose a model for this task.",
+        "thisTaskOnly": "Model selected for this task only"
+      },
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
       "branchChanged": "The project is now on {{branch}}. Check it, then send again.",
@@ -16440,6 +16605,7 @@
       },
       "filterCreatorsHeading": "Buddies",
       "filterCreatorsAny": "All",
+      "filterHideAutomations": "Hide automation tasks",
       "filterCreatorsNone": "Hide all",
       "filterSelectedCreators": "{{count}} selected",
       "filterProjectsHeading": "Projects",
@@ -16921,7 +17087,41 @@
             "token": "Using fallback token",
             "recheck": "Check connection",
             "summary": "Manage GitHub repositories, issues, pull requests, and Actions.",
-            "otherMethods": "Other connection methods"
+            "otherMethods": "Other connection methods",
+            "github-app": "GitHub App"
+          },
+          "access": {
+            "title": "GitHub App access",
+            "all": "All repositories",
+            "selected": "Selected repositories",
+            "visible": "Visible repositories: {{count}}",
+            "unknownCount": "Repository count unavailable",
+            "permissions": "Permissions",
+            "read": "Read only",
+            "write": "Read and write",
+            "admin": "Admin",
+            "loading": "Loading access…",
+            "missing": "Connect the GitHub App on this computer to view access.",
+            "unavailable": "Access details unavailable.",
+            "empty": "No installations visible to this account.",
+            "suspended": "Installation suspended",
+            "events": "Repositories subscribed to events on this computer: {{count}}",
+            "manage": "Manage repository access",
+            "names": {
+              "actions": "Actions",
+              "administration": "Repository administration",
+              "checks": "Checks",
+              "contents": "Repository contents",
+              "deployments": "Deployments",
+              "issues": "Issues",
+              "members": "Organization members",
+              "metadata": "Metadata",
+              "organization_events": "Organization events",
+              "pull_requests": "Pull requests",
+              "repository_hooks": "Repository webhooks",
+              "statuses": "Commit statuses",
+              "workflows": "Workflow files"
+            }
           },
           "app": {
             "title": "Repository events",
@@ -16934,6 +17134,21 @@
             "repositories": "Choose repositories",
             "disconnect": "Disconnect events",
             "connect": "Connect GitHub App"
+          },
+          "connection": {
+            "operations": "Repository operations",
+            "operationsMissing": "Repository access is not authorized yet",
+            "checking": "Checking GitHub connection…",
+            "mismatch": "Operations and notifications use different accounts. Check the accounts and reconnect.",
+            "ready": "GitHub account connected.",
+            "close": "Close",
+            "incomplete": "Account linked. Authorize repository operations on this computer to finish.",
+            "eventsOnly": "This account receives repository events. Its name alone does not confirm authorization on this computer.",
+            "connect": "Connect GitHub",
+            "alternative": "Use local GitHub sign-in",
+            "cliDescription": "Keep using your local sign-in. Personal notifications and other features unsupported by GitHub Apps still require it.",
+            "disconnect": "Disconnect GitHub App",
+            "repositories": "Repositories watched: {{count}}"
           }
         },
         "unresolved": "Unresolved review threads: {{count}}",
@@ -16989,6 +17204,12 @@
       "unspecifiedDir": "Unspecified directory"
     },
     "workdirBrowse": {
+      "previewFile": "Preview",
+      "filterDirectory": "Filter this folder…",
+      "projectTree": "Project tree",
+      "systemPreview": "System preview",
+      "listView": "List",
+      "gridView": "Thumbnails",
       "backToProjects": "Back to Projects",
       "switchProject": "Switch project",
       "activeSessionCount_one": "{{count}} active session",
@@ -17312,7 +17533,8 @@
         "title": "Import Repository Automations",
         "description": "Source: {{workingDir}}. Review the definitions below. Importing applies these changes and enables new automations, which can run commands and start Agents with full access. Import only content you trust.",
         "accept": "Confirm Import",
-        "removed": "Will remove: {{names}}"
+        "removed": "Will remove: {{names}}",
+        "fileMissing": "Import skipped. The automation file in {{projectName}} could not be found."
       },
       "toast": {
         "summary": "added {{inserted}} · updated {{updated}} · removed {{deleted}}",
@@ -17355,6 +17577,7 @@
       "promote": {
         "menu": "Promote to project automation",
         "noWorkingDir": "Can’t promote an automation without a working directory",
+        "pluginEngine": "Plugin engines only run on this computer, so this automation can’t become a project automation",
         "success": "Promoted to project automation"
       },
       "editProject": {
@@ -17408,6 +17631,7 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
         "success": "Success",
@@ -17631,6 +17855,7 @@
         "selectThread": "Select a target session",
         "selectProject": "Select a project directory",
         "modelUnavailable": "Model {{model}} is no longer available. Select another model.",
+        "pluginEngineUnavailable": "The selected plugin engine isn’t available right now. Select another model.",
         "reasoningInvalid": "Reasoning must be one of {{values}}",
         "preRunHookCommandRequired": "Enter the pre-run check command",
         "preRunPluginRequired": "Choose a plugin for the pre-run check",
@@ -17905,7 +18130,7 @@
         "domain-radar": {
           "name": "Domain radar",
           "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",
-          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "prompt": "Collect the latest developments about “{{topic}}” from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
           "params": {
             "topic": {
               "label": "Topic to follow",
@@ -17927,12 +18152,12 @@
         "weekly-work-draft": {
           "name": "Weekly report drafter",
           "description": "Compile this week's work from documents in the working directory into a report draft",
-          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as “Done this week / In progress / Next week / Needs coordination”, concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
         },
         "knowledge-freshness": {
           "name": "Knowledge base freshness check",
           "description": "Monthly health check of working-directory docs for outdated or conflicting content",
-          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as “update / merge / delete” suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
       }
     },
@@ -17970,8 +18195,8 @@
       "secretMissing": "Events are rejected until a secret is generated.",
       "rotateFailed": "Couldn't generate the secret. Secrets can only be managed on the computer running this task.",
       "genericSender": "the sender",
-      "secretFillHint": "Enter it as \"{{field}}\" in {{sender}}.",
-      "secretPastePlaceholder": "Paste \"{{field}}\" from {{sender}}",
+      "secretFillHint": "Enter it as “{{field}}” in {{sender}}.",
+      "secretPastePlaceholder": "Paste “{{field}}” from {{sender}}",
       "secretSave": "Save secret",
       "secretSaved": "Secret saved.",
       "secretSaveFailed": "Couldn't save the secret. Secrets can only be managed on the computer running this task.",
@@ -18175,7 +18400,7 @@
       "marked": "Marked as duplicate",
       "bannerPrefix": "This issue is a duplicate of",
       "bannerSuffix": "",
-      "bannerTitleWrap": "\"{{title}}\"",
+      "bannerTitleWrap": "“{{title}}”",
       "checkPanel": {
         "ariaLabel": "Similar issues found",
         "close": "Close",
@@ -18357,7 +18582,7 @@
       "expired": "Input handoff ended after waiting too long."
     },
     "failure": {
-      "permission": "Cindy can't read this computer's screen. Allow Cindy under Accessibility in System Settings.",
+      "permission": "Cindy can’t read the interface on this Mac. Check control access for the running copy of Cindy. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
       "target_gone": "The target window was closed.",
       "unreadable": "This screen can't be read. You can finish it on the host computer, then hand back to the agent.",
       "action_failed": "That action didn't take effect. Check the screen and try again.",
@@ -19352,6 +19577,7 @@
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
       "savedModelUnavailable": "The saved model or its source is unavailable.",
+      "pluginEngineNoWorktree": "Plugin engine Workers can't use a worktree. Turn off the worktree option to create this Worker.",
       "reselectModel": "Choose a model",
       "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",
@@ -21347,6 +21573,7 @@
       "reviewed": "Reviewed",
       "verified-publisher": "Verified publisher"
     },
+    "viewLimit": "Too many pages are open. Scroll another page out of view or collapse it, and this page will open automatically.",
     "pluginRevoked": "The plugin was disabled or changed. This page is no longer available.",
     "pluginCspRejected": "The page requested an undeclared domain and was blocked.",
     "filesOnExecutionComputer": "View file contents on the execution computer",
@@ -22079,8 +22306,10 @@
     "picker": {
       "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
       "manage": "Manage model groups",
+      "deviceTitle": "Model groups · {{device}}",
       "switched": "“{{name}}” switched this task to {{model}}",
-      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed."
+      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
+      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
@@ -22327,5 +22556,10 @@
       "auto": "Auto-review",
       "bypassPermissions": "Full access"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "In System & App Protection Override, select {{app}} and click ⓘ. If it’s missing, use + to add the running app.",
+    "review": "$t(macControlPermission.selectApp)\nIf offered, Choose Apps limits which apps it can control. Full control gives the app access to all apps and data. If you agree, acknowledge each item, then choose Allow at the bottom."
   }
 }

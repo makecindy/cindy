@@ -1473,3 +1473,35 @@ it('removes an offline device immediately and ignores a directory reply started 
   expect(result.current).toEqual([]);
   unmount();
 });
+
+// 「全部任务」删除残留回归，unit：单测目录行覆盖不到菜单额外合入的任务缓存和拒绝记录。
+// 先返回不完整目录，再返回行完全相同的完整目录，验证仅成员资格变化也会更新菜单。
+it('reconciles cached and rejected machine options only when the directory confirms absence', async () => {
+  const offline = { deviceId: 'offline', name: 'Offline Mac', platform: 'darwin', appVersion: '1',
+    online: false, busy: false, remoteControlEnabled: false, controlEnabled: true, isSelf: false, lastSeenAt: null,
+  } satisfies DeviceLinkDeviceView;
+  const listDevices = vi.fn()
+    .mockResolvedValueOnce({ devices: [offline], partial: true })
+    .mockResolvedValueOnce({ devices: [offline] })
+    .mockResolvedValue({ devices: [], partial: true });
+  vi.stubGlobal('electronAPI', { deviceLink: { listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+    onPresenceChanged: vi.fn(), onStatusChanged: vi.fn(), onControlTargetChanged: vi.fn(),
+  } });
+  const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+  const { revokedDevicesStore } = await import('@/features/device-link/revokedDevicesStore');
+  const { retryDeviceLinkDeviceList } = await import('@/features/device-link/useDeviceLinkDeviceList');
+  const { useSwitcherDevices } = await import('@/features/device-link/useMachineSwitcher');
+  for (const id of ['offline', 'deleted']) {
+    remoteProjectsStore.setDeviceSessions(id, id, []);
+    remoteProjectsStore.markDeviceDisconnected(id);
+  }
+  revokedDevicesStore.markRevoked('deleted-rejected');
+  const { result, unmount } = renderHook(() => useSwitcherDevices().map(device => device.deviceId).sort());
+  await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(1));
+  expect(result.current).toEqual(['deleted', 'deleted-rejected', 'offline']);
+  await act(async () => retryDeviceLinkDeviceList());
+  expect(result.current).toEqual(['offline']);
+  await act(async () => retryDeviceLinkDeviceList());
+  expect(result.current).toEqual(['offline']);
+  unmount();
+});

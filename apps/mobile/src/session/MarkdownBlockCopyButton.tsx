@@ -19,8 +19,8 @@ const COPY_BUTTON_HIT_SLOP = 6;
 
 type CopyState = CopyMessageStatus | 'idle' | 'copying';
 
-/** Persistent mobile alternative to Desktop's hover-only code-block copy action. */
-export function MarkdownCodeCopyButton({ text }: { text: string }) {
+/** Whole-block copy complements native selection, which cannot cross table cells. */
+export function MarkdownBlockCopyButton({ text, kind = 'code' }: { text: string; kind?: 'code' | 'table' }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -42,7 +42,7 @@ export function MarkdownCodeCopyButton({ text }: { text: string }) {
     return () => clearTimeout(timer);
   }, [state]);
 
-  const copyCode = useCallback(() => {
+  const copyBlock = useCallback(() => {
     if (!text.trim() || state === 'copying') return;
     const operation = ++operationRef.current;
     setState('copying');
@@ -62,7 +62,7 @@ export function MarkdownCodeCopyButton({ text }: { text: string }) {
       ? t('message.renderer.copyStateFailed')
       : copying
         ? t('message.renderer.copyStateCopying')
-        : t('message.renderer.copyCode');
+        : t(kind === 'table' ? 'message.renderer.copyTable' : 'message.renderer.copyCode');
 
   return (
     <Pressable
@@ -72,13 +72,14 @@ export function MarkdownCodeCopyButton({ text }: { text: string }) {
       accessibilityState={{ disabled: copying, busy: copying }}
       disabled={copying}
       hitSlop={COPY_BUTTON_HIT_SLOP}
-      onPress={copyCode}
+      onPress={copyBlock}
       style={({ pressed }) => [
         styles.button,
+        kind === 'table' && styles.tableButton,
         pressed && styles.pressed,
         copying && styles.disabled,
       ]}
-      testID="message.markdownCodeCopyButton"
+      testID={kind === 'table' ? 'message.markdownTableCopyButton' : 'message.markdownCodeCopyButton'}
     >
       {copying ? (
         <ActivityIndicator color={colors.textSecondary} size="small" />
@@ -104,6 +105,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: spacing.xxl,
     justifyContent: 'center',
     width: spacing.xxl,
+  },
+  // Keep the action outside the scrollable grid and clear of header/cell text.
+  tableButton: {
+    alignSelf: 'flex-end',
+    position: 'relative',
+    top: 0,
+    right: 0,
+    marginTop: spacing.xs,
+    marginRight: spacing.xs,
   },
   disabled: { opacity: 0.6 },
   pressed: { opacity: 0.72 },

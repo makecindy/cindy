@@ -14,6 +14,12 @@
   "usageOnlyDevice": "{{name}}만",
   "usagePlans": "요금제 잔여 한도",
   "usageBudget": "이번 기간 남은 예산",
+  "usageWaiting": "컴퓨터가 연결되면 요금제 잔여 한도와 오늘 사용량이 여기에 표시돼요",
+  "usageUpdateDesktop": "컴퓨터의 Cindy를 업데이트하면 사용량을 볼 수 있어요",
+  "usageWaitingTitle": "사용량이 여기에 표시돼요",
+  "usageWaitingCopy": "휴대폰이 컴퓨터에 연결되면 각 계정의 요금제 잔여 한도와 일별 사용량이 자동으로 동기화돼요. 보통 몇 초면 끝나요.",
+  "usageUpdateDesktopTitle": "컴퓨터의 Cindy를 업데이트해 주세요",
+  "usageUpdateDesktopCopy": "컴퓨터의 Cindy 버전이 오래되어 사용량을 휴대폰으로 보낼 수 없어요. 업데이트하면 자동으로 표시돼요.",
   "management": {
     "title": "기기 관리",
     "openDevice": "{{name}} 기기 상세 정보 보기",
@@ -440,6 +446,7 @@
       "filterEmptyCopy": "표시 설정의 필터에서 조정하거나 재설정할 수 있습니다.",
       "filterTeammatesHeading": "동반자",
       "filterAnySource": "전체",
+      "filterHideAutomations": "자동화 작업 숨기기",
       "filterHideAllTeammates": "모두 숨기기",
       "filterSelectedTeammates": "{{count}}명 선택",
       "inbox": {

@@ -36,6 +36,21 @@ export function isSyntheticTriggerText(text: string): boolean {
   return text.startsWith(UI_ACTION_TRIGGER_PREFIX);
 }
 
+/** Raw history may hold plain text or the outer persisted attachment envelope. */
+export function isSyntheticTriggerContent(content: unknown): boolean {
+  return isSyntheticTriggerText(readUserText(content));
+}
+
+function readUserText(content: unknown): string {
+  if (typeof content === 'string' && content.trimStart().startsWith('{')) {
+    try { content = JSON.parse(content) as unknown; }
+    catch { return ''; }
+  }
+  const text = typeof content === 'string' ? content
+    : (content as { text?: unknown } | null)?.text;
+  return typeof text === 'string' ? text : '';
+}
+
 /**
  * 规范化续跑指令(2026-07-05 产品决策,原定义在桌面 interruptedTurn.ts,随
  * UI_ACTION_TRIGGER_PREFIX 一起上移):英文、代码固定 —— 它是系统 prompt 而非
@@ -93,14 +108,7 @@ export function isContinuationMessage(message: {
     || message.systemCardType === 'auto-resume') return true;
   // Mobile persists user text as a JSON envelope; live/desktop rows may already
   // contain the decoded object or plain text. Only unwrap the outer envelope.
-  let content = message.content;
-  if (typeof content === 'string' && content.trimStart().startsWith('{')) {
-    try { content = JSON.parse(content) as unknown; }
-    catch { return false; }
-  }
-  const text = typeof content === 'string' ? content
-    : (content as { text?: unknown } | null)?.text;
-  return typeof text === 'string' && syntheticTriggerKind(text) === 'continue';
+  return syntheticTriggerKind(readUserText(message.content)) === 'continue';
 }
 
 /**

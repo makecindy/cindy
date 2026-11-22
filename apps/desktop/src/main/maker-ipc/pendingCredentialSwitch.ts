@@ -1,5 +1,5 @@
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
 
 import {
   isCredentialModeSwitchBusyError,
@@ -56,7 +56,8 @@ export interface PendingCredentialSwitch {
 
 interface PendingSwitchSession {
   id: string;
-  agentKind: AgentKind;
+  // Only compared with 'pi'; plugin-engine tasks never register credential switches.
+  agentKind: EngineKind;
   remoteHostId?: string | null;
   isTurnRunning?: () => boolean;
 }

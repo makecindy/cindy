@@ -1,3 +1,105 @@
+diff --git a/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java b/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java
+index 80c68034b193a47bedb56ca527352de9548e8ac6..f67883ccb18c5aca89f05d4196f9dead2980844f 100644
+--- a/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java
++++ b/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java
+@@ -44,6 +44,8 @@ import com.reactnativecommunity.webview.events.TopMessageEvent;
+ import org.json.JSONException;
+ import org.json.JSONObject;
+ 
++import java.util.ArrayList;
++import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
+@@ -155,35 +157,68 @@ public class RNCWebView extends WebView implements LifecycleEventListener {
+ 
+     @Override
+     public ActionMode startActionMode(ActionMode.Callback callback, int type) {
+-      if(menuCustomItems == null ){
++      if (menuCustomItems == null || menuCustomItems.isEmpty()) {
+         return super.startActionMode(callback, type);
+       }
+-
++      // A mode owns its definitions. Props may change before an async selection
++      // result returns, and system menu ids are not custom-item array indexes.
++      final List<Map<String, String>> definitions = new ArrayList<>();
++      for (Map<String, String> definition : menuCustomItems) {
++        definitions.add(new HashMap<>(definition));
++      }
+       return super.startActionMode(new ActionMode.Callback2() {
++        private final MenuItem[] customItems = new MenuItem[definitions.size()];
++        private boolean active = false;
++        private boolean pending = false;
++
++        private boolean addCustomItems(Menu menu) {
++          boolean changed = false;
++          for (int i = 0; i < definitions.size(); i++) {
++            MenuItem previous = customItems[i];
++            if (previous != null && menu.findItem(previous.getItemId()) == previous) continue;
++            int id;
++            do { id = View.generateViewId(); } while (menu.findItem(id) != null);
++            customItems[i] = menu.add(Menu.NONE, id, Menu.NONE, definitions.get(i).get("label"));
++            changed = true;
++          }
++          return changed;
++        }
++
+         @Override
+         public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+-          for (int i = 0; i < menuCustomItems.size(); i++) {
+-            menu.add(Menu.NONE, i, i, (menuCustomItems.get(i)).get("label"));
+-          }
++          if (!callback.onCreateActionMode(mode, menu)) return false;
++          active = true;
++          addCustomItems(menu);
+           return true;
+         }
+ 
+         @Override
+         public boolean onPrepareActionMode(ActionMode actionMode, Menu menu) {
+-          return false;
++          boolean changed = callback.onPrepareActionMode(actionMode, menu);
++          return addCustomItems(menu) || changed;
+         }
+ 
+         @Override
+         public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+-          WritableMap wMap = Arguments.createMap();
++          Map<String, String> definition = null;
++          for (int i = 0; i < customItems.length; i++) {
++            if (customItems[i] == item) { definition = definitions.get(i); break; }
++          }
++          // Copy, Select all, Share and ProcessText keep the Chromium/system
++          // implementation. They never evaluate JS or enter the custom bridge.
++          if (definition == null) return callback.onActionItemClicked(mode, item);
++          if (!active || pending) return true;
++          pending = true;
++          final Map<String, String> selectedDefinition = definition;
+           RNCWebView.this.evaluateJavascript(
+             "(function(){return {selection: window.getSelection().toString()} })()",
+             new ValueCallback<String>() {
+               @Override
+               public void onReceiveValue(String selectionJson) {
+-                Map<String, String> menuItemMap = menuCustomItems.get(item.getItemId());
+-                wMap.putString("label", menuItemMap.get("label"));
+-                wMap.putString("key", menuItemMap.get("key"));
++                if (!active || !RNCWebView.this.isAttachedToWindow()) return;
++                WritableMap wMap = Arguments.createMap();
++                wMap.putString("label", selectedDefinition.get("label"));
++                wMap.putString("key", selectedDefinition.get("key"));
+                 String selectionText = "";
+                 try {
+                   selectionText = new JSONObject(selectionJson).getString("selection");
+@@ -199,7 +234,8 @@ public class RNCWebView extends WebView implements LifecycleEventListener {
+ 
+         @Override
+         public void onDestroyActionMode(ActionMode mode) {
+-          mode = null;
++          active = false;
++          callback.onDestroyActionMode(mode);
+         }
+ 
+         @Override
 diff --git a/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java b/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java
 index fa8efb8..b31ebed 100644
 --- a/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java

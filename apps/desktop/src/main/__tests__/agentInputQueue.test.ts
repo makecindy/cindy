@@ -47,6 +47,43 @@ function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueue
 }
 
 describe('agentInputQueue', () => {
+  it('projects the send_to_session path only from the host-reconciled live session route', () => {
+    const href = 'cindy://session/target';
+    const queued = {
+      ...queuedMessage([]),
+      text: href,
+      persistedContent: href,
+      agentReferences: [{
+        kind: 'session' as const,
+        start: 0,
+        end: href.length,
+        href,
+        sessionId: 'target',
+        title: 'Target',
+      }],
+    };
+    // Review and plugin-engine tasks are queued as built-in claude-code and reconciled only at start
+    // (PR #11894 review). The queued snapshot alone must never advertise a tool the engine lacks.
+    expect(buildMakerUserMessage(queued)).toMatchObject({ content: expect.not.stringContaining('send_to_session') });
+    const local = { agentKind: 'claude-code' as const, supportsRemote: false };
+    expect(buildMakerUserMessage(queued, [], { sendToSession: local }))
+      .toMatchObject({ content: expect.stringContaining('cindy_helper\'s call_tool') });
+    // message-source.md「发给模型的说明」: auto titles and Ghost hooks share this projection,
+    // so the send route must stay out of it.
+    expect(getAgentFacingText(queued)).not.toContain('send_to_session');
+    const remoteHref = 'cindy://session/target?device=studio';
+    const remote = {
+      ...queued,
+      text: remoteHref,
+      persistedContent: remoteHref,
+      agentReferences: [{ ...queued.agentReferences[0], end: remoteHref.length, href: remoteHref }],
+    };
+    expect(buildMakerUserMessage(remote, [], { sendToSession: { ...local, supportsRemote: true } }))
+      .toMatchObject({ content: expect.stringContaining('target_session_id="studio::target"') });
+    expect(buildMakerUserMessage(remote, [], { sendToSession: local }))
+      .toMatchObject({ content: expect.stringContaining('cannot send messages to it directly') });
+  });
+
   it.each([false, true])('keeps synthetic text on disk and strips only host text-only model input (%s)', (toolsDisabled) => {
     const text = '[UI_ACTION_TRIGGER]Say hello with cached usage hints.';
     const queued = {

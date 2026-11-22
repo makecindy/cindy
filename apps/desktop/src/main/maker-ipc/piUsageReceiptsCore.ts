@@ -1,3 +1,4 @@
+import { mayRecordTurnUsage, turnUsageAdmission } from '../usage/turnUsageAdmission.js';
 import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { localDayKey } from '../localDb/dailySpend.js';
 import type { PiUsageWrite } from '../localDb/worker/opHandlers/piUsageTx.js';
@@ -12,13 +13,14 @@ import { rebroadcastTodaySpend } from './turnUsagePorts.js';
 import { broadcastSessionSpend, broadcastSessionTokens } from './turnUsagePorts.js';
 import { addRegionalMoney, legacyUsdMoney, normalizeRegionalMoney } from '../../shared/regionalMoney.js';
 import { createLogger } from '../logger.js';
-import type { TurnUsageContext } from './turnUsageContextCore.js';
+import { tokenAttribution, piModelBilling, type TurnUsageContext } from './turnUsageContextCore.js';
 import type { Session } from '@cindy/maker-core';
 
 const log = createLogger('pi-usage');
 const pending = new Set<Promise<unknown>>();
 interface PiUsageOwner {
   db: ReturnType<typeof getDbClient>;
+  account?: () => boolean;
   scope: ReturnType<typeof captureDataOwnerBroadcastScope>;
   /** Only a confirmed account currency may survive an owner boundary. */
   currency?: ReturnType<typeof currentLedgerCurrency>;
@@ -60,14 +62,20 @@ export function isPiReceiptPayload(value: unknown): value is PiReceiptPayload {
 export function recordPiUsageReceipts(session: Session, usage: PiReceiptPayload, context: TurnUsageContext): void {
   const sessionId = session.id;
   let owner = owners.get(session);
-  if (!owner) {
-    owner = { db: getDbClient(), scope: captureDataOwnerBroadcastScope(), contexts: new Map() };
+  const account = turnUsageAdmission.getStore();
+  if (!owner || (account && owner.account !== account)) {
+    owner = { db: getDbClient(), scope: captureDataOwnerBroadcastScope(), contexts: new Map(), account };
+    owners.set(session, owner);
+  } else if (account) {
+    // A new connection/window generation of this same account inherits the settlement
+    // context and confirmed currency. In-flight receipts keep their own original DB.
+    owner = { ...owner, db: getDbClient(), scope: captureDataOwnerBroadcastScope() };
     owners.set(session, owner);
   }
-  trackPiUsageWrite(persistPiUsageReceipts(owner, sessionId, usage, context));
+  trackPiUsageWrite(persistPiUsageReceipts(owner, sessionId, usage, context, !session.remoteHostId && !session.agentDeviceId));
 }
 
-async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, usage: PiReceiptPayload, context: TurnUsageContext,
+async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, usage: PiReceiptPayload, context: TurnUsageContext, localExecution: boolean,
   recovery?: { day: string; current: () => boolean;
     pricing: Awaited<ReturnType<typeof getGatewayModelPricing>>;
     changed: (hasCost: boolean) => void }): Promise<void> {
@@ -76,17 +84,18 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
   context = contexts.get(usage.settlementId) ?? context;
   contexts.set(usage.settlementId, context);
   if (contexts.size > 64) contexts.delete(contexts.keys().next().value!);
-  const subscription = context.subscriptionKind !== null || context.accessKind === 'subscription';
-  const route = context.isUserProviderRoute && !subscription ? 'provider-api' : subscription ? 'subscription' : 'xd-gateway';
   const receipts = usage.receipts.flatMap(raw => {
     if (!raw || typeof raw !== 'object') return [];
     const value = raw as Record<string, unknown>;
     const segment = normalizeTurnUsageSegments([raw])[0];
     if (!segment?.id || !Number.isSafeInteger(value.recordedAt) || Number(value.recordedAt) <= 0) return [];
     const model = normalizeModelIdForPricing(segment.model || 'unknown');
+    const { route, billing } = piModelBilling(context, model);
+    const subscription = route === 'subscription';
     const unpriced = value.unpriced === true;
     const needsPricing = !unpriced && (route !== 'provider-api' || context.accessKind === 'managed');
     const row: PiUsageWrite = {
+      attribution: localExecution ? tokenAttribution(billing, context) : undefined,
       sessionId, settlementId: usage.settlementId, receiptId: segment.id,
       recordedAt: Number(value.recordedAt), day: recovery?.day ?? localDayKey(Number(value.recordedAt)),
       model: subscription ? piSubscriptionUsageModelKey(model) : model, currency: tokenCurrency,
@@ -99,26 +108,32 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
         ...(owner.currency ? { currency: owner.currency } : {}),
       }) } : {}),
     };
-    return [{ row, segment, model, unpriced, needsPricing }];
+    return [{ row, segment, model, route, subscription, unpriced, needsPricing }];
   });
   if (!receipts.length) return;
   // Token facts never wait for model pricing or account refresh requests.
   const tokens = recovery ? { changed: false } : await db.tx('usage.recordPiUsage', receipts.map(r => r.row));
-  if (recovery && !recovery.current()) return;
-  if (tokens.changed && isDataOwnerBroadcastScopeCurrent(scope)) {
+  if (!mayRecordTurnUsage() || (recovery && !recovery.current())) return;
+  const tokensScope = owner.account?.() ? captureDataOwnerBroadcastScope() : scope;
+  if (tokens.changed && isDataOwnerBroadcastScopeCurrent(tokensScope)) {
     const total = await db.queryOne<{ total: number }>('SELECT total_token_usage AS total FROM sessions WHERE id = ?', [sessionId]);
-    if (total) broadcastSessionTokens({ sessionId, totalTokens: total.total }, scope);
-    void rebroadcastTodaySpend(scope);
+    if (total) broadcastSessionTokens({ sessionId, totalTokens: total.total }, tokensScope);
+    void rebroadcastTodaySpend(tokensScope);
   }
   if (!receipts.some(r => r.needsPricing)) return;
-  const pricing = recovery ? recovery.pricing
-    : route === 'xd-gateway' ? await getGatewayModelPricingForModel() : getReferenceModelPricing();
-  if (recovery && !recovery.current()) return;
+  const gatewayPricing = recovery ? recovery.pricing
+    : receipts.some(r => r.route === 'xd-gateway') ? await getGatewayModelPricingForModel() : null;
+  if (!mayRecordTurnUsage() || (recovery && !recovery.current())) return;
   // DB/pricing awaits may have allowed this account's currency to recover.
   // Keep token facts, but never finalize money using an unknown USD fallback.
+  // Token admission and priced settlement are separate SQLite transactions.
+  // A reopened connection for this same account may now be the live writer.
+  if (owner.account?.()) owner = { ...owner, db: getDbClient(), scope: captureDataOwnerBroadcastScope() };
   const currency = confirmedOwnerCurrency(owner);
   if (!currency) return;
-  const priced = receipts.filter(r => r.needsPricing).map(({ row, segment, model, unpriced }) => {
+  const referencePricing = getReferenceModelPricing();
+  const priced = receipts.filter(r => r.needsPricing).map(({ row, segment, model, route, subscription, unpriced }) => {
+    const pricing = route === 'xd-gateway' ? gatewayPricing : referencePricing;
     const segments = unpriced ? [] : [{ ...segment,
       priceVariant: segment.priceVariant ?? (segment.id?.startsWith('pi:') && context.piFastMode ? 'priority' : 'standard'),
     }];
@@ -138,12 +153,12 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
       approximate: ledgerMoney?.approximate ?? subscription, actualCost: ledgerMoney?.kind === 'actual-cost' };
   });
   if (!priced.some(row => row.amount !== null)) return;
-  const result = await db.tx('usage.recordPiUsage', priced);
+  const result = await owner.db.tx('usage.recordPiUsage', priced);
   if (!result.changed) return;
   const hasCost = priced.some(row => row.actualCost && row.amount !== null && row.amount > 0);
   if (recovery) { recovery.changed(hasCost); return; }
   if (hasCost) await broadcastPersistedPiSpend(owner, sessionId);
-  void rebroadcastTodaySpend(scope);
+  void rebroadcastTodaySpend(owner.scope);
 }
 
 async function broadcastPersistedPiSpend(owner: PiUsageOwner, sessionId: string): Promise<void> {
@@ -189,7 +204,6 @@ export function retryPendingPiUsageReceipts(): Promise<void> {
         // Cache reads only: never wait once per receipt for the same model sync.
         const gatewayPricing = await getGatewayModelPricing();
         if (!current()) return;
-        const referencePricing = getReferenceModelPricing();
         const changedSessions = new Set<string>();
         let changed = false;
         for (const row of rows) {
@@ -200,11 +214,10 @@ export function retryPendingPiUsageReceipts(): Promise<void> {
             if (saved.version !== 1 || saved.receipt?.id !== row.receiptId || !saved.context
                 || typeof saved.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(saved.day)) continue;
             if (!owner.currency && (saved.currency === 'USD' || saved.currency === 'CNY')) owner.currency = saved.currency;
-            const subscription = saved.context.subscriptionKind !== null || saved.context.accessKind === 'subscription';
             await persistPiUsageReceipts(owner, row.sessionId,
-              { settlementId: row.settlementId, receipts: [saved.receipt] }, saved.context, {
+              { settlementId: row.settlementId, receipts: [saved.receipt] }, saved.context, false, {
                 day: saved.day, current,
-                pricing: subscription || saved.context.isUserProviderRoute ? referencePricing : gatewayPricing,
+                pricing: gatewayPricing,
                 changed: hasCost => { changed = true; if (hasCost) changedSessions.add(row.sessionId); },
               });
           } catch (error) {

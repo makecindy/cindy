@@ -22,6 +22,8 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import type { SessionReference } from '../../../../shared/sessionReference';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import { isPluginEngineEffort } from '../../../../shared/pluginEngines';
 import {
   DEFAULT_SCHEDULE_WEBHOOK_PRESET,
   parseWebhookFormat,
@@ -163,6 +165,12 @@ export interface ScheduleFormState {
   webhookFormat?: string;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  /**
+   * 选中的插件引擎(docs/plans/acp-plugin-bridge.md)。和新建任务草稿一样单独保存在内置引擎的选择旁边：
+   * 有值时保存为 agentKind / modelAgentKind = 'acp'，内置的 agentKind / model 只是切回内置引擎时的初值。
+   * 只用于每次新建任务、在本机运行的自动任务；绑定 / 持续会话 / 脚本 / worktree 都会清掉它。
+   */
+  pluginEngine?: PluginEngineSelection | null;
   modelAgentDeviceId?: string;
   /** The bound task's baseline, independent of the editable model choice. Form-only. */
   boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
@@ -205,6 +213,7 @@ export interface ScheduleFormState {
   /** 打开时脚本与插件都已配置(Agent 设的)：界面显示插件，保存时脚本原样保留。 */
   preRunKeepScript?: boolean;
   /** 插件前置检查选定的插件实例 id;空 = 还没选。 */
+  primaryHostKey?: string;
   preRunPluginId: string;
   /** 插件没回应、出错或不可用时的处理。 */
   preRunPluginOnFailure: PreRunPluginFailureAction;
@@ -600,6 +609,37 @@ export function parseScriptTimeoutMs(sec: string): number | undefined {
 }
 
 /** Preserve a binding's baseline when saving; unbound tasks use the selected Harness. */
+/**
+ * 已保存的自动任务 → 表单的引擎字段。插件引擎任务('acp')放进 pluginEngine，内置引擎的字段回到默认
+ * (切回内置引擎时由表单的默认模型回填)；其余与旧版一致。
+ */
+export function scheduleEngineFormFields(
+  s: Schedule,
+): Pick<ScheduleFormState, 'agentKind' | 'modelAgentKind' | 'boundAgent' | 'model' | 'providerId' | 'pluginEngine'> {
+  if (s.agentKind === 'acp' || s.modelAgentKind === 'acp') {
+    return {
+      agentKind: 'claude-code',
+      modelAgentKind: undefined,
+      boundAgent: undefined,
+      model: '',
+      providerId: '',
+      pluginEngine: {
+        providerId: s.providerId ?? '',
+        modelId: s.model?.trim() || PLUGIN_ENGINE_DEFAULT_MODEL,
+        ...(isPluginEngineEffort(s.effort) ? { effort: s.effort } : {}),
+      },
+    };
+  }
+  return {
+    agentKind: s.modelAgentKind ?? s.agentKind,
+    modelAgentKind: s.modelAgentKind,
+    boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: s.agentKind } : undefined,
+    model: s.model ?? '',
+    providerId: s.providerId ?? '',
+    pluginEngine: null,
+  };
+}
+
 export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormState['agentKind'] {
   return form.executionMode !== 'script' && hasRealBinding(form) &&
     form.boundAgent?.sessionId === form.targetSessionId.trim()
@@ -697,6 +737,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     ...(form.prEnabled === undefined ? {} : { prTrigger: form.prEnabled
       ? { url: form.prUrl?.trim() ?? '', change: form.prChange ?? 'any' } : null }),
     preRunHook: buildPreRunHook(form),
+    ...(form.primaryHostKey ? { primaryHostKey: form.primaryHostKey } : {}),
     preRunPlugin: buildPreRunPlugin(form),
     // 表单带这个字段时恒带 key：关闭时 null 清空触发条件，接收地址和密钥一并作废。
     ...(form.webhookEnabled === undefined ? {} : {
@@ -755,6 +796,21 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
   if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
+  if (form.pluginEngine && !form.persistentSession) {
+    // 插件引擎：每次新建任务、在本机运行；没有 Fast、worktree 与运行位置。
+    return {
+      ...base,
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      model: form.pluginEngine.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+      providerId: form.pluginEngine.providerId,
+      effort: form.pluginEngine.effort,
+      fastMode: false,
+      useWorktree: false,
+      agentDeviceId: undefined,
+      modelAgentDeviceId: undefined,
+    };
+  }
   return base;
 }
 

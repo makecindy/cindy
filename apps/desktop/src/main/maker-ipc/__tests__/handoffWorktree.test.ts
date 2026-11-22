@@ -251,10 +251,11 @@ describe('prepareTaskWorktree', () => {
   const caller = { workingDir: BASE, status: 'active', source: 'desktop' };
 
   it('binds a new worktree to the calling task, branched from the fresh remote default', async () => {
-    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main', fetched: true }));
     const deps = makeDeps({ resolveFreshSource });
     const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
     expect(res).toMatchObject({ ok: true, created: true, meta: { sessionId: 'task-1' } });
+    expect(res).not.toHaveProperty('staleBaseReason');
     expect(resolveFreshSource).toHaveBeenCalledWith(BASE, 'main');
     expect(deps.createWorktree).toHaveBeenCalledWith({
       sessionId: 'task-1',
@@ -262,6 +263,18 @@ describe('prepareTaskWorktree', () => {
       name: 'fresh-name',
       sourceBranch: 'refs/remotes/origin/main',
     });
+  });
+
+  // 拉取失败时退用本地引用曾经静默进行,Agent 以为是最新代码就开工;结果必须带上原因。
+  // 没有 remote 的纯本地仓库无所谓落后,不能误报。
+  it.each([
+    ['a failed fetch', 'stale-remote-ref', 'stale-remote-ref'],
+    ['a repository without a remote', 'no-remote', undefined],
+  ] as const)('reports the stale base for %s only when the base may be behind', async (_label, reason, expected) => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main', fetched: false, reason }));
+    const res = await prepareTaskWorktree(makeDeps({ resolveFreshSource }), { sessionId: 'task-1', caller });
+    expect(res).toMatchObject({ ok: true, created: true });
+    expect((res as { staleBaseReason?: string }).staleBaseReason).toBe(expected);
   });
 
   it('returns the existing binding instead of creating a second worktree', async () => {

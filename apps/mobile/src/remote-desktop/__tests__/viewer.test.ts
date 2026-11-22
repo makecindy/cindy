@@ -28,6 +28,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     type: string;
     epoch: string;
     sequence: number;
+    fieldTap?: boolean;
     events?: Array<{ kind: string; code?: string; text?: string; down?: boolean }>;
   }> = [];
   const listeners: Record<string, (event: unknown) => void> = {};
@@ -456,6 +457,7 @@ describe("remote desktop viewport", () => {
     v.send({ type: 'mouseButtons', native: true, enabled: true });
     v.send({ type: 'nativeMouse', control: 'left', event: 'pointerdown', id: 0, y: 100 });
     v.ack();
+    expect(v.messages.filter(m => m.type === 'input' && m.fieldTap)).toHaveLength(1);
     const beforeTap = v.messages.flatMap(m => m.events ?? []).length;
     v.send({ type: 'nativeTouchpad', tap: true });
     v.flush();

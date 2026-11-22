@@ -1,3 +1,4 @@
+import { mayRecordTurnUsage, turnUsageBroadcastScope } from './usage/turnUsageAdmission.js';
 /**
  * modelMismatchBroadcaster —— 把「本轮模型被降级 / 替换」标记挂到该轮最后一条
  * assistant 消息上。
@@ -111,12 +112,13 @@ export async function recordModelMismatchOnMessage(
   const { sessionId, clientId, mismatch } = args;
   if (!sessionId || !clientId) return;
   if (!mismatch?.selected || !mismatch.actual) return;
-  const ownerScope = captureOwnerScope();
+  let ownerScope = captureOwnerScope();
   try {
     const patched = await deps.enqueue(`model-mismatch:${sessionId}:${clientId}`, () =>
       deps.patchAgentMeta(sessionId, clientId, { modelMismatch: mismatch }),
     );
-    if (!patched || !isOwnerScopeCurrent(ownerScope)) return;
+    ownerScope = turnUsageBroadcastScope(ownerScope, captureOwnerScope);
+    if (!patched || !mayRecordTurnUsage() || !isOwnerScopeCurrent(ownerScope)) return;
     const payload = { sessionId, clientId, modelMismatch: mismatch };
     if (deps.broadcastWithOwnerScope) {
       deps.broadcastWithOwnerScope(payload, ownerScope);
