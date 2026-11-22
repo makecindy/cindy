@@ -12502,6 +12502,7 @@
           "listenPortLabel": "本机监听端口",
           "listenPortPlaceholder": "18747",
           "hint": "在本地网络连接 BlueBubbles，只处理所选对话。连接前，请先停止这些对话里的其他自动回复程序。",
+          "automationDenied": "发送时，macOS 拒绝了 BlueBubbles 控制“信息”的请求。请在运行 BlueBubbles 的 Mac 上查看“系统设置 → 隐私与安全性 → 自动化”。",
           "uncertain": "有 {{count}} 条消息的处理结果待核对。请先查看对话记录，再决定是否重试，避免重复回复。"
         }
       },

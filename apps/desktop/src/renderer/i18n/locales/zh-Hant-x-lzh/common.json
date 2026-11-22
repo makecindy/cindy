@@ -12511,6 +12511,7 @@
           "listenPortLabel": "本機偵聽埠",
           "listenPortPlaceholder": "18747",
           "hint": "於本地網路接 BlueBubbles，僅理所選言談。接入前，須先停此等言談中其餘自動應答程式。",
+          "automationDenied": "發訊時，macOS 禁 BlueBubbles 控制「訊息」。請於運行 BlueBubbles 之 Mac 查「系統設定 → 隱私權與安全性 → 自動化」。",
           "uncertain": "{{count}} 則訊尚待核驗。先查言談記錄，再議重試，勿重答。"
         }
       },
