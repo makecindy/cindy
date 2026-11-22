@@ -24,7 +24,7 @@ import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { t } from '../i18n.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
+import { broadcastBotTaskListChanged, readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
 import { botProfiles } from '../localDb/schema.js';
 import { normalizeRecentWorkdirPath } from '../localDb/ipc/recentWorkdirsCore.js';
 import { createLogger } from '../logger.js';
@@ -335,9 +335,13 @@ async function pruneEmptyLegacyRoutineHistory(ownerRoot: string, assertCurrent: 
     }
     if (neverDispatched.size === 0) return;
     assertCurrent();
-    const { removed } = await getDbClient().tx('bots.pruneEmptyLegacyRoutineHistory',
+    const { removed, botIds } = await getDbClient().tx('bots.pruneEmptyLegacyRoutineHistory',
       { neverDispatchedSessionIds: [...neverDispatched] });
-    if (removed > 0) log.info('removed empty V1 routine runs from teammate history', { removed });
+    if (removed === 0) return;
+    log.info('removed empty V1 routine runs from teammate history', { removed });
+    // A teammate's history already shown elsewhere would still list the removed tasks.
+    assertCurrent();
+    for (const botId of botIds) broadcastBotTaskListChanged(botId);
   } catch (error) {
     log.warn('empty V1 routine run cleanup failed; retries on next start', { error: String(error) });
   }

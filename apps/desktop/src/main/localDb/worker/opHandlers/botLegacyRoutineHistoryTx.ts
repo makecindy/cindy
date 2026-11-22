@@ -13,7 +13,7 @@ import type Database from 'better-sqlite3';
 /** Routine ids are `[A-Za-z0-9_-]` only, so this never matches a reused task's key. */
 const SINGLE_RUN_ROUTE_KEY = /^routine:[A-Za-z0-9_-]+:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const CANDIDATES_SQL = `SELECT l.session_id AS id, l.route_key AS routeKey FROM bot_session_links l
+const CANDIDATES_SQL = `SELECT l.session_id AS id, l.route_key AS routeKey, l.bot_id AS botId FROM bot_session_links l
   JOIN sessions s ON s.id = l.session_id
   WHERE l.role = 'history' AND l.route_key GLOB 'routine:?*' AND l.archived_at IS NOT NULL
     AND s.source = 'bot' AND s.status = 'archived'
@@ -51,15 +51,15 @@ function referenceColumns(db: Database.Database): Array<{ table: string; columns
   return found;
 }
 
-export function botsPruneEmptyLegacyRoutineHistory(db: Database.Database, args: unknown): { removed: number } {
+export function botsPruneEmptyLegacyRoutineHistory(db: Database.Database, args: unknown): { removed: number; botIds: string[] } {
   const evidence = (args as { neverDispatchedSessionIds?: unknown } | null)?.neverDispatchedSessionIds;
   if (!Array.isArray(evidence)) throw new Error('neverDispatchedSessionIds must be an array');
   const neverDispatched = new Set(evidence.filter((id): id is string => typeof id === 'string'));
   return db.transaction(() => {
-    const candidates = (db.prepare(CANDIDATES_SQL).all() as Array<{ id: string; routeKey: string }>)
-      .filter(({ id, routeKey }) => SINGLE_RUN_ROUTE_KEY.test(routeKey) && neverDispatched.has(id))
-      .map(({ id }) => id);
-    if (candidates.length === 0) return { removed: 0 };
+    const rows = (db.prepare(CANDIDATES_SQL).all() as Array<{ id: string; routeKey: string; botId: string }>)
+      .filter(({ id, routeKey }) => SINGLE_RUN_ROUTE_KEY.test(routeKey) && neverDispatched.has(id));
+    const candidates = rows.map(({ id }) => id);
+    if (candidates.length === 0) return { removed: 0, botIds: [] };
     const pending = new Set(candidates);
     const referenced = new Set<string>();
     const ids = JSON.stringify(candidates);
@@ -80,11 +80,13 @@ export function botsPruneEmptyLegacyRoutineHistory(db: Database.Database, args: 
     // The link cascades with its task; delete it explicitly too so no link can outlive it.
     const removeLink = db.prepare('DELETE FROM bot_session_links WHERE session_id = ?');
     let removed = 0;
-    for (const id of candidates) {
+    const botIds = new Set<string>();
+    for (const { id, botId } of rows) {
       if (referenced.has(id) || removeSession.run({ id }).changes !== 1) continue;
       removeLink.run(id);
       removed += 1;
+      botIds.add(botId);
     }
-    return { removed };
+    return { removed, botIds: [...botIds] };
   })();
 }

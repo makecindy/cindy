@@ -655,12 +655,12 @@ describe('Bot named worker transactions', () => {
     // Everything but `empty-unproven` comes with run records saying it never reached the model.
     const args = { neverDispatchedSessionIds: rows.map(([id]) => id).filter((id) => id !== 'empty-unproven') };
 
-    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args })).toEqual({ removed: 1 });
+    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args })).toEqual({ removed: 1, botIds: ['bot-1'] });
     expect(remaining()).toEqual(kept);
     expect(db.prepare("SELECT COUNT(*) FROM bot_session_links WHERE session_id = 'empty-fresh'").pluck().get()).toBe(0);
     expect(db.prepare('SELECT COUNT(*) FROM messages').pluck().get()).toBe(2);
     // Repeating it (another window, the next start) changes nothing.
-    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args })).toEqual({ removed: 0 });
+    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args })).toEqual({ removed: 0, botIds: [] });
     expect(remaining()).toEqual(kept);
   });
 

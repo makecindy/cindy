@@ -1499,7 +1499,7 @@ export type DbTxResultByName = {
   'bots.createChannelLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
-  'bots.pruneEmptyLegacyRoutineHistory': { removed: number };
+  'bots.pruneEmptyLegacyRoutineHistory': { removed: number; botIds: string[] };
   'botGroups.create': undefined;
   'botGroups.setMembers': BotGroupsSetMembersResult;
   'botGroups.delete': { archivedSessionIds: string[] };
