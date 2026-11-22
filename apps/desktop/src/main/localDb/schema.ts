@@ -156,6 +156,7 @@ export const sessions = sqliteTable(
     sdkSessionId: text('sdk_session_id'),
     totalTokenUsage: integer('total_token_usage').notNull().default(0),
     totalCostUsd: real('total_cost_usd').notNull().default(0),
+    totalCostUsdIsApproximate: integer('total_cost_usd_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /** 新版区域金额；legacy total_cost_usd 仍保留为历史 USD 事实。 */
     totalCostAmount: real('total_cost_amount').notNull().default(0),
     totalCostCurrency: text('total_cost_currency', { enum: ['CNY', 'USD'] }),
@@ -1739,6 +1740,8 @@ export const scheduleRuns = sqliteTable(
     /** 新版区域真实费用与订阅价值；旧 USD 列只做历史兼容。 */
     costAmount: real('cost_amount').notNull().default(0),
     estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
+    /** Estimate denominated in the other native currency (USD or CNY). */
+    otherEstimatedValueAmount: real('other_estimated_value_amount').notNull().default(0),
     costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
     costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /**

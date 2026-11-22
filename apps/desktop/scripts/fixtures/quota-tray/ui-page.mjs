@@ -25,7 +25,10 @@ export default {
     await page.locator('.more').click();
     await page.getByRole('button', { name: await ui.t('menubar.ui.settings'), exact: true }).click();
     await page.getByRole('switch', { name: await ui.t('menubar.ui.privacy'), exact: true }).check();
-    await page.locator('select').selectOption('local');
+    const currency = page.getByLabel(await ui.t('menubar.ui.usageCurrency'));
+    await currency.selectOption('USD');
+    await page.getByLabel(await ui.t('menubar.ui.usageScope')).selectOption('local');
+    if (await currency.inputValue() !== 'USD') throw new Error('Changing scope reset the selected usage currency');
     // #11277 review: the last visible source cannot be hidden (Swift panel parity); its switch shakes.
     const sourceSwitches = page.locator('.manage-source input[type=checkbox]');
     const sourceCount = await sourceSwitches.count();

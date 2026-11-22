@@ -484,6 +484,21 @@ it.each([
     accessible: '本轮消耗 $0.25',
   },
   {
+    name: 'two native costs with a same-currency media fee',
+    meta: {
+      userTurnCost: { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' },
+      turnUsageDetails: {
+        userTurnAmounts: [
+          { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' },
+          { amount: 3, currency: 'CNY', approximate: false, kind: 'actual-cost' },
+        ],
+        additionalCosts: [{ amount: 1, currency: 'CNY', approximate: false, kind: 'actual-cost' }],
+      },
+    },
+    visible: '$2.00 + ¥2.00 + ¥1.00',
+    accessible: '本轮消耗 $2.00 + ¥2.00 + ¥1.00',
+  },
+  {
     name: 'subscription value',
     meta: { turnCost: { amount: 0.25, currency: 'USD', approximate: true, kind: 'value-estimate' } },
     visible: '价值 $0.25',
