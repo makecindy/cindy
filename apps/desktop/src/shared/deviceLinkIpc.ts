@@ -13,6 +13,7 @@ export const DEVICE_LINK_INVOKE = {
   SET_KEEP_AWAKE: 'device-link:set-keep-awake',
   /** 控制端本地偏好:切换是否主动控制某个目标设备 */
   SET_DEVICE_CONTROL_ENABLED: 'device-link:set-device-control-enabled',
+  CLOUD_COMPUTER_ENTRY: 'device-link:cloud-computer-entry',
   /** 同账号设备列表(REST 经 main 转发,带 online/busy/开关三态) */
   LIST_DEVICES: 'device-link:list-devices',
   /** 远程连接拓扑:本机连接路径与 RTT 快照(纯本机读,不进隧道) */

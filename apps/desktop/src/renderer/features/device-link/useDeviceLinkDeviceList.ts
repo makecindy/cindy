@@ -381,7 +381,7 @@ export function subscribeDeviceLinkDeviceRemoval(fn: (deviceId: string) => void)
 }
 
 function ensureStarted(): void {
-  if (started) return;
+  if (started || typeof window === 'undefined' || !window.electronAPI?.deviceLink?.onPresenceChanged) return;
   started = true;
   let linkStatus: 'stopped' | 'connecting' | 'online' | null = null;
   let linkStatusRevision = 0;

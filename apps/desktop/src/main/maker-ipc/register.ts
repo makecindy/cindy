@@ -1,6 +1,7 @@
 import { assertSessionTreeOwner, navigateAndRehydrateSessionTree } from './sessionTreeNavigation.js';
 import { bindSessionUsageAccount } from '../usage/sessionUsageOwner.js';
-import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt, contextRecoveryAbortSignal } from './contextRecoveryAssembly.js';
+import { readContextRecoverySessionWithPorts, classifyCodexHistoryWithPorts, commitContextRecoveryWithPorts, replayContextRecoveryWithPorts, contextRecoveryRebuilt } from './contextRecoveryAssembly.js';
+import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.desktop.js';
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
 import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
@@ -244,8 +245,9 @@ import {
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import { redactEventForRenderer } from './rendererEventRedaction.js';
-import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
+import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, pluginEngineSettingsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
+import { onPluginEnginePrefsChanged, readPluginEnginePrefs, updatePluginEnginePrefs } from '../maker-host/plugin-engine-prefs-store.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
 import {
@@ -328,7 +330,7 @@ import { createUserMessageDurableWrite } from './userMessageDurableWrite.js';
 import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResumeHooks.js';
 import { createAutoResumeRuntime } from './autoResumeRuntime.js';
 import { createSessionRuntimeFallback } from './sessionRuntimeFallback.js';
-import { handleSilentStopTurnEndWithPorts } from './silentStopTurnEnd.js';
+import { handleDesktopSilentStopTurnEnd } from './silentStopTurnEnd.desktop.js';
 import { settleSilentStopDoneWithPorts, type SilentStopSettleReason } from './silentStopSettle.js';
 import { surfaceSilentStopFailureWithPorts, type SilentStopFailureCause } from './silentStopFailure.js';
 import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createRememberThinkingIntent, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
@@ -900,6 +902,8 @@ import {
 } from './piIdleReleaseWatcher.js';
 import {
   ackSessionTurnEndedDurable,
+  clearSilentContinuationMarkers,
+  forgetSilentContinuationProjection,
   hasAssistantProgressAfterMessage,
   getRecoveryContextSnapshot,
   markSessionTurnEnded,
@@ -1544,7 +1548,7 @@ import {
   type PendingCredentialSwitchAccessPorts,
 } from './pendingCredentialSwitchAccess.js';
 import { createApplyPiPendingSelection, createPendingCredentialSwitchRouteReader, createPendingCredentialSwitchService } from './pendingCredentialSwitchAssembly.js';
-import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps } from './pendingCredentialSwitch.js';
+import { PendingCredentialSwitchService, type PendingCredentialSwitchDeps, projectDeferredCredentialSwitchIntent } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
   runMemoryChangeWithCodexRestart,
@@ -2643,8 +2647,11 @@ export function broadcastSessionCreated(sessionId: string): void {
  * 收尾分支直接调 markSessionTurnEnded(时序类 review 反馈已三次命中此点,
  * 2026-07-06 收敛为单点)。
  */
-function markTurnEndedAfterPersistDrain(sessionId: string): void {
-  markSessionTurnEndedAfterBarrier(sessionId, drainPersistQueue());
+function markTurnEndedAfterPersistDrain(
+  sessionId: string,
+  event?: Parameters<typeof markSessionTurnEndedAfterBarrier>[2],
+): void {
+  markSessionTurnEndedAfterBarrier(sessionId, drainPersistQueue(), event);
 }
 
 // ─── Orca collab service holder ───────────────────────────────────────────
@@ -3414,6 +3421,7 @@ async function prepareUserMessageForAgent(
   sessionId: string,
   message: unknown,
   logPrefix: 'send' | 'steer',
+  replay?: Parameters<typeof normalizeUserMessage>[2],
 ): Promise<IpcUserMessage> {
   const msg = message as IpcUserMessage;
   // 归一化 image/file 块到真实 fs path (xdt-image:// 反查、F6 base64 落临时文件、
@@ -3422,7 +3430,7 @@ async function prepareUserMessageForAgent(
   // send 与 steer 必须共用这一层：插话是投递模式，不是缩水版内容类型。
   // 过去队列 bug 的根源就是 busy/idle 两条路径各自拼消息，导致附件、mention、
   // 持久化内容不同步；这里把 main 边界也收敛成同一个 helper。
-  const normalized = await normalizeUserMessage(sessionId, msg);
+  const normalized = await normalizeUserMessage(sessionId, msg, replay);
   const sentImageUrls = imageCacheStore.collectSessionImageUrls(msg);
   if (sentImageUrls.length > 0) {
     const mark = await imageCacheStore.markFilesCommitted(sentImageUrls);
@@ -5907,9 +5915,12 @@ async function handleSilentStopTurnEnd(
   session: NonNullable<ReturnType<Maker['getSession']>>,
   doneAt: number,
   turnLeaseId: string,
-  turnOrigin?: SendOrigin,
+  turnOrigin: SendOrigin | undefined,
+  owner: Pick<ReturnType<typeof getActiveAppSession>, 'mode' | 'dataOwnerId'>,
 ): Promise<void> {
-  await handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, {
+  await handleDesktopSilentStopTurnEnd(session, doneAt, turnLeaseId, turnOrigin, {
+    owner,
+    getBoundSession: () => sessionBindings.getSession(session.id),
     silentStopTurnLeaseGate, agentInputCoordinatorHolder, silentStopAutoResumeGuard, sessionListActivityTracker,
     productTurnWallClockTracker, advanceRuntimeRecoveryNotice, createDbMessage, settleSilentStopDone,
     surfaceSilentStopExhaustedBanner, log,
@@ -6052,7 +6063,10 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
         sessionTurnActivityTracker.deleteSession(session.id);
         sessionListActivityTracker.deleteSession(session.id);
         sessionTurnBoundaryGenerationById.delete(session.id);
-        markSessionTurnEnded(session.id);
+        markSessionTurnEnded(session.id, undefined, {
+          sessionInstanceId: session.instanceId, sessionTurnGeneration: session.getTurnGeneration(),
+        });
+        forgetSilentContinuationProjection(session.id, session.instanceId);
       },
       notifyGoalIdle: () => notifyGoalIdleAfterTurnSettled(session.id),
       cancelGoalResume: () => goalDeferredResumeCancelObserver?.(session.id),
@@ -6063,6 +6077,7 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
 /** Called only when the outgoing Maker is actually discarded, not on any error status. */
 export function releaseSessionBindingsForOwnerBoundary(): void {
   sessionBindings.releaseForOwnerBoundary();
+  clearSilentContinuationMarkers();
 }
 
 let pluginTaskServiceForCurrentOwner: (() => PluginTaskService) | null = null;
@@ -6172,7 +6187,7 @@ const settlePluginTaskTerminal: NonNullable<SessionEventDependencies['onPluginTa
     }
   };
 
-const sessionEventDependencies: SessionEventDependencies = {
+const sessionEventDependencies: Omit<SessionEventDependencies, 'handleSilentStopTurnEnd'> = {
   onPluginTaskTerminal: settlePluginTaskTerminal,
   onSuccessfulProductTurn: finishProductTurn,
   saveRemoteNativeHistory: (sessionId, data, anchor, persisted) =>
@@ -6269,9 +6284,6 @@ const sessionEventDependencies: SessionEventDependencies = {
   },
   get agentInputCoordinatorHolder() {
     return agentInputCoordinatorHolder;
-  },
-  get handleSilentStopTurnEnd() {
-    return handleSilentStopTurnEnd;
   },
   get isRemoteAuthRetryErrorEvent() {
     return isRemoteAuthRetryErrorEvent;
@@ -6407,6 +6419,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   };
   const ownerDb = getCurrentDbClientSnapshot();
   const ownerEventDependencies = Object.create(sessionEventDependencies) as SessionEventDependencies;
+  const { mode, dataOwnerId } = getActiveAppSession();
+  const continueSilentStop: SessionEventDependencies['handleSilentStopTurnEnd'] =
+    (runtime, doneAt, turnLeaseId, origin) => handleSilentStopTurnEnd(runtime, doneAt, turnLeaseId, origin, { mode, dataOwnerId });
+  Object.defineProperty(ownerEventDependencies, 'handleSilentStopTurnEnd', { value: continueSilentStop });
   Object.defineProperty(ownerEventDependencies, 'onPluginTaskTerminal', {
     value: (...args: Parameters<NonNullable<SessionEventDependencies['onPluginTaskTerminal']>>) => {
       if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;
@@ -6652,6 +6668,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pendingWorkerQuestion: id => isKnownOrcaWorkerSession(id) ? hasPendingWorkerQuestion(id) : undefined,
   }));
   setSessionRuntimeCleanup(createSessionRuntimeCleanup({
+    clearDeferredCredentialSelection: sessionId => pendingCredentialSwitchHolder?.clearDeferredSelection(sessionId),
     cancelPendingRemoteStart,
     discardWorkingDirectoryRecovery: (sessionId) => workingDirectoryRecovery.discard(sessionId),
     broadcastSessionRuntimeProjection,
@@ -6798,6 +6815,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       read: pluginEngineRemoteUse,
       set: setPluginEngineRemoteUse,
       onChange: (listener) => onRemoteProviderAccessChanged(() => listener()),
+    },
+    settings: {
+      read: readPluginEnginePrefs,
+      update: updatePluginEnginePrefs,
+      onChange: onPluginEnginePrefsChanged,
+    },
+    isCurrentOwner: (stamp) => {
+      const current = getActiveDataOwnerPushStamp();
+      return !isAppSessionBoundaryPending() && stamp.dataOwnerId === current.dataOwnerId
+        && stamp.ownerGeneration === current.ownerGeneration;
     },
   });
 
@@ -11391,7 +11418,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     describePluginEngine: (providerId) => {
       const key = pluginEngineKeyFromProviderId(providerId);
-      return key ? getPluginHarnessRegistry().list().find((harness) => harness.key === key)?.name ?? null : null;
+      // The name the user sees for it (their own display name when they gave one).
+      return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
     },
     getSessionRow: readAgentSwitchSessionRow,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
@@ -11403,6 +11431,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applyAgentSwitchToDb: createAgentSwitchDbApply(applyAgentSwitchToSessionRow, resolveConfiguredContextWindow),
     setSessionProvider,
     supersedePendingCredentialSwitch: clearPendingCredentialSwitchForSession,
+    projectDeferredCredentialSwitchIntent: (sessionId) =>
+      projectDeferredCredentialSwitchIntent(getPendingCredentialSwitchTarget(sessionId)),
     insertBoundaryMessage: createAgentSwitchBoundaryInsert(createDbMessage),
     applyResumeFallbackAtomically: applyAgentSwitchResumeFallbackAtomically,
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
@@ -11738,7 +11768,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (signal?.aborted) throw new Error('Scheduled model selection aborted');
       const result = await applySessionRuntimeSelection(sessionId, route.model, route.providerId,
         { effort: route.effort, fastMode: route.fastMode },
-        { source: 'user', configStaged: true, sessionLockHeld: true, applyingUserSelectionOnSend: true });
+        { source: 'user', configStaged: true, sessionLockHeld: true, applyingUserSelectionOnSend: true }).catch(error => {
+        if (isCredentialModeSwitchBusyError(error)) {
+          throw new ScheduledModelSelectionBusyError('Scheduled model selection deferred', { cause: error });
+        }
+        throw error;
+      });
       if (result.deferred) throw new ScheduledModelSelectionBusyError('Scheduled model selection deferred');
       if (result.superseded || runtimeSelectionRequiresModelWindowConfirmation(result)) {
         throw new Error('Scheduled model selection could not be applied');
@@ -14122,7 +14157,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setSessionOpeningModelAdmission(async body => {
     // 插件引擎任务不在内置模型目录里：按本机此刻提供的插件引擎准入(docs/plans/acp-plugin-bridge.md)。
     if (isPluginEngineKind(body.agentKind)) {
-      return admitPluginEngineSession(body, getPluginHarnessRegistry().list(), pluginEngineModelsOf);
+      return admitPluginEngineSession(body, getPluginHarnessRegistry().list(), pluginEngineModelsOf, pluginEngineSettingsOf);
     }
     const execution = await resolveSessionExecution({
       agentKind: body.agentKind, model: body.model, providerId: body.providerId,
@@ -17059,31 +17094,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const currentDeviceId = await readSessionAgentDeviceId(sessionId);
     if (route.agentDeviceId === undefined && currentDeviceId) return;
     const pluginEngineChanges = route.agentKind === 'acp' && currentProviderId !== undefined && currentProviderId !== route.providerId;
-    if (route.agentKind !== currentAgentKind || pluginEngineChanges || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId) {
-      await performSessionAgentSwitch(agentSwitchDeps, {
+    const samePluginEngine = route.agentKind === 'acp' && currentAgentKind === 'acp'
+      && !pluginEngineChanges && currentDeviceId === (route.agentDeviceId ?? null);
+    if ((samePluginEngine && agentSwitchPending.get(sessionId))
+      || (!samePluginEngine && (route.agentKind !== currentAgentKind || pluginEngineChanges
+        || currentDeviceId !== (route.agentDeviceId ?? null) || currentDeviceId))) {
+      const switched = await performSessionAgentSwitch(agentSwitchDeps, {
         sessionId, targetAgentKind: route.agentKind, model: route.model,
         providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
         ...(route.agentDeviceId !== undefined ? { agentDeviceId: route.agentDeviceId } : {}),
         configStaged: true,
       });
-      const intent = agentSwitchPending.get(sessionId);
-      return intent ? {
-        ...route, agentKind: intent.targetAgentKind, model: intent.model,
-        providerId: intent.providerId ?? null,
-        agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
-      } : route;
-    } else {
-      const result = await applyWithVerifiedModelWindow((confirmedContextWindow) =>
-        applySessionRuntimeSelection(sessionId, route.model, route.providerId,
-          { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode,
-            ...(confirmedContextWindow === undefined ? {} : { confirmedContextWindow }) },
-          { source: 'user', deferWhileRunning: true, sessionLockHeld: true, configStaged: true }));
-      // SET_MODEL stages local user selections without returning their provider.
-      // The pending intent already contains the validated/rebound connection.
-      const intent = result.deferred ? agentSwitchPending.get(sessionId) : undefined;
-      return { ...route, providerId: result.effectiveProviderId === undefined
-        ? (intent ? intent.providerId ?? null : route.providerId) : result.effectiveProviderId };
+      if (switched.sameEngineSuperseded) {
+        throw new ScheduledModelSelectionBusyError('Saved companion route was superseded');
+      }
+      if (!samePluginEngine) {
+        const intent = agentSwitchPending.get(sessionId);
+        return intent ? {
+          ...route, agentKind: intent.targetAgentKind, model: intent.model,
+          providerId: intent.providerId ?? null,
+          agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
+        } : route;
+      }
+      // Reselecting the current plugin clears any older switch before applying its model.
     }
+    const result = await applyWithVerifiedModelWindow((confirmedContextWindow) =>
+      applySessionRuntimeSelection(sessionId, route.model, route.providerId,
+        { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode,
+          ...(confirmedContextWindow === undefined ? {} : { confirmedContextWindow }) },
+        { source: 'user', deferWhileRunning: true, sessionLockHeld: true, configStaged: true }));
+    // SET_MODEL stages local user selections without returning their provider.
+    // The pending intent already contains the validated/rebound connection.
+    const intent = result.deferred ? agentSwitchPending.get(sessionId) : undefined;
+    return { ...route, providerId: result.effectiveProviderId === undefined
+      ? (intent ? intent.providerId ?? null : route.providerId) : result.effectiveProviderId };
   };
   followMovedCindyAutoRoutesNow = async () => {
     const owner = getActiveAppSession();
@@ -18267,8 +18311,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     markOrcaRoleIfNeeded,
     broadcastSessionCreated,
-    prepareSendUserMessage: (sessionId, message) =>
-      prepareUserMessageForAgent(sessionId, message, 'send'),
+    prepareSendUserMessage: (sessionId, message, replay) =>
+      prepareUserMessageForAgent(sessionId, message, 'send', replay),
     materializeDirectSendOssAttachments,
     captureCindyLearnInvocation: createCindyLearnInvocationCapture({
       getSession: (sessionId) => maker.getSession(sessionId),
@@ -18709,10 +18753,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getCoordinator: () => agentInputCoordinatorHolder,
       resetWireNotes: id => wireNoteMemory.reset(id),
     }, sessionId),
-    getRecoveryAbortSignal: sessionId => contextRecoveryAbortSignal({
+    getRecoveryAbortSignal: (sessionId, claim) => desktopContextRecoveryAbortSignal({
       getCoordinator: () => agentInputCoordinatorHolder,
       resetWireNotes: id => wireNoteMemory.reset(id),
-    }, sessionId),
+      enqueueDurableWrite,
+      broadcastMessageRow,
+      isCurrentTurn: turn => {
+        const session = sessionBindings.getSession(sessionId);
+        return session?.instanceId === turn.instanceId && session.getTurnGeneration() === turn.generation;
+      },
+      log,
+    }, sessionId, claim),
     // PI provider compat 自愈：上游拒收可选请求字段后，把「该 provider/model 关掉该字段」
     // 学进 models.json compat 的覆盖存储；重建会话时 writeModelsJson 合并它。
     readPiNativeCompatOverride: (providerId, modelId, routeKey) =>
@@ -19371,6 +19422,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return false;
     }
     if (!liveSessionIdle) return false;
+    const endedTurn = { sessionInstanceId: sess.instanceId, sessionTurnGeneration: sess.getTurnGeneration() };
     // The vendor is authoritative that this turn is over, but no terminal event
     // reached the host. Seal persist state before releasing the boundary;
     // otherwise its last progress line is later treated as a legacy final
@@ -19405,8 +19457,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     notifyGoalIdleAfterTurnSettled(sessionId);
     try {
       // The marker write is best-effort and ordered behind pending message
-      // persistence. It may retry/settle after an owner boundary is available.
-      markTurnEndedAfterPersistDrain(sessionId);
+      // persistence. Only this live Session can settle its continuation.
+      markTurnEndedAfterPersistDrain(sessionId, endedTurn);
       noteClaudeSessionTurnState(sessionId, false);
       settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
       settlePendingSessionRuntimeControlHolder?.(sessionId, `reconcile:${source}`);
@@ -19841,6 +19893,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isTurnRunning: (sessionId) => {
       const sess = getStableSessionForTurnBoundary(sessionId);
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
+    },
+    // Read on every queue projection: stay quiet while the account owner is being replaced.
+    supportsSameTurnSteer: (sessionId) => {
+      try {
+        const sess = sessionBindings.getSession(sessionId) ?? maker.getSession(sessionId);
+        return sess ? sess.capabilities.sameTurnSteer.supported : null;
+      } catch {
+        return null;
+      }
     },
     isLiveTurnRunning: (sessionId) => {
       const lookup = lookupStableSessionForTurnBoundary(sessionId);
@@ -23233,6 +23294,7 @@ export function registerComputerUseIpc(): void {
       platform: process.platform,
       showGuide: options.showGuide,
       appBundlePath: getComputerDriverAppBundlePath(),
+      systemVersion: process.getSystemVersion?.(),
     });
     try {
       // Permission snapshots are mutable TCC state and cannot be accepted from

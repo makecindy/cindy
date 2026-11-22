@@ -21,11 +21,34 @@ export default {
     'same-account-twice-here': { about: 'Two connections of one login on this computer: one entry in both surfaces' },
     'hidden-provider': { about: 'A provider hidden from the picker is folded under 已隐藏 at the end of the list, found by search, and still selectable' },
     'hidden-provider-settings': { about: 'Settings folds hidden and disabled providers into two groups that start closed; each detail says what the state means and how to undo it' },
+    'plugin-providers': { about: 'Providers that plugins offer are listed after this computer’s own with a plugin badge; hidden and turned-off ones go into the same two groups, and the detail offers what an ordinary provider does' },
   },
   async ready(page) {
     await page.locator('[data-listed-source]').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'plugin-providers') {
+      const rows = page.locator('[data-testid="plugin-engine-provider-row"]');
+      await rows.first().waitFor();
+      assert.equal(await rows.count(), 1, 'only the plugin provider still in the model picker sits in the regular list');
+      assert.equal(await page.locator('[data-testid="plugin-engine-provider-detail"]').count(), 0, 'an ordinary provider stays the default selection');
+      await ui.capture('plugin-row-in-list');
+      assert.ok(await rows.first().locator('img').count(), 'the row draws the plugin’s own icon when it has one');
+      await rows.first().click();
+      await page.locator('[data-testid="provider-usage-module"]').waitFor();
+      assert.ok(await page.locator('[data-testid="plugin-engine-provider-detail"] img').count(), 'so does the detail header');
+      await ui.capture('plugin-provider-detail');
+      await page.locator('[data-provider-rail-group="suspended"] > button').click();
+      await page.locator('[data-plugin-engine="zcode-plugin:zcode"]').click();
+      await page.getByText(await ui.t('settings.providers.plugin.suspendedBanner')).waitFor();
+      assert.equal(await page.locator('[data-testid="plugin-engine-models"]').count(), 0, 'a turned-off plugin provider lists no models');
+      await ui.capture('plugin-provider-disabled');
+      await page.locator('[data-provider-rail-group="hidden"] > button').click();
+      await page.locator('[data-plugin-engine="agy-plugin:agy"]').click();
+      await page.getByText(await ui.t('settings.providers.plugin.hiddenBanner')).waitFor();
+      await ui.capture('plugin-provider-hidden');
+      return;
+    }
     const settingsEntries = (await page.locator('[data-listed-source]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-listed-source')))).sort();
     await page.locator('[data-picker] button').first().click();
     await page.getByRole('listbox').waitFor();

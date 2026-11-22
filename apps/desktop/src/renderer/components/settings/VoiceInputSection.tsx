@@ -1,3 +1,4 @@
+import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
 import { voiceInputSettings } from './VoiceInputSection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
@@ -1996,7 +1997,12 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     label={t('settings.voiceInput.permissions.accessibility.label')}
                     granted={permissions.accessibility.ok}
                     onGrant={() => void requestPermission('accessibility')}
-                    tooltip={t('settings.voiceInput.permissions.accessibility.tooltip')}
+                    tooltip={[
+                      t('settings.voiceInput.permissions.accessibility.tooltip'),
+                      !permissions.accessibility.ok && usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease)
+                        ? t('macControlPermission.selectApp', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+                        : '',
+                    ].filter(Boolean).join(' ')}
                   />
                 )}
             </span>

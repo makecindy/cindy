@@ -512,6 +512,13 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     } else if (clearAvatarRefs) {
       db.prepare("DELETE FROM media_refs WHERE ref_kind = 'bot-avatar' AND ref_id = ?").run(id);
     }
+    // The canonical chat is the buddy. A later rename must replace the name
+    // captured when the template was installed, or hand-off chips keep the old one.
+    if (p.displayName !== undefined && expectString(p.displayName, 'displayName') !== current.displayName) {
+      db.prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id IN
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'canonical' AND archived_at IS NULL)`)
+        .run(expectString(p.displayName, 'displayName'), now, id);
+    }
     if (changed) {
       db.prepare(`INSERT INTO bot_profile_versions
         (id, bot_id, version, identity_source, capabilities_json, created_at)

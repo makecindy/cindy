@@ -3,8 +3,8 @@ import { isLibraryExtraDirSlot } from './extraDirsValidator.js';
 
 import { acpHarnessKeyFromProviderId, type CreateSessionOptions, type EngineKind, type WorkspaceKind } from '@cindy/maker-core';
 
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
-import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 
 /**
  * A caller-supplied dialogue session id becomes a path segment under the app-managed
@@ -154,16 +154,16 @@ export function readCreateSessionOpts(
     }
   }
   if (agentKind === 'acp') {
-    // Plugin engines are chosen through their harness id. They run on this computer, or on another
-    // computer of the same account that opened the engine for remote use (never SSH or a share).
+    // Plugin engines are chosen through their harness id. They run on this computer, on another
+    // computer of the same account, or on a direct provider share (never SSH or invalid peer ids).
     if (!acpHarnessKeyFromProviderId(typeof body.providerId === 'string' ? body.providerId : null)) {
       throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
     }
     if (typeof body.remoteHostId === 'string' && body.remoteHostId.trim()) {
       throwIpcError('INVALID_PARAMS', 'plugin engine tasks do not run in SSH workspaces');
     }
-    if (typeof body.agentDeviceId === 'string' && isProviderShareAgentDeviceId(body.agentDeviceId)) {
-      throwIpcError('INVALID_PARAMS', 'plugin engines are only offered by your own computers');
+    if (typeof body.agentDeviceId === 'string' && (isSharedTaskPeer(body.agentDeviceId) || parseProviderSharePeer(body.agentDeviceId))) {
+      throwIpcError('INVALID_PARAMS', 'invalid plugin engine target device');
     }
   }
   // 模型组凭据只由 main 内部的入口交给 bootstrapSession，界面与其他设备传来的一律不认。

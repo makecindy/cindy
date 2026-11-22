@@ -4640,8 +4640,11 @@ function ToolGroupCard({
  * 媒体条 / 结果预览,再点收起。展开态走共享进程内记忆(blockId 前缀 `toolrow-`,
  * 与组级 `tools-` key 空间天然隔离)。无详情可展的行不显示 chevron、不可点击。
  */
-type ToolDetailActions = Pick<MessageActions,
-  | 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia'>;
+type ToolDetailActionKey = 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia';
+type ToolDetailActions = Pick<MessageActions, ToolDetailActionKey>;
+/** Hand-picked tool actions must list every key: a dropped optional callback
+ * silently disables it for those rows (process images stopped auto-loading). */
+type ListedToolDetailActions = { [K in ToolDetailActionKey]: MessageActions[K] };
 
 function ToolActionRow({
   actions,
@@ -5243,12 +5246,14 @@ function WorkGroupCard({
   );
   // Tool detail rows do not consume message action/queue/share busy state.
   // Keep their callbacks and streaming flag stable across those unrelated updates.
-  const toolActions = useMemo(() => ({
+  const toolActions = useMemo((): ListedToolDetailActions & Pick<MessageActions, 'isSessionStreaming'> => ({
     onLoadToolInput: actions.onLoadToolInput,
     onRetryImageDelivery: actions.onRetryImageDelivery,
     onOpenPayload: actions.onOpenPayload,
+    onResolveRemoteMedia: actions.onResolveRemoteMedia,
     isSessionStreaming: actions.isSessionStreaming,
-  }), [actions.onRetryImageDelivery, actions.onLoadToolInput, actions.onOpenPayload, actions.isSessionStreaming]);
+  }), [actions.onRetryImageDelivery, actions.onLoadToolInput, actions.onOpenPayload,
+    actions.onResolveRemoteMedia, actions.isSessionStreaming]);
   const startedAtIso = isStreaming && item.startedAtMs !== undefined
     ? new Date(item.startedAtMs).toISOString()
     : undefined;

@@ -84,7 +84,7 @@ export function createHostSessionMovePorts(deps: {
 }): {
   move: {
     lookupSessionWorktreeBinding: SessionWorktreeBindingLookup;
-    closeIdleSessionForMove(sessionId: string): Promise<boolean>;
+    closeIdleSessionForMove(sessionId: string, storedAgentKind: string): Promise<boolean>;
     broadcastRecentWorkdirsChanged(path: string): void;
   };
   liveCcSessionBridge: LiveCcSessionBridge;
@@ -96,18 +96,20 @@ export function createHostSessionMovePorts(deps: {
       // suppressed. The Host also counts a turn whose rows are still settling (the desktop reads the
       // runtime only): closing then could race those writes. The idle runtime closes through the
       // executor, which lets go of the instance (interactions, binding, environment notes) first.
-      closeIdleSessionForMove: async sessionId => {
+      closeIdleSessionForMove: async (sessionId, storedAgentKind) => {
         const maker = deps.getMakerIfReady();
-        if (deps.isTurnRunning(sessionId) || maker?.getSession(sessionId)?.isTurnRunning()) return false;
-        if (maker) await withRehydrateCloseSuppressed(sessionId, () => deps.closeRuntime(sessionId));
+        const live = maker?.getSession(sessionId);
+        if (deps.isTurnRunning(sessionId) || live?.isTurnRunning()) return false;
+        if (maker && storedAgentKind !== 'cc') {
+          await withRehydrateCloseSuppressed(sessionId, () => deps.closeRuntime(sessionId));
+        }
         return true;
       },
       broadcastRecentWorkdirsChanged: createRecentWorkdirsChangedPush(deps.publish),
     },
     // As register.ts setLiveCcSessionBridge: a Claude task's resume id in memory, and Maker closing its
-    // runtime so the old directory's CLI stops writing the transcript being copied. The desktop does not
-    // check for a running turn here; Maker's close settles an unfinished turn with its terminal before it
-    // drops its listeners, so this goes to Maker itself and the executor still sees that terminal.
+    // runtime so the old directory's CLI stops writing the transcript being copied. The shared move check has
+    // already verified this turn is idle. Keep the handle until relocation reads its live resume id.
     liveCcSessionBridge: {
       resolveSdkSessionId: sessionId =>
         deps.getMakerIfReady()?.listActiveSessions().find(session => session.id === sessionId)?.sdkSessionId ?? null,

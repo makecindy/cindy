@@ -5,9 +5,12 @@ import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDef
 import { setNewMakerDraftCache, syncNewMakerDraftCache } from '../../maker-host/newMakerDefaultsCache';
 
 const host = vi.hoisted(() => ({ owner: 'owner:1', enabled: true, connected: true, agents: ['codex'],
-  enableSecond: false, providers: vi.fn(), remote: vi.fn(), pluginEngines: vi.fn((): unknown[] => []) }));
+  enableSecond: false, providers: vi.fn(), remote: vi.fn(), remotePlugin: vi.fn(), pluginEngines: vi.fn((): unknown[] => []) }));
 vi.mock('../pluginEnginesIpc.js', () => ({ listPluginEngineViews: host.pluginEngines }));
-vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readRemoteProviderRoute: host.remote }));
+vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({
+  readRemoteProviderRoute: host.remote,
+  readRemotePluginEngines: host.remotePlugin,
+}));
 vi.mock('../../maker-host/index.js', () => ({ getMakerIfReady: () => ({ listAvailableAgents: () => host.agents }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: host.providers }),
@@ -28,6 +31,7 @@ beforeEach(() => {
   host.enableSecond = false;
   host.pluginEngines.mockReset();
   host.pluginEngines.mockReturnValue([]);
+  host.remotePlugin.mockReset();
   host.owner = 'owner:1'; host.enabled = true; host.connected = true; host.agents = ['codex'];
   host.providers.mockImplementation(async () => [{ id: 'openai', source: 'builtin', connected: host.connected, agents: ['codex'], routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
     models: { codex: ['luna', 'sol'].map(model => ({ id: model, status: 'active', mode: 'chat', defaultEnabled: true,
@@ -46,6 +50,25 @@ it('validates the offered companion model on its host without adding it to appli
   expect(await inspectAppDefaultModel()).toMatchObject({ current: route, available: [] });
   host.pluginEngines.mockReturnValue([]);
   expect(await validateTaskModel(plugin)).toBe(false);
+});
+
+// 依据：伙伴允许选择同账号远程电脑或好友分享的插件供应商，不要求本机安装同名插件。
+// 覆盖缺口：resolveAvailableTaskModels 此前对带 agentDeviceId 的 acp 路由一律返回 null。
+// 最小失败输入：本机无插件，校验 share:friend 与 other-device 上的 acp 路由；tier：unit。
+it('validates remote and shared plugin engine routes against the target device catalog', async () => {
+  const shared = { harness: 'acp' as const, agentDeviceId: 'share:friend', providerId: 'acp-plugin:sample:engine', model: 'chosen', effort: 'high', fastMode: false };
+  const badEffort = { ...shared, effort: 'max' };
+  const missing = { ...shared, agentDeviceId: 'other-device', model: 'missing' };
+  host.connected = false;
+  host.remotePlugin.mockImplementation(async (deviceId: string) => {
+    if (deviceId === 'share:friend') {
+      return [{ providerId: shared.providerId, availability: { state: 'available' }, models: [{ id: 'chosen', efforts: ['high'] }] }];
+    }
+    throw new Error('[REMOTE_AGENT_UNAVAILABLE] unavailable');
+  });
+  expect(await resolveAvailableTaskModels([shared, badEffort, missing])).toEqual([shared, null, null]);
+  expect(host.remotePlugin.mock.calls).toEqual([['share:friend'], ['other-device']]);
+  expect(host.pluginEngines).not.toHaveBeenCalled();
 });
 
 describe('Bot control of the real Cindy default', () => {

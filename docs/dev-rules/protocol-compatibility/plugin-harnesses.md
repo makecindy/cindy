@@ -92,6 +92,52 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 
 实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx` 与 `PluginEngineRemoteUse.test.tsx`。
 
+## 插件引擎进入模型供应商列表（2026-11-22）
+
+这台电脑上已启用、已批准的插件声明的引擎，同时列在「设置 → 模型供应商」左栏(名字后带「插件」标识)，插件停用或
+卸载后随引擎列表消失。只在视图与设置层和普通供应商并列：`@cindy/model-providers` 的类型、普通供应商的目录、
+排序与停用存储(`model-disable-prefs.json`、供应商顺序、`local-codex-provider-prefs.json`)都不改，不增加 manifest
+字段、权限行、批准状态或安装迁移，存量插件影响：无。产品约定见[供应商设置](../../product-rules/provider-settings.md)。
+
+- **设置存储**：按账号的 `owners/<账号>/plugin-engine-prefs.json`，
+  `{ engines: { "<插件实例>:<引擎 id>": { name?, hidden?, suspended?, disabledModels? } } }`，只记用户改过的项，
+  恢复默认即删除对应字段(整项为空时删除键，文件为空时删除文件)。显示名 ≤64 字符，关闭的模型 ≤200 个、id ≤256 字符，
+  最多 256 个引擎；文件缺失、损坏或形状不对按「没有设置」读取，不会把引擎读成停用。插件停用再启用保留设置。
+  「允许被远程调用」仍在 `remote-provider-access-prefs.json`，不搬动。
+- **写入通道**：`maker:set-plugin-engine-prefs`，正文 `{ key, name?: string | null, hidden?, suspended?, models?: { ids, disabled } }`，
+  只改出现的字段，返回写入后的引擎视图(插件已不在时为 `null`)。只在本机窗口可用，不进 device-link allowlist；
+  device-link 调用 `PERMISSION_DENIED`，形状或长度不对、关闭引擎没列出的模型 `INVALID_PARAMS`，给已不在列表里的
+  引擎写入新设置 `NOT_FOUND`(撤销已有设置始终允许)。写入后照常经 `maker:plugin-engines-changed` 推完整列表。
+- **`maker:list-plugin-engines` 的变化**(既有字段的新取值 + 追加可选字段，旧端无需升级)：
+  - 有模型被关闭时，`defaultModelAllowed: false` 禁止回退到由引擎自行决定的默认模型。默认模型可能选中被关闭的模型，
+    因此本机和远程执行端也拒绝该请求。恢复全部模型后恢复原默认行为。
+  - 用户起的显示名直接作为 `name`；关掉的模型不在 `models` 里；停用的引擎报 `availability: { state: 'unavailable', reason: 'suspended' }`
+    (不带 `message`，避免旧手机把主进程语言的文案原样显示)。旧手机与旧电脑本来就把 `unavailable` 的引擎排除在新任务之外。
+  - 追加可选 `hidden: true`、`suspended: true`。新版桌面与手机的模型选择器不列 `hidden` 的引擎(当前任务已选着它时保留)；
+    旧端不认识 `hidden`，照旧列出，隐藏只改陈列，不构成越权。
+  - 追加可选 `declaredName`(有显示名时的插件原名)与 `disabledModels`(关掉的模型)，只给本机窗口的设置页；
+    device-link 回包(手机、同账号其他电脑、分享受邀者)在 `remotePluginEngineViews` 去掉这两项。
+  - 没有任何设置时回包与此前逐字段一致，不多出字段。
+- **借用方不受主人的「隐藏」影响**：另一台电脑或受邀者借用引擎时(`parseOfferedPluginEngines`、
+  renderer `remotePluginEngineChoices`)去掉 `hidden`、`suspended`、`declaredName`、`disabledModels`；停用的引擎因
+  `unavailable` 不再开放。
+- **准入**(在装着插件的电脑上判定，前端不列出不算边界)：停用的引擎与关掉的模型不能开新任务、不能把任务换过去、
+  不能用于自动化与协同 Worker(`admitPluginEngineSession` / `admitPluginEngineSwitchTarget`)；停用的引擎不对同账号
+  其他电脑和分享受邀者开放(`isPluginEngineOfferedRemotely` / `isPluginEngineOfferedToGuests`)，远程调用开关原样保留，
+  启用后恢复；关掉的模型在执行端的 `pluginEngines.isOffered`(`remote-agent/host/service.ts`)同样拒绝，与
+  `remoteModelAccess` 的模型范围叠加。隐藏不参与任何准入。本机已在运行的任务不被打断；其他电脑与受邀者的任务沿用既有的逐轮实时复核，
+  停用或关掉模型后从下一轮起被拒绝(与关闭「允许被远程调用」相同)。
+- **中转**：走既有 invoke 帧与既有只读 channel，没有新帧、新 channel 进 allowlist 或恢复语义变化，官方与自建中转
+  原样转发回包里多出的可选字段，无需修改；未做互通重跑，依据是 device-link 包与 allowlist 均无改动。
+- **暂未提供**：与普通供应商混排的拖动排序、模型选择器里的「已隐藏」展开区、设置页列出同账号其他电脑上的插件引擎、
+  供应商组与引擎切换。
+
+实现见 `maker-host/plugin-engine-prefs-store.ts`、`maker-ipc/pluginEnginesIpc.ts`、`maker-ipc/pluginEngineSessionAdmission.ts`、
+`maker-host/pluginEngineRemoteUse.ts`、renderer `components/settings/PluginEngineProviders.tsx` 与 mobile
+`session/pluginEngines.ts`；回归见 `plugin-engine-prefs-store.test.ts`、`pluginEnginesIpc.test.ts`、
+`pluginEngineSessionAdmission.test.ts`、`PluginEngineProviders.test.tsx`、`providersSectionDeepLink.test.tsx`、
+`PluginEnginesSection.test.tsx` 与 mobile `pluginEngines.test.ts`。
+
 ## 引擎账号用量
 
 执行引擎通过 `PUT /harnesses` 的可选布尔标志 `reportsUsage: true` 表示其主 JSON-RPC worker
@@ -104,3 +150,26 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 同账号配对设备通过只读 `maker:get-plugin-engine-usage(key)` 查询执行电脑；SSH、分享访客与未配对调用没有账号用量入口。
 旧插件继续使用现有状态与模型，新插件在旧 Host 上仍可在自己的设置页获取用量。旧 Host 缺少该 channel 时控制端按无数据处理。
 既有 Device Link invoke 帧和自建中转可原样转发，无需扩展中转协议。该变更不增加 manifest 权限、批准或安装迁移。
+
+## 插话（2026-11-22）
+
+Cindy 与引擎入口之间的 ACP wire 追加一个可选扩展，沿用生态已有约定（claude-agent-acp 0.109、codex-acp、oh-my-pi），不自创方法：
+Agent 在 `initialize` 结果**顶层** `_meta.steering.supported === true` 时，`sameTurnSteer` 为支持，运行中的插话发请求
+`_session/steering`，参数 `{ sessionId, prompt: ContentBlock[], _meta: { steering: { idleBehavior: 'promptRequired' } } }`。
+结果 `injected` 为受理；`promptRequired` 按「没有进行中的回合」交给宿主改为下一轮发送；`startedNewTurn`（不认识
+`idleBehavior` 的旧适配器自己开了一轮）按受理处理，输出按回合外工作显示；其他结果或 JSON-RPC 错误按未受理处理；
+已发出但超时或连接断开按「送达未知」（`delivery uncertain`）交给宿主，队首保留并暂停，不重发。Agent 声明了却回
+method-not-found 时本会话撤回插话能力，之后的插话排队。
+
+兼容：没有声明的 Agent（含全部存量插件引擎）`sameTurnSteer` 仍不支持。旧版 Cindy 从不发送该请求。
+远程与分享任务的能力沿用既有 `negotiatedCapabilities` 状态带回控制端，`steer` 沿用既有 remote-agent 方法与受邀者实时复核，
+新旧控制端与被控端任意组合都按被控端握手结果决定是否插话；不新增 manifest 字段、权限、批准、channel 或中转帧。
+实现见 maker-core `agents/acp/protocol.ts`、`capabilities.ts`、`session.ts`；回归见 `acp-session.test.ts`「AcpSession same-turn steering」。
+
+不支持插话时的呈现（同日）：输入协调器（Desktop 与 Node Host 共用）在会话 `sameTurnSteer` 不支持时，界面发起的插话不再
+交给引擎报 `UNSUPPORTED_CAPABILITY`，而是按「这一轮结束后发送」排队（队列行插话移到队首，输入框插话排到队尾），不显示错误；
+控制面严格插话（`fallbackToTurn: false`）照旧返回未插入。`AgentInputProjection` 追加可选 `steerUnsupported?: boolean`，
+只在确知不支持时为 `true`，经既有输入 projection 推给本机界面、控制端与手机。新界面据此隐藏插话入口（输入框按排队发送、
+排队消息菜单不出现插话），队列等待时在消息流末尾显示一行说明。旧被控端不带该字段，新界面按支持处理，行为与以前相同；
+旧控制端与手机忽略该字段，仍显示插话入口，点击后由新被控端排队，不再报错。不新增 channel 或中转帧，自建中转原样转发。
+回归见 `agent-input-coordinator.test.ts`「sends a steer after this turn」与 renderer `pendingQueueRowPresentation.test.ts`「PendingQueueBubble steer action」。
