@@ -33,6 +33,7 @@
  * 目标是另一台电脑时，登记与落地前都按那台的目录校验，不留一个发送时必然失败的意图。
  */
 
+import { CredentialModeSwitchBusyError } from '../maker-host/credentialSwitchError.js';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import {
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
@@ -384,6 +385,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
    * close 完成，必须先清登记，避免它在新 agent route 提交后回写旧 provider。
    */
   supersedePendingCredentialSwitch?(sessionId: string): void;
+  projectDeferredCredentialSwitchIntent?(sessionId: string): PublicAgentSwitchIntent | null;
   /** 返回边界行 clientId(resume 回落时原子改写定位用)。 */
   insertBoundaryMessage(sessionId: string, content: AgentSwitchBoundaryContent): Promise<string>;
   /**
@@ -484,6 +486,8 @@ export interface PendingAgentSwitchIntent {
   cindyAutoRelocation?: { fromProviderId: string; targetProviderId: string };
   /** SET_MODEL intent: apply the route without a cross-engine handoff. */
   sameAgentSelection?: boolean;
+  /** Original user input, before staging fills omitted axes from the current row. */
+  credentialSelectionAxes?: { effort: boolean; fastMode: boolean };
   /** Set by the host at selection time. Never projected or accepted from IPC. */
   deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
   /** 'acp' = 插件引擎，providerId 必为 acp-plugin:<插件>:<引擎>。 */
@@ -942,12 +946,8 @@ export async function performSessionAgentSwitch(
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {
-      if (row.source === 'bot' && pluginTargetDeviceId) {
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'companions use plugin engines installed on their own computer');
-      }
-      if (pluginTargetDeviceId && (isProviderShareAgentDeviceId(pluginTargetDeviceId)
-        || isSharedTaskPeer(pluginTargetDeviceId) || parseProviderSharePeer(pluginTargetDeviceId))) {
-        throwIpcError('PRECONDITION_FAILED', 'plugin engines run on your own computers only');
+      if (pluginTargetDeviceId && (isSharedTaskPeer(pluginTargetDeviceId) || parseProviderSharePeer(pluginTargetDeviceId))) {
+        throwIpcError('PRECONDITION_FAILED', 'invalid plugin engine target device');
       }
       if (!stayingOnRemotePluginEngine && !pluginTargetDeviceId) requestedAgentDeviceId = null;
     }
@@ -1791,6 +1791,9 @@ export function applyPendingAgentSwitchIfIdle(
           sessionId, intent, true, undefined, undefined, access, opts?.nextInputChars,
         );
         const result = await (sharedTask ? runOutsideDeviceLinkInvokeContext(applySelection) : applySelection());
+        if (result.deferred && deps.projectDeferredCredentialSwitchIntent?.(sessionId)) {
+          throw new CredentialModeSwitchBusyError([sessionId]);
+        }
         if (result.deferred || result.superseded) {
           throw new Error('model selection could not be applied before send');
         }
@@ -1968,7 +1971,8 @@ export function registerMakerSessionAgentSwitchHandler(
       if (typeof sessionId !== 'string' || sessionId.length === 0) {
         throwIpcError('INVALID_PARAMS', 'sessionId required');
       }
-      const intent = projectPendingAgentSwitchIntent(deps.pendingSwitches?.get(sessionId));
+      const intent = projectPendingAgentSwitchIntent(deps.pendingSwitches?.get(sessionId))
+        ?? deps.projectDeferredCredentialSwitchIntent?.(sessionId) ?? null;
       if (intent?.targetAgentKind === 'acp' && isDeviceLinkInvoke()
         && !deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1)) {
         return null;

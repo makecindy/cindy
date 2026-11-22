@@ -20,6 +20,7 @@ const FOUNDATION_FAMILIES = [
   "defaults",
   "fontWeight",
   "motion",
+  "zIndex",
 ] as const;
 export interface DesktopBindings {
   defaults: Record<string, { light: string | null; dark: string | null }>;

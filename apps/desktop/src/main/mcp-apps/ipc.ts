@@ -1,11 +1,13 @@
+import { McpAppViewSlots } from '@cindy/maker-shared/mcp-app-controller';
 import { createMcpAppsService } from './service.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
+import { supportsComposerDrag } from './composerDrag.js';
 import { createPluginFileAccess } from './pluginFileAccess.js';
 import { configurePluginAppearanceFiles } from './appearance.js';
 import { mediaTypeForLibraryPath } from '../cindy-brain/runtime/ghostFiles.js';
 import { ipcMain, shell, BrowserWindow, dialog, webContents } from 'electron';
-import { bindPluginUiResource, finishPluginUiAction } from './hostUi.js';
+import { bindPluginUiResource, finishPluginUiAction, hasComposerAttachmentInWindow } from './hostUi.js';
 import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import { nativePluginUi, parsePluginUiInterests } from './nativeRuntime.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -14,6 +16,7 @@ import { preparePluginAttachmentResult } from './pluginAttachment.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import { stageLocalFileToCache, cleanupOwnedUnpersistedStagedChatAttachments } from '../file-browser/remote-file-cache.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
+import { ingestChatImageBuffer } from '../cindy-media/chatAttachments.js';
 import { resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost.js';
 import fs from 'node:fs/promises';
@@ -36,11 +39,11 @@ import { createLogger } from '../logger.js';
 import { getMcpAppRevisionKey } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
-import { getRemoteLinkCloseEpoch, remoteInvoke } from '../device-link/index.js';
+import { getRemoteLinkCloseEpoch, onRemoteLinkClosed, remoteInvoke } from '../device-link/index.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { McpAppsHost, appServerRevision, type McpAppsHostDeps } from './host.js';
+import { McpAppsHost, appServerRevision, validateComposerAttachment, type McpAppsHostDeps } from './host.js';
 import { readAppServer, setMcpAppsHost } from './runtime.js';
-import { MCP_APPS_INVOKE, parseMcpAppRecord } from '../../shared/mcpApps.js';
+import { MCP_APPS_INVOKE, MCP_APP_COMPOSER_ATTACHMENT_EVENT, parseMcpAppRecord, type McpAppComposerAttachment } from '../../shared/mcpApps.js';
 import { handleMcpAppOperation, handleMcpAppFrameOperation } from './operations.js';
 import { RemoteMcpAppViews } from './remoteViews.js';
 import {
@@ -67,8 +70,15 @@ export function registerMcpAppsIpc(
     toolDefinition?: Pick<Tool, 'name' | 'description' | 'inputSchema'>,
   ) => Promise<AutoReviewDecision>,
   allowPendingPage?: (sessionId: string, requestId: string) => void,
+  /** Windows that render a task composer. A detached sidebar has none of its own. */
+  isComposerWindow?: (window: BrowserWindow) => boolean,
 ): void {
   let saving = false;
+  const slots = new McpAppViewSlots();
+  let assertSessionForComposer: ((sessionId: string) => Promise<{
+    owner: NonNullable<ReturnType<typeof getCurrentDbClientSnapshot>>;
+    session: { remoteHostId?: string | null };
+  }>) | undefined;
   const providerCalls = new Map<string, Map<string, AbortController>>();
   const currentOwner = () => getCurrentDbClientSnapshot() ?? undefined;
   const pluginFiles = configurePluginAppearanceFiles(createPluginFileAccess({
@@ -105,12 +115,68 @@ export function registerMcpAppsIpc(
         saving = false;
       }
     },
+    composerDrag: supportsComposerDrag(process.platform, process.versions.electron),
+    composerCaller: (caller) => {
+      const match = /^renderer:(\d+)$/.exec(caller);
+      const contents = match ? webContents.fromId(Number(match[1])) : undefined;
+      const window = contents && !contents.isDestroyed() ? BrowserWindow.fromWebContents(contents) : null;
+      return !!window && !window.isDestroyed() && !!isComposerWindow?.(window);
+    },
+    hasComposerAttachment: hasComposerAttachmentInWindow,
+    sendComposerAttachment: async ({ caller, sessionId, viewId, resourceKey, name, mimeType, size, bytes, assertCurrent }) => {
+      if (!caller.startsWith('renderer:')) throw new Error('MCP_APP_OWNER_ONLY');
+      const scope = await assertSessionForComposer?.(sessionId);
+      if (!scope?.owner.userId || scope.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
+      if (size !== bytes.byteLength || size < 1 || size > 64 * 1024 * 1024) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+      const validated = validateComposerAttachment(bytes, mimeType);
+      const { category, mimeType: normalizedMimeType } = validated;
+      // Images and PDFs take their extension from the validated bytes: sending
+      // treats `.gif` specially, so a display name must not decide the block type.
+      const ext = category === 'image' ? `.${normalizedMimeType === 'image/jpeg' ? 'jpg' : normalizedMimeType.slice('image/'.length)}`
+        : category === 'pdf' ? '.pdf' : (() => {
+          const base = name.split(/[\\/]/).pop() ?? name;
+          const dot = base.lastIndexOf('.');
+          return dot > 0 ? base.slice(dot).toLowerCase() : '.txt';
+        })();
+      await assertCurrent();
+      const stagedPath = await stageLocalFileToCache({
+        ownerId: scope.owner.userId,
+        suggestedName: name,
+        expectedSize: BigInt(size),
+        copyTo: target => fs.writeFile(target, bytes, { flag: 'wx' }),
+      });
+      try {
+        await assertCurrent();
+        // Prepare the preview before delivery so the tray can append synchronously.
+        let imageUrl: string | undefined;
+        if (category === 'image') {
+          try {
+            imageUrl = (await ingestChatImageBuffer({ buffer: bytes, mimeType: normalizedMimeType }, scope.owner.client.drizzle)).url;
+          } catch { /* The staged file can still be attached if preview preparation fails. */ }
+          await assertCurrent();
+        }
+        const senderId = Number(caller.slice('renderer:'.length));
+        const target = Number.isSafeInteger(senderId) ? webContents.fromId(senderId) : undefined;
+        if (!target || target.isDestroyed()) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+        const payload: McpAppComposerAttachment = {
+          sessionId, viewId,
+          attachment: { id: randomUUID(), mcpAppResourceKey: resourceKey, name, path: stagedPath, ext, size, category, mimeType: normalizedMimeType,
+            ...(imageUrl ? { url: imageUrl, originalName: name } : {}) },
+        };
+        target.send(MCP_APP_COMPOSER_ATTACHMENT_EVENT, payload);
+      } catch (error) {
+        await cleanupOwnedUnpersistedStagedChatAttachments({ ownerId: scope.owner.userId, filePaths: [stagedPath] });
+        throw error;
+      }
+    },
     pluginFiles,
     disposeDocument: removeMcpAppDocument,
   });
+  assertSessionForComposer = assertSession;
   setMcpAppsHost(host);
   setMcpAppFileReader((id, token, request) => host.readPluginFile(id, token, request));
   const remoteViews = new RemoteMcpAppViews({
+    released: (owner, caller, peer, window) => slots.released(owner, caller, peer, window),
     owner: currentOwner,
     closeEpoch: getRemoteLinkCloseEpoch,
     invoke: async (deviceId, sessionId, input, preSend, options) => {
@@ -124,10 +190,26 @@ export function registerMcpAppsIpc(
     openLink: (url) => shell.openExternal(url),
   });
   setMcpAppCallerCleanup(async (caller) => {
+    slots.cancelCaller(caller);
     for (const call of providerCalls.get(caller)?.values() ?? []) call.abort();
     providerCalls.delete(caller);
     nativePluginUi.release(caller);
     await Promise.allSettled([host.releaseCaller(caller), remoteViews.releaseCaller(caller)]);
+  });
+  const redeemChannel = 'maker:redeem-composer-attachment-drag';
+  ipcMain.removeHandler(redeemChannel);
+  ipcMain.handle(redeemChannel, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!input || typeof input !== 'object') throwIpcError('INVALID_PARAMS', 'MCP_APP_COMPOSER_DRAG_INVALID');
+    const { sessionId, ticket } = input as Record<string, unknown>;
+    if (typeof sessionId !== 'string' || !sessionId || typeof ticket !== 'string' || ticket.length !== 48)
+      throwIpcError('INVALID_PARAMS', 'MCP_APP_COMPOSER_DRAG_INVALID');
+    try {
+      await host.redeemComposerAttachmentDrag(`renderer:${event.sender.id}`, sessionId, ticket);
+    } catch (error) {
+      const code = error instanceof Error && /^MCP_APP_[A-Z_]+$/.test(error.message) ? error.message : 'MCP_APP_COMPOSER_DRAG_INVALID';
+      throwIpcError('PRECONDITION_FAILED', code);
+    }
   });
   ipcMain.removeHandler(MCP_APPS_INVOKE);
   ipcMain.handle(MCP_APPS_INVOKE, async (event, sessionId: unknown, raw: unknown) => {
@@ -252,45 +334,61 @@ export function registerMcpAppsIpc(
         finishPluginUiAction(caller, reply.requestId, reply.result, reply.error as string | undefined);
         return {};
       }
-      if (raw && typeof raw === 'object' && 'deviceId' in raw) {
-        // Incoming device-link calls cannot use this local-only route to pivot to another computer.
-        if (remote) throw new Error('MCP_APP_INVALID_REQUEST');
-        if (sessionId === null) throw new Error('MCP_APP_INVALID_SCOPE');
-        return await remoteViews.control(caller, raw.deviceId, sessionId, raw);
-      }
-      return await handleMcpAppOperation(
-        host,
-        caller,
-        sessionId,
-        raw,
-        remote
-          ? undefined
-          : {
-              resource: async (source) => {
-                const scope = sessionId === null ? undefined : await assertSession(sessionId);
-                if (scope?.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
-                return bindPluginUiResource(caller, sessionId, source.instanceId, source.viewId, config => host.serverRevision(config), async () => {
-                  if (!scope || sessionId === null) return;
-                  const latest = await assertSession(sessionId);
-                  if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId)
-                    throw new Error('MCP_APP_SESSION_UNAVAILABLE');
-                }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined);
+      const owner = currentOwner();
+      const dispatch = async (allocated?: (limit?: 'pending' | 'document') => void) => {
+        if (raw && typeof raw === 'object' && 'deviceId' in raw) {
+          // Incoming device-link calls cannot use this local-only route to pivot to another computer.
+          if (remote) throw new Error('MCP_APP_INVALID_REQUEST');
+          if (sessionId === null) throw new Error('MCP_APP_INVALID_SCOPE');
+          return await remoteViews.control(caller, raw.deviceId, sessionId, raw, allocated);
+        }
+        return await handleMcpAppOperation(
+          host,
+          caller,
+          sessionId,
+          raw,
+          remote
+            ? undefined
+            : {
+                resource: async (source) => {
+                  const scope = sessionId === null ? undefined : await assertSession(sessionId);
+                  if (scope?.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
+                  return bindPluginUiResource(caller, sessionId, source.instanceId, source.viewId, config => host.serverRevision(config), async () => {
+                    if (!scope || sessionId === null) return;
+                    const latest = await assertSession(sessionId);
+                    if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId)
+                      throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+                  }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined);
+                },
+                supply: (document, boundCaller, hostContext) =>
+                  supplyMcpAppDocument(document, boundCaller, (input) =>
+                    handleMcpAppFrameOperation(
+                      host,
+                      boundCaller,
+                      sessionId,
+                      document.viewId,
+                      input,
+                      async (url) => {
+                        assertMcpAppDocumentCaller(document.viewId, boundCaller);
+                        await shell.openExternal(url);
+                      },
+                    ), () => slots.released(owner, boundCaller, boundCaller, 'document'), hostContext),
               },
-              supply: (document, boundCaller, hostContext) =>
-                supplyMcpAppDocument(document, boundCaller, (input) =>
-                  handleMcpAppFrameOperation(
-                    host,
-                    boundCaller,
-                    sessionId,
-                    document.viewId,
-                    input,
-                    async (url) => {
-                      assertMcpAppDocumentCaller(document.viewId, boundCaller);
-                      await shell.openExternal(url);
-                    },
-                  ), undefined, hostContext),
-            },
-      );
+        );
+      };
+      // Slot waits belong to the viewer's process, including detached windows.
+      // Remote callers only have access to the existing MCP Apps wire operations.
+      if (remote || !raw || typeof raw !== 'object') return await dispatch();
+      const input = raw as Record<string, unknown>;
+      const peer = typeof input.deviceId === 'string' ? input.deviceId : caller;
+      const remoteOpen = typeof input.deviceId === 'string' && typeof input.openId === 'string';
+      const linkEpoch = remoteOpen ? getRemoteLinkCloseEpoch(peer) : 0;
+      return await slots.control(owner, caller, peer, input, dispatch, linkEpoch,
+        remoteOpen ? closed => {
+          const unwatch = onRemoteLinkClosed(peer, closed);
+          if (getRemoteLinkCloseEpoch(peer) !== linkEpoch) closed();
+          return unwatch;
+        } : undefined);
     } catch (error) {
       // device-link serializes the execution Host's IPC prefix. Unwrap that
       // envelope before applying the same public-code boundary on the viewer.

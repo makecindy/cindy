@@ -46,6 +46,12 @@ export interface MobilePluginEngine {
   /** 插件图标(data URL)；缺省 = 通用引擎标识。 */
   iconDataUrl?: string;
   availability: { state: 'available' | 'unavailable' | 'unknown'; message?: string };
+  /**
+   * 用户在那台电脑的「设置 → 模型供应商」里把它从模型选择器中隐藏了：选择器不再列出，已经在用它的任务
+   * 照常显示名字、图标和用量。旧电脑不带这个字段。用户在那里停用的引擎由那台电脑报成 unavailable。
+   */
+  hidden?: true;
+  defaultModelAllowed?: false;
   models: MobilePluginEngineModel[];
   permissionModes: { id: string; displayName: string }[];
   defaultPermissionMode: string;
@@ -160,6 +166,8 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
       ...(description ? { description } : {}),
       ...(iconDataUrl ? { iconDataUrl } : {}),
       availability: { state, ...(message ? { message } : {}) },
+      ...(item.hidden === true ? { hidden: true as const } : {}),
+      ...(item.defaultModelAllowed === false ? { defaultModelAllowed: false as const } : {}),
       models,
       permissionModes: modes,
       defaultPermissionMode: requestedDefault && modes.some((mode) => mode.id === requestedDefault)
@@ -184,10 +192,11 @@ export function isPluginEngineSelectable(engine: Pick<MobilePluginEngine, 'avail
 
 /** 引擎下列出的模型行：上报过的模型，或在还没上报时只有「默认模型」一项；当前选的是默认时它也保留。 */
 export function pluginEngineModelRows(
-  engine: Pick<MobilePluginEngine, 'models'>,
+  engine: Pick<MobilePluginEngine, 'models' | 'defaultModelAllowed'>,
   activeModelId?: string | null,
 ): (MobilePluginEngineModel & { isDefault: boolean })[] {
   const models = engine.models.map((model) => ({ ...model, isDefault: false }));
+  if (engine.defaultModelAllowed === false) return models;
   const defaultRow = { id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: '', efforts: [], isDefault: true };
   if (models.length === 0) return [defaultRow];
   return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL ? [defaultRow, ...models] : models;
@@ -347,8 +356,9 @@ export function buildPluginEngineGroups(
   for (const engine of options.engines) {
     const selectable = isPluginEngineSelectable(engine);
     const active = options.active?.providerId === engine.providerId ? options.active : null;
-    // 只装了插件但未登录 / 未就绪的引擎不在模型选择器里占位；仅当前任务已选该引擎时保留以便识别状态。
-    if (!selectable && !active) continue;
+    // 只装了插件但未登录 / 未就绪的引擎、用户在那台电脑上隐藏的引擎都不在模型选择器里占位；
+    // 仅当前任务已选该引擎时保留以便识别状态。
+    if ((!selectable || engine.hidden) && !active) continue;
     const engineMatches = !needle || engine.name.toLowerCase().includes(needle);
     const rows = pluginEngineModelRows(engine, active?.modelId)
       .filter((model) => engineMatches

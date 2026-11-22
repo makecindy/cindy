@@ -29625,6 +29625,53 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
+  // #8309 / unit: notifications and failed completion snapshots share the
+  // diagnosis without adding turn/start calls. Existing tests only cover
+  // context overflow in the completion-only path, not nested exhausted 529.
+  it.each(['notification', 'completion-only'])('keeps nested overload terminal through %s', async delivery => {
+    vi.useFakeTimers();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart
+      ? { turn: { id: 'turn-1' } } : undefined);
+    const handle = await agent.startSession({ sessionId: `session-nested-overload-${delivery}`,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      const handlers = (host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>)[0]![1];
+      const events: AgentEvent[] = [];
+      void (async () => { for await (const event of handle.events()) events.push(event); })();
+      await handle.send({ type: 'user', content: 'check the workspace' });
+      const error = { message: 'stream disconnected before completion',
+        codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 529 } } as const,
+        additionalDetails: 'HTTP 529: server_is_overloaded' };
+      const turnId = handle.getCurrentTurnId?.() ?? 'turn-1';
+      if (delivery === 'notification') {
+        handlers.error?.({ threadId: 'start-thread-id', turnId, willRetry: false, error });
+      } else {
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: turnId, status: 'failed', error } });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events.filter(event => event.type === 'error')).toEqual([expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        reason: 'UPSTREAM_OVERLOADED', codexErrorInfo: 'responseTooManyFailedAttempts', isTerminal: true,
+      }) })]);
+      if (delivery === 'notification') {
+        expect(events.filter(event => event.type === 'status' &&
+          (event.data as { isRunning?: boolean }).isRunning === false)).toHaveLength(1);
+        // The notification settles the turn; its subsequent completion must not
+        // emit a second terminal error or restart the failed request.
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: turnId, status: 'failed', error } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+      } else {
+        expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      }
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves structured Codex error info when failed turn only reports it on turn/completed', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

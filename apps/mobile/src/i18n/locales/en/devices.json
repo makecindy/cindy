@@ -14,7 +14,16 @@
   "usageOnlyDevice": "{{name}} only",
   "usagePlans": "Plan allowances",
   "usageBudget": "Remaining period budget",
+  "usageWaiting": "Plan allowances and today’s usage appear once your computer connects",
+  "usageUpdateDesktop": "Update Cindy on your computer to see usage",
+  "usageWaitingTitle": "Your usage will appear here",
+  "usageWaitingCopy": "Once your phone connects to your computer, plan allowances and daily usage for each account sync automatically, usually within a few seconds.",
+  "usageUpdateDesktopTitle": "Update Cindy on your computer",
+  "usageUpdateDesktopCopy": "Cindy on your computer is too old to send usage to your phone. It will appear here after you update.",
   "management": {
+    "addCloud": "Add cloud computer",
+    "preparingCloud": "Cloud computer · preparing",
+    "manageCloud": "Manage cloud computer",
     "title": "Device Management",
     "openDevice": "View details for {{name}}",
     "details": "Device details",
@@ -384,6 +393,7 @@
       "showDeviceTasks": "Show sessions",
       "openDevice": "Open",
       "renameDevice": "Rename",
+      "groupDevice": "Device",
       "groupProject": "Project",
       "sortBy": {
         "priority": "Priority",
@@ -425,11 +435,15 @@
       "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "displayHeading": "Display",
       "view": {
+        "card": "Cards",
         "text": "Text",
         "list": "List"
       },
       "taskInfoHeading": "Session info",
       "taskInfo": {
+        "teammate": "Buddy avatar",
+        "project": "Project icon and name",
+        "harness": "Harness icon",
         "time": "Time",
         "pr": "PR status",
         "tokens": "Tokens",

@@ -40,3 +40,20 @@ test('every path server.mjs answers itself is classified for a desktop hold', ()
   assert.deepEqual([...found].filter(path => !(path in classified)).sort(), [], 'paths server.mjs answers that are not classified');
   assert.deepEqual(Object.keys(classified).filter(path => !found.has(path)).sort(), [], 'classified paths server.mjs no longer answers');
 });
+
+// Guard tier: the integration cases run the real queue and service factories;
+// moving only one main.ts caller to a boolean hold would leave those cases green.
+test('main binds all four profile writers and the installed memory MCP provider to the live queue', () => {
+  const main = fs.readFileSync(new URL('../../apps/host/src/main.ts', import.meta.url), 'utf8');
+  assert.ok(/const profileServices = bindHostProfileServices\(\{\s*profileHoldReason: inputQueue\.profileHoldReason,\s*profileHoldGeneration: inputQueue\.profileHoldGeneration,/.test(main), 'profile queue binding');
+  assert.ok(/hostTools = profileServices\.tools\(/.test(main), 'host tools');
+  assert.ok(/const memory = profileServices\.memory\(/.test(main), 'memory services');
+  assert.ok(/makerMemory = memory\.manager;/.test(main), 'installed memory manager');
+  assert.ok(/mcpProviders: await pluginGateway\.prepareMcpProviders\(\[\.\.\.hostTools\.providers, \.\.\.memory\.providers\(/.test(main), 'installed memory MCP');
+  assert.ok(/updateProjectInfo: profileServices\.project\(/.test(main), 'project update');
+  assert.ok(/const runtimePluginSettings = profileServices\.plugins\(/.test(main), 'task plugin settings');
+  assert.ok(!/\bcreateHost(?:ToolService|MemoryManager|MemoryMcpProviders|ProjectInfoUpdate|RuntimePluginSettings)\s*\(/.test(main),
+    'main must obtain profile writers from the bound services');
+  const uninstall = main.match(/onUninstallSourceState:\s*async fromPart => \{([\s\S]*?)\n    \},/)?.[1] ?? '';
+  assert.match(uninstall, /await current\.cleanupUninstalledSource\(fromPart\)/, 'uninstall must use the scoped cleanup lease');
+});

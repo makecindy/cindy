@@ -7,7 +7,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { mcpAppSandboxDocument } from '@cindy/maker-shared/mcp-apps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { McpAppView } from '../session/mcpAppView';
+import { MCP_APP_DEFAULT_HEIGHT, McpAppView } from '../session/mcpAppView';
+import { MessageListVisibility, MessageListVisibilityContext } from '../session/messageListVisibility';
 import { MessageListRevealContext, MessageListKeepKeyboardContext } from '../session/messageListReveal';
 
 // #10431 unit: the real View must consume local focus geometry without sending
@@ -29,6 +30,41 @@ it('keeps focus geometry local and rejects invalid or stale focus events', async
   receive({ top: 10, bottom: 20 });
   expect(view.state.focus).toBeUndefined();
   expect(invoke).not.toHaveBeenCalled();
+});
+
+/* #11917 regression: the real mobile View must cancel a quota wait when the
+ * device closes in the gap between the slot check and close-listener setup.
+ * Minimal failure: open reports MCP_APP_VIEW_LIMIT, the close epoch advances
+ * during listener registration, and a later release must not reopen the card. */
+it('cancels a quota wait when the device closes before its close listener is ready', async () => {
+  let epoch = 0;
+  let registered = false;
+  const getEpoch = vi.fn(() => epoch);
+  const onUserClose = vi.fn((_device: string, _listener: () => void) => {
+    registered = true;
+    // Simulate closeLink completing just before this subscription is installed.
+    epoch++;
+    return () => {};
+  });
+  const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => {
+    const input = (args[1] ?? {}) as { op?: string };
+    if (input.op === 'open') throw new Error('MCP_APP_VIEW_LIMIT');
+    return {};
+  });
+  const view = new McpAppView(invoke, 'device', 'task', 'card', () => {}, () => {}, async () => {}, 0,
+    MCP_APP_DEFAULT_HEIGHT, false, getEpoch, onUserClose);
+  let completed = false;
+  const opening = view.open({});
+  opening.then(() => { completed = true; });
+  try {
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(registered).toBe(true);
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(completed).toBe(true);
+    expect(invoke.mock.calls.filter(([, , args]) => (args[1] as { op?: string }).op === 'open')).toHaveLength(1);
+  } finally {
+    await view.close();
+  }
 });
 
 // #10431 unit: actual card focus and keyboard callbacks must reveal the input
@@ -85,6 +121,8 @@ const state = vi.hoisted(() => ({
   props: {} as Record<string, any>,
   inject: vi.fn(),
   invoke: vi.fn(),
+  getUserCloseEpoch: vi.fn(() => 0),
+  onUserClose: vi.fn(() => () => {}),
   mode: 'light',
   platform: 'android',
   prepare: vi.fn(),
@@ -107,8 +145,17 @@ vi.mock('../session/mcpAppNativeDocument', () => ({ prepareMcpAppNativeDocument:
 vi.mock('react-native', () => ({
   View: ({ children, ref, onLayout }: any) => {
     if (onLayout) state.cardLayout = onLayout;
-    useImperativeHandle(ref, () => ({ getBoundingClientRect: () => ({ width: 380 }), measureInWindow: (callback: any) => callback(0, 100, 380, 320) }));
-    return createElement('div', null, children);
+    const element = useRef<HTMLDivElement>(null);
+    useImperativeHandle(ref, () => ({
+      getBoundingClientRect: () => {
+        const rect = element.current?.getBoundingClientRect();
+        return rect && rect.width > 0 && rect.height > 0
+          ? rect
+          : DOMRect.fromRect({ x: 0, y: 80, width: 380, height: 60 });
+      },
+      measureInWindow: (callback: any) => callback(0, 100, 380, 320),
+    }));
+    return createElement('div', { ref: element }, children);
   },
   Keyboard: { isVisible: () => state.keyboardVisible, addListener: (name: string, listener: () => void) => {
     state.keyboardListeners.set(name, listener);
@@ -157,7 +204,7 @@ vi.mock('@/components/AppText', () => ({
   Text: ({ children }: { children: React.ReactNode }) => createElement('span', null, children),
 }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({
-  useDeviceLink: () => ({ invoke: state.invoke }),
+  useDeviceLink: () => ({ invoke: state.invoke, getUserCloseEpoch: state.getUserCloseEpoch, onUserClose: state.onUserClose }),
 }));
 vi.mock('@/theme', () => {
   const colors = {
@@ -806,7 +853,7 @@ it('bypasses result caching only for mobile App open and poll', async () => {
   for (const op of ['open', 'poll']) {
     const call = state.invoke.mock.calls.find(([, , [, input]]) => input.op === op)!;
     expect(call).toBeDefined();
-    expect(call[3]).toEqual({ noResultCache: true });
+    expect(call[3]).toEqual(op === 'open' ? { noResultCache: true, preSend: expect.any(Function) } : { noResultCache: true });
     expect(call[2][1]).not.toHaveProperty('noResultCache');
   }
   await act(async () => render(null));
@@ -847,4 +894,64 @@ it('shows the custom service snapshot and namespace-free organization history', 
   await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="org" title="Planner" plugin={{ name: 'Planner', source: { kind: 'organization' } }} />));
   expect(container.textContent).toContain('Planner');
   expect(container.textContent).not.toContain('mcpApps.source.');
+});
+
+// The execution computer sends the existing error code; only a card carrying plugin identity is revoked.
+it.each(['MCP_PLUGIN_UNAVAILABLE', 'MCP_APP_SERVER_CHANGED', 'MCP_APP_VIEW_UNAVAILABLE'])(
+  'shows the plugin-specific failure for %s and keeps the fallback for a custom server',
+  async code => {
+    state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+      if (input.op === 'open') throw new Error(code);
+      return {};
+    });
+    await act(async () => render(<>
+      <McpAppCard deviceId="device" sessionId="task" clientId="plugin" title="Plugin" plugin={{ name: 'Plugin' }} />
+      <McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Custom" />
+    </>));
+    expect(container.textContent).toContain('PluginmcpApps.retrymcpApps.pluginRevoked');
+    expect(container.textContent).toContain('CustommcpApps.retrymcpApps.loadFailed');
+  },
+);
+
+// Device View quota: releasing one of four real card controllers admits just the oldest visible waiter.
+it('reopens only the first waiting card when scrolling another page offscreen frees a remote View', async () => {
+  const active = new Set<string>();
+  const opens: string[] = [];
+  state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+    if (input.op === 'open') {
+      opens.push(input.clientId);
+      if (active.size >= 4) throw new Error('MCP_APP_VIEW_LIMIT');
+      active.add(input.clientId);
+      return { ...doc, viewId: input.clientId };
+    }
+    if (input.op === 'poll') return new Promise(() => {});
+    if (input.op === 'teardown' && !active.delete(input.viewId)) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+    return {};
+  });
+  const cards = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  const list = new MessageListVisibility(() => ({ top: 50, bottom: 300 }));
+  let cardTop = 100;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const top = this.closest('[data-card="f"]') ? cardTop : 80;
+    return DOMRect.fromRect({ y: top, height: 60, width: 300 });
+  });
+  async function show(hidden: string[]) {
+    await act(async () => render(<MessageListVisibilityContext.Provider value={list}>
+      {cards.map(key => <div key={key} data-card={key}><McpAppCard deviceId="device"
+        sessionId="task" clientId={key} title={key} active={!hidden.includes(key)} /></div>)}
+    </MessageListVisibilityContext.Provider>));
+  }
+  await show([]);
+  expect(opens).toEqual(cards);
+  expect(container.textContent?.match(/mcpApps.viewLimit/g)).toHaveLength(3);
+  await show(['a']);
+  expect(opens.slice(7)).toEqual(['e']);
+  expect([...active]).toEqual(['b', 'c', 'd', 'e']);
+  active.delete('b'); // The executor already retired this View before the viewer closed it.
+  // The parent row is still visible, but its nested card is now below the list.
+  cardTop = 350;
+  await act(async () => list.viewportChanged());
+  await show(['a', 'b']);
+  expect(opens.slice(7)).toEqual(['e', 'g']);
+  expect(state.invoke.mock.calls.some(([, , [, input]]) => input.op === 'wait-for-view-slot')).toBe(false);
 });

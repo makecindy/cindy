@@ -338,7 +338,7 @@
     "invite": "초대 복사",
     "invitationCopied": "초대를 복사했습니다. 메시지에 붙여넣어 동료에게 보내세요.",
     "tabOwned": "내가 공유한 항목",
-    "startIntro": "파트너를 초대해 이 세션의 모든 내용을 함께 보고, 같은 Agent로 협업하세요.",
+    "startIntro": "동료를 초대해 이 세션의 모든 내용을 함께 보고, 같은 Agent로 협업하세요.",
     "runsOnThisDevice": "이 컴퓨터에서 실행 중",
     "inviteNotice": "초대 링크를 가진 사용자는 로그인 후 참여할 수 있으며, 호스트와 동일한 Agent 권한을 갖습니다.",
     "offlineAutoClose": "호스트 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다.",
@@ -351,7 +351,7 @@
     "hostOfflineNote": "이 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다. 다시 공유하려면 공유를 시작하고 새 초대 링크를 보내세요.",
     "sharingBadge": "공유 중",
     "ownedEmptyTitle": "공유 중인 세션이 없습니다",
-    "ownedEmptyHint": "아무 세션이나 열고 \"세션 공유\"를 눌러 파트너를 초대하세요.",
+    "ownedEmptyHint": "아무 세션이나 열고 \"세션 공유\"를 눌러 동료를 초대하세요.",
     "closeAll": "모든 공유 중지 ({{count}})",
     "closeAllTitle": "모든 공유를 중지할까요?",
     "closeAllBody": "모든 게스트가 아래 작업에 접근할 수 없게 되며 초대 링크가 만료됩니다.",
@@ -563,7 +563,8 @@
       "calloutUnknown": "요청한 사람을 모른다면 거절하세요. 거절하면 이 링크는 더 이상 사용할 수 없습니다.",
       "approve": "공유 승인",
       "reject": "요청 거절",
-      "later": "나중에 처리"
+      "later": "나중에 처리",
+      "calloutPluginEngine": "{{name}}님은 자신의 컴퓨터에 플러그인이나 CLI를 설치하지 않고도 이 컴퓨터의 CLI 로그인과 할당량으로 사용할 수 있습니다."
     },
     "apply": {
       "loading": "공유 링크를 읽는 중…",
@@ -976,7 +977,7 @@
     "captureFailed": "화면을 캡처하지 못했습니다",
     "permission": {
       "title": "화면 기록 권한이 필요합니다",
-      "detail": "스크린샷을 찍으려면 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 기록에서 {{appName}}을(를) 허용한 다음 {{appName}}을(를) 다시 여세요.",
+      "detail": "{{appName}}의 화면 기록을 허용한 뒤 다시 시도하세요. macOS에서 요청하면 앱을 다시 여세요.",
       "openSettings": "시스템 설정 열기",
       "later": "나중에"
     },
@@ -1143,12 +1144,12 @@
     "windowsError": "승인이 완료되지 않았습니다. 이 컴퓨터에서 다시 시도하세요.",
     "windowsErrorDetail": "오류 코드 {{code}}",
     "permissionsTitle": "원격 데스크톱 권한",
-    "permissionsIntro": "데스크톱을 보려면 화면 기록 권한이, 조작하려면 손쉬운 사용 권한도 필요합니다. 컴퓨터에서 허용하면 상태가 자동으로 갱신됩니다.",
+    "permissionsIntro": "제어할 Mac에서 화면 기록을 허용하면 데스크탑을 볼 수 있습니다. 키보드와 마우스를 사용하려면 Cindy에 앱 제어도 허용하세요. 권한 상태는 자동으로 확인됩니다.",
     "permissionsReady": "시스템 권한이 준비되었습니다. 다시 연결할 수 있습니다.",
     "screenRecording": "화면 기록",
-    "accessibility": "손쉬운 사용",
-    "screenRecordingHelp": "시스템 설정을 열고 현재 Cindy 앱의 화면 기록을 허용하세요. 재시작을 요청하면 Cindy를 다시 연 후 연결하세요.",
-    "accessibilityHelp": "설정을 열고 시스템 권한 안내에 표시된 앱의 손쉬운 사용을 허용하세요. 돌아오면 실제 입력 권한을 자동 확인합니다.",
+    "accessibility": "키보드 및 마우스 제어",
+    "screenRecordingHelp": "화면 기록 또는 화면 및 시스템 오디오 녹음에서 현재 실행 중인 Cindy의 화면 기록을 허용하세요. macOS에서 요청하면 Cindy를 다시 여세요.",
+    "accessibilityHelp": "개인정보 보호 및 보안에서 시스템이 안내하는 앱을 선택하세요. System & App Protection Override가 보이면 제어를 허용할 앱을 선택하고, 이전 버전에서는 손쉬운 사용을 켜세요.",
     "permissionChecking": "확인 중…",
     "permissionGranted": "허용됨",
     "permissionUnknown": "확인되지 않음",
@@ -1164,7 +1165,7 @@
     "title": "원격 데스크톱",
     "allow": "원격 데스크톱 허용",
     "allowHint": "같은 계정의 기기에서 이 컴퓨터의 모든 앱을 보고 조작하도록 허용합니다. 위의 기기 제어도 켜주세요.",
-    "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요.",
+    "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
     "inputUnsupported": "이 컴퓨터의 현재 데스크톱 환경에서는 Cindy를 통한 원격 키보드 및 마우스 제어가 지원되지 않습니다.",
     "controlUnavailable": "원격 키보드 및 마우스 제어를 일시적으로 사용할 수 없습니다. 다시 연결해 주세요.",
     "beingControlled": "데스크톱을 원격으로 제어 중",
@@ -1281,7 +1282,7 @@
     "privacyScreen": "연결 중 프라이버시 화면 사용",
     "privacyScreenHint": "원격 제어 중 이 컴퓨터의 화면을 가립니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
     "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
-    "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
+    "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다. 원격 컴퓨터가 Mac인 경우 해당 Mac에서 실행 중인 Cindy의 제어 권한을 확인하세요.",
     "hostMute": "원격 컴퓨터 음소거",
     "hostMuteHint": "연결 중 원격 컴퓨터의 소리를 음소거합니다",
     "hostMuteFailed": "원격 컴퓨터의 음소거 상태를 변경할 수 없습니다",
@@ -1310,7 +1311,7 @@
     "credentialSigningRequired": "Mac 개발 버전에 서명 설정이 없습니다. Mac에서 서명을 설정하고 Cindy를 다시 시작한 후 다시 시도해 주세요.",
     "credentialPasswordRejected": "Mac 로그인 암호를 확인하지 못했습니다. 다시 입력해 주세요.",
     "credentialIdentityChanged": "컴퓨터의 신원을 확인할 수 없습니다. 확인되지 않은 기기로 암호를 보내지 않습니다.",
-    "credentialAccessibilityRequired": "Mac의 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 Cindy를 허용한 후 다시 연결하세요.",
+    "credentialAccessibilityRequired": "Mac에서 실행 중인 Cindy의 제어 권한을 확인한 뒤 다시 연결하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
     "credentialUnlockUnavailable": "이 Mac의 잠금을 안전하게 해제하지 못했습니다. 잠금 화면에서 본인 계정을 선택한 후 다시 연결하세요. 계속 실패하면 Mac에서 직접 잠금을 해제하세요.",
     "disconnecting": "연결 끊는 중…",
     "loadingDisplayModes": "해상도 불러오는 중…",
@@ -1342,7 +1343,9 @@
       }
     },
     "lockOnExitHintPrivacy": "종료하면 프라이버시 화면을 표시하여 AI가 계속 작업할 수 있습니다. 컴퓨터를 건드리면 잠깁니다.",
-    "lockedEnablePrivacyHint": "자리를 비운 동안에도 AI가 이 컴퓨터를 계속 사용하게 하려면, 이 컴퓨터의 “설정 → 일반 → 자리를 비울 때”에서 프라이버시 화면을 켜세요."
+    "lockedEnablePrivacyHint": "자리를 비운 동안에도 AI가 이 컴퓨터를 계속 사용하게 하려면, 이 컴퓨터의 “설정 → 일반 → 자리를 비울 때”에서 프라이버시 화면을 켜세요.",
+    "revealCurrentApp": "Finder에서 {{app}} 보기",
+    "openPermissionInNewWindow": "새 윈도우에서 열기"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1802,6 +1805,8 @@
       "other": "기타",
       "lowAlert": "곧 소진될 때 알림",
       "privacy": "개인 정보 숨기기",
+      "automaticCurrency": "자동",
+      "usageCurrency": "사용량 표시 통화",
       "usageScope": "사용량 집계 범위",
       "manageFoot": "제공자 관리",
       "showSource": "메뉴에 {{name}} 표시",
@@ -1899,7 +1904,7 @@
       "windowBehavior": "앱 동작",
       "shortcuts": "키보드 단축키",
       "mcpServers": "사용자 지정 MCP",
-      "bots": "파트너",
+      "bots": "동반자",
       "awayFromComputer": "자리를 비울 때"
     },
     "remote": {
@@ -2416,7 +2421,7 @@
         "video": "동영상",
         "file": "파일",
         "message": "새 메시지",
-        "teammate": "파트너",
+        "teammate": "동반자",
         "sender": "알 수 없는 발신자",
         "mention": "나를 멘션함",
         "reply": "내게 답장함",
@@ -2470,8 +2475,8 @@
         "hint": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, Touch ID나 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
         "permission": "누군가 이 Mac을 건드릴 때 즉시 잠그려면 '시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용'에서 Cindy를 허용하세요. 허용하기 전에는 평소처럼 화면이 꺼지고 잠깁니다.",
         "preview": "지금 사용해 보기",
-        "previewStarting": "마우스와 키보드에서 손을 떼세요. 3초 뒤 프라이버시 화면이 나타납니다. 아무 키나 눌러 잠근 뒤 잠금을 해제해 보세요.",
-        "previewUnavailable": "프라이버시 화면을 표시할 수 없습니다. Cindy를 다시 시작한 뒤 다시 시도하세요.",
+        "previewStarting": "프라이버시 화면을 준비하고 있습니다. 마우스와 키보드에서 손을 떼세요. 화면이 가려지면 키를 눌러 잠금을 테스트하세요.",
+        "previewUnavailable": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
         "delay": {
           "30": "30초",
           "60": "1분",
@@ -2482,7 +2487,10 @@
           "system": "시스템"
         },
         "hintWindows": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, Windows Hello나 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
-        "hintLinux": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다."
+        "hintLinux": "AI가 화면을 써야 할 때 이 컴퓨터는 화면을 끄거나 잠그지 않습니다. 프라이버시 화면이 화면을 가리고 AI는 그 뒤에서 계속 작업합니다. 키를 누르거나 클릭하면 바로 잠기며, 암호로 잠금을 해제합니다. 작업이 없을 때는 평소처럼 화면이 꺼지고 잠깁니다. 원격 제어가 끝난 뒤에도 프라이버시 화면으로 이 컴퓨터를 보호합니다.",
+        "permissionMissing": "프라이버시 화면이 꺼져 있습니다. 키를 누르거나 클릭하면 Mac을 잠글 수 있도록 Cindy에 권한을 부여해야 합니다.",
+        "checkFailed": "이 컴퓨터에서 프라이버시 화면 권한을 확인할 수 없습니다.",
+        "saveFailed": "프라이버시 화면 설정을 저장하지 못했습니다."
       }
     },
     "agentIsland": {
@@ -3138,7 +3146,7 @@
         },
         "accessibility": {
           "label": "자동 입력",
-          "tooltip": "손쉬운 사용 권한은 다른 앱에 음성 입력 결과를 자동으로 넣고, 정리용 커서 주변 텍스트를 읽고, 외부 수정 내용을 감지해 사전을 학습하는 데 사용됩니다."
+          "tooltip": "선택한 앱에 받아쓰기를 입력하고, 문장을 다듬기 위해 커서 주변의 텍스트를 읽고, 사전에 반영할 수정 내용을 감지하도록 Cindy에 허용합니다. Mac에 표시되는 손쉬운 사용 또는 System & App Protection Override에서 허용하세요."
         }
       },
       "interactionSound": {
@@ -3716,6 +3724,7 @@
         "connecting": "연결 중…",
         "rename": "이름 변경",
         "suspended": "비활성화됨",
+        "hidden": "숨김",
         "unconfigured": "설정 안 됨"
       },
       "button": {
@@ -3726,7 +3735,9 @@
         "cancel": "취소",
         "retry": "모델 목록 다시 가져오기",
         "retrying": "다시 가져오는 중…",
-        "enableProvider": "제공자 활성화"
+        "enableProvider": "제공자 활성화",
+        "showProvider": "표시",
+        "hideInstead": "숨김으로 변경"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4106,7 +4117,7 @@
         "paymentRequired": "유료",
         "paymentUnlock": "유료로 잠금 해제",
         "enableModel": "이 모델 활성화",
-        "capabilityGroupHint": "대화 모델 선택에는 표시되지 않습니다. 스위치로 해당 기능에서의 표시 여부를 설정합니다.",
+        "capabilityGroupHint": "모델 선택기에는 표시되지 않습니다. 스위치로 해당 기능에서 이 모델을 사용할지 정합니다.",
         "accessWriteFailed": "변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.",
         "visibilityWriteFailed": "모델 표시 설정을 저장하지 못했습니다. 다시 시도해 주세요. 문제가 계속되면 Cindy를 다시 시작해 주세요.",
         "disabledGroup": "비활성화됨",
@@ -4250,22 +4261,22 @@
           "aria": "모델 유형으로 필터",
           "chat": "대화"
         },
-        "hiddenGroup": "표시 안 함",
+        "hiddenGroup": "숨김",
         "management": {
           "brand": "제조사"
         },
         "manage": {
           "title": "모델",
-          "selected": "{{count}}개 선택됨",
-          "hint": "스위치로 사용할 대화 모델을 선택하세요.",
+          "selected": "{{count}}개 표시",
+          "hint": "스위치로 모델 선택기에 표시할 모델을 정합니다. 끄면 숨겨질 뿐이며, 모델 선택기 하단의 ‘숨김’에서 계속 선택할 수 있습니다.",
           "menu": "관리",
           "arrange": "목록 정렬",
           "byBrand": "제조사별로 묶기",
           "byName": "모델 이름순 정렬",
-          "selection": "모델 선택",
-          "showAll": "모든 모델 선택",
-          "hideAll": "모든 선택 해제",
-          "reset": "기본 선택 복원",
+          "selection": "모델 선택기에 표시",
+          "showAll": "모두 표시",
+          "hideAll": "모두 숨기기",
+          "reset": "기본 표시로 복원",
           "connectionRequired": "연결하면 사용할 수 있습니다. 모델 선택은 유지됩니다."
         }
       },
@@ -4279,7 +4290,8 @@
         "groupBadge_other": "제공자 그룹 · 컴퓨터 {{count}}대",
         "groupNote": "{{device}}에서 이 제공자를 제공자 그룹으로 만들었습니다. 모델 목록에서 선택해 새 작업을 만들면 {{device}}가 그룹 배정 방식에 따라 아래 컴퓨터 중 한 대에 작업을 배정하고, 그 컴퓨터에 문제가 생기면 다른 컴퓨터로 바꿔 계속합니다. {{device}}가 온라인이면 여기에서 「원격 및 공유」를 열어 그룹과 공유를 관리할 수 있습니다.",
         "groupMembersTitle": "그룹의 컴퓨터",
-        "groupMembersFailed": "지금은 그룹의 컴퓨터 상태를 가져올 수 없습니다."
+        "groupMembersFailed": "지금은 그룹의 컴퓨터 상태를 가져올 수 없습니다.",
+        "hiddenBanner": "이 컴퓨터의 모델 선택기에서 숨겨져 있습니다. 즐겨찾기와 사용 중인 세션에는 영향이 없습니다."
       },
       "genericOAuth": {
         "subtitle": "구독 계정",
@@ -4323,7 +4335,8 @@
           "rejected": "이 제공자가 요청을 거부했습니다. 아래는 마지막으로 가져온 목록입니다. 잠시 후 다시 시도하거나 다른 제공자를 사용하세요.",
           "empty": "이번에는 이 제공자가 사용 가능한 모델을 반환하지 않았습니다. 아래는 마지막으로 가져온 목록입니다. 계정 권한을 확인한 후 다시 시도하세요."
         },
-        "suspendedBanner": "이 제공자는 비활성화되어 있습니다. 자격 증명은 유지되며, 활성화하면 모델을 다시 사용할 수 있습니다.",
+        "suspendedBanner": "이 제공자는 비활성화되어 새 세션과 백그라운드 기능에서 더 이상 사용되지 않습니다. 자격 증명은 유지됩니다. 모델 선택기에서만 보이지 않게 하려면 숨김으로 변경하세요.",
+        "hiddenBanner": "모델 선택기에서 숨겨져 있습니다. 사용 중인 세션과 백그라운드 기능에는 영향이 없으며, 모델 선택기 하단의 ‘숨김’에서 계속 선택할 수 있습니다.",
         "remoteAccess": {
           "label": "원격 사용 허용",
           "description": "켜면 내 다른 컴퓨터와 공유받은 사람이 이 제공자의 모델을 사용할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다.",
@@ -4533,7 +4546,25 @@
       },
       "menu": {
         "disableProvider": "이 제공자 비활성화",
-        "enableProvider": "이 제공자 활성화"
+        "enableProvider": "이 제공자 활성화",
+        "hideProvider": "모델 선택기에서 숨기기",
+        "showProvider": "모델 선택기에 표시"
+      },
+      "plugin": {
+        "title": "플러그인이 제공하는 제공자",
+        "badge": "플러그인",
+        "rowTip": "{{provider}} · 플러그인 제공",
+        "source": "플러그인 제공",
+        "declaredName": "플러그인에서의 이름: {{name}}",
+        "note": "이 제공자는 설치된 플러그인이 제공하며, 플러그인 자체 엔진으로 작업을 실행합니다. 로그인과 연결은 플러그인에서 관리합니다. 플러그인을 끄거나 제거하면 이 목록에서 사라집니다.",
+        "openPlugin": "플러그인 열기",
+        "resetName": "플러그인의 이름으로 되돌리기",
+        "suspendedBanner": "이 제공자는 비활성화되어 새 작업과 자동화에서 더 이상 사용되지 않으며, 내 다른 컴퓨터와 공유받은 사람도 사용할 수 없습니다. 플러그인 자체에는 영향이 없습니다. 모델 선택기에서만 보이지 않게 하려면 숨김으로 변경하세요.",
+        "hiddenBanner": "모델 선택기에서 숨겨져 있습니다. 이미 사용 중인 작업과 자동화에는 영향이 없습니다.",
+        "unavailableBanner": "플러그인이 이 엔진을 지금 실행할 수 없다고 알렸습니다. 플러그인을 열어 이유를 확인하세요.",
+        "unavailableBannerReason": "지금 실행할 수 없음: {{reason}}",
+        "modelsEmpty": "이 엔진은 아직 모델을 나열하지 않아 새 작업은 엔진 자체의 기본 모델을 사용합니다. 작업을 한 번 실행하면 여기에 모델이 표시됩니다.",
+        "modelSwitchAria": "{{model}} 활성화"
       },
       "builtinApiKey": {
         "subtitle": "API key 연결",
@@ -4599,7 +4630,7 @@
         "more": "음성 모델 더 보기 ({{count}})",
         "manual": "음성 모델 ID 직접 입력",
         "modelId": "음성 모델 ID",
-        "modelsHint": "음성 모델을 저장해도 음성 합성은 시작되지 않습니다. 음색과 문장별 읽기는 파트너 음성 설정에서 조정할 수 있습니다.",
+        "modelsHint": "음성 모델을 저장해도 음성 합성은 시작되지 않습니다. 음색과 문장별 읽기는 동반자 음성 설정에서 조정할 수 있습니다.",
         "otherModels": "대화 및 기타 모델",
         "separateKey": "음성에는 API 키가 필요합니다. 별도 연결을 만들고 기존 구독 또는 기기 코드 연결은 유지합니다.",
         "fetchFailed": "모델 목록을 가져올 수 없습니다. 참조 모델을 선택하여 추가할 수 있습니다.",
@@ -4818,13 +4849,13 @@
         "workingDirFailed": "작업 디렉터리를 업데이트하지 못했습니다. 다시 선택하세요."
       },
       "companion": {
-        "assigned": "연결된 파트너가 답장합니다",
-        "description": "WeChat에서 {{name}}와 대화하며 기억과 기본 작업을 공유합니다. 이 컴퓨터의 WeChat 연결은 한 번에 한 파트너에게만 연결할 수 있습니다.",
-        "other": "WeChat이 다른 파트너에게 연결되어 있습니다. 해당 파트너의 연결 설정이나 개인 WeChat 설정에서 먼저 연결을 해제하세요.",
-        "permissionNote": "내가 WeChat에서 보내는 메시지에는 전체 액세스를 포함한 파트너의 권한 설정이 적용됩니다. Cindy의 파트너 채팅 입력란 아래에서 권한을 변경할 수 있습니다. 다른 사람이 보낸 메시지에는 기존 권한 제한이 유지됩니다.",
-        "remove": "파트너 연결 해제",
+        "assigned": "연결된 동반자가 답장합니다",
+        "description": "WeChat에서 {{name}}와 대화하며 기억과 기본 작업을 공유합니다. 이 컴퓨터의 WeChat 연결은 한 번에 한 동반자에게만 연결할 수 있습니다.",
+        "other": "WeChat이 다른 동반자에게 연결되어 있습니다. 해당 동반자의 연결 설정이나 개인 WeChat 설정에서 먼저 연결을 해제하세요.",
+        "permissionNote": "내가 WeChat에서 보내는 메시지에는 전체 액세스를 포함한 동반자의 권한 설정이 적용됩니다. Cindy의 동반자 채팅 입력란 아래에서 권한을 변경할 수 있습니다. 다른 사람이 보낸 메시지에는 기존 권한 제한이 유지됩니다.",
+        "remove": "동반자 연결 해제",
         "useExisting": "연결된 WeChat으로 {{name}}와 대화",
-        "updateFailed": "연결을 변경하지 못했습니다. WeChat 작업이 끝난 뒤 다시 시도하고 파트너를 사용할 수 있는지 확인하세요."
+        "updateFailed": "연결을 변경하지 못했습니다. WeChat 작업이 끝난 뒤 다시 시도하고 동반자를 사용할 수 있는지 확인하세요."
       }
     },
     "discordBot": {
@@ -5705,10 +5736,10 @@
         "toggleAria": "내 브라우저 로그인 사용",
         "confirmTitle": "Agent가 브라우저 로그인을 사용하도록 할까요?",
         "confirmDescription": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다.",
-        "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. Chrome 로그인 파일을 읽으려면 ‘전체 디스크 접근 권한’도 필요합니다. 언제든 끌 수 있으며, 복사본은 삭제됩니다.",
+        "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다. macOS에서 폴더를 선택하라고 하면 사용할 브라우저 프로필 폴더를 선택하세요.",
         "confirm": "내 로그인 사용",
-        "readDeniedTitle": "전체 디스크 접근 권한이 필요합니다",
-        "readDeniedDescription": "Chrome 로그인 파일을 읽으려면 시스템이 Cindy를 허용해야 합니다. 개인 정보 보호 및 보안 → 전체 디스크 접근 권한에서 Cindy를 켠 다음 다시 시도하세요.",
+        "readDeniedTitle": "브라우저 프로필을 읽을 수 없음",
+        "readDeniedDescription": "개인정보 보호 및 보안 → 전체 디스크 접근 권한에서 실행 중인 Cindy를 선택하세요. 폴더를 선택할 수 있다면 필요한 브라우저 프로필 폴더만 선택한 뒤 다시 시도하세요.",
         "openFullDiskAccess": "시스템 설정 열기",
         "readDeniedLater": "나중에",
         "toast": {
@@ -5880,7 +5911,7 @@
         "permissionIntro": {
           "title": "컴퓨터 자동 조작 활성화",
           "description": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요.",
-          "macosDescription": "다음 단계에서 {{appName}}가 Cua Driver 설치 또는 권한 부여 흐름을 열고, 필요하면 macOS 시스템 설정으로 이동합니다. 먼저 CuaDriver에 손쉬운 사용 및 화면 기록 기본 권한을 부여하세요. 이후 실제 사용 중에는 macOS가 대상 앱이나 특정 동작에 대해 추가 확인을 표시할 수 있습니다. 사용자가 직접 Computer Use 작업을 시작한 경우에만 승인하세요. 완료 후 {{appName}}로 돌아오면 자동으로 확인하고 활성화합니다.",
+          "macosDescription": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요. CuaDriver에 화면 기록을 허용하세요. System & App Protection Override에서 제어를 허용할 앱을 선택하고, 이전 macOS 버전에서는 손쉬운 사용을 켜세요.",
           "confirm": "계속",
           "cancel": "나중에"
         },
@@ -5901,8 +5932,8 @@
         },
         "permissions": {
           "title": "시스템 권한",
-          "macosHint": "Computer Use에는 손쉬운 사용 및 화면 기록 권한이 필요합니다. 실제 사용 중에는 macOS가 대상 앱이나 동작에 대해 추가 확인을 표시할 수 있습니다.",
-          "accessibilityLabel": "손쉬운 사용",
+          "macosHint": "CuaDriver에 화면 기록을 허용하세요. System & App Protection Override에서 제어를 허용할 앱을 선택하고, 이전 버전에서는 손쉬운 사용을 켜세요.",
+          "accessibilityLabel": "키보드 및 마우스 제어",
           "screenRecordingLabel": "화면 기록",
           "grant": "허용",
           "accessibility": "손쉬운 사용: {{status}}",
@@ -5948,7 +5979,7 @@
           "toggleFailed": "컴퓨터 직접 제어 전환 실패",
           "installFailed": "cua-driver 설치 실패",
           "permissionFailed": "Computer Use 권한 설정이 완료되지 않았습니다",
-          "permissionPending": "두 시스템 권한을 허용한 후 여기로 돌아와 다시 확인을 누르세요",
+          "permissionPending": "Mac에서 권한 설정을 마치세요. 상태가 바뀌지 않으면 다시 확인하세요.",
           "permissionSettingsOpened": "시스템 권한 설정을 열었습니다. 권한 부여를 마친 뒤 여기로 돌아와 \"다시 확인\"을 눌러 주세요.",
           "permissionSettingsMonitoring": "시스템 권한 설정을 열었습니다. 권한 부여를 마치면 상태가 자동으로 업데이트됩니다.",
           "openPermissionSettingsFailed": "시스템 권한 설정을 열지 못했습니다"
@@ -7000,7 +7031,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "프라이버시 화면에 포함됨: 컴퓨터가 잠자기 상태로 전환되지 않습니다."
+      "keepAwakeIncluded": "프라이버시 화면에 포함됨: 컴퓨터가 잠자기 상태로 전환되지 않습니다.",
+      "localNetwork": {
+        "label": "로컬 네트워크",
+        "deniedHint": "이 권한이 없으면 같은 네트워크의 컴퓨터와 휴대폰이 이 컴퓨터에 직접 연결할 수 없고 릴레이를 거쳐야 해서 느려집니다.",
+        "settingsHint": "시스템 설정 › 개인정보 보호 및 보안 › 로컬 네트워크에서 Cindy를 켜세요. 돌아오면 바로 적용됩니다."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8215,10 +8251,10 @@
         "agentTasksRequest": "세션 권한 확인",
         "agentTasks": "이 플러그인의 Cindy 세션을 만들고 관리할 수 있음",
         "agentTasksDetail": "플러그인은 자신이 만든 세션에 메시지를 보내고 결과를 읽으며 실행을 중지할 수 있습니다. 세션은 사용자에게 표시되고 플러그인의 AI 설정을 사용하므로 모델 비용이 발생할 수 있습니다. 세션의 Agent는 작업 권한과 계정 소유 관계에 따라 연결된 도구를 사용하며 다른 세션과 계정 데이터에도 접근할 수 있습니다.",
-        "agentDelegation": "파트너에게 작업을 위임할 수 있음",
-        "agentDelegationDetail": "파트너는 위임 범위 내에서 자동 검토를 거쳐 실행합니다. 소유자를 사칭하거나 파트너 권한을 변경하지 않습니다.",
-        "agentTargets": "프로젝트, 기존 세션 및 파트너에 메시지를 보낼 수 있음",
-        "agentTargetsDetail": "로컬 프로젝트 디렉터리와 세션 및 파트너의 이름과 ID를 확인하고, 프로젝트에 세션을 만들거나 기존 세션 및 파트너에 텍스트와 이미지를 보낼 수 있습니다. AI 실행과 모델 비용이 발생할 수 있습니다. 이 전송 API 자체로는 다른 세션의 기록을 읽거나 설정을 변경하거나 중지할 수 없습니다.",
+        "agentDelegation": "동반자에게 작업을 위임할 수 있음",
+        "agentDelegationDetail": "동반자는 위임 범위 내에서 자동 검토를 거쳐 실행합니다. 소유자를 사칭하거나 동반자 권한을 변경하지 않습니다.",
+        "agentTargets": "프로젝트, 기존 세션 및 동반자에 메시지를 보낼 수 있음",
+        "agentTargetsDetail": "로컬 프로젝트 디렉터리와 세션 및 동반자의 이름과 ID를 확인하고, 프로젝트에 세션을 만들거나 기존 세션 및 동반자에 텍스트와 이미지를 보낼 수 있습니다. AI 실행과 모델 비용이 발생할 수 있습니다. 이 전송 API 자체로는 다른 세션의 기록을 읽거나 설정을 변경하거나 중지할 수 없습니다.",
         "agentObserve": "로컬 프로젝트의 세션 목록과 상태를 볼 수 있음",
         "agentObserveDetail": "등록된 로컬 프로젝트에 있는 세션의 제목, Agent 종류, 보관 여부와 상태(실행 중, 확인 필요, 최근 활동 시간)를 확인하고 메인 창에서 세션을 열 수 있습니다. 메시지, 계획, 파일을 읽거나 메시지를 보내거나 세션을 변경할 수는 없습니다.",
         "agentObserveRequest": "세션 보기 권한 확인",
@@ -8516,7 +8552,10 @@
           "description": "켜면 내 다른 컴퓨터에서 이 엔진으로 작업을 실행할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다. 파일과 명령은 작업이 있는 컴퓨터에 그대로 남습니다.",
           "unsupported": "이 플러그인은 아직 다른 컴퓨터에서 엔진을 사용하는 것을 지원하지 않습니다.",
           "remoteControlOff": "이 컴퓨터는 아직 원격 제어를 허용하지 않아 다른 컴퓨터에서 이 엔진을 사용할 수 없습니다.",
-          "ariaLabel": "내 다른 컴퓨터에서 {{engine}} 사용 허용"
+          "ariaLabel": "내 다른 컴퓨터에서 {{engine}} 사용 허용",
+          "descriptionShareable": "켜면 내 다른 컴퓨터와 공유받은 사람이 플러그인을 설치하지 않고도 이 엔진으로 작업을 실행할 수 있습니다. Agent는 이 컴퓨터에서 이 컴퓨터의 로그인과 할당량으로 실행됩니다. 파일과 명령은 작업이 있는 컴퓨터에 그대로 남습니다.",
+          "providerDisabled": "이 제공자는 제공자 설정에서 비활성화되어 다른 컴퓨터에서 이 엔진을 사용할 수 없습니다.",
+          "openProviders": "제공자 설정 열기"
         },
         "githubRelease": {
           "title": "플러그인 업데이트",
@@ -9935,8 +9974,8 @@
         "prompt-prediction": "입력 제안",
         "working-status": "작업 상태",
         "help": "도움말",
-        "bot-creation": "동료 만들기",
-        "bot-opening": "동료 인사말",
+        "bot-creation": "동반자 만들기",
+        "bot-opening": "동반자 인사말",
         "group-planning": "그룹 계획",
         "ambient-reply": "답장 판단",
         "auto-review": "자동 검토",
@@ -10895,6 +10934,13 @@
         "enabled": "켜짐"
       },
       "close": "다운로드 화면 닫기"
+    },
+    "localNetwork": {
+      "title": "로컬 네트워크 접근 허용",
+      "relayOnly": "다른 기기가 지금은 릴레이를 통해서만 이 컴퓨터에 연결되어 느립니다. 허용하면 같은 네트워크에서는 직접 연결됩니다.",
+      "controlEnabled": "같은 네트워크의 기기가 이 컴퓨터를 직접 제어하려면 로컬 네트워크 접근이 필요합니다. 없으면 릴레이를 거칩니다.",
+      "allow": "허용",
+      "dismiss": "나중에"
     }
   },
   "bots": {
@@ -11003,14 +11049,14 @@
     "close": "닫기",
     "list": {
       "createMenu": "새로 만들기",
-      "createTeammate": "새 동료",
+      "createTeammate": "새 동반자",
       "joinWithLink": "초대 링크 입력…",
       "startChat": "대화 시작하기",
-      "selectChat": "동료 또는 그룹 채팅을 선택해 대화를 시작하세요",
+      "selectChat": "동반자 또는 그룹 채팅을 선택해 대화를 시작하세요",
       "typing": "입력 중…",
       "unread": "읽지 않은 메시지 {{count}}개",
-      "search": "동료 또는 그룹 채팅 검색",
-      "searchPlaceholder": "동료 또는 그룹 채팅 검색…",
+      "search": "동반자 또는 그룹 채팅 검색",
+      "searchPlaceholder": "동반자 또는 그룹 채팅 검색…",
       "showHidden": "숨긴 동반자 표시",
       "hideHidden": "숨긴 동반자 접기",
       "hidden": "숨김({{count}})",
@@ -11021,13 +11067,18 @@
       "pinned": "고정됨",
       "needsAttention": "확인 필요",
       "duplicate": "동반자 복제",
+      "duplicating": "동반자를 복제하는 중…",
+      "duplicateFailed": "동반자를 복제하지 못했습니다.",
+      "duplicateModelRequired": "복제하기 전에 설정에서 동반자의 기본 사용 모델을 선택하세요.",
+      "pinFailed": "동반자 고정 상태를 변경하지 못했습니다.",
+      "hideFailed": "동반자 숨김 상태를 변경하지 못했습니다.",
       "moreActions": "{{name}} 추가 작업",
       "viewIcons": "아이콘",
       "showCollapsedTeammateAvatars": "접었을 때 아바타 표시",
       "sectionExpand": "동반자 펼치기",
       "showLess": "접기",
       "sectionCollapse": "동반자 접기",
-      "noResults": "검색과 일치하는 동료나 그룹이 없어요"
+      "noResults": "검색과 일치하는 동반자나 그룹이 없어요"
     },
     "cancel": "취소",
     "save": "저장",
@@ -11043,7 +11094,7 @@
     "sessionLoadFailedTitle": "이 동반자 작업을 불러올 수 없습니다",
     "sessionLoadFailedDescription": "작업 연결은 남아 있지만 Cindy가 동반자 상태를 읽지 못했습니다. 다시 시도하거나 동반자 개요로 돌아가세요.",
     "sessionUnavailableTitle": "이 동반자 작업은 더 이상 사용할 수 없습니다",
-    "sessionUnavailableDescription": "이 작업이 없어졌거나 삭제되었거나 더 이상 이 동료의 것이 아닐 수 있습니다. 돌아가면 복구된 기본 작업을 열 수 있어요.",
+    "sessionUnavailableDescription": "이 작업이 없어졌거나 삭제되었거나 더 이상 이 동반자의 것이 아닐 수 있습니다. 돌아가면 복구된 기본 작업을 열 수 있어요.",
     "settings": "설정",
     "settingsTabs": {
       "model": "모델"
@@ -11153,7 +11204,7 @@
     "profileSaveOffline": "동반자가 있는 컴퓨터에 연결할 수 없습니다. 다시 연결한 후 저장해 주세요.",
     "modelLabel": "모델",
     "modelUnavailable": "{{model}}(현재 사용할 수 없음)",
-    "codexAutomaticCompact": "Codex 동료는 스스로 맥락을 압축하고 /new를 써도 지금 작업이 유지됩니다. 정말 새로 시작해야 할 때만 새 작업을 여세요.",
+    "codexAutomaticCompact": "Codex 동반자는 스스로 맥락을 압축하고 /new를 써도 지금 작업이 유지됩니다. 정말 새로 시작해야 할 때만 새 작업을 여세요.",
     "image": "이미지 추가",
     "send": "메시지 보내기",
     "roster": {
@@ -11167,15 +11218,15 @@
       "composerPlaceholderLatin": "{{name}}에게 말 걸기…"
     },
     "globalSettings": {
-      "restoreHint": "동료 추천 모델로 복원합니다. 개별 동료의 사용자 지정 모델은 유지됩니다.",
+      "restoreHint": "동반자 추천 모델로 복원합니다. 개별 동반자의 사용자 지정 모델은 유지됩니다.",
       "restoreFailed": "기본값을 복원하지 못했습니다. 다시 시도해 주세요.",
       "defaultModel": "기본 사용 모델",
-      "defaultModelHint": "새 작업의 모델 선택과 별개인 동료용 모델입니다. 개별 동료는 다른 모델을 선택할 수 있어요.",
-      "title": "동료",
-      "description": "동료 전체에 적용되는 설정입니다. 개별 동료 설정은 각자의 페이지에 있어요.",
+      "defaultModelHint": "새 작업의 모델 선택과 별개인 동반자용 모델입니다. 개별 동반자는 다른 모델을 선택할 수 있어요.",
+      "title": "동반자",
+      "description": "동반자 전체에 적용되는 설정입니다. 개별 동반자 설정은 각자의 페이지에 있어요.",
       "rosterNote": "기본 제공되는 구성원은 버전마다 늘어납니다.",
       "showReplyTarget": "답장 대상 메시지 표시",
-      "showReplyTargetHint": "동료 답장 위에 어떤 메시지에 대한 답장인지 표시합니다. 이전 답장에는 표시되지 않습니다."
+      "showReplyTargetHint": "동반자 답장 위에 어떤 메시지에 대한 답장인지 표시합니다. 이전 답장에는 표시되지 않습니다."
     },
     "session": {
       "ownedByBot": "{{name}}이(가) 연 세션",
@@ -11256,8 +11307,8 @@
         },
         "title": "AI 대신 답장 모드",
         "settings": "AI 대신 답장 설정",
-        "companion": "내 동료",
-        "choose": "동료 선택",
+        "companion": "내 동반자",
+        "choose": "동반자 선택",
         "enabled": "자동 대신 답장",
         "triggerLabel": "작동 방식",
         "resumeAfter": "부재 후 재개",
@@ -11286,8 +11337,8 @@
           "off": "자동 대신 답장 꺼짐",
           "offline": "답장 일시 중지 · 컴퓨터 오프라인",
           "waiting": "수동 시작 대기",
-          "unbound": "동료 미선택",
-          "enabled": "동료가 대신 답장할 준비가 됐어요"
+          "unbound": "동반자 미선택",
+          "enabled": "동반자가 대신 답장할 준비가 됐어요"
         },
         "trigger": {
           "always": "항상 활성화",
@@ -11304,7 +11355,7 @@
         "attribution": "{{name}}이(가) {{owner}} 대신 답장했어요",
         "digestNow": "지금 정리",
         "digestWorking": "정리 중…",
-        "digestSent": "동료 채팅으로 보냈어요",
+        "digestSent": "동반자 채팅으로 보냈어요",
         "digestFailed": "정리하지 못했어요. 다시 시도하세요.",
         "digestEmpty": "새로 정리할 내용이 없어요",
         "joinSetup": "참여 후 AI 대신 답장 설정",
@@ -11464,7 +11515,7 @@
         "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
         "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다",
         "runtimeFailureReason": {
-          "unclaimed_timeout": "{{name}}이(가) 대기 시간 내에 처리를 시작하지 못해 이번 요청이 종료되었습니다.\n동료의 소유자에게 해당 컴퓨터에서 Cindy가 정상 실행 중이고 네트워크에 연결되어 있는지 확인해 달라고 요청하세요."
+          "unclaimed_timeout": "{{name}}이(가) 대기 시간 내에 처리를 시작하지 못해 이번 요청이 종료되었습니다.\n동반자의 소유자에게 해당 컴퓨터에서 Cindy가 정상 실행 중이고 네트워크에 연결되어 있는지 확인해 달라고 요청하세요."
         },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 이 동반자가 있는 기기의 원격 세션 수가 한도에 도달했습니다.\n동반자의 소유자에게 사용하지 않는 세션을 보관해 달라고 요청하거나, 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
@@ -11521,7 +11572,7 @@
         "projectDirChoose": "폴더 선택",
         "projectDirChange": "폴더 변경",
         "projectDirClear": "지우기",
-        "projectDirNote": "이 컴퓨터에 있는 기존 프로젝트를 선택하세요. 비워 두면 저장소에 해당하는 프로젝트를 먼저 사용하고, 없으면 작업을 맡은 동료의 프로젝트를 사용합니다. Git 분업에는 별도 워크트리를 사용합니다.",
+        "projectDirNote": "이 컴퓨터에 있는 기존 프로젝트를 선택하세요. 비워 두면 저장소에 해당하는 프로젝트를 먼저 사용하고, 없으면 작업을 맡은 동반자의 프로젝트를 사용합니다. Git 분업에는 별도 워크트리를 사용합니다.",
         "autoContinueSaveFailed": "단계 넘기기를 저장하지 못했습니다. 다시 시도해 주세요.",
         "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요",
         "allowMemberInvites": "모든 멤버의 친구 초대 허용",
@@ -11715,7 +11766,7 @@
           "listOthers": "다른 스레드",
           "newSeparator": "새 답글"
         },
-        "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 동료를 멘션할 수 있어요…",
+        "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 동반자를 멘션할 수 있어요…",
         "sendReply": "답글 보내기",
         "addReaction": "이모지 반응 추가",
         "reactionCount": "{{emoji}} · 반응 {{count}}개",
@@ -11738,7 +11789,7 @@
         "readerUnknown": "알 수 없는 멤버",
         "invite": "그룹에 초대",
         "groupCreated": "그룹 채팅이 생성되었습니다",
-        "inviteFriends": "친구를 초대해 함께 동료를 사용해 보세요",
+        "inviteFriends": "친구를 초대해 함께 동반자를 사용해 보세요",
         "generatingLink": "초대 링크 생성 중…",
         "join": "그룹 참여",
         "revokeLink": "이 링크 취소",
@@ -11766,7 +11817,7 @@
         "loginRequired": "현재 계정에 로그인한 후 다시 시도하세요.",
         "requestFailed": "채팅 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
         "copyFailed": "복사하지 못했습니다. 링크를 선택하여 직접 복사하세요.",
-        "createDescription": "동료를 선택하거나 먼저 그룹을 만들고 친구를 초대할 수 있어요.",
+        "createDescription": "동반자를 선택하거나 먼저 그룹을 만들고 친구를 초대할 수 있어요.",
         "settings": {
           "notifications": {
             "title": "메시지 알림",
@@ -11794,9 +11845,9 @@
           "admin": "관리자",
           "member": "멤버",
           "guest": "게스트",
-          "companionOf": "{{name}}의 동료",
-          "toolsHint": "멤버는 동료의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
-          "ownerOnly": "동료 소유자만 이 권한을 변경할 수 있습니다.",
+          "companionOf": "{{name}}의 동반자",
+          "toolsHint": "멤버는 동반자의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
+          "ownerOnly": "동반자 소유자만 이 권한을 변경할 수 있습니다.",
           "authorizeTitle": "이 그룹에서 {{name}}의 도구와 정보를 사용하도록 허용할까요?",
           "makeAdmin": "관리자로 지정",
           "removeAdmin": "관리자 해제",
@@ -11804,22 +11855,22 @@
           "transferTitle": "{{name}}에게 소유권을 이전할까요?",
           "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다.",
           "removeTitle": "{{name}}을(를) 그룹에서 내보낼까요?",
-          "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 동료도 나갑니다.",
+          "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 동반자도 나갑니다.",
           "removeOwn": "그룹에서 내보내기",
-          "removeOwnScope": "이 그룹에만 적용됩니다. 파트너는 계정에 유지됩니다.",
-          "removeOwnHint": "{{name}} 파트너가 “{{group}}” 메시지를 더 이상 받지 않습니다. 기록은 유지되며 다른 그룹과 개인 채팅에는 영향을 주지 않습니다.",
+          "removeOwnScope": "이 그룹에만 적용됩니다. 동반자는 계정에 유지됩니다.",
+          "removeOwnHint": "{{name}} 동반자가 “{{group}}” 메시지를 더 이상 받지 않습니다. 기록은 유지되며 다른 그룹과 개인 채팅에는 영향을 주지 않습니다.",
           "removeOwnActiveHint": "이 그룹에서 진행 중인 요청이 중지됩니다. 별도로 시작한 작업은 계속 실행됩니다.",
           "stopAndRemove": "중지 후 내보내기",
           "leave": "그룹 나가기",
           "leaveHint": "나와 내 동반자가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
           "soleOwnerHint": "그룹에 나만 남았어요. 그룹을 보관하면 기록을 유지하고 나중에 다시 사용할 수 있어요.",
           "archive": "그룹 보관",
-          "archiveHint": "그룹을 보관하면 모든 멤버의 새 메시지와 동료 실행이 중지돼요. 기록은 유지돼요. 그룹을 검색해 기록을 보거나 보관을 해제할 수 있어요.",
+          "archiveHint": "그룹을 보관하면 모든 멤버의 새 메시지와 동반자 실행이 중지돼요. 기록은 유지돼요. 그룹을 검색해 기록을 보거나 보관을 해제할 수 있어요.",
           "confirm": "확인",
           "lastOwner": "나가거나 소유자를 내보내기 전에 다른 멤버에게 소유권을 이전하세요.",
           "conflict": "다른 멤버가 설정을 변경했습니다. 새로 고침 후 다시 시도하세요.",
           "unarchive": "그룹 보관 해제",
-          "unarchiveHint": "보관을 해제하면 모든 멤버의 메시지와 동료 실행이 재개돼요.",
+          "unarchiveHint": "보관을 해제하면 모든 멤버의 메시지와 동반자 실행이 재개돼요.",
           "archived": "보관된 그룹입니다. 기록은 계속 볼 수 있습니다.",
           "capabilityScope": "이것은 {{name}}의 도구와 사용 권한이며, 이 그룹에만 적용되는 설정이 아닙니다.",
           "tabSettings": "설정",
@@ -12054,47 +12105,16 @@
       "officialInherited": "Cindy 공식 · 이 컴퓨터 설정 따름"
     },
     "guided": {
-      "title": "동료 만들기",
-      "reviewTitle": "새로운 동료",
-      "question": "기대하는 점을 간단히 적어 주세요.",
-      "placeholder": "예를 들어, 일상 대화로 영어를 연습하고 표현도 꼼꼼하게 교정받고 싶어요.",
-      "generate": "동료 만들기",
-      "generating": "동료를 구상하고 있어요…",
-      "generationFailed": "생성하지 못했습니다. 입력 내용은 남아 있으니 다시 시도해 주세요.",
+      "title": "동반자 만들기",
+      "generate": "동반자 만들기",
       "modelRequired": "위에서 사용 가능한 모델을 선택한 후 계속해 주세요.",
-      "modelFollowsDefault": "동료 기본 모델을 따릅니다.",
-      "modelForThisBot": "이 선택은 이 동료에게만 적용됩니다.",
-      "cindyDescription": "Cindy 사용과 도구 연결을 도와드리고 함께 일을 마무리할게요.",
-      "cindySummary": "Cindy 관리, 도구 연결, 일 마무리.",
-      "openCindy": "Cindy 열기",
-      "addCindy": "Cindy 추가",
-      "done": "완료",
-      "editName": "이름 편집",
-      "duplicateName": "같은 이름의 동료가 있습니다. 구분하기 쉬운 이름을 선택해 주세요.",
-      "introduction": "자기소개",
-      "editIntroduction": "자기소개 편집",
-      "refine": "동료 조정",
-      "refinePlaceholder": "어떤 점을 바꿀까요? 예를 들어, 조금 더 편하고 유머 있게.",
-      "back": "뒤로",
-      "invite": "동료 초대",
+      "modelFollowsDefault": "동반자 기본 모델을 따릅니다.",
+      "modelForThisBot": "이 선택은 이 동반자에게만 적용됩니다.",
+      "duplicateName": "같은 이름의 동반자가 있습니다. 구분하기 쉬운 이름을 선택해 주세요.",
       "portrait": "프로필 사진 {{number}}",
       "upload": "이미지 업로드",
       "generateAvatar": "프로필 사진 생성",
-      "useAvatar": "이 사진 사용",
-      "examples": {
-        "english": {
-          "label": "영어 연습",
-          "prompt": "일상 대화로 영어를 연습하고 싶어요. 인내심 있게 듣고 부자연스러운 표현을 꼼꼼히 교정해 주세요."
-        },
-        "ideas": {
-          "label": "아이디어 나누기",
-          "prompt": "상상력과 주관을 갖춘 창작 파트너. 글쓰기와 제품 아이디어를 구체적인 계획으로 발전시키고 싶어요."
-        },
-        "life": {
-          "label": "일상 이야기",
-          "prompt": "따뜻하고 유머 있는 파트너. 성급하게 조언하기보다 일상의 작은 이야기를 들어줬으면 해요."
-        }
-      }
+      "useAvatar": "이 사진 사용"
     },
     "import": {
       "title": "동반자 가져오기",
@@ -12153,10 +12173,10 @@
       "attachmentUnsupported": "아직 지원하지 않는 첨부 형식입니다. 원본 파일은 소스에 남아 있습니다.",
       "diskFull": "디스크 공간이 부족합니다. 공간을 확보한 뒤 다시 시도하세요.",
       "permissionDenied": "읽기 또는 저장 권한이 없습니다. 권한을 수정한 뒤 다시 시도하세요.",
-      "setupDeferred": "동료 채팅에서 로그인과 확인을 계속할 수 있습니다.",
+      "setupDeferred": "동반자 채팅에서 로그인과 확인을 계속할 수 있습니다.",
       "automationInvalid": "자동화 정의를 변환할 수 없어 생성되지 않았습니다.",
       "itemFailed": "아직 완료되지 않은 항목입니다. 다시 시도하거나 세부 정보를 확인하세요.",
-      "chatPartial": "동료가 생성되었지만 일부 자료는 완전히 저장되지 않았습니다. 아래 항목은 추가 처리가 필요하며 다른 내용과 채팅은 계속 사용할 수 있습니다.",
+      "chatPartial": "동반자가 생성되었지만 일부 자료는 완전히 저장되지 않았습니다. 아래 항목은 추가 처리가 필요하며 다른 내용과 채팅은 계속 사용할 수 있습니다.",
       "imBotOwnerMissing": "소유자 사용자 ID를 찾지 못했습니다. 동반자의 메시지 플랫폼 페이지에서 이 봇을 연결하세요.",
       "imBotGatewayRunning": "기존 게이트웨이가 아직 이 봇을 사용 중입니다. 중지한 다음 메시지 플랫폼에서 연결하세요.",
       "imBotInUse": "이 봇은 이미 이 컴퓨터에서 사용 중입니다 (설정 → IM 봇, 또는 다른 동반자).",
@@ -12255,15 +12275,15 @@
       "transferFailed": "{{name}}을(를) “{{device}}”(으)로 옮기지 못했습니다",
       "repair": {
         "action": "자료 수정 후 다시 시도",
-        "title": "동료 자료 수정",
-        "description": "저장하면 이 컴퓨터에서 동료를 복원합니다. 원본 자료는 먼저 이 컴퓨터에 백업됩니다.",
+        "title": "동반자 자료 수정",
+        "description": "저장하면 이 컴퓨터에서 동반자를 복원합니다. 원본 자료는 먼저 이 컴퓨터에 백업됩니다.",
         "save": "저장하고 복원",
         "count": "{{count}} / {{limit}}자",
         "over": "{{count}}자 초과했습니다. 내용을 줄인 후 저장하세요.",
         "changed": "자료 또는 주 컴퓨터가 변경되었습니다. 다시 읽은 후 수정하세요.",
         "loadFailed": "자료를 읽지 못했습니다. 다시 시도하세요.",
         "backupFailed": "원본 자료를 백업하지 못해 수정 사항을 적용하지 않았습니다. 디스크 여유 공간을 확인하고 다시 시도하세요.",
-        "saveFailed": "동료가 아직 복원되지 않았습니다. 수정 내용은 여기에 남아 있습니다. 다시 시도하세요.",
+        "saveFailed": "동반자가 아직 복원되지 않았습니다. 수정 내용은 여기에 남아 있습니다. 다시 시도하세요.",
         "reload": "다시 읽기"
       }
     },
@@ -12479,17 +12499,17 @@
         "ok": "확인"
       },
       "officialX": {
-        "bind": "이 동료에게 연결",
-        "remove": "동료 연결 해제",
+        "bind": "이 동반자에게 연결",
+        "remove": "동반자 연결 해제",
         "bindTitle": "X 질문을 {{name}}에게 맡길까요?",
-        "bindBody": "공식 @askmycindy에 보낸 공개 질문을 {{name}}의 정체성, 도구, 공유 기억과 작업 폴더로 처리합니다. 답글은 공개됩니다. X 대화 기록은 비공개 채팅과 분리됩니다. 기존 동료 연결이 있으면 교체됩니다.",
-        "removeTitle": "X 동료 연결을 해제할까요?",
+        "bindBody": "공식 @askmycindy에 보낸 공개 질문을 {{name}}의 정체성, 도구, 공유 기억과 작업 폴더로 처리합니다. 답글은 공개됩니다. X 대화 기록은 비공개 채팅과 분리됩니다. 기존 동반자 연결이 있으면 교체됩니다.",
+        "removeTitle": "X 동반자 연결을 해제할까요?",
         "removeBody": "X 계정 연결은 유지되며 이후 질문은 일반 작업으로 처리됩니다. 이미 진행 중인 답변은 완료됩니다.",
         "bound": "{{name}}이(가) X 질문을 담당합니다. X를 켜고 계정을 인증하면 사용할 수 있습니다.",
-        "boundElsewhere": "X가 다른 동료에게 연결되어 있습니다. 여기에 연결하면 기존 동료를 교체합니다.",
+        "boundElsewhere": "X가 다른 동반자에게 연결되어 있습니다. 여기에 연결하면 기존 동반자를 교체합니다.",
         "unbound": "공식 @askmycindy에 보낸 질문을 {{name}}에게 맡길 수 있습니다.",
-        "managed": "동료가 X 질문을 담당합니다. 해당 동료의 메시지 플랫폼 설정에서 연결을 변경할 수 있습니다.",
-        "riskBody": "X 질문에는 동료의 공유 기억, 도구와 작업 폴더가 사용되며 답글은 공개됩니다. 개인 정보를 다루는 용도로 사용하지 마세요. X 대화는 비공개 채팅 기록을 직접 사용하지 않습니다."
+        "managed": "동반자가 X 질문을 담당합니다. 해당 동반자의 메시지 플랫폼 설정에서 연결을 변경할 수 있습니다.",
+        "riskBody": "X 질문에는 동반자의 공유 기억, 도구와 작업 폴더가 사용되며 답글은 공개됩니다. 개인 정보를 다루는 용도로 사용하지 마세요. X 대화는 비공개 채팅 기록을 직접 사용하지 않습니다."
       }
     },
     "voiceMode": {
@@ -12514,8 +12534,8 @@
       "settingsTitle": "음성",
       "openSettings": "음성 설정",
       "startConversation": "음성 대화 시작",
-      "settingsHint": "이 파트너의 읽어주기 모델과 음성을 선택한 후 입력창에서 음성 대화를 시작하세요.",
-      "previewNeedsChat": "파트너와 대화를 시작하면 음성을 미리 들을 수 있습니다.",
+      "settingsHint": "이 동반자의 읽어주기 모델과 음성을 선택한 후 입력창에서 음성 대화를 시작하세요.",
+      "previewNeedsChat": "동반자와 대화를 시작하면 음성을 미리 들을 수 있습니다.",
       "voiceId": "음성 ID",
       "manualVoice": "음성 ID 직접 입력",
       "refreshVoices": "음성 목록 새로고침",
@@ -12550,7 +12570,7 @@
       "modelUnavailable": "저장된 읽어주기 모델을 사용할 수 없습니다. 다른 모델을 선택하세요.",
       "noModels": "사용 가능한 음성 합성 모델이 없습니다.",
       "noModelsSupportedProtocols": "MiniMax, ElevenLabs, Qwen / CosyVoice HTTP API 및 OpenAI 호환 음성 합성 API를 지원합니다.",
-      "noModelsSetupHint": "제공자를 연결하고 음성 모델을 활성화하면 파트너의 낭독 음성을 설정할 수 있습니다.",
+      "noModelsSetupHint": "제공자를 연결하고 음성 모델을 활성화하면 동반자의 낭독 음성을 설정할 수 있습니다.",
       "openProviders": "모델 제공자 열기",
       "catalogError": "음성 설정을 불러오거나 저장하지 못했습니다. 다시 시도하세요.",
       "start": "대화 시작",
@@ -12593,7 +12613,7 @@
       "speedValue": "{{speed}}×",
       "sentencePlayback": "문장별로 읽기",
       "sentencePlaybackHint": "답변이 생성되는 동안 완성된 문장부터 읽습니다. 끄면 전체 답변이 완성된 후 읽습니다. 답변 처리가 필요한 경우 자동으로 기다립니다.",
-      "preferenceHint": "음성 설정은 이 동료에게만 저장됩니다.",
+      "preferenceHint": "음성 설정은 이 동반자에게만 저장됩니다.",
       "resetPreference": "기본값 복원",
       "preferenceError": "음성 설정을 불러오거나 저장하지 못했습니다. 다시 시도해 주세요.",
       "protocol": "음성 API",
@@ -12606,12 +12626,12 @@
       "callRecord": "이번 통화",
       "callHistoryTitle": "음성 통화",
       "you": "나",
-      "companion": "파트너",
+      "companion": "동반자",
       "callInProgress": "통화 중",
       "callSendFailed": "전송하지 못했습니다. 말한 내용은 보관됩니다.",
       "handoff": {
         "sending": "전달 중…",
-        "accepted": "파트너에게 전달됨",
+        "accepted": "동반자에게 전달됨",
         "failed": "전달하지 못했습니다. 말한 내용은 보관됩니다",
         "completed": "결과를 받았습니다"
       },
@@ -12714,7 +12734,7 @@
           "detachedBySlash": "🚪 원격 제어를 끝내고 Discord DM으로 돌아왔어요. 다음에 데스크톱을 원격 제어하려면 /ctr을 보내 주세요.",
           "detachedByRevoke": "⚠️ 데스크톱에서 원격 제어를 회수했습니다. 이후 메시지는 다시 Discord DM으로 돌아갑니다.",
           "notAttached": "🤷 지금은 원격 제어 중인 세션이 없어서 /exctr로 할 일이 없어요.",
-          "companionManagedCommand": "🧭 이 봇은 동료에게 넘겨졌어요. 모델, 권한, 작업 디렉터리는 동료 설정을 따르니, 바꾸려면 Cindy의 동료 설정에서 조정해 주세요~"
+          "companionManagedCommand": "🧭 이 봇은 동반자에게 넘겨졌어요. 모델, 권한, 작업 디렉터리는 동반자 설정을 따르니, 바꾸려면 Cindy의 동반자 설정에서 조정해 주세요~"
         },
         "agent": {
           "completedNoText": "✅ 완료했어요 (이번 턴에서 Agent가 남긴 말은 없어요)",
@@ -12902,13 +12922,13 @@
           "help": "🤖 제가 할 수 있는 일이에요:\n\n/new         새 세션 만들기 (기존 세션은 유지, 그룹에서는 현재 그룹 토픽별로 생성)\n/project     특정 프로젝트 폴더로 전환해 작업 (bot 쪽에서 실행, 데스크톱은 이어받지 않음)\n/session     최근 데스크톱 세션 목록, 하나를 누르면 바로 이어받아 계속 대화\n/model       다른 모델로 교체\n/permission  권한 모드 변경 (auto / bypass / ask 등)\n/settings    현재 프로젝트, Agent, 모델, 추론 강도, 권한 보기\n/ctr         데스크톱의 프로젝트를 원격으로 이어받기 (이어받는 중에 다시 보내면 세션 전환)\n/exctr       이어받기를 끝내고 Telegram 대화로 돌아가기\n/help        제가 할 수 있는 일 보기\n\n실행 중인 작업을 멈추고 싶다면 /stop(또는 `!stop`)을 보내세요. 현재 실행을 바로 중지하고 대기 중인 메시지도 취소해요. 세션은 그대로 남아 있어 이어서 진행할 수 있어요.\n\n1:1 채팅에서는 바로 메시지를 보내면 돼요. 그룹에서는 저를 @ 멘션하거나 제 메시지에 답장할 때만 반응하고, 그룹의 최근 메시지도 맥락으로 기억해 둬요.",
           "unknownCommand": "`{{cmd}}` 명령어는 알아듣지 못했어요 🤔\n사용할 수 있는 명령어: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ 현재 설정\n\n프로젝트: {{workspace}}\nAgent: {{agent}}\n모델: {{model}}\n추론 강도: {{effort}}\n권한: {{permission}}\n\n바꾸려면 /project, /model, /permission을 보내세요.",
-          "settingsCompanion": "⚙️ 현재 설정 (동료)\n\n프로젝트: {{workspace}}\nAgent: {{agent}}\n모델: {{model}}\n추론 강도: {{effort}}\n권한: {{permission}}\n\n모델, 권한, 작업 디렉터리는 동료 설정을 따릅니다. Cindy의 동료 설정에서 변경하세요.",
+          "settingsCompanion": "⚙️ 현재 설정 (동반자)\n\n프로젝트: {{workspace}}\nAgent: {{agent}}\n모델: {{model}}\n추론 강도: {{effort}}\n권한: {{permission}}\n\n모델, 권한, 작업 디렉터리는 동반자 설정을 따릅니다. Cindy의 동반자 설정에서 변경하세요.",
           "detachedBySlash": "🚪 이어받기를 끝냈어요. Telegram 대화로 돌아왔어요. 다음에 데스크톱을 원격으로 조작하고 싶으면 /ctr을 보내세요",
           "detachedByRevoke": "⚠️ 데스크톱에서 이어받기를 해제했어요. 이후 메시지는 Telegram 대화로 돌아갑니다.",
           "notAttached": "🤷 지금은 이어받은 세션이 없어서 /exctr로 할 일이 없어요.",
-          "companionDmNew": "🧭 여기는 동료의 메인 대화예요. 계속 이어지고, 새 세션을 따로 열지 않아요. 주제를 바꾸고 싶으면 그냥 말씀하세요. 따로 해야 할 일은 동료가 알아서 백그라운드 작업을 열어요.",
+          "companionDmNew": "🧭 여기는 동반자의 메인 대화예요. 계속 이어지고, 새 세션을 따로 열지 않아요. 주제를 바꾸고 싶으면 그냥 말씀하세요. 따로 해야 할 일은 동반자가 알아서 백그라운드 작업을 열어요.",
           "companionLaneNew": "🌱 이 그룹에서 새 대화를 시작했어요. 이전 맥락은 정리해 뒀어요. 처음부터 시작해 봐요!",
-          "companionManagedCommand": "🧭 이 연결은 동료에게 맡겨져 있어 모델, 권한, 작업 디렉터리가 동료 설정을 따릅니다. Cindy의 동료 설정에서 변경하세요."
+          "companionManagedCommand": "🧭 이 연결은 동반자에게 맡겨져 있어 모델, 권한, 작업 디렉터리가 동반자 설정을 따릅니다. Cindy의 동반자 설정에서 변경하세요."
         },
         "agent": {
           "completedNoText": "✅ 다 끝났어요 (이번 턴에는 Agent가 아무 말도 하지 않았어요)",
@@ -12926,7 +12946,7 @@
           "scheduledTaskHeaderNamed": "🤖 자동화 “{{name}}”",
           "unsupportedOnly": "🙏 이 메시지는 처리할 수 없어요:\n{{list}}\n\n처리할 수 있는 것: 텍스트, 이미지(jpg/png/gif/webp), PDF, 코드 및 설정 텍스트 파일.",
           "unsupportedNotice": "ℹ️ 다음 내용은 처리할 수 없어서 일단 제외했어요:\n{{list}}\n\n나머지는 잘 받았고 처리하고 있어요.",
-          "companionUnavailable": "⏸ 동료가 지금은 메시지를 받을 수 없어요: {{reason}}",
+          "companionUnavailable": "⏸ 동반자가 지금은 메시지를 받을 수 없어요: {{reason}}",
           "authMissing": {
             "currentProvider": "현재 제공자",
             "reasonGatewayKey": "먼저 Cindy AI Key를 설정해야 합니다",
@@ -13123,7 +13143,7 @@
         },
         "slash": {
           "detachFailed": "❌ 이어받기를 종료하지 못했습니다: {{error}}",
-          "companionManaged": "🧭 이 연결은 동료에게 넘겨졌습니다. 모델, 권한, 작업 디렉터리는 동료 설정을 따릅니다. Cindy의 동료 설정에서 변경하세요."
+          "companionManaged": "🧭 이 연결은 동반자에게 넘겨졌습니다. 모델, 권한, 작업 디렉터리는 동반자 설정을 따릅니다. Cindy의 동반자 설정에서 변경하세요."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 그룹 채팅의 작업에 승인이 필요합니다. 승인 카드는 그룹에 올라가지 않으니 여기서 확인하세요.",
@@ -13196,7 +13216,7 @@
           "detachedBySlash": "🚪 원격 제어를 종료했습니다. 이후 메시지는 WeCom 대화로 돌아갑니다.",
           "detachedByRevoke": "⚠️ Cindy Desktop에서 원격 제어를 회수했습니다. 이후 메시지는 WeCom 대화로 돌아갑니다.",
           "notAttached": "현재 원격 제어 중인 작업이 없습니다.",
-          "companionManagedCommand": "🧭 이 연결은 동료에게 맡겨져 있어 모델, 권한, 작업 디렉터리는 동료 설정을 따릅니다. Cindy의 동료 설정에서 변경하세요."
+          "companionManagedCommand": "🧭 이 연결은 동반자에게 맡겨져 있어 모델, 권한, 작업 디렉터리는 동반자 설정을 따릅니다. Cindy의 동반자 설정에서 변경하세요."
         },
         "agent": {
           "completedNoText": "✅ 작업을 완료했습니다(이번 턴에는 텍스트 출력이 없습니다)",
@@ -13338,9 +13358,9 @@
           "detachedBySlash": "🚪 원격 제어를 끝냈어요. 1:1 채팅으로 돌아왔어요. 다시 데스크톱 앱을 제어하려면 /ctr을 보내 주세요",
           "detachedByRevoke": "⚠️ 데스크톱 앱에서 원격 제어를 해제했어요. 이후 메시지는 다시 1:1 채팅으로 와요.",
           "notAttached": "🤷 지금은 제어 중인 세션이 없어서 /exctr이 할 일이 없어요.",
-          "companionDmNew": "🧭 여기는 동료의 메인 대화라서 계속 이어지고, 새 세션을 따로 열지 않아요. 주제를 바꾸고 싶으면 그냥 말해 주세요. 따로 할 일은 동료가 알아서 백그라운드 세션을 열어요.",
+          "companionDmNew": "🧭 여기는 동반자의 메인 대화라서 계속 이어지고, 새 세션을 따로 열지 않아요. 주제를 바꾸고 싶으면 그냥 말해 주세요. 따로 할 일은 동반자가 알아서 백그라운드 세션을 열어요.",
           "companionLaneNew": "🌱 이 그룹에서 새 대화를 시작했어요. 이전 컨텍스트는 접어 두었으니 처음부터 시작해요~",
-          "companionManagedCommand": "🧭 이 연결은 동료에게 맡겨져 있어서 모델, 권한, 작업 디렉터리는 동료 설정을 따릅니다. Cindy의 동료 설정에서 변경해 주세요."
+          "companionManagedCommand": "🧭 이 연결은 동반자에게 맡겨져 있어서 모델, 권한, 작업 디렉터리는 동반자 설정을 따릅니다. Cindy의 동반자 설정에서 변경해 주세요."
         },
         "agent": {
           "completedNoText": "✅ 끝났어요 (이번 턴에서 Agent가 아무 말도 하지 않았어요)",
@@ -13359,7 +13379,7 @@
           "scheduledTaskHeaderNamed": "🤖 자동화 '{{name}}'",
           "unsupportedOnly": "🙏 이 메시지는 처리할 수 없어요:\n{{items}}\n\n처리할 수 있는 것: 텍스트, 이미지(jpg/png/gif/webp), PDF, 코드·설정 등 텍스트 파일.",
           "unsupportedNotice": "ℹ️ 아래 내용은 처리할 수 없어서 일단 제외했어요:\n{{items}}\n\n나머지는 잘 받았어요. 처리하는 중이에요~",
-          "companionUnavailable": "⏸ 동료가 지금은 메시지를 받을 수 없어요: {{reason}}",
+          "companionUnavailable": "⏸ 동반자가 지금은 메시지를 받을 수 없어요: {{reason}}",
           "authMissing": {
             "defaultProvider": "현재 제공자",
             "message": "⚠️ 현재 대화의 제공자: '{{provider}}'({{model}}). {{reason}}.",
@@ -13614,18 +13634,18 @@
           "delayedReplyQuestion": "원래 메시지: {{question}}",
           "stillProcessing": "아직 처리 중이에요…",
           "ownerOnlyCommands": "봇 명령은 소유자만 사용할 수 있습니다.",
-          "companionManagedCommand": "Cindy에서 이 동료를 열어 주세요. 모델은 동료 설정에서 바꾸고, 권한은 대화 입력창 아래에서 전환합니다.",
+          "companionManagedCommand": "Cindy에서 이 동반자를 열어 주세요. 모델은 동반자 설정에서 바꾸고, 권한은 대화 입력창 아래에서 전환합니다.",
           "help": "사용 가능한 명령: /new 새 대화, /stop 현재 실행 중단, /stop all 모든 실행 중단, /status 상태 보기, /help 도움말 보기.",
           "status_one": "Cindy WeChat 연결이 정상입니다. 현재 대기열: {{count}}건.",
           "status_other": "Cindy WeChat 연결이 정상입니다. 현재 대기열: {{count}}건.",
           "stopped": "작업을 중지했습니다.",
-          "companionDmNew": "이곳은 동료와 같은 장기 세션을 함께 쓰므로 기록과 메모리가 유지됩니다. 컨텍스트를 정리하려면 Cindy에서 동료를 다시 시작하세요.",
+          "companionDmNew": "이곳은 동반자와 같은 장기 세션을 함께 쓰므로 기록과 메모리가 유지됩니다. 컨텍스트를 정리하려면 Cindy에서 동반자를 다시 시작하세요.",
           "newConversation": "새 대화를 시작했습니다.",
           "unknownCommand": "알 수 없는 명령입니다. /help를 보내 사용 가능한 명령을 확인하세요.",
           "overloaded": "현재 WeChat 작업이 많습니다. 잠시 후 다시 시도하세요."
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "이 메시지는 작업마다 권한 확인이 필요하지만, 동료의 현재 모델 또는 권한 모드가 이를 지원하지 않아 시작할 수 없습니다.\n소유자가 Cindy에서 이 동료를 열어 동료 설정의 모델을 확인하고, 대화 입력창 아래에서 “기본 권한” 또는 “자동 리뷰”를 선택해 주세요.",
+          "companionPermissionUnsupported": "이 메시지는 작업마다 권한 확인이 필요하지만, 동반자의 현재 모델 또는 권한 모드가 이를 지원하지 않아 시작할 수 없습니다.\n소유자가 Cindy에서 이 동반자를 열어 동반자 설정의 모델을 확인하고, 대화 입력창 아래에서 “기본 권한” 또는 “자동 리뷰”를 선택해 주세요.",
           "missingAuth": "현재 Agent의 인증이 아직 완료되지 않았습니다. 먼저 Cindy에서 모델 서비스를 연결하세요.",
           "generic": "이 메시지는 지금 시작할 수 없습니다. 잠시 후 다시 시도하세요."
         },
@@ -14119,6 +14139,8 @@
         "remoteFavoriteUnavailable": "{{source}} · 그 컴퓨터의 모델을 불러올 수 없음",
         "favoritesGroup": "즐겨찾기",
         "recentGroup": "최근",
+        "hiddenGroup": "숨김({{count}})",
+        "hiddenGroupHint": "숨긴 제공자와 모델도 선택할 수 있습니다",
         "recentEmpty": "최근 사용한 모델이 없습니다 — 모델을 선택하면 여기에 표시됩니다",
         "favoritesSaveFailed": "즐겨찾기 변경 사항을 저장하지 못했습니다",
         "favoritesCleanupFailed": "공유가 해제된 모델의 즐겨찾기를 삭제하지 못했습니다",
@@ -14296,6 +14318,8 @@
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
+
+      "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
       "resumeAction": "계속 전송",
       "resumeAria": "대기열 메시지 전송 계속",
       "showMore_one": "{{count}}개 더 있음",
@@ -14443,6 +14467,7 @@
       "steerNotSent": "전송되지 않았습니다. 지금은 끼어들기를 사용할 수 없습니다. 초안은 유지됩니다.",
       "credentialSwitchApplied": "모델 제공자 전환이 적용되었습니다.",
       "credentialSwitchFailed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요.",
+      "credentialSwitchKeptSettings": "전환이 완료되지 않았습니다. 작업에는 이전 설정이 계속 적용됩니다.",
       "modelSwitchContextGuard": {
         "warnToast": "이 대화는 이미 {{used}}를 사용 중입니다. 바꾸면 새 모델 용량({{total}})의 약 {{pct}}%가 됩니다",
         "condensedToast": "새 모델에 맞게 이전 대화를 압축합니다. 전체 대화 기록은 계속 볼 수 있습니다.",
@@ -15718,6 +15743,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "컨텍스트가 가득 차 이 메시지를 처리하지 못했습니다. 이후 메시지는 계속 순서대로 처리됩니다.",
       "attachmentPrefix": "첨부: ",
       "attachmentAttachedAria": "{{name}} 첨부됨",
       "saveAttachmentAs": "첨부 파일 {{name}} 다른 이름으로 저장",
@@ -16382,6 +16408,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "클라우드 컴퓨터 추가",
+        "preparingCloud": "클라우드 컴퓨터 준비 중",
+        "manageCloud": "클라우드 컴퓨터 관리",
         "allMachines": "전체",
         "localMachine": "이 기기",
         "connecting": "연결 중…",
@@ -16517,6 +16546,9 @@
       "taskInfoSummaryNone": "없음",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Harness 아이콘",
+        "project": "프로젝트 아이콘 및 이름",
+        "teammate": "동반자 아바타",
         "time": "시간",
         "pr": "PR 상태",
         "worktree": "worktree",
@@ -18479,7 +18511,7 @@
       "expired": "대기 시간이 너무 길어 대리 입력이 종료되었습니다."
     },
     "failure": {
-      "permission": "Cindy에 이 컴퓨터 화면을 읽을 권한이 없습니다. 시스템 설정의 손쉬운 사용에서 Cindy를 허용하세요.",
+      "permission": "Cindy가 이 Mac의 화면을 읽을 수 없습니다. 실행 중인 Cindy의 제어 권한을 확인하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
       "target_gone": "대상 창이 닫혔습니다.",
       "unreadable": "이 화면을 읽을 수 없습니다. 호스트 컴퓨터에서 직접 완료한 뒤 Agent에게 넘기세요.",
       "action_failed": "방금 작업이 적용되지 않았습니다. 화면을 확인하고 다시 시도하세요.",
@@ -20358,7 +20390,7 @@
     "epermGuidance": {
       "title": "macOS 폴더 접근이 거부되었습니다",
       "message": "Cindy가 {{folder}} 폴더에 접근할 수 없습니다",
-      "detail": "macOS에서 접근을 거부했습니다. 시스템 설정을 열어 권한을 부여한 다음 Agent 명령을 다시 실행하세요.",
+      "detail": "파일 및 폴더에서 Cindy가 이 폴더에 접근하도록 허용한 뒤 다시 시도하세요.",
       "openSystemSettings": "시스템 설정 열기",
       "cancel": "취소",
       "folderNames": {
@@ -21378,11 +21410,11 @@
     "cancel": "취소"
   },
   "groupTools": {
-    "authorizationRequired": "그룹 권한이 만료되었거나 이 작업이 허용되지 않습니다. 동료 소유자가 이 그룹에서 다시 요청해 주세요.",
-    "localPeersOnly": "그룹에서는 이 기기의 같은 계정에 있는 동료에게만 메시지를 보낼 수 있습니다.",
+    "authorizationRequired": "그룹 권한이 만료되었거나 이 작업이 허용되지 않습니다. 동반자 소유자가 이 그룹에서 다시 요청해 주세요.",
+    "localPeersOnly": "그룹에서는 이 기기의 같은 계정에 있는 동반자에게만 메시지를 보낼 수 있습니다.",
     "ownerChanged": "계정이 변경되었습니다. 다시 시도해 주세요.",
     "invalidMessage": "메시지 또는 재시도 식별자가 유효하지 않습니다.",
-    "privateUnavailable": "이 동료의 개인 채팅을 사용할 수 없습니다. 나중에 다시 시도해 주세요.",
+    "privateUnavailable": "이 동반자의 개인 채팅을 사용할 수 없습니다. 나중에 다시 시도해 주세요.",
     "idempotencyConflict": "이 재시도 식별자는 다른 메시지에 이미 사용되었습니다.",
     "privateUnconfirmed": "개인 메시지 전달이 확인되지 않았습니다. 같은 식별자로 다시 시도해 주세요.",
     "verificationUnavailable": "그룹 권한을 확인할 수 없습니다. 연결이 복구되면 다시 시도하세요."
@@ -21443,6 +21475,9 @@
     "actionFailed": "플러그인 작업을 완료하지 못했습니다. 다시 시도해 주세요."
   },
   "mcpApps": {
+    "composerDragFailed": "첨부하지 못했습니다. 다시 드래그하거나 ‘입력창에 추가’를 선택하세요.",
+    "composerAttachmentFormat": "이미지, PDF, 일반 텍스트 파일을 각각 최대 64 MiB까지 첨부할 수 있습니다.",
+    "composerAttachmentBusy": "잠시 후 첨부 파일을 추가해 주세요.",
     "sharedTaskReadOnly": "이 카드는 세션 소유자만 조작할 수 있습니다.",
     "retry": "다시 불러오기",
     "loadFailed": "앱을 불러오지 못했습니다. 연결을 확인한 후 다시 불러오세요.",
@@ -21458,6 +21493,7 @@
       "reviewed": "검토됨",
       "verified-publisher": "확인된 게시자"
     },
+    "viewLimit": "열린 페이지가 너무 많습니다. 다른 페이지를 화면 밖으로 스크롤하거나 접으면 이 페이지가 자동으로 열립니다.",
     "pluginRevoked": "플러그인이 비활성화되거나 변경되어 이 페이지를 사용할 수 없습니다.",
     "pluginCspRejected": "페이지에서 선언되지 않은 도메인을 요청하여 로드를 차단했습니다.",
     "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인하세요",
@@ -21888,9 +21924,9 @@
       "pick": "하나씩 선택",
       "started": "백그라운드에서 가져오기를 시작했습니다. 진행 상황은 “설정 → 세션 가져오기”에서 확인할 수 있습니다.",
       "startFailed": "가져오기를 시작하지 못했습니다. “설정 → 세션 가져오기”에서 다시 가져올 수 있습니다.",
-      "teammatesHeading": "동료",
-      "teammatesHint": "다른 도구의 Agent를 기억, 스킬, 자동화와 함께 동료로 가져옵니다.",
-      "importTeammate": "동료로 가져오기"
+      "teammatesHeading": "동반자",
+      "teammatesHint": "다른 도구의 Agent를 기억, 스킬, 자동화와 함께 동반자로 가져옵니다.",
+      "importTeammate": "동반자로 가져오기"
     },
     "finish": {
       "title": "준비를 마쳤습니다",
@@ -22438,5 +22474,10 @@
       "auto": "자동 리뷰",
       "bypassPermissions": "전체 접근"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "System & App Protection Override에서 {{app}} 오른쪽의 ⓘ를 누르세요. 목록에 없으면 ＋를 눌러 실행 중인 앱을 추가하세요.",
+    "review": "$t(macControlPermission.selectApp)\n앱 선택 옵션이 있으면 제어 대상을 지정한 앱으로 제한할 수 있습니다. Mac 전체 제어를 허용하면 모든 앱과 데이터에 접근할 수 있습니다. 동의한다면 각 항목을 읽고 확인한 뒤 창 하단에서 허용하세요."
   }
 }

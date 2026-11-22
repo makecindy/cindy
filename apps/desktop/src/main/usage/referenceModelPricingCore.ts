@@ -26,10 +26,8 @@ import {
   providerRegistryTariffEndedAt,
   providerSnapshotReferencePriceQuote,
 } from './accountReferencePrice.js';
-import { currentLedgerCurrency } from './ledgerCurrency.js';
 import {
   applyModelPriceOverrides,
-  currencyCanProjectToLedger,
   mergeStoredModelPriceOverride,
   type ModelPriceOverridesSnapshot,
 } from './modelPriceOverrideStore.js';
@@ -150,7 +148,6 @@ export function getReferenceModelPricing(
   const { at } = options;
   const catalog = getActiveCatalog();
   const registry = catalog.modelRegistry;
-  const ledgerCurrency = currentLedgerCurrency();
   const pricing = registryPricingCatalog(registry, at);
   for (const provider of options.providers ?? catalog.providers) {
     if (provider.id === 'xd') continue;
@@ -176,7 +173,7 @@ export function getReferenceModelPricing(
             registry,
             { agent: agentKind, at, ...(nativeOAuth ? { officialOnly: true } : {}) },
           );
-          if (registryQuote && currencyCanProjectToLedger(registryQuote.currency, ledgerCurrency)) {
+          if (registryQuote) {
             (pricing[provider.id] ??= {})[modelPricingKey(model.id, agentKind)] = registryQuote;
             continue;
           }
@@ -200,7 +197,7 @@ export function getReferenceModelPricing(
     }
   }
   return {
-    ...applyModelPriceOverrides(pricing, registry, ledgerCurrency, { at, entries: options.overrides }),
+    ...applyModelPriceOverrides(pricing, registry, { at, entries: options.overrides }),
     ...getByokPricing(),
   };
 }

@@ -13,9 +13,16 @@ const state=(message,fromHost=false)=>{
  if(['ui/notifications/initialized','ui/notifications/size-changed','ui/notifications/sandbox-escape'].includes(message.method)||(fromHost&&message.method==='ui/notifications/host-context-changed'))
   window.parent.postMessage(message,'*');
 };
-const fail=()=>{if(stopped)return;stopped=true;clearTimeout(initializationTimer);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/sandbox-failed'},'*');};
+const fail=error=>{
+ if(stopped)return;
+ stopped=true;clearTimeout(initializationTimer);
+ const notice={jsonrpc:'2.0',method:'ui/notifications/sandbox-failed'};
+ if(error?.message==='MCP_PLUGIN_UNAVAILABLE'||error?.message==='MCP_APP_SERVER_CHANGED')notice.params={code:error.message};
+ window.parent.postMessage(notice,'*');
+};
 async function invoke(input){
  const response=await fetch(${encode(bridgeUrl)},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
+ if(response.status===410)throw new Error((await response.json()).code);
  if(!response.ok)throw new Error('MCP_APP_VIEW_UNAVAILABLE');
  return response.json();
 }
@@ -66,7 +73,7 @@ async function poll(){
   }
   }
   if(!events.length&&!stopped)await new Promise(resolve=>setTimeout(resolve,250));
- }}catch{fail();}
+ }}catch(error){fail(error);}
 }
 frame.src=${encode(resourceUrl)};
 document.body.appendChild(frame);

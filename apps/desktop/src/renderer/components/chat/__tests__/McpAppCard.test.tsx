@@ -70,6 +70,7 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   },
 }));
 import { McpAppCard } from '../McpAppCard';
+import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { applyPluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
@@ -721,6 +722,94 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
   },
 );
 
+// Unit through the real card lifecycle. Main can deliver an attachment the user
+// requested while teardown is in flight; the listener used to stop at unmount,
+// so the staged file reached no composer. Minimal failing input: one delivery
+// after unmount and before close() settles.
+it('keeps a composer delivery that crosses card teardown', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let deliver!: (payload: unknown) => void;
+  const stop = vi.fn();
+  vi.stubGlobal('electronAPI', { maker: { mcpApps: vi.fn(async () => ({})),
+    onMcpAppComposerAttachment: (callback: typeof deliver) => { deliver = callback; return stop; } } });
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="teardown-task" clientId="card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const viewId = (controller as unknown as { document: { viewId: string } }).document.viewId;
+    controller.close.mockReturnValue(closed);
+    await act(async () => root.render(null));
+    expect(stop).not.toHaveBeenCalled();
+    deliver({ sessionId: 'teardown-task', viewId, attachment: { id: 'late', mcpAppResourceKey: 'resource', name: 'late.txt',
+      path: '/staged/late.txt', ext: '.txt', size: 1, category: 'text', mimeType: 'text/plain' } });
+    expect(getDraft('teardown-task')?.attachments.map(file => file.name)).toEqual(['late.txt']);
+    await act(async () => { finish(); await closed; });
+    expect(stop).toHaveBeenCalledOnce();
+  } finally {
+    finish();
+    clearDraft('teardown-task');
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+// Unit through the real card lifecycle and owner-scoped draft store. The listener
+// outlives unmount, so a delivery can land after an account switch and used to
+// enter the new owner's draft of a shared task ID. Minimal failing input: owner
+// a opens the card, the renderer switches to owner b, then the payload arrives.
+it('drops a composer delivery that arrives after an account switch', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let deliver!: (payload: unknown) => void;
+  const mcpApps = vi.fn(async () => ({}));
+  vi.stubGlobal('electronAPI', { maker: { mcpApps,
+    onMcpAppComposerAttachment: (callback: typeof deliver) => { deliver = callback; return () => {}; } } });
+  setDataOwnerGeneration('owner-a');
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="shared-task" clientId="card" title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    const viewId = (controller as unknown as { document: { viewId: string } }).document.viewId;
+    controller.close.mockReturnValue(closed);
+    await act(async () => root.render(null));
+    setDataOwnerGeneration('owner-b');
+    deliver({ sessionId: 'shared-task', viewId, attachment: { id: 'stale', mcpAppResourceKey: 'resource', name: 'stale.txt',
+      path: '/owner-a/stale.txt', ext: '.txt', size: 1, category: 'text', mimeType: 'text/plain' } });
+    expect(getDraft('shared-task')?.attachments ?? []).toEqual([]);
+    deliver({ sessionId: 'shared-task', viewId, requestId: 'contains', resourceKey: 'resource' });
+    expect(mcpApps).toHaveBeenLastCalledWith('shared-task', { op: 'host-result', requestId: 'contains', result: false });
+  } finally {
+    finish();
+    clearDraft('shared-task');
+    setDataOwnerGeneration(null);
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 it('reopens when device ownership is restored but ignores unchanged ownership', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
@@ -1045,7 +1134,7 @@ it.each(['rising', 'oscillating'])('follows %s sizes without echoing height-only
     expect(options?.rootMargin).toBe('80px 0px');
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const controller = state.controllers[0];
-    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }));
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }), expect.any(Function));
     await act(async () => controller.message({ method: 'ui/notifications/initialized' }));
     await act(async () => controller.message({ method: 'ui/notifications/sandbox-result-delivered' }));
     for (let i = 0; i < 10; i++) await act(async () => {
@@ -1159,7 +1248,7 @@ it('fills a panel with nonzero dimensions and ignores App automatic heights with
     Object.defineProperty(frameRoot, 'clientHeight', { configurable: true, get: () => height });
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const controller = state.controllers[0];
-    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 450 } }));
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 600, height: 450 } }), expect.any(Function));
     expect(container.textContent).not.toContain('Page');
     for (let i = 0; i < 10; i++) await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 800 + i * 100 } }));
     expect((frameRoot as HTMLElement).style.height).toBe('');

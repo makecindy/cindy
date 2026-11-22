@@ -155,7 +155,7 @@ import { resolveEffectiveConnectionError } from '@/components/connectionBannerVi
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useLocalNetworkStatus } from '@/device-link/localNetworkStatus';
-import { subscribeCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
+import { subscribeSessionCredentialSwitchNotices } from '@/session/credentialSwitchOutcome';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useSharedTaskAccess } from '@/device-link/useSharedTaskAccess';
 import { useLeaveSharedTask } from '@/device-link/useLeaveSharedTask';
@@ -1148,7 +1148,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const shareSelectionActive = useShareSelectionActive(sessionId);
   const shareSelectionCount = useShareSelectionCount();
   const shareSelectionRevision = useShareSelectionRevision();
-  const deviceId = readRouteParam(params.deviceId) ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
+  const linkedDeviceId = readRouteParam(params.deviceId);
+  const listedSession = remoteSessionStore.getSessions?.()?.find((item) => item.id === sessionId);
+  const deviceId = resolveSessionLinkDeviceId({
+    listedDeviceId: listedSession?.canonicalDeviceId ?? listedSession?.deviceLinkDeviceId,
+    linkedDeviceId,
+    currentDeviceId: remoteSessionStore.getSessionDeviceId(sessionId),
+  }) ?? '';
   // 回撤 preview/commit 的「请求代际」。每次发起 +1、每次切 session 也 +1(见下方 reset effect),
   // 异步返回后代际已变则丢弃。比只比较 sessionId 更严谨:仅比 sessionId 无法失效「A 发起 → 切到 B →
   // 请求返回前又切回 A」期间的 stale 请求(切回后 sessionId 再次相等会误放行,导致确认框在 A 复活或
@@ -1173,10 +1179,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 这里只需要本 route 所属 navigator 的 state —— session 路由直属 root stack。
     getState(): CollabSessionStateLike | undefined;
   }>();
-  useEffect(() => subscribeCredentialSwitchOutcome((outcome) => {
-    if (outcome.deviceId !== deviceId || outcome.sessionId !== sessionId || !navigation.isFocused()) return;
-    Alert.alert(t(outcome.kind === 'applied' ? 'models.switchOutcome.applied' : 'models.switchOutcome.failed'));
-  }), [deviceId, navigation, sessionId, t]);
+  // The selected device can send outcomes under its Device Link shard ID.
+  // A shared peer keeps its own scope even if the listed task has a physical device.
+  const credentialNoticeAlias = deviceId && deviceId === listedSession?.canonicalDeviceId
+    && !isScopedPeer(deviceId) && !isScopedPeer(listedSession.deviceLinkDeviceId)
+    ? listedSession.deviceLinkDeviceId : undefined;
+  useEffect(() => subscribeSessionCredentialSwitchNotices(
+    deviceId, sessionId, () => navigation.isFocused(), (key) => Alert.alert(t(key)), credentialNoticeAlias,
+  ), [credentialNoticeAlias, deviceId, navigation, sessionId, t]);
   const router = useRouter();
   // 完整消息读取权限按「会话 + 单调代际」登记。focus 与 AppState 正交：后台时
   // 导航仍可能保持 focused，必须立即撤权；重新聚焦/回前台会生成新代际，使旧
@@ -8815,7 +8825,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const runControlAction = useCallback(async (
     action: () => Promise<void | boolean>,
     optimisticPatch?: Partial<RemoteSession>,
-    opts?: { recover?: 'rollback' | 'refetch' },
+    opts?: { recover?: 'rollback' | 'refetch'; protectModelSelection?: boolean },
   ) => {
     if (controlBusy) return false;
     // 新建会话在途:会话可能还没在被控端建成,setModel / setPlanMode 这类 RPC 必然
@@ -8829,7 +8839,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 不要因一次设置尝试清掉仍在恢复中的连接错误,否则会提前放开 outbox 派发门。
     if (!outboxConnectionDispatchBlocked) setError(null);
     let rollbackPatch: Partial<RemoteSession> | null = null;
+    let releaseModelWrite: (() => void) | undefined;
     if (optimisticPatch && deviceId && currentSession) {
+      if (opts?.protectModelSelection) {
+        releaseModelWrite = sessionPendingWrites.track(sessionId, Object.keys(optimisticPatch));
+      }
       const rollback: Record<string, unknown> = {};
       for (const key of Object.keys(optimisticPatch)) {
         rollback[key] = currentSession[key as keyof RemoteSession];
@@ -8880,6 +8894,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setError(formatRemoteError(err));
       return false;
     } finally {
+      releaseModelWrite?.();
       setControlBusy(false);
     }
   }, [
@@ -9379,7 +9394,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         fastMode: next.fastMode,
         ...(agentSwitchIntent ? { agentSwitchIntent: null } : {}),
         // 旧 host 的兼容 RPC 链可能部分成功；失败时回读权威会话收敛而非本地回滚。
-      }, { recover: 'refetch' });
+      }, { recover: 'refetch', protectModelSelection: true });
     })();
   }, [
     agentLocationMovable,
@@ -9467,7 +9482,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!selection && config.fast !== (currentSession.fastMode ?? false)) await maker.setFastMode(sessionId,config.fast);
       return true;
     }, {model:config.modelId,providerId:config.providerId,effort:config.effort,fastMode:config.fast,
-      ...(agentSwitchIntent ? {agentSwitchIntent:null} : {})}, {recover:'refetch'});
+      ...(agentSwitchIntent ? {agentSwitchIntent:null} : {})}, { recover: 'refetch', protectModelSelection: true });
     if (applied) setModelSheetAgentKind(config.agent);
     return applied;
   }, [canUseRemoteSessionControls,currentSession,controlBusy,composerDeviceProviders.providers,maker,

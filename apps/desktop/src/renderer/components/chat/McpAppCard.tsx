@@ -25,6 +25,9 @@ import { createLogger } from '@/lib/logger';
 import { Spinner } from '@/components/ui/spinner';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { findMcpAppBackdropColor } from './mcpAppBackdrop';
+import { getDraft } from '@/lib/composerDraftStore';
+import { getDataOwnerGeneration, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 
 // Local diagnostics only: renderer logs remain excluded from log uploads. Never
 // log the original exception; it may contain HTML, tool data or credential URLs.
@@ -152,6 +155,7 @@ interface McpAppCardProps {
   fallbackText?: string;
   plugin?: unknown;
   customMcp?: unknown;
+  composerPlacement?: string;
   chrome?: 'card' | 'panel';
   sizing?: 'content' | 'fill' | 'sidebar-section';
   source?: { instanceId: string; viewId: string };
@@ -195,7 +199,7 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, composerPlacement, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
   const { t, i18n } = useTranslation();
   const [canFullscreen, setCanFullscreen] = useState(false);
   const appTitle = title || t('mcpApps.appName');
@@ -316,6 +320,29 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       if (frame) frame.style.backgroundColor = findMcpAppBackdropColor(element);
     };
     backdropPaintRef.current = paintFrameBackdrop;
+    // The same declared View may be placed on multiple messages in one task.
+    const draftResourceKey = (key: string) => composerPlacement ? JSON.stringify([composerPlacement, key]) : key;
+    // Drafts are stored per data owner. A delivery that arrives after an account
+    // switch belongs to the previous owner and must not enter the new one's draft.
+    const draftOwner = getDataOwnerGeneration();
+    const stopComposerAttachment = deviceId === undefined && sessionId !== null
+      ? window.electronAPI?.maker?.onMcpAppComposerAttachment?.((payload) => {
+          // Accept a delivery that crosses teardown: the listener lives until close()
+          // settles, after which Main can no longer send for this View.
+          if (payload.sessionId !== sessionId || payload.viewId !== localViewId) return;
+          const sameOwner = isDataOwnerIdCurrent(draftOwner);
+          if ('requestId' in payload) {
+            const key = draftResourceKey(payload.resourceKey);
+            const present = sameOwner && !!getDraft(sessionId)?.attachments.some(file => file.mcpAppResourceKey === key);
+            void window.electronAPI.maker.mcpApps(sessionId, { op: 'host-result', requestId: payload.requestId, result: present }).catch(() => {});
+            return;
+          }
+          if (!sameOwner) return;
+          appendMcpAppComposerAttachment(sessionId, {
+            ...payload.attachment, mcpAppResourceKey: draftResourceKey(payload.attachment.mcpAppResourceKey),
+          });
+        })
+      : undefined;
     const invoke: AppInvoker = (id, input) =>
       window.electronAPI.maker.mcpApps(id, deviceId ? { ...input, deviceId } : input);
     const post = (message: AppRpc) => frame?.contentWindow?.postMessage(message, '*');
@@ -451,11 +478,52 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const initialContext = readContext();
     lastContext = JSON.stringify(initialContext);
     let opened = false;
+    // Keep the existing preload margin for ordinary opens. A quota waiter needs a real
+    // viewport intersection so a nearby offscreen card cannot take the available slot.
+    let waitingObserver: IntersectionObserver | undefined;
+    let reopenOnEntry = false;
+    let firstIntersection: ((visible: boolean) => void) | undefined;
+    const checkWaitingCard = () => new Promise<boolean>(resolve => {
+      firstIntersection = resolve;
+      // Ask Chromium for a fresh intersection on admission too. A scroll can
+      // precede the last observer notification in the frame that freed a slot.
+      waitingObserver?.disconnect();
+      const observer = new IntersectionObserver(([entry]) => {
+        if (disposed || observer !== waitingObserver) return;
+        const waitingVisible = entry.isIntersecting && visibleRef.current;
+        if (!waitingVisible) {
+          reopenOnEntry = true;
+          void controller.close().catch(() => {});
+        } else if (reopenOnEntry) {
+          reopenOnEntry = false;
+          setAttempt(value => value + 1);
+        }
+        firstIntersection?.(waitingVisible);
+        firstIntersection = undefined;
+      });
+      waitingObserver = observer;
+      observer.observe(card.current!);
+    });
     void controller
-      .open(initialContext)
+      .open(initialContext, async waiting => {
+        if (disposed || !visibleRef.current) return false;
+        clearTimeout(loadingTimer);
+        if (!waiting) {
+          // Measure the compact waiting card before expanding the loading placeholder.
+          if (!await checkWaitingCard() || disposed || !visibleRef.current) return false;
+          const latest = readContext();
+          lastContext = JSON.stringify(latest);
+          pendingContext = undefined;
+          void controller.context(latest);
+        }
+        setError(waiting ? 'mcpApps.viewLimit' : undefined);
+        setLoading(!waiting);
+        return waiting ? checkWaitingCard() : true;
+      })
       .then(async (document) => {
         if (!document || disposed) return;
         opened = true;
+        waitingObserver?.disconnect();
         void flush();
         phase = 'sandbox';
         localViewId = document.viewId;
@@ -494,6 +562,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     function dispose() {
       if (disposed) return;
       disposed = true;
+      waitingObserver?.disconnect();
+      firstIntersection?.(false);
       forgetRetainedLocalView(retentionKey);
       updateContextRef.current = undefined;
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer); clearTimeout(heightFallbackTimer);
@@ -535,13 +605,14 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         .close()
         .catch(() => {})
         .finally(() => {
+          stopComposerAttachment?.();
           frame?.remove();
           frame = undefined;
           window.removeEventListener('message', receive);
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, sidebarSection, heights, heightKey, rememberLayout]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, composerPlacement, sidebarSection, heights, heightKey, rememberLayout]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;
@@ -556,8 +627,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   }, [enabled, retained, visible, deviceId, retentionKey]);
 
   useEffect(() => {
-    if (root.current && visibleRef.current)
-      void controllerRef.current?.context(hostContext(locale, root.current, fixedRef.current)).catch(() => {});
+    if (visibleRef.current) updateContextRef.current?.();
   }, [locale]);
   useLayoutEffect(() => {
     if (mode !== 'fullscreen') return;
@@ -602,7 +672,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       open
       className={
         mode === 'fullscreen'
-          ? 'mcp-app-fullscreen fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
+          ? 'mcp-app-fullscreen fixed inset-4 z-float m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
           : chrome === 'panel' ? `static m-0 flex w-full min-h-0 max-w-none flex-col border-0 bg-transparent p-0 text-inherit ${fixed ? 'h-full flex-1' : ''}` : `static mx-0 my-3 w-full max-w-none overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
       }
       // The modal's top layer still shares the macOS window controls and drag geometry.

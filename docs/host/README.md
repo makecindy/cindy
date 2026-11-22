@@ -71,6 +71,8 @@ pnpm dev:host -- --mock
 CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 ```
 
+企业内测使用中国区账号体系。用开发环境的桌面渲染产物构建 Host 时，在 `--region cn` 后加 `--dev-endpoints`，并通过 `--web-dir` 指定 dev 渲染目录。构建器将发布仓提供的 `config/endpoint.dev.json` 装入中国区配置，同时核对渲染环境以及认证、设备、模型和 CDN 的独立 HTTPS 地址。
+
 ## 当前边界
 
 - Host 只监听 `127.0.0.1`，所有数据接口要求 profile bearer 或本机 cookie。
