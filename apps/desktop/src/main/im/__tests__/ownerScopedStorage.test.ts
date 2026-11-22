@@ -164,6 +164,7 @@ describe('IM owner-scoped storage', () => {
     const statSync = fs.statSync;
     const spy = vi.spyOn(fs, 'statSync').mockImplementation((...args) => {
       const stat = Reflect.apply(statSync, fs, args);
+      if (!stat) return stat;
       return Object.assign(stat, { mtimeNs: 1n, ctimeNs: 1n });
     });
     try {
