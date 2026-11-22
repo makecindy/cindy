@@ -469,6 +469,7 @@ import {
   type ComposerLongPressVoiceGesture,
 } from '@/voice-input/composerLongPressGesture';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
+import { COMPOSER_ATTACHMENT_MIME, composerAttachmentDropError, isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
 import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
 import { appendMentionChip } from './mentionChipInsertion';
@@ -3455,6 +3456,10 @@ export function ChatInput({
 
     const result = await requestRendererMicrophonePermission();
     if (result.ok) return;
+    if (result.status === 'device-unavailable') {
+      toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+      return;
+    }
 
     const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
     if (!settingsResult.ok) {
@@ -3558,6 +3563,9 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  const canReceiveComposerDrag = () => !!sessionId && storageKey === sessionId && !sharedGuest &&
+    !composerMutationLocked && !remoteHostId && !deviceLinkDeviceId && !getSessionDeviceId(sessionId) &&
+    typeof window.electronAPI?.maker?.redeemComposerAttachmentDrag === 'function';
   // Only the composer that owns the run explains why someone else's words are missing.
   const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
@@ -9660,11 +9668,30 @@ export function ChatInput({
               if (intent === 'keep-caret') editor.commands.focus();
               else if (intent === 'doc-end') editor.commands.focus('end');
             }}
+            onDropCapture={(event) => {
+              if (!isComposerAttachmentDrag(event.dataTransfer)) return;
+              event.preventDefault();
+              event.stopPropagation();
+              dragCounterRef.current = 0;
+              setIsDragOver(false);
+              composerMentionDragActiveRef.current = false;
+              internalMentionDragActiveRef.current = false;
+              setMentionDragCaret(editor, null);
+              onComposerDropHandled?.();
+              const ticket = event.dataTransfer.getData(COMPOSER_ATTACHMENT_MIME);
+              if (!ticket || !sessionId || !canReceiveComposerDrag()) {
+                toast.error(t('mcpApps.composerDragFailed'));
+                return;
+              }
+              void window.electronAPI.maker.redeemComposerAttachmentDrag({ sessionId, ticket })
+                .catch(error => toast.error(t(composerAttachmentDropError(error))));
+            }}
             onDragEnter={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isComposerAttachmentDrag(e.dataTransfer) && !canReceiveComposerDrag()) return;
               const firstEnter = dragCounterRef.current === 0;
-              if (firstEnter && Array.from(e.dataTransfer.types).includes(COMPOSER_MENTION_MIME)) {
+              if (firstEnter && !isComposerAttachmentDrag(e.dataTransfer) && Array.from(e.dataTransfer.types).includes(COMPOSER_MENTION_MIME)) {
                 composerMentionDragActiveRef.current = true;
                 if (editor && !editor.isDestroyed) {
                   lastComposerSelectionFromRef.current = editor.state.selection.from;
@@ -9678,6 +9705,10 @@ export function ChatInput({
             onDragOver={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isComposerAttachmentDrag(e.dataTransfer)) {
+                e.dataTransfer.dropEffect = canReceiveComposerDrag() ? 'copy' : 'none';
+                return;
+              }
               if (internalMentionDragActiveRef.current && editor && !editor.isDestroyed) {
                 const dropPos =
                   editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos ?? null;
@@ -9690,7 +9721,7 @@ export function ChatInput({
             onDragLeave={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              dragCounterRef.current -= 1;
+              dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
               if (dragCounterRef.current === 0) {
                 setIsDragOver(false);
                 composerMentionDragActiveRef.current = false;

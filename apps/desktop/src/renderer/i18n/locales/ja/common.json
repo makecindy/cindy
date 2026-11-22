@@ -977,7 +977,7 @@
     "captureFailed": "画面をキャプチャできませんでした",
     "permission": {
       "title": "画面収録の許可が必要です",
-      "detail": "スクリーンショットを撮るには、「システム設定 > プライバシーとセキュリティ > 画面収録とシステムオーディオ録音」で {{appName}} を許可し、{{appName}} を開き直してください。",
+      "detail": "{{appName}} に画面収録を許可して、もう一度お試しください。macOS に求められた場合はアプリを開き直してください。",
       "openSettings": "システム設定を開く",
       "later": "今はしない"
     },
@@ -1144,12 +1144,12 @@
     "windowsError": "承認が完了していません。このコンピューターで再試行してください。",
     "windowsErrorDetail": "エラーコード {{code}}",
     "permissionsTitle": "リモートデスクトップの権限",
-    "permissionsIntro": "画面の表示には画面収録、操作にはアクセシビリティの権限も必要です。コンピューターで許可すると、状態が自動更新されます。",
+    "permissionsIntro": "接続先の Mac で画面収録を許可するとデスクトップを表示できます。キーボードとマウスを使うには、Cindy にアプリの操作も許可してください。許可の状態は自動で確認されます。",
     "permissionsReady": "システム権限の準備ができました。再接続できます。",
     "screenRecording": "画面収録",
-    "accessibility": "アクセシビリティ",
-    "screenRecordingHelp": "システム設定を開き、この Cindy の画面収録を許可してください。再起動を求められた場合は、Cindy を開き直してから接続してください。",
-    "accessibilityHelp": "設定を開き、システムの許可ダイアログに表示されたアプリのアクセシビリティを有効にしてください。戻ると実際の入力権限を自動確認します。",
+    "accessibility": "キーボードとマウスの操作",
+    "screenRecordingHelp": "「画面収録」または「画面収録とシステムオーディオ録音」で、現在起動中の Cindy に画面収録を許可してください。macOS に求められた場合は Cindy を開き直してください。",
+    "accessibilityHelp": "「プライバシーとセキュリティ」で、システムの案内に表示されたアプリを選択します。「System & App Protection Override」がある場合は操作を許可するアプリを選び、以前のバージョンでは「アクセシビリティ」を有効にしてください。",
     "permissionChecking": "確認中…",
     "permissionGranted": "許可済み",
     "permissionUnknown": "未確認",
@@ -1343,7 +1343,9 @@
       }
     },
     "lockOnExitHintPrivacy": "終了時にプライバシースクリーンを表示し、AI は作業を続けられます。パソコンに触れるとロックされます。",
-    "lockedEnablePrivacyHint": "離席中もこのパソコンを AI に使わせるには、このパソコンの「設定 → 一般 → 離席中」でプライバシースクリーンをオンにしてください。"
+    "lockedEnablePrivacyHint": "離席中もこのパソコンを AI に使わせるには、このパソコンの「設定 → 一般 → 離席中」でプライバシースクリーンをオンにしてください。",
+    "revealCurrentApp": "{{app}} を Finder に表示",
+    "openPermissionInNewWindow": "新しいウインドウで開く"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3144,7 +3146,7 @@
         },
         "accessibility": {
           "label": "自動入力",
-          "tooltip": "アクセシビリティ権限は、他のアプリへの自動入力、整形用のカーソル周辺テキストの取得、外部での修正検出による辞書学習に使います。"
+          "tooltip": "選択したアプリへの音声入力、文章の推敲に使うカーソル付近の文字の読み取り、辞書用の修正検出を Cindy に許可します。Mac に表示される「アクセシビリティ」または「System & App Protection Override」で許可してください。"
         }
       },
       "interactionSound": {
@@ -5757,10 +5759,10 @@
         "toggleAria": "ブラウザのログイン状態を使う",
         "confirmTitle": "Agent にブラウザのログイン状態を使わせますか？",
         "confirmDescription": "Agent はメール、クラウド、社内コンソールなど、すでにログインしているサイトであなたとして操作できます。いつでもオフにでき、コピーは削除されます。",
-        "confirmDescriptionMac": "Agent はメール、クラウド、社内コンソールなど、すでにログインしているサイトであなたとして操作できます。Chrome のログインファイルを読むには「フルディスクアクセス」も必要です。いつでもオフにでき、コピーは削除されます。",
+        "confirmDescriptionMac": "Agent はメール、クラウド、社内コンソールなど、すでにログインしているサイトであなたとして操作できます。いつでもオフにでき、コピーは削除されます。 macOS にフォルダの選択を求められた場合は、使用するブラウザプロファイルのフォルダを選んでください。",
         "confirm": "ログイン状態を使う",
-        "readDeniedTitle": "フルディスクアクセスが必要です",
-        "readDeniedDescription": "Chrome のログインファイルを読むには、システムが Cindy を許可する必要があります。「プライバシーとセキュリティ → フルディスクアクセス」で Cindy をオンにしてから、もう一度お試しください。",
+        "readDeniedTitle": "ブラウザプロファイルを読み取れません",
+        "readDeniedDescription": "「プライバシーとセキュリティ → フルディスクアクセス」で現在起動中の Cindy を選択します。フォルダを選択できる場合は必要なブラウザプロファイルのフォルダだけを選んで、もう一度お試しください。",
         "openFullDiskAccess": "システム設定を開く",
         "readDeniedLater": "あとで",
         "toast": {
@@ -5932,7 +5934,7 @@
         "permissionIntro": {
           "title": "コンピュータ自動操作を有効化",
           "description": "{{appName}} は Cua Driver をローカルにインストールまたは起動し、画面の読み取りやクリック、入力などを行います。自分でコンピュータ自動操作タスクを開始した場合にのみ有効にしてください。",
-          "macosDescription": "次に {{appName}} は Cua Driver のインストールまたは権限付与フローを開き、必要に応じて macOS のシステム設定へ移動します。まず CuaDriver に「アクセシビリティ」と「画面収録」の基本権限を許可してください。その後の使用中に、macOS が対象アプリや具体的な操作ごとに追加の確認を表示することがあります。自分で Computer Use タスクを開始した場合にのみ承認してください。完了後 {{appName}} に戻ると、自動で確認して有効化します。",
+          "macosDescription": "{{appName}} は Cua Driver をローカルにインストールまたは起動し、画面の読み取りやクリック、入力などを行います。自分でコンピュータ自動操作タスクを開始した場合にのみ有効にしてください。 CuaDriver に画面収録を許可してください。「System & App Protection Override」で操作を許可するアプリを選びます。以前の macOS では「アクセシビリティ」を有効にしてください。",
           "confirm": "続行",
           "cancel": "後で"
         },
@@ -5953,8 +5955,8 @@
         },
         "permissions": {
           "title": "システム権限",
-          "macosHint": "コンピュータ操作には「アクセシビリティ」と「画面収録」が必要です。実際の使用中には、対象アプリや操作ごとに追加確認が表示されることがあります。",
-          "accessibilityLabel": "アクセシビリティ",
+          "macosHint": "CuaDriver に画面収録を許可してください。「System & App Protection Override」で操作を許可するアプリを選びます。以前のバージョンでは「アクセシビリティ」を有効にしてください。",
+          "accessibilityLabel": "キーボードとマウスの操作",
           "screenRecordingLabel": "画面収録",
           "grant": "許可する",
           "accessibility": "アクセシビリティ：{{status}}",
@@ -6000,7 +6002,7 @@
           "toggleFailed": "コンピュータの直接操作の切り替えに失敗しました",
           "installFailed": "cua-driver のインストールに失敗しました",
           "permissionFailed": "コンピュータ操作の権限が完了していません",
-          "permissionPending": "2つのシステム権限を許可したら、ここに戻って「再確認」を押してください",
+          "permissionPending": "Mac で許可を完了してください。状態が更新されない場合は再確認してください。",
           "permissionSettingsOpened": "システム権限設定を開きました。許可が完了したら、ここに戻って「再確認」を押してください。",
           "permissionSettingsMonitoring": "システムの権限設定を開きました。権限を付与すると、状態は自動的に更新されます。",
           "openPermissionSettingsFailed": "システム権限設定を開けませんでした"
@@ -12508,6 +12510,7 @@
           "listenPortLabel": "ローカル待受ポート",
           "listenPortPlaceholder": "18747",
           "hint": "ローカルネットワークで BlueBubbles に接続し、選択したチャットのみ処理します。接続前に、これらのチャットの他の自動応答を停止してください。",
+          "automationDenied": "送信時に、macOS が BlueBubbles による「メッセージ」の操作を拒否しました。BlueBubbles を実行している Mac で「システム設定」→「プライバシーとセキュリティ」→「オートメーション」を確認してください。",
           "uncertain": "{{count}} 件の処理結果の確認が必要です。重複を避けるため、再試行前にチャット履歴を確認してください。"
         }
       },
@@ -15070,7 +15073,6 @@
     "runningStatus": {
       "currentRate": "直近の速度",
       "lastRequestRate": "直近のリクエストの平均",
-      "recentTokenRate": "直近 {{rate}} tok/s",
       "waitingSample": "計測中",
       "averageRate": "このターンの平均",
       "rateHistory": "生成速度の推移",
@@ -15841,7 +15843,7 @@
       "viewThread": "スレッドのコンテキストを表示（{{count}}）",
       "memberFromGroup": "{{name}} · {{platform}} グループ「{{group}}」から",
       "memberFromPlatform": "{{name}} · {{platform}} グループから",
-      "guestFromDm": "{{name}} · {{platform}} の DM から（オーナー以外）",
+      "guestFromDm": "{{name}} · {{platform}} の DM から",
       "unknownSender": "グループメンバー"
     },
     "rewind": {
@@ -20411,7 +20413,7 @@
     "epermGuidance": {
       "title": "macOS のフォルダアクセスが拒否されました",
       "message": "Cindy は「{{folder}}」フォルダにアクセスできません",
-      "detail": "macOS によりアクセスが拒否されました。「システム設定」を開いて権限を付与し、Agent のコマンドをもう一度実行してください。",
+      "detail": "「ファイルとフォルダ」で Cindy にこのフォルダへのアクセスを許可し、もう一度お試しください。",
       "openSystemSettings": "システム設定を開く",
       "cancel": "キャンセル",
       "folderNames": {
@@ -21496,6 +21498,9 @@
     "actionFailed": "プラグインの操作を完了できませんでした。もう一度お試しください。"
   },
   "mcpApps": {
+    "composerDragFailed": "添付できませんでした。もう一度ドラッグするか、「入力欄に追加」を選んでください。",
+    "composerAttachmentFormat": "画像、PDF、プレーンテキストに対応しています。1 件あたり最大 64 MiB です。",
+    "composerAttachmentBusy": "しばらく待ってから添付してください。",
     "sharedTaskReadOnly": "このカードを操作できるのはセッションのオーナーだけです。",
     "retry": "再読み込み",
     "loadFailed": "アプリを読み込めませんでした。接続を確認して再読み込みしてください。",

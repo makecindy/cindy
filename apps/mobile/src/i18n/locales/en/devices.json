@@ -393,6 +393,7 @@
       "showDeviceTasks": "Show sessions",
       "openDevice": "Open",
       "renameDevice": "Rename",
+      "groupDevice": "Device",
       "groupProject": "Project",
       "sortBy": {
         "priority": "Priority",
@@ -434,11 +435,15 @@
       "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "displayHeading": "Display",
       "view": {
+        "card": "Cards",
         "text": "Text",
         "list": "List"
       },
       "taskInfoHeading": "Session info",
       "taskInfo": {
+        "teammate": "Buddy avatar",
+        "project": "Project icon and name",
+        "harness": "Harness icon",
         "time": "Time",
         "pr": "PR status",
         "tokens": "Tokens",
