@@ -62,6 +62,24 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1: retries of one addressed document must use its durable bridge receipt.
+  // A lost response (including after process restart) must not trigger a second POST.
+  it('reuses direct delivery receipts and leaves an uncertain send pending on retry', async () => {
+    const f = await fixture(null, undefined, true);
+    const text = 'QA morning report — 17°C';
+    const send = (id: string) => f.im.sendDirectDelivery(f.chat.guid, text, id);
+    await expect(send('first-document')).resolves.toEqual({ messageId: 'outbound' });
+    await expect(send('first-document')).resolves.toEqual({ messageId: 'outbound' });
+    await expect(f.im.sendDirectDelivery(f.otherChat.guid, text, 'first-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    await expect(f.im.sendDirectDelivery('any;+;group', text, 'first-document')).rejects.toThrow('BLUEBUBBLES_DIRECT_CHAT_REQUIRED');
+    f.send.mockRejectedValueOnce(new Error('lost response'));
+    await expect(send('second-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    const restored = await fixture(f.state(), undefined, true);
+    await expect(restored.im.sendDirectDelivery(f.chat.guid, text, 'second-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    expect(f.send.mock.calls.map(([chat]) => chat)).toEqual([f.chat.guid, f.chat.guid]);
+    expect(restored.send).not.toHaveBeenCalled();
+  });
+
   it('keeps confirmed parent lookups scoped through duplicate receipts and a failed echo', async () => {
     const f = await fixture(null, undefined, true, undefined, true);
     const receipts = new BlueBubblesReceipts(f.storage, 1_000);

@@ -171,6 +171,8 @@ export interface RichChannelIM extends TextChannelIM {
 export type ChannelIM = RichChannelIM;
 
 export interface ImFinalOutput {
+  /** Original native input for a reply; absent for background output. */
+  inputMessageId?: string;
   userId: string;
   text: string;
   terminal: 'done' | 'aborted' | 'error';
@@ -195,6 +197,8 @@ export type ImOutputDriver =
     }
   | {
       kind: 'chunked-text';
+      /** Include the native input ID when matching a terminal reply to a document request. */
+      includeInputMessageId?: true;
       im: TextChannelIM;
       /**
        * Reserve an inbound reply context before a potentially long turn.

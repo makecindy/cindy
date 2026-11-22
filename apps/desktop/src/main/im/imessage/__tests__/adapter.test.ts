@@ -1,3 +1,8 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import * as storage from '../../ownerScopedStorage';
+import { directDeliveryFile, prepareDirectDelivery } from '../directDelivery';
 import { expect, it, vi } from 'vitest';
 import { BlueBubblesIM, type IMMessageEvent } from '@cindy/im';
 import type { InteractionRequest } from '@cindy/maker-core';
@@ -135,4 +140,37 @@ it.each(['abort', 'release'])('clears the matching question waiter on host %s', 
     await im.dispose();
     await cancelled;
   } finally { lease.release(); await im.dispose(); }
+});
+
+// Tier 1: only the addressed DM may retrieve the original, even when another
+// connected DM on the same companion asks. Transport tests cannot see lane scope.
+it('recovers the saved direct document verbatim only for its recipient and date', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-addressed-document-'));
+  const privatePath = vi.spyOn(storage, 'ownerScopedImUserDataPath').mockImplementation((...parts) => path.join(root, ...parts));
+  const send = vi.fn(async () => ({ messageId: 'accepted' }));
+  const origin = 'http://127.0.0.1:1234', connectionId = '123456abcdef';
+  const target = 'any;-;one@example.test';
+  const im = { connectedOrigin: origin, isGroup: (id: string) => id.includes(';+;'), sendDirectDelivery: send, commitFinal: vi.fn() };
+  const adapter = wireIMessageOrchestrator(im as never, {} as never,
+    { instanceKey: 'test', companionBotId: 'bot', connectionId }) as unknown as ImChannelAdapter;
+  const reader = (chatId: string) => {
+    const scope = adapter.channelToolScopeFor!({ chatId, messageId: 'request' } as IMMessageEvent);
+    return scope?.channel === 'imessage' ? scope.readDirectDelivery : undefined;
+  };
+  try {
+    const text = 'QA morning report\nWeather: 17°C';
+    const record = prepareDirectDelivery(directDeliveryFile('bot', connectionId, origin, target), text);
+    expect(reader('any;+;group')).toBeUndefined();
+    expect(reader('any;-;two@example.test')!(0)).toBeNull();
+    expect(reader(target)!(record.createdAt + 1)).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+    expect(reader(target)!(record.createdAt)).toEqual({ text, createdAt: record.createdAt });
+    expect(send).not.toHaveBeenCalled();
+    if (adapter.output.kind !== 'chunked-text') throw new Error('Expected a chunked reply');
+    await adapter.output.commitFinal({ userId: target, text: text.replace('\n', '  \n'), inputMessageId: 'request', terminal: 'done' });
+    expect(send).toHaveBeenCalledWith(target, text, record.replyId);
+  } finally {
+    privatePath.mockRestore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

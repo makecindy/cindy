@@ -4115,6 +4115,7 @@ export function createTurnRunner(
           await output.commitFinal({
             userId: turn.userId,
             text: finalText,
+            ...(output.includeInputMessageId && turn.userMessageId ? { inputMessageId: turn.userMessageId } : {}),
             terminal: turn.terminalKind,
             threadTs: turn.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
@@ -4253,6 +4254,7 @@ export function createTurnRunner(
           await output.commitFinal({
             userId,
             text: fallbackText,
+            ...(output.includeInputMessageId && turn.userMessageId ? { inputMessageId: turn.userMessageId } : {}),
             terminal: turn.terminalKind,
             threadTs: turn.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),

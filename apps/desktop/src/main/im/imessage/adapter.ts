@@ -13,11 +13,13 @@ import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { createImOrchestrator } from '../shared/orchestrator';
 import { channelForceConfirmToolCall } from '../shared/channelToolPolicy';
 import { handleDingTalkTextInteraction } from '../dingtalk/interaction';
+import { directDeliveryFile, readDirectDelivery } from './directDelivery';
 import { archiveDirectory, readArchive } from './archive';
 import { ui } from './uiText';
 
 export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestratorConfig,
   options: { instanceKey: string; companionBotId: string; connectionId: string }) {
+  const requestedDocuments = new Map<string, { inputMessageId: string; origin: string; text: string; replyId: string }>();
   const textInteractions = new Map<string, { cancelled: boolean }>();
   const companionLane: NonNullable<ImChannelAdapter['companionLane']> = userId => im.isGroup(userId)
     ? { kind: 'group', chatId: userId, threadId: '' }
@@ -43,7 +45,20 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       return envelope[1] === 'NOTIFY' ? envelope[2].trim() : null;
     },
     processingEmoji: '', silentQueue: true,
-    output: { kind: 'chunked-text', im, commitFinal: async output => {
+    output: { kind: 'chunked-text', includeInputMessageId: true, im, commitFinal: async output => {
+      const document = requestedDocuments.get(output.userId);
+      if (document && document.inputMessageId === output.inputMessageId) {
+        requestedDocuments.delete(output.userId);
+        if (im.connectedOrigin !== document.origin) throw new Error('IMESSAGE_CONNECTION_CHANGED');
+        // The normal reply may contain Markdown hard breaks. Restore original bytes
+        // only when the assistant replied with this document on this same input.
+        const plain = (text: string) => text.replace(/[ \t]+(?=\r?\n)/g, '').trim();
+        if (output.terminal === 'done' && plain(output.text) === plain(document.text)) {
+          await im.sendDirectDelivery(output.userId, document.text, document.replyId);
+          await im.commitFinal({ ...output, text: '' });
+          return;
+        }
+      }
       await im.commitFinal(output);
       if (!im.isGroup(output.userId) || output.terminal === 'error' || !output.text.trim()) return;
       await IMESSAGE_GROUP_WINDOW.record({ botId: im.botContextId, chatId: output.userId, threadId: '',
@@ -74,14 +89,23 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     channelToolScopeFor: event => {
       const origin = im.connectedOrigin;
       const directory = origin && archiveDirectory(options.connectionId, origin);
+      const directFile = origin && !im.isGroup(event.chatId) &&
+        directDeliveryFile(options.companionBotId, options.connectionId, origin, event.chatId);
       return { channel: 'imessage', im, botId: event.contextId,
       laneUserId: event.senderId, chatId: event.chatId,
+      readDirectDelivery: directFile ? after => {
+        if (im.connectedOrigin !== origin) throw new Error('Connection changed');
+        const record = readDirectDelivery(directFile);
+        if (!record || record.createdAt < after) return null;
+        requestedDocuments.set(event.chatId, { inputMessageId: event.messageId, origin, text: record.text, replyId: record.replyId });
+        return { text: record.text, createdAt: record.createdAt };
+      } : undefined,
       readArchive: directory ? (query, before, limit) => readArchive(directory, event.chatId, query, before, limit) : undefined,
       chatKind: im.isGroup(event.chatId) ? 'group' : 'direct',
       requesterIsOwner: event.speaker?.isOwner === true, companion: true };
     },
     channelNoteSourceFor: event => ({
-      toolsHint: 'iMessage via local BlueBubbles. cindy_imessage tools provide connected chat history, immediate text/file sending and connection health. Normal final replies are delivered automatically.',
+      toolsHint: 'iMessage via local BlueBubbles. cindy_imessage tools provide connected chat history, immediate text/file sending and connection health. When asked for a report or document addressed to this private chat, use latest_direct_delivery in the current private chat. Reply with the returned original verbatim, including after a failed proactive send. Normal final replies are delivered automatically.',
       chatKind: im.isGroup(event.chatId) ? 'group' : 'direct', chatId: event.chatId,
       chatName: event.interactionSource?.chatName, senderId: event.speaker?.id,
       senderName: event.speaker?.name, senderIsOwner: event.speaker?.isOwner === true,
