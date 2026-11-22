@@ -461,6 +461,17 @@ export const RUN_LEGACY_STALE_MS = 2 * 60 * 60 * 1000;
  */
 const DB_SYNC_INTERVAL_MS = 30_000;
 
+/**
+ * 同一条任务**同时在途**的过期写入条数上限。
+ *
+ * 写通道楔住(单条 UPDATE 永不 settle)而批量读一直健康时,恢复信号会淘汰孤儿
+ * 登记并换发新的过期写入;旧请求不取消、不收口,在途写入就按同步周期无界增长,
+ * 再次压垮存储(Codex P1 on #12087)。到顶后不再换发:过期写入停在那儿等写通道
+ * 恢复(写入 settle 后计数回落,过期写入重新发得出)。三条足够把「写通道彻底楔住」
+ * 与「这一条写入只是慢」区分开。
+ */
+const MAX_OUTSTANDING_EXPIRE_WRITES = 3;
+
 /** 公开快照字段之外，再保留最近一次长跑诊断时间用于日志节流。 */
 /**
  * 排期补偿只需要这四项。单独抽出来是为了让"补排失败后的重试凭据"能纯内存留存:
@@ -538,6 +549,16 @@ export class Scheduler extends EventEmitter {
     version: number;
     update: Promise<Schedule | null>;
   }>();
+  /**
+   * 每条任务**在途未 settle** 的过期写入条数。
+   *
+   * 孤儿登记被淘汰(存储恢复、行仍是同一版)后,下一轮会换发一条新的过期写入;
+   * 写通道整体楔住时那些写入永远不 settle,旧请求既不取消也不收口 —— 每个同步
+   * 周期都多挂一条在途 UPDATE,在途写入按时间无界增长,再次压垮存储
+   * (Codex P1 on #12087)。这里给在途条数封顶:到顶后不再淘汰孤儿登记,过期写入
+   * 停在那儿等写通道恢复(恢复后写入 settle,计数回落,过期写入重新发得出)。
+   */
+  private readonly outstandingExpireWrites = new Map<string, number>();
   /**
    * 生命周期代次:每次 stop() +1。
    *
@@ -626,6 +647,8 @@ export class Scheduler extends EventEmitter {
   private readonly processId?: number;
   private readonly preGateStorageTimeoutMs: number;
   private lastPreGateTimeoutLogAt = 0;
+  /** 过期写入换发到上限的告警节流时刻(见 logExpireWriteBackoff)。 */
+  private lastExpireWriteBackoffLogAt = 0;
   private readonly inflightAttempts = new Map<string, InflightAttempt>();
   // Keep deadline edits visible while an automatic run is preparing/queued,
   // including edits that remove it from activeSchedules by expiring it.
@@ -920,6 +943,8 @@ export class Scheduler extends EventEmitter {
     // 会以为「这条任务还有在途过期写入」而永远不再发过期写入。promise 本身取消
     // 不了,但它的迟到结果已被上面的代次挡住。
     this.pendingExpireWrites.clear();
+    // 在途计数同理:上一段生命周期那些挂死的过期写入不再占用新主人的换发额度。
+    this.outstandingExpireWrites.clear();
     // 在途的过期回读同理:挂死的读取消不了,登记也不能跨生命周期留着(否则重启
     // 后的调度器会一直复用上一段生命周期那一份挂死的读)。
     this.pendingExpireReads.clear();
@@ -1012,9 +1037,19 @@ export class Scheduler extends EventEmitter {
             // (可能是永不 settle 的孤儿)。压制登记只有 settle/stop 才清,不淘汰
             // 的话恢复后每个 tick 都在「还有在途写入」处退出,过期写入永远发不出去
             // (Codex P2 on #12087)。写入若即将落地,重复一次 UPDATE 由版本判据兜住。
+            //
+            // 但淘汰不能无限换发:写通道整体楔住时那些写入永远不 settle,每个同步
+            // 周期都多挂一条在途 UPDATE,在途写入无界增长,再次压垮存储
+            // (Codex P1 on #12087)。在途条数到顶就不再淘汰 —— 过期写入停着等写通道
+            // 恢复(写入 settle 后计数回落,过期写入重新发得出去)。
             const pendingWrite = this.pendingExpireWrites.get(sch.id);
             if (pendingWrite && pendingWrite.version <= sch.updatedAt) {
-              this.pendingExpireWrites.delete(sch.id);
+              const outstanding = this.outstandingExpireWrites.get(sch.id) ?? 0;
+              if (outstanding < MAX_OUTSTANDING_EXPIRE_WRITES) {
+                this.pendingExpireWrites.delete(sch.id);
+              } else {
+                this.logExpireWriteBackoff(sch.id, outstanding);
+              }
             }
             const previous = previousSchedules.get(sch.id);
             const cadenceChanged =
@@ -1208,6 +1243,23 @@ export class Scheduler extends EventEmitter {
         processId: this.processId,
         phase,
         timeoutMs: this.preGateStorageTimeoutMs,
+      },
+    );
+  }
+
+  /** 过期写入换发到上限时的告警(节流):写通道多半整体楔住了。 */
+  private logExpireWriteBackoff(scheduleId: string, outstanding: number): void {
+    const now = this.clock.now();
+    if (now - this.lastExpireWriteBackoffLogAt < PRE_GATE_TIMEOUT_LOG_THROTTLE_MS) return;
+    this.lastExpireWriteBackoffLogAt = now;
+    this.logger?.warn?.(
+      'scheduler: expiry write retry capped — the write channel looks wedged',
+      {
+        schedulerInstanceId: this.schedulerInstanceId,
+        processId: this.processId,
+        scheduleId,
+        outstanding,
+        cap: MAX_OUTSTANDING_EXPIRE_WRITES,
       },
     );
   }
@@ -1513,9 +1565,18 @@ export class Scheduler extends EventEmitter {
     update: Promise<Schedule | null>,
   ): void {
     this.pendingExpireWrites.set(scheduleId, { version, update });
+    // 在途条数与登记分开记:登记会被「孤儿淘汰」删掉(好让过期写入重新发得出去),
+    // 但那条挂死的请求仍然在途 —— 计数要跟着 promise 的 settle 走,不能跟着登记走。
+    this.outstandingExpireWrites.set(
+      scheduleId,
+      (this.outstandingExpireWrites.get(scheduleId) ?? 0) + 1,
+    );
     const clear = () => {
       const tracked = this.pendingExpireWrites.get(scheduleId);
       if (tracked && tracked.update === update) this.pendingExpireWrites.delete(scheduleId);
+      const outstanding = (this.outstandingExpireWrites.get(scheduleId) ?? 1) - 1;
+      if (outstanding <= 0) this.outstandingExpireWrites.delete(scheduleId);
+      else this.outstandingExpireWrites.set(scheduleId, outstanding);
     };
     // 两个分支都传 clear:rejected 的 promise 不能变成未处理的 rejection。
     void update.then(clear, clear);
@@ -4032,7 +4093,7 @@ export class Scheduler extends EventEmitter {
           lastFinishedAt: now,
           status: 'expired',
           nextFireAt: undefined,
-        });
+        }, current);
         this.activeSchedules.delete(scheduleId);
         this.logger?.info?.('scheduler: expired one-shot schedule after stalled run', {
           schedulerInstanceId: this.schedulerInstanceId,
@@ -4045,7 +4106,13 @@ export class Scheduler extends EventEmitter {
       }
       const next = computeNextFireAt(current, now);
       if (next === undefined) return; // manual:按语义不续命
-      const updated = await this.storage.update(scheduleId, { nextFireAt: next });
+      // CAS:这一版读到的行必须还是当前行才能落笔。
+      // 补排可能在途很久(存储写通道挂死),期间代次前进会换发第二次补排;第二次
+      // 先把按恢复时刻算出的排期写进库,第一条旧 RPC 随后恢复 —— 它按故障前时刻
+      // 算出的值会把新排期盖回去,周期任务因此可能提前或重复触发(Codex P1 on
+      // #12087)。CAS 让两者只有一次能落地:换发出来的那次写入之后,行已经不是
+      // 读到的这一版,旧的那次写入落空(返回 null),既不覆盖持久行,也不覆盖缓存。
+      const updated = await this.storage.update(scheduleId, { nextFireAt: next }, current);
       if (updated && updated.status === 'active') {
         this.activeSchedules.set(scheduleId, updated);
       }
@@ -4054,6 +4121,7 @@ export class Scheduler extends EventEmitter {
         processId: this.processId,
         scheduleId,
         nextFireAt: next,
+        persisted: updated !== null,
       });
     }
   }

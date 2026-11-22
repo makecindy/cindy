@@ -2031,6 +2031,134 @@ describe('Scheduler', () => {
     }
   });
 
+  // Codex P1 on #12087:孤儿过期写入的淘汰不能变成「每次同步都换发一条写入」。
+  // 写通道局部挂死(单条 UPDATE 永不 settle)而批量读一直健康时,每个 30 秒同步
+  // 都会淘汰那份孤儿登记、随后再发一条 UPDATE;旧的请求既不取消也不收口,在途
+  // 写入按时间无界增长,再次压垮存储。在途过期写入必须有硬上限。
+  it('bounds the outstanding expire writes while the write channel stays wedged', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 30, logger: { warn: vi.fn() } });
+    await local.scheduler.start();
+    const createdAt = local.clock.now();
+    await local.scheduler.create({
+      ...baseInput, intervalMs: 3_600_000, expireAt: createdAt + 2_000,
+    });
+
+    const realUpdate = local.storage.update.bind(local.storage);
+    let expireWrites = 0;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) => {
+      if (patch.status === 'expired') {
+        expireWrites += 1;
+        // 写通道楔住:过期写入永不 settle(存储写侧的局部故障形态)。
+        return new Promise<Schedule | null>(() => {});
+      }
+      return realUpdate(id, patch, expected);
+    });
+
+    local.clock.setTo(createdAt + 2_000);
+    await local.scheduler.tick();
+    expect(expireWrites).toBe(1);
+
+    // 写通道一直楔住:同步轮数增加,在途过期写入不得跟着增长。
+    for (let i = 0; i < 6; i += 1) {
+      local.clock.advance(30_000);
+      await local.scheduler.tick();
+    }
+    expect(expireWrites).toBeLessThanOrEqual(3);
+
+    await local.scheduler.stop();
+  });
+
+  // Codex P1 on #12087:已退役补排的在途写入不能盖掉换发出来的那次补排的结果。
+  // 同一凭据的补排卡在 storage.update、listActive 随后从失败恢复时,代次前进会
+  // 换发第二次补排;第二次先把按恢复时刻算出的排期写进库,第一次那条旧 RPC 随后
+  // 恢复 —— 它按故障前时刻算出的值会把新排期盖回去,周期任务因此可能提前或重复
+  // 触发。持久化副作用必须带快照 CAS。
+  it('does not let a retired replan overwrite the schedule written by its replacement', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+        runnerImpl: (_s, ctx) => new Promise<FireResult>(() => {
+          ctx.signal.addEventListener('abort', () => {});
+        }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      const realGet = h.storage.get.bind(h.storage);
+      const realUpdate = h.storage.update.bind(h.storage);
+      const realListActive = h.storage.listActive.bind(h.storage);
+      let releaseWedgedWrite!: () => void;
+      let replanReads = 0;
+      let replanWrites = 0;
+      const inReplanPath = () => (new Error().stack ?? '').includes('applyStalledClaimReplan');
+      vi.spyOn(h.storage, 'get').mockImplementation((id: string) => {
+        if (id !== sch.id) return realGet(id);
+        if (!inReplanPath()) return realGet(id);
+        replanReads += 1;
+        // 第一次补排的回读失败 → 凭据上膛;之后的回读照常。
+        if (replanReads === 1) return Promise.reject(new Error('storage unavailable'));
+        return realGet(id);
+      });
+      vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+        if (inReplanPath()) {
+          replanWrites += 1;
+          if (replanWrites === 1) {
+            // 换发出来的那次补排卡在写上(旧 RPC 在途)。
+            await new Promise<void>((resolve) => { releaseWedgedWrite = resolve; });
+          }
+        }
+        return realUpdate(id, patch, expected);
+      });
+      let bulkFailed = false;
+      vi.spyOn(h.storage, 'listActive').mockImplementation(() =>
+        bulkFailed ? new Promise<Schedule[]>(() => {}) : realListActive());
+
+      // 第一轮 run:跑挂 → 强制收口 → 那次补排的回读失败(凭据上膛)。
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(replanReads).toBe(1);
+
+      // 重试一次补排:回读成功,写排期卡住(旧 RPC 在途)。
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanReads).toBe(2);
+      expect(replanWrites).toBe(1);
+
+      // 批量读失败一代(代次冻结,在途补排仍被压制)。
+      bulkFailed = true;
+      h.clock.advance(30_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanWrites).toBe(1);
+
+      // 批量读从失败恢复 → 代次前进,换发第二次补排:这一次的写必须落地。
+      bulkFailed = false;
+      h.clock.advance(30_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanWrites).toBe(2);
+      const settledNextFireAt = h.storage.schedules.get(sch.id)?.nextFireAt;
+      expect(settledNextFireAt).toEqual(expect.any(Number));
+
+      // 旧的那条 RPC 恢复:它按故障前的时刻算出的排期不得盖掉新补排的结果。
+      releaseWedgedWrite();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.storage.schedules.get(sch.id)?.nextFireAt).toBe(settledNextFireAt);
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Codex P2 on #11577:守卫回读按任务单飞之后,在途的那一次读可能发端于本地快照
   // 前进之前。用户改短截止时间,update() 换掉 automaticDispatchSchedules 里的那一版
   // (updatedAt 前进),而单飞复用的旧读回来的是改期前那一行(更长的 expireAt);
