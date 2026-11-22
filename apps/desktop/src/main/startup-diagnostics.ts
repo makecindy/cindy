@@ -146,6 +146,8 @@ export interface RunMarkerStoreDeps {
   isPidAlive?: (pid: number) => boolean;
   /** 本次系统启动时刻(epoch ms),读不到返回 null;默认由 os.uptime() 推算。测试注入 */
   bootTimeMs?: () => number | null;
+  /** 本进程已运行的毫秒数;默认 process.uptime()。测试注入 */
+  processUptimeMs?: () => number;
   warn?: (msg: string, err?: unknown) => void;
 }
 
@@ -170,6 +172,7 @@ export class RunMarkerStore {
   private readonly now: () => Date;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly bootTimeMs: () => number | null;
+  private readonly processUptimeMs: () => number;
   private readonly warn: (msg: string, err?: unknown) => void;
   private current: RunMarker | null = null;
   private writeFailureLogged = false;
@@ -181,6 +184,7 @@ export class RunMarkerStore {
     this.now = deps.now ?? (() => new Date());
     this.isPidAlive = deps.isPidAlive ?? defaultIsPidAlive;
     this.bootTimeMs = deps.bootTimeMs ?? defaultBootTimeMs;
+    this.processUptimeMs = deps.processUptimeMs ?? (() => process.uptime() * 1000);
     this.warn = deps.warn ?? ((msg, err) => log.warn(msg, err));
   }
 
@@ -211,11 +215,19 @@ export class RunMarkerStore {
 
   /** 本实例启动:写 running 标记。 */
   begin(): void {
-    const nowIso = this.now().toISOString();
+    const now = this.now();
+    const nowIso = now.toISOString();
+    // begin() 常在启动链的后段(如 crashReporter 初始化之后)才执行,this.now()
+    // 只是写标记的时刻。用进程已运行时长倒推出进程真正的启动时刻,尸体报告里的
+    // startedAt / "~Ns alive" 才对得上主日志。读数异常时退回写标记的时刻。
+    const uptimeMs = this.processUptimeMs();
+    const startedAt = Number.isFinite(uptimeMs) && uptimeMs > 0
+      ? new Date(now.getTime() - uptimeMs).toISOString()
+      : nowIso;
     this.current = {
       pid: this.pid,
       version: this.version,
-      startedAt: nowIso,
+      startedAt,
       heartbeatAt: nowIso,
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       state: 'running',

@@ -66,7 +66,13 @@ function writeMarker(marker: Partial<RunMarker> & { pid: number }): string {
 }
 
 function makeStore(
-  opts: { pid?: number; alivePids?: number[]; now?: () => Date; bootTimeMs?: number | null } = {},
+  opts: {
+    pid?: number;
+    alivePids?: number[];
+    now?: () => Date;
+    bootTimeMs?: number | null;
+    processUptimeMs?: number;
+  } = {},
 ) {
   return new RunMarkerStore({
     dir: tmpDir,
@@ -75,6 +81,7 @@ function makeStore(
     now: opts.now,
     isPidAlive: (pid) => (opts.alivePids ?? []).includes(pid),
     bootTimeMs: () => opts.bootTimeMs ?? null,
+    processUptimeMs: () => opts.processUptimeMs ?? 0,
     warn: () => {},
   });
 }
@@ -91,6 +98,20 @@ describe('RunMarkerStore state machine', () => {
     expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
     expect(m.heartbeatAt).toBe('2026-07-07T12:00:00.000Z');
     expect(m.heartbeatIntervalMs).toBeGreaterThan(0);
+  });
+
+  it('begin() records when the process started, not when the marker was written', () => {
+    // 写标记发生在启动链后段:这次写比进程启动晚了 21 秒。
+    const store = makeStore({
+      pid: 43,
+      now: () => new Date('2026-07-07T12:00:21.000Z'),
+      processUptimeMs: 21_000,
+    });
+    store.begin();
+
+    const m = readMarker(43);
+    expect(m.startedAt).toBe('2026-07-07T12:00:00.000Z');
+    expect(m.heartbeatAt).toBe('2026-07-07T12:00:21.000Z');
   });
 
   it('heartbeat() refreshes heartbeatAt without touching state', () => {
