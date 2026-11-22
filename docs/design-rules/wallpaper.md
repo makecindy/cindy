@@ -24,6 +24,9 @@ syntax-highlighted code, such as code blocks and diffs (the fixed syntax palette
 web or editor content keep their readable opaque surfaces. Implementation: the in-page
 glass rule in `globals.css`, scoped to page containers and excluding floating roles and
 absolute / fixed / sticky surfaces; the floor comes from `useWallpaperBackground`.
+A sticky header filled with its own card's token (`.wallpaper-sticky-header`, such as the
+model list toolbar) stays clear over that glass card until it sticks over scrolled content,
+then takes back its opaque fill; elsewhere it keeps its fill unchanged.
 Desktop transparency uses this same rule and contrast floor, including its exclusions
 (user decision, 2026-11-08). Do not duplicate per-control styles by background source.
 At zero desktop transparency, keep raised surfaces fully opaque. The sidebar's own

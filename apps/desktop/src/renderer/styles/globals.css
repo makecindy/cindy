@@ -2770,6 +2770,26 @@ html.dark:is([data-wallpaper-active='true'], [data-desktop-background='true']) {
 )) {
   background-color: color-mix(in srgb, var(--wallpaper-glass-fill) var(--wallpaper-glass-opacity), transparent);
 }
+/* A sticky header filled with its card's token (one of the fills above) would sit on
+   the glass card as an opaque slab. While the card is glass the header stays clear
+   until it sticks over scrolled content, then takes its opaque fill back, as sticky
+   surfaces do. Elsewhere it keeps its own fill unchanged. */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true']) .wallpaper-sticky-header {
+  container-type: scroll-state;
+  background-color: transparent;
+}
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true']) .wallpaper-sticky-header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+@container scroll-state(stuck: top) {
+  html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true']) .wallpaper-sticky-header::before {
+    background-color: var(--wallpaper-glass-fill);
+  }
+}
 
 /* Keep the decoded old canvas above the new one and fade only its opacity.
    Fixed composer copies follow the same transition, preserving the crop and

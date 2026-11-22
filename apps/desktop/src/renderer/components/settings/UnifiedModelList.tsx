@@ -1204,10 +1204,12 @@ export function UnifiedModelList({
     <div className={'flex flex-col'}>
       {/* 第一行说明模型选择与管理，第二行仅筛选当前列表。排列和批量配置在菜单里
           明确分组，任何筛选或排列操作都不写入模型开关。 */}
+      {/* 壁纸 / 桌面透明时工具行未吸顶就透出卡片的半透明底，吸顶后才铺回卡片底色
+          （wallpaper-sticky-header，见 globals.css）。 */}
       {!compactEmpty && (
         <div
           data-testid="provider-model-toolbar"
-          className="sticky top-0 z-raised flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
+          className="wallpaper-sticky-header sticky top-0 z-raised flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
         >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div className="min-w-0 flex-1">
@@ -1335,13 +1337,7 @@ export function UnifiedModelList({
               {showSearch && (
                 /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
              不让 chip 组被 overflow-hidden 裁掉(PR #1102 review)。 */
-                <div
-                  className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full px-3"
-                  style={{
-                    backgroundColor: 'var(--surface-elevated)',
-                    border: '1px solid var(--border-default)',
-                  }}
-                >
+                <div className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3">
                   <Search
                     size={14}
                     className="shrink-0"
