@@ -2959,6 +2959,16 @@ export class Scheduler extends EventEmitter {
     await this.abortInflightAndWait(id, opts?.exemptRunId);
     const updated = await this.storage.update(id, { status: 'paused', updatedAt: this.clock.now() });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
+    // pause 是**排期语义**的改动(用户改主意了,这条任务不再按原排期跑),这一版不再是
+    // 任何一次补排写下的排期 —— 作废该任务名下的补排收据。
+    //
+    // 为什么必须在这里作废:收据指纹只带 CAS 身份(不带行级 updatedAt,见
+    // replanWriteIdentity),而 pause → resume 之后行会回到 active 且 nextFireAt
+    // 可能与暂停前逐项相同(用户在同一个槽位前暂停又恢复,resume 算出的还是那个
+    // 槽位)。不动作废的话,收据会把这**用户恢复出来的那一版**认成退役写入,恢复
+    // 时刻的补排把它顶到下一个槽位,用户恢复的那次触发被静默跳过
+    // (Codex P1 on #12087 的第十一轮复评)。
+    this.invalidateReplanWriteReceipts(id);
     this.invalidScheduleIds.delete(id);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
@@ -2992,6 +3002,12 @@ export class Scheduler extends EventEmitter {
       nextFireAt: hasExpired(existing, now) ? undefined : beforeDeadline(existing, next),
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
+    // resume 同样是**排期语义**的改动(这一版的排期由用户重新起算),作废该任务名下
+    // 的补排收据 —— 与 pause 同一把尺子:pause → resume 之后行回到 active 且
+    // nextFireAt 可能与暂停前逐项相同,不动作废的话收据会把用户恢复出来的那一版
+    // 认成退役写入,恢复时刻的补排把它顶到下一个槽位,用户恢复的那次触发被静默
+    // 跳过(Codex P1 on #12087 的第十一轮复评)。
+    this.invalidateReplanWriteReceipts(id);
     this.invalidScheduleIds.delete(id);
     if (updated.status === 'active') this.activeSchedules.set(id, updated);
     else this.activeSchedules.delete(id);

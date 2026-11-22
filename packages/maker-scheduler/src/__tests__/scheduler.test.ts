@@ -2939,6 +2939,99 @@ describe('Scheduler', () => {
   // (name / prompt)时,行级 updatedAt 被推进而 nextFireAt 原样保留。收据指纹若带上
   // 行级修订,这份排期就再也认不出来 —— 恢复时按"别人写的排期"保留它,长故障之后
   // 立即补跑 / 与新一轮重叠。元数据编辑不动作排期语义,收据必须继续有效。
+  // Codex P1 on #12087(第十一轮复评):退役收据对「用户暂停后又恢复」失效。
+  // 收据指纹刻意只带 CAS 身份(不带行级 updatedAt),而 pause → resume 之后行回到
+  // active、nextFireAt 可能与暂停前逐项相同(用户在同一个槽位之前暂停又恢复,resume
+  // 算出的还是那个槽位)—— 不动作废收据的话,恢复时刻的补排把**用户恢复出来的那一
+  // 版**认成退役写入,顶到下一个槽位,用户恢复的那次触发被静默跳过。
+  it('keeps the slot a user resumed before the stalled replan retried', async () => {
+    vi.useFakeTimers();
+    try {
+      let runStarts = 0;
+      const h = makeHarness({
+        runStallMs: 10_000,
+        runStallAbortGraceMs: 1_000,
+        preGateStorageTimeoutMs: 30,
+        logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+        runnerImpl: (_s, ctx) => {
+          runStarts += 1;
+          return new Promise<FireResult>(() => {
+            ctx.signal.addEventListener('abort', () => {});
+          });
+        },
+      });
+      const sch = await h.scheduler.create({ ...baseInput });
+      const realGet = h.storage.get.bind(h.storage);
+      const realUpdate = h.storage.update.bind(h.storage);
+      const realListActive = h.storage.listActive.bind(h.storage);
+      const inReplanPath = () => (new Error().stack ?? '').includes('applyStalledClaimReplan');
+      let replanReads = 0;
+      let replanWrites = 0;
+      vi.spyOn(h.storage, 'get').mockImplementation((id: string) => {
+        if (id !== sch.id) return realGet(id);
+        if (!inReplanPath()) return realGet(id);
+        replanReads += 1;
+        // 第一次补排的回读失败 → 凭据上膛;之后的回读照常。
+        if (replanReads === 1) return Promise.reject(new Error('storage unavailable'));
+        return realGet(id);
+      });
+      vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+        if (!inReplanPath()) return realUpdate(id, patch, expected);
+        replanWrites += 1;
+        // 第一次补排的写卡死(写通道楔住):收据已经签发(值 = 发起时刻算出的槽位),
+        // 但落笔一直不回来 → 凭据继续上膛,由后续 tick 重试。
+        if (replanWrites === 1) return new Promise<Schedule | null>(() => {});
+        return realUpdate(id, patch, expected);
+      });
+      let bulkFailed = false;
+      vi.spyOn(h.storage, 'listActive').mockImplementation(() =>
+        bulkFailed ? new Promise<Schedule[]>(() => {}) : realListActive());
+
+      // 第一轮 run:到点触发 → 卡死 → 强制收口 → 那次补排的回读失败(凭据上膛)。
+      h.clock.advance(30_000); // 00:01:00 —— 第一个槽位
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(10_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(1_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(replanReads).toBe(1);
+
+      // 重试一次补排:回读成功,写排期卡死(收据已签发,值 = 00:02:00 那个槽位)。
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanReads).toBe(2);
+      expect(replanWrites).toBe(1);
+
+      // 用户在那个槽位之前把任务暂停又恢复:resume 算出的还是同一个槽位。
+      await h.scheduler.pause(sch.id);
+      await h.scheduler.resume(sch.id);
+      const userSlot = h.storage.schedules.get(sch.id)?.nextFireAt;
+      expect(userSlot).toBeGreaterThan(h.clock.now());
+
+      // 批量读失败一代(代次冻结):这一轮还在用户那个槽位之前,到期槽位不会先被派发。
+      h.clock.advance(30_000);
+      bulkFailed = true;
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(replanWrites).toBe(1); // 在途的那一次还挂着,这一轮换发不出去
+      bulkFailed = false;
+
+      // 故障持续到那个槽位之后 → 批量读恢复(代次前进)→ 换发第二次补排。
+      h.clock.advance(120_000);
+      void h.scheduler.tick();
+      await vi.advanceTimersByTimeAsync(100);
+
+      // 恢复时刻的补排不得把用户恢复出来的那一版顶到下一个槽位 —— 那个槽位仍要触发。
+      expect(runStarts).toBe(2);
+
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('still takes over a retired replan write after a metadata-only edit', async () => {
     vi.useFakeTimers();
     try {
