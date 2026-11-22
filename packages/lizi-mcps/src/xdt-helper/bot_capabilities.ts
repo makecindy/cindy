@@ -3,7 +3,57 @@ import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
 import type { ControlResult, LiziMcpSessionContext } from "../types.js";
 import { errorPayload, okPayload } from "./_payload.js";
 
+export const teammateProfilePatch = z.strictObject({
+  expectedVersion: z.number().int().positive(),
+  name: z.string().trim().min(1).max(200).optional(),
+  description: z.string().max(12000).optional(),
+  avatar: z.string().min(1).max(256).optional(),
+  avatarFile: z.enum(['avatar.png', 'avatar.jpg', 'avatar.webp']).optional().describe('Image in your own .cindy/settings folder. Apply separately with expectedAvatar and expectedVersion.'),
+  expectedAvatar: z.string().max(256).optional(),
+  userContextSource: z.string().max(12000).optional(),
+  identitySource: z.string().max(12000).optional(),
+  modelChain: z.array(z.strictObject({
+    id: z.string().min(1).max(2048).describe('Enabled route id from get_app_default_model.'),
+    effort: z.string().max(64).optional(),
+    fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
+  })).min(1).max(5).nullable().optional().describe('Complete model chain for this buddy; null removes its override and follows the application default.'),
+});
+
+const speechRoute = z.strictObject({
+  modelId: z.string().min(1).max(256),
+  providerId: z.string().max(256).optional(),
+  agent: z.enum(['claude-code', 'codex', 'pi']).optional(),
+  protocol: z.enum(['openai', 'elevenlabs', 'minimax', 'qwen-tts', 'dashscope-tts']).optional(),
+});
+const voiceRequest = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('inspect') }),
+  z.strictObject({ action: z.literal('voices'), route: speechRoute }),
+  z.strictObject({ action: z.literal('apply'), revision: z.string().length(64),
+    selection: speechRoute.extend({ voice: z.string().min(1).max(256), speed: z.number().positive().optional() }).nullable().optional(),
+    sentencePlayback: z.boolean().nullable().optional() }),
+]);
+export type TeammateVoiceRequest = z.infer<typeof voiceRequest>;
+export const groupRequest = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('inspect'), group: z.string().trim().min(1).max(512) }),
+  z.strictObject({ action: z.literal('apply'), group: z.string().trim().min(1).max(512),
+    connectionRef: z.string().regex(/^[a-f0-9]{12}$/), revision: z.string().max(100),
+    replyMode: z.enum(['always', 'mention']) }),
+]);
+export type TeammateGroupRequest = z.infer<typeof groupRequest>;
+export interface TeammateGroupBinding {
+  connectionRef: string;
+  group: string;
+  name: string;
+  assignedToSelf: boolean;
+  revision: string;
+  replyMode: 'always' | 'mention';
+}
 export interface BotCapabilityCallbacks {
+  removePersonalSkill?(input: { callerSessionId: string; slug: string }): Promise<ControlResult<{ changed: boolean }, string>>;
+  restoreStandard?(input: { callerSessionId: string }): Promise<ControlResult<{ changed: boolean }, string>>;
+  voice?(input: { callerSessionId: string; request: TeammateVoiceRequest }): Promise<ControlResult<{ result: unknown }, string>>;
+  iMessageGroup?(input: { callerSessionId: string; request: TeammateGroupRequest | { action: "applyFromProject"; revision: string } }): Promise<
+    ControlResult<{ groups: TeammateGroupBinding[] }, string>>;
   models?(params: { callerSessionId: string }): Promise<ControlResult<{
     current: AppDefaultModelRoute | null;
     available: { id: string; route: AppDefaultModelRoute; efforts: string[]; supportsFastMode?: boolean; supportsUltrafastMode?: boolean }[];
@@ -13,13 +63,9 @@ export interface BotCapabilityCallbacks {
   }, string>>;
   /** Host resolves the caller; tools never accept another Bot's id or raw config. */
   inspect?(params: { callerSessionId: string }): Promise<ControlResult<{ state: BotControlState }, string>>;
-  updateProfile?(params: {
+  updateProfile?(params: z.infer<typeof teammateProfilePatch> & {
     callerSessionId: string;
-    expectedVersion: number;
-    name?: string;
-    description?: string;
-    identitySource?: string;
-    modelChain?: { id: string; effort?: string; fastMode?: boolean | 'ultrafast' }[] | null;
+    fromProject?: true;
   }): Promise<ControlResult<{ effective: "next-turn" }, string>>;
   list(params: {
     callerSessionId: string;
@@ -60,14 +106,15 @@ export interface AppDefaultModelRoute {
 }
 
 export interface BotControlState {
+  settings?: { directory: string | null; device: string; permissionMode: string | null; permissionAuthority: 'host' };
   conversations?: {
     scope: 'local';
     teammateId: string;
-    connections: { channel: string; connectionId?: string; status: string }[];
+    connections: { channel: string; connectionId?: string; status: string; group?: string; replyMode?: string }[];
     connectionsAvailable: boolean;
     guidance: string;
   };
-  profile: { id: string; name: string; description: string; identitySource: string; version: number };
+  profile: { id: string; name: string; description: string; identitySource: string; version: number; avatar?: string; userContextSource?: string };
   session: { id: string; workingDir: string | null; remoteHostId: string | null };
   model: { source: "override" | "default"; candidates: { harness: string; providerId?: string | null; model: string }[] };
   memory: { enabled: boolean; scope: "self" };
@@ -133,25 +180,66 @@ export function registerBotCapabilityTools(
       return result.ok ? okPayload({ state: result.state }) : errorPayload(result.errorCode, result.message);
     },
   });
+  if (deps.callbacks.removePersonalSkill) registry.register({
+    name: 'remove_teammate_personal_skill',
+    category: 'bots',
+    description: 'Remove one active personal project skill requested by the owner. Inspect its ownership with list_teammate_skills first, then reread the list.',
+    inputShape: { slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/) },
+    handler: async ({ slug }) => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      const result = await deps.callbacks.removePersonalSkill!({ callerSessionId, slug });
+      return result.ok ? okPayload({ changed: result.changed }) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.callbacks.restoreStandard) registry.register({
+    name: 'restore_teammate_standard_skills',
+    category: 'bots',
+    description: 'Repair missing standard project skills. Keep personal files, own rules and explicit disables. Read the project skill shelf afterwards.',
+    inputShape: {},
+    handler: async () => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      const result = await deps.callbacks.restoreStandard!({ callerSessionId });
+      return result.ok ? okPayload({ changed: result.changed }) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.callbacks.voice) registry.register({
+    name: 'configure_teammate_voice',
+    category: 'bots',
+    description: 'Read your voice preference, source and available speech models, list voices for a model, or apply your selection and sentence playback with the observed revision.',
+    inputShape: { request: voiceRequest },
+    handler: async ({ request }) => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      const result = await deps.callbacks.voice!({ callerSessionId, request });
+      return result.ok ? okPayload({ result: result.result }) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.callbacks.iMessageGroup) registry.register({
+    name: 'configure_teammate_imessage_group',
+    category: 'bots',
+    description: 'Inspect a named local authorized iMessage group in your owner conversation. To receive that group, apply its exact GUID, connection reference, revision and reply mode. The host verifies the server and callback before switching. Other chats keep their routes.',
+    inputShape: { request: z.union([groupRequest, z.strictObject({ action: z.literal('applyFromProject'), revision: z.string().min(1).max(100) })]) },
+    handler: async ({ request }) => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      const result = await deps.callbacks.iMessageGroup!({ callerSessionId, request });
+      return result.ok ? okPayload({ groups: result.groups }) : errorPayload(result.errorCode, result.message);
+    },
+  });
   if (deps.callbacks.updateProfile) registry.register({
     name: "update_teammate_profile",
     category: "bots",
     description: TEAMMATE_CONTROL_GUIDANCE,
     inputShape: {
-      expectedVersion: z.number().int().positive(),
-      name: z.string().trim().min(1).max(200).optional(),
-      description: z.string().max(12000).optional(),
-      identitySource: z.string().max(12000).optional(),
-      modelChain: z.array(z.strictObject({
-        id: z.string().min(1).max(2048).describe('Enabled route id from get_app_default_model.'),
-        effort: z.string().max(64).optional(),
-        fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
-      })).min(1).max(5).nullable().optional().describe('Complete model chain for this buddy; null removes its override and follows the application default.'),
+      ...teammateProfilePatch.shape,
+      fromProject: z.literal(true).optional().describe('Apply .cindy/settings/profile.json in your own project at this expectedVersion. Use alone with expectedVersion.'),
     },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
       if (!callerSessionId) return errorPayload("NOT_A_BOT_SESSION", "当前调用未绑定伙伴任务");
-      if (input.name === undefined && input.description === undefined && input.identitySource === undefined && input.modelChain === undefined)
+      if ((input.fromProject && Object.keys(input).length !== 2) || Object.keys(input).length < 2)
         return errorPayload("INVALID_PARAMS", "请选择要修改的资料");
       const result = await deps.callbacks.updateProfile!({ ...input, callerSessionId });
       return result.ok ? okPayload({ effective: result.effective }) : errorPayload(result.errorCode, result.message);

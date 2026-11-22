@@ -472,6 +472,7 @@ import {
   closeComputerPermissionGuideWindow,
   finishComputerPermissionAppDrag,
   getComputerPermissionGuideStatus,
+  getComputerPermissionPaneUrl,
   openComputerPermissionPaneForStatus,
   isComputerPermissionGuideWebContents,
   refreshComputerPermissionGuideWindow,
@@ -479,8 +480,8 @@ import {
   showComputerPermissionGuideWindow,
   startComputerPermissionAppDrag,
 } from '../computer-permission-guide/window.js';
-import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
-import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
+import { MAC_ACCESSIBILITY_SETTINGS_URL, parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
+import { getComputerPermissionGuideMode } from './computerPermissionGuideEligibility.js';
 import {
   resolveSessionQueueCounts,
   type SessionQueueInspectionEntry,
@@ -19021,7 +19022,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }, (sessionId, requestId) => {
     const session = pageApprovalSessions.get(requestId);
     if (session?.id === sessionId) allowHostPagePermission(session, requestId);
-  });
+  }, (win) => win === getDeepLinkMainWindow() || isSecondaryAppWindow(win));
   registerMakerSessionSendHandler(
     {
       handle(channel, handler) {
@@ -23262,6 +23263,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
  * bootstrap 在 splash 之后的同一时刻调用。只用模块级依赖，不闭合 `registerMakerIpc` 的状态。
  */
 export function registerComputerUseIpc(): void {
+  let permissionGrantGeneration = 0;
   // ── Local desktop computer-use (Settings →「电脑使用」) ─────────────────
   // Probe the installed CuaDriver used by the phase-one Computer Use runtime.
   ipcMain.handle(
@@ -23295,25 +23297,42 @@ export function registerComputerUseIpc(): void {
     if (!options) {
       throwIpcError('INVALID_PARAMS', 'Invalid Computer Use permission request');
     }
-    const shouldShowGuide = shouldUseComputerPermissionGuide({
+    const generation = ++permissionGrantGeneration;
+    const guideMode = getComputerPermissionGuideMode({
+      systemVersion: process.platform === 'darwin' ? process.getSystemVersion?.() : undefined,
       platform: process.platform,
       showGuide: options.showGuide,
       appBundlePath: getComputerDriverAppBundlePath(),
-      systemVersion: process.getSystemVersion?.(),
     });
     try {
       // Permission snapshots are mutable TCC state and cannot be accepted from
       // Renderer. Re-establish the state in Main immediately before guide side
       // effects, bypassing both daemon and probe caches.
-      const initialStatus = shouldShowGuide
+      const initialStatus = guideMode !== 'driver'
         ? await getComputerDriverStatus({
             forcePermissionProbe: true,
             freshPermissionProbe: true,
             bypassPermissionProbeCache: true,
           })
         : undefined;
-      if (shouldShowGuide) {
-        if (!initialStatus) throw new Error('Computer Use permission guide status unavailable');
+      if (guideMode === 'settings' && initialStatus) {
+        const cancelled = { ok: false, stdout: '', stderr: '', status: initialStatus };
+        if (generation !== permissionGrantGeneration) return cancelled;
+        const url = getComputerPermissionPaneUrl(initialStatus);
+        if (!url) return { ok: true, stdout: '', stderr: '', status: initialStatus };
+        // An explicit badge click already opened the user's chosen pane.
+        if (!options.openedPaneUrl) {
+          await shell.openExternal(url).catch((error) => {
+            log.warn('opening macOS permission settings failed', { error: String(error) });
+          });
+        }
+        if (generation !== permissionGrantGeneration) return cancelled;
+        const result = await grantComputerDriverPermissions(initialStatus);
+        return !options.openedPaneUrl && url === MAC_ACCESSIBILITY_SETTINGS_URL
+          ? { ...result, continueToScreenRecording: true }
+          : result;
+      }
+      if (guideMode === 'drag' && initialStatus) {
         if (options.openedPaneUrl) {
           seedOpenedPermissionPane(options.openedPaneUrl);
         }
@@ -23329,7 +23348,7 @@ export function registerComputerUseIpc(): void {
       }
       return await grantComputerDriverPermissions(initialStatus);
     } catch (err) {
-      if (shouldShowGuide) closeComputerPermissionGuideWindow();
+      if (guideMode === 'drag') closeComputerPermissionGuideWindow();
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }
   });
@@ -23367,6 +23386,7 @@ export function registerComputerUseIpc(): void {
     if (!cancelledFromGuide) {
       assertTrustedAppRendererEvent(_event);
     }
+    permissionGrantGeneration++;
     cancelComputerDriverPermissionGrant();
     closeComputerPermissionGuideWindow();
     if (cancelledFromGuide) {

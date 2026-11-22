@@ -684,7 +684,11 @@ describe('turnRunner: connection handed to a companion bot', () => {
         }),
       }),
     }));
-    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+    const commitFinal = vi.fn(async () => undefined);
+    runner = createTurnRunner({
+      ...fakeAdapter, channel: 'imessage',
+      output: { kind: 'chunked-text', im: fakeAdapter.im, commitFinal },
+    }, fakeRepo, fakeCards, {
       companion: companion as unknown as ImCompanionRouteDeps,
       acquirePendingAgentSwitch,
     });
@@ -694,6 +698,10 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(harnesses.get('mimi-main')!.send).not.toHaveBeenCalled();
     expect(switched.send).toHaveBeenCalledTimes(1);
     for (const [, text] of mocks.im.sendText.mock.calls) expect(String(text)).not.toContain('❌');
+    switched.emit({ type: 'text', data: { text: 'sample reply', isFinal: true } } as AgentEvent);
+    switched.emit({ type: 'done', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledOnce());
+    expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER, text: 'sample reply', terminal: 'done' }));
     expect(runner.getMakerSessionById('mimi-main')).toBe(switched.session);
   });
 
