@@ -59,9 +59,14 @@ export function getSessionRuntimeStartOverride(sessionId: string, agentKind: Eng
 export function projectSessionRuntimeControl(
   sessionId: string,
   baseline: SessionRuntimeProfile,
+  agentDeviceId = baseline.agentDeviceId,
 ): Partial<RendererSession> {
   const control = getSessionRuntimeControlSnapshot(sessionId);
-  const effective = control.effectiveOverride ?? baseline;
+  const override = control.effectiveOverride;
+  // A route-change push can run while an override from the previous computer still exists.
+  const effective = override && (override.agentDeviceId ?? null) === (agentDeviceId ?? null)
+    ? override
+    : baseline;
   return {
     agentKind: makerToDbAgentKind(effective.agentKind),
     model: effective.model,
