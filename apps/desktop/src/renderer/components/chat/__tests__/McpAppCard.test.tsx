@@ -181,6 +181,56 @@ it('paints the iframe backdrop from the nearest card background without recomput
   }
 });
 
+// Renderer unit through the real card lifecycle. The fallback stays on the iframe
+// for the App's lifetime, so it must equal what is already visible behind it.
+// Painting the body color hid the wallpaper, and painting a translucent layer
+// doubled it. Minimal failing inputs: an active wallpaper canvas, a translucent
+// ancestor, and an image-backed ancestor.
+it('keeps the iframe transparent over wallpaper, translucent and image backgrounds', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  document.body.style.backgroundColor = 'rgb(250, 250, 250)';
+  document.documentElement.dataset.wallpaperActive = 'true';
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="backdrop-wallpaper" clientId="backdrop-card" title="App" />));
+    container.querySelector('dialog')!.style.backgroundColor = 'transparent';
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const frame = container.querySelector('iframe')!;
+    expect(frame.style.backgroundColor).toBe('transparent');
+
+    await act(async () => {
+      delete document.documentElement.dataset.wallpaperActive;
+      await Promise.resolve();
+    });
+    expect(frame.style.backgroundColor).toBe('rgb(250, 250, 250)');
+
+    container.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    await act(async () => { document.documentElement.dataset.theme = 'translucent'; await Promise.resolve(); });
+    expect(frame.style.backgroundColor).toBe('transparent');
+
+    container.style.backgroundColor = 'transparent';
+    container.style.backgroundImage = 'url(wallpaper.png)';
+    await act(async () => { document.documentElement.dataset.theme = 'image'; await Promise.resolve(); });
+    expect(frame.style.backgroundColor).toBe('transparent');
+  } finally {
+    delete document.documentElement.dataset.wallpaperActive;
+    delete document.documentElement.dataset.theme;
+    document.body.style.backgroundColor = '';
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 it('does not walk backdrop ancestors for unrelated DOM changes', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');

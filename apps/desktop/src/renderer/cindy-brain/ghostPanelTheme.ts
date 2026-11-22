@@ -156,13 +156,17 @@ function buildGhostCanvasThemeCss(backgroundProperty: 'background' | 'background
   ].join('\n');
 }
 
+/** The window canvas shows a wallpaper or the desktop instead of its surface color. */
+export function isHostCanvasImageBacked(root: HTMLElement = document.documentElement): boolean {
+  return root.dataset.wallpaperActive === 'true' || root.dataset.desktopBackground === 'true';
+}
+
 /** Main views share the host background canvas; controls keep their theme surfaces. */
 export function buildGhostMainViewThemeCss(): string {
   // A background shorthand would reset author images, sizing and repeat rules,
   // even if the wallpaper override below only changes background-color.
   const css = buildGhostCanvasThemeCss('background-color');
-  const root = document.documentElement;
-  if (root.dataset.wallpaperActive !== 'true' && root.dataset.desktopBackground !== 'true') return css;
+  if (!isHostCanvasImageBacked()) return css;
   // Only clear the document canvas, never surface tokens: plugins also use those
   // tokens for inputs, cards and dialogs. Keep any author-provided background image.
   return `${css}\nhtml, body { background-color: transparent !important; }`;
