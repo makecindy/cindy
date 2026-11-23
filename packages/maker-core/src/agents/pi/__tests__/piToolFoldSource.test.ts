@@ -581,6 +581,21 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(callRead.content![0].text)).toContain('echo decoy one');
   });
 
+  it('keeps a batch readable after a later call takes the same id and folds', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    messages.push(call('r1', 'bash', { command: 'echo decoy two' }), result('r1', 'bash', 'decoy two'));
+    const first = projection(context, messages)!;
+    expect(refsOf(first)[0]).toBe('r1');
+    // 同名调用稍后才出现，而且同样被折叠：折叠标记落在调用 id 上，不能影响批解析。
+    const second = projection(context, messages.concat(pairs(40, 40)))!;
+    expect(refsOf(second)).toContain('r1');
+    const batchRead = await tool.execute('t-batch2', { batch: 'r1' });
+    expect(String(batchRead.content![0].text)).toContain('run step 0');
+    const callRead = await tool.execute('t-call2', { call_id: 'r1' });
+    expect(String(callRead.content![0].text)).toContain('echo decoy two');
+  });
+
   it('keeps folding after a pin instead of reviving dropped originals', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);
