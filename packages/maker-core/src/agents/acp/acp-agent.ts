@@ -259,9 +259,11 @@ export class AcpAgent extends BaseAgent {
     ].filter((part) => part.trim()).join('\n\n') : '';
     // The built-in engines learn the installed plugins and Skills from their system prompt and native
     // Skill loading; a plugin engine is told in the briefing instead (user decision 2026-11-24). Only
-    // for this computer's own tasks: a hosted task's plugins and Skills are the other computer's, and a
-    // companion keeps its own frozen capability set, exactly as the built-in engines leave them out.
-    const capabilities = hosted || opts.botRuntimeProfile ? null : {
+    // for this computer's own tasks: a hosted task's plugins and Skills are the other computer's, and an
+    // isolated companion keeps its own frozen capability set, exactly as the built-in engines leave them
+    // out (a project-context companion loads like any task). A resumed session already has the
+    // briefing, and resuming never falls back to a new session, so nothing is read for it.
+    const capabilities = hosted || isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null : {
       pluginRoster: this.readPluginRoster(opts.workingDir, logger),
       skills: await this.readSessionSkills(opts.workingDir, logger),
     };

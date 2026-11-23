@@ -1127,6 +1127,32 @@ describe('AcpAgent (the acp engine)', () => {
     expect(briefing!.text).toBe('You are Mika.');
   });
 
+  // Review (#12294)：V2 项目伙伴（projectContext）按普通任务装配，与内置 Pi 一致要收到花名册与 Skill；恢复的会话
+  // 已有说明且恢复失败不会改开新会话，所以不读取。最小失败输入：projectContext 伙伴；带 resumeSessionId 启动。
+  it('briefs a project-context companion like any task, and reads nothing for a resumed session', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await briefingEngine(agent, vi.fn(() => '<ghost-roster></ghost-roster>'), vi.fn(async () => skillList)).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', botProfilePrompt: 'You are Mika.',
+      botRuntimeProfile: { botId: 'mika', profileVersion: 1, projectContext: true, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+    });
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).toContain('You are Mika.');
+    expect(briefing!.text).toContain('<ghost-roster>');
+    expect(briefing!.text).toContain('<cindy-skills>');
+
+    const resumed = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } },
+      handlers: { 'session/resume': () => ({}) } });
+    const roster = vi.fn(() => '<ghost-roster></ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const again = await briefingEngine(resumed, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', resumeSessionId: 'old-1',
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    expect(await firstPrompt(resumed, again)).toEqual([{ type: 'text', text: 'open a PR' }]);
+  });
+
   // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的
   // 文件与命令工具只会作用在 Agent 所在的这台电脑，所以：入口以远程工作区方式启动(插件关掉自带工具)，
   // 工具全部来自任务所在电脑的隧道，没有 cindy_exec 就拒绝；受邀者一律拒绝。此前这类会话在这里一律被拒，没有覆盖。
