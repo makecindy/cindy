@@ -2904,6 +2904,14 @@ export function getMaker(): Maker {
       appVersion: app.getVersion(),
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      getGhostRosterPrompt,
+      // Same Skill scope as the built-in Pi engine (its discovery, Cindy-managed and plugin Skills,
+      // and the user's enable switches), like the Cindy tool scope above.
+      listSessionSkills: async ({ workingDir }) => {
+        const maker = _maker;
+        if (!maker?.listAvailableAgents().includes('pi')) return [];
+        return (await maker.listAgentSkills('pi', { workingDir })).skills;
+      },
     });
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };

@@ -1059,6 +1059,74 @@ describe('AcpAgent (the acp engine)', () => {
     expect(contexts[0]).toMatchObject({ mcpCallerKind: kind, mcpCallerAttested: attested });
   });
 
+  // 用户决定（2026-11-24）：插件引擎收不到 Cindy system prompt，内置引擎从 system prompt 知道的已装插件花名册、
+  // 从原生 Skill 加载知道的 Skill，改在新会话首条消息前告诉它。依据：用户反馈 Antigravity 任务不知道已装插件与 Skill，
+  // 发 PR 绕开了 GitHub 插件的 pr Skill。覆盖缺口：此前首轮 briefing 只有协作角色、伙伴与远程工作区说明。
+  // 最小失败输入（unit）：本机任务带花名册与 Skill；对端不收 HTTP MCP（插件网关没交出去）；伙伴任务。
+  const briefingEngine = (agent: FakeAgent, roster: ReturnType<typeof vi.fn>, skills: ReturnType<typeof vi.fn>) => new AcpAgent({
+    auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+    runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+    endpoints: { connect: async () => agent.transport },
+    preparePiExtraSpawnConfig: async () => ({ mcpBridge: { token: 't', servers: [{ name: 'cindy', url: 'http://127.0.0.1:9/mcp/cindy' }] } }),
+    getGhostRosterPrompt: roster as unknown as (ctx: { workingDir?: string }) => string,
+    listSessionSkills: skills as unknown as (ctx: { workingDir: string }) => Promise<Array<{ name: string; description?: string; path?: string }>>,
+  });
+  const skillList = [
+    { name: 'cindy-plugin-github:pr', description: 'Carry a GitHub pull request\n from start to merge.', path: '/skills/pr/SKILL.md' },
+    { name: 'no-file', description: 'Has no readable SKILL.md.' },
+  ];
+  const firstPrompt = async (agent: FakeAgent, handle: { send(m: { type: 'user'; content: string }): Promise<unknown> }) => {
+    await handle.send({ type: 'user', content: 'open a PR' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    return agent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+  };
+
+  it('tells a new plugin-engine conversation which plugins and Skills it can use, once', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster>\n{"id":"cindy-github"}\n</ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', pluginEngineBriefing: 'You are a Worker.',
+    });
+    expect(roster).toHaveBeenCalledWith({ workingDir: '/repo' });
+    expect(skills).toHaveBeenCalledWith({ workingDir: '/repo' });
+    const [briefing, message, more] = await firstPrompt(agent, handle);
+    expect(briefing!.text.indexOf('<ghost-roster>')).toBeLessThan(briefing!.text.indexOf('<cindy-skills>'));
+    expect(briefing!.text.indexOf('<cindy-skills>')).toBeLessThan(briefing!.text.indexOf('You are a Worker.'));
+    expect(briefing!.text).toContain('- cindy-plugin-github:pr: Carry a GitHub pull request from start to merge. ("/skills/pr/SKILL.md")');
+    expect(briefing!.text).not.toContain('no-file');
+    expect(message).toEqual({ type: 'text', text: 'open a PR' });
+    expect(more).toBeUndefined();
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.send({ type: 'user', content: 'again' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'again' }]);
+  });
+
+  it('leaves the plugin roster out when the agent did not take the plugin gateway, and keeps the Skills', async () => {
+    const agent = createFakeAgent({ agentCapabilities: {} });
+    const handle = await briefingEngine(agent, vi.fn(() => '<ghost-roster></ghost-roster>'), vi.fn(async () => skillList))
+      .startSession({ workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy' });
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).not.toContain('<ghost-roster>');
+    expect(briefing!.text).toContain('<cindy-skills>');
+  });
+
+  it('keeps a companion on its own capability set: no roster or Skill list', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster></ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', botProfilePrompt: 'You are Mika.',
+      botRuntimeProfile: { botId: 'mika', profileVersion: 1, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).toBe('You are Mika.');
+  });
+
   // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的
   // 文件与命令工具只会作用在 Agent 所在的这台电脑，所以：入口以远程工作区方式启动(插件关掉自带工具)，
   // 工具全部来自任务所在电脑的隧道，没有 cindy_exec 就拒绝；受邀者一律拒绝。此前这类会话在这里一律被拒，没有覆盖。
