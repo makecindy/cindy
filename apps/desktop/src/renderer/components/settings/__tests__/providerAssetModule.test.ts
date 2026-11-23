@@ -174,6 +174,24 @@ describe('canUpgradeBillingPlan', () => {
     expect(canUpgradeBillingPlan(plusMonth, plusAndMaxCatalog)).toBe(true);
   });
 
+  it.each(['antom_alipay_cn', 'antom_alipay_hk'] as const)(
+    '%s 月付订阅不显示升级入口，即使目录有更高档或暂未加载', (provider) => {
+      const subscription = { ...plusMonth, provider };
+      const catalog = {
+        ...plusAndMaxCatalog,
+        products: plusAndMaxCatalog.products.map((product) => ({
+          ...product,
+          offers: product.offers.map((offer) => ({
+            ...offer,
+            purchaseOptions: offer.purchaseOptions.map((option) => ({ ...option, provider })),
+          })),
+        })),
+      };
+      expect(canUpgradeBillingPlan(subscription, catalog)).toBe(false);
+      expect(canUpgradeBillingPlan(subscription, null)).toBe(false);
+    },
+  );
+
   it('已经是最高档 → 升满，不能再升级', () => {
     const maxed: BillingSubscription = {
       ...plusMonth,

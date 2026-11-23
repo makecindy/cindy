@@ -3444,6 +3444,23 @@ describe('BillingPage plan change', () => {
     expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
   });
 
+  it.each(['antom_alipay_cn', 'antom_alipay_hk'] as const)(
+    '%s does not open plan change from a deep link', async (provider) => {
+      routerState.search = 'tab=billing&intent=plan-change';
+      const billing = billingMocks();
+      billing.getCurrentSubscription = vi.fn(async () => ({
+        subscription: { ...activeSubscription(), provider },
+      }));
+      install(billing);
+
+      render(<BillingPage />);
+
+      await screen.findByText('billing.settings.subscriptionCard.manageAction');
+      expect(screen.queryByText('billing.planChange.targetTitle')).toBeNull();
+      expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+    },
+  );
+
   it('深链 ?intent=plan-change 在订阅加载失败时保留参数，刷新成功后再打开目标弹窗', async () => {
     routerState.search = 'tab=billing&intent=plan-change';
     const billing = billingMocks();

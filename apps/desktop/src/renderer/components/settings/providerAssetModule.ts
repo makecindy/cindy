@@ -11,7 +11,7 @@ import type {
   BillingSubscription,
 } from '../../../shared/billing';
 import type { ModelAccessStatus } from '../../../shared/modelAccess';
-import { isSupportedPurchaseOption } from '../../features/billing/purchaseSupport';
+import { isSupportedPurchaseOption, supportsBillingPlanChangeProvider } from '../../features/billing/purchaseSupport';
 import type { ClaudeAccountUsageSnapshot } from '../../hooks/useClaudeAccountUsage';
 
 export type ProviderAssetModuleState =
@@ -62,7 +62,8 @@ export function isBillingPlanChangeEligible(
     !subscription.cancelAtPeriodEnd &&
     subscription.effectivePlan?.offer.interval === 'MONTH' &&
     typeof subscription.provider === 'string' &&
-    subscription.provider.length > 0
+    subscription.provider.length > 0 &&
+    supportsBillingPlanChangeProvider(subscription.provider)
   );
 }
 

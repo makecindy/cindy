@@ -8,6 +8,11 @@ export type SupportedPurchaseOption = BillingPurchaseOption & {
 
 export const SUPPORTED_BILLING_PROVIDERS = new Set<SupportedBillingProvider>(BILLING_CHANNEL_IDS);
 
+export function supportsBillingPlanChangeProvider(provider: string | null | undefined): boolean {
+  // 保留未返回渠道的旧订阅入口。Antom 已支持购买，但尚未支持改档。
+  return provider !== 'antom_alipay_cn' && provider !== 'antom_alipay_hk';
+}
+
 const SUPPORTED_PAYMENT_ACTIONS = new Set<BillingPurchaseOption['paymentAction']>([
   'QR_CODE',
   'REDIRECT',

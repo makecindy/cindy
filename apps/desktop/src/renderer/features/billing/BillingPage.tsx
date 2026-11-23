@@ -61,6 +61,7 @@ import { billingApi } from './api';
 import {
   isSupportedBillingProvider,
   isSupportedPurchaseOption,
+  supportsBillingPlanChangeProvider,
   type SupportedBillingProvider,
   type SupportedPurchaseOption,
 } from './purchaseSupport';
@@ -843,7 +844,7 @@ export function BillingSettingsSection({
     };
   }, [catalog, currentPlan, currentProvider]);
   const showPlanChangeEntry =
-    (currentProvider !== 'antom_alipay_cn' && currentProvider !== 'antom_alipay_hk') &&
+    supportsBillingPlanChangeProvider(currentProvider) &&
     currentPlan !== null &&
     currentSubscription !== null &&
     PLAN_CHANGE_ENTRY_STATUSES.includes(currentSubscription.status) &&
@@ -3159,7 +3160,7 @@ function PaymentOptionRow({
           </p>
         </div>
         {isAntomWallet && (
-          <p className="text-11 leading-4 text-[var(--text-secondary)]">
+          <p className="text-11 leading-[1.455] text-[var(--text-secondary)]">
             {t('billing.alipayPlusPartner')}
           </p>
         )}
