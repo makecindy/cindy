@@ -5911,7 +5911,8 @@
         "title": "Browser automation",
         "description": "A dedicated browser for agents — separate from your everyday Chrome",
         "toggleAria": "Toggle browser automation",
-        "toggleHint": "Applies only to new Agent sessions.",
+        "toggleHint": "This project’s Browser setting takes effect when its agent sessions start or restart.",
+        "userDefaultToggleHint": "Changing the Browser default automatically refreshes local Codex when it is idle. Your tasks and chat history are kept. Codex reloads all built-in tool settings, with project overrides taking priority. Pi and other agents apply the Browser default the next time they start or restart.",
         "noProjectHint": "Open Settings from a project session to toggle browser automation for that project.",
         "detected": "Detected {{browser}}",
         "notDetected": "No local browser detected. Install Chrome to use browser automation.",
@@ -6192,15 +6193,15 @@
     },
     "builtinTools": {
       "title": "Built-in Tools",
-      "description": "Set defaults for new sessions or override them for a project. Project settings take priority.",
+      "description": "Set tool defaults or override them for a project. Project settings take priority.",
       "empty": "No tools available.",
       "toggleAria": "Toggle {{name}} tool",
-      "toggleHint": "Changes apply only to new or restarted agent sessions. Running sessions are not affected.",
+      "toggleHint": "New or restarted agent sessions pick up these tool settings.",
       "loadFailed": "Failed to load tool list",
       "scopePicker": {
         "ariaLabel": "Switch the scope of built-in tool settings",
-        "userDefault": "New session defaults",
-        "userDefaultDescription": "Used by new sessions without a project override"
+        "userDefault": "Agent session defaults",
+        "userDefaultDescription": "Used when the project has no override"
       },
       "source": {
         "project": "project",

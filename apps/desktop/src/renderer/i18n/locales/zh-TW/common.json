@@ -5868,7 +5868,8 @@
         "title": "自動操作瀏覽器",
         "description": "一個 Agent 專用的獨立瀏覽器，與你日常的 Chrome 互不影響",
         "toggleAria": "切換瀏覽器自動化",
-        "toggleHint": "僅對新建的 Agent 會話生效",
+        "toggleHint": "此專案的瀏覽器設定在該專案的 Agent 會話啟動或重新啟動時生效。",
+        "userDefaultToggleHint": "變更瀏覽器預設值後，Cindy 會在本機 Codex 閒置時自動重新載入。原任務和對話記錄會保留。Codex 會重新讀取所有內建工具設定，並優先採用專案覆蓋。Pi 等其他 Agent 在下次啟動或重新啟動時採用瀏覽器預設值。",
         "noProjectHint": "從專案任務中開啟「設定」可針對該專案開關瀏覽器自動化。",
         "detected": "已偵測到 {{browser}}",
         "notDetected": "未偵測到本機瀏覽器。安裝 Chrome 後即可使用瀏覽器自動化。",
@@ -6152,7 +6153,7 @@
       "description": "設定 Agent 會話預設值，或為指定專案新增覆蓋。專案設定優先於使用者預設值。",
       "empty": "暫無可用的工具。",
       "toggleAria": "切換 {{name}} 工具",
-      "toggleHint": "變更僅對新建或重啟的 Agent 會話生效，正在執行的 Agent 會話不受影響。",
+      "toggleHint": "新建或重新啟動的 Agent 會話會採用這裡的工具設定。",
       "loadFailed": "載入工具列表失敗",
       "scopePicker": {
         "ariaLabel": "切換內建工具設定的作用域",

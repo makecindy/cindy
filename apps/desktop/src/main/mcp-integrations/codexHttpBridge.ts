@@ -895,7 +895,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
         sessionId: prefixId(blockedToolCall.context?.sessionId),
         workingDir: blockedToolCall.context?.workingDir,
       });
-      writeBlockedToolCallResponse(res, parsedBody, pluginId, blockedToolCall.reason);
+      writeBlockedToolCallResponse(res, parsedBody, pluginId, blockedToolCall);
       return;
     }
     if (activeContext) {
@@ -1107,10 +1107,14 @@ function writeBlockedToolCallResponse(
   res: http.ServerResponse,
   body: unknown,
   pluginId: string,
-  reason: BlockedToolCall['reason'],
+  { reason, context }: BlockedToolCall,
 ): void {
+  const disabledGuidance =
+    pluginId === 'browser' && context?.agentKind === 'codex' && !context.remoteHostId
+      ? 'Enable Browser in Settings → Tools → Built-in Tools → Agent session defaults. Wait for local Codex to finish any active turns, then retry in this task. If a project override disables Browser, enable Browser in Settings → Automation for that project and restart the agent session.'
+      : 'Enable it in Settings and start a new session to apply the change.';
   const message = reason === 'disabled'
-    ? `Built-in tool "${pluginId}" is disabled for this session. Enable it in Settings and start a new session to apply the change.`
+    ? `Built-in tool "${pluginId}" is disabled for this session. ${disabledGuidance}`
     : reason === 'ambiguous_thread_context'
       ? `Built-in tool "${pluginId}" received calls from more than one session in a single batch and cannot tell them apart. Retry the calls one session at a time.`
       : `Built-in tool "${pluginId}" could not bind this call to a verified Cindy session. This is a session-routing problem, not a plugin setup problem. Start a new task and try again.`;

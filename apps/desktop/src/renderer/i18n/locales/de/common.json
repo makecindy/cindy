@@ -5911,7 +5911,8 @@
         "title": "Browserautomatisierung",
         "description": "Ein eigener Browser für Agents – getrennt von deinem alltäglichen Chrome",
         "toggleAria": "Browserautomatisierung umschalten",
-        "toggleHint": "Gilt nur für neue Agent-Sitzungen.",
+        "toggleHint": "Die Browser-Einstellung dieses Projekts gilt ab dem Start oder Neustart seiner Agent-Sitzungen.",
+        "userDefaultToggleHint": "Wenn du den Browser-Standard änderst, wird der lokale Codex automatisch aktualisiert, sobald er nichts mehr ausführt. Deine Sitzungen und der Chatverlauf bleiben erhalten. Codex lädt alle Einstellungen für integrierte Werkzeuge neu. Projekteinstellungen haben Vorrang. Pi und andere Agents übernehmen den Browser-Standard beim Start oder Neustart ihrer Sitzungen.",
         "noProjectHint": "Öffne die Einstellungen in einer Projektsitzung, um die Browserautomatisierung für dieses Projekt umzuschalten.",
         "detected": "{{browser}} erkannt",
         "notDetected": "Kein lokaler Browser erkannt. Installiere Chrome, um die Browserautomatisierung zu nutzen.",
@@ -6192,15 +6193,15 @@
     },
     "builtinTools": {
       "title": "Integrierte Tools",
-      "description": "Lege Standards für neue Sitzungen fest oder überschreibe sie für ein Projekt. Projekteinstellungen haben Vorrang.",
+      "description": "Lege Standardwerte für Werkzeuge fest oder passe sie für ein Projekt an. Projekteinstellungen haben Vorrang.",
       "empty": "Keine Tools verfügbar.",
       "toggleAria": "Tool {{name}} umschalten",
-      "toggleHint": "Änderungen gelten nur für neue oder neu gestartete Agent-Sitzungen. Laufende Sitzungen sind nicht betroffen.",
+      "toggleHint": "Neue oder neu gestartete Agent-Sitzungen übernehmen diese Werkzeugeinstellungen.",
       "loadFailed": "Tool-Liste konnte nicht geladen werden",
       "scopePicker": {
         "ariaLabel": "Geltungsbereich der Einstellungen für integrierte Tools wechseln",
-        "userDefault": "Standards für neue Sitzungen",
-        "userDefaultDescription": "Wird für neue Sitzungen ohne projektspezifische Überschreibung verwendet"
+        "userDefault": "Standards für Agent-Sitzungen",
+        "userDefaultDescription": "Gilt, wenn das Projekt keine eigene Einstellung hat"
       },
       "source": {
         "project": "Projekt",

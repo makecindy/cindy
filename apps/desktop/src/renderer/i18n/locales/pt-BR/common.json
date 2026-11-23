@@ -5971,7 +5971,8 @@
         "title": "Automação do navegador",
         "description": "Um navegador exclusivo para Agents — separado do Chrome que você usa no dia a dia",
         "toggleAria": "Alternar automação do navegador",
-        "toggleHint": "Aplica-se apenas a novas sessões de Agent.",
+        "toggleHint": "A configuração do navegador deste projeto é aplicada ao iniciar ou reiniciar suas sessões de Agent.",
+        "userDefaultToggleHint": "Quando você muda o padrão do navegador, o Codex local é atualizado automaticamente assim que fica ocioso. Suas sessões e o histórico de conversas são preservados. O Codex recarrega as configurações de todas as ferramentas integradas e dá prioridade às do projeto. O Pi e os demais Agents usam o padrão do navegador ao iniciar ou reiniciar suas sessões.",
         "noProjectHint": "Abra as Configurações a partir de uma sessão do projeto para alternar a automação do navegador nesse projeto.",
         "detected": "{{browser}} detectado",
         "notDetected": "Nenhum navegador local detectado. Instale o Chrome para usar a automação do navegador.",
@@ -6252,15 +6253,15 @@
     },
     "builtinTools": {
       "title": "Ferramentas integradas",
-      "description": "Defina os padrões para novas sessões ou substitua-os em um projeto. As configurações do projeto têm prioridade.",
+      "description": "Defina os padrões das ferramentas ou personalize-os para um projeto. As configurações do projeto têm prioridade.",
       "empty": "Nenhuma ferramenta disponível.",
       "toggleAria": "Ativar ou desativar ferramenta {{name}}",
-      "toggleHint": "As alterações se aplicam apenas a sessões de Agent novas ou reiniciadas. As sessões em execução não são afetadas.",
+      "toggleHint": "Sessões de Agent novas ou reiniciadas usam estas configurações de ferramentas.",
       "loadFailed": "Falha ao carregar a lista de ferramentas",
       "scopePicker": {
         "ariaLabel": "Alterar o escopo das configurações de ferramentas integradas",
-        "userDefault": "Padrões para novas sessões",
-        "userDefaultDescription": "Usado por novas sessões sem configuração específica do projeto"
+        "userDefault": "Padrões das sessões de Agent",
+        "userDefaultDescription": "Usados quando o projeto não tem configuração própria"
       },
       "source": {
         "project": "projeto",
