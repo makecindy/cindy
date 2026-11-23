@@ -172,16 +172,18 @@ export function useLinkedTaskStatus(sessionId: string, hostSessionId: string | u
   const localLive = useAgentIslandActivity(deviceId ? '' : id);
   const remoteLive = useRemoteSessionActivity(deviceId ? id : '', deviceId);
   const attention = useSessionAttentionKind(deviceId ? '' : id);
-  const known = useSyncExternalStore(
+  const record = useSyncExternalStore(
     (onChange) => sessionsStore.subscribe(onChange),
-    // Archived tasks keep only the link: whether they are cached depends on the archive view being open.
-    () => !deviceId && sessionsStore.findById(id)?.status === 'active',
+    () => (deviceId ? undefined : sessionsStore.findById(id)?.status),
   );
+  // Archived or deleted tasks keep only the link, even with an error dot still on them: archiving
+  // keeps the attention (only deletion clears it), and an unloaded archive list must not read Idle.
+  if (record === 'archived' || record === 'deleted') return null;
   return resolveLinkedTaskStatus({
     run,
     livePhase: deviceId ? remoteLive?.phase : localLive?.phase,
     attention: deviceId ? undefined : attention,
-    known,
+    known: record === 'active',
   });
 }
 

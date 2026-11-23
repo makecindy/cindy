@@ -205,6 +205,9 @@ describe('sidebar-embedded session navigation boundary', () => {
     ];
     mocks.listSessions.mockResolvedValueOnce(rows);
     await act(async () => { await sessionsStore.ensureByFilter('all', { fresh: true }); });
+    // Review of 0a74014b87: archiving keeps an error dot (only deletion clears it); the archived
+    // row must still show no state at all.
+    act(() => addSessionAttention('known-archived', 'error'));
     try {
       render(<BotStartedTasksFooter tasks={[
         { sessionId: 'known-active', title: 'Active', created: true },
@@ -212,7 +215,7 @@ describe('sidebar-embedded session navigation boundary', () => {
       ]} />);
       expect(screen.getAllByTestId('bot-started-task-status').map((node) => node.getAttribute('data-status'))).toEqual(['idle']);
     } finally {
-      act(() => sessionsStore.reset());
+      act(() => { clearSessionAttention('known-archived', { intent: 'explicit' }); sessionsStore.reset(); });
     }
   });
 
