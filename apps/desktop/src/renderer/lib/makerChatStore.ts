@@ -251,7 +251,7 @@ import {
   extractUsageLimitRecoveryHint,
   type UsageLimitRecoveryHint,
 } from '@/lib/usageLimitRecovery';
-import { providerErrorExplanation } from '@/utils/streamInterruptError';
+import { hasProviderErrorDetails } from '@/utils/streamInterruptError';
 import { parseReconnectAttemptMessage } from '@/utils/networkError';
 
 import {
@@ -427,8 +427,8 @@ export function remoteErrorMessageForBanner(error: unknown): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
-  // The banner localizes its title from the reason. Preserve structured provider copy underneath.
-  if (providerErrorExplanation(message)) return message;
+  // The banner localizes its summary and decides which details are safe to show inline.
+  if (hasProviderErrorDetails(message)) return message;
   if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
   // The banner localizes this stable reason. Keep the host's bounded cause in
   // the raw detail/diagnosis path instead of replacing it with summary copy.

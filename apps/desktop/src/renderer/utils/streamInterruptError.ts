@@ -20,7 +20,9 @@ export function isStreamInterruptedErrorMessage(message: string, reason?: string
 export function isUpstreamOutputBlockedErrorMessage(raw: string): boolean {
   if (raw.length > 64_000 || !raw.includes('"safety_violation"')) return false;
   try {
-    const body = JSON.parse(raw) as { error?: { type?: unknown; code?: unknown; message?: unknown } } | null;
+    // Live events may append the known HTTP status to the diagnostic body.
+    const json = raw.replace(/ \(HTTP 400\)$/, '');
+    const body = JSON.parse(json) as { error?: { type?: unknown; code?: unknown; message?: unknown } } | null;
     const error = body?.error;
     return error?.type === 'invalid_request_error'
       && error.code === 'safety_violation'
@@ -83,10 +85,19 @@ function extractErrorMessage(value: unknown, depth = 0): string | null {
   );
 }
 
+function structuredProviderErrorMessage(raw: string): string | null {
+  return raw.length > 64_000 ? null : extractErrorMessage(embeddedErrorObject(raw));
+}
+
+/** Whether a structured error carries diagnostic text, even when it should stay collapsed. */
+export function hasProviderErrorDetails(raw: string): boolean {
+  return structuredProviderErrorMessage(raw) !== null;
+}
+
 /** Only promote a bounded message field, never the transport wrapper or a stack trace. */
 export function providerErrorExplanation(raw: string): string | null {
-  if (raw.length > 64_000 || isUpstreamOutputBlockedErrorMessage(raw)) return null;
-  const message = extractErrorMessage(embeddedErrorObject(raw));
+  if (isUpstreamOutputBlockedErrorMessage(raw)) return null;
+  const message = structuredProviderErrorMessage(raw);
   if (!message || message.length > 1500 || /(?:^\s*[\[{]|\n\s*at\s)/.test(message)) return null;
   return message;
 }
