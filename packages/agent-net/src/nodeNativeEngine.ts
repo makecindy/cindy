@@ -13,17 +13,15 @@ import dgram from 'node:dgram';
 import nodeModule from 'node:module';
 import type { NativeEnginePort } from './nativeTransport.js';
 
-/** What the module exports (packages/agent-net-native/node/src/lib.rs). */
+/** What the module exports (packages/agent-net-native/node/src/lib.rs); an engine is a numeric handle. */
 export interface NodeNativeBinding {
-  /** `wakePort`: a UDP port on 127.0.0.1 that receives a byte from `wakeSource()` when there is something to read. */
-  create(options: string, wakePort: number): NodeNativeHandle;
-}
-interface NodeNativeHandle {
-  command(input: string): string;
-  io(input: Uint8Array): Uint8Array;
-  ready(): boolean;
-  wakeSource(): number;
-  destroy(): void;
+  /** `wakePort`: a UDP port on 127.0.0.1 that receives a byte from `wakeSource(handle)` when there is something to read. */
+  create(options: string, wakePort: number): number;
+  command(handle: number, input: string): string;
+  io(handle: number, input: Uint8Array): Uint8Array;
+  ready(handle: number): boolean;
+  wakeSource(handle: number): number;
+  destroy(handle: number): void;
 }
 /**
  * The engine's options (packages/agent-net-native/src/lib.rs `create`): the identity's keys as they are (`keys`: the X25519
@@ -43,7 +41,9 @@ export interface NodeNativeEngineOptions {
 /** Loads the module from an absolute path; throws when it is missing or does not load on this system. */
 export function loadNodeNativeBinding(file: string): NodeNativeBinding {
   const binding = nodeModule.createRequire(file)(file) as Partial<NodeNativeBinding>;
-  if (typeof binding?.create !== 'function') throw new Error('AGENT_NET_NATIVE_BINDING_INVALID');
+  if (['create', 'command', 'io', 'ready', 'wakeSource', 'destroy'].some(name => typeof (binding as Record<string, unknown>)?.[name] !== 'function')) {
+    throw new Error('AGENT_NET_NATIVE_BINDING_INVALID');
+  }
   return binding as NodeNativeBinding;
 }
 
@@ -55,8 +55,8 @@ export class NodeNativeEngine implements NativeEnginePort {
   private work = false;
   private readonly waiters = new Set<(work: boolean) => void>();
 
-  private constructor(private readonly handle: NodeNativeHandle, private readonly wake: dgram.Socket) {
-    const source = handle.wakeSource();
+  private constructor(private readonly native: NodeNativeBinding, private readonly handle: number, private readonly wake: dgram.Socket) {
+    const source = native.wakeSource(handle);
     // Only the module's own wake socket counts; anything else on this port is ignored.
     wake.on('message', (_bytes, from) => { if (from.port === source && from.address === '127.0.0.1') this.signal(); });
   }
@@ -67,13 +67,13 @@ export class NodeNativeEngine implements NativeEnginePort {
       // It never keeps the worker alive by itself; a quiet error (the port went away) only costs a wake, and timers cover it.
       wake.unref();
       wake.on('error', () => undefined);
-      return new NodeNativeEngine(binding.create(JSON.stringify(options), wake.address().port), wake);
+      return new NodeNativeEngine(binding, binding.create(JSON.stringify(options), wake.address().port), wake);
     } catch (error) { wake.close(); throw error; }
   }
 
   async command<T = unknown>(command: Record<string, unknown>): Promise<T> {
     if (this.destroyed) throw new Error('AGENT_NET_ENGINE_CLOSED');
-    const response = JSON.parse(this.handle.command(JSON.stringify(command))) as { ok: boolean; value?: T; code?: string };
+    const response = JSON.parse(this.native.command(this.handle, JSON.stringify(command))) as { ok: boolean; value?: T; code?: string };
     if (!response.ok) throw new Error(response.code || 'AGENT_NET_NATIVE_COMMAND_FAILED');
     return response.value as T;
   }
@@ -83,7 +83,7 @@ export class NodeNativeEngine implements NativeEnginePort {
    */
   wait = (maxMs: number): Promise<boolean> => {
     if (this.destroyed) return Promise.reject(new Error('AGENT_NET_ENGINE_CLOSED'));
-    if (this.work || this.handle.ready()) { this.work = false; return Promise.resolve(true); }
+    if (this.work || this.native.ready(this.handle)) { this.work = false; return Promise.resolve(true); }
     return new Promise((resolve) => {
       const done = (work: boolean) => { clearTimeout(timer); this.waiters.delete(done); resolve(work); };
       const timer = setTimeout(() => done(false), Math.max(1, maxMs));
@@ -94,8 +94,8 @@ export class NodeNativeEngine implements NativeEnginePort {
   io = async (input: Uint8Array, waitMs = 0, kick = false): Promise<Uint8Array> => {
     if (waitMs > 0 && !(await this.wait(waitMs))) return EMPTY;
     if (this.destroyed) throw new Error('AGENT_NET_ENGINE_CLOSED');
-    const output = this.handle.io(input);
-    if (kick && this.handle.ready()) this.signal();
+    const output = this.native.io(this.handle, input);
+    if (kick && this.native.ready(this.handle)) this.signal();
     return output;
   };
   /** A waiting call returns now and reads. */
@@ -103,7 +103,7 @@ export class NodeNativeEngine implements NativeEnginePort {
   async destroy(): Promise<void> {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.handle.destroy();
+    this.native.destroy(this.handle);
     this.wake.close();
     for (const done of [...this.waiters]) done(false);
   }

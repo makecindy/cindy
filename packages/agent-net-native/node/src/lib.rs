@@ -12,9 +12,10 @@
 //! that had moved data ended (2026-11-23, exit code 139); the module being unloaded under its threads turned out to be the
 //! cause (`pin_module`), but a call from the pump thread into an environment that is going away remains a hazard of its own.
 use std::{
+    collections::BTreeMap,
     net::UdpSocket,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}},
+    sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}},
     thread,
     time::Instant,
 };
@@ -71,14 +72,24 @@ impl Shared {
     }
 }
 
-/// One engine: one identity, one UDP socket, its peer connections. Create with `create`.
-#[napi]
-pub struct AgentNetEngine { shared: Arc<Shared> }
+/// The engines in this process by handle: one identity, one UDP socket, its peer connections each. A handle is a plain number
+/// rather than a JS object wrapping native memory: nothing in JS points into Rust, and an engine lives until `destroy` or the
+/// end of the worker that created it.
+fn engines() -> &'static Mutex<BTreeMap<u32, Arc<Shared>>> {
+    static ENGINES: OnceLock<Mutex<BTreeMap<u32, Arc<Shared>>>> = OnceLock::new();
+    ENGINES.get_or_init(Default::default)
+}
+fn engine(handle: u32) -> Option<Arc<Shared>> { engines().lock().ok()?.get(&handle).cloned() }
+fn remove(handle: u32) {
+    let shared = engines().lock().ok().and_then(|mut all| all.remove(&handle));
+    if let Some(shared) = shared { shared.close(); }
+}
 
 /// `options`: the engine's JSON options (`keys` or seed and context, deviceId, udp, enhancedTransport; `../src/lib.rs` `create`).
 /// `wakePort`: a UDP port on 127.0.0.1 the worker listens on; a byte from `wakeSource()` there means `io` has something to read.
+/// Returns the engine's handle.
 #[napi]
-pub fn create(mut env: Env, options: String, wake_port: u32) -> napi::Result<AgentNetEngine> {
+pub fn create(mut env: Env, options: String, wake_port: u32) -> napi::Result<u32> {
     pin_module();
     let wake_port = u16::try_from(wake_port).ok().filter(|port| *port > 0).ok_or_else(|| failure("INVALID_WAKE_PORT"))?;
     if options.len() > MAX_COMMAND { return Err(failure("INVALID_NATIVE_COMMAND")); }
@@ -91,14 +102,17 @@ pub fn create(mut env: Env, options: String, wake_port: u32) -> napi::Result<Age
     let wake = UdpSocket::bind(("127.0.0.1", 0)).and_then(|socket| socket.connect(("127.0.0.1", wake_port)).map(|_| socket))
         .map_err(|_| failure("NATIVE_ENGINE_FAILURE"))?;
     let shared = Arc::new(Shared { engine: Mutex::new(Some(Cell(engine))), notified: AtomicBool::new(false), read_at: AtomicU64::new(0), closed: AtomicBool::new(false), wake });
-    // A worker that ends without `destroy` ends its engines too: the socket closes and the pump thread stops.
-    env.add_env_cleanup_hook(shared.clone(), |shared| shared.close())?;
+    static NEXT: AtomicU32 = AtomicU32::new(1);
+    let handle = NEXT.fetch_add(1, Ordering::Relaxed);
     let pump_shared = shared.clone();
     thread::Builder::new()
         .name("cindy-agent-net-pump".into())
         .spawn(move || pump(pump_shared, waiter))
         .map_err(|_| failure("NATIVE_ENGINE_FAILURE"))?;
-    Ok(AgentNetEngine { shared })
+    engines().lock().map_err(|_| failure("NATIVE_ENGINE_FAILURE"))?.insert(handle, shared);
+    // A worker that ends without `destroy` ends its engines too: the socket closes and the pump thread stops.
+    if let Err(error) = env.add_env_cleanup_hook(handle, remove) { remove(handle); return Err(error); }
+    Ok(handle)
 }
 
 /// The engine's own loop: wait for a datagram or the core's next timer, take a turn, tell JS when there is something to
@@ -127,67 +141,61 @@ fn notify(shared: &Shared) {
     }
 }
 
+/// One JSON command (engine.rs `command`); returns `{"ok":true,"value":…}` or `{"ok":false,"code":…}` like the C ABI.
 #[napi]
-impl AgentNetEngine {
-    /// One JSON command (engine.rs `command`); returns `{"ok":true,"value":…}` or `{"ok":false,"code":…}` like the C ABI.
-    #[napi]
-    pub fn command(&self, input: String) -> String {
-        let result = if input.len() > MAX_COMMAND { Err("INVALID_NATIVE_COMMAND") } else {
-            serde_json::from_str::<Value>(&input).map_err(|_| "INVALID_NATIVE_COMMAND")
-                .and_then(|command| self.shared.with(|engine| engine.command(&command)))
-        };
-        match result { Ok(value) => json!({"ok":true,"value":value}), Err(code) => json!({"ok":false,"code":code}) }.to_string()
-    }
-    /// One `io` frame in, one out (engine.rs `io`, `../src/lib.rs` `cindy_agent_net_io`): a little-endian u32 header length,
-    /// the JSON header, then the raw bytes it lists. A call that reads (`"poll":true`) takes what `onWork` announced; what the
-    /// engine collects after it is announced again.
-    ///
-    /// Bytes cross as plain Node buffers read in place and returned as a copy, not as napi-rs `Buffer`s: those release their
-    /// reference through one callback for the whole process, made in the first worker's environment, and with a worker on the
-    /// engine ending while another went on, Electron 42 crashed (2026-11-23, exit code 139).
-    #[napi(ts_args_type = "input: Uint8Array", ts_return_type = "Buffer")]
-    pub fn io(&self, env: Env, input: JsBuffer) -> napi::Result<JsBuffer> {
-        let input = input.into_value()?;
-        let result = if input.len() > MAX_IO { Err("INVALID_NATIVE_COMMAND") } else {
-            split(&input).ok_or("INVALID_NATIVE_IO")
-                .and_then(|(header, payload)| serde_json::from_slice::<Value>(header).map_err(|_| "INVALID_NATIVE_IO").map(|header| (header, payload)))
-                .and_then(|(header, payload)| {
-                    if header["poll"] == true {
-                        self.shared.read_at.store(micros(), Ordering::Release);
-                        self.shared.notified.store(false, Ordering::Release);
-                    }
-                    self.shared.with(|engine| engine.io(&header, payload))
-                })
-        };
-        let (header, payload) = match result {
-            Ok((value, payload)) => (json!({"ok":true,"value":value}), payload),
-            Err(code) => (json!({"ok":false,"code":code}), Vec::new()),
-        };
-        let header = header.to_string().into_bytes();
-        let mut output = Vec::with_capacity(4 + header.len() + payload.len());
-        output.extend_from_slice(&(header.len() as u32).to_le_bytes());
-        output.extend_from_slice(&header);
-        output.extend_from_slice(&payload);
-        Ok(env.create_buffer_copy(output)?.into_raw())
-    }
-    /// The engine takes a turn now; true when it has something for JS to read with `io`. JS calls it after writing: a write
-    /// can leave a datagram for the relay WebSocket, which no arriving packet would announce. False once destroyed or failed.
-    #[napi]
-    pub fn ready(&self) -> bool {
-        self.shared.with(|engine| engine.pump()).is_ok_and(|(work, _)| work)
-    }
-    /// The port wake bytes come from: the worker takes only those.
-    #[napi]
-    pub fn wake_source(&self) -> u32 {
-        self.shared.wake.local_addr().map_or(0, |address| u32::from(address.port()))
-    }
-    /// Closes the socket and every connection without notice to peers (close them first for that), and ends the pump thread.
-    #[napi]
-    pub fn destroy(&self) { self.shared.close(); }
+pub fn command(handle: u32, input: String) -> String {
+    let result = if input.len() > MAX_COMMAND { Err("INVALID_NATIVE_COMMAND") } else {
+        serde_json::from_str::<Value>(&input).map_err(|_| "INVALID_NATIVE_COMMAND")
+            .and_then(|command| engine(handle).ok_or("AGENT_NET_ENGINE_CLOSED")?.with(|engine| engine.command(&command)))
+    };
+    match result { Ok(value) => json!({"ok":true,"value":value}), Err(code) => json!({"ok":false,"code":code}) }.to_string()
 }
-impl Drop for AgentNetEngine {
-    fn drop(&mut self) { self.shared.close(); }
+/// One `io` frame in, one out (engine.rs `io`, `../src/lib.rs` `cindy_agent_net_io`): a little-endian u32 header length, the
+/// JSON header, then the raw bytes it lists. A call that reads (`"poll":true`) takes what a wake byte announced; what the engine
+/// collects after it is announced again.
+///
+/// Bytes cross as a Node buffer read in place and come back as a copy V8 owns, not as napi-rs `Buffer`s, which release their
+/// reference through one process-wide callback tied to the environment of the first worker that loaded the module.
+#[napi(ts_args_type = "handle: number, input: Uint8Array", ts_return_type = "Buffer")]
+pub fn io(env: Env, handle: u32, input: JsBuffer) -> napi::Result<JsBuffer> {
+    let input = input.into_value()?;
+    let result = if input.len() > MAX_IO { Err("INVALID_NATIVE_COMMAND") } else {
+        split(&input).ok_or("INVALID_NATIVE_IO")
+            .and_then(|(header, payload)| serde_json::from_slice::<Value>(header).map_err(|_| "INVALID_NATIVE_IO").map(|header| (header, payload)))
+            .and_then(|(header, payload)| {
+                let shared = engine(handle).ok_or("AGENT_NET_ENGINE_CLOSED")?;
+                if header["poll"] == true {
+                    shared.read_at.store(micros(), Ordering::Release);
+                    shared.notified.store(false, Ordering::Release);
+                }
+                shared.with(|engine| engine.io(&header, payload))
+            })
+    };
+    let (header, payload) = match result {
+        Ok((value, payload)) => (json!({"ok":true,"value":value}), payload),
+        Err(code) => (json!({"ok":false,"code":code}), Vec::new()),
+    };
+    let header = header.to_string().into_bytes();
+    let mut output = Vec::with_capacity(4 + header.len() + payload.len());
+    output.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    output.extend_from_slice(&header);
+    output.extend_from_slice(&payload);
+    Ok(env.create_buffer_copy(output)?.into_raw())
 }
+/// The engine takes a turn now; true when it has something for JS to read with `io`. JS calls it after writing: a write
+/// can leave a datagram for the relay WebSocket, which no arriving packet would announce. False once destroyed or failed.
+#[napi]
+pub fn ready(handle: u32) -> bool {
+    engine(handle).is_some_and(|shared| shared.with(|engine| engine.pump()).is_ok_and(|(work, _)| work))
+}
+/// The port wake bytes come from: the worker takes only those.
+#[napi]
+pub fn wake_source(handle: u32) -> u32 {
+    engine(handle).and_then(|shared| shared.wake.local_addr().ok()).map_or(0, |address| u32::from(address.port()))
+}
+/// Closes the socket and every connection without notice to peers (close them first for that), and ends the pump thread.
+#[napi]
+pub fn destroy(handle: u32) { remove(handle); }
 
 /// Keeps this module loaded for the rest of the process. Node unloads a native module when the last worker that loaded it ends,
 /// while threads it started can still be running its code: the pump thread for up to MAX_PUMP_WAIT_MS, a relay or STUN name

@@ -157,7 +157,7 @@ it.skipIf(!binding)('keeps a computer on WASM when the native engine comes up wi
   // A module that ignored the keys it was given (or a mix-up of identities) would present a key no peer knows this device by.
   const real = loadNodeNativeBinding(binding!), other = generateIdentity('b-native');
   const raw = (key: import('node:crypto').KeyObject) => key.export({ format: 'jwk' }).d!;
-  const swapped: NodeNativeBinding = { create: (options, wakePort) => real.create(JSON.stringify({ ...JSON.parse(options),
+  const swapped: NodeNativeBinding = { ...real, create: (options, wakePort) => real.create(JSON.stringify({ ...JSON.parse(options),
     keys: { transport: raw(other.transportPrivateKey), signing: raw(other.signingPrivateKey) } }), wakePort) };
   const socket = await AgentNetSocket.open({ client: net.memberApi, userId: net.userId, lanDiscovery: false,
     native: { binding: swapped, onFallback: code => fallbacks.push(code) } });
@@ -232,8 +232,9 @@ it.skipIf(!binding)('keeps the native module loaded after the only worker that l
   const loaded = () => (process.report.getReport() as { sharedObjects: string[] }).sharedObjects
     .some(file => file.includes(path.basename(directory)));
   const worker = new Worker(`const { parentPort, workerData } = require('node:worker_threads');
-    const engine = require(workerData).create(JSON.stringify({ seed: Buffer.alloc(32, 9).toString('base64url'), context: 'pin', deviceId: 'pin' }), 9);
-    engine.destroy(); parentPort.postMessage('created');`, { eval: true, workerData: copy });
+    const native = require(workerData);
+    native.destroy(native.create(JSON.stringify({ seed: Buffer.alloc(32, 9).toString('base64url'), context: 'pin', deviceId: 'pin' }), 9));
+    parentPort.postMessage('created');`, { eval: true, workerData: copy });
   await new Promise(resolve => worker.once('message', resolve));
   expect(loaded()).toBe(true);
   await worker.terminate();
