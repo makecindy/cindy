@@ -7,6 +7,7 @@ import { BUNDLED_CATALOG, buildUserProvider, unifiedModelEntries, type CustomPro
 import { customProviderModelConfigFromCatalogModel } from '@/lib/customProviders';
 
 import { ProviderConnectionDialog } from '../ProviderConnectionDialog';
+import { fetchProviderModels as fetchModelsThroughMain } from '../../../../main/maker-host/provider-model-fetch';
 
 const customProviderMocks = vi.hoisted(() => ({
   readCustomProviderKey: vi.fn(),
@@ -54,6 +55,22 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+it('refreshes only the selected Token Rhythm runtime using that runtime stored key', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+  const initial: CustomProviderConfig = { id: 'tokenrhythm-saved-test', name: 'Token Rhythm', runtimes: structuredClone(preset.runtimes) };
+  customProviderMocks.readCustomProviderKey.mockImplementation(async (_id, agent) => `fake-${agent}-key`);
+  const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-account-model"}]}'));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(input => fetchModelsThroughMain(input, transport));
+  render(<ProviderConnectionDialog initial={initial} onClose={vi.fn()} onSaved={vi.fn()} />);
+  await waitForInitialDialogFocus();
+  fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+  await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
+  expect(transport).toHaveBeenCalledOnce();
+  expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(expect.objectContaining({ agent: 'codex', apiKey: 'fake-codex-key', savedProviderId: initial.id }));
+  expect(new Headers(transport.mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer fake-codex-key');
+});
 
 // Model selection is now explicit; auth/metadata tests below still exercise their
 // original contract after choosing the fixture's models through the real picker.
