@@ -15139,7 +15139,7 @@
       "subagentStarted": "Subagent {{name}} 已启动",
       "showDetails": "展开 Subagent 详情",
       "hideDetails": "收起 Subagent 详情",
-      "noDetailsAvailable": "暂无可展示的详情",
+      "noDetailsAvailable": "暂无可展示的详情，可查看对话中的回复",
       "showFullResult": "展开完整结果",
       "hideFullResult": "收起结果",
       "provider": {

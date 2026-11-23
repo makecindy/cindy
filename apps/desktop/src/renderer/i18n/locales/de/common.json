@@ -15163,7 +15163,7 @@
       "subagentStarted": "Subagent {{name}} gestartet",
       "showDetails": "Subagent-Details anzeigen",
       "hideDetails": "Subagent-Details ausblenden",
-      "noDetailsAvailable": "Keine Details verfügbar.",
+      "noDetailsAvailable": "Keine Details verfügbar. Sieh dir die Antworten in der Unterhaltung an.",
       "showFullResult": "Vollständiges Ergebnis anzeigen",
       "hideFullResult": "Ergebnis einklappen",
       "provider": {

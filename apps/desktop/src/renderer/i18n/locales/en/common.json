@@ -15200,7 +15200,7 @@
       "subagentStarted": "Subagent {{name}} started",
       "showDetails": "Show subagent details",
       "hideDetails": "Hide subagent details",
-      "noDetailsAvailable": "No details available.",
+      "noDetailsAvailable": "No details available. Check the conversation for replies.",
       "showFullResult": "Show full result",
       "hideFullResult": "Collapse result",
       "provider": {
