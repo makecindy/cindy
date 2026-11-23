@@ -12777,16 +12777,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "偵測到可轉換的工作區設定",
-        "description": "目前工作區包含 {{sourceAgent}} 的專案層級設定。是否為 {{targetAgent}} 產生對應設定？這些變更只會寫入目前的工作區目錄。",
-        "primary": "轉換",
-        "cancel": "不要"
+        "title": "要讓 {{targetAgent}} 也使用這些專案設定嗎？",
+        "description": "這個專案已為 {{sourceAgent}} 設定好以下項目。你可以在專案裡為 {{targetAgent}} 加入一份，也可以直接開始任務。",
+        "primary": "加入 {{targetAgent}}",
+        "cancel": "直接開始任務"
       },
       "running": {
-        "title": "正在轉換設定…",
-        "description": "正在為 {{targetAgent}} 寫入工作區設定，請勿關閉視窗。",
-        "primary": "轉換",
-        "cancel": "不要"
+        "title": "正在加入專案設定…",
+        "description": "正在將 {{targetAgent}} 的設定儲存到目前的專案。",
+        "primary": "正在加入…",
+        "cancel": "直接開始任務"
+      },
+      "items": {
+        "agents-md": "專案說明與工作約定",
+        "agents": "專案自訂的助手角色",
+        "hooks": "自動執行的動作（例如執行專案指令碼）",
+        "mcp": "外部工具連線"
       }
     },
     "confirmDialog": {

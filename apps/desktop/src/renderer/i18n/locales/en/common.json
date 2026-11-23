@@ -12823,16 +12823,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Convertible workspace config detected",
-        "description": "This workspace contains project-level config for {{sourceAgent}}. Generate matching config for {{targetAgent}}? Changes are written only inside this workspace.",
-        "primary": "Convert",
-        "cancel": "No thanks"
+        "title": "Use these project settings with {{targetAgent}} too?",
+        "description": "This project already has these settings for {{sourceAgent}}. You can save a copy here for {{targetAgent}} or start the task without adding them.",
+        "primary": "Add to {{targetAgent}}",
+        "cancel": "Start task now"
       },
       "running": {
-        "title": "Converting config…",
-        "description": "Writing workspace config for {{targetAgent}}. Don’t close the window.",
-        "primary": "Convert",
-        "cancel": "No thanks"
+        "title": "Adding project settings…",
+        "description": "Saving settings for {{targetAgent}} in this project.",
+        "primary": "Adding…",
+        "cancel": "Start task now"
+      },
+      "items": {
+        "agents-md": "Project instructions and guidelines",
+        "agents": "Custom assistant roles",
+        "hooks": "Automatic actions, such as running a project script",
+        "mcp": "Connections to external tools"
       }
     },
     "confirmDialog": {

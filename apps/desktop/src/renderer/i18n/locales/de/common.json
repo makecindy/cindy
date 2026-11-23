@@ -12823,16 +12823,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Konvertierbare Arbeitsbereichskonfiguration erkannt",
-        "description": "Dieser Arbeitsbereich enthält eine projektweite Konfiguration für {{sourceAgent}}. Passende Konfiguration für {{targetAgent}} erstellen? Änderungen werden nur innerhalb dieses Arbeitsbereichs geschrieben.",
-        "primary": "Konvertieren",
-        "cancel": "Nein danke"
+        "title": "Diese Projekteinstellungen auch für {{targetAgent}} verwenden?",
+        "description": "Dieses Projekt enthält die folgenden Einstellungen für {{sourceAgent}}. Du kannst hier eine Kopie für {{targetAgent}} speichern oder die Aufgabe direkt starten.",
+        "primary": "Für {{targetAgent}} hinzufügen",
+        "cancel": "Aufgabe direkt starten"
       },
       "running": {
-        "title": "Konfiguration wird konvertiert…",
-        "description": "Arbeitsbereichskonfiguration für {{targetAgent}} wird geschrieben. Bitte schließe das Fenster nicht.",
-        "primary": "Konvertieren",
-        "cancel": "Nein danke"
+        "title": "Projekteinstellungen werden hinzugefügt…",
+        "description": "Die Einstellungen für {{targetAgent}} werden in diesem Projekt gespeichert.",
+        "primary": "Wird hinzugefügt…",
+        "cancel": "Aufgabe direkt starten"
+      },
+      "items": {
+        "agents-md": "Projektanweisungen und Richtlinien",
+        "agents": "Eigene Assistentenrollen",
+        "hooks": "Automatische Aktionen, etwa das Ausführen eines Projektskripts",
+        "mcp": "Verbindungen zu externen Werkzeugen"
       }
     },
     "confirmDialog": {

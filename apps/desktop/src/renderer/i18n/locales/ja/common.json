@@ -12777,16 +12777,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "変換できるワークスペース設定を検出",
-        "description": "このワークスペースには {{sourceAgent}} のプロジェクト設定があります。{{targetAgent}} 用の対応設定を生成しますか？変更はこのワークスペース内にのみ書き込まれます。",
-        "primary": "変換",
-        "cancel": "不要"
+        "title": "{{targetAgent}} でもこのプロジェクト設定を使いますか？",
+        "description": "このプロジェクトには {{sourceAgent}} 用の設定があります。以下の設定を {{targetAgent}} 用にプロジェクトに追加するか、そのままタスクを開始できます。",
+        "primary": "{{targetAgent}} に追加",
+        "cancel": "そのままタスクを開始"
       },
       "running": {
-        "title": "設定を変換中…",
-        "description": "{{targetAgent}} 用のワークスペース設定を書き込んでいます。ウィンドウを閉じないでください。",
-        "primary": "変換",
-        "cancel": "不要"
+        "title": "プロジェクト設定を追加中…",
+        "description": "{{targetAgent}} 用の設定をこのプロジェクトに保存しています。",
+        "primary": "追加中…",
+        "cancel": "そのままタスクを開始"
+      },
+      "items": {
+        "agents-md": "プロジェクトの指示と作業ルール",
+        "agents": "プロジェクト独自のアシスタントの役割",
+        "hooks": "スクリプトの実行などの自動処理",
+        "mcp": "外部ツールとの接続"
       }
     },
     "confirmDialog": {

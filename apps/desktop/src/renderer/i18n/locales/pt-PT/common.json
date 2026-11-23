@@ -12923,16 +12923,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Detetada configuração de espaço de trabalho convertível",
-        "description": "Este espaço de trabalho contém configuração ao nível do projeto para {{sourceAgent}}. Gerar configuração equivalente para {{targetAgent}}? As alterações são gravadas apenas dentro deste espaço de trabalho.",
-        "primary": "Converter",
-        "cancel": "Não, obrigado"
+        "title": "Usar estas definições do projeto também com {{targetAgent}}?",
+        "description": "Este projeto já tem as definições abaixo para {{sourceAgent}}. Pode guardar aqui uma cópia para {{targetAgent}} ou iniciar a tarefa sem as adicionar.",
+        "primary": "Adicionar a {{targetAgent}}",
+        "cancel": "Iniciar a tarefa"
       },
       "running": {
-        "title": "A converter configuração…",
-        "description": "A gravar a configuração do espaço de trabalho para {{targetAgent}}. Não feche a janela.",
-        "primary": "Converter",
-        "cancel": "Não, obrigado"
+        "title": "A adicionar definições do projeto…",
+        "description": "A guardar as definições de {{targetAgent}} neste projeto.",
+        "primary": "A adicionar…",
+        "cancel": "Iniciar a tarefa"
+      },
+      "items": {
+        "agents-md": "Instruções e orientações do projeto",
+        "agents": "Funções personalizadas do assistente",
+        "hooks": "Ações automáticas, como executar um script do projeto",
+        "mcp": "Ligações a ferramentas externas"
       }
     },
     "confirmDialog": {

@@ -12777,16 +12777,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "察得工作區配置可轉",
-        "description": "此工作區含 {{sourceAgent}} 之案級配置。欲為 {{targetAgent}} 生相應配置否？所改僅寫入此工作區目錄。",
-        "primary": "轉之",
-        "cancel": "不必"
+        "title": "亦為 {{targetAgent}} 採用此案設定乎？",
+        "description": "此案已有 {{sourceAgent}} 之設定如下。可於案中為 {{targetAgent}} 另存一份，亦可逕啟差事。",
+        "primary": "添予 {{targetAgent}}",
+        "cancel": "逕啟差事"
       },
       "running": {
-        "title": "方轉配置…",
-        "description": "方為 {{targetAgent}} 寫入工作區配置，勿闔視窗。",
-        "primary": "轉之",
-        "cancel": "不必"
+        "title": "方添此案設定…",
+        "description": "方存 {{targetAgent}} 之設定於此案。",
+        "primary": "方添…",
+        "cancel": "逕啟差事"
+      },
+      "items": {
+        "agents-md": "此案說明與行事之約",
+        "agents": "此案自訂之助手職分",
+        "hooks": "自動所行之事（如執行指令碼）",
+        "mcp": "外部工具之連線"
       }
     },
     "confirmDialog": {

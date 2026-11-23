@@ -12777,16 +12777,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "변환 가능한 워크스페이스 설정 감지됨",
-        "description": "이 워크스페이스에 {{sourceAgent}} 프로젝트 설정이 있습니다. {{targetAgent}}용 대응 설정을 생성할까요? 변경 사항은 이 워크스페이스 안에만 기록됩니다.",
-        "primary": "변환",
-        "cancel": "아니요"
+        "title": "{{targetAgent}}에서도 이 프로젝트 설정을 사용할까요?",
+        "description": "이 프로젝트에는 아래와 같은 {{sourceAgent}}용 설정이 있습니다. 프로젝트에 {{targetAgent}}용으로도 추가하거나 바로 작업을 시작할 수 있습니다.",
+        "primary": "{{targetAgent}}에 추가",
+        "cancel": "바로 작업 시작"
       },
       "running": {
-        "title": "설정 변환 중…",
-        "description": "{{targetAgent}}용 워크스페이스 설정을 기록하고 있습니다. 창을 닫지 마세요.",
-        "primary": "변환",
-        "cancel": "아니요"
+        "title": "프로젝트 설정 추가 중…",
+        "description": "이 프로젝트에 {{targetAgent}}용 설정을 저장하고 있습니다.",
+        "primary": "추가 중…",
+        "cancel": "바로 작업 시작"
+      },
+      "items": {
+        "agents-md": "프로젝트 지침 및 작업 규칙",
+        "agents": "프로젝트에서 정의한 도우미 역할",
+        "hooks": "프로젝트 스크립트 실행과 같은 자동 작업",
+        "mcp": "외부 도구 연결"
       }
     },
     "confirmDialog": {
