@@ -32,7 +32,7 @@ import {
   type JsonRpcId,
 } from './protocol.js';
 import { isCodexResponseTimingLine, parseCodexResponseTiming, type CodexResponseTiming } from './response-timing.js';
-import type { Transport } from './transport.js';
+import type { Transport, TransportCloseInfo } from './transport.js';
 
 /**
  * 单条 NDJSON line 的上限, 按 JS 字符串长度 (UTF-16 code unit) 计, 不是字节。
@@ -43,6 +43,14 @@ const DEFAULT_MAX_LINE_BYTES = 16 * 1024 * 1024;
 /** 识别超限行信封时, 行首和行尾各最多读这么多字符; diff / 文件内容这类大字段不在读取范围内。 */
 const OVERSIZED_ENVELOPE_PEEK_CHARS = 4_096;
 const MAX_STDERR_LOG_CHARS = 2_000;
+const SSH_RECOVERY_TIMEOUT_MS = 12_000;
+const MAX_RECOVERY_THREADS = 16;
+
+type RecoveredItem = { id: string; type: string; status?: string };
+type RecoveredTurn = { id: string; status: string; items: RecoveredItem[] };
+type ObservedTurn = { id: string; completedItems: Set<string>; restoredItems: Set<string> };
+type RecoveryMessage = { line: string; message: { id?: JsonRpcId; method: string; params?: unknown } };
+type TransportRecovery = { controller: AbortController; messages: RecoveryMessage[]; size: number };
 
 /** 响应超过单行上限被丢弃: 只有对应的这一个请求失败, 连接继续可用。 */
 export class AppServerMessageTooLargeError extends Error {
@@ -360,6 +368,8 @@ export function detectAuthInvalidationReason(
 }
 
 export interface AppServerClientOptions {
+  /** Live thread owners to reattach when a reconnectable transport is replaced. */
+  getSubscribedThreadIds?: () => string[];
   /**
    * Transport 工厂; 在 start() 时调用一次, 之后由 client 独占 transport 生命周期。
    *
@@ -449,6 +459,12 @@ export class AppServerClient {
   private readonly requestHandlers = new Map<string, ServerRequestHandler>();
 
   private initialized = false;
+  private initializeParams: InitializeParams | undefined;
+  private recovery: TransportRecovery | undefined;
+  private readonly activeTurns = new Map<string, ObservedTurn>();
+  private readonly restoredTerminals = new Map<string, string>();
+  private serverRequestsInFlight = 0;
+  private readonly getSubscribedThreadIds?: () => string[];
   /** close() 调用后置 true, 阻止后续 request / 重复 close 的副作用。 */
   private closed = false;
   private closePromise: Promise<void> | null = null;
@@ -458,6 +474,7 @@ export class AppServerClient {
       throw new Error('AppServerClient: createTransport factory is required');
     }
     this.createTransport = opts.createTransport;
+    this.getSubscribedThreadIds = opts.getSubscribedThreadIds;
     this.logger = opts.logger.child('codex-app-server');
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
     this.onOversizedNotification = opts.onOversizedNotification;
@@ -484,10 +501,20 @@ export class AppServerClient {
     }
     this.started = true;
     const transport = this.createTransport();
+    this.attachTransport(transport);
+  }
+
+  private attachTransport(transport: Transport): void {
     this.transport = transport;
-    transport.onLine((line) => this.handleLine(line));
-    transport.onStderr?.((line) => this.handleStderrLine(line));
-    transport.onClose((info) => this.handleTransportClose(info.reason));
+    transport.onLine((line) => {
+      if (this.transport === transport && !this.closed) this.handleLine(line);
+    });
+    transport.onStderr?.((line) => {
+      if (this.transport === transport && !this.closed) this.handleStderrLine(line);
+    });
+    transport.onClose((info) => {
+      if (this.transport === transport) this.handleTransportClose(info);
+    });
   }
 
   // ── 生命周期 ──────────────────────────────────────────────────────────────
@@ -512,6 +539,7 @@ export class AppServerClient {
     const params: InitializeParams = { clientInfo, capabilities };
     const response = await this.request<InitializeResponse>(Method.Initialize, params);
     this.initialized = true;
+    this.initializeParams = params;
     this.logger.info('initialized', {
       userAgent: response.userAgent,
       codexHome: response.codexHome,
@@ -537,6 +565,10 @@ export class AppServerClient {
   async close(opts?: { reason?: string; throwOnTransportError?: boolean }): Promise<void> {
     if (!this.closePromise) {
       this.closed = true;
+      this.recovery?.controller.abort();
+      this.recovery = undefined;
+      this.activeTurns.clear();
+      this.restoredTerminals.clear();
       const reason = opts?.reason ?? 'AppServerClient.close()';
       // 缓存未吞错的完成结果，各调用方独立选择是否传播失败。
       const closePromise = Promise.resolve().then(() => this.transport?.close(reason)).catch((error) => {
@@ -571,6 +603,15 @@ export class AppServerClient {
    * `extendWhileProgress` 只在给了 timeoutMs 时生效(见 RequestProgressDeadline)。
    */
   request<R = unknown>(
+    method: string,
+    params?: unknown,
+    opts?: { timeoutMs?: number; extendWhileProgress?: RequestProgressDeadline },
+  ): Promise<R> {
+    if (this.recovery) return Promise.reject(new Error('Codex SSH transport is reconnecting'));
+    return this.sendRequest<R>(method, params, opts);
+  }
+
+  private sendRequest<R>(
     method: string,
     params?: unknown,
     opts?: { timeoutMs?: number; extendWhileProgress?: RequestProgressDeadline },
@@ -679,7 +720,11 @@ export class AppServerClient {
   private handleLine(line: string): void {
     if (!line) return;
     if (line.length > this.maxLineBytes) {
-      this.handleOversizedLine(line);
+      if (this.recovery) {
+        this.handleTransportFailure(new Error('Codex SSH recovery exceeded the line limit'));
+      } else {
+        this.handleOversizedLine(line);
+      }
       return;
     }
 
@@ -700,8 +745,16 @@ export class AppServerClient {
     // - id 存在 + result 存在 → 我们 request 的 SuccessResponse
     // - id 存在 + error 存在 → 我们 request 的 ErrorResponse
     // - id 不存在 + method 存在 → Notification
+    if ('method' in msg && this.recovery) {
+      const recovery = this.recovery;
+      recovery.size += line.length;
+      if (recovery.size > this.maxLineBytes) recovery.controller.abort();
+      else recovery.messages.push({ line, message: msg });
+      return;
+    }
     if ('id' in msg && 'method' in msg) {
-      void this.dispatchServerRequest(msg);
+      this.serverRequestsInFlight++;
+      void this.dispatchServerRequest(msg).finally(() => { this.serverRequestsInFlight--; });
       return;
     }
     if ('id' in msg && 'result' in msg) {
@@ -713,7 +766,10 @@ export class AppServerClient {
       return;
     }
     if ('method' in msg) {
-      void this.dispatchNotification(msg.method, (msg as { params?: unknown }).params);
+      const params = (msg as { params?: unknown }).params;
+      const trackTurns = this.transport?.reconnect || this.activeTurns.size || this.restoredTerminals.size;
+      if (trackTurns && this.observeTurn(msg.method, params)) return;
+      void this.dispatchNotification(msg.method, params);
       return;
     }
     this.logger.warn('unrecognized incoming message', { preview: line.slice(0, 200) });
@@ -735,7 +791,7 @@ export class AppServerClient {
     const { id, method, ...scope } = peekOversizedEnvelope(line);
     if (id !== undefined && method !== undefined) {
       this.logger.warn('oversized server request rejected', { method, id, length, limit });
-      this.sendErrorResponse(id, {
+      void this.sendErrorResponse(id, {
         code: JSONRPC_ERROR_CODE.INVALID_REQUEST,
         message: `${method} request exceeds client line limit (${length} > ${limit})`,
       });
@@ -801,11 +857,140 @@ export class AppServerClient {
    *   subscribers + 重置 client/startPromise, 否则下个 session 调 ensureStarted
    *   会拿到缓存的 startPromise → request 撞 "after close()" 全军覆没
    */
-  private handleTransportClose(reason: string): void {
+  private handleTransportClose(info: TransportCloseInfo): void {
     const wasExternalClose = this.closed;
-    this.logger.info('transport closed', { reason, wasExternalClose });
+    this.logger.info('transport closed', { reason: info.reason, wasExternalClose });
     if (wasExternalClose) return;
-    this.handleTransportFailure(new Error(`codex app-server transport closed: ${reason}`));
+    const failure = new Error(`codex app-server transport closed: ${info.reason}`);
+    if (this.recovery) {
+      this.recovery.controller.abort();
+      this.handleTransportFailure(failure);
+      return;
+    }
+    const transport = this.transport;
+    const threadIds = this.getSubscribedThreadIds?.() ?? [];
+    const init = this.initializeParams;
+    if (!info.reconnectable || !transport?.reconnect || !init ||
+        this.pending.size || this.writeFailureTombstones.size || this.serverRequestsInFlight ||
+        !this.activeTurns.size || threadIds.length > MAX_RECOVERY_THREADS ||
+        [...this.activeTurns.keys()].some((id) => !threadIds.includes(id))) {
+      this.handleTransportFailure(failure);
+      return;
+    }
+    const recovery: TransportRecovery = { controller: new AbortController(), messages: [], size: 0 };
+    this.recovery = recovery;
+    void this.recoverTransport(transport, init, threadIds, recovery).catch(() => {
+      if (!this.closed) this.handleTransportFailure(failure);
+    });
+  }
+
+  /** Suppress duplicates only for item snapshots emitted during SSH recovery. */
+  private observeTurn(method: string, raw: unknown): boolean {
+    if (!raw || typeof raw !== 'object') return false;
+    const { threadId, turnId, turn, item, itemId } = raw as {
+      threadId?: string; turnId?: string; turn?: { id: string }; item?: { id: string }; itemId?: string;
+    };
+    if (!threadId) return false;
+    const active = this.activeTurns.get(threadId);
+    if (method === 'turn/completed' && turn?.id && turn.id === this.restoredTerminals.get(threadId)) return true;
+    if (method === 'turn/started' && turn?.id && active?.id !== turn.id) {
+      this.restoredTerminals.delete(threadId);
+      this.activeTurns.set(threadId, { id: turn.id, completedItems: new Set(), restoredItems: new Set() });
+    } else if (method === 'turn/completed' && active && active.id === turn?.id) {
+      this.activeTurns.delete(threadId);
+    } else if (active && active.id === turnId && method.startsWith('item/')) {
+      const id = item?.id ?? itemId;
+      if (id && active.restoredItems.has(id)) return true;
+      if (method === 'item/completed' && id) active.completedItems.add(id);
+    }
+    return false;
+  }
+
+  private async recoverTransport(
+    previous: Transport,
+    init: InitializeParams,
+    threadIds: string[],
+    recovery: TransportRecovery,
+  ): Promise<void> {
+    const deadline = Date.now() + SSH_RECOVERY_TIMEOUT_MS;
+    const signal = AbortSignal.any([recovery.controller.signal, AbortSignal.timeout(SSH_RECOVERY_TIMEOUT_MS)]);
+    const request = <R>(method: string, params: unknown): Promise<R> => {
+      signal.throwIfAborted();
+      return this.sendRequest<R>(method, params, { timeoutMs: Math.max(1, deadline - Date.now()) });
+    };
+    const replacement = await previous.reconnect!(signal);
+    if (signal.aborted || this.closed) {
+      await replacement.close('Codex SSH recovery was cancelled');
+      signal.throwIfAborted();
+      return;
+    }
+    this.attachTransport(replacement);
+    await request(Method.Initialize, init);
+    const snapshots: Array<{ threadId: string; turn: RecoveredTurn; observed: ObservedTurn }> = [];
+    for (const threadId of threadIds) {
+      const { thread } = await request<{
+        thread: { id: string; status: { type: string; activeFlags?: string[] } };
+      }>(Method.ThreadResume, { threadId, excludeTurns: true });
+      if (thread.id !== threadId || !['active', 'idle'].includes(thread.status.type) ||
+          thread.status.activeFlags?.length) {
+        throw new Error('SSH recovery could not prove thread identity or has an outstanding interaction');
+      }
+      const observed = this.activeTurns.get(threadId);
+      if (!observed) continue;
+      const { data } = await request<{ data: RecoveredTurn[] }>(Method.ThreadTurnsList, {
+        threadId, limit: 1, sortDirection: 'desc', itemsView: 'full',
+      });
+      const [turn] = data;
+      if (!turn || turn.id !== observed.id ||
+          !['inProgress', 'completed', 'interrupted', 'failed'].includes(turn.status) ||
+          !Array.isArray(turn.items) ||
+          turn.items.some((item) => typeof item?.id !== 'string' || typeof item.type !== 'string')) {
+        throw new Error('SSH recovery could not find the original Codex turn');
+      }
+      snapshots.push({ threadId, turn, observed });
+    }
+    signal.throwIfAborted();
+    if (recovery.messages.some(({ message }) => {
+      if ('id' in message) return true;
+      if (message.method !== 'thread/status/changed') return false;
+      const params = message.params as { status?: { activeFlags?: string[] } } | undefined;
+      return Boolean(params?.status?.activeFlags?.length);
+    })) {
+      throw new Error('SSH recovery received an interactive server request');
+    }
+    const liveItems = new Set<string>();
+    const liveTurns = new Set<string>();
+    for (const { message } of recovery.messages) {
+      const params = message.params as { threadId?: string; turnId?: string; turn?: { id: string }; item?: { id: string } } | undefined;
+      if (message.method === 'item/completed' && params?.item) {
+        liveItems.add(JSON.stringify([params.threadId, params.turnId, params.item.id]));
+      } else if (message.method === 'turn/completed' && params?.turn) {
+        liveTurns.add(JSON.stringify([params.threadId, params.turn.id]));
+      }
+    }
+    this.recovery = undefined;
+    for (const { threadId, turn, observed } of snapshots) {
+      for (const item of turn.items) {
+        if (item.type === 'userMessage' || item.status === 'inProgress' ||
+            observed.completedItems.has(item.id) ||
+            liveItems.has(JSON.stringify([threadId, turn.id, item.id]))) continue;
+        // The full turn view returns persisted items, not uncommitted deltas.
+        this.handleLine(JSON.stringify({ method: 'item/completed', params: { threadId, turnId: turn.id, item } }));
+        observed.restoredItems.add(item.id);
+      }
+    }
+    for (const { line } of recovery.messages) this.handleLine(line);
+    for (const { threadId, turn } of snapshots) {
+      if (turn.status !== 'inProgress' && !liveTurns.has(JSON.stringify([threadId, turn.id]))) {
+        this.handleLine(JSON.stringify({ method: 'turn/completed', params: { threadId, turn } }));
+        if (this.restoredTerminals.size >= MAX_RECOVERY_THREADS) {
+          const oldest = this.restoredTerminals.keys().next().value;
+          if (oldest !== undefined) this.restoredTerminals.delete(oldest);
+        }
+        this.restoredTerminals.set(threadId, turn.id);
+      }
+    }
+    this.logger.info('Codex SSH transport recovered', { threadCount: snapshots.length });
   }
 
   private dispatchResponse(id: JsonRpcId, result: unknown, error: JsonRpcErrorObject | null): void {
@@ -896,7 +1081,7 @@ export class AppServerClient {
     const handler = this.requestHandlers.get(msg.method);
     if (!handler) {
       // server 期待 response — 必须回, 否则 server side 卡住。
-      this.sendErrorResponse(msg.id, {
+      await this.sendErrorResponse(msg.id, {
         code: JSONRPC_ERROR_CODE.METHOD_NOT_FOUND,
         message: `no handler registered for ${msg.method}`,
       });
@@ -904,10 +1089,10 @@ export class AppServerClient {
     }
     try {
       const result = await handler(msg.params, { id: msg.id, method: msg.method });
-      this.sendSuccessResponse(msg.id, result);
+      await this.sendSuccessResponse(msg.id, result);
     } catch (e) {
       const err = e as Error & { code?: number; data?: unknown };
-      this.sendErrorResponse(msg.id, {
+      await this.sendErrorResponse(msg.id, {
         code: typeof err.code === 'number' ? err.code : JSONRPC_ERROR_CODE.INTERNAL_ERROR,
         message: err.message,
         data: err.data,
@@ -915,18 +1100,18 @@ export class AppServerClient {
     }
   }
 
-  private sendSuccessResponse(id: JsonRpcId, result: unknown): void {
+  private async sendSuccessResponse(id: JsonRpcId, result: unknown): Promise<void> {
     if (this.closed || !this.transport) return;
     const payload = JSON.stringify({ id, result: result ?? {} });
-    this.transport.writeLine(payload).catch((err: Error) => {
+    await this.transport.writeLine(payload).catch((err: Error) => {
       this.logger.warn('write success response failed', { id, message: err.message });
     });
   }
 
-  private sendErrorResponse(id: JsonRpcId, error: JsonRpcErrorObject): void {
+  private async sendErrorResponse(id: JsonRpcId, error: JsonRpcErrorObject): Promise<void> {
     if (this.closed || !this.transport) return;
     const payload = JSON.stringify({ id, error });
-    this.transport.writeLine(payload).catch((err: Error) => {
+    await this.transport.writeLine(payload).catch((err: Error) => {
       this.logger.warn('write error response failed', { id, message: err.message });
     });
   }

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { AppServerClient, detectAuthInvalidationReason, type OversizedNotification } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
+import type { Transport, LineHandler, StderrHandler, CloseHandler, TransportCloseInfo } from './transport.js';
 import { Method } from './protocol.js';
 import { readAccountRateLimitsWithRefresh } from './account-rate-limits.js';
 
@@ -34,7 +34,11 @@ class FakeTransport implements Transport {
   }
 
   async close(reason = 'test close'): Promise<void> {
-    for (const handler of this.closeHandlers) handler({ reason });
+    this.emitClose({ reason });
+  }
+
+  emitClose(info: TransportCloseInfo): void {
+    for (const handler of this.closeHandlers) handler(info);
   }
 
   emitLine(value: unknown): void {
@@ -788,5 +792,98 @@ describe('AppServerClient oversized lines', () => {
     expect(onTransportError).toHaveBeenCalledTimes(1);
     expect(onTransportError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     expect((onTransportError.mock.calls[0]?.[0] as Error).message).toMatch(/exceeds maxLineBytes/);
+  });
+});
+
+
+// Unit regression for #7393: an acknowledged turn lost its transport and Cindy
+// emitted a terminal failure. Drive AppServerClient with only the close frame
+// and a daemon snapshot; assert the original turn and delivery are preserved.
+describe('AppServerClient SSH recovery', () => {
+  const threadId = 'remote-thread';
+  const turnId = 'original-turn';
+  const item = { id: 'assistant-item', type: 'agentMessage', text: 'Complete output' };
+
+  class RespondingTransport extends FakeTransport {
+    constructor(private readonly results: Record<string, unknown>) { super(); }
+
+    async writeLine(line: string): Promise<void> {
+      await super.writeLine(line);
+      const { id, method } = JSON.parse(line) as { id?: number; method?: string };
+      if (id !== undefined && method && Object.hasOwn(this.results, method)) {
+        this.emitLine({ id, result: this.results[method] });
+      }
+    }
+  }
+
+  async function startCase(snapshotStatus: 'inProgress' | 'completed', waitingOnApproval = false) {
+    const initialize = { userAgent: 'test', platformFamily: 'unix', platformOs: 'linux', codexHome: '/tmp' };
+    const replacement = new RespondingTransport({
+      [Method.Initialize]: initialize,
+      [Method.ThreadResume]: {
+        thread: { id: threadId, status: { type: 'active', activeFlags: waitingOnApproval ? ['waitingOnApproval'] : [] } },
+      },
+      [Method.ThreadTurnsList]: { data: [{ id: turnId, status: snapshotStatus, items: [item] }] },
+    });
+    const transport = Object.assign(
+      new RespondingTransport({ [Method.Initialize]: initialize, [Method.TurnStart]: { turn: { id: turnId } } }),
+      { reconnect: vi.fn(async () => replacement) },
+    );
+    const fail = vi.fn();
+    const client = new AppServerClient({
+      createTransport: () => transport, logger, onTransportError: fail,
+      getSubscribedThreadIds: () => [threadId],
+    });
+    const received: string[] = [];
+    client.onNotification('item/completed', () => { received.push('item'); });
+    client.onNotification('turn/completed', () => { received.push('turn'); });
+    client.start();
+    await client.initialize({ name: 'test', version: '1' });
+    await client.request(Method.TurnStart, { threadId, input: [] });
+    transport.emitLine({ method: 'turn/started', params: { threadId, turn: { id: turnId } } });
+    return { client, transport, replacement, fail, received };
+  }
+
+  it.each(['inProgress', 'completed'] as const)('preserves the original %s turn without replaying input', async (status) => {
+    const { client, transport, replacement, fail, received } = await startCase(status);
+    try {
+      transport.emitClose({ reason: 'proxy channel closed (exit code=null)', reconnectable: true });
+      await vi.waitFor(() => expect(received[0]).toBe('item'));
+      if (status === 'inProgress') {
+        replacement.emitLine({ method: 'item/completed', params: { threadId, turnId, item } });
+      }
+      replacement.emitLine({ method: 'turn/completed', params: { threadId, turn: { id: turnId, status: 'completed' } } });
+      expect(received).toEqual(['item', 'turn']);
+      expect(fail).not.toHaveBeenCalled();
+      const requests = replacement.lines.map((line) => JSON.parse(line));
+      expect(requests.map(({ method }) => method)).toEqual([Method.Initialize, Method.ThreadResume, Method.ThreadTurnsList]);
+      expect(requests[1].params).toEqual({ threadId, excludeTurns: true });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('uses the existing terminal error when the resumed thread is awaiting approval', async () => {
+    const { client, transport, replacement, fail, received } = await startCase('inProgress', true);
+    try {
+      transport.emitClose({ reason: 'proxy channel closed (exit code=null)', reconnectable: true });
+      await vi.waitFor(() => expect(fail).toHaveBeenCalledTimes(1));
+      expect(received).toEqual([]);
+      expect(replacement.lines.map((line) => JSON.parse(line).method)).toEqual([Method.Initialize, Method.ThreadResume]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('does not reattach while the outcome of a write is unknown', async () => {
+    const { client, transport, fail } = await startCase('inProgress');
+    // The old channel has not acknowledged an interrupt.
+    const unknown = client.request(Method.TurnInterrupt, { threadId, turnId });
+    const rejected = expect(unknown).rejects.toThrow('transport failure');
+    transport.emitClose({ reason: 'proxy channel closed (exit code=null)', reconnectable: true });
+    await rejected;
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(transport.reconnect).not.toHaveBeenCalled();
+    await client.close();
   });
 });
