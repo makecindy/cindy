@@ -63,7 +63,7 @@ export function TeammateTextRow({
       />
       <span
         className={cn(
-          'pointer-events-none relative min-w-0 truncate text-sm leading-5',
+          'pointer-events-none relative min-w-0 truncate text-sm',
           bold ? 'font-semibold' : 'font-normal',
         )}
         title={name}

@@ -332,7 +332,7 @@ describe('icon-only button tooltip coverage', () => {
     expect(cardActionStart).toBeGreaterThanOrEqual(0);
     expect(sessionItem.slice(actionStart)).toContain('<Tip text={label}');
     expect(sessionCard.slice(cardActionStart)).toContain('<Tip text={label}');
-    expect(sessionItem).toContain('<AutomationSessionButton');
+    // 文字模式任务行不再挂自动任务按钮(2026-11-19 极简侧栏);卡片仍挂，且必须带可见 Tip。
     expect(sessionCard).toContain('<AutomationSessionButton');
     expect(automationButton).toContain("<Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}");
     expect(sessionItem).not.toContain("<Tip text={t('ccAgent.sidebar.automationGenerated')}");

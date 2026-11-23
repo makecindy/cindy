@@ -118,7 +118,7 @@ export function SidebarMainTabs({
                 type="button"
                 aria-label={optionsLabel}
                 className={cn(
-                  'relative flex h-6 w-6 items-center justify-center rounded-md',
+                  'relative flex h-6 w-6 items-center justify-center rounded-lg',
                   'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
                   'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                   'data-[state=open]:text-[var(--sidebar-nav-text)]',

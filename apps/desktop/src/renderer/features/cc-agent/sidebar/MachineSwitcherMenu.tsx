@@ -153,7 +153,7 @@ interface MachineChip {
 }
 
 const CHIP_CLASS =
-  'relative flex h-6 shrink-0 items-center rounded-md text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
+  'relative flex h-6 shrink-0 items-center rounded text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 const CHIP_SELECTED_CLASS = 'font-medium text-[var(--sidebar-nav-text)]';
 const CHIP_IDLE_CLASS =
   'font-normal text-[var(--sidebar-list-muted)] hover:text-[var(--sidebar-nav-text)]';
@@ -270,7 +270,6 @@ export function MachineTabStrip({
               <button
                 type="button"
                 aria-pressed={chip.selected}
-                title={chip.id !== MACHINE_ALL ? t('ccAgent.sidebar.machineSwitcher.multiSelect') : undefined}
                 className={cn(
                   CHIP_CLASS,
                   chip.selected ? CHIP_SELECTED_CLASS : CHIP_IDLE_CLASS,
