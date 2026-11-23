@@ -938,4 +938,38 @@ describe('a task running on a plugin engine', () => {
       window.electronAPI = prevApi;
     }
   });
+
+  // Regression (#12247 review): while the Desktop picker remains open across a plugin window's
+  // reset time, the local display clock must drop the expired window and promote the next valid
+  // window without triggering extra usage IPC calls.
+  it('advances the local clock while open to hide expired plugin windows without re-fetching', async () => {
+    vi.useFakeTimers();
+    const baseNow = new Date('2026-11-23T10:00:00.000Z').getTime();
+    vi.setSystemTime(baseNow);
+    const getPluginEngineUsage = vi.fn(async () => ({
+      updatedAt: baseNow,
+      windows: [
+        { label: 'Short', remainingPercent: 15, resetsAt: baseNow + 90_000 },
+        { label: 'Weekly', remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
+      ],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    try {
+      const reporting = engine('quota-clock:dsh', 'Quota Clock', { reportsUsage: true });
+      renderDraftPicker({ engines: [reporting], active: null, onSelect: vi.fn() });
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByLabelText(/Short · 15%/)).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(95_000);
+      });
+      expect(screen.queryByLabelText(/Short · 15%/)).toBeNull();
+      expect(screen.getByLabelText(/Weekly · 82%/)).toBeTruthy();
+      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+    } finally {
+      window.electronAPI = prevApi;
+      vi.useRealTimers();
+    }
+  });
 });

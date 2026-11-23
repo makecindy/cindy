@@ -151,19 +151,21 @@ async function readAccount(
 async function readRemotePluginEngineList(
   deps: RemoteSubscriptionDeps,
   deviceId: string,
-): Promise<PluginEngineView[]> {
+): Promise<{ ok: true; engines: PluginEngineView[] } | { ok: false }> {
   try {
     const response = await deps.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
     if (!response.ok) {
-      if (response.error.code !== 'CHANNEL_NOT_ALLOWED') {
-        deps.onError?.(`remote:${deviceId}:plugin-engines`, new Error(response.error.message));
-      }
-      return [];
+      if (response.error.code === 'CHANNEL_NOT_ALLOWED') return { ok: true, engines: [] };
+      deps.onError?.(`remote:${deviceId}:plugin-engines`, new Error(response.error.message));
+      return { ok: false };
     }
-    return parseOfferedPluginEngines(response.result).filter((engine) => engine.reportsUsage === true);
+    return {
+      ok: true,
+      engines: parseOfferedPluginEngines(response.result).filter((engine) => engine.reportsUsage === true),
+    };
   } catch (error) {
     deps.onError?.(`remote:${deviceId}:plugin-engines`, error);
-    return [];
+    return { ok: false };
   }
 }
 
@@ -180,10 +182,12 @@ async function readDevice(
     deps.onError?.(`remote:${device.id}:providers`, error);
     return null;
   }
-  const [pluginEngines] = await Promise.all([readRemotePluginEngineList(deps, device.id)]);
+  const pluginList = await readRemotePluginEngineList(deps, device.id);
+  const pluginEngines = pluginList.ok ? pluginList.engines : [];
   const accounts = providers.filter((provider) => provider.connected && !provider.suspended && !provider.removed && !provider.subscriptionPoolAlias &&
     (isSubscriptionProvider(provider.id) || providerWeeklyQuotaSource(provider)));
   const failed: string[] = [];
+  if (!pluginList.ok) failed.push(`remote:${device.id}:plugin-engines`);
   const [read, pluginRead] = await Promise.all([
     Promise.all(
       accounts.map(async (provider) => {
@@ -279,7 +283,8 @@ export function retainRemoteSubscriptions(
     if (stopped(entry.source) || seen.has(id) || nowMs - entry.seenAtMs >= REMOTE_RETAIN_MS) continue;
     const deviceId = entry.source.device?.id;
     const poolFailed = entry.source.pooled && deviceId && read.failed.has(`remote:${deviceId}:${entry.source.providerId}`);
-    if (!(deviceId && read.unreachable.has(deviceId)) && !read.failed.has(id) && !poolFailed) continue;
+    const pluginListFailed = entry.source.family === 'plugin' && !!deviceId && read.failed.has(`remote:${deviceId}:plugin-engines`);
+    if (!(deviceId && read.unreachable.has(deviceId)) && !read.failed.has(id) && !poolFailed && !pluginListFailed) continue;
     seen.set(id, entry);
     sources.push({
       ...entry.source,

@@ -87,6 +87,25 @@ function quotaTimeKey(values: QuotaValues, now: number): string {
   );
 }
 
+/** Compare time-dependent presentation for plugin engine windows (expiry and countdown). */
+function pluginQuotaTimeKey(
+  values: Readonly<Record<string, GhostHarnessUsage>>,
+  now: number,
+): string {
+  return JSON.stringify(
+    Object.entries(values).map(([providerId, usage]) => [
+      providerId,
+      (usage.windows ?? [])
+        .filter((row) => !row.resetsAt || row.resetsAt > now)
+        .map((row) => [
+          row.label,
+          Math.round(row.remainingPercent),
+          row.resetsAt ? quotaCountdown(row.resetsAt / 1000, now) : null,
+        ]),
+    ]),
+  );
+}
+
 /** One read per account, never one per model. Responses are fenced by device/account/connection. */
 export function useMobileModelQuotas(
   scope: string,
@@ -146,11 +165,65 @@ export function useMobileModelQuotas(
     values: QuotaValues;
   }>();
   const [now, setNow] = useState(Date.now);
-  const clockSnapshot = useRef({ values: {} as QuotaValues, now });
+  const clockSnapshot = useRef({
+    values: {} as QuotaValues,
+    pluginValues: {} as Readonly<Record<string, GhostHarnessUsage>>,
+    now,
+  });
   clockSnapshot.current = {
     values: state?.binding === binding ? state.values : {},
+    pluginValues: pluginEngineQuotas,
     now,
   };
+  const hasTimedPluginWindow = Object.values(pluginEngineQuotas).some((usage) =>
+    (usage.windows ?? []).some(
+      (row) => typeof row.resetsAt === "number" && row.resetsAt > now,
+    ),
+  );
+  const needsDisplayClock =
+    visible && (sources !== "[]" || hasTimedPluginWindow);
+  useEffect(() => {
+    if (!visible) return;
+    setNow(Date.now());
+  }, [visible, pluginEngineQuotas]);
+  useEffect(() => {
+    if (!needsDisplayClock) return;
+    let clock: ReturnType<typeof setInterval> | undefined;
+    const stopClock = () => {
+      clearInterval(clock);
+      clock = undefined;
+    };
+    const startClock = () => {
+      stopClock();
+      if (AppState.currentState !== "active") return;
+      clock = setInterval(() => {
+        if (AppState.currentState !== "active") return;
+        const next = Date.now();
+        const previous = clockSnapshot.current;
+        if (
+          quotaTimeKey(previous.values, previous.now) !==
+            quotaTimeKey(previous.values, next) ||
+          pluginQuotaTimeKey(previous.pluginValues, previous.now) !==
+            pluginQuotaTimeKey(previous.pluginValues, next)
+        ) {
+          setNow(next);
+        }
+      }, 1000);
+    };
+    startClock();
+    const app = AppState.addEventListener("change", (value) => {
+      if (value === "active") {
+        setNow(Date.now());
+        startClock();
+      } else {
+        stopClock();
+      }
+    });
+    return () => {
+      stopClock();
+      app.remove();
+    };
+  }, [needsDisplayClock]);
   useEffect(() => {
     if (!visible || status !== "online" || sources === "[]") return;
     let active = true;
@@ -285,27 +358,15 @@ export function useMobileModelQuotas(
         void refresh();
       }
     };
-    let clock: ReturnType<typeof setInterval> | undefined;
     let timer: ReturnType<typeof setInterval> | undefined;
     const stopTimers = () => {
-      clearInterval(clock);
       clearInterval(timer);
-      clock = timer = undefined;
+      timer = undefined;
     };
     const resume = () => {
       stopTimers();
       if (AppState.currentState !== "active") return;
       void refresh();
-      clock = setInterval(() => {
-        if (AppState.currentState !== "active") return;
-        const next = Date.now();
-        const previous = clockSnapshot.current;
-        if (
-          quotaTimeKey(previous.values, previous.now) !==
-          quotaTimeKey(previous.values, next)
-        )
-          setNow(next);
-      }, 1000);
       timer = setInterval(() => void refresh(), 30000);
     };
     resume();

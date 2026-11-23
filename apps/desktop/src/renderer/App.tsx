@@ -71,6 +71,7 @@ import {
   getDraft,
   getDraftForOwnerPreferenceSync,
   applyAppDefaultModelSelection,
+  applyPluginEngineDraftRoute,
   subscribeDraft,
   setEffortForModel,
   setFastModeForModel,
@@ -364,6 +365,10 @@ export function App() {
         taskProviderId,
         appDefaultSelection,
       }) => {
+        if (agent === 'acp') {
+          if (active) applyPluginEngineDraftRoute({ providerId, modelId, effort });
+          return;
+        }
         if (appDefaultSelection) {
           if (applyAppDefaultModelSelection(appDefaultSelection)) {
             const route = appDefaultSelection.route;

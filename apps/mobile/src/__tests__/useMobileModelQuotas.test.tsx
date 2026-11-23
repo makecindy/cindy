@@ -42,13 +42,14 @@ const providers = [
 let root: Root;
 let view: ReturnType<typeof useMobileModelQuotas>;
 let renders: number;
-function Probe({ sources = providers, remoteCatalogs = [], taskId, pluginEngines }: {
+function Probe({ sources = providers, remoteCatalogs = [], taskId, pluginEngines, visible = true }: {
   sources?: ProviderView[];
   remoteCatalogs?: { deviceId: string; providers: ProviderView[] }[];
   taskId?: string;
   pluginEngines?: MobilePluginEngine[];
+  visible?: boolean;
 }) {
-  view = useMobileModelQuotas('["account","host"]', true, sources, remoteCatalogs, taskId, pluginEngines);
+  view = useMobileModelQuotas('["account","host"]', visible, sources, remoteCatalogs, taskId, pluginEngines);
   renders++;
   return null;
 }
@@ -308,4 +309,64 @@ it("reads usage for selectable reporting plugin engines through the shared usage
   });
   expect(view.pluginEngineQuotas["acp-plugin:off:cli"]).toBeUndefined();
   expect(view.pluginEngineQuotas["acp-plugin:down:cli"]).toBeUndefined();
+});
+
+// Regression (#12247 review): on a computer with no built-in subscription sources, plugin engine
+// windows must still drive the local display clock while visible and refresh `now` on reopen.
+it("advances display clock for plugin-only computers and refreshes now on reopen without extra reads", async () => {
+  vi.useFakeTimers();
+  const baseNow = new Date("2026-11-23T10:00:00.000Z").getTime();
+  vi.setSystemTime(baseNow);
+  setMobileAuthOwner("plugin-clock-acct");
+  h.invoke.mockImplementation(async (_device, channel, args) => {
+    if (channel === "maker:get-plugin-engine-usage" && args?.[0] === "clock:dsh") {
+      return {
+        updatedAt: baseNow,
+        windows: [{ label: "Short", remainingPercent: 20, resetsAt: baseNow + 90_000 }],
+      };
+    }
+    return null;
+  });
+  const engines: MobilePluginEngine[] = [
+    {
+      key: "clock:dsh",
+      providerId: "acp-plugin:clock:dsh",
+      name: "Clock Harness",
+      reportsUsage: true,
+      availability: { state: "available" },
+      models: [],
+      permissionModes: [],
+      defaultPermissionMode: "ask",
+    },
+  ];
+  try {
+    await act(async () => {
+      root.render(createElement(Probe, { sources: [], visible: true, pluginEngines: engines }));
+    });
+    expect(view.now).toBe(baseNow);
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(95_000);
+    });
+    expect(view.now).toBeGreaterThanOrEqual(baseNow + 90_000);
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+
+    // Hide the picker for an hour: clock stops while hidden, then refreshes immediately on reopen.
+    await act(async () => {
+      root.render(createElement(Probe, { sources: [], visible: false, pluginEngines: engines }));
+    });
+    const hiddenAt = view.now;
+    await act(async () => {
+      vi.advanceTimersByTime(3_600_000);
+    });
+    expect(view.now).toBe(hiddenAt);
+
+    await act(async () => {
+      root.render(createElement(Probe, { sources: [], visible: true, pluginEngines: engines }));
+    });
+    expect(view.now).toBeGreaterThanOrEqual(hiddenAt + 3_600_000);
+  } finally {
+    vi.useRealTimers();
+  }
 });

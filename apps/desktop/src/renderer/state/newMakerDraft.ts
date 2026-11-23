@@ -1108,6 +1108,34 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
 }
 
 /**
+ * Preselects a local plugin engine on the new-task draft (for example from the quota panel's
+ * "New task" action), clearing mutually exclusive model selections without touching Claude/Codex/Pi prefs.
+ */
+export function applyPluginEngineDraftRoute(route: {
+  providerId: string;
+  modelId: string;
+  effort?: string;
+}): boolean {
+  if (!pluginEngineKeyFromProviderId(route.providerId) || !route.modelId.trim()) return false;
+  const current = getDraft();
+  const previous = current.pluginEngine;
+  const effort = isPluginEngineEffort(route.effort) ? route.effort : previous?.effort;
+  patchDraft({
+    ...(current.vendor === 'orca' ? { vendor: 'cc' } : {}),
+    pluginEngine: {
+      providerId: route.providerId,
+      modelId: route.modelId,
+      ...(previous?.permissionMode ? { permissionMode: previous.permissionMode } : {}),
+      ...(effort ? { effort } : {}),
+    },
+    pluginModel: null,
+    modelGroup: null,
+    ...(current.agentDeviceId ? { agentDeviceId: null, agentDeviceName: null } : {}),
+  });
+  return true;
+}
+
+/**
  * 当前草稿 Harness 不可用时按系统顺序回退。
  *
  * 必须在调用瞬间读取模块级 currentDraft:产品默认 effect 可能刚把 cc 改成 Pi,若这里继续

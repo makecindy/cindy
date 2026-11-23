@@ -969,5 +969,51 @@ describe('plugin engine quota collection', () => {
       device: { id: 'desk-2', name: 'Office Mac' },
       windows: [{ kind: 'custom', label: 'Pro', usedPercent: 40 }],
     });
+
+    // Regression (#12247 review): transient plugin-list failure must retain previously seen remote
+    // plugin quota and mark the read incomplete instead of treating the error as an empty list.
+    const previousSeen = new Map([[read.sources[0]!.id, { source: read.sources[0]!, seenAtMs: NOW }]]);
+    const transientFail = await readRemoteSubscriptions({
+      nowMs: NOW + 60_000,
+      listDevices: async () => ({
+        devices: [{
+          deviceId: 'desk-2', name: 'Office Mac', platform: 'darwin', isSelf: false,
+          online: true, remoteControlEnabled: true, controlEnabled: true, appVersion: '9.0.0',
+        } as never],
+      }),
+      invoke: async (_deviceId, channel) => {
+        if (channel === 'maker:provider:list') return { ok: true, result: { providers: [] } };
+        if (channel === 'maker:list-plugin-engines') {
+          return { ok: false, error: { code: 'TIMEOUT', message: 'request timed out' } };
+        }
+        return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } };
+      },
+    } as RemoteSubscriptionDeps);
+
+    expect(transientFail.incomplete).toBe(true);
+    expect(transientFail.failed.has('remote:desk-2:plugin-engines')).toBe(true);
+    const retained = retainRemoteSubscriptions(previousSeen, transientFail, NOW + 60_000);
+    expect(retained.sources).toHaveLength(1);
+    expect(retained.sources[0]).toMatchObject({
+      id: 'remote:desk-2:acp-plugin:dsh:dsh',
+      lastSeenAtMs: NOW,
+    });
+
+    // An old host returning CHANNEL_NOT_ALLOWED (or an explicit empty list) is complete and drops removed engines.
+    const unsupported = await readRemoteSubscriptions({
+      nowMs: NOW + 120_000,
+      listDevices: async () => ({
+        devices: [{
+          deviceId: 'desk-2', name: 'Office Mac', platform: 'darwin', isSelf: false,
+          online: true, remoteControlEnabled: true, controlEnabled: true, appVersion: '9.0.0',
+        } as never],
+      }),
+      invoke: async (_deviceId, channel) => {
+        if (channel === 'maker:provider:list') return { ok: true, result: { providers: [] } };
+        return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } };
+      },
+    } as RemoteSubscriptionDeps);
+    expect(unsupported.incomplete).toBe(false);
+    expect(retainRemoteSubscriptions(previousSeen, unsupported, NOW + 120_000).sources).toEqual([]);
   });
 });

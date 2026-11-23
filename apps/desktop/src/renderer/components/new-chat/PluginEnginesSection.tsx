@@ -172,22 +172,74 @@ interface EngineBlockProps {
   onChooseEffort(modelId: string, effort: PluginEngineEffort): void;
 }
 
+function pluginGroupQuotaTimeKey(
+  usage: GhostHarnessUsage,
+  now: number,
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  return (usage.windows ?? [])
+    .filter((row) => !row.resetsAt || row.resetsAt > now)
+    .map((row) => [
+      row.label,
+      Math.round(row.remainingPercent),
+      row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null,
+    ])
+    .map((parts) => parts.join(':'))
+    .join('|');
+}
+
 /** Compact quota/balance readout on a plugin engine group header; reuses the 1-minute shared reader. */
 function PluginEngineGroupQuota({ engine }: { engine: PluginEngineChoice }) {
   const { t, i18n } = useTranslation();
   const targetKey = `${engine.deviceId ?? ''}:${engine.key}`;
-  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage; now: number } | null>(null);
+  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const owner = getDataOwnerGeneration();
     let active = true;
     void readPluginEngineUsage(owner, engine.deviceId ?? null, engine.key).result.then((usage) => {
       if (!active || !isDataOwnerGenerationCurrent(owner)) return;
-      setReading(usage ? { targetKey, usage, now: Date.now() } : null);
+      setReading(usage ? { targetKey, usage } : null);
+      setNow(Date.now());
     });
     return () => { active = false; };
   }, [engine.key, engine.deviceId, targetKey]);
-  if (!reading || reading.targetKey !== targetKey) return null;
-  const { usage, now } = reading;
+  const activeUsage = reading?.targetKey === targetKey ? reading.usage : null;
+  const hasTimedWindow = !!activeUsage?.windows?.some(
+    (row) => typeof row.resetsAt === 'number' && row.resetsAt > now,
+  );
+  const clockSnapshot = useRef({ usage: activeUsage, now, t });
+  clockSnapshot.current = { usage: activeUsage, now, t };
+  useEffect(() => {
+    if (!hasTimedWindow) return;
+    const syncClock = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const { usage: currentUsage, now: prevNow, t: translate } = clockSnapshot.current;
+      if (!currentUsage) return;
+      const nextNow = Date.now();
+      if (
+        pluginGroupQuotaTimeKey(currentUsage, prevNow, translate) !==
+        pluginGroupQuotaTimeKey(currentUsage, nextNow, translate)
+      ) {
+        setNow(nextNow);
+      }
+    };
+    const timer = window.setInterval(syncClock, 1000);
+    const onVisibility = () => {
+      if (!document.hidden) syncClock();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+    return () => {
+      window.clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
+  }, [hasTimedWindow]);
+  if (!activeUsage) return null;
+  const usage = activeUsage;
   const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
   const balances = pluginEngineUsageBalances(usage, i18n.language, t);
   const first = current.reduce<(typeof current)[number] | undefined>((lowest, row) =>
