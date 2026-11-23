@@ -450,7 +450,7 @@ const pickerReadAt = new WeakMap<DeviceCatalogue, number>();
  * DEVICE_PLUGIN_ENGINES_REREAD_MS; a computer keeps its last answer in between.
  * `null` = that computer has not answered yet (or could not be reached).
  */
-export function useDevicesPluginEngines(deviceIds: readonly string[]): {
+export function useDevicesPluginEngines(deviceIds: readonly string[], prefetchOnReconnect = false): {
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>;
   read: (deviceId?: string) => void;
 } {
@@ -471,12 +471,12 @@ export function useDevicesPluginEngines(deviceIds: readonly string[]): {
     }
   }, [sources]);
   const subscribe = useCallback((listener: () => void) => {
-    // Picker candidates share cache updates and read on demand, without causing reconnect prefetch.
-    const offs = sources.map((source) => source.catalogue.subscribe(listener, false));
+    // Picker candidates read on demand. A visible settings list can also recover on reconnect.
+    const offs = sources.map((source) => source.catalogue.subscribe(listener, prefetchOnReconnect));
     return () => {
       for (const off of offs) off();
     };
-  }, [sources]);
+  }, [sources, prefetchOnReconnect]);
   // One map per distinct set of answers, so consumers re-render only when a computer's list changed.
   const cache = useRef<{
     sources: typeof sources;

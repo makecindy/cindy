@@ -129,8 +129,14 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
   停用或关掉模型后从下一轮起被拒绝(与关闭「允许被远程调用」相同)。
 - **中转**：走既有 invoke 帧与既有只读 channel，没有新帧、新 channel 进 allowlist 或恢复语义变化，官方与自建中转
   原样转发回包里多出的可选字段，无需修改；未做互通重跑，依据是 device-link 包与 allowlist 均无改动。
-- **暂未提供**：与普通供应商混排的拖动排序、模型选择器里的「已隐藏」展开区、设置页列出同账号其他电脑上的插件引擎、
-  供应商组与引擎切换。
+- **设置页列出同账号其他电脑开放的引擎**(2026-11-23 补齐)：renderer `OwnRemotePluginEngines.tsx` 复用新建任务模型
+  选择器的按电脑目录缓存(`useDevicesPluginEngines`)与筛选(`remotePluginEngineChoices`)，只列 `isPluginEngineOfferedRemotely`
+  的引擎，只读展示。读取量：打开「模型供应商」页时向每台在线、允许远程控制的同账号电脑各发一次既有的只读
+  `maker:list-plugin-engines`(后台档；与模型选择器共用 15 秒内不重读)。列表可见时，新上线或重连的电脑可补读，
+  复用重连预取，不轮询；进入分享管理页则释放列表订阅。
+  打开某一项详情时与模型选择器同一时机发一次 `maker:refresh-plugin-engines`(按电脑 60 秒冷却)并在 2.5 秒后复读。
+  没有新 channel、新字段或 allowlist 变化，旧电脑回 `CHANNEL_NOT_ALLOWED` 时不列出。
+- **暂未提供**：与普通供应商混排的拖动排序、模型选择器里的「已隐藏」展开区、供应商组与引擎切换。
 
 实现见 `maker-host/plugin-engine-prefs-store.ts`、`maker-ipc/pluginEnginesIpc.ts`、`maker-ipc/pluginEngineSessionAdmission.ts`、
 `maker-host/pluginEngineRemoteUse.ts`、renderer `components/settings/PluginEngineProviders.tsx` 与 mobile

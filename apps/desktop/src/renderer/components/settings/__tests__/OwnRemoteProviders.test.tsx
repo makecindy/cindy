@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -10,8 +11,20 @@ import {
   useOwnRemoteProviders,
   type OwnRemoteProvider,
 } from '../OwnRemoteProviders';
+import {
+  OwnRemotePluginEngineDetail,
+  OwnRemotePluginEngineRows,
+  useOwnRemotePluginEngines,
+} from '../OwnRemotePluginEngines';
 import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import {
+  DEVICE_PLUGIN_ENGINES_REREAD_MS,
+  hasRemotePluginEngineSubscribers,
+  prefetchRemotePluginEngines,
+  resetPluginEnginesStoreForTests,
+} from '@/hooks/usePluginEngines';
+import { useControllableDevices } from '@/hooks/useControllableDevices';
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -439,5 +452,120 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     }} />);
     expect(screen.queryByTestId('provider-usage-module')).toBeNull();
     expect(screen.queryByText('quotaCard.noWindows')).toBeNull();
+  });
+});
+
+// 测试价值：「设置 → 模型供应商」此前只列本机插件引擎和其他电脑的普通供应商，同账号另一台电脑开放的
+// 插件引擎在新建任务的模型列表里能选，在设置页却看不到。
+// 生产入口：真实 useOwnRemotePluginEngines + 按电脑的引擎目录缓存 + 行与详情，只替换在线电脑列表和
+// Device Link invoke。最小失败输入：一台在线电脑回一个已开放的引擎和一个未开放的引擎。
+// 第二条守住读取次数：在线电脑列表变化时只读新出现的电脑，不把已读过的电脑再读一遍。
+// tier: unit(jsdom，内存 invoke，不联网)。
+describe('plugin engines my other computers open for remote use', () => {
+  const invoke = vi.fn();
+  let originalApi: Window['electronAPI'];
+  const listCalls = () => invoke.mock.calls
+    .filter(([, channel]) => channel === 'maker:list-plugin-engines')
+    .map(([deviceId]) => deviceId as string);
+
+  function engine(harnessId: string, overrides: Record<string, unknown> = {}) {
+    return {
+      key: `agy:${harnessId}`,
+      providerId: `acp-plugin:agy:${harnessId}`,
+      ghostId: 'agy',
+      harnessId,
+      name: harnessId === 'antigravity' ? 'Antigravity' : 'Closed engine',
+      availability: { state: 'available' },
+      models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro' }],
+      permissionModes: [],
+      defaultPermissionMode: 'ask',
+      remoteUse: { supported: true, enabled: true },
+      ...overrides,
+    };
+  }
+
+  function Page({ active = true }: { active?: boolean }) {
+    // 与设置页相同：电脑列表来自 useOwnRemoteProviderList 用的那份(这里由文件顶部的 mock 提供)。
+    const entries = useOwnRemotePluginEngines(useControllableDevices(), active);
+    const [selected, setSelected] = useState<string | null>(null);
+    const entry = entries.find((item) => item.key === selected);
+    return (
+      <>
+        <OwnRemotePluginEngineRows entries={entries} selectedKey={selected} onSelect={setSelected} />
+        {entry ? <OwnRemotePluginEngineDetail entry={entry} /> : null}
+      </>
+    );
+  }
+
+  beforeEach(() => {
+    originalApi = window.electronAPI;
+    setDataOwnerGeneration('owner-1', 1);
+    resetPluginEnginesStoreForTests();
+    invoke.mockReset();
+    window.electronAPI = { ...originalApi, deviceLink: { invoke } } as unknown as Window['electronAPI'];
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    window.electronAPI = originalApi;
+    resetPluginEnginesStoreForTests();
+    setDataOwnerGeneration(null, 0);
+  });
+
+  it('lists the engine another computer opened and shows where it runs and its models', async () => {
+    devices.value = [{ deviceId: 'studio-desktop', name: 'Studio Desktop', platform: 'darwin' }];
+    invoke.mockImplementation(async (_deviceId: string, channel: string) => channel === 'maker:list-plugin-engines'
+      ? [engine('antigravity'), engine('closed', { remoteUse: { supported: true, enabled: false } })]
+      : undefined);
+    render(<Page />);
+
+    const row = await screen.findByTestId('own-remote-plugin-engine-row');
+    expect(screen.getAllByTestId('own-remote-plugin-engine-row')).toHaveLength(1);
+    expect(row.getAttribute('aria-label')).toBe(
+      'settings.providers.remote.rowLabel:{"provider":"Antigravity","device":"Studio Desktop"}',
+    );
+    fireEvent.click(row);
+    const detail = screen.getByTestId('own-remote-plugin-engine-detail');
+    expect(within(detail).getByText('Studio Desktop')).toBeTruthy();
+    expect(within(detail).getByText('Gemini 3 Pro')).toBeTruthy();
+    expect(within(detail).queryByRole('button', { name: 'settings.providers.detail.moreActionsAria' })).toBeNull();
+    expect(listCalls()).toEqual(['studio-desktop']);
+  });
+
+  it('reads only a computer that comes online while the page stays open', async () => {
+    // 时钟照常走，只在电脑列表变化前跳过 15 秒的复读间隔，证明不是靠这个间隔才没有重读。
+    const realNow = Date.now.bind(Date);
+    let skipped = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skipped);
+    invoke.mockResolvedValue([]);
+    const first = { deviceId: 'mini', name: 'Mini', platform: 'darwin' };
+    devices.value = [first];
+    const view = render(<Page />);
+    await waitFor(() => expect(listCalls()).toEqual(['mini']));
+
+    skipped += DEVICE_PLUGIN_ENGINES_REREAD_MS + 1;
+    devices.value = [first, { deviceId: 'studio-desktop', name: 'Studio Desktop', platform: 'darwin' }];
+    view.rerender(<Page />);
+    await waitFor(() => expect(listCalls()).toEqual(['mini', 'studio-desktop']));
+  });
+
+  it('recovers an unread catalogue on reconnect and releases the subscription when hidden', async () => {
+    const deviceId = 'studio-desktop';
+    devices.value = [{ deviceId, name: 'Studio Desktop', platform: 'darwin' }];
+    invoke.mockRejectedValueOnce(new Error('connection interrupted')).mockResolvedValue([engine('antigravity')]);
+    const view = render(<Page />);
+    await waitFor(() => expect(listCalls()).toEqual([deviceId]));
+    expect(screen.queryByTestId('own-remote-plugin-engine-row')).toBeNull();
+
+    await act(async () => {
+      // The remote bootstrap only prefetches for a live subscriber.
+      if (hasRemotePluginEngineSubscribers(deviceId)) await prefetchRemotePluginEngines(deviceId);
+    });
+    expect(await screen.findByTestId('own-remote-plugin-engine-row')).toBeTruthy();
+
+    view.rerender(<Page active={false} />);
+    expect(hasRemotePluginEngineSubscribers(deviceId)).toBe(false);
+    expect(screen.queryByTestId('own-remote-plugin-engine-row')).toBeNull();
   });
 });
