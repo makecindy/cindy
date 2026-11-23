@@ -13208,7 +13208,8 @@
           "subject": {
             "githubIssue": "「GitHub Issue を提出」の確認カード",
             "renameSessions": "「タスク名の一括変更」の確認カード",
-            "pluginFileGrant": "「プラグインのファイル許可」の確認カード"
+            "pluginFileGrant": "「プラグインのファイル許可」の確認カード",
+            "mediaPathReveal": "「Agent にメディアファイルのパソコン上の場所を伝える」の確認カード"
           }
         },
         "replyWords": {

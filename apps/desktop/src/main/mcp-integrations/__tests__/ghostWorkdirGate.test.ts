@@ -2452,6 +2452,30 @@ describe('Cindy media 本机路径揭示', () => {
     expect(JSON.stringify([media, handoff])).toContain('并非用户手动拒绝');
   });
 
+  // 复盘(2026-11):主人在手机上点不了只在电脑上出现的确认卡,超时被报成 DENIED 且叫 Agent
+  // 「提醒用户后重试」,伙伴连等 4 轮。超时要有独立错误码,并说清是没人确认、别自动重试。
+  it('确认卡超时与用户拒绝区分开,并告诉 Agent 不要自动重试', async () => {
+    const url = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: process.execPath, mime_type: 'image/png' });
+    confirmRequestMock.mockResolvedValue({ confirmed: false, allowDirs: false, reason: 'timeout' });
+    const deps = makeDeps('claude-code', 'confirm-timeout');
+    const media = await deps.callMedia?.({ action: 'resolve_local_path', url });
+    expect(media).toMatchObject({ ok: false, errorCode: 'LOCAL_PATH_REVEAL_TIMEOUT' });
+    expect(media).not.toHaveProperty('local_path');
+    const dir = path.join(outsideDir, 'confirm-timeout');
+    fs.mkdirSync(dir, { recursive: true });
+    const handoff = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, dir });
+    expect(handoff).toMatchObject({ ok: false });
+    for (const result of [media, handoff]) {
+      const message = String((result as { message?: unknown }).message);
+      expect(message).toContain('这不是用户拒绝');
+      expect(message).toContain('不要自动重试');
+      // 超时后旧卡已撤下:恢复顺序只能是用户就位后重新调用、确认新卡,不能叫用户先去点旧卡。
+      expect(message).toContain('新的确认卡');
+      expect(message).not.toContain('后重试');
+    }
+  });
+
   it('用户拒绝或调用缺少会话语境时不把路径放进工具结果', async () => {
     const url = `cindy-media://blobs/${'b'.repeat(64)}.png`;
     callCindyMediaMock.mockResolvedValue({

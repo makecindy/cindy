@@ -13208,7 +13208,8 @@
           "subject": {
             "githubIssue": "「呈 GitHub Issue」之確認卡",
             "renameSessions": "「批次易差事之名」之確認卡",
-            "pluginFileGrant": "「法器卷帙授權」之確認卡"
+            "pluginFileGrant": "「法器卷帙授權」之確認卡",
+            "mediaPathReveal": "「許 Agent 知圖等媒體卷於機上之所在」之確認卡"
           }
         },
         "replyWords": {
