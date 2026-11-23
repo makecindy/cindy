@@ -45,9 +45,9 @@ function open(credentials: UdpRelayCredentials, options: Partial<RelayUdpOptions
     ...options,
   });
   paths.push(path);
-  const registrations = () => sent.map((packet, i) => {
+  const registrations = (from = 0) => sent.slice(from).map((packet, i) => {
     const registration = verifyUdpRegister(packet, credentials.key);
-    return registration && { ...registration, at: sentAt[i] };
+    return registration && { ...registration, at: sentAt[from + i] };
   }).filter((r) => r !== null);
   return { path, sent, registrations };
 }
@@ -210,11 +210,12 @@ async function upWithAckingRelay(fill: number, options: Partial<RelayUdpOptions>
   fakeTimers();
   const credentials = { session: new Uint8Array(8).fill(fill), key: new Uint8Array(32).fill(fill + 1) };
   const opened = open(credentials, options);
-  let acked = 0n;
+  let inspectedPackets = 0;
   const ackAll = () => {
-    for (const r of opened.registrations()) {
-      if (r.counter <= acked) continue;
-      acked = r.counter;
+    // Only decode new packets. A simulated cooldown can span thousands of timer steps.
+    const pending = opened.registrations(inspectedPackets);
+    inspectedPackets = opened.sent.length;
+    for (const r of pending) {
       opened.path.intercept(encodeUdpRegisterAck(credentials, r.counter, true, COOKIE));
     }
   };
