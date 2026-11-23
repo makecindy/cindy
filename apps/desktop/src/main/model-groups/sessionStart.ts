@@ -1,6 +1,6 @@
 /**
- * 模式跟着任务走(model-groups.md §6.3 原则)：新建任务时按模式选第一个来源，这个任务第一轮消息派发的那一刻
- * 提交选路、记下任务经哪个模式建的(之后撞配额或故障的接替都按这条记录走)，并在那条消息下面写说明。
+ * 模式跟着任务走(model-groups.md §6.3 原则)：新建任务时按模式选第一个来源并记下任务经哪个模式建的(之后撞配额或
+ * 故障的接替都按这条记录走，首轮也算)；这个任务第一轮消息派发的那一刻提交选路，并在那条消息下面写说明。
  * 入口(定时任务、IM、Hook……)只做两件事：要新建任务时 `prepare` 拿到选中的来源当作具体模型用，
  * 把凭据随建任务参数交给新建任务(bootstrapSession 调 `attach`)。派发由所有发送共用的钩子调 `dispatched`。
  * 发到已有任务不经这里：那个任务按它自己的模式走。
@@ -99,13 +99,23 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
       const result = await ports.resolve({ selection: { type: 'route', id: groupId }, dryRun: true });
       return result.outcome !== 'missing';
     },
-    /** 新建任务(bootstrapSession)收到凭据：这个任务第一轮派发时结算。 */
+    /**
+     * 新建任务(bootstrapSession)收到凭据：立刻记下任务经哪个模式建的(发送前就要能查到，首轮出错才能按模式接替)，
+     * 选路提交与说明等第一轮派发时结算。记录只在任务正用着记下的来源时生效，任务没建成留下的记录不会误用。
+     */
     attach(sessionId: string, token: string): void {
       const item = prepared.get(token);
       if (!item) return;
       prepared.delete(token);
       prune(attached);
       attached.set(sessionId, item);
+      if (item.result.outcome === 'routed') {
+        try {
+          ports.bind(sessionId, item.selection, modelGroupCandidateKey(item.result.route));
+        } catch {
+          // 记录只影响接替与提议；建任务照常。
+        }
+      }
     },
     /** 所有发送共用的派发钩子：这个任务的第一轮消息(clientId)发出去了。 */
     dispatched(sessionId: string, clientId: string): void {
@@ -114,9 +124,6 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
       attached.delete(sessionId);
       try {
         if (item.result.decisionId) ports.commit(item.result.decisionId);
-        if (item.result.outcome === 'routed') {
-          ports.bind(sessionId, item.selection, modelGroupCandidateKey(item.result.route));
-        }
         const note = buildModelGroupRouteNote(item.result, item.keptModelName, ports.t, ports.locale(), ports.locationName);
         if (note) {
           ports.writeNote(sessionId, note, {

@@ -50,10 +50,12 @@ describe('a mode picks the first source of a new task and is settled when its fi
     start.dispatched('task-1', 'msg-1');
     expect(calls.commit).not.toHaveBeenCalled();
     start.attach('task-1', prepared!.token);
+    // The record exists before the first turn is sent, so a first-turn failure can be taken over (§6).
+    expect(calls.bind).toHaveBeenCalledWith('task-1', { type: 'route', id: 'daily' }, 'codex\u0000openai-work\u0000gpt-astra\u0000desk-2');
     expect(calls.commit).not.toHaveBeenCalled();
     start.dispatched('task-1', 'msg-1');
     expect(calls.commit).toHaveBeenCalledWith('d1');
-    expect(calls.bind).toHaveBeenCalledWith('task-1', { type: 'route', id: 'daily' }, 'codex\u0000openai-work\u0000gpt-astra\u0000desk-2');
+    expect(calls.bind).toHaveBeenCalledOnce();
     const [, note, options] = calls.writeNote.mock.calls[0]!;
     expect(note).toMatchObject({ pluginName: 'Daily mode', outcome: 'routed', source: 'model-group' });
     expect(options).toEqual({ clientId: 'model-group-route:task-1:d1', anchorClientId: 'msg-1' });
