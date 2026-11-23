@@ -5695,6 +5695,45 @@ describe('native account assignment on the executing computer', () => {
       } finally { clock.mockRestore(); }
     });
 
+    // PR #12279 (unit): both cached windows are full but still recent enough for early
+    // selection. The wrapped start must wait for the in-flight refresh before choosing
+    // credits, and use the account whose newly read window has room.
+    it('waits for an in-flight quota refresh before falling back to credits', async () => {
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let releaseQuota = () => {};
+      let starting: Promise<AgentSessionHandle> | undefined;
+      try {
+        h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+        h.read.mockImplementation(async (_kind: string, directory: string) => ({
+          authenticated: true, identity: directory, plan: 'plus', planType: 'plus',
+        }));
+        h.usage.mockImplementation(async (_kind: string, directory: string) => quotaFor(directory, 100));
+        await readSubscriptionPool('openai');
+        now += 4 * 60_000;
+        const gate = new Promise<void>(resolve => { releaseQuota = resolve; });
+        const quotaReads = h.usage.mock.calls.length;
+        h.usage.mockImplementation(async (_kind: string, directory: string) => {
+          await gate;
+          return quotaFor(directory, directory.endsWith('/default') ? 100 : 20);
+        });
+
+        const { start, agent } = startAgent('codex');
+        starting = agent.startSession({ providerId: 'openai', sessionId: 'task', model: 'gpt-6' } as StartSessionOptions);
+        void starting.catch(() => {});
+        await vi.waitFor(() => expect(h.usage).toHaveBeenCalledTimes(quotaReads + 2));
+        expect(start).not.toHaveBeenCalled();
+
+        releaseQuota();
+        await starting;
+        expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
+        expect(h.usage).toHaveBeenCalledTimes(quotaReads + 2);
+      } finally {
+        releaseQuota();
+        await starting?.then(handle => handle.close(), () => {});
+        clock.mockRestore();
+      }
+    });
+
     // Same decision: returning to Cindy refreshes the account views, and a message sent meanwhile
     // joins that read. The task starts on the login it read; the views still wait for its quota.
     it('starts on the login of a view read that is still fetching quota, without a second read', async () => {

@@ -2561,7 +2561,12 @@ export async function acquireSubscriptionAccount(
   // A task resumes only its own home. For fresh assignment each profile completes its own
   // auth + model discovery; one slow sibling must not put a barrier in front of healthy peers.
   const snapshots = new Map<string, AccountSnapshot>();
-  const pendingReads = new Set<Promise<void>>();
+  const pendingReads = new Set<Promise<unknown>>();
+  const trackRead = (read: Promise<unknown>) => {
+    if (pendingReads.has(read)) return;
+    pendingReads.add(read);
+    void read.finally(() => pendingReads.delete(read)).catch(() => {});
+  };
   // Diagnostics only: the slowest account (login) read and model read of this selection.
   const selectionStartedAt = performance.now();
   let accountReadMs = 0;
@@ -2597,9 +2602,7 @@ export async function acquireSubscriptionAccount(
     // accounts already tried this round are read for identity, never ranked.
     const ranked = reads.filter(account => !options.exclude?.has(account.id)).length > 1;
     for (const account of reads) {
-      const read = prepareAccount(account.id, ranked && !options.exclude?.has(account.id) ? 'recent' : 'known');
-      pendingReads.add(read);
-      void read.finally(() => pendingReads.delete(read)).catch(() => {});
+      trackRead(prepareAccount(account.id, ranked && !options.exclude?.has(account.id) ? 'recent' : 'known'));
     }
     // Fairness uses all ready profiles after the same window, never whichever CLI replies first.
     // Leave native timeouts and coalesced flights intact. With no admissible candidate we keep
@@ -2692,16 +2695,30 @@ export async function acquireSubscriptionAccount(
       : options.exclude;
     // A pinned account keeps running on credits. A new pick prefers ChatGPT accounts with plan quota
     // left and falls back to credits-only accounts only when none can take the task (2026-11-24).
+    const candidateOptions = { lastPicked: state.lastPicked.get(selectionProvider), exclude };
     let members = buildMembers(rebinding, pinned !== undefined);
-    let grouped = accountCandidates(state, provider, members, {
-      lastPicked: state.lastPicked.get(selectionProvider), exclude,
-    });
-    if (provider === 'openai' && !control && pinned === undefined && !planQuotaOnly && pendingReads.size === 0
+    let grouped = accountCandidates(state, provider, members, candidateOptions);
+    if (provider === 'openai' && !control && pinned === undefined
       && providerGroupSchedulingCandidates(grouped.candidates, grouped).length === 0) {
-      members = buildMembers(rebinding, true);
-      grouped = accountCandidates(state, provider, members, {
-        lastPicked: state.lastPicked.get(selectionProvider), exclude,
-      });
+      const creditMembers = buildMembers(rebinding, true);
+      const creditGroup = accountCandidates(state, provider, creditMembers, candidateOptions);
+      // Account preparation can finish before its quota flight when it used a recent snapshot.
+      // Join those flights before falling back to credits or giving up on a quota-only handoff.
+      // A completed refresh that opens a plan slot can win immediately on the next selection.
+      for (const candidate of creditGroup.candidates) {
+        if (!candidate.usable || candidate.paused || creditGroup.exclude.has(candidate.key)
+          || candidate.running >= candidate.limit) continue;
+        for (const id of accountProfilePeers(state, provider, candidate.id)) {
+          if (!creditMembers.some(member => member.id === id && member.usable && !member.paused)) continue;
+          const key = keyOf(provider, id);
+          const flight = state.flights.get(key);
+          if (flight && state.cache.get(key)?.quotaPending) trackRead(flight.promise);
+        }
+      }
+      if (!planQuotaOnly && pendingReads.size === 0) {
+        members = creditMembers;
+        grouped = creditGroup;
+      }
     }
     if (options.dryRun && options.reportScheduling) {
       // An explicitly weighted pool cannot predict its next random account without
