@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   CSSProperties,
   FocusEvent as ReactFocusEvent,
@@ -1004,7 +1004,6 @@ export function LoginConsentDialog({
   onDisagree,
   onOpenTerms,
   onOpenPrivacy,
-  zIndex,
 }: {
   title: string;
   body: string;
@@ -1014,14 +1013,10 @@ export function LoginConsentDialog({
   onDisagree: () => void;
   onOpenTerms: () => void;
   onOpenPrivacy: () => void;
-  /** 登录页之外复用时(主界面协议更新确认)需要盖过应用内所有浮层;不传沿用 z-50。 */
-  zIndex?: number;
 }) {
   const agreeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // layout effect:焦点与 inert 在绘制前就位。替换另一层遮挡(如协议状态加载中的透明遮挡层)时,
-  // 前一层的清理与这里的接管在同一次提交里完成,中间不会有按键落到被盖住的控件上。
-  useLayoutEffect(() => {
+  useEffect(() => {
     // 记录触发元素 → 打开聚焦「同意」→ 背景兄弟节点 inert(遮罩挡鼠标,
     // inert 挡键盘/读屏,与下方 Tab trap 构成完整模态)→ 关闭归还焦点(§14.2)
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1089,7 +1084,7 @@ export function LoginConsentDialog({
         if (event.target === event.currentTarget) event.currentTarget.focus();
       }}
       className="fixed inset-0 z-50 grid place-items-center outline-none"
-      style={{ background: LOGIN_COLORS.consentOverlay, ...(zIndex === undefined ? {} : { zIndex }) }}
+      style={{ background: LOGIN_COLORS.consentOverlay }}
       onKeyDown={handleKeyDown}
     >
       <div

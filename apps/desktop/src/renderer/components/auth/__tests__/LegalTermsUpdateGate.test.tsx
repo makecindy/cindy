@@ -32,7 +32,12 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
 
 import { isAppInteractionLocked } from '@/lib/appInteractionLock';
 
+import { useLegalTermsGateBlocking } from '../legalTermsGateState';
 import { LegalTermsUpdateGate } from '../LegalTermsUpdateGate';
+
+function GateBlockingProbe() {
+  return <span data-testid="gate-blocking">{String(useLegalTermsGateBlocking())}</span>;
+}
 import { LEGAL_LINKS } from '../../../../shared/legalLinks';
 
 function payload(legalTermsUpdateRequired: boolean) {
@@ -73,20 +78,20 @@ afterEach(() => {
 describe('LegalTermsUpdateGate', () => {
   it('blocks a signed-in user who agreed to the old terms until they agree', async () => {
     render(<LegalTermsUpdateGate />);
-    const dialog = await screen.findByTestId('login-consent-dialog');
+    const dialog = await screen.findByTestId('legal-terms-update-dialog');
     expect(dialog.textContent).toContain('legalTermsUpdate.title');
 
     fireEvent.click(screen.getByText('legalTermsUpdate.agree'));
     await act(async () => {});
 
     expect(electronAPI.acceptLegalTermsUpdate).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(screen.queryByTestId('legal-terms-update-dialog')).toBeNull();
     expect(auth.logout).not.toHaveBeenCalled();
   });
 
   it('logs out when the user does not agree', async () => {
     render(<LegalTermsUpdateGate />);
-    await screen.findByTestId('login-consent-dialog');
+    await screen.findByTestId('legal-terms-update-dialog');
 
     fireEvent.click(screen.getByText('legalTermsUpdate.disagree'));
     await act(async () => {});
@@ -97,7 +102,7 @@ describe('LegalTermsUpdateGate', () => {
 
   it('opens the updated terms in the browser', async () => {
     render(<LegalTermsUpdateGate />);
-    await screen.findByTestId('login-consent-dialog');
+    await screen.findByTestId('legal-terms-update-dialog');
 
     fireEvent.click(screen.getByText('服务条款'));
     expect(electronAPI.openExternal).toHaveBeenCalledWith(LEGAL_LINKS.termsOfService);
@@ -106,16 +111,16 @@ describe('LegalTermsUpdateGate', () => {
   // 另一个窗口里点了同意:设置广播到达后本窗口也收起。
   it('closes when another window records the agreement', async () => {
     render(<LegalTermsUpdateGate />);
-    await screen.findByTestId('login-consent-dialog');
+    await screen.findByTestId('legal-terms-update-dialog');
 
     act(() => broadcast?.(payload(false)));
-    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(screen.queryByTestId('legal-terms-update-dialog')).toBeNull();
   });
 
   // 弹窗只挡住鼠标与焦点不够:全局快捷键在 window 捕获阶段只看交互锁。
   it('holds the app interaction lock while open and releases it after agreeing', async () => {
     render(<LegalTermsUpdateGate />);
-    await screen.findByTestId('login-consent-dialog');
+    await screen.findByTestId('legal-terms-update-dialog');
     expect(isAppInteractionLocked()).toBe(true);
 
     fireEvent.click(screen.getByText('legalTermsUpdate.agree'));
@@ -130,7 +135,7 @@ describe('LegalTermsUpdateGate', () => {
     render(<LegalTermsUpdateGate />);
     await act(async () => {});
 
-    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(screen.queryByTestId('legal-terms-update-dialog')).toBeNull();
     expect(isAppInteractionLocked()).toBe(false);
   });
 
@@ -146,7 +151,7 @@ describe('LegalTermsUpdateGate', () => {
 
     await act(async () => resolve(payload(false)));
     expect(screen.queryByTestId('legal-terms-update-pending')).toBeNull();
-    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(screen.queryByTestId('legal-terms-update-dialog')).toBeNull();
     expect(isAppInteractionLocked()).toBe(false);
   });
 
@@ -162,12 +167,10 @@ describe('LegalTermsUpdateGate', () => {
     render(<LegalTermsUpdateGate />);
     expect(document.activeElement).not.toBe(input);
 
-    const focusDuringSwap: Array<Element | null> = [];
-    input.addEventListener('focus', () => focusDuringSwap.push(document.activeElement));
     await act(async () => resolve(payload(true)));
 
-    expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
-    expect(document.activeElement).toBe(screen.getByTestId('login-consent-agree'));
+    expect(screen.getByTestId('legal-terms-update-dialog')).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByTestId('legal-terms-update-agree'));
     expect(background.inert).toBe(true);
     background.remove();
   });
@@ -196,12 +199,36 @@ describe('LegalTermsUpdateGate', () => {
     expect(screen.queryByTestId('legal-terms-update-pending')).toBeNull();
   });
 
+  // 依据:更新说明等自动弹出的 Radix 弹窗会抢焦点却画在协议遮罩下面,协议确认期间必须暂缓。
+  it('tells other auto-opening dialogs to wait while the gate blocks, and releases them after agreeing', async () => {
+    render(
+      <>
+        <LegalTermsUpdateGate />
+        <GateBlockingProbe />
+      </>,
+    );
+    await screen.findByTestId('legal-terms-update-dialog');
+    expect(screen.getByTestId('gate-blocking').textContent).toBe('true');
+
+    fireEvent.click(screen.getByText('legalTermsUpdate.agree'));
+    await act(async () => {});
+    expect(screen.getByTestId('gate-blocking').textContent).toBe('false');
+  });
+
+  it('treats Escape as not agreeing', async () => {
+    render(<LegalTermsUpdateGate />);
+    const dialog = await screen.findByTestId('legal-terms-update-dialog');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await act(async () => {});
+    expect(auth.logout).toHaveBeenCalledTimes(1);
+  });
+
   it('never shows in local mode (skip login)', async () => {
     auth.mode = 'local';
     render(<LegalTermsUpdateGate />);
     await act(async () => {});
 
-    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(screen.queryByTestId('legal-terms-update-dialog')).toBeNull();
   });
 
   it('stays hidden for users already on the current terms', async () => {
@@ -209,6 +236,6 @@ describe('LegalTermsUpdateGate', () => {
     render(<LegalTermsUpdateGate />);
     await act(async () => {});
 
-    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(screen.queryByTestId('legal-terms-update-dialog')).toBeNull();
   });
 });

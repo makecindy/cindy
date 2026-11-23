@@ -8,7 +8,7 @@ import {
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
-import { LOGIN_COLORS } from '@/components/login/loginDesignTokens';
+import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
@@ -28,7 +28,8 @@ type LegalStatus = 'pending' | 'required' | 'clear';
  * 账号与协议状态都确定之前先用透明遮挡层接住输入(不显示内容,避免每次打开都闪一下):
  * 已恢复的终端 / 浏览器页签不能在判定完成前收到按键。查询失败或超时按「不需要」放行。
  *
- * 模态语义与 LoginConsentDialog 一致(DESIGN.md §14.2):焦点收进遮挡层、背景兄弟节点 inert,
+ * 外观用应用内共享的 `.modal-scrim` / `.modal-panel`(DESIGN.md §4);判定中的透明遮挡不显示内容。
+ * 模态语义与主窗口确认弹窗一致(DESIGN.md §14.2):焦点收进遮挡层、背景兄弟节点 inert,
  * Tab 不会落回被盖住的控件;解除后焦点归还。交互锁另外挡住全局快捷键。
  */
 export function DetachedLegalTermsUpdateBlocker() {
@@ -122,25 +123,15 @@ export function DetachedLegalTermsUpdateBlocker() {
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) event.currentTarget.focus();
       }}
-      className="fixed inset-0 grid place-items-center p-6 outline-none"
-      style={{
-        background: open ? LOGIN_COLORS.consentOverlay : 'transparent',
-        zIndex: Z_INDEX_LAYERS['blocking-gate'],
-      }}
+      className={cn('fixed inset-0 grid place-items-center p-4 outline-none', open && 'modal-scrim')}
+      style={{ zIndex: Z_INDEX_LAYERS['blocking-gate'] }}
     >
       {open && (
-        <div
-          className="w-full max-w-[340px] rounded-xl px-5 py-5 text-center"
-          style={{ background: LOGIN_COLORS.panelBg, boxShadow: `inset 0 0 0 1px ${LOGIN_COLORS.panelBorder}` }}
-        >
-          <p id="detached-legal-terms-title" className="text-16 font-semibold" style={{ color: LOGIN_COLORS.titleText }}>
+        <div className="modal-panel w-full max-w-[400px] p-4">
+          <h2 id="detached-legal-terms-title" className="text-lg font-medium text-[var(--confirm-title)]">
             {t('legalTermsUpdate.title')}
-          </p>
-          <p
-            id="detached-legal-terms-body"
-            className="mt-2 text-13 leading-[1.54]"
-            style={{ color: LOGIN_COLORS.secondaryText }}
-          >
+          </h2>
+          <p id="detached-legal-terms-body" className="mt-2 text-base text-[var(--confirm-desc)]">
             {t('legalTermsUpdate.detachedBody')}
           </p>
         </div>

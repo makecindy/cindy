@@ -41,6 +41,7 @@ import { WindowControls } from '@/components/title-bar/WindowControls';
 import { UpdateNoticeDialog } from '@/components/UpdateNoticeDialog';
 import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictDialogHost';
 import { LegalTermsUpdateGate } from '@/components/auth/LegalTermsUpdateGate';
+import { useLegalTermsGateBlocking } from '@/components/auth/legalTermsGateState';
 import { StartupRecoveryDialogs } from '@/components/log-support/StartupRecoveryDialogs';
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
@@ -480,6 +481,8 @@ export function MainLayout() {
     onOpen: openNotice,
     onOpenVersion: openVersionNotice,
   } = useUpdateNotice();
+  // 协议更新确认挡着时,更新说明与启动恢复提示先不弹:它们会抢焦点却画在协议遮罩下面。
+  const legalTermsGateBlocking = useLegalTermsGateBlocking();
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation();
@@ -2099,7 +2102,7 @@ export function MainLayout() {
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (
         <UpdateNoticeDialog
-          open={noticeOpen}
+          open={noticeOpen && !legalTermsGateBlocking}
           mode={noticeMode}
           releaseNotes={releaseNotes}
           allVersions={noticeAllVersions}
@@ -2109,7 +2112,7 @@ export function MainLayout() {
       )}
       {/* 重启提示按更新说明、中断任务恢复、意外退出诊断的顺序出现。 */}
       {!isSecondaryWindow() && (
-        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen)} />
+        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen) || legalTermsGateBlocking} />
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
