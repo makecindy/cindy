@@ -41,6 +41,7 @@ vi.mock('../../maker-host/provider-order-store.js', () => ({
 vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
   readAuxiliaryModelSettings: vi.fn(),
   readAuxiliaryModelSettingsState: vi.fn(),
+  onAuxiliaryModelSettingsRead: vi.fn(),
   writeAuxiliaryModelSettingsPatch: vi.fn(),
 }));
 

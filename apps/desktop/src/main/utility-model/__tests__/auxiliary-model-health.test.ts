@@ -7,6 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * - 现有覆盖缺口：one-shot 请求测试覆盖单次 HTTP 失败，但没有覆盖跨请求窗口。
  * - 最小失败输入与 tier：同一模型三次 request_failed 触发提醒，五次才隔离，unit。
  */
+vi.mock('../resolveAuxiliaryModelChain.js', () => ({
+  getEffectiveAuxiliaryModelChain: () => ({ source: 'auto', refs: [] }),
+}));
+
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => 'test',
   isAppSessionBoundaryPending: () => false,

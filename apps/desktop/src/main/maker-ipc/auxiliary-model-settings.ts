@@ -51,7 +51,7 @@ import { captureAuxiliaryRoutes, requestUtilityText } from '../utility-model/one
 import { parseAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
 import type { AuxiliaryModelSettingsTestResult } from '../../shared/auxiliaryModelSettings.js';
 import { getEffectiveAuxiliaryModelChain } from '../utility-model/resolveAuxiliaryModelChain.js';
-import { dismissAuxiliaryModelNotice, getAuxiliaryModelHealthSnapshot, recoverTestedAuxiliaryRoutes, retainAuxiliaryModelRoutes } from '../utility-model/auxiliary-model-health.js';
+import { dismissAuxiliaryModelNotice, getAuxiliaryModelHealthSnapshot, observeAuxiliarySettingsReads, recoverTestedAuxiliaryRoutes, retainAuxiliaryModelRoutes } from '../utility-model/auxiliary-model-health.js';
 
 const log = createLogger('maker-ipc/auxiliary-model-settings');
 
@@ -294,12 +294,13 @@ export async function saveAuxiliaryModelSettings(
     if (effective.source === 'custom' && JSON.stringify(effective.refs) === JSON.stringify(models)) {
       recoverTestedAuxiliaryRoutes(models);
     }
-    retainAuxiliaryModelRoutes(effective);
+    retainAuxiliaryModelRoutes(effective, true);
   }
   return { ok: true, tested: models };
 }
 
 export function registerAuxiliaryModelSettingsIpc(): void {
+  observeAuxiliarySettingsReads();
   registerAuxiliaryModelHealthIpc();
   ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_HEALTH_DISMISS, (event, sessionId: unknown, noticeId: unknown) => {
     assertTrustedAppRendererEvent(event);

@@ -204,7 +204,7 @@ export interface OneShotCandidatesPorts {
   getUtilityModelChainProfiles: typeof import('./UtilityModelSelection.js').getUtilityModelChainProfiles;
   getEffectiveAuxiliaryModelChain: typeof import('./resolveAuxiliaryModelChain.js').getEffectiveAuxiliaryModelChain;
   isAuxiliaryModelTemporarilyUnavailable?: (providerId: string, model: string, auxiliaryRef?: string, onClaim?: (release: () => void) => void) => boolean;
-  captureAuxiliaryHealthObserver?: () => (result: UtilityTextResult, options: { sessionId?: string; operation?: AuxiliaryNoticeOperation; routeGuards?: ReadonlyMap<string, () => boolean> }) => void;
+  captureAuxiliaryHealthObserver?: (chain?: ReturnType<typeof import('./resolveAuxiliaryModelChain.js').getEffectiveAuxiliaryModelChain>) => (result: UtilityTextResult, options: { sessionId?: string; operation?: AuxiliaryNoticeOperation; routeGuards?: ReadonlyMap<string, () => boolean> }) => void;
   /**
    * Result of each auxiliary-chain request, for the user-facing health notice.
    * Desktop only: the Node Host has no surface to show it and leaves it unset.
@@ -554,15 +554,16 @@ async function requestUtilityText(
     return { ok: false, reason: 'no_candidate', attempts: [] };
   }
 
-  const observe = ports.captureAuxiliaryHealthObserver?.();
-  const chain = observe && !opts?.bypassAuxiliaryModelHealth && !opts?.pinnedProfileId
+  const chain = ports.captureAuxiliaryHealthObserver && !opts?.bypassAuxiliaryModelHealth && !opts?.pinnedProfileId
     ? getEffectiveAuxiliaryModelChain() : null;
+  const observe = opts?.bypassAuxiliaryModelHealth ? undefined : ports.captureAuxiliaryHealthObserver?.(chain ?? undefined);
   const chainBefore = chain && stableSnapshot(chain);
   const routeGuards = chain ? new Map(chain.refs.map(ref => [ref, captureAuxiliaryRoutes([ref])])) : undefined;
   const claims: (() => void)[] = [];
   try {
-    const result = await requestDefaultUtilityText(maker, prompt, opts, release => claims.push(release));
-    if (chainBefore === null || chainBefore === stableSnapshot(getEffectiveAuxiliaryModelChain())) {
+    let cancelled = false;
+    const result = await requestDefaultUtilityText(maker, prompt, opts, release => claims.push(release), () => { cancelled = true; });
+    if (!cancelled && (chainBefore === null || chainBefore === stableSnapshot(getEffectiveAuxiliaryModelChain()))) {
       if (observe && !opts?.bypassAuxiliaryModelHealth && !opts?.signal?.aborted && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner) {
         try {
           observe(result, {
@@ -945,6 +946,7 @@ async function requestDefaultUtilityText(
   prompt: string,
   opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
   onClaim?: (release: () => void) => void,
+  onCancelled?: () => void,
 ): Promise<UtilityTextResult> {
   // Default-chain resolution and credential discovery can both await. Capture
   // the owner before either starts so callers that do not provide their own
@@ -967,9 +969,10 @@ async function requestDefaultUtilityText(
   const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
     ...opts,
     beforeDispatch: async (route) => {
-      if (callerCancelled || !requestSnapshotStillCurrent()) return false;
+      if (callerCancelled || opts?.signal?.aborted || !requestSnapshotStillCurrent()) return false;
       if (callerBeforeDispatch && !(await callerBeforeDispatch(route))) {
         callerCancelled = true;
+        onCancelled?.();
         return false;
       }
       // The caller guard may await account/database state. Re-check the

@@ -1,4 +1,5 @@
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { onAuxiliaryModelSettingsRead } from './auxiliary-model-settings-store.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 import { trustedHttpError } from './auxiliaryUpstreamError.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
@@ -32,6 +33,7 @@ let nextNoticeId = 0;
 let scope: string;
 let errorRevision = 0;
 let conversationGeneration = 0;
+let effectiveChainKey: string | undefined;
 let requestSequence = 0;
 const lastCompletedRequest = new Map<string, number>();
 let broadcast: ((channel: string, event: AuxiliaryModelHealthEvent) => void) | undefined;
@@ -47,6 +49,7 @@ function scopedRoutes() {
     conversations.clear();
     dismissedSessions.clear();
     lastCompletedRequest.clear();
+    effectiveChainKey = undefined;
     scope = current;
   }
   return routes;
@@ -94,7 +97,7 @@ function observe(providerId: string, model: string, failure: UtilityTextAttempt 
   const route: Route = existing ?? { outcomes: [], retryAt: 0, lastNoticeAt: -Infinity };
   if (stillCurrent) route.stillCurrent = stillCurrent;
   state.set(id, route);
-  if (failure?.status !== 'skipped') {
+  if (failure?.status !== 'skipped' || transientPreparationFailure(failure)) {
     route.outcomes.push(!failure);
     if (route.outcomes.length > 10) route.outcomes.shift();
   }
@@ -205,17 +208,23 @@ function updateConversation(sessionId: string | undefined, result: UtilityTextRe
   });
 }
 
+function transientPreparationFailure(attempt: UtilityTextAttempt) {
+  return attempt.reason === 'auth_probe_failed' || attempt.reason === 'agent_unavailable';
+}
+
 function preflightFailure(attempt: UtilityTextAttempt) {
   return attempt.status === 'skipped' && !attempt.paused &&
-    ['not_authenticated', 'api_key_missing', 'endpoint_missing', 'model_unavailable', 'unsupported_transport'].includes(attempt.reason);
+    (transientPreparationFailure(attempt) || ['not_authenticated', 'api_key_missing', 'endpoint_missing', 'model_unavailable', 'unsupported_transport'].includes(attempt.reason));
 }
 
 /** Ignore a previous custom chain's conversation attribution even if the same pins are saved again. */
-export function captureAuxiliaryHealthObserver(): typeof recordAuxiliaryModelResult {
+export function captureAuxiliaryHealthObserver(chain = getEffectiveAuxiliaryModelChain()): typeof recordAuxiliaryModelResult {
+  retainAuxiliaryModelRoutes(chain);
   const generation = conversationGeneration;
   const sequence = ++requestSequence;
   return (result, options) => {
-    if (generation !== conversationGeneration || isAppSessionBoundaryPending() || options?.bypassHealth) return;
+    if (isAppSessionBoundaryPending() || options?.bypassHealth) return;
+    if (generation !== conversationGeneration) return;
     const sessionId = options?.sessionId;
     if (sessionId) {
       scopedRoutes();
@@ -262,12 +271,22 @@ export function recoverTestedAuxiliaryRoutes(refs: readonly string[]): void {
   }
 }
 
+/** Connect all Desktop reads (including settings opened without a dispatch) to the same lifecycle. */
+export function observeAuxiliarySettingsReads(): void {
+  onAuxiliaryModelSettingsRead(models => retainAuxiliaryModelRoutes(getEffectiveAuxiliaryModelChain(models)));
+}
+
 /** Remove obsolete alerts as soon as the replacement chain becomes effective. */
-export function retainAuxiliaryModelRoutes(chain: ReturnType<typeof getEffectiveAuxiliaryModelChain>): void {
+export function retainAuxiliaryModelRoutes(chain: ReturnType<typeof getEffectiveAuxiliaryModelChain>, saved = false): void {
+  const state = scopedRoutes();
+  const identity = JSON.stringify([chain.source, chain.refs]);
+  const previous = effectiveChainKey;
+  effectiveChainKey = identity;
+  if (!saved && (previous === undefined || previous === identity)) return;
   // Even A → B → A may finish while an old dispatch is still in flight.
   conversationGeneration++;
   dismissedSessions.clear();
-  const state = scopedRoutes();
+  lastCompletedRequest.clear();
   for (const sessionId of conversations.keys()) clearConversation(sessionId);
   for (const [id, route] of state) {
     if (chain.refs.includes(id)) {
@@ -285,9 +304,10 @@ export function retainAuxiliaryModelRoutes(chain: ReturnType<typeof getEffective
 
 export function getAuxiliaryModelHealthSnapshot(sessionId?: string): AuxiliaryModelHealthSnapshot[] {
   if (isAppSessionBoundaryPending()) return [];
+  const chain = getEffectiveAuxiliaryModelChain();
+  retainAuxiliaryModelRoutes(chain);
   const state = scopedRoutes();
   if (sessionId !== undefined) {
-    const chain = getEffectiveAuxiliaryModelChain();
     if (chain.source !== 'custom') return [];
     const conversation = conversations.get(sessionId);
     if (!conversation) return [];
@@ -307,4 +327,4 @@ export function getAuxiliaryModelHealthSnapshot(sessionId?: string): AuxiliaryMo
     .sort((a, b) => b.lastErrorAt - a.lastErrorAt);
 }
 
-export const __testing = { reset: () => { routes.clear(); conversations.clear(); dismissedSessions.clear(); } };
+export const __testing = { reset: () => { routes.clear(); conversations.clear(); dismissedSessions.clear(); effectiveChainKey = undefined; } };

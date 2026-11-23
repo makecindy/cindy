@@ -25,6 +25,8 @@ vi.mock('electron', () => ({
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(h.dir, 'owner', ...parts),
   activeOwnerScopeKey: () => 'test-owner',
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'test-owner', ownerGeneration: 0 }),
+  isAppSessionBoundaryPending: () => false,
   getActiveAppSession: () => ({
     mode: h.mode,
     dataOwnerId: h.ownerId,
@@ -50,6 +52,10 @@ import {
   writeAuxiliaryModelSettingsPatch,
   __testing,
 } from '../auxiliary-model-settings-store.js';
+
+import {
+  captureAuxiliaryHealthObserver, getAuxiliaryModelHealthSnapshot, dismissAuxiliaryModelNotice, observeAuxiliarySettingsReads,
+} from '../auxiliary-model-health.js';
 
 const TITLE_PIN = 'cat:openai:codex:gpt-5.4-mini';
 const PROMPT_PIN = 'cat:xd:claude-code:kimi-k2.5';
@@ -108,6 +114,47 @@ describe('auxiliary-model-settings-store', () => {
     expect(readAuxiliaryModelSettings()).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
     expect(isAuxiliaryModelCustomized()).toBe(true);
     expect(readJson(settingsPath())).toEqual({ models: [TITLE_PIN, PROMPT_PIN] });
+  });
+
+  // File integration, PR #12303: external edits bypass the save IPC. Reads of
+  // the same list keep a dismissal; a reordered or restored chain starts anew.
+  it('tracks the observed effective file across dismissals and late completions', () => {
+    observeAuxiliarySettingsReads();
+    const models = [TITLE_PIN, PROMPT_PIN];
+    const fail = (observer = captureAuxiliaryHealthObserver()) => observer({
+      ok: false, reason: 'all_candidates_failed', attempts: models.map(ref => ({
+        providerId: 'fixture', model: 'fixture', auxiliaryRef: ref, transport: 'codex-responses',
+        status: 'failed', reason: 'http_error', httpStatus: 403,
+      })),
+    }, { sessionId: 'chat' });
+    writeJson(settingsPath(), { models });
+    fail();
+    const old = getAuxiliaryModelHealthSnapshot('chat')[0].noticeId!;
+    dismissAuxiliaryModelNotice('chat', old);
+    writeJson(settingsPath(), { models, unused: 1 });
+    fail();
+    expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+    const late = captureAuxiliaryHealthObserver();
+    writeJson(settingsPath(), { models: [...models].reverse() });
+    expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+    fail();
+    dismissAuxiliaryModelNotice('chat', old);
+    const changed = getAuxiliaryModelHealthSnapshot('chat');
+    expect(changed).toHaveLength(2);
+    expect(changed[0].noticeId).not.toBe(old);
+    const lateFromChanged = captureAuxiliaryHealthObserver();
+    writeJson(settingsPath(), { models: [] });
+    expect(readAuxiliaryModelSettingsState().value.models).toEqual([]);
+    writeJson(settingsPath(), { models: [...models].reverse() });
+    expect(readAuxiliaryModelSettings().models).toEqual([...models].reverse());
+    fail(lateFromChanged);
+    expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+    writeJson(settingsPath(), { models });
+    expect(readAuxiliaryModelSettings().models).toEqual(models);
+    fail(late);
+    expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+    fail();
+    expect(getAuxiliaryModelHealthSnapshot('chat')).toHaveLength(2);
   });
 
   it('deletes the override file when restoring the empty automatic list', async () => {

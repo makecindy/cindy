@@ -500,6 +500,58 @@ describe('utility one-shot candidates', () => {
       expect(getAuxiliaryModelHealthSnapshot('A')[0].noticeId).not.toBe(incident);
     });
 
+    // Unit, PR #12303: an attempted readiness check can fail before HTTP.
+    // Count each real check exactly once and never probe an isolated route early.
+    it.each(['agent_unavailable', 'auth_probe_failed'] as const)('debounces a failed %s preparation before rechecking the route', async reason => {
+      vi.useFakeTimers();
+      chainState.refs = ['codex-gpt-5.4-mini'];
+      const maker = makerMock(true);
+      const available = vi.spyOn(maker, 'listAvailableAgents');
+      const auth = vi.mocked(maker.getAgentAuthState);
+      if (reason === 'agent_unavailable') available.mockReturnValue([]);
+      else auth.mockRejectedValue(new Error('fixture'));
+      const run = () => requestUtilityText(maker, 'Title', { source: 'title', sessionId: 'chat' });
+      for (let n = 1; n <= 5; n++) {
+        expect((await run()).ok).toBe(false);
+        expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ reason, failureCount: n, attemptCount: n });
+        expect(getAuxiliaryModelHealthSnapshot('chat').map(row => row.status)).toEqual(n < 3 ? [] : [n === 5 ? 'isolated' : 'warning']);
+      }
+      await run();
+      expect(available).toHaveBeenCalledTimes(5);
+      expect(auth).toHaveBeenCalledTimes(reason === 'agent_unavailable' ? 0 : 5);
+      vi.advanceTimersByTime(60_001);
+      available.mockReturnValue(['codex']);
+      auth.mockResolvedValue({ authenticated: true });
+      expect((await run()).ok).toBe(true);
+      expect(getAuxiliaryModelHealthSnapshot('chat')[0].status).toBe('recovered');
+    });
+
+    it.each(['auto', 'custom'] as const)('keeps %s fallback success silent when the preferred auth probe fails', async source => {
+      chainState.source = source;
+      chainState.refs = ['codex-gpt-5.4-mini', chainState.refs[1]];
+      const maker = makerMock(true);
+      vi.mocked(maker.getAgentAuthState).mockRejectedValue(new Error('fixture'));
+      fetchMock.mockResolvedValue(response('Backup title'));
+      for (let i = 0; i < 6; i++) {
+        expect(await requestUtilityText(maker, 'Title', { source: 'title', sessionId: 'chat' })).toMatchObject({ ok: true });
+      }
+      expect(maker.getAgentAuthState).toHaveBeenCalledTimes(5);
+      expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ status: 'isolated', failureCount: 5, attemptCount: 5 });
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+    });
+
+    it('discards a failed preparation if its caller cancels before the backup', async () => {
+      chainState.refs.unshift('codex-gpt-5.4-mini');
+      const maker = makerMock(true);
+      vi.mocked(maker.getAgentAuthState).mockRejectedValue(new Error('fixture'));
+      await requestUtilityText(maker, 'Title', {
+        source: 'title', sessionId: 'chat',
+        beforeDispatch: async route => route.providerId === 'openai',
+      });
+      expect(maker.getAgentAuthState).toHaveBeenCalledOnce();
+      expect(getAuxiliaryModelHealthSnapshot()).toEqual([]);
+    });
+
     it('requires evidence from every saved route including unavailable credentials, and ignores cancellation', async () => {
       readCustomKey.mockImplementation(id => id === 'review-a' ? null : 'review-b-secret');
       const run = (signal?: AbortSignal) => requestUtilityText(makerMock(true), 'Title', { source: 'title', sessionId: 'chat', signal });
