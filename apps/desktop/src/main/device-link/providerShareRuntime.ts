@@ -60,6 +60,7 @@ import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { getPluginHarnessRegistry, requestPluginHarnessRefresh } from '../cindy-brain/pluginHarnesses.js';
 import { onPluginHarnessModelsChanged } from '../maker-host/acp-host.js';
 import { isPluginEngineOfferedToGuests } from '../maker-host/pluginEngineRemoteUse.js';
+import { onPluginEnginePrefsChanged } from '../maker-host/plugin-engine-prefs-store.js';
 import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
 import { providerShareVisibility } from './providerShareVisibility.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
@@ -75,7 +76,6 @@ import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getGatewayModelPricing, getModelPriceQuote } from '../usage/modelPricing.js';
 import {
   getReferenceModelPricing,
@@ -405,6 +405,9 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   });
   const stopPluginRegistry = getPluginHarnessRegistry().onChange(() => syncSharedPluginCatalogs());
   const stopPluginModels = onPluginHarnessModelsChanged(() => syncSharedPluginCatalogs());
+  // The owner renamed or turned off a shared engine (or some of its models) in Settings → Model providers:
+  // friends it is shared with read its list again. Plugin engine shares have no cloud standby to publish.
+  const stopPluginSettings = onPluginEnginePrefsChanged(() => syncSharedPluginCatalogs());
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
   const timer = setInterval(queueAvailabilityPublish, 60_000);
   timer.unref?.();
@@ -414,7 +417,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
     availabilityPublisherEpoch += 1;
     availabilityPublishPending = false;
     pluginCatalogSnapshots.clear();
-    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopPluginRegistry(); stopPluginModels(); stopSettings();
+    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopPluginRegistry(); stopPluginModels(); stopPluginSettings(); stopSettings();
   };
 
   // 启动仲裁可能早于 IPC 注册；必须在 host 的第一轮快照前配置持久归属。
@@ -709,7 +712,7 @@ function perTurnAverageMoney(row: ProviderShareUsageEstimateRow, price: ModelPri
     outputTokens: row.outputTokens / turns,
     cacheReadTokens: row.cacheReadTokens / turns,
     cacheCreateTokens: row.cacheCreateTokens / turns,
-  }, price, currentLedgerCurrency());
+  }, price);
   return money && { amount: money.amount * turns, currency: money.currency };
 }
 

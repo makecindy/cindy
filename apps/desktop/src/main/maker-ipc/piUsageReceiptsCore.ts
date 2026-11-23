@@ -11,7 +11,7 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../device-link/broadcast-tap.js';
 import { rebroadcastTodaySpend } from './turnUsagePorts.js';
 import { broadcastSessionSpend, broadcastSessionTokens } from './turnUsagePorts.js';
-import { addRegionalMoney, legacyUsdMoney, normalizeRegionalMoney } from '../../shared/regionalMoney.js';
+import { sessionSpendAmounts, normalizeRegionalMoney } from '../../shared/regionalMoney.js';
 import { createLogger } from '../logger.js';
 import { tokenAttribution, piModelBilling, type TurnUsageContext } from './turnUsageContextCore.js';
 import type { Session } from '@cindy/maker-core';
@@ -125,15 +125,14 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
     : receipts.some(r => r.route === 'xd-gateway') ? await getGatewayModelPricingForModel() : null;
   if (!mayRecordTurnUsage() || (recovery && !recovery.current())) return;
   // DB/pricing awaits may have allowed this account's currency to recover.
-  // Keep token facts, but never finalize money using an unknown USD fallback.
+  // Only Gateway settlement depends on account recovery. Other quotes carry their own currency.
   // Token admission and priced settlement are separate SQLite transactions.
   // A reopened connection for this same account may now be the live writer.
   if (owner.account?.()) owner = { ...owner, db: getDbClient(), scope: captureDataOwnerBroadcastScope() };
   const currency = confirmedOwnerCurrency(owner);
-  if (!currency) return;
   const referencePricing = getReferenceModelPricing();
   const piOpaqueModelIds = context.opaqueModelIdsByAgent?.pi;
-  const priced = receipts.filter(r => r.needsPricing).map(({ row, segment, model, route, subscription, unpriced }) => {
+  const priced = receipts.filter(r => r.needsPricing && (r.route !== 'xd-gateway' || currency)).map(({ row, segment, model, route, subscription, unpriced }) => {
     const pricing = route === 'xd-gateway' ? gatewayPricing : referencePricing;
     const segments = unpriced ? [] : [{ ...segment,
       priceVariant: segment.priceVariant ?? (segment.id?.startsWith('pi:') && context.piFastMode ? 'priority' : 'standard'),
@@ -152,7 +151,7 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
     const money = subscription
       ? computePriceQuoteTurnMoney(row,
         (context.providerId ? getCodexProviderSubscriptionValuePrice(context.providerId, model, pricing, undefined, undefined, 'pi') : undefined)
-          ?? getSubscriptionValuePriceFor('pi', model, pricing), currency, segments)
+          ?? getSubscriptionValuePriceFor('pi', model, pricing), segments)
       : resolveTurnCost({ rawModel: model, agent: 'pi', tokens: row,
         sdkCostDelta: route === 'provider-api' || unpriced ? undefined : segment.costUsd,
         pricing, context: { providerId: context.providerId, billingRoute: route,
@@ -173,7 +172,7 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
     const ledgerMoney = money?.kind === 'actual-cost' || subscription ? money : null;
     // A resolved message-only estimate is final without ledger spend. Only a
     // missing quote stays pending for replay after the catalog becomes available.
-    return { ...row, amount: ledgerMoney?.amount ?? (money ? 0 : null), currency: ledgerMoney?.currency ?? currency,
+    return { ...row, amount: ledgerMoney?.amount ?? (money ? 0 : null), currency: ledgerMoney?.currency ?? row.currency,
       approximate: ledgerMoney?.approximate ?? subscription, actualCost: ledgerMoney?.kind === 'actual-cost' };
   });
   if (!priced.some(row => row.amount !== null)) return;
@@ -188,18 +187,13 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
 async function broadcastPersistedPiSpend(owner: PiUsageOwner, sessionId: string): Promise<void> {
   const { db, scope } = owner;
   if (isDataOwnerBroadcastScopeCurrent(scope)) {
-    const row = await db.queryOne<{ legacy: number; amount: number; currency: string | null; approximate: number }>(
-      `SELECT total_cost_usd AS legacy, total_cost_amount AS amount, total_cost_currency AS currency,
+    const row = await db.queryOne<{ legacy: number; usdApproximate: number; amount: number; currency: string | null; approximate: number }>(
+      `SELECT total_cost_usd AS legacy, total_cost_usd_is_approximate AS usdApproximate, total_cost_amount AS amount, total_cost_currency AS currency,
         total_cost_is_approximate AS approximate FROM sessions WHERE id = ?`, [sessionId]);
     if (row) {
-      const legacy = legacyUsdMoney(row.legacy ?? 0);
       const current = normalizeRegionalMoney({ amount: row.amount, currency: row.currency ?? owner.currency ?? LEDGER_CURRENCY_FALLBACK,
         approximate: Boolean(row.approximate), kind: 'actual-cost' });
-      const totalMoney = current
-        ? legacy.currency === current.currency ? addRegionalMoney([legacy, current]) : current
-        : legacy;
-      broadcastSessionSpend({ sessionId, totalMoney,
-        ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}) }, scope);
+      broadcastSessionSpend({sessionId, ...sessionSpendAmounts(row.legacy ?? 0, current, Boolean(row.usdApproximate))}, scope);
     }
   }
 }

@@ -450,7 +450,7 @@ function PluginSetupPromptStateful({
           }
           onClick={submitCurrentAction}
         >
-          <span className="flex items-center gap-[7px]">
+          <span className="flex items-center gap-1.5">
             {busy ? (
               <span className="inline-flex animate-spin motion-reduce:animate-none">
                 <LoaderCircle aria-hidden="true" size={14} />

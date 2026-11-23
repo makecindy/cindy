@@ -41,7 +41,8 @@ import {
   type LinkAcceptPayload,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import { ServerApiError } from '../serverApiClient.desktop';
+import { ServerApiError, serverApiFetch } from '../serverApiClient.desktop';
+import { getClientEndpoint } from '../clientEndpointsService.js';
 import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import {
   __resetDirectoryThrottleForTests,
@@ -60,6 +61,7 @@ import {
   DEVICE_LINK_INVOKE,
   DEVICE_LINK_PUSH,
   type DeviceLinkDeviceView,
+  type DeviceLinkPeerPathPreference,
   type DeviceLinkState,
   type DeviceLinkPeerLinksSnapshot,
 } from '../../shared/deviceLinkIpc';
@@ -131,7 +133,9 @@ import {
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
+  setPeerPathPreference,
 } from './settings-store.desktop';
+import { setAgentNetPeerPathPreference } from './agentNetRuntime.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
 
@@ -187,6 +191,8 @@ export interface DeviceLinkIpcDeps {
   getState(): DeviceLinkState;
   /** 远程连接拓扑:本机链路快照(只读) */
   getPeerLinks(): DeviceLinkPeerLinksSnapshot;
+  /** 远程连接拓扑:持久化并立即应用单台设备的 Agent-Net 选路偏好 */
+  setPeerPathPreference?(deviceId: string, preference: DeviceLinkPeerPathPreference): Promise<void>;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   /** `signal` 是调用方的期限信号:目录读用它把「fetch + 刷新等待 + 重试」一起框住。 */
@@ -257,6 +263,10 @@ export function defaultDeps(): DeviceLinkIpcDeps {
       };
     },
     getPeerLinks: () => getDeviceLinkPeerLinks(true),
+    setPeerPathPreference: async (deviceId: string, preference: DeviceLinkPeerPathPreference) => {
+      await setPeerPathPreference(deviceId, preference);
+      setAgentNetPeerPathPreference(deviceId, preference);
+    },
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
@@ -362,6 +372,19 @@ function rethrowServerError(err: unknown): never {
 /** 远程连接拓扑快照:纯转发,门禁在注册处(trusted renderer + 账号能力)。 */
 export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinksSnapshot {
   return deps.getPeerLinks();
+}
+
+export async function handleSetPeerPathPreference(
+  deps: DeviceLinkIpcDeps,
+  deviceId: unknown,
+  preference: unknown,
+): Promise<{ deviceId: string; preference: DeviceLinkPeerPathPreference }> {
+  const id = requireString(deviceId, 'deviceId');
+  if (preference !== 'auto' && preference !== 'direct' && preference !== 'relay') {
+    throwIpcError('INVALID_PARAMS', 'preference must be auto, direct, or relay');
+  }
+  await deps.setPeerPathPreference?.(id, preference);
+  return { deviceId: id, preference };
 }
 
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
@@ -1975,6 +1998,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown; enabled?: unknown };
     return handleSetDeviceControlEnabled(deps, p.deviceId, p.enabled);
   });
+  ipcMain.handle(DEVICE_LINK_INVOKE.CLOUD_COMPUTER_ENTRY, async event => {
+    assertTrustedAppRendererEvent(event);
+    return serverApiFetch<unknown>('/api/model-access/personal/cloud-computer/entry', {
+      baseUrl:() => getClientEndpoint('modelAccessApiBaseUrl'), cache:'no-store',
+      timeoutMs:5000, redactErrorDetails:true, expectedErrors:[{status:403},{status:404}],
+    });
+  });
   ipcMain.handle(
     DEVICE_LINK_INVOKE.LIST_DEVICES,
     gated(() => handleListDevices(deps)),
@@ -1983,6 +2013,12 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     // 新增的特权只读(本账号设备的链路拓扑):先拒外来 frame,再看账号能力。
     assertTrustedAppRendererEvent(e);
     return gated(() => handleGetPeerLinks(deps))();
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_PEER_PATH_PREFERENCE, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; preference?: unknown };
+    return handleSetPeerPathPreference(deps, p.deviceId, p.preference);
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();

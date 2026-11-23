@@ -3549,8 +3549,10 @@
       "z-dropdown": "semantic.foundations.z-dropdown",
       "z-tooltip": "semantic.foundations.z-tooltip",
       "z-modal-popover-nested": "semantic.foundations.z-modal-popover-nested",
+      "z-modal-blocking": "semantic.foundations.z-modal-blocking",
       "z-toast": "semantic.foundations.z-toast",
-      "z-toast-top": "semantic.foundations.z-toast-top"
+      "z-toast-top": "semantic.foundations.z-toast-top",
+      "z-blocking-gate": "semantic.foundations.z-blocking-gate"
     },
     "numeric": {
       "10": "semantic.foundations.text-10",
@@ -3668,8 +3670,10 @@
       "dropdown": "semantic.foundations.z-dropdown",
       "tooltip": "semantic.foundations.z-tooltip",
       "modal-popover-nested": "semantic.foundations.z-modal-popover-nested",
+      "modal-blocking": "semantic.foundations.z-modal-blocking",
       "toast": "semantic.foundations.z-toast",
-      "toast-top": "semantic.foundations.z-toast-top"
+      "toast-top": "semantic.foundations.z-toast-top",
+      "blocking-gate": "semantic.foundations.z-blocking-gate"
     }
   },
   "documentation": {

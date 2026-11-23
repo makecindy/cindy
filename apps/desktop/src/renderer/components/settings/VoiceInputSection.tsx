@@ -1,3 +1,4 @@
+import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
 import { voiceInputSettings } from './VoiceInputSection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
@@ -1039,20 +1040,19 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
 
   const requestPermission = useCallback(async (kind: VoiceInputPermissionKind) => {
     try {
-      if (kind === 'microphone') {
-        if (permissions.microphone.ok) {
-          await window.electronAPI.voiceInput.openMicrophoneSettings();
-        } else {
-          const result = await requestRendererMicrophonePermission();
-          if (!result.ok) {
-            await window.electronAPI.voiceInput.openMicrophoneSettings();
-          }
+      if (kind === 'microphone' && !permissions.microphone.ok) {
+        const result = await requestRendererMicrophonePermission();
+        if (result.ok) return;
+        if (result.status === 'device-unavailable') {
+          toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+          return;
         }
-      } else if (kind === 'inputMonitoring') {
-        await window.electronAPI.voiceInput.openInputMonitoringSettings();
-      } else {
-        await window.electronAPI.voiceInput.openAccessibilitySettings();
       }
+      const voice = window.electronAPI.voiceInput;
+      const opened = kind === 'microphone' ? await voice.openMicrophoneSettings()
+        : kind === 'inputMonitoring' ? await voice.openInputMonitoringSettings()
+        : await voice.openAccessibilitySettings();
+      if (!opened.ok) toast.error(t('settings.voiceInput.permissions.openFailed'));
     } catch {
       toast.error(t('settings.voiceInput.permissions.openFailed'));
     } finally {
@@ -1996,7 +1996,12 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     label={t('settings.voiceInput.permissions.accessibility.label')}
                     granted={permissions.accessibility.ok}
                     onGrant={() => void requestPermission('accessibility')}
-                    tooltip={t('settings.voiceInput.permissions.accessibility.tooltip')}
+                    tooltip={[
+                      t('settings.voiceInput.permissions.accessibility.tooltip'),
+                      !permissions.accessibility.ok && usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease)
+                        ? t('macControlPermission.selectApp', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+                        : '',
+                    ].filter(Boolean).join(' ')}
                   />
                 )}
             </span>

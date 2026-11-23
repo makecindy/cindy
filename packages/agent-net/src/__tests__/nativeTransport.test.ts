@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { createPrivateNetwork, generateIdentity, issueCertificate, verifyCertificate } from '@cindy/agent-net-relay';
 import { PROTOCOL_VERSION } from '@cindy/device-link-protocol';
 import { AgentNetSocket } from '../portableSocket.js';
-import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
+import { NativeTransport, encodeNativeIo, type NativeEnginePort } from '../nativeTransport.js';
 import type { PeerChannel } from '../types.js';
 
 // Unit at the production NativeTransport IO boundary: a poll is still initializing
@@ -341,6 +341,156 @@ it('lets a native-wait engine wake it instead of polling on timers', async () =>
 });
 
 /** 测试价值
+ * - 生产入口与可观察结果：手机的 NativeTransport 在原生库带 `binary-io`（与 `native-wait`）时怎么驱动引擎。等待的那次 `io` 调用把引擎
+ *   随后读到的东西一并带回，连接收到的就是对端发来的原始字节；等待调用在外时，要发的数据走另一次不读的 `io`（带 `kick`），同一时刻
+ *   只有一次调用在读，读到的东西不会乱序；引擎只收下一部分时，剩下的字节下一轮接着发、顺序不变。
+ * - Bug／规则依据：2026-11-21 真机（Redmi K40，CPU 降频时）每次异步过桥 3–4 毫秒、2 KB 回包 base64 解码 3.8 毫秒，一个应答要过三次桥
+ *   （remote-and-mobile-adaptation.md，会话层方案 10.2 v2-4 的二进制桥）。两次调用同时读，流数据会乱序；部分写入若从头重发，对端收到重复字节。
+ * - 现有覆盖缺口：其余用例的引擎替身都没有 `io`；真实 C ABI 的集成用例走通了整条路，但等待调用与写入同时在外的先后不受控。
+ * - 最小失败输入：一条已建立的连接；等待调用在外时发 5 个字节、引擎只收 2 个；随后等待调用带回对端一条新流上的 3 个字节；最后一次等待调用失败。
+ * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身，等待调用由用例手动放行；约 10 毫秒。
+ */
+it('reads in the call that waited and writes beside it on a binary-io engine', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  const ops: string[] = [], written: number[][] = [], kicks: boolean[] = [];
+  const waiting: Array<{ maxMs: number; answer(arrived?: [number, Uint8Array]): void; fail(error: Error): void }> = [];
+  let nextStream = 0, accept = Infinity, readers = 0, mostReaders = 0;
+  const read = (arrived?: [number, Uint8Array]) => ({
+    value: { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false, unacked: false, remoteKey: remote.transportKey,
+      events: arrived ? [{ kind: 'open', stream: arrived[0] }] : [], data: arrived ? [{ stream: arrived[0], len: arrived[1].length }] : [],
+      rttUs: 0, sent: 0, received: 0, rotations: 0 }] },
+    payload: arrived ? [arrived[1]] : [],
+  });
+  const answer = (taken: number[], poll: ReturnType<typeof read> | null) =>
+    encodeNativeIo({ ok: true, value: { written: taken, poll: poll?.value ?? null } }, poll?.payload ?? []);
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      ops.push(command.op as string);
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null, features: ['native-wait', 'binary-io'] };
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') value = Buffer.from(command.data as string, 'base64url').length;
+      return value as T;
+    },
+    wait: () => new Promise<boolean>(() => {}),
+    io: (input, waitMs = 0, kick = false) => {
+      const length = new DataView(input.buffer, input.byteOffset, input.byteLength).getUint32(0, true);
+      const header = JSON.parse(Buffer.from(input.subarray(4, 4 + length)).toString()) as { writes?: number[][]; poll: boolean };
+      let offset = 4 + length;
+      const taken = (header.writes ?? []).map(([, , size]) => {
+        written.push([...input.subarray(offset, offset + size)]); offset += size;
+        const took = Math.min(size, accept); accept = Infinity;
+        return took;
+      });
+      if (!header.poll) { kicks.push(kick); return Promise.resolve(answer(taken, null)); }
+      readers++; mostReaders = Math.max(mostReaders, readers);
+      if (!waitMs) { readers--; return Promise.resolve(answer(taken, read())); }
+      return new Promise<Uint8Array>((resolve, reject) => waiting.push({ maxMs: waitMs, answer: (arrived) => {
+        readers--; resolve(arrived ? answer([], read(arrived)) : new Uint8Array(0));
+      }, fail: (error) => { readers--; reject(error); } }));
+    },
+    kick: () => {},
+    async destroy() {},
+  };
+  const channels: PeerChannel[] = [], received: number[][] = [];
+  let transport: NativeTransport | undefined;
+  const settle = () => vi.advanceTimersByTimeAsync(0);
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true, admissionVersion: () => 1,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+      onIncoming: channel => { channels.push(channel); channel.onData(bytes => received.push([...bytes])); } });
+    await settle();
+    // The first turn read the established connection; then one call waits in the engine.
+    expect(channels).toHaveLength(1);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].maxMs).toBe(250);
+    // Something to send while that call waits: written beside it, without reading.
+    accept = 2;
+    channels[0].send(Uint8Array.of(1, 2, 3, 4, 5));
+    await settle();
+    expect(written).toEqual([[1, 2, 3, 4, 5]]);
+    expect(kicks).toEqual([true]);
+    expect(waiting).toHaveLength(1);
+    // The waiting call comes back with the peer's bytes; the three the engine did not take follow, in order.
+    waiting.shift()!.answer([9, Uint8Array.of(0x44, 7, 8, 9)]);
+    await settle();
+    expect(received).toEqual([[7, 8, 9]]);
+    expect(written).toEqual([[1, 2, 3, 4, 5], [3, 4, 5]]);
+    expect(mostReaders).toBe(1);
+    expect(waiting).toHaveLength(1);
+    // Nothing went through the base64 commands after the connection's first bytes.
+    expect(ops.filter(op => op === 'poll' || op === 'datagram')).toEqual([]);
+    expect(ops.filter(op => op === 'write')).toHaveLength(2);
+    // A waiting call fails: what it read may be lost to JS, so the transport closes rather than go on with a gap.
+    let closed = false;
+    channels[0].onClose(() => { closed = true; });
+    waiting.shift()!.fail(new Error('AGENT_NET_COMMAND_FAILED'));
+    await settle();
+    expect(closed).toBe(true);
+    expect(waiting).toHaveLength(0);
+  } finally { await transport?.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机的 NativeTransport 在原生库带 `binary-io` 时，一轮要写的条数超过原生 `io` 一次收的上限（1024 条）时
+ *   分几轮写完，连接一条都不断。
+ * - Bug／规则依据：PR #12036 审阅。原来一轮只按字节数限，129 条连接各排 8 条小消息就是 1032 条写入，原生拒收整帧，传输层随之关掉，
+ *   所有连接一起断。
+ * - 现有覆盖缺口：上面的 `binary-io` 用例只有一条连接、几次写入。
+ * - 最小失败输入：130 条已建立的连接各排 8 条 1 字节的消息；引擎替身照原生的规矩拒收超过 1024 条写入的调用。
+ * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身（没有 `native-wait`，按计时器驱动）；约 0.3 秒。
+ */
+it('splits a turn of many small writes across io calls instead of losing every connection', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native');
+  const peers = Array.from({ length: 130 }, (_, index) => generateIdentity('peer-' + index));
+  const hex = (key: string) => Buffer.from(key, 'base64url').toString('hex');
+  const writesPerCall: number[] = [];
+  let nextStream = 0, dataBytes = 0;
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null, features: ['binary-io'] };
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') value = Buffer.from(command.data as string, 'base64url').length;
+      return value as T;
+    },
+    io: async (input) => {
+      const length = new DataView(input.buffer, input.byteOffset, input.byteLength).getUint32(0, true);
+      const header = JSON.parse(Buffer.from(input.subarray(4, 4 + length)).toString()) as { writes?: number[][]; poll: boolean };
+      const writes = header.writes ?? [];
+      // As engine.rs `io`: a call with more than MAX_IO_WRITES is refused whole.
+      if (writes.length > 1024) return encodeNativeIo({ ok: false, code: 'INVALID_NATIVE_IO' });
+      writesPerCall.push(writes.length);
+      dataBytes += writes.reduce((sum, [, , size]) => sum + size, 0);
+      const connections = peers.map((peer, index) => ({ id: index + 1, established: true, dead: false, closedByPeer: false, unacked: false,
+        remoteKey: peer.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }));
+      return encodeNativeIo({ ok: true, value: { written: writes.map(([, , size]) => size), poll: header.poll ? { packets: [], connections } : null } });
+    },
+    async destroy() {},
+  };
+  const channels: PeerChannel[] = [];
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true, admissionVersion: () => 1,
+      admittedPeers: () => peers.map(peer => ({ id: hex(peer.transportKey), relayId: peer.deviceId })),
+      relayIdOf: (id) => peers.find(peer => hex(peer.transportKey) === id)?.deviceId, onIncoming: channel => { channels.push(channel); } });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(channels).toHaveLength(peers.length);
+    let closed = 0;
+    for (const channel of channels) channel.onClose(() => { closed++; });
+    writesPerCall.length = 0; dataBytes = 0;
+    for (const channel of channels) for (let message = 0; message < 8; message++) channel.send(Uint8Array.of(message));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(closed).toBe(0);
+    expect(dataBytes).toBe(peers.length * 8);
+    expect(Math.max(...writesPerCall)).toBeLessThanOrEqual(512);
+  } finally { await transport?.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
  * - 生产入口与可观察结果：手机的 NativeTransport 把要发的字节交给原生引擎的顺序（引擎收到的命令序列）。socket 没有报告准入变化时，
  *   写入排在轮询前面；每秒一次的「按时间复查准入」到期也不拦写入；socket 报告准入变了，先把新名单交给引擎再写；
  *   对端此刻已不被准入，一个字节也不写。
@@ -536,4 +686,129 @@ it('honors a custom dial timeoutMs budget and reports directAddress updates when
     await transport?.close();
     vi.useRealTimers();
   }
+});
+
+/** 测试价值（会话 v2 在手机上）
+ * - 生产入口与可观察结果：手机 NativeChannel 的会话 v2 流（`sessionWire().openBody` / `onBody`），引擎收到的命令。一条大消息开一条
+ *   自己的流，先写 0x33 和键，写完就结束；调用方放弃时这里排着的不再写，流随即结束（`abandon`，连已经交给核心、还没发出的
+ *   也不发），已经结束的流补一个 `abandon`；引擎暂时开不出流
+ *   （`STREAM_LIMIT`）时这条连接照常，下一轮再开。还没交给引擎的字节算在会话积压里。对端的流：键分在两片里到也认得出，
+ *   流结束时报 `null`。引擎没有 `probe-grants`（核心回探测只带两条流的额度）时不用正文流，照 v1 走通道。
+ * - Bug／规则依据：docs/agent-net-session-plan.md 第 7 节 v2-2；开流失败原来会关掉整条连接（plan 里的异常）；2026-11-22 CI：
+ *   没有 `probe-grants` 的核心上正文流（第 6 条流）停在 128 个分片。
+ * - 现有覆盖缺口：原生集成测试只走正常写完的流，不覆盖放弃、开流失败和分片的键。
+ * - 最小失败输入：200 KB 的消息写完；写之前就放弃；结束后再放弃；第一次开流报 `STREAM_LIMIT`；
+ *   对端一条流的头五个字节分成 3 + 2 到达；本端没宣告 v2 时对端开正文流（同旧节点，关连接）；本端会话还没挂上时对端开 200 条
+ *   只有键和结束的流，再来一条正好让「字节 + 每个事件 64」超过 16 MiB 的（审查 #12063：结束事件原来不计，可以无限堆）；
+ *   引擎只少 `probe-grants` 时开正文流。
+ * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身，假计时器。 */
+it.each(['finish', 'abandon-first', 'abandon-after-end', 'stream-limit', 'undeclared', 'early-budget', 'without-probe-grants'] as const)(
+  'opens, ends and gives up session v2 body streams on the native engine: %s', async mode => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  const ops: Array<{ op: string; stream?: number }> = [], written = new Map<number, Buffer[]>();
+  let nextStream = 0, limited = mode === 'stream-limit';
+  let inbound: { events: unknown[]; data: Array<{ stream: number; data: string }> } = { events: [{ kind: 'open', stream: 71 }],
+    data: [{ stream: 71, data: Buffer.from([0x43, ...Buffer.from(JSON.stringify({ session: ['agent-net-session-v1', 'agent-net-session-v2'] }) + '\n')]).toString('base64url') }] };
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      ops.push({ op: command.op as string, stream: command.stream as number | undefined });
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null,
+        features: ['stream-levels', 'stream-retired', ...(mode === 'without-probe-grants' ? [] : ['probe-grants'])] };
+      if (command.op === 'poll') {
+        value = { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false, unacked: false,
+          remoteKey: remote.transportKey, ...inbound, rttUs: 0, sent: 0, received: 0, rotations: 0 }] };
+        inbound = { events: [], data: [] };
+      }
+      if (command.op === 'openStream') {
+        // Data, control, then the control and normal lanes; the fifth open is the body's (the background lane's comes after).
+        if (limited && nextStream === 4) { limited = false; throw new Error('STREAM_LIMIT'); }
+        value = ++nextStream;
+      }
+      if (command.op === 'write') {
+        const bytes = Buffer.from(command.data as string, 'base64url');
+        written.set(command.stream as number, [...(written.get(command.stream as number) ?? []), bytes]);
+        value = bytes.length;
+      }
+      if (command.op === 'abandon') value = 0;
+      return value as T;
+    }, async destroy() {},
+  };
+  const channels: PeerChannel[] = [];
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+      onIncoming: channel => { channels.push(channel); } });
+    await vi.advanceTimersByTimeAsync(100);
+    const channel = channels[0], wire = channel.sessionWire!()!;
+    expect(channel.sessionBodies).toBe(mode !== 'without-probe-grants');
+    const peerBody = (stream: number, key: number, bytes: Buffer = Buffer.alloc(0)) => [{ stream, data: Buffer.concat([Buffer.from([0x33]),
+      Buffer.from(Uint32Array.of(key).buffer).reverse(), bytes]).toString('base64url') }];
+    if (mode === 'undeclared') {
+      inbound = { events: [{ kind: 'open', stream: 72 }], data: peerBody(72, 9, Buffer.from('{}')) };
+      await vi.advanceTimersByTimeAsync(20);
+      expect(ops.filter(op => op.op === 'close')).toHaveLength(1);
+      return;
+    }
+    if (mode === 'without-probe-grants') {
+      expect(wire.openBody!('normal', 1)).toBeNull();
+      return;
+    }
+    channel.declareSessions!(['agent-net-session-v2']);
+    if (mode === 'early-budget') {
+      for (let round = 0; round < 2; round++) {
+        const streams = Array.from({ length: 100 }, (_, index) => 100 + round * 100 + index);
+        inbound = { events: [...streams.map(stream => ({ kind: 'open', stream })), ...streams.map(stream => ({ kind: 'finish', stream }))],
+          data: streams.flatMap(stream => peerBody(stream, stream)) };
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      expect(ops.filter(op => op.op === 'close')).toEqual([]);
+      inbound = { events: [{ kind: 'open', stream: 300 }], data: peerBody(300, 300, Buffer.alloc(16 * 1024 * 1024 - 201 * 64 + 1)) };
+      await vi.advanceTimersByTimeAsync(20);
+      expect(ops.filter(op => op.op === 'close')).toHaveLength(1);
+      return;
+    }
+    const received: Array<[number, string | null]> = [];
+    wire.onData(() => {});
+    wire.onBody!((bodyKey, bytes) => { received.push([bodyKey, bytes && Buffer.from(bytes).toString()]); });
+    const content = Buffer.alloc(200_000, 0x61);
+    const body = wire.openBody!('normal', 0x01020304)!;
+    if (mode === 'abandon-first') body.abandon();
+    body.write(new Uint8Array(content));
+    body.finish();
+    // Counted in the session's backlog until the engine took it (this stand-in reports nothing left in the core).
+    if (mode !== 'abandon-first') expect(wire.bufferedAmount).toBeGreaterThanOrEqual(content.length);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(wire.bufferedAmount).toBe(0);
+    const opened = ops.filter(op => op.op === 'openStream').length;
+    const stream = [...written].find(([, chunks]) => chunks[0][0] === 0x33)?.[0];
+    const ends = () => ops.filter(op => op.op === 'finish' || op.op === 'abandon').map(op => [op.op, op.stream]);
+    expect(ops.filter(op => op.op === 'close')).toEqual([]);
+    if (mode === 'abandon-first') {
+      // Given up before its stream opened: nothing of it reaches the engine.
+      expect(stream).toBeUndefined();
+      expect(ends()).toEqual([]);
+      expect(opened).toBe(5);
+    } else {
+      expect(Buffer.concat(written.get(stream!)!)).toEqual(Buffer.concat([Buffer.from([0x33, 1, 2, 3, 4]), content]));
+      expect(ends()).toEqual([['finish', stream]]);
+      // Data, control, three lanes, the body's refused open, then its open on the next turn.
+      expect(opened).toBe(mode === 'stream-limit' ? 7 : 6);
+    }
+    if (mode === 'abandon-after-end') {
+      body.abandon();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(ends()).toEqual([['finish', stream], ['abandon', stream]]);
+    }
+    // The peer's body stream, its kind and key split over two chunks.
+    inbound = { events: [{ kind: 'open', stream: 72 }], data: [{ stream: 72, data: Buffer.from([0x33, 0, 0]).toString('base64url') },
+      { stream: 72, data: Buffer.from([0, 9, 0x7b, 0x7d]).toString('base64url') }] };
+    await vi.advanceTimersByTimeAsync(20);
+    inbound = { events: [{ kind: 'finish', stream: 72 }], data: [] };
+    await vi.advanceTimersByTimeAsync(20);
+    expect(received).toEqual([[9, '{}'], [9, null]]);
+  } finally { await transport?.close(); vi.useRealTimers(); }
 });

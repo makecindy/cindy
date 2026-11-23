@@ -2459,7 +2459,7 @@ describe('usage through the production event pipeline', () => {
   // Use the production pipeline to prove that currency recovery does not freeze
   // fallback USD into a receipt, either within a write or across product turns.
   it.each(['during-write', 'next-turn', 'terminal-replay'] as const)(
-    'prices Pi subscription receipts in the recovered account currency (%s)', async mode => {
+    'prices Pi subscription receipts in the original quote currency after account recovery (%s)', async mode => {
       const h = harness();
       pricing(true);
       effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
@@ -2473,9 +2473,9 @@ describe('usage through the production event pipeline', () => {
       h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
       if (mode !== 'during-write') {
         await flushSessionPiTurnUsage();
-        // Unknown currency is pending, not a final USD estimate.
-        expect(writes.mock.calls.every(call => (call as unknown as [string, Array<{ amount: unknown }>])[1]
-          .every(row => row.amount === null))).toBe(true);
+        expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+          currency: 'USD', amount: expect.any(Number), actualCost: false,
+        })]);
       }
       effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
       effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
@@ -2485,7 +2485,7 @@ describe('usage through the production event pipeline', () => {
       }, { source: 'pi' }));
       await flushSessionPiTurnUsage();
       expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
-        currency: 'CNY', amount: expect.any(Number), actualCost: false,
+        currency: 'USD', amount: expect.any(Number), actualCost: false,
       })]);
       await h.dispose();
     },

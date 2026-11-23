@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip } from '@/components/ui/tooltip';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
+import { useHeldWhileBlockingPrompt } from '@/components/ui/blocking-prompt-hold';
 
 // 长按钮文案在面板内换行、按钮纵向长高,不冲出弹窗也不截断(DESIGN.md §4)。
 const CONFIRM_ACTION_CLASS =
@@ -103,7 +104,7 @@ export interface ConfirmDialogProps {
 }
 
 export function ConfirmDialog({
-  open,
+  open: requestedOpen,
   onOpenChange,
   title,
   description: defaultDescription,
@@ -134,6 +135,8 @@ export function ConfirmDialog({
   zIndex = Z_INDEX_LAYERS.modal,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
+  // 登录过期等阻断提示显示期间,独立挂载的确认框(如关窗确认)暂缓到它关闭后再出现。
+  const open = useHeldWhileBlockingPrompt(requestedOpen);
   // describeContent 用:让 aria-describedby 覆盖整个「description + content」滚动区。
   const bodyId = useId();
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');

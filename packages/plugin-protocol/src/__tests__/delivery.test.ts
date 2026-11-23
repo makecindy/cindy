@@ -58,7 +58,11 @@ describe('plugin delivery contract', () => {
   it('keeps full catalog counts independent of the page size and rejects legacy removals on read pages', () => {
     const page = { schemaVersion: 2, plugins: [candidate], nextCursor: 'next',
       counts: { all: 200, public: 200, organization: 0, personal: 0 } };
-    expect(parsePluginCatalogPage(page).counts?.all).toBe(200);
+    expect(parsePluginCatalogPage(page).counts).toEqual(page.counts);
+    const counts = { ...page.counts, official: 145, community: 0 };
+    expect(parsePluginCatalogPage({ ...page, counts }).counts).toEqual(counts);
+    for (const change of [{ official: -1 }, { community: '0' }, { community: 56 }])
+      expect(() => parsePluginCatalogPage({ ...page, counts: { ...counts, ...change } })).toThrow();
     expect(() => parsePluginCatalogPage({ ...page, removals: [] })).toThrow();
     expect(() => parsePluginCatalogPage({ ...page, counts: { ...page.counts, all: 1 } })).toThrow();
   });
