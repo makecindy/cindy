@@ -134,6 +134,46 @@ describe('LegalTermsUpdateGate', () => {
     expect(isAppInteractionLocked()).toBe(false);
   });
 
+  // 依据:已恢复的终端 / 浏览器 / 插件不能抢在确认弹窗出现前被操作;查询悬而不决时不能永久锁住。
+  it('swallows input with an invisible blocker until the terms status arrives', async () => {
+    let resolve: (value: ReturnType<typeof payload>) => void = () => {};
+    electronAPI.getAnalyticsSettings.mockReturnValue(new Promise((r) => (resolve = r)));
+    render(<LegalTermsUpdateGate />);
+
+    const pending = screen.getByTestId('legal-terms-update-pending');
+    expect(document.activeElement).toBe(pending);
+    expect(isAppInteractionLocked()).toBe(true);
+
+    await act(async () => resolve(payload(false)));
+    expect(screen.queryByTestId('legal-terms-update-pending')).toBeNull();
+    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(isAppInteractionLocked()).toBe(false);
+  });
+
+  it('gives up waiting after a timeout and leaves the app usable', async () => {
+    vi.useFakeTimers();
+    try {
+      electronAPI.getAnalyticsSettings.mockReturnValue(new Promise(() => {}));
+      render(<LegalTermsUpdateGate />);
+      expect(screen.getByTestId('legal-terms-update-pending')).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.queryByTestId('legal-terms-update-pending')).toBeNull();
+      expect(isAppInteractionLocked()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not hold back organization accounts while loading', async () => {
+    auth.user = { membershipKind: 'org' };
+    electronAPI.getAnalyticsSettings.mockReturnValue(new Promise(() => {}));
+    render(<LegalTermsUpdateGate />);
+    expect(screen.queryByTestId('legal-terms-update-pending')).toBeNull();
+  });
+
   it('never shows in local mode (skip login)', async () => {
     auth.mode = 'local';
     render(<LegalTermsUpdateGate />);

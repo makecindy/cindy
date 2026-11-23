@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -11,7 +11,12 @@ import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
+import { PendingInputBlocker } from './PendingInputBlocker';
+
 const log = createLogger('LegalTermsUpdateGate');
+
+/** 查询迟迟不回时的兜底:超时后按「不需要确认」放行,不让应用一直被无形遮挡锁住。 */
+const PENDING_TIMEOUT_MS = 5_000;
 
 /**
  * 协议更新确认:已同意过旧版《服务条款》《隐私协议》的个人账号,进入主界面时必须先确认
@@ -21,6 +26,8 @@ const log = createLogger('LegalTermsUpdateGate');
  *   (membershipKind === 'personal')弹出:本地模式与企业组织账号(SSO)被登录页协议门豁免,
  *   设备上的同意记录不区分账号类型,不能当作个人账号的证据。新用户在登录页同意时已记录当前版本。
  * - 显示期间持有应用交互锁,全局快捷键与菜单命令不在背后继续执行。
+ * - 个人账号在协议状态查询返回前,先用透明遮挡层接住输入(已恢复的终端 / 浏览器 / 插件不能
+ *   抢在确认弹窗之前被操作);查询失败按「不需要」处理,超过 5 秒未返回也放行。
  * - 同意:记录当前版本,所有窗口经设置广播同步收起。
  * - 不同意:退出登录,回到登录页;下次登录时在登录页重新同意即可。
  */
@@ -29,11 +36,15 @@ export function LegalTermsUpdateGate() {
   const { mode, user, logout } = useAuth();
   const { state, acceptLegalTermsUpdate } = useAnalyticsSettings();
   const [busy, setBusy] = useState(false);
-  const open =
-    mode === 'cloud' &&
-    user?.membershipKind === 'personal' &&
-    !state.loading &&
-    state.legalTermsUpdateRequired;
+  const personal = mode === 'cloud' && user?.membershipKind === 'personal';
+  const [timedOut, setTimedOut] = useState(false);
+  useEffect(() => {
+    if (!state.loading) return undefined;
+    const timer = window.setTimeout(() => setTimedOut(true), PENDING_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [state.loading]);
+  const pending = personal && state.loading && !timedOut;
+  const open = personal && !state.loading && state.legalTermsUpdateRequired;
 
   // layout effect:在浏览器绘制、用户能操作之前就加锁。
   useLayoutEffect(() => {
@@ -41,6 +52,7 @@ export function LegalTermsUpdateGate() {
     return acquireAppInteractionLock();
   }, [open]);
 
+  if (pending) return <PendingInputBlocker testId="legal-terms-update-pending" />;
   if (!open) return null;
 
   const openLink = (url: string) => {
