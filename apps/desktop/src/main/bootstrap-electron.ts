@@ -1082,6 +1082,7 @@ import {
 import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
+import { setAuxiliaryModelHealthBroadcaster } from './utility-model/auxiliary-model-health.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
 import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
@@ -7324,6 +7325,11 @@ const registerIpcHandlers = () => {
       });
       registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerWorkingStatusIpc();
+      setAuxiliaryModelHealthBroadcaster((channel, payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
+        }
+      });
       registerAuxiliaryModelSettingsIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();

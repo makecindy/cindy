@@ -888,6 +888,7 @@ const fanOutMakerEvent = createIpcFanOut('maker:event');
 const fanOutMakerAgentsChanged = createIpcFanOut('maker:agents:changed');
 const fanOutMakerTurnChangeSetUpdated = createIpcFanOut('maker:turn-change-set:updated');
 const fanOutMakerStatusChanged = createIpcFanOut('maker:status-changed');
+const fanOutMakerAuxiliaryModelHealthChanged = createIpcFanOut('maker:auxiliary-model-health');
 const fanOutMakerInputProjection = createIpcFanOut('maker:input:projection');
 const fanOutMakerInteractionRequest = createIpcFanOut('maker:interaction-request');
 const fanOutMakerInteractionDismissed = createIpcFanOut('maker:interaction-dismissed');
@@ -1872,6 +1873,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:lookup', ghostIds),
     query: (input: import('../shared/pluginMarket').PluginMarketQuery): Promise<import('../shared/pluginMarket').PluginMarketPage> =>
       ipcRenderer.invoke('plugin-market:query', input),
+    cancelOfficialModelPlugins: (): Promise<void> => ipcRenderer.invoke('plugin-market:cancel-official-model-plugins'),
+    officialModelPlugins: (cursor: string | null): Promise<import('../shared/pluginMarket').OfficialModelPluginPage> =>
+      ipcRenderer.invoke('plugin-market:official-model-plugins', cursor),
     recommendations: (): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
       ipcRenderer.invoke('plugin-market:recommendations'),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
@@ -8247,8 +8251,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:auxiliary-model-settings:get'),
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
-    ): Promise<AuxiliaryModelSettingsState> =>
+    ): Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSaveResult> =>
       ipcRenderer.invoke('maker:auxiliary-model-settings:set', patch),
+    auxiliaryModelSettingsTest: (
+      patch: AuxiliaryModelSettingsPatch,
+    ): Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsTestResult> =>
+      ipcRenderer.invoke('maker:auxiliary-model-settings:test', patch),
+    auxiliaryModelHealthDismiss: (sessionId: string, noticeId: number): Promise<void> =>
+      ipcRenderer.invoke('maker:auxiliary-model-health:dismiss', sessionId, noticeId),
+    auxiliaryModelRouteHealthGet: (sessionId?: string): Promise<import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthSnapshot[]> =>
+      ipcRenderer.invoke('maker:auxiliary-model-route-health:get', sessionId),
+    onAuxiliaryModelHealthChanged: fanOutMakerAuxiliaryModelHealthChanged,
     /** Whether any auxiliary model can run now; changes arrive as app-settings section `auxiliary-model-health`. */
     auxiliaryModelHealthGet: (): Promise<AuxiliaryModelHealth> =>
       ipcRenderer.invoke('maker:auxiliary-model-health:get'),

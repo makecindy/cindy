@@ -44,3 +44,9 @@ export {
   type AcpEndpointConnectOptions,
   type AcpEndpointLauncher,
 } from './acp-agent.js';
+export {
+  CINDY_PLUGIN_GATEWAY_MCP_SERVER,
+  formatPluginEngineSkillList,
+  renderPluginEngineCapabilityBriefing,
+  type PluginEngineBriefingSkill,
+} from './briefing.js';

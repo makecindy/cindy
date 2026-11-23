@@ -130,6 +130,21 @@ describe('DiscordIM outbound', () => {
     expect(fileAttachments(channel.send.mock.calls[1]?.[0])).toEqual(files.slice(10));
   });
 
+  it('delivers the streaming final when a leading chunk contains only whitespace', async () => {
+    const channel = makeChannel('dm-1');
+    const progress = { ...await channel.messages.fetch(), delete: vi.fn(async () => {}) };
+    channel.messages.fetch.mockResolvedValue(progress);
+    const im = makeIm(channel);
+    const handle = await im.startStreamingText('user-1');
+    const answer = 'First line of the answer\nSecond line of the answer';
+
+    await handle.finalize(`${'\n'.repeat(2000)}${answer}`);
+
+    expect(progress.edit).toHaveBeenCalledWith(answer);
+    expect(progress.delete).not.toHaveBeenCalled();
+    expect(channel.send).toHaveBeenCalledTimes(1);
+  });
+
   it('batches streaming image uploads by request size', async () => {
     const sevenMiB = 7 * 1024 * 1024;
     const files = Array.from({ length: 4 }, () => tempFile(sevenMiB));
