@@ -18726,7 +18726,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
-    needsNativeSessionHandoff: (id, row) => needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke),
+    needsNativeSessionHandoff: (id, row) => {
+      // Remote/provider-group sources are assigned by the executing computer.
+      if (row.remoteHostId || row.agentDeviceId)
+        return needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke);
+      // Probe the accepted route that bootstrap will start, not the saved preference.
+      // Keep the source row/native identity intact for the durable history handoff.
+      const target = { ...row, id, agentKind: dbToMakerEngineKind(row.agentKind), model: row.model ?? undefined };
+      const runtimeOverride = applySessionRuntimeOverrideForStart(target, false);
+      if (runtimeOverride && readProviderGroupBinding(id)?.groupDeviceId)
+        return needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke);
+      return needsSubscriptionAccountHandoff(id, target, remoteBackgroundInvoke);
+    },
     classifyCodexHistory: (threadId) => classifyCodexHistoryWithPorts({
       captureDataOwnerBroadcastScope: (...args) => captureDataOwnerBroadcastScope(...args),
       getCurrentDbClientSnapshot: (...args) => getCurrentDbClientSnapshot(...args),
