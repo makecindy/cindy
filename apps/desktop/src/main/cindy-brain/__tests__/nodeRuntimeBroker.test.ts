@@ -523,6 +523,8 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     vi.stubEnv('APPDATA', 'C:\\Users\\demo\\AppData\\Roaming');
     vi.stubEnv('GH_CONFIG_DIR', 'D:\\gh-config');
     vi.stubEnv('XDG_CONFIG_HOME', 'D:\\xdg-config');
+    vi.stubEnv('XDG_RUNTIME_DIR', '/run/user/1000');
+    vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus');
     const child = new FakeUtilityProcess();
     const fork = vi.fn((modulePath: unknown, entryArgs: unknown, options: unknown) => {
       void modulePath;
@@ -560,6 +562,9 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     expect(forkOptions.env.APPDATA).toBe('C:\\Users\\demo\\AppData\\Roaming');
     expect(forkOptions.env.GH_CONFIG_DIR).toBe('D:\\gh-config');
     expect(forkOptions.env.XDG_CONFIG_HOME).toBe('D:\\xdg-config');
+    // Linux 上 agy 等 CLI 经会话总线读 Secret Service 钥匙串；裁掉会话总线变量同样会误报“未登录”。
+    expect(forkOptions.env.XDG_RUNTIME_DIR).toBe('/run/user/1000');
+    expect(forkOptions.env.DBUS_SESSION_BUS_ADDRESS).toBe('unix:path=/run/user/1000/bus');
 
     expect(worker.stderr).toBe(child.stderr);
     expect(child.stderr.listenerCount('error')).toBe(0);

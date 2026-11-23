@@ -34,6 +34,11 @@ export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.Process
     'GH_CONFIG_DIR',
     // XDG_CONFIG_HOME 也可指定 gh 配置目录，且在 Windows 上同样可能优先于 APPDATA。
     'XDG_CONFIG_HOME',
+    // Linux 用户会话总线（socket 地址，不是秘密）：agy 等 CLI 经 D-Bus 的 Secret Service
+    // 读取钥匙串里的登录。缺了它们，Chromium 派生的子进程会拿到
+    // DBUS_SESSION_BUS_ADDRESS=disabled:，CLI 连不上钥匙串而误报“未登录”。
+    'XDG_RUNTIME_DIR',
+    'DBUS_SESSION_BUS_ADDRESS',
   ] as const;
   const env: NodeJS.ProcessEnv = {
     CINDY_GHOST_ID: ghostId,
