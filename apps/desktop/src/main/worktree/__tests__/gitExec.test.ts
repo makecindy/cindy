@@ -7,7 +7,6 @@
  */
 
 import { EventEmitter } from 'node:events';
-import fs from 'node:fs/promises';
 import { OperationBudget } from '../../utils/operationBudget';
 import { enqueueGitRepoWrite } from '../../git-snapshot/gitRepoWriteQueue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,7 +28,11 @@ vi.mock('../../device-link/crossProcessLock', () => ({
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
+vi.mock('../../workdir-probe-host/index.js', () => ({
+  realpathWorkingDirectory: async (cwd: string) => cwd,
+}));
 
+import { detectCwd } from '../detectCwd';
 import {
   gitExec,
   GitExecError,
@@ -205,10 +208,11 @@ describe('macOS Git discovery', () => {
     selected, developerTools, blocked,
   }) => {
     setPlatform('darwin');
-    vi.spyOn(fs, 'stat').mockResolvedValue({ isFile: () => true } as never);
-    vi.spyOn(fs, 'access').mockResolvedValue(undefined);
-    vi.spyOn(fs, 'realpath').mockResolvedValue(selected);
-    mocks.execFile.mockImplementation((_file, _args, _options, callback: ExecCb) => {
+    mocks.execFile.mockImplementation((file, _args, _options, callback: ExecCb) => {
+      if (file === '/bin/sh') {
+        callback(null, selected === '/usr/bin/git' ? '0 apple\n' : '0 independent\n', '');
+        return new EventEmitter();
+      }
       callback(developerTools ? null : Object.assign(new Error('no developer directory'), { code: 2 }),
         developerTools ? '/Developer\n' : '', '');
       return new EventEmitter();
@@ -234,7 +238,53 @@ describe('macOS Git discovery', () => {
     } else {
       await expect(version()).resolves.toMatchObject({ stdout: 'git version fixture\n' });
     }
-    expect(mocks.execFile).toHaveBeenCalledTimes(selected === '/usr/bin/git' ? 1 : 0);
+    expect(mocks.execFile.mock.calls.filter(([file]) => file === '/usr/bin/xcode-select'))
+      .toHaveLength(selected === '/usr/bin/git' ? 1 : 0);
+  });
+
+  // #8454 P1: four hung executable lookups must leave the directory scheduler
+  // at its existing deadline. Existing Git timeout tests start after lookup.
+  // Unit tier: production detectCwd with a fake clock and a stalled subprocess.
+  it('returns unknown for stalled PATH checks and advances the next directory', async () => {
+    setPlatform('darwin');
+    const stalledSignals: AbortSignal[] = [];
+    mocks.execFile.mockImplementation((file, argv, options, callback: ExecCb) => {
+      if (file !== '/bin/sh') throw new Error(`Unexpected probe: ${file}`);
+      if (argv[3] === '/healthy/bin/git') {
+        callback(null, '0 independent\n', '');
+      } else {
+        stalledSignals.push(options.signal);
+      }
+      return new EventEmitter();
+    });
+    mocks.spawn.mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+      void Promise.resolve().then(() => {
+        child.stdout.emit('data', Buffer.from('/healthy\nmain\n.git\n.git\n'));
+        child.emit('close', 0, null);
+      });
+      return child;
+    });
+    vi.stubEnv('PATH', 'bin:/usr/bin');
+    try {
+      const slow = Array.from({ length: 4 }, (_, index) => detectCwd(`/slow-${index}`));
+      const results = Promise.allSettled(slow);
+      const healthy = detectCwd('/healthy');
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(stalledSignals).toHaveLength(4);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await results).map((result) =>
+        result.status === 'rejected' && result.reason.timedOut,
+      )).toEqual([true, true, true, true]);
+      expect(stalledSignals.every((signal) => signal.aborted)).toBe(true);
+      await expect(healthy).resolves.toMatchObject({ isGitRepo: true, repoRoot: '/healthy' });
+      expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
+        '/healthy/bin/git', expect.any(Array), expect.objectContaining({ cwd: '/healthy' }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('preserves raw Git failures for explicit worktree commands', async () => {

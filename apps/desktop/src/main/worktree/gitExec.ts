@@ -118,6 +118,39 @@ function remainingDeadlineMs(deadlineAtMs: number | undefined, args: readonly st
   return remaining;
 }
 
+async function discoverMacGit(
+  args: readonly string[],
+  cwd: string | undefined,
+  env: NodeJS.ProcessEnv,
+  opts: GitExecOpts,
+): Promise<string | null | undefined> {
+  const remaining = remainingDeadlineMs(opts.deadlineAtMs, args) ?? opts.timeoutMs;
+  const controller = new AbortController();
+  const signal = opts.signal ? AbortSignal.any([opts.signal, controller.signal]) : controller.signal;
+  signal.throwIfAborted();
+  const timer = remaining && remaining > 0 ? setTimeout(() => {
+    controller.abort(new GitExecError({
+      args, exitCode: null, stdout: '', stderr: 'Git discovery deadline exceeded', timedOut: true,
+    }));
+  }, remaining) : undefined;
+  let abort!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try {
+    // The lookup subprocess is abortable. The shared xcode-select probe keeps
+    // its own budget so one caller's timeout does not invalidate its cache.
+    const selected = await Promise.race([cancelled, resolveMacGitProbe(cwd, env, signal)]);
+    signal.throwIfAborted();
+    remainingDeadlineMs(opts.deadlineAtMs, args);
+    return selected;
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', abort);
+  }
+}
+
 /** POSIX 超时后 SIGTERM → SIGKILL 的宽限期:给 git 留出清理 .lock 的时间窗。 */
 const POSIX_KILL_GRACE_MS = 1_500;
 /** POSIX 宽限期内探测进程组是否清空的轮询间隔。 */
@@ -283,11 +316,7 @@ async function execFileOnce(
   const env = opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined;
   let file = 'git';
   if (process.platform === 'darwin' && opts?.avoidMacGitInstallPrompt) {
-    opts.signal?.throwIfAborted();
-    remainingDeadlineMs(opts.deadlineAtMs, args);
-    const selected = await resolveMacGitProbe(cwd, env ?? process.env);
-    opts.signal?.throwIfAborted();
-    remainingDeadlineMs(opts.deadlineAtMs, args);
+    const selected = await discoverMacGit(args, cwd, env ?? process.env, opts);
     if (selected === null) {
       throw new GitExecError({
         args,

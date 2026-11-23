@@ -1,11 +1,23 @@
 import { execFile } from 'node:child_process';
-import { constants } from 'node:fs';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const APPLE_GIT = '/usr/bin/git';
 const DEFAULT_PATH = '/usr/bin:/bin';
 const DEVELOPER_TOOLS_CACHE_MS = 5_000;
+// Shell builtins keep potentially blocked filesystem calls out of Main's
+// libuv pool. Arguments are literal paths, and the shell starts no children.
+// -ef follows aliases to Apple's stub, like the previous realpath check.
+const SELECT_GIT = `
+  index=0
+  for candidate do
+    if [ -x "$candidate" ] && [ -f "$candidate" ]; then
+      kind=independent
+      if [ "$candidate" -ef /usr/bin/git ]; then kind=apple; fi
+      printf '%s %s\\n' "$index" "$kind"
+      exit 0
+    fi
+    index=$((index + 1))
+  done
+`;
 let developerToolsCheck: {
   developerDir: string | undefined;
   expiresAt: number;
@@ -34,26 +46,27 @@ function hasDeveloperTools(env: NodeJS.ProcessEnv): Promise<boolean> {
 export async function resolveMacGitProbe(
   cwd: string | undefined,
   env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
 ): Promise<string | null | undefined> {
-  for (const directory of (env.PATH ?? DEFAULT_PATH).split(path.posix.delimiter)) {
+  const candidates = (env.PATH ?? DEFAULT_PATH).split(path.posix.delimiter).map((directory) => {
     // Relative PATH entries are resolved in the child cwd. Preserve symlink/..
     // components so the filesystem resolves the same path as spawn.
-    const candidate = (path.posix.isAbsolute(directory)
+    return (path.posix.isAbsolute(directory)
       ? [directory, 'git']
       : [path.posix.resolve(cwd ?? process.cwd()), directory, 'git']
     ).filter(Boolean).join(path.posix.sep);
-    let executable: string;
-    try {
-      await fs.access(candidate, constants.X_OK);
-      if (!(await fs.stat(candidate)).isFile()) continue;
-      executable = await fs.realpath(candidate);
-    } catch {
-      continue;
-    }
-    if (executable === APPLE_GIT && !(await hasDeveloperTools(env))) return null;
-    // Retain the PATH spelling for independent Git binaries and wrappers.
-    return candidate;
-  }
-  // Preserve spawn's error when Git cannot be resolved from PATH.
-  return undefined;
+  });
+
+  const selection = await new Promise<string>((resolve, reject) => {
+    execFile('/bin/sh', ['-c', SELECT_GIT, 'git-path-probe', ...candidates],
+      { signal }, (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout.trim());
+      });
+  });
+  signal.throwIfAborted();
+  if (!selection) return undefined; // Preserve spawn's normal missing-Git error.
+  const [index, kind] = selection.split(' ');
+  if (kind === 'apple' && !(await hasDeveloperTools(env))) return null;
+  return candidates[Number(index)];
 }
