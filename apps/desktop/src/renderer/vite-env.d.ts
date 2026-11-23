@@ -7057,7 +7057,15 @@ interface ElectronAPI {
     auxiliaryModelSettingsGet: () => Promise<AuxiliaryModelSettingsState>;
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
-    ) => Promise<AuxiliaryModelSettingsState>;
+    ) => Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSaveResult>;
+    auxiliaryModelSettingsTest: (
+      patch: AuxiliaryModelSettingsPatch,
+    ) => Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsTestResult>;
+    auxiliaryModelHealthDismiss: (sessionId: string, noticeId: number) => Promise<void>;
+    auxiliaryModelRouteHealthGet: (sessionId?: string) => Promise<import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthSnapshot[]>;
+    onAuxiliaryModelHealthChanged: (
+      callback: (event: import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthEvent) => void,
+    ) => () => void;
     auxiliaryModelHealthGet: () => Promise<AuxiliaryModelHealth>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
