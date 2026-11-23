@@ -62,6 +62,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   // 由桌面 sessionToCamel 产出(已处理 clearedAt / rewind / 角色过滤);idle 会话直接显示,
   // 无需 load 完整消息。sessionRowMessagePreview 会读取它。
   preview?: string | null;
+  summary?: string | null;
 }
 
 export interface RemoteSessionListMessageLike {

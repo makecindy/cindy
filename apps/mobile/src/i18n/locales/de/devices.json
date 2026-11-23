@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "Aktualisiere Cindy auf deinem Computer",
   "usageUpdateDesktopCopy": "Die Cindy-Version auf deinem Computer ist zu alt, um die Nutzung an dein Smartphone zu senden. Nach dem Update erscheint sie hier automatisch.",
   "management": {
+    "addCloud": "Cloud-Computer hinzufügen",
+    "preparingCloud": "Cloud-Computer wird vorbereitet",
+    "manageCloud": "Cloud-Computer verwalten",
     "title": "Geräteverwaltung",
     "openDevice": "Details zu {{name}} anzeigen",
     "details": "Gerätedetails",
@@ -390,6 +393,7 @@
       "showDeviceTasks": "Aufgaben anzeigen",
       "openDevice": "Öffnen",
       "renameDevice": "Umbenennen",
+      "groupDevice": "Gerät",
       "groupProject": "Projekt",
       "sortBy": {
         "priority": "Priorität",
@@ -431,11 +435,15 @@
       "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
       "displayHeading": "Anzeige",
       "view": {
+        "card": "Karten",
         "text": "Text",
         "list": "Liste"
       },
       "taskInfoHeading": "Aufgabeninfo",
       "taskInfo": {
+        "teammate": "Avatar des Freundes",
+        "project": "Projektsymbol und -name",
+        "harness": "Harness-Symbol",
         "time": "Zeit",
         "pr": "PR-Status",
         "tokens": "Tokens",

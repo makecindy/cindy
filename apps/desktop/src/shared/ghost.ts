@@ -393,6 +393,13 @@ export const GHOST_NODE_CHILD_MODE_FLAG = '__cindy-node-child__';
  * 出现乱码;base64 逐字节保真)。
  */
 
+/**
+ * 单条 stdio base64 中继帧的字符上限。接收端对超过上限的帧整段丢弃（没有断流、没有报错），
+ * 所以按字节写一条可能很大的消息时（例如插件引擎的 ACP 行里带 base64 图片），发送方必须
+ * 按 4 的整数倍切段：每段都是合法 base64，接收端依次喂进同一条 stdin，拼接后与原始字节一致。
+ */
+export const GHOST_NODE_STDIO_B64_MAX_CHARS = 2 * 1024 * 1024;
+
 /** worker → 主机:代启/喂 stdin/收 stdin/杀进程。 */
 export type GhostNodeChildToHostMessage =
   | (GhostPipeHostToolRequest & { reqId: string })

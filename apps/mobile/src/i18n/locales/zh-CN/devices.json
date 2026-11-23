@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "更新电脑上的 Cindy 后即可查看",
   "usageUpdateDesktopCopy": "电脑上的 Cindy 版本较旧，还不能把用量同步到手机。更新后会自动显示。",
   "management": {
+    "addCloud": "添加云主机",
+    "preparingCloud": "云主机 · 准备中",
+    "manageCloud": "管理云主机",
     "title": "设备管理",
     "openDevice": "查看 {{name}} 的设备详情",
     "details": "设备详情",
@@ -390,6 +393,7 @@
       "showDeviceTasks": "查看任务",
       "openDevice": "打开",
       "renameDevice": "重命名",
+      "groupDevice": "设备",
       "groupProject": "项目",
       "sortBy": {
         "priority": "优先级",
@@ -431,11 +435,15 @@
       "showCollapsedTeammateAvatars": "收起时显示头像",
       "displayHeading": "显示",
       "view": {
+        "card": "卡片",
         "text": "文字",
         "list": "列表"
       },
       "taskInfoHeading": "任务信息",
       "taskInfo": {
+        "teammate": "伙伴头像",
+        "project": "项目图标和名称",
+        "harness": "Harness 图标",
         "time": "时间",
         "pr": "PR 状态",
         "tokens": "Token",

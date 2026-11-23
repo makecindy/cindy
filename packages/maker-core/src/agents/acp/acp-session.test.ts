@@ -190,7 +190,18 @@ describe('ACP line decoder (host stdout chunks)', () => {
 describe('openAcpSession handshake', () => {
   it('negotiates v1 without client fs/terminal and drops MCP transports the agent did not advertise', async () => {
     const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    const warn = vi.fn();
+    const logger: Logger = {
+      trace: () => {},
+      debug: () => {},
+      info: () => {},
+      warn,
+      error: () => {},
+      fatal: () => {},
+      child: () => logger,
+    };
     const { session } = await open(agent, {
+      logger,
       mcpServers: [
         { type: 'http', name: 'cindy-tools', url: 'http://127.0.0.1:1/mcp', headers: [] },
         { name: 'local', command: '/bin/tool', args: [], env: [] },
@@ -204,6 +215,10 @@ describe('openAcpSession handshake', () => {
     expect(sessionNew).toMatchObject({ method: 'session/new', params: { cwd: '/work/project' } });
     expect((sessionNew.params as AcpRecord).mcpServers).toEqual([{ name: 'local', command: '/bin/tool', args: [], env: [] }]);
     expect(session.droppedMcpServers).toEqual(['cindy-tools']);
+    expect(warn).toHaveBeenCalledWith(
+      'acp: dropping MCP servers whose transport the agent did not advertise',
+      { dropped: ['cindy-tools'], mcpCapabilities: { http: false, sse: false } },
+    );
     expect(session.id).toBe('sess-1');
     expect(session.resumeOutcome).toBe('new');
   });

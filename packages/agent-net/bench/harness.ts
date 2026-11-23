@@ -188,7 +188,10 @@ async function processNetwork(profile: LinkProfile, cleanup: Array<() => Promise
     child.close();
   });
   // --no-line（只配 --remote-network）：不经线路代理，设备直接连另一台电脑上的中转；没有计量。
-  await call('init', { profile, direct: !!remote && process.argv.includes('--no-line') });
+  const direct = !!remote && process.argv.includes('--no-line');
+  // 明文直连拿不到中转的 UDP 凭据，Agent-Net 的数据报全走中转 WebSocket（见 network-process.ts 的说明）。
+  if (direct) console.warn('note: --no-line connects to the relay over plain http, so Agent-Net modes get no relay UDP: their datagrams go over the relay WebSocket (TCP).');
+  await call('init', { profile, direct });
   return {
     meters,
     async syncMeters() { Object.assign(meters, await call<Meters>('meters')); },

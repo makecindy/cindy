@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "更新電腦上的 Cindy 後即可查看",
   "usageUpdateDesktopCopy": "電腦上的 Cindy 版本較舊，還不能把用量同步到手機。更新後會自動顯示。",
   "management": {
+    "addCloud": "新增雲端主機",
+    "preparingCloud": "雲端主機 · 準備中",
+    "manageCloud": "管理雲端主機",
     "title": "裝置管理",
     "openDevice": "查看 {{name}} 的裝置詳細資訊",
     "details": "裝置詳細資訊",
@@ -390,6 +393,7 @@
       "showDeviceTasks": "查看任務",
       "openDevice": "開啟",
       "renameDevice": "重新命名",
+      "groupDevice": "裝置",
       "groupProject": "專案",
       "sortBy": {
         "priority": "優先順序",
@@ -431,11 +435,15 @@
       "showCollapsedTeammateAvatars": "收起時顯示頭像",
       "displayHeading": "顯示",
       "view": {
+        "card": "卡片",
         "text": "文字",
         "list": "列表"
       },
       "taskInfoHeading": "任務資訊",
       "taskInfo": {
+        "teammate": "夥伴頭像",
+        "project": "專案圖示和名稱",
+        "harness": "Harness 圖示",
         "time": "時間",
         "pr": "PR 狀態",
         "tokens": "Token",

@@ -15,18 +15,20 @@ import { WEB_SHIM_DEFINE } from '../src/web-client-build.mjs';
 import { chromium } from 'playwright-core';
 import { clientMigrationContract } from '../src/client-migration-contract.mjs';
 import { selectReleaseHarnesses } from '../src/release-harnesses.mjs';
-import { assertWebRegion, selectReleaseRegion } from '../src/release-region.mjs';
+import { assertWebRegion, selectReleaseRegion, validateDevelopmentEndpoints } from '../src/release-region.mjs';
 import { redundantCopies } from '../src/release-dependency-copies.mjs';
 
 const repo = fileURLToPath(new URL('../../..', import.meta.url));
 const host = path.join(repo, 'apps/host');
 const desktop = path.join(repo, 'apps/desktop');
 const { values } = parseArgs({ options: {
-  output: { type: 'string' }, region: { type: 'string' }, 'web-dir': { type: 'string' }, harnesses: { type: 'string' },
+  output: { type: 'string' }, region: { type: 'string' }, 'dev-endpoints': { type: 'boolean', default: false }, 'web-dir': { type: 'string' }, harnesses: { type: 'string' },
 } });
-if (!values.output) throw new Error('Usage: pnpm --filter @cindy/host build --output <new-directory> --region <cn|global> [--web-dir <renderer-build>] [--harnesses <name,...>]');
+if (!values.output) throw new Error('Usage: pnpm --filter @cindy/host build --output <new-directory> --region <cn|global> [--dev-endpoints] [--web-dir <renderer-build>] [--harnesses <name,...>]');
 // One release per edition, as the desktop: required, fixed at build time, checked before any work.
 const region = selectReleaseRegion(values.region);
+const devEndpoints = values['dev-endpoints'];
+if (devEndpoints && region !== 'cn') throw new Error('Development services require the cn Host edition');
 // Resolved before any build work so an invalid selection fails immediately.
 const harnessSelection = selectReleaseHarnesses({ option: values.harnesses });
 for (const warning of harnessSelection.warnings) console.warn(`Warning: ${warning}`);
@@ -169,9 +171,10 @@ try {
   const web = values['web-dir'] ? path.resolve(values['web-dir']) : path.join(desktop, '.vite/renderer/main_window');
   await fs.access(path.join(web, 'index.html'));
   // The web client is the desktop renderer, which bakes its region when it is built.
-  assertWebRegion(web, region);
+  assertWebRegion(web, devEndpoints ? 'dev' : region);
   const metadata = {
     version: (await readJson(path.join(desktop, 'package.json'))).version, region,
+    ...(devEndpoints && { environment: 'dev' }),
     platform: process.platform, arch: process.arch, modules: process.versions.modules,
     nodeVersion: process.versions.node,
   };
@@ -189,7 +192,15 @@ try {
   // with .ts extensions. This must not change their frozen runtime hashes.
   await fs.mkdir(path.join(resources, 'config'));
   for (const file of ['endpoint.json', 'endpoint.global.json']) {
-    await fs.copyFile(path.join(repo, 'config', file), path.join(resources, 'config', file));
+    const source = devEndpoints && file === 'endpoint.json' ? 'endpoint.dev.json' : file;
+    const manifest = path.join(repo, 'config', source);
+    if (source === 'endpoint.dev.json') {
+      const dev = await readJson(manifest);
+      const production = await Promise.all(['endpoint.json', 'endpoint.global.json']
+        .map(name => readJson(path.join(repo, 'config', name))));
+      validateDevelopmentEndpoints(dev, production);
+    }
+    await fs.copyFile(manifest, path.join(resources, 'config', file));
   }
   const vec = process.platform === 'win32' ? 'vec0.dll' : process.platform === 'darwin' ? 'vec0.dylib' : 'vec0.so';
   await fs.mkdir(path.join(resources, 'native'));

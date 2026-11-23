@@ -193,7 +193,9 @@ export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'u
   }
 }
 
-export async function readDesktopInputPermission(): Promise<DesktopPermissionStatus> {
+export async function readDesktopInputPermission(
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<DesktopPermissionStatus> {
   if (process.platform !== 'darwin') return 'notRequired';
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -207,7 +209,8 @@ export async function readDesktopInputPermission(): Promise<DesktopPermissionSta
       }),
     ]);
     // Only --request-permission may open the macOS authorization UI.
-    const { stdout } = await exec(binary, ['--check'], {
+    const args = operation === 'postEvents' ? ['--check', '--post-events'] : ['--check'];
+    const { stdout } = await exec(binary, args, {
       timeout: 5000,
       maxBuffer: 1024,
     });
@@ -276,11 +279,15 @@ export async function verifyDesktopOwner(
 export async function requestDesktopInputPermission(
   isCurrent: () => boolean,
   signal: AbortSignal,
-): Promise<void> {
-  if (process.platform !== 'darwin') return;
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<boolean> {
+  if (process.platform !== 'darwin') return true;
   const binary = await resolveBinary();
-  if (isCurrent())
-    await exec(binary, ['--request-permission'], { timeout: 5000, maxBuffer: 1024, signal });
+  if (!isCurrent()) return false;
+  const args = ['--request-permission'];
+  if (operation === 'postEvents') args.push('--post-events');
+  const { stdout } = await exec(binary, args, { timeout: 5000, maxBuffer: 1024, signal });
+  return stdout.trim() === 'ready';
 }
 
 export class DesktopInputHost {

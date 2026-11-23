@@ -9,7 +9,7 @@ import {
 import type { WsLike } from '@cindy/device-link';
 import { CERT_LIFETIME_MS, delegationEndpointCertificate, delegationVisibleTo, type Delegation, type DeviceView } from '@cindy/agent-net-protocol';
 import { frameMatchesDelegation, scopedFrame, delegatedPeerKey, delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
-import { DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
+import { AGENT_NET_SESSION_V2, DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
 import { SessionPeer, type SessionConfig, type SessionRole } from './session/peer.js';
 export type { SessionHandlers } from './session/peer.js';
 
@@ -330,7 +330,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     const scope = this.sessionConfig ? this.sessionScope(deviceId) : null;
     if (!scope) return;
     // Between devices of one account presence travels on the session too, so nothing on the connection is a Device Link frame.
-    peer.channel.declareSessions?.(scope.role === 'both' ? [SESSION_PRESENCE_FEATURE] : []);
+    // Session v2 (large messages on body streams of their own) whenever this channel reads body streams.
+    peer.channel.declareSessions?.([...(scope.role === 'both' ? [SESSION_PRESENCE_FEATURE] : []), ...(peer.channel.sessionBodies ? [AGENT_NET_SESSION_V2] : [])]);
     peer.channel.onSessionCapable?.(() => {
       const config = this.sessionConfig, wire = peer.channel.sessionWire?.();
       if (!config || !wire || this.closed || this.peers.get(deviceId) !== peer || this.sessions.has(scope.key)
@@ -344,16 +345,32 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         if (!current()) { session.dispose('UNAUTHORIZED'); return; }
         return handler(...args);
       });
+      const unauthorized = () => { queueMicrotask(() => session.dispose('UNAUTHORIZED')); return new Error('UNAUTHORIZED'); };
       const checked: SessionWire = {
         write: (lane, bytes) => {
-          if (!current()) { queueMicrotask(() => session.dispose('UNAUTHORIZED')); throw new Error('UNAUTHORIZED'); }
+          if (!current()) throw unauthorized();
           wire.write(lane, bytes);
         },
         get bufferedAmount() { return wire.bufferedAmount; },
         onData: (handler) => wire.onData(handler),
+        ...(wire.openBody ? {
+          openBody: (lane: Parameters<NonNullable<SessionWire['openBody']>>[0], key: number) => {
+            if (!current()) throw unauthorized();
+            const body = wire.openBody!(lane, key);
+            return body && {
+              write: (bytes: Uint8Array) => { if (!current()) throw unauthorized(); body.write(bytes); },
+              finish: () => body.finish(),
+              abandon: () => body.abandon(),
+            };
+          },
+        } : {}),
+        ...(wire.onBody ? { onBody: (handler: Parameters<NonNullable<SessionWire['onBody']>>[0]) => wire.onBody!(handler) } : {}),
       };
+      // Session v2 only when both ends declared it: an older node closes the connection on a body stream.
+      const bodies = !!wire.openBody && peer.channel.sessionBodies === true
+        && peer.channel.sessionFeatures?.().includes(AGENT_NET_SESSION_V2) === true;
       session = new SessionPeer({
-        wire: checked, role: scope.role, laneFor: config.laneFor,
+        wire: checked, role: scope.role, laneFor: config.laneFor, bodies,
         onOpen: guard(handlers.onOpen), onClose: guard(handlers.onClose), onRequest: guard(handlers.onRequest),
         onPush: guard(handlers.onPush),
         // This socket keeps presence for its Device Link client: a peer's session presence becomes the same local event as its frame.
@@ -673,6 +690,10 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.closed) return;
     this.transport?.networkChanged?.();
     if (!this.uplink) this.reconnectRelayNow(false);
+  }
+  /** Session requests to a relayed peer timed out (see Transport.relayStalled). */
+  relayStalled(): void {
+    if (!this.closed) this.transport?.relayStalled?.();
   }
   /**
    * This device's own route changed (the phone: Wi-Fi ↔ cellular, lost and back). Besides `networkChanged`, the relay

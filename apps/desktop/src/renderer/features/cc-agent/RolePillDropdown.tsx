@@ -1408,7 +1408,7 @@ export function RolePillDropdown({
         ref={triggerRef}
         type="button"
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border py-[3px] px-2.5',
+          'inline-flex items-center gap-1.5 rounded-full border py-0.5 px-2.5',
           'text-11 leading-none',
           // focused worker 出错时 trigger 也描红(dropdown 布局下它是常驻可见的当前 worker)
           currentAttention === 'error'

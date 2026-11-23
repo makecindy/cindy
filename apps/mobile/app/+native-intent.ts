@@ -122,6 +122,8 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     }
     // OAuth 冷启动回首页；热回跳不导航，保留正在处理授权的页面。
     // PKCE 仍由 AuthProvider 的独立 Linking 监听处理。其余深链沿用原规则。
+    const device = /^(?:(?:cindy|cindycn|cindydev):\/\/|\/)devices\/([A-Za-z0-9_-]{1,128})$/.exec(path);
+    if (device) return '/devices/' + device[1];
     if (pathname === '/auth') return initial ? '/' : null;
     // A restored launch URL is not proof of an unconsumed share. On cold start,
     // let IncomingShareBridge navigate only after reading an actual pending batch.

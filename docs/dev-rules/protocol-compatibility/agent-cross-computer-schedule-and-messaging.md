@@ -78,6 +78,12 @@ allowlist、数据库 migration 或第三台电脑转发。复合 ID 不交给�
 `failed_session_id` 为失败或结果未知项，`remaining_session_ids` 为未执行项；各 ID 保留设备前缀。
 `partial` 表示已有确认完成项或失败项结果未知，不能把整个远程批次当作事务。
 
+`snooze_sessions`（2026-11-22，稍后处理 / 取回）沿用同一拆批与批次合同。远程调用目标电脑界面已在用的
+`local-db:sessions:patch-meta(id, { snoozedUntil })`，回执行的 `snoozedUntil` 与请求值（工具已规范为
+ISO 毫秒时间、无限期哨兵或 `null`）一致才算完成，否则按结果未知停止。本机先确认整批存在且未删除，再逐个走
+`patchSessionMetaInDb`；中途失败同样返回已完成项，不回滚。没有新 channel、allowlist 或字段；与归档同属
+`TASK_ACTION_TOOLS`，本机与跨电脑调用都交给任务权限档。
+
 沿用同账号远控、双方允许控制、owner 检查与目标可见性。跨电脑写入进入当前任务权限档，
 本机操作保持原样。离线、禁用、撤权、不支持分别明确返回；旧宿主拒绝 `patch-meta` 时返回
 `REMOTE_UNSUPPORTED`。已支持这个 channel 和生命周期保护的旧宿主无需新增协议即可执行。
