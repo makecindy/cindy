@@ -149,6 +149,7 @@ import {
 } from './AttachmentCollection';
 import {
   AttachmentCollectionContext,
+  normalizedLiveCollectionItem,
   type AttachmentCollectionItem,
 } from './AttachmentCollectionContext';
 import {
@@ -517,6 +518,8 @@ function isDirectCacheable(src: string): boolean {
 /** The mounted content owns unsaved annotation state; every source switch goes through it. */
 type ImageLightboxContentProps = Omit<ImageLightboxProps, 'onSourceChangeCancelled'> & {
   leaveGuardRef?: { current: PreviewLeaveGuard | null };
+  onLeaveSettled?: () => void;
+  pendingSourceRef?: { current: ImageSourceSnapshot | null };
 };
 
 /**
@@ -533,9 +536,11 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const activeSourceRef = useRef(activeSource);
   const pendingSourceRef = useRef<ImageSourceSnapshot | null>(null);
   const sourceGuardInFlightRef = useRef(false);
-  const busySettlePendingRef = useRef(false);
   const settleSourceRef = useRef<(() => void) | null>(null);
   const sourceSettlementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestSettleAfterLeave = useCallback(() => {
+    settleSourceRef.current?.();
+  }, []);
   const contentLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
   const collectionLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
   const liveCollection = useContext(AttachmentCollectionContext);
@@ -551,7 +556,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
     if (!openingCollection) return null;
     return openingCollection.map((item): AttachmentCollectionItem => {
       const live = liveCollection?.find((next) => next.id === item.id);
-      return live ? { ...item, image: live.image } : item;
+      return live ? normalizedLiveCollectionItem({ ...item, image: live.image }) : item;
     });
   }, [openingCollection, liveCollection]);
   const activeLeaveGuardRef = items ? collectionLeaveGuardRef : contentLeaveGuardRef;
@@ -600,26 +605,20 @@ export function ImageLightbox(props: ImageLightboxProps) {
       sourceGuardInFlightRef.current = true;
       void guard(leave).then((outcome) => {
         sourceGuardInFlightRef.current = false;
-        const wasBusySettlePending = busySettlePendingRef.current;
-        if (outcome !== 'busy') busySettlePendingRef.current = false;
         if (disposed) {
           scheduleSettle();
           return;
         }
         if (outcome === 'applied') {
-          if (pendingSourceRef.current || wasBusySettlePending) scheduleSettle();
+          if (pendingSourceRef.current) scheduleSettle();
           return;
         }
-        if (outcome === 'busy') {
-          if (!busySettlePendingRef.current) {
-            busySettlePendingRef.current = true;
-            scheduleSettle();
-          }
-          return;
-        }
+        // A busy guard belongs to an independent leave operation. That
+        // operation calls requestSettleAfterLeave when its confirm lock clears;
+        // retrying here would only guess at its lifecycle.
+        if (outcome === 'busy') return;
         pendingSourceRef.current = null;
         onSourceChangeCancelledRef.current?.(activeSourceRef.current);
-        if (wasBusySettlePending) scheduleSettle();
       });
     };
     settleSourceRef.current = settle;
@@ -639,6 +638,8 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const contentProps: ImageLightboxContentProps = {
     ...activeSource,
     onClose: props.onClose,
+    onLeaveSettled: requestSettleAfterLeave,
+    pendingSourceRef,
     annotationDisabled,
     initialStrokes: activeSource.initialStrokes ?? acceptedAnnotationEdit?.initialStrokes,
     annotationEdit:
@@ -676,7 +677,9 @@ export function ImageLightbox(props: ImageLightboxProps) {
             ...(latestAnnotationEdit ?? {}),
             initialStrokes:
               imageProps?.initialStrokes ??
-              collectionAnnotationEdit?.initialStrokes ??
+              (collectionAnnotationEdit
+                ? collectionAnnotationEdit.initialStrokes ?? []
+                : undefined) ??
               baseAnnotationEdit?.initialStrokes ??
               latestAnnotationEdit?.initialStrokes,
             onDraftChange:
@@ -692,8 +695,13 @@ export function ImageLightbox(props: ImageLightboxProps) {
     return {
       ...contentProps,
       ...imageProps,
+      onLeaveSettled: requestSettleAfterLeave,
+      pendingSourceRef,
       annotationDisabled: collectionAnnotationDisabled,
-      initialStrokes: imageProps?.initialStrokes ?? contentProps.initialStrokes,
+      initialStrokes:
+        imageProps?.initialStrokes ??
+        (imageProps?.annotationEdit ? imageProps.annotationEdit.initialStrokes ?? [] : undefined) ??
+        contentProps.initialStrokes,
       annotationEdit,
     } as ImageLightboxContentProps;
   };
@@ -736,6 +744,8 @@ function ImageLightboxContent({
   autoAnnotate = false,
   annotationDisabled = false,
   leaveGuardRef,
+  onLeaveSettled,
+  pendingSourceRef,
 }: ImageLightboxContentProps) {
   const { t } = useTranslation();
   // 会话全量图片列表(MessageStream 下发);非聊天场景无 Provider 时为 null。
@@ -1036,6 +1046,7 @@ function ImageLightboxContent({
       // 两个监听之间清空),立即解除会让本组件的 keydown 再放弃一次。
       setTimeout(() => {
         confirmPendingRef.current = false;
+        onLeaveSettled?.();
       }, 0);
     }
     if (confirmed && mountedRef.current) annotationWriterRef.current.discard();
@@ -1089,6 +1100,7 @@ function ImageLightboxContent({
     } finally {
       setTimeout(() => {
         confirmPendingRef.current = false;
+        onLeaveSettled?.();
       }, 0);
     }
   };
@@ -1630,7 +1642,7 @@ function ImageLightboxContent({
   }, []);
 
   function handleClose() {
-    if (isClosingRef.current) return;
+    if (isClosingRef.current || pendingSourceRef?.current) return;
     isClosingRef.current = true;
     setIsVisible(false);
     setTimeout(() => {

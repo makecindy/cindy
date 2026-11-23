@@ -2,7 +2,11 @@
 import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
 import { memo, useContext, useMemo } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { collectSessionImageSrcs } from '@/components/chat/MessageStream';
+import {
+  collectSessionImageSrcs,
+  toolMediaImageItemId,
+} from '@/components/chat/MessageStream';
+import type { ToolMediaItem } from '@/components/chat/AgentActionRow';
 import { ImageGalleryContext } from '@/components/chat/ImageGalleryContext';
 import { createRenderItemMetadataProjection } from '@/components/chat/streamingMessageProjection';
 import { usePrevUserMessageInView } from '@/components/chat/usePrevUserMessageInView';
@@ -173,4 +177,23 @@ describe('derived consumers during a text stream', () => {
       flush();
     },
   );
+});
+
+// 测试价值
+// - 生产入口与可观察结果：工具媒体列表为图片生成集合 ID；视频/音频不占用图片序号，
+//   因此 [video, A, B] 的 A/B 与 collectSessionImageSrcs 投影的 image:0/1 一致。
+// - Bug／规则依据：#11952 round 14 review PRRT_kwDOTgdRUs66r4HC；
+//   docs/dev-rules/engineering-conventions.md §3.2。
+// - 现有覆盖缺口：既有投影测试只验证图片集合内容，没有验证混合媒体点击时的 ID 对齐。
+// - 最小失败输入：工具段先返回 video，再返回两张 image；修复前 A 得到 image:1、B 得到 image:2。
+// - tier：unit；复用现有 jsdom 文件，定向套件实测低于 5s。
+it('uses image-only ordinals for tool media collection IDs', () => {
+  const items: ToolMediaItem[] = [
+    { kind: 'video', url: 'cindy-media://blobs/video.mp4' },
+    { kind: 'image', url: 'cindy-media://blobs/a.png' },
+    { kind: 'image', url: 'cindy-media://blobs/b.png' },
+  ];
+  expect(toolMediaImageItemId('segment', items, 0)).toBeUndefined();
+  expect(toolMediaImageItemId('segment', items, 1)).toBe('segment:image:0');
+  expect(toolMediaImageItemId('segment', items, 2)).toBe('segment:image:1');
 });

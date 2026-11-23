@@ -21,6 +21,27 @@ export type AttachmentCollectionItem = PreviewItem & {
   image?: AttachmentCollectionImageProps;
 };
 
+/** A present live item with no strokes is an explicitly cleared draft, not a missing baseline. */
+export function normalizedLiveCollectionItem(
+  item: AttachmentCollectionItem,
+): AttachmentCollectionItem {
+  const liveStrokes =
+    item.image?.initialStrokes ?? item.image?.annotationEdit?.initialStrokes ?? [];
+  if (!item.image) {
+    return item.kind === 'image' ? { ...item, image: { initialStrokes: liveStrokes } } : item;
+  }
+  return {
+    ...item,
+    image: {
+      ...item.image,
+      initialStrokes: liveStrokes,
+      annotationEdit: item.image.annotationEdit
+        ? { ...item.image.annotationEdit, initialStrokes: liveStrokes }
+        : undefined,
+    },
+  };
+}
+
 export type PreviewLeaveOutcome = 'applied' | 'cancelled' | 'busy';
 export type PreviewLeaveGuard = (leave: () => void) => Promise<PreviewLeaveOutcome>;
 

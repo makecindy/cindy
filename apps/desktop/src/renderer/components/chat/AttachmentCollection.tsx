@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'rea
 import {
   AttachmentCollectionContext,
   ActivePreviewCollection,
+  normalizedLiveCollectionItem,
   type AttachmentCollectionItem,
   type PreviewLeaveGuard,
 } from './AttachmentCollectionContext';
@@ -9,6 +10,7 @@ export {
   AttachmentCollectionContext,
   ActivePreviewCollection,
   useOpeningCollection,
+  normalizedLiveCollectionItem,
   type AttachmentCollectionItem,
   type PreviewLeaveGuard,
   type PreviewLeaveOutcome,
@@ -52,7 +54,7 @@ export function AttachmentCollectionPreview({
   // those stable ids so returning to an item does not restore a stale draft.
   const items = snapshot.map((item) => {
     const live = openingItems.find((next) => next.id === item.id);
-    return live ? { ...item, image: live.image } : item;
+    return live ? normalizedLiveCollectionItem({ ...item, image: live.image }) : item;
   });
   const [start] = useState(() => {
     const byId = initialItemId

@@ -2819,6 +2819,20 @@ function renderItemKeyForClientId(items: readonly RenderItem[], clientId: string
  * 'tool_media' item(工具段外的产物流)与 'ghost_card' item 的回锚媒体
  * (卡正下方)。加新 kind 只需改 extractToolResultMedia + 这里加分支。
  */
+/** Match the image-only ordinal used by collectSessionImageSrcs / messageAttachmentCollections. */
+export function toolMediaImageItemId(
+  renderItemKey: string | undefined,
+  items: readonly ToolMediaItem[],
+  mediaIndex: number,
+): string | undefined {
+  if (!renderItemKey || items[mediaIndex]?.kind !== 'image') return undefined;
+  let imageIndex = 0;
+  for (let i = 0; i < mediaIndex; i += 1) {
+    if (items[i]?.kind === 'image') imageIndex += 1;
+  }
+  return `${renderItemKey}:image:${imageIndex}`;
+}
+
 function ToolMediaList({ items, sessionId, renderItemKey }: {
   items: ToolMediaItem[]; sessionId?: string; renderItemKey?: string;
 }) {
@@ -2836,7 +2850,7 @@ function ToolMediaList({ items, sessionId, renderItemKey }: {
             <div key={mediaKey} className="flex flex-col gap-1.5">
               <ChatImageView
                 src={m.url}
-                itemId={renderItemKey ? `${renderItemKey}:image:${i}` : undefined}
+                itemId={toolMediaImageItemId(renderItemKey, items, i)}
                 filename={`tool-image-${i + 1}`}
                 variant="tool-output"
                 modelFile={m.modelFile}
