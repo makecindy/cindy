@@ -15743,6 +15743,7 @@
         "ghApiCall": "呼 GitHub API"
       },
       "status": {
+        "resultUnknown": "結果未明",
         "running": "方行",
         "done": "已毕"
       }
@@ -19653,6 +19654,7 @@
       "qrExpired": "二维码已逾时，请重新起始",
       "registrationFailed": "立之未成，请稍后再试",
       "silentStopExhausted": "察得空答，自动续行已暂止。",
+      "piToolResultUnknown": "工具未報其果而 Pi 已退，成否未明。",
       "executionResultUnavailable": "未得行之结果，自动接续已止。可请助手察既有之结果。",
       "unexecutedToolMarkup": "模型以文字述工具之调用，未能核其执行结果，此轮未竟。",
       "outputLimit": "模型已达输出之限，此答或有不全。可遣新讯以续；若屡至此限，宜减思之深浅，或先压缩言谈录。",

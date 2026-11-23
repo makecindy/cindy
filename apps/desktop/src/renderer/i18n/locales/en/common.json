@@ -15817,6 +15817,7 @@
         "ghApiCall": "Call GitHub API"
       },
       "status": {
+        "resultUnknown": "Result unknown",
         "running": "Running",
         "done": "Completed"
       }
@@ -19728,6 +19729,7 @@
       "qrExpired": "QR code expired. Start again.",
       "registrationFailed": "Creation failed. Try again later.",
       "silentStopExhausted": "An empty response was detected. Automatic continuation is paused.",
+      "piToolResultUnknown": "Pi exited before the tool returned a result. The outcome is unknown.",
       "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
       "unexecutedToolMarkup": "The model wrote a tool call as text. Execution could not be confirmed, so this turn did not complete.",
       "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",

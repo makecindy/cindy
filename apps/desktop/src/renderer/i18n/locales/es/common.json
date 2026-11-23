@@ -15923,6 +15923,7 @@
         "ghApiCall": "Llamar a la API de GitHub"
       },
       "status": {
+        "resultUnknown": "Resultado desconocido",
         "running": "En ejecución",
         "done": "Completado"
       }
@@ -19913,6 +19914,7 @@
       "qrExpired": "El código QR venció, empieza de nuevo",
       "registrationFailed": "No se pudo crear, inténtalo de nuevo más tarde",
       "silentStopExhausted": "Se ha detectado una respuesta vacía. La continuación automática está en pausa.",
+      "piToolResultUnknown": "Pi se cerró antes de que la herramienta devolviera un resultado. Se desconoce el resultado.",
       "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pídele al asistente que verifique el resultado de la ejecución existente.",
       "unexecutedToolMarkup": "El modelo escribió una llamada a una herramienta como texto. No se pudo confirmar la ejecución, por lo que este turno no se completó.",
       "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce la intensidad de razonamiento o compacta primero el historial de la conversación.",

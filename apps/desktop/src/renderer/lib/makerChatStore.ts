@@ -531,6 +531,7 @@ export interface ChatMessage {
   toolInput?: unknown;
   /** Durable Agent/Task terminal state restored from the tool_use row. */
   agentTaskStatus?: AgentTaskTerminalStatus;
+  piToolResultUnconfirmed?: true;
   /**
    * Renderer-local timestamp for the latest in-place `update_plan` payload.
    * `createdAt` remains the persisted message creation time and must not be
@@ -20143,6 +20144,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolInput,
         ...replyToFields,
         ...(agentTaskStatus ? { agentTaskStatus } : {}),
+        ...(m.agentMeta?.piToolResultUnconfirmed === true ? { piToolResultUnconfirmed: true as const } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {
               terminalPlanSnapshot: true,

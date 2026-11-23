@@ -15751,6 +15751,7 @@
         "ghApiCall": "呼叫 GitHub API"
       },
       "status": {
+        "resultUnknown": "結果未知",
         "running": "執行中",
         "done": "已完成"
       }
@@ -19653,6 +19654,7 @@
       "qrExpired": "QR 碼已過期，請重新開始",
       "registrationFailed": "建立失敗，請稍後重試",
       "silentStopExhausted": "偵測到空回應，自動續跑已暫停。",
+      "piToolResultUnknown": "Pi 在工具傳回結果前結束，執行結果未知。",
       "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
       "unexecutedToolMarkup": "模型把工具呼叫寫成了文字，無法確認執行結果，本輪未完成。",
       "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",

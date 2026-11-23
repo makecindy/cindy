@@ -52,7 +52,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { Check, ChevronDown, ChevronRight } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, CircleHelp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   describeToolUse,
@@ -797,6 +797,10 @@ export function AgentActionRow({
   onActivateOverride,
 }: AgentActionRowProps) {
   const { t } = useTranslation();
+  const resultUnconfirmed = message.piToolResultUnconfirmed === true && toolResult === undefined;
+  const statusLabel = t(resultUnconfirmed
+    ? 'chat.agentActionRow.status.resultUnknown'
+    : status === 'running' ? 'chat.agentActionRow.status.running' : 'chat.agentActionRow.status.done');
   const processMedia = useMemo(() => readToolProcessMedia(toolResult), [toolResult]);
   const resultText = readToolProcessText(toolResult);
   const compactedToolResult = parseToolResultCompactionMarker(resultText);
@@ -1146,14 +1150,10 @@ export function AgentActionRow({
             AgentTaskCard 先例 — Thinking Orange 仅限 Running Status Bar。 */}
         <span
           role="img"
-          aria-label={
-            status === 'running'
-              ? t('chat.agentActionRow.status.running')
-              : t('chat.agentActionRow.status.done')
-          }
+          aria-label={statusLabel}
           className="inline-flex h-[18px] w-4 items-center justify-center shrink-0 text-[var(--msg-tool-card-chevron)]"
         >
-          {status === 'running' ? <Spinner size={13} /> : <Check size={13} />}
+          {resultUnconfirmed ? <CircleHelp size={13} /> : status === 'running' ? <Spinner size={13} /> : <Check size={13} />}
         </span>
         {!hideVerb && (
           <span className="text-14 text-[var(--msg-tool-card-chevron)] shrink-0">
@@ -1161,6 +1161,11 @@ export function AgentActionRow({
           </span>
         )}
         {displayCell}
+        {resultUnconfirmed && (
+          <span className="shrink-0 text-13 text-[var(--msg-tool-card-chevron)]" aria-hidden="true">
+            {statusLabel}
+          </span>
+        )}
         <span className="flex-1" />
         {stats && (
           <span className="font-mono text-13 font-medium shrink-0 flex gap-1">

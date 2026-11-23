@@ -122,7 +122,7 @@ vi.mock('../transport.js', async (importOriginal) => {
             });
             return;
           }
-          if (cmd.type === 'fixture_exit') return process.exit(23);
+          if (cmd.type === 'fixture_exit') return process.exit(cmd.code === 0 ? 0 : 23);
           output({ type: 'response', id: cmd.id, command: cmd.type, success: true,
             data: cmd.type === 'get_state'
               ? { sessionFile: '/fixture/session.jsonl', model: { id: 'm', provider: 'cindy', contextWindow: 200000 } }
@@ -321,6 +321,35 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     expect(usage.durationMs).toBeUndefined();
     expect(session!.isTurnRunning()).toBe(false);
   });
+
+  it.each([false, true])(
+    'reports the outstanding tool on a clean exit only when its result is missing (result=%s)',
+    async (withResult) => {
+      const { events, transport } = await start();
+      if (withResult) {
+        await transport.writeLine(JSON.stringify({
+          type: 'fixture_frames',
+          frames: [{ type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash',
+            result: { content: [{ type: 'text', text: 'fixture result' }] } }],
+        }));
+        await vi.waitFor(() => expect(events.find(event => event.type === 'tool_result_full')?.data)
+          .toMatchObject({ toolUseId: 'build-1', fullText: 'fixture result' }));
+      }
+      await transport.writeLine(JSON.stringify({ type: 'fixture_exit', code: 0 }));
+      await vi.waitFor(() => expect(events.find(event => event.type === 'error')).toBeDefined());
+      const error = events.find(event => event.type === 'error')!.data;
+      expect(error).toMatchObject({ isTerminal: true, message: expect.stringContaining('code=0') });
+      if (withResult) {
+        expect(error).not.toHaveProperty('unconfirmedToolUseIds');
+      } else {
+        expect(error).toMatchObject({
+          reason: 'pi-tool-result-unknown',
+          unconfirmedToolUseIds: ['build-1'],
+        });
+        expect(events.some(event => event.type === 'tool_result_full')).toBe(false);
+      }
+    },
+  );
 
   it('reports executor exit while a build descendant still holds the RPC pipes open', async () => {
     const { events, transport } = await start();

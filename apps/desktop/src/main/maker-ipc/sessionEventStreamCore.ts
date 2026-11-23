@@ -43,6 +43,16 @@ export function persistSessionStreamEventCore(
   let persistId: string | undefined;
   let resolvedContent: string | undefined;
   let persistedOnly = false;
+  if (event.type === 'error' && event.source === 'pi' && event.turnScope !== 'background'
+      && isTerminalTurnErrorEvent(event)) {
+    const ids = (event.data as { unconfirmedToolUseIds?: unknown })?.unconfirmedToolUseIds;
+    if (Array.isArray(ids)) {
+      deps.persistence.markPiToolResultsUnconfirmed(
+        session.id,
+        ids.filter((id): id is string => typeof id === 'string' && id.length > 0),
+      );
+    }
+  }
   if (
     event.source === 'codex' &&
     event.turnScope !== 'background' &&

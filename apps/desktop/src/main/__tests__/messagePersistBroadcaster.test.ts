@@ -249,6 +249,7 @@ import {
 import {
   persistToolProcessMedia,
   onToolUseEvent,
+  markPiToolResultsUnconfirmed,
   onAgentTaskUpdateEvent,
   persistCodexPlanOnDone,
   persistCodexPlanOnTerminalError,
@@ -330,6 +331,28 @@ beforeEach(() => {
   ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
+});
+
+// #10455: the terminal Pi report patches the durable tool-use row, even if a new turn
+// has already reused the native ID. No result exists for the affected call.
+it('broadcasts an unknown result on only the tool row bound to the exiting turn', async () => {
+  const input = { command: 'printf fixture' };
+  const affected = onToolUseEvent(SESSION, { toolUseId: 'call-1', toolName: 'bash', input }, null);
+  onToolUseEvent(SESSION, { toolUseId: 'call-2', toolName: 'bash', input }, null);
+  markPiToolResultsUnconfirmed(SESSION, ['call-1', 'unobserved', 'call-1']);
+  resetTurnPersistState(SESSION);
+  onToolUseEvent(SESSION, { toolUseId: 'call-1', toolName: 'bash', input }, null);
+  await drainPersistQueue();
+
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledExactlyOnceWith(
+    SESSION, affected, { piToolResultUnconfirmed: true },
+  );
+  expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledExactlyOnceWith(
+    SESSION, affected, expect.anything(),
+  );
+  expect(vi.mocked(createMessage).mock.calls.map(([, row]) => row.role)).toEqual([
+    'tool_use', 'tool_use', 'tool_use',
+  ]);
 });
 
 // #6884, unit: IM display projection must not change history. Existing text

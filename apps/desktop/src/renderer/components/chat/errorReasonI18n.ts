@@ -20,6 +20,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
   'unexecuted-tool-markup': 'logic.errors.unexecutedToolMarkup',
   'yield-continuation-incomplete': 'logic.errors.executionResultUnavailable',
+  'pi-tool-result-unknown': 'logic.errors.piToolResultUnknown',
   'output-limit': 'logic.errors.outputLimit',
   tool_use_loop_detected: 'logic.errors.toolUseLoopDetected',
   'permission-tighten-interrupt-failed': 'logic.errors.permissionTightenInterruptFailed',

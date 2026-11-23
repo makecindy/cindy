@@ -175,6 +175,8 @@ export interface CcMeta {
   fastModeState?: string;
   /** Host-persisted terminal lifecycle for the originating Agent/Task tool call. */
   agentTaskStatus?: AgentTaskTerminalStatus;
+  /** The local Pi process exited before returning this particular tool result. */
+  piToolResultUnconfirmed?: true;
 
   /**
    * Host-side delivery marker. SDKs generally do not echo user steer messages in

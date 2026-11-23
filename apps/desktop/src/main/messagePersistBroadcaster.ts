@@ -1011,7 +1011,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     Map<string, { persistId: string; input: unknown }>
   >();
 
-  const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
+  const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown; persistId?: string }>>();
   function getHistoryToolName(sessionId: string, toolUseId: string): string {
     return toolUseInfoBySession.get(sessionId)?.get(toolUseId)?.toolName ?? '';
   }
@@ -1496,17 +1496,19 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       return persistId;
     }
 
+    const existingPersistId =
+      !acpTool && isUpdatableToolUse(toolName) && toolUseId
+        ? updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
+        : undefined;
+    const persistId = existingPersistId ?? createId();
     if (toolUseId) {
       rememberToolUseId(sessionId, toolUseId, createdAt);
       getOrCreateSessionMap(toolUseInfoBySession, sessionId).set(toolUseId, {
         toolName,
         input: persistedInput,
+        persistId,
       });
     }
-    const existingPersistId =
-      !acpTool && isUpdatableToolUse(toolName) && toolUseId
-        ? updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
-        : undefined;
     if (existingPersistId) {
       const content = { toolUseId, toolName, input: persistedInput };
       enqueueWrite(`tool_use_update:${sessionId}:${existingPersistId}`, () =>
@@ -1518,7 +1520,6 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       notePersistedMessage(sessionId, 'tool_use', existingPersistId);
       return existingPersistId;
     }
-    const persistId = createId();
     const meta = agentTaskMetaForToolUse(
       sessionId,
       toolUseId,
@@ -1541,6 +1542,24 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     rememberCodexPlanRow(sessionId, toolName, toolUseId, persistId, persistedInput);
     notePersistedMessage(sessionId, 'tool_use', persistId);
     return persistId;
+  }
+
+  function markPiToolResultsUnconfirmed(sessionId: string, toolUseIds: readonly string[]): void {
+    const tools = toolUseInfoBySession.get(sessionId);
+    const clearBoundary = clearBoundaryBySession.get(sessionId);
+    for (const toolUseId of new Set(toolUseIds)) {
+      const persistId = tools?.get(toolUseId)?.persistId;
+      if (!persistId) continue;
+      enqueueWrite(`pi_tool_result_unknown:${sessionId}:${persistId}`, async (ownerScope) => {
+        if (clearBoundaryBySession.get(sessionId) !== clearBoundary) return;
+        const patched = await patchMessageAgentMetaWithResult(sessionId, persistId, {
+          piToolResultUnconfirmed: true,
+        });
+        if (patched && clearBoundaryBySession.get(sessionId) === clearBoundary) {
+          await broadcastMessageAgentMetaUpdate(sessionId, persistId, ownerScope);
+        }
+      });
+    }
   }
 
   /**
@@ -3438,6 +3457,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     onAgentTaskUpdateEvent,
     preserveTurnPersistStateForBackground,
     onToolUseEvent,
+    markPiToolResultsUnconfirmed,
     persistCodexPlanOnDone,
     persistCodexPlanOnTerminalError,
     prepareSyntheticToolEventForBroadcast,
