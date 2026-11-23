@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "사용할 수 없는 공유",
+      "offline": "{{name}} · 일시적으로 오프라인",
       "hostOutdated": "공유한 사람의 컴퓨터에 있는 Cindy 버전이 오래되어 이 모델을 불러올 수 없습니다. 상대방에게 Cindy를 업데이트해 달라고 한 뒤 다시 시도하세요.",
       "numbered": "{{name}} ({{index}})"
     },

@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "已不可用之分享",
+      "offline": "{{name}} · 暫離線",
       "hostOutdated": "分享者機上之 Cindy 版本過舊，讀不得此等模型。請彼更新 Cindy 而後再試。",
       "numbered": "{{name}} ({{index}})"
     },
