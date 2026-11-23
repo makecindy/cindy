@@ -8,7 +8,7 @@ import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
 import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
-import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
+import { BOT_MODEL_STARTUP_ADMISSION_REASON, BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotStartupAdmissionReason } from './botCandidateRecovery.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { SnapshotOperationDeadlineError } from '../utils/operationBudget.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -3474,7 +3474,7 @@ export class AgentInputCoordinator {
     const startupAdmissionInput = this.pendingStartupAdmissionInput(state);
     this.blockAutomaticOrcaReports(state);
     this.supersedePendingAutoResumeRecoveries(sessionId);
-    if (state.autoResumePending?.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) state.autoResumePending = null;
+    if (isBotStartupAdmissionReason(state.autoResumePending?.reason)) state.autoResumePending = null;
     this.cancelPreparedAutoResume(sessionId, state);
     if (state.activeTurn?.reconnectRecovery) state.activeTurn.stopped = true;
     this.abortInputBoundary(sessionId);
@@ -3902,7 +3902,7 @@ export class AgentInputCoordinator {
     // dispatch. Retry the existing input/receipt, never clone an uncertain send.
     const reportPreparation = opts?.auto && previousAutoResumeInfo?.reason === 'orca-report-preparation'
       && state.pendingQueue[0]?.orcaReportDelivery && !state.pendingQueue[0].orcaReportDelivery.recoveryBlocked;
-    const startupAdmission = opts?.auto && previousAutoResumeInfo?.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
+    const startupAdmission = opts?.auto && isBotStartupAdmissionReason(previousAutoResumeInfo?.reason);
     const waitingQueueHead = (usageWait || reportPreparation || startupAdmission) && recovery.kind === 'queue-head'
       && state.pendingQueue[0]?.clientId === recovery.clientId;
     if (automatic && !waitingQueueHead && (recovery.kind !== 'active-turn' || (!continueItem && !progressKnown))) {
@@ -4097,7 +4097,7 @@ export class AgentInputCoordinator {
     if (removed) this.removePendingCompactWaitClientId(state, removed.clientId);
     state.queueEditLocks = state.queueEditLocks.filter((id) => id !== clientId);
     if (state.recovery?.kind === 'queue-head' && state.recovery.clientId === clientId) {
-      if (state.autoResumePending?.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) {
+      if (isBotStartupAdmissionReason(state.autoResumePending?.reason)) {
         this.deps.onUserEnqueue?.(sessionId);
         state.autoResumePending = null;
         state.autoResumeAttemptToken = null;
@@ -4991,7 +4991,7 @@ export class AgentInputCoordinator {
     if (!opts?.preserveAutoResumeIntent) {
       const startupAdmissionInput = this.pendingStartupAdmissionInput(state);
       this.supersedePendingAutoResumeRecoveries(sessionId);
-      if (state.autoResumePending?.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) state.autoResumePending = null;
+      if (isBotStartupAdmissionReason(state.autoResumePending?.reason)) state.autoResumePending = null;
       if (startupAdmissionInput) this.notifyRejectedUserTurn(sessionId, startupAdmissionInput);
       // 任务被关闭：限额等待也一并撤销，到点不能把已关闭的任务重新拉起来。
       state.usageLimitWait = null;
@@ -5180,7 +5180,7 @@ export class AgentInputCoordinator {
     // 供应商组正在换电脑：错误先不呈现(没有红横幅、没有限额倒计时)，聊天流里只有「正在换一台电脑继续」。
     const groupSwitchHeld = isProviderGroupSwitchHoldLive(state);
     const error = groupSwitchHeld || (state.autoResumePending?.reason === 'orca-report-preparation'
-      || state.autoResumePending?.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) ? null : state.error;
+      || isBotStartupAdmissionReason(state.autoResumePending?.reason)) ? null : state.error;
     // Draining removes the queue row before asynchronous preparation starts.
     // Keep the existing recovery projection until dispatch settles; derive it
     // from the active owner so cancellation/failure cannot leave a stale flag.
@@ -6380,9 +6380,9 @@ export class AgentInputCoordinator {
         latest.queueAbortPending &&
         result.kind === 'session-dispatch' &&
         result.reason === 'cancelled-before-dispatch';
-      const startupAdmission = !item.orcaReportDelivery && result.kind === 'host-send'
-        && result.startupAdmission === 'subscription-account-limited';
-      const scheduledQuotaAdmission = startupAdmission && this.deps.isScheduledQuotaInput?.(item) === true;
+      const startupAdmission = !item.orcaReportDelivery && result.kind === 'host-send' ? result.startupAdmission : undefined;
+      const scheduledQuotaAdmission = startupAdmission === 'subscription-account-limited'
+        && this.deps.isScheduledQuotaInput?.(item) === true;
       if (!cancelledByUserBoundary && !startupAdmission) this.notifyRejectedUserTurn(sessionId, item);
       if (!cancelledByUserBoundary) this.recoverOrcaReportPreparation(sessionId, latest, item, result);
       // This receipt comes only from a proven-stopped bootstrap, before the
@@ -6390,7 +6390,8 @@ export class AgentInputCoordinator {
       // Bot membership, route changes and retry limits remain owned by the host.
       if (!latest.queueAbortPending && !latest.autoResumePending
         && startupAdmission && !scheduledQuotaAdmission) {
-        const signals = { reason: BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON };
+        const signals = { reason: startupAdmission === 'model-unavailable'
+          ? BOT_MODEL_STARTUP_ADMISSION_REASON : BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON };
         if (this.isResumableTurnErrorCandidate(sessionId, message, signals, item)) {
           const takeover = this.notifyResumableTurnError(sessionId, item, message, signals, false);
           if (takeover) {
@@ -6402,7 +6403,7 @@ export class AgentInputCoordinator {
       // A queued takeover still owns the original delivery receipt. Reject only
       // when no startup recovery owns it, or when that recovery is later abandoned.
       if (!cancelledByUserBoundary && startupAdmission
-        && latest.autoResumePending?.reason !== BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) {
+        && !isBotStartupAdmissionReason(latest.autoResumePending?.reason)) {
         this.notifyRejectedUserTurn(sessionId, item);
       }
       // The stopped bootstrap has no native turn to emit a quota terminal.
@@ -8215,7 +8216,7 @@ export class AgentInputCoordinator {
 
   private pendingStartupAdmissionInput(state: SessionInputState): AgentInputQueuedMessage | undefined {
     const recovery = state.recovery;
-    if (state.autoResumePending?.reason !== BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON
+    if (!isBotStartupAdmissionReason(state.autoResumePending?.reason)
       || recovery?.kind !== 'queue-head') return undefined;
     // Ending ownership must still find the original input after an allowed
     // queue reorder. Retry eligibility separately requires it to be the head.

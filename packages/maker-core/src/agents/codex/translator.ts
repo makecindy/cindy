@@ -60,6 +60,7 @@ import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from 
 import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
 import { codexResponseSampledTokens } from './app-server/response-timing.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
+import { AppServerResponseError } from './app-server/client.js';
 import {
   formatTerminalRateLimitRetryMessage,
   TERMINAL_RATE_LIMIT_RETRY_REASON,
@@ -859,6 +860,13 @@ export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
 
 export const CODEX_ACCOUNT_ACCESS_DENIED_REASON = 'account_access_denied';
 
+export function isCodexStartupModelUnavailableError(error: Error): boolean {
+  const data = error instanceof AppServerResponseError ? error.data : undefined;
+  const info = data && typeof data === 'object' && 'codexErrorInfo' in data
+    && data.codexErrorInfo === 'modelNotFound' ? 'modelNotFound' : undefined;
+  return isCodexModelUnavailableError({ message: error.message, codexErrorInfo: info });
+}
+
 /** Only traverse provider error envelopes, never arbitrary metadata or quoted prose. */
 function accountAccessDenial(value: unknown, depth = 0): { message: string } | null {
   if (depth > 8) return null;
@@ -938,6 +946,7 @@ export function isCodexModelUnavailableError(
 
   const info = error?.codexErrorInfo;
   const tag = codexErrorInfoTag(info);
+  if (tag === 'modelNotFound') return true;
   if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded'
     || tag === 'serverOverloaded' || tag === 'internalServerError'
     || tag === 'contextWindowExceeded' || tag === 'cyberPolicy') return false;

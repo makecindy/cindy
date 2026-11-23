@@ -48,6 +48,8 @@ export interface SchedulerQueuedPromptRequest {
   signal?: AbortSignal;
   /** Runs under the send lock before the live session is captured or a user row is written. */
   onPreparing?: () => Promise<void>;
+  /** The schedule owns its route for this run. */
+  explicitModelRoute?: boolean;
   /** Reject the queued run if preparation fails before dispatch. */
   onPreparationFailed?: (error: unknown) => void;
   /** The row exists but preparation/send failed; recovering retains this run. */
@@ -78,6 +80,7 @@ export interface SchedulerQueueBridge {
   runSignalFor(sessionId: string, item: AgentInputQueuedMessage): AbortSignal | undefined;
   /** Manual Continue uses its existing input id but shares failure/recovery ownership. */
   trackPrompt(clientId: string, req: SchedulerQueuedPromptRequest): SchedulerQueuedPromptRequest['onAccepted'];
+  rearmModelPreparation(sessionId: string, item: AgentInputQueuedMessage): void;
   removeQueuedPrompt(sessionId: string, clientId: string): void;
   /** 排队项(含派发中 / 可重试 recovery)是否仍被 coordinator 跟踪 —— runner 派发等待的存活探测。 */
   isPromptTracked(sessionId: string, clientId: string): boolean;
@@ -112,6 +115,11 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
   const schedulerQueuedPromptPreparations = deps.preparations;
   // Callback ownership only; recovery and its lifetime remain in the coordinator.
   const awaitingAcceptance = new Map<string, SchedulerQueuedPromptRequest>();
+  const awaitingPrompt = (sessionId: string, item: AgentInputQueuedMessage) => {
+    const req = awaitingAcceptance.get(item.clientId);
+    if (req?.sessionId === sessionId && item.origin?.kind === 'scheduler'
+      && req.origin.scheduleId === item.origin.scheduleId && req.origin.runId === item.origin.runId) return req;
+  };
   const recoverySourceClientId = (sessionId: string, item: AgentInputQueuedMessage): string | undefined => {
     if (!item.autoResume || !item.retrySourceClientId || item.origin?.kind !== 'scheduler') return;
     const req = awaitingAcceptance.get(item.retrySourceClientId);
@@ -128,6 +136,19 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
       deps.discardAcceptedCallback?.(clientId);
     }
   };
+  const registerPreparation = (clientId: string, req: SchedulerQueuedPromptRequest): void => {
+    if (req.onPreparing) {
+      schedulerQueuedPromptPreparations.set(clientId, {
+        onPreparing: req.onPreparing,
+        explicitModelRoute: req.explicitModelRoute,
+        onPreparationFailed: error => {
+          awaitingAcceptance.delete(clientId);
+          deps.discardAcceptedCallback?.(clientId);
+          req.onPreparationFailed?.(error);
+        },
+      });
+    }
+  };
   const trackPrompt = (clientId: string, req: SchedulerQueuedPromptRequest): SchedulerQueuedPromptRequest['onAccepted'] => {
     awaitingAcceptance.set(clientId, req);
     schedulerQueuedPromptDiscardWatchers.set(clientId, {
@@ -137,16 +158,7 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
         req.onDiscarded?.();
       },
     });
-    if (req.onPreparing) {
-      schedulerQueuedPromptPreparations.set(clientId, {
-        onPreparing: req.onPreparing,
-        onPreparationFailed: error => {
-          awaitingAcceptance.delete(clientId);
-          deps.discardAcceptedCallback?.(clientId);
-          req.onPreparationFailed?.(error);
-        },
-      });
-    }
+    registerPreparation(clientId, req);
     return async permissions => {
       awaitingAcceptance.delete(clientId);
       schedulerQueuedPromptDiscardWatchers.delete(clientId);
@@ -155,14 +167,14 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
     };
   };
   return {
-    runSignalFor: (sessionId, item) => {
-      const req = awaitingAcceptance.get(item.clientId);
-      if (req?.sessionId === sessionId && item.origin?.kind === 'scheduler'
-        && req.origin.scheduleId === item.origin.scheduleId && req.origin.runId === item.origin.runId) {
-        return req.signal;
+    runSignalFor: (sessionId, item) => awaitingPrompt(sessionId, item)?.signal,
+    trackPrompt,
+    rearmModelPreparation(sessionId, item) {
+      const req = awaitingPrompt(sessionId, item);
+      if (req && !req.signal?.aborted && !req.explicitModelRoute) {
+        registerPreparation(item.clientId, req);
       }
     },
-    trackPrompt,
     recoverySourceClientId,
     releasePrompt,
     onPersistedSendRejected: (sessionId, message, item, recovering = false) => {

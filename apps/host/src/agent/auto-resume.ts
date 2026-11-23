@@ -137,6 +137,8 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
     autoResumeBookkeeping,
     // Teammate tasks are refused at admission: no input carries a Teammate route to fall back from.
     botFallbackInputs: { has: () => false },
+    explicitScheduledModelInputs: undefined,
+    rearmScheduledModelPreparation: undefined,
     // Configured model groups are bound at dispatch in the desktop only.
     modelGroupInputs: undefined,
     resumeQuotaWait: undefined,

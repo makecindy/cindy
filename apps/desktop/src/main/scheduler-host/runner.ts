@@ -277,6 +277,7 @@ export interface SchedulerQueueDeps {
     text: string;
     persistedContent: string;
     inheritTargetPlanMode?: boolean;
+    explicitModelRoute?: boolean;
     origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
     /** Runs under the send lock before the queued Session is captured. */
     onPreparing?: () => Promise<void>;
@@ -2951,6 +2952,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ? `${UI_ACTION_TRIGGER_PREFIX}${schedule.prompt}`
           : schedule.prompt,
       origin,
+      explicitModelRoute: hasScheduledModelOverride(schedule),
       onPreparing: async () => {
         this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {

@@ -14164,10 +14164,13 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 // #10559, unit: real transaction + coordinator + recovery hooks/guard/bookkeeping.
 // Only bootstrap/native execution and route application are injected. Existing
 // turn-error tests never enter the cold, unpersisted queue-head failure boundary.
-describe('Bot subscription startup admission', () => {
-  function startupHarness(bot = true, opaque = false, rehydrate = false, quota = false) {
+describe('Bot startup admission', () => {
+  function startupHarness(bot = true, opaque = false, rehydrate = false, quota = false,
+    modelRejection?: { message: string; explicit?: boolean }) {
     const scheduledQuotaInputs = new WeakSet<object>();
     const h = createHarness({ isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts) });
+    const { schedulerBridge, preparations } = createInputEnqueueHarness(h.coordinator);
+    const preparedEngines: string[] = [];
     const attemptCurrent = vi.spyOn(h.coordinator, 'isAutoResumeAttemptCurrent');
     const sid = 'startup-admission';
     let backup = false;
@@ -14185,14 +14188,14 @@ describe('Bot subscription startup admission', () => {
         return { accepted: true as const };
       }),
     };
-    const failure = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
+    const failure = new Error(modelRejection?.message ?? '[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
     const bootstrap = vi.fn(async () => {
       if (!backup) throw opaque ? failure : new AgentStartupStoppedError(failure);
       return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
     });
     const transaction = createMakerSendTransaction({
       getMainClassicalStyle, getResolvedMainLocale, readMcpAppModelContext: id => mcpAppModelContext(id),
-      getSession: () => (rehydrate && !backup) || (quota && backup) ? session : undefined,
+      getSession: () => (rehydrate && !backup) || ((quota || modelRejection) && backup) ? session : undefined,
       readScheduledPermissions: async () => ({ permissionMode: 'ask', planModeEnabled: true }),
       closeSession: async () => {}, closeSessionIfCurrent: async () => {}, preflightBotRuntimeResources: async () => {},
       getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
@@ -14207,12 +14210,16 @@ describe('Bot subscription startup admission', () => {
       createDbMessage: async (id, row) => { await mocks.createMessage(id, row); },
       isSessionRunningError: () => false, log: mocks.logger,
     });
-    h.sendToAgent.mockImplementation(async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome);
+    h.sendToAgent.mockImplementation(async (...args) => {
+      await runSchedulerQueuedPreparation(args[3].persistUserMessage?.clientId, preparations, () => {});
+      return (await transaction.sendToAgentAccepted(...args)).outcome;
+    });
     const botFallbackInputs = new WeakSet<object>();
     const fallback = vi.fn(async (_sid: string, _episode: number, _token: number, _required: boolean, current: () => boolean) => {
       if (!current()) return { session: null, outcome: 'superseded' as const };
       backup = true;
-      h.setAgentKind('codex');
+      session.agentKind = modelRejection ? 'pi' : 'codex';
+      h.setAgentKind(session.agentKind);
       return { session: null, outcome: 'switched' as const };
     });
     const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
@@ -14232,7 +14239,10 @@ describe('Bot subscription startup admission', () => {
         isAutoResumeAttemptCurrent: (id, token) => h.coordinator.isAutoResumeAttemptCurrent(id, token),
         autoRetryLastError: (id, token) => h.coordinator.autoRetryLastError(id, token),
       }, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      botFallbackInputs, scheduledQuotaInputs,
+      explicitScheduledModelInputs: { has: () => modelRejection?.explicit === true },
+      rearmScheduledModelPreparation: schedulerBridge.rearmModelPreparation,
+      saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
       getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
       maybeApplySessionRuntimeFallback: fallback, pendingSessionRuntimeFallbackRebuilds: new Set<Session>(),
@@ -14243,16 +14253,66 @@ describe('Bot subscription startup admission', () => {
     h.isResumableTurnErrorCandidate.mockImplementation(hooks.canRecoverTurn);
     h.onResumableTurnError.mockImplementation(hooks.onResumableTurnError);
     const item = makeItem('original', 'original task', { createOpts: {
-      agentKind: 'claude-code', model: 'claude-opus-5-5', workingDir: '/repo', planMode: true,
+      agentKind: modelRejection ? 'codex' : 'claude-code',
+      model: modelRejection ? 'fixture-primary' : 'claude-opus-5-5', workingDir: '/repo', planMode: true,
     } });
     if (bot) botFallbackInputs.add(item.createOpts);
-    if (quota) {
+    if (quota || modelRejection) {
       item.origin = { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'daily-run' };
-      scheduledQuotaInputs.add(item.createOpts);
+      if (modelRejection) {
+        const accept = schedulerBridge.trackPrompt(item.clientId, {
+          sessionId: sid, origin: item.origin, text: 'original task', persistedContent: 'original task',
+          explicitModelRoute: modelRejection.explicit,
+          onPreparing: async () => { preparedEngines.push(session.agentKind); },
+          onAccepted: () => { expect(preparedEngines.at(-1)).toBe(session.agentKind); },
+        });
+        h.onAcceptedQueuedMessage.mockImplementation(async () => { await accept(); });
+      }
+      if (quota) scheduledQuotaInputs.add(item.createOpts);
     }
-    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent,
+    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent, preparedEngines,
       setAvailable: () => { backup = true; } };
   }
+
+  // #12082, unit: a cold scheduled wake through the real transaction and input
+  // coordinator. Only a stopped startup with a model code can preserve the
+  // delivery receipt and send the original task once on the backup.
+  it.each(['explicit-rejection', 'plain-404', 'explicit-route', 'unconfirmed'] as const)(
+    'handles a scheduled model rejection at the delivery boundary: %s', async mode => {
+      vi.useFakeTimers();
+      try {
+        const message = mode === 'plain-404' ? 'unexpected status 404 Not Found'
+          : 'unexpected status 404: {"error":{"code":"model_not_found","message":"Model fixture-primary is not available for this group"}}';
+        const h = startupHarness(true, mode === 'unconfirmed', false, false,
+          { message, explicit: mode === 'explicit-route' });
+        h.coordinator.enqueue(h.sid, h.item);
+        await flush();
+        await h.sendToAgent.mock.results[0].value;
+        await flush();
+        expect(h.session.send).not.toHaveBeenCalled();
+        expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(30_000);
+        await flush();
+
+        if (mode === 'explicit-rejection') {
+          await h.sendToAgent.mock.results[1].value;
+          expect(h.fallback).toHaveBeenCalledExactlyOnceWith(h.sid, 1, expect.any(Number), true, expect.any(Function));
+          expect(h.session.send).toHaveBeenCalledOnce();
+          expect(h.preparedEngines).toEqual(['codex', 'pi']);
+          expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'original task' });
+          expect(h.onUserMessagePersisted).toHaveBeenCalledOnce();
+          expect(h.coordinator.getProjection(h.sid).error).toBeNull();
+          expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+          expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId)).toEqual(['original', 'original']);
+        } else {
+          expect(h.fallback).not.toHaveBeenCalled();
+          expect(h.preparedEngines).toEqual(['codex']);
+          expect(h.session.send).not.toHaveBeenCalled();
+          expect(h.onRejectedUserTurn).toHaveBeenCalledOnce();
+        }
+      } finally { vi.useRealTimers(); }
+    },
+  );
 
   // Unit regression: #11082's proven-stopped startup receipt bypassed the quota
   // terminal path. Existing tests covered only running remote Schedule errors.

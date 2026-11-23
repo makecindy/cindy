@@ -7,6 +7,8 @@ import { SnapshotOperationDeadlineError } from '../utils/operationBudget.js';
 import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
   AgentStartupStoppedError,
+  CODEX_MODEL_UNAVAILABLE_MESSAGE,
+  isCodexStartupModelUnavailableError,
   TurnDispatchUnconfirmedError,
   PI_CACHE_RECOVERY_EXPECTATION,
   MODEL_REQUEST_CONTROL,
@@ -976,6 +978,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           createHostSendFailure('REHYDRATE_FAILED', err.message, { startupAdmission: 'subscription-account-limited' }),
         ) };
       }
+      if (startupError instanceof AgentStartupStoppedError && createOpts.agentKind === 'codex'
+        && err instanceof Error && isCodexStartupModelUnavailableError(err)) {
+        return { kind: 'failure', result: toCompatibleMakerSendResult(
+          createHostSendFailure('REHYDRATE_FAILED', CODEX_MODEL_UNAVAILABLE_MESSAGE, { startupAdmission: 'model-unavailable' }),
+        ) };
+      }
       // Let the input coordinator own verified group quota waits; generic host
       // failure results would erase the structured reset time before it sees it.
       if (err instanceof ProviderGroupUsageLimitError) throw err;
@@ -1107,6 +1115,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         && err.message.startsWith('[SUBSCRIPTION_ACCOUNT_LIMITED]')) {
         return { kind: 'failure', result: toCompatibleMakerSendResult(
           createHostSendFailure('LAZY_CREATE_FAILED', err.message, { startupAdmission: 'subscription-account-limited' }),
+        ) };
+      }
+      if (startupError instanceof AgentStartupStoppedError && createOpts.agentKind === 'codex'
+        && err instanceof Error && isCodexStartupModelUnavailableError(err)) {
+        return { kind: 'failure', result: toCompatibleMakerSendResult(
+          createHostSendFailure('LAZY_CREATE_FAILED', CODEX_MODEL_UNAVAILABLE_MESSAGE, { startupAdmission: 'model-unavailable' }),
         ) };
       }
       // Same boundary as rehydrate: preserve the branded error and its reset data.

@@ -874,6 +874,7 @@ export type CodexErrorInfo =
   | 'contextWindowExceeded'
   | 'sessionBudgetExceeded'
   | 'usageLimitExceeded'
+  | 'modelNotFound'
   /** 上游临时过载: HTTP 503 + `server_is_overloaded` / `slow_down`。 */
   | 'serverOverloaded'
   | 'cyberPolicy'
