@@ -4439,6 +4439,15 @@
         "groupLocal": "此機模型",
         "metaLocalRecommended": "薦 · 於 Cindy 內取下",
         "metaLocalConnect": "連方行之此機服務",
+        "configurePlugin": "配置",
+        "installAndConfigure": "安裝並配置",
+        "pluginLoading": "正讀法器…",
+        "engineState": {
+          "available": "已備",
+          "unavailable": "不可用",
+          "unknown": "候引擎報其狀"
+        },
+        "retryPlugin": "再試",
         "officialModelPlugins": "官方模型法器",
         "moreLocal": "更多此機服務"
       },

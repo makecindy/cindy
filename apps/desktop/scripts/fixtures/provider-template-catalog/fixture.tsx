@@ -12,7 +12,7 @@ function Page({ scenario }: { scenario: string }) {
   const [detected, setDetected] = useState<DetectedProviderDraft>();
   const [draft, setDraft] = useState<DetectedProviderDraft>();
   if (scenario === 'official-model-plugins') return <AddProviderWizard providers={[]}
-    onOpenMarketPlugin={id => { Object.assign(evidence, { pluginId: id }); }} onClose={() => undefined}
+    showOfficialModelPlugins onClose={() => undefined}
     onDone={() => undefined} onOpenCustomForm={() => undefined} />;
   return item.kind === 'wizard' || detected ? <AddProviderWizard providers={[]}
     entry={item.kind === 'wizard' ? { kind: 'preset', presetId: item.providerId } : undefined}
@@ -26,7 +26,8 @@ mountPage({
     const item = cases.find(c => c.id === ctx.case) ?? cases[0];
     const engine = { name: 'Antigravity', ghostId: 'cindy-antigravity-acp', pluginId: 'official-engine',
       sourceType: 'server', scope: 'public', publisherKind: 'official', releaseId: 'official-release' };
-    return { ...(ctx.case === 'official-model-plugins' ? { pluginMarket: {
+    return { ...(ctx.case === 'official-model-plugins' ? { ghosts: { listSync: () => ({ ghosts: [] }), onChanged: () => () => {} }, pluginMarket: {
+      detail: async () => ({ ...engine, installState: 'not-installed', manifest: { harnesses: [{ protocol: 'acp' }] } }),
       officialModelPlugins: async () => ({ items: [engine], officialIds: [engine.pluginId], totalOfficial: 1, nextCursor: null }),
       cancelOfficialModelPlugins: async () => {},
     } } : {}), maker: {

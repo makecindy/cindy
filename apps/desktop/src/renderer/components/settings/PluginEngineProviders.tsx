@@ -132,7 +132,7 @@ export function PluginTag({ size }: { size: 'row' | 'detail' }) {
 }
 
 function engineReady(engine: PluginEngineView): boolean {
-  return engine.availability.state !== 'unavailable';
+  return engine.availability.state === 'available';
 }
 
 /** 左栏里由插件提供的供应商：与本机供应商同一行式，接在它们下面，不参与拖动排序。 */
@@ -421,7 +421,7 @@ export function PluginEngineProviderDetail({
   const visibilityError = t('settings.providers.models.visibilityWriteFailed');
   const accessError = t('settings.providers.models.accessWriteFailed');
   const openPlugin = () => navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(engine.ghostId)}`);
-  const unavailable = !engine.suspended && !engineReady(engine);
+  const unavailable = !engine.suspended && engine.availability.state === 'unavailable';
   // 与模型选择器同一时机：打开时请插件重新上报模型(主进程按插件冷却)，新列表随推送到达。
   useEffect(() => {
     requestPluginEnginesRefresh(engine.ghostId);
@@ -432,7 +432,7 @@ export function PluginEngineProviderDetail({
       ? 'newChat.pluginEngines.unavailable'
       : engine.hidden
         ? 'settings.providers.pill.hidden'
-        : 'settings.providers.remote.statusReady';
+        : engineReady(engine) ? 'settings.providers.remote.statusReady' : 'settings.providers.wizard.engineState.unknown';
   return (
     <div data-testid="plugin-engine-provider-detail" className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 px-5 py-4">

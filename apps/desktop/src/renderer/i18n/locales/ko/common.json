@@ -4439,6 +4439,15 @@
         "groupLocal": "로컬 모델",
         "metaLocalRecommended": "추천 · Cindy에서 다운로드",
         "metaLocalConnect": "실행 중인 로컬 서버에 연결",
+        "configurePlugin": "설정",
+        "installAndConfigure": "설치 및 설정",
+        "pluginLoading": "플러그인 불러오는 중…",
+        "engineState": {
+          "available": "준비됨",
+          "unavailable": "사용할 수 없음",
+          "unknown": "엔진 상태 대기 중"
+        },
+        "retryPlugin": "다시 시도",
         "officialModelPlugins": "공식 모델 플러그인",
         "moreLocal": "기타 로컬 서버"
       },

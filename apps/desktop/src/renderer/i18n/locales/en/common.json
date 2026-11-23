@@ -4482,6 +4482,15 @@
         "groupLocal": "Local models",
         "metaLocalRecommended": "Recommended · download in Cindy",
         "metaLocalConnect": "Connect a running local server",
+        "configurePlugin": "Configure",
+        "installAndConfigure": "Install and configure",
+        "pluginLoading": "Loading plugin…",
+        "engineState": {
+          "available": "Ready",
+          "unavailable": "Unavailable",
+          "unknown": "Waiting for engine status"
+        },
+        "retryPlugin": "Retry",
         "officialModelPlugins": "Official model plugins",
         "moreLocal": "More local servers"
       },

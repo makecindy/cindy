@@ -19,6 +19,11 @@ export default {
       assert.equal(await row.count(), 1);
       await page.getByText(await ui.t('settings.providers.wizard.officialModelPlugins'), { exact: true }).waitFor();
       await ui.capture('official-list');
+      await row.click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.installAndConfigure') }).waitFor();
+      await ui.capture('official-setup');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.back') }).click();
+      assert.equal(await search.inputValue(), 'Antigravity');
       return;
     }
     assert.deepEqual(await page.evaluate(() => window.templateIds), presets.map(p => p.id));

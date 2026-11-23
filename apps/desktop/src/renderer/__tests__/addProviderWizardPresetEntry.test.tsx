@@ -759,8 +759,12 @@ describe('AddProviderWizard — preset 直达', () => {
       items: [{ name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine' }], officialIds: ['official-engine'], totalOfficial: null, nextCursor: 'community-only',
     });
     Object.assign(window.electronAPI, { pluginMarket: { officialModelPlugins: query, cancelOfficialModelPlugins: vi.fn().mockResolvedValue(undefined) } });
-    const open = vi.fn();
-    render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} onOpenMarketPlugin={open} />);
+    const detail = vi.fn().mockResolvedValue({ pluginId: 'official-engine', ghostId: 'engine', sourceType: 'server',
+      scope: 'public', publisherKind: 'official', releaseId: 'r1', installState: 'not-installed', manifest: { harnesses: [{ protocol: 'acp' }] } });
+    const install = vi.fn().mockRejectedValue({ code: 'MUTATION_CANCELLED' });
+    Object.assign(window.electronAPI.pluginMarket, { detail, install });
+    Object.assign(window.electronAPI, { ghosts: { listSync: () => ({ ghosts: [] }), onChanged: () => () => {} } });
+    render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} showOfficialModelPlugins />);
     await screen.findByText('settings.providers.wizard.officialModelPlugins');
     const search = screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' });
     fireEvent.change(search, { target: { value: 'deepseek' } });
@@ -769,7 +773,14 @@ describe('AddProviderWizard — preset 直达', () => {
     fireEvent.change(search, { target: { value: 'antigravity' } });
     expect(screen.queryByText('Image tool')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Antigravity/ }));
-    await waitFor(() => expect(open).toHaveBeenCalledWith('official-engine'));
+    await screen.findByRole('button', { name: 'settings.providers.wizard.installAndConfigure' });
+    expect(detail).toHaveBeenCalledWith('official-engine');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.installAndConfigure' }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith('official-engine', {
+      expectedReleaseId: 'r1', expectedManifest: { harnesses: [{ protocol: 'acp' }] }, allowSourceReplacement: false,
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' })).toHaveProperty('value', 'antigravity');
     expect(query).toHaveBeenCalledTimes(2);
     expect(query.mock.calls).toEqual([[null], ['next']]);
   });

@@ -4538,6 +4538,15 @@
         "groupLocal": "Modelos locales",
         "metaLocalRecommended": "Recomendado · descargar en Cindy",
         "metaLocalConnect": "Conecte un servidor local en ejecución",
+        "configurePlugin": "Configurar",
+        "installAndConfigure": "Instalar y configurar",
+        "pluginLoading": "Cargando el complemento…",
+        "engineState": {
+          "available": "Disponible",
+          "unavailable": "No disponible",
+          "unknown": "Esperando el estado del motor"
+        },
+        "retryPlugin": "Reintentar",
         "officialModelPlugins": "Complementos oficiales de modelos",
         "moreLocal": "Más servidores locales"
       },

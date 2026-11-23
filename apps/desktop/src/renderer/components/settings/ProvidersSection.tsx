@@ -4294,10 +4294,7 @@ export function ProvidersSection() {
             setWizard(null);
             if (reason !== 'connection-failed') toast.error(t('settings.providers.custom.nameSearchUnavailable'));
           } : undefined}
-          onOpenMarketPlugin={pluginId => {
-            setWizard(null);
-            setSearchParams({ tab: 'ghosts', market: pluginId });
-          }}
+          showOfficialModelPlugins
           onOpenCustomForm={() => {
             setWizard(null);
             setDialog({ mode: 'create' });
