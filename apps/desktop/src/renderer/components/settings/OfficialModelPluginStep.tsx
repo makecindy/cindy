@@ -23,8 +23,12 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
 }) {
   const { t } = useTranslation();
   const ghosts = useInstalledGhosts();
+  // Ignore unrelated plugin notifications so a settings webview keeps its form and login state.
+  const identity = JSON.stringify(ghosts.filter(g => g.manifest.id === item.ghostId).map(g => [
+    installedGhostStoragePart(g), g.namespace, g.manifest.version, ghostInstallApprovalToken(g.approval), g.enabled, Boolean(g.retirement),
+  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
   const [reload, setReload] = useState(0);
-  const [result, setResult] = useState<{ detail?: PluginMarketDetail; error?: string; roster: typeof ghosts }>();
+  const [result, setResult] = useState<{ detail?: PluginMarketDetail; error?: string; identity: string }>();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
   const pending = useRef(false);
@@ -42,18 +46,18 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
         if (detail.pluginId !== item.pluginId || detail.ghostId !== item.ghostId ||
             detail.scope !== 'public' || detail.sourceType !== 'server' || detail.publisherKind !== 'official' ||
             !detail.manifest.harnesses?.some(engine => engine.protocol === 'acp')) {
-          setResult({ error: 'settings.ghosts.market.errors.stateChanged', roster: ghosts });
+          setResult({ error: 'settings.ghosts.market.errors.stateChanged', identity });
           return;
         }
-        setResult({ detail, roster: ghosts });
+        setResult({ detail, identity });
       } catch (error) {
-        if (active && isDataOwnerGenerationCurrent(owner)) setResult({ error: pluginMarketErrorKey(error), roster: ghosts });
+        if (active && isDataOwnerGenerationCurrent(owner)) setResult({ error: pluginMarketErrorKey(error), identity });
       }
     }
     void load();
     return () => { active = false; };
-  }, [item, owner, ghosts, reload]);
-  const detail = result?.roster === ghosts ? result.detail : undefined;
+  }, [item, owner, identity, reload]);
+  const detail = result?.identity === identity ? result.detail : undefined;
   const installed = detail?.installState === 'installed' || detail?.installState === 'update-available';
   const ghost = detail && installed ? ghosts.find(g => marketItemMatchesInstalledGhost(detail, g)) : undefined;
   const approved = ghost?.approval.state === 'approved' && !ghost.retirement;
@@ -69,11 +73,12 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
     setBusy(true);
     setActionError('');
     try {
-      if (canInstall) await installReviewedMarketRelease(detail);
+      let targetInstance = instance;
+      if (canInstall) targetInstance = installedGhostStoragePart((await installReviewedMarketRelease(detail)).ghost);
       else if (approved && instance) await window.electronAPI.ghosts.setEnabled(instance, true, ghostInstallApprovalToken(ghost.approval));
       if (mounted.current && isDataOwnerGenerationCurrent(owner)) {
         setReload(v => v + 1);
-        requestPluginEnginesRefresh();
+        if (targetInstance) requestPluginEnginesRefresh(targetInstance);
       }
     } catch (cause) {
       if (mounted.current && isDataOwnerGenerationCurrent(owner) && extractIpcError(cause)?.code !== 'MUTATION_CANCELLED')
