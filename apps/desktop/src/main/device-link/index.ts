@@ -2100,10 +2100,11 @@ function connectionIssueForRenderer(issue: ConnectionIssuePayload | null): Rende
 /**
  * 设置页本机卡片的「重新加入」：这台设备被移除后，由用户在这台设备上让它回来（deviceRejoin.ts）。
  * 账号与中转按点击时的为准：每一跳请求发出前、每个等待点之后都核对，中途切号就整个停下（2026-11-23 review）。
- * 重连沿用 Agent-Net 拒绝身份时的同一条重建（restartDeviceLinkForRelayChange）：主连接可能从 Device Link 换回 Agent-Net。
+ * 重连只拉起被 4410 停下的主连接，别的账号分享来的任务与供应商连接照常运行（2026-11-23 review）。只有 Agent-Net 是否启用
+ * 因此变了（解除了对这台身份的拒绝）时，依赖它的整套运行环境按 Agent-Net 拒绝身份时的同一条路径重建。
  */
 export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }> {
-  const scope = activeOwnerScopeKey(), selection = agentNetSelectionKey();
+  const scope = activeOwnerScopeKey(), selection = agentNetSelectionKey(), agentNetWasActive = isAgentNetActive();
   const assertCurrent = () => {
     if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending() || agentNetSelectionKey() !== selection
       || activeSelfHostedRelay()) throw new Error('DEVICE_REJOIN_SCOPE_CHANGED');
@@ -2113,7 +2114,11 @@ export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }>
     officialFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: () => { assertCurrent(); return officialDeviceLinkApiBase(); } }),
     rejoinAgentNet: () => rejoinOfficialAgentNet(),
     agentNetRequired: () => agentNetRequiresEncryption(),
-    restartConnection: () => restartDeviceLinkForRelayChange(),
+    restartConnection: () => {
+      if (isAgentNetActive() !== agentNetWasActive) { restartDeviceLinkForRelayChange(); return; }
+      // start() brings back only the stopped main connection; running scoped connections are left as they are.
+      if (client && arbiter?.isOwner() && authManager.getAuthState().isAuthenticated) client.start();
+    },
     assertCurrent,
     warn: (message, error) => log.warn(message, error),
   });

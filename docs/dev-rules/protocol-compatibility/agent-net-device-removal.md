@@ -39,9 +39,10 @@ Agent-Net refuses this identity」（被拒后改走中转、签「没开」；�
   一次点击各发一次请求，不自动重试、不轮询；只动本机的连接，不影响其他设备（范围见下面「重连的范围」）。
 - **界面。** Desktop 设置页本机卡片在官方网络的「已移除」旁给「重新加入」（main 给连接问题带 `rejoinable`，自建中转不带）；
   删除确认框改为说明那台设备点「重新加入」即可回来。手机在横幅与首页连接行给同样的按钮（`apps/mobile/src/device-link/deviceRejoin.ts`）。
-- **重连的范围。** 4410 只停了主连接。手机与 Node Host 用 `start()` 只拉起这条主连接，别的账号分享来的任务连接照常运行
-  （2026-11-23 review）。Desktop 沿用 Agent-Net 拒绝身份时的同一条重建（`restartDeviceLinkForRelayChange`），因为主连接可能
-  从 Device Link 换回 Agent-Net。点击时的账号与中转在每个等待点之后核对，中途切号就整个停下，不替新账号入网或重连。
+- **重连的范围。** 4410 只停了主连接。手机、Node Host 与 Desktop 都用 `start()` 只拉起这条主连接，别的账号分享来的任务与
+  供应商连接照常运行（2026-11-23 review）。只有 Desktop 的 Agent-Net 是否启用因此变了（解除了对这台身份的拒绝，主连接要从
+  Device Link 换回 Agent-Net）时，才按 Agent-Net 拒绝身份时的同一条路径整套重建（`restartDeviceLinkForRelayChange`）。点击时的
+  账号与中转在每个等待点之后核对，中途切号就整个停下，不替新账号入网或重连。
 - **Node Host。** `cindy-host remote rejoin` 走同一流程（`apps/host/src/device-link.ts` 的 `rejoin` 复用 `rejoinRemovedDevice`；
   `agentNetNode.ts` 的 `rejoin` 不论本地证书是否过期都带 `rejoin: true` 重新入网）。Host 没有自建中转和「仅使用 Agent-Net」，Agent-Net
   回不来时照常走 Device Link。控制通道不传错误原文，结果和提示放在返回的 `rejoin` 里：旧服务端提示用 `cindy-host login` 重新登录；
