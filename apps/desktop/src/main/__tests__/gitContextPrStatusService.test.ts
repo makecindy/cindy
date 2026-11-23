@@ -981,6 +981,36 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
   });
 
+  // #12168: consecutive REST reads of the same head can have a missing GraphQL
+  // summary. Losing and regaining detail must not dispatch an otherwise idle task.
+  it('observes verified MR changes across missing summaries and resets the summary on a new head', async () => {
+    const target = { provider: 'gitlab' as const, host: 'git.example.com', owner: 'group', repo: 'project', prNumber: 7 };
+    const url = 'https://git.example.com/group/project/-/merge_requests/7';
+    const tasks = (['any', 'ci', 'review'] as const).map(change =>
+      schedule(change, url, { preRunHook: undefined, prTrigger: { url, change } }));
+    const runNow = vi.fn(async (_id: string) => null);
+    let now = 0;
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true, now: () => now });
+    const observe = async (headSha: string, failed: number | null, unresolvedCount: number | null, notes = 0) => {
+      now += 300_000;
+      runNow.mockClear();
+      watch.observe(target, { ...target, ok: true, status: 'open', htmlUrl: url, title: 'Fix', branch: 'fix',
+        headSha, checks: failed === null ? null : { total: 1, passed: 1 - failed, failed, pending: 0, skipped: 0 },
+        unresolvedCount, metadata: { user_notes_count: notes } });
+      await new Promise(resolve => setImmediate(resolve));
+      return runNow.mock.calls.map(([id]) => id);
+    };
+    expect(await observe('head1', null, null)).toEqual([]);
+    expect(await observe('head1', 0, 0)).toEqual([]);
+    expect(await observe('head1', null, null)).toEqual([]);
+    expect(await observe('head1', 0, 0)).toEqual([]);
+    expect(await observe('head1', null, null, 1)).toEqual(['any', 'review']);
+    expect(await observe('head1', 1, 1, 1)).toEqual(['any', 'ci', 'review']);
+    expect(await observe('head2', null, null, 1)).toEqual(['any']);
+    expect(await observe('head2', 0, 0, 1)).toEqual([]);
+  });
+
   it('handles review already outstanding when a GitLab follow-up starts, without waking again after success', async () => {
     const target = { provider: 'gitlab' as const, host: 'git.example.com', owner: 'group/sub', repo: 'project', prNumber: 7 };
     const url = 'https://git.example.com/group/sub/project/-/merge_requests/7';

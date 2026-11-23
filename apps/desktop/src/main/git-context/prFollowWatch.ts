@@ -58,8 +58,23 @@ export function prStatusSignature(result: PrStatusResult): string | null {
   ].join('|');
 }
 
-export function changesBetween(previous: string | undefined, current: string | undefined): PrChange[] {
+/** Optional GraphQL fields describe one MR head. A missing count is unknown, including when zero was last observed. */
+function withKnownMrSummary(signature: string, fallback: string | undefined): string {
+  if (!fallback) return signature;
+  const [status, head, checks, threads, ...rest] = signature.split('|');
+  const [, otherHead, otherChecks, otherThreads] = fallback.split('|');
+  if (!head || head !== otherHead) return signature;
+  return [status, head, checks || otherChecks, threads || otherThreads, ...rest].join('|');
+}
+
+export function changesBetween(previous: string | undefined, current: string | undefined, provider?: PrStatusQuery['provider']): PrChange[] {
   if (!previous || !current || previous === current) return [];
+  // When detail first becomes available, establish its baseline without treating it as a change.
+  if (provider === 'gitlab') {
+    current = withKnownMrSummary(current, previous);
+    previous = withKnownMrSummary(previous, current);
+    if (previous === current) return [];
+  }
   const changes: PrChange[] = ['any'];
   const [oldStatus, , oldChecks, oldThreads, , , oldReview, oldNotes, oldPipeline, oldBlocking] = previous.split('|');
   const [status, , checks, threads, , , review, notes, pipeline, blocking] = current.split('|');
@@ -106,14 +121,16 @@ export class PrFollowWatch {
 
   /** Record a fresh status; trigger the watching schedules when it changed. Never throws. */
   observe(query: PrStatusQuery, result: PrStatusResult): void {
-    const signature = prStatusSignature(result);
-    if (signature === null) return;
+    const fresh = prStatusSignature(result);
+    if (fresh === null) return;
     const key = prStatusKey(query);
     const previous = this.signatures.get(key);
+    const signature = query.provider === 'gitlab' ? withKnownMrSummary(fresh, previous) : fresh;
     this.signatures.delete(key);
     this.signatures.set(key, signature);
     if (this.signatures.size > MAX_TRACKED) this.signatures.delete(this.signatures.keys().next().value!);
-    if (previous === undefined || previous === signature) {
+    const changes = changesBetween(previous, signature, query.provider);
+    if (!changes.length) {
       this.retryPending();
       if (previous === undefined && result.ok && (result.status === 'merged' || (query.provider === 'gitlab' && result.status === 'closed'))) {
         const mergedAt = Date.parse(String((result.status === 'merged' ? result.metadata?.merged_at : result.metadata?.closed_at) ?? ''));
@@ -126,7 +143,6 @@ export class PrFollowWatch {
       return;
     }
     const url = sessionPrUrl(query);
-    const changes = changesBetween(previous, signature);
     void this.trigger(url, changes).catch((error) => {
       this.deps.log?.warn?.('pr follow watch trigger failed', {
         error: error instanceof Error ? error.message : String(error),

@@ -82,7 +82,7 @@ import {
 } from './prStatusService.js';
 
 import { fetchPrSummary } from './prSummary';
-import { PrFollowWatch } from './prFollowWatch';
+import { changesBetween, PrFollowWatch } from './prFollowWatch';
 import { getSchedulerIfInitialized, getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
 
 const gitlabSetupSubscriptions: Array<() => void> = [];
@@ -202,7 +202,7 @@ export async function refreshSchedulePr(url: string, schedule?: Schedule): Promi
   const [result] = await prStatusService.getStatuses([ref],
     { waitForFresh: true, refresh: true });
   if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
-  if (schedule && ref.provider === 'gitlab' && (!before || before === prFollowWatch.observedSignature(ref))) {
+  if (schedule && ref.provider === 'gitlab' && !changesBetween(before, prFollowWatch.observedSignature(ref), ref.provider).length) {
     await prFollowWatch.reconcileInitialMrWork(schedule, result);
   }
 }
