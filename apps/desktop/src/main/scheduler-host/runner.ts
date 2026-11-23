@@ -328,6 +328,8 @@ export interface MakerScheduleRunnerDeps {
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
+  /** Fire-local model defaults supplied by the host; never persisted into the schedule. */
+  resolveInheritedModel?: (schedule: Schedule) => Promise<Partial<Schedule> | null>;
   /** Saved quota waits deduplicate by schedule even when each fire creates a new task. */
   findUsageLimitWait?: (scheduleId: string) => Promise<string | null>;
   /**
@@ -1265,6 +1267,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
         durationMs: hook.durationMs,
         stdout: hook.stdout.slice(0, 200),
       });
+    }
+
+    if (!ctx.resumeSessionId && !schedule.model?.trim()) {
+      const inherited = await this.deps.resolveInheritedModel?.(schedule);
+      ctx.assertFireContext?.();
+      throwIfFireAborted(ctx.signal, 'inherited model resolution');
+      if (inherited) schedule = { ...schedule, ...inherited };
     }
 
     // isHeartbeat / sessionId 在 persistentSession 自我续命分支里可能被翻回新建路径，
@@ -4448,6 +4457,7 @@ function extractErr(data: unknown): string {
  * after a delete/pause won the race.
  */
 type FireAbortStage =
+  | 'inherited model resolution'
   | 'runner entry'
   | 'quota wait check'
   | 'queue snapshot restore'

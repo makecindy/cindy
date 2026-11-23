@@ -1085,6 +1085,48 @@ describe('BlueBubbles local ingress', () => {
     } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
 
+  // Windows CI run 45128422069 failed at concurrent publication. Unit: exercise the real
+  // downloadToFile entry with a brief rename lock; the real-filesystem case above cannot
+  // deterministically reproduce that Windows lock on other platforms. No real backoff waits.
+  it('publishes an original after brief file locks without losing the old destination', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-rename-lock-'));
+    const dest = path.join(root, 'original.mov');
+    await fs.writeFile(dest, 'old');
+    const rename = vi.spyOn(fs, 'rename');
+    for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+      rename.mockRejectedValueOnce(Object.assign(new Error('private-path'), { code }));
+    }
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response('original')));
+      const result = api.downloadToFile('g', dest).then(value => ({ value }), error => ({ error }));
+      await vi.waitFor(() => expect(rename).toHaveBeenCalled());
+      expect(await fs.readFile(dest, 'utf8')).toBe('old');
+      await vi.runAllTimersAsync();
+      expect(await result).toEqual({ value: 8 });
+      expect(await fs.readFile(dest, 'utf8')).toBe('original');
+      expect(await fs.readdir(root)).toEqual(['original.mov']);
+    } finally { vi.useRealTimers(); rename.mockRestore(); await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['EPERM', 'EIO'])('cleans up a failed original without replacing the old file (%s)', async code => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-rename-fail-'));
+    const dest = path.join(root, 'original.mov');
+    await fs.writeFile(dest, 'old');
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('private-path'), { code }));
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response('original')));
+      const result = api.downloadToFile('g', dest).then(value => ({ value }), error => ({ error }));
+      await vi.waitFor(() => expect(rename).toHaveBeenCalled());
+      await vi.runAllTimersAsync();
+      expect(await result).toMatchObject({ error: { code: 'BLUEBUBBLES_REQUEST_FAILED', message: 'BLUEBUBBLES_REQUEST_FAILED' } });
+      expect(rename).toHaveBeenCalledTimes(code === 'EPERM' ? 6 : 1);
+      expect(await fs.readFile(dest, 'utf8')).toBe('old');
+      expect(await fs.readdir(root)).toEqual(['original.mov']);
+    } finally { vi.useRealTimers(); rename.mockRestore(); await fs.rm(root, { recursive: true, force: true }); }
+  });
+
   // fetch_attachment backs on this: only an attachment of a message in this connected chat, streamed to disk.
   it('fetches an original only for an attachment of a message in that chat', async () => {
     const f = await fixture();
