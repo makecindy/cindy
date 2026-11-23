@@ -6860,7 +6860,7 @@
           "routeUnavailable": "Unavailable",
           "routeMeasuring": "Measuring…",
           "routeDirectUnavailableHint": "Direct connection is currently unavailable on this network",
-          "routePreferenceFailed": "Could not switch route. Please try again."
+          "routePreferenceFailed": "Could not switch route. Try again."
         },
         "protocol": {
           "agentNet": "Agent-Net",
