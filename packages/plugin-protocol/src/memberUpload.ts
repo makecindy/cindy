@@ -9,6 +9,7 @@ import {
 } from './internal/parse.js';
 import { isValidPluginResourceId } from './internal/pluginResourceId.js';
 import { isValidGhostId } from './manifest.js';
+import type { VisibilityAudience } from './visibilityAudience.js';
 
 export { PluginProtocolError } from './internal/parse.js';
 
@@ -80,6 +81,14 @@ export function isPluginMemberUploadFailureCode(
 export interface PreparePluginMemberUploadRequest {
   sizeBytes: number;
   sha256: string;
+  /**
+   * Visibility the member chose on the publish confirmation screen. Applied with this
+   * publish: a new plugin becomes visible to this audience once its first version is
+   * listed; an existing plugin changes immediately. Omitted keeps the current audience
+   * (new plugins default to all members). Older servers reject the field, so clients
+   * send it only when it changes the audience and the server supports author APIs.
+   */
+  visibilityAudience?: VisibilityAudience;
 }
 
 export interface PreparePluginMemberUploadResponse {
@@ -194,7 +203,9 @@ export function parsePreparePluginMemberUploadRequest(
   value: unknown,
 ): PreparePluginMemberUploadRequest {
   const raw = object(value, 'request');
-  const unknownKeys = Object.keys(raw).filter((key) => key !== 'sizeBytes' && key !== 'sha256');
+  const unknownKeys = Object.keys(raw).filter(
+    (key) => key !== 'sizeBytes' && key !== 'sha256' && key !== 'visibilityAudience',
+  );
   if (unknownKeys.length > 0) {
     throw new PluginProtocolError(`request 不接受字段: ${unknownKeys.join(', ')}`);
   }
@@ -208,7 +219,22 @@ export function parsePreparePluginMemberUploadRequest(
       `request.sizeBytes 必须是 1–${PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES} 的安全整数`,
     );
   }
-  return { sizeBytes: raw.sizeBytes, sha256: sha256(raw.sha256, 'request.sha256') };
+  // Shape only, like plugin-server. Callers that build the value use parseVisibilityAudience.
+  if (
+    raw.visibilityAudience !== undefined &&
+    (!raw.visibilityAudience ||
+      typeof raw.visibilityAudience !== 'object' ||
+      Array.isArray(raw.visibilityAudience))
+  ) {
+    throw new PluginProtocolError('request.visibilityAudience 必须是对象');
+  }
+  return {
+    sizeBytes: raw.sizeBytes,
+    sha256: sha256(raw.sha256, 'request.sha256'),
+    ...(raw.visibilityAudience !== undefined
+      ? { visibilityAudience: raw.visibilityAudience as VisibilityAudience }
+      : {}),
+  };
 }
 
 /** Validates that commit carries no package, path or identity override fields. */
