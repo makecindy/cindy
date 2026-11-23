@@ -103,10 +103,6 @@ describe('SessionItem activity time', () => {
     );
     expect(sessionItemSource).toContain('<SessionInfoMeta');
     expect(sessionItemSource).toContain('pieces={infoPieces}');
-    // 任务标签常显、紧跟标题，不再作为任务信息复选项进右侧信息槽。
-    expect(sessionItemSource).toMatch(
-      /<\/SidebarTitleMarquee>\s*\{\/\*[^*]*\*\/\}\s*<TaskTagDots tags=\{session\.tags\} \/>/,
-    );
     expect(sessionInfoMetaSource).toContain('formatSidebarTime(activityIso, t)');
     expect(sessionInfoMetaSource).toContain('text-sidebar-action-icon');
     expect(sessionItemSource).toContain('transition-opacity');

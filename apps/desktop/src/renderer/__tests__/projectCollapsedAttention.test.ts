@@ -207,25 +207,25 @@ describe('collapsed automation group right status', () => {
 });
 
 describe('collapsed project attention wiring', () => {
-  it('renders the aggregate status on the trailing slot while the project is collapsed', () => {
+  // 极简侧栏(2026-11-19):收起的项目行运行中 → 行尾灰色转圈;需要你看的 → 项目名加粗,
+  // 名字上带同名状态属性。两者都只在收起时出现，展开后由子任务行各自表达。
+  it('shows the collapsed aggregate as a trailing spinner or a bold project name', () => {
     const slotChrome = 'group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end';
     const gridChrome = 'grid h-6 grid-cols-[max-content] items-center justify-items-end';
-    expect(projectNodeSource).toContain('isCollapsed && collapsedStatusTone ? (');
+    expect(projectNodeSource).toContain('isCollapsed && lamp?.running ? (');
+    expect(projectNodeSource).toContain('<SidebarRightStatusIndicator kind="running" isActive={false} />');
     expect(projectNodeSource).toContain(
-      '<SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />',
+      'data-sidebar-right-status={isCollapsed && collapsedStatusTone ? collapsedStatusTone : undefined}',
     );
+    expect(projectNodeSource).toContain("isCollapsed && collapsedStatusTone && 'font-semibold text-foreground'");
     expect(projectNodeSource).not.toContain('AttentionDot');
     expect(projectNodeSource).toContain(slotChrome);
     expect(sessionItemSource).toContain(slotChrome);
     expect(projectNodeSource).toContain(gridChrome);
     expect(sessionItemSource).toContain(gridChrome);
-    const nameSpan = projectNodeSource.indexOf(
-      '<span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>',
-    );
+    const nameSpan = projectNodeSource.indexOf('data-sidebar-right-status={isCollapsed && collapsedStatusTone');
     const trailingSlot = projectNodeSource.indexOf(slotChrome);
-    const indicator = projectNodeSource.indexOf(
-      '<SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />',
-    );
+    const indicator = projectNodeSource.indexOf('<SidebarRightStatusIndicator kind="running" isActive={false} />');
     expect(nameSpan).toBeGreaterThan(0);
     expect(trailingSlot).toBeGreaterThan(nameSpan);
     expect(indicator).toBeGreaterThan(trailingSlot);

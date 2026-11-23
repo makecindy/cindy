@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import Sortable, { type SortableEvent } from 'sortablejs';
-import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getStartingSessionIds, markSessionStarting, resetSessionStartingStoreForTests, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -13,9 +13,6 @@ import {
   clearRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { ProjectsSection, type ProjectsSectionProps } from '../features/cc-agent/sidebar/sections/ProjectsSection';
-import { useConversationSearch } from '../features/cc-agent/sidebar/ConversationSearchBox';
-import { SidebarInlineSearch } from '../features/cc-agent/sidebar/SidebarInlineSearch';
-import { ConfirmDialogProvider, useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => {} },
@@ -32,12 +29,6 @@ vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', () => ({
   projectOrderWriteScopeForSelection: () => ({ kind: 'viewer' }),
   useLocalHostProjectOrder: () => ({ snapshot: { manualProjectOrder: [] } }),
   useRemoteHostProjectOrders: () => ({ orders: new Map() }),
-}));
-vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({ MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) => fold ? <button onClick={fold.onClick}>{fold.label}</button> : null }));
-// main 633e27c76 起设备段头包了远程桌面快捷入口(挂 device-link presence 订阅,需要
-// preload 桥);本文件只验证段头灯语与折叠豁免,段头壳层直接透传子节点。
-vi.mock('../features/cc-agent/sidebar/DeviceSectionHeader', () => ({
-  DeviceSectionHeader: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({ UnclassifiedSection: () => null }));
 // Keep ProjectsSection, its private SessionGroupNode, SessionEntryList, collapse model,
@@ -59,7 +50,9 @@ function remoteSessions(): Session[] {
   } as Session));
 }
 
-function props(groupDevice: boolean): ProjectsSectionProps {
+// 极简侧栏(2026-11-19)后不再有竖向设备分段;groupDevice 只是残留的本地设置,
+// 默认关闭,仅在「旧设置不再切段」的用例里打开。
+function props(groupDevice = false): ProjectsSectionProps {
   return {
     unclassified: [], projects: [], dialogues: [], allKnownProjects: [], allProjectKeysForOrder: ['local:known-project'],
     filter: {
@@ -87,8 +80,16 @@ function props(groupDevice: boolean): ProjectsSectionProps {
 }
 
 /** Three remote tasks in the shared dialogue group (limit 1, so two rows fold). */
-function groupProps(groupDevice: boolean): ProjectsSectionProps {
-  return { ...props(groupDevice), dialogues: remoteSessions() };
+function groupProps(): ProjectsSectionProps {
+  return { ...props(), dialogues: remoteSessions() };
+}
+
+/**
+ * 对话组在「对话」标签里不画组头(标签本身就是组);仍带组头、可收起的共享组是 Cindy Make。
+ * 同三条远程任务改成 Make 来源，复用同一份组头聚合灯与折叠豁免。
+ */
+function makeGroupProps(): ProjectsSectionProps {
+  return { ...props(), dialogues: remoteSessions().map((s) => ({ ...s, source: 'cindy-make' })) };
 }
 
 beforeEach(() => {
@@ -138,213 +139,11 @@ function activity(phase: typeof phases[number]) {
 }
 
 // Issue #6575: render real ProjectsSection headers and observe the contextmenu
-// boundary that opens the ancestor's organize menu. Existing lamp/drag tests do
-// not right-click headers. Minimal regression input: one grouped dialogue and a
-// bubbling, cancelable contextmenu event. Reuse this unit fixture to cover both
-// device layouts, the shared Make header and the real ProjectNode menu.
-// Standalone: 6.47s including pnpm (Vitest 5.01s, 2.68s collection); reuses
-// the existing component fixture without another jsdom file or module resets.
+// boundary that opens the ancestor's organize menu. Minimal regression input: the
+// shared Make header, a blank area and a project header with a bubbling,
+// cancelable contextmenu event. The dialogue group header (and its menu) is gone
+// since the chats tab became headerless (2026-11-19).
 describe('Sidebar group context menus', () => {
-  // Issue #6575 P1 / DESIGN §14.2: the actual header is distinct from Radix's
-  // positioning anchor. Existing key tests dispatched to an unfocused header,
-  // hiding the lost focus. Unit: real menu opened by either keyboard shortcut.
-  it.each(['ContextMenu', 'F10'])('returns focus to the dialogue header after %s then Escape', async (key) => {
-    const p = props(false);
-    p.dialogues = [{ id: 'dialogue', title: 'Dialogue task', status: 'active', workspaceKind: 'dialogue' } as Session];
-    render(<ProjectsSection {...p} />);
-    const header = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
-    header.focus();
-    fireEvent.keyDown(header, { key, shiftKey: key === 'F10' });
-    const menu = await screen.findByRole('menu');
-    fireEvent.keyDown(menu, { key: 'Escape' });
-    // Radix schedules close-auto-focus after its focus scope unmounts.
-    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
-    expect(screen.queryByRole('menu')).toBeNull();
-    expect(document.activeElement).toBe(header);
-    fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.keyDown(document.activeElement!, { key: ' ' });
-    expect(header.getAttribute('aria-expanded')).toBe('true');
-  });
-
-  it('keeps focus in the search field opened by a dialogue menu action', async () => {
-    const p = props(false);
-    p.dialogues = [{ id: 'dialogue', title: 'Dialogue task', status: 'active', workspaceKind: 'dialogue' } as Session];
-    function SidebarWithSearch() {
-      const [openSignal, setOpenSignal] = useState(0);
-      const search = useConversationSearch({ enabled: true, navigate: vi.fn(), allKnownProjects: [] });
-      return <>
-        <ProjectsSection {...p} onSearchDialogues={() => setOpenSignal((value) => value + 1)} />
-        <SidebarInlineSearch search={search} allKnownProjects={[]} openSignal={openSignal} />
-      </>;
-    }
-    render(<SidebarWithSearch />);
-    const header = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
-    header.focus();
-    fireEvent.keyDown(header, { key: 'ContextMenu' });
-    const menu = await screen.findByRole('menu');
-    fireEvent.click(within(menu).getByText('ccAgent.sidebar.dialogueAction.search'));
-    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
-    expect(screen.queryByRole('menu')).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'ccAgent.search.placeholder' }));
-  });
-
-  // #6641 / DESIGN §14.2: no-op/notification-only actions have no next focus
-  // owner; a real confirmation or search input must keep its own focus.
-  it('returns focus after an archive action opens no follow-up dialog', async () => {
-    const p = props(false);
-    p.dialogues = [{ id: 'running', title: 'Running', status: 'active', workspaceKind: 'dialogue' } as Session];
-    p.runningSessionIds = new Set(['running']);
-    render(<ProjectsSection {...p} />);
-    const header = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
-    header.focus();
-    fireEvent.keyDown(header, { key: 'ContextMenu' });
-    fireEvent.click(within(await screen.findByRole('menu')).getByText('ccAgent.sidebar.projectAction.archivedAll'));
-    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
-    expect(p.onArchiveAllDialogues).toHaveBeenCalledWith(p.dialogues);
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(document.activeElement).toBe(header);
-  });
-
-  it('keeps focus in the confirmation opened by an archive action', async () => {
-    const p = props(false);
-    p.dialogues = [{ id: 'dialogue', title: 'Dialogue task', status: 'active', workspaceKind: 'dialogue' } as Session];
-    function SidebarWithConfirmation() {
-      const { confirm } = useConfirmDialog();
-      return <ProjectsSection {...p} onArchiveAllDialogues={() => {
-        void confirm({ title: 'Archive sessions', description: 'Archive this group?', cancelText: 'Keep sessions' });
-      }} />;
-    }
-    render(<ConfirmDialogProvider><SidebarWithConfirmation /></ConfirmDialogProvider>);
-    const header = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
-    header.focus();
-    fireEvent.keyDown(header, { key: 'ContextMenu' });
-    fireEvent.click(within(await screen.findByRole('menu')).getByText('ccAgent.sidebar.projectAction.archivedAll'));
-    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
-    expect(document.activeElement).toBe(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Keep sessions' }));
-  });
-
-  it('preserves focus on an outside input when the menu is dismissed', async () => {
-    const p = props(false);
-    p.dialogues = [{ id: 'dialogue', title: 'Dialogue task', status: 'active', workspaceKind: 'dialogue' } as Session];
-    render(<><ProjectsSection {...p} /><input aria-label="Outside search" /></>);
-    const outside = screen.getByRole('textbox', { name: 'Outside search' });
-    const header = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
-    header.focus();
-    fireEvent.keyDown(header, { key: 'ContextMenu' });
-    await screen.findByRole('menu');
-    fireEvent.pointerDown(outside, { pointerType: 'mouse', button: 0 });
-    outside.focus();
-    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
-    expect(screen.queryByRole('menu')).toBeNull();
-    expect(document.activeElement).toBe(outside);
-  });
-
-  // The dedicated menu must act on the full group, including folded rows, and
-  // never expose project actions or silently archive a local subset of a mixed group.
-  // #6641: pinned rows are absent from the visible list but remain searchable,
-  // participate in remote guards and stay within their owning device section.
-  it.each(['active', 'archived'] as const)('offers scoped search and bulk %s actions for local dialogues', async (status) => {
-    const p = props(false);
-    p.filter.status = status;
-    p.dialogues = ['first', 'folded'].map((id) => ({
-      id, title: id, status, workspaceKind: 'dialogue', pinnedAt: null,
-      createdAt: '2026-09-03', updatedAt: '2026-09-03',
-    } as Session));
-    const pinned = { ...p.dialogues[0], id: 'pinned', pinnedAt: '2026-10-21' };
-    const make: Session = { ...p.dialogues[0], id: 'make', source: 'cindy-make' };
-    p.dialogueActionSessions = [...p.dialogues, pinned, make];
-    render(<ProjectsSection {...p} />);
-    const header = screen.getByText('ccAgent.sidebar.dialogues').closest('[role="button"]')!;
-    expect(screen.queryByTestId('row-folded')).toBeNull();
-    expect(screen.queryByTestId('row-pinned')).toBeNull();
-    fireEvent.contextMenu(header);
-    let menu = await screen.findByRole('menu');
-    expect(within(menu).getAllByRole('menuitem')).toHaveLength(2);
-    fireEvent.click(within(menu).getByText('ccAgent.sidebar.dialogueAction.search'));
-    expect(p.onSearchDialogues).toHaveBeenCalledWith([...p.dialogues, pinned]);
-    fireEvent.contextMenu(header);
-    menu = await screen.findByRole('menu');
-    fireEvent.click(within(menu).getByText(status === 'archived'
-      ? 'ccAgent.sidebar.dialogueAction.restoreAll'
-      : 'ccAgent.sidebar.projectAction.archivedAll'));
-    expect(p.onArchiveAllDialogues).toHaveBeenCalledWith([...p.dialogues, pinned]);
-  });
-
-  it('disables bulk actions when the only remote member is pinned', async () => {
-    const p = props(false);
-    p.dialogues = [{ id: 'local', title: 'Local', status: 'active', workspaceKind: 'dialogue' } as Session];
-    const remotePinned = { ...p.dialogues[0], id: 'pinned-remote', pinnedAt: '2026-10-21', deviceLinkDeviceId: 'remote' };
-    p.dialogueActionSessions = [...p.dialogues, remotePinned];
-    render(<ProjectsSection {...p} />);
-    fireEvent.contextMenu(screen.getByText('ccAgent.sidebar.dialogues').closest('[role="button"]')!);
-    const menu = await screen.findByRole('menu');
-    const archive = within(menu).getByRole('menuitem', { name: /ccAgent.sidebar.projectAction.archivedAll/ });
-    expect(archive.getAttribute('aria-disabled')).toBe('true');
-    fireEvent.click(archive);
-    expect(p.onArchiveAllDialogues).not.toHaveBeenCalled();
-    fireEvent.click(within(menu).getByText('ccAgent.sidebar.dialogueAction.search'));
-    expect(p.onSearchDialogues).toHaveBeenCalledWith([...p.dialogues, remotePinned]);
-  });
-
-  it('keeps pinned members within their own device section for group actions', async () => {
-    const p = props(true);
-    p.dialogues = [{ id: 'local', title: 'Local', status: 'active', workspaceKind: 'dialogue' } as Session];
-    const localPinned = { ...p.dialogues[0], id: 'pinned-local', pinnedAt: '2026-10-21' };
-    const remotePinned = { ...localPinned, id: 'pinned-remote', deviceLinkDeviceId: 'remote' };
-    p.dialogueActionSessions = [...p.dialogues, localPinned, remotePinned];
-    render(<ProjectsSection {...p} />);
-    fireEvent.contextMenu(screen.getByText('ccAgent.sidebar.dialogues').closest('[role="button"]')!);
-    fireEvent.click(within(await screen.findByRole('menu')).getByText('ccAgent.sidebar.projectAction.archivedAll'));
-    expect(p.onArchiveAllDialogues).toHaveBeenCalledWith([...p.dialogues, localPinned]);
-  });
-
-  it.each([false, true])('disables bulk actions when a dialogue group contains remote tasks, mixed %s', async (mixed) => {
-    const p = props(false);
-    p.dialogues = [{ ...remoteSessions()[0], id: 'remote-dialogue' }];
-    if (mixed) p.dialogues.push({ ...p.dialogues[0], id: 'local-dialogue', deviceLinkDeviceId: undefined });
-    render(<ProjectsSection {...p} />);
-    fireEvent.contextMenu(screen.getByText('ccAgent.sidebar.dialogues').closest('[role="button"]')!);
-    const menu = await screen.findByRole('menu');
-    const archive = within(menu).getByRole('menuitem', { name: /ccAgent.sidebar.projectAction.archivedAll/ });
-    expect(archive.getAttribute('aria-disabled')).toBe('true');
-    expect(within(menu).getByText('ccAgent.sidebar.dialogueAction.remoteBulkUnavailable')).toBeTruthy();
-    fireEvent.click(archive);
-    expect(p.onArchiveAllDialogues).not.toHaveBeenCalled();
-    fireEvent.click(within(menu).getByText('ccAgent.sidebar.dialogueAction.search'));
-    expect(p.onSearchDialogues).toHaveBeenCalledWith(p.dialogues);
-  });
-
-  it.each([false, true])('contains dialogue right-clicks and preserves its controls, device grouping %s', async (groupDevice) => {
-    const p = props(groupDevice);
-    p.dialogues = [{ ...remoteSessions()[0], id: 'dialogue', title: 'Dialogue task' }];
-    const onSidebarContextMenu = vi.fn();
-    render(<div onContextMenu={onSidebarContextMenu}><ProjectsSection {...p} /></div>);
-    const header = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
-    const event = createEvent.contextMenu(header);
-    fireEvent(header, event);
-    expect(event.defaultPrevented).toBe(true);
-    expect(onSidebarContextMenu).not.toHaveBeenCalled();
-    expect(header.getAttribute('aria-expanded')).toBe('true');
-    fireEvent.keyDown(await screen.findByRole('menu'), { key: 'Escape' });
-
-    fireEvent.click(header);
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.keyDown(header, { key: 'Enter' });
-    expect(header.getAttribute('aria-expanded')).toBe('true');
-    fireEvent.keyDown(header, { key: ' ' });
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-
-    const create = within(header).getByRole('button', { name: 'ccAgent.sidebar.newDialogue' });
-    fireEvent.contextMenu(create);
-    expect(onSidebarContextMenu).not.toHaveBeenCalled();
-    fireEvent.click(create);
-    expect(p.onCreateDialogue).toHaveBeenCalledWith(
-      groupDevice ? { deviceId: 'remote', deviceName: 'Remote device' } : undefined,
-    );
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-  });
-
   it('preserves the shared Make header, blank-area events and the project menu', async () => {
     const p = props(false);
     p.dialogues = [{ ...remoteSessions()[0], id: 'make', source: 'cindy-make' }];
@@ -415,83 +214,151 @@ describe('Manual project sorting', () => {
   });
 });
 
-describe.each([false, true])('Dialogue groups with device grouping %s', (groupDevice) => {
-  it.each(phases)('renders the collapsed group header lamp for remote %s', (phase) => {
-    activity(phase);
-    render(<ProjectsSection {...groupProps(groupDevice)} />);
-    expect(Boolean(screen.queryByText('Remote device'))).toBe(groupDevice);
-    const header = groupHeader();
-    expectLamp(header, null);
-    fireEvent.click(header);
-    expectLamp(header, phase);
+function makeHeader() {
+  return screen.getByText('settings.cindyMake.title').closest<HTMLElement>('[role="button"]')!;
+}
+/**
+ * 极简侧栏的状态观测点:运行中 = 行尾转圈(data-sidebar-right-status="running");
+ * 出错 / 等你回复 / 完成未读 = 加粗标题上的同名属性。一个组头最多只亮一种。
+ */
+function expectLamp(header: Element, phase: typeof phases[number] | null) {
+  const tone = phase === 'needs-interaction' ? 'awaiting' : phase === 'completed' ? 'done' : phase;
+  const kinds = Array.from(header.querySelectorAll('[data-sidebar-right-status]')).map((node) =>
+    node.getAttribute('data-sidebar-right-status'),
+  );
+  expect(kinds).toEqual(tone ? [tone] : []);
+  if (tone && tone !== 'running') {
+    expect(header.querySelector(`[data-sidebar-right-status="${tone}"]`)!.className).toContain('font-semibold');
+  }
+}
+
+describe('Chats tab', () => {
+  it('lists dialogues only under the chats tab, without a group header', () => {
+    localStorage.setItem('sidebar.collapse.projectSessionLimit', '10');
+    const view = render(<ProjectsSection {...groupProps()} />);
+    expect(screen.queryByTestId('row-first')).toBeNull();
+    view.rerender(<ProjectsSection {...groupProps()} mainTab="chats" />);
+    expect(screen.queryByText('ccAgent.sidebar.dialogues')).toBeNull();
+    expect(screen.getAllByTestId(/^row-/).map((row) => row.textContent)).toEqual(['first', 'idle', 'lit']);
   });
 
   it.each(phases)('reveals the remote %s row beyond the group limit without Show all', (phase) => {
     activity(phase);
-    render(<ProjectsSection {...groupProps(groupDevice)} />);
+    render(<ProjectsSection {...groupProps()} mainTab="chats" />);
     expect(screen.getByTestId('row-first')).toBeTruthy();
     expect(screen.queryByTestId('row-idle')).toBeNull();
     expect(screen.queryByTestId('row-lit')).not.toBeNull();
     expect(screen.getByText('ccAgent.sidebar.showAllSessions')).toBeTruthy();
   });
 
-  it('updates the rendered group on remote activity and shows its header lamp only while collapsed', () => {
-    render(<ProjectsSection {...groupProps(groupDevice)} />);
+  it('reveals and re-folds a row as its remote activity starts and clears', () => {
+    const p = groupProps();
+    render(<ProjectsSection {...p} mainTab="chats" />);
     expect(screen.queryByTestId('row-lit')).toBeNull();
-    const header = groupHeader();
-    expect(header.querySelector('.session-status-breathing')).toBeNull();
+    act(() => activity('running'));
+    fireEvent.click(screen.getByTestId('row-lit'));
+    expect(p.onSessionClick).toHaveBeenCalledWith('lit');
+    act(() => clearRemoteSessionActivity());
+    expect(screen.queryByTestId('row-lit')).toBeNull();
+  });
+
+  // 旧「按设备分组」设置留在本地时,对话仍是一份完整列表,不按电脑切段。
+  it('keeps every device in one dialogue list with the legacy device grouping setting on', () => {
+    const p = props(true);
+    const sessions = remoteSessions();
+    p.dialogues = [
+      { ...sessions[0], id: 'a-first', deviceLinkDeviceId: 'a' },
+      { ...sessions[1], id: 'a-idle', deviceLinkDeviceId: 'a' },
+      { ...sessions[0], id: 'b-first', deviceLinkDeviceId: 'b' },
+      { ...sessions[1], id: 'b-idle', deviceLinkDeviceId: 'b' },
+      { ...sessions[2], id: 'lit', deviceLinkDeviceId: 'b' },
+    ];
+    p.remoteDeviceIndex = new Map([['a', { name: 'Device A', online: true }], ['b', { name: 'Device B', online: true }]]);
+    render(<ProjectsSection {...p} mainTab="chats" />);
+    expect(screen.queryByText('Device A')).toBeNull();
+    expect(screen.queryByText('Device B')).toBeNull();
+    fireEvent.click(screen.getByText('ccAgent.sidebar.showAllSessions'));
+    expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);
+  });
+});
+
+describe('Collapsed group header lamps', () => {
+  it.each(phases)('renders the collapsed Make header lamp for remote %s', (phase) => {
+    activity(phase);
+    render(<ProjectsSection {...makeGroupProps()} />);
+    const header = makeHeader();
+    expectLamp(header, null);
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expectLamp(header, phase);
+  });
+
+  it('updates the collapsed header on remote activity and shows it only while collapsed', () => {
+    render(<ProjectsSection {...makeGroupProps()} />);
+    const header = makeHeader();
     act(() => activity('running'));
     expect(screen.queryByTestId('row-lit')).not.toBeNull();
     expectLamp(header, null);
     fireEvent.click(header);
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-    expect(header.querySelector('.session-status-breathing')).not.toBeNull();
+    expectLamp(header, 'running');
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('true');
     expectLamp(header, null);
     expect(screen.queryByTestId('row-lit')).not.toBeNull();
+    fireEvent.click(header);
     act(() => clearRemoteSessionActivity());
+    expectLamp(header, null);
+  });
+
+  it('keeps awaiting on a collapsed project and hands it to the row once expanded', () => {
+    const p = props();
+    const session = remoteSessions()[2];
+    const projectKey = 'device-link:remote:/demo';
+    p.projects = [{
+      projectKey, displayName: 'Demo project', workingDir: '/demo', scope: 'local',
+      sessions: [session], remoteHostId: null, deviceLinkDeviceId: 'remote',
+      deviceLinkDeviceName: 'Remote device', deviceLinkConnectionStatus: 'connected',
+      segments: 1, latestActivityAt: session.updatedAt,
+    }];
+    p.allProjectKeysForOrder = [projectKey];
+    p.collapsed = new Set([projectKey]);
+    activity('needs-interaction');
+    const view = render(<ProjectsSection {...p} />);
+    const projectHeader = () => screen.getByText('Demo project').closest('[data-project-header]')!;
+    expect(screen.queryByText('Remote device')).toBeNull();
+    expectLamp(projectHeader(), 'needs-interaction');
     expect(screen.queryByTestId('row-lit')).toBeNull();
-    expect(header.querySelector('.session-status-breathing')).toBeNull();
+    view.rerender(<ProjectsSection {...p} collapsed={new Set()} />);
+    expectLamp(projectHeader(), null);
+    expect(screen.getByTestId('row-lit')).toBeTruthy();
   });
 });
 
 // Use the real starting store/hook as the parent display-running source. No fake
 // absorption or direct prop replacement: ProjectsSection must settle it itself.
+// Observed through the collapsed Make header, the remaining collapsible shared group.
 function StartingSidebar(p: ProjectsSectionProps) {
   const starting = useStartingSessionIds(p.runningSessionIds);
   return <ProjectsSection {...p} runningSessionIds={new Set([...p.runningSessionIds, ...starting])} />;
 }
-function groupHeader(root: HTMLElement = document.body) {
-  return within(root).getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
-}
-function deviceHeader(name: string) { return screen.getByText(name).closest('button')!; }
-function expectLamp(header: Element, phase: typeof phases[number] | null) {
-  expect(Boolean(header.querySelector('.session-status-breathing'))).toBe(phase === 'running');
-  for (const tone of ['awaiting', 'error', 'done']) {
-    const expected = phase === 'needs-interaction' ? 'awaiting' : phase === 'completed' ? 'done' : phase;
-    expect(Boolean(header.querySelector(`[class*="--card-status-${tone}"], [data-sidebar-right-status="${tone}"]`))).toBe(tone === expected);
-  }
-}
 
-describe.each([false, true])('Dialogue group starting lifecycle, device grouping %s', (groupDevice) => {
+describe('Shared group starting lifecycle', () => {
   for (const first of ['running', 'needs-interaction'] as const) {
     it.each(['completed', 'error'] as const)(`${first} settles starting before %s without waiting for TTL`, (terminal) => {
       vi.useFakeTimers();
-      const p = groupProps(groupDevice);
+      const p = makeGroupProps();
       remoteProjectsStore.pinSessionOrigin('remote', 'lit');
       markSessionStarting('lit');
       render(<StartingSidebar {...p} />);
-      expectLamp(groupHeader(), null);
-      fireEvent.click(groupHeader());
-      expectLamp(groupHeader(), 'running');
+      expectLamp(makeHeader(), null);
+      fireEvent.click(makeHeader());
+      expectLamp(makeHeader(), 'running');
       act(() => activity(first));
       expect.soft(getStartingSessionIds().has('lit')).toBe(false);
       act(() => activity(terminal));
-      expectLamp(groupHeader(), terminal);
-      if (groupDevice) expectLamp(deviceHeader('Remote device'), null);
-      fireEvent.click(groupHeader());
-      expectLamp(groupHeader(), null);
+      expectLamp(makeHeader(), terminal);
+      fireEvent.click(makeHeader());
+      expectLamp(makeHeader(), null);
       expect(screen.getByTestId('row-lit')).toBeTruthy();
       // No timer advancement: the terminal UI must be correct immediately.
     });
@@ -499,23 +366,23 @@ describe.each([false, true])('Dialogue group starting lifecycle, device grouping
 
   it('settles when only the dialogues prop arrives after the remote activity', () => {
     vi.useFakeTimers();
-    const p = groupProps(groupDevice);
+    const p = makeGroupProps();
     markSessionStarting('lit');
     activity('running');
     const view = render(<StartingSidebar {...p} dialogues={[]} />);
     expect(getStartingSessionIds().has('lit')).toBe(true);
     view.rerender(<StartingSidebar {...p} />);
     expect(getStartingSessionIds().has('lit')).toBe(false);
-    fireEvent.click(groupHeader());
+    fireEvent.click(makeHeader());
     act(() => activity('completed'));
-    expectLamp(groupHeader(), 'completed');
+    expectLamp(makeHeader(), 'completed');
   });
 
   // Bug 2026-11-18: a remote turn that ended without a running push (fast or read on
   // completion) stayed "starting" for the 2-minute TTL, so the inbox kept it in working.
   it('settles when the remote turn-end time advances, without a running push or TTL', () => {
     vi.useFakeTimers();
-    const p = groupProps(groupDevice);
+    const p = groupProps();
     const withEnded = (endedAt: number) =>
       p.dialogues.map((s) => (s.id === 'lit' ? { ...s, lastTurnEndedAt: endedAt } : s));
     markSessionStarting('lit');
@@ -529,127 +396,13 @@ describe.each([false, true])('Dialogue group starting lifecycle, device grouping
 
   it('keeps the existing no-in-flight terminal fallback and local running settlement', () => {
     vi.useFakeTimers();
-    const p = groupProps(groupDevice);
+    const p = groupProps();
     markSessionStarting('lit');
     activity('completed');
     const view = render(<StartingSidebar {...p} />);
     expect(getStartingSessionIds().has('lit')).toBe(true);
     view.rerender(<StartingSidebar {...p} runningSessionIds={new Set(['lit'])} />);
     expect(getStartingSessionIds().has('lit')).toBe(false);
-  });
-});
-
-function multiDeviceProps(): ProjectsSectionProps {
-  const p = props(true);
-  const sessions = remoteSessions();
-  p.dialogues = [
-    { ...sessions[0], id: 'a-first', deviceLinkDeviceId: 'a' },
-    { ...sessions[1], id: 'a-idle', deviceLinkDeviceId: 'a' },
-    { ...sessions[0], id: 'b-first', deviceLinkDeviceId: 'b' },
-    { ...sessions[1], id: 'b-idle', deviceLinkDeviceId: 'b' },
-    { ...sessions[2], id: 'lit', deviceLinkDeviceId: 'b' },
-  ];
-  p.remoteDeviceIndex = new Map([['a', { name: 'Device A', online: true }], ['b', { name: 'Device B', online: true }]]);
-  return p;
-}
-
-describe('Dialogue groups across devices', () => {
-  it('keeps awaiting visible in a collapsed project while its device is expanded', () => {
-    const p = props(true);
-    const session = remoteSessions()[2];
-    const projectKey = 'device-link:remote:/demo';
-    p.projects = [{
-      projectKey, displayName: 'Demo project', workingDir: '/demo', scope: 'local',
-      sessions: [session], remoteHostId: null, deviceLinkDeviceId: 'remote',
-      deviceLinkDeviceName: 'Remote device', deviceLinkConnectionStatus: 'connected',
-      segments: 1, latestActivityAt: session.updatedAt,
-    }];
-    p.collapsed = new Set([projectKey]);
-    activity('needs-interaction');
-    const view = render(<ProjectsSection {...p} />);
-    const projectHeader = () => screen.getByText('Demo project').closest('[data-project-header]')!;
-    expectLamp(deviceHeader('Remote device'), null);
-    expectLamp(projectHeader(), 'needs-interaction');
-    expect(screen.queryByTestId('row-lit')).toBeNull();
-    fireEvent.click(deviceHeader('Remote device'));
-    expectLamp(deviceHeader('Remote device'), 'needs-interaction');
-    fireEvent.click(deviceHeader('Remote device'));
-    expectLamp(deviceHeader('Remote device'), null);
-    expectLamp(projectHeader(), 'needs-interaction');
-    view.rerender(<ProjectsSection {...p} collapsed={new Set()} />);
-    expectLamp(projectHeader(), null);
-    expect(screen.getByTestId('row-lit')).toBeTruthy();
-  });
-
-  it.each(phases)('keeps %s lamps and exempt rows on the owning device', (phase) => {
-    const p = multiDeviceProps();
-    render(<ProjectsSection {...p} />);
-    act(() => applyRemoteSessionActivity('b', { sessionId: 'lit', phase, attention: true, compactDetail: '' }));
-    expectLamp(deviceHeader('Device A'), null);
-    const a = deviceHeader('Device A').parentElement!;
-    const b = deviceHeader('Device B').parentElement!;
-    expectLamp(deviceHeader('Device B'), null);
-    expectLamp(groupHeader(a), null);
-    expectLamp(groupHeader(b), null);
-    fireEvent.click(groupHeader(b));
-    expectLamp(groupHeader(b), phase);
-    fireEvent.click(groupHeader(b));
-    expectLamp(groupHeader(b), null);
-    expect(within(a).queryByTestId('row-lit')).toBeNull();
-    expect(within(b).getByTestId('row-lit')).toBeTruthy();
-    expect(screen.getAllByText('ccAgent.sidebar.dialogues')).toHaveLength(2);
-    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
-    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(2);
-    fireEvent.click(within(b).getByTestId('row-lit'));
-    expect(p.onSessionClick).toHaveBeenCalledWith('lit');
-    fireEvent.click(deviceHeader('Device B'));
-    expect(deviceHeader('Device B').getAttribute('aria-expanded')).toBe('false');
-    expectLamp(deviceHeader('Device B'), phase);
-    fireEvent.click(deviceHeader('Device B'));
-    expect(deviceHeader('Device B').getAttribute('aria-expanded')).toBe('true');
-    expectLamp(deviceHeader('Device B'), null);
-  });
-
-  it('keeps show-all state per device and stable across task reorder', () => {
-    const p = multiDeviceProps();
-    const view = render(<ProjectsSection {...p} />);
-    const a = deviceHeader('Device A').parentElement!;
-    const b = deviceHeader('Device B').parentElement!;
-    fireEvent.click(within(b).getByText('ccAgent.sidebar.showAllSessions'));
-    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(3);
-    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
-    const bHeader = groupHeader(b);
-    view.rerender(<ProjectsSection {...p} dialogues={[...p.dialogues].reverse()} />);
-    expect(groupHeader(b)).toBe(bHeader);
-    expect(within(b).getAllByTestId(/^row-/)).toHaveLength(3);
-    expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
-  });
-
-  it('folds dialogue groups independently per device and includes them in fold-all', () => {
-    vi.useFakeTimers();
-    render(<ProjectsSection {...multiDeviceProps()} />);
-    const a = deviceHeader('Device A').parentElement!;
-    const b = deviceHeader('Device B').parentElement!;
-    fireEvent.click(groupHeader(a));
-    expect(groupHeader(a).getAttribute('aria-expanded')).toBe('false');
-    expect(groupHeader(b).getAttribute('aria-expanded')).toBe('true');
-    fireEvent.click(screen.getByText('ccAgent.sidebar.foldAll.collapseProjects'));
-    expect(groupHeader(b).getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(screen.getByText('ccAgent.sidebar.foldAll.collapseDevices'));
-    expect(deviceHeader('Device A').getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(screen.getByText('ccAgent.sidebar.foldAll.expandAll'));
-    expect(groupHeader(a).getAttribute('aria-expanded')).toBe('true');
-    expect(groupHeader(b).getAttribute('aria-expanded')).toBe('true');
-  });
-
-  it('keeps one dialogue group with every task when device grouping is off', () => {
-    const p = multiDeviceProps();
-    p.filter.groupDevice = false;
-    render(<ProjectsSection {...p} />);
-    expect(screen.getAllByText('ccAgent.sidebar.dialogues')).toHaveLength(1);
-    expect(screen.queryByText('Device A')).toBeNull();
-    fireEvent.click(screen.getByText('ccAgent.sidebar.showAllSessions'));
-    expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);
   });
 });
 

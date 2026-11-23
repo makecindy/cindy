@@ -274,9 +274,6 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/remoteAgentRelocationWiring.test.ts',
   'src/renderer/features/bots/__tests__/botPermissionSwitch.test.ts',
   'src/renderer/features/bots/__tests__/botChatSurface.test.ts',
-  // Shared sidebar geometry and non-wrapping metadata are cross-file design
-  // contracts retained from main; component behavior stays in sidebar units.
-  'src/renderer/features/bots/__tests__/teammatesSectionSpacing.test.ts',
   'src/main/cindy-brain/__tests__/forgeOidcInstallEntry.test.ts',
   'src/main/cindy-brain/__tests__/forge.connection.test.ts',
   'src/main/cindy-brain/__tests__/forge.oauth.test.ts',

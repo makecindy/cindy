@@ -434,6 +434,11 @@ describe('SessionCard visual cases', () => {
 
     const owned = renderRow('owned');
     const ownerSlot = owned.container.querySelector(`[data-testid="shared-task-role-slot-owned-${session.id}"]`);
+    if (variant === 'text') {
+      // 极简侧栏(2026-11-19):紧凑文字行只留标题，共享主人的皇冠只在列表 / 卡片形态出现。
+      expect(ownerSlot).toBeNull();
+      return;
+    }
     expect(ownerSlot).toBeTruthy();
     expect(ownerSlot?.querySelector('svg')?.getAttribute('class')).toContain('text-[var(--warning-fg)]');
   });
@@ -1395,7 +1400,13 @@ describe('SessionCard visual cases', () => {
         (node) => node.children.length === 0 && node.textContent === baseSession.title,
       )!;
 
-    it.each(variants)('%s: 色球紧跟标题，不在右侧任务信息槽', (variant) => {
+    it('text: 紧凑文字行不常显标签色球(2026-11-19 极简侧栏)', () => {
+      const { container } = renderVariant('text', { ...baseSession, tags });
+      expect(dotsFor(container)).toBeNull();
+      expect(container.querySelector('[aria-label="Red tag"]')).toBeNull();
+    });
+
+    it.each(['list', 'card'] as const)('%s: 色球紧跟标题，不在右侧任务信息槽', (variant) => {
       const { container } = renderVariant(variant, { ...baseSession, tags });
       const dots = dotsFor(container);
       expect(dots).not.toBeNull();

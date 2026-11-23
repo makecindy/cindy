@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ReactNode } from 'react';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 import type { ProjectNode } from '../features/cc-agent/lib/projectGrouping';
@@ -34,10 +34,6 @@ vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', () => ({
   useLocalHostProjectOrder: () => ({ snapshot: { manualProjectOrder: [] } }),
   useRemoteHostProjectOrders: () => ({ orders: new Map() }),
 }));
-vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({
-  MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) =>
-    fold ? <button onClick={fold.onClick}>{fold.label}</button> : null,
-}));
 vi.mock('@/components/sidebar/SortableList', () => ({
   SortableList: ({
     items,
@@ -63,7 +59,10 @@ vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({
     </>
   ),
 }));
-vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({ SessionItem: () => null }));
+// 顶部标签后未分类草稿并进混排、经 SessionEntryRows 渲染;只露标题以便校验先后顺序。
+vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({
+  SessionItem: ({ session }: { session: Session }) => <span>{session.title}</span>,
+}));
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({ SessionCard: () => null }));
 vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({
   AutomationSessionGroupItem: () => null,
@@ -160,213 +159,56 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe('Online device headers without tasks', () => {
-  // Device-row creation must target that row, independent of the global scope.
-  // Existing folding tests did not exercise creation. Minimal unit input: two
-  // empty device sections; click each add button and verify target + fold state.
-  it('creates on the clicked device without collapsing its section', () => {
-    const onCreateProject = vi.fn();
-    render(<ProjectsSection {...props(true)} onCreateProject={onCreateProject} />);
-    for (const [name, target] of [
-      ['ccAgent.sidebar.deviceGroup.local', null],
-      ['Remote device', { deviceId: 'remote', deviceName: 'Remote device' }],
-    ] as const) {
-      const header = screen.getByText(name).closest('button')!;
-      const add = within(header.parentElement!).getByRole('button', { name: 'ccAgent.sidebar.newProject' });
-      fireEvent.click(add);
-      expect(onCreateProject).toHaveBeenLastCalledWith(target);
-      expect(header.getAttribute('aria-expanded')).toBe('true');
-    }
-    expect(onCreateProject).toHaveBeenCalledTimes(2);
-  });
-  // #7237: unit regression through the real group headers. One unnamed host
-  // was covered, but two ID-as-name hosts previously had indistinguishable labels.
-  it('distinguishes unnamed device headers and folds only the selected device', () => {
-    render(<ProjectsSection {...props(true)} remoteDeviceIndex={new Map([
-      ['host-b', { name: 'host-b', online: true }],
-      ['host-a', { name: '', online: true }],
-    ])} />);
-    const first = screen.getByText('another computer (1)').closest('button')!;
-    const second = screen.getByText('another computer (2)').closest('button')!;
-    fireEvent.click(second);
-    expect(first.getAttribute('aria-expanded')).toBe('true');
-    expect(second.getAttribute('aria-expanded')).toBe('false');
-  });
-
-  it('renders and folds an empty online device, then removes it when offline', () => {
-    const p = { ...props(true), allProjectKeysForOrder: [] };
-    const view = render(<ProjectsSection {...p} />);
-    const header = screen.getByText('Remote device').closest('button')!;
-    expect(header.getAttribute('aria-expanded')).toBe('true');
-    fireEvent.click(header);
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-    view.rerender(
-      <ProjectsSection
-        {...p}
-        remoteDeviceIndex={new Map([['remote', { name: 'Remote device', online: false }]])}
-      />,
-    );
-    expect(screen.queryByText('Remote device')).toBeNull();
-    view.rerender(<ProjectsSection {...p} />);
-    expect(screen.getByText('Remote device').closest('button')!.getAttribute('aria-expanded')).toBe(
-      'false',
-    );
-  });
-
-  it('does not show device headers when device grouping is disabled', () => {
-    render(<ProjectsSection {...props(false)} allProjectKeysForOrder={[]} />);
-    expect(screen.queryByText('Remote device')).toBeNull();
-  });
-});
-
-// #6615: entering Settings unmounts ProjectsSection. Existing device tests only
-// rerender it, so they miss lost collapse state. Unit tier: real component clicks
-// and unmount/remount with jsdom storage; the smallest input is two empty devices.
-describe('Device collapse state after remounting', () => {
-  const localName = 'ccAgent.sidebar.deviceGroup.local';
-  const remoteName = 'Remote device';
-  const deviceHeader = (name: string) => screen.getByText(name).closest('button')!;
-
-  it.each([
-    { collapsedNames: [localName] },
-    { collapsedNames: [remoteName] },
-    { collapsedNames: [localName, remoteName] },
-  ])(
-    'restores individually collapsed devices: $collapsedNames',
-    ({ collapsedNames }) => {
-      const p = props(true);
-      const view = render(<ProjectsSection {...p} />);
-      for (const name of [localName, remoteName]) {
-        expect(deviceHeader(name).getAttribute('aria-expanded')).toBe('true');
-      }
-      for (const name of collapsedNames) fireEvent.click(deviceHeader(name));
-      view.unmount();
-
-      render(<ProjectsSection {...p} />);
-      for (const name of [localName, remoteName]) {
-        expect(deviceHeader(name).getAttribute('aria-expanded')).toBe(
-          String(!collapsedNames.includes(name)),
-        );
-      }
-    },
-  );
-
-  it('remembers bulk collapse and clears it after expanding all', () => {
-    const p = props(true);
-    let view = render(<ProjectsSection {...p} />);
-    fireEvent.click(screen.getByText('ccAgent.sidebar.foldAll.collapseDevices'));
-    view.unmount();
-
-    view = render(<ProjectsSection {...p} />);
-    for (const name of [localName, remoteName]) {
-      expect(deviceHeader(name).getAttribute('aria-expanded')).toBe('false');
-    }
-    fireEvent.click(screen.getByText('ccAgent.sidebar.foldAll.expandAll'));
-    view.unmount();
-
-    render(<ProjectsSection {...p} />);
-    for (const name of [localName, remoteName]) {
-      expect(deviceHeader(name).getAttribute('aria-expanded')).toBe('true');
-    }
-  });
-});
-
-describe('Offline device header names', () => {
-  function cachedProjectProps(): ProjectsSectionProps {
-    const p = props(true);
+// 2026-11-19 极简侧栏:电脑改由顶部标签下的横向电脑行切换,主列表不再竖向插入设备段头。
+// 旧「按设备分组」设置仍可能留在用户本地,打开时也必须保持一份平铺列表。
+// 最小输入:一个本机项目 + 一个在线远程设备上的项目。
+describe('Main list without vertical device sections', () => {
+  it.each([false, true])('keeps one flat list with the legacy device grouping setting %s', (groupDevice) => {
+    const p = props(groupDevice);
+    const base = {
+      scope: 'local' as const,
+      remoteHostId: null,
+      deviceLinkDeviceName: null,
+      deviceLinkConnectionStatus: null,
+      segments: 1,
+      sessions: [],
+      latestActivityAt: '2026-10-04T00:00:00Z',
+    };
     p.projects = [
+      { ...base, projectKey: 'local:/here', displayName: 'Local project', workingDir: '/here', deviceLinkDeviceId: null },
       {
-        projectKey: 'device:offline:/project',
-        displayName: 'Cached project',
-        workingDir: '/project',
+        ...base,
+        projectKey: 'device:remote:/there',
+        displayName: 'Remote project',
+        workingDir: '/there',
         scope: 'remote',
-        remoteHostId: null,
-        deviceLinkDeviceId: 'offline',
-        deviceLinkDeviceName: 'Saved computer',
-        deviceLinkConnectionStatus: 'disconnected',
-        segments: 1,
-        sessions: [
-          {
-            id: 'cached-task',
-            title: 'Cached task',
-            status: 'active',
-            workingDir: '/project',
-            deviceLinkDeviceId: 'offline',
-            deviceLinkDeviceName: 'Saved computer',
-            createdAt: '2026-10-04T00:00:00Z',
-            updatedAt: '2026-10-04T00:00:00Z',
-          } as Session,
-        ],
-        latestActivityAt: '2026-10-04T00:00:00Z',
+        deviceLinkDeviceId: 'remote',
+        deviceLinkDeviceName: 'Remote device',
+        deviceLinkConnectionStatus: 'connected',
       },
-    ];
+    ] as ProjectNode[];
     p.allProjectKeysForOrder = p.projects.map((project) => project.projectKey);
-    return p;
-  }
-
-  it('keeps the cached name after disconnecting and uses the current name on reconnect', () => {
-    remoteProjectsStore.setDeviceSessions('offline', 'Saved computer', []);
-    const p = cachedProjectProps();
-    const onlineIndex = new Map(p.remoteDeviceIndex);
-    onlineIndex.set('offline', { name: 'Current computer', online: true });
-    const view = render(<ProjectsSection {...p} remoteDeviceIndex={onlineIndex} />);
-    expect(screen.getByText('Current computer')).toBeTruthy();
-    expect(screen.queryByText('Saved computer')).toBeNull();
-
-    act(() => remoteProjectsStore.markDeviceDisconnected('offline'));
-    view.rerender(<ProjectsSection {...p} />);
-    expect(screen.getByText('Saved computer')).toBeTruthy();
-    expect(screen.queryByText('offline')).toBeNull();
-    expect(screen.getByText('ccAgent.sidebar.deviceGroup.offline')).toBeTruthy();
-
-    act(() => remoteProjectsStore.renameDevice('offline', 'Renamed computer'));
-    expect(screen.getByText('Renamed computer')).toBeTruthy();
-    expect(screen.queryByText('Saved computer')).toBeNull();
-
-    view.rerender(<ProjectsSection {...p} remoteDeviceIndex={onlineIndex} />);
-    expect(screen.getByText('Current computer')).toBeTruthy();
-    expect(screen.queryByText('ccAgent.sidebar.deviceGroup.offline')).toBeNull();
-  });
-
-  it('reads the name from a restored offline snapshot on first render', () => {
-    remoteProjectsStore.hydrateFromCache([
-      {
-        deviceId: 'offline',
-        deviceName: 'Restored computer',
-        sessions: cachedProjectProps().projects[0].sessions,
-      },
-    ]);
-    render(<ProjectsSection {...cachedProjectProps()} />);
-    expect(screen.getByText('Restored computer')).toBeTruthy();
-    expect(screen.queryByText('offline')).toBeNull();
-  });
-
-  it('uses a readable fallback when no device name is known', () => {
-    render(<ProjectsSection {...cachedProjectProps()} />);
-    expect(screen.getByText('another computer')).toBeTruthy();
-  });
-
-  it('does not enable device grouping when only disconnected devices remain', () => {
-    remoteProjectsStore.setDeviceSessions('offline', 'Saved computer', []);
-    remoteProjectsStore.markDeviceDisconnected('offline');
-    render(<ProjectsSection {...cachedProjectProps()} remoteDeviceIndex={new Map()} />);
-    expect(screen.getByText('Cached project')).toBeTruthy();
-    expect(screen.queryByText('Saved computer')).toBeNull();
+    localStorage.setItem('sidebar.collapse.projectSessionLimit', '10');
+    render(<ProjectsSection {...p} />);
+    expect(screen.getByText('Local project')).toBeTruthy();
+    expect(screen.getByText('Remote project')).toBeTruthy();
+    expect(screen.queryByText('Remote device')).toBeNull();
     expect(screen.queryByText('ccAgent.sidebar.deviceGroup.local')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ccAgent.sidebar.newProject' })).toBeNull();
   });
 });
 
 describe('Cindy Make sidebar entry', () => {
-  it.each([false, true])('hides the label, old tasks and creation entry with device grouping %s when disabled', (groupDevice) => {
+  it('hides the label, old tasks and creation entry when disabled', () => {
     feature.enabled = false;
-    render(<ProjectsSection {...makeProps(groupDevice, false)} />);
+    render(<ProjectsSection {...makeProps(false)} />);
     expect(screen.queryByText('settings.cindyMake.title')).toBeNull();
     expect(screen.queryByText('Make task')).toBeNull();
     expect(screen.queryByRole('button', { name: 'settings.cindyMake.create.title' })).toBeNull();
     expect(screen.getByText('Ordinary project')).toBeTruthy();
   });
-  function makeProps(groupDevice: boolean, custom: boolean) {
-    const p = props(groupDevice);
+  function makeProps(custom: boolean) {
+    const p = props(false);
     const make = {
       id: 'make',
       title: 'Make task',
@@ -404,30 +246,20 @@ describe('Cindy Make sidebar entry', () => {
     return p;
   }
 
-  it.each([false, true])(
-    'renders Make before projects and drafts with device grouping %s',
-    (groupDevice) => {
-      for (const custom of [false, true]) {
-        render(<ProjectsSection {...makeProps(groupDevice, custom)} />);
-        const make = screen.getByText('settings.cindyMake.title');
-        const project = screen.getByText('Ordinary project');
-        expect(
-          make.compareDocumentPosition(project) & Node.DOCUMENT_POSITION_FOLLOWING,
-        ).toBeTruthy();
-        if (!groupDevice) {
-          expect(
-            make.compareDocumentPosition(screen.getByText('Ordinary draft')) &
-              Node.DOCUMENT_POSITION_FOLLOWING,
-          ).toBeTruthy();
-        }
-        expect(screen.getAllByText('settings.cindyMake.title')).toHaveLength(1);
-        cleanup();
-      }
-    },
-  );
+  it.each([false, true])('renders Make before projects and drafts with custom project order %s', (custom) => {
+    localStorage.setItem('sidebar.collapse.projectSessionLimit', '10');
+    render(<ProjectsSection {...makeProps(custom)} />);
+    const make = screen.getByText('settings.cindyMake.title');
+    for (const later of ['Ordinary project', 'Ordinary draft']) {
+      expect(
+        make.compareDocumentPosition(screen.getByText(later)) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+    expect(screen.getAllByText('settings.cindyMake.title')).toHaveLength(1);
+  });
 
   it('opens the settings creation dialog without toggling the group and resets it after cancel', async () => {
-    render(<ProjectsSection {...makeProps(false, false)} />);
+    render(<ProjectsSection {...makeProps(false)} />);
     const header = screen.getByText('settings.cindyMake.title').closest('[role="button"]')!;
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('false');
@@ -456,10 +288,10 @@ describe('Cindy Make sidebar entry', () => {
     expect((within(reopened).getByRole('textbox') as HTMLTextAreaElement).value).toBe('');
   });
 
-  it.each([false, true])(
-    'does not open a local creation dialog from remote-only Make with device grouping %s',
-    (groupDevice) => {
-      const p = makeProps(groupDevice, false);
+  it(
+    'does not open a local creation dialog from remote-only Make',
+    () => {
+      const p = makeProps(false);
       p.projects = [];
       p.unclassified = p.unclassified
         .filter((session) => session.source === 'cindy-make')

@@ -1,10 +1,8 @@
 /**
- * projectsSidebarSection — 主列表段头控件不变量。
+ * projectsSidebarSection — 主列表接线不变量。
  *
- * 2026-08-13 用户定稿:段头标题即机器范围下拉(MachineSwitcherMenu,「全部任务」
- * 与设备下拉合并),段级收起取消;右侧保留折叠按钮(单层 = 收起所有分组 ↔ 展开;
- * 设备+项目双层 = 循环 收项目层 → 收设备层 → 全部展开,foldState 状态机)与
- * 侧边栏显示设置入口。
+ * 2026-11-19 极简侧栏:顶部标签(任务 / 对话 / 自动化)取代段头范围下拉、批量折叠按钮
+ * 与竖向设备分段;电脑改由标签下的横向电脑行切换。这里只守仍然存在的接线。
  */
 
 import { readFileSync } from 'node:fs';
@@ -18,41 +16,7 @@ const projectsSectionSource = readFileSync(
 );
 
 describe('Projects sidebar section', () => {
-  it('keeps the group fold state machine (section collapse itself is gone)', () => {
-    // 设备段头仍用单箭头折叠;右侧折叠按钮走三态状态机。
-    expect(projectsSectionSource).toContain('ChevronDown');
-    expect(projectsSectionSource).toContain('ChevronRight');
-    expect(projectsSectionSource).toContain('ChevronsDownUp');
-    expect(projectsSectionSource).toContain('ChevronsUpDown');
-    // E 期折叠状态机:三态循环 + 图标随「下一步动作」切换。
-    expect(projectsSectionSource).toContain(
-      "'collapse-groups' | 'collapse-devices' | 'expand-all'",
-    );
-    expect(projectsSectionSource).toContain(
-      "const FoldIcon = foldState === 'expand-all' ? ChevronsUpDown : ChevronsDownUp",
-    );
-    // 段级收起已随「标题 = 范围下拉」取消(2026-08-13 用户定稿)。
-    expect(projectsSectionSource).not.toContain('isSectionCollapsed');
-    expect(projectsSectionSource).not.toContain('SectionToggleIcon');
-  });
-
-  it('header order: scope title dropdown → fold → filter', () => {
-    const titleIndex = projectsSectionSource.indexOf('<MainListScopeHeader');
-    const foldIndex = projectsSectionSource.indexOf('onClick: handleFoldAll');
-    expect(titleIndex).toBeGreaterThanOrEqual(0);
-    expect(foldIndex).toBeGreaterThan(titleIndex);
-    expect(projectsSectionSource).toContain('hasMainListContent && foldState !== null');
-    // 只有对话组、没有项目时折叠按钮仍可用;零项目不能把 isAllCollapsed 当成组层已收齐。
-    expect(projectsSectionSource).toContain(
-      'disabled: projectNodesToggleDisabled && !hasDeviceLayer && !hasGroupLayer',
-    );
-    expect(projectsSectionSource).toContain(
-      'const allVisibleProjectGroupsCollapsed = mixedEntries.every(',
-    );
-    expect(projectsSectionSource).toContain(
-      "entry.kind !== 'project' || collapsed.has(entry.project.projectKey)",
-    );
-    expect(projectsSectionSource).toContain('allSessionGroupsCollapsed');
+  it('feeds every visible list session into source labels outside the inbox', () => {
     // task-inbox.md：收件箱候选现在也在普通列表中保持订阅，不能抢占普通列表的来源标签。
     // 保留已有 guard 接线契约：普通列表覆盖项目、对话和未分类；只有收件箱模式用 inboxSessions。
     expect(projectsSectionSource).toContain('flattenedSessionsForSourceLabels');
@@ -62,36 +26,6 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).toContain(
       '[...projects.flatMap((project) => project.sessions), ...dialogues, ...unclassified]',
     );
-  });
-
-
-
-  it('only shows project header actions while hovering or focusing the Projects header row', () => {
-    const headerSource = readFileSync(
-      resolve(
-        __dirname,
-        '..',
-        'features',
-        'cc-agent',
-        'sidebar',
-        'MainListScopeHeader.tsx',
-      ),
-      'utf8',
-    );
-    expect(headerSource).toContain('group/sidebar-header flex h-6');
-    expect(headerSource).toContain(
-      'pointer-events-none opacity-0 transition-opacity duration-150',
-    );
-    expect(headerSource).toContain(
-      'group-hover/sidebar-header:pointer-events-auto group-hover/sidebar-header:opacity-100',
-    );
-    expect(headerSource).toContain(
-      'has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100',
-    );
-    expect(headerSource).not.toContain(
-      'group-focus-within/sidebar-header:pointer-events-auto',
-    );
-    // 各按钮在 hover/归档下的显隐由 MainListScopeHeader.test.tsx 通过组件渲染验证。
   });
 
   it('the project tree renders unconditionally (section collapse removed)', () => {
@@ -131,41 +65,24 @@ describe('Projects sidebar section', () => {
     );
   });
 
-  // 2026-08-13 review P1:设备是最外层层级,折叠只能发生在段内——先全局折叠再
-  // 切段会把前 N 名之外的设备连段头一起藏掉。
-  it('device grouping splits the full list first, then collapses per section', () => {
+  // 顶部标签把同一份混排结果切给各标签,再各自走「显示全部」折叠视图;
+  // 先折叠再切会让别的标签的条目占掉本标签的可见名额。
+  it('slices the mixed list per top tab before applying the fold view', () => {
+    expect(projectsSectionSource).toContain('groupDialogue: true,');
+    expect(projectsSectionSource).toContain('groupAutomation: true,');
     expect(projectsSectionSource).toContain(
-      'return splitEntriesByDevice(mixedEntries, [...(remoteDeviceIndex?.keys() ?? [])], {',
+      'const mixedEntries = useMemo(() => entriesForTab(allTabEntries, mainTab), [allTabEntries, mainTab]);',
     );
-    const start = projectsSectionSource.indexOf('const mixedUnclassified = useMemo(');
-    const input = projectsSectionSource.slice(start, projectsSectionSource.indexOf('const mixedEntries', start));
-    expect(start).toBeGreaterThan(-1);
-    expect(input).toContain('unclassifiedHidden');
-    expect(input).toContain('? []');
-    expect(input).toContain('deviceGroupingActive');
-    expect(input).toContain('? unclassified');
-    expect(input).toContain(
-      'unclassified.filter((session) => isCindyMakeFamilySource(session.source))',
+    expect(projectsSectionSource).toContain('} = collapseEntries(mixedEntries, showAllProjects);');
+    expect(projectsSectionSource.indexOf('const mixedEntries = useMemo(')).toBeLessThan(
+      projectsSectionSource.indexOf('} = collapseEntries(mixedEntries, showAllProjects);'),
     );
-    expect(input).toContain('[unclassified, unclassifiedHidden, deviceGroupingActive]');
+    // F-PJ-10:具体多选项目时未分类区不渲染;否则并入混排,自动化跑出的未分类任务才能归到自动化标签。
+    expect(projectsSectionSource).toContain(
+      '() => (unclassifiedHidden ? [] : unclassified),',
+    );
     expect(projectsSectionSource).toContain('unclassified: mixedUnclassified,');
-    // 每段独立折叠视图 + 段内作用域的「显示全部」(复核 P2:共用一个标志会让
-    // 点任一段全段展开)。
-    expect(projectsSectionSource).toMatch(
-      /const sectionView = collapseEntries\(\s*section\.entries,\s*expandedDeviceSections\.has\(key\),\s*\)/,
-    );
-    expect(projectsSectionSource).toContain('{sectionView.isOverflowing && (');
-    expect(projectsSectionSource).toContain(
-      'setExpandedDeviceSections((prev) => new Set(prev).add(key))',
-    );
     expect(projectsSectionSource).toContain('{!deviceGroupingActive && projectsOverflow && (');
-  });
-
-  it('device grouping can stay on with custom project order', () => {
-    expect(projectsSectionSource).toContain(
-      'const deviceGroupingActive = deviceGroupingAvailable && filter.groupDevice;',
-    );
-    expect(projectsSectionSource).not.toContain("filter.sortBy !== 'manual'");
   });
 
   it('renders pre-grouped automation entries as one flat-list row', () => {
@@ -177,14 +94,8 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).not.toContain('sessions={[entry.session]}');
   });
 
-  it('includes automation groups in the header batch fold state machine', () => {
-    expect(projectsSectionSource).toContain(
-      "const hasGroupLayer = mixedEntries.some((entry) => entry.kind !== 'session')",
-    );
+  it('keeps per-group automation collapse wired after the batch fold button was removed', () => {
     expect(projectsSectionSource).toContain('useAutomationGroupsCollapsed(');
-    expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(true)');
-    expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(false)');
-    expect(projectsSectionSource).toContain('allAutomationGroupsCollapsed');
     expect(projectsSectionSource).toContain(
       'automationGroupCollapsed={isAutomationGroupCollapsed}',
     );

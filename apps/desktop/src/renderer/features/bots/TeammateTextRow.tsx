@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { SidebarRightStatusIndicator } from '@/features/cc-agent/sidebar/SidebarRightStatusIndicator';
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { companionDragProps } from './companionDragProps';
 
@@ -47,7 +48,7 @@ export function TeammateTextRow({
       className={cn(
         'group relative flex h-8 w-full items-center gap-2.5 rounded-full pr-2 pl-3 select-none',
         selected
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+          ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
           : 'text-foreground hover:bg-sidebar-item-hover',
       )}
     >

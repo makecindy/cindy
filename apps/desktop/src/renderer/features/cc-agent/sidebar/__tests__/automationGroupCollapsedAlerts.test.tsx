@@ -207,6 +207,14 @@ function renderGroup({
   );
 }
 
+/**
+ * 收起组头的汇总状态。极简侧栏(2026-11-19)里组头不画彩色点，出错 / 等你回复 / 完成未读
+ * 改为加粗标题，并在标题按钮上带同名状态属性;运行中仍是行尾转圈。
+ */
+function groupHeaderStatus(container: HTMLElement): string | null {
+  return container.querySelector('button[data-sidebar-right-status]')?.getAttribute('data-sidebar-right-status') ?? null;
+}
+
 /** The entry point under test: right-clicking the group header opens the same 更多 menu. */
 function openGroupMenu() {
   fireEvent.contextMenu(screen.getByText('产品决策巡检'));
@@ -348,35 +356,33 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
   it('无告警时收起就是收起:组头不点状态、不渲染子行', () => {
     const { container } = renderGroup();
     expect(childRunIds(container)).toEqual([]);
-    expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
+    expect(groupHeaderStatus(container)).toBeNull();
   });
 
-  it('组内旧运行留下告警时由红色组头代表,不重复成行', () => {
+  it('组内旧运行留下告警时由出错组头代表,不重复成行', () => {
     // 收起态组头直接打开 run-2，下面不能重复同一任务。
     addSessionAttention('run-2', 'error');
     const { container } = renderGroup({ notifications: ['run-2'] });
 
-    expect(screen.getByLabelText('Failed — click to view')).toBeTruthy();
+    expect(groupHeaderStatus(container)).toBe('error');
     expect(childRunIds(container)).toEqual([]);
   });
 
-  it('定时任务失败未读(attention kind 缺失)同样算告警,不被涂成完成绿', () => {
+  it('定时任务失败未读(attention kind 缺失)同样算告警,不被当成完成', () => {
     const { container } = renderGroup({
       notifications: ['run-3'],
       urgentSessionIds: new Set(['run-3']),
     });
 
-    expect(screen.getByLabelText('Failed — click to view')).toBeTruthy();
-    expect(screen.queryByLabelText('Completed — click to view')).toBeNull();
+    expect(groupHeaderStatus(container)).toBe('error');
     expect(childRunIds(container)).toEqual([]);
   });
 
-  it('完成未读时组头补绿点且运行单独成行', () => {
+  it('完成未读时组头标为完成且运行单独成行', () => {
     addSessionAttention('run-2', 'done');
     const { container } = renderGroup({ notifications: ['run-2'] });
 
-    expect(screen.getByLabelText('Completed — click to view')).toBeTruthy();
-    expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
+    expect(groupHeaderStatus(container)).toBe('done');
     expect(childRunIds(container)).toEqual(['run-2']);
   });
 

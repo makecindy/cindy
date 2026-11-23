@@ -40,6 +40,7 @@ import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDev
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { CindyDevicePicker } from './CindyDevicePicker';
 import { TeammateTextRow } from './TeammateTextRow';
+import { withoutBotHiddenLanes } from './botGroupLane';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { cindyDeviceKey, cindyDeviceOptions } from './cindyDeviceRoster';
 import { BotAvatar } from './BotAvatar';
@@ -205,9 +206,14 @@ export function TeammatesSection({
   // A cloud companion is one row wherever it runs; only per-computer Cindys still merge into one entry.
   const cindyOptions = cindyDeviceOptions(withoutCloudCompanions(bots, cloud), withoutCloudCompanions(remoteBots, cloud),
     devices ?? [], unreadByBotId, t('bots.devicePicker.local'));
-  const statusForBot = (bot: BotProfile | (typeof remoteBots)[number]) => 'deviceId' in bot
+  // Any visible lane at work (routine, thread, history run) keeps the row spinning, as the
+  // old 「正在输入…」 did. Group and IM lanes stay on their own rows.
+  const laneRunning = (bot: BotProfile) => withoutBotHiddenLanes(bot.sessions)
+    .some(session => islandActivity.get(session.id)?.phase === 'running');
+  const statusForBot = (bot: BotProfile | (typeof remoteBots)[number]): TeammateStatus => 'deviceId' in bot
     ? remoteTeammateStatus(bot, isRemoteBotUnread(bot), isCloudCompanionRemote(cloud, bot))
-    : localTeammateStatus(bot, islandActivity, (unreadByBotId[bot.id] ?? 0) > 0);
+    : aggregateTeammateStatus([localTeammateStatus(bot, islandActivity, (unreadByBotId[bot.id] ?? 0) > 0),
+      laneRunning(bot) ? 'running' : 'idle']);
   const cindyStatus = aggregateTeammateStatus(cindyOptions.map(option => statusForBot(option.bot)));
   const hasMultipleCindys = cindyOptions.length > 1;
   const routeCindy = cindyOptions.find(option => option.key === cindyDeviceKey({ id: botId ?? '', deviceId }));

@@ -138,11 +138,8 @@ describe('SessionCard review regressions', () => {
   it('projects local and remote activity through the shared session status model', () => {
     // 左侧运行标记和右侧状态槽必须消费同一投影，避免各自组合本地/远程状态源。
     expect(sessionItemSource).toContain('projectSidebarSessionActivity({');
-    expect(sessionItemSource).toContain(
-      'const leftIconRunning = sessionActivity.currentTurnActive === true',
-    );
     expect(sessionItemSource).toContain('resolveSidebarRightStatus(sessionActivity)');
-    expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
+    expect(sessionItemSource).toContain('isRunning={sessionActivity.currentTurnActive === true}');
     expect(sessionCardSource).toContain('projectSidebarSessionActivity({');
     expect(sessionCardSource).toContain(
       'const leftIconRunning = sessionActivity.currentTurnActive === true',
@@ -307,11 +304,8 @@ describe('SessionCard review regressions', () => {
     );
   });
 
-  it('keeps every sidebar Agent-to-Timer gap as compact as the former Clock', () => {
-    expect(sessionItemSource).toContain(
-      'const hasAutomationMeta = !inboxMode && (boundSchedules.length > 0 || isAutomationGenerated);',
-    );
-    expect(sessionItemSource).toContain("!isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5'");
+  // 紧凑文字行不再显示计时器(2026-11-19 极简侧栏);计时器只留在自动化组头。
+  it('keeps the automation group Agent-to-Timer gap as compact as the former Clock', () => {
     expect(automationGroupSource).toContain('className="flex min-w-0 items-center gap-1.5"');
   });
 
@@ -463,14 +457,15 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain(
       "'text-13 font-semibold leading-[1.3] tracking-[-0.005em]'",
     );
-    expect(sessionItemSource).toContain("'text-left text-sm font-medium'");
+    // 紧凑文字行:普通标题常规字重，需要你看的(出错 / 等你回复 / 完成未读)加粗。
+    expect(sessionItemSource).toContain("needsAttention ? 'font-semibold' : 'font-normal'");
   });
 
   it('keeps list-mode time and remote marks on the text-mode color and size', () => {
     expect(sessionCardSource).toContain('size={12}');
     expect(sessionCardSource).toContain(": 'text-sidebar-action-icon'");
     expect(sessionCardSource).not.toContain('size={11}\n                      strokeWidth={1.8}');
-    expect(sessionItemSource).toContain('size={12}');
+    // 紧凑文字行不再画远程电脑图标(2026-11-19);信息槽仍用同一次级色。
     expect(sessionItemSource).toContain(": 'text-sidebar-action-icon'");
   });
 

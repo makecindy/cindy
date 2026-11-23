@@ -223,7 +223,13 @@ describe('SessionItem — Cindy Make preparation', () => {
     publish({});
     expect(screen.getByTestId(makeA.id).getAttribute('data-running')).toBe('false');
   });
-  it('shows preparation as activity and redraws only when this task changes phase', () => {
+  // 极简侧栏(2026-11-19):准备阶段不再在行尾写阶段文字，只显示同一个运行转圈。
+  const runningSpinnerOf = (sessionId: string) =>
+    screen
+      .getByTestId(sessionId)
+      .closest('[data-sidebar-session-row="true"]')
+      ?.querySelector('[data-sidebar-right-status="running"]') ?? null;
+  it('shows preparation as running and redraws only the preparing task', () => {
     let state: CindyMakeGlobalState = {};
     const listeners = new Set<() => void>();
     vi.spyOn(cindyMakeState, 'getSnapshot').mockImplementation(() => state);
@@ -261,10 +267,11 @@ describe('SessionItem — Cindy Make preparation', () => {
       });
     publish();
     expect(screen.getByTestId(makeA.id).getAttribute('data-running')).toBe('true');
-    expect(screen.getByText('cindyMake.code.phases.workspace')).toBeTruthy();
+    expect(runningSpinnerOf(makeA.id)).not.toBeNull();
+    expect(screen.queryByText('cindyMake.code.phases.workspace')).toBeNull();
     report = { ...report, task: { ...report.task!, phase: 'dependencies' } };
     publish();
-    expect(screen.getByText('cindyMake.code.phases.dependencies')).toBeTruthy();
+    expect(runningSpinnerOf(makeA.id)).not.toBeNull();
     const baselineA = renderCounts.get(makeA.id);
     report = { ...report, task: { ...report.task!, dependencies: { added: 42, reused: 200 } } };
     publish();
@@ -276,7 +283,7 @@ describe('SessionItem — Cindy Make preparation', () => {
       report = { ...report, status };
       publish();
       expect(screen.getByTestId(makeA.id).getAttribute('data-running')).toBe('false');
-      expect(screen.queryByText('cindyMake.code.phases.dependencies')).toBeNull();
+      expect(runningSpinnerOf(makeA.id)).toBeNull();
     }
   });
 });
