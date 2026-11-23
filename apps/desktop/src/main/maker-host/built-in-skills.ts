@@ -12,6 +12,7 @@ import {
   CINDY_BUILT_IN_SKILL_NAMES,
   CINDY_PLUGIN_CREATOR_NAME,
   CINDY_THEME_CREATOR_NAME,
+  CINDY_ARTIFACTS_NAME,
 } from '../../shared/cindyBuiltInSkills';
 import { withSkillMutation } from '../skillhub/sharedMutationLease';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
@@ -35,6 +36,8 @@ export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 108;
 export const BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY = '_versions';
 const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
 const THEME_CREATOR_FIRST_BUNDLE_VERSION = 113;
+/** Base 108 + the record count when `_versions/2026-11-22-artifacts.md` landed; recheck if records merge first. */
+const ARTIFACTS_FIRST_BUNDLE_VERSION = 222;
 
 export interface BuiltInSkillDescriptor {
   name: string;
@@ -111,7 +114,9 @@ function committedSkillDescriptors(
     (descriptor.name === CINDY_PLUGIN_CREATOR_NAME
       && manifest.bundleVersion < PLUGIN_CREATOR_FIRST_BUNDLE_VERSION
       || descriptor.name === CINDY_THEME_CREATOR_NAME
-      && manifest.bundleVersion < THEME_CREATOR_FIRST_BUNDLE_VERSION)
+      && manifest.bundleVersion < THEME_CREATOR_FIRST_BUNDLE_VERSION
+      || descriptor.name === CINDY_ARTIFACTS_NAME
+      && manifest.bundleVersion < ARTIFACTS_FIRST_BUNDLE_VERSION)
     && !Object.prototype.hasOwnProperty.call(manifest.fingerprints, descriptor.name)
   ));
 }

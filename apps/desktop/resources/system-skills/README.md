@@ -20,6 +20,11 @@ data-only theme packages with colors, brand images, fonts, wallpaper, reading
 styles, density and motion, applied by the shared Host appearance service. Its
 read-only checker and packager include v1 compatibility and verification guidance.
 
+`artifacts` is generated, not hand-written: its `SKILL.md` is the exact output of
+`@open-artifact/harness-kit` (`renderedSkillFile(localSkill(...))`, parameters in
+`src/main/open-artifact/skill.ts`). Do not edit it by hand; after a kit upgrade, regenerate it
+and add a version record. `src/main/open-artifact/__tests__/openArtifact.test.ts` fails on drift.
+
 ## Bundle version records
 
 The bundle version is a fixed base plus the number of `*.md` files in `_versions/`. Whenever

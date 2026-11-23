@@ -335,6 +335,7 @@ import { settleSilentStopDoneWithPorts, type SilentStopSettleReason } from './si
 import { surfaceSilentStopFailureWithPorts, type SilentStopFailureCause } from './silentStopFailure.js';
 import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createRememberThinkingIntent, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
+import { setOpenArtifactSessionBridge } from '../open-artifact/openArtifact.desktop.js';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
 import { createBotReadStateIpc, createBotWindowAccess } from './botReadStateLocalIpc.js';
@@ -14221,6 +14222,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (meta.agentKind !== 'acp') scheduleSessionAutoTitle({ sessionId: taskId, text, placeholderText, agentKind: meta.agentKind, isUserText: true });
     }).catch(() => log.warn('Plugin task automatic naming could not be scheduled'));
   };
+  // Open Artifact 页面评论回到任务:主人本人的评论走与插件消息相同的持久输入队列(forceQueue),
+  // 来源复用 sourcePlugin 的 local-app: 保留前缀;协作者 / 系统通知不进 user 角色(见 open-artifact/wake.ts)。
+  setOpenArtifactSessionBridge({
+    send: (params) => sendToSessionInternal(params),
+    isBusy: (sessionId) => isGoalInputBlocked(sessionId),
+    isInTurn: (sessionId) => sessionTurnActivityTracker.isSessionInTurn(sessionId),
+    observeTurns: (listener) => sessionTurnActivityTracker.addSessionTurnObserver(listener),
+    title: async (sessionId) => (await maker.getSessionMeta(sessionId))?.title || undefined,
+  });
   setGhostAgentTurnRunner(createGhostAgentTurnRunner({
     readSessionMeta: sessionId => maker.getSessionMeta(sessionId),
     admitLocalSession: sessionId => resolveSessionExecution({}, sessionId),

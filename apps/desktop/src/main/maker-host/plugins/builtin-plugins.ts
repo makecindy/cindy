@@ -42,6 +42,9 @@ const BUILTIN_META: BuiltinPluginMeta[] = [
   { id: 'xdt_helper',   name: 'Cindy Helper', description: 'Host capability disclosure — tells agents what tools and models are available' },
   { id: 'collab',       name: 'Collab Mode',  description: 'Multi-worker collaboration (Orca team) — start_team / create_worker / send_to_worker etc.' },
   { id: 'lsp',          name: 'LSP',          description: 'TypeScript LSP queries (Beta — gated by Settings → Experimental → LSP Mode)' },
+  // 桌面专属(desktop-only):provider 由 mcp-integrations/mcp-providers.ts 追加,不在 @cindy/mcps
+  // 的 createLiziMcpProviders 里,所以映射放 DESKTOP_PROVIDER_NAME_TO_PLUGIN_ID,不进 PLUGIN_ID_TO_MCP_ID。
+  { id: 'artifacts',    name: 'Artifacts',    description: 'Make docs, slides and other pages; comments come back to the task' },
   // xd_service 已于 2026-07-13 退役:Pages 能力(含部署)整体迁入内置意识
   // xd-pages(登录邮箱派生凭证 + 目录过户上传),不再是 MCP 插件。
   // mivo 已于 2026-07-13 退役:13 工具整体迁入内置意识 xd-mivo(exchange
@@ -115,16 +118,28 @@ export const PROVIDER_NAME_TO_PLUGIN_ID: Record<KnownProviderName, PluginId> = {
 };
 
 /**
+ * 只在桌面端存在的内置 provider(不在 @cindy/mcps 的 createLiziMcpProviders 里,
+ * 所以不进上面那张由测试按共享 provider 列表校验穷尽的表)。
+ */
+export const DESKTOP_PROVIDER_NAME_TO_PLUGIN_ID: Readonly<Record<string, PluginId>> = {
+  cindy_artifacts: 'artifacts',
+};
+
+const builtinPluginIdOf = (name: string): PluginId | undefined =>
+  PROVIDER_NAME_TO_PLUGIN_ID[name as KnownProviderName]
+  ?? (Object.hasOwn(DESKTOP_PROVIDER_NAME_TO_PLUGIN_ID, name) ? DESKTOP_PROVIDER_NAME_TO_PLUGIN_ID[name] : undefined);
+
+/**
  * 把 @cindy/mcps 的 MCP provider name 解析成用户可见 plugin id。
  * 未知 name 原样透传；registry 会按 fail-open 处理为默认启用。
  */
 export function pluginIdForProviderName(name: string): PluginId {
-  return PROVIDER_NAME_TO_PLUGIN_ID[name as KnownProviderName] ?? name;
+  return builtinPluginIdOf(name) ?? name;
 }
 
 /** Resolve only first-party built-in providers; custom MCP ids must never inherit this policy. */
 export function pluginIdForKnownProviderName(name: string): PluginId | null {
-  return PROVIDER_NAME_TO_PLUGIN_ID[name as KnownProviderName] ?? null;
+  return builtinPluginIdOf(name) ?? null;
 }
 
 /** 从静态 metadata 列表构造 Plugin descriptor。
@@ -168,6 +183,7 @@ const PLUGIN_ID_TO_MCP_ID: Record<PluginId, LiziMcpId | undefined> = {
   xdt_helper: 'cindy_helper',
   collab: 'cindy_orca',
   lsp: 'cindy_lsp',
+  artifacts: undefined,
 };
 
 /** createLiziMcpProviders `enabled` 数组使用的有序 LiziMcpId。模块加载时计算一次，运行期不变。 */

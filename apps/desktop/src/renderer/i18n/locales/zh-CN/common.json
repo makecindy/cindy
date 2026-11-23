@@ -6095,6 +6095,10 @@
         "ssh": {
           "name": "SSH 远程命令",
           "description": "通过本机配置的 SSH 连接在远程电脑上执行命令。"
+        },
+        "artifacts": {
+          "name": "Artifacts 页面",
+          "description": "制作文档、幻灯片等页面，评论会回到任务。"
         }
       }
     },
@@ -18731,6 +18735,9 @@
       },
       "themeCreator": {
         "description": "制作并验证 Cindy 的配色、素材和外观设置。"
+      },
+      "artifacts": {
+        "description": "把文档、幻灯片、设计稿、白板、表格、数据看板或短动画做成实时页面，在任务旁边打开，评论会回到任务里。"
       }
     },
     "common": {

@@ -6138,6 +6138,10 @@
         "ssh": {
           "name": "SSH-Befehle",
           "description": "Befehle auf entfernten Computern über konfigurierte SSH-Verbindungen ausführen."
+        },
+        "artifacts": {
+          "name": "Artifacts",
+          "description": "Dokumente, Folien und andere Seiten erstellen; Kommentare gehen an die Aufgabe zurück."
         }
       }
     },
@@ -18806,6 +18810,9 @@
       },
       "themeCreator": {
         "description": "Cindys Farben, Bildmaterial und Darstellungseinstellungen erstellen und prüfen."
+      },
+      "artifacts": {
+        "description": "Erstellt Dokumente, Folien, Designs, Whiteboards, Tabellen, Dashboards oder kurze Animationen als Live-Seiten neben der Aufgabe und leitet Kommentare zurück."
       }
     },
     "common": {

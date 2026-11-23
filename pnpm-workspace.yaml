@@ -55,3 +55,7 @@ allowBuilds:
   cpu-features: false
   protobufjs: false
   ssh2: false
+# @open-artifact 0.14.1 was published 2026-11-23 04:38 UTC; remove these once older than pnpm's 1-day minimumReleaseAge (from 2026-11-24 05:00 UTC).
+minimumReleaseAgeExclude:
+  - '@open-artifact/harness-kit@0.14.1'
+  - '@open-artifact/protocol@0.14.1'

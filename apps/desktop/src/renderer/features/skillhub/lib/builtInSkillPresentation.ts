@@ -3,6 +3,7 @@ import {
   CINDY_SKILL_CREATOR_NAME,
   CINDY_PLUGIN_CREATOR_NAME,
   CINDY_THEME_CREATOR_NAME,
+  CINDY_ARTIFACTS_NAME,
   isCindyBuiltInSkillMetadata,
 } from '../../../../shared/cindyBuiltInSkills';
 
@@ -10,12 +11,14 @@ export const SKILL_CREATOR_DESCRIPTION_KEY = 'skillhub.builtIn.skillCreator.desc
 export const LEARN_DESCRIPTION_KEY = 'skillhub.builtIn.learn.description' as const;
 export const PLUGIN_CREATOR_DESCRIPTION_KEY = 'skillhub.builtIn.pluginCreator.description' as const;
 export const THEME_CREATOR_DESCRIPTION_KEY = 'skillhub.builtIn.themeCreator.description' as const;
+export const ARTIFACTS_DESCRIPTION_KEY = 'skillhub.builtIn.artifacts.description' as const;
 
 const BUILT_IN_SKILL_ORDER = new Map([
   [CINDY_SKILL_CREATOR_NAME, 0],
   [CINDY_LEARN_NAME, 1],
   [CINDY_PLUGIN_CREATOR_NAME, 2],
   [CINDY_THEME_CREATOR_NAME, 3],
+  [CINDY_ARTIFACTS_NAME, 4],
 ]);
 
 /**
@@ -29,12 +32,13 @@ export function builtInSkillDescriptionKey(
     description?: string;
     scope?: string;
   },
-): typeof SKILL_CREATOR_DESCRIPTION_KEY | typeof LEARN_DESCRIPTION_KEY | typeof PLUGIN_CREATOR_DESCRIPTION_KEY | typeof THEME_CREATOR_DESCRIPTION_KEY | undefined {
+): typeof SKILL_CREATOR_DESCRIPTION_KEY | typeof LEARN_DESCRIPTION_KEY | typeof PLUGIN_CREATOR_DESCRIPTION_KEY | typeof THEME_CREATOR_DESCRIPTION_KEY | typeof ARTIFACTS_DESCRIPTION_KEY | undefined {
   if (!isCindyBuiltInSkillMetadata(skill)) return undefined;
   if (skill.name === CINDY_SKILL_CREATOR_NAME) return SKILL_CREATOR_DESCRIPTION_KEY;
   if (skill.name === CINDY_LEARN_NAME) return LEARN_DESCRIPTION_KEY;
   if (skill.name === CINDY_PLUGIN_CREATOR_NAME) return PLUGIN_CREATOR_DESCRIPTION_KEY;
   if (skill.name === CINDY_THEME_CREATOR_NAME) return THEME_CREATOR_DESCRIPTION_KEY;
+  if (skill.name === CINDY_ARTIFACTS_NAME) return ARTIFACTS_DESCRIPTION_KEY;
   return undefined;
 }
 

@@ -6095,6 +6095,10 @@
         "ssh": {
           "name": "SSH 명령",
           "description": "설정된 SSH 연결로 원격 컴퓨터에서 명령을 실행합니다."
+        },
+        "artifacts": {
+          "name": "Artifacts",
+          "description": "문서, 슬라이드 등 페이지를 만들고 댓글은 작업으로 돌아옵니다."
         }
       }
     },
@@ -18731,6 +18735,9 @@
       },
       "themeCreator": {
         "description": "Cindy의 색상, 시각 자료, 외관 설정을 만들고 검증합니다."
+      },
+      "artifacts": {
+        "description": "문서, 슬라이드, 디자인, 화이트보드, 표, 대시보드, 짧은 애니메이션을 실시간 페이지로 만들어 작업 옆에 열고 댓글을 작업으로 돌려보냅니다."
       }
     },
     "common": {

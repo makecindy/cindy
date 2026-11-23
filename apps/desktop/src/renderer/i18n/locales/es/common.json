@@ -6196,6 +6196,10 @@
         "ssh": {
           "name": "Comandos SSH",
           "description": "Ejecuta comandos en computadoras remotas mediante conexiones SSH configuradas."
+        },
+        "artifacts": {
+          "name": "Artifacts",
+          "description": "Crea documentos, diapositivas y otras páginas; los comentarios vuelven a la tarea."
         }
       }
     },
@@ -18977,6 +18981,9 @@
       },
       "themeCreator": {
         "description": "Crea y verifica los colores, recursos visuales y ajustes de apariencia de Cindy."
+      },
+      "artifacts": {
+        "description": "Crea documentos, diapositivas, diseños, pizarras, hojas, paneles o animaciones cortas como páginas en vivo que se abren junto a la tarea y devuelven los comentarios."
       }
     },
     "common": {

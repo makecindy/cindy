@@ -203,4 +203,6 @@ apps/desktop/resources/builtin-ghosts/
 
 # 本地验收截图与设计稿等任务产物(只在本地保存,不入仓)。
 artifacts/
+# 例外：内置技能 /artifacts 的目录（Open Artifact，随包发布）。
+!apps/desktop/resources/system-skills/artifacts/
 .playwright-mcp/

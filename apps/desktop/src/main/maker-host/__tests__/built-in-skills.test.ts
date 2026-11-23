@@ -42,6 +42,7 @@ function fixture() {
   const learnSource = path.join(bundledRoot, 'learn');
   const pluginSource = path.join(bundledRoot, 'cindy-plugin-creator');
   const themeSource = path.join(bundledRoot, 'cindy-theme-creator');
+  const artifactsSource = path.join(bundledRoot, 'artifacts');
   const userDataDir = path.join(root, 'user-data');
   const appDataDir = path.join(root, 'app-data');
   const homeDir = path.join(root, 'home');
@@ -50,6 +51,11 @@ function fixture() {
   fs.mkdirSync(learnSource, { recursive: true });
   fs.mkdirSync(pluginSource, { recursive: true });
   fs.mkdirSync(themeSource, { recursive: true });
+  fs.mkdirSync(artifactsSource, { recursive: true });
+  fs.writeFileSync(
+    path.join(artifactsSource, 'SKILL.md'),
+    '---\nname: artifacts\ndescription: Make Open Artifact pages\n---\n\n# Artifacts\n',
+  );
   fs.writeFileSync(
     path.join(themeSource, 'SKILL.md'),
     '---\nname: cindy-theme-creator\ndescription: Create Cindy themes\n---\n\n# Theme Creator\n',
@@ -682,8 +688,8 @@ describe('built-in Skills', () => {
       const target = fs.realpathSync(active);
       const skillPath = path.join(active, 'cindy-skill-creator');
       expect(prepared.projectionSafe).toBe(true);
-      expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toHaveLength(4);
-      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(4);
+      expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toHaveLength(5);
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(5);
       if (damage === 'modified-content') {
         fs.appendFileSync(path.join(skillPath, 'SKILL.md'), '\nChanged');
       } else if (damage === 'missing-manifest') {
@@ -848,7 +854,7 @@ describe('built-in Skills', () => {
     const pending = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
     fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, bundleVersion: manifest.bundleVersion + 1 }));
     await expect(pending).resolves.toEqual([]);
-    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(4);
+    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(5);
   });
 
   // Unit, PR #8493: changes to an already-hashed Skill must be rejected even

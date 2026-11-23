@@ -361,6 +361,7 @@ import {
   registerRsbBrowserBridgeIpc,
   registerTabOpResultHandler,
 } from './rsb-browser-bridge';
+import { closeOpenArtifact, resumeOpenArtifactAfterLaunch } from './open-artifact/openArtifact.desktop.js';
 import {
   getRsbNativePopupOwnerWebContents,
   hasActiveRsbNativePopupSurfaces,
@@ -7524,6 +7525,10 @@ const registerIpcHandlers = () => {
     // Local runtime discovery has settled; unavailable agents are repaired in the background.
     await registerMakerIpcsAfterSplash();
     startBinaryBackgroundUpdates();
+    // Open Artifact, on a timer off the startup path and only with the Artifacts tool on: connect to a running daemon
+    // (comments left while Cindy was closed come back), or start one when Cindy used it before and a runtime is on disk
+    // (restored sidebar pages load). Never downloads here; that waits for the first tool call.
+    resumeOpenArtifactAfterLaunch();
 
     return {
       claudeCode: { status: claudeRes.ready ? 'passed' as const : 'failed' as const, path: claudeRes.path },
@@ -11445,6 +11450,9 @@ onQuit('anthropic-compat-proxy', () => disposeAnthropicCompatProxy(), 'async');
 // browser + locked user-data-dir would otherwise survive quit and force a stale
 // SingletonLock recovery next launch). `stop` is idempotent / no-op if never started.
 onQuit('browser-runtime', () => disposeBrowserRuntime(), 'async');
+// Open Artifact: close the connection and ask a daemon Cindy started to stop, waiting at most 3 s for it to remove its
+// state files (inside the async budget); one another app started keeps serving that app.
+onQuit('open-artifact', () => closeOpenArtifact(), 'async');
 // Remote file-service clients: 先于 pool 关闭, 挂断远端 daemon 的 exec channel。
 onQuit('remote-file-browser', () => disposeRemoteFileBrowser(), 'async');
 onQuit('html-previews', disposeHtmlPreviews, 'async');

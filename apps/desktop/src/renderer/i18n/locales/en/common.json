@@ -6138,6 +6138,10 @@
         "ssh": {
           "name": "SSH commands",
           "description": "Run commands on remote computers through configured SSH connections."
+        },
+        "artifacts": {
+          "name": "Artifacts",
+          "description": "Make docs, slides and other pages; comments come back to the task."
         }
       }
     },
@@ -18806,6 +18810,9 @@
       },
       "themeCreator": {
         "description": "Create and verify Cindy colors, visual assets, and appearance settings."
+      },
+      "artifacts": {
+        "description": "Make docs, slides, designs, whiteboards, sheets, dashboards or short animations as live pages that open beside the task and send comments back."
       }
     },
     "common": {

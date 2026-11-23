@@ -277,6 +277,12 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.100
         version: 0.1.100
+      '@open-artifact/harness-kit':
+        specifier: 0.14.1
+        version: 0.14.1
+      '@open-artifact/protocol':
+        specifier: 0.14.1
+        version: 0.14.1
       '@paralleldrive/cuid2':
         specifier: ^2.3.1
         version: 2.3.1
@@ -4340,6 +4346,13 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@open-artifact/harness-kit@0.14.1':
+    resolution: {integrity: sha512-pNhR+2byG4EZld+apxVheHbnZYNhp5kSUqBkc4sRni/o5o9AUbx+DdYgVMdS5wufXReDZ1xzHfvJYVd0TmaREQ==}
+    engines: {node: '>=22.18'}
+
+  '@open-artifact/protocol@0.14.1':
+    resolution: {integrity: sha512-3ZHLlgzGtshpegTrDCWhAXVJ742okbSTFOf3XQjOM+VpXGz/PgzR3NRznaFNGjUOmVAtiMG5dbMyz0z1C7UxXQ==}
 
   '@oxc-project/types@0.149.0':
     resolution: {integrity: sha512-Efcc+iF0j3Bf67YjEqIqWXbX5XddXoK/Mw4K1/JuXwRCZ8N16VR7iT23nlCc9XrveFVh/E5Rqs2StT0V8v9LdA==}
@@ -15139,6 +15152,12 @@ snapshots:
 
   '@noxcturnal/noxcturnal-win32-x64-msvc@0.1.12':
     optional: true
+
+  '@open-artifact/harness-kit@0.14.1':
+    dependencies:
+      '@open-artifact/protocol': 0.14.1
+
+  '@open-artifact/protocol@0.14.1': {}
 
   '@oxc-project/types@0.149.0': {}
 

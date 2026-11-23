@@ -6095,6 +6095,10 @@
         "ssh": {
           "name": "SSH 遠端命令",
           "description": "透過本機設定的 SSH 連線在遠端電腦上執行命令。"
+        },
+        "artifacts": {
+          "name": "Artifacts 頁面",
+          "description": "製作文件、投影片等頁面，留言會回到任務。"
         }
       }
     },
@@ -18731,6 +18735,9 @@
       },
       "themeCreator": {
         "description": "製作並驗證 Cindy 的配色、素材與外觀設定。"
+      },
+      "artifacts": {
+        "description": "把文件、投影片、設計稿、白板、表格、資料儀表板或短動畫做成即時頁面，在任務旁邊開啟，留言會回到任務裡。"
       }
     },
     "common": {

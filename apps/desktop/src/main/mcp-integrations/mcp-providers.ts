@@ -101,6 +101,8 @@ import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
 import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.desktop.js';
+import { createArtifactsProvider } from '../open-artifact/tools.js';
+import { getOpenArtifactService } from '../open-artifact/openArtifact.desktop.js';
 import { getComputerMcpDeps } from './computer.desktop.js';
 import { discordIm, feishuIm, wechatIm } from '../im';
 import { directDeliveryFile, prepareDirectDelivery } from '../im/imessage/directDelivery';
@@ -1667,6 +1669,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   // essential plugin 始终放行；非 essential plugin 按 project → user → default 判定。
   // provider name(如 'lizi_jira') 会先映射成用户可见的 plugin id(如 'jira')。
   const gated = gateBuiltinMcpProviders(providers, () => deps.pluginRegistry);
+
+  // cindy_artifacts: Open Artifact 的三个工具,桌面专属(不在 @cindy/mcps 共享列表里),走同一个 plugin
+  // gate(plugin id `artifacts`,见 builtin-plugins.ts DESKTOP_PROVIDER_NAME_TO_PLUGIN_ID)。SSH 远程任务不挂。
+  gated.push(...gateBuiltinMcpProviders([createArtifactsProvider(getOpenArtifactService, resolveLiziMcpSessionContext)], () => deps.pluginRegistry));
 
   // cindy:意识总机(cindy-tools;网关模式,
   // docs/dev-rules/plugin-security-and-authoring.md;2026-07-12 由 cindy_ghosts 更名——server 名进

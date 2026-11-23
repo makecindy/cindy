@@ -13,6 +13,7 @@ import { RsbWebviewBackend } from './browser-backend/rsb-webview-backend.js';
 import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import { getActiveRsbSessionId, setActiveRsbSessionId } from '../rsb-browser-bridge/active-session.js';
 import type { RsbBrowserBridgeTabOp } from '../../shared/rsbBrowserBridge.js';
+import type { RendererBridgeOptions } from '../rsb-browser-bridge/renderer-bridge.js';
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createLogger } from '../logger.js';
@@ -24,10 +25,14 @@ let isDetached = () => false;
 export function setMainWindowAccessorForBackend(accessor: typeof mainWindowAccessor) { mainWindowAccessor = accessor; }
 export function setEnsureHostForBackend(impl: typeof ensureHost) { ensureHost = impl; }
 export function setIsDetachedForBackend(impl: typeof isDetached) { isDetached = impl; }
+/** The right-sidebar tab bridge the embedded backend uses; Open Artifact opens its pages through the same one. */
+export function desktopRsbBridgeOptions(): RendererBridgeOptions {
+  return { getHostWebContents: op => mainWindowAccessor(op), ensureHost: id => ensureHost(id), isDetached: () => isDetached(), logger };
+}
 export function createDesktopEmbeddedBackend(resolveUploadRoots: (sessionId: string) => Promise<string[]>) {
   return new RsbWebviewBackend({ registry: getRsbBrowserBridge(),
     getActiveSessionId: () => getActiveRsbSessionId(), artifactRoot: () => nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'),
-    resolveUploadRoots, bridge: { getHostWebContents: op => mainWindowAccessor(op), ensureHost: id => ensureHost(id), isDetached: () => isDetached(), logger }, logger });
+    resolveUploadRoots, bridge: desktopRsbBridgeOptions(), logger });
 }
 const runtime = createBrowserRuntime({ tempDir: () => app.getPath('temp'), settings,
   recipes: { ...loader, ...writer }, secretIo: genericOAuthSecretIo,

@@ -6095,6 +6095,10 @@
         "ssh": {
           "name": "SSH 遠方命令",
           "description": "藉此機所設 SSH 連線，於遠方之機上執行命令。"
+        },
+        "artifacts": {
+          "name": "Artifacts 頁卷",
+          "description": "製文書、幻燈諸頁，評歸任務。"
         }
       }
     },
@@ -18731,6 +18735,9 @@
       },
       "themeCreator": {
         "description": "為 Cindy 製配色、圖材與外觀設定，並驗之。"
+      },
+      "artifacts": {
+        "description": "以文書、幻燈、設計之稿、白板、表格、數據之板或短動畫為即觀之頁，啟於任務之側，評語歸於任務。"
       }
     },
     "common": {
