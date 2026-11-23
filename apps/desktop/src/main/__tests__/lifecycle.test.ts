@@ -844,7 +844,8 @@ describe('installQuitHandler', () => {
 
   // #7210: exercise the installed before-quit handler and classify its real persisted marker.
   // The existing exception tests start with an idle app. A pending disposer is the minimal
-  // condition needed to reproduce the race in this unit test.
+  // condition needed to reproduce the race in this unit test. The fatal-shutdown
+  // notification drives log backfill and must be emitted once even if two exceptions arrive.
   it.each([
     {
       name: 'fatal exception during cleanup',
@@ -894,6 +895,8 @@ describe('installQuitHandler', () => {
       const { app } = await import('electron');
       diagnostics.initStartupDiagnostics();
       lifecycle.installQuitHandler();
+      const onFatalShutdown = vi.fn();
+      lifecycle.onFatalShutdown(onFatalShutdown);
 
       let finishCleanup!: () => void;
       const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
@@ -915,7 +918,10 @@ describe('installQuitHandler', () => {
         for (const onExit of snapshot.added('exit')) onExit(actualExitCode);
         if (timing === 'after-exit-event') raiseError();
       });
-      if (timing === 'cleanup') raiseError();
+      if (timing === 'cleanup') {
+        raiseError();
+        raiseError();
+      }
       const repeatedQuit = { preventDefault: vi.fn() };
       beforeQuit(repeatedQuit);
       expect(app.exit).not.toHaveBeenCalled();
@@ -931,6 +937,9 @@ describe('installQuitHandler', () => {
       expect(nextStart.analyzePreviousRuns()).toMatchObject([
         { kind, marker: { exitCode, shutdownReason, disposedAt: expect.any(String) } },
       ]);
+      expect(onFatalShutdown.mock.calls).toEqual(
+        kind === 'crash-exit' ? [['uncaughtException']] : [],
+      );
       expect(dispose).toHaveBeenCalledOnce();
       expect(repeatedQuit.preventDefault).toHaveBeenCalledOnce();
     } finally {

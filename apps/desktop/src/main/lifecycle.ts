@@ -638,6 +638,7 @@ export function installQuitHandler(timeoutMs = 2000): void {
       if (beforeQuitExitCode === 0) {
         beforeQuitExitCode = 1;
         noteUncaughtExceptionDuringQuit();
+        notifyFatalShutdown('uncaughtException');
       }
       return;
     }
