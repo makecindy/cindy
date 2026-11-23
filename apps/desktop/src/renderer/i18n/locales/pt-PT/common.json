@@ -22559,6 +22559,18 @@
       "cheapest": {
         "title": "O mais barato",
         "hint": "Usa primeiro as subscrições com quota disponível, sem custo adicional; o resto segue do preço de tabela mais baixo ao mais alto, e as fontes sem preço ficam para o fim."
+      },
+      "drain": {
+        "title": "Esgotar e passar",
+        "hint": "Continua a usar a última fonte até ficar sem quota ou indisponível e só então passa à seguinte; não volta atrás quando as anteriores recuperam."
+      },
+      "headroom": {
+        "title": "Mais quota restante",
+        "hint": "Usa primeiro a fonte com a maior proporção de quota restante (a semanal, se existir); as fontes sem quota legível ficam para o fim."
+      },
+      "weighted": {
+        "title": "Por peso",
+        "hint": "Distribui as novas tarefas pelas fontes na proporção dos pesos, de forma intercalada; as fontes indisponíveis ficam de fora desta vez."
       }
     },
     "picker": {
@@ -22586,6 +22598,11 @@
       "tight": "A quota de 5 horas está quase cheia, por isso é ignorada por agora",
       "cheapest": "Preço de tabela mais baixo",
       "cheapestFree": "Ainda há quota de subscrição, sem custo adicional",
+      "drain": "Continua a ser usada até se esgotar a quota",
+      "drainNext": "A fonte anterior esgotou-se ou ficou indisponível, por isso passou para esta",
+      "headroom": "Tem mais quota restante",
+      "headroomQuota": "Restam {{left}} % de quota, mais do que em qualquer outra fonte",
+      "weighted": "É a vez dela segundo o peso",
       "noVision": "A mensagem tem imagens e esta fonte não as consegue ver",
       "exceptionImage": "A mensagem tem imagens, por isso só foram consideradas as fontes que as conseguem ver",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte as consegue ver, por isso escolheu como habitualmente",
@@ -22605,6 +22622,9 @@
       "effort": "Esforço de raciocínio",
       "effortUnset": "Não definido",
       "effortHint": "Se o modelo escolhido não suportar este nível, corre com a sua predefinição.",
+      "weight": "Peso",
+      "weightAria": "Peso de «{{name}}»",
+      "weightHint": "Com «Por peso», um peso maior recebe mais tarefas novas. 1–1000.",
       "sources": "Fontes que pode usar",
       "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
       "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo ligado.",
@@ -22637,6 +22657,7 @@
         "empty": "Ainda não há exceções. Cada nova tarefa segue a regra de escolha acima.",
         "imageRule": "Quando a mensagem tiver imagens, usar apenas fontes que as consigam ver",
         "hoursRule": "{{from}}–{{to}}: usar «{{name}}»",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}»",
         "remove": "Remover esta exceção",
         "add": "Adicionar uma exceção",
         "choose": "Escolher uma situação",
@@ -22645,6 +22666,9 @@
         "from": "De",
         "to": "Até",
         "useRoute": "Usar em vez disso",
+        "days": "Dias",
+        "daysHint": "Sem dias selecionados, aplica-se todos os dias. Um intervalo que passa da meia-noite conta para o dia em que começa.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Adicionar",
         "sameHour": "O início e o fim não podem ser a mesma hora.",
         "full": "Até {{count}} exceções.",

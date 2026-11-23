@@ -22346,6 +22346,18 @@
       "cheapest": {
         "title": "Cheapest",
         "hint": "Uses subscriptions with quota left first, at no extra cost; the rest go from lowest to highest listed price, and sources without a price come last."
+      },
+      "drain": {
+        "title": "Use until empty",
+        "hint": "Keeps using the last source until it runs out of quota or becomes unavailable, then moves to the next; it does not switch back when earlier ones recover."
+      },
+      "headroom": {
+        "title": "Most quota left",
+        "hint": "Uses the source with the largest share of quota left (weekly quota when there is one); sources without readable quota come last."
+      },
+      "weighted": {
+        "title": "By weight",
+        "hint": "Spreads new tasks across sources in proportion to their weights, interleaved; unavailable sources sit out this time."
       }
     },
     "picker": {
@@ -22373,6 +22385,11 @@
       "tight": "Its 5-hour quota is almost full, so it is skipped for now",
       "cheapest": "Lowest listed price",
       "cheapestFree": "Subscription quota left, no extra cost",
+      "drain": "Still using it until its quota runs out",
+      "drainNext": "The previous source ran out or became unavailable, so it moved to this one",
+      "headroom": "Most quota left",
+      "headroomQuota": "{{left}}% of its quota is left, more than any other source",
+      "weighted": "Its turn by weight",
       "noVision": "The message has images and it cannot see images",
       "exceptionImage": "The message has images, so only sources that can see images were considered",
       "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
@@ -22392,6 +22409,9 @@
       "effort": "Reasoning effort",
       "effortUnset": "Not set",
       "effortHint": "If the chosen model does not support this level, it runs at its own default.",
+      "weight": "Weight",
+      "weightAria": "Weight for “{{name}}”",
+      "weightHint": "With “By weight”, a higher weight gets more new tasks. 1–1000.",
       "sources": "Sources it can use",
       "sourcesHint": "Different models can sit together. The task shows which one was used.",
       "sourcesEmpty": "No sources yet. Add a connected model below.",
@@ -22424,6 +22444,7 @@
         "empty": "No exceptions yet. Every new task uses the pick rule above.",
         "imageRule": "When the message has images, use only sources that can see images",
         "hoursRule": "{{from}}–{{to}}: use “{{name}}” instead",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: use “{{name}}” instead",
         "remove": "Remove this exception",
         "add": "Add an exception",
         "choose": "Choose a situation",
@@ -22432,6 +22453,9 @@
         "from": "From",
         "to": "To",
         "useRoute": "Use instead",
+        "days": "Days",
+        "daysHint": "No days selected means every day. A time range past midnight counts toward the day it starts.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Add",
         "sameHour": "Start and end cannot be the same time.",
         "full": "Up to {{count}} exceptions.",

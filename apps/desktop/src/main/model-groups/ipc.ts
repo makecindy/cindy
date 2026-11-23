@@ -11,6 +11,7 @@ import {
   modelGroupAgentDeviceId,
   modelGroupCandidateKey,
   modelGroupSelectionForOwner,
+  modelGroupsConfigForRemote,
   normalizeModelGroupsConfig,
   sanitizeModelGroupRouteNote,
   sanitizeModelGroupSelection,
@@ -69,7 +70,7 @@ const routeNotePorts: ModelGroupRouteNotePorts = {
 export function registerModelGroupsIpc(): void {
   ipcMain.handle(MODEL_GROUPS_IPC.GET, (event) => {
     assertModelGroupsCaller(event);
-    return readModelGroupsConfig();
+    return isDeviceLinkInvoke() ? modelGroupsConfigForRemote(readModelGroupsConfig()) : readModelGroupsConfig();
   });
   ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

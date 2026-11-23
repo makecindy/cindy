@@ -23,7 +23,12 @@ import {
 } from '../../shared/modelGroups.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
-import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from './pick.js';
+import {
+  applyModelGroupWeightStep,
+  pickModelGroupCandidate,
+  type ModelGroupCandidateFacts,
+  type ModelGroupWeightStep,
+} from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
 
 export interface ModelGroupResolverDeps {
@@ -134,11 +139,19 @@ function scopedWindowApplies(scopedTo: string, modelId: string, modelName: strin
 }
 
 export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
-  /** 「轮流」上一次选中的候选；只在内存里，重启后从第一个开始。 */
+  /** 「轮流」「用完再换」上一次选中的候选；只在内存里，重启后从第一个开始。 */
   const lastPicked = new Map<string, string>();
-  const pending = new Map<string, { scope: string; at: number; selection: ModelGroupResolveRequest['selection']; result: ModelGroupResolveResult; routeId?: string }>();
+  /** 「按权重」每条路线的计数；只在内存里，重启后重新开始。 */
+  const weightCounters = new Map<string, ReadonlyMap<string, number>>();
+  const pending = new Map<string, {
+    scope: string; at: number; selection: ModelGroupResolveRequest['selection']; result: ModelGroupResolveResult; routeId?: string;
+    weightStep?: ModelGroupWeightStep;
+  }>();
 
-  function prepare(request: ModelGroupResolveRequest, scope: string, result: ModelGroupResolveResult, routeId?: string): ModelGroupResolveResult {
+  function prepare(
+    request: ModelGroupResolveRequest, scope: string, result: ModelGroupResolveResult, routeId?: string,
+    weightStep?: ModelGroupWeightStep,
+  ): ModelGroupResolveResult {
     if (request.dryRun || scope !== deps.scope()) return result;
     // 未采用的结果不写盘；限制暂存数量和生命周期，避免取消操作不断积累。
     for (const [id, item] of pending) {
@@ -146,7 +159,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     }
     while (pending.size >= 128) pending.delete(pending.keys().next().value!);
     const decisionId = randomUUID();
-    pending.set(decisionId, { scope, at: deps.now(), selection: { ...request.selection }, result, routeId });
+    pending.set(decisionId, {
+      scope, at: deps.now(), selection: { ...request.selection }, result, routeId,
+      ...(weightStep ? { weightStep } : {}),
+    });
     return { ...result, decisionId };
   }
 
@@ -157,6 +173,8 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     deps.recordDecision?.(item.selection, item.result);
     if (item.result.outcome === 'routed' && item.routeId) {
       lastPicked.set(`${item.scope}\u0000${item.routeId}`, modelGroupCandidateKey(item.result.route));
+      const key = `${item.scope}\u0000${item.routeId}`;
+      if (item.weightStep) weightCounters.set(key, applyModelGroupWeightStep(weightCounters.get(key), item.weightStep));
     }
     return true;
   }
@@ -270,6 +288,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const facts = await inspect(route, views);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
+      weightCounters: weightCounters.get(`${scope}\u0000${route.id}`),
     });
     const exceptions: ModelGroupAppliedException[] = [
       ...via,
@@ -292,10 +311,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       modelName: entry.modelName, sourceName: entry.sourceName,
       why: entry.why, quota: entry.quota, trace: picked.trace,
       ...(exceptions.length > 0 ? { exceptions } : {}),
-    }, route.id);
+    }, route.id, picked.weightStep);
   }
 
-  /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置。 */
+  /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置与「按权重」的计数。 */
   async function candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]> {
     return inspect(route, await deps.views());
   }

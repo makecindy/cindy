@@ -22257,6 +22257,18 @@
       "cheapest": {
         "title": "最省",
         "hint": "訂閱尚有限額者先用，不另費錢；餘者依標價由低至高，無標價者居後。"
+      },
+      "drain": {
+        "title": "盡而後易",
+        "hint": "恆用前番之源，待其限額盡或不可用乃易其次；前者復可用，亦不復歸。"
+      },
+      "headroom": {
+        "title": "餘多者先",
+        "hint": "餘額之比最高者先用（有週限者視週限）；不得其限額者居後。"
+      },
+      "weighted": {
+        "title": "依權",
+        "hint": "新差事依諸源之權，錯落分之；不可用者此番不與。"
       }
     },
     "picker": {
@@ -22284,6 +22296,11 @@
       "tight": "五小時限額將滿，姑不用",
       "cheapest": "標價最低",
       "cheapestFree": "訂閱尚有限額，不另費錢",
+      "drain": "續用之，待其限額盡",
+      "drainNext": "前源已盡或不可用，易至此",
+      "headroom": "餘額最多",
+      "headroomQuota": "限額尚餘 {{left}}%，多於諸源",
+      "weighted": "依權此番分至彼",
       "noVision": "訊中有圖，彼不能觀圖",
       "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
       "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
@@ -22303,6 +22320,9 @@
       "effort": "思之深淺",
       "effortUnset": "不指定",
       "effortHint": "所擇模型不支此檔時，依其常例而行。",
+      "weight": "權",
+      "weightAria": "「{{name}}」之權",
+      "weightHint": "依權分時，權愈重者得新差事愈多，一至一千。",
       "sources": "可用之源",
       "sourcesHint": "可納不同模型；實用何者，書於差事之中。",
       "sourcesEmpty": "尚無源。於下增已連線之模型。",
@@ -22335,6 +22355,7 @@
         "empty": "尚無例外，每一新差事皆依上之擇法。",
         "imageRule": "訊中有圖時，唯用能觀圖之源",
         "hoursRule": "{{from}}–{{to}} 改行「{{name}}」",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}} 改行「{{name}}」",
         "remove": "刪此例外",
         "add": "增例外",
         "choose": "擇一情形",
@@ -22343,6 +22364,9 @@
         "from": "自",
         "to": "至",
         "useRoute": "改行",
+        "days": "日",
+        "daysHint": "不擇則日日皆然；跨子夜之時段，以始之日為準。",
+        "dayRange": "{{from}}至{{to}}",
         "addHours": "增",
         "sameHour": "起訖不可同時。",
         "full": "至多 {{count}} 條例外。",

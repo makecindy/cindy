@@ -22559,6 +22559,18 @@
       "cheapest": {
         "title": "Lo más barato",
         "hint": "Usa primero las suscripciones con cuota disponible, sin coste adicional; el resto va del precio de lista más bajo al más alto, y las fuentes sin precio quedan al final."
+      },
+      "drain": {
+        "title": "Agotar y pasar",
+        "hint": "Sigue usando la última fuente hasta que se quede sin cuota o deje de estar disponible, y entonces pasa a la siguiente; no vuelve atrás cuando las anteriores se recuperan."
+      },
+      "headroom": {
+        "title": "Más cuota restante",
+        "hint": "Usa primero la fuente con mayor proporción de cuota restante (la semanal si la hay); las fuentes sin cuota legible van al final."
+      },
+      "weighted": {
+        "title": "Por peso",
+        "hint": "Reparte las tareas nuevas entre las fuentes según su peso, de forma intercalada; las fuentes no disponibles no participan esta vez."
       }
     },
     "picker": {
@@ -22586,6 +22598,11 @@
       "tight": "Su cuota de 5 horas está casi llena, así que se omite por ahora",
       "cheapest": "Precio de lista más bajo",
       "cheapestFree": "Queda cuota de suscripción, sin coste adicional",
+      "drain": "Se sigue usando hasta que se agote su cuota",
+      "drainNext": "La fuente anterior se agotó o dejó de estar disponible, así que pasó a esta",
+      "headroom": "Le queda la mayor cuota",
+      "headroomQuota": "Le queda un {{left}} % de cuota, más que a cualquier otra fuente",
+      "weighted": "Le toca según su peso",
       "noVision": "El mensaje tiene imágenes y esta fuente no puede verlas",
       "exceptionImage": "El mensaje tiene imágenes, así que solo se consideraron las fuentes que pueden verlas",
       "exceptionImageFallback": "El mensaje tiene imágenes, pero ninguna fuente puede verlas, así que se eligió como siempre",
@@ -22605,6 +22622,9 @@
       "effort": "Intensidad de razonamiento",
       "effortUnset": "Sin especificar",
       "effortHint": "Si el modelo elegido no admite este nivel, se ejecuta con su valor predeterminado.",
+      "weight": "Peso",
+      "weightAria": "Peso de «{{name}}»",
+      "weightHint": "Con «Por peso», un peso mayor recibe más tareas nuevas. 1–1000.",
       "sources": "Fuentes que puede usar",
       "sourcesHint": "Puede haber modelos distintos. La tarea indica cuál se usó.",
       "sourcesEmpty": "Aún no hay fuentes. Añade abajo un modelo conectado.",
@@ -22637,6 +22657,7 @@
         "empty": "Aún no hay excepciones. Cada tarea nueva usa la regla de elección de arriba.",
         "imageRule": "Cuando el mensaje tenga imágenes, usar solo fuentes que puedan verlas",
         "hoursRule": "{{from}}–{{to}}: usar «{{name}}»",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}»",
         "remove": "Quitar esta excepción",
         "add": "Añadir una excepción",
         "choose": "Elegir una situación",
@@ -22645,6 +22666,9 @@
         "from": "Desde",
         "to": "Hasta",
         "useRoute": "Usar en su lugar",
+        "days": "Días",
+        "daysHint": "Si no eliges ninguno, se aplica todos los días. Un tramo que pasa de medianoche cuenta para el día en que empieza.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Añadir",
         "sameHour": "El inicio y el fin no pueden ser la misma hora.",
         "full": "Hasta {{count}} excepciones.",
