@@ -291,3 +291,29 @@ it('收起时点标题行任意位置也能展开(鼠标); 点按钮不会重复
   fireEvent.click(sectionHeader());
   expect(sectionHeader().getAttribute('aria-expanded')).toBe('false');
 });
+
+// PR #12287, unit: 通过真实恢复按钮验证项目和权限的继承分支，原有用例只覆盖直接选择。
+it.each([
+  ['project', null, 'ask', { projectToken: null }],
+  ['permission', 'ask', 'bypassPermissions', { permissionMode: null }],
+] as const)('恢复 %s 会放宽权限时先确认，取消不写入', async (field, permissionMode, projectPermission, patch) => {
+  const token = 'a'.repeat(24);
+  state.list.mockResolvedValue(listOf([{
+    ...FOLLOWING,
+    project: { token, name: 'cindy', available: true, config: { route: PROJECT_ROUTE, permissionMode: projectPermission } },
+    permissionMode,
+  }]));
+  const defaults = await state.defaultsGet();
+  state.defaultsGet.mockResolvedValue({ ...defaults, groupPermissionMode: 'bypassPermissions' });
+  await openGroup();
+  const label = screen.getByText(`settings.feishuBot.groups.${field}.label`);
+  const reset = within(label.parentElement!).getByRole('button', { name: 'settings.defaults.restore' });
+  state.confirm.mockResolvedValueOnce(false);
+  fireEvent.click(reset);
+  await waitFor(() => expect(state.confirm).toHaveBeenCalledTimes(1));
+  expect(state.set).not.toHaveBeenCalled();
+
+  state.confirm.mockResolvedValueOnce(true);
+  fireEvent.click(reset);
+  await waitFor(() => expect(state.set).toHaveBeenCalledExactlyOnceWith('oc_group1', patch, '项目群'));
+});

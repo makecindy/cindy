@@ -257,7 +257,7 @@ describe('workspaceKind 在复活 / upsert 冲突时的归属', () => {
       {
         ...ns,
         routeOverrideFor: (_bot: string, user: string) => (user.startsWith('g/') ? route : null),
-        laneWorkingDirFor: async (_bot: string, user: string) => (user.startsWith('g/') ? laneDir : null),
+        laneWorkingDirFor: async (_bot: string, user: string) => (user.startsWith('g/') ? laneDir : undefined),
       } as unknown as ImSessionNamespace,
       { projectSwitching: true },
     );
@@ -279,6 +279,13 @@ describe('workspaceKind 在复活 / upsert 冲突时的归属', () => {
     const [row] = await db.select().from(sessions);
     expect(row!.workingDir).toBe(PROJECT_DIR);
     expect(row!.workspaceKind).toBe('project');
+
+    // PR #12287: 解除群项目绑定后，下次 /new 应回到托管对话目录并更新侧栏归组。
+    laneDir = null;
+    const dialogue = await laneRepo.prepareNewSession('bot1', 'g/oc_1');
+    await resetSessionToDefaults(created.id, {} as ImOrchestratorConfig, dialogue, 'telegram');
+    const [reset] = await db.select().from(sessions);
+    expect(reset).toMatchObject({ workingDir: MANAGED_DIR, workspaceKind: 'dialogue' });
   });
 
   /**

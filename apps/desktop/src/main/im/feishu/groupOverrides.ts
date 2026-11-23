@@ -204,9 +204,9 @@ export function feishuGroupProjectDefaults(
  * （任务落回机器人的对话目录），不按一个已经移除的路径去执行。顺带整理一次项目名表，
  * 让随后按项目取设置时用的是最新的名字。
  */
-export async function feishuGroupWorkingDir(botAppId: string, userId: string): Promise<string | null> {
+export async function feishuGroupWorkingDir(botAppId: string, userId: string): Promise<string | null | undefined> {
   const chatId = feishuGroupChatIdOf(userId);
-  if (!chatId) return null;
+  if (!chatId) return undefined;
   const projectDir = readFeishuGroupSettings(botAppId, chatId)?.projectDir;
   if (!projectDir) return null;
   const projects = await listProjectsForControl({ projectsOnly: true, all: true });

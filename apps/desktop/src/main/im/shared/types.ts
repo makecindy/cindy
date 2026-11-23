@@ -139,11 +139,11 @@ export interface ImSessionNamespace {
    */
   routeOverrideFor?(botContextId: string, userId: string): ImLaneRouteOverride | null;
   /**
-   * 按路由键给新任务指定项目目录(个人飞书 bot 的按群项目)。返回 null/缺省 = 用
-   * `ensureWorkingDir`。只在建任务与 `/new` 时生效, 已有任务的目录不被悄悄挪动。
+   * 按路由键给新任务指定项目目录(个人飞书 bot 的按群项目)。null 表示选用渠道对话目录，
+   * undefined 表示不为该路由键指定目录。只在建任务与 `/new` 时生效。
    * 返回的目录必须仍是侧栏里的本机项目且确实存在。
    */
-  laneWorkingDirFor?(botContextId: string, userId: string): Promise<string | null>;
+  laneWorkingDirFor?(botContextId: string, userId: string): Promise<string | null | undefined>;
   /**
    * 任务落在路由键绑定的项目目录 `workingDir` 里、且没有 routeOverrideFor 时, 模型路由与权限
    * 跟随这个项目的设置(个人飞书 bot: 群绑定的项目 →「项目与模型」)。返回 null/缺省 = 用渠道

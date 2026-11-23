@@ -46,6 +46,8 @@ import {
   type ImDefaultSettingsState,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { imBotSettings } from './ImBotSection.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 const FOLLOW = '__follow__';
 const MISSING = '__missing__';
@@ -84,6 +86,7 @@ function channelRoute(channel: ImDefaultSettingsState): FeishuGroupRoute {
 
 export function FeishuGroupSettingsSection() {
   const { t } = useTranslation();
+  const groupSetting = useSettingDefinition(imBotSettings.feishuGroups);
   const [list, setList] = useState<FeishuGroupSettingsList | null>(null);
   const [channel, setChannel] = useState<ImDefaultSettingsState | null>(null);
   const [sectionOpen, setSectionOpen] = useState(false);
@@ -244,7 +247,7 @@ export function FeishuGroupSettingsSection() {
   const customCount = (list?.groups ?? []).filter(hasOverrides).length;
 
   return (
-    <section className="flex flex-col py-1" aria-label={t('settings.feishuBot.groups.title')}>
+    <section {...groupSetting.anchorProps} className="flex flex-col py-1" aria-label={groupSetting.title}>
       {/* 收起时要一眼看出能点开：整行可点（鼠标，带悬停底色），键盘与读屏用右侧的「展开 / 收起」按钮；
           读过群名单后，收起时在说明下露出几个群头像。 */}
       <div
@@ -257,7 +260,7 @@ export function FeishuGroupSettingsSection() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <h3 id={titleId} className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-              {t('settings.feishuBot.groups.title')}
+              {groupSetting.title}
             </h3>
             {list && list.groups.length > 0 && (
               <span className="text-12 leading-none tabular-nums text-[var(--text-tertiary)]">
@@ -267,18 +270,25 @@ export function FeishuGroupSettingsSection() {
             )}
           </div>
           <p className="mt-2 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-            {t('settings.feishuBot.groups.description')}
+            {groupSetting.description}
           </p>
           {!sectionOpen && list && list.groups.length > 0 && <GroupAvatarStack groups={list.groups} />}
         </div>
         <div className="flex shrink-0 items-center gap-2" onClick={(event) => event.stopPropagation()}>
           {sectionOpen && (
-            <Button size="sm" variant="secondary" onClick={() => load(true)} disabled={loading}>
+            <Button
+              data-settings-search-action="Refresh the Feishu group list"
+              size="sm"
+              variant="secondary"
+              onClick={() => load(true)}
+              disabled={loading}
+            >
               <RefreshCw size={14} aria-hidden />
               {t('settings.feishuBot.groups.refresh')}
             </Button>
           )}
           <Button
+            data-settings-search-action="Expand or collapse the Feishu group list"
             id={triggerId}
             size="sm"
             variant="secondary"
@@ -325,6 +335,7 @@ export function FeishuGroupSettingsSection() {
                   <div className="flex flex-col gap-5">
                     {list.groups.length > SEARCH_MIN_GROUPS && (
                       <Input
+                        data-settings-search-action="Filter groups in the current list"
                         value={query}
                         onChange={setQuery}
                         type="search"
@@ -344,6 +355,7 @@ export function FeishuGroupSettingsSection() {
                           <>
                             <Collapse open={showAll}>{showAll && hiddenFollowing.map(renderGroup)}</Collapse>
                             <button
+                              data-settings-search-action="Show or hide the remaining groups"
                               type="button"
                               aria-expanded={showAll}
                               onClick={() => setShowAll((value) => !value)}
@@ -516,6 +528,7 @@ function FeishuGroupEditor({
   onSave: (patch: FeishuGroupSettingsPatch) => Promise<boolean>;
 }) {
   const { t, i18n } = useTranslation();
+  const groupSetting = useSettingDefinition(imBotSettings.feishuGroups);
   const { confirm } = useConfirmDialog();
   // 跟随时显示并在此基础上修改的是渠道此刻的路由；改了任何一项就整条存成这个群的路由。
   // 跟随的来源：群绑定了项目、且「项目与模型」里对得上那一行时跟随项目，否则跟随渠道设置。
@@ -548,29 +561,30 @@ function FeishuGroupEditor({
     const key = `newChat.permissionSelector.modes.${route.agentKind}.${mode}.label`;
     return i18n.exists(key) ? t(key) : mode;
   };
-  // 换项目（或解除绑定）会让群里新任务的权限变宽时先确认；群自己设了权限时换项目不影响权限。
+  const confirmWiderPermission = (next: ImDefaultPermissionMode) =>
+    !isWiderPermissionMode(next, effectivePermission) ||
+    confirm({
+      title: t('settings.feishuBot.groups.widerConfirm.title', { name }),
+      description: t('settings.feishuBot.groups.widerConfirm.description', {
+        current: permissionLabel(effectivePermission),
+        next: permissionLabel(next),
+      }),
+      confirmText: t('settings.feishuBot.groups.widerConfirm.confirm'),
+      cancelText: t('settings.feishuBot.groups.widerConfirm.cancel'),
+      confirmVariant: 'destructive',
+    });
+
   const changeProject = async (value: string) => {
     if (value === MISSING || value === projectValue) return;
     const token = value === FOLLOW ? null : value;
-    if (group.permissionMode === null) {
-      const next =
-        (token ? projects.find((project) => project.token === token)?.permissionMode : null) ??
-        channel.groupPermissionMode;
-      if (isWiderPermissionMode(next, effectivePermission)) {
-        const confirmed = await confirm({
-          title: t('settings.feishuBot.groups.widerConfirm.title', { name }),
-          description: t('settings.feishuBot.groups.widerConfirm.description', {
-            current: permissionLabel(effectivePermission),
-            next: permissionLabel(next),
-          }),
-          confirmText: t('settings.feishuBot.groups.widerConfirm.confirm'),
-          cancelText: t('settings.feishuBot.groups.widerConfirm.cancel'),
-          confirmVariant: 'destructive',
-        });
-        if (!confirmed) return;
-      }
-    }
-    await onSave({ projectToken: token });
+    const next =
+      group.permissionMode ??
+      projects.find((project) => project.token === token)?.permissionMode ??
+      channel.groupPermissionMode;
+    if (await confirmWiderPermission(next)) await onSave({ projectToken: token });
+  };
+  const resetPermission = async () => {
+    if (await confirmWiderPermission(inheritedPermission)) await onSave({ permissionMode: null });
   };
   const changePermission = async (mode: string) => {
     if (!isImDefaultPermissionMode(mode)) return;
@@ -598,9 +612,10 @@ function FeishuGroupEditor({
         hint={t('settings.feishuBot.groups.project.hint')}
         customized={group.project !== null}
         disabled={disabled}
-        onReset={() => void onSave({ projectToken: null })}
+        onReset={() => void changeProject(FOLLOW)}
       >
         <Select
+          {...groupSetting.controlProps}
           label={t('settings.feishuBot.groups.project.label')}
           value={projectValue}
           options={projectOptions}
@@ -685,7 +700,7 @@ function FeishuGroupEditor({
         }
         customized={group.permissionMode !== null}
         disabled={disabled}
-        onReset={() => void onSave({ permissionMode: null })}
+        onReset={() => void resetPermission()}
       >
         <PermissionSelector
           permissionMode={effectivePermission}

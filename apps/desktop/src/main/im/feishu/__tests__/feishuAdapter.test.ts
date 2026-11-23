@@ -383,7 +383,7 @@ describe('feishu group lane adapter hooks', () => {
       // 别的群与私聊不受影响。
       expect(adapter.sessions.permissionModeFor?.('g/oc_other')).toBe('auto');
       expect(adapter.sessions.routeOverrideFor?.('cli_abc', 'g/oc_other')).toBeNull();
-      expect(await adapter.sessions.laneWorkingDirFor?.('cli_abc', 'ou_owner')).toBeNull();
+      expect(await adapter.sessions.laneWorkingDirFor?.('cli_abc', 'ou_owner')).toBeUndefined();
       // 项目从侧栏移除后不再按旧目录执行。
       projectMocks.projects = [];
       expect(await adapter.sessions.laneWorkingDirFor?.('cli_abc', 'g/oc_g1')).toBeNull();
