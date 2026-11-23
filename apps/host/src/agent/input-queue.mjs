@@ -723,6 +723,39 @@ export function createInputQueue(deps) {
       // This endpoint clears pending inputs, not persisted history. Only the
       // history service may advance the durable conversation clear boundary.
       clearSession: id => stop(id, { keepQueue: false }),
+      drainSessionPersistence: id => executor.drainSessionPersistence(id),
+      setLastAssistantTranscriptUuid: (id, uuid) => executor.setLastAssistantTranscriptUuid(id, uuid),
+      restoreSessionForRewind: (id, options, assertCurrent) => executor.restoreSession(id, options, assertCurrent),
+      async withSessionInputStoppedForRewind(id, action) {
+        const lockId = 'session-rewind';
+        const state = stateFor(id);
+        if (state.rewindStopping) throw Object.assign(new Error('A rewind is already in progress for this session'), { code: 'SESSION_RUNNING' });
+        state.rewindStopping = true;
+        let releaseOnExit = true;
+        try {
+          await restoreQueue(id);
+          if (!coordinator.isQueueRestored(id)) throw Object.assign(new Error('Failed to restore queued input before rewind'), { code: 'INTERNAL' });
+          coordinator.setInteractionLock(id, lockId, true, { preserveOnStop: true });
+          if (coordinator.hasActiveTurnForRewind(id)) {
+            await stop(id, { keepQueue: true, pauseQueue: true });
+          } else {
+            coordinator.pausePendingQueueForRewind(id);
+          }
+          const stopped = await coordinator.waitForRewindBoundaryIdle(id, 15_000);
+          if (!stopped) {
+            releaseOnExit = false;
+            void coordinator.releaseRewindLockWhenIdle(id, lockId).finally(() => { state.rewindStopping = false; });
+            throw Object.assign(new Error('Timed out waiting for the session to stop before rewind'), { code: 'SESSION_RUNNING' });
+          }
+          return await action();
+        } finally {
+          coordinator.pausePendingQueueForRewind(id);
+          if (releaseOnExit) {
+            coordinator.setInteractionLock(id, lockId, false);
+            state.rewindStopping = false;
+          }
+        }
+      },
       /** The running turn's accepted input, as the desktop's Auto-review context reads it. */
       acceptedInputProvenance: id => coordinator.getAcceptedInputProvenance(id),
       async disposeSession(id) {

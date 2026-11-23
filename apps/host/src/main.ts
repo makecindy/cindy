@@ -172,6 +172,8 @@ import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
 import { listPiRuntimePaletteCommands, mergePiPackageCommands, shouldListPiPackageCommands } from '../../desktop/src/shared/piPackages.js';
 import { createHostSessionUpdate } from './agent/session-update.ts';
+import { createHostRewind } from './agent/rewind.js';
+import { getActiveCatalog } from '../../desktop/src/main/maker-host/active-catalog.js';
 import { createHostSessionMovePorts, createRecentWorkdirsChangedPush } from './agent/session-move.ts';
 import { createHostTouchUserSend } from './agent/touch-user-send.ts';
 import { setLiveCcSessionBridge } from '../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
@@ -2338,6 +2340,24 @@ function startDeviceLink(): void {
     hasCindyAiApiKey: () => currentGateway() !== null,
     broadcastCreated: sessionDraftPorts.emitSessionCreated,
   });
+  const hostRewind = createHostRewind({
+    getMaker: () => agentGraph?.maker ?? null,
+    resolveHandoffWindow: async (sessionId, route) => {
+      if (!agentGraph || !route.model || route.remoteHostId || route.agentDeviceId || route.agentKind === 'acp') return null;
+      const budget = route.workingBudget ?? await agentGraph.modelWindow.readStoredSessionContextWindowBudget(sessionId);
+      return agentGraph.modelWindow.resolveConfiguredContextWindow(
+        getActiveCatalog(), route.agentKind, route.providerId, route.model, budget, 'required',
+      );
+    },
+    drainSessionPersistence: id => inputQueue.drainSessionPersistence(id),
+    setLastAssistantTranscriptUuid: (id, uuid) => inputQueue.setLastAssistantTranscriptUuid(id, uuid),
+    restoreSession: (id, options, assertCurrent) => inputQueue.restoreSessionForRewind(id, options, assertCurrent),
+    withSessionInputStoppedForRewind: (id, action) => inputQueue.withSessionInputStoppedForRewind(id, action),
+    profileHoldReason: () => inputQueue.profileHoldReason(),
+    clearPendingHandoff: id => pendingHandoff.clear(id),
+    recoverGeneratedImages: id => recoverGeneratedImagesForHistory(id),
+    publish: event => eventHub.publish(event),
+  });
   deviceLink = createHostDeviceLink({
     sessionHandoff,
     profileDir, worktree, version: layout.version,
@@ -2386,6 +2406,7 @@ function startDeviceLink(): void {
         .from(sessionTable).where(eq(sessionTable.id, sessionId)).limit(1);
       return !!row;
     },
+    rewind: hostRewind,
     createRuntimeSession: input => {
       return createHostRuntimeSession(explicitPorts<HostRuntimeSessionCreatePorts>({
       serverDeps,

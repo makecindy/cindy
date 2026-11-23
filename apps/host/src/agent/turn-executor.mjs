@@ -1405,6 +1405,8 @@ export function createTurnExecutor(deps) {
     },
     behindDurableWrites,
     enqueueDurableWrite(id, label, fn) { return historyFor(id).enqueueDurableWrite(label, fn); },
+    drainSessionPersistence(id) { return historyFor(id).drain(); },
+    setLastAssistantTranscriptUuid(id, uuid) { historyFor(id).setLastAssistantTranscriptUuid(id, uuid); },
     /** A task's event persistence, for the auto-resume runtime (auto-resume.ts) and the reply anchor. */
     autoResumeHistory: id => historyFor(id),
     // The coordinator's hooks for a user turn stored but not dispatched, as register.ts passes them:

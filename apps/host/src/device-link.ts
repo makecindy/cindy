@@ -172,6 +172,10 @@ export interface HostDeviceLinkPorts {
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   closeRuntimeSession(sessionId: string, opts?: unknown): Promise<void>;
+  rewind?: {
+    preview(sessionId: unknown, clientId: unknown): Promise<unknown>;
+    commit(sessionId: unknown, clientId: unknown, opts?: unknown): Promise<unknown>;
+  };
   /** The desktop-compatible maker:send transaction (agent/input-queue.mjs). */
   send(sessionId: string, message: unknown, createOpts?: unknown, sendOpts?: unknown): Promise<unknown>;
   /** Captures the current clear boundary and input generation before a direct send. */
@@ -618,6 +622,22 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     }
     return call('/api/sessions/update', { sessionId, patch, ...(deleteTarget ? { deleteTarget } : {}) });
   });
+  if (deps.rewind) {
+    const rewind = deps.rewind;
+    registry.register(MAKER_INVOKE.REWIND_PREVIEW, async ([sessionId, clientId]) => {
+      assertCurrent();
+      const result = await rewind.preview(sessionId, clientId);
+      assertCurrent();
+      return result;
+    });
+    registry.register(MAKER_INVOKE.REWIND_COMMIT, async ([sessionId, clientId, opts]) => {
+      assertCurrent();
+      refuseWhileHeld();
+      const result = await rewind.commit(sessionId, clientId, opts);
+      assertCurrent();
+      return result;
+    });
+  }
   registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => {
     // The preview is a read. Like project-info writes at the service boundary,
     // apply is refused on entry and rechecked at the write boundary after waiting.
