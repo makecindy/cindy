@@ -40,7 +40,7 @@ function HealthCard({ active, recovered, onDismiss }: {
         </span>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
           <div role="status" className="min-w-0 flex-[1_1_15rem]">
-            <p className="text-14 font-medium leading-5">{t(`settings.auxiliaryModels.notice.${kind}`)}</p>
+            <p className="text-14 font-medium leading-[1.429]">{t(`settings.auxiliaryModels.notice.${kind}`)}</p>
             <p className="mt-0.5 text-12 leading-[1.5] text-[var(--text-secondary)]">{t(`settings.auxiliaryModels.notice.${kind === 'recovered' ? 'recoveredBody' : 'unavailableBody'}`)}</p>
           </div>
           {active.length > 0 && <div className="flex max-w-full flex-wrap items-center gap-1">

@@ -423,6 +423,10 @@ describe('utility one-shot candidates', () => {
         const recovered = getAuxiliaryModelHealthSnapshot('chat');
         expect(recovered[0].status).toBe('recovered');
         expect(recovered[0].operation).toBeUndefined();
+        dismissAuxiliaryModelNotice('chat', recovered[0].noticeId!);
+        fetchMock.mockImplementation(async () => new Response('Denied', { status: 403 }) as never);
+        await run('chat', 'title');
+        expect(getAuxiliaryModelHealthSnapshot('chat')[0]?.operation).toBe('title');
       } finally { setAuxiliaryModelHealthBroadcaster(undefined); }
     });
 
@@ -450,6 +454,50 @@ describe('utility one-shot candidates', () => {
       dismissAuxiliaryModelNotice('chat', incident);
       expect(getAuxiliaryModelHealthSnapshot('chat')).toHaveLength(2);
       expect(getAuxiliaryModelHealthSnapshot('chat')[0].noticeId).not.toBe(incident);
+    });
+
+    // Unit, PR #12303: the earlier tests recover in the same chat. A real success
+    // on either saved route in B must also retire A's incident, without a toast in A.
+    it.each(['primary', 'backup'])('silently retires other chats’ outages on %s success', async winner => {
+      vi.useFakeTimers();
+      const title = (sessionId: string) => requestUtilityText(makerMock(true), 'Title', { source: 'title', sessionId });
+      const denied = () => new Response('Insufficient balance.', { status: 402 }) as never;
+      const push = vi.fn();
+      setAuxiliaryModelHealthBroadcaster(push);
+      try {
+        fetchMock.mockImplementation(async () => denied());
+        await title('A');
+        const incident = getAuxiliaryModelHealthSnapshot('A')[0].noticeId;
+        vi.advanceTimersByTime(60_001);
+        push.mockClear();
+        if (winner === 'backup') fetchMock.mockResolvedValueOnce(denied());
+        fetchMock.mockResolvedValueOnce(response('Title'));
+        expect((await title('B')).ok).toBe(true);
+        expect(getAuxiliaryModelHealthSnapshot('A')).toEqual([]);
+        expect(push.mock.calls.some(([, e]) => e.sessionId === 'A' && e.removed)).toBe(true);
+        expect(push.mock.calls.some(([, e]) => e.notify)).toBe(false);
+        await title('A');
+        expect(getAuxiliaryModelHealthSnapshot('A')[0].noticeId).not.toBe(incident);
+      } finally { setAuxiliaryModelHealthBroadcaster(undefined); }
+    });
+
+    // Unit, PR #12303: the 32-entry detail cache must not undo a dismissal in
+    // an ongoing outage. Recovery in a different chat starts a new incident.
+    it('keeps a dismissal through 33 other chats until the saved chain works again', async () => {
+      vi.useFakeTimers();
+      const title = (sessionId: string) => requestUtilityText(makerMock(true), 'Title', { source: 'title', sessionId });
+      fetchMock.mockImplementation(async () => new Response('Insufficient balance.', { status: 402 }) as never);
+      await title('A');
+      const incident = getAuxiliaryModelHealthSnapshot('A')[0].noticeId!;
+      dismissAuxiliaryModelNotice('A', incident);
+      for (let i = 0; i < 33; i++) await title('other-' + i);
+      await title('A');
+      expect(getAuxiliaryModelHealthSnapshot('A')).toEqual([]);
+      vi.advanceTimersByTime(60_001);
+      fetchMock.mockResolvedValueOnce(response('Title'));
+      await title('B');
+      await title('A');
+      expect(getAuxiliaryModelHealthSnapshot('A')[0].noticeId).not.toBe(incident);
     });
 
     it('requires evidence from every saved route including unavailable credentials, and ignores cancellation', async () => {

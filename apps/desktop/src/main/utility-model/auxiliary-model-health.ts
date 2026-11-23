@@ -24,7 +24,10 @@ type Route = {
 const routes = new Map<string, Route>();
 // Per-session views represent the completed chain. Route health also includes
 // automatic calls and failed candidates from requests that ultimately succeeded.
-const conversations = new Map<string, { rows: AuxiliaryModelHealthSnapshot[]; dismissed?: boolean }>();
+const conversations = new Map<string, { rows: AuxiliaryModelHealthSnapshot[] }>();
+// Details are capped at 32 chats. Keep only the IDs of chats explicitly muted
+// during this saved chain's current outage, independent of detail-cache evictions.
+const dismissedSessions = new Set<string>();
 let nextNoticeId = 0;
 let scope: string;
 let errorRevision = 0;
@@ -42,6 +45,7 @@ function scopedRoutes() {
   if (current !== scope) {
     routes.clear();
     conversations.clear();
+    dismissedSessions.clear();
     lastCompletedRequest.clear();
     scope = current;
   }
@@ -57,6 +61,7 @@ function currentRoute(id: string) {
   const route = state.get(id);
   if (route?.stillCurrent && !route.stillCurrent()) {
     state.delete(id);
+    if (dismissedSessions.size && getEffectiveAuxiliaryModelChain().refs.includes(id)) dismissedSessions.clear();
     for (const [sessionId, { rows }] of conversations) {
       if (rows.some(row => row.auxiliaryRef === id)) clearConversation(sessionId);
     }
@@ -127,11 +132,10 @@ function observe(providerId: string, model: string, failure: UtilityTextAttempt 
   broadcast?.(MAKER_PUSH.AUXILIARY_MODEL_HEALTH_CHANGED, snapshot);
 }
 
-function clearConversation(sessionId: string, dismissOnly = false) {
+function clearConversation(sessionId: string) {
   const view = conversations.get(sessionId);
   if (!view) return;
-  if (dismissOnly) view.dismissed = true;
-  else conversations.delete(sessionId);
+  conversations.delete(sessionId);
   for (const row of view.rows) {
     broadcast?.(MAKER_PUSH.AUXILIARY_MODEL_HEALTH_CHANGED, {
       ...row, upstreamMessage: undefined, removed: true, conversationOnly: true,
@@ -141,14 +145,27 @@ function clearConversation(sessionId: string, dismissOnly = false) {
 
 /** A delayed click must not close a later incident, even for the same owner and session. */
 export function dismissAuxiliaryModelNotice(sessionId: string, noticeId: number): void {
-  if (getAuxiliaryModelHealthSnapshot(sessionId)[0]?.noticeId === noticeId) {
-    clearConversation(sessionId, true);
+  const visible = getAuxiliaryModelHealthSnapshot(sessionId)[0];
+  if (visible && visible.noticeId === noticeId) {
+    if (visible.status !== 'recovered') dismissedSessions.add(sessionId);
+    clearConversation(sessionId);
   }
 }
 
-function updateConversation(sessionId: string, result: UtilityTextResult, operation?: AuxiliaryNoticeOperation) {
+function updateConversation(sessionId: string | undefined, result: UtilityTextResult, operation?: AuxiliaryNoticeOperation) {
   const chain = getEffectiveAuxiliaryModelChain();
   if (chain.source !== 'custom' || !chain.refs.length) return;
+  if (result.ok && result.auxiliaryRef && chain.refs.includes(result.auxiliaryRef)) {
+    // A usable result ends the whole-chain outage, even if the route's rolling
+    // failure rate is still high. Only the completing chat may announce recovery.
+    dismissedSessions.clear();
+    for (const [otherId, { rows }] of conversations) {
+      if (otherId !== sessionId && rows.some(row => row.auxiliaryRef === result.auxiliaryRef && row.status !== 'recovered')) {
+        clearConversation(otherId);
+      }
+    }
+  }
+  if (!sessionId || dismissedSessions.has(sessionId)) return;
   const previous = conversations.get(sessionId);
   const hadOutage = previous?.rows.some(row => row.status === 'warning' || row.status === 'isolated');
   let views: AuxiliaryModelHealthSnapshot[] = [];
@@ -157,11 +174,10 @@ function updateConversation(sessionId: string, result: UtilityTextResult, operat
     clearConversation(sessionId);
     // A successful backup should never interrupt the conversation, even when
     // it clears an earlier outage. Announce recovery only on the preferred route.
-    if (!hadOutage || previous.dismissed || result.auxiliaryRef !== chain.refs[0]) return;
+    if (!hadOutage || result.auxiliaryRef !== chain.refs[0]) return;
     const primary = currentRoute(chain.refs[0])?.latest;
     if (primary) views = [{ ...primary, status: 'recovered', sessionId, switchedToBackup: false }];
   } else {
-    if (previous?.dismissed && hadOutage) return;
     for (const ref of chain.refs) {
       const route = currentRoute(ref);
       const latest = route?.latest;
@@ -199,12 +215,12 @@ export function captureAuxiliaryHealthObserver(): typeof recordAuxiliaryModelRes
   const generation = conversationGeneration;
   const sequence = ++requestSequence;
   return (result, options) => {
-    if (generation !== conversationGeneration) return;
+    if (generation !== conversationGeneration || isAppSessionBoundaryPending() || options?.bypassHealth) return;
     const sessionId = options?.sessionId;
     if (sessionId) {
       scopedRoutes();
       if (sequence < (lastCompletedRequest.get(sessionId) ?? 0)) {
-        recordAuxiliaryModelResult(result, { ...options, sessionId: undefined });
+        recordRouteResult(result, { ...options, sessionId: undefined });
         return;
       }
       lastCompletedRequest.delete(sessionId);
@@ -216,8 +232,9 @@ export function captureAuxiliaryHealthObserver(): typeof recordAuxiliaryModelRes
   };
 }
 
-export function recordAuxiliaryModelResult(result: UtilityTextResult, options?: { bypassHealth?: boolean; sessionId?: string; operation?: AuxiliaryNoticeOperation; routeGuards?: ReadonlyMap<string, () => boolean> }): void {
-  if (isAppSessionBoundaryPending() || options?.bypassHealth) return;
+type HealthOptions = { bypassHealth?: boolean; sessionId?: string; operation?: AuxiliaryNoticeOperation; routeGuards?: ReadonlyMap<string, () => boolean> };
+
+function recordRouteResult(result: UtilityTextResult, options?: HealthOptions): void {
   for (const attempt of result.attempts ?? []) {
     const switched = result.ok && key(attempt.providerId, attempt.model, attempt.auxiliaryRef) !== key(result.providerId, result.model, result.auxiliaryRef);
     if ((attempt.status === 'failed' && !attempt.outputRejected) || preflightFailure(attempt)) {
@@ -225,8 +242,13 @@ export function recordAuxiliaryModelResult(result: UtilityTextResult, options?: 
     }
   }
   if (result.ok) observe(result.providerId, result.model, undefined, false, options?.sessionId, result.auxiliaryRef, options?.routeGuards?.get(result.auxiliaryRef ?? ''));
-  if (options?.sessionId && ![...(options.routeGuards?.values() ?? [])].some(guard => !guard())) {
-    updateConversation(options.sessionId, result, options.operation);
+}
+
+export function recordAuxiliaryModelResult(result: UtilityTextResult, options?: HealthOptions): void {
+  if (isAppSessionBoundaryPending() || options?.bypassHealth) return;
+  recordRouteResult(result, options);
+  if ((options?.sessionId || result.ok && result.auxiliaryRef) && ![...(options?.routeGuards?.values() ?? [])].some(guard => !guard())) {
+    updateConversation(options?.sessionId, result, options?.operation);
   }
 }
 
@@ -244,6 +266,7 @@ export function recoverTestedAuxiliaryRoutes(refs: readonly string[]): void {
 export function retainAuxiliaryModelRoutes(chain: ReturnType<typeof getEffectiveAuxiliaryModelChain>): void {
   // Even A → B → A may finish while an old dispatch is still in flight.
   conversationGeneration++;
+  dismissedSessions.clear();
   const state = scopedRoutes();
   for (const sessionId of conversations.keys()) clearConversation(sessionId);
   for (const [id, route] of state) {
@@ -267,7 +290,7 @@ export function getAuxiliaryModelHealthSnapshot(sessionId?: string): AuxiliaryMo
     const chain = getEffectiveAuxiliaryModelChain();
     if (chain.source !== 'custom') return [];
     const conversation = conversations.get(sessionId);
-    if (!conversation || conversation.dismissed) return [];
+    if (!conversation) return [];
     const view = conversation.rows;
     if (view.some(row => !row.auxiliaryRef || !chain.refs.includes(row.auxiliaryRef) || !currentRoute(row.auxiliaryRef))) {
       clearConversation(sessionId);
@@ -284,4 +307,4 @@ export function getAuxiliaryModelHealthSnapshot(sessionId?: string): AuxiliaryMo
     .sort((a, b) => b.lastErrorAt - a.lastErrorAt);
 }
 
-export const __testing = { reset: () => { routes.clear(); conversations.clear(); } };
+export const __testing = { reset: () => { routes.clear(); conversations.clear(); dismissedSessions.clear(); } };

@@ -48,6 +48,7 @@ let app;
 let ownedProfile;
 const providerId = 'aux-e2e-' + randomUUID().slice(0, 8);
 const sessionId = randomUUID();
+const otherSessionId = randomUUID();
 let page;
 try {
   const name = 'aux-e2e-' + randomUUID().slice(0, 8);
@@ -91,10 +92,12 @@ try {
       models: [primary, backup].map(id => ({ id, name: id, contextWindow: 32768, maxOutput: 256, defaultEnabled: true })) } },
   }, { codex: key }), { providerId, primary, backup, key, port: server.address().port });
   assert.ok(result.ok);
-  await page.evaluate(async ({ sessionId, out, primary, providerId }) => {
-    await window.electronAPI.localDb.sessions.create({ id: sessionId, title: 'Desk organization', workingDir: out, workspaceKind: 'dialogue', agentKind: 'codex', model: primary, providerId, permissionMode: 'ask' });
+  await page.evaluate(async ({ sessionId, otherSessionId, out, primary, providerId }) => {
+    for (const [id, title] of [[sessionId, 'Desk organization'], [otherSessionId, 'Office supplies']]) {
+      await window.electronAPI.localDb.sessions.create({ id, title, workingDir: out, workspaceKind: 'dialogue', agentKind: 'codex', model: primary, providerId, permissionMode: 'ask' });
+    }
     location.hash = '#/cc-agent/' + sessionId;
-  }, { sessionId, out, primary, providerId });
+  }, { sessionId, otherSessionId, out, primary, providerId });
   const locale = await page.evaluate(() => document.documentElement.lang || navigator.language);
   const translations = JSON.parse(await readFile(new URL('../src/renderer/i18n/locales/' + (locale.startsWith('en') ? 'en' : locale) + '/common.json', import.meta.url), 'utf8'));
   const notice = translations.settings.auxiliaryModels.notice;
@@ -102,7 +105,7 @@ try {
   const pins = [primary, backup].map(id => options.find(o => o.providerId === providerId && o.modelId === id && o.available)?.id);
   assert.ok(pins.every(Boolean));
   const save = models => page.evaluate(models => window.electronAPI.maker.auxiliaryModelSettingsSet({ models }), models);
-  const title = () => page.evaluate(id => window.electronAPI.maker.generateTitle('Organize the desk', 'pi', id), sessionId);
+  const title = (target = sessionId) => page.evaluate(id => window.electronAPI.maker.generateTitle('Organize the desk', 'pi', id), target);
   const health = () => page.evaluate(id => window.electronAPI.maker.auxiliaryModelRouteHealthGet(id), sessionId);
   const notices = () => page.evaluate(() => window.auxiliaryE2ENotices);
   await page.evaluate(() => {
@@ -179,18 +182,24 @@ try {
   assert.deepEqual(await health(), []);
   console.log('PASS successful backup stays silent, whole-chain failure names title and preserves HTTP detail, dismissal survives reentry');
 
+  await page.evaluate(id => { location.hash = '#/cc-agent/' + id; }, otherSessionId);
+  assert.equal((await title(otherSessionId)).title, null);
+  await banner.waitFor();
+
   // Use the real retry interval. Sleeping does not trigger any model request.
   replies.set(primary, 'success');
   const pausedCount = requests.length;
   await delay(Math.max(0, Math.max(...rows.map(r => r.lastErrorAt)) + 60_100 - Date.now()));
   assert.equal(requests.length, pausedCount);
   assert.equal((await title()).title, 'Desk organization');
+  await banner.waitFor({ state: 'hidden' });
   assert.deepEqual(await health(), []);
+  await page.evaluate(id => { location.hash = '#/cc-agent/' + id; }, sessionId);
   replies.set(primary, 'denied');
   assert.equal((await title()).title, null);
   await banner.waitFor();
   assert.notEqual((await health())[0].noticeId, rows[0].noticeId);
-  console.log('PASS real recovery and a new visible outage. Screenshots:', out);
+  console.log('PASS recovery clears another open chat, and a new outage is visible after dismissal. Screenshots:', out);
 } finally {
   server.closeAllConnections();
   if (server.listening) await new Promise(resolve => server.close(resolve));
