@@ -22,7 +22,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as ownerStorage from '../../ownerScopedStorage';
 import { isIMessageSteeringEnabled } from '../../imessage/steering';
-import type { IMessageToolScope } from '../channelToolScope';
+import { findImQuestionReply } from '../questionPresentation';
+import { getActiveInteractionRoute } from '../../../maker-ipc/interactionRouter';
+import { readChannelToolScope, type IMessageToolScope } from '../channelToolScope';
 import type { ChannelIM } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
@@ -337,14 +339,16 @@ describe('turnRunner: connection handed to a companion bot', () => {
       })) }));
       runner = createTurnRunner({
         ...fakeAdapter, channel: 'imessage',
+        output: { kind: 'chunked-text', im: fakeAdapter.im, commitFinal: vi.fn() },
         companionLane: chat => chat === OWNER ? { kind: 'owner-dm' }
           : chat.startsWith('g/') ? { kind: 'group', chatId: chat, threadId: '' }
           : { kind: 'guest-dm', userId: chat },
         steerWhileBusy: (bot, chat) => isIMessageSteeringEnabled(connection, bot, chat),
       }, fakeRepo, fakeCards, { companion: companion as unknown as ImCompanionRouteDeps });
-      const receive = (chat: string, text: string, owner = chat === OWNER) => runner.dispatchAgentTurn({
+      mocks.persistUserMessage.mockImplementation(async ({ text }) => ({ clientId: 'receipt-' + text }));
+      const receive = (chat: string, text: string, owner = chat === OWNER, respondent = chat) => runner.dispatchAgentTurn({
         queueMode: 'external', beforeProviderStart: async () => {}, botContextId: BOT_CONTEXT,
-        userId: chat, text, attachments: [], userMessageId: chat + text, requesterIsOwner: owner,
+        userId: chat, text, attachments: [], userMessageId: chat + text, requesterIsOwner: owner, questionRespondentId: respondent,
         channelToolScope: { channel: 'imessage', botId: BOT_CONTEXT, laneUserId: chat, chatId: chat,
           im: mocks.im as unknown as IMessageToolScope['im'], requesterIsOwner: owner,
           companion: true, chatKind: chat.startsWith('g/') ? 'group' : 'direct' },
@@ -371,9 +375,22 @@ describe('turnRunner: connection handed to a companion bot', () => {
         expect(first.kind).toBe('accepted');
         if (first.kind !== 'accepted') throw new Error(first.reason);
         const h = harnesses.get(first.sessionId)!;
-        const follow = await receive(chat, 'follow ' + chat);
+        const follow = await receive(chat, 'follow ' + chat, chat === OWNER, chat === 'g/group' ? 'second-member' : chat);
         if (chats.includes(chat)) {
           expect(follow).toMatchObject({ kind: 'accepted', sessionId: first.sessionId, terminal: first.terminal });
+          expect(readChannelToolScope({ sessionId: first.sessionId, sessionInstanceId: h.session.instanceId })?.inputClientId)
+            .toBe('receipt-follow ' + chat);
+          if (chat === 'g/group') {
+            const route = getActiveInteractionRoute(h.session)!;
+            await route.presentQuestion!({ kind: 'ask_user_question', requestId: 'q', delivery: 'async',
+              questions: [{ id: 'a', question: 'Which?' }] }, { answer: vi.fn(), settled: new Promise(() => {}) });
+            const code = String(mocks.im.sendText.mock.calls.at(-1)?.[1]).match(/Q[0-9a-f]{8}/)![0];
+            const reply = (id: string) => findImQuestionReply(fakeAdapter.im, {
+              senderId: chat, text: code + ' OK', speaker: { id, name: id, isOwner: false },
+            })!();
+            expect(await reply(chat)).toBe(false);
+            expect(await reply('second-member')).toBe(true);
+          }
           expect(h.session.steer).toHaveBeenCalledTimes(1);
           expect(JSON.stringify(vi.mocked(h.session.steer).mock.calls[0]![0])).toContain('follow ' + chat);
         } else {

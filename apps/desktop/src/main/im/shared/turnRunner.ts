@@ -244,6 +244,7 @@ interface TurnState {
   /** Stable identity used by the central interaction router for this turn. */
   turnId: string;
   imInputGeneration?: number;
+  questionRespondentId?: string;
   /** Direct Stop cancels this exact turn, independently of session disposal. */
   stopRequested?: boolean;
   userId: string;
@@ -367,7 +368,6 @@ interface QueuedSend {
   turnPermissionPolicy?: TurnPermissionPolicy;
   /** Main-verified owner sender (see ImRunAgentTurnArgs.requesterIsOwner). */
   requesterIsOwner?: boolean;
-  questionRespondentId?: string;
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -1319,6 +1319,7 @@ export function createTurnRunner(
     });
     const turn: TurnState = {
       turnId: randomUUID(),
+      questionRespondentId: args.questionRespondentId,
       userId,
       scopeKey: target.scopeKey,
       initialMessageText: text,
@@ -1549,7 +1550,6 @@ export function createTurnRunner(
         && args.requesterIsOwner === true && target.botOwned)
         ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
-      questionRespondentId: args.questionRespondentId,
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1636,7 +1636,12 @@ export function createTurnRunner(
       if (/\[NO_ACTIVE_TURN\]|\bno active (?:\w+ )?turn\b/i.test(String(error))) return null;
       throw error;
     }
-    await persistAcceptedInput(item);
+    // Existing question cards keep their captured respondent. New questions follow
+    // the accepted input, even while its durable reply anchor is being written.
+    active.questionRespondentId = item.turn.questionRespondentId;
+    delete scope.inputClientId;
+    const persisted = await persistAcceptedInput(item);
+    if (persisted && readChannelToolScope(identity) === scope) scope.inputClientId = persisted.clientId;
     await commitAcceptedRoute(item);
     return { kind: 'accepted', sessionId: item.rowId, acceptedAt: Date.now(), terminal: active.terminalPromise };
   }
@@ -2058,11 +2063,13 @@ export function createTurnRunner(
               scope: item.channelToolScope,
             });
           }
-          const questionPresentation = item.questionRespondentId ? {
+          const questionPresentation = item.turn.questionRespondentId ? {
             questionTimeoutMs: IM_QUESTION_TIMEOUT_MS,
             presentQuestion: async (question: Extract<InteractionRequest, { kind: 'ask_user_question' }>, controls: import('../../maker-ipc/interactionRouter').QuestionControls) => {
+              const respondent = item.turn.questionRespondentId;
+              if (!respondent) throw new Error('IM_QUESTION_RESPONDENT_MISSING');
               if (question.delivery !== 'async') await finalizeActiveStream(rowId);
-              await presentImQuestion({ output, lane: userId, respondent: item.questionRespondentId!,
+              await presentImQuestion({ output, lane: userId, respondent,
                 scope: noticeScope, request: question, controls,
                 current: () => sessionStates.get(rowId)?.makerSession === noticeSession,
                 warn: () => log.warn('IM question update failed'),
