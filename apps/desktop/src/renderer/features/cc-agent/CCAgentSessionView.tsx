@@ -1969,6 +1969,7 @@ function CCAgentSessionContent({
     cancelUsageLimitWait,
     errorIsRecoverable,
     errorRetryText,
+    queueHeadRetry,
     errorCanContinue,
     errorPersistId,
     disposedErrorPersistId,
@@ -6151,6 +6152,8 @@ function CCAgentSessionContent({
                 outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
+                queuedSendRecovery={queueHeadRetry && !remoteDeviceId && Boolean(session?.agentDeviceId
+                  && !isProviderShareAgentDeviceId(session.agentDeviceId))}
                 onRetry={handleRetry}
                 onContinueAfterError={canContinueError ? handleContinueAfterError : undefined}
                 onSilentStopContinue={handleSilentStopContinue}

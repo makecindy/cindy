@@ -42,6 +42,24 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
+// #12240, unit: the live banner must explain both options for a retained
+// queue head. The same network error without that recovery cannot promise
+// that the original input is still waiting to be sent.
+it.each([true, false])('describes the original input only for a queue-head retry (%s)', async queuedSendRecovery => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error="LAZY_CREATE_FAILED: [REMOTE_AGENT_UNAVAILABLE] not online within 1500ms"
+      agentKind="codex" agentDeviceId="other-computer" queuedSendRecovery={queuedSendRecovery}
+      retryText="original input" onRetry={retry} />
+  </I18nextProvider>);
+  const hint = screen.queryByText('Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.');
+  expect(Boolean(hint)).toBe(queuedSendRecovery);
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+  expect(retry).toHaveBeenCalledExactlyOnceWith('original input');
+});
+
 // L343 / unit: a short input skipped after a context overflow uses the same
 // notice as any skipped input. Exercise the real bubble with its locale bundle.
 it('shows the context-full notice on a skipped short input', async () => {
