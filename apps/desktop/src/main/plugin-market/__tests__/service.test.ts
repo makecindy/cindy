@@ -1,3 +1,4 @@
+import { MarketSourceStore } from '../sources/store';
 import { compareCindyVersions, getPluginToolUi, parsePluginResolveRequest, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -833,6 +834,29 @@ it('finds canonical root and organization instance keys without listing', () => 
 });
 
 describe('PluginMarketService migration and defaultInstall', () => {
+  // Unit regression: even with custom sources configured, official engine discovery must not
+  // open a local source or enumerate installations for each candidate on the cold or warm path.
+  it('classifies public official engines by release without opening custom sources or scanning installations', async () => {
+    const engine = summary({ publisherKind: 'official' });
+    const community = summary({ id: `c${'b'.repeat(24)}`, publisherKind: 'personal' });
+    const tool = summary({ id: `c${'c'.repeat(24)}`, publisherKind: 'official' });
+    const h = harness([community, engine, tool]);
+    const sourceStore = new MarketSourceStore(() => { throw new Error('unexpected local source read'); });
+    const bindSources = vi.spyOn(sourceStore, 'bind').mockReturnValue(sourceStore);
+    const service = new PluginMarketService(h.api as unknown as PluginMarketApi, h.ledger, sourceStore);
+    h.api.detail.mockResolvedValueOnce(parsedDetail(engine, {
+      ...manifest(engine.ghostId), node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] },
+      harnesses: [{ id: 'engine', name: 'Engine', protocol: 'acp', entry: 'engine.js' }],
+    }));
+    for (let open = 0; open < 2; open++) {
+      expect((await service.officialModelPlugins()).items.map(item => item.pluginId)).toEqual([engine.id]);
+    }
+    expect(h.api.detail.mock.calls).toEqual([[engine.id], [tool.id]]);
+    expect(h.api.resolve).not.toHaveBeenCalled();
+    expect(bindSources).not.toHaveBeenCalled();
+    expect(runtime.listScans).toBe(0);
+  });
+
   // Unit: the three new read paths must not invoke the synchronous disk scanner.
   // A held worker snapshot also proves simultaneous readers share one pending scan.
   it('shares background installation reads across catalog, lookup and recommendations without synchronous scans', async () => {

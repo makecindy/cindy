@@ -754,16 +754,11 @@ it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building 
 });
 
 describe('AddProviderWizard — preset 直达', () => {
-  it('opens the official ACP listing by market ID when names collide across sources and pages', async () => {
-    const engine = { sourceType: 'server', scope: 'public', publisherKind: 'official', name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine', releaseId: 'r1' };
-    const tool = { ...engine, pluginId: 'official-image-tool', name: 'Image tool' };
-    const query = vi.fn()
-      .mockResolvedValueOnce({ items: [{ ...engine, publisherKind: 'personal' }, { ...engine, sourceType: 'local-market' }, tool], nextCursor: 'next' })
-      .mockResolvedValueOnce({ items: [engine], nextCursor: null });
-    const detail = vi.fn(async (id: string) => id === tool.pluginId
-      ? { ...tool, manifest: {} }
-      : { ...engine, manifest: { harnesses: [{ protocol: 'acp' }] } });
-    Object.assign(window.electronAPI, { pluginMarket: { query, detail } });
+  it('searches paginated official model plugins locally and opens the exact market resource', async () => {
+    const query = vi.fn().mockResolvedValueOnce({ items: [], nextCursor: 'next' }).mockResolvedValueOnce({
+      items: [{ name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine' }], nextCursor: null,
+    });
+    Object.assign(window.electronAPI, { pluginMarket: { officialModelPlugins: query } });
     const open = vi.fn();
     render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} onOpenMarketPlugin={open} />);
     await screen.findByText('settings.providers.wizard.officialModelPlugins');
@@ -776,7 +771,7 @@ describe('AddProviderWizard — preset 直达', () => {
     fireEvent.click(screen.getByRole('button', { name: /Antigravity/ }));
     await waitFor(() => expect(open).toHaveBeenCalledWith('official-engine'));
     expect(query).toHaveBeenCalledTimes(2);
-    expect(detail.mock.calls).toEqual([[tool.pluginId, false], [engine.pluginId, false]]);
+    expect(query.mock.calls).toEqual([[null], ['next']]);
   });
 
   it('opens custom configuration from the header and leaves only cancel below the list', async () => {

@@ -176,6 +176,10 @@ export function registerPluginMarketIpc(): void {
     const query = requireObject(input, 'query');
     return invokePluginMarket(() => service().query(query));
   });
+  ipcMain.handle('plugin-market:official-model-plugins', (event, cursor: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return invokePluginMarket(() => service().officialModelPlugins(cursor));
+  });
   ipcMain.handle('plugin-market:recommendations', (event) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() => service().recommendations());
@@ -189,10 +193,10 @@ export function registerPluginMarketIpc(): void {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(async () => service().consumeRemovalNotice());
   });
-  ipcMain.handle('plugin-market:detail', (event, pluginId: unknown, includeReadme?: unknown) => {
+  ipcMain.handle('plugin-market:detail', (event, pluginId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
-      service().detail(requireString(pluginId, 'pluginId'), { includeReadme: includeReadme !== false }),
+      service().detail(requireString(pluginId, 'pluginId'), { includeReadme: true }),
     );
   });
   ipcMain.handle('plugin-market:prepare-share', (event, pluginId: unknown, options: unknown) => {

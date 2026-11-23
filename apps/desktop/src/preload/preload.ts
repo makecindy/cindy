@@ -1856,12 +1856,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:lookup', ghostIds),
     query: (input: import('../shared/pluginMarket').PluginMarketQuery): Promise<import('../shared/pluginMarket').PluginMarketPage> =>
       ipcRenderer.invoke('plugin-market:query', input),
+    officialModelPlugins: (cursor: string | null): Promise<import('../shared/pluginMarket').OfficialModelPluginPage> =>
+      ipcRenderer.invoke('plugin-market:official-model-plugins', cursor),
     recommendations: (): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
       ipcRenderer.invoke('plugin-market:recommendations'),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
       ipcRenderer.invoke('plugin-market:snapshot'),
-    detail: (pluginId: string, includeReadme = true): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
-      ipcRenderer.invoke('plugin-market:detail', pluginId, includeReadme),
+    detail: (pluginId: string): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
+      ipcRenderer.invoke('plugin-market:detail', pluginId),
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions): Promise<import('../shared/share').ShareContent> =>
       ipcRenderer.invoke('plugin-market:prepare-share', pluginId, options),
     prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean): Promise<import('../shared/share').SharePreparation> =>

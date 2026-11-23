@@ -48,6 +48,7 @@ import type {
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
   PluginMarketSnapshot,
+  OfficialModelPluginPage,
   PluginMarketQuery,
   PluginMarketPage,
   PluginMarketCounts,
@@ -1046,6 +1047,7 @@ function removalNoticeKey(owner: ActiveAppSession): string {
  */
 export class PluginMarketService {
   private readonly snapshotFlights = new Map<string, MarketSnapshotFlight>();
+  private readonly officialEngineCapabilities = new Map<string, { digest: string; hasEngine: boolean }>();
   private readonly catalogFlights = new Map<string, Promise<MarketCatalog>>();
   private readonly localReadFlights = new Map<string, Promise<LocalInstallSnapshot>>();
   private readonly localRefreshContexts = new Map<string, { context: PluginMarketRefreshContext; lastUsed: number }>();
@@ -1306,6 +1308,44 @@ export class PluginMarketService {
     return { plugins: result.results.flatMap(row => row.status === 'available' ? [row.plugin] : []),
       removals: result.removals, currentOrganization: result.currentOrganization,
       ...(result.organizationAccessError ? { organizationAccessError: result.organizationAccessError } : {}) };
+  }
+
+  /** Provider discovery reads only public server metadata. Installation and local markets belong to the detail page. */
+  async officialModelPlugins(cursor: unknown = null): Promise<OfficialModelPluginPage> {
+    if (cursor !== null && (typeof cursor !== 'string' || !cursor || cursor.length > 128))
+      throwIpcError('INVALID_PARAMS', 'Invalid Plugin catalog cursor');
+    this.requireConfigured();
+    const endpoint = getClientEndpoint('pluginApiBaseUrl');
+    const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
+    const assertCurrent = () => {
+      if (owner) requireSameMarketOwner(owner);
+      else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+      if (endpoint !== getClientEndpoint('pluginApiBaseUrl')) throwIpcError('PRECONDITION_FAILED', 'Plugin endpoint changed');
+    };
+    assertCurrent();
+    const page = await this.api.catalog({ scope: 'public', limit: 100, cursor, counts: cursor === null });
+    assertCurrent();
+    const candidates = page.plugins.filter(plugin => plugin.scope === 'public' && plugin.publisherKind === 'official');
+    const items: OfficialModelPluginPage['items'] = [];
+    for (const plugin of candidates) {
+      const key = JSON.stringify([endpoint, plugin.id]);
+      const digest = plugin.currentRelease.sha256;
+      let capability = this.officialEngineCapabilities.get(key);
+      if (capability?.digest !== digest) {
+        const detail = await this.api.detail(plugin.id).catch(() => null);
+        assertCurrent();
+        if (!detail || detail.publisherKind !== 'official') continue;
+        try { assertDetailMatchesSummary(plugin, detail); } catch { continue; }
+        const manifest = validateNormalizedGhostManifest(detail.currentRelease.manifest);
+        if (!manifest.ok) continue;
+        capability = { digest, hasEngine: manifest.manifest.harnesses?.some(engine => engine.protocol === 'acp') === true };
+        this.officialEngineCapabilities.set(key, capability);
+      }
+      if (capability.hasEngine)
+        items.push({ pluginId: plugin.id, ghostId: plugin.ghostId, name: plugin.name, description: plugin.description });
+    }
+    const allOfficialOnFirstPage = cursor === null && page.counts?.official === candidates.length;
+    return { items, nextCursor: allOfficialOnFirstPage ? null : page.nextCursor };
   }
 
   /** UI and Agent queries share target-owned pagination; they never run maintenance. */
