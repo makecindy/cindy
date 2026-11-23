@@ -195,6 +195,21 @@ describe('sidebar-embedded session navigation boundary', () => {
     }
   });
 
+  // Review of d7d084eac8: the standalone chip is one button whose aria-label names the action,
+  // which hides the state inside it from screen readers. The state must describe the button.
+  it('describes a started-task chip button with its live state for screen readers', () => {
+    const sessionId = `chip-status-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      render(<BotStartedTasks tasks={[{ sessionId, title: 'Fix login', created: true }]} />);
+      expect(screen.getByRole('button').getAttribute('aria-describedby')).toBeNull();
+      act(() => addSessionAttention(sessionId, 'awaiting'));
+      const describedBy = screen.getByRole('button').getAttribute('aria-describedby');
+      expect(describedBy ? document.getElementById(describedBy)?.textContent : null).toContain('chat.botStartedTasks.status.needsAction');
+    } finally {
+      act(() => clearSessionAttention(sessionId, { intent: 'explicit' }));
+    }
+  });
+
   // Walk-through for #12051: a task this computer knows reads Idle; an archived one keeps only its
   // link, instead of reading Idle only when the archive list happens to be loaded. Unit tier.
   it('reads idle for a known active task and nothing for an archived one', async () => {

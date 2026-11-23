@@ -4,7 +4,7 @@
  * without this the owner had only the reply text to find the task. Read from the `send_to_session`
  * receipts of the turn, not from what the reply says.
  */
-import { useSyncExternalStore } from 'react';
+import { useId, useSyncExternalStore } from 'react';
 import { ChevronDown, ChevronRight, CornerDownLeft, CornerDownRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -200,12 +200,15 @@ const STATUS_LABEL = {
  * read, not de-emphasized metadata. Colour (a static AttentionDot) only where the owner may need to act.
  */
 function LinkedTaskStatusLabel({ sessionId, hostSessionId }: { sessionId: string; hostSessionId?: string }) {
+  return <LinkedTaskStatusText status={useLinkedTaskStatus(sessionId, hostSessionId)} />;
+}
+
+function LinkedTaskStatusText({ status, id }: { status: LinkedTaskStatus | null; id?: string }) {
   const { t } = useTranslation();
-  const status = useLinkedTaskStatus(sessionId, hostSessionId);
   if (!status) return null;
   const dot = STATUS_DOT[status];
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 text-[var(--text-secondary)]" data-testid="bot-started-task-status" data-status={status}>
+    <span id={id} className="inline-flex shrink-0 items-center gap-1 text-[var(--text-secondary)]" data-testid="bot-started-task-status" data-status={status}>
       <span aria-hidden>·</span>
       {dot ? <AttentionDot tone={dot} /> : null}
       <span>{t(STATUS_LABEL[status])}</span>
@@ -220,11 +223,13 @@ function TaskChip({ task, hostSessionId }: { task: BotStartedTask; hostSessionId
   const { t } = useTranslation();
   const title = useLinkedTaskTitle(task.sessionId, hostSessionId, task.title) || t('chat.botStartedTasks.untitled');
   const open = useOpenLinkedTask(task.sessionId, hostSessionId);
+  const status = useLinkedTaskStatus(task.sessionId, hostSessionId);
+  const statusId = useId();
   const content = (
     <>
       <CornerDownRight size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
       <span className="min-w-0 truncate font-medium">{title}</span>
-      <LinkedTaskStatusLabel sessionId={task.sessionId} hostSessionId={hostSessionId} />
+      <LinkedTaskStatusText status={status} id={statusId} />
       {open ? <ChevronRight size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" /> : null}
     </>
   );
@@ -235,6 +240,8 @@ function TaskChip({ task, hostSessionId }: { task: BotStartedTask; hostSessionId
       data-split-pane-route-action=""
       title={t('chat.botStartedTasks.open', { title })}
       aria-label={t('chat.botStartedTasks.open', { title })}
+      // The label names the action; the state inside would be hidden behind it, so it describes the button.
+      aria-describedby={status ? statusId : undefined}
       onClick={open}
       className={cn(BOT_TASK_PILL_CLASS, 'max-w-[320px]', CHAT_FOCUS_CLASS, CHAT_COLOR_TRANSITION_CLASS, 'hover:bg-[var(--cmd-palette-item-hover)]')}
     >
