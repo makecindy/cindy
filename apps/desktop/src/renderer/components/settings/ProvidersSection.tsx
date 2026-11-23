@@ -1028,39 +1028,56 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  // The catalog already identifies saved pools. Match that layout while refreshing its accounts.
-  const [pooled, setPooled] = useState(provider?.subscriptionAccountPool === providerId);
-  const [poolConnected, setPoolConnected] = useState(provider?.connected === true);
-  const [poolUnknown, setPoolUnknown] = useState(false);
+  const [pool, setPool] = useState<SubscriptionPoolView>();
+  const [connected, setConnected] = useState(provider?.connected === true);
+  const [readUnknown, setReadUnknown] = useState(false);
   const [busy, setBusy] = useState(false);
   const login = useRef<string | null>(null);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
-    let current = true;
-    const refresh = () => window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId })
-      .then(view => { if (current) {
+    let revision = 0;
+    const refresh = async () => {
+      const request = ++revision;
+      try {
+        const view = await window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId });
+        if (request !== revision) return;
         const connected = view.accounts.some(account => account.status === 'ready' || account.status === 'limited');
         // Accounts that could not be read are unknown, not signed out (2026-11-18): offering
         // sign-in here made a network problem look like a lost login.
         const unknown = !connected && view.accounts.some(account => account.status === 'unavailable');
-        setPooled(view.configured);
-        setPoolConnected(connected);
-        setPoolUnknown(unknown);
+        setPool(view);
+        setConnected(connected);
+        setReadUnknown(unknown);
         onPoolConnectionChange?.(view.configured && !unknown ? connected : null);
-      } }).catch(() => {});
+      } catch {
+        if (request === revision) setReadUnknown(true);
+      }
+    };
     refreshRef.current = refresh;
     void refresh();
     const off = window.electronAPI.subscriptionAccounts.onChanged(event => { if (event.providerId === providerId) void refresh(); });
     return () => {
-      current = false; off();
+      ++revision;
+      off();
       onPoolConnectionChange?.(null);
       if (login.current) void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
     };
   }, [providerId, onPoolConnectionChange]);
+  // The catalog already identifies saved pools. Match that layout while refreshing its accounts.
+  const pooled = pool?.configured ?? (provider?.subscriptionAccountPool === providerId);
   if (!pooled) return providerId === 'anthropic'
     ? <AnthropicHeader provider={provider} onChanged={onChanged}>{children}</AnthropicHeader>
     : <OpenAiHeader provider={provider} onChanged={onChanged}>{children}</OpenAiHeader>;
-  const connected = poolConnected;
+  const poolUnknown = !connected && readUnknown;
+  const accounts = pool?.accounts;
+  // Without a default or a single account to reconnect, the user chooses the account in its row.
+  const account = accounts?.length === 1 ? accounts[0] : accounts?.find(account => account.id === 'default');
+  const signIn = account ? { action: 'login' as const, accountId: account.id }
+    : accounts?.length === 0 ? { action: 'add' as const } : undefined;
+  const actionLabel = login.current ? 'settings.providers.button.cancel'
+    : connected ? 'settings.providers.button.disconnect'
+    : poolUnknown ? 'subscriptionAccounts.signIn.retry'
+    : signIn ? 'subscriptionAccounts.login' : undefined;
   const act = async () => {
     if (poolUnknown && !login.current) {
       // Re-read only; a recovered account announces itself to the account list as well.
@@ -1077,9 +1094,9 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
     setBusy(true);
     try {
       if (connected && provider) await disconnectProvider(provider, await window.electronAPI.maker.listProviders());
-      else {
+      else if (signIn) {
         login.current = crypto.randomUUID();
-        await window.electronAPI.subscriptionAccounts.command({ action: 'login', providerId, accountId: 'default', loginKey: login.current });
+        await window.electronAPI.subscriptionAccounts.command({ ...signIn, providerId, loginKey: login.current });
       }
       onChanged();
     } catch (error) {
@@ -1091,8 +1108,9 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
     icon={providerId === 'anthropic' ? <AnthropicMark size={18} /> : <OpenAIMark size={18} />}
     title={provider?.name ?? (providerId === 'anthropic' ? 'Anthropic' : 'OpenAI')}
     subtitle={t('subscriptionAccounts.title')}
-    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting' : poolUnknown ? 'subscriptionAccounts.unavailable' : 'settings.providers.pill.disconnected') }}
-    primaryAction={{ label: t(login.current ? 'settings.providers.button.cancel' : connected ? 'settings.providers.button.disconnect' : poolUnknown ? 'subscriptionAccounts.signIn.retry' : 'subscriptionAccounts.login'), onClick: () => void act(), disabled: busy && !login.current }} />;
+    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting'
+      : poolUnknown ? 'subscriptionAccounts.unavailable' : pool ? 'settings.providers.pill.disconnected' : 'subscriptionAccounts.signIn.checking') }}
+    primaryAction={actionLabel ? { label: t(actionLabel), onClick: () => void act(), disabled: busy && !login.current } : undefined} />;
 }
 
 /**

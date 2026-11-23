@@ -296,7 +296,9 @@ import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
 import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry.js';
 import { registerMakerSessionSendHandler } from '../../maker-ipc/sessionSendHandler.js';
 import { registerStopSessionBackgroundTasksHandler } from '../../maker-ipc/stopSessionBackgroundTasksHandler.js';
-import { registerSharedAccountStopAll, sharedAccountRegisterWiring, sharedAccountSendTransaction } from '../../remote-agent/__tests__/poolHarness.js';
+import { registerSharedAccountStopAll, sharedAccountHandoffProbe, sharedAccountRegisterWiring, sharedAccountSendTransaction } from '../../remote-agent/__tests__/poolHarness.js';
+import { createContextOverflowRollover } from '../../maker-ipc/contextOverflowRollover.js';
+import { acceptSessionRuntimeMutation, applySessionRuntimeOverrideForStart, clearAllSessionRuntimeControlStates } from '../../maker-ipc/sessionRuntimeControl.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
 import { providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
 import { providerShareGuestPeer } from '@cindy/device-link';
@@ -364,6 +366,168 @@ beforeEach(() => {
   h.strategies = {};
   h.copyOverrides.mockReset();
   h.storedUsage.clear();
+});
+
+// #11322 / unit: Desktop's actual handoff callback → prepare → send transaction →
+// coordinator dispatch → subscription-wrapped native start. Existing placement tests
+// supplied B directly and missed the saved-A / accepted-B split. Minimal input:
+// task/native bound to A, saved A, accepted B. Only IO and the native engine are fake.
+describe('accepted subscription route handoff before queued dispatch', () => {
+  it.each(['executor', null])('keeps the remote-group source when execution is on %s', async agentDeviceId => {
+    const id = 'remote-assignment';
+    clearAllSessionRuntimeControlStates();
+    try {
+      acceptSessionRuntimeMutation({ sessionId: id, source: 'fallback', deferred: false, profile: {
+        agentKind: 'claude-code', agentDeviceId, providerId: 'controller-provider',
+        model: 'claude-model', effort: null, fastMode: false,
+      } });
+      const probe = vi.fn(async () => false);
+      const row = { status: 'active', agentKind: 'cc', agentDeviceId, remoteHostId: null,
+        providerId: 'assigned-provider', model: 'claude-model', sdkSessionId: 'remote-native', clearedAt: null };
+      await sharedAccountHandoffProbe(probe, 'group-owner')(id, row);
+      expect(probe).toHaveBeenCalledWith(id, expect.objectContaining(row), expect.any(Function));
+    } finally { clearAllSessionRuntimeControlStates(); }
+  });
+  it.each(['agent', 'fallback', 'unchanged', 'deferred', 'unavailable', 'cancelled', 'owner-changed'] as const)(
+    'preserves native ownership and dispatches the queue head once (%s)', async mode => {
+      const id = 'accepted-route';
+      clearAllSessionRuntimeControlStates();
+      h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')] };
+      await runSubscriptionAccountCommand({ action: 'place', providerId: 'anthropic', accountId: 'second', target: null });
+      const target = Object.keys(h.created)[0]!;
+      const old = await acquireSubscriptionAccount('anthropic', 'claude-model', [`task:${id}`]);
+      await old!.bind([`task:${id}`, 'native:old-native']);
+      old!.release();
+      const row = { id, status: 'active', source: 'desktop', agentKind: 'cc', providerId: 'anthropic',
+        model: 'claude-model', sdkSessionId: 'old-native' as string | null, clearedAt: null, remoteHostId: null,
+        agentDeviceId: null, contextTokens: 10, contextWindow: 200_000, workingDir: '/synthetic/work' };
+      const profile = { agentKind: 'claude-code' as const, providerId: target, model: row.model, effort: null, fastMode: false };
+      if (mode !== 'unchanged') acceptSessionRuntimeMutation({ sessionId: id,
+        source: mode === 'agent' ? 'agent' : 'fallback', profile, deferred: mode === 'deferred' });
+      if (mode === 'unavailable') h.pools.anthropic.accounts[1]!.paused = true;
+      let handoff: string | null = null;
+      let live: Session | undefined;
+      let endEvents!: () => void;
+      const eventsEnded = new Promise<void>(resolve => { endEvents = resolve; });
+      const sent = vi.fn(async () => {});
+      const nativeStart = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'new-native',
+        send: sent, close: async () => { endEvents(); }, abort: async () => {}, events: async function* () { await eventsEnded; },
+        setInteractionResolver() {},
+      } as unknown as AgentSessionHandle));
+      const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: nativeStart } as unknown as BaseAgent);
+      const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+      const commits = vi.fn(async (_id: string, _handoff: string) => { row.sdkSessionId = null; });
+      const rollover = createContextOverflowRollover({
+        getSessionRow: async () => ({ ...row }),
+        needsNativeSessionHandoff: sharedAccountHandoffProbe((taskId, state) => {
+          const result = probeSubscriptionAccountHandoff(taskId, state);
+          if (mode === 'owner-changed') {
+            h.owner = 'next-owner';
+            clearAllSessionRuntimeControlStates();
+          }
+          return result;
+        }),
+        listMessages: async () => {
+          if (mode === 'cancelled') rollover.cancelRecovery(id);
+          return [{ role: 'user', content: 'Remember prior work', clientId: 'prior-user', createdAt: 1 },
+            { role: 'assistant', content: 'Step one completed', clientId: 'prior-reply', createdAt: 2 }];
+        },
+        findLatestRebuildMeta: async () => null, getLiveSession: () => live,
+        closeSession: async () => { await live?.close(); live = undefined; },
+        drainPersistQueue: async () => {}, commitRebuild: commits,
+        setPendingHandoff: (_id, text) => { handoff = text; },
+        replayUserMessage: async () => { throw new Error('Pre-send handoff must not replay'); },
+        withCloseSuppressed: (_id, run) => run(), log: { info() {}, warn() {} },
+      });
+      const persisted = vi.fn(async () => {});
+      const wiring = sharedAccountRegisterWiring({
+        getSessionRowSnapshotStrict: async () => row,
+        setSdkSessionId: nativeId => { row.sdkSessionId = nativeId; },
+        applySessionRuntimeOverrideForStart,
+        admitLocalSessionRoute: async () => {},
+        createSessionWithRuntimePlugins: async (opts: StartSessionOptions) => {
+          const handle = await agent.startSession({ ...opts, sessionId: id });
+          return live = new Session({ id, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
+            workDir: row.workingDir, handle, capabilities: {} as never,
+            logger });
+        },
+      });
+      const transaction = sharedAccountSendTransaction({ ...wiring,
+        getSession: () => live, prepareUnhealthySession: taskId => rollover.prepareUnhealthySession(taskId),
+        readScheduledPermissions: async () => ({ permissionMode: 'bypassPermissions', planModeEnabled: false }),
+        peekPendingHandoff: async () => handoff, consumePendingHandoff: () => { handoff = null; },
+        createDbMessage: persisted, reconcileCreateOptsWithDb: async (_id, opts) => {
+          opts.providerId = row.providerId; opts.resumeSessionId = row.sdkSessionId ?? undefined;
+        },
+      });
+      const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome);
+      const coordinator = new AgentInputCoordinator({ sendToAgent: send, steerToAgent: async () => {},
+        abortSession: async () => {}, touchUserSend: async () => {},
+        createUserMessage: async () => { throw new Error('The send transaction owns user persistence'); },
+        isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
+        getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
+        getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
+        emitProjection() {},
+      });
+      try {
+        const text = 'Continue remaining work';
+        coordinator.enqueue(id, { clientId: 'head-once', text, persistedContent: text,
+          model: row.model, effort: 'medium', workingDir: row.workingDir, permissionMode: 'bypassPermissions',
+          createOpts: { agentKind: 'claude-code', model: row.model, providerId: row.providerId,
+            workingDir: row.workingDir, permissionMode: 'bypassPermissions' },
+          chatMessage: { clientId: 'head-once', role: 'user', content: text, isStreaming: false, createdAt: new Date().toISOString() },
+        }, { manualUiSend: true });
+        await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+        const outcome = await send.mock.results[0]!.value.catch((error: Error) => error);
+        if (['unavailable', 'cancelled', 'owner-changed'].includes(mode)) {
+          expect(outcome).toBeInstanceOf(Error);
+          expect((outcome as Error).message).toMatch(mode === 'unavailable' ? /No subscription account/
+            : mode === 'cancelled' ? /aborted/ : /owner changed/);
+          expect(nativeStart).not.toHaveBeenCalled();
+          expect(commits).not.toHaveBeenCalled();
+          expect(sent).not.toHaveBeenCalled();
+          expect(coordinator.getProjection(id).pendingQueue.map(item => item.clientId)).toEqual(['head-once']);
+          if (mode === 'unavailable') {
+            h.pools.anthropic.accounts[1]!.paused = false;
+            await coordinator.retryLastError(id);
+            await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+            await send.mock.results[1]!.value;
+            expect(nativeStart).toHaveBeenCalledOnce();
+            expect(nativeStart.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/second');
+            expect(nativeStart.mock.calls[0]![0].resumeSessionId).toBeUndefined();
+            expect(commits).toHaveBeenCalledOnce();
+            expect(sent).toHaveBeenCalledOnce();
+            expect(persisted).toHaveBeenCalledOnce();
+            expect(persisted.mock.calls[0]).toEqual(expect.arrayContaining([
+              id, expect.objectContaining({ clientId: 'head-once' }),
+            ]));
+            expect(coordinator.getProjection(id).pendingQueue).toEqual([]);
+          }
+        } else {
+          expect(nativeStart, JSON.stringify(outcome)).toHaveBeenCalledOnce();
+          const switched = mode === 'agent' || mode === 'fallback';
+          expect(commits).toHaveBeenCalledTimes(switched ? 1 : 0);
+          expect(nativeStart.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir)
+            .toBe(switched ? 'anthropic/second' : 'anthropic/default');
+          expect(nativeStart.mock.calls[0]![0].resumeSessionId).toBe(switched ? undefined : 'old-native');
+          expect(sent, JSON.stringify(outcome)).toHaveBeenCalledOnce();
+          expect(JSON.stringify(sent.mock.calls)).toContain(text);
+          if (switched) expect(JSON.stringify(sent.mock.calls)).toContain('Step one completed');
+          expect(persisted).toHaveBeenCalledOnce();
+          expect(persisted.mock.calls[0]).toEqual(expect.arrayContaining([
+            id, expect.objectContaining({ clientId: 'head-once' }),
+          ]));
+          expect(coordinator.getProjection(id).pendingQueue).toEqual([]);
+          expect(h.bindings.get('native:new-native')?.accountId).toBe(switched ? 'second' : 'default');
+        }
+        expect(row.providerId).toBe('anthropic');
+        expect(h.bindings.get('native:old-native')?.accountId).toBe('default');
+      } finally {
+        endEvents();
+        await live?.close();
+        clearAllSessionRuntimeControlStates();
+      }
+    });
 });
 
 // Unit regression 2026-11-16: real router → host.handle(open) → account acquire,

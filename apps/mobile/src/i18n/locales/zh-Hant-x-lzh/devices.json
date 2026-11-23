@@ -32,7 +32,7 @@
     "notFound": "此器已不在君之名籍中。",
     "deleteDevice": "刪此器",
     "deleteTitle": "刪「{{name}}」乎？",
-    "deleteMessage": "將此器自名籍中移除，並斷其遠端連線。器上之差事與卷皆存；重新登門後可再加入。",
+    "deleteMessage": "將此器自名籍中移除，並斷其遠端連線。器上之差事與卷皆存；於彼器點「重新加入」即可復歸。",
     "deleteFailed": "刪器未成。",
     "deleteOnline": "伺服器今尚不能移除在線之器，請待服務升級後再試。",
     "deleteRejectedWhileOffline": "刪器未成：伺服器仍記其在線，與此處所示離線之狀不符",

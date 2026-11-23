@@ -144,6 +144,8 @@ interface DeviceLinkConnectionIssuePayload {
   closeCode?: number;
   detail?: string;
   at: number;
+  /** 官方网络上的「已移除」:可以在本机「重新加入」 */
+  rejoinable?: true;
 }
 
 /** 设备互联:presence 推送快照 */
@@ -4418,6 +4420,8 @@ interface ElectronAPI {
       name: string | null,
     ) => Promise<{ deviceId: string; name: string; manualName?: string | null }>;
     deleteDevice: (deviceId: string) => Promise<{ deviceId: string; deleted: boolean }>;
+    /** 本机被移除后「重新加入」(官方网络) */
+    rejoin: () => Promise<{ agentNet: 'rejoined' | 'skipped' | 'failed' }>;
     // —— 控制端:远程会话视图 ——
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;

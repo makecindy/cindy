@@ -108,6 +108,7 @@ import { ModelSelector, ModelSelectorContent } from '../ModelSelector';
 import { PermissionSelector } from '../PermissionSelector';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  controlledPluginEngineSources,
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
   remotePluginEngineChoices,
@@ -129,6 +130,7 @@ import {
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
 import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../../../shared/pluginEngines';
+import { createIpcError } from '../../../../shared/ipc-errors';
 
 const modes: PluginEngineView['permissionModes'] = [
   { id: 'ask', displayName: 'Ask' },
@@ -625,6 +627,42 @@ describe('plugin engines in the new-task picker', () => {
       expect(invoke).not.toHaveBeenCalled();
       await act(async () => { picker.result.current.read(); });
       expect(picker.result.current.catalogues.get(deviceId)).toEqual([dsh]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // 2026-11-23 用户反馈：A 远控 B 新建任务时看不到 B 收到的插件供应商分享(内置供应商分享可以)。
+  // 生产入口与可观察结果：controlledPluginEngineSources + useDevicesPluginEngines + remotePluginEngineChoices；
+  // B 名单里的同账号电脑与插件供应商分享成为候选，列表经 B 的 maker:model-catalog:read 读取，选中后 Agent 在那个来源运行；
+  // 内置供应商分享不列，旧版 B 拒绝代读时只是不列出。最小失败输入与 tier：unit(jsdom)，B 名单含插件分享 share:p。
+  it('offers the engines of the task computer’s sources under remote control, read through that computer', async () => {
+    const shared = { ...engine('dsh-acp:dsh', 'DeepSeek Harness'), remoteUse: { supported: true, shareSupported: true, enabled: true } };
+    const sources = controlledPluginEngineSources('device-b', [
+      { deviceId: 'device-a', name: 'Studio' },
+      { deviceId: 'share:p', name: 'DSH · Magi', favoriteSource: { providerId: shared.providerId } },
+      { deviceId: 'share:builtin', name: 'Anthropic · Magi', favoriteSource: { providerId: 'anthropic' } },
+    ], (id) => (id === 'share:p' ? '来自 Magi 的分享' : null));
+    expect(sources.map((source) => [source.deviceId, source.name])).toEqual([['device-a', 'Studio'], ['share:p', '来自 Magi 的分享']]);
+    // The task computer has not listed its sources (older computer, or not read yet): nothing extra is offered.
+    expect(controlledPluginEngineSources(undefined, [{ deviceId: 'device-a', name: 'Studio' }], () => null)).toEqual([]);
+    const invoke = vi.fn(async (host: string, channel: string, args: unknown[]) => {
+      if (host !== 'device-b' || channel !== 'maker:model-catalog:read') throw new Error('read outside the task computer');
+      if ((args[0] as { agentDeviceId?: string }).agentDeviceId === 'device-a') {
+        throw createIpcError('INVALID_PARAMS', 'Invalid model catalog read');
+      }
+      return [shared];
+    });
+    vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+    try {
+      const picker = renderHook(() => useDevicesPluginEngines(sources.map((source) => source.catalogueKey!)));
+      await act(async () => { picker.result.current.read(); });
+      const choices = remotePluginEngineChoices(sources, picker.result.current.catalogues, (id, name) => name ?? id);
+      expect(choices.map((choice) => [choice.providerId, choice.deviceId, choice.deviceName]))
+        .toEqual([[shared.providerId, 'share:p', '来自 Magi 的分享']]);
+      expect(pluginEngineSessionCreateFields(resolveActivePluginEngine(choices, {
+        providerId: shared.providerId, deviceId: 'share:p', modelId: PLUGIN_ENGINE_DEFAULT_MODEL,
+      })!)).toMatchObject({ providerId: shared.providerId, agentDeviceId: 'share:p' });
     } finally {
       vi.unstubAllGlobals();
     }
