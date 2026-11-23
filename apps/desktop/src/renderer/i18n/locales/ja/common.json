@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "利用できなくなった共有",
+      "offline": "{{name}} · 一時的にオフライン",
       "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。",
       "numbered": "{{name}} ({{index}})"
     },

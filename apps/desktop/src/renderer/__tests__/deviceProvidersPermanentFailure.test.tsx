@@ -925,7 +925,10 @@ describe('provider share catalog identity changes', () => {
     expect(f.providerReads()).toBe(1);
   });
 
-  it('expires provider and capability snapshots without prefetching the expired target', async () => {
+  // 2026-11-23: a mounted picker reads an expired catalog once more (same as Mobile) instead of
+  // staying empty until the window is focused; the host's forwarded budget still bounds the
+  // result, and a second expiry inside 5s retires without another read.
+  it('re-reads an expired provider and capability snapshot once for a mounted picker, then retires it', async () => {
     const f = await mountSharePicker();
     f.setContinuity({ provider: { stale: false, remainingMs: 1_000 },
       capabilities: { stale: false, remainingMs: 1_000 } });
@@ -938,8 +941,16 @@ describe('provider share catalog identity changes', () => {
       const providerReads = f.providerReads();
       const capabilityReads = f.capabilityReads();
       await act(async () => { await vi.advanceTimersByTimeAsync(1_100); await Promise.resolve(); });
-      expect(f.providerReads()).toBe(providerReads);
-      expect(f.capabilityReads()).toBe(capabilityReads);
+      await flushMounted();
+      expect(f.providerReads()).toBe(providerReads + 1);
+      expect(f.capabilityReads()).toBeGreaterThanOrEqual(capabilityReads);
+      expect(f.latest().providers).toHaveLength(1);
+      const rereadProviders = f.providerReads();
+      const rereadCapabilities = f.capabilityReads();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_100); await Promise.resolve(); });
+      await flushMounted();
+      expect(f.providerReads()).toBe(rereadProviders);
+      expect(f.capabilityReads()).toBe(rereadCapabilities);
       expect(f.latest().providers).toEqual([]);
       expect(getCachedCapabilities('claude-code', 'share:a')).toBeNull();
     } finally {

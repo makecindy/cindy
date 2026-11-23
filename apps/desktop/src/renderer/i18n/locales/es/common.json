@@ -698,6 +698,7 @@
     },
     "picker": {
       "unavailable": "Recurso compartido no disponible",
+      "offline": "{{name}} · Sin conexión por ahora",
       "hostOutdated": "La versión de Cindy en la computadora del propietario es demasiado antigua para enumerar estos modelos. Pídele que actualice Cindy y vuelve a intentarlo.",
       "numbered": "{{name}} ({{index}})"
     },

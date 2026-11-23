@@ -75,8 +75,12 @@ describe('recipient-owned shared model favorites', () => {
   it('aggregates only exact, available grants for the current account', () => {
     const sources = renderHook(() => useProviderShareFavoriteSources());
     expect([...sources.result.current.values()]).toEqual(['share:s1', 'share:s2']);
-    act(() => publish([{ ...share(), status: 'paused' }, { ...share('s2', 'm2'), hostOnline: false }]));
+    act(() => publish([{ ...share(), status: 'paused' }, { ...share('s2', 'm2'), hostCapable: false }]));
     expect(sources.result.current.size).toBe(0);
+    // 2026-11-23 用户裁决「保留并标注」: an owner computer that is only temporarily offline keeps its
+    // favorites resolvable (greyed with the catalog) instead of making them vanish and come back.
+    act(() => publish([share(), { ...share('s2', 'm2'), hostOnline: false, hostCapable: false }]));
+    expect([...sources.result.current.values()]).toEqual(['share:s1', 'share:s2']);
     act(() => publish([share('s1', 'replacement')]));
     expect(sources.result.current.has(providerShareFavoriteSource(share()))).toBe(false);
     expect(sources.result.current.get(providerShareFavoriteSource(share('s1', 'replacement')))).toBe('share:s1');

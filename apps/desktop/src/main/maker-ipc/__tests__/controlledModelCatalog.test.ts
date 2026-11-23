@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createControlledModelCatalogReader, type ControlledModelCatalogDeps } from '../controlledModelCatalog.js';
+import { CONTROLLED_SOURCE_READ_TIMEOUT_MS, createControlledModelCatalogReader, type ControlledModelCatalogDeps } from '../controlledModelCatalog.js';
+import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { REMOTE_AGENT_INVOKE_TIMEOUT_MS } from '@cindy/device-link';
 import { invokeModelCatalog } from '../../../renderer/lib/invokeModelCatalog';
 import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 import { extractIpcError } from '../../../shared/ipcError';
@@ -177,5 +179,39 @@ describe('controlled model catalogs', () => {
     await expect(f.read(request())).rejects.toThrow('account changed');
     f.assertCaller.mockImplementation(() => { throw new Error('guest denied'); });
     await expect(f.read({ op: 'locations' })).rejects.toThrow('guest denied');
+  });
+
+  // Gap (2026-11-23): a slow/offline sharer behind the task computer came back to the controller as
+  // PRECONDITION_FAILED, which Desktop and Mobile treat as final and drop the share's catalog.
+  // Minimal input: one temporary source failure per form, plus one hung source read.
+  it.each([
+    ['envelope timeout', { ok: false as const, error: { code: 'INVOKE_TIMEOUT' as const, message: 'no reply' } }, 'DEVICE_LINK_TIMEOUT'],
+    ['envelope offline', { ok: false as const, error: { code: 'DEVICE_OFFLINE' as const, message: 'offline' } }, 'DEVICE_LINK_DEVICE_OFFLINE'],
+    ['thrown link closed', Object.assign(new Error('[LINK_CLOSED] closed'), { code: 'LINK_CLOSED' }), 'DEVICE_LINK_NOT_CONNECTED'],
+  ] as const)('keeps a %s from the source temporary for the controller', async (_label, failure, code) => {
+    const f = fixture();
+    if (failure instanceof Error) f.invoke.mockRejectedValue(failure);
+    else f.invoke.mockResolvedValue(failure);
+    const error = await f.read(request('share:b-only')).catch((caught: unknown) => caught);
+    expect(extractIpcError(error)?.code).toBe(code);
+    expect(isTransientRemoteError(error) || isDeviceUnresponsiveRemoteError(error)).toBe(true);
+  });
+
+  it('still reports a refused source as unavailable', async () => {
+    const f = fixture();
+    f.invoke.mockResolvedValue({ ok: false, error: { code: 'ACCESS_REVOKED', message: 'revoked' } });
+    await expect(f.read(request('share:b-only'))).rejects.toThrow('PRECONDITION_FAILED');
+  });
+
+  it('answers a hung source read before the controller request times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.invoke.mockImplementation(() => new Promise(() => {}));
+      const pending = f.read(request('share:b-only')).catch((caught: unknown) => caught);
+      await vi.advanceTimersByTimeAsync(CONTROLLED_SOURCE_READ_TIMEOUT_MS);
+      expect(extractIpcError(await pending)?.code).toBe('DEVICE_LINK_TIMEOUT');
+      expect(CONTROLLED_SOURCE_READ_TIMEOUT_MS).toBeLessThan(REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+    } finally { vi.useRealTimers(); }
   });
 });
