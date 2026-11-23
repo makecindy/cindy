@@ -59,12 +59,12 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
   },
   {
     key: 'computer-use',
-    title: 'Computer Use(操作本机桌面:窗口、点击、输入、截图)',
+    title: '自动操作电脑（Computer automation）',
     oneLiner:
-      '桌面操作只走 cindy_computer;工具列表里没有它就是 Computer Use 没开,引导用户到「设置 → 内置工具」开启并授权,不用 shell 模拟键鼠。',
+      '桌面操作使用 cindy_computer。当前任务缺少桌面工具时，说明可用状态并提供任务电脑「设置 → 自动操作 → 自动操作电脑」的入口。',
     detail: [
-      `【怎么判断没开】cindy_computer 这个 MCP 只在 Computer Use 开启时注册;当前工具列表里找不到 mcp__cindy_computer__* 时,说明用户没开,不是 ${BRAND_NAME} 没有这个能力。不要改用 osascript 按键、cliclick、CGEvent 脚本或 cua-driver CLI 代替,这些会被拒绝。`,
-      '【怎么引导】告诉用户这一步需要操作桌面,请在「设置 → 内置工具 → Computer Use」打开开关;macOS 还会要求授予「辅助功能」和「屏幕录制」权限,设置页里有逐步引导。用 get_settings_link(page="builtin-tools") 生成绑定任务电脑的入口并展示返回的 Markdown；桌面直接打开，手机和另一台电脑走远程画面。开关和权限都要用户本人操作,agent 不能代为开启。',
+      '【状态】用 get_capabilities({scope:"runtime", server:"cindy_computer"}) 查询当前任务的工具状态。按宿主返回的状态和原因说明；仅凭工具缺失无法判断开关、驱动或系统权限。工具可用时，用 cindy_computer 的 status 和 check_permissions 查看驱动及权限。不要用 osascript 按键、cliclick、CGEvent 脚本或 cua-driver CLI 代替。',
+      '【设置】需要用户检查时，调用 get_settings_link(page="computer-use")，展示返回的任务电脑 Markdown 链接。位置是「设置 → 自动操作 → 自动操作电脑」（Settings → Automation → Computer automation）。若宿主无法生成链接，说明原因。由用户本人操作开关，并按 macOS 页面提示授予辅助功能和屏幕录制权限。',
       '【开启之后】Codex 任务的工具桥会自动刷新;Claude Code 任务的 MCP 列表在任务启动时固定,开启后让用户再发一条消息或新建任务,然后用 cindy_computer 的 list_tools 确认它已出现,再继续。',
       '【能做什么】list_windows / get_window_state 读窗口与无障碍树和截图,click / set_value / type_text / press_key / hotkey / scroll 操作目标窗口。Electron 与网页里的文本用 set_value;iOS 模拟器窗口不接受合成输入,用 xcrun simctl 或 AXe;有人正在用电脑时前台输入会被拒(USER_INPUT_ACTIVE),此时先改走后台(后台点击、菜单、set_value、文件或命令行),都不行才等待或询问;锁屏类快捷键被拒(HOTKEY_BLOCKED)。',
     ].join(' '),

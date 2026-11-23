@@ -92,7 +92,7 @@ describe('createDesktopInputShellGuardHooks', () => {
         permissionDecisionReason: SHELL_DESKTOP_INPUT_DISABLED_REASON,
       },
     });
-    expect(SHELL_DESKTOP_INPUT_DISABLED_REASON).toContain('Computer Use is disabled');
+    expect(SHELL_DESKTOP_INPUT_DISABLED_REASON).toMatch(/Computer automation is disabled.*page=computer-use/);
     expect(enabled).toHaveBeenCalled();
   });
 });
