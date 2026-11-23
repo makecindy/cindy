@@ -7,7 +7,7 @@ import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
-import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
+import { supportsSubscriptionFastPolicy, unifiedModelKeyId, type AgentKind } from '@cindy/model-providers';
 import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
 import { notifyProviderShareCatalogChanged } from './dispatch.desktop.js';
@@ -72,6 +72,7 @@ import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { focusMainWindow } from '../deepLink.js';
 import { isFocusedAppContentWindow } from '../windowFocusClassifier.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -82,7 +83,11 @@ import {
   type ModelPriceOverridesSnapshot,
 } from '../usage/referenceModelPricing.js';
 import type { ModelPriceQuote } from '../../shared/regionalMoney.js';
-import { computePriceQuoteTurnMoney, normalizeModelIdForPricing } from '../usage/turnCostCalculator.js';
+import {
+  computePriceQuoteTurnMoney,
+  isOfficialAnthropicProviderConnection,
+  normalizeModelIdForPricing,
+} from '../usage/turnCostCalculator.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { normalizeProviderShareMemberNote, PROVIDER_SHARE_MEMBER_NOTE_MAX_LENGTH } from '../../shared/providerShareMemberNote.js';
@@ -719,6 +724,30 @@ function createUsageEstimator() {
   let gatewayPricing: ReturnType<typeof getGatewayModelPricing> | undefined;
   let overrides: ModelPriceOverridesSnapshot | undefined;
   const referencePricing = new Map<string, ReturnType<typeof getReferenceModelPricing>>();
+  let catalogProviders: ReturnType<typeof getActiveCatalog>['providers'] | undefined;
+  const getCatalogProvider = (providerId: string | null) => {
+    if (!providerId) return undefined;
+    catalogProviders ??= getActiveCatalog().providers;
+    return catalogProviders.find((item) => item.id === providerId);
+  };
+  const isOpaqueRow = (
+    providerId: string | null,
+    agent: AgentKind | undefined,
+    model: string,
+  ): boolean => {
+    if (!providerId || providerId === 'xd') return false;
+    const provider = getCatalogProvider(providerId);
+    if (isOfficialAnthropicProviderConnection(providerId, provider, agent, model)) return false;
+    if (!provider?.models) return false;
+    const agents = agent ? [agent] : (Object.keys(provider.models) as AgentKind[]);
+    return agents.some((candidateAgent) =>
+      (provider.models[candidateAgent] ?? []).some(
+        (entry) =>
+          (entry.opaqueModelId === true || entry.discoveredSource?.kind === 'magpie') &&
+          normalizeModelIdForPricing(entry.id) === model,
+      ),
+    );
+  };
   const referenceCatalog = (day: string | undefined) => {
     const key = day ?? '';
     let pricing = referencePricing.get(key);
@@ -731,24 +760,45 @@ function createUsageEstimator() {
   };
   return async (row: ProviderShareUsageEstimateRow): Promise<ProviderShareMoney | null> => {
     const sdkMoney: ProviderShareMoney | null = row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
-    // 只有 SDK 金额、没有 token 计数的行无从按单价估算，保留记录的金额而不是算成 0。
-    if (row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens <= 0) return sdkMoney;
-    // 与本机记账(resolveTurnCost)一致：普通供应商 API 优先用 SDK 记录的金额，只在缺失时按单价估算；
-    // DeepSeek 的 SDK 金额把缓存命中按普通输入计，按参考价重算。XD 只认 Gateway 报价。
-    if (sdkMoney && row.providerId !== 'xd' && row.providerId !== 'deepseek') return sdkMoney;
+    const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
+    const model = normalizeModelIdForPricing(row.model);
+    const provider = getCatalogProvider(row.providerId);
+    const isOfficialAnthropic = isOfficialAnthropicProviderConnection(
+      row.providerId,
+      provider,
+      agent,
+      model,
+    );
+    if (isOfficialAnthropic && sdkMoney) {
+      overrides ??= readModelPriceOverridesSnapshot();
+      const hasAnthropicOverride = Object.values(overrides).some(
+        (entry) => entry?.providerId === row.providerId,
+      );
+      if (!hasAnthropicOverride) return sdkMoney;
+    }
+    const hasTokenDeltas =
+      row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens > 0;
+    // 只有 SDK 金额、没有 token 计数的行无从按单价估算，保留记录的金额（不透明模型除外）。
+    if (!hasTokenDeltas) {
+      if (sdkMoney && isOpaqueRow(row.providerId, agent, model)) return null;
+      return sdkMoney;
+    }
     try {
-      const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
-      const model = normalizeModelIdForPricing(row.model);
       // XD 的实际报价与其他供应商的参考价独立，不能跨来源借价。
       const pricing = row.providerId === 'xd'
         ? await (gatewayPricing ??= getGatewayModelPricing())
         : referenceCatalog(row.day);
       const price = getModelPriceQuote(pricing, row.providerId, model, agent);
-      const money = perTurnAverageMoney(row, price);
-      if (money) return money;
+      // 与本机记账(resolveTurnCost)一致：非 Anthropic 供应商优先按有效报价重算，
+      // Anthropic 仅让用户显式覆写覆盖 SDK 账单事实，其余仍保留 SDK 记录金额。
+      if (!sdkMoney || !isOfficialAnthropic || price?.source === 'user-override') {
+        const money = perTurnAverageMoney(row, price);
+        if (money) return money;
+      }
     } catch (error) {
       log.warn('provider share usage estimate failed', { error: String(error) });
     }
+    if (sdkMoney && isOpaqueRow(row.providerId, agent, model)) return null;
     return sdkMoney;
   };
 }

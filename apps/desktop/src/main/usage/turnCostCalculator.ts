@@ -2,7 +2,15 @@
  * 单轮费用计算。定价先看实际 billing route，再看模型；模型名不再决定来源。
  */
 
-import { isByokProviderId, type AgentKind } from '@cindy/model-providers';
+import {
+  isByokProviderId,
+  providerWireProtocolForApi,
+  resolvePiModelRoute,
+  type AgentKind,
+  type CatalogModel,
+  type ProviderWireProtocol,
+  type RoutingDescriptor,
+} from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
 
@@ -122,6 +130,184 @@ export interface TurnPricingContext {
   region: CindyRegion;
   /** Captured when the request starts, so logout cannot reclassify an in-flight enterprise turn. */
   accessKind?: 'subscription' | 'api' | 'managed' | null;
+  /** Selected request model when upstream may return a different routed backend model name. */
+  selectedModel?: string;
+  /** Model-level flag marking opaque upstream routing whose names must not drive SDK fallback billing. */
+  opaqueModelId?: boolean;
+  /** Normalized model IDs on this route with opaque upstream routing (multi-model Claude turns). */
+  opaqueModelIds?: readonly string[];
+  /** True when the turn's runtime route targets the verified official Anthropic API. */
+  officialAnthropicApi?: boolean;
+  /** Per-model official Anthropic flags when a model's explicit route differs from the runtime default. */
+  officialAnthropicModels?: Readonly<Record<string, boolean>>;
+}
+
+const CLAUDE_MAIN_USAGE_PARENT = '__main__';
+
+function isClaudeMainSegmentId(segmentId: string | undefined): boolean {
+  return typeof segmentId === 'string' && segmentId.endsWith(`:${CLAUDE_MAIN_USAGE_PARENT}`);
+}
+
+function isClaudeSubagentSegmentId(segmentId: string | undefined): boolean {
+  return (
+    typeof segmentId === 'string' &&
+    segmentId.startsWith('claude:') &&
+    !segmentId.endsWith(`:${CLAUDE_MAIN_USAGE_PARENT}`)
+  );
+}
+
+function defaultWireProtocolForAgent(agent: AgentKind): ProviderWireProtocol {
+  if (agent === 'claude-code') return 'anthropic-messages';
+  if (agent === 'pi') return 'openai-chat';
+  return 'openai-responses';
+}
+
+/** True only for verified official https://api.anthropic.com Anthropic Messages endpoints. */
+export function isOfficialAnthropicMessagesEndpoint(endpoint: {
+  baseUrl: string | undefined;
+  wireProtocol?: ProviderWireProtocol;
+  requestPath?: string;
+}): boolean {
+  if (!endpoint.baseUrl) return false;
+  if (endpoint.wireProtocol && endpoint.wireProtocol !== 'anthropic-messages') return false;
+  if (endpoint.requestPath && endpoint.requestPath.trim() !== '/v1/messages') return false;
+  try {
+    const url = new URL(endpoint.baseUrl);
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.search ||
+      url.hash
+    ) {
+      return false;
+    }
+    if (url.hostname.toLowerCase() !== 'api.anthropic.com') return false;
+    const pathname = url.pathname.replace(/\/+$/, '');
+    return pathname === '' || pathname === '/v1';
+  } catch {
+    return false;
+  }
+}
+
+export interface OfficialAnthropicRouteProvider {
+  id: string;
+  routing?: Partial<
+    Record<AgentKind, Pick<RoutingDescriptor, 'upstream' | 'wireProtocol' | 'requestPath' | 'disabled'>>
+  >;
+  models?: Partial<
+    Record<AgentKind, readonly Pick<CatalogModel, 'id' | 'api' | 'piApi' | 'route'>[]>
+  >;
+}
+
+export function isOfficialAnthropicProviderAgentRoute(
+  provider: OfficialAnthropicRouteProvider,
+  agent: AgentKind,
+  modelId?: string,
+): boolean {
+  if (provider.id === 'anthropic') return true;
+  const routing = provider.routing?.[agent];
+  if (!routing || routing.disabled) return false;
+  const defaultWire = defaultWireProtocolForAgent(agent);
+  const normalizedTarget = modelId ? normalizeModelIdForPricing(modelId) : undefined;
+  const modelEntry = normalizedTarget
+    ? (provider.models?.[agent]?.find((candidate) => candidate.id === modelId) ??
+      provider.models?.[agent]?.find(
+        (candidate) => normalizeModelIdForPricing(candidate.id) === normalizedTarget,
+      ))
+    : undefined;
+  if (agent === 'pi' && modelEntry) {
+    const piRoute = resolvePiModelRoute(modelEntry, {
+      baseUrl: routing.upstream,
+      wireProtocol: routing.wireProtocol ?? defaultWire,
+    });
+    if (!piRoute) return false;
+    return isOfficialAnthropicMessagesEndpoint({
+      baseUrl: piRoute.baseUrl,
+      wireProtocol: piRoute.wireProtocol,
+      requestPath: piRoute.requestPath ?? (modelEntry.route ? undefined : routing.requestPath),
+    });
+  }
+  return isOfficialAnthropicMessagesEndpoint({
+    baseUrl: modelEntry?.route?.baseUrl ?? routing.upstream,
+    wireProtocol:
+      modelEntry?.route?.wireProtocol ??
+      providerWireProtocolForApi(modelEntry?.api ?? modelEntry?.piApi) ??
+      routing.wireProtocol ??
+      defaultWire,
+    requestPath: modelEntry?.route ? modelEntry.route.requestPath : routing.requestPath,
+  });
+}
+
+export function isOfficialAnthropicProviderConnection(
+  providerId: string | null | undefined,
+  provider: OfficialAnthropicRouteProvider | undefined,
+  agent?: AgentKind,
+  modelId?: string,
+): boolean {
+  if (providerId === 'anthropic' || provider?.id === 'anthropic') return true;
+  if (!provider) return false;
+  if (agent) return isOfficialAnthropicProviderAgentRoute(provider, agent, modelId);
+  const agents = (Object.keys(provider.routing ?? {}) as AgentKind[]).filter(
+    (candidate) => provider.routing?.[candidate] && !provider.routing[candidate]!.disabled,
+  );
+  if (agents.length === 0) return false;
+  const normalizedTarget = modelId ? normalizeModelIdForPricing(modelId) : undefined;
+  const matchingAgents = normalizedTarget
+    ? agents.filter((candidate) =>
+        provider.models?.[candidate]?.some(
+          (entry) => normalizeModelIdForPricing(entry.id) === normalizedTarget,
+        ),
+      )
+    : [];
+  const scope = matchingAgents.length > 0 ? matchingAgents : agents;
+  return scope.every((candidate) => isOfficialAnthropicProviderAgentRoute(provider, candidate, modelId));
+}
+
+export function resolveOfficialAnthropicModelsForAgent(
+  provider: OfficialAnthropicRouteProvider | undefined,
+  providerId: string | null | undefined,
+  agent?: AgentKind,
+): {
+  officialAnthropicApi: boolean;
+  officialAnthropicModels?: Readonly<Record<string, boolean>>;
+} {
+  if (providerId === 'anthropic' || provider?.id === 'anthropic') {
+    return { officialAnthropicApi: true };
+  }
+  if (!provider) {
+    return { officialAnthropicApi: false };
+  }
+  if (!agent) {
+    return { officialAnthropicApi: isOfficialAnthropicProviderConnection(providerId, provider) };
+  }
+  const defaultOfficial = isOfficialAnthropicProviderAgentRoute(provider, agent);
+  const models = provider.models?.[agent];
+  if (!models?.length) {
+    return { officialAnthropicApi: defaultOfficial };
+  }
+  const overrides: Record<string, boolean> = {};
+  const ambiguous = new Set<string>();
+  for (const model of models) {
+    const normalizedId = normalizeModelIdForPricing(model.id);
+    if (!normalizedId || normalizedId === 'unknown') continue;
+    const modelOfficial = isOfficialAnthropicProviderAgentRoute(provider, agent, model.id);
+    if (modelOfficial === defaultOfficial) {
+      if (normalizedId in overrides) {
+        delete overrides[normalizedId];
+        ambiguous.add(normalizedId);
+      }
+      continue;
+    }
+    if (!ambiguous.has(normalizedId)) {
+      overrides[normalizedId] = modelOfficial;
+    }
+  }
+  return {
+    officialAnthropicApi: defaultOfficial,
+    ...(Object.keys(overrides).length > 0 ? { officialAnthropicModels: overrides } : {}),
+  };
 }
 
 export type TurnCostSource = 'sdk' | 'gateway' | 'reference' | 'sdk-fallback' | 'subscription';
@@ -312,10 +498,30 @@ export function resolveTurnCost(args: {
     };
   }
 
+  const rawSelectedModel = context.selectedModel
+    ? normalizeModelIdForPricing(context.selectedModel)
+    : undefined;
+  const selectedModel =
+    rawSelectedModel && rawSelectedModel !== 'unknown' ? rawSelectedModel : undefined;
+  const isOpaqueId = (candidate: string | undefined): boolean =>
+    candidate !== undefined &&
+    context.opaqueModelIds?.some((id) => normalizeModelIdForPricing(id) === candidate) === true;
+  const isSelectedOpaque = context.opaqueModelId === true || isOpaqueId(selectedModel);
+  const isOpaqueModel = isSelectedOpaque || isOpaqueId(model);
+  const providerQuoteModel = isSelectedOpaque && selectedModel ? selectedModel : model;
   const providerQuote =
     context.billingRoute === 'provider-api'
-      ? getModelPriceQuote(pricing, context.providerId, model, agent)
+      ? getModelPriceQuote(pricing, context.providerId, providerQuoteModel, agent)
       : undefined;
+  const undatedRouteModel = providerQuoteModel.replace(/-\d{8}$/, '');
+  const officialOverride =
+    context.officialAnthropicModels?.[providerQuoteModel] ??
+    context.officialAnthropicModels?.[undatedRouteModel] ??
+    context.officialAnthropicModels?.[rawModel.trim()];
+  const isOfficialAnthropic =
+    officialOverride !== undefined
+      ? officialOverride
+      : (context.officialAnthropicApi ?? context.providerId === 'anthropic');
   if (context.accessKind === 'managed') {
     return {
       model,
@@ -328,12 +534,14 @@ export function resolveTurnCost(args: {
     tokens.outputTokens > 0 ||
     tokens.cacheReadTokens > 0 ||
     tokens.cacheCreateTokens > 0;
-  // DeepSeek 的缓存命中价与未命中价相差数十倍。Claude SDK 的 costUSD 是客户端
-  // 对第三方模型的估值，不是 DeepSeek 账单事实；一旦把缓存 token 按普通输入价算，
-  // 前台金额就会被成倍放大。有 token 增量且官方参考价存在时，按实际 token/cache
-  // 分桶重算并保留 value-estimate 标记；只有 cost 增量或目录价格不覆盖本轮时仍退回
-  // SDK，避免把有费用但无 token 明细的轮次误算成 $0。
-  if (context.providerId === 'deepseek' && providerQuote && hasTokenDeltas) {
+  // 非 Anthropic 官方连接且有 token 增量时，供应商报价（发现价、参考表或用户覆写）比
+  // Claude Code SDK 的客户端模型估值更权威；Anthropic 官方连接只让用户显式覆写覆盖
+  // SDK 账单。只有缺失可报价明细（非不透明模型）或仅有 cost 增量时仍退回 SDK。
+  if (
+    providerQuote &&
+    hasTokenDeltas &&
+    (!isOfficialAnthropic || providerQuote.source === 'user-override')
+  ) {
     const referenceMoney = computePriceQuoteTurnMoney(
       tokens,
       providerQuote,
@@ -347,8 +555,10 @@ export function resolveTurnCost(args: {
     }
   }
 
+  // 声明为 opaqueModelId（如网关路由分组）且没有有效供应商报价时，禁止把 SDK 兜底
+  // 估值记成 actual-cost，留空让界面明确呈现缺失价格。
   const sdkAmount = Math.max(0, sdkCostDelta ?? 0);
-  if (context.billingRoute === 'provider-api' && sdkAmount > 0) {
+  if (context.billingRoute === 'provider-api' && sdkAmount > 0 && !isOpaqueModel) {
     return { model, money: usdMoney(sdkAmount), source: 'sdk' };
   }
   return {
@@ -384,22 +594,74 @@ export function resolveClaudeTurnCostSinks(
   usageSegments?: readonly TurnUsageSegment[],
   usageSegmentsComplete = false,
 ): ClaudeTurnCostResolution {
-  type DeltaWithSegments = ModelUsageDeltaEntry & { segments?: TurnUsageSegment[] };
-  const effectiveDeltas: DeltaWithSegments[] =
+  const normalizedSelectedModel = context.selectedModel
+    ? normalizeModelIdForPricing(context.selectedModel)
+    : undefined;
+  const selectedModel =
+    normalizedSelectedModel && normalizedSelectedModel !== 'unknown'
+      ? normalizedSelectedModel
+      : undefined;
+  const hasSelectedOpaque =
+    context.opaqueModelId === true ||
+    (selectedModel !== undefined &&
+      context.opaqueModelIds?.some((id) => normalizeModelIdForPricing(id) === selectedModel) === true);
+  // selectedModel and opaqueModelId describe the session's selected main model; subagent
+  // requests must resolve quotes and opaque checks for their own model IDs instead.
+  const subagentContext: TurnPricingContext = {
+    providerId: context.providerId,
+    billingRoute: context.billingRoute,
+    region: context.region,
+    ...(context.accessKind !== undefined ? { accessKind: context.accessKind } : {}),
+    ...(context.opaqueModelIds !== undefined ? { opaqueModelIds: context.opaqueModelIds } : {}),
+    ...(context.officialAnthropicApi !== undefined
+      ? { officialAnthropicApi: context.officialAnthropicApi }
+      : {}),
+    ...(context.officialAnthropicModels !== undefined
+      ? { officialAnthropicModels: context.officialAnthropicModels }
+      : {}),
+  };
+
+  type ScopedDelta = ModelUsageDeltaEntry & {
+    segments?: TurnUsageSegment[];
+    isMainRequest: boolean;
+  };
+  const effectiveDeltas: ScopedDelta[] =
     usageSegments === undefined
-      ? modelDeltas
+      ? (() => {
+          const hasSelectedModelDelta =
+            selectedModel !== undefined &&
+            modelDeltas.some((delta) => normalizeModelIdForPricing(delta.model) === selectedModel);
+          return modelDeltas.map((delta) => ({
+            ...delta,
+            isMainRequest: hasSelectedModelDelta
+              ? normalizeModelIdForPricing(delta.model) === selectedModel
+              : modelDeltas.length <= 1,
+          }));
+        })()
       : (() => {
+          type ScopeBucket = { all: TurnUsageSegment[]; priceable: TurnUsageSegment[] };
           const observedByModel = new Map<
             string,
-            { all: TurnUsageSegment[]; priceable: TurnUsageSegment[] }
+            { main: ScopeBucket; subagent: ScopeBucket; unscoped: ScopeBucket }
           >();
+          let hasExplicitClaudeMain = false;
+          let hasExplicitClaudeSubagent = false;
           for (const segment of usageSegments) {
             const model = normalizeModelIdForPricing(segment.model);
-            const group = observedByModel.get(model) ?? { all: [], priceable: [] };
+            const group = observedByModel.get(model) ?? {
+              main: { all: [], priceable: [] },
+              subagent: { all: [], priceable: [] },
+              unscoped: { all: [], priceable: [] },
+            };
             const copy = { ...segment };
-            group.all.push(copy);
+            const bucket = isClaudeMainSegmentId(segment.id)
+              ? ((hasExplicitClaudeMain = true), group.main)
+              : isClaudeSubagentSegmentId(segment.id)
+                ? ((hasExplicitClaudeSubagent = true), group.subagent)
+                : group.unscoped;
+            bucket.all.push(copy);
             if (usageSegmentsComplete || segment.complete === true) {
-              group.priceable.push(copy);
+              bucket.priceable.push(copy);
             }
             observedByModel.set(model, group);
           }
@@ -407,29 +669,17 @@ export function resolveClaudeTurnCostSinks(
             modelDeltas.map((delta) => [normalizeModelIdForPricing(delta.model), delta]),
           );
           const models = new Set([...observedByModel.keys(), ...cumulativeByModel.keys()]);
-          const values: DeltaWithSegments[] = [];
-          for (const model of models) {
-            const observed = observedByModel.get(model);
-            const cumulative = cumulativeByModel.get(model);
-            const observedTotals = sumTurnUsageSegments(observed?.all ?? []);
-            const priceableSegments = observed?.priceable ?? [];
+          const hasSelectedModelInTurn = selectedModel !== undefined && models.has(selectedModel);
+          const values: ScopedDelta[] = [];
+          const pushBucket = (
+            model: string,
+            target: TurnTokenDeltas,
+            priceableSegments: TurnUsageSegment[],
+            initialCost: number,
+            isMainRequest: boolean,
+          ) => {
             const priceableTotals = sumTurnUsageSegments(priceableSegments);
-            const target: TurnTokenDeltas = {
-              inputTokens: Math.max(observedTotals.inputTokens, cumulative?.inputTokensDelta ?? 0),
-              outputTokens: Math.max(
-                observedTotals.outputTokens,
-                cumulative?.outputTokensDelta ?? 0,
-              ),
-              cacheReadTokens: Math.max(
-                observedTotals.cacheReadTokens,
-                cumulative?.cacheReadTokensDelta ?? 0,
-              ),
-              cacheCreateTokens: Math.max(
-                observedTotals.cacheCreateTokens,
-                cumulative?.cacheCreateTokensDelta ?? 0,
-              ),
-            };
-            let remainingCost = cumulative?.costUsdDelta ?? 0;
+            let remainingCost = initialCost;
             if (priceableSegments.length > 0) {
               values.push({
                 model,
@@ -439,6 +689,7 @@ export function resolveClaudeTurnCostSinks(
                 cacheReadTokensDelta: priceableTotals.cacheReadTokens,
                 cacheCreateTokensDelta: priceableTotals.cacheCreateTokens,
                 segments: priceableSegments,
+                isMainRequest,
               });
               // Provider-reported cost is already represented once. The
               // unpriceable residual below carries token facts only.
@@ -471,8 +722,100 @@ export function resolveClaudeTurnCostSinks(
                 // into one synthetic provider call. Only explicitly completed
                 // request segments above are eligible for token pricing.
                 segments: [],
+                isMainRequest,
               });
             }
+          };
+
+          for (const model of models) {
+            const observed = observedByModel.get(model);
+            const cumulative = cumulativeByModel.get(model);
+            const explicitMainCount = observed?.main.all.length ?? 0;
+            const subagentCount = observed?.subagent.all.length ?? 0;
+            const unscopedCount = observed?.unscoped.all.length ?? 0;
+
+            if (explicitMainCount > 0 && subagentCount > 0 && hasSelectedOpaque) {
+              const mainAll = [...observed!.main.all, ...observed!.unscoped.all];
+              const mainPriceable = [...observed!.main.priceable, ...observed!.unscoped.priceable];
+              const mainTotals = sumTurnUsageSegments(mainAll);
+              const subagentTotals = sumTurnUsageSegments(observed!.subagent.all);
+              const combinedInput = mainTotals.inputTokens + subagentTotals.inputTokens;
+              const combinedOutput = mainTotals.outputTokens + subagentTotals.outputTokens;
+              const combinedCacheRead =
+                mainTotals.cacheReadTokens + subagentTotals.cacheReadTokens;
+              const combinedCacheCreate =
+                mainTotals.cacheCreateTokens + subagentTotals.cacheCreateTokens;
+              pushBucket(
+                model,
+                {
+                  inputTokens:
+                    mainTotals.inputTokens +
+                    Math.max(0, (cumulative?.inputTokensDelta ?? 0) - combinedInput),
+                  outputTokens:
+                    mainTotals.outputTokens +
+                    Math.max(0, (cumulative?.outputTokensDelta ?? 0) - combinedOutput),
+                  cacheReadTokens:
+                    mainTotals.cacheReadTokens +
+                    Math.max(0, (cumulative?.cacheReadTokensDelta ?? 0) - combinedCacheRead),
+                  cacheCreateTokens:
+                    mainTotals.cacheCreateTokens +
+                    Math.max(0, (cumulative?.cacheCreateTokensDelta ?? 0) - combinedCacheCreate),
+                },
+                mainPriceable,
+                cumulative?.costUsdDelta ?? 0,
+                true,
+              );
+              pushBucket(model, subagentTotals, observed!.subagent.priceable, 0, false);
+              continue;
+            }
+
+            const allSegments = observed
+              ? [...observed.main.all, ...observed.subagent.all, ...observed.unscoped.all]
+              : [];
+            const priceableSegments = observed
+              ? [
+                  ...observed.main.priceable,
+                  ...observed.subagent.priceable,
+                  ...observed.unscoped.priceable,
+                ]
+              : [];
+            const observedTotals = sumTurnUsageSegments(allSegments);
+            const target: TurnTokenDeltas = {
+              inputTokens: Math.max(observedTotals.inputTokens, cumulative?.inputTokensDelta ?? 0),
+              outputTokens: Math.max(
+                observedTotals.outputTokens,
+                cumulative?.outputTokensDelta ?? 0,
+              ),
+              cacheReadTokens: Math.max(
+                observedTotals.cacheReadTokens,
+                cumulative?.cacheReadTokensDelta ?? 0,
+              ),
+              cacheCreateTokens: Math.max(
+                observedTotals.cacheCreateTokens,
+                cumulative?.cacheCreateTokensDelta ?? 0,
+              ),
+            };
+            const isMainRequest =
+              explicitMainCount > 0
+                ? true
+                : subagentCount > 0
+                  ? false
+                  : hasExplicitClaudeMain
+                    ? false
+                    : hasExplicitClaudeSubagent
+                      ? hasSelectedModelInTurn
+                        ? model === selectedModel
+                        : unscopedCount > 0 || models.size - observedByModel.size <= 1
+                      : hasSelectedModelInTurn
+                        ? model === selectedModel
+                        : models.size <= 1;
+            pushBucket(
+              model,
+              target,
+              priceableSegments,
+              cumulative?.costUsdDelta ?? 0,
+              isMainRequest,
+            );
           }
           return values;
         })();
@@ -491,7 +834,7 @@ export function resolveClaudeTurnCostSinks(
       tokens,
       sdkCostDelta: delta.costUsdDelta,
       pricing,
-      context,
+      context: delta.isMainRequest ? context : subagentContext,
       segments: delta.segments,
     });
     perModel.push({
@@ -562,6 +905,7 @@ export function buildClaudeTurnUsageDetails(
   trace?: unknown,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
+  const uniqueModels = hasModelUsageDeltas ? [...new Set(deltas!.map((delta) => delta.model))] : undefined;
   const perModelCost = perModel
     ?.filter(item => item.money && item.money.amount > 0)
     .map(item => ({ model: item.model, money: item.money!, ...claudeModelBilling(item, billing) }));
@@ -579,8 +923,8 @@ export function buildClaudeTurnUsageDetails(
     cacheCreateTokens: hasModelUsageDeltas
       ? deltas?.reduce((sum, delta) => sum + delta.cacheCreateTokensDelta, 0)
       : usage?.cache_creation_input_tokens,
-    model: deltas?.length === 1 ? deltas[0].model : hasModelUsageDeltas ? undefined : fallbackModel,
-    models: hasModelUsageDeltas ? deltas?.map((delta) => delta.model) : undefined,
+    model: uniqueModels?.length === 1 ? uniqueModels[0] : hasModelUsageDeltas ? undefined : fallbackModel,
+    models: uniqueModels,
     perModelTokens: perModel?.map(item => ({ model: item.model, ...item.deltas, ...claudeModelBilling(item, billing) })),
     perModelCost: perModelCost && perModelCost.length > 0 ? perModelCost : undefined,
     durationMs,
