@@ -38,7 +38,9 @@ import {
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
+import { PI_SUBAGENT_TOOL_NAME } from "@cindy/maker-shared/agent-task";
 import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
+import { PI_NATIVE_SUBAGENT_CALL_ENTRY } from "./session-tree.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -5522,6 +5524,17 @@ export default async function cindyBridge(piApi: any) {
       // 缩小等待确认期间替换原始 link 的竞态面。这不是 descriptor / inode 绑定；
       // 同 UID 并发替换 canonical 路径仍需未来由 OS 级 no-follow 写入能力解决。
       event.input.path = writeTargetResolved;
+    }
+  });
+
+  // Store the provenance alongside the native call. Its name and result remain
+  // owned by the extension, and the custom entry stays out of model context.
+  pi.on('tool_result', (event: any) => {
+    if (event.toolName !== ${JSON.stringify(PI_SUBAGENT_TOOL_NAME)} || typeof event.toolCallId !== 'string') return;
+    try {
+      pi.appendEntry(${JSON.stringify(PI_NATIVE_SUBAGENT_CALL_ENTRY)}, { toolCallId: event.toolCallId });
+    } catch {
+      // History presentation must not fail a tool result.
     }
   });
 

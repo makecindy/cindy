@@ -19,6 +19,7 @@ import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
  */
 
 import { randomUUID } from 'node:crypto';
+import { PI_NATIVE_SUBAGENT_DISPLAY_NAME } from './session-tree.js';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { StartSessionOptions } from '../base-agent.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -1093,7 +1094,10 @@ function translatePiEventInternal(
           toolUseId,
           ...parseMessageToolUse({
             role: 'tool_use',
-            content: { toolName, input: toolArgs },
+            content: {
+              toolName: toolName === PI_SUBAGENT_TOOL_NAME ? PI_NATIVE_SUBAGENT_DISPLAY_NAME : toolName,
+              input: toolArgs,
+            },
             toolUseId,
           }),
         },

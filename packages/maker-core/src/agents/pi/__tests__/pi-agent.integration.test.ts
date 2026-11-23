@@ -491,6 +491,21 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }));
       expect(JSON.stringify(requests[1].messages)).toContain('synthetic-user-result-11339');
       if (enabled) expect(requests[0].tools).toContainEqual(expect.objectContaining({ name: 'cindy_subagent' }));
+
+      // Replay the new tool call from the actual Pi branch after the result. The
+      // extension still uses the literal name, while the app gets a normal tool.
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'tool_use', data: expect.objectContaining({ toolName: 'dynamic:subagent' }),
+      }));
+      const tree = await handle.getSessionTree!();
+      expect(tree.leafId).toBeTruthy();
+      const restored = await handle.navigateSessionTree!(tree.leafId!, { summarize: false });
+      expect(restored.messages.filter(message => message.role === 'tool_use')).toEqual([
+        expect.objectContaining({ content: expect.objectContaining({ toolName: 'dynamic:subagent' }) }),
+      ]);
+      expect(restored.messages.filter(message => message.role === 'tool_result')).toEqual([
+        expect.objectContaining({ content: 'synthetic-user-result-11339' }),
+      ]);
     } finally {
       await handle?.close();
       scriptedResponses.length = 0;

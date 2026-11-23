@@ -283,6 +283,7 @@ import {
   normalizePiSessionTree,
   piRetryBranch,
   piContextTokensFromTree,
+  rawPiSessionTreeLeafId,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
 import type { PiRuntimeCapabilityManifest } from '../../types/pi-runtime-capabilities.js';
@@ -8263,7 +8264,7 @@ export class PiAgent extends BaseAgent {
               if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
                 throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
               }
-              if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
+              if (!switched.success || !after.success || rawPiSessionTreeLeafId(after.data) !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
               }
               rejectIfCancelled(sendOpts, 'send');

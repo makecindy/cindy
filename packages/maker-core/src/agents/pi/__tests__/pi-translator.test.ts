@@ -125,6 +125,9 @@ describe('pi translator', () => {
     expect(events.find(event => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'sa-1')?.data)
       .toMatchObject({ toolName: 'subagent' });
 
+    expect(events.find(event => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'native-1')?.data)
+      .toMatchObject({ toolName: 'dynamic:subagent' });
+
     const updates = events.filter((event) => event.type === 'agent_task_update');
     expect(updates.map((event) => event.data)).toEqual([
       expect.objectContaining({
