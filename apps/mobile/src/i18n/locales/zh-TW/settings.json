@@ -547,6 +547,14 @@
     "chooseExistingFolder": "選擇現有資料夾",
     "changeMainDirectory": "更改"
   },
+  "composerFollowUp": {
+    "title": "訊息傳送",
+    "label": "任務執行時傳送",
+    "queue": "排隊",
+    "steer": "插話",
+    "description": "排隊會等目前這一輪結束。插話會嘗試將訊息傳到目前這一輪。",
+    "saveFailed": "儲存失敗，請重試。"
+  },
   "navigation": {
     "unavailable": "無法開啟目標電腦的設定。請確認電腦在線上且已允許遠端控制；舊版本請先更新 Cindy。"
   }

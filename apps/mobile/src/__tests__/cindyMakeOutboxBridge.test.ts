@@ -96,6 +96,28 @@ describe('Cindy Make outbox bridge guards', () => {
       .rejects.toThrow('OUTBOX_OWNER_CHANGED');
   });
 
+  // Unit: a turn that ends while a steer waits for the link must never receive that steer.
+  it('checks the turn at dispatch without invalidating an already sent reply', async () => {
+    const { record, callbacks, invoke } = harness([]);
+    const turnEnded = new Error('turn ended');
+    let running = true;
+    const send = callbacks.invokeOwned(record, () => { if (!running) throw turnEnded; });
+    invoke.mockImplementationOnce(async (_device, _channel, _args, options) => {
+      running = false;
+      options.preSend();
+      throw new Error('should not reach dispatch');
+    });
+    await expect(send('desktop', 'maker:input:steer', ['session'])).rejects.toBe(turnEnded);
+
+    running = true;
+    invoke.mockImplementationOnce(async (_device, _channel, _args, options) => {
+      options.preSend();
+      running = false;
+      return { id: 'session', source: 'cc' };
+    });
+    await expect(send('desktop', 'maker:input:steer', ['session'])).resolves.toMatchObject({ id: 'session' });
+  });
+
   it.each(['cindy-make', 'cindy-make-merge'])('selects a suspended hidden %s record for local cleanup even offline', async source => {
     const { record, callbacks, invoke, latest } = harness([{ id: 'session', source, deviceLinkDeviceId: 'desktop' }]);
     record.suspended = true;

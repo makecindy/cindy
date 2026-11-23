@@ -1,5 +1,5 @@
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
-import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
+import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { cindyMakeOutboxPolicy } from './cindyMakeOutboxPolicy';
 import { isDurableOutboxHandedOff, isDurableOutboxSettled, type DurableOutboxRecord } from './durableOutbox';
 import { sessionFromCreateResult } from './newSession';
@@ -9,6 +9,15 @@ import type { RemoteSession } from './types';
 
 type SessionSource = Pick<RemoteSession, 'id' | 'source' | 'deviceLinkDeviceId'>;
 type OutboxLease = ReturnType<typeof remoteSessionStore.acquireSessionMessageWork>;
+
+export function enqueueMobileOutboxRecord(record: DurableOutboxRecord, invoke: RemoteInvoke) {
+  const { item, prepared, sendAtMs, clearBoundaryMs, deviceId } = record;
+  if (!prepared) throw new Error('Missing prepared outbox message');
+  return createMobileMakerTransport({ deviceId, invoke }).input.enqueue(item.sessionId, prepared, {
+    sendAtMs,
+    ...(clearBoundaryMs !== undefined ? { expectedClearBoundaryMs: clearBoundaryMs } : {}),
+  });
+}
 
 const findOutboxSession = (record: DurableOutboxRecord, sessions: readonly SessionSource[]) =>
   sessions.find((session) => session.id === record.item.sessionId && session.deviceLinkDeviceId === record.deviceId);
@@ -60,7 +69,7 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
   const knownSession = (record: DurableOutboxRecord) => findOutboxSession(record, deps.getSessions());
   const hidden = (record: DurableOutboxRecord) => outboxSessionIsHidden(record, deps.getSessions());
   const invokeOwned =
-    (record: DurableOutboxRecord): RemoteInvoke =>
+    (record: DurableOutboxRecord, beforeSend?: () => void): RemoteInvoke =>
     async (deviceId, channel, args) => {
       const guardRecord = () => {
         deps.guard();
@@ -69,7 +78,10 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
       };
       guardRecord();
       const result = await deps.invoke(deviceId, channel, args, {
-        preSend: guardRecord,
+        preSend: () => {
+          guardRecord();
+          beforeSend?.();
+        },
       });
       guardRecord();
       return result as never;

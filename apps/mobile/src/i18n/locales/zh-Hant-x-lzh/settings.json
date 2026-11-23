@@ -547,6 +547,14 @@
     "chooseExistingFolder": "選擇現有資料夾",
     "changeMainDirectory": "更改"
   },
+  "composerFollowUp": {
+    "title": "遣訊",
+    "label": "差事方行時遣訊",
+    "queue": "排隊",
+    "steer": "插話",
+    "description": "排隊則俟此輪既畢。插話則試遣其訊入此輪。",
+    "saveFailed": "未能存，請再試。"
+  },
   "navigation": {
     "unavailable": "未能開啟彼機設定。請驗其在線且已允遠控；版本舊則先更新 Cindy。"
   }

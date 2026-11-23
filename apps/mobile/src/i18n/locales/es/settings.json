@@ -547,6 +547,14 @@
     "chooseExistingFolder": "Elegir carpeta existente",
     "changeMainDirectory": "Cambiar"
   },
+  "composerFollowUp": {
+    "title": "Envío de mensajes",
+    "label": "Enviar con una tarea en curso",
+    "queue": "Poner en cola",
+    "steer": "Dar indicaciones",
+    "description": "La cola espera a que termine el turno actual. Al dar indicaciones, se intenta enviar el mensaje en el turno actual.",
+    "saveFailed": "No se pudo guardar el ajuste. Vuelve a intentarlo."
+  },
   "navigation": {
     "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."
   }

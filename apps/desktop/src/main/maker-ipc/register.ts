@@ -21092,6 +21092,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return {
       ...inputCoordinator.getProjection(sid),
       inputDeliveryVersion: 1,
+      automaticSteer: true,
       ...(deliveryReceipts ? { deliveryReceipts } : {}),
     };
   });
@@ -21382,8 +21383,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ? (opts as {
               removeFromQueue?: boolean;
               touchUserSend?: boolean;
+              automaticSteer?: boolean;
             } & AgentInputClearBoundaryOpts)
           : undefined;
+      if (steerOpts?.automaticSteer !== undefined && steerOpts.automaticSteer !== true) {
+        throwIpcError('INVALID_PARAMS', 'Invalid automatic steering option');
+      }
+      if (steerOpts?.automaticSteer === true && steerOpts.removeFromQueue === true) {
+        throwIpcError('INVALID_PARAMS', 'Automatic steering requires a new message');
+      }
       const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item, {
         // A device-link projection intentionally omits the trusted snapshot;
         // Only the explicit remove-from-queue steer path may reattach it from
@@ -21570,6 +21578,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const retained = coordinatorRetainsClientId(queued.clientId);
           if (retained) {
             markQueuedAttachmentDurableAfterSnapshot(sid, parsed.clientId, attachmentOwnerId);
+            // The host owns an uncertain or recoverable attempt. Do not invite a second write.
+            if (steerOpts?.automaticSteer) {
+              if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
+              return true;
+            }
           } else {
             if (attachmentOwnerId) {
               queuedAttachmentOwnership.restoreCurrentOwner(

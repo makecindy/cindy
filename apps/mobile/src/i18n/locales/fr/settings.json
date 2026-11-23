@@ -547,6 +547,14 @@
     "chooseExistingFolder": "Choisir un dossier existant",
     "changeMainDirectory": "Modifier"
   },
+  "composerFollowUp": {
+    "title": "Envoi de messages",
+    "label": "Envoi pendant une tâche",
+    "queue": "Mettre en file d’attente",
+    "steer": "Réorienter",
+    "description": "La file d’attente attend la fin du tour actuel. La réorientation tente d’envoyer le message pendant ce tour.",
+    "saveFailed": "Impossible d’enregistrer le réglage. Réessayez."
+  },
   "navigation": {
     "unavailable": "Impossible d’ouvrir les paramètres de l’ordinateur cible. Vérifiez qu’il est en ligne et autorise le contrôle à distance ; mettez Cindy à jour si nécessaire."
   }

@@ -547,6 +547,14 @@
     "chooseExistingFolder": "Vorhandenen Ordner wählen",
     "changeMainDirectory": "Ändern"
   },
+  "composerFollowUp": {
+    "title": "Nachrichtenversand",
+    "label": "Bei laufender Aufgabe senden",
+    "queue": "Einreihen",
+    "steer": "Lenken",
+    "description": "Beim Einreihen wartet die Nachricht bis zum Ende der aktuellen Runde. Beim Lenken wird versucht, sie in die laufende Runde einzufügen.",
+    "saveFailed": "Die Einstellung konnte nicht gespeichert werden. Versuche es erneut."
+  },
   "navigation": {
     "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
   }

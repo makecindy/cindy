@@ -8805,7 +8805,31 @@ describe('AgentInputCoordinator steer transaction', () => {
     ).toBe(false);
   });
 
-  it('does not leave a direct inspection row or start a fallback turn when control steer loses the active-turn race', async () => {
+  // Unit: a stale phone projection must not resume even one pending host message.
+  it.each(['before admission', 'during screening'] as const)('keeps the queue paused %s of automatic steering', async (when) => {
+    const h = createHarness();
+    const sid = 'automatic-steer-paused';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('queued', 'wait'));
+    if (when === 'before admission') h.coordinator.pausePendingQueueForRewind(sid);
+    else h.setScreenUserMessage(async () => {
+      h.coordinator.pausePendingQueueForRewind(sid);
+      return { action: 'allow' } as const;
+    });
+
+    const item = makeItem('automatic', 'follow-up');
+    await expect(h.coordinator.steer(sid, item, { automaticSteer: true })).resolves.toBe(false);
+    h.coordinator.enqueue(sid, item);
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      queuePaused: true,
+      pendingQueue: [{ clientId: 'queued' }, { clientId: 'automatic' }],
+      steeringQueueClientIds: [],
+    });
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([{ fallbackToTurn: false }, { automaticSteer: true }])('does not leave a direct inspection row or start a fallback turn with %o after the active turn ends', async (opts) => {
     const h = createHarness();
     const sid = 'inspection-control-steer-no-active-race';
     h.setRunning(true);
@@ -8816,9 +8840,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     });
 
     await expect(
-      h.coordinator.steer(sid, makeItem('q-control', 'urgent'), {
-        fallbackToTurn: false,
-      }),
+      h.coordinator.steer(sid, makeItem('q-control', 'urgent'), opts),
     ).resolves.toBe(false);
 
     expect(h.sendToAgent).not.toHaveBeenCalled();

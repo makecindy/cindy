@@ -506,6 +506,7 @@ import {
 } from '@/session/optimisticUserMessages';
 import { useWaitingComputerRecovery } from '@/session/useWaitingComputerRecovery';
 import { usePendingOutboxActions, usePendingSendActions } from '@/session/usePendingSendActions';
+import { getComposerFollowUpMode, useComposerFollowUpMode } from '@/settings/composerFollowUpPreference';
 import {
   acquireQueueEditLock,
   commitQueueEdit,
@@ -1308,6 +1309,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const pendingInteractionsAuthoritative = useSessionPendingInteractionsAuthoritative(sessionId);
   const inputProjection = useSessionInputProjection(sessionId);
   const remoteSessionRunning = useSessionRunning(sessionId);
+  useComposerFollowUpMode();
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
   const recommendationSession = currentSession;
   const remoteSessionRunStatus = useSessionRunStatus(sessionId);
@@ -6909,6 +6911,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? extractMobileSessionReferences(text, remoteSessionStore.getSessionDeviceId)
       : [];
     const dispatchBlockedAtSend = outboxDispatchBlockedNow();
+    const steerTurnStartedAt = !dispatchBlockedAtSend
+      && remoteSessionStore.isSessionRunning(sessionId, deviceId)
+      && getComposerFollowUpMode() === 'steer'
+      ? remoteSessionStore.getSessionRunStatus(sessionId).startedAt
+      : null;
     const legacyPlanRequiresLiveDispatch = outboxEligible
       && !earlyLocalCommand
       && !earlyDesktopCommand
@@ -7124,6 +7131,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               ? { resourceRef: { collectionId: readRouteParam(params.resourceCollectionId)!, kind: 'bot', id: readRouteParam(params.resourceId)! } } : {}),
             ...(!independent ? { draftHandoff: { before: documentBeforeSend, after: documentAfterOptimisticClear } } : {}),
             state: 'queued', uploads: [], clearBoundaryMs: clearedAt !== null && Number.isFinite(clearedAt) ? clearedAt : null,
+            ...(steerTurnStartedAt !== null ? { steerTurnStartedAt } : {}),
           };
           for (let slot = 0; slot < readyAttachments.length; slot++) {
             const source = getUploadedSource(readyAttachments[slot].id);
