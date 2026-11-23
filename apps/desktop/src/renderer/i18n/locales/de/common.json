@@ -1951,7 +1951,7 @@
       },
       "footnote": "Phase A: nur SSH-Verbindungsverwaltung. Das Ausführen von Agents auf dem Remote-Rechner folgt in einem späteren Update.",
       "viaAuth": "über {{label}}",
-      "managedAliasConflict": "Dieser SSH-Alias ist sowohl in der von Cindy verwalteten als auch in einer externen Konfiguration definiert. Die Verbindungsdetails sind schreibgeschützt. Dieser Host kann hier nicht entfernt werden.",
+      "managedAliasConflict": "Dieser SSH-Alias ist sowohl in der von Cindy verwalteten als auch in einer externen Konfiguration definiert. Die Verbindungsdetails sind schreibgeschützt. Dieser Eintrag kann hier nicht entfernt werden.",
       "readOnlyFromSshConfig": "Verbindungsdetails stammen aus der SSH-Konfiguration",
       "importedAgentHint": "Authentifiziert über den lokalen SSH-Schlüsselagenten (ssh-agent). Eine erfolgreiche ssh-Verbindung im Terminal bedeutet nicht, dass der Agent bereit ist.",
       "agentError": {
