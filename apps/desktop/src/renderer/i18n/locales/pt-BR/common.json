@@ -10920,7 +10920,18 @@
       "loadFailed": "Falha ao carregar a árvore de arquivos",
       "unsupportedDropFile": "Ainda não é possível visualizar este formato de arquivo",
       "multipleDropFilesUnsupported": "Solte um arquivo por vez",
-      "pushNow": "Push"
+      "pushNow": "Push",
+      "aiCommitFallback": "O resumo por IA não está disponível; uma mensagem de commit concisa foi mantida.",
+      "commitSuccess": "{{oid}} enviado",
+      "changes": "Alterações",
+      "changedOnlyEmpty": "Nenhum arquivo alterado",
+      "commitMessage": "Mensagem de commit",
+      "commitMessagePlaceholder": "Descreva o objetivo desta alteração…",
+      "autoPush": "Push automático",
+      "pushBranch": "Branch de push: {{branch}}",
+      "aiCommitSummary": "Resumo por IA",
+      "commitToGithub": "Commit no GitHub",
+      "changedOnly": "Mostrar apenas arquivos alterados"
     },
     "browser": {
       "newTab": "Nova aba",

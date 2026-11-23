@@ -10844,7 +10844,18 @@
       "loadFailed": "Failed to load the file tree",
       "unsupportedDropFile": "This file format cannot be previewed yet",
       "multipleDropFilesUnsupported": "Drop one file at a time",
-      "pushNow": "Push"
+      "pushNow": "Push",
+      "aiCommitFallback": "AI summary is unavailable; a concise commit message was kept.",
+      "commitSuccess": "Committed {{oid}}",
+      "changes": "Changes",
+      "changedOnlyEmpty": "No changed files",
+      "commitMessage": "Commit message",
+      "commitMessagePlaceholder": "Describe the purpose of this change…",
+      "autoPush": "Auto push",
+      "pushBranch": "Push branch: {{branch}}",
+      "aiCommitSummary": "AI summary",
+      "commitToGithub": "Commit to GitHub",
+      "changedOnly": "Show changed files only"
     },
     "browser": {
       "newTab": "New tab",

@@ -10844,7 +10844,18 @@
       "loadFailed": "Dateibaum konnte nicht geladen werden",
       "unsupportedDropFile": "Für dieses Dateiformat ist noch keine Vorschau verfügbar",
       "multipleDropFilesUnsupported": "Lege jeweils nur eine Datei ab",
-      "pushNow": "Push"
+      "pushNow": "Push",
+      "aiCommitFallback": "Die KI-Zusammenfassung ist nicht verfügbar; eine knappe Commit-Nachricht wurde beibehalten.",
+      "commitSuccess": "{{oid}} committet",
+      "changes": "Änderungen",
+      "changedOnlyEmpty": "Keine geänderten Dateien",
+      "commitMessage": "Commit-Nachricht",
+      "commitMessagePlaceholder": "Beschreibe den Zweck dieser Änderung…",
+      "autoPush": "Automatischer Push",
+      "pushBranch": "Push-Branch: {{branch}}",
+      "aiCommitSummary": "KI-Zusammenfassung",
+      "commitToGithub": "Auf GitHub committen",
+      "changedOnly": "Nur geänderte Dateien anzeigen"
     },
     "browser": {
       "newTab": "Neuer Tab",

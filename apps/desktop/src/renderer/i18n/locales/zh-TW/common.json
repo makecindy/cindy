@@ -10800,7 +10800,18 @@
       "loadFailed": "檔案樹載入失敗",
       "unsupportedDropFile": "暫時不支援展示該格式的檔案",
       "multipleDropFilesUnsupported": "一次只能拖入一個檔案",
-      "pushNow": "推送"
+      "pushNow": "推送",
+      "aiCommitFallback": "AI 摘要暫不可用，已保留簡潔提交資訊。",
+      "commitSuccess": "已提交 {{oid}}",
+      "changes": "已變更",
+      "changedOnlyEmpty": "沒有已變更檔案",
+      "commitMessage": "提交資訊",
+      "commitMessagePlaceholder": "說明本次修改的目的…",
+      "autoPush": "自動 push",
+      "pushBranch": "推送分支：{{branch}}",
+      "aiCommitSummary": "AI 摘要",
+      "commitToGithub": "提交到 GitHub",
+      "changedOnly": "僅顯示已變更檔案"
     },
     "browser": {
       "newTab": "新標籤",

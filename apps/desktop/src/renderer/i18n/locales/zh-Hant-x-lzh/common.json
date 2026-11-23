@@ -10800,7 +10800,18 @@
       "loadFailed": "卷樹載入未成",
       "unsupportedDropFile": "此格式之卷，暫不能展示",
       "multipleDropFilesUnsupported": "一次僅可拖入一卷",
-      "pushNow": "推"
+      "pushNow": "推",
+      "aiCommitFallback": "AI 總結暫不可用，已存簡要之提交訊息。",
+      "commitSuccess": "已提交 {{oid}}",
+      "changes": "已改",
+      "changedOnlyEmpty": "無已改之卷",
+      "commitMessage": "提交訊息",
+      "commitMessagePlaceholder": "述此改之旨…",
+      "autoPush": "自動 push",
+      "pushBranch": "推分支：{{branch}}",
+      "aiCommitSummary": "AI 總結",
+      "commitToGithub": "提交於 GitHub",
+      "changedOnly": "僅示已改之卷"
     },
     "browser": {
       "newTab": "新分頁",

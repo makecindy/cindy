@@ -10800,7 +10800,18 @@
       "loadFailed": "ファイルツリーの読み込みに失敗しました",
       "unsupportedDropFile": "この形式のファイルはまだプレビューできません",
       "multipleDropFilesUnsupported": "一度にドラッグできるファイルは1つだけです",
-      "pushNow": "プッシュ"
+      "pushNow": "プッシュ",
+      "aiCommitFallback": "AI 要約を利用できないため、簡潔なコミットメッセージを維持しました。",
+      "commitSuccess": "コミットしました {{oid}}",
+      "changes": "変更",
+      "changedOnlyEmpty": "変更されたファイルはありません",
+      "commitMessage": "コミットメッセージ",
+      "commitMessagePlaceholder": "この変更の目的を入力…",
+      "autoPush": "自動 push",
+      "pushBranch": "Push ブランチ：{{branch}}",
+      "aiCommitSummary": "AI 要約",
+      "commitToGithub": "GitHub にコミット",
+      "changedOnly": "変更されたファイルのみ表示"
     },
     "browser": {
       "newTab": "新しいタブ",

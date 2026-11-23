@@ -10800,7 +10800,18 @@
       "loadFailed": "파일 트리를 불러오지 못했습니다",
       "unsupportedDropFile": "이 형식의 파일은 아직 미리 볼 수 없습니다",
       "multipleDropFilesUnsupported": "파일은 한 번에 하나만 드롭할 수 있습니다",
-      "pushNow": "푸시"
+      "pushNow": "푸시",
+      "aiCommitFallback": "AI 요약을 사용할 수 없어 간결한 커밋 메시지를 유지했습니다.",
+      "commitSuccess": "커밋됨 {{oid}}",
+      "changes": "변경 사항",
+      "changedOnlyEmpty": "변경된 파일이 없습니다",
+      "commitMessage": "커밋 메시지",
+      "commitMessagePlaceholder": "이 변경의 목적을 입력하세요…",
+      "autoPush": "자동 push",
+      "pushBranch": "Push 브랜치: {{branch}}",
+      "aiCommitSummary": "AI 요약",
+      "commitToGithub": "GitHub에 커밋",
+      "changedOnly": "변경된 파일만 표시"
     },
     "browser": {
       "newTab": "새 탭",
