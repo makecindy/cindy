@@ -404,7 +404,7 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
-import { configurePluginHarnessRegistry, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
 import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
 import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
@@ -9525,7 +9525,19 @@ export function registerGhostIpc(): void {
         type: 'node-request', method: 'usage',
         params: { harnessId, ...(accountDir !== undefined ? { accountDir } : {}) }, timeoutMs: 26000,
       });
-      return response.ok && isDataOwnerBroadcastScopeCurrent(owner) ? response.result : null;
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) return null;
+      if (response.ok) return response.result;
+      switch (response.errorCode) {
+        case 'TIMEOUT':
+        case 'RATE_LIMITED':
+        case 'PROCESS_START_FAILED':
+        case 'PROCESS_EXITED':
+        case 'PROTOCOL_ERROR':
+        case 'INTERNAL':
+          return PLUGIN_USAGE_WORKER_FAILURE;
+        default:
+          return null;
+      }
     },
     // 引擎账号(plugin-harnesses.md 引擎账号)：方法名与参数由注册表固定，回包按协议校验后才用。
     callAccount: async (ghostId, method, params, timing) => {
