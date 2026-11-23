@@ -37,7 +37,7 @@ A **buddy** is a long-lived AI companion with its own name, avatar, personality,
 - **Personality & conversation** — free text describing who the buddy is and how it talks.
 - **Memory** — **Use memory** toggle (off: memories aren't read or saved), **What you know about me**, and the buddy's saved memories grouped as About you / Your preferences / Projects / References. Search, edit, or delete them. Each buddy's memory is its own, separate from Settings > Personalization > Memory.
 - **Linked Projects** — projects the buddy may read for background when needed (**Choose a project**, **Add**). Linking doesn't assign the project's sessions or start background work.
-- **Model** — **Primary Model** with up to 5 candidates (**Add fallback model**; **Backup models (N)**). If one is unavailable, it automatically continues with the next. **Restore default model** goes back to the shared default. When a buddy starts a new task, it picks that task's model itself (you can tell it which one you prefer).
+- **Model** — **Primary Model** with up to 5 candidates (**Add fallback model**; **Backup models (N)**). If one is unavailable, it automatically continues with the next. **Restore default model** goes back to the shared default. This is where each buddy's model is set; there is no single control that changes every buddy's model at once. When a buddy starts a new task, it picks that task's model itself (you can tell it which one you prefer).
 - **Voice** — speech model, voice, speech speed, and **Read by sentence** for voice conversations (see below).
 - **Capabilities** — choose which **Built-in tools**, **MCP** servers, and **Skills** this buddy may use (items unavailable on this computer are marked). By default it follows the tools enabled on this computer; turning one off switches to an explicit list. Cindy built-in Skills and verified official plugin Skills are inherited automatically and follow their enabled state on this computer. Personal, third-party, and engine-provided Skills remain opt-in. **Input Handoff** lets it ask you to type a password or code on any of your devices; it never sees the value.
 - **Messaging platforms** — give the buddy its own bot (see below).
@@ -96,5 +96,4 @@ A **buddy** is a long-lived AI companion with its own name, avatar, personality,
 
 **Settings shared by all buddies** (Settings > General > **Buddies**):
 
-- **Default model**: used by buddies that don't choose their own, independent of new-task model choices.
 - **Show which message a reply answers**: shows above a buddy's reply which of your messages it answers. It's off by default.
