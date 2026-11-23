@@ -1756,20 +1756,30 @@ describe('translateResponsesRequest', () => {
     });
   });
 
-  it.each(['https://api.z.ai/api/coding/paas/v4', 'https://open.bigmodel.cn/api/coding/paas/v4'])(
-    'retains GLM-5.4 thinking when returning a tool result on %s',
+  describe.each(['https://api.z.ai/api/coding/paas/v4', 'https://open.bigmodel.cn/api/coding/paas/v4'])(
+    'GLM Coding Plan replay on %s',
     upstreamBase => {
-      const model = 'glm-5.4';
-      const capabilities = chatCompatibilityCapabilities({ upstreamBase, model, harness: 'codex', protocol: 'openai-chat' });
-      const request = translateResponsesRequest(base({ model, input: [
-        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'inspect the file' }] },
-        { type: 'function_call', call_id: 'c1', name: 'read', arguments: '{}' },
-        { type: 'function_call_output', call_id: 'c1', output: 'ok' },
-      ] }), { capabilities });
-      expect(request.messages).toMatchObject([
-        { role: 'assistant', reasoning_content: 'inspect the file', tool_calls: [{ id: 'c1' }] },
-        { role: 'tool', tool_call_id: 'c1', content: 'ok' },
-      ]);
+      it.each([
+        ['glm-5.3', undefined, 'tool call'],
+        ['glm-5.4', undefined, 'tool call'],
+        ['glm-5.4[1m]', undefined, 'tool call'],
+        ['glm-5.4', 'inspect the file', 'inspect the file'],
+        ['glm-5.4[1m]', 'inspect the file', 'inspect the file'],
+      ])('serializes tool results for %s with reasoning %s', (model, reasoning, expected) => {
+        const capabilities = chatCompatibilityCapabilities({ upstreamBase, model, harness: 'codex', protocol: 'openai-chat' });
+        const input: ResponsesRequest['input'] = [
+          { type: 'function_call', call_id: 'c1', name: 'read', arguments: '{}' },
+          { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+        ];
+        if (reasoning !== undefined) {
+          input.unshift({ type: 'reasoning', content: [{ type: 'reasoning_text', text: reasoning }] });
+        }
+        const request = translateResponsesRequest(base({ model, input }), { capabilities });
+        expect(request.messages).toMatchObject([
+          { role: 'assistant', reasoning_content: expected, tool_calls: [{ id: 'c1' }] },
+          { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+        ]);
+      });
     },
   );
 

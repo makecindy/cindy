@@ -19,8 +19,9 @@ export function chatCompatibilityCapabilities(route: CompatibilityRoute, existin
     baseline.reasoningField = 'reasoning_effort';
   }
   // GLM-5.4 Coding Plan retains thinking across tool calls on both Chat endpoints.
-  if (route.model === 'glm-5.4' && (profile.id === 'zai' || profile.id === 'zhipu-bigmodel-coding')) {
+  if ((route.model === 'glm-5.4' || route.model === 'glm-5.4[1m]') && (profile.id === 'zai' || profile.id === 'zhipu-bigmodel-coding')) {
     baseline.reasoningHistoryField = 'reasoning_content';
+    baseline.toolCallReasoningPlaceholder = true;
     baseline.reasoningField = 'reasoning_effort';
   }
   if (typeof profile.parallelToolCalls === 'boolean') baseline.parallelToolCalls = profile.parallelToolCalls;
