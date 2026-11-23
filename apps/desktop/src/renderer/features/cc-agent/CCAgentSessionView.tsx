@@ -1146,6 +1146,14 @@ function CCAgentSessionContent({
   const voiceQuestionBridge = useRef<VoiceQuestionTarget | null>(null);
   const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   const companionSettingsOpen = new URLSearchParams(location.search).get('settings') === '1';
+  const openCompanionModelSettings = botChatIdentity?.canonicalChat && !botChatIdentity.deviceId && !readOnly
+    ? () => {
+        const search = new URLSearchParams(location.search);
+        search.set('settings', '1');
+        search.set('settingsPage', 'model');
+        navigate(`${location.pathname}?${search.toString()}`);
+      }
+    : undefined;
   const openVoiceSettings = useCallback(() => {
     const search = new URLSearchParams(location.search);
     search.set('settings', '1');
@@ -6069,6 +6077,7 @@ function CCAgentSessionContent({
                 />
               ) : (
                 <ErrorTailErrorBanner
+                  onOpenCompanionModelSettings={openCompanionModelSettings}
                   onChooseComputer={sharedTaskRecovery.askAgain}
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
@@ -6144,6 +6153,7 @@ function CCAgentSessionContent({
             {/* 只隐藏已有同一错误活动行的过载重试；认证、额度等操作入口照常保留。 */}
             {showLiveErrorBanner && (
               <ErrorBanner
+                onOpenCompanionModelSettings={openCompanionModelSettings}
                 onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}

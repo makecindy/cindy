@@ -42,6 +42,27 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
+// #10264, unit: the existing settings action and retry remain independently
+// available for both a live rejection and one restored from chat history.
+it.each(['live', 'tail'] as const)('offers companion model settings for a %s empty-chain refusal', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const error = '[PRECONDITION_FAILED] 请先选择已开启的伙伴模型';
+  const openSettings = vi.fn();
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={error} onOpenCompanionModelSettings={openSettings} retryText="original input" onRetry={retry} />
+    : <ErrorTailErrorBanner errorText={error} onOpenCompanionModelSettings={openSettings} onContinue={retry} onDismiss={vi.fn()} />}
+  </I18nextProvider>);
+
+  expect(screen.getByText(en.chat.errorBanner.companionModelMissing)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.companionModelSettings }));
+  expect(openSettings).toHaveBeenCalledOnce();
+  expect(retry).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+  expect(retry).toHaveBeenCalledOnce();
+});
+
 // #12240, unit: the live banner must explain both options for a retained
 // queue head. The same network error without that recovery cannot promise
 // that the original input is still waiting to be sent.

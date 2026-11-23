@@ -15337,6 +15337,8 @@
       "codexHelperUnavailable": "이 작업에서 cindy_helper가 활성화되어 있지만 사용할 수 없습니다. 작업 결과를 보고하지 못할 수 있습니다.",
       "codexHelperUnverified": "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다.",
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
+      "companionModelMissing": "이 동반자가 사용할 수 있는 모델이 없습니다. 모델을 선택한 후 다시 시도하세요.",
+      "companionModelSettings": "모델 설정",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",
       "retryTitle": "마지막 메시지 다시 보내기",

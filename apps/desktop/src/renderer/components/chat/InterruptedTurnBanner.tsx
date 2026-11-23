@@ -98,6 +98,7 @@ export function InterruptedTurnBanner({
 export const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
 
 export function ErrorTailErrorBanner({
+  onOpenCompanionModelSettings,
   onChooseComputer,
   errorText,
   onContinue,
@@ -127,6 +128,7 @@ export function ErrorTailErrorBanner({
   /** 持久化 error 行的 **raw** 文案(只解码 bracket code,不 i18n 化)——
    *  ErrorBanner 的不可重试门控靠对原文的正则命中。 */
   errorText: string;
+  onOpenCompanionModelSettings?: () => void;
   onChooseComputer?: () => void;
   onContinue: () => Promise<void> | void;
   onDismiss: () => void;
@@ -161,6 +163,7 @@ export function ErrorTailErrorBanner({
 
   return (
     <ErrorBanner
+      onOpenCompanionModelSettings={onOpenCompanionModelSettings}
       onChooseComputer={onChooseComputer}
       error={errorText}
       errorReason={errorReason}

@@ -80,6 +80,7 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 
 interface ErrorBannerProps {
+  onOpenCompanionModelSettings?: () => void;
   onChooseComputer?: () => void;
   error: string;
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
@@ -168,6 +169,7 @@ function OpenAiConnectionSettingsAction({ providerId }: { providerId: string }) 
 }
 
 export function ErrorBanner({
+  onOpenCompanionModelSettings,
   onChooseComputer,
   error,
   errorReason,
@@ -427,6 +429,9 @@ export function ErrorBanner({
           : undefined;
   const ipcRefusal = extractIpcError(new Error(error));
   const preconditionMessage = ipcRefusal?.code === 'PRECONDITION_FAILED' ? ipcRefusal.message : undefined;
+  // The empty-chain refusal shares its IPC code with unrelated preconditions.
+  const openCompanionModelSettings = preconditionMessage === '请先选择已开启的伙伴模型'
+    ? onOpenCompanionModelSettings : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isRemoteResumeRejected = isRemoteAgentResumeRejectedError(error);
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
@@ -552,7 +557,10 @@ export function ErrorBanner({
   const piCloudContextRecovery = agentKind === 'pi'
     ? /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[PI_STARTUP_CLOUD_CONTEXT_FILE\] ([^\r\n]+)\npi rpc timeout after \d+ms: [^\r\n]+$/.exec(error)?.[1]
     : undefined;
-  if (piCloudContextRecovery) {
+  if (openCompanionModelSettings) {
+    displayError = t('chat.errorBanner.companionModelMissing');
+    hasSpecialGuidance = false;
+  } else if (piCloudContextRecovery) {
     displayError = piCloudContextRecovery;
   } else if (geminiLimit !== null) {
     displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
@@ -904,6 +912,11 @@ export function ErrorBanner({
       actions={
         <>
           {isLocalAuthSession && remoteErrorCode === 'AUTO_REVIEW_NO_AVAILABLE_MODEL' && <AutoReviewRecoveryActions />}
+          {openCompanionModelSettings && (
+            <Button size="sm" compact type="button" data-split-pane-route-action="" onClick={openCompanionModelSettings}>
+              {t('chat.errorBanner.companionModelSettings')}
+            </Button>
+          )}
           {sharedRecoveryReason && onChooseComputer && !isRecoverable && (
             <Button size="sm" compact type="button" onClick={onChooseComputer}>
               {t('sharedTaskRecovery.choose')}

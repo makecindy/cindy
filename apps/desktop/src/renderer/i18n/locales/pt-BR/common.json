@@ -15500,6 +15500,8 @@
       "codexHelperUnavailable": "cindy_helper está ativado, mas não está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
       "requestFormatError": "O aplicativo enviou uma solicitação inválida, por isso não foi possível concluir esta resposta.",
+      "companionModelMissing": "Este amigo não tem um modelo disponível. Escolha um modelo e tente novamente.",
+      "companionModelSettings": "Configurações do modelo",
       "replyFailed": "Não foi possível concluir a resposta",
       "queuedSendRecovery": "Sua mensagem não foi enviada. Selecione “Tentar novamente” para enviá-la sem alterações. Uma nova mensagem substituirá a anterior.",
       "retryTitle": "Reenviar a última mensagem",
