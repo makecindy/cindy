@@ -321,6 +321,7 @@ export function isAgentNetActive(): boolean {
  * which decides by itself (a device still removed there gets Device Link's own "removed"; one that signed in again connects),
  * and its signed statement says "off". Not with 「仅使用 Agent-Net」, where there is no Device Link to fall back to (2026-11-17:
  * a deleted device that signed in again could otherwise never connect while its Agent-Net switch was on).
+ * 「重新加入」 on this device lifts the revocation (`rejoinOfficialAgentNet`) and forgets the refusal.
  */
 let refusedSelection: string | null = null;
 const refusalScope = () => JSON.stringify([activeOwnerScopeKey(), agentNetSelectionKey()]);
@@ -336,6 +337,18 @@ export function noteAgentNetIdentityRefused(reason: string): boolean {
   if (!agentNetIdentityRefused()) agentNetLog.warn(`agent-net refused this device (${reason}); running on Device Link until the account or selection changes`);
   refusedSelection = refusalScope();
   return true;
+}
+/**
+ * 「重新加入」 (deviceRejoin.ts): asks the official Agent-Net service to take this removed device back, enrolling again even
+ * while its revoked certificate has not expired, then forgets the refusal so the next connection uses Agent-Net again.
+ * 'skipped' when there is nothing to lift: a self-hosted relay is selected, or this device never enrolled and has Agent-Net off.
+ */
+export async function rejoinOfficialAgentNet(): Promise<'rejoined' | 'skipped'> {
+  if (activeSelfHostedRelay() || !officialAgentNetBase()) return 'skipped';
+  if (!readRelaySecrets(officialAgentNetSlot())?.agentNet && readDeviceLinkSettings().agentNetEnabled !== true) return 'skipped';
+  await ensureOfficialAgentNetClient(deviceName(), { rejoin: true });
+  refusedSelection = null;
+  return 'rejoined';
 }
 export function agentNetSupportsPeer(id: string): boolean { return current?.supports(id) ?? false; }
 export function agentNetRequiresEncryption(): boolean {

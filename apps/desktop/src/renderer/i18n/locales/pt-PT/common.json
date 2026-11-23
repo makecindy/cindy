@@ -7124,6 +7124,15 @@
         "unstable": "A ligação está constantemente a cair e a restabelecer-se — verifique a rede ou reinicie o Cindy se o problema persistir",
         "agent-net-relay-down": "Não é possível aceder ao relay do Agent-Net; a restabelecer a ligação. Os computadores ligados diretamente continuam a funcionar; os outros dispositivos não conseguem ligar-se por agora"
       },
+      "rejoin": {
+        "hint": "Este dispositivo foi removido da sua conta. Selecione «Reingressar» para o trazer de volta.",
+        "action": "Reingressar",
+        "done": "Reingresso concluído",
+        "doneWithoutAgentNet": "Reingresso concluído. O Agent-Net ainda não foi restaurado, por isso será usado o Device Link por agora",
+        "unsupported": "O servidor ainda não permite reingressar. Termine sessão e volte a iniciar sessão neste dispositivo",
+        "agentNetFailed": "O Agent-Net ainda não foi restaurado. Desative «Usar apenas Agent-Net» para ligar pelo Device Link por agora",
+        "failed": "Não foi possível reingressar. Verifique a sua rede e tente novamente"
+      },
       "refresh": "Atualizar",
       "empty": "Ainda não há outros dispositivos. Inicie sessão no {{appName}} com a mesma conta noutro computador e este aparecerá aqui.",
       "thisDevice": "Este dispositivo",
@@ -7141,7 +7150,7 @@
       "renameCancel": "Cancelar",
       "delete": "Eliminar",
       "deleteTitle": "Eliminar «{{name}}»?",
-      "deleteMessage": "Remover este dispositivo da sua conta e desligar o acesso remoto. As sessões e os ficheiros serão mantidos. Inicie sessão novamente nesse dispositivo para voltar a adicioná-lo.",
+      "deleteMessage": "Remover este dispositivo da sua conta e desligar o acesso remoto. As sessões e os ficheiros serão mantidos. Selecione «Reingressar» nesse dispositivo para o trazer de volta.",
       "deleteOnlineHint": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
       "error": {
         "unavailable": "O serviço Device Link está indisponível (não ativado no servidor ou erro de rede)",

@@ -659,7 +659,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (url.pathname === API + '/enroll' && method === 'POST') {
       if (!options.enroll || mode !== 'official') return fail(404, 'NOT_FOUND');
       const bytes = await readBody(req, 16_384);
-      const enrollment = await options.enroll(req, jsonBody(bytes));
+      const body = jsonBody(bytes);
+      const enrollment = await options.enroll(req, body);
       const c = enrollment.certificate;
       if (!verifyCertificate(enrollment.rootPublicKey, c, now()) || c.networkId !== enrollment.networkId) return fail(500, 'ENROLLMENT_INVALID');
       await synchronize(req, [c.networkId]);
@@ -667,10 +668,16 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         const n = own(state.networks, c.networkId) ?? blankNetwork(c.networkId, enrollment.name, enrollment.rootPublicKey, c.subject);
         if (n.rootPublicKey !== enrollment.rootPublicKey || n.subject !== c.subject) return fail(403, 'NETWORK_MISMATCH');
         const existing = own(n.devices, c.deviceId);
-        if (existing && (existing.revokedAt !== null || existing.certificate.signingKey !== c.signingKey || existing.certificate.transportKey !== c.transportKey)) return fail(403, 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL');
+        // A removed device comes back only when it explicitly asks to rejoin, with its own account
+        // login behind this enrollment; it may bring new keys. Certificates issued before this one
+        // stay void through notBefore, as after an approved join. Automatic renewals keep the refusal.
+        // Same rule as the server repository's copy of this kernel (official enrollment).
+        const rejoining = body.rejoin === true && !!existing && existing.revokedAt !== null;
+        if (existing && !rejoining && (existing.revokedAt !== null || existing.certificate.signingKey !== c.signingKey || existing.certificate.transportKey !== c.transportKey)) return fail(403, 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL');
         if (!existing && Object.keys(n.devices).length >= 256) return fail(409, 'DEVICE_LIMIT');
         n.devices[c.deviceId] = { ...existing, certificate: c, name: existing?.name ?? name(enrollment.deviceName),
-          reportedName: name(enrollment.deviceName), ...(!existing ? { customName: null } : {}), revokedAt: null };
+          reportedName: name(enrollment.deviceName), ...(!existing ? { customName: null } : {}), revokedAt: null,
+          ...(rejoining ? { notBefore: c.issuedAt } : {}) };
         state.networks[n.id] = n;
       });
       announce(c.networkId);

@@ -7124,6 +7124,15 @@
         "unstable": "A conexão cai e reconecta repetidamente — verifique a rede ou reinicie o Cindy se o problema persistir",
         "agent-net-relay-down": "Não é possível acessar o relay do Agent-Net; reconectando. Computadores conectados diretamente continuam funcionando; outros dispositivos não conseguem se conectar por enquanto"
       },
+      "rejoin": {
+        "hint": "Este dispositivo foi removido da sua conta. Selecione “Reingressar” para trazê-lo de volta.",
+        "action": "Reingressar",
+        "done": "Reingresso concluído",
+        "doneWithoutAgentNet": "Reingresso concluído. O Agent-Net ainda não foi restaurado, então o Device Link será usado por enquanto",
+        "unsupported": "O servidor ainda não permite reingressar. Saia e entre novamente neste dispositivo",
+        "agentNetFailed": "O Agent-Net ainda não foi restaurado. Desative “Usar apenas Agent-Net” para se conectar pelo Device Link por enquanto",
+        "failed": "Não foi possível reingressar. Verifique sua rede e tente novamente"
+      },
       "refresh": "Atualizar",
       "empty": "Nenhum outro dispositivo ainda. Entre no {{appName}} com a mesma conta em outro computador e ele aparecerá aqui.",
       "thisDevice": "Este dispositivo",
@@ -7141,7 +7150,7 @@
       "renameCancel": "Cancelar",
       "delete": "Excluir",
       "deleteTitle": "Excluir “{{name}}”?",
-      "deleteMessage": "Remova este dispositivo da sua conta e desconecte o acesso remoto. Suas sessões e arquivos serão mantidos. Entre novamente nesse dispositivo para adicioná-lo de novo.",
+      "deleteMessage": "Remova este dispositivo da sua conta e desconecte o acesso remoto. Suas sessões e arquivos serão mantidos. Selecione “Reingressar” nesse dispositivo para trazê-lo de volta.",
       "deleteOnlineHint": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
       "error": {
         "unavailable": "O serviço Device Link está indisponível (não ativado no servidor ou erro de rede)",

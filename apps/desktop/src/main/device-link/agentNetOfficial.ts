@@ -68,8 +68,14 @@ export function outgoingOfficialAgentNetClient(): AgentNetClient | null {
   const base = officialAgentNetBase(); if (!base) return null;
   const stored = readRelaySecrets(officialAgentNetSlot(base)); return stored ? client(base, stored) : null;
 }
-/** Enrollment uses the existing token-refreshing account client. Member traffic never carries its token. */
-export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClient> {
+/**
+ * Enrollment uses the existing token-refreshing account client. Member traffic never carries its token.
+ * `rejoin`: the user asked to bring this device back after it was removed from the account (「重新加入」). Its stored
+ * certificate was revoked with the removal even if it has not expired, so this enrolls again whatever its expiry, and asks the
+ * service to lift the removal (`rejoin: true`; without it the service keeps refusing a removed device).
+ */
+export function ensureOfficialAgentNetClient(name: string, options: { rejoin?: boolean } = {}): Promise<AgentNetClient> {
+  const rejoin = options.rejoin === true;
   const base = officialAgentNetBase(), scope = activeOwnerScopeKey(), subject = getCurrentUserId(), slot = officialAgentNetSlot(base);
   const assertCurrent = () => {
     if (!base || !subject || activeOwnerScopeKey() !== scope || getCurrentUserId() !== subject || isAppSessionBoundaryPending()
@@ -79,7 +85,8 @@ export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClie
   const url = new URL(base);
   if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:'
     && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new Error('SECURE_AGENT_NET_URL_REQUIRED');
-  const key = scope + '\0' + base;
+  // An ordinary renewal in flight would not lift a removal: a rejoin does not wait on it.
+  const key = scope + '\0' + base + (rejoin ? '\0rejoin' : '');
   const existing = inflight.get(key); if (existing) return existing;
   const locked = async <T>(operation: () => Promise<T> | T): Promise<T> => {
     const lock = relayDataPath('secrets', slot + '.initialize.lock');
@@ -95,12 +102,13 @@ export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClie
       if (!value) { value = { credential: 'agent-net-only', seed: randomBytes(32).toString('base64url') }; writeRelaySecrets(slot, value); }
       identity(slot, value); return value;
     });
-    const ready = client(base, secrets);
+    const ready = rejoin ? null : client(base, secrets);
     if (ready && ready.certificate.expiresAt - Date.now() > renewalMargin) return ready;
     const keys = identity(slot, secrets);
+    const request = createEnrollmentRequest(keys, name.trim().slice(0, 64) || 'Cindy');
     let response: unknown;
     try { response = await serverApiFetch('/api/agent-net/enroll', {
-      baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: createEnrollmentRequest(keys, name.trim().slice(0, 64) || 'Cindy'),
+      baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: rejoin ? { ...request, rejoin: true } : request,
       timeoutMs: 10_000, cache: 'no-store', logLabel: '/api/agent-net/enroll', redactErrorDetails: true,
       allowedRedactedErrorCodes: ['DEVICE_REENROLLMENT_REQUIRES_APPROVAL', 'ACCOUNT_AUTH_INVALID', 'ENROLLMENT_PROOF_INVALID'],
     }); } catch (error) {
