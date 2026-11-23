@@ -4197,7 +4197,6 @@ export class PiAgent extends BaseAgent {
     // Own the entire managed-skill setup in the existing startup rollback:
     // discovery and path checks can fail before any projection is created.
     let managedSkillPaths: string[];
-    let managedSkillRoot: string | undefined;
     let projectSkillRoot: string | undefined;
     let args: string[];
     const taskSystemPrompt = opts[TASK_SYSTEM_PROMPT] ?? '';
@@ -4223,12 +4222,10 @@ export class PiAgent extends BaseAgent {
         ...(opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (opts.hostSkills ?? []).map((skill) => skill.path)),
       ].map((skillPath) => [canonicalSkillPath(skillPath), skillPath])).values()];
 
-      // One explicit directory also works with --no-skills. Keep its lifetime in
-      // the existing per-session configHome and link only already-authorized
-      // physical sources; argv size must not grow with installed plugin count.
+      // Use the authorized source paths so Pi's Skill locations stay stable
+      // across starts, independently of the isolated, random configHome.
       const managedLaunchSkills = managedSkillPaths.filter((skillPath) => !projectResourceCli.skills
         .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)));
-      managedSkillRoot = managedLaunchSkills.length ? path.join(configHome, 'cindy-managed-skills') : undefined;
 
       // pi 的 --append-system-prompt 接受 <text|path>:参数在磁盘上存在即按文件读。
       // 伙伴提示词(身份 + 能力说明 + teammate-guide + 记忆索引)轻易两三万字符,
@@ -4272,7 +4269,7 @@ export class PiAgent extends BaseAgent {
         ...additionalSkillPaths.filter((skillPath) => !projectResourceCli.skills
           .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)))
           .flatMap((skillPath) => ['--skill', skillPath]),
-        ...(managedSkillRoot ? ['--skill', managedSkillRoot] : []),
+        ...managedLaunchSkills.flatMap((skillPath) => ['--skill', skillPath]),
         ...(appendSystemPromptPath ? ['--append-system-prompt', appendSystemPromptPath] : []),
         // 受邀者的说明文件扩展排在 bridge 之前：托管时 bridge 会按当前选项渲染整段系统提示。
         ...(guestContextExtensionPath ? ['--extension', guestContextExtensionPath] : []),
@@ -4285,6 +4282,26 @@ export class PiAgent extends BaseAgent {
       args = buildArgs(loadProjectResourcesInPlace ? piProjectResourceCliArgs(projectResourceCli) : []);
       const spawnBudget = piSpawnArgvBudget(process.platform);
       if (
+        managedLaunchSkills.length > 0
+        && spawnBudget !== null
+        && estimateSpawnArgvLength(args, process.platform) > spawnBudget
+      ) {
+        // Native discovery accepts explicit paths even under --no-skills. Move
+        // the entire CLI Skill segment together to preserve duplicate-name
+        // precedence relative to additional and project Skills. Only paths that
+        // passed the existing launch filters enter this session-owned file.
+        const skillPaths: string[] = [];
+        const firstSkillIndex = args.indexOf('--skill');
+        args = args.filter((arg, index, all) => {
+          if (arg === '--skill') { skillPaths.push(all[index + 1]!); return false; }
+          return all[index - 1] !== '--skill';
+        });
+        const skillExtensionPath = path.join(configHome, 'cindy-launch-skills.js');
+        await fs.writeFile(skillExtensionPath,
+          `export default function (pi) { pi.on('resources_discover', () => ({ skillPaths: ${JSON.stringify(skillPaths)} })); }\n`,
+          { mode: 0o600 });
+        args.splice(firstSkillIndex, 0, '--extension', skillExtensionPath);
+      } else if (
         projectResourceCli.skills.length > 0
         && spawnBudget !== null
         && estimateSpawnArgvLength(args, process.platform) > spawnBudget
@@ -4298,14 +4315,6 @@ export class PiAgent extends BaseAgent {
           ...projectResourceCli.promptTemplates.flatMap((promptPath) => ['--prompt-template', promptPath]),
           ...projectResourceCli.extensions.flatMap((extensionPath) => ['--extension', extensionPath]),
         ]);
-      }
-      if (managedSkillRoot) {
-        await fs.mkdir(managedSkillRoot);
-        for (const [index, skillPath] of managedLaunchSkills.entries()) {
-          // Preserve discovery order for same-name skills without long filenames.
-          await fs.symlink(path.dirname(skillPath), path.join(managedSkillRoot, String(index).padStart(12, '0')),
-            process.platform === 'win32' ? 'junction' : 'dir');
-        }
       }
       if (projectSkillRoot) {
         await fs.mkdir(projectSkillRoot);
@@ -6619,7 +6628,6 @@ export class PiAgent extends BaseAgent {
             ...projectResourceCli.skills,
             ...managedSkillPaths,
             ...(projectSkillRoot ? [projectSkillRoot] : []),
-            ...(managedSkillRoot ? [managedSkillRoot] : []),
             ...projectResourceCli.promptTemplates,
             ...projectResourceCli.extensions,
           ],

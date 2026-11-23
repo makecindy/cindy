@@ -449,6 +449,109 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  // #11657, integration: existing startup tests inspect argv only. Two native
+  // starts with a fixed cwd and unchanged authorized Skills must send the same
+  // system prefix and tools, with readable source locations, including overflow.
+  // This loopback measures request stability, never provider cache hits or cost.
+  it.each(['ordinary', 'overflow'] as const)('keeps managed Skill locations stable in native final requests: %s', { timeout: 60_000 }, async mode => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-stable-skills-'));
+    const cwd = path.join(root, 'work');
+    mkdirSync(cwd);
+    const count = mode === 'ordinary' ? 2 : process.platform === 'win32' ? 180 : 1_000;
+    const skills = Array.from({ length: count }, (_, index) => {
+      const file = path.join(root, 'revision-'.repeat(12), String(index), 'SKILL.md');
+      mkdirSync(path.dirname(file), { recursive: true });
+      // Same-name entries prove first-source precedence survives both argv paths.
+      const name = index < 2 ? 'duplicate' : `fixture-${index}`;
+      writeFileSync(file, `---\nname: ${name}\ndescription: Synthetic source ${index}\n---\nUnchanged skill guidance ${index}.`);
+      return { kind: 'agent-skill' as const, source: 'skill' as const, name,
+        path: file, claudeCommandName: `cindy:${name}` };
+    });
+    const requests: Array<{ messages: Array<{ role: string; content: unknown }>; tools: unknown }> = [];
+    const deps = buildDeps();
+    deps.resolvePiAgentHome = () => path.join(root, 'agent');
+    deps.resolvePiGlobalContextHome = () => path.join(root, 'global');
+    deps.resolvePiGatewayModelApi = () => 'openai-completions';
+    deps.getManagedSkills = async () => skills;
+    deps.preparePiExtraSpawnConfig = async () => ({ mcpEnv: {
+      HOME: root, USERPROFILE: root, XDG_CONFIG_HOME: path.join(root, 'xdg'), PI_OFFLINE: '1',
+    } });
+    try {
+      for (const id of ['a', 'b']) {
+        const handle = await new PiAgent(deps).startSession({ sessionId: `stable-skills-${id}`, workingDir: cwd,
+          model: 'pi-test-model', permissionMode: 'bypassPermissions',
+          ...(mode === 'overflow' ? { botRuntimeProfile: { botId: 'fixture', profileVersion: 1,
+            skillPolicy: { mode: 'allowlist' as const, configured: skills.map((_, index) => `grant-${index}`),
+              catalog: skills.map((skill, index) => ({ name: `grant-${index}`, path: skill.path, enabled: true })) },
+            mcpPolicy: { mode: 'inherit' as const, configured: [], catalog: [] },
+            toolsetPolicy: { mode: 'inherit' as const, configured: [], catalog: [] } } } : {}) });
+        try {
+          const offset = seenRequests.length;
+          const settled = (async () => { for await (const event of handle.events()) {
+            if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+            if (event.type === 'done') break;
+          } })();
+          await handle.send({ type: 'user', content: 'Reply OK' });
+          await settled;
+          expect(seenRequests.slice(offset)).toHaveLength(1);
+          requests.push(JSON.parse(seenRequests[offset]!.body));
+        } finally { await handle.close(); }
+      }
+      const systems = requests.map(request => request.messages.filter(message => message.role === 'system'));
+      expect(systems[1]).toEqual(systems[0]);
+      expect(requests[1]!.tools).toEqual(requests[0]!.tools);
+      const system = JSON.stringify(systems[0]);
+      expect(system).not.toContain('run-tmp');
+      expect(system).toContain(jsonStringContent(skills[0]!.path));
+      expect(system).not.toContain(jsonStringContent(skills[1]!.path));
+      expect(system).toContain('Synthetic source 0');
+      expect(system).not.toContain('Synthetic source 1</description>');
+      const locations = [...JSON.stringify(systems[0]).matchAll(/<location>(.*?)<\/location>/g)]
+        .map(match => JSON.parse(`"${match[1]}"`) as string);
+      expect(locations).toHaveLength(count - 1);
+      expect(locations.every(location => readFileSync(location, 'utf8').includes('Unchanged skill guidance'))).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // #11657: authorization must be reapplied on restart, not inherited from a
+  // previous stable location. Native request capture catches implicit reloads
+  // that argv-only filtering tests cannot see (integration tier).
+  it.each(['disabled', 'revoked'] as const)('omits managed Skills after %s on native restart', { timeout: 30_000 }, async mode => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-skill-revoke-'));
+    const skill = path.join(root, 'managed', 'SKILL.md');
+    mkdirSync(path.dirname(skill));
+    writeFileSync(skill, '---\nname: fixture\ndescription: Authorized fixture marker\n---\nOriginal guidance.');
+    const deps = buildDeps();
+    deps.resolvePiAgentHome = () => path.join(root, 'agent');
+    deps.resolvePiGlobalContextHome = () => path.join(root, 'global');
+    deps.getManagedSkills = async () => [{ kind: 'agent-skill', source: 'skill', name: 'fixture', path: skill,
+      claudeCommandName: 'cindy:fixture' }];
+    deps.preparePiExtraSpawnConfig = async () => ({ mcpEnv: { HOME: root, USERPROFILE: root, PI_OFFLINE: '1' } });
+    try {
+      for (const active of [true, false]) {
+        deps.getDisabledSkillPaths = () => !active && mode === 'disabled' ? [skill] : [];
+        const handle = await new PiAgent(deps).startSession({ sessionId: `skill-${mode}-${active}`, workingDir: root,
+          model: 'pi-test-model', permissionMode: 'bypassPermissions',
+          botRuntimeProfile: { botId: 'fixture', profileVersion: 1,
+            skillPolicy: { mode: 'allowlist', configured: ['skill:fixture'],
+              catalog: [{ name: 'fixture', runtimeCommandName: 'skill:fixture', path: skill,
+                enabled: true, runtimeStatus: !active && mode === 'revoked' ? 'failed' : 'loaded' }] },
+            mcpPolicy: { mode: 'inherit', configured: [], catalog: [] },
+            toolsetPolicy: { mode: 'inherit', configured: [], catalog: [] } } });
+        try {
+          const settled = (async () => { for await (const event of handle.events()) {
+            if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+            if (event.type === 'done') break;
+          } })();
+          await handle.send({ type: 'user', content: 'Reply OK' });
+          await settled;
+          const request = JSON.parse(seenRequests.at(-1)!.body);
+          expect(JSON.stringify(request.system).includes('Authorized fixture marker')).toBe(active);
+        } finally { await handle.close(); }
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   // #9043: unlike the RPC fake, this exercises generated models.json through
   // native Google serialization. The loopback always returns synthetic success;
   // it proves wire compatibility, not real Gemini/Windows App acceptance.
