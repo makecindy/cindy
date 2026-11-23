@@ -13,7 +13,8 @@
  *   离开确认锁在异步保存完成后才释放。
  * - 逐笔草稿回写不触发换图确认；换图只由宿主请求的不同图片上下文驱动。
  * - 集合重新挂载图片时读取最新草稿；宿主换图经过当前集合图片的离开守卫。
- * - 附件更新被锁定时预览只读，不能把空回调当作保存成功。
+ * - 附件更新被锁定时预览只读，不能把空回调当作保存成功；解锁后当前草稿
+ *   写入器恢复，once-bound 快捷键不会沿用锁定首帧的空写入器。
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
@@ -868,6 +869,85 @@ describe('ImageLightbox annotate mode', () => {
       screen.queryByRole('button', { name: label('chat.media.annotate') }),
     ).toBeNull();
     expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 在同一张图锁定后解锁，标注入口恢复；
+  //   绘制与 Cmd/Ctrl+Z 都写回当前附件草稿，不会只剩浮窗内的笔迹。
+  // - Bug／规则依据：#11952 round 10 review PRRT_kwDOTgdRUs66pjK3、
+  //   PRRT_kwDOTgdRUs66pjK6；docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有只读测试只验证锁定态，既有撤销测试未在锁定首帧后解锁。
+  // - 最小失败输入：先以 annotationDisabled 挂载，再不换源解锁并画一笔／按 Ctrl+Z；
+  //   修复前分别缺少标注入口、快捷键沿用空写入器。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.4s。
+  it('restores annotation editing after a locked direct preview is unlocked', () => {
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const view = render(
+      <ConfirmDialogProvider>
+        <ImageLightbox src={SRC} onClose={vi.fn()} annotationDisabled initialStrokes={[]} />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    expect(
+      screen.queryByRole('button', { name: label('chat.media.annotate') }),
+    ).toBeNull();
+
+    view.rerender(
+      <ConfirmDialogProvider>
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationEdit={{ initialStrokes: [], onDraftChange, onSave }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    expect(onDraftChange).toHaveBeenCalledWith({
+      strokes: [expect.objectContaining({ points: expect.any(Array) })],
+    });
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('uses the current draft writer for annotation shortcuts after unlock', () => {
+    const lockedOnDraftChange = vi.fn();
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const view = render(
+      <ConfirmDialogProvider>
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationDisabled
+          annotationEdit={{
+            initialStrokes: [],
+            onDraftChange: lockedOnDraftChange,
+            onSave: vi.fn(),
+          }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    view.rerender(
+      <ConfirmDialogProvider>
+        <ImageLightbox
+          src={SRC}
+          onClose={vi.fn()}
+          annotationEdit={{ initialStrokes: [], onDraftChange, onSave }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    expect(onDraftChange).toHaveBeenCalledWith({
+      strokes: [expect.objectContaining({ points: expect.any(Array) })],
+    });
+    pressKey({ key: 'z', ctrlKey: true });
+    expect(onDraftChange).toHaveBeenLastCalledWith({ strokes: [] });
+    expect(committedPaths('stroke')).toHaveLength(0);
+    expect(lockedOnDraftChange).not.toHaveBeenCalled();
     expect(onSave).not.toHaveBeenCalled();
   });
 });

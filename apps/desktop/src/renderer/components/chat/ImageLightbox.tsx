@@ -548,22 +548,30 @@ export function ImageLightbox(props: ImageLightboxProps) {
   }, [requestedKey, activeLeaveGuardRef]);
 
   const annotationDisabled = Boolean(requestedSourceRef.current.annotationDisabled);
+  const latestAnnotationEdit = requestedSourceRef.current.annotationEdit;
+  // The accepted source owns the stroke baseline; the current host owns the
+  // capability and callbacks. A composer lock may lift while this source is
+  // still mounted, so don't freeze a missing annotationEdit into the source.
+  const acceptedAnnotationEdit = activeSource.annotationEdit ?? latestAnnotationEdit;
   const contentProps: ImageLightboxContentProps = {
     ...activeSource,
     onClose: props.onClose,
     annotationDisabled,
-    // Keep the accepted baseline strokes, but let the latest host callbacks
-    // write each draft change back without turning it into a source request.
+    initialStrokes: activeSource.initialStrokes ?? acceptedAnnotationEdit?.initialStrokes,
     annotationEdit:
-      !annotationDisabled && activeSource.annotationEdit
+      !annotationDisabled && acceptedAnnotationEdit
         ? {
-            ...activeSource.annotationEdit,
+            ...acceptedAnnotationEdit,
+            initialStrokes:
+              activeSource.annotationEdit?.initialStrokes ??
+              activeSource.initialStrokes ??
+              acceptedAnnotationEdit.initialStrokes,
             onDraftChange:
-              requestedSourceRef.current.annotationEdit?.onDraftChange ??
-              activeSource.annotationEdit.onDraftChange,
+              latestAnnotationEdit?.onDraftChange ??
+              acceptedAnnotationEdit.onDraftChange,
             onSave:
-              requestedSourceRef.current.annotationEdit?.onSave ??
-              activeSource.annotationEdit.onSave,
+              latestAnnotationEdit?.onSave ??
+              acceptedAnnotationEdit.onSave,
           }
         : undefined,
   };
@@ -573,21 +581,28 @@ export function ImageLightbox(props: ImageLightboxProps) {
     const collectionAnnotationDisabled = Boolean(
       annotationDisabled || imageProps?.annotationDisabled,
     );
-    const latestCallbacks = requestedSourceRef.current.annotationEdit;
     const baseAnnotationEdit = contentProps.annotationEdit;
     const collectionAnnotationEdit = imageProps?.annotationEdit;
+    const annotationEditSource =
+      collectionAnnotationEdit ?? baseAnnotationEdit ?? latestAnnotationEdit;
     const annotationEdit =
-      !collectionAnnotationDisabled && (baseAnnotationEdit || collectionAnnotationEdit)
+      !collectionAnnotationDisabled && annotationEditSource
         ? {
             ...(baseAnnotationEdit ?? {}),
             ...(collectionAnnotationEdit ?? {}),
+            ...(latestAnnotationEdit ?? {}),
+            initialStrokes:
+              imageProps?.initialStrokes ??
+              collectionAnnotationEdit?.initialStrokes ??
+              baseAnnotationEdit?.initialStrokes ??
+              latestAnnotationEdit?.initialStrokes,
             onDraftChange:
               collectionAnnotationEdit?.onDraftChange ??
-              latestCallbacks?.onDraftChange ??
+              latestAnnotationEdit?.onDraftChange ??
               baseAnnotationEdit?.onDraftChange,
             onSave:
               collectionAnnotationEdit?.onSave ??
-              latestCallbacks?.onSave ??
+              latestAnnotationEdit?.onSave ??
               baseAnnotationEdit?.onSave,
           }
         : undefined;
@@ -595,6 +610,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
       ...contentProps,
       ...imageProps,
       annotationDisabled: collectionAnnotationDisabled,
+      initialStrokes: imageProps?.initialStrokes ?? contentProps.initialStrokes,
       annotationEdit,
     } as ImageLightboxContentProps;
   };
@@ -806,9 +822,11 @@ function ImageLightboxContent({
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
   const annotationDisabledRef = useRef(false);
+  const annotationEditRef = useRef(annotationEdit);
   const strokesRef = useRef<AnnotationStroke[]>([]);
   isAnnotatingRef.current = isAnnotating;
   annotationDisabledRef.current = annotationDisabled;
+  annotationEditRef.current = annotationEdit;
   strokesRef.current = strokes;
 
   // A background voice/send lock can arrive while the preview is open. Leave
@@ -842,25 +860,27 @@ function ImageLightboxContent({
   const syncAnnotationDraft = useCallback((next: AnnotationStroke[]) => {
     strokesRef.current = next;
     setStrokes(next);
-    if (annotationDisabled) return;
-    annotationEdit?.onDraftChange?.({
+    if (annotationDisabledRef.current) return;
+    annotationEditRef.current?.onDraftChange?.({
       strokes: next.map((stroke) => ({ points: [...stroke.points] })),
     });
-  }, [annotationEdit, annotationDisabled]);
+  }, []);
+  const syncAnnotationDraftRef = useRef(syncAnnotationDraft);
+  syncAnnotationDraftRef.current = syncAnnotationDraft;
 
   const undoLastStroke = useCallback(() => {
     const current = strokesRef.current;
     if (current.length === 0) return;
     setRedoStack([...redoStackRef.current, current[current.length - 1]]);
-    syncAnnotationDraft(current.slice(0, -1));
-  }, [syncAnnotationDraft, setRedoStack]);
+    syncAnnotationDraftRef.current(current.slice(0, -1));
+  }, [setRedoStack]);
 
   const redoStroke = useCallback(() => {
     const redo = redoStackRef.current;
     if (redo.length === 0) return;
     setRedoStack(redo.slice(0, -1));
-    syncAnnotationDraft([...strokesRef.current, redo[redo.length - 1]]);
-  }, [syncAnnotationDraft, setRedoStack]);
+    syncAnnotationDraftRef.current([...strokesRef.current, redo[redo.length - 1]]);
+  }, [setRedoStack]);
 
   /**
    * 放弃标注:恢复到打开时的笔迹(编辑模式=上次保存的;发送模式=空)并退出
@@ -877,8 +897,20 @@ function ImageLightboxContent({
     }
     resetDraftStroke();
     setRedoStack([]);
-    syncAnnotationDraft([...baselineStrokesRef.current]);
+    syncAnnotationDraftRef.current([...baselineStrokesRef.current]);
     setIsAnnotating(false);
+  };
+  // The once-bound keydown handler reads the current annotation writer through
+  // this ref, so a late capability unlock cannot use the locked first frame.
+  const annotationWriterRef = useRef({
+    undo: undoLastStroke,
+    redo: redoStroke,
+    discard: performDiscardAnnotation,
+  });
+  annotationWriterRef.current = {
+    undo: undoLastStroke,
+    redo: redoStroke,
+    discard: performDiscardAnnotation,
   };
 
   /**
@@ -902,7 +934,7 @@ function ImageLightboxContent({
   const discardAnnotation = async (): Promise<void> => {
     if (confirmPendingRef.current) return;
     if (!confirmDialog || !hasUnsavedStrokeChanges()) {
-      performDiscardAnnotation();
+      annotationWriterRef.current.discard();
       return;
     }
     confirmPendingRef.current = true;
@@ -922,7 +954,7 @@ function ImageLightboxContent({
         confirmPendingRef.current = false;
       }, 0);
     }
-    if (confirmed && mountedRef.current) performDiscardAnnotation();
+    if (confirmed && mountedRef.current) annotationWriterRef.current.discard();
   };
   // once-bound keydown handler 通过 ref 调用最新的放弃逻辑(依赖 confirmDialog 等
   // 每次渲染的值)。
@@ -935,10 +967,12 @@ function ImageLightboxContent({
       leave();
       return 'applied';
     }
-    if (annotationDisabled || !confirmDialog) return 'cancelled';
+    if (annotationDisabledRef.current || !confirmDialog) return 'cancelled';
     confirmPendingRef.current = true;
     try {
-      const canSave = !annotationDisabled && Boolean(annotationEdit || chatSessionId);
+      const canSave =
+        !annotationDisabledRef.current &&
+        Boolean(annotationEditRef.current || chatSessionId);
       const choice = canSave
         ? await confirmDialog.confirmThree({
             title: t('chat.media.annotateDiscardConfirmTitle'),
@@ -956,13 +990,13 @@ function ImageLightboxContent({
           : 'cancel';
       if (!mountedRef.current) return 'cancelled';
       if (choice === 'tertiary') {
-        syncAnnotationDraft([...baselineStrokesRef.current]);
+        syncAnnotationDraftRef.current([...baselineStrokesRef.current]);
         leave();
         return 'applied';
       }
       if (choice === 'confirm') {
-        if (annotationDisabled) return 'cancelled';
-        const saved = annotationEdit
+        if (annotationDisabledRef.current) return 'cancelled';
+        const saved = annotationEditRef.current
           ? await handleAnnotationSave(leave)
           : await handleSendToChat(leave);
         return saved ? 'applied' : 'cancelled';
@@ -1069,7 +1103,7 @@ function ImageLightboxContent({
     );
     resetDraftStroke();
     setRedoStack([]);
-    syncAnnotationDraft([...baselineStrokesRef.current]);
+    syncAnnotationDraftRef.current([...baselineStrokesRef.current]);
     setNaturalSize(null);
     // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 挂载时固定。
   }, [index, resetViewport]);
@@ -1350,7 +1384,7 @@ function ImageLightboxContent({
     }
     if (draft && draft.points.length > 0) {
       setRedoStack([]);
-      syncAnnotationDraft([...strokesRef.current, draft]);
+      syncAnnotationDraftRef.current([...strokesRef.current, draft]);
     } else {
       draftPathCacheRef.current = null;
       writeDraftPath('');
@@ -1412,7 +1446,7 @@ function ImageLightboxContent({
         e.preventDefault();
         // 标注模式中 Esc = 放弃标注(清笔迹退出),再按一次才关 lightbox。
         if (annotationShortcutsEnabled) {
-          if (!hasUnsavedStrokeChanges()) performDiscardAnnotation();
+          if (!hasUnsavedStrokeChanges()) annotationWriterRef.current.discard();
           else void requestCloseRef.current();
           return;
         }
@@ -1436,8 +1470,8 @@ function ImageLightboxContent({
       // ⇧⌘Z / Ctrl+Shift+Z 重做,非 mac 另支持 Ctrl+Y。
       if (annotationShortcutsEnabled && (e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
-        if (e.shiftKey) redoStroke();
-        else undoLastStroke();
+        if (e.shiftKey) annotationWriterRef.current.redo();
+        else annotationWriterRef.current.undo();
         return;
       }
       if (
@@ -1449,7 +1483,7 @@ function ImageLightboxContent({
         (e.key === 'y' || e.key === 'Y')
       ) {
         e.preventDefault();
-        redoStroke();
+        annotationWriterRef.current.redo();
         return;
       }
       // 步进缩放。zoomBy / resetViewport 只读写 ref + 稳定 setter,首帧闭包即终身有效。
@@ -1551,7 +1585,7 @@ function ImageLightboxContent({
   // 经 main 取字节进 canvas,无 taint 问题)。
   const canAnnotate =
     !annotationDisabled &&
-    (annotationEdit ? true : canSendToChat) &&
+    (annotationEditRef.current ? true : canSendToChat) &&
     naturalSize !== null &&
     isImageBytesReachable(currentSrc);
 
@@ -1762,9 +1796,10 @@ function ImageLightboxContent({
    * 更新托盘附件。惰性烧录:这里不产位图,发送消息时统一物化。
    */
   async function handleAnnotationSave(afterSave = handleClose): Promise<boolean> {
-    if (annotationDisabled || !annotationEdit) return false;
+    const writer = annotationEditRef.current;
+    if (annotationDisabledRef.current || !writer) return false;
     try {
-      await annotationEdit.onSave({
+      await writer.onSave({
         strokes: strokesRef.current.map((stroke) => ({ points: [...stroke.points] })),
       });
       if (!mountedRef.current) return false;
@@ -1978,7 +2013,7 @@ function ImageLightboxContent({
               baselineStrokesRef.current = EMPTY_STROKES;
               resetDraftStroke();
               setRedoStack([]);
-              syncAnnotationDraft([]);
+              syncAnnotationDraftRef.current([]);
               return;
             }
               setLoadFailed(currentSrc);
@@ -2163,8 +2198,16 @@ function ImageLightboxContent({
             <Redo2 className="h-4 w-4" />
           </LightboxToolbarButton>
           <LightboxToolbarButton
-              onClick={() => void (annotationEdit ? handleAnnotationSave() : handleSendToChat())}
-              label={t(annotationEdit ? 'chat.media.annotateSave' : 'chat.media.sendToChat')}
+              onClick={() =>
+                void (annotationEditRef.current
+                  ? handleAnnotationSave()
+                  : handleSendToChat())
+              }
+              label={t(
+                annotationEditRef.current
+                  ? 'chat.media.annotateSave'
+                  : 'chat.media.sendToChat',
+              )}
               keepPointerFocus
             >
               <Check className="h-4 w-4" />
