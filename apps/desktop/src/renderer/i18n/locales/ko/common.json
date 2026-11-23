@@ -7014,6 +7014,15 @@
         "unstable": "연결이 끊김과 재연결을 반복하고 있습니다. 네트워크를 확인하고, 계속되면 Cindy를 다시 시작해 주세요",
         "agent-net-relay-down": "Agent-Net 중계에 연결할 수 없어 다시 연결하는 중입니다. 직접 연결된 컴퓨터는 계속 사용할 수 있지만 다른 기기는 잠시 연결할 수 없습니다"
       },
+      "rejoin": {
+        "hint": "계정에서 이 기기가 제거되었습니다. “다시 참여”를 선택하면 되돌릴 수 있습니다.",
+        "action": "다시 참여",
+        "done": "다시 참여했습니다",
+        "doneWithoutAgentNet": "다시 참여했습니다. Agent-Net은 아직 복구되지 않아 당분간 Device Link로 연결합니다",
+        "unsupported": "서버가 아직 다시 참여를 지원하지 않습니다. 이 기기에서 로그아웃한 후 다시 로그인하세요",
+        "agentNetFailed": "Agent-Net이 아직 복구되지 않았습니다. “Agent-Net만 사용”을 끄면 당분간 Device Link로 연결할 수 있습니다",
+        "failed": "다시 참여하지 못했습니다. 네트워크를 확인한 후 다시 시도하세요"
+      },
       "refresh": "새로고침",
       "empty": "아직 다른 기기가 없습니다. 다른 컴퓨터에서 같은 계정으로 {{appName}}에 로그인하면 여기에 표시됩니다.",
       "thisDevice": "이 기기",
@@ -7031,7 +7040,7 @@
       "renameCancel": "취소",
       "delete": "삭제",
       "deleteTitle": "“{{name}}” 기기를 삭제할까요?",
-      "deleteMessage": "계정에서 이 기기를 제거하고 원격 연결을 끊습니다. 기기의 세션과 파일은 유지됩니다. 해당 기기에서 다시 로그인하면 추가할 수 있습니다.",
+      "deleteMessage": "계정에서 이 기기를 제거하고 원격 연결을 끊습니다. 기기의 세션과 파일은 유지됩니다. 해당 기기에서 “다시 참여”를 선택하면 되돌릴 수 있습니다.",
       "deleteOnlineHint": "현재 서버는 온라인 기기 제거를 지원하지 않습니다. 서비스 업데이트 후 다시 시도하세요.",
       "error": {
         "unavailable": "기기 연동 서비스를 사용할 수 없습니다(서버 미활성화 또는 네트워크 오류)",
@@ -13208,7 +13217,8 @@
           "subject": {
             "githubIssue": "‘GitHub 이슈 제출’ 확인 카드",
             "renameSessions": "‘작업 이름 일괄 변경’ 확인 카드",
-            "pluginFileGrant": "‘플러그인 파일 권한 부여’ 확인 카드"
+            "pluginFileGrant": "‘플러그인 파일 권한 부여’ 확인 카드",
+            "mediaPathReveal": "‘Agent에게 컴퓨터에 있는 미디어 파일 위치 알려 주기’ 확인 카드"
           }
         },
         "replyWords": {
@@ -17652,6 +17662,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "자동화 모델 설정을 읽을 수 없습니다. 편집기를 닫고 다시 열어 주세요.",
       "promptDialog": {
         "titleEdit": "자동화 편집",
         "titleCreate": "자동화 만들기",
@@ -17995,6 +18006,7 @@
         "effortHeading": "추론 강도",
         "effortDefault": "기본값",
         "followSession": "세션 따르기",
+        "followTeammate": "동반자의 기본 모델 따르기",
         "modelListAria": "모델 목록",
         "modelSelectorAria": "모델 선택기",
         "categoryListAria": "{{category}} 모델",

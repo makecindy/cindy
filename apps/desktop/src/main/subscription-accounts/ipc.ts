@@ -115,6 +115,7 @@ export function registerSubscriptionAccountsIpc(): void {
             : KNOWN_FAILURE_REASONS.has(reason) ? reason
               : error instanceof Error ? error.name : typeof error,
         });
+      if (reason === 'Account not found') throwIpcError('NOT_FOUND', 'Subscription account not found');
       if (unreachable)
         throwIpcError(
           'SUBSCRIPTION_ACCOUNT_UNREACHABLE',

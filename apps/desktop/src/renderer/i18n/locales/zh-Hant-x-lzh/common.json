@@ -7014,6 +7014,15 @@
         "unstable": "連線屢斷屢連，請察網路；若持續如此，請重啟 Cindy",
         "agent-net-relay-down": "不能達 Agent-Net 中轉，方復連；已直連之電腦如常可用，餘裝置暫不能連"
       },
+      "rejoin": {
+        "hint": "此裝置已自名籍中移除，點「重新加入」即可復歸。",
+        "action": "重新加入",
+        "done": "已重新加入",
+        "doneWithoutAgentNet": "已重新加入，Agent-Net 暫未復，姑以 Device Link 相連",
+        "unsupported": "伺服器尚不支援重新加入，請於此裝置辭出後重新登入",
+        "agentNetFailed": "Agent-Net 暫未復。解「唯用 Agent-Net」之限，可先以 Device Link 相連",
+        "failed": "重新加入未成，請察網路後再試"
+      },
       "refresh": "重整",
       "empty": "海內尚無知己機。於另一臺機上以同一名籍登入 {{appName}}，此處即見之。",
       "thisDevice": "此機",
@@ -7031,7 +7040,7 @@
       "renameCancel": "罷",
       "delete": "刪",
       "deleteTitle": "刪「{{name}}」乎？",
-      "deleteMessage": "將此裝置自名籍中移除，並中斷遠端連線。裝置上之差事與卷仍存，重新登入後可再加入。",
+      "deleteMessage": "將此裝置自名籍中移除，並中斷遠端連線。裝置上之差事與卷仍存，其後於彼裝置點「重新加入」即可復歸。",
       "deleteOnlineHint": "今伺服器尚不支援移除在線裝置，請俟服務升級後再試。",
       "error": {
         "unavailable": "裝置互聯服務暫不可用(服務端未啟用或網路有異)",
@@ -13208,7 +13217,8 @@
           "subject": {
             "githubIssue": "「呈 GitHub Issue」之確認卡",
             "renameSessions": "「批次易差事之名」之確認卡",
-            "pluginFileGrant": "「法器卷帙授權」之確認卡"
+            "pluginFileGrant": "「法器卷帙授權」之確認卡",
+            "mediaPathReveal": "「許 Agent 知圖等媒體卷於機上之所在」之確認卡"
           }
         },
         "replyWords": {
@@ -17652,6 +17662,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "未能讀取自動化模型設定，請關閉編輯器後重開再試。",
       "promptDialog": {
         "titleEdit": "修自運",
         "titleCreate": "立自運",
@@ -17995,6 +18006,7 @@
         "effortHeading": "思之深淺",
         "effortDefault": "常例",
         "followSession": "隨差事",
+        "followTeammate": "隨同伴主模型",
         "modelListAria": "模型錄",
         "modelSelectorAria": "擇模型",
         "categoryListAria": "{{category}} 模型",

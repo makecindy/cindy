@@ -5371,6 +5371,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('device-link:rename-device', { deviceId, name }),
     deleteDevice: (deviceId: string): Promise<{ deviceId: string; deleted: boolean }> =>
       ipcRenderer.invoke('device-link:delete-device', { deviceId }),
+    /** 本机被移除后「重新加入」(官方网络) */
+    rejoin: (): Promise<{ agentNet: 'rejoined' | 'skipped' | 'failed' }> => ipcRenderer.invoke('device-link:rejoin'),
     // —— 控制端:远程会话视图 ——
     openLink: (deviceId: string): Promise<{ appVersion: string; allowlistHash: string }> =>
       ipcRenderer.invoke('device-link:open-link', { deviceId }),
@@ -6372,6 +6374,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;
       }> => ipcRenderer.invoke('local-db:bots:model-chain-settings-set', body),
+      ownsProject: (workingDir: string): Promise<boolean> =>
+        ipcRenderer.invoke('local-db:bots:owns-project', workingDir),
       list: (body?: {
         lastReadAtByBotId?: Record<string, number>;
         welcomeContext?: import('../shared/botWelcomeContext').BotWelcomeContext;

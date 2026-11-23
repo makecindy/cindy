@@ -115,7 +115,7 @@ function usePluginEngineRename(): (engine: PluginEngineView) => Promise<void> {
 }
 
 /** 「插件」标识：告诉用户这一项来自插件，而不是自己添加的连接。 */
-function PluginTag({ size }: { size: 'row' | 'detail' }) {
+export function PluginTag({ size }: { size: 'row' | 'detail' }) {
   const { t } = useTranslation();
   return (
     <span
@@ -277,9 +277,10 @@ function RemoteAccessRow({
 
 /**
  * 引擎账号的用量：打开详情和窗口重新获得焦点时读一次(与任务里的用量标签共用一分钟内的读取)，
- * 读不到或插件没有数据时整块不出现。
+ * 读不到或插件没有数据时整块不出现。`deviceId` 为 null 读这台电脑；自己其他电脑开放的引擎
+ * (OwnRemotePluginEngines)传那台电脑，经既有只读的 `maker:get-plugin-engine-usage` 读那台电脑的账号。
  */
-function EngineUsage({ engine }: { engine: PluginEngineView }) {
+export function PluginEngineUsage({ deviceId, engineKey }: { deviceId: string | null; engineKey: string }) {
   const { t, i18n } = useTranslation();
   const [reading, setReading] = useState<{ usage: GhostHarnessUsage; now: number } | null>(null);
   useEffect(() => {
@@ -287,7 +288,7 @@ function EngineUsage({ engine }: { engine: PluginEngineView }) {
     let active = true;
     const read = () => {
       if (document.hidden) return;
-      void readPluginEngineUsage(owner, null, engine.key).result.then((usage) => {
+      void readPluginEngineUsage(owner, deviceId, engineKey).result.then((usage) => {
         if (!active || !isDataOwnerGenerationCurrent(owner)) return;
         setReading(usage ? { usage, now: Date.now() } : null);
       });
@@ -298,7 +299,7 @@ function EngineUsage({ engine }: { engine: PluginEngineView }) {
       active = false;
       window.removeEventListener('focus', read);
     };
-  }, [engine.key]);
+  }, [deviceId, engineKey]);
   if (!reading) return null;
   return (
     <div data-testid="provider-usage-module" className="shrink-0 border-t px-1 py-2" style={DIVIDER_STYLE}>
@@ -584,7 +585,9 @@ export function PluginEngineProviderDetail({
             onManageShare={onManageShare}
           />
         )}
-        {!engine.suspended && engine.reportsUsage && <EngineUsage key={`usage:${engine.key}`} engine={engine} />}
+        {!engine.suspended && engine.reportsUsage && (
+          <PluginEngineUsage key={`usage:${engine.key}`} deviceId={null} engineKey={engine.key} />
+        )}
         {!engine.suspended && <EngineModels engine={engine} />}
       </div>
     </div>

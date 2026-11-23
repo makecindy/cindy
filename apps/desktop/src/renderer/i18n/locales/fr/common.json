@@ -7124,6 +7124,15 @@
         "unstable": "La connexion se coupe et se rétablit sans cesse : vérifiez le réseau, ou redémarrez Cindy si le problème persiste",
         "agent-net-relay-down": "Relais Agent-Net injoignable, reconnexion en cours. Les ordinateurs connectés directement fonctionnent toujours ; les autres appareils ne peuvent pas se connecter pour le moment"
       },
+      "rejoin": {
+        "hint": "Cet appareil a été retiré de votre compte. Choisissez « Rejoindre » pour le rétablir.",
+        "action": "Rejoindre",
+        "done": "Appareil rétabli",
+        "doneWithoutAgentNet": "Appareil rétabli. Agent-Net n'est pas encore rétabli : Device Link est utilisé en attendant",
+        "unsupported": "Le serveur ne permet pas encore de rejoindre. Déconnectez-vous puis reconnectez-vous sur cet appareil",
+        "agentNetFailed": "Agent-Net n'est pas encore rétabli. Désactivez « Utiliser uniquement Agent-Net » pour vous connecter via Device Link en attendant",
+        "failed": "Impossible de rejoindre. Vérifiez votre connexion réseau et réessayez"
+      },
       "refresh": "Actualiser",
       "empty": "Aucun autre appareil pour l'instant. Connectez-vous à {{appName}} avec le même compte sur un autre ordinateur et il apparaîtra ici.",
       "thisDevice": "Cet appareil",
@@ -7141,7 +7150,7 @@
       "renameCancel": "Annuler",
       "delete": "Supprimer",
       "deleteTitle": "Supprimer « {{name}} » ?",
-      "deleteMessage": "Retirer cet appareil de votre compte et couper l'accès à distance. Ses sessions et fichiers sont conservés. Reconnectez-vous sur cet appareil pour le rajouter.",
+      "deleteMessage": "Retirer cet appareil de votre compte et couper l'accès à distance. Ses sessions et fichiers sont conservés. Choisissez « Rejoindre » sur cet appareil pour le rétablir.",
       "deleteOnlineHint": "Ce serveur ne permet pas encore de retirer des appareils en ligne. Réessayez après la mise à niveau du service.",
       "error": {
         "unavailable": "Le service de liaison d'appareils est indisponible (non activé sur le serveur ou erreur réseau)",
@@ -13372,7 +13381,8 @@
           "subject": {
             "githubIssue": "La carte de confirmation « Soumettre une issue GitHub »",
             "renameSessions": "La carte de confirmation « Renommer des tâches en lot »",
-            "pluginFileGrant": "La carte de confirmation « Autorisation de fichiers du plugin »"
+            "pluginFileGrant": "La carte de confirmation « Autorisation de fichiers du plugin »",
+            "mediaPathReveal": "La carte de confirmation « Permettre à l’Agent d’obtenir l’emplacement d’un fichier multimédia sur l’ordinateur »"
           }
         },
         "replyWords": {
@@ -17892,6 +17902,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Impossible de lire le modèle de l’automatisation. Fermez puis rouvrez l’éditeur pour réessayer.",
       "promptDialog": {
         "titleEdit": "Modifier l'automatisation",
         "titleCreate": "Créer une automatisation",
@@ -18235,6 +18246,7 @@
         "effortHeading": "Effort de raisonnement",
         "effortDefault": "Par défaut",
         "followSession": "Suivre la session",
+        "followTeammate": "Suivre le modèle principal de l’ami",
         "modelListAria": "Liste des modèles",
         "modelSelectorAria": "Sélecteur de modèle",
         "categoryListAria": "Modèles {{category}}",

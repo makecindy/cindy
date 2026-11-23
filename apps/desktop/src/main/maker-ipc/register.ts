@@ -390,7 +390,7 @@ import {
   type GhostGrantConfirmInteractionSnapshot,
 } from '../cindy-brain/ghostGrantConfirmBridge.js';
 import { createFeishuDesktopConfirmNotifier } from '../im/desktopConfirmNoticeWiring.js';
-import { buildInputHandoffNoticeText, desktopConfirmSubject } from '../im/desktopConfirmNotice.js';
+import { buildInputHandoffNoticeText, desktopConfirmSubject, ghostGrantConfirmSubject } from '../im/desktopConfirmNotice.js';
 import { sendInputHandoffChannelNotice, notifyInputHandoffOnce, forgetInputHandoffNotice } from '../im/shared/inputHandoffChannelNotice.js';
 import { bindingStore } from '../im/binding.js';
 import { isHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
@@ -3555,8 +3555,8 @@ export async function confirmTaskAction(
 const ghostGrantConfirmBridge = initGhostGrantConfirmBridge({
   broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
   logger: log,
-  onDesktopOnlyConfirmPending: (sessionId) =>
-    desktopConfirmImNotifier(sessionId, desktopConfirmSubject('pluginFileGrant')),
+  onDesktopOnlyConfirmPending: (sessionId, lane) =>
+    desktopConfirmImNotifier(sessionId, desktopConfirmSubject(ghostGrantConfirmSubject(lane))),
 });
 
 const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
@@ -13663,13 +13663,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     isGroupInputLive: (sessionId, clientId) => agentInputCoordinatorHolder?.isInputLive(sessionId, clientId) ?? false,
     // A group task card follows its task (bot-group-chat.md §10): title, live phase and recorded PR.
-    readGroupTaskStatus: async (taskId) => {
+    readGroupTaskStatus: async (taskId, options) => {
       const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status, model: sessions.model })
         .from(sessions).where(eq(sessions.id, taskId)).limit(1);
       if (!row || row.status === 'deleted') return null;
-      // The model as the model picker names it, else its id.
-      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false }).catch(() => []);
-      const model = modelDisplayNames(providers).get(usageModelKey(row.model)) ?? row.model;
+      // The model as the model picker names it, else its id; only its reader asks (task cards never show it).
+      const providers = options?.model ? await getDesktopProviderService().listProviders({ allowSideEffects: false }).catch(() => []) : [];
+      const model = options?.model ? modelDisplayNames(providers).get(usageModelKey(row.model)) ?? row.model : undefined;
       const runtime = await tryGetOrcaCollabService()?.getSessionRuntime({ targetSessionId: taskId }).catch(() => undefined);
       const phase = runtime?.ok && typeof runtime.runtime.phase === 'string' ? runtime.runtime.phase : 'idle';
       const pr = (await listPrRefs(taskId).catch(() => [])).find(ref => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(ref.url));
@@ -18744,7 +18744,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
-    needsNativeSessionHandoff: (id, row) => needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke),
+    needsNativeSessionHandoff: (id, row) => {
+      // Remote/provider-group sources are assigned by the executing computer.
+      if (row.remoteHostId || row.agentDeviceId)
+        return needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke);
+      // Probe the accepted route that bootstrap will start, not the saved preference.
+      // Keep the source row/native identity intact for the durable history handoff.
+      const target = { ...row, id, agentKind: dbToMakerEngineKind(row.agentKind), model: row.model ?? undefined };
+      const runtimeOverride = applySessionRuntimeOverrideForStart(target, false);
+      if (runtimeOverride && readProviderGroupBinding(id)?.groupDeviceId)
+        return needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke);
+      return needsSubscriptionAccountHandoff(id, target, remoteBackgroundInvoke);
+    },
     classifyCodexHistory: (threadId) => classifyCodexHistoryWithPorts({
       captureDataOwnerBroadcastScope: (...args) => captureDataOwnerBroadcastScope(...args),
       getCurrentDbClientSnapshot: (...args) => getCurrentDbClientSnapshot(...args),

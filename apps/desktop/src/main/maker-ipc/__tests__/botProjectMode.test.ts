@@ -37,7 +37,7 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
 vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
+import { BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { importBotSkillFiles } from '../botSkillStore.js';
 import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
@@ -71,6 +71,19 @@ async function runMemoryCheck(workingDir: string, firedAt: number,
   return exitCode;
 }
 
+// User decision 2026-11-16 / unit: new supplied tasks must acquire the same model policy
+// through the creation entry, without adding their IDs to the runner or editor.
+// Existing review-only coverage misses a new task definition and an unmarked old snapshot.
+it('gives a new default task model inheritance while retaining every existing model preference', () => {
+  const defaults = { id: 'future-default-task', name: 'Future default', prompt: 'Do useful work', cronExpr: '0 9 * * *' };
+  expect(createBotDefaultProjectSchedule(defaults)).toMatchObject({ ...defaults, followTeammateModel: true });
+  const chosen = { ...defaults, model: 'chosen-c', providerId: 'custom', fastMode: 'ultrafast' as const };
+  expect(createBotDefaultProjectSchedule(defaults, chosen)).toMatchObject(chosen);
+  expect(createBotDefaultProjectSchedule(defaults, chosen).followTeammateModel).toBeUndefined();
+  expect(createBotDefaultProjectSchedule(defaults, { ...defaults, followTeammateModel: false }).followTeammateModel).toBe(false);
+  expect(createBotDefaultProjectSchedule(defaults, { ...defaults, followTeammateModel: true }).followTeammateModel).toBe(true);
+});
+
 // Teammate V2 (2026-11-06): the nightly review is the project's own automation,
 // added once on the teammate's model; an owner's later edit or removal is kept.
 describe('ensureBotProjectAutomations', () => {
@@ -89,12 +102,13 @@ describe('ensureBotProjectAutomations', () => {
     const route = { harness: 'pi' as const, model: 'm1', providerId: 'p1', effort: 'medium', fastMode: false };
     await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir, route })).resolves.toBe(true);
     expect(loader.upsertSchedule).toHaveBeenCalledWith(workingDir, expect.objectContaining({
-      id: BOT_PROJECT_MEMORY_REVIEW_ID, agentKind: 'pi', model: 'm1', providerId: 'p1',
+      id: BOT_PROJECT_MEMORY_REVIEW_ID, followTeammateModel: true,
       name: 'Mimi · Review memory', persistentSession: true, silentWhenIdle: true,
       prompt: expect.stringContaining('teammate id bot-1'),
     }), { keepUnreadable: true });
 
     const supplied = loader.upsertSchedule.mock.calls[0]![1];
+    expect(supplied.model).toBeUndefined();
     // Restoring an already-upgraded project on this computer recreates only its local check.
     const checkFile = path.join(root, '.memory-review-check-v1.cjs');
     await fs.rm(checkFile);

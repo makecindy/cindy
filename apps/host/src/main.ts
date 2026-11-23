@@ -215,7 +215,7 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
-const usage = 'cindy-host [serve|login [--region=cn|global] [--org=<domain-or-id>] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]';
+const usage = 'cindy-host [serve|login [--region=cn|global] [--org=<domain-or-id>] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off|rejoin]|stop]';
 
 /** The status command's boundary category: the running Host's, else a lock-free read of the profile. */
 function readStatusSkillProjectionBoundary(processStatus: { running: boolean | null; runtime?: { skillProjectionBoundary?: string } }) {
@@ -303,9 +303,14 @@ if (command === '--help' || command === '-h') {
  } else if (command === 'remote') {
   try {
     const action = process.argv[3] ?? 'status';
-    if (!['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off'].includes(action))
-      throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]');
-    console.log(JSON.stringify(await requestHostRemote(resolveHostDataDir(), action, process.argv[4]), null, 2));
+    if (!['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off', 'rejoin'].includes(action))
+      throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off|rejoin]');
+    const result = await requestHostRemote(resolveHostDataDir(), action, process.argv[4]);
+    console.log(JSON.stringify(result, null, 2));
+    // 「重新加入」 reports its outcome in the result (device-link.ts `rejoin`): say why it did not work, and fail the command.
+    const rejoin = action === 'rejoin' ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
+    if (rejoin && typeof rejoin.hint === 'string') (rejoin.result === 'rejoined' ? console.log : console.error)(rejoin.hint);
+    if (rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
@@ -2188,6 +2193,8 @@ const server = createHostServer({ ...serverDeps, service, platformClient: () => 
     if (action === 'revoke') return deviceLink.revoke(body.deviceId ?? '');
     // This Host's 「Agent-Net (Beta)」 setting; off by default (docs/agent-net-session-plan.md 阶段 5).
     if (action === 'agent-net-on' || action === 'agent-net-off') return deviceLink.setAgentNetEnabled(action === 'agent-net-on');
+    // 「重新加入」 after this Host was removed from the account (device-link.ts `rejoin`).
+    if (action === 'rejoin') return deviceLink.rejoin();
     throw new Error('Unknown remote control command');
   },
 });
@@ -2300,6 +2307,8 @@ function startDeviceLink(): void {
     refreshToken: async () => { await refreshAuthSession(); },
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
+    // 「重新加入」 (`cindy-host remote rejoin`): the same official Device Link service and account token as the device list.
+    officialDeviceLinkFetch: (route, opts) => serverApi(route, { ...opts, baseUrl: endpoint, cache: 'no-store', redactErrorDetails: true }),
     invoke: service, subscribe: eventHub.subscribe,
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),

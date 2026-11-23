@@ -32,7 +32,7 @@
     "notFound": "此裝置已不在你的帳號中。",
     "deleteDevice": "刪除裝置",
     "deleteTitle": "刪除「{{name}}」？",
-    "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，重新登入後可再次加入。",
+    "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，在那台裝置上點「重新加入」即可回來。",
     "deleteFailed": "刪除裝置失敗。",
     "deleteOnline": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
     "deleteRejectedWhileOffline": "未能刪除裝置：伺服器仍將它記為線上，與清單中的離線狀態不一致",

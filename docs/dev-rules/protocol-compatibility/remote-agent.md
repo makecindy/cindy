@@ -375,7 +375,9 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   各电脑自行向官方分享服务查询本账号的跨区分享，不新增成员授权。查询失败时仅保留当前位置，不改读控制端的授权。
   #8010 新增同账号只读 `maker:model-catalog:read`：`op: locations` 列任务所在电脑可用的来源；
   `op: read` 只代读固定的 `maker:provider:list`、`maker:get-capabilities`、`maker:list-available-agents`、
-  `maker:agent:status`。来源必须在主机当前名单中，回包前复核名单与账号代次；不接受任意 IPC 或写操作。
+  `maker:agent:status`，以及 2026-11-23 起的 `maker:list-plugin-engines`(远程控制下列出来源的插件引擎，见
+  [插件引擎](plugin-harnesses.md)「远程控制下同样可选」；旧主机回 `INVALID_PARAMS`，控制端只列被控电脑自己的引擎)。
+  来源必须在主机当前名单中，回包前复核名单与账号代次；不接受任意 IPC 或写操作。
   控制端自身和仅被控电脑加载的分享也参与候选。创建、换位置与发送沿用真实 `agentDeviceId`；
   Renderer 的 `(任务电脑, 来源电脑)` 目录缓存键仅用于读取，不作为运行设备传送或落盘。
   旧主机明确不支持新通道时保留原直接读取与两端分享交集行为；连接失败不触发此降级。

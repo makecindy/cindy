@@ -184,6 +184,15 @@ OpenAI、Claude 和 Grok 都允许新增独立登录账号。每次新增生成�
   「已隐藏」展开区，需要时在这里重新显示。辅助模型、媒体模型不列插件引擎。
 - 「添加供应商」不创建这类供应商，它来自安装插件。
 
+自己其他电脑开放的插件引擎（2026-11-23 用户反馈后补齐）：同账号、在线、允许远程控制的电脑上打开了「允许被远程调用」
+的插件引擎也列在左栏，接在其他电脑的普通供应商后面，与它们同一行式：图标带远程角标、名字后带「插件」标识，所在电脑
+只写在悬停提示里，范围与新建任务的模型列表里以「引擎 · 电脑名」出现的那些一致，本机不需要装同款插件。点开在右栏只读地看
+所在电脑、状态与开放的模型；插件上报账号用量时，说明下方同样只读显示那台电脑上该账号的用量（与其他电脑普通供应商的
+剩余额度同一裁决，见[供应商分享](provider-sharing.md)，同一 2026-11-23 用户反馈后补齐），读不到时整块不出现。
+改名、隐藏、停用和逐模型关闭都在那台电脑上设置，这里不提供菜单。那台电脑离线、关掉远程调用
+或停用该引擎后，这一行随下次读取消失。入口 `components/settings/OwnRemotePluginEngines.tsx`，回归在
+`OwnRemoteProviders.test.tsx`。
+
 实现与兼容约定见[插件引擎协议记录](../dev-rules/protocol-compatibility/plugin-harnesses.md)；界面入口
 `components/settings/PluginEngineProviders.tsx`，回归 `PluginEngineProviders.test.tsx` 与
 `providersSectionDeepLink.test.tsx`。Light／Dark 双模式目检需单独记录，不以组件测试或复用主题样式代替。

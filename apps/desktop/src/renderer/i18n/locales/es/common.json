@@ -7124,6 +7124,15 @@
         "unstable": "La conexión se interrumpe y se restablece continuamente: revisa la red o reinicia Cindy si el problema persiste",
         "agent-net-relay-down": "No se puede acceder al relé de Agent-Net; reconectando. Las computadoras conectadas directamente siguen funcionando; los demás dispositivos no pueden conectarse por ahora"
       },
+      "rejoin": {
+        "hint": "Este dispositivo se eliminó de tu cuenta. Selecciona «Volver a unirse» para recuperarlo.",
+        "action": "Volver a unirse",
+        "done": "Dispositivo unido de nuevo",
+        "doneWithoutAgentNet": "Dispositivo unido de nuevo. Agent-Net aún no se ha restablecido, así que por ahora se usa Device Link",
+        "unsupported": "El servidor aún no permite volver a unirse. Cierra sesión y vuelve a iniciarla en este dispositivo",
+        "agentNetFailed": "Agent-Net aún no se ha restablecido. Desactiva «Usar solo Agent-Net» para conectarte por Device Link mientras tanto",
+        "failed": "No se pudo volver a unir. Comprueba tu conexión de red e inténtalo de nuevo"
+      },
       "refresh": "Actualizar",
       "empty": "Aún no hay otros dispositivos. Inicia sesión en {{appName}} con la misma cuenta en otra computadora y aparecerá aquí.",
       "thisDevice": "Este dispositivo",
@@ -7141,7 +7150,7 @@
       "renameCancel": "Cancelar",
       "delete": "Eliminar",
       "deleteTitle": "¿Eliminar “{{name}}”?",
-      "deleteMessage": "Elimina este dispositivo de tu cuenta y desconecta el acceso remoto. Se conservan sus sesiones y archivos. Vuelve a iniciar sesión en ese dispositivo para unirlo de nuevo.",
+      "deleteMessage": "Elimina este dispositivo de tu cuenta y desconecta el acceso remoto. Se conservan sus sesiones y archivos. Selecciona «Volver a unirse» en ese dispositivo para recuperarlo.",
       "deleteOnlineHint": "Este servidor aún no admite la eliminación de dispositivos en línea. Vuelve a intentarlo cuando se actualice el servicio.",
       "error": {
         "unavailable": "El servicio Device Link no está disponible (no está habilitado en el servidor o hay un error de red)",
@@ -13372,7 +13381,8 @@
           "subject": {
             "githubIssue": "La tarjeta de confirmación “Enviar incidencia de GitHub”",
             "renameSessions": "La tarjeta de confirmación “Renombrar tareas en lote”",
-            "pluginFileGrant": "La tarjeta de confirmación “Autorizar archivos del complemento”"
+            "pluginFileGrant": "La tarjeta de confirmación “Autorizar archivos del complemento”",
+            "mediaPathReveal": "La tarjeta de confirmación “Permitir que el Agent obtenga la ubicación de un archivo multimedia en la computadora”"
           }
         },
         "replyWords": {
@@ -17892,6 +17902,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "No se pudo leer el modelo de la automatización. Cierra y vuelve a abrir el editor para reintentar.",
       "promptDialog": {
         "titleEdit": "Editar automatización",
         "titleCreate": "Crear automatización",
@@ -18235,6 +18246,7 @@
         "effortHeading": "Intensidad de razonamiento",
         "effortDefault": "Predeterminado",
         "followSession": "Seguir sesión",
+        "followTeammate": "Seguir el modelo principal del amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Selector de modelo",
         "categoryListAria": "Modelos de {{category}}",

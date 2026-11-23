@@ -7057,6 +7057,15 @@
         "unstable": "Verbindung bricht ständig ab und wird wiederhergestellt — prüfe das Netzwerk oder starte Cindy neu, falls das Problem weiterhin besteht",
         "agent-net-relay-down": "Agent-Net-Relay nicht erreichbar, Verbindung wird wiederhergestellt. Direkt verbundene Computer funktionieren weiter; andere Geräte können sich vorerst nicht verbinden"
       },
+      "rejoin": {
+        "hint": "Dieses Gerät wurde aus deinem Konto entfernt. Wähle „Wieder beitreten“, um es zurückzuholen.",
+        "action": "Wieder beitreten",
+        "done": "Gerät wieder beigetreten",
+        "doneWithoutAgentNet": "Gerät wieder beigetreten. Agent-Net ist noch nicht wiederhergestellt, vorerst wird Device Link verwendet",
+        "unsupported": "Der Server unterstützt das Wiederbeitreten noch nicht. Melde dich auf diesem Gerät ab und erneut an",
+        "agentNetFailed": "Agent-Net ist noch nicht wiederhergestellt. Deaktiviere „Nur Agent-Net verwenden“, um dich vorerst über Device Link zu verbinden",
+        "failed": "Wiederbeitreten fehlgeschlagen. Prüfe deine Netzwerkverbindung und versuche es erneut"
+      },
       "refresh": "Aktualisieren",
       "empty": "Noch keine weiteren Geräte. Melde dich auf einem anderen Computer mit demselben Konto bei {{appName}} an, damit er hier angezeigt wird.",
       "thisDevice": "Dieses Gerät",
@@ -7074,7 +7083,7 @@
       "renameCancel": "Abbrechen",
       "delete": "Löschen",
       "deleteTitle": "„{{name}}“ löschen?",
-      "deleteMessage": "Dieses Gerät aus deinem Konto entfernen und den Fernzugriff trennen. Seine Sitzungen und Dateien bleiben erhalten. Melde dich auf dem Gerät erneut an, um es wieder hinzuzufügen.",
+      "deleteMessage": "Dieses Gerät aus deinem Konto entfernen und den Fernzugriff trennen. Seine Sitzungen und Dateien bleiben erhalten. Wähle auf dem Gerät „Wieder beitreten“, um es zurückzuholen.",
       "deleteOnlineHint": "Dieser Server unterstützt das Entfernen von Online-Geräten noch nicht. Versuche es nach der Aktualisierung des Dienstes erneut.",
       "error": {
         "unavailable": "Dienst für Geräteverknüpfung nicht verfügbar (auf dem Server nicht aktiviert oder Netzwerkfehler)",
@@ -13261,7 +13270,8 @@
           "subject": {
             "githubIssue": "Die Bestätigungskarte „GitHub-Issue einreichen“",
             "renameSessions": "Die Bestätigungskarte „Mehrere Sitzungen umbenennen“",
-            "pluginFileGrant": "Die Bestätigungskarte „Plugin-Dateizugriff erlauben“"
+            "pluginFileGrant": "Die Bestätigungskarte „Plugin-Dateizugriff erlauben“",
+            "mediaPathReveal": "Die Bestätigungskarte „Agent den Speicherort einer Mediendatei auf dem Computer mitteilen“"
           }
         },
         "replyWords": {
@@ -17726,6 +17736,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Die Modelleinstellung konnte nicht gelesen werden. Schließe den Editor und öffne ihn erneut.",
       "promptDialog": {
         "titleEdit": "Automatisierung bearbeiten",
         "titleCreate": "Automatisierung erstellen",
@@ -18069,6 +18080,7 @@
         "effortHeading": "Denkintensität",
         "effortDefault": "Standard",
         "followSession": "Sitzung folgen",
+        "followTeammate": "Hauptmodell des Freundes folgen",
         "modelListAria": "Modellliste",
         "modelSelectorAria": "Modellauswahl",
         "categoryListAria": "{{category}}-Modelle",

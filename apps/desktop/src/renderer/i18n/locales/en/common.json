@@ -7057,6 +7057,15 @@
         "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists",
         "agent-net-relay-down": "Can't reach the Agent-Net relay, reconnecting. Computers connected directly still work; other devices can't connect for now"
       },
+      "rejoin": {
+        "hint": "This device was removed from your account. Select Rejoin to bring it back.",
+        "action": "Rejoin",
+        "done": "Device rejoined",
+        "doneWithoutAgentNet": "Device rejoined. Agent-Net isn’t back yet, so Device Link is used for now",
+        "unsupported": "The server doesn’t support rejoining yet. Sign out and sign in again on this device",
+        "agentNetFailed": "Agent-Net isn’t back yet. Turn off “Use Only Agent-Net” to connect with Device Link for now",
+        "failed": "Couldn’t rejoin. Check your network and try again"
+      },
       "refresh": "Refresh",
       "empty": "No other devices yet. Sign in to {{appName}} with the same account on another computer and it will show up here.",
       "thisDevice": "This device",
@@ -7074,7 +7083,7 @@
       "renameCancel": "Cancel",
       "delete": "Delete",
       "deleteTitle": "Delete “{{name}}”?",
-      "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Sign in again on that device to rejoin.",
+      "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Select Rejoin on that device to bring it back.",
       "deleteOnlineHint": "This server does not yet support removing online devices. Retry after the service is upgraded.",
       "error": {
         "unavailable": "Device Link service is unavailable (not enabled on server or network error)",
@@ -13261,7 +13270,8 @@
           "subject": {
             "githubIssue": "The “Submit GitHub Issue” confirmation card",
             "renameSessions": "The “Rename tasks in bulk” confirmation card",
-            "pluginFileGrant": "The “Plugin file access” confirmation card"
+            "pluginFileGrant": "The “Plugin file access” confirmation card",
+            "mediaPathReveal": "The “Let the Agent get a media file’s location on the computer” confirmation card"
           }
         },
         "replyWords": {
@@ -17726,6 +17736,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Could not read the automation’s model preference. Close and reopen the editor to retry.",
       "promptDialog": {
         "titleEdit": "Edit Automation",
         "titleCreate": "Create Automation",
@@ -18069,6 +18080,7 @@
         "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
+        "followTeammate": "Follow buddy’s primary model",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",

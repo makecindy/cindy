@@ -7014,6 +7014,15 @@
         "unstable": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合は Cindy を再起動してください",
         "agent-net-relay-down": "Agent-Net の中継に接続できません。再接続しています。直接接続しているパソコンは引き続き使えますが、ほかのデバイスはしばらく接続できません"
       },
+      "rejoin": {
+        "hint": "このデバイスはアカウントから削除されました。「再参加」を選ぶと戻せます。",
+        "action": "再参加",
+        "done": "再参加しました",
+        "doneWithoutAgentNet": "再参加しました。Agent-Net はまだ復旧していないため、当面は Device Link で接続します",
+        "unsupported": "サーバーはまだ再参加に対応していません。このデバイスでログアウトして再度ログインしてください",
+        "agentNetFailed": "Agent-Net はまだ復旧していません。「Agent-Net のみ使用」をオフにすると、当面は Device Link で接続できます",
+        "failed": "再参加に失敗しました。ネットワークを確認して再試行してください"
+      },
       "refresh": "更新",
       "empty": "他のデバイスはまだありません。別のパソコンで同じアカウントで {{appName}} にログインすると、ここに表示されます。",
       "thisDevice": "このデバイス",
@@ -7031,7 +7040,7 @@
       "renameCancel": "キャンセル",
       "delete": "削除",
       "deleteTitle": "「{{name}}」を削除しますか？",
-      "deleteMessage": "アカウントからこのデバイスを削除し、リモート接続を切断します。デバイス上のセッションとファイルは保持されます。再度ログインすると追加できます。",
+      "deleteMessage": "アカウントからこのデバイスを削除し、リモート接続を切断します。デバイス上のセッションとファイルは保持されます。そのデバイスで「再参加」を選ぶと戻せます。",
       "deleteOnlineHint": "現在のサーバーはオンラインのデバイス削除に未対応です。サービス更新後に再試行してください。",
       "error": {
         "unavailable": "デバイス連携サービスは現在利用できません（サーバーで有効になっていないか、ネットワークエラーです）",
@@ -13208,7 +13217,8 @@
           "subject": {
             "githubIssue": "「GitHub Issue を提出」の確認カード",
             "renameSessions": "「タスク名の一括変更」の確認カード",
-            "pluginFileGrant": "「プラグインのファイル許可」の確認カード"
+            "pluginFileGrant": "「プラグインのファイル許可」の確認カード",
+            "mediaPathReveal": "「Agent にメディアファイルのパソコン上の場所を伝える」の確認カード"
           }
         },
         "replyWords": {
@@ -17652,6 +17662,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "自動化のモデル設定を読み込めませんでした。エディターを閉じて開き直してください。",
       "promptDialog": {
         "titleEdit": "自動化を編集",
         "titleCreate": "自動化を作成",
@@ -17995,6 +18006,7 @@
         "effortHeading": "推論強度",
         "effortDefault": "デフォルト",
         "followSession": "セッションに従う",
+        "followTeammate": "仲間のメインモデルに従う",
         "modelListAria": "モデル一覧",
         "modelSelectorAria": "モデルセレクター",
         "categoryListAria": "{{category}} モデル",

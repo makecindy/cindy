@@ -1946,6 +1946,11 @@ function recoveryFixture() {
     log: { info: vi.fn(), warn: vi.fn(() => { order.push('warn'); }) },
     isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => null },
     needsSubscriptionAccountHandoff: vi.fn(), remoteBackgroundInvoke: vi.fn(),
+    // These ordering tests do not select an account. Keep the projection ports
+    // injected so source extraction cannot cold-load the subscription runtime
+    // inside a timed test; account handoff is exercised by runtime.test.ts.
+    dbToMakerEngineKind: (x: unknown) => x,
+    applySessionRuntimeOverrideForStart: vi.fn(), readProviderGroupBinding: vi.fn(),
     readCodexThreadStorageReadOnly: vi.fn(async () => ({ rolloutPath: '/fixture/history' })),
     classifyCodexHistoryOversized: vi.fn(async () => 'healthy'),
     DEFAULT_MODEL_COMPACTION_PCT: 80, getActiveCatalog: vi.fn(), dbToMakerAgentKind: (x: unknown) => x,

@@ -80,6 +80,7 @@ import { ensureBotProjectAutomations, ensureWorkspaceRepository, readWorkspaceRe
 import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
 import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { readBotProjectMode } from '../../../shared/botProjectMode.js';
+import { ownTeammateProjectState } from '../../scheduler-host/ownTeammateProject.js';
 import { readBotResponsibilityScope } from '../../maker-ipc/botTaskCreation.js';
 import {
   NEW_BOT_DEFAULT_PI_EFFORT,
@@ -313,7 +314,7 @@ export async function createBotCanonicalSession(
 }
 
 export type EnsureBotGroupLaneResult =
-  | { ok: true; sessionId: string; created: boolean; replacedSessionId?: string }
+  | { ok: true; sessionId: string; created: boolean; replacedSessionId?: string; permissionSynced?: boolean }
   | { ok: false; errorCode: 'MEMBER_UNAVAILABLE' | 'NO_MODEL'; message: string };
 
 function botSessionPayload(row: OpenedSessionRow) {
@@ -407,7 +408,7 @@ export async function ensureBotGroupLaneSession(input: {
   if (existing && !moves) {
     await syncBotLanePermission(existing.sessionId);
     owner.assertCurrent();
-    return { ok: true, sessionId: existing.sessionId, created: false };
+    return { ok: true, sessionId: existing.sessionId, created: false, permissionSynced: true };
   }
   const [profile] = await db.select().from(botProfiles).where(eq(botProfiles.id, input.botId)).limit(1);
   if (!profile || profile.status !== 'active') {
@@ -2454,6 +2455,21 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
     } catch {
       owner.assertCurrent();
       throwIpcError('INTERNAL', 'Could not restore Bot model defaults');
+    }
+  });
+
+  // A local metadata query must not provision teammates, resume invitations or hydrate routes.
+  ipcMain.handle('local-db:bots:owns-project', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const workingDir = requireString(raw, 'workingDir');
+    const owner = captureBotOperationOwner();
+    try {
+      const state = await ownTeammateProjectState(workingDir);
+      owner.assertCurrent();
+      return state === 'active' || state === 'stopped';
+    } catch {
+      owner.assertCurrent();
+      throwIpcError('INTERNAL', 'Could not check Bot project ownership');
     }
   });
 

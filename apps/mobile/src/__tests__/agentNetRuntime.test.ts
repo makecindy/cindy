@@ -13,7 +13,7 @@ import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 
 const fake = vi.hoisted(() => ({ target: vi.fn(), open: vi.fn(), identity: vi.fn(), enabled: false, agentNetOnly: false,
-  createTransport: vi.fn(), rawFetch: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
+  onlyEncrypted: false, createTransport: vi.fn(), rawFetch: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
 vi.mock('@cindy/agent-net/portable', async original => ({ ...await original<typeof import('@cindy/agent-net/portable')>(),
   AgentNetSocket: { openWithBindings: fake.open }, NativeTransport: { create: fake.createTransport } }));
 vi.mock('@/api/client', async original => ({
@@ -28,8 +28,8 @@ vi.mock('@/device-link/agentNetIdentity', () => ({ ensureMobileAgentNetIdentity:
 vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getActiveSelfHostedRelay: () => fake.agentNetOnly ? { signing: { agentNet: { certificate: {} } } } : null,
   getSelfHostedRelayRouteGeneration: () => 0, isAgentNetOnlyRoute: () => fake.agentNetOnly,
   subscribeSelfHostedRelayRoute: () => () => {}, deviceLinkMediaApiBaseUrl: () => 'https://relay.example.test' }));
-vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ ready: true, enabled: fake.enabled, onlyEncrypted: false, generation: 0 }),
-  mobileAgentNetRequiresEncryption: () => false, subscribeMobileAgentNetPreferences: () => () => {} }));
+vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ ready: true, enabled: fake.enabled, onlyEncrypted: fake.onlyEncrypted, generation: 0 }),
+  mobileAgentNetRequiresEncryption: () => fake.onlyEncrypted, subscribeMobileAgentNetPreferences: () => () => {} }));
 vi.mock('@/device-link/agentNetNotifications', () => ({ clearMobileAgentNetNotifications: vi.fn(),
   clearMobileAgentNetNotificationDelivery: vi.fn(), refreshMobileAgentNetNotificationPreferences: vi.fn(),
   mobileAgentNetNotificationScope: vi.fn(), mutateMobileAgentNetNotificationRegistration: vi.fn(),
@@ -47,7 +47,7 @@ import { openMobileAgentNetSocket, isMobileAgentNetActive, mobileAgentNetIdentit
   notifyMobileAgentNetNetworkChanged, stopMobileAgentNetRuntime } from '@/device-link/agentNetRuntime';
 import { uploadMobileAttachment } from '@/session/mobileAttachmentUpload';
 beforeEach(() => {
-  fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false; fake.agentNetOnly = false;
+  fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false; fake.agentNetOnly = false; fake.onlyEncrypted = false;
   fake.readDirectory.mockReset().mockResolvedValue(null);
   fake.rawFetch.mockReset().mockResolvedValue({ devices: [] });
   fake.createTransport.mockReset(); fake.verifyCertificate.mockReset().mockImplementation(verifyCertificate);
@@ -299,9 +299,11 @@ it('starts the official device-list check in parallel with identity setup and sc
 it.each([
   ['keeps offline cache mode when the directory check fails transiently', 'socket-error-0', false],
   ['closes the cached socket and falls back to Device Link when the identity is revoked (403)', 'socket-error-403', true],
+  ['shows removal when the encrypted-only phone cold starts with a revoked credential', 'encrypted-revoked', true],
   ['converts a deferred-relay explicit 403 upgrade rejection into 1006 Device Link fallback instead of terminal 4410', 'deferred-403', true],
 ] as const)('verifies a failed initial relay handshake once via directory: %s', async (_label, mode, shouldRefuse) => {
   fake.enabled = true;
+  fake.onlyEncrypted = mode === 'encrypted-revoked';
   const identity = generateIdentity('phone'), desktop = generateIdentity('desktop-lan');
   const { bootstrap } = createPrivateNetwork('Revoked mobile', identity);
   const desktopCert = { ...bootstrap.ownerCertificate, deviceId: desktop.deviceId, signingKey: desktop.signingKey, transportKey: desktop.transportKey };
@@ -318,8 +320,9 @@ it.each([
   let rejectDeferred!: (error: Error) => void;
   let useDeferred = false;
   const directory = vi.fn(async () => {
-    const status = mode === 'socket-error-403' ? 403 : 0;
-    throw Object.assign(new Error(status === 403 ? 'DEVICE_REVOKED' : 'AGENT_NET_NETWORK_ERROR'), { status });
+    const status = mode === 'socket-error-403' || mode === 'encrypted-revoked' ? 403 : 0;
+    const code = status === 403 ? 'DEVICE_REVOKED' : 'AGENT_NET_NETWORK_ERROR';
+    throw Object.assign(new Error(code), { status, code });
   });
   fake.identity.mockResolvedValue({
     api: {
@@ -349,9 +352,9 @@ it.each([
     const closedCode = new Promise<number>(resolve => socket!.once('close', code => resolve(code)));
     if (mode === 'deferred-403') rejectDeferred(new Error('AGENT_NET_UPGRADE_403'));
     if (shouldRefuse) {
-      await expect(closedCode).resolves.toBe(1006);
-      expect(mobileAgentNetIdentityRefused()).toBe(true);
-      expect(isMobileAgentNetActive()).toBe(false);
+      await expect(closedCode).resolves.toBe(fake.onlyEncrypted ? 4410 : 1006);
+      expect(mobileAgentNetIdentityRefused()).toBe(!fake.onlyEncrypted);
+      expect(isMobileAgentNetActive()).toBe(fake.onlyEncrypted);
       if (mode === 'deferred-403') expect(directory).not.toHaveBeenCalled();
     } else {
       await Promise.resolve();

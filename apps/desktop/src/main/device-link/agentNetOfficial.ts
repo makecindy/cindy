@@ -68,8 +68,14 @@ export function outgoingOfficialAgentNetClient(): AgentNetClient | null {
   const base = officialAgentNetBase(); if (!base) return null;
   const stored = readRelaySecrets(officialAgentNetSlot(base)); return stored ? client(base, stored) : null;
 }
-/** Enrollment uses the existing token-refreshing account client. Member traffic never carries its token. */
-export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClient> {
+/**
+ * Enrollment uses the existing token-refreshing account client. Member traffic never carries its token.
+ * `rejoin`: the user asked to bring this device back after it was removed from the account (「重新加入」). Its stored
+ * certificate was revoked with the removal even if it has not expired, so this enrolls again whatever its expiry, and asks the
+ * service to lift the removal (`rejoin: true`; without it the service keeps refusing a removed device).
+ */
+export function ensureOfficialAgentNetClient(name: string, options: { rejoin?: boolean } = {}): Promise<AgentNetClient> {
+  const rejoin = options.rejoin === true;
   const base = officialAgentNetBase(), scope = activeOwnerScopeKey(), subject = getCurrentUserId(), slot = officialAgentNetSlot(base);
   const assertCurrent = () => {
     if (!base || !subject || activeOwnerScopeKey() !== scope || getCurrentUserId() !== subject || isAppSessionBoundaryPending()
@@ -79,8 +85,13 @@ export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClie
   const url = new URL(base);
   if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:'
     && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new Error('SECURE_AGENT_NET_URL_REQUIRED');
-  const key = scope + '\0' + base;
-  const existing = inflight.get(key); if (existing) return existing;
+  const routineKey = scope + '\0' + base;
+  const rejoinKey = routineKey + '\0rejoin';
+  const key = rejoin ? rejoinKey : routineKey;
+  const existing = inflight.get(rejoinKey) ?? (!rejoin ? inflight.get(routineKey) : undefined);
+  if (existing) return existing;
+  // Finish any earlier write before restoring the membership. New callers use the restored identity.
+  const pendingRenewal = rejoin ? inflight.get(routineKey) : undefined;
   const locked = async <T>(operation: () => Promise<T> | T): Promise<T> => {
     const lock = relayDataPath('secrets', slot + '.initialize.lock');
     await fs.mkdir(path.dirname(lock), { recursive: true, mode: 0o700 }); assertCurrent();
@@ -89,20 +100,22 @@ export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClie
     });
   };
   const work = (async () => {
+    if (pendingRenewal) await pendingRenewal.catch(() => undefined);
     const secrets = await locked(() => {
       let value = readRelaySecrets(slot, { fresh: true });
       if (!value && existsSync(relayDataPath('secrets', slot + '.enc'))) throw new Error('AGENT_NET_IDENTITY_UNREADABLE');
       if (!value) { value = { credential: 'agent-net-only', seed: randomBytes(32).toString('base64url') }; writeRelaySecrets(slot, value); }
       identity(slot, value); return value;
     });
-    const ready = client(base, secrets);
+    const ready = rejoin ? null : client(base, secrets);
     if (ready && ready.certificate.expiresAt - Date.now() > renewalMargin) return ready;
     const keys = identity(slot, secrets);
+    const request = createEnrollmentRequest(keys, name.trim().slice(0, 64) || 'Cindy');
     let response: unknown;
     try { response = await serverApiFetch('/api/agent-net/enroll', {
-      baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: createEnrollmentRequest(keys, name.trim().slice(0, 64) || 'Cindy'),
+      baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: rejoin ? { ...request, rejoin: true } : { ...request, reportRevocation: true },
       timeoutMs: 10_000, cache: 'no-store', logLabel: '/api/agent-net/enroll', redactErrorDetails: true,
-      allowedRedactedErrorCodes: ['DEVICE_REENROLLMENT_REQUIRES_APPROVAL', 'ACCOUNT_AUTH_INVALID', 'ENROLLMENT_PROOF_INVALID'],
+      allowedRedactedErrorCodes: ['DEVICE_REVOKED', 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL', 'ACCOUNT_AUTH_INVALID', 'ENROLLMENT_PROOF_INVALID'],
     }); } catch (error) {
       assertCurrent();
       // Early renewal is optional while the original identity is still valid.

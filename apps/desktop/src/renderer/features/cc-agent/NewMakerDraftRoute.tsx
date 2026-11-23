@@ -12,6 +12,7 @@ import {
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
 import {
+  controlledPluginEngineSources,
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
   remotePluginEngineChoices,
@@ -19,6 +20,7 @@ import {
   type ActivePluginEngine,
   type PluginEngineChoice,
   type PluginEngineSelection,
+  type PluginEngineSource,
 } from '@/lib/pluginEngineSelection';
 import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
 import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
@@ -1166,6 +1168,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     devices: providerShareDevices,
     pluginEngineDevices: sharedPluginEngineDevices = [],
     nameFor: providerShareDeviceName,
+    isReceived: isReceivedProviderShare,
   } =
     useProviderShareAgentDevices([effectiveAgentDeviceId], effectiveDeviceLinkDeviceId);
   const remoteAgentDevices = useMemo(() => {
@@ -1263,7 +1266,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   //   · 本机新任务(`pluginEnginesAllowed`)：列出本机引擎，以及本机已装对应插件时其他电脑开放的远程引擎；
   //   · 被控电脑新任务(`controlledPluginEnginesAllowed`)：任务在被控电脑运行，列出被控电脑自己的插件引擎
   //     (与手机端远程建任务同一套 `maker:list-plugin-engines` / `maker:create-session` 通道；选择只留内存，
-  //     不写本机 newMakerDraft)。SSH、协同与跨账号分享对象不提供。
+  //     不写本机 newMakerDraft)，以及被控电脑名单里同账号其他电脑与它收到的插件供应商分享开放的引擎
+  //     (经被控电脑代读，与内置模型同一套名单，provider-sharing.md §5.1)。SSH、协同与共享任务访客不提供。
   const pluginEnginesAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
   const controlledPluginEnginesAllowed =
     isDeviceLinkDraft && !isSharedTaskPeer(effectiveDeviceLinkDeviceId) && !effectiveRemoteHostId && draft.vendor !== 'orca';
@@ -1314,18 +1318,30 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           ? [[rememberedPluginEngineDeviceId, providerShareDeviceName(rememberedPluginEngineDeviceId)] as [string, string | null]]
           : []),
       ])
-    : '[]';
-  const pluginEngineDevices = useMemo(
-    () => (JSON.parse(pluginEngineDevicesKey) as Array<[string, string | null]>).map(([deviceId, name]) => ({ deviceId, name })),
+    : controlledPluginEnginesAllowed
+      ? JSON.stringify(controlledPluginEngineSources(
+          controlledModelRoute.catalogHostDeviceId,
+          controlledModelRoute.devices,
+          // 本机也收到的分享按本机的叫法；只在被控电脑加载的分享用被控电脑给的名字。
+          (id) => (isReceivedProviderShare(id) ? providerShareDeviceName(id) : null),
+        ).map(({ deviceId, name, catalogueKey }) => [deviceId, name ?? null, catalogueKey]))
+      : '[]';
+  const pluginEngineDevices = useMemo<readonly PluginEngineSource[]>(
+    () => (JSON.parse(pluginEngineDevicesKey) as Array<[string, string | null, string?]>)
+      .map(([deviceId, name, catalogueKey]) => ({ deviceId, name, ...(catalogueKey ? { catalogueKey } : {}) })),
     [pluginEngineDevicesKey],
   );
-  const pluginEngineDeviceIds = useMemo(() => pluginEngineDevices.map((device) => device.deviceId), [pluginEngineDevices]);
+  const pluginEngineDeviceIds = useMemo(
+    () => pluginEngineDevices.map((device) => device.catalogueKey ?? device.deviceId),
+    [pluginEngineDevices],
+  );
   const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(pluginEngineDeviceIds);
   const pluginEngineChoices = useMemo<readonly PluginEngineChoice[]>(() => {
-    if (controlledPluginEnginesAllowed) {
-      return controlledPluginCatalogue.engines ?? NO_PLUGIN_ENGINES;
-    }
     const remote = remotePluginEngineChoices(pluginEngineDevices, devicePluginEngines, deviceDisplayName, pluginEngineList);
+    if (controlledPluginEnginesAllowed) {
+      const own = controlledPluginCatalogue.engines ?? NO_PLUGIN_ENGINES;
+      return remote.length ? [...own, ...remote] : own;
+    }
     return remote.length ? [...pluginEngineList, ...remote] : pluginEngineList;
   }, [
     controlledPluginEnginesAllowed,
@@ -1341,13 +1357,22 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   useEffect(() => {
     if (rememberedPluginEngineDeviceListed) readDevicePluginEngines(rememberedPluginEngineDeviceId);
   }, [rememberedPluginEngineDeviceListed, rememberedPluginEngineDeviceId, readDevicePluginEngines]);
-  // 打开模型选择器：本机草稿请本机插件重报模型并各读一次其他电脑列表；被控电脑草稿请被控电脑重报模型并复读。
+  // 被控电脑草稿已选另一来源的引擎(例如失败后回到编辑)：先经被控电脑读那份列表，选择才能生效。
+  const dlPluginEngineCatalogueKey = dlPluginEngine?.deviceId
+    ? pluginEngineDevices.find((device) => device.deviceId === dlPluginEngine.deviceId)?.catalogueKey
+    : undefined;
+  useEffect(() => {
+    if (dlPluginEngineCatalogueKey) readDevicePluginEngines(dlPluginEngineCatalogueKey);
+  }, [dlPluginEngineCatalogueKey, readDevicePluginEngines]);
+  // 打开模型选择器：本机草稿请本机插件重报模型并各读一次其他电脑列表；被控电脑草稿请被控电脑重报模型，
+  // 并经被控电脑各读一次它名单里其他来源的列表。
   const hasLocalPluginEnginesRef = useRef(false);
   hasLocalPluginEnginesRef.current = pluginEngineList.length > 0;
   const controlledPluginRefresh = controlledPluginCatalogue.refresh;
   const readPluginEngineCatalogues = useCallback(() => {
     if (controlledPluginEnginesAllowed) {
       controlledPluginRefresh();
+      readDevicePluginEngines();
       return;
     }
     if (hasLocalPluginEnginesRef.current) requestPluginEnginesRefresh();
@@ -1399,6 +1424,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   deviceId: effectiveDeviceLinkDeviceId,
                   selection: {
                     providerId: selection.providerId,
+                    // 被控电脑名单里的另一台电脑或分享：Agent 在那里运行，任务仍建在被控电脑。
+                    ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
                     modelId: selection.modelId,
                     ...(previous?.permissionMode ? { permissionMode: previous.permissionMode } : {}),
                     ...(effort ? { effort } : {}),
@@ -4860,6 +4887,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         : '';
       const engineSelectionAtSend: PluginEngineSelection = {
         providerId: selection.engine.providerId,
+        ...(selection.engine.deviceId ? { deviceId: selection.engine.deviceId } : {}),
         modelId: selection.modelId,
         ...(selection.effort ? { effort: selection.effort } : {}),
         permissionMode: enginePermissionMode,
@@ -4926,6 +4954,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 model: createFields.model,
                 effort: createFields.effort,
                 permissionMode: enginePermissionMode,
+                ...(createFields.agentDeviceId ? { agentDeviceId: createFields.agentDeviceId } : {}),
               },
             });
             const retryId = remoteCreationRetryId(NEW_MAKER_DRAFT_KEY, remoteDeviceId, createArgs);
