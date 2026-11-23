@@ -7186,6 +7186,7 @@ function CCAgentSessionContent({
                       />
                     )}
                     <ContextCapacityRing
+                      visible={viewVisible}
                       reportedOnly={pluginEngineTask}
                       isRunning={agentStatus.isRunning}
                       sessionId={sessionId}
