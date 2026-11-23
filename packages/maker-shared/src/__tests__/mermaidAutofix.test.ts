@@ -99,6 +99,13 @@ describe('repairMermaidSource', () => {
     );
   });
 
+  it('未闭合的形状不会吞掉后面的完整标签和连线', () => {
+    const prefix = 'flowchart TD\n' + 'A(('.repeat(600);
+    expect(repairMermaidSource(prefix + ' C([go → stop]) → B')).toBe(
+      prefix + ' C([go → stop]) --> B',
+    );
+  });
+
   it('已引号的节点标签内容不被二次改写', () => {
     const src = 'flowchart TD\nA["call foo(x:y)"] --> B';
     expect(repairMermaidSource(src)).toBe(src);

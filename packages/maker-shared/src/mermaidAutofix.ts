@@ -62,31 +62,43 @@ const SHAPE_ENDS = new Map([
   ['{{', '}}'],
   ['((', '))'],
   ['(((', ')))'],
-  ['[/', ']'],
-  ['[\\', ']'],
+  ['[/', '/]'],
+  ['[\\', '/]'],
 ]);
 const LABEL_BRACKET_ENDS = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
 
-function findShapeEnd(line: string, start: number, end: string): number {
-  const brackets: string[] = [];
-  for (let i = start; i < line.length; i++) {
+/**
+ * 从右向左索引各个闭合符。每个位置可以跳过一整个配对括号或引号段，
+ * 这样未闭合的形状不会让下一个候选重新扫描同一段。
+ */
+function indexLabelEnds(line: string): Map<string, Uint16Array> {
+  const bracketEnds = new Map([...LABEL_BRACKET_ENDS.values()].map(
+    (end) => [end, new Uint16Array(line.length + 1)],
+  ));
+  const shapeEnds = new Map([...new Set(SHAPE_ENDS.values())].map(
+    (end) => [end, new Uint16Array(line.length + 1)],
+  ));
+  const allEnds = [...bracketEnds, ...shapeEnds];
+  let nextQuote = -1;
+
+  for (let i = line.length - 1; i >= 0; i--) {
     const char = line[i];
-    if (brackets.length === 0 && line.startsWith(end, i)) {
-      // 斜边矩形的两个斜边可以同向或反向，但必须紧贴成对的方括号。
-      if (end !== ']' || (i > start && (line[i - 1] === '/' || line[i - 1] === '\\'))) {
-        return i + end.length;
-      }
-    }
-    if (char === '"') {
-      const quoteEnd = line.indexOf('"', i + 1);
-      if (quoteEnd !== -1) i = quoteEnd;
-      continue;
-    }
+    let next = i + 1;
     const bracketEnd = LABEL_BRACKET_ENDS.get(char);
-    if (bracketEnd) brackets.push(bracketEnd);
-    else if (char === brackets[brackets.length - 1]) brackets.pop();
+    if (bracketEnd) {
+      next = bracketEnds.get(bracketEnd)![next] || line.length;
+    } else if (char === '"') {
+      if (nextQuote !== -1) next = nextQuote + 1;
+      nextQuote = i;
+    }
+
+    for (const [end, offsets] of allEnds) {
+      // 斜边矩形的结束符允许两种斜线方向。
+      const matches = line.startsWith(end, i) || (end === '/]' && line.startsWith('\\]', i));
+      offsets[i] = matches ? i + end.length : offsets[next];
+    }
   }
-  return -1;
+  return shapeEnds;
 }
 
 function replaceArrowsOutsideLabels(line: string): string {
@@ -95,12 +107,14 @@ function replaceArrowsOutsideLabels(line: string): string {
   const protectedStarts = /"[^"]*(?:"|$)|(?<=[\p{L}\p{N}\p{M}_.!?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{)/gu;
   let result = '';
   let start = 0;
+  let labelEnds: Map<string, Uint16Array> | undefined;
   for (let match = protectedStarts.exec(line); match; match = protectedStarts.exec(line)) {
     const token = match[0];
     const shapeEnd = SHAPE_ENDS.get(token);
     if (shapeEnd) {
-      const end = findShapeEnd(line, protectedStarts.lastIndex, shapeEnd);
-      if (end === -1) continue;
+      labelEnds ??= indexLabelEnds(line);
+      const end = labelEnds.get(shapeEnd)![protectedStarts.lastIndex];
+      if (!end) continue;
       protectedStarts.lastIndex = end;
     }
     result += line.slice(start, match.index).replace(UNICODE_ARROW_RE, '-->');
