@@ -46,9 +46,9 @@ export interface PickSlotDeps {
    * 弹系统级选文件夹窗口;返回所选绝对路径,取消返回 null。
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
    */
-  showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string; fileAccess?: true }): Promise<string | null>;
+  showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string; fileAccess?: true; signal?: AbortSignal }): Promise<string | null>;
   issueDirectory?(ghostId: string, dirAbs: string, assertCurrent: () => void): Promise<string>;
-  showFileDialog?(params: { ghostName: string; purpose: string | null; accept: string[]; multiple: boolean }): Promise<string[] | null>;
+  showFileDialog?(params: { ghostName: string; purpose: string | null; accept: string[]; multiple: boolean; signal?: AbortSignal }): Promise<string[] | null>;
   importFiles?(ghostId: string, paths: string[], input: {
     into: 'media' | 'library'; path?: string; callId?: string; assertCurrent(): void;
   }): Promise<GhostPipePickResult>;
@@ -166,8 +166,8 @@ export class GhostPickSlot {
     const stillInstalled = () => remainsActive() && this.deps.getMutationTarget(ghostId) === target;
     if (fileAccess && !hasPluginHostToolGroupApproval(ghost, 'files')) return fail('PERMISSION_DENIED', '插件安装批准无效或未声明 files');
     if (callId) this.deps.holdCall?.(ghostId, callId, GHOST_PIPE_CALL_MAX_TOTAL_MS);
-    // A cancelled logical request does not close Electron's native panel. Keep
-    // BUSY owned by the dialog promise, not by the cancellation race below.
+    // Keep the slot occupied until the native panel actually finishes, even
+    // when the logical request has already returned cancellation.
     const selectAndDeliver = async (): Promise<GhostPipePickResult> => {
       this.dialogInFlight = true;
       let picked: string | null;
@@ -175,12 +175,13 @@ export class GhostPickSlot {
       try {
         if (fileMode) {
           files = await this.deps.showFileDialog!({ ghostName: ghost.manifest.name, purpose,
-            accept: (request.accept as string[] | undefined) ?? [], multiple: request.multiple === true });
+            accept: (request.accept as string[] | undefined) ?? [], multiple: request.multiple === true, ...(signal ? { signal } : {}) });
           picked = files?.[0] ?? null;
         } else picked = await this.deps.showDirectoryDialog({
           ghostName: ghost.manifest.name,
           purpose,
           ghostId,
+          ...(signal ? { signal } : {}),
           ...(fileAccess ? { fileAccess: true as const } : {}),
           ...(typeof request.mobilePageId === 'string' ? { mobilePageId: request.mobilePageId } : {}),
         });

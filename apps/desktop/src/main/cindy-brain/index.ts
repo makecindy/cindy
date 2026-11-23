@@ -8,6 +8,7 @@ import { createGhostExecutionPipe } from './executionPipe.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
+import { showPluginOpenDialog } from './pluginOpenPanel.js';
 import { mediaTypeForLibraryPath } from './runtime/ghostFiles.js';
 import { pluginUiPromptDeclined, pluginUiPromptSuppressed, deferPluginUiPrompt, declinePluginUiPrompt } from './pluginUiPreferences.js';
 import { ghostPermissionItems, declaredGhostControlPoints } from '../../shared/ghost.js';
@@ -4428,7 +4429,7 @@ export function getGhostPickSlot(): GhostPickSlot {
         if (overlaps(directory, managed) || overlaps(managed, directory)) throw new Error('HOST_STORAGE_PROTECTED');
         return issueGhostPickedDirectory(id, directory, assertCurrent);
       },
-      showDirectoryDialog: async ({ ghostName, purpose, ghostId, mobilePageId, fileAccess }) => {
+      showDirectoryDialog: async ({ ghostName, purpose, ghostId, mobilePageId, fileAccess, signal }) => {
         if (mobilePageId) {
           if (!mobilePluginPages) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
           return mobilePluginPages.chooseDirectory(mobilePageId, ghostId, purpose);
@@ -4437,16 +4438,16 @@ export function getGhostPickSlot(): GhostPickSlot {
         if (!win || win.isDestroyed()) throw new Error('没有可挂靠的宿主窗口');
         // main 侧 t() 只插值 {{appName}},插件名在调用点替换(与 bootstrap 菜单同做法)。
         const message = t(fileAccess ? 'settings.ghosts.perm.filesPickMessage' : 'settings.ghosts.pick.dialogMessage').replaceAll('{{name}}', () => ghostName);
-        const result = await dialog.showOpenDialog(win, {
+        const result = await showPluginOpenDialog(win, {
           title: t('settings.ghosts.pick.dialogTitle'),
           message: purpose ? `${message}\n${purpose}` : message,
           properties: ['openDirectory', 'createDirectory'],
-        });
+        }, signal);
         if (result.canceled || result.filePaths.length === 0) return null;
         // Record and return the selected target, never a retargetable alias.
         return fs.promises.realpath(result.filePaths[0]);
       },
-      showFileDialog: async ({ ghostName, purpose, multiple, accept }) => {
+      showFileDialog: async ({ ghostName, purpose, multiple, accept, signal }) => {
         const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
         if (!win || win.isDestroyed()) throw new Error('没有可挂靠的宿主窗口');
         const extensions = accept.flatMap(value => value.startsWith('.') ? [value.slice(1)] :
@@ -4454,11 +4455,11 @@ export function getGhostPickSlot(): GhostPickSlot {
           value === 'video/*' ? ['mp4', 'webm', 'mov'] : value === 'audio/*' ? ['mp3', 'wav', 'ogg', 'm4a'] :
           blobStore.extForMime(value) ? [blobStore.extForMime(value)!.slice(1)] :
           value === 'application/pdf' ? ['pdf'] : value === 'text/plain' ? ['txt'] : value === 'application/zip' ? ['zip'] : []);
-        const result = await dialog.showOpenDialog(win, {
+        const result = await showPluginOpenDialog(win, {
           title: ghostName, message: purpose ?? ghostName,
           properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
           ...(extensions.length ? { filters: [{ name: ghostName, extensions }] } : {}),
-        });
+        }, signal);
         if (result.canceled) return null;
         return Promise.all(result.filePaths.map(file => fs.promises.realpath(file)));
       },

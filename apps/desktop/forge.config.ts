@@ -2160,6 +2160,12 @@ const config: ForgeConfig = {
         );
         if (trackpadBuild.error || trackpadBuild.status !== 0)
           throw new Error('Native trackpad build failed');
+        const pluginOpenPanelBuild = spawnSync(process.execPath, [
+          path.join(__dirname, 'native/plugin-open-panel/build.mjs'),
+          path.join(__dirname, 'resources/tools/plugin-open-panel/cindy-plugin-open-panel.node'), arch,
+        ], { stdio: 'inherit' });
+        if (pluginOpenPanelBuild.error || pluginOpenPanelBuild.status !== 0)
+          throw new Error('Native plugin open panel build failed');
         runAgentActivityBuild([
           'addon',
           path.join(__dirname, 'resources/tools/agent-island/cindy-agent-activity.node'),
