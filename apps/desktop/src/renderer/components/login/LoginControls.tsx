@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type {
   CSSProperties,
   FocusEvent as ReactFocusEvent,
@@ -1019,7 +1019,9 @@ export function LoginConsentDialog({
 }) {
   const agreeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  // layout effect:焦点与 inert 在绘制前就位。替换另一层遮挡(如协议状态加载中的透明遮挡层)时,
+  // 前一层的清理与这里的接管在同一次提交里完成,中间不会有按键落到被盖住的控件上。
+  useLayoutEffect(() => {
     // 记录触发元素 → 打开聚焦「同意」→ 背景兄弟节点 inert(遮罩挡鼠标,
     // inert 挡键盘/读屏,与下方 Tab trap 构成完整模态)→ 关闭归还焦点(§14.2)
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;

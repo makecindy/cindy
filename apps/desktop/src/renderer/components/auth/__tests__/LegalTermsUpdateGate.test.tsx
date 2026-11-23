@@ -150,6 +150,28 @@ describe('LegalTermsUpdateGate', () => {
     expect(isAppInteractionLocked()).toBe(false);
   });
 
+  // 依据:透明遮挡层换成确认弹窗时,焦点不能在两者之间回到被盖住的控件。
+  it('keeps focus contained when the loading blocker is replaced by the dialog', async () => {
+    const background = document.createElement('div');
+    const input = document.createElement('input');
+    background.appendChild(input);
+    document.body.appendChild(background);
+    input.focus();
+    let resolve: (value: ReturnType<typeof payload>) => void = () => {};
+    electronAPI.getAnalyticsSettings.mockReturnValue(new Promise((r) => (resolve = r)));
+    render(<LegalTermsUpdateGate />);
+    expect(document.activeElement).not.toBe(input);
+
+    const focusDuringSwap: Array<Element | null> = [];
+    input.addEventListener('focus', () => focusDuringSwap.push(document.activeElement));
+    await act(async () => resolve(payload(true)));
+
+    expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByTestId('login-consent-agree'));
+    expect(background.inert).toBe(true);
+    background.remove();
+  });
+
   it('gives up waiting after a timeout and leaves the app usable', async () => {
     vi.useFakeTimers();
     try {
