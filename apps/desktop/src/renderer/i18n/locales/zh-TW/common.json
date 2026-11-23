@@ -5065,6 +5065,7 @@
       "formHint": "使用者 ID 是純數字；私聊 @userinfobot 可以查到自己的 ID。",
       "connect": "連線",
       "connectingAction": "連線中…",
+      "connectTimedOut": "連線逾時，請重試",
       "errorCode": {
         "invalid-token": "Bot Token 無效或已被重置，請重新填寫",
         "provider-api": "Telegram 服務返回錯誤，請稍後重試",
@@ -12502,6 +12503,7 @@
           "conflict": "這個機器人已經在這台電腦上使用了：在 設定 → IM 機器人 裡，或是在另一位夥伴那裡。",
           "botUnavailable": "{{name}} 目前無法使用，等它恢復後再試。",
           "connectFailed": "未能連線：{{reason}}",
+          "connectTimedOut": "連線逾時，請重試。",
           "failed": "未能完成，請稍後再試。",
           "personalBotGone": "設定 → IM 機器人 裡已經沒有這個機器人了，請改為填寫憑證。"
         },

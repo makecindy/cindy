@@ -5065,6 +5065,7 @@
       "formHint": "ユーザー ID は数字です。@userinfobot に DM すると自分の ID を確認できます。",
       "connect": "接続",
       "connectingAction": "接続中…",
+      "connectTimedOut": "接続がタイムアウトしました。もう一度お試しください。",
       "errorCode": {
         "invalid-token": "Bot Token が無効か再発行されています。入力し直してください",
         "provider-api": "Telegram 側でエラーが発生しました。しばらくしてから再試行してください",
@@ -12511,6 +12512,7 @@
           "conflict": "このボットはすでにこのコンピューターで使われています（設定 → IM ボット、または別の仲間）。",
           "botUnavailable": "{{name}} は現在利用できません。復帰後にもう一度お試しください。",
           "connectFailed": "接続できませんでした：{{reason}}",
+          "connectTimedOut": "接続がタイムアウトしました。もう一度お試しください。",
           "failed": "完了できませんでした。しばらくしてからもう一度お試しください。",
           "personalBotGone": "設定 → IM ボット にこのボットはもうありません。認証情報を入力してください。"
         },

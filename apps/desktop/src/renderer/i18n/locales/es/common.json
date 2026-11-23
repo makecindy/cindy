@@ -5164,6 +5164,7 @@
       "formHint": "El ID de usuario es numérico; escribe a @userinfobot por mensaje directo para consultar tu ID.",
       "connect": "Conectar",
       "connectingAction": "Conectando…",
+      "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
       "errorCode": {
         "invalid-token": "El token del bot no es válido o se restableció: vuelve a introducirlo",
         "provider-api": "Telegram devolvió un error; inténtalo de nuevo en breve",
@@ -12657,6 +12658,7 @@
           "conflict": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo.",
           "botUnavailable": "{{name}} no está disponible en este momento. Inténtalo cuando vuelva.",
           "connectFailed": "No se pudo conectar: {{reason}}",
+          "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
           "failed": "No se pudo terminar. Inténtalo más tarde.",
           "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales."
         },

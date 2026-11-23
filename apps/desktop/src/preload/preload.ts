@@ -2760,6 +2760,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{
       status: TelegramBotStatusWire;
       saveErrorStatus?: TelegramBotStatusWire;
+      /** 保存失败只是建连握手超时(界面保留输入、提示重试)。 */
+      saveTimedOut?: boolean;
       ownerUserId: string | null;
       botUsername: string | null;
     }> => ipcRenderer.invoke('telegramBot:set-config', payload),

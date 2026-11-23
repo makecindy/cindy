@@ -2511,6 +2511,8 @@ interface ElectronAPI {
     setConfig: (payload: { token: string; ownerUserId: string }) => Promise<{
       status: TelegramBotTransportStatus;
       saveErrorStatus?: TelegramBotTransportStatus;
+      /** 保存失败只是建连握手超时(界面保留输入、提示重试)。 */
+      saveTimedOut?: boolean;
       ownerUserId: string | null;
       botUsername: string | null;
     }>;

@@ -374,9 +374,47 @@ describe('TelegramIM', () => {
     const result = (await ctx.handlers.get('telegramBot:set-config')!({
       token: '999:bad-token-abcdefghijklmn',
       ownerUserId: OWNER_ID,
-    })) as { saveErrorStatus?: { kind: string } };
+    })) as { saveErrorStatus?: { kind: string }; saveTimedOut?: boolean };
     expect(result.saveErrorStatus?.kind).toBe('error');
+    expect(result.saveTimedOut).toBeUndefined();
     expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  });
+
+  // Maintainer review on #11994: a new binding whose handshake only timed out reports that
+  // separately (the UI keeps the typed values and offers "try again"), leaves nothing
+  // half-saved, and the identical payload then connects. An invalid token stays a plain failure.
+  it('set-config 握手超时: 标出超时、不留半套凭证, 同一份输入重试即连上', async () => {
+    vi.useFakeTimers();
+    const original = api.call.bind(api);
+    let stall = true;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getMe' && stall) {
+        stall = false;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      }
+      return original(method, params, signal);
+    }) as typeof api.call;
+    const save = ctx.handlers.get('telegramBot:set-config')!;
+    const payload = { token: '999:secret-token-abcdefghijk', ownerUserId: OWNER_ID };
+    try {
+      const first = save(payload) as Promise<{ saveTimedOut?: boolean; saveErrorStatus?: { code?: string } }>;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await first).toMatchObject({ saveTimedOut: true, saveErrorStatus: { code: 'network' } });
+      expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(im.getStatus().kind).toBe('error');
+
+      const second = (await save(payload)) as { saveTimedOut?: boolean; saveErrorStatus?: unknown };
+      expect(second.saveTimedOut).toBeUndefined();
+      expect(second.saveErrorStatus).toBeUndefined();
+      expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+      expect(ctx.secrets.get('telegram-bot-token')).toBe(payload.token);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('set-config 连接失败且旧 secret 回滚写失败: 落下线闩锁, 重启不得用混合配置上线', async () => {

@@ -34,6 +34,7 @@ import { ownerScopedImSecrets } from '../ownerScopedStorage';
 import { readWechatChannelSettings, writeWechatCompanionBinding } from '../wechat/channelSettings';
 import {
   BOT_IM_CONNECTION_CHANGED_EVENT,
+  BOT_IM_CONNECT_TIMEOUT_REASON,
   isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionAddInput,
@@ -584,7 +585,8 @@ async function addBotImConnectionNow(
         if (input.channel !== 'telegram') return rollback('channel mismatch');
         const state = await transport.im.setConfig({ token: input.token, ownerUserId: input.ownerUserId });
         const failed = state.saveErrorStatus ?? (state.status.kind === 'connected' ? null : state.status);
-        if (failed) return rollback(describeStatusFailure(failed));
+        // 只是握手超时: 用稳定原因, 页面据此保留输入、提示用原输入重试。
+        if (failed) return rollback(state.saveTimedOut ? BOT_IM_CONNECT_TIMEOUT_REASON : describeStatusFailure(failed));
         break;
       }
       case 'feishu': {

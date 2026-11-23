@@ -5164,6 +5164,7 @@
       "formHint": "L'identifiant utilisateur est numérique ; envoyez un message privé à @userinfobot pour connaître le vôtre.",
       "connect": "Connecter",
       "connectingAction": "Connexion…",
+      "connectTimedOut": "Délai de connexion dépassé. Réessayez.",
       "errorCode": {
         "invalid-token": "Le jeton du bot est invalide ou a été réinitialisé : saisissez-le à nouveau",
         "provider-api": "Telegram a renvoyé une erreur : réessayez dans un instant",
@@ -12657,6 +12658,7 @@
           "conflict": "Ce bot est déjà connecté sur cet ordinateur, dans Paramètres → Bots de messagerie ou sur un autre ami.",
           "botUnavailable": "{{name}} n'est pas disponible pour le moment. Réessayez lorsqu'il sera de retour.",
           "connectFailed": "Connexion impossible : {{reason}}",
+          "connectTimedOut": "Délai de connexion dépassé. Réessayez.",
           "failed": "Impossible de terminer. Réessayez plus tard.",
           "personalBotGone": "Ce bot n'est plus configuré dans Paramètres → Bots de messagerie. Saisissez plutôt ses identifiants."
         },

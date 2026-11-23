@@ -142,6 +142,12 @@ function fakeTelegram(prefix: string, opts: { connect: boolean }) {
     getConfigState: () => ({ status, ownerUserId: h.secrets.get(`${prefix}telegram-owner-user-id`) ?? null, botUsername: 'mia_bot' }),
     setConfig: vi.fn(async (payload: { token: string; ownerUserId: string }) => {
       await h.beforeTelegramSetConfig?.();
+      if (telegramSaveTimesOutOnce) {
+        // 传输层握手超时: 凭证已回滚, 只把「是超时」报上来。
+        telegramSaveTimesOutOnce = false;
+        set({ kind: 'error', reason: 'handshake timed out', code: 'network' } as typeof status);
+        return { status, ownerUserId: null, botUsername: null, saveErrorStatus: status, saveTimedOut: true };
+      }
       h.secrets.set(`${prefix}telegram-bot-token`, payload.token);
       h.secrets.set(`${prefix}telegram-owner-user-id`, payload.ownerUserId);
       if (!opts.connect) {
@@ -311,6 +317,7 @@ const createdOther: Array<{
 }> = [];
 let connectOutcome = true;
 let telegramConflictAfterConnect = false;
+let telegramSaveTimesOutOnce = false;
 
 describe('bot im connection runtime', () => {
   // Electron IPC 安全规则 §5：新增归档入口不能绕过 sender/payload 校验；旧测试只覆盖连接生命周期。
@@ -393,6 +400,7 @@ describe('bot im connection runtime', () => {
     createdOther.length = 0;
     connectOutcome = true;
     telegramConflictAfterConnect = false;
+    telegramSaveTimesOutOnce = false;
     adoptionTesting.reset();
     h.drainWechat.mockClear();
     configureBotImConnectionRuntime({
@@ -784,6 +792,21 @@ describe('bot im connection runtime', () => {
     expect(created[0]!.im.dispose).toHaveBeenCalled();
     expect(created[0]!.orchestrator.unregister).toHaveBeenCalled();
     expect(__testing.instances.size).toBe(0);
+  });
+
+  // Maintainer review on #11994: a timed-out handshake is reported with the stable `timeout`
+  // reason the add dialog keys on, leaves no record or key behind, and the very same input
+  // then connects without re-entering anything.
+  it('reports a timed-out add as `timeout` and lets the identical input connect next time', async () => {
+    const input = { botId: 'bot-mia', channel: 'telegram' as const, token: '1:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' };
+    telegramSaveTimesOutOnce = true;
+    await expect(addBotImConnection(input)).rejects.toThrow(/CONNECT_FAILED: timeout$/);
+    expect(listBotImConnections()).toEqual([]);
+    expect([...h.secrets.keys()]).toEqual([]);
+
+    const added = await addBotImConnection(input);
+    expect(added.connection.status).toEqual({ kind: 'connected', appId: '777' });
+    expect(listBotImConnections()).toHaveLength(1);
   });
 
   it('refuses an inactive teammate and a token already used by the settings-page bot', async () => {
