@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 卡片底色按 roles 取色：白天 / 夜间由 values(-night)/colors.xml 决定，
+     所以这张 drawable 只有一份，不再配 drawable-night。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
   <corners android:radius="18dp" />
-  <solid android:color="#F4F4F6" />
+  <solid android:color="@color/cindy_entry_widget_card" />
 </shape>

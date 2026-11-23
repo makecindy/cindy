@@ -270,20 +270,33 @@ describe('mobile native boundary contracts', () => {
   // 这组 id；RemoteViews 碰到布局里没有的 id 会抛 ActionException，整次更新被桌面拒绝，
   // 组件就停在旧画面且没有可见报错。原生端没有可跑的渲染测试，只能在 guard 里锁。
   it('keeps every entry widget layout carrying the view ids the provider updates', () => {
-    const xml = (directory: string, name: string) => readFileSync(
-      resolve(process.cwd(), `modules/cindy-entry-widget/android/src/main/res/${directory}/${name}.xml`),
+    const xml = (path: string) => readFileSync(
+      resolve(process.cwd(), 'modules/cindy-entry-widget/android/src/main/res', path),
       'utf8',
     );
     const shared = ['cindy_entry_widget_root', 'cindy_entry_widget_icon', 'cindy_entry_widget_title'];
-    for (const directory of ['layout', 'layout-night']) {
-      for (const name of ['cindy_entry_widget', 'cindy_entry_widget_compact', 'cindy_entry_widget_row']) {
-        const layout = xml(directory, name);
-        for (const id of shared) expect(layout).toContain(`@+id/${id}`);
-        // 电脑名只属于标准卡：紧凑 / 横排版式一旦带上它，Provider 的 CARD 分支就会碰到
-        // 不存在的 id（也可能反过来让紧凑版被多写一行）。
-        if (name === 'cindy_entry_widget') expect(layout).toContain('@+id/cindy_entry_widget_subtitle');
-        else expect(layout).not.toContain('cindy_entry_widget_subtitle');
-      }
+    for (const name of ['cindy_entry_widget', 'cindy_entry_widget_compact', 'cindy_entry_widget_row']) {
+      const layout = xml(`layout/${name}.xml`);
+      for (const id of shared) expect(layout).toContain(`@+id/${id}`);
+      // 电脑名只属于标准卡：紧凑 / 横排版式一旦带上它，Provider 的 CARD 分支就会碰到
+      // 不存在的 id（也可能反过来让紧凑版被多写一行）。
+      if (name === 'cindy_entry_widget') expect(layout).toContain('@+id/cindy_entry_widget_subtitle');
+      else expect(layout).not.toContain('cindy_entry_widget_subtitle');
+    }
+  });
+  // guard: 版式只有一套，日夜差异全在 values(-night)/colors.xml。少一份 night 定义时系统
+  // 会默默退回白天色，深色壁纸上的名字直接糊掉且没有任何报错。
+  it('defines every entry widget colour for both themes', () => {
+    const dir = 'modules/cindy-entry-widget/android/src/main/res';
+    const read = (path: string) => readFileSync(resolve(process.cwd(), dir, path), 'utf8');
+    const referenced = ['layout/cindy_entry_widget.xml', 'layout/cindy_entry_widget_compact.xml',
+      'layout/cindy_entry_widget_row.xml', 'drawable/cindy_entry_widget_card.xml']
+      .flatMap((file) => [...read(file).matchAll(/@color\/([a-z0-9_]+)/g)].map((match) => match[1]));
+    expect(referenced.length).toBeGreaterThan(0);
+    for (const theme of ['values', 'values-night']) {
+      const declared = [...read(`${theme}/colors.xml`).matchAll(/<color name="([a-z0-9_]+)"/g)]
+        .map((match) => match[1]);
+      for (const colour of new Set(referenced)) expect(declared).toContain(colour);
     }
   });
 });

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 组件是 RemoteViews，读不到 Web / RN 的设计 token，所以色值只在这里定义一次：
+     白天一份、夜间一份（values-night），layout 与 drawable 一律引用，不再逐文件写死。 -->
+<resources>
+  <color name="cindy_entry_widget_card">#F4F4F6</color>
+  <color name="cindy_entry_widget_text">#1B1B1F</color>
+  <color name="cindy_entry_widget_text_secondary">#8A8A8F</color>
+  <color name="cindy_entry_widget_text_shadow">#66000000</color>
+</resources>

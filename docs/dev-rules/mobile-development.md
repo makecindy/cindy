@@ -955,10 +955,13 @@ Android 17 / HyperOS）：系统按契约把 `CONFIRM_PIN_SHORTCUT` 交给桌面
 尺寸：默认放上桌面 2×2（Android 12 起由 `targetCellWidth/Height` 决定，旧系统按 `minWidth/minHeight`
 = 110dp），`minResizeWidth/Height` = 40dp，可以一直缩到 1 格，横竖都可拖。版式按启动器报告的
 实际尺寸选（`OPTION_APPWIDGET_MIN/MAX_*`，与用量组件同一读法：竖屏用 MIN_WIDTH + MAX_HEIGHT，
-横屏反过来）：一格宽用 `cindy_entry_widget_compact`（头像 + 一行名字，高度 < 56dp 时只留头像）；
+横屏反过来）：一格宽用 `cindy_entry_widget_compact`——这张不画卡片底色，按桌面图标的观感摆
+40dp 头像 + 一行带浅阴影的名字，高度 < 68dp 时只留头像；
 高度不足宽度的 62%（1 行高，如 2×1）用 `cindy_entry_widget_row`（头像在左、名字在右）；其余用
 标准卡 `cindy_entry_widget`（头像 + 名字，2 格见方才带电脑名）。三套版式共用同一组 view id，
 Provider 只碰当前版式里存在的 id —— RemoteViews 对不存在的 id 报错会让整次更新被桌面拒绝。
+版式只有一套：日夜差异全在 `values(-night)/colors.xml`，布局与卡片 drawable 只引用颜色名，
+不再各存一份 `layout-night`。
 
 深链带 `desktopEntry=1` 标记，由根级 `DesktopEntryHost` 校验白名单（只允许伙伴会话与新建任务）再跳转；
 被篡改的链接直接丢弃。

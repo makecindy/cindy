@@ -22,7 +22,7 @@
     android:ellipsize="end"
     android:gravity="center"
     android:maxLines="1"
-    android:textColor="#1B1B1F"
+    android:textColor="@color/cindy_entry_widget_text"
     android:textSize="13sp" />
   <TextView
     android:id="@+id/cindy_entry_widget_subtitle"
@@ -32,6 +32,6 @@
     android:ellipsize="end"
     android:gravity="center"
     android:maxLines="1"
-    android:textColor="#8A8A8F"
+    android:textColor="@color/cindy_entry_widget_text_secondary"
     android:textSize="11sp" />
 </LinearLayout>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与 values/colors.xml 同名，桌面处于深色模式时由系统自动取这一份。 -->
+<resources>
+  <color name="cindy_entry_widget_card">#1F1F22</color>
+  <color name="cindy_entry_widget_text">#F2F2F7</color>
+  <color name="cindy_entry_widget_text_secondary">#9A9AA0</color>
+  <color name="cindy_entry_widget_text_shadow">#99000000</color>
+</resources>

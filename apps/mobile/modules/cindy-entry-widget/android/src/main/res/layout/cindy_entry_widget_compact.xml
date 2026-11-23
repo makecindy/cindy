@@ -1,27 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 1 格宽：头像 + 名字。名字放不下时由 Provider 隐藏，只剩居中的头像。 -->
+<!-- 1 格：不画卡片底色，按桌面图标的观感只摆头像 + 名字。名字放不下时由 Provider 隐藏，
+     只剩居中的头像；名字带一层浅阴影，省得落在亮壁纸或照片上糊掉。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
   android:id="@+id/cindy_entry_widget_root"
   android:layout_width="match_parent"
   android:layout_height="match_parent"
-  android:background="@drawable/cindy_entry_widget_compact_card"
   android:gravity="center"
   android:orientation="vertical"
-  android:padding="6dp">
+  android:padding="4dp">
   <ImageView
     android:id="@+id/cindy_entry_widget_icon"
-    android:layout_width="32dp"
-    android:layout_height="32dp"
+    android:layout_width="40dp"
+    android:layout_height="40dp"
     android:contentDescription="@null"
     android:scaleType="fitCenter" />
   <TextView
     android:id="@+id/cindy_entry_widget_title"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginTop="2dp"
+    android:layout_marginTop="3dp"
     android:ellipsize="end"
     android:gravity="center"
     android:maxLines="1"
-    android:textColor="#1B1B1F"
+    android:shadowColor="@color/cindy_entry_widget_text_shadow"
+    android:shadowDx="0"
+    android:shadowDy="1"
+    android:shadowRadius="3"
+    android:textColor="@color/cindy_entry_widget_text"
     android:textSize="11sp" />
 </LinearLayout>

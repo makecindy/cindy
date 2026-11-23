@@ -26,6 +26,6 @@
     android:ellipsize="end"
     android:gravity="center_vertical"
     android:maxLines="1"
-    android:textColor="#1B1B1F"
+    android:textColor="@color/cindy_entry_widget_text"
     android:textSize="12sp" />
 </LinearLayout>

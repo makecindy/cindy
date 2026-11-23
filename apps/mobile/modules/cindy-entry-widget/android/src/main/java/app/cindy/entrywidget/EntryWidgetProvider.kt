@@ -40,8 +40,9 @@ class EntryWidgetProvider : AppWidgetProvider() {
   companion object {
     /** 两格的实际尺寸；启动器按 1 格约 40–75dp、2 格 ≥110dp 折算。 */
     private const val TWO_CELLS_DP = 110f
-    /** 紧凑版里放得下名字的高度：6dp×2 边距 + 32dp 头像 + 2dp 间距 + 11sp 字高。 */
-    private const val COMPACT_NAME_MIN_DP = 56f
+    /** 紧凑版里放得下名字的高度：4dp×2 边距 + 40dp 头像 + 3dp 间距 + 11sp 字高（约 16dp）。
+     *  比这更矮时只留头像，看起来就是一枚桌面图标。 */
+    private const val COMPACT_NAME_MIN_DP = 68f
     /** 高度不足宽度的这个比例，按「1 行高」处理（2×1 约 0.43，两行见方约 0.9–1.0）。 */
     private const val ROW_HEIGHT_RATIO = 0.62f
     /** 取不到尺寸时按 2×2 画，与默认放置一致。 */
