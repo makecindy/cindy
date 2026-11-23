@@ -6634,7 +6634,8 @@ export class AgentInputCoordinator {
     state.botCapabilityRefreshVersion += 1;
     for (const item of state.pendingQueue) {
       const wait = this.botCapabilityRefreshWaits.get(item);
-      if (!wait?.waiting) continue;
+      // The fallback can have released the wait but hit another drain gate.
+      if (!wait) continue;
       if (wait.timer) clearTimeout(wait.timer);
       wait.timer = null;
       wait.waiting = false;

@@ -1,4 +1,5 @@
 import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
+import { schedulePendingInteractionTimeout, type PendingInteractionTimeoutEntry } from '../interactionTimeout.js';
 import { desktopContextRecoveryAbortSignal } from '../contextRecoveryAssembly.desktop.js';
 import { acceptedAttachmentReplay } from '../attachmentReplay.js';
 import { normalizeUserMessage } from '../normalizeAttachments.desktop.js';
@@ -3078,6 +3079,69 @@ describe('AgentInputCoordinator send transaction', () => {
       await flush();
       expect(h.sendToAgent.mock.calls[2][3].persistUserMessage?.clientId).toBe('waiting');
       expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #7316, unit: drive the host timeout after the one fallback is deferred or
+  // hits the busy gate. The neighboring tests inject refresh-ready directly.
+  it.each(['deferred', 'blocked'])('dispatches the original input once after interaction timeout (%s fallback)', async (fallback) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-interaction-timeout';
+      const requestId = 'permission';
+      const entry: PendingInteractionTimeoutEntry = {
+        sessionId: sid,
+        kind: 'permission',
+        request: { kind: 'permission', requestId, toolName: 'test', input: {} },
+        resolve: vi.fn(),
+        timeoutRemainingMs: 5_000,
+      };
+      let pending: PendingInteractionTimeoutEntry | undefined;
+      const openInteraction = () => {
+        pending = entry;
+        h.setPendingInteraction(true);
+        schedulePendingInteractionTimeout(requestId, entry, {
+          getPending: () => pending,
+          isExecutionPaused: sessionId => h.coordinator.isExecutionPaused(sessionId),
+          clearPending: () => {
+            pending = undefined;
+            h.setPendingInteraction(false);
+            return entry;
+          },
+          dismiss: vi.fn(),
+          publishTimeout: vi.fn(),
+          onInteractionTimedOut: sessionId => h.coordinator.onBotCapabilityRefreshReady(sessionId),
+        });
+      };
+      const error = new BotCapabilityRefreshDeferredError();
+      h.sendToAgent.mockRejectedValueOnce(error);
+      if (fallback === 'deferred') {
+        h.sendToAgent.mockImplementationOnce(async () => {
+          openInteraction();
+          throw error;
+        });
+      }
+
+      h.coordinator.enqueue(sid, makeItem('original', 'send after the interaction settles'));
+      await flush();
+      if (fallback === 'blocked') openInteraction();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const attemptsBeforeTimeout = fallback === 'deferred' ? 2 : 1;
+      expect(h.sendToAgent).toHaveBeenCalledTimes(attemptsBeforeTimeout);
+      expect(h.coordinator.getProjection(sid)).toMatchObject({
+        error: null,
+        pendingQueue: [expect.objectContaining({ clientId: 'original' })],
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(entry.resolve).toHaveBeenCalledWith({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+      expect(h.sendToAgent).toHaveBeenCalledTimes(attemptsBeforeTimeout + 1);
+      expect(h.sendToAgent.mock.calls[attemptsBeforeTimeout][3].persistUserMessage?.clientId).toBe('original');
+      expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1);
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
