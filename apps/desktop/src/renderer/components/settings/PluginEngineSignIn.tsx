@@ -31,6 +31,7 @@ function SignInForm({ methods, onChange }: { methods: readonly Method[]; onChang
     <div className="flex flex-col gap-3" data-testid="plugin-engine-sign-in">
       {methods.length > 1 && (
         <SegmentedControl
+          data-settings-search-action="Choose how the plugin signs in the account being added in this dialog"
           aria-label={t('subscriptionAccounts.pluginSignIn.method')}
           value={methodId}
           options={methods.map((item) => ({ value: item.id, label: item.label }))}
@@ -44,6 +45,7 @@ function SignInForm({ methods, onChange }: { methods: readonly Method[]; onChang
       {method.kind === 'secret' ? (
         <>
           <Input
+            data-settings-search-action="Enter the API key of the plugin engine account being signed in in this dialog"
             secret
             mono
             autoFocus
