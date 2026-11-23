@@ -8589,7 +8589,7 @@
           "updated": "法器已更新。",
           "empty": "暂无可安装的版本。",
           "sign-in": "请登录 GitHub 后检查更新。",
-          "forbidden": "当前 GitHub 登录无权读取此私有仓库。",
+          "forbidden": "无法读取 GitHub Release。请检查仓库链接和 GitHub 账号的访问权限。",
           "unavailable": "无法检查或安装更新，请重试。"
         },
         "customSlotTitle": "法器自订设置区",

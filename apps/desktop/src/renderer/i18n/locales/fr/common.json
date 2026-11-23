@@ -8718,7 +8718,7 @@
           "updated": "Plugin mis à jour.",
           "empty": "Aucune version installable disponible.",
           "sign-in": "Connectez-vous à GitHub pour rechercher des mises à jour.",
-          "forbidden": "Ce compte GitHub ne peut pas lire le dépôt privé.",
+          "forbidden": "Impossible de lire la version publiée sur GitHub. Vérifiez le lien du dépôt et les droits d’accès de votre compte GitHub.",
           "unavailable": "Impossible de vérifier ou d’installer la mise à jour. Réessayez."
         },
         "customSlotTitle": "Zone de paramètres personnalisés du plugin",

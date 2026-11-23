@@ -8718,7 +8718,7 @@
           "updated": "Complemento actualizado.",
           "empty": "No hay ninguna versión disponible para instalar.",
           "sign-in": "Inicia sesión en GitHub para buscar actualizaciones.",
-          "forbidden": "Esta sesión de GitHub no tiene acceso de lectura al repositorio privado.",
+          "forbidden": "No se pudo leer la versión publicada en GitHub. Comprueba el enlace del repositorio y los permisos de tu cuenta de GitHub.",
           "unavailable": "No se pudo comprobar ni instalar la actualización. Inténtalo de nuevo."
         },
         "customSlotTitle": "Área de configuración personalizada del complemento",

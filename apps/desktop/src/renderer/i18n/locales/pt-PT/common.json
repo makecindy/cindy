@@ -8718,7 +8718,7 @@
           "updated": "Plugin atualizado.",
           "empty": "Nenhuma versão disponível para instalar.",
           "sign-in": "Inicie sessão no GitHub para procurar atualizações.",
-          "forbidden": "Esta conta do GitHub não tem acesso de leitura ao repositório privado.",
+          "forbidden": "Não foi possível ler a versão publicada no GitHub. Verifique a ligação do repositório e as permissões da sua conta do GitHub.",
           "unavailable": "Não foi possível verificar ou instalar a atualização. Tente novamente."
         },
         "customSlotTitle": "Área de definições personalizadas do plugin",
