@@ -3150,7 +3150,19 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
   scheduleNativeHistoryBackupCleanup();
-  if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
+  if (getMakerIfReady()) {
+    refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
+  } else if (dataOwnerId !== null && makerProviderRefreshConfigured) {
+    // Resident plugins can start below before the post-DB provider startup.
+    // Reuse the normal Maker constructor to register this owner's providers.
+    try {
+      getMakerCore();
+    } catch (error) {
+      ownerBackgroundLog.warn('Maker initialization before resident plugin startup failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
     const outcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
