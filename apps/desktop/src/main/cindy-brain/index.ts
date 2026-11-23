@@ -9543,7 +9543,7 @@ export function registerGhostIpc(): void {
         if (readPluginHostUi(entry.config.plugin!.instance) !== entry) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
       },
     }] : []),
-    read: instance => ghostKv.read(instance),
+    readStrict: ghostKv.readStrict,
     write: (instance, value) => {
       ghostKv.write(instance, value);
       getGhostSetupChangeBus().emit(instance, { source: 'kv' });

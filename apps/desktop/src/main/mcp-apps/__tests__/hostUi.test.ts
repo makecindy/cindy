@@ -94,7 +94,7 @@ it('exposes only approved registered settings and ignores a forged namespace', a
   entry.config.plugin!.instance = 'local__example';
   let stored: Record<string, unknown> = { private: 'keep' };
   configurePluginSettings({ entries: () => [{ instance: 'local__example', title: 'Example', settings, assertCurrent() {} }],
-    read: () => stored, write: (_instance, value) => { stored = value; } });
+    readStrict: () => stored, write: (_instance, value) => { stored = value; } });
   const binding = bindPluginUiResource('renderer:1', null, 'local__example', 'global', () => 'rev');
   expect(binding.hostTools?.some(tool => tool.name === 'cindy.ui.settings')).toBe(true);
   const signal = new AbortController().signal;

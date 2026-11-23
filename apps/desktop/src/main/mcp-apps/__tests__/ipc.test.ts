@@ -400,7 +400,7 @@ describe('MCP App persistence and IPC wiring', () => {
     let stored: Record<string, unknown> = { private: 'keep' };
     configurePluginSettings({ entries: () => [{ instance: 'local__demo', title: 'Demo', settings, assertCurrent() {
       if (!state.plugin) throw new Error('revoked');
-    } }], read: () => stored, write: (_instance, value) => { stored = value; } });
+    } }], readStrict: () => stored, write: (_instance, value) => { stored = value; } });
     const event = { sender: { id: 1, isDestroyed: () => false } };
     const input = { op: 'plugin-settings', instanceId: 'local__demo', operation: 'update', patch: { enabled: false } };
     expect(await state.handle!(event, null, input)).toMatchObject({ section: 'plugins.local__demo', state: { value: { enabled: false } } });
