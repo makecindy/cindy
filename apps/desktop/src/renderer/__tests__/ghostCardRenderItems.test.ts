@@ -14,6 +14,7 @@ import { buildRenderItems, buildCachedRenderItems, type RenderItem } from '../co
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { GhostCardSnapshot, GhostCardEntry, GhostLiveCard } from '@/cindy-brain/ghostCardStore';
+import { __resetGhostCardStoreForTest, getGhostCardSnapshot, ingestCardPush } from '@/cindy-brain/ghostCardStore';
 import type { TurnChangeSetSummary } from '../../shared/turnChangeSet';
 
 const GHOST_TOOL = 'mcp__cindy__ghost_call';
@@ -68,6 +69,28 @@ describe('ghost_card · settled 配对', () => {
     expect(items.find(item => item.type === 'ghost_card')).toMatchObject({
       callId: 'library-card', ghostId: 'library', settled: true,
     });
+  });
+
+  it('matches a live Codex startup card to its host-recorded alias', () => {
+    const alias = 'ghost_start_library_find_529157ba331ac99bbeaa';
+    const named: ChatMessage = {
+      ...mkGhostCall('named'),
+      toolName: `mcp:cindy:${alias}`,
+      toolInput: { args: { query: 'atlas' } },
+    };
+    __resetGhostCardStoreForTest();
+    try {
+      ingestCardPush({
+        callId: 'progress', ghostId: 'library', sessionId: 'session-a',
+        toolUseId: null, startupToolName: alias, html: '<p>Progress</p>', height: 240,
+      });
+      const items = itemsOf([mkGhostCall('progressive', 'library'), named], getGhostCardSnapshot());
+      expect(items.find(item => item.type === 'ghost_card')).toMatchObject({
+        callId: 'progress', toolCall: { clientId: 'named' }, settled: false,
+      });
+    } finally {
+      __resetGhostCardStoreForTest();
+    }
   });
   // Unit regression: tool media and cindy-ui independently displayed the same
   // generated video. The existing Markdown image cases do not cover components.

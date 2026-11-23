@@ -17,6 +17,7 @@ import {
   handleGhostList,
   handleGhostManual,
   handleMedia,
+  prepareStartupGhostToolInputSchema,
 } from "../ghost/mcpServer.js";
 import type {
   CindyGhostInfo,
@@ -2284,7 +2285,8 @@ describe('personal community author MCP transport', () => {
     } as const;
     const callGhostTool = vi.fn<CindyGhostsMcpDeps['callGhostTool']>(async () => ({ ok: true, result: { found: true } }));
     const startupTools: NonNullable<CindyGhostsMcpDeps['startupTools']>[number][] = [
-      { name, ghostId: 'library', namespace: 'local', tool: 'find', description: 'Find books', parameters },
+      { name, ghostId: 'library', namespace: 'local', tool: 'find', description: 'Find books',
+        inputSchema: prepareStartupGhostToolInputSchema(parameters)! },
     ];
     const { client, close } = await connected(fakeDeps({ callGhostTool, startupTools }));
     try {

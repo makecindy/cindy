@@ -13,6 +13,8 @@
  * 会话内恒定。
  */
 
+import type { z } from 'zod';
+
 /** 意识注册的单个工具(来自 ghost.json 的 tools 声明,host 透传)。 */
 export interface CindyGhostToolInfo {
   name: string;
@@ -487,7 +489,7 @@ export interface CindyGhostsMcpDeps {
     namespace: string | null;
     tool: string;
     description: string;
-    parameters?: Record<string, unknown>;
+    inputSchema: z.ZodType<{ args: Record<string, unknown> }>;
   }[];
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;

@@ -20,7 +20,7 @@ import { createStaticPromptProvider } from './staticPrompt.js';
 import { GhostSubscriptionGateway, isGhostEligibleSessionRow, isGhostSessionSwitchEligibleRow,
   type GhostScreenResult, type GhostSubscriptionGatewayDeps } from './subscriptionGateway.js';
 import { createPluginToolLifecycle } from './toolLifecycleControl.js';
-import { startupGhostToolName } from './startupGhostTool.js';
+import { findStartupGhostToolTarget, startupGhostToolName } from './startupGhostTool.js';
 
 export const GHOST_HOOK_FUSED_CHANNEL = 'ghosts:hook-fused';
 
@@ -301,14 +301,13 @@ export function createRuntimePluginHost(ports: RuntimePluginHostPorts) {
     return toolApproval(findGhostForInstanceId(ghostId, namespace), tool);
   };
   function resolveStartupToolApproval(name: string) {
-    for (const ghost of availableGhosts()) {
-      const tool = ghost.manifest.tools?.find(candidate => startupGhostToolName(ghost, candidate) === name);
-      if (tool) {
-        const facts = toolApproval(ghost, tool.name);
-        if (facts) return { ...facts, ...installedGhostLogicalIdentity(ghost), tool: tool.name };
-      }
-    }
-    return null;
+    const target = findStartupGhostToolTarget(name);
+    if (!target) return null;
+    const ghost = findGhostForInstanceId(target.instance);
+    const tool = ghost?.manifest.tools?.find(candidate => candidate.name === target.tool);
+    if (!ghost || !tool || startupGhostToolName(ghost, tool) !== name) return null;
+    const facts = toolApproval(ghost, tool.name);
+    return facts ? { ...facts, ...installedGhostLogicalIdentity(ghost), tool: tool.name } : null;
   }
 
   return { getGhostSubscriptionGateway, dropGhost, isGhostEligibleSession, hasEnabledUserMessageHookGhost,

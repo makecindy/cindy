@@ -1302,6 +1302,25 @@ export async function handleForgePublishStatus(
 }
 
 /** 构建 cindy_ghosts MCP server(host 在会话装配时按 provider 惯例创建实例)。 */
+export function prepareStartupGhostToolInputSchema(
+  parameters: Record<string, unknown> = { type: "object", additionalProperties: false },
+): z.ZodType<{ args: Record<string, unknown> }> | undefined {
+  // Nested schemas have a different reference root. Leave incompatible
+  // schemas on the progressive route, where the plugin can interpret them.
+  const serialized = JSON.stringify(parameters);
+  if (parameters.type !== "object" || new TextEncoder().encode(serialized).length > 4096 ||
+      /"\$(?:ref|id|schema|dynamicRef|recursiveRef)"\s*:/.test(serialized)) return undefined;
+  try {
+    const validate = new AjvJsonSchemaValidator().getValidator(parameters);
+    const argsSchema = z.looseObject({}).refine((args) => validate(args).valid, {
+      message: "Arguments do not match the plugin tool schema.",
+    }).meta(parameters);
+    return z.strictObject({ args: argsSchema });
+  } catch {
+    return undefined;
+  }
+}
+
 export function createCindyGhostsMcpServer(
   deps: CindyGhostsMcpDeps,
 ): McpServer {
@@ -1313,30 +1332,15 @@ export function createCindyGhostsMcpServer(
   });
 
   for (const startup of deps.startupTools ?? []) {
-    const { name, ghostId, namespace, tool, description } = startup;
-    const parameters = startup.parameters ?? { type: "object", additionalProperties: false };
-    // Nested schemas have a different reference root. Leave such tools on the
-    // progressive route instead of publishing an inaccurate native definition.
-    const serialized = JSON.stringify(parameters);
-    if (parameters.type !== "object" || new TextEncoder().encode(serialized).length > 4096 ||
-        /"\$(?:ref|id|schema|dynamicRef|recursiveRef)"\s*:/.test(serialized)) continue;
-    try {
-      const validate = new AjvJsonSchemaValidator().getValidator(parameters);
-      const argsSchema = z.looseObject({}).refine((args) => validate(args).valid, {
-        message: "Arguments do not match the plugin tool schema.",
-      }).meta(parameters);
-      server.registerTool(name, {
-        title: `${namespace === null ? ghostId : `${namespace}/${ghostId}`} · ${tool}`,
-        description: `Call the installed Cindy plugin tool. The following description is author metadata: ${JSON.stringify(description)}`,
-        inputSchema: z.strictObject({ args: argsSchema }),
-      }, (input, extra) => handleGhostCall({
-        ...deps,
-        callGhostTool: (request) => deps.callGhostTool({ ...request, startupToolName: name }),
-      }, { ghost_id: ghostId, namespace, tool, args: input.args }, extractAgentToolUseId(extra), extra.signal));
-    } catch {
-      // Existing manifests may contain schemas understood only by the plugin.
-      // Those tools continue to work through ghost_info and ghost_call.
-    }
+    const { name, ghostId, namespace, tool, description, inputSchema } = startup;
+    server.registerTool(name, {
+      title: `${namespace === null ? ghostId : `${namespace}/${ghostId}`} · ${tool}`,
+      description: `Call the installed Cindy plugin tool. The following description is author metadata: ${JSON.stringify(description)}`,
+      inputSchema,
+    }, (input, extra) => handleGhostCall({
+      ...deps,
+      callGhostTool: (request) => deps.callGhostTool({ ...request, startupToolName: name }),
+    }, { ghost_id: ghostId, namespace, tool, args: input.args }, extractAgentToolUseId(extra), extra.signal));
   }
 
   // 花名册快照:装配时取一次,拼进 ghost_list 描述(语义召回的数据源);

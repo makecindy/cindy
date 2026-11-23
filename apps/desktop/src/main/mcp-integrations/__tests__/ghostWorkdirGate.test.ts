@@ -2043,6 +2043,10 @@ describe('ghost_call 兜底拒绝', () => {
   it('pins the startup tool to its enabled installation and revokes it before dispatch', async () => {
     const ghost: InstalledGhost = {
       ...chipGhost('library', ['tool'], { tools: [
+        ...['recent', 'genres', 'authors'].map(name => ({
+          name, description: 'Query with a referenced schema', exposure: 'startup',
+          parameters: { type: 'object', $ref: '#/$defs/query' },
+        })),
         { name: 'find', description: 'Find books', exposure: 'startup' },
         { name: 'list', description: 'List books' },
       ] }) as InstalledGhost,
@@ -2064,6 +2068,7 @@ describe('ghost_call 兜底拒绝', () => {
     expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
       ghostId: installedGhostStoragePart(ghost), tool: 'find', args: { query: 'atlas' },
     }));
+    expect(cardRegisterMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ startupToolName }));
     expect(live).toHaveBeenCalledWith('s1', 's1-instance', WORKDIR);
     dispatchMock.mockClear();
     for (const installed of [

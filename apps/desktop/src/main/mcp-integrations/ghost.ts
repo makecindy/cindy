@@ -38,7 +38,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 
-import { buildGhostRosterPrompt } from 'cindy-tools';
+import { buildGhostRosterPrompt, prepareStartupGhostToolInputSchema } from 'cindy-tools';
 
 import type {
   CindyForgeInstallResult,
@@ -138,7 +138,7 @@ import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarg
 import { getGhostSetupCoordinator as desktopSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 
 import { createGhostVisibility } from '../cindy-brain/ghostVisibility.js';
-import { STARTUP_GHOST_TOOLS_OWNER_KEY, startupGhostToolName } from '../cindy-brain/startupGhostTool.js';
+import { registerStartupGhostToolTarget, STARTUP_GHOST_TOOLS_OWNER_KEY, startupGhostToolName } from '../cindy-brain/startupGhostTool.js';
 
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 
@@ -1762,7 +1762,7 @@ function pageControlHidden(ghost: InstalledGhost): { tools: Set<string>; manual:
 type StartupGhostCatalog = {
   instance: string;
   workdir: string;
-  targets: Map<string, { instance: string; tool: string }>;
+  targets: Map<string, ReturnType<typeof registerStartupGhostToolTarget>>;
   tools: NonNullable<CindyGhostsMcpDeps['startupTools']>[number][];
 };
 
@@ -1889,10 +1889,12 @@ function getCindyGhostsMcpDeps(
       for (const tool of ghost.manifest.tools ?? []) {
         const name = startupGhostToolName(ghost, tool);
         if (!name || hidden?.tools.has(tool.name)) continue;
-        targets.set(name, { instance: installedGhostStoragePart(ghost), tool: tool.name });
+        const inputSchema = prepareStartupGhostToolInputSchema(tool.parameters);
+        if (!inputSchema) continue;
+        targets.set(name, registerStartupGhostToolTarget(name, installedGhostStoragePart(ghost), tool.name));
         tools.push({ name, ghostId: ghost.manifest.id,
           namespace: installedGhostLogicalIdentity(ghost).namespace, tool: tool.name,
-          description: tool.description, parameters: tool.parameters });
+          description: tool.description, inputSchema });
         if (++count === 3 || tools.length === 8) break;
       }
       if (tools.length === 8) break;
@@ -2815,6 +2817,7 @@ function getCindyGhostsMcpDeps(
         logicalGhostId: pluginStoragePart(installedGhostLogicalIdentity(target)),
         tool,
         toolUseId: agentToolUseId ?? null,
+        ...(startupTarget ? { startupToolName } : {}),
         // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
         // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
         sessionId: callSessionContext?.sessionId ?? null,
