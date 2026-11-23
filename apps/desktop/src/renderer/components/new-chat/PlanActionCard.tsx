@@ -137,7 +137,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
     <div
       ref={cardRef}
       className={cn(
-        'flex w-full max-w-[914px] flex-col overflow-hidden rounded-[12px] border',
+        'flex w-full max-w-[914px] flex-col overflow-hidden rounded-xl border',
         'border-[var(--plan-card-border)] bg-[var(--plan-card-bg)]',
       )}
     >
@@ -147,7 +147,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
         onClick={handleApprove}
         disabled={submitted}
         className={cn(
-          'flex w-full items-center gap-[10px] border-b px-[16px] py-[14px] text-left',
+          'flex w-full items-center gap-2.5 border-b px-4 py-3.5 text-left',
           'border-[var(--plan-action-row-divider)]',
           'transition-colors hover:bg-[var(--plan-action-row-hover-bg)]',
           submitted && 'cursor-not-allowed opacity-60 hover:bg-transparent',
@@ -193,7 +193,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
           <div
             data-testid="interaction-answer-composer"
             className={cn(
-              'flex w-full min-w-0 gap-2 rounded-[8px] border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+              'flex w-full min-w-0 gap-2 rounded-lg border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
               composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
             )}
           >
@@ -245,7 +245,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
           type="button"
           onClick={handleFeedbackRowClick}
           className={cn(
-            'flex w-full items-center gap-[10px] px-[16px] py-[14px] text-left',
+            'flex w-full items-center gap-2.5 px-4 py-3.5 text-left',
             'transition-colors hover:bg-[var(--plan-action-row-hover-bg)]',
           )}
         >

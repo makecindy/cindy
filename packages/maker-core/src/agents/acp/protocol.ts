@@ -17,6 +17,17 @@ export const ACP_ERROR_RESOURCE_NOT_FOUND = -32002;
 export const JSONRPC_METHOD_NOT_FOUND = -32601;
 export const JSONRPC_INTERNAL_ERROR = -32603;
 
+/**
+ * Same-turn steering. ACP v1 has no way to add input to a running prompt, so
+ * agents that can do it (claude-agent-acp, codex-acp, oh-my-pi, ...) share this
+ * extension request: `{ sessionId, prompt: ContentBlock[], _meta? }`, answered
+ * with `{ outcome: 'injected' | 'promptRequired' | 'startedNewTurn' }`. Agents
+ * advertise it in the `initialize` result as top-level `_meta.steering.supported: true`.
+ * Request `_meta.steering.idleBehavior: 'promptRequired'` asks an agent whose turn
+ * already ended to hand the content back instead of starting a turn on its own.
+ */
+export const ACP_STEERING_METHOD = '_session/steering';
+
 export type AcpRecord = Record<string, unknown>;
 
 export type AcpContentBlock =
@@ -46,6 +57,8 @@ export interface AcpInitializeResult {
   agentCapabilities: AcpAgentCapabilities;
   authMethods: AcpAuthMethod[];
   agentInfo?: { name: string; title?: string; version: string };
+  /** The agent takes ACP_STEERING_METHOD (top-level `_meta.steering.supported`). */
+  steering: boolean;
 }
 
 export interface AcpConfigSelectOption {
@@ -156,6 +169,7 @@ export function normalizeInitializeResult(raw: unknown): AcpInitializeResult {
     ...(name && version
       ? { agentInfo: { name, version, ...(asNonEmptyString(agentInfo.title) ? { title: agentInfo.title as string } : {}) } }
       : {}),
+    steering: asRecord(asRecord(result._meta).steering).supported === true,
   };
 }
 

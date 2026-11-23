@@ -106,3 +106,30 @@ it('waits for local DB readiness before querying pending imports', async () => {
   await act(async () => {});
   expect(listPendingImports).toHaveBeenCalledOnce();
 });
+
+// Issue 11839, unit/jsdom: a real review dialog and toast must explain a skipped
+// import when reconcile returns no-file. Success and thrown-error cases miss it.
+it('explains a skipped import when its automation file is gone', async () => {
+  vi.useFakeTimers();
+  const pending: ProjectAutomationImport = {
+    workingDir: '/review/fixture',
+    configHash: 'reviewed',
+    schedules: [{ name: 'Daily' }],
+    removedNames: [],
+  };
+  const reconcile = vi.fn().mockResolvedValue({
+    workingDir: pending.workingDir, inserted: 0, updated: 0, deleted: 0, skipped: 'no-file',
+  });
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { projectAutomation: {
+    listPendingImports: vi.fn().mockResolvedValue([pending]), reconcile,
+    onEvent: () => () => {},
+  } } } });
+  render(<ConfirmDialogProvider><ProjectAutomationNotifyBridge /><ToastContainer /></ConfirmDialogProvider>);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: /import.review/ }));
+  fireEvent.click(screen.getByRole('button', { name: /import.accept/ }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+
+  expect(screen.queryByRole('button', { name: /import.review/ })).toBeNull();
+  expect(screen.getByText(/import.fileMissing.*fixture/)).toBeTruthy();
+});

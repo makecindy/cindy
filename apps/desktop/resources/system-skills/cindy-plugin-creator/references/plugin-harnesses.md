@@ -98,6 +98,17 @@ Cindy 存下最新状态,显示引擎列表时只读这份记录,**不调用插�
 「逐项确认 / 全部允许」。用户切换模式时 Cindy 让 Agent 切到对应模式(ACP 的 `mode` 配置项),Agent 请求权限时
 仍由用户逐个确认,选「全部允许」才自动同意。
 
+**插话**:ACP v1 每个会话同一时间只跑一个 prompt,没有「往正在跑的这一轮里补一句」的方法。Agent 支持生态里通行的
+`_session/steering` 扩展(claude-agent-acp、codex-acp 等已实现)时,在 `initialize` 结果的**顶层** `_meta` 里声明
+`{ "steering": { "supported": true } }`,用户就能在任务运行中插话:Cindy 发请求
+`_session/steering`,参数 `{ sessionId, prompt: ContentBlock[], _meta: { steering: { idleBehavior: "promptRequired" } } }`,
+Agent 把内容注入当前这一轮后回 `{ "outcome": "injected" }`,插话之后的回复继续走这一轮的 `session/update`,这一轮的
+`session/prompt` 等插话的工作做完再返回。Agent 这一轮已经结束时回 `{ "outcome": "promptRequired", "reason": "noRunningTurn" }`
+且不要自己开新一轮,Cindy 会把这条消息作为下一轮发送。没有声明的 Agent 照旧:运行中输入的消息排队,等这一轮结束再发。
+
+入口原样转发字节时什么都不用做,外部 Agent 自己声明、自己处理。入口会改写 `initialize` 回包时要保留 `_meta.steering`;
+外部 Agent 本身不支持时,不要替它声明,否则 Cindy 会把插话发给它而收不到 `injected`。
+
 ### 入口进程
 
 用户在任务里选了你的引擎后,Cindy 以插件 Node 运行时的「原样 stdio」模式启动 `entry`(与
@@ -127,6 +138,55 @@ npm 的 `.cmd` 启动器，从可信的安装目录定位该包声明的 JavaScr
 数组启动入口。上例中的参数为固定值。
 
 引擎在安装插件的电脑上运行。手机可以选择被控电脑提供的引擎来新建普通任务。每次新建本机任务的自动化也可以选择插件引擎。
+
+### 让用户的其他电脑与分享好友免装使用
+
+用户可以在自己账号的另一台电脑上新建任务，也可以把引擎分享给好友——对方无需安装插件或 CLI，就能让
+Agent 在装了插件的这台电脑上运行：用这台的程序、登录和额度，项目文件与命令仍在任务所在的那台电脑。这类任务里，
+Agent 自带的读写文件、执行命令的工具只能碰到 Agent 所在的电脑，而项目不在这里，所以必须关掉，改用 Cindy 经 MCP 提供的工具。
+
+支持同账号远程调用的引擎，在 `PUT /harnesses` 对应条目设置 `remoteWorkspace: true`(只在 `available: true` 时有效)。
+不设置时，这个引擎只能运行本机任务。用户还要在插件设置里为该引擎打开「允许被远程调用」，默认关闭；
+开关由 Cindy 提供，插件不能替用户打开。
+
+若引擎同时支持跨账号分享给好友，还需在 `PUT /harnesses` 对应条目设置 `guestWorkspace: true`(与 `remoteWorkspace: true` 一起发布)。
+声明 `guestWorkspace: true` 后，插件详情页会显示「远程与分享」入口，允许用户生成一次性分享链接并管理授权成员。
+
+- 同账号远程任务启动时，入口进程的 `process.argv` 会收到固定参数 `--cindy-remote-workspace`；
+- 跨账号分享受邀者任务启动时，入口进程的 `process.argv` 会收到 `--cindy-remote-workspace` 和 `--cindy-guest-workspace`。
+
+看到 `--cindy-remote-workspace` 时入口必须做到：
+
+- **只对这一次启动关掉 Agent 自带的文件与命令工具**，包括读写与搜索文件、执行命令、后台任务、切换目录，
+  以及在本机运行模型写的代码的工具。用这次启动的命令行参数、环境变量或一份独立的配置实现，
+  **不要改写用户的全局配置**：用户自己在终端里用这个 Agent 时，它的工具必须照旧可用。
+- **做不到就不要启动**。Agent 的版本不支持关闭工具、关不干净或无法确认时，向 stderr 写明原因并以非零
+  状态退出，不要带着自带工具继续运行，否则它会在错误的电脑上读写文件。新版本 Agent 可能新增工具，
+  建议启动前读回它的实际配置，只放行确认无害的工具。Agent 没有办法读回配置时，入口改为在任务进行中检查它
+  报告的工具调用，出现自带的文件或命令工具就结束任务。
+- **让 Agent 在一个空目录里启动**，不要用用户的主目录或项目目录作为它的工作目录。
+
+当同时看到 `--cindy-guest-workspace` 时，入口还必须做到：
+
+- **隔离分享者本机的个人配置、技能、自定义命令、记忆与会话列表**，避免受邀者的会话读取分享者的个人提示词、
+  本地插件/MCP 配置或列举历史会话（但保留 CLI 登录凭据使其可正常访问模型服务）；
+- **关掉 Agent 在分享者本机直接发起网页抓取的工具**（如 `WebFetch` / `tool-web`），防止受邀者借分享者网络访问内网地址；
+  Cindy 会在受邀者自己的电脑上通过 `cindy_exec` 提供 `WebFetch`。
+
+Cindy 在 `session/new` 的 `mcpServers` 里交给 Agent 的全部是任务所在电脑的工具(HTTP 传输，
+带 `Authorization` 头)。其中 `cindy_exec` 提供 `Bash`、`BashOutput`、`KillShell`、`Read`、`Write`、`Edit`、
+`NotebookEdit`(受邀者任务还包含在受邀者本机执行的 `WebFetch`)，在任务所在电脑上执行。Agent 握手时没有声明 `mcpCapabilities.http` 的，这类任务会被拒绝；
+Agent 实际能连 HTTP 的 MCP 服务却没有声明时，由入口在转发 `initialize` 的回包时补上。
+`session/new` 的 `cwd` 是一个只含项目说明文件的目录，路径仅用于对话，不代表项目在这台电脑上。
+Agent 收不到 Cindy 的系统提示，Cindy 会在新会话的第一条消息前附一段说明，告诉它项目在哪、该用哪些工具。
+
+Cindy 按工具调用里的名称和参数显示卡片，并在用户同意后核对随后执行的操作。Agent 把这些工具报告成别的样子时
+(例如套一层通用的 MCP 调用器，真正的参数嵌在里面)，入口在转发 `session/request_permission` 与
+`tool_call` / `tool_call_update` 时把 `title` 和 `rawInput` 还原成被调用的工具和它的参数：`cindy_exec` 的工具
+用原名(`Bash`、`Read`、`Write` 等)，`command`、`file_path` 等保持在 `rawInput` 顶层。不还原时，用户确认过的
+命令与实际执行的对不上，需要确认的高风险操作会一直被任务所在电脑拒绝。
+
+插件引擎目前不加入多机供应商组或备用机委托。
 
 ### 显示账号用量
 

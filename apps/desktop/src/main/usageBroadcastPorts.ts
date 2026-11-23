@@ -23,6 +23,7 @@ export interface UsageBroadcastWindow {
 }
 
 export interface UsageBroadcastPorts {
+  getTokenOwnerLifetime(): number;
   getAllWindows(): readonly UsageBroadcastWindow[];
   isTrustedAppRendererWindow(win: UsageBroadcastWindow): boolean;
   patchMessageAgentMeta(sessionId: string, clientId: string, patch: Record<string, unknown>): Promise<boolean>;
@@ -32,6 +33,7 @@ export interface UsageBroadcastPorts {
     patch: Record<string, unknown>,
   ): Promise<MessageAgentMetaPatchResult | null>;
   readPriorUserRoundCost(sessionId: string, assistantClientId: string): Promise<{
+    amounts?: RegionalMoney[];
     additionalCosts?: RegionalMoney[];
     money: RegionalMoney | null;
     costUsd: number;
@@ -46,6 +48,7 @@ const unbound = (name: string) => (): Promise<never> =>
   Promise.reject(new Error(`${name} is not bound in this process; pass the dependency explicitly`));
 
 let ports: UsageBroadcastPorts = {
+  getTokenOwnerLifetime: () => 0,
   getAllWindows: () => [],
   isTrustedAppRendererWindow: () => false,
   patchMessageAgentMeta: unbound('patchMessageAgentMeta'),
@@ -95,3 +98,5 @@ export function enqueueDurableWrite<T>(label: string, fn: (ownerScope: unknown) 
 export function getGatewayModelPricing(): Promise<ModelPricingMap | null> {
   return ports.getGatewayModelPricing();
 }
+
+export const getTokenOwnerLifetime = () => ports.getTokenOwnerLifetime();

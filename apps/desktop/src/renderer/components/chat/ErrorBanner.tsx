@@ -32,10 +32,12 @@ import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import {
   canOfferCodexHistoryRecovery,
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
   parseAgentErrorCode,
+  parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
   requiresAgentErrorConfigurationChange,
   isRemoteAgentResumeRejectedError,
@@ -321,7 +323,8 @@ export function ErrorBanner({
   // 时刻的快照),不用会话当前的 providerId —— 报错后切换 provider / 恢复历史错误
   // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 时不提供 Cindy
   // 充值入口；余额摘要仍可使用供应商通用提示。
-  const isQuotaExhausted = isQuotaExhaustedErrorMessage(error);
+  const geminiLimit = parseGeminiInputRateLimit(error);
+  const isQuotaExhausted = geminiLimit === null && isQuotaExhaustedErrorMessage(error);
   const isGatewayQuotaExhausted =
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
@@ -420,6 +423,8 @@ export function ErrorBanner({
         : errorReasonI18nKey
           ? t(errorReasonI18nKey)
           : undefined;
+  const ipcRefusal = extractIpcError(new Error(error));
+  const preconditionMessage = ipcRefusal?.code === 'PRECONDITION_FAILED' ? ipcRefusal.message : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isRemoteResumeRejected = isRemoteAgentResumeRejectedError(error);
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
@@ -460,6 +465,7 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
+  const isAccountUsageLimitText = isAccountUsageLimitReachedText(error);
   // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
@@ -544,6 +550,8 @@ export function ErrorBanner({
     : undefined;
   if (piCloudContextRecovery) {
     displayError = piCloudContextRecovery;
+  } else if (geminiLimit !== null) {
+    displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   } else if (subscriptionGuidance) {
     displayError = subscriptionGuidance;
     hasSpecialGuidance = false;
@@ -621,8 +629,17 @@ export function ErrorBanner({
           : 'chat.errorBanner.codexUsageLimit',
       );
     }
+  } else if (usageLimitResumeAt) {
+    // 被控端已确认是账号用量上限并排好了自动继续：直接说发生了什么，
+    // 「将于 X 自动继续」在操作区，原始报错留在可展开的详情里。
+    displayError = t('chat.errorBanner.usageLimitReached');
   } else if (isQuotaExhausted) {
     displayError = t('providerError.QUOTA_EXCEEDED');
+  } else if (isAccountUsageLimitText) {
+    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但原文明说到了用量上限。
+    displayError = usageLimitResetAt
+      ? t('chat.errorBanner.usageLimitReachedWithReset', { resetAt: usageLimitResetAt })
+      : t('chat.errorBanner.usageLimitReachedNoReset');
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -684,7 +701,8 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = localizedReasonError ?? t('chat.errorBanner.replyFailed');
+    displayError = localizedReasonError ?? t(preconditionMessage === undefined
+      ? 'chat.errorBanner.replyFailed' : 'ipcError.PRECONDITION_FAILED');
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
@@ -704,6 +722,8 @@ export function ErrorBanner({
     isStreamInterrupted ||
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
+    Boolean(usageLimitResumeAt) ||
+    isAccountUsageLimitText ||
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||
@@ -854,7 +874,7 @@ export function ErrorBanner({
             ? t('chat.errorBanner.readableHistoryRecoveryDescription')
             : renderProviderErrorExplanation(error, displayError, t)
       }
-      details={canShowErrorDetails ? error : undefined}
+      details={canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined}
       onDiagnose={
         onDiagnose
           ? () => onDiagnose({ message: displayError, details: error, reason: errorReason })
@@ -984,10 +1004,12 @@ export function ErrorBanner({
             // 额度重置后自动继续:只是告知,不是按钮;用户仍可重试、换模型或发新消息接手。
             <span
               className="shrink-0 flex select-none items-center gap-1 text-xs text-[var(--text-secondary)]"
-              title={t('chat.errorBanner.usageLimitAutoContinueTitle')}
+              title={geminiLimit === null ? t('chat.errorBanner.usageLimitAutoContinueTitle') : undefined}
             >
               <Timer size={12} />
-              {t('chat.errorBanner.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
+              {geminiLimit !== null && usageLimitWait
+                ? <GeminiRetryCountdown resumeAt={usageLimitWait.resumeAt} />
+                : t('chat.errorBanner.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
             </span>
           )}
           {(manualReset.canReset || manualReset.canRetry) && (
@@ -1065,4 +1087,14 @@ export function ErrorBanner({
       }
     />
   );
+}
+
+function GeminiRetryCountdown({ resumeAt }: { resumeAt: number }) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [resumeAt]);
+  return <>{t('chat.geminiRateLimit.retryIn', { seconds: Math.max(0, Math.ceil((resumeAt - now) / 1000)) })}</>;
 }

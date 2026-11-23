@@ -1,7 +1,7 @@
 /**
  * 测试价值(list_model_groups 的读取边界)
  * - 生产入口与可观察结果：registerModelGroupsTools 的 list_model_groups——是否调用宿主读取、返回的错误码。
- * - 规则依据：docs/product-rules/model-groups.md §6.2(只读本机当前账号；共享任务不读主人配置；SSH 任务不读)。
+ * - 规则依据：docs/product-rules/model-groups.md §6.4(只读本机当前账号；共享任务不读主人配置；SSH 任务不读)。
  * - 现有覆盖缺口：新工具；错误映射漏掉会把共享拒绝当成「读取失败」诱导重试，或让 SSH 任务读到本机配置。
  * - 最小失败输入：带 remoteHostId 的调用方；宿主抛 PERMISSION_DENIED。
  * - tier：unit，真实 registry。

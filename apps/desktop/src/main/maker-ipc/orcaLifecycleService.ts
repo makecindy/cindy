@@ -136,6 +136,7 @@ export interface OrcaLifecycleDeps {
    * 选路：推进「轮流」、记「最近的选择」。选不到、创建失败与回滚都不提交；enable_collab_mode 不经过模式。
    */
   commitModelGroupDecision?(decisionId: string): boolean;
+  promoteSideChatLead?(leadSessionId: string, teamId: string, workerId: string, assertCurrent?: () => Promise<void>): Promise<void>;
   broadcastSessionCreated(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
 }
@@ -318,6 +319,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     }
     const { modelGroup, ...createdRoute } = created;
     if (modelGroup?.decisionId) deps.commitModelGroupDecision?.(modelGroup.decisionId);
+    await deps.promoteSideChatLead?.(params.leadSessionId, team.id, created.workerId, assertCreatedCurrent);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {
@@ -521,6 +523,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       });
     }
 
+    await deps.promoteSideChatLead?.(params.leadSessionId, team.id, created.workerId, assertCreatedCurrent);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {

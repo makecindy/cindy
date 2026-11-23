@@ -124,12 +124,14 @@ pnpm mobile:sim:whoami -- --mock --json
 - 模拟电脑支持协同：任务或新建任务的「+」面板 →「协同模式」可以直接打开开启协同的表单，角色清单
   （含添加、长按移除）读写的是模拟电脑上的那一份，只在本次进程内生效。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。
+- 复古皮肤：`cindy://retro-skin-preview`，可加 `?skin=thinkpad` 等已有外观标识以直接比较各款键盘；在折叠屏竖向半折叠姿态下，使用正式的外壳、键盘及窗口几何显示原生预览；按键事件仅显示在屏幕内，不连接远程电脑。用于检查屏幕边界、素材拼接及真实触摸反馈，不代表远程连接已验证。
 - 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
   mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
 - 反馈确认：`cindy://sessions/visual-issue-confirm?deviceId=cindy-visual-mock-mac`，合成反馈草稿、署名与环境，覆盖预览、编辑和展开详情；不提交。Desktop 对应 `pnpm ui:check --page issue-confirm --case all --theme all`，两端均加载实际组件。
+- 代输入：`cindy://sessions/visual-input-handoff?deviceId=cindy-visual-mock-mac`，一条英文的电脑 App 登录请求（长目的、Agent 补充、邮箱与密码），点「填写」打开实际的 iOS 原生面板；用于在 iPhone Duo 折叠／展开、短屏与常规机型上检查对齐和高度。合成数据，「继续」不会提交到任何电脑。
 - 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。
 - 群列表告警：模拟电脑的伙伴群列表包含「已结束分工」「另一执行失败」「仍需回复」三行，
   由真实共享状态判据生成无提醒、错误、待回复状态，验证失败历史不等于仍需处理。只用于列表目检。

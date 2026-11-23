@@ -47,6 +47,7 @@ import {
 import { createLogger } from '@/lib/logger';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { Session, SessionStatus } from '@/lib/ccAgent.types';
+import type { SessionDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 
 const log = createLogger('useSessionLifecycleActions');
 
@@ -63,10 +64,13 @@ function setStatusInOrder(
   status: SessionStatus,
   target: Awaited<ReturnType<typeof sessionService.resolveStatusWriteTarget>>,
   discardWorktreeChanges?: true,
+  deleteTarget?: SessionDeleteTarget,
 ): Promise<Session> {
-  const write = () => discardWorktreeChanges
-    ? sessionService.setStatus(sessionId, status, target, true)
-    : sessionService.setStatus(sessionId, status, target);
+  const write = () => deleteTarget
+    ? sessionService.setStatus(sessionId, status, target, undefined, deleteTarget)
+    : discardWorktreeChanges
+      ? sessionService.setStatus(sessionId, status, target, true)
+      : sessionService.setStatus(sessionId, status, target);
   if (target.kind !== 'device-link') return write();
   const previous = remoteStatusWrites.get(sessionId);
   const next = previous ? previous.then(write, write) : write();
@@ -88,6 +92,7 @@ export interface RunSessionActionOptions {
    * "下一条 / 上一条 / 新建"；没有列表上下文的入口继续回落到 /cc-agent。
    */
   deleteRedirectRoute?: string | null;
+  deleteTarget?: SessionDeleteTarget;
 }
 
 export function useSessionLifecycleActions(options?: { includeArchived?: ListStatusFilter }) {
@@ -145,7 +150,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     async (
       sessionId: string,
       action: 'delete' | 'archive',
-      { activeSessionId, deleteRedirectRoute, prepareArchive }: RunSessionActionOptions,
+      { activeSessionId, deleteRedirectRoute, prepareArchive, deleteTarget }: RunSessionActionOptions,
     ) => {
       const actionStartedAt = performance.now();
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
@@ -253,7 +258,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
-        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget, discardWorktreeChanges);
+        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget, discardWorktreeChanges, deleteTarget);
         statusWriteFinishedAt = performance.now();
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);

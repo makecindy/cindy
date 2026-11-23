@@ -1,6 +1,6 @@
 /**
- * send_to_session 新建任务时按模型组的模式选来源。规则见 docs/product-rules/model-groups.md §6.3：
- * 与 Lead 建 Worker(§6.2)同一个选路与同一个 resolver 实例；选中的引擎、模型、供应商连接与 Agent 位置
+ * send_to_session 新建任务时按模型组的模式选来源。规则见 docs/product-rules/model-groups.md §6.5：
+ * 与 Lead 建 Worker(§6.4)同一个选路与同一个 resolver 实例；选中的引擎、模型、供应商连接与 Agent 位置
  * 作为固定路线交给原有的新建流程，任务建好、首条消息被接受后才提交(推进「轮流」、记「最近的选择」)。
  */
 import type { ModelGroupResolveRequest, ModelGroupResolveResult } from '../../shared/modelGroups';

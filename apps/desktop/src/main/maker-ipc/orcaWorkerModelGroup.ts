@@ -1,6 +1,6 @@
 /**
  * Lead 用模型组(模式)创建 Worker：创建时按模式规则选一次来源，再交给原有的 Worker 创建与校验。
- * 规则见 docs/product-rules/model-groups.md §6.2。选路凭据只留在宿主里，Worker 真正建好、首条任务送出后
+ * 规则见 docs/product-rules/model-groups.md §6.4。选路凭据只留在宿主里，Worker 真正建好、首条任务送出后
  * 才由生命周期提交(推进「轮流」、记「最近的选择」)；冲突、选不到与创建失败都不提交。
  */
 import type { AgentKind } from '@cindy/maker-core';

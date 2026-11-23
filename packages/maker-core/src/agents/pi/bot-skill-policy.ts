@@ -4,6 +4,8 @@ import type { PiProjectResourceAssemblySnapshot } from './project-resource-assem
 export interface PiBotSkillSelection {
   disableImplicitSkills: boolean;
   explicitSkillPaths: string[];
+  /** The teammate's own skills; mounted even when project resources load in place. */
+  ownSkillPaths: string[];
   projectAssembly: PiProjectResourceAssemblySnapshot;
 }
 
@@ -29,6 +31,7 @@ export function applyPiBotSkillPolicy(
     return {
       disableImplicitSkills: false,
       explicitSkillPaths: [...new Set([...own, ...assembly.launchSkillPaths])],
+      ownSkillPaths: own,
       projectAssembly: assembly,
     };
   }
@@ -61,6 +64,7 @@ export function applyPiBotSkillPolicy(
     explicitSkillPaths: [
       ...new Set([...own, ...userSkillPaths, ...projectAssembly.launchSkillPaths]),
     ],
+    ownSkillPaths: own,
     projectAssembly,
   };
 }

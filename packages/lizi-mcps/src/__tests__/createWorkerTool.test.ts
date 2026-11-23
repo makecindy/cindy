@@ -364,7 +364,7 @@ it('accepts omitted agent and returns the resolved route and branch fallback', a
  * 测试价值(model_group_id 透传与回执)
  * - 生产入口与可观察结果：registerCreateWorkerTool 的真实 schema 与 handler——传给宿主的 modelGroupId、回执里的
  *   model_group 与实际路线。
- * - 规则依据：docs/product-rules/model-groups.md §6.2。
+ * - 规则依据：docs/product-rules/model-groups.md §6.4。
  * - 现有覆盖缺口：此前工具没有模式参数；透传漏掉会让宿主按记忆建 Worker，用户以为在用模式。
  * - 最小失败输入：{ role, label, model_group_id: 'r1' }(不传 agent)。
  * - tier：unit，真实 registry。

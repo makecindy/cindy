@@ -20,7 +20,12 @@ import {
   usageScope,
 } from '../collect';
 import { readRemoteSubscriptions, retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen, type RemoteSubscriptionDeps } from '../remoteSubscriptions';
-import { topModels, type MenubarSubscriptionInput } from '../snapshot';
+import { buildMenubarView, topModels, type MenubarSubscriptionInput } from '../snapshot';
+import { MENUBAR_HARNESS_LOGOS } from '../logos';
+import { buildMenubarUiStrings, createMenubarTranslate } from '../strings';
+import { mainStringKeysUnder, rawMainString } from '../../i18n.desktop';
+import { DEFAULT_MENUBAR_SETTINGS } from '../../../shared/menubarQuota';
+import type { ProviderAccountUsageResult, ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
 import type { UsageHistoryPayload, UsageHistoryTask } from '../../usage/usageHistory';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 
@@ -153,6 +158,120 @@ describe('collectMenubarInputs', () => {
       ...overrides,
     };
   }
+
+  const glmQuota: ZhipuCodingPlanQuotaSnapshot = {
+    kind: 'zhipu-coding-plan-quota',
+    noPlan: false,
+    level: null,
+    fiveHour: { usedPercent: 20, resetsAt: null },
+    weekly: { usedPercent: 35, resetsAt: NOW + 2 * 86_400_000 },
+    fetchedAt: NOW,
+  };
+  const ready = (snapshot = glmQuota, stale = false): ProviderAccountUsageResult =>
+    ({ status: 'ready', snapshot, stale });
+  const glm = provider({ id: 'glm', auth: { method: 'apiKey' }, routing: {
+    pi: { upstream: 'https://api.z.ai/api/coding/paas/v4', authStrategy: 'api-key-header' },
+  } });
+
+  async function panel(collectDeps: MenubarCollectDeps) {
+    const raw = (key: string) => rawMainString(key, 'en');
+    return buildMenubarView({
+      ...await collectMenubarInputs(collectDeps),
+      nowMs: NOW, locale: 'en', moneySymbol: '$', settings: DEFAULT_MENUBAR_SETTINGS,
+      harnessLogos: MENUBAR_HARNESS_LOGOS, uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), raw, 'en'),
+      t: createMenubarTranslate('en', raw),
+    });
+  }
+
+  it.each([
+    { label: 'a missing 5-hour reset', reading: ready(), value: '65', fills: [0.8, 0.65], resets: ['Weekly resets'], plan: '' },
+    {
+      label: 'a named plan with both resets',
+      reading: ready({ ...glmQuota, level: 'pro', fiveHour: { usedPercent: 20, resetsAt: NOW + 3_600_000 } }),
+      value: '65', fills: [0.8, 0.65], resets: ['5-hour resets', 'Weekly resets'], plan: 'PRO',
+    },
+    { label: 'the old plan', reading: ready({ ...glmQuota, weekly: null }), value: '80', fills: [0.8], resets: [], plan: '' },
+    { label: 'an expired weekly window', reading: ready({ ...glmQuota, weekly: { usedPercent: 35, resetsAt: NOW } }), value: '80', fills: [0.8], resets: [], plan: '' },
+    {
+      label: 'two expired windows',
+      reading: ready({ ...glmQuota, fiveHour: { usedPercent: 20, resetsAt: NOW }, weekly: { usedPercent: 35, resetsAt: NOW - 1 } }),
+      value: '—', fills: [], resets: [], plan: '',
+    },
+    { label: 'no plan', reading: ready({ ...glmQuota, level: 'pro', noPlan: true }), value: '—', fills: [], resets: [], plan: '' },
+    { label: 'stale data', reading: ready({ ...glmQuota, level: 'pro' }, true), value: '—', fills: [], resets: [], plan: '' },
+    { label: 'a failed read', reading: { status: 'unavailable', error: 'network' } as const, value: '—', fills: [], resets: [], plan: '' },
+  ])('shows the correct GLM amount in the panel for $label', async ({ reading, value, fills, resets, plan }) => {
+    const readZhipu = vi.fn(async () => reading);
+    const collectDeps = deps({
+      listProviders: async () => [
+        glm,
+        provider({ id: 'glm-payg', auth: { method: 'apiKey' }, routing: { pi: { upstream: 'https://api.z.ai/api/paas/v4' } } } as Partial<ProviderView> & { id: string }),
+        provider({ id: 'glm-preview', auth: { method: 'apiKey' }, routing: { pi: { upstream: 'https://api.z.ai/api/anthropic-preview' } } } as Partial<ProviderView> & { id: string }),
+      ],
+    });
+    const view = await panel({ ...collectDeps, readZhipu });
+    expect(readZhipu.mock.calls).toEqual([['glm']]);
+    expect(view.sources.map(source => [source.id, source.value ?? source.valueLabel])).toEqual([['glm', value]]);
+    const detail = view.details.glm;
+    expect(detail.bigValue).toBe(value);
+    expect(detail.plan).toBe(plan);
+    expect(detail.legend).toHaveLength(fills.length > 1 ? fills.length : 0);
+    expect(detail.rings.map(ring => ring.fraction)).toEqual(fills.length ? fills : [0]);
+    expect(detail.facts.filter(fact => fact.label.includes('resets')).map(fact => fact.label).sort()).toEqual(resets);
+    expect(view.sources[0]?.resetsAtMs ?? null).toBe(resets.length ? glmQuota.weekly?.resetsAt : null);
+  });
+
+  it('falls back to the 5-hour GLM quota if weekly resets during collection', async () => {
+    let now = NOW;
+    const view = await panel(deps({
+      now: () => now,
+      listProviders: async () => [glm],
+      readZhipu: async () => {
+        now = NOW + 1;
+        return ready({ ...glmQuota, weekly: { usedPercent: 35, resetsAt: now } });
+      },
+    }));
+    expect(view.sources[0]).toMatchObject({ id: 'glm', value: '80', resetsAtMs: null });
+    expect(view.details.glm.facts.map(fact => fact.label)).not.toContain('Weekly resets');
+  });
+
+  it('keeps existing providers’ amounts, resets, details and relative order with GLM connected', async () => {
+    const reset = NOW + 86_400_000;
+    const providers = [
+      provider({ id: 'openai', auth: { method: 'oauth', native: 'codex' } }),
+      provider({ id: 'anthropic' }),
+      provider({ id: 'xai' }),
+      provider({ id: 'kimi-coding', auth: { method: 'apiKey' }, routing: {
+        pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' },
+      } }),
+      provider({ id: 'opencode-go', auth: { method: 'apiKey' }, routing: {
+        pi: { upstream: 'https://opencode.ai/zen/go/v1', authStrategy: 'api-key-header' },
+      } }),
+    ];
+    const collectDeps = deps({
+      listProviders: async () => providers,
+      readClaude: async () => ({ sevenDay: { utilization: 10, resetsAt: reset / 1000 } }) as never,
+      readXai: async () => ({ creditUsagePercent: 15, resetsAt: reset / 1000, updatedAt: NOW }),
+      readKimi: async () => ({ status: 'ready', stale: false, snapshot: {
+        kind: 'kimi-coding-quota', fetchedAt: NOW, windows: [{ id: 'limit_7d', usedPercent: 20, resetsAt: reset }],
+      } }),
+      readOpenCodeGo: async () => ({ status: 'ready', stale: false, snapshot: {
+        kind: 'opencode-go-quota', fetchedAt: NOW, windows: [{ id: 'weekly', usedPercent: 25, limited: false, resetsAt: reset }],
+      } }),
+      readZhipu: async () => ready(),
+    });
+    const before = await panel(collectDeps);
+    expect(before.sources).toHaveLength(providers.length);
+    expect(Object.fromEntries(before.sources.map(source => [source.id, [source.value, source.resetsAtMs]]))).toEqual({
+      openai: ['80', reset], anthropic: ['90', reset], xai: ['85', reset],
+      'kimi-coding': ['80', reset], 'opencode-go': ['75', reset],
+    });
+    const after = await panel({ ...collectDeps, listProviders: async () => [...providers, glm] });
+    expect(after.sources.filter(source => source.id !== glm.id)).toEqual(before.sources);
+    for (const provider of providers) {
+      expect(after.details[provider.id]).toEqual(before.details[provider.id]);
+    }
+  });
 
   it('includes auxiliary task tokens without charging them at the conversation model rate', async () => {
     const input = usage([task('mixed')]);

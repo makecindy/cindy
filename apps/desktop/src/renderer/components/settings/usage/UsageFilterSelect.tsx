@@ -63,7 +63,7 @@ export function UsageFilterSelect({
           side="bottom"
           align="end"
           sideOffset={4}
-          className="z-[10010] max-h-[var(--radix-select-content-available-height)] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
+          className="max-h-[var(--radix-select-content-available-height)] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
         >
           <Select.Viewport>
             {options.map((option) => (

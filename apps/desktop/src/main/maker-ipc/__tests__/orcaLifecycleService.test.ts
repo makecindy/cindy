@@ -129,9 +129,11 @@ describe('OrcaLifecycleService', () => {
   it.each(['create-task', 'create-placeholder', 'enable-task', 'enable-placeholder', 'enable-deferred'].flatMap(action => [true, false].flatMap(revoked => ['source', 'directory'].map(scope => ({ action, revoked, scope }))))) (
     'guards $action $scope at acceptance, revoked=$revoked, and cleans up outside dispatch', async ({ action, revoked, scope }) => {
       let allowed = true, insideSend = false, nativeCalls = 0;
+      const promoteSideChatLead = vi.fn(async () => undefined);
       const { deps, service } = createDeps({
         getActiveTeamByLead: async () => action.startsWith('create') ? activeTeam() : null,
         getWorkerPermissionModeOverride: async () => ({ permissionMode: 'auto', assertCurrent: async () => { if (scope === 'source' && !allowed) throw new Error('Revoked'); } }),
+        promoteSideChatLead,
       });
       const create = deps.createWorkerInTeam;
       deps.createWorkerInTeam = async (params, assertCurrent, onCreated) => {
@@ -169,6 +171,8 @@ describe('OrcaLifecycleService', () => {
         : await service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', ...(action === 'enable-task' || action === 'enable-deferred' ? { delegateTask: 'Evaluate' } : {}), deferDelegateTask: action === 'enable-deferred' });
       expect(result.ok).toBe(!revoked);
       expect(nativeCalls).toBe(revoked ? 0 : 1);
+      // Both UI and agent-triggered worker creation promote only after acceptance.
+      expect(promoteSideChatLead).toHaveBeenCalledTimes(revoked ? 0 : 1);
       expect(deps.rollbackCreatedWorker).toHaveBeenCalledTimes(revoked ? 1 : 0);
       expect(deps.markTeamEnded).toHaveBeenCalledTimes(revoked && action.startsWith('enable') ? 1 : 0);
     },
@@ -770,6 +774,8 @@ describe('OrcaLifecycleService', () => {
     expect(dispatchedMessage).toContain('Lead session id: "lead-1"');
     expect(dispatchedMessage).toContain('orca_worker_bridge.read_lead_history');
     expect(dispatchedMessage).toContain('If the task is self-contained, proceed directly');
+    expect(dispatchedMessage).toContain('order="desc", limit=8');
+    expect(dispatchedMessage).toContain('only while the context you need is missing');
     expect(dispatchedMessage).toContain(
       "do not assume the process cwd is the Lead's active worktree",
     );
@@ -1205,7 +1211,7 @@ describe('Orca task authority is independent of task creator', () => {
  * 测试价值(模式选路的提交时机)
  * - 生产入口与可观察结果：createOrcaLifecycleService().createWorker——commitModelGroupDecision 是否被调用、
  *   返回结果是否带出选路凭据。
- * - 规则依据：docs/product-rules/model-groups.md §6.2(只有 Worker 落定才推进「轮流」；凭据不出宿主)。
+ * - 规则依据：docs/product-rules/model-groups.md §6.4(只有 Worker 落定才推进「轮流」；凭据不出宿主)。
  * - 现有覆盖缺口：创建服务的用例只到「选出路线」，不覆盖就绪占位失败回滚后是否仍提交。
  * - 最小失败输入：就绪占位被拒、Worker 已回滚，但「轮流」已前进；或回执里带出 decisionId。
  * - tier：unit，注入依赖。

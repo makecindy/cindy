@@ -142,6 +142,8 @@ export function buildHomeScopePullDownActions(
  */
 export interface HomeDisplayMenuState {
   groupByProject: boolean;
+  groupDevice?: boolean;
+  hasDeviceGroups?: boolean;
   groupDialogue: boolean;
   groupAutomation?: boolean;
   sortBy: HomeListSortBy;
@@ -225,6 +227,7 @@ export function buildHomeDisplayPullDownActions(input: {
   const { state, t } = input;
   const inboxMode = state.taskListMode === 'inbox';
   const groupSummary = [
+    state.hasDeviceGroups && state.groupDevice ? t(`${MENU}.groupDevice`) : null,
     state.groupByProject ? t(`${MENU}.groupProject`) : null,
     state.groupDialogue ? t(`${MENU}.groupDialogue`) : null,
     state.groupAutomation ? t(`${MENU}.groupAutomation`) : null,
@@ -245,6 +248,7 @@ export function buildHomeDisplayPullDownActions(input: {
       // 「按项目分组」会增删下方「项目排序」整个子菜单,菜单结构变了 iOS 只能整份替换、
       // 打开中的菜单会退回根层,所以它选完收起;只改勾选 / 副标题 / 禁用的项才保持展开。
       checkable("group.project", t(`${MENU}.groupProject`), state.groupByProject),
+      ...(state.hasDeviceGroups ? [checkable("group.device", t(`${MENU}.groupDevice`), !!state.groupDevice, true)] : []),
       checkable("group.dialogue", t(`${MENU}.groupDialogue`), state.groupDialogue, true),
       checkable("group.automation", t(`${MENU}.groupAutomation`), state.groupAutomation === true, true),
     ]),
@@ -363,6 +367,7 @@ export function homeDisplayActionPatch(
   state: HomeDisplayMenuState,
 ): HomeDisplayPatch | null {
   if (id === "teammates.showCollapsedAvatars") return { showCollapsedTeammateAvatars: !(state.showCollapsedTeammateAvatars ?? true) };
+  if (id === "group.device") return { groupDevice: !state.groupDevice };
   if (id === "group.project") return { groupByProject: !state.groupByProject };
   if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
   if (id === "group.automation") return { groupAutomation: !state.groupAutomation };

@@ -252,6 +252,11 @@ describe('renderActivity', () => {
     pushToolStep(activity, 'Read', { file_path: '/x/relay.ts' }, 'read-1');
     const speed = { rate: 54.6, average: 50, tokens: 200, elapsedMs: 4_000, streaming: true };
 
+    const measurement = { average: 42, latest: { rate: 42, atMs: 5000, kind: 'request', measuredAt: Date.now() } };
+    applyStatusTokenRate(activity, { tokenSpeed: { ...speed, measurement } });
+    expect(activity.tokenRate).toBe(42);
+    applyStatusTokenRate(activity, { tokenSpeed: { ...speed, measurement: { latest: null, average: null } } });
+    expect(activity.tokenRate).toBeNull();
     expect(applyStatusTokenRate(activity, { tokenSpeed: speed })).toBe(true);
     expect(activity.tokenRate).toBe(55);
     // 占位帧 / 0 读数 / 非对象: 保留上一个值。

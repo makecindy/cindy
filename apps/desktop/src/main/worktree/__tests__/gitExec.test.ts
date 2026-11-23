@@ -379,6 +379,9 @@ describe('gitExec timeoutMs', () => {
     );
     const pending = gitExec(['status'], '/repo');
     const status = probe(pending);
+    expect(mocks.execFile).toHaveBeenCalledWith(
+      'git', ['status'], expect.objectContaining({ windowsHide: true }), expect.any(Function),
+    );
     state.child.stdout.emit(
       'error',
       Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN', syscall: 'read' }),

@@ -1,3 +1,4 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -70,6 +71,7 @@ export default function CompanionDirectMessages() {
   const peer = thread ? participant(peerId, thread.botAId === peerId ? thread.botAName : thread.botBName) : null;
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   return <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.screen}>
+      <WallpaperBackdrop />
     <SimpleStackHeader scrollEdge title={viewer && peer ? `${viewer.name} ⇄ ${peer.name}` : t('devices.companions.messages')}
       onBack={() => goBackGuarded(router)} />
     <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} testID="companion.directThread"

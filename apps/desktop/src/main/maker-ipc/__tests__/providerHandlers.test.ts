@@ -44,7 +44,8 @@ import {
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
-import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
+import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
 import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
@@ -556,6 +557,52 @@ describe('provider:list IPC handler', () => {
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
     });
+  });
+
+  // Unit: provider:list serves both local display and remote automatic routing.
+  it('requests offline display models only for the local renderer', async () => {
+    const harness = new IpcHarness();
+    const current = { ...fakeView('openai', false), models: { codex: [] } };
+    const retained = { id: 'gpt-retained', name: 'Retained', contextWindow: 128_000, efforts: [], defaultEffort: null };
+    registerProviderHandlers(harness, makeDeps({
+      isTrustedSender: () => true,
+      listProviders: async opts => [opts?.includeSubscriptionDisplayModels
+        ? { ...current, subscriptionDisplayModels: { codex: [retained] } }
+        : current],
+    }));
+    const invoke = () => harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    expect(await invoke()).toMatchObject({ providers: [{
+      connected: false, models: { codex: [] }, subscriptionDisplayModels: { codex: [retained] },
+    }] });
+    for (const providerPicker of [undefined, 'available'] as const) {
+      const result = await runDeviceLinkInvokeContext({
+        controllerDeviceId: 'paired-device', channel: MAKER_INVOKE.PROVIDER_LIST, providerPicker,
+      }, invoke) as { providers: ProviderView[] };
+      expect(result.providers).toEqual([current]);
+    }
+  });
+
+  // #11693: a missing discovered model can still have an explicit hidden preference.
+  // Exercise the actual provider:list handler and visibility mirror with an empty service result.
+  it('returns the hidden preference for a removed model without publishing sibling preferences', async () => {
+    const harness = new IpcHarness();
+    const route = { agent: 'codex' as const, providerId: 'off', modelId: 'gone' };
+    setModelVisibilityMirror({ 'codex:off:gone': false, 'codex:off:sibling': false, 'codex:on:gone': true });
+    try {
+      registerProviderHandlers(harness, makeDeps({
+        listProviders: async opts => {
+          opts?.picker?.describe?.([], ['off']);
+          return [];
+        },
+        getModelVisibilityOverrides: getModelVisibilityMirrorSnapshot,
+      }));
+      const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'mobile', channel: MAKER_INVOKE.PROVIDER_LIST, providerPicker: route },
+        () => harness.invoke(MAKER_INVOKE.PROVIDER_LIST));
+      expect(result).toMatchObject({ providers: [] });
+      expect(result).toHaveProperty('modelVisibilityOverrides', { 'codex:off:gone': false });
+    } finally {
+      clearModelVisibilityMirror();
+    }
   });
 
   it('encodes a real visibility timeout at the IPC boundary for message-only remote transport', async () => {
@@ -3700,6 +3747,249 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(removeCustomProviderHeaders).not.toHaveBeenCalled();
   });
 
+  // 回归:旧密文对当前 safeStorage 主密钥解不开时,用户仍能正常删除/断开供应商;
+  // 不可解密的旧 blob 推迟到 DB 删除提交后清理,避免删除中途失败回滚时误删旧密文。
+  it('deletes a custom provider with undecryptable API keys and headers, removing them after DB deletion', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const events: string[] = [];
+    const removeCustomProviderKey = vi.fn((_providerId, agent: AgentKind) => {
+      events.push(`remove-key:${agent}`);
+      keys.delete(agent);
+      return { success: true };
+    });
+    const removeCustomProviderHeaders = vi.fn((_providerId, agent: AgentKind) => {
+      events.push(`remove-headers:${agent}`);
+      headers.delete(agent);
+      return { success: true };
+    });
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey,
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders,
+      refreshCatalog: vi.fn(async () => {
+        events.push('refresh-catalog');
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'valid-codex-key',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    events.length = 0;
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await listCustomProviders()).toEqual([]);
+    expect(keys.size).toBe(0);
+    expect(headers.size).toBe(0);
+    // 可恢复凭据在删除前清理,不可恢复密文在 DB 删除后、刷新目录前清理。
+    expect(events.indexOf('remove-key:claude-code')).toBeGreaterThan(events.indexOf('remove-key:codex'));
+    expect(events.indexOf('remove-key:claude-code')).toBeLessThan(events.indexOf('refresh-catalog'));
+    expect(events.indexOf('remove-headers:claude-code')).toBeLessThan(events.indexOf('refresh-catalog'));
+  });
+
+  it('preserves undecryptable credentials when provider deletion fails before commit', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      removeOAuthCredentials: vi.fn(() => null),
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders: vi.fn((_providerId, agent: AgentKind) => {
+        headers.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable-rollback',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'must-survive',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).rejects.toThrow(/INTERNAL.*failed to remove existing OAuth credentials/);
+
+    expect(await listCustomProviders()).toHaveLength(1);
+    expect(keys.get('codex')).toBe('must-survive');
+    expect(keys.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    expect(headers.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+  });
+
+  it('still refreshes catalog after deletion if post-commit cleanup of an undecryptable blob fails', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        if (agent === 'claude-code') return { success: false, error: 'remove_failed' };
+        keys.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable-post-cleanup-fail',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    vi.mocked(deps.refreshCatalog).mockClear();
+    vi.mocked(deps.broadcastChanged).mockClear();
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.refreshCatalog).toHaveBeenCalledOnce();
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it('disconnects a custom provider even when one runtime has undecryptable credentials', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders: vi.fn((_providerId, agent: AgentKind) => {
+        headers.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'disconnect-undecryptable',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'valid-codex-key',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await getCustomProvider(config.id)).not.toBeNull();
+    expect(keys.size).toBe(0);
+    expect(headers.size).toBe(0);
+  });
+
   it('serializes create key staging with a later cross-window update', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -6525,6 +6815,17 @@ describe('remote provider access writes', () => {
   });
 });
 
+// Observes entry into the share-revocation step without replacing it: every other case in this
+// file keeps the real policy.
+const availabilityPolicyEntered = vi.hoisted(() => vi.fn());
+vi.mock('../../device-link/providerShareAvailabilityPolicy.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../device-link/providerShareAvailabilityPolicy.js')>();
+  return { ...actual, withAvailabilityPolicyMutation: <T,>(providerId: string | undefined, work: () => Promise<T>) => {
+    availabilityPolicyEntered(providerId);
+    return actual.withAvailabilityPolicyMutation(providerId, work);
+  } };
+});
+
 describe('receiving-client remote provider disable', () => {
   it('reuses provider overrides with a device-scoped key and never changes host sharing', async () => {
     const harness = new IpcHarness();
@@ -6537,6 +6838,49 @@ describe('receiving-client remote provider disable', () => {
     await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { ...command, disabled: false });
     expect(deps.setProviderDisabled).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), false);
     expect(deps.listRemoteProviders).toHaveBeenCalledOnce();
+  });
+  // Rule (disableOverrides.ts): hiding a provider is presentation, disabling is access. The two
+  // share one channel, so the regression to guard is a hide that also stops the provider (or the
+  // reverse). Minimal input: one hide command for a local provider and one for a peer's.
+  // Tier: unit over the real handler; persistence is covered by model-disable-store.test.ts.
+  it('hides a provider from the picker without touching access, locally and per peer', async () => {
+    const harness = new IpcHarness();
+    const setProviderHidden = vi.fn();
+    const deps = makeDeps({ listProviders: vi.fn(async () => [catalogView('xd', {})]),
+      listRemoteProviders: vi.fn(async () => [catalogView('openai', {})]), setProviderHidden });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: true });
+    expect(setProviderHidden).toHaveBeenLastCalledWith('xd', true);
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET,
+      { kind: 'provider-hidden', providerId: 'openai', remoteDeviceId: 'peer', hidden: true });
+    expect(setProviderHidden).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), true);
+    // Un-hiding clears a stale entry even when the provider is gone from the catalog.
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'gone', hidden: false });
+    expect(setProviderHidden).toHaveBeenLastCalledWith('gone', false);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'gone', hidden: true }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd' }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+  });
+  // PR #11565 review: a hide went through withAvailabilityPolicyMutation, which revokes the
+  // provider's registered standby shares on the server before the local write and fails when the
+  // server is unreachable. Hiding narrows no permission, so it must not enter that step; disabling
+  // still must. Minimal input: one hide and one disable of the same provider. Tier: unit over the
+  // real handler; the policy itself is covered by providerShareAvailability tests.
+  it('hiding does not enter the share-revocation step that disabling requires', async () => {
+    const harness = new IpcHarness();
+    const setProviderHidden = vi.fn();
+    const deps = makeDeps({ listProviders: vi.fn(async () => [catalogView('xd', {})]), setProviderHidden });
+    registerProviderHandlers(harness, deps);
+    availabilityPolicyEntered.mockClear();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: true });
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: false });
+    expect(setProviderHidden).toHaveBeenCalledTimes(2);
+    expect(availabilityPolicyEntered).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider', providerId: 'xd', disabled: true });
+    expect(availabilityPolicyEntered).toHaveBeenCalledExactlyOnceWith('xd');
   });
   it('rejects unknown remote providers but permits clearing a stale stop while offline', async () => {
     const harness = new IpcHarness();

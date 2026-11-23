@@ -178,7 +178,7 @@ export function resolveSendToSessionExecutionConfig(params: {
   /** 新任务的 Agent 换了电脑：来源的 provider 不在那台，按目标电脑重新解析；缺模型算没有路由。 */
   locationChanged?: boolean;
   /**
-   * 模型组选中的供应商连接(model-groups.md §6.3)：来源固定为它；推理强度按模式——overrides.effort 只是偏好，
+   * 模型组选中的供应商连接(model-groups.md §6.5)：来源固定为它；推理强度按模式——overrides.effort 只是偏好，
    * 模型不支持时退到默认档，没带就用模型默认档，不继承来源任务的档位。
    */
   pinnedProviderId?: string;

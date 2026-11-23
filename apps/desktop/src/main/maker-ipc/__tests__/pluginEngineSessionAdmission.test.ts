@@ -4,14 +4,18 @@
  * 测试价值
  * - 生产入口与可观察结果：Desktop 的任务开启准入(register.ts 的 setSessionOpeningModelAdmission)对
  *   `agent_kind = 'acp'` 调用的 admitPluginEngineSession；看准入后写进任务行的字段与拒绝原因。
- * - 规则依据：设计「任务记录」与「第一期明确不支持」：插件引擎任务只在本机、只用本机此刻提供的引擎，
- *   不回落到内置引擎。
+ * - 规则依据：设计「任务记录」「第一期明确不支持」与「第三期：自己的其他电脑使用」：引擎是本机此刻提供的，
+ *   或自己账号另一台电脑上的；SSH 与别人分享的供应商不行；不回落到内置引擎。
  * - 现有覆盖缺口：2026-11-18 实机新建插件引擎任务被内置模型目录拒绝(「Agent acp 当前不可用」)，
  *   此前没有任何测试走到这一步。
  * - 最小失败输入：可用引擎 + model 'default' 被拒；不可用 / 已卸载 / 指向另一台电脑的引擎被放行。
+ * - 2026-11-22 补(插件引擎进入「设置 → 模型供应商」)：用户在那里停用的引擎、关掉的模型不能再开新任务或换过去，
+ *   其余模型与「默认模型」照常；规则依据 configuration-and-overrides.md「停用是准入，隐藏不是」。
+ *   最小失败输入：停用后仍放行；关掉的模型仍放行；只关一个模型却把整个引擎拒掉。
  * - tier：unit(纯函数，引擎列表由调用方传入)。
  */
 import { describe, expect, it } from 'vitest';
+import { providerShareGuestPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 import type { PluginHarness } from '../../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../../localDb/sessionOpening.js';
 import { admitPluginEngineSession as admitWith, admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission.js';
@@ -77,10 +81,41 @@ describe('opening a task on a plugin engine', () => {
       'DeepSeek Harness 当前不可用：Run npm i -g @deepseek-ai/dsh'],
     ['the plugin was turned off or removed', body(), [], '提供这个引擎的插件已停用或卸载'],
     ['no engine id', body({ providerId: 'anthropic' }), [harness({ state: 'available' })], '缺少引擎标识'],
-    ['another computer', body({ agentDeviceId: 'mac-mini' }), [harness({ state: 'available' })], '只能在本机运行'],
-    ['an SSH host', body({ remoteHostId: 'host-1' }), [harness({ state: 'available' })], '只能在本机运行'],
+    ['a raw provider-share wire peer', body({ agentDeviceId: providerShareGuestPeer('s1', 'm1', 'd1') }), [harness({ state: 'available' })], '无效的插件引擎运行位置'],
+    ['a shared-task peer', body({ agentDeviceId: sharedTaskGuestPeer('t1', 'm1', 'd1') }), [harness({ state: 'available' })], '无效的插件引擎运行位置'],
+    ['an SSH host', body({ remoteHostId: 'host-1' }), [harness({ state: 'available' })], '不能在 SSH 工作区里运行'],
   ] as const)('refuses with a reason when %s', (_label, input, harnesses, message) => {
     expect(() => admitPluginEngineSession(input, harnesses)).toThrow(message);
+  });
+
+  // 引擎可以是自己账号另一台电脑上的，也可以是朋友分享过来的(`share:<id>`)；使用端免装插件，不按本机引擎列表拒绝
+  // (执行电脑是否开放 remoteWorkspace / guestWorkspace 由执行电脑在任务启动时核对)。
+  // 最小失败输入：本机没有任何插件引擎、agentDeviceId 指向另一台电脑或 `share:6f1c`。
+  it('refuses an engine the user turned off and a model they turned off, and nothing else', () => {
+    const available = [harness({ state: 'available' })];
+    expect(() => admitWith(body(), available, () => models, () => ({ suspended: true })))
+      .toThrow('DeepSeek Harness 已在「设置 → 模型供应商」中停用');
+    const oneModelOff = () => ({ disabledModels: ['deepseek-v4'] });
+    expect(() => admitWith(body({ model: 'deepseek-v4' }), available, () => models, oneModelOff))
+      .toThrow('DeepSeek Harness 的这个模型已在「设置 → 模型供应商」中关闭');
+    expect(() => admitWith(body({ model: 'default' }), available, () => models, oneModelOff)).toThrow('关闭');
+    expect(admitWith(body({ model: 'no-levels' }), available, () => models, oneModelOff).model).toBe('no-levels');
+    expect(() => admitWith(body(), available, () => models, oneModelOff)).toThrow('关闭');
+    // Nothing set: the same result as before these settings existed.
+    expect(admitWith(body({ model: 'deepseek-v4', effort: 'max' }), available, () => models, () => ({})))
+      .toEqual(admitPluginEngineSession(body({ model: 'deepseek-v4', effort: 'max' }), available));
+  });
+
+  it.each(['mac-mini', 'share:6f1c'])('admits an engine of %s without needing the plugin installed here', (agentDeviceId) => {
+    expect(admitPluginEngineSession(body({ agentDeviceId, model: '', effort: 'high', fastMode: true }), [])).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
+      agentDeviceId,
+      model: 'default',
+      effort: 'high',
+      fastMode: false,
+    });
+    expect(admitPluginEngineSession(body({ agentDeviceId, effort: 'turbo' }), []).effort).toBe('');
   });
 });
 
@@ -123,5 +158,22 @@ describe('switching an existing task onto a plugin engine', () => {
       'DeepSeek Harness 当前不可用：Run npm i -g @deepseek-ai/dsh'],
   ] as const)('refuses an engine that is %s', (_label, engines, message) => {
     expect(() => admitPluginEngineSwitchTarget(target(), engines)).toThrow(message);
+  });
+
+  // The engine list main builds reports a turned-off engine as unavailable and keeps the models
+  // the user turned off apart from `models` (pluginEnginesIpc); admission says which of the two it was.
+  it('refuses an engine the user turned off and a model they turned off, and nothing else', () => {
+    const suspended: PluginEngineView = {
+      ...view({ state: 'unavailable', reason: 'suspended' }), suspended: true,
+    };
+    expect(() => admitPluginEngineSwitchTarget(target(), [suspended]))
+      .toThrow('DeepSeek Harness 已在「设置 → 模型供应商」中停用');
+    const oneModelOff: PluginEngineView = {
+      ...view({ state: 'available' }), models: [models[1]!], disabledModels: [models[0]!],
+    };
+    expect(() => admitPluginEngineSwitchTarget(target(), [oneModelOff]))
+      .toThrow('DeepSeek Harness 的这个模型已在「设置 → 模型供应商」中关闭');
+    expect(admitPluginEngineSwitchTarget(target({ model: 'no-levels' }), [oneModelOff]).model).toBe('no-levels');
+    expect(admitPluginEngineSwitchTarget(target({ model: 'default' }), [oneModelOff]).model).toBe('default');
   });
 });

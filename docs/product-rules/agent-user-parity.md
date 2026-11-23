@@ -127,14 +127,15 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
-| 任务     | 新建任务时指定模型组的模式（`send_to_session` create 的 `model_group_id`，先用 `list_model_groups` 查模式 id），由宿主按模式选一次来源，回执带模式与实际路线（[model-groups.md §6.3](model-groups.md#63-send_to_session-按模式新建任务)） | 有（当前账号本机配置；共享任务不能用；任务建好后不再换来源） | 无（`device` 指向另一台电脑与 SSH 来源返回 `INVALID_ARGS`，不改用本机的模式） |
+| 任务     | 新建任务时指定模型组的模式（`send_to_session` create 的 `model_group_id`，先用 `list_model_groups` 查模式 id），由宿主按模式选一次来源，回执带模式与实际路线（[model-groups.md §6.5](model-groups.md#65-send_to_session-按模式新建任务)） | 有（当前账号本机配置；共享任务不能用；任务建好后不再换来源） | 无（`device` 指向另一台电脑与 SSH 来源返回 `INVALID_ARGS`，不改用本机的模式） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
+| 任务     | 稍后处理（指定时间 / 无限期）与提前取回，与收件箱同一字段和唤回规则（`snooze_sessions`，与归档同在 control 类） | 有（2026-11-22） | 有（2026-11-22，既有 patch-meta，按顺序写，结果不明不重发） |
 | 任务     | `delete_session` 删除明确任务（不能删除当前调用任务），复用宿主生命周期清理 | 有（整体安装授予的 control 声明） | 有（既有 patch-meta，结果不明不重发） |
 | 自动归档 | 设置 → 存储空间中的闲置自动归档开关、保留天数、预览与恢复默认；`tasks.auto-archive` 仍通过 `task-management` 配置分类复用 `get_app_settings` / `update_app_settings` / `reset_app_settings` | 有（当前账号本机） | 无（设置本身为本机范围，远程仍使用现有归档与恢复） |
 | 共享任务 | 为当前原任务生成原生邀请、查询共享状态（`create_shared_task_invitation` / `get_shared_task_state`） | 有（房主；沿用任务权限，Plan 只读） | 手机或同账号其他电脑控制当前任务时在任务宿主执行；不支持指定其他任务 |
 | 跟进收到的共享任务 | 在自己的任务里用复制的链接读取运行状态，查看最近或更早的记录（`get_shared_task_progress`） | 有（使用当前账号的单任务访客权限） | 从手机或另一台电脑发起时，由运行该任务的 Desktop 使用其已有共享连接读取。退出或撤权后，后续查询显示访问失败。 |
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
-| 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10） | 无 |
+| 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，拉取失败时返回 `base_fetched: false` 与提示；可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10；拉取失败提示 2026-11-21） | 无 |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序 / 插话待发消息；任务调用方沿原消息归属，声明 control 的插件可查看、撤回、调序、插话所有来源，编辑范围与任务界面一致，消费中与已消费项不可撤回 | 有（共用唯一队列；插件编辑标明实际插件来源，不沿用原文授权） | 无 |
 | 任务运行 | `control_session` 暂停 / 恢复 / 重试 / 压缩，Agent 与插件共用执行暂停锁、错误恢复与原生压缩事务；送达未知不自动重放 | 有（执行电脑本机；Claude 原 `/compact` 队列、Codex/Pi 原生手动压缩；不打断在途模型和工具） | 无 |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
@@ -146,7 +147,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 协同 / Worker | 为 Worker 新建 worktree、指定源分支、归档时回收 | 有 | 无 |
 | 协同 / Worker | 给已开始的本机 Worker 换引擎、模型、来源、推理强度与 Fast（Lead 用 `set_worker_runtime`，也可对 Worker 任务用 `set_session_runtime`；下一条 `send_to_worker` 时生效；已有待生效选择时省略 agent／`harness` 即修改那次选择；`get_session_runtime` 能看到用户在面板里登记的选择） | 有（2026-11-17：撞用量上限的休眠 Worker 派活时先落地新路线，不再先按旧路线唤醒；起不来时回执说明原因与下一步） | 无（运行设备 Worker 不适用） |
 | 协同 / Worker | 单个／批量创建默认跟随本机手动面板已提交路线，返回实际路线与回退原因 | 有（按当前账号本机 scope；旧逐 Agent 偏好不算选择） | 运行设备与 SSH 保持原策略；远程供应商路线可记忆 |
-| 协同 / Worker | 单个／批量创建时指定模型组的模式（`model_group_id`，先用 `list_model_groups` 查只读的模式 id），由宿主按模式选一次来源，返回模式与实际路线（[model-groups.md §6.2](model-groups.md#62-lead-按模式创建-worker)） | 有（当前账号本机配置；共享任务不能读；手动创建面板不提供模式） | 无（`execution_device_id` 与 SSH Lead 返回 `INVALID_PARAMS`，不改用本机） |
+| 协同 / Worker | 单个／批量创建时指定模型组的模式（`model_group_id`，先用 `list_model_groups` 查只读的模式 id），由宿主按模式选一次来源，返回模式与实际路线（[model-groups.md §6.4](model-groups.md#64-lead-按模式创建-worker)） | 有（当前账号本机配置；共享任务不能读；手动创建面板不提供模式） | 无（`execution_device_id` 与 SSH Lead 返回 `INVALID_PARAMS`，不改用本机） |
 | 协同 / Worker | 其他仓库的新 worktree 默认使用主任务记住的源分支，失效回退当前分支 | 有（返回实际源分支与原因；显式参数优先） | 无 |
 | 定时任务 | 列出、详情、运行记录、修改、暂停、恢复、删除、立即运行     | 有   | 有（V1 / V2 各自实时名册判断可用；仅加密连接不依赖 V1 在线状态） |
 | 定时任务 | 选择远程／分享供应商模型（运行位置、引擎、模型与速度）及清除覆盖恢复跟随；绑定任务或持续模式切回本机须保留完整引擎／模型选择 | 有   | 有（设置或清除模型选择均核验目标电脑的 `supportsScheduleAgentDeviceSelection`） |

@@ -1,6 +1,6 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
 import { GHOST_TOOLS_MAX } from './internal/toolsLimit.js';
-import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
+import { validateWithStoredMcpApps, ghostMcpAppsValidationError, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
@@ -4060,7 +4060,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
 
   if (raw.mcpApps !== undefined && raw.schemaVersion !== 3) return { ok: false, reason: 'mcpApps requires schemaVersion 3' };
   const parsedMcpApps = raw.mcpApps === undefined ? undefined : parseGhostMcpApps(raw.mcpApps, tools ?? [], network?.hosts ?? [], isSafeGhostRelativePath);
-  if (parsedMcpApps === null) return { ok: false, reason: 'mcpApps.ui 页面或工具声明无效，页面域名必须在 network.hosts 内' };
+  if (parsedMcpApps === null) return { ok: false, reason: ghostMcpAppsValidationError(raw.mcpApps) };
   const mcpApps = parsedMcpApps;
   return {
     ok: true,

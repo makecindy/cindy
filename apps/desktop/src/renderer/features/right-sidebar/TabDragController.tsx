@@ -363,7 +363,7 @@ export function TabDragController({
             node.style.transform = `translate3d(${pointRef.current.x}px, ${pointRef.current.y}px, 0)`;
           }
         }}
-        className="pointer-events-none fixed left-0 top-0 z-[9999] will-change-transform"
+        className="pointer-events-none fixed left-0 top-0 z-fullscreen will-change-transform"
       >
         <div
           className="flex h-[30px] max-w-[220px] items-center rounded-lg border px-2.5 text-12 font-medium text-[var(--text-primary)] animate-fade-in"

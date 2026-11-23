@@ -367,7 +367,7 @@ it('keeps processing after an omitted-agent default fails and returns the next a
 /**
  * 测试价值(批量逐项按模式选路)
  * - 生产入口与可观察结果：registerCreateWorkersTool——每项各自把 model_group_id 交给宿主，一项选不到不拦后面的项。
- * - 规则依据：docs/product-rules/model-groups.md §6.2(批量逐项)。
+ * - 规则依据：docs/product-rules/model-groups.md §6.4(批量逐项)。
  * - 现有覆盖缺口：批量用例只覆盖目录与上限；模式失败若被当成中止原因，后面的 Worker 会被跳过。
  * - 最小失败输入：三项同一模式，第二项返回 MODEL_GROUP_UNAVAILABLE。
  * - tier：unit，真实 registry。

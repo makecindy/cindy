@@ -312,7 +312,7 @@ describe('send_to_session tool', () => {
     });
   });
 
-  // model-groups.md §6.3: the mode id reaches the host only on create, an existing task is
+  // model-groups.md §6.5: the mode id reaches the host only on create, an existing task is
   // refused before any host call (ignoring it would report a mode that was never used), and
   // the receipt names the chosen mode/source without any host-internal decision handle.
   it('create: model_group_id 只在新建时交给宿主，回执带选中的模式与来源', async () => {

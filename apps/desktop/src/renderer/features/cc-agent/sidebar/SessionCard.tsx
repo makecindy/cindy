@@ -85,6 +85,7 @@ import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import {
   mergeOrcaLeadAttentionKind,
+  pendingOrcaWorkerQuestion,
   useOrcaLeadWorkerAttentionKind,
 } from '../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
@@ -132,7 +133,7 @@ function getNeutralAwaitingKind(
   return '';
 }
 
-/** SessionCard 与 SessionItem 共用同一份 props 契约（indented 在卡片流中无意义，忽略）。
+/** SessionCard 与 SessionItem 共用同一份 props 契约。
  *  variant:
  *    - 'card'(默认):白底描边卡片(瀑布流),标题 1 行 + 正文 2 行 + 右下角时间。
  *    - 'list':满宽扁平行(类 Telegram / 对话列表),无卡片描边底色;标题 + 右上角
@@ -171,8 +172,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
 }: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
   const followers = useSessionFollowers(session);
-  // 标题后常显的标记:任务标签色球与「伙伴在跟进」头像。浮出操作钮与归档确认胶囊按它让位。
-  const hasTitleMarks = !!session.tags?.length || followers.length > 0;
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
@@ -268,7 +267,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
   const awaitingKind =
     (islandActivity?.phase === 'needs-interaction' ? islandActivity.interactionKind : null) ??
-    (neutralAwaitingKind || null);
+    (neutralAwaitingKind || (orcaWorkerAttentionKind === 'awaiting' && pendingOrcaWorkerQuestion(session.id) ? 'ask_user' : null));
   const awaitingText =
     awaitingKind == null
       ? null
@@ -292,6 +291,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const cardPreview = awaitingText ?? preparationText ?? bodyPreview;
   // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
+  const showProject = taskInfoFields.includes('project');
+  const showTeammate = taskInfoFields.includes('teammate');
+  const hasTitleMarks = !!session.tags?.length || (showTeammate && followers.length > 0);
+  const inboxProject = inboxMode ? sessionTaskProjectIconDirectory(session) : null;
   const cardPrRefs = usePrRefsForSession(session.id);
   const cardInfoPrRef = taskInfoFields.includes('pr') ? cardPrRefs[0] : undefined;
   const cardInfoWorktree = useTaskInfoWorktree(session, taskInfoFields.includes('worktree'));
@@ -590,10 +593,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   ) : null;
 
   const statusIconNode = (
-    <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, inboxMode && "!w-[18px]")} aria-hidden>
+    <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, "empty:hidden", inboxMode && "!w-[18px]")} aria-hidden>
       <SessionStatusIcon
-          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
-            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+          hasSeparateStatusIndicator={rightStatusKind !== 'time'}
+          hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
+          identityIcon={showProject && inboxProject ? (
+            <ResolvedProjectIcon directory={inboxProject}
               remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
               name={sourceLabel} size={18} />
           ) : undefined}
@@ -649,11 +654,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       {showScheduleBindingBadge || showAutomationTimer ? (
         <span className={CARD_TITLE_META_SLOT_CLASS}>{renderAutomationMeta(10)}</span>
       ) : null}
-      <span
-        className="inline-block"
-        style={{ width: showScheduleBindingBadge || showAutomationTimer ? 7 : 6 }}
-        aria-hidden
-      />
     </>
   );
 
@@ -782,7 +782,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               draggable={splitDragHandleActive}
               className="relative flex h-[22px] min-w-0 flex-1 items-center gap-0"
             >
-              <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
+              <span className={cn(
+                'flex shrink-0 items-center',
+                showScheduleBindingBadge || showAutomationTimer ? 'mr-[7px]' : 'has-[>:not(:empty)]:mr-1.5',
+              )}>{titlePrefixNode}</span>
               {isEditing ? (
                 <SessionRenameInput
                   sessionId={session.id}
@@ -821,7 +824,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   </SidebarTitleMarquee>
                   {/* 任务标签常显、紧跟标题，不属于任务信息复选。 */}
                   <TaskTagDots tags={session.tags} />
-                  <BotFollowMark followers={followers} />
+                  {showTeammate && <BotFollowMark followers={followers} />}
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
@@ -836,7 +839,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                     />
                   )}
                   {/* Agent 在另一台电脑运行(任务在本机)的标识在 Agent 图标上(信号波纹)。 */}
-                  {sourceLabel && !inboxMode ? (
+                  {showProject && sourceLabel && !inboxMode ? (
                     <span
                       title={sourceLabel}
                       data-project-source
@@ -927,14 +930,14 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           )}
         </div>
       ) : (
-        <div className="relative flex h-full flex-col px-[10px] pt-[8px] pb-[8px]">
+        <div className="relative flex h-full flex-col px-2.5 pt-2 pb-2">
           {/* 右上角 hover 操作钮(More + Archive/Undo);archivePending 时换成红色确认胶囊。
             时间在右下角(见下),操作钮放右上角空位、不和时间挤在一起。 */}
           {!navigationOnly && !isEditing && !archivePending && (
             <div
               className={cn(
                 // peer:标题行按操作钮自身的 focus-within 让位,与其显隐条件一致。
-                'peer/card-actions absolute right-[6px] top-[6px] z-10 flex items-center gap-0.5',
+                'peer/card-actions absolute right-[6px] top-[6px] z-raised flex items-center gap-0.5',
                 menuPos !== null
                   ? 'opacity-100'
                   : 'opacity-0 group-hover/card:opacity-100 focus-within:opacity-100',
@@ -982,7 +985,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               }}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
-              className={cn('absolute right-[6px] top-[6px] z-20', CARD_ARCHIVE_CONFIRM_CLASS)}
+              className={cn('absolute right-[6px] top-[6px] z-page-float', CARD_ARCHIVE_CONFIRM_CLASS)}
               aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
             >
               {t('ccAgent.sidebar.sessionMenu.archived')}
@@ -1047,7 +1050,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             {!isEditing && hasTitleMarks ? (
               <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
                 <TaskTagDots tags={session.tags} />
-                <BotFollowMark followers={followers} />
+                {showTeammate && <BotFollowMark followers={followers} />}
               </span>
             ) : null}
             {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。
@@ -1095,7 +1098,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
             draggable={splitDragHandleActive}
             className={cn(
-              'mt-[4px] h-[2.8em] text-11 leading-[1.4]',
+              'mt-1 h-[2.8em] text-11 leading-[1.4]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
               isActive
                 ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
@@ -1110,12 +1113,13 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             远程业务标识、worktree;右下角业务时间。中间空位自然由图标簇与时间撑开。 */}
           <div
             className={cn(
-              'mt-[6px] flex items-center gap-1.5',
+              'mt-1.5 flex items-center gap-1.5',
               'text-11 font-medium leading-none tabular-nums',
               isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
             )}
           >
             <SessionStatusIcon
+              hideHarness={!taskInfoFields.includes('harness')}
               session={session}
               isRunning={leftIconRunning}
               isAttached={isAttached}
@@ -1158,7 +1162,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       {!isEditing && !archivePending && ordinalBadgeLabel != null && (
         <span
           className={cn(
-            'pointer-events-none absolute right-2 top-2 z-20 flex',
+            'pointer-events-none absolute right-2 top-2 z-page-float flex',
             isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
           )}
         >
@@ -1242,7 +1246,7 @@ function TimeActionsSlot({
   session: Session;
   inboxMode?: boolean;
   navigationOnly?: boolean;
-  snoozeAction: SnoozeAction;
+  snoozeAction?: SnoozeAction;
   pieces: readonly SessionInfoPiece[];
   prRef?: SessionPrRef;
   worktree?: SessionWorktreeInfo;
@@ -1266,7 +1270,7 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actionsOpen = menuOpen || snoozeOpen;
-  const canSnooze = inboxMode && !isArchived && canUnarchive;
+  const canSnooze = inboxMode && !isArchived && canUnarchive && !!snoozeAction;
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
@@ -1325,7 +1329,7 @@ function TimeActionsSlot({
             }}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
-            className="absolute right-0 top-1/2 z-20 w-max min-w-14 -translate-y-1/2 whitespace-nowrap"
+            className="absolute right-0 top-1/2 z-page-float w-max min-w-14 -translate-y-1/2 whitespace-nowrap"
             aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
           >
             {t('ccAgent.sidebar.sessionMenu.archived')}

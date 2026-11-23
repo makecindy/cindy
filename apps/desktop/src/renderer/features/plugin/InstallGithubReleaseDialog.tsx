@@ -56,9 +56,9 @@ export function InstallGithubReleaseDialog({ onClose, onInstalled }: {
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 p-4"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 p-4"
           onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
           onInteractOutside={(event) => event.preventDefault()}
         >

@@ -585,7 +585,7 @@ describe('resolveSendToSessionCreateRoute', () => {
 });
 
 /**
- * model-groups.md §6.3：send_to_session 按模式新建任务。生产入口是 resolveSendToSessionCreateRoute 的
+ * model-groups.md §6.5：send_to_session 按模式新建任务。生产入口是 resolveSendToSessionCreateRoute 的
  * pinnedProviderId(模式选中的来源)与 sendToSessionModelGroup 的冲突、选路函数；register.ts 的 create
  * 分支只把它们串起来。最小失败输入：模式选中的模型与来源任务相同、只是供应商连接不同——不固定来源时
  * 会原样沿用来源任务的连接与推理强度，用户的「快作废的先用」等于没生效。

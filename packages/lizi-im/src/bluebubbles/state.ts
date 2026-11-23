@@ -11,7 +11,7 @@ export interface BlueBubblesState {
   inbox: Record<string, { receivedAt: number; state: 'pending' | 'dispatching' | 'accepted' | 'ignored';
     echoHint?: { id: string; failed: boolean };
     stop?: { chatId: string; sentAt: number; before: string[] } }>;
-  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string; failed?: true;
+  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string; failed?: true; automationDenied?: true;
     /** Optional on old journals. Only retained while awaiting an authoritative ID. */
     echoSignature?: string }>;
 }
@@ -52,6 +52,7 @@ export class BlueBubblesReceipts {
   // A missing delivery result stays visible in health after ingress has finished correlating it.
   private readonly awaitingCorrelation = new Set<string>();
   private readonly outgoingChats = new Map<string, string>();
+  private readonly sentByChat = new Map<string, Map<string, number>>();
   private readonly unresolved = new Set<string>();
   private readonly stops = new Map<string, { sentAt: number; before: Set<string> }>();
   private readonly signatureKey?: Buffer;
@@ -78,6 +79,7 @@ export class BlueBubblesReceipts {
     for (const [id, value] of Object.entries(this.state.outbox)) {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'outbox', id, value });
       if (value.messageId) this.outgoingChats.set(value.messageId, value.chatId);
+      this.indexSent(value, 1);
       if (value.state !== 'sent' && !value.failed) {
         this.unsettledSends.add(id);
         this.awaitingCorrelation.add(id);
@@ -88,9 +90,13 @@ export class BlueBubblesReceipts {
   snapshot(): BlueBubblesState { return structuredClone(this.state); }
   uncertainCounts(activeDispatches: ReadonlySet<string>, activeSends: ReadonlySet<string>) {
     let uncertainInputs = 0, uncertainSends = 0;
+    let automationDenied = false;
     for (const id of this.dispatching) if (!activeDispatches.has(id)) uncertainInputs++;
-    for (const id of this.unsettledSends) if (!activeSends.has(id)) uncertainSends++;
-    return { uncertainInputs, uncertainSends };
+    for (const id of this.unsettledSends) if (!activeSends.has(id)) {
+      uncertainSends++;
+      if (this.state.outbox[id].automationDenied === true) automationDenied = true;
+    }
+    return { uncertainInputs, uncertainSends, ...(automationDenied && { automationDenied }) };
   }
   get activatedAt(): number { return this.state.activatedAt; }
   activatedAtFor(chat: string): number { return Math.max(this.state.activatedAt, this.state.chatActivatedAt?.[chat] ?? this.state.activatedAt); }
@@ -153,6 +159,8 @@ export class BlueBubblesReceipts {
     else {
       const next = this.snapshot(); applyBlueBubblesReceiptUpdate(next, update); this.storage.write(next);
     }
+    const previousSend = update.kind === 'outbox' && Object.hasOwn(this.state.outbox, update.id)
+      ? this.state.outbox[update.id] : undefined;
     applyBlueBubblesReceiptUpdate(this.state, update);
     if (update.kind === 'inbox') {
       if (!this.arrivalOrder.has(update.id)) this.arrivalOrder.set(update.id, this.arrivalOrder.size);
@@ -162,6 +170,8 @@ export class BlueBubblesReceipts {
       else this.unresolved.delete(update.id);
       this.indexStop(update.value.stop);
     } else if (update.kind === 'outbox') {
+      this.indexSent(previousSend, -1);
+      this.indexSent(update.value, 1);
       if (update.value.messageId) this.outgoingChats.set(update.value.messageId, update.value.chatId);
       if (update.value.state === 'sent' || update.value.failed) {
         this.unsettledSends.delete(update.id);
@@ -178,9 +188,25 @@ export class BlueBubblesReceipts {
     if (!previous) throw new Error('BLUEBUBBLES_RECEIPT_MISSING');
     this.update({ kind: 'inbox', id: guid, value: { ...previous, state } });
   }
-  confirmedSend(id: string): string | undefined {
+  hasSentMessage(chatId: string, messageId: string): boolean {
+    return this.sentByChat.get(chatId)?.has(messageId) === true;
+  }
+  private indexSent(row: BlueBubblesState['outbox'][string] | undefined, change: 1 | -1): void {
+    if (row?.state !== 'sent' || !row.messageId) return;
+    const messages = this.sentByChat.get(row.chatId) ?? new Map<string, number>();
+    const count = (messages.get(row.messageId) ?? 0) + change;
+    if (count > 0) {
+      messages.set(row.messageId, count);
+      this.sentByChat.set(row.chatId, messages);
+    } else {
+      messages.delete(row.messageId);
+      if (!messages.size) this.sentByChat.delete(row.chatId);
+    }
+  }
+  hasOutgoing(id: string): boolean { return Object.hasOwn(this.state.outbox, id); }
+  confirmedSend(id: string, chatId?: string): string | undefined {
     const row = this.state.outbox[id];
-    return row?.state === 'sent' ? row.messageId : undefined;
+    return row?.state === 'sent' && (chatId === undefined || row.chatId === chatId) ? row.messageId : undefined;
   }
   isOutgoing(chat: string, guid: string, tempGuid?: string): boolean {
     return this.outgoingChats.get(guid) === chat || (!!tempGuid && this.state.outbox[tempGuid]?.chatId === chat);

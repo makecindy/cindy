@@ -1,6 +1,6 @@
 /**
  * 给 Agent 看的模型组：只列这台电脑当前账号建的模式及其来源(稳定 id、名称、选法、推理强度、例外)，
- * 不含额度、凭证或别的电脑上的配置。创建 Worker 时用 routes[].id 作为 model_group_id(model-groups.md §6.2)。
+ * 不含额度、凭证或别的电脑上的配置。创建 Worker 时用 routes[].id 作为 model_group_id(model-groups.md §6.4)。
  */
 import type { ModelGroupsConfig } from '../../shared/modelGroups.js';
 

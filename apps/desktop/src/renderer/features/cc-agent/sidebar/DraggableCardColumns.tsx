@@ -263,7 +263,7 @@ export function DraggableCardColumns<T>({
   }, [columns, disabled, forceFallback, reducedMotion, groupId]);
 
   return (
-    <div className="flex w-full items-stretch gap-[7px]">
+    <div className="flex w-full items-stretch gap-1.5">
       {buckets.map((bucket, c) => (
         <div
           key={c}
@@ -272,7 +272,7 @@ export function DraggableCardColumns<T>({
           ref={(el) => {
             columnRefs.current[c] = el;
           }}
-          className="flex min-w-0 flex-1 flex-col gap-[7px]"
+          className="flex min-w-0 flex-1 flex-col gap-1.5"
         >
           {bucket.map((item, r) => {
             const id = getId(item);

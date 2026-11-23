@@ -3562,7 +3562,7 @@ describe('Worker tool defaults follow the submitted panel route atomically', () 
  * 测试价值(经模型组创建 Worker)
  * - 生产入口与可观察结果：createOrcaWorkerCreationService().createWorker 带 modelGroupId——Worker 实际用的
  *   引擎、模型、来源与 Agent 位置，以及冲突 / 选不到时的错误码。
- * - 规则依据：docs/product-rules/model-groups.md §6.2(参数冲突、不换工作电脑、共享任务不用主人的模式、选不到即失败、只在落定后提交)。
+ * - 规则依据：docs/product-rules/model-groups.md §6.4(参数冲突、不换工作电脑、共享任务不用主人的模式、选不到即失败、只在落定后提交)。
  * - 现有覆盖缺口：此前 Worker 创建不经过模型组；相邻用例只覆盖记忆、显式来源与供应商组跟随。
  * - 最小失败输入：模式的推理强度该模型不支持(当成显式参数会让创建失败；被 resolver 去掉后又继承了 Lead 的档位)；只传图片不传首条任务(图片例外改了来源)；Lead 的 Agent 在另一台电脑而模式选中本机来源(省略位置会改跟 Lead 查错目录)；Lead 归在供应商组而
  *   模式选中 Lead 现用来源(会被改成组那一项)；未提交的选路被当成已采用，「轮流」提前前进。
