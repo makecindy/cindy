@@ -159,6 +159,7 @@ export interface RemoteScheduleRun {
   estimatedValueUsd?: number;
   costMoney?: RemoteScheduleRunMoney;
   estimatedValueMoney?: RemoteScheduleRunMoney;
+  estimatedValueAmounts?: RemoteScheduleRunMoney[];
   costAttribution?: 'exact' | 'direct' | 'mixed' | 'zero' | 'unavailable' | 'legacy';
   readAt?: RemoteTimestamp;
 }

@@ -103,6 +103,10 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
 | App | 启动后等 Metro 日志出现这次的 `iOS Bundled`，没等到就重新启动。`bundleVerified: false` 表示这个 Metro 没有日志（例如在日志功能之前启动），无法确认 |
 | 前台 | 读设备日志里 App 最新的运行状态，不在前台就切回前台（开机后系统偶尔会把它挤到后台）。`foreground: null` 表示日志里没有状态，未确认 |
 
+Metro 每 5 秒核对启动时的项目目录。目录被回收、移动，或原路径已指向另一个目录时，
+服务自动退出。运行 `mobile:sim:up` 还会核验旧版本留下的端口归属记录，回收工作目录
+已删除且进程身份匹配的服务，包括自定义端口。仍存在的工作目录可继续用于热更新。
+
 失败时结果 JSON 的 `code` 说明原因，`next` 说明下一步：`UNSUPPORTED_PLATFORM`、`BAD_ARGS`、
 `SIMULATOR_UNAVAILABLE`、`UNKNOWN_DEVICE`、`DEVICE_CHOICE_NEEDED`、`NO_REUSABLE_DEVICE`、`BOOT_FAILED`、`METRO_PROBE_FAILED`、
 `METRO_PORTS_BUSY`、`METRO_START_FAILED`、`NATIVE_PROBE_FAILED`、`IOS_BUILD_TOOLS_UNAVAILABLE`、

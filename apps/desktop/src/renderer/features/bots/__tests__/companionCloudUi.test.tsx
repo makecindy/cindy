@@ -79,6 +79,21 @@ it('renders the saved cloud transcript before the remote read and preserves it o
 });
 
 describe('presentation helpers', () => {
+  // #8585, unit: same-home installation demotion has no profileFailure. Keep a
+  // cloud recovery row without exposing a runnable local copy or auto-taking it.
+  it('retains same-home installation shadows as read-only recovery rows until restored', () => {
+    const cloud = snapshot('desk');
+    cloud.demotedBotIds = ['mia'];
+    expect(withoutShadowedBots([{ id: 'mia' }], cloud)).toEqual([]);
+    const rows = cloudRemoteBots(cloud, []);
+    expect(rows).toMatchObject([{ id: 'mia', deviceId: 'desk', online: false, sessionId: null }]);
+    expect(isCloudCompanionRemote(cloud, rows[0]!)).toBe(true);
+    expect(cloudOnlyRemoteBots(cloud, rows)).toEqual([]);
+    expect(cloudRemoteBots({ ...cloud, enabled: false }, [])).toEqual([]);
+    cloud.demotedBotIds = [];
+    expect(cloudRemoteBots(cloud, [])).toEqual([]);
+    expect(withoutShadowedBots([{ id: 'mia' }], cloud)).toEqual([{ id: 'mia' }]);
+  });
   // #10112, unit tier: a rejected shadow must have a recovery entry, never a runnable copy.
   it('retains a read-only entry for a rejected local restore, then removes it on recovery', () => {
     const cloud = snapshot('desk');
@@ -138,6 +153,30 @@ describe('presentation helpers', () => {
 });
 
 describe('CloudCompanionOfflineView', () => {
+  // #8585, unit: the real cloud view exposes the existing shadow recovery action
+  // for a same-home install conflict, without calling takeOver on mount. Existing
+  // tests cover remote/offline homes and profile rejection, not this input.
+  it('shows local shadow recovery without announcing an offline computer or taking over on mount', async () => {
+    const cloud = snapshot('desk');
+    cloud.demotedBotIds = ['mia'];
+    maker.getCompanionCloudState.mockResolvedValue(cloud);
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [{ id: 'old', role: 'user', text: 'Saved history', createdAt: 1 }] });
+    maker.takeOverCompanion.mockResolvedValueOnce({ ok: false, code: 'FAILED' }).mockResolvedValueOnce({ ok: true });
+    resetCompanionCloudStoreForTests(cloud);
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk" />);
+    expect(await screen.findByText('Saved history')).toBeTruthy();
+    expect(screen.getByTestId('companion-shadow-banner')).toBeTruthy();
+    expect(screen.queryByText(/^bots.cloud.homeOffline/)).toBeNull();
+    expect(maker.takeOverCompanion).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.continueHere' }));
+    expect(await screen.findByText(/^bots.cloud.takeOverFailed/)).toBeTruthy();
+    expect(screen.getByText('Saved history')).toBeTruthy();
+    expect(h.ensureLoaded).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.continueHere' }));
+    await waitFor(() => expect(h.ensureLoaded).toHaveBeenCalledWith(true));
+    expect(maker.takeOverCompanion).toHaveBeenCalledTimes(2);
+    expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia');
+  });
   // #10112, integration tier: enter through the failed companion, edit the complete
   // 12001-character source, retain edits on a failed save, then return to the recovered buddy.
   it('corrects the rejected profile through its real form and preserves edits when saving fails', async () => {

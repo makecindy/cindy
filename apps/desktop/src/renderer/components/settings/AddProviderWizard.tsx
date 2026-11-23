@@ -281,7 +281,7 @@ export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
 function InfoLine({ text }: { text: string }) {
   return (
     <div className="flex items-start gap-2 text-12" style={{ color: 'var(--text-tertiary)' }}>
-      <Info size={13} className="mt-[1px] shrink-0" />
+      <Info size={13} className="mt-px shrink-0" />
       <span>{text}</span>
     </div>
   );
@@ -1031,6 +1031,7 @@ export function AddProviderWizard({
           discoveredSources: { ...existing?.discoveredSources, [agent]: m.discoveredSource },
           discoverySnapshotIds: { ...existing?.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
           opaqueModelIds: { ...existing?.opaqueModelIds, [agent]: m.opaqueModelId },
+          ...(m.discoveredCost ? { discoveredCosts: { ...existing?.discoveredCosts, [agent]: m.discoveredCost } } : {}),
           ...(m.route ? { routes: { ...existing?.routes, [agent]: m.route } } : {}),
         });
       }
@@ -1208,9 +1209,13 @@ export function AddProviderWizard({
               existing.name !== m.name ||
               m.discoveredSource || m.discoverySnapshotId || m.opaqueModelId ||
               existing.discoveredSources?.[agent] || existing.discoverySnapshotIds?.[agent] ||
-              m.discoveredCost ||
+              m.discoveredCost || existing.discoveredCosts?.[agent] ||
               m.discoveredMetadata || existing.speechReference
             ) {
+              const nextDiscoveredCosts = { ...existing.discoveredCosts };
+              if (m.discoveredCost) nextDiscoveredCosts[agent] = m.discoveredCost;
+              else delete nextDiscoveredCosts[agent];
+              const hasDiscoveredCosts = Object.keys(nextDiscoveredCosts).length > 0;
               next.set(m.id, {
                 ...existing,
                 speechReference: false,
@@ -1221,7 +1226,7 @@ export function AddProviderWizard({
                 discoveredSources: { ...existing.discoveredSources, [agent]: m.discoveredSource },
                 discoverySnapshotIds: { ...existing.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
                 opaqueModelIds: { ...existing.opaqueModelIds, [agent]: m.opaqueModelId || existing.opaqueModelIds?.[agent] },
-                ...(m.discoveredCost ? { discoveredCosts: { ...existing.discoveredCosts, [agent]: m.discoveredCost } } : {}),
+                discoveredCosts: hasDiscoveredCosts ? nextDiscoveredCosts : undefined,
                 agents: mergedAgents,
                 discoveredMetadata: {
                   ...existing.discoveredMetadata,
@@ -1402,7 +1407,7 @@ export function AddProviderWizard({
             const discoveredMetadata = m.discoveredMetadata?.[agent] ?? {};
             // Current picks own visibility; an old disabled draft must not override
             // a checked row. Leave checked models on the existing default contract.
-            const { defaultEnabled: _oldEnabled, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
+            const { defaultEnabled: _oldEnabled, discoveredCost: _oldCost, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
               detected?.config.runtimes[agent]?.models.find(model => model.id === m.id) ?? {};
             return {
               ...draftModel,
@@ -1579,7 +1584,7 @@ export function AddProviderWizard({
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) handleClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
       <Dialog.Content
         ref={panelRef}
         aria-describedby={undefined}
@@ -1595,7 +1600,7 @@ export function AddProviderWizard({
           if (savingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
         }}
         style={WINDOW_NO_DRAG_STYLE}
-        className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+        className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
       >
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
@@ -1978,12 +1983,12 @@ export function AddProviderWizard({
                   {t('settings.providers.custom.fields.apiKey')}
                 </label>
                 <SettingsTextInput
+                  data-settings-search-action="Enter the API key of the built-in provider draft in this wizard"
                   value={apiKey}
                   onChange={setApiKey}
                   size="md"
                   mono
                   secret
-                  secretTipContentClassName="z-[10001]"
                 />
               </div>
             </div>
@@ -2024,13 +2029,13 @@ export function AddProviderWizard({
                     {t('settings.providers.custom.fields.apiKey')}
                   </label>
                   <SettingsTextInput
+                    data-settings-search-action="Enter the API key of the preset provider draft in this wizard"
                     value={apiKey}
                     onChange={setApiKey}
                     placeholder={isMimoTokenPlanPreset(sel.preset) ? 'tp-…' : 'sk-…'}
                     size="md"
                     mono
                     secret
-                    secretTipContentClassName="z-[10001]"
                   />
                   {bindGeminiImages && <InfoLine text={t('settings.providers.wizard.geminiImageKeyNote')} />}
                   {isMimoTokenPlanPreset(sel.preset) && (
@@ -2257,6 +2262,7 @@ export function AddProviderWizard({
         <div className="flex items-center justify-between px-4 pb-4 pt-2">
           <button
             type="button"
+            data-settings-search-action="Return to the previous wizard step or custom provider form"
             onClick={() => {
               if (savingRef.current) return;
               if (step === 2 && detected && onReturnCustom && sel?.kind === 'preset') {
@@ -2282,7 +2288,7 @@ export function AddProviderWizard({
                       const saved = original.models.find(row => row.id === id);
                       // Only checked rows return to the custom form. Do not
                       // resurrect an older disabled flag on this second save path.
-                      const { defaultEnabled: _oldEnabled, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
+                      const { defaultEnabled: _oldEnabled, discoveredCost: _oldCost, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
                       return { ...(!selectedModel.interfaceId && !selectedModel.api && !selectedModel.piApi && !selectedModel.route
                         && model.interfaceIds?.[target] ? { interfaceId: model.interfaceIds[target] } : {}),
                         ...selectedModel, id, name: model.name,
@@ -2290,6 +2296,7 @@ export function AddProviderWizard({
                         discoveredSource: model.discoveredSources?.[target],
                         discoverySnapshotId: model.discoverySnapshotIds?.[target],
                         opaqueModelId: model.opaqueModelIds?.[target] || saved?.opaqueModelId,
+                        ...(model.discoveredCosts?.[target] ? { discoveredCost: model.discoveredCosts[target] } : {}),
                         ...(saved?.route ?? model.routes?.[target] ? { route: saved?.route ?? model.routes?.[target] } : {}),
                       };
                     }) : original.models;

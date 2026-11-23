@@ -174,4 +174,28 @@ describe('createPeerLinksPushScheduler', () => {
     ], null);
     expect(peerLinksStructureKey(a)).toBe(peerLinksStructureKey(b));
   });
+
+  // 2026-11-22 双路延迟与手动选路偏好:偏好变化或双路测速从单路变双路时结构 key 变化并触发广播,单纯数值波动不广播。tier: unit。
+  it('Agent-Net 选路偏好或双路可达状态变化会改变结构 key,纯 RTT 数值波动不变', () => {
+    const base: DeviceLinkPeerLinksSnapshot = {
+      links: [],
+      relayRttMs: 14,
+      agentNetRoutes: [{ deviceId: 'a', path: 'direct', rttMs: 220, directRttMs: 220, relayRttMs: null, pathPreference: 'auto' }],
+    };
+    const bothMeasured: DeviceLinkPeerLinksSnapshot = {
+      ...base,
+      agentNetRoutes: [{ deviceId: 'a', path: 'direct', rttMs: 215, directRttMs: 215, relayRttMs: 86, pathPreference: 'auto' }],
+    };
+    const jitterOnly: DeviceLinkPeerLinksSnapshot = {
+      ...base,
+      agentNetRoutes: [{ deviceId: 'a', path: 'direct', rttMs: 218, directRttMs: 218, relayRttMs: 89, pathPreference: 'auto' }],
+    };
+    const prefChanged: DeviceLinkPeerLinksSnapshot = {
+      ...base,
+      agentNetRoutes: [{ deviceId: 'a', path: 'direct', rttMs: 218, directRttMs: 218, relayRttMs: 89, pathPreference: 'relay' }],
+    };
+    expect(peerLinksStructureKey(bothMeasured)).not.toBe(peerLinksStructureKey(base));
+    expect(peerLinksStructureKey(jitterOnly)).toBe(peerLinksStructureKey(bothMeasured));
+    expect(peerLinksStructureKey(prefChanged)).not.toBe(peerLinksStructureKey(jitterOnly));
+  });
 });

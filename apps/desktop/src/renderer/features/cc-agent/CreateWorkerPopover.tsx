@@ -1307,13 +1307,13 @@ export function CreateWorkerPopover({
     <><Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
       <Dialog.Portal>
       <Dialog.Overlay
-        className={cn('modal-scrim fixed inset-0 z-50 flex items-center justify-center', className)}
+        className={cn('modal-scrim fixed inset-0 z-modal flex items-center justify-center', className)}
         // 遮罩不是拖拽区:标 drag 会把整块视口变成拖拽命中区,只给 500px 的 Content 挖洞,
         // 探出洞的浮层(模型面板)左侧就被吞掉 —— 与其它 modal 弹窗同口径(windowDrag.tsx)。
         style={WINDOW_NO_DRAG_STYLE}
       >
       <Dialog.Content
-        className="modal-panel relative z-10 max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"
+        className="modal-panel relative z-raised max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"
         // 没有说明文字时显式置空,避免指向不存在的描述节点。
         {...(description ? {} : { 'aria-describedby': undefined })}
         onPointerDownOutside={(event) => event.preventDefault()}

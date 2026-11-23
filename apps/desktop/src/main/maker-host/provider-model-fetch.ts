@@ -37,17 +37,18 @@ const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
 const CODEX_MODELS_CLIENT_VERSION = '0.147.0';
 
-// Share only an in-flight Hinoki HTTP read, not parsed models or agent-bound
+// Share only an in-flight Hinoki/Token Rhythm HTTP read, not parsed models or agent-bound
 // provenance receipts. Every caller keeps its own parsing/error policy below.
-const hinokiReads = new WeakMap<typeof fetch, Map<string, {
+const sharedModelReads = new WeakMap<typeof fetch, Map<string, {
   response: Promise<Response>;
   consumers: number;
 }>>();
 
 async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
-  if (url !== 'https://inference.hinoki.security/v1/models') return fetchImpl(url, init);
-  let reads = hinokiReads.get(fetchImpl);
-  if (!reads) { reads = new Map(); hinokiReads.set(fetchImpl, reads); }
+  if (url !== 'https://inference.hinoki.security/v1/models'
+    && url !== 'https://tokenrhythm.studio/v1/models') return fetchImpl(url, init);
+  let reads = sharedModelReads.get(fetchImpl);
+  if (!reads) { reads = new Map(); sharedModelReads.set(fetchImpl, reads); }
   // The existing process-local HMAC includes all effective headers (including
   // credentials) without retaining plaintext keys in the map key. Never share
   // across redirect policies or injected transport/credential-owner closures.

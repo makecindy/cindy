@@ -70,6 +70,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 - [插件面板预览 preview（§4.15）](references/plugin-panel-preview.md)
 - [插件随包浏览器扩展 browserExtension（§4.24）](references/plugin-browser-extension.md)
 - [插件确认弹窗 confirm（§4.18）](references/plugin-confirm-dialog.md)
+- [插件表单弹窗 form（§4.19）](references/plugin-form-dialog.md)
 - [插件推荐任务（§4.21）](references/plugin-recommendations.md)
 
 ### 插件事件与任务协作

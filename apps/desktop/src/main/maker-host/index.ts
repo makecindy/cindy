@@ -151,6 +151,7 @@ import {
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
+  confirmTaskAction,
   isActiveInputAccountScoped,
   isSessionInTurn,
   wireSessionToIpc,
@@ -312,6 +313,8 @@ import {
 } from './codex-proxy-host.desktop.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.desktop.js';
+import { STARTUP_GHOST_TOOLS_OWNER_KEY } from '../cindy-brain/startupGhostTool.js';
+import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
 import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
 import {
@@ -417,6 +420,7 @@ import { createDesktopOrcaTeamStoreAdapter } from './orcaTeamStoreAdapter.js';
 import { broadcastOrcaWorkerChanged } from './orcaWorkerBroadcast.js';
 import {
   getDesktopClaudeReadOnlyAllowedTools,
+  getDesktopMcpToolApprovalEvidence,
   getDesktopMcpToolApprovalPolicy,
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
@@ -696,11 +700,14 @@ export async function refreshCodexGatewayHost(
 let _resolveBotCapabilityAgentKind: BotCapabilityServiceDeps['resolveBotAgentKind'] | null = null;
 // Bootstrap owns IM/hook modules that depend back on this host. Bind their reader
 // once, but read the current owner's stores on each call (including after resetMaker).
+let _iMessageGroup: BotCapabilityServiceDeps['iMessageGroup'];
 let _readBotConversationConnections: BotCapabilityServiceDeps['readConversationConnections'];
 export function setBotConversationConnectionsReader(
   reader: NonNullable<BotCapabilityServiceDeps['readConversationConnections']>,
+  iMessageGroup?: BotCapabilityServiceDeps['iMessageGroup'],
 ): void {
   _readBotConversationConnections = reader;
+  _iMessageGroup = iMessageGroup;
 }
 
 export function setBotCapabilityAgentKindResolver(
@@ -935,11 +942,18 @@ function companionToolAgentKind(kind: EngineKind): AgentKind {
 function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     listMcpServers: (input) => listBotRuntimeMcpServers({
       ...input,
       agentKind: companionToolAgentKind(input.agentKind),
     }),
     markOfficialSkills: markCindyOfficialSkills,
+    isOwnerInput: isActiveInputOwnerAuthored,
+    confirmGroupAccess: (sessionId, input) => confirmTaskAction(sessionId, 'configure_teammate_imessage_group', input),
+    iMessageGroup: async (...args) => {
+      if (!_iMessageGroup) throw new Error('HOST_NOT_READY');
+      return _iMessageGroup(...args);
+    },
     readConversationConnections: async (botId) => {
       if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
       return _readBotConversationConnections(botId);
@@ -1141,6 +1155,12 @@ export function getMaker(): Maker {
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
       // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。
+      isStartupToolSessionCurrent: (sessionId: string, instanceId: string, workdir: string) => {
+        const session = _maker?.getSession(sessionId);
+        return !!session && session.instanceId === instanceId && session.workDir === workdir &&
+          session.getStatus() === 'active' && !session.hasStartedClosing() &&
+          !session.remoteHostId && !isAppSessionBoundaryPending();
+      },
       getLiveSessionGrantState: (sessionId: string, sessionInstanceId: string) => {
         if (!sessionInstanceId) return null;
         const session = _maker?.getSession(sessionId);
@@ -1471,6 +1491,7 @@ export function getMaker(): Maker {
       // 行时, Claude 只剩上面那份静态只读白名单, 可信第一方 server 的 call_tool
       // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+      getMcpToolApprovalEvidence: getDesktopMcpToolApprovalEvidence,
       resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
@@ -1887,6 +1908,7 @@ export function getMaker(): Maker {
         registerCodexMcpThreadContext(threadId, {
           agentKind: 'codex',
           sessionId,
+          startupCatalogKey: vendorOptions,
           mcpCallerKind,
           mcpCallerAttested,
           ...(sessionInstanceId ? { sessionInstanceId } : {}),
@@ -1978,6 +2000,7 @@ export function getMaker(): Maker {
       // 只有已 review 的第一方只读/媒体工具静默。
       // 详见 AgentDeps.getMcpToolApprovalPolicy。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+      getMcpToolApprovalEvidence: getDesktopMcpToolApprovalEvidence,
       // 远端 Codex (P2): 给 session 标 remoteHostId 的, CodexAgent 通过这个钩子拿
       // 远端 transport — SSH 连接已有 ConnectionPool (remote-ssh feature 起的) 管,
       // 这里包一层把 RemoteHost + SshDaemonTransport 装起来。
@@ -2447,6 +2470,7 @@ export function getMaker(): Maker {
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
       getUserName: () => getAuthState().user?.name,
+      prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
       listSkills: async ({ agentKind: engineKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
         const agentKind = companionToolAgentKind(engineKind);
@@ -2640,6 +2664,20 @@ export function getMaker(): Maker {
             getActiveCatalog(),
           );
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
+          // Resolve the startup tool surface from the persisted task, not the
+          // source or marker supplied by a renderer or queued request.
+          if (opts.vendorOptions && STARTUP_GHOST_TOOLS_OWNER_KEY in opts.vendorOptions) {
+            opts.vendorOptions = { ...opts.vendorOptions };
+            delete opts.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY];
+          }
+          if (['claude-code', 'codex', 'pi'].includes(opts.agentKind) && !opts.reviewMode &&
+              !opts.remoteHostId && !opts.agentDeviceId && !opts.vendorOptions?.orcaRole) {
+            const owner = activeOwnerScopeKey();
+            const source = await readSessionSource(sessionId).catch(() => null);
+            if (source === 'desktop' && owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
+              opts.vendorOptions = { ...opts.vendorOptions, [STARTUP_GHOST_TOOLS_OWNER_KEY]: owner };
+            }
+          }
           if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
             const thinkingEnabled = getThinkingEnabledFromMemory(
               opts.agentKind,

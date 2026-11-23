@@ -20,6 +20,6 @@ export function QuotaResetConfetti({ anchor, onDone }: QuotaResetConfettiProps) 
     setOrigin({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
   }, [anchor]);
   return origin ? (
-    <ConfettiBurst origin={origin} preset="quota" zIndex={9999} onDone={onDone} />
+    <ConfettiBurst origin={origin} preset="quota" onDone={onDone} />
   ) : null;
 }

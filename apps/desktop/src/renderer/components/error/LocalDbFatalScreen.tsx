@@ -98,7 +98,7 @@ export function LocalDbFatalScreen({
 
   return (
     <div
-      className="fixed inset-0 z-[9999]"
+      className="fixed inset-0 z-fullscreen"
       style={{ background: 'var(--surface)', WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <ConfirmDialog
