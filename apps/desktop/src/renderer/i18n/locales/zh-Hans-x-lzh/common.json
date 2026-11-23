@@ -1921,6 +1921,7 @@
       },
       "footnote": "初版仅支持 SSH 连接管理；于远程行 Agent 之能，将于后续版本增之。",
       "viaAuth": "经 {{label}} 认证",
+      "managedAliasConflict": "此 SSH 别名在 Cindy 管理的配置和外部配置中均有定义。连接信息为只读，无法在此移除该主机。",
       "readOnlyFromSshConfig": "连接信息出自 SSH 设置",
       "importedAgentHint": "由本机 SSH 密钥代理（ssh-agent）验身。终端 ssh 虽可通，未必代理已备。",
       "agentError": {

@@ -1989,6 +1989,7 @@
       },
       "footnote": "Phase A : gestion des connexions SSH uniquement. L'exécution d'Agents sur la machine distante arrivera dans une prochaine mise à jour.",
       "viaAuth": "via {{label}}",
+      "managedAliasConflict": "Cet alias SSH est défini à la fois dans la configuration gérée par Cindy et dans une configuration externe. Les détails de connexion sont en lecture seule et cet hôte ne peut pas être retiré ici.",
       "readOnlyFromSshConfig": "Les détails de connexion proviennent de la configuration SSH",
       "importedAgentHint": "S’authentifie via l’agent local de clés SSH (ssh-agent). Une connexion ssh réussie dans le terminal ne garantit pas que l’agent est prêt.",
       "agentError": {

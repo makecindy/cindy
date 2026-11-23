@@ -1921,6 +1921,7 @@
       },
       "footnote": "Phase A は SSH 接続管理のみ。リモートでのエージェント実行は今後のアップデートで対応します。",
       "viaAuth": "{{label}} で認証",
+      "managedAliasConflict": "この SSH エイリアスは、Cindy が管理する設定と外部の設定の両方で定義されています。接続情報は読み取り専用で、この画面からホストを削除できません。",
       "readOnlyFromSshConfig": "接続情報は SSH 設定から読み込まれています",
       "importedAgentHint": "このコンピューターの SSH 鍵エージェント（ssh-agent）で認証します。ターミナルの ssh で接続できても、エージェントが利用可能とは限りません。",
       "agentError": {

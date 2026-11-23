@@ -5538,6 +5538,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
           identityFileName?: string;
           source: 'ssh-config' | 'manual';
           managedByCindy: boolean;
+          managedAliasConflict?: boolean;
           displayName?: string;
         };
         status:

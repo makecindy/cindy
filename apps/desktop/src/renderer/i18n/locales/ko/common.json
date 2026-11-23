@@ -1921,6 +1921,7 @@
       },
       "footnote": "Phase A는 SSH 연결 관리만 지원합니다. 원격에서 에이전트를 실행하는 기능은 이후 업데이트에서 제공됩니다.",
       "viaAuth": "{{label}}(으)로 인증",
+      "managedAliasConflict": "이 SSH 별칭은 Cindy가 관리하는 설정과 외부 설정에 모두 정의되어 있습니다. 연결 정보는 읽기 전용이며 여기에서 이 호스트를 제거할 수 없습니다.",
       "readOnlyFromSshConfig": "연결 정보는 SSH 설정에서 가져옵니다",
       "importedAgentHint": "이 컴퓨터의 SSH 키 에이전트(ssh-agent)를 통해 인증합니다. 터미널 ssh 연결에 성공해도 에이전트가 준비되었다는 뜻은 아닙니다.",
       "agentError": {
