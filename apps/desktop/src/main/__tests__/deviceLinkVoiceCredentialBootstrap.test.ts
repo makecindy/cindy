@@ -21,6 +21,7 @@ import {
   DL_SUBSCRIBE_CHANNEL,
   isProviderSharePeer,
   isSharedTaskPeer,
+  parseProviderSharePeer,
   parseSharedTaskPeer,
   PROTOCOL_VERSION,
   providerShareGuestPeer,
@@ -101,8 +102,9 @@ function productionFunction(source: ts.SourceFile, name: string): string {
 // Shared-provider recovery uses the same real bootstrap callbacks as the replay
 // cases below. Guard tier: importing index.ts starts the Electron singleton.
 // The tracker unit tests set presence manually and cannot catch missing wiring.
-// Minimum regression: three timeouts, a current route-offline event, then a
-// fresh authorized handshake; the old callback leaves every future probe blocked.
+// Minimum regressions: three timeouts followed by route-offline, with or without
+// a fresh handshake. A scoped host has no ordinary device-presence online edge;
+// waiting for acceptance before allowing the probe that opens the link deadlocks.
 function productionExpression(predicate: (node: ts.Node) => boolean): Script {
   const matches: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
@@ -134,12 +136,13 @@ function providerRecoveryHarness() {
   const revoked = new Set<string>();
   const disabled: string[] = [];
   let owner = true;
+  let relayOnline = true;
   let now = 0;
   let accepted!: (peer: string, streamId: string) => void;
   let routeOffline!: (change: { state: string; deviceId: string; connectionEpoch: number; linkGeneration: number }) => void;
   let scopedStatus!: (connection: unknown, status: string) => void;
-  const connection = { getStatus: () => 'online', getConnectionEpoch: () => 3, getPeerLinkGeneration: () => 4 };
-  const otherConnection = {};
+  const connection = { getStatus: () => relayOnline ? 'online' : 'disconnected', getConnectionEpoch: () => 3, getPeerLinkGeneration: () => 4 };
+  const otherConnection = { getStatus: () => 'online' };
   const connectionFor = (id: string) => id === peer || id === retained ? connection : otherConnection;
   const client = { connectionFor, hasOfflineDirectPath: () => false,
     onPeerStreamAccepted: (cb: typeof accepted) => { accepted = cb; },
@@ -148,7 +151,7 @@ function providerRecoveryHarness() {
     client, routedClient: { connectionFor, onScopedConnectionStatus: (cb: typeof scopedStatus) => { scopedStatus = cb; } },
     presenceAvailableByDevice: presence, presenceOnlineByDevice: online,
     isProviderSharePeer, isScopedPeer: (id: string) => isProviderSharePeer(id) || isSharedTaskPeer(id),
-    parseSharedTaskPeer, shortDeviceRef, isDeviceResponsivenessProbeEligible,
+    parseProviderSharePeer, parseSharedTaskPeer, shortDeviceRef, isDeviceResponsivenessProbeEligible,
     revokedByRemote: revoked, readDeviceLinkSettings: () => ({ disabledControlDeviceIds: disabled }),
     arbiter: { isOwner: () => owner }, hasOfflineDirectPath: (id: string) => id === retained,
     invalidatePluginOauth: () => {}, handleControllerOffline: () => {}, remoteControlConsent: { peerGone: () => {} },
@@ -165,9 +168,10 @@ function providerRecoveryHarness() {
   const probe = vi.fn(() => new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; }));
   const tracker = createResponsivenessTracker({ now: () => now, isProbeEligible: eligible,
     probeInvoke: probe, onUnresponsiveChanged: () => {} });
-  return { peer, other, retained, ordinary, presence, online, revoked, disabled, tracker, probe,
+  return { peer, other, retained, ordinary, presence, online, revoked, disabled, tracker, probe, eligible,
     accept: () => accepted(peer, 'fresh-stream'), connection, client, scopedStatus,
     setOwner: (value: boolean) => { owner = value; }, finish: () => finish(), fail: () => fail(new DeviceLinkError('INVOKE_TIMEOUT', 'still unreachable')),
+    setRelayOnline: (value: boolean) => { relayOnline = value; },
     offline: (connectionEpoch = 3, linkGeneration = 4) => routeOffline({ state: 'offline', deviceId: peer, connectionEpoch, linkGeneration }),
     advance: () => { now += BREAKER_PROBE_BACKOFF_MAX_MS; },
     trip: async () => {
@@ -186,10 +190,11 @@ describe('provider-share recovery bootstrap', () => {
   it('resumes one bounded live probe after fresh acceptance, and closes only on its response', async () => {
     const h = providerRecoveryHarness();
     h.presence.set(h.other, false); h.online.set(h.other, false);
-    await h.trip(); h.offline(); h.advance();
+    await h.trip(); h.offline();
     h.tracker.probeTick(); expect(h.probe).not.toHaveBeenCalled();
     h.accept();
     expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    h.advance();
     h.tracker.probeTick(); h.accept(); h.tracker.probeTick();
     expect(h.probe).toHaveBeenCalledExactlyOnceWith(h.peer, 'maker:remote-agent:v1', [{ op: 'caps' }]);
     await expect(h.tracker.guardInvoke(h.peer, 'maker:remote-agent:v1', async () => 'must not run')).rejects.toMatchObject({ code: 'DEVICE_UNRESPONSIVE' });
@@ -203,16 +208,46 @@ describe('provider-share recovery bootstrap', () => {
     expect(h.tracker.isUnresponsive(h.peer)).toBe(false);
   });
 
-  it.each(['revoked', 'disabled', 'not owner'])('fresh acceptance preserves the %s probe boundary', async gate => {
+  it('probes a route-offline shared host without waiting for a new handshake or relay generation', async () => {
+    const h = providerRecoveryHarness();
+    await h.trip(); h.offline();
+    h.tracker.probeTick(); expect(h.probe).not.toHaveBeenCalled();
+    h.advance(); h.tracker.probeTick(); h.tracker.probeTick();
+    expect(h.probe).toHaveBeenCalledExactlyOnceWith(h.peer, 'maker:remote-agent:v1', [{ op: 'caps' }]);
+    expect(h.presence.get(h.peer)).toBe(false);
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    await expect(h.tracker.guardInvoke(h.peer, 'maker:remote-agent:v1', async () => 'must not run')).rejects.toMatchObject({ code: 'DEVICE_UNRESPONSIVE' });
+    await expect(h.tracker.guardInvoke(h.ordinary, 'maker:remote-agent:v1', async () => 'healthy')).resolves.toBe('healthy');
+    h.fail(); await Promise.resolve(); await Promise.resolve();
+    h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(1);
+    h.advance(); h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(2);
+    h.accept();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    h.finish(); await Promise.resolve();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(false);
+  });
+
+  it('keeps explicit offline presence gates for ordinary peers and share guests', () => {
+    const h = providerRecoveryHarness();
+    for (const peer of [h.ordinary, providerShareGuestPeer('recovery-share', 'member', 'guest-device'), sharedTaskHostPeer('task', 'host')]) {
+      h.presence.set(peer, false);
+      expect(h.eligible(peer)).toBe(false);
+    }
+  });
+
+  it.each(['revoked', 'disabled', 'not owner', 'relay offline'])('offline recovery preserves the %s probe boundary', async gate => {
     const h = providerRecoveryHarness();
     await h.trip(); h.offline(); h.advance();
     if (gate === 'revoked') h.revoked.add(h.peer);
     if (gate === 'disabled') h.disabled.push(h.peer);
     if (gate === 'not owner') h.setOwner(false);
+    if (gate === 'relay offline') h.setRelayOnline(false);
+    h.tracker.probeTick();
+    expect(h.probe).not.toHaveBeenCalled();
     h.accept(); h.tracker.probeTick();
     expect(h.probe).not.toHaveBeenCalled();
     expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
-    h.revoked.clear(); h.disabled.length = 0; h.setOwner(true);
+    h.revoked.clear(); h.disabled.length = 0; h.setOwner(true); h.setRelayOnline(true);
     h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(1);
     h.finish(); await Promise.resolve();
     expect(h.tracker.isUnresponsive(h.peer)).toBe(false);
