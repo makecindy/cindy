@@ -296,7 +296,9 @@ import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
 import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry.js';
 import { registerMakerSessionSendHandler } from '../../maker-ipc/sessionSendHandler.js';
 import { registerStopSessionBackgroundTasksHandler } from '../../maker-ipc/stopSessionBackgroundTasksHandler.js';
-import { registerSharedAccountStopAll, sharedAccountRegisterWiring, sharedAccountSendTransaction } from '../../remote-agent/__tests__/poolHarness.js';
+import { registerSharedAccountStopAll, sharedAccountHandoffProbe, sharedAccountRegisterWiring, sharedAccountSendTransaction } from '../../remote-agent/__tests__/poolHarness.js';
+import { createContextOverflowRollover } from '../../maker-ipc/contextOverflowRollover.js';
+import { acceptSessionRuntimeMutation, applySessionRuntimeOverrideForStart, clearAllSessionRuntimeControlStates } from '../../maker-ipc/sessionRuntimeControl.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
 import { providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
 import { providerShareGuestPeer } from '@cindy/device-link';
@@ -364,6 +366,168 @@ beforeEach(() => {
   h.strategies = {};
   h.copyOverrides.mockReset();
   h.storedUsage.clear();
+});
+
+// #11322 / unit: Desktop's actual handoff callback → prepare → send transaction →
+// coordinator dispatch → subscription-wrapped native start. Existing placement tests
+// supplied B directly and missed the saved-A / accepted-B split. Minimal input:
+// task/native bound to A, saved A, accepted B. Only IO and the native engine are fake.
+describe('accepted subscription route handoff before queued dispatch', () => {
+  it.each(['executor', null])('keeps the remote-group source when execution is on %s', async agentDeviceId => {
+    const id = 'remote-assignment';
+    clearAllSessionRuntimeControlStates();
+    try {
+      acceptSessionRuntimeMutation({ sessionId: id, source: 'fallback', deferred: false, profile: {
+        agentKind: 'claude-code', agentDeviceId, providerId: 'controller-provider',
+        model: 'claude-model', effort: null, fastMode: false,
+      } });
+      const probe = vi.fn(async () => false);
+      const row = { status: 'active', agentKind: 'cc', agentDeviceId, remoteHostId: null,
+        providerId: 'assigned-provider', model: 'claude-model', sdkSessionId: 'remote-native', clearedAt: null };
+      await sharedAccountHandoffProbe(probe, 'group-owner')(id, row);
+      expect(probe).toHaveBeenCalledWith(id, expect.objectContaining(row), expect.any(Function));
+    } finally { clearAllSessionRuntimeControlStates(); }
+  });
+  it.each(['agent', 'fallback', 'unchanged', 'deferred', 'unavailable', 'cancelled', 'owner-changed'] as const)(
+    'preserves native ownership and dispatches the queue head once (%s)', async mode => {
+      const id = 'accepted-route';
+      clearAllSessionRuntimeControlStates();
+      h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')] };
+      await runSubscriptionAccountCommand({ action: 'place', providerId: 'anthropic', accountId: 'second', target: null });
+      const target = Object.keys(h.created)[0]!;
+      const old = await acquireSubscriptionAccount('anthropic', 'claude-model', [`task:${id}`]);
+      await old!.bind([`task:${id}`, 'native:old-native']);
+      old!.release();
+      const row = { id, status: 'active', source: 'desktop', agentKind: 'cc', providerId: 'anthropic',
+        model: 'claude-model', sdkSessionId: 'old-native' as string | null, clearedAt: null, remoteHostId: null,
+        agentDeviceId: null, contextTokens: 10, contextWindow: 200_000, workingDir: '/synthetic/work' };
+      const profile = { agentKind: 'claude-code' as const, providerId: target, model: row.model, effort: null, fastMode: false };
+      if (mode !== 'unchanged') acceptSessionRuntimeMutation({ sessionId: id,
+        source: mode === 'agent' ? 'agent' : 'fallback', profile, deferred: mode === 'deferred' });
+      if (mode === 'unavailable') h.pools.anthropic.accounts[1]!.paused = true;
+      let handoff: string | null = null;
+      let live: Session | undefined;
+      let endEvents!: () => void;
+      const eventsEnded = new Promise<void>(resolve => { endEvents = resolve; });
+      const sent = vi.fn(async () => {});
+      const nativeStart = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'new-native',
+        send: sent, close: async () => { endEvents(); }, abort: async () => {}, events: async function* () { await eventsEnded; },
+        setInteractionResolver() {},
+      } as unknown as AgentSessionHandle));
+      const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: nativeStart } as unknown as BaseAgent);
+      const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+      const commits = vi.fn(async (_id: string, _handoff: string) => { row.sdkSessionId = null; });
+      const rollover = createContextOverflowRollover({
+        getSessionRow: async () => ({ ...row }),
+        needsNativeSessionHandoff: sharedAccountHandoffProbe((taskId, state) => {
+          const result = probeSubscriptionAccountHandoff(taskId, state);
+          if (mode === 'owner-changed') {
+            h.owner = 'next-owner';
+            clearAllSessionRuntimeControlStates();
+          }
+          return result;
+        }),
+        listMessages: async () => {
+          if (mode === 'cancelled') rollover.cancelRecovery(id);
+          return [{ role: 'user', content: 'Remember prior work', clientId: 'prior-user', createdAt: 1 },
+            { role: 'assistant', content: 'Step one completed', clientId: 'prior-reply', createdAt: 2 }];
+        },
+        findLatestRebuildMeta: async () => null, getLiveSession: () => live,
+        closeSession: async () => { await live?.close(); live = undefined; },
+        drainPersistQueue: async () => {}, commitRebuild: commits,
+        setPendingHandoff: (_id, text) => { handoff = text; },
+        replayUserMessage: async () => { throw new Error('Pre-send handoff must not replay'); },
+        withCloseSuppressed: (_id, run) => run(), log: { info() {}, warn() {} },
+      });
+      const persisted = vi.fn(async () => {});
+      const wiring = sharedAccountRegisterWiring({
+        getSessionRowSnapshotStrict: async () => row,
+        setSdkSessionId: nativeId => { row.sdkSessionId = nativeId; },
+        applySessionRuntimeOverrideForStart,
+        admitLocalSessionRoute: async () => {},
+        createSessionWithRuntimePlugins: async (opts: StartSessionOptions) => {
+          const handle = await agent.startSession({ ...opts, sessionId: id });
+          return live = new Session({ id, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
+            workDir: row.workingDir, handle, capabilities: {} as never,
+            logger });
+        },
+      });
+      const transaction = sharedAccountSendTransaction({ ...wiring,
+        getSession: () => live, prepareUnhealthySession: taskId => rollover.prepareUnhealthySession(taskId),
+        readScheduledPermissions: async () => ({ permissionMode: 'bypassPermissions', planModeEnabled: false }),
+        peekPendingHandoff: async () => handoff, consumePendingHandoff: () => { handoff = null; },
+        createDbMessage: persisted, reconcileCreateOptsWithDb: async (_id, opts) => {
+          opts.providerId = row.providerId; opts.resumeSessionId = row.sdkSessionId ?? undefined;
+        },
+      });
+      const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome);
+      const coordinator = new AgentInputCoordinator({ sendToAgent: send, steerToAgent: async () => {},
+        abortSession: async () => {}, touchUserSend: async () => {},
+        createUserMessage: async () => { throw new Error('The send transaction owns user persistence'); },
+        isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
+        getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
+        getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
+        emitProjection() {},
+      });
+      try {
+        const text = 'Continue remaining work';
+        coordinator.enqueue(id, { clientId: 'head-once', text, persistedContent: text,
+          model: row.model, effort: 'medium', workingDir: row.workingDir, permissionMode: 'bypassPermissions',
+          createOpts: { agentKind: 'claude-code', model: row.model, providerId: row.providerId,
+            workingDir: row.workingDir, permissionMode: 'bypassPermissions' },
+          chatMessage: { clientId: 'head-once', role: 'user', content: text, isStreaming: false, createdAt: new Date().toISOString() },
+        }, { manualUiSend: true });
+        await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+        const outcome = await send.mock.results[0]!.value.catch((error: Error) => error);
+        if (['unavailable', 'cancelled', 'owner-changed'].includes(mode)) {
+          expect(outcome).toBeInstanceOf(Error);
+          expect((outcome as Error).message).toMatch(mode === 'unavailable' ? /No subscription account/
+            : mode === 'cancelled' ? /aborted/ : /owner changed/);
+          expect(nativeStart).not.toHaveBeenCalled();
+          expect(commits).not.toHaveBeenCalled();
+          expect(sent).not.toHaveBeenCalled();
+          expect(coordinator.getProjection(id).pendingQueue.map(item => item.clientId)).toEqual(['head-once']);
+          if (mode === 'unavailable') {
+            h.pools.anthropic.accounts[1]!.paused = false;
+            await coordinator.retryLastError(id);
+            await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+            await send.mock.results[1]!.value;
+            expect(nativeStart).toHaveBeenCalledOnce();
+            expect(nativeStart.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/second');
+            expect(nativeStart.mock.calls[0]![0].resumeSessionId).toBeUndefined();
+            expect(commits).toHaveBeenCalledOnce();
+            expect(sent).toHaveBeenCalledOnce();
+            expect(persisted).toHaveBeenCalledOnce();
+            expect(persisted.mock.calls[0]).toEqual(expect.arrayContaining([
+              id, expect.objectContaining({ clientId: 'head-once' }),
+            ]));
+            expect(coordinator.getProjection(id).pendingQueue).toEqual([]);
+          }
+        } else {
+          expect(nativeStart, JSON.stringify(outcome)).toHaveBeenCalledOnce();
+          const switched = mode === 'agent' || mode === 'fallback';
+          expect(commits).toHaveBeenCalledTimes(switched ? 1 : 0);
+          expect(nativeStart.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir)
+            .toBe(switched ? 'anthropic/second' : 'anthropic/default');
+          expect(nativeStart.mock.calls[0]![0].resumeSessionId).toBe(switched ? undefined : 'old-native');
+          expect(sent, JSON.stringify(outcome)).toHaveBeenCalledOnce();
+          expect(JSON.stringify(sent.mock.calls)).toContain(text);
+          if (switched) expect(JSON.stringify(sent.mock.calls)).toContain('Step one completed');
+          expect(persisted).toHaveBeenCalledOnce();
+          expect(persisted.mock.calls[0]).toEqual(expect.arrayContaining([
+            id, expect.objectContaining({ clientId: 'head-once' }),
+          ]));
+          expect(coordinator.getProjection(id).pendingQueue).toEqual([]);
+          expect(h.bindings.get('native:new-native')?.accountId).toBe(switched ? 'second' : 'default');
+        }
+        expect(row.providerId).toBe('anthropic');
+        expect(h.bindings.get('native:old-native')?.accountId).toBe('default');
+      } finally {
+        endEvents();
+        await live?.close();
+        clearAllSessionRuntimeControlStates();
+      }
+    });
 });
 
 // Unit regression 2026-11-16: real router → host.handle(open) → account acquire,
@@ -3287,6 +3451,8 @@ describe('native account assignment on the executing computer', () => {
   // Unit regression (2026-11-13): account pools rejected ChatGPT before the upstream could
   // spend credits. Prior coverage asserted exhausted windows were admission failures; it never
   // started/resumed a full-window account with available, unknown or depleted cached credits.
+  // 2026-11-24 user decision: with every account's plan used up, credits remain the last resort,
+  // and the pre-send check must not hand the task to another credits-only account.
   it.each([
     { hasCredits: true, unlimited: false, balance: '52768.87' },
     null,
@@ -3306,10 +3472,48 @@ describe('native account assignment on the executing computer', () => {
     ] as const) {
       const lease = await acquireSubscriptionAccount('openai', 'gpt-6', [...keys], false, options);
       expect(lease?.account.configDir).toBe('accountId' in options ? 'openai/second' : 'openai/default');
-      expect(readSubscriptionAccountBlocked('openai', lease!.accountId, 'gpt-6')).toBe(false);
       lease!.release();
     }
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', model: 'gpt-6', sdkSessionId: 'thread-old' };
+    const rebuild = vi.fn(async () => {});
+    expect(await readSubscriptionAccountSwitch('existing', async () => row)).toBeNull();
+    expect(await prepareSubscriptionAccountFailover('existing', {
+      readSession: async () => row, isRunning: () => false, rebuild,
+    })).toBe(false);
+    expect(rebuild).not.toHaveBeenCalled();
     expect(h.bindings.get('task:existing')?.accountId).toBe('default');
+  });
+
+  // 2026-11-24 user report: a pool of two ChatGPT accounts kept assigning and resuming tasks on the
+  // account whose weekly plan showed 0% left (spending credits) while the other had 49% left.
+  // Production entries: acquireSubscriptionAccount (new pick) and the pre-send failover; observable
+  // result: the task lands on / moves to the account with plan quota, keeping credits as the last
+  // resort once that account is full. Existing coverage only proved credits-only accounts stay
+  // admissible. Minimal failing input: 'order' pool, first account at 100%, second at 20%. tier: unit.
+  it('prefers ChatGPT accounts with plan quota over credits for new and bound tasks', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({ codexUsage: { appServerBuckets: { codex: {
+      limitId: 'codex', updatedAt: Date.now(),
+      primary: { usedPercent: dir.endsWith('default') ? 100 : 20, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 86400 },
+      secondary: null,
+    } }, webSnapshot: null }, codexCredits: { hasCredits: true, unlimited: false, balance: '32402.89' } }));
+    const fresh = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:new']);
+    expect(fresh?.accountId).toBe('second');
+    // The account with plan quota is full (limit 1): credits on the exhausted account are the last resort.
+    const fallback = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:other']);
+    expect(fallback?.accountId).toBe('default');
+    fallback!.release();
+    fresh!.release();
+
+    h.bindings.set('task:existing', { providerId: 'openai', accountId: 'default' });
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', model: 'gpt-6', sdkSessionId: 'thread-old' };
+    const rebuild = vi.fn(async () => {});
+    expect(await readSubscriptionAccountSwitch('existing', async () => row)).toBe('local#openai:default');
+    expect(await prepareSubscriptionAccountFailover('existing', {
+      readSession: async () => row, isRunning: () => false, rebuild,
+    })).toBe(true);
+    expect(rebuild).toHaveBeenCalledOnce();
+    expect(h.bindings.get('task:existing')?.accountId).toBe('second');
   });
 
   // Regression: a pinned exhausted account was reported as login-or-reset even
@@ -5176,7 +5380,7 @@ describe('native account assignment on the executing computer', () => {
     const chosen = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', []);
     expect(chosen?.account.configDir).toBe('openai/second');
     try {
-      // The other account can ask upstream to spend credits even though its plan window is full.
+      // With the account that has plan quota full, the other one asks upstream to spend credits.
       const credits = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', ['task:new']);
       expect(credits?.account.configDir).toBe('openai/default');
       credits?.release();
@@ -5489,6 +5693,45 @@ describe('native account assignment on the executing computer', () => {
         // The quota read still completes and is what the account views show.
         expect(await shownQuota(row.provider, bound ?? row.account ?? 'default')).toBe(row.fresh);
       } finally { clock.mockRestore(); }
+    });
+
+    // PR #12279 (unit): both cached windows are full but still recent enough for early
+    // selection. The wrapped start must wait for the in-flight refresh before choosing
+    // credits, and use the account whose newly read window has room.
+    it('waits for an in-flight quota refresh before falling back to credits', async () => {
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let releaseQuota = () => {};
+      let starting: Promise<AgentSessionHandle> | undefined;
+      try {
+        h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+        h.read.mockImplementation(async (_kind: string, directory: string) => ({
+          authenticated: true, identity: directory, plan: 'plus', planType: 'plus',
+        }));
+        h.usage.mockImplementation(async (_kind: string, directory: string) => quotaFor(directory, 100));
+        await readSubscriptionPool('openai');
+        now += 4 * 60_000;
+        const gate = new Promise<void>(resolve => { releaseQuota = resolve; });
+        const quotaReads = h.usage.mock.calls.length;
+        h.usage.mockImplementation(async (_kind: string, directory: string) => {
+          await gate;
+          return quotaFor(directory, directory.endsWith('/default') ? 100 : 20);
+        });
+
+        const { start, agent } = startAgent('codex');
+        starting = agent.startSession({ providerId: 'openai', sessionId: 'task', model: 'gpt-6' } as StartSessionOptions);
+        void starting.catch(() => {});
+        await vi.waitFor(() => expect(h.usage).toHaveBeenCalledTimes(quotaReads + 2));
+        expect(start).not.toHaveBeenCalled();
+
+        releaseQuota();
+        await starting;
+        expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
+        expect(h.usage).toHaveBeenCalledTimes(quotaReads + 2);
+      } finally {
+        releaseQuota();
+        await starting?.then(handle => handle.close(), () => {});
+        clock.mockRestore();
+      }
     });
 
     // Same decision: returning to Cindy refreshes the account views, and a message sent meanwhile

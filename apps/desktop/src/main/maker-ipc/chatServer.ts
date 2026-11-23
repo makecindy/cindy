@@ -2993,7 +2993,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
       // The requester's other devices learn at once where this runs; later renewals repeat it.
       if (selfDeviceId) {
-        const model = (await deps.readGroupTaskStatus?.(sessionId).catch(() => null))?.model;
+        const model = (await deps.readGroupTaskStatus?.(sessionId, { model: true }).catch(() => null))?.model;
         run.executor = { deviceId: selfDeviceId, sessionId, ...(model ? { model } : {}) };
         if (live()) void checkLease(run);
       }
@@ -3141,7 +3141,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           settings.plans[key] = run.workspace; settings.plans[run.plan.id] = run.workspace;
           workspaces().save(s.room.id, settings);
         }
-        await deps.syncLanePermission?.(lane.sessionId, bot.id);
+        // A reused lane was reconciled inside ensureLane, with nothing in between; a new or moved one still is here.
+        if (!lane.permissionSynced) await deps.syncLanePermission?.(lane.sessionId, bot.id);
         return { ...lane, name };
       })();
       const contextRead = (async () => {

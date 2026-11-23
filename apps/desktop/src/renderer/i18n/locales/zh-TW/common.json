@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "已無法使用的分享",
+      "offline": "{{name}} · 暫時離線",
       "hostOutdated": "分享者電腦上的 Cindy 版本太舊，讀不到這些模型。請讓對方更新 Cindy 後再試。",
       "numbered": "{{name}} ({{index}})"
     },
@@ -7008,11 +7009,20 @@
       "connectionIssue": {
         "device-removed": "裝置已從帳號中移除，請在本裝置登出後重新登入。",
         "auth-failed": "登入已失效，請重新登入",
-        "replaced": "連線被另一處相同裝置頂替",
+        "replaced": "連線被另一個 Cindy 取代，它可能在本機，也可能在另一台被識別成同一台的電腦上",
         "too-many-connections": "同帳號連線數已達上限",
         "version-mismatch": "通訊協定版本不一致，請更新應用程式",
         "unstable": "連線反覆斷開又重連，請檢查網路；若持續如此，重啟 Cindy",
         "agent-net-relay-down": "連不上 Agent-Net 中轉，正在重新連線；已直連的電腦照常可用，其他裝置暫時連不上"
+      },
+      "rejoin": {
+        "hint": "這台裝置已從帳號中移除，點「重新加入」即可回來。",
+        "action": "重新加入",
+        "done": "已重新加入",
+        "doneWithoutAgentNet": "已重新加入，Agent-Net 暫未恢復，先用 Device Link 連線",
+        "unsupported": "伺服器暫不支援重新加入，請在本裝置登出後重新登入",
+        "agentNetFailed": "Agent-Net 暫未恢復。關閉「僅使用 Agent-Net」後可先用 Device Link 連線",
+        "failed": "重新加入失敗，請檢查網路後重試"
       },
       "refresh": "重新整理",
       "empty": "暫無其它裝置。在另一臺電腦上用同一帳號登入 {{appName}} 後，這裡會顯示該裝置。",
@@ -7031,7 +7041,7 @@
       "renameCancel": "取消",
       "delete": "刪除",
       "deleteTitle": "刪除「{{name}}」？",
-      "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，重新登入後可再次加入。",
+      "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，之後在那台裝置上點「重新加入」即可回來。",
       "deleteOnlineHint": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
       "error": {
         "unavailable": "裝置互聯服務暫時無法使用（伺服器未啟用或網路異常）",
@@ -7058,6 +7068,22 @@
       },
       "control": "控制",
       "standbyHint": "本機另一個 Cindy 執行個體正在使用遠端連線。關閉它後，此執行個體會自動接管。",
+      "identityConflict": {
+        "notice": "這台電腦和「{{name}}」被識別成了同一台電腦，兩邊會互相擠掉遠端連線，還可能被登出。在其中一台上換一個新身分就能解決。",
+        "replace": "給這台電腦換一個新身分",
+        "blockedSelfHostedRelay": "這台電腦正在使用自己的中繼，現在不能換身分。切回官方中繼後，就可以在這裡換。",
+        "confirmTitle": "給這台電腦換一個新身分？",
+        "confirmRestart": "Cindy 會馬上重新啟動，進行中的任務會中斷。",
+        "confirmNewDevice": "重新啟動後需要再登入一次，這台電腦會以一台新電腦出現在裝置清單裡。",
+        "confirmKeptByOther": "原本記在這個身分下的設定（如裝置名稱、夥伴的主力電腦、分享出去的供應商）會留給「{{name}}」，這台電腦需要重新設定。",
+        "confirmOtherUnaffected": "「{{name}}」維持不變，不需要再到那台電腦上操作。",
+        "confirmAction": "換身分並重新啟動 Cindy",
+        "failed": "未能給這台電腦換身分",
+        "toastTitle": "這台電腦和「{{name}}」被識別成了同一台電腦",
+        "toastBody": "兩台電腦會互相擠掉遠端連線，還可能被登出。在其中一台上換一個新身分就能解決。",
+        "toastAction": "開啟裝置互聯",
+        "toastDismiss": "稍後處理"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -8603,7 +8629,7 @@
           "updated": "插件已更新。",
           "empty": "暫無可安裝的版本。",
           "sign-in": "請登入 GitHub 後檢查更新。",
-          "forbidden": "目前的 GitHub 登入無權讀取此私人儲存庫。",
+          "forbidden": "無法讀取 GitHub Release。請檢查儲存庫連結與 GitHub 帳號的存取權限。",
           "unavailable": "無法檢查或安裝更新，請重試。"
         },
         "customSlotTitle": "插件自訂設定區",
@@ -9666,6 +9692,12 @@
       "guidance": "請等待後再取得驗證碼。重新啟動、重新安裝或切換網路不保證解除限制。",
       "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "服務條款和隱私政策已更新",
+    "body": "Cindy 的<terms>服務條款</terms>和<privacy>隱私政策</privacy>已更新，請閱讀並同意後繼續使用。",
+    "agree": "同意",
+    "disagree": "退出登入"
   },
   "legacyMigration": {
     "title": "遷移舊版本資料",
@@ -13202,7 +13234,8 @@
           "subject": {
             "githubIssue": "「提交 GitHub Issue」的確認卡",
             "renameSessions": "「批次重新命名任務」的確認卡",
-            "pluginFileGrant": "「插件檔案授權」的確認卡"
+            "pluginFileGrant": "「插件檔案授權」的確認卡",
+            "mediaPathReveal": "「讓 Agent 取得圖片等媒體檔案在電腦上的位置」的確認卡"
           }
         },
         "replyWords": {
@@ -17646,6 +17679,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "無法讀取自動化的模型設定，請關閉編輯器後重新開啟重試。",
       "promptDialog": {
         "titleEdit": "編輯自動化",
         "titleCreate": "建立自動化",
@@ -17989,11 +18023,13 @@
         "effortHeading": "推理強度",
         "effortDefault": "預設",
         "followSession": "跟隨任務",
+        "followTeammate": "跟隨夥伴主模型",
         "modelListAria": "模型列表",
         "modelSelectorAria": "模型選擇器",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "推理強度",
-        "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。"
+        "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。",
+        "modelGroupTitle": "模型組「{{name}}」：建立新任務時依模式選來源"
       }
     },
     "toast": {
@@ -20332,6 +20368,7 @@
       "totalDetail_other": "{{count}} 張 × {{amount}}",
       "pay": "前往付款",
       "refundNote": "禮品卡不能兌換現金。卡被領取或兌換後不退款；未領取的卡如需退款，請聯絡支援人員。",
+      "termsNote": "點擊「前往付款」即表示你已閱讀並同意<terms>《禮品卡購買與使用條款》</terms>。",
       "cancel": "取消",
       "loadFailed": "暫時無法讀取購買限制，請稍後重試。",
       "checkoutSubtitle_other": "禮品卡 {{amount}} × {{count}} · 付款成功後立即產生",
@@ -22107,6 +22144,11 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登入方式",
+      "secretHint": "Key 只交給插件，儲存在這個帳號自己的資料夾裡；Cindy 不會保存，也不會傳到其他電腦。",
+      "browserHint": "插件會開啟瀏覽器，在那裡完成登入後回到這裡。"
+    },
     "placement": {
       "needsUpdate": "執行這項操作的電腦需要先更新 Cindy，才能這樣調整帳號。",
       "moveTo": "移到…",
@@ -22249,6 +22291,18 @@
       "cheapest": {
         "title": "最省錢",
         "hint": "還有配額的訂閱先用，不另外花錢；其餘按標價從低到高，沒有標價的排在後面。"
+      },
+      "drain": {
+        "title": "用完再換",
+        "hint": "一直用上一次的來源，它配額用完或用不了才換下一個；前面的恢復了也不換回去。"
+      },
+      "headroom": {
+        "title": "餘量最多的先用",
+        "hint": "剩餘配額占比最高的先用（有週配額看週配額）；讀不到配額的來源排在後面。"
+      },
+      "weighted": {
+        "title": "按權重",
+        "hint": "新任務按各來源的權重比例交錯分配；用不了的來源這次不參與。"
       }
     },
     "picker": {
@@ -22276,6 +22330,11 @@
       "tight": "5 小時配額快滿了，先不用",
       "cheapest": "標價最低",
       "cheapestFree": "訂閱還有配額，不另外花錢",
+      "drain": "接著用它，直到配額用完",
+      "drainNext": "上一個來源用完或用不了，換到它",
+      "headroom": "剩餘配額最多",
+      "headroomQuota": "還剩 {{left}}% 配額，比其他來源都多",
+      "weighted": "按權重這次分到它",
       "noVision": "訊息裡有圖片，它看不了圖",
       "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
       "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
@@ -22295,6 +22354,9 @@
       "effort": "推理強度",
       "effortUnset": "不指定",
       "effortHint": "選中的模型不支援這一檔時，按它的預設檔執行。",
+      "weight": "權重",
+      "weightAria": "「{{name}}」的權重",
+      "weightHint": "按權重分配時，權重越大分到的新任務越多，1–1000。",
       "sources": "可以用的來源",
       "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
       "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
@@ -22327,6 +22389,7 @@
         "empty": "還沒有例外，每個新任務都按上面的選法挑。",
         "imageRule": "訊息裡有圖片時，只用能看圖的來源",
         "hoursRule": "{{from}}–{{to}} 改走「{{name}}」",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}} 改走「{{name}}」",
         "remove": "刪除這條例外",
         "add": "新增例外",
         "choose": "選擇一種情況",
@@ -22335,6 +22398,9 @@
         "from": "從",
         "to": "到",
         "useRoute": "改走",
+        "days": "星期",
+        "daysHint": "不選就是每天；跨午夜的時段按開始那一天算。",
+        "dayRange": "{{from}}至{{to}}",
         "addHours": "新增",
         "sameHour": "開始和結束不能是同一個時刻。",
         "full": "最多 {{count}} 條例外。",

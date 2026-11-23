@@ -698,6 +698,7 @@
     },
     "picker": {
       "unavailable": "Recurso compartido no disponible",
+      "offline": "{{name}} · Sin conexión por ahora",
       "hostOutdated": "La versión de Cindy en la computadora del propietario es demasiado antigua para enumerar estos modelos. Pídele que actualice Cindy y vuelve a intentarlo.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -7118,11 +7119,20 @@
       "connectionIssue": {
         "device-removed": "Este dispositivo se eliminó de tu cuenta. Cierra sesión y vuelve a iniciarla en este dispositivo.",
         "auth-failed": "La sesión caducó: vuelve a iniciar sesión",
-        "replaced": "Conexión reemplazada por otra instancia de este dispositivo",
+        "replaced": "Otra instancia de Cindy tomó la conexión, en esta computadora o en otra reconocida como esta",
         "too-many-connections": "Se alcanzó el límite de conexiones de esta cuenta",
         "version-mismatch": "La versión del protocolo no coincide: actualiza la aplicación",
         "unstable": "La conexión se interrumpe y se restablece continuamente: revisa la red o reinicia Cindy si el problema persiste",
         "agent-net-relay-down": "No se puede acceder al relé de Agent-Net; reconectando. Las computadoras conectadas directamente siguen funcionando; los demás dispositivos no pueden conectarse por ahora"
+      },
+      "rejoin": {
+        "hint": "Este dispositivo se eliminó de tu cuenta. Selecciona «Volver a unirse» para recuperarlo.",
+        "action": "Volver a unirse",
+        "done": "Dispositivo unido de nuevo",
+        "doneWithoutAgentNet": "Dispositivo unido de nuevo. Agent-Net aún no se ha restablecido, así que por ahora se usa Device Link",
+        "unsupported": "El servidor aún no permite volver a unirse. Cierra sesión y vuelve a iniciarla en este dispositivo",
+        "agentNetFailed": "Agent-Net aún no se ha restablecido. Desactiva «Usar solo Agent-Net» para conectarte por Device Link mientras tanto",
+        "failed": "No se pudo volver a unir. Comprueba tu conexión de red e inténtalo de nuevo"
       },
       "refresh": "Actualizar",
       "empty": "Aún no hay otros dispositivos. Inicia sesión en {{appName}} con la misma cuenta en otra computadora y aparecerá aquí.",
@@ -7141,7 +7151,7 @@
       "renameCancel": "Cancelar",
       "delete": "Eliminar",
       "deleteTitle": "¿Eliminar “{{name}}”?",
-      "deleteMessage": "Elimina este dispositivo de tu cuenta y desconecta el acceso remoto. Se conservan sus sesiones y archivos. Vuelve a iniciar sesión en ese dispositivo para unirlo de nuevo.",
+      "deleteMessage": "Elimina este dispositivo de tu cuenta y desconecta el acceso remoto. Se conservan sus sesiones y archivos. Selecciona «Volver a unirse» en ese dispositivo para recuperarlo.",
       "deleteOnlineHint": "Este servidor aún no admite la eliminación de dispositivos en línea. Vuelve a intentarlo cuando se actualice el servicio.",
       "error": {
         "unavailable": "El servicio Device Link no está disponible (no está habilitado en el servidor o hay un error de red)",
@@ -7168,6 +7178,22 @@
       },
       "control": "Control",
       "standbyHint": "Otra instancia de Cindy en esta computadora está usando la conexión remota. Ciérrala y esta instancia tomará el control automáticamente.",
+      "identityConflict": {
+        "notice": "Esta computadora y «{{name}}» se reconocen como la misma computadora, así que se quitan la conexión remota entre sí y la sesión puede cerrarse. Dale una identidad nueva a una de las dos para solucionarlo.",
+        "replace": "Dar una identidad nueva a esta computadora",
+        "blockedSelfHostedRelay": "Esta computadora usa tu propio retransmisor, así que ahora no puede cambiar de identidad. Vuelve al retransmisor de Cindy y podrás cambiarla aquí.",
+        "confirmTitle": "¿Dar una identidad nueva a esta computadora?",
+        "confirmRestart": "Cindy se reinicia de inmediato y las tareas en curso se interrumpen.",
+        "confirmNewDevice": "Tras el reinicio tendrás que iniciar sesión una vez más. Esta computadora aparecerá como una computadora nueva en la lista de dispositivos.",
+        "confirmKeptByOther": "La configuración guardada con la identidad anterior, como el nombre del dispositivo, la computadora principal de tus amigos y los proveedores compartidos, se queda en «{{name}}». Vuelve a configurarla en esta computadora.",
+        "confirmOtherUnaffected": "«{{name}}» no cambia. No hace falta hacer nada en esa computadora.",
+        "confirmAction": "Cambiar identidad y reiniciar Cindy",
+        "failed": "No se pudo dar una identidad nueva a esta computadora",
+        "toastTitle": "Esta computadora y «{{name}}» se reconocen como la misma computadora",
+        "toastBody": "Se quitan la conexión remota entre sí y la sesión puede cerrarse. Dale una identidad nueva a una de las dos para solucionarlo.",
+        "toastAction": "Abrir Enlace de dispositivo",
+        "toastDismiss": "Más tarde"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -8718,7 +8744,7 @@
           "updated": "Complemento actualizado.",
           "empty": "No hay ninguna versión disponible para instalar.",
           "sign-in": "Inicia sesión en GitHub para buscar actualizaciones.",
-          "forbidden": "Esta sesión de GitHub no tiene acceso de lectura al repositorio privado.",
+          "forbidden": "No se pudo leer la versión publicada en GitHub. Comprueba el enlace del repositorio y los permisos de tu cuenta de GitHub.",
           "unavailable": "No se pudo comprobar ni instalar la actualización. Inténtalo de nuevo."
         },
         "customSlotTitle": "Área de configuración personalizada del complemento",
@@ -9781,6 +9807,12 @@
       "guidance": "Espera antes de solicitar otro código. Reiniciar, reinstalar o cambiar de red no garantiza que se elimine el límite.",
       "support": "Si esto continúa después de esperar, envía los registros de forma privada a feedback@cindy.app e incluye tu sistema operativo, la versión de Cindy, la hora del error y el código que aparece abajo. No publiques los registros."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Términos actualizados",
+    "body": "Actualizamos los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy> de Cindy. Acéptalos para continuar o cierra sesión.",
+    "agree": "Aceptar",
+    "disagree": "Cerrar sesión"
   },
   "legacyMigration": {
     "title": "Migrar datos de la versión anterior",
@@ -13366,7 +13398,8 @@
           "subject": {
             "githubIssue": "La tarjeta de confirmación “Enviar incidencia de GitHub”",
             "renameSessions": "La tarjeta de confirmación “Renombrar tareas en lote”",
-            "pluginFileGrant": "La tarjeta de confirmación “Autorizar archivos del complemento”"
+            "pluginFileGrant": "La tarjeta de confirmación “Autorizar archivos del complemento”",
+            "mediaPathReveal": "La tarjeta de confirmación “Permitir que el Agent obtenga la ubicación de un archivo multimedia en la computadora”"
           }
         },
         "replyWords": {
@@ -17886,6 +17919,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "No se pudo leer el modelo de la automatización. Cierra y vuelve a abrir el editor para reintentar.",
       "promptDialog": {
         "titleEdit": "Editar automatización",
         "titleCreate": "Crear automatización",
@@ -18229,11 +18263,13 @@
         "effortHeading": "Intensidad de razonamiento",
         "effortDefault": "Predeterminado",
         "followSession": "Seguir sesión",
+        "followTeammate": "Seguir el modelo principal del amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Selector de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Intensidad de razonamiento",
-        "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora."
+        "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora.",
+        "modelGroupTitle": "Grupo de modelos «{{name}}»: elige una fuente al crear una tarea nueva"
       }
     },
     "toast": {
@@ -20600,6 +20636,7 @@
       "totalDetail_other": "{{count}} tarjetas × {{amount}}",
       "pay": "Continuar al pago",
       "refundNote": "Las tarjetas de regalo no se pueden cambiar por dinero. Las tarjetas canjeadas no se reembolsan. Para solicitar el reembolso de una tarjeta sin canjear, ponte en contacto con el soporte.",
+      "termsNote": "Al seleccionar Continuar al pago, aceptas los <terms>Términos de las tarjetas de regalo</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "No se pudieron cargar los límites de compra. Vuelve a intentarlo más tarde.",
       "checkoutSubtitle_one": "Tarjeta de regalo {{amount}} × {{count}} · se emite en cuanto se complete el pago",
@@ -22407,6 +22444,11 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Método de inicio de sesión",
+      "secretHint": "La clave solo va al plugin, que la guarda en la carpeta propia de esta cuenta. Cindy no la guarda ni la envía a otros ordenadores.",
+      "browserHint": "El plugin abrirá tu navegador. Inicia sesión allí y luego vuelve aquí."
+    },
     "placement": {
       "needsUpdate": "Hay que actualizar Cindy en el equipo que realiza esta operación para mover cuentas así.",
       "moveTo": "Mover a…",
@@ -22551,6 +22593,18 @@
       "cheapest": {
         "title": "Lo más barato",
         "hint": "Usa primero las suscripciones con cuota disponible, sin coste adicional; el resto va del precio de lista más bajo al más alto, y las fuentes sin precio quedan al final."
+      },
+      "drain": {
+        "title": "Agotar y pasar",
+        "hint": "Sigue usando la última fuente hasta que se quede sin cuota o deje de estar disponible, y entonces pasa a la siguiente; no vuelve atrás cuando las anteriores se recuperan."
+      },
+      "headroom": {
+        "title": "Más cuota restante",
+        "hint": "Usa primero la fuente con mayor proporción de cuota restante (la semanal si la hay); las fuentes sin cuota legible van al final."
+      },
+      "weighted": {
+        "title": "Por peso",
+        "hint": "Reparte las tareas nuevas entre las fuentes según su peso, de forma intercalada; las fuentes no disponibles no participan esta vez."
       }
     },
     "picker": {
@@ -22578,6 +22632,11 @@
       "tight": "Su cuota de 5 horas está casi llena, así que se omite por ahora",
       "cheapest": "Precio de lista más bajo",
       "cheapestFree": "Queda cuota de suscripción, sin coste adicional",
+      "drain": "Se sigue usando hasta que se agote su cuota",
+      "drainNext": "La fuente anterior se agotó o dejó de estar disponible, así que pasó a esta",
+      "headroom": "Le queda la mayor cuota",
+      "headroomQuota": "Le queda un {{left}} % de cuota, más que a cualquier otra fuente",
+      "weighted": "Le toca según su peso",
       "noVision": "El mensaje tiene imágenes y esta fuente no puede verlas",
       "exceptionImage": "El mensaje tiene imágenes, así que solo se consideraron las fuentes que pueden verlas",
       "exceptionImageFallback": "El mensaje tiene imágenes, pero ninguna fuente puede verlas, así que se eligió como siempre",
@@ -22597,6 +22656,9 @@
       "effort": "Intensidad de razonamiento",
       "effortUnset": "Sin especificar",
       "effortHint": "Si el modelo elegido no admite este nivel, se ejecuta con su valor predeterminado.",
+      "weight": "Peso",
+      "weightAria": "Peso de «{{name}}»",
+      "weightHint": "Con «Por peso», un peso mayor recibe más tareas nuevas. 1–1000.",
       "sources": "Fuentes que puede usar",
       "sourcesHint": "Puede haber modelos distintos. La tarea indica cuál se usó.",
       "sourcesEmpty": "Aún no hay fuentes. Añade abajo un modelo conectado.",
@@ -22629,6 +22691,7 @@
         "empty": "Aún no hay excepciones. Cada tarea nueva usa la regla de elección de arriba.",
         "imageRule": "Cuando el mensaje tenga imágenes, usar solo fuentes que puedan verlas",
         "hoursRule": "{{from}}–{{to}}: usar «{{name}}»",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}»",
         "remove": "Quitar esta excepción",
         "add": "Añadir una excepción",
         "choose": "Elegir una situación",
@@ -22637,6 +22700,9 @@
         "from": "Desde",
         "to": "Hasta",
         "useRoute": "Usar en su lugar",
+        "days": "Días",
+        "daysHint": "Si no eliges ninguno, se aplica todos los días. Un tramo que pasa de medianoche cuenta para el día en que empieza.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Añadir",
         "sameHour": "El inicio y el fin no pueden ser la misma hora.",
         "full": "Hasta {{count}} excepciones.",

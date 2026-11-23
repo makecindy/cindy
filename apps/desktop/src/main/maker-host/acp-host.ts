@@ -22,6 +22,7 @@ import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/plu
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
 import type { NodeWorkerProcess } from '../cindy-brain/nodeRuntimeBroker.js';
 import { createAcpProcessTransport } from './acp-transport.js';
+import { withPluginEngineAccounts } from '../plugin-engine-accounts/agent.js';
 export { createAcpProcessTransport } from './acp-transport.js';
 export {
   getCachedPluginHarnessModels,
@@ -48,7 +49,7 @@ export interface BuildAcpAgentOpts {
   makerMemory?: AgentDeps['makerMemory'];
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
   /** Starts the declared entry of a listed harness in raw-stdio mode. */
-  spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean }): Promise<NodeWorkerProcess>;
+  spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string }): Promise<NodeWorkerProcess>;
 }
 
 export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
@@ -65,10 +66,11 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
     clientInfo: { name: 'cindy', title: 'Cindy', version: opts.appVersion },
     endpoints: {
       connect: async (key, options) => createAcpProcessTransport(
-        options?.remoteWorkspace || options?.guestWorkspace
+        options?.remoteWorkspace || options?.guestWorkspace || options?.accountDir
           ? await opts.spawnHarness(key, {
               ...(options.remoteWorkspace ? { remoteWorkspace: true } : {}),
               ...(options.guestWorkspace ? { guestWorkspace: true } : {}),
+              ...(options.accountDir ? { accountDir: options.accountDir } : {}),
             })
           : await opts.spawnHarness(key),
         logger,
@@ -104,7 +106,9 @@ export function installPluginEngines(opts: InstallPluginEnginesOpts): () => void
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
       spawnHarness: (key, options) => (options ? registry.spawn(key, options) : registry.spawn(key)),
     });
-    registered = opts.maker.registerAgent('acp', agent);
+    // Engines whose plugin keeps accounts apart run on accounts like built-in providers
+    // (subscription-account-pools.md 插件引擎的账号); all others start exactly as before.
+    registered = opts.maker.registerAgent('acp', withPluginEngineAccounts(agent));
     if (registered) opts.logger.info('plugin engine registered', { harnesses: list.length });
   };
   sync(registry.list());

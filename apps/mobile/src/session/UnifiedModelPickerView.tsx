@@ -60,6 +60,7 @@ import { mobileAgentLabel } from "./sessionAgentSwitch";
 import type {
   UnifiedMobileModelGroupRow,
   UnifiedMobilePickerViewProps,
+  UnifiedMobilePluginEngineGroup,
   UnifiedMobilePluginEngineRow,
   UnifiedMobileRow,
 } from "./UnifiedModelPickerSheet";
@@ -219,7 +220,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         : []),
       // 插件引擎分组列在内置模型之前。
       ...(pluginEngineGroupList ?? []).flatMap((group) => [
-        { kind: "pluginHeader" as const, key: `header:${group.key}`, title: group.title, groupKey: group.key },
+        { kind: "pluginHeader" as const, key: `header:${group.key}`, group },
         ...group.rows.map((row, index) => ({
           kind: "pluginModel" as const,
           key: `${group.key}:${row.key}`,
@@ -932,6 +933,28 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       </Pressable>}
     </View>
   );
+  const pluginGroupHeading = (group: UnifiedMobilePluginEngineGroup) => (
+    <View style={styles.quotaHeading}>
+      <Text style={styles.groupLabel}>{group.title}</Text>
+      {group.quota?.summary ? (
+        <Text
+          accessibilityLabel={group.quota.accessibilityLabel}
+          testID={`${p.testID}.group.${group.key}.quota`}
+          style={[
+            styles.quotaText,
+            group.quota.level === "crit"
+              ? styles.quotaResetCrit
+              : group.quota.level === "warn"
+                ? styles.quotaResetWarn
+                : null,
+          ]}
+        >
+          {group.quota.summary}
+        </Text>
+      ) : null}
+    </View>
+  );
+
   const listPage =
     Platform.OS === "android" ? null : (
       <>
@@ -941,7 +964,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           </Group>
         ) : null}
         {pluginEngineGroups.map((group) => (
-          <Group key={group.key} testID={`${p.testID}.group.${group.key}`} title={group.title}>
+          <Group key={group.key} testID={`${p.testID}.group.${group.key}`} heading={pluginGroupHeading(group)}>
             {group.rows.map(pluginEngineRow)}
           </Group>
         ))}
@@ -1032,8 +1055,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                           {modelGroupRow(item.row)}
                         </View>
                       ) : item.kind === "pluginHeader" ? (
-                        <View style={styles.group} testID={`${p.testID}.group.${item.groupKey}`}>
-                          <Text style={styles.groupLabel}>{item.title}</Text>
+                        <View style={styles.group} testID={`${p.testID}.group.${item.group.key}`}>
+                          {pluginGroupHeading(item.group)}
                         </View>
                       ) : item.kind === "pluginModel" ? (
                         <View>

@@ -144,6 +144,8 @@ interface DeviceLinkConnectionIssuePayload {
   closeCode?: number;
   detail?: string;
   at: number;
+  /** 官方网络上的「已移除」:可以在本机「重新加入」 */
+  rejoinable?: true;
 }
 
 /** 设备互联:presence 推送快照 */
@@ -2392,6 +2394,7 @@ interface ElectronAPI {
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
+  acceptLegalTermsUpdate: () => Promise<AnalyticsSettingsPayload>;
   onAnalyticsSettingsChange: (callback: (payload: AnalyticsSettingsPayload) => void) => () => void;
 
   // ── 客户端日志上报(设置 → 关于)──
@@ -2754,7 +2757,7 @@ interface ElectronAPI {
     cb: (payload: {
       selectDraftAgent?: true;
       appDefaultSelection?: import('../shared/appDefaultModelSelection').AppDefaultModelSelection;
-      agent: 'claude-code' | 'codex' | 'pi';
+      agent: 'claude-code' | 'codex' | 'pi' | 'acp';
       providerId: string;
       modelId: string;
       active: boolean;
@@ -4388,6 +4391,7 @@ interface ElectronAPI {
       directDataDeviceIds?: string[];
       connectionIssue: DeviceLinkConnectionIssuePayload | null;
       standby: boolean;
+      identityConflict?: import('../shared/deviceLinkIpc').DeviceLinkIdentityConflict | null;
       controlledBy: Array<{ deviceId: string; name: string }>;
       revokedControllers: string[];
       disabledControlDeviceIds: string[];
@@ -4417,6 +4421,10 @@ interface ElectronAPI {
       name: string | null,
     ) => Promise<{ deviceId: string; name: string; manualName?: string | null }>;
     deleteDevice: (deviceId: string) => Promise<{ deviceId: string; deleted: boolean }>;
+    /** 本机被移除后「重新加入」(官方网络) */
+    rejoin: () => Promise<{ agentNet: 'rejoined' | 'skipped' | 'failed' }>;
+    /** 设备身份冲突时给这台电脑换一个新身份；成功后应用随即重启。 */
+    replaceDeviceIdentity: () => Promise<{ restarting: true }>;
     // —— 控制端:远程会话视图 ——
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;
@@ -4444,6 +4452,10 @@ interface ElectronAPI {
     ) => () => void;
     /** 同机单持有者仲裁角色变化。 */
     onOwnershipChanged: (cb: (payload: { standby: boolean }) => void) => () => void;
+    /** 另一台电脑在用本机设备身份的确认 / 撤销。 */
+    onIdentityConflict?: (
+      cb: (payload: { conflict: import('../shared/deviceLinkIpc').DeviceLinkIdentityConflict | null }) => void,
+    ) => () => void;
     /** 云端设备目录被明确拒绝后，已挂载的设备列表立即失效。 */
     onDeviceDirectoryInvalidated?: (cb: () => void) => () => void;
     /** 控制端:被控端转发回来的 renderer 广播事件 */
@@ -5253,6 +5265,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     bots: {
+      ownsProject: (workingDir: string) => Promise<boolean>;
       projectRepository: (botId: string, retry: boolean) => Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus>;
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];
@@ -5817,7 +5830,8 @@ interface ElectronAPI {
      */
     listPluginEngines: () => Promise<import('../shared/pluginEngines').PluginEngineView[]>;
     /** Read the private account snapshot of one approved plugin engine. */
-    getPluginEngineUsage?: (key: string) => Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null>;
+    /** `task`: a local task whose engine keeps accounts reads its own account's usage (2026-11-23). */
+    getPluginEngineUsage?: (key: string, task?: { sessionId: string }) => Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null>;
     /**
      * Asks engine plugins to republish their models, like the provider model refresh when the picker
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
