@@ -43,7 +43,7 @@ export interface CompanionCloudHost {
   retireLocalCopy?: (botId: string, current: () => boolean) => Promise<void>;
   homes: CompanionHomeRegistry;
   openState: (endpoint: string, humanActorId: string, current: () => boolean) => CompanionCloudState;
-  readValues: (botId: string) => Promise<CompanionPreferenceValue[]>;
+  readValues: (botId: string, scope?: 'skills') => Promise<CompanionPreferenceValue[]>;
   /** Read-only merge preflight: profiles (any status), task links and home files count as data.
    * Only an explicit false proves absence; missing capability/errors must never allow retirement. */
   hasLocalData?: (botId: string) => Promise<boolean>;
@@ -762,6 +762,8 @@ export function startCompanionCloud(input: {
   async function flush(botId: string, options: { preferencesOnly?: boolean; validateValues?: (values: CompanionPreferenceValue[]) => void } = {}) {
     const bot = pick(null).find(candidate => candidate.botId === botId);
     if (!bot) throw new Error('NOT_HOME');
+    // Reject a known-incompatible target before cloud I/O. The upload checks again for edits during the drain.
+    options.validateValues?.(await input.host.readValues(botId, 'skills'));
     // The whole conversation backlog first: the old copy stops mirroring once demoted, and a long
     // drain must not leave edits made meanwhile behind.
     await mirror.syncBot(bot.botId, bot.actorId, bot.name, { drain: true });

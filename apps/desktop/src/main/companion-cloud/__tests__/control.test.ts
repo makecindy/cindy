@@ -24,7 +24,7 @@ afterEach(() => { runtime?.dispose(); runtime = undefined; });
 function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
   readActors?: () => Promise<CompanionRuntimeActor[]>; identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
-  readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
+  readValues?: CompanionCloudHost['readValues']; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
   retireLocalCopy?: CompanionCloudHost['retireLocalCopy']; store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived']; current?: () => boolean }) {
@@ -884,7 +884,8 @@ describe('transfer', () => {
   it('uploads again when the companion changed during the flush, and refuses while it keeps changing', async () => {
     // Changes once while the first pass uploads, then stays put: the move uses the newest value.
     let version = 0;
-    const once = setup({ home: 'desk', devices: [device('laptop')], readValues: async () => {
+    const once = setup({ home: 'desk', devices: [device('laptop')], readValues: async (_botId, scope) => {
+      if (scope === 'skills') return [];
       const current = [{ key: 'companion.profile.v1', value: { name: `Mia ${version}` } }];
       if (version < 1) version += 1;
       return current;
@@ -973,6 +974,20 @@ describe('transfer', () => {
     expect(t.state.isDemoted('bot_mia')).toBe(false);
   });
 
+  it('rejects an incompatible skill locally before syncing the conversation or profile', async () => {
+    const t = setup({ home: 'desk', devices: [device('laptop')],
+      homeLink: { version: async () => 4, targets: async () => [], handOver: async () => ({ ok: true }) },
+      values: [{ key: 'companion.skill.v1:large', value: { content: 'x'.repeat(71_560) } }],
+      syncProfile: async () => { throw new Error('OFFLINE'); } });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({
+      ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: { slug: 'large', bodyBytes: 71_560 },
+    });
+    expect(t.calls).toHaveLength(0);
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+  });
+
+  const largeFrontmatter = `---\r\nname: large\r\ndescription: ${'x'.repeat(71_560)}\r\n---\r\n\r\nsmall\r\n`;
+
   // Regression: 127 shipped store readers but still advertised v2. Exercise the real
   // transfer decision with the shipped declaration, not a hardcoded v3 test peer.
   // #12112, unit tier: an uploadable imported skill can still fail an old receiver's
@@ -984,7 +999,8 @@ describe('transfer', () => {
     { peer: 'old with store reader', version: 4, storeEnabled: true, failure: 'SKILL_TARGET_OUTDATED' },
     { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, failure: 'FAILED' },
     { peer: 'old at body limit', version: 4, storeEnabled: true, content: 'x'.repeat(65_536) },
-    { peer: 'old with large frontmatter', version: 4, storeEnabled: true, content: `---\r\nname: large\r\ndescription: ${'x'.repeat(71_560)}\r\n---\r\n\r\nsmall\r\n` },
+    { peer: 'old with large frontmatter', version: 4, storeEnabled: true, content: largeFrontmatter },
+    { peer: 'old without store reader and with large frontmatter', version: 2, storeEnabled: true, content: largeFrontmatter, failure: 'FAILED' },
     { peer: 'old with multibyte body', version: 4, storeEnabled: true, content: `---\nname: large\n---\n${'界'.repeat(21_846)}\n`, failure: 'SKILL_TARGET_OUTDATED', bodyBytes: 65_538 },
     { peer: 'old after background upload', version: 4, storeEnabled: true, preflush: true, failure: 'SKILL_TARGET_OUTDATED' },
     { peer: 'old with edit during flush', version: 4, storeEnabled: true, editDuringFlush: true, failure: 'SKILL_TARGET_OUTDATED' },
