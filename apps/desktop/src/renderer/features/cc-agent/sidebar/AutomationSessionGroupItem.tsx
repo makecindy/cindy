@@ -623,6 +623,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                   openLatestSession();
                 }}
                 disabled={!latestSession}
+                data-sidebar-right-status={minimalText && groupNeedsAttention ? groupRightStatusKind : undefined}
                 className="min-w-0 truncate text-left disabled:cursor-default"
               >
                 <span className="min-w-0 truncate">{group.title}</span>

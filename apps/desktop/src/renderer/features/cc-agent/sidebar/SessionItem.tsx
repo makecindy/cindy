@@ -1069,12 +1069,15 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         // icon shrink-0 保持可见;右侧槽位只保留 worktree + 时间 + hover action。
         <span
           data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+          // 需要你看的状态(出错 / 等你回复 / 完成未读)以加粗标题呈现;这里留下语义状态，
+          // 供读屏之外的检查与自动化识别(运行中由行尾转圈承载同名属性)。
+          data-sidebar-right-status={needsAttention ? rightStatusKind : undefined}
           data-no-drag={splitDragHandleActive ? 'true' : undefined}
           draggable={splitDragHandleActive}
           className="min-w-0 flex flex-1 items-center"
         >
-          {/* 标题后不再挂自动任务计时器、标签色点、伙伴头像、远程电脑图标和项目名;
-              这些信息留在悬停浮层与右键菜单里(2026-11-19 用户裁决)。 */}
+          {/* 标题后不再挂自动任务计时器、标签色点和远程电脑图标(2026-11-19 用户裁决);
+              伙伴与项目按「任务信息」勾选显示。 */}
           <SidebarTitleMarquee
             title={displayTitle}
             className={isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground'}

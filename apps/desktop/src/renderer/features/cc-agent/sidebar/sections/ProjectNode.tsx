@@ -405,7 +405,12 @@ const ProjectHeader = memo(function ProjectHeader({
           ) : (
             // shrink 而非 flex-1:让远程图标紧跟项目名,不被推到行尾
             // (2026-08-12 用户裁决,与会话行的标题 + 远程图标同款)。
-            <span className={cn('min-w-0 max-w-full shrink truncate', isCollapsed && collapsedStatusTone && 'font-semibold text-foreground')}>{project.displayName}</span>
+            <span
+              data-sidebar-right-status={isCollapsed && collapsedStatusTone ? collapsedStatusTone : undefined}
+              className={cn('min-w-0 max-w-full shrink truncate', isCollapsed && collapsedStatusTone && 'font-semibold text-foreground')}
+            >
+              {project.displayName}
+            </span>
           )}
           {/* 远程机器标注:按设备分组时段头已写明归属,行内不再重复(hideRemoteMachineLabel)。 */}
           {!isEditingName && remoteIdentity && !hideRemoteMachineLabel ? (

@@ -1429,7 +1429,10 @@ export function SessionGroupNode({
         {/* 组头只有文字(2026-11-19 用户裁决):不画分组图标;收起时运行中显示行尾
             灰色转圈，需要你看的(出错 / 等你回复 / 完成未读)标题加粗。 */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span className={cn('min-w-0 shrink truncate', collapsed && lamp?.dotTone && 'font-semibold text-foreground')}>
+          <span
+            data-sidebar-right-status={collapsed && lamp?.dotTone ? lamp.dotTone : undefined}
+            className={cn('min-w-0 shrink truncate', collapsed && lamp?.dotTone && 'font-semibold text-foreground')}
+          >
             {groupTitle ?? t('ccAgent.sidebar.dialogues')}
           </span>
           <Chevron
