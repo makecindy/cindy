@@ -4770,7 +4770,7 @@
     "toolFold": {
       "cell": {
         "title": "Dobramento de payload de ferramentas (experimental)",
-        "description": "Em sessões longas do Agent, cada ida e volta de ferramenta (comando mais saída) é reenviada a cada passo. Quando ativado, as novas sessões do Agent Pi dobram as idas e voltas antigas em uma única linha e truncam resultados grandes demais antes de entrarem no histórico; o modelo pode recuperar o original com toolfold_read. Medido em duas sessões longas: cerca de 23% a 27% menos tokens de entrada. Afeta apenas as sessões do Agent Pi iniciadas depois; com a opção desligada, o comportamento é exatamente o de antes."
+        "description": "As idas e voltas de ferramentas antigas são dobradas em uma única linha e os resultados grandes demais são truncados antes; o modelo pode recuperar os originais quando precisar. Afeta apenas as sessões do Agent Pi criadas depois."
       },
       "toggleAria": "Ativar/desativar dobra de payload de ferramentas",
       "toast": {

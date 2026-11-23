@@ -4770,7 +4770,7 @@
     "toolFold": {
       "cell": {
         "title": "Repli des charges utiles d'outils (expérimental)",
-        "description": "Dans les longues sessions d'Agent, chaque aller-retour d'outil (commande et sortie) est renvoyé à chaque étape. Activé, les nouvelles sessions d'Agent Pi replient les anciens allers-retours sur une ligne et tronquent les résultats trop volumineux avant leur entrée dans l'historique ; le modèle peut récupérer l'original avec toolfold_read. Mesuré sur deux longues sessions : environ 23 % à 27 % de jetons d'entrée en moins. Seules les sessions d'Agent Pi démarrées ensuite sont concernées ; désactivé, le comportement est exactement celui d'avant."
+        "description": "Les allers-retours d'outils anciens sont repliés sur une ligne et les résultats trop volumineux sont tronqués avant ; le modèle peut récupérer les originaux si besoin. Seules les sessions d'Agent Pi créées ensuite sont concernées."
       },
       "toggleAria": "Activer/désactiver le repli des charges utiles d'outils",
       "toast": {

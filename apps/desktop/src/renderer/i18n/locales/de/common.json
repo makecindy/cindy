@@ -4714,7 +4714,7 @@
     "toolFold": {
       "cell": {
         "title": "Tool-Nutzlasten falten (experimentell)",
-        "description": "In langen Agent-Sitzungen wird jeder Werkzeug-Roundtrip (Befehl plus Ausgabe) bei jedem Schritt erneut gesendet. Ist die Option aktiv, falten neue Pi-Agent-Sitzungen ältere Roundtrips auf eine Zeile und kürzen überlange Ergebnisse, bevor sie in den Verlauf gelangen; das Modell kann das Original mit toolfold_read abrufen. An zwei langen Sitzungen gemessen: rund 23 % bis 27 % weniger Eingabetokens. Betrifft nur Pi-Agent-Sitzungen, die danach starten; bei ausgeschalteter Option ist das Verhalten exakt wie zuvor."
+        "description": "Ältere Werkzeug-Roundtrips werden auf eine Zeile gefaltet und überlange Ergebnisse vorher gekürzt; das Modell kann die Originale bei Bedarf abrufen. Betrifft nur Pi-Agent-Sitzungen, die danach starten."
       },
       "toggleAria": "Tool-Nutzlasten falten umschalten",
       "toast": {
