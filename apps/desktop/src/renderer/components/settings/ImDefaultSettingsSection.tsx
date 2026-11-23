@@ -319,7 +319,7 @@ export function ImDefaultSettingsSection({
   return (
     <section
       className={cn(
-        'flex flex-col gap-[18px]',
+        'flex flex-col gap-4',
         embedded
           ? 'py-1'
           : [

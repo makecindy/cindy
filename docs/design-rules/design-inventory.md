@@ -74,7 +74,7 @@
 | `mobile.relay-join` | mobile | 扫码加入自建中转 | app/relay-join.tsx |
 | `mobile.remote-desktop` | mobile | 远程桌面 | app/devices/desktop/[deviceId].tsx |
 | `mobile.resources` | mobile | 远程资源列表与详情 | app/resources/[collectionId].tsx / app/resources/[collectionId]/[resourceId].tsx |
-| `mobile.settings` | mobile | 设置（含调试与日志上传可见入口） | app/settings.tsx / app/settings/developer.tsx / app/settings/device-name.tsx / app/settings/handheld.tsx / app/settings/user-bubble.tsx / app/settings/voice-dictionary.tsx / app/settings/voice-speaker-filter.tsx |
+| `mobile.settings` | mobile | 设置（含调试与日志上传可见入口） | app/settings.tsx / app/settings/developer.tsx / app/settings/device-name.tsx / app/settings/handheld.tsx / app/settings/user-bubble.tsx / app/settings/voice-dictionary.tsx / app/settings/voice-speaker-filter.tsx / app/settings/wallpaper.tsx |
 
 ### 生产路由覆盖
 
@@ -162,6 +162,7 @@
 | apps/mobile/app/settings/user-bubble.tsx | UserBubblePage | `mobile.settings` |
 | apps/mobile/app/settings/voice-dictionary.tsx | VoiceDictionaryScreen | `mobile.settings` |
 | apps/mobile/app/settings/voice-speaker-filter.tsx | VoiceSpeakerFilterRoute | `mobile.settings` |
+| apps/mobile/app/settings/wallpaper.tsx | WallpaperPage | `mobile.settings` |
 | apps/mobile/app/settings.tsx | SettingsScreen | `mobile.settings` |
 | apps/mobile/app/shared-session.tsx | SharedSessionScreen | `mobile.chat.sharing` |
 | apps/mobile/app/usage.tsx | UsageScreen | `mobile.home` |
@@ -177,6 +178,7 @@
 | apps/mobile/app/listperf.tsx | __DEV__ list performance harness; not production UI |
 | apps/mobile/app/plugin-management-preview.tsx | gated plugin settings visual fixture; not production UI |
 | apps/mobile/app/plugin-preview-regression.tsx | MOBILE_VISUAL_MOCK_ENABLED card preview fixture; not production UI |
+| apps/mobile/app/retro-skin-preview.tsx | MOBILE_VISUAL_MOCK_ENABLED folded remote desktop skin fixture |
 | apps/mobile/app/splash-preview.tsx | MOBILE_VISUAL_MOCK_ENABLED preview; not production UI |
 
 Mobile 静态图跟随本地 import/reexport 与平台 TSX；根布局仅登记可见反馈，不把布局自身或资源实例另算 surface。服务端动态内容、运行期 import 拼接、原生系统呈现及未显式导入的消费者需人工复核；不宣称完整递归渲染图。

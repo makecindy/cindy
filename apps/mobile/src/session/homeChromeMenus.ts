@@ -11,6 +11,7 @@ import type { HomeProjectOrder } from "@/session/homeProjectOrder";
 import { canBrowseMobileHomeDevice, type MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 import {
   activeContentFilterCount,
+  DEFAULT_HOME_FILTERS,
   HOME_DIALOGUE_FILTER_KEY,
   HOME_LAST_ACTIVITY_FILTERS,
   HOME_TASK_INFO_FIELDS,
@@ -141,6 +142,8 @@ export function buildHomeScopePullDownActions(
  */
 export interface HomeDisplayMenuState {
   groupByProject: boolean;
+  groupDevice?: boolean;
+  hasDeviceGroups?: boolean;
   groupDialogue: boolean;
   groupAutomation?: boolean;
   sortBy: HomeListSortBy;
@@ -150,6 +153,7 @@ export interface HomeDisplayMenuState {
   teammateFilter?: HomeTeammateFilter;
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
+  hideAutomations?: boolean;
   taskListMode?: 'tasks' | 'inbox';
   viewMode: HomeListViewMode;
   taskInfoFields: readonly HomeTaskInfoField[];
@@ -221,12 +225,15 @@ export function buildHomeDisplayPullDownActions(input: {
   t: Translate;
 }): NativePullDownAction[] {
   const { state, t } = input;
+  const inboxMode = state.taskListMode === 'inbox';
   const groupSummary = [
+    state.hasDeviceGroups && state.groupDevice ? t(`${MENU}.groupDevice`) : null,
     state.groupByProject ? t(`${MENU}.groupProject`) : null,
     state.groupDialogue ? t(`${MENU}.groupDialogue`) : null,
     state.groupAutomation ? t(`${MENU}.groupAutomation`) : null,
   ].filter(Boolean).join(t(`${MENU}.summarySeparator`)) || t(`${MENU}.summaryNone`);
   const filterCount = activeContentFilterCount({
+    hideAutomations: state.hideAutomations,
     projects: state.projectFilter,
     teammates: state.teammateFilter,
     vendor: state.vendorFilter,
@@ -241,6 +248,7 @@ export function buildHomeDisplayPullDownActions(input: {
       // 「按项目分组」会增删下方「项目排序」整个子菜单,菜单结构变了 iOS 只能整份替换、
       // 打开中的菜单会退回根层,所以它选完收起;只改勾选 / 副标题 / 禁用的项才保持展开。
       checkable("group.project", t(`${MENU}.groupProject`), state.groupByProject),
+      ...(state.hasDeviceGroups ? [checkable("group.device", t(`${MENU}.groupDevice`), !!state.groupDevice, true)] : []),
       checkable("group.dialogue", t(`${MENU}.groupDialogue`), state.groupDialogue, true),
       checkable("group.automation", t(`${MENU}.groupAutomation`), state.groupAutomation === true, true),
     ]),
@@ -308,6 +316,7 @@ export function buildHomeDisplayPullDownActions(input: {
         HOME_LAST_ACTIVITY_FILTERS.map((range) =>
           checkable(`filter.lastActivity.${range}`, t(`${MENU}.filterLastActivity.${range}`),
             state.lastActivityFilter === range))),
+      checkable("filter.hideAutomations", t(`${MENU}.filterHideAutomations`), state.hideAutomations === true, true),
       section("filter.resetGroup", [{
         disabled: filterCount === 0,
         id: "filter.reset",
@@ -325,8 +334,8 @@ export function buildHomeDisplayPullDownActions(input: {
       image: "checklist",
       icon: ListChecks,
     }]),
-    section("organize", organize),
-    section("narrow", [
+    ...(inboxMode ? [] : [section("organize", organize)]),
+    section("narrow", inboxMode ? [filter] : [
       {
         ...submenu("status", t(`${MENU}.statusHeading`), t(`${MENU}.status.${state.statusFilter}`), "checklist",
           STATUS_OPTIONS.map((status) => ({
@@ -358,10 +367,15 @@ export function homeDisplayActionPatch(
   state: HomeDisplayMenuState,
 ): HomeDisplayPatch | null {
   if (id === "teammates.showCollapsedAvatars") return { showCollapsedTeammateAvatars: !(state.showCollapsedTeammateAvatars ?? true) };
+  if (id === "group.device") return { groupDevice: !state.groupDevice };
   if (id === "group.project") return { groupByProject: !state.groupByProject };
   if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
   if (id === "group.automation") return { groupAutomation: !state.groupAutomation };
-  if (id === "filter.reset") return { lastActivityFilter: "all", projectFilter: "all", teammateFilter: "all", vendorFilter: "all" };
+  if (id === "filter.hideAutomations") return { hideAutomations: !state.hideAutomations };
+  if (id === "filter.reset") return {
+    ...DEFAULT_HOME_FILTERS,
+    hideAutomations: false,
+  };
   if (id === "filter.teammates.none") return { teammateFilter: "none" };
   if (id === "filter.teammates.all") return { teammateFilter: "all" };
   if (id.startsWith("filter.teammate:")) {

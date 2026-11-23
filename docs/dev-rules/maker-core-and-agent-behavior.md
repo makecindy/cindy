@@ -61,7 +61,8 @@ Host 按请求代次保存待确认的接管：未派发或收到关联的原生
   本机清理可复用既有退役路径，但须先确认没有其他健康订阅或启动租约，并取得实际退出证明；
   托管／SSH 不据此退役远端共享进程。
   有其他任务占用时保留隔离，下次显式重试；不能用一次 unsubscribe 回包代替在途恢复已停止的证明。
-  探测暂时失败保持未验证，并在下次发送复查；未知原生状态仍保持 pending，不用目录猜就绪。
+  状态查询超时或出错只记诊断日志，在下次普通发送时复查。只有查到当前线程的 helper 确实不可用时，
+  才显示告警并写入任务历史。未知原生状态仍保持 pending，不用目录猜就绪。
   不新增后台重试。
 停止探测时及时结束本轮等待，以“尚未派发”释放发送占位，不等待底层探测 RPC 返回；迟到结果不
 回写下一轮。异步启动转为明确不可用时，即使后台工作阻止恢复，也保留去重的缺席提示。
@@ -317,6 +318,11 @@ Codex 同引擎切模（包括自动任务、Orca、设备互联与 SSH）保留
 90%／100% 或伙伴账本新鲜而抢先生成 Cindy 交接。窗口预算与用户 override 保持不变；重载模型
 目录或凭证执行句柄不等于重建历史。Cindy 只在明确的上下文超限、原生压缩失败或历史字节超限后
 沿用既有兜底及副作用保护。跨引擎交接和显式重启仍按各自生命周期规则处理；伙伴不再执行空闲间隔刷新。
+本地代理观察到当前根线程、当前轮在采样前为缩窗自动压缩，且上游明确拒绝了这次请求中的旧型号时，
+沿用上述有界交接。按请求关联原生元数据与 HTTP 拒绝，下一次采样使旧证据失效。目标模型被拒、
+账号权限错误、手动压缩及缺乏请求证据的错误仍按原分类处理。
+Chat Completions、Anthropic Messages 和使用原生 SDK 的桥接以同一条请求的上游错误为证据。
+桥接包装或脱敏前识别明确的模型拒绝，保留型号及拒绝类别，普通 403 不触发交接。
 真实 CLI 的同供应商、跨供应商与逐 thread 预算回归见
 `apps/desktop/src/main/maker-host/__tests__/codexContextSwitch.native.test.ts`；逐 thread 回归在本机
 模拟服务运行，不代表完成了真实 SSH 端到端验收。
@@ -446,7 +452,9 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 冻结输入。本地摘要再失败即正常报错，不循环切换。尚未结算的原生 exec continuation 无法跨
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
-Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
+Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志
+（唯一例外：每次响应的计时 trace 行只读来显示 tok/s，不驱动任何行为，见
+[实时生成速度](protocol-compatibility/live-generation-speed.md)），
 不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
 改写为历史故障（包括读取已保存消息时）。收到当前 turn 的原生 `contextCompaction`
 开始事件后，取消短重连计时，压缩期间交给既有 upstream-idle 长超时保护；完成后恢复
@@ -575,8 +583,10 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   `packages/maker-core/src/agents/shared/desktop-input-shell.ts` 一份判定覆盖：Claude PreToolUse
   守卫直接拒绝（完全访问档同样生效，仅本地运行时：SSH 远端的本地钩子不会跨 RPC 生效，远端桌面
   工具不受影响）；Ask／Auto 档由共用审阅策略（`continuation-policy.ts`，写明只针对运行 Cindy 的这台
-  电脑）让 reviewer 拦下。Codex 完全访问档（`approvalPolicy: never`，宿主没有拦截点）与 Pi 完全访问档
-  （非退化红线）不加拦截。
+  电脑）让 reviewer 拦下。对于直接调用 `cua-driver` 的路径，本地 Codex 普通任务在 Cindy 专用的实际
+  运行目录加载原生执行规则，包括恢复旧账号会话和完全访问档。规则在进程启动前拒绝匹配的驱动
+  子命令，版本和状态查询仍可执行。共用用户原生配置目录、远程执行及其他脚本输入未由这条规则覆盖。
+  Pi 完全访问档沿用原有策略。
 - Cindy 的目标模式由 `goal-host` 统一管理续跑、预算与暂停／恢复。Codex 创建和恢复线程时
   使用会话级 `features.goals=false`，避免模型另建原生目标，形成绕过宿主调度与来源标记的
   第二套循环；不写用户的全局 Codex 配置。不能仅把无来源事件改判为目标事件，否则用户
@@ -926,8 +936,8 @@ Cindy reviewer 与 Codex native reviewer 使用同一份范围语义，但接入
 Agent developer 指令不会进入原生审批摘要，因此通过线程级 `auto_review.policy` 内联
 Markdown 接入；在创建或恢复线程时预装，不依赖初始权限模式，后续切到 Auto 即可使用。
 不修改用户配置文件，不改 sandbox／审批者，不覆盖用户或项目自定义策略，
-管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0、0.159.2 与 0.166.0，完整保留各版本
-默认租户策略；0.159.2 与 0.166.0 的原生 reviewer 请求已于 2026-11-03 抓取，租户策略
+管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0、0.159.2、0.166.0 与 0.167.2，完整保留各版本
+默认租户策略；0.159.2 与 0.166.0 的原生 reviewer 请求已于 2026-11-03 抓取，0.167.2 于 2026-11-21 抓取，租户策略
 与 0.153.4 逐行一致，因此复用同一文件。未知版本保留原生策略，不能拿旧版本策略覆盖新默认。
 `native-auto-review-policy.test.ts` 同时检查打包 pin 在已核验版本表内，升级运行时不能只改 pin。原生行为验证见
 `agents/codex/native-auto-review-policy.native.test.ts`（`packages/maker-core/src/` 下），

@@ -1,3 +1,4 @@
+import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupWorkRow } from './BotGroupWorkArea';
@@ -950,7 +951,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   // in-page content (offline notice or image selection), matching the timeline inset.
   const headerBlurHeight = systemBack ? headerHeight
     : Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
-  return <RichContentContext.Provider value={richContent}><View style={[styles.screen, screenInsets]} testID="botGroup.screen">
+  return <RichContentContext.Provider value={richContent}><View style={[styles.flex, screenInsets]} testID="botGroup.screen">
     {threadRootId ? <Stack.Screen options={{ gestureEnabled: previousIsGroup }} /> : null}
     {nativeHeader || systemBack ? null : <Stack.Screen options={{ headerShown: false }} />}
     {floatingHeader ? <>
@@ -1339,6 +1340,8 @@ function BotGroupTimelineItem({
   const richContentActive = active && (!visibility || visible);
   const styles = useThemedStyles(makeStyles);
   const { colors: userBubbleColors } = useUserBubbleAppearance();
+  const { selected: wallpaper } = useWallpaper();
+  const { colors, mode } = useTheme();
   if (message.kind === 'round-end') {
     return <BotGroupDivider testID="botGroup.roundEnd">
       <Text style={styles.dividerText}>{t('groupChat.timeline.roundEnded')}</Text>
@@ -1386,6 +1389,7 @@ function BotGroupTimelineItem({
           {bubble ? <View style={[
             styles.userBubble,
             compact && styles.userBubbleCompact,
+            wallpaper !== 'none' && { backgroundColor: wallpaperRaisedFill(colors.surfaceElevated, mode) },
             userBubbleColors && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
           ]} testID="botGroup.message.userBubble">
             {quoteDisplay ? <View style={styles.userQuote}>

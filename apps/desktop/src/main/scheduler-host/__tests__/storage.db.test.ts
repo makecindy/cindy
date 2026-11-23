@@ -16,7 +16,7 @@ import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
-import { recordScheduleRunCostDirect } from '../runCostLedger';
+import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
@@ -106,6 +106,7 @@ const SCHEDULER_DDL = [
       created_at INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0
@@ -147,6 +148,7 @@ const SCHEDULER_DDL = [
       agent_kind TEXT NOT NULL,
       model_agent_kind TEXT,
       model_agent_device_id TEXT,
+      inherited_project_dir TEXT,
       model TEXT,
       provider_id TEXT,
       agent_device_id TEXT,
@@ -161,6 +163,7 @@ const SCHEDULER_DDL = [
       pre_run_hook_command TEXT,
       pre_run_hook_timeout_ms INTEGER,
       pre_run_plugin_id TEXT,
+      primary_host_key TEXT,
       pre_run_plugin_on_failure TEXT,
       skip_log_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
       notify_desktop INTEGER NOT NULL DEFAULT 1,
@@ -190,6 +193,7 @@ const SCHEDULER_DDL = [
       estimated_value_usd REAL NOT NULL DEFAULT 0,
       cost_amount REAL NOT NULL DEFAULT 0,
       estimated_value_amount REAL NOT NULL DEFAULT 0,
+      other_estimated_value_amount REAL NOT NULL DEFAULT 0,
       cost_currency TEXT,
       cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       cost_attribution TEXT NOT NULL DEFAULT 'legacy',
@@ -317,6 +321,33 @@ it.each(['eligible', 'paused', 'archived', 'finished', 'manual-continue', 'runni
   } finally { h.close(); }
 });
 
+// DB tier: one scheduler turn has two native subscription quotes, including the path without an assistant row.
+it.each(['message', 'tool-only'])('reads both native estimates for a %s turn after repeated reads', async mode => {
+  const h = createStorageHarness();
+  try {
+    setCurrentDbClient({ drizzle: h.db } as unknown as DbClient, 'test-user');
+    h.sqlite.exec("INSERT INTO sessions (id, title) VALUES ('task', 'mixed')");
+    await h.storage.insert(baseSchedule({ targetSessionId: 'task' }));
+    await h.storage.insertRun({ id: 'run', scheduleId: 'sch-1', sessionId: 'task', firedAt: 1, status: 'success' });
+    const dollars = { currency: 'USD', amount: 2, approximate: true, kind: 'value-estimate' } as const;
+    const yuan = { ...dollars, currency: 'CNY', amount: 7 } as const;
+    const estimatedAmounts = [dollars, yuan];
+    if (mode === 'message') {
+      const meta = { origin: { kind: 'scheduler', scheduleId: 'sch-1', runId: 'run' },
+        turnCost: dollars, turnCostIsEstimate: true, turnUsageDetails: { estimatedAmounts } };
+      h.sqlite.prepare("INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES ('m','m','task','assistant','',?,2)").run(JSON.stringify(meta));
+      await applyScheduleRunCostMetaChange({}, meta);
+      await applyScheduleRunCostMetaChange(meta, meta);
+    } else {
+      await recordScheduleRunCostDirect({ runId: 'run', money: dollars, estimatedAmounts });
+    }
+    for (let read = 0; read < 2; read++) {
+      expect(await h.storage.listRuns('sch-1')).toMatchObject([{ estimatedValueAmounts: [dollars, yuan], costMoney: { amount: 0 } }]);
+      expect(await h.storage.listCostSummaries()).toMatchObject([{ totalEstimatedValueAmounts: [dollars, yuan], totalMoney: { amount: 0 } }]);
+    }
+  } finally { clearCurrentDbClient(); h.close(); }
+});
+
 it.each(['api', 'subscription', 'tool-only'])('includes media in both run history and schedule totals for %s runs', async (mode) => {
   const harness = createStorageHarness();
   try {
@@ -412,6 +443,10 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const schedule = baseSchedule({
       id: 'sch-storage',
       name: 'storage smoke',
+      primaryHostKey: 'public/cindy-contacts',
+      // DB tier: a PR checkout retains the creator project across insert/get/update.
+      inheritedProjectDir: '/projects/app',
+      workingDir: '/checkouts/pr',
       nextFireAt: 1_700_000_120_000,
       // providerId 钉到非原生来源,断言往返保真(insert → get 都带回 'anthropic')。
       providerId: 'anthropic',
@@ -435,6 +470,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         status: 'paused',
         updatedAt: 1_700_000_200_000,
       });
+      expect(updated?.inheritedProjectDir).toBe('/projects/app');
+      expect(updated?.workingDir).toBe('/checkouts/pr');
+      expect(updated?.primaryHostKey).toBe(schedule.primaryHostKey);
       expect(updated?.status).toBe('paused');
       expect(updated?.nextFireAt).toBeUndefined();
       expect(await harness.storage.listActive()).toEqual([]);
@@ -686,7 +724,11 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
 
   // The in-task banner reads this projection; without missingPlugin it can only say
   // "checks blocked" when a plugin uninstall removed the check script.
-  it('projects the missing plugin of a blocked check into the sidebar index', async () => {
+  // Unit: the desktop sidebar reads a bounded SQL projection, not the full hook record.
+  it.each([
+    { missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } },
+    { prCheckDiagnosis: { kind: 'dns', host: 'api.github.com', failures: 3, retryAt: 1_800_000, device: 'Build Mac' } },
+  ])('projects the blocked check diagnosis into the sidebar index: %j', async (diagnosis) => {
     const harness = createStorageHarness();
     try {
       harness.sqlite.exec(`
@@ -704,14 +746,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         preRunHookResult: {
           status: 'failed', decision: 'block', exitCode: 1, durationMs: 1, stdout: '', stderr: 'MODULE_NOT_FOUND',
           stdoutTruncated: false, stderrTruncated: false, timedOut: false, aborted: false,
-          missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' },
+          ...diagnosis,
         },
       });
       const [run] = await harness.storage.listSidebarIndexRuns();
       expect(run).toMatchObject({
         runId: 'blocked-missing-plugin',
         failureKind: 'precheck',
-        missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' },
+        ...diagnosis,
       });
     } finally {
       harness.close();

@@ -495,6 +495,19 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(projectFor(false, true)[0]).not.toHaveProperty('logoKind');
   });
 
+  // Unit: the real tunnel projection only exposes the optional v2 directory SVG to the same
+  // account. A foreign controller or a user provider with the same field must get no SVG.
+  it('restricts custom artwork to same-account organization suppliers', () => {
+    const customIcon = '<svg/>';
+    const enterprise = { ...xdProviderWithFullRouting(), id: 'byok-test', source: 'organization', customIcon };
+    const forged = { ...enterprise, id: 'user-test', source: 'user' };
+    const payload = { providers: [enterprise, forged] };
+    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', payload, true, [], true))
+      .toMatchObject({ providers: [expect.objectContaining({ customIcon }), expect.not.objectContaining({ customIcon })] });
+    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', payload, true, [], false))
+      .toMatchObject({ providers: [expect.not.objectContaining({ customIcon }), expect.not.objectContaining({ customIcon })] });
+  });
+
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {
     const { providers } = project({
       providers: [

@@ -23,7 +23,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }), useOptionalAuthDeviceId: () => null }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: translate, i18n: { resolvedLanguage: 'en' } }),
 }));
@@ -44,11 +44,16 @@ const mocks = vi.hoisted(() => ({
   setBotHidden: vi.fn(async () => undefined),
   setBotPinned: vi.fn(async () => undefined),
   duplicateBotProfile: vi.fn(async () => ({ id: 'copy' })),
+  toastError: vi.fn(),
   /** 灵动岛活动镜像:sessionId -> phase。侧栏据此显示「正在输入…」。 */
   islandActivity: new Map<string, { sessionId: string; phase: string; compactDetail?: string }>(),
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
+vi.mock('@/lib/toast', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/toast')>();
+  return { ...actual, toast: { ...actual.toast, error: mocks.toastError } };
+});
 
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
@@ -103,6 +108,7 @@ vi.mock('../BotDeleteDialog', () => ({
 }));
 
 import { TeammatesSection } from '../TeammatesSection';
+import { BotModelSelectionRequiredError } from '../botStore';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
 import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
@@ -157,6 +163,7 @@ beforeEach(() => {
   mocks.setBotHidden.mockResolvedValue(undefined);
   mocks.setBotPinned.mockResolvedValue(undefined);
   mocks.duplicateBotProfile.mockResolvedValue({ id: 'copy' });
+  mocks.toastError.mockReset();
   mocks.health = new Map();
   mocks.unread = {};
   mocks.groupMessages = new Map();
@@ -186,12 +193,38 @@ beforeEach(() => {
   });
 });
 
+// Unit regression: dragging the name inside a companion button must carry
+// that chat to the split/window receiver without producing a bogus task link.
+it('starts a task-style window drag from the companion name', async () => {
+  mocks.profiles = [bot({ id: 'mate', name: 'Mate' })];
+  const { getByText } = await renderSidebar();
+  const data = new Map<string, string>();
+  const name = getByText('Mate');
+  const row = name.closest('button')!;
+  expect(row.draggable).toBe(true);
+  fireEvent.dragStart(name, { dataTransfer: { setData: (key: string, value: string) => data.set(key, value) } });
+  expect([...data.values()]).toEqual(['/bots/mate']);
+  fireEvent.dragEnd(row);
+});
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
 });
 
 describe('one Cindy entry across devices', () => {
+  // #8585, unit: two legacy Cindy choices must not absorb the newly reachable
+  // same-home cloud recovery row, which is intentionally outside their picker.
+  it('keeps cloud recovery separate from the legacy Cindy picker', async () => {
+    mocks.profiles = [{ ...bot({ id: 'legacy-local', name: 'Legacy local' }), templateId: 'cindy' },
+      bot({ id: 'cindy-default', name: 'Recovered Cindy' })];
+    mocks.remoteBots = [{ ...remote('legacy-desk', 'Legacy desk'), id: 'legacy-remote', templateId: 'cindy' }];
+    mocks.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['cindy-default'], actors: [
+      { id: 'actor-cindy', externalId: 'cindy-default', name: 'Recovered Cindy', avatar: null, homeDeviceId: 'desk' }] };
+    await renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: /Recovered Cindy/ }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/desk/cindy-default');
+  });
   const remote = (deviceId: string, deviceName: string, extra = {}) => ({
     id: 'cindy-default', deviceId, deviceName, name: 'Cindy', avatar: '🤖', avatarColor: 'violet',
     description: '', preview: `${deviceName} preview`, activityAt: 1, sessionId: `${deviceId}-chat`, online: true, ...extra,
@@ -1009,6 +1042,49 @@ describe('TeammatesSection rows', () => {
     fireEvent.keyDown(row, { key: 'ContextMenu' });
     fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'bots.list.pin' }), { key: 'Enter' });
     expect(mocks.setBotPinned).toHaveBeenCalledExactlyOnceWith('bot-1', true);
+  });
+
+  // Regression: roster writes are not optimistic, so a rejected pin / hide used to
+  // leave the row unchanged with no feedback (an unhandled rejection).
+  it.each([
+    { item: 'bots.list.pin', write: () => mocks.setBotPinned, message: 'bots.list.pinFailed' },
+    { item: 'bots.list.hide', write: () => mocks.setBotHidden, message: 'bots.list.hideFailed' },
+  ])('reports a failed $item instead of silently doing nothing', async ({ item, write, message }) => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.params = { botId: 'bot-1' };
+    write().mockRejectedValueOnce(new Error('ipc down'));
+    await renderSidebar();
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: item }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith(message));
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  // Regression: duplicating reads the avatar and waits for the new profile with no
+  // progress, and a missing default model rejected silently.
+  it.each([
+    { error: new BotModelSelectionRequiredError(), message: 'bots.list.duplicateModelRequired' },
+    { error: new Error('create failed'), message: 'bots.list.duplicateFailed' },
+  ])('shows duplicate progress in the row, then explains $message', async ({ error, message }) => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    let reject!: (reason: unknown) => void;
+    mocks.duplicateBotProfile.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    await renderSidebar();
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'bots.list.duplicate' }));
+    expect(await screen.findByRole('status', { name: 'bots.list.duplicating' })).toBeTruthy();
+
+    // A second request while the first is in flight must not start another copy.
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    const again = await screen.findByRole('menuitem', { name: 'bots.list.duplicate' });
+    expect(again.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(again);
+    expect(mocks.duplicateBotProfile).toHaveBeenCalledTimes(1);
+
+    await act(async () => { reject(error); });
+    expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith(message);
+    expect(screen.queryByRole('status', { name: 'bots.list.duplicating' })).toBeNull();
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
   it('re-reads the list when a Bot conversation is marked read', async () => {

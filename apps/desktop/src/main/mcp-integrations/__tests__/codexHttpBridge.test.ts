@@ -1342,15 +1342,20 @@ describe('codexHttpBridge', () => {
     expect(bridge.mcpSessionCount()).toBe(1);
   });
 
-  // Review finding on the cleanup above: an initialize that already passed the ctx check
-  // can finish after the Session unregistered, missing the cleanup scan. The factory runs
-  // between the ctx check and the table insert, so unregistering there is that interleaving.
-  it('does not keep an MCP session whose owner unregistered while it was initializing', async () => {
+  // Regression: real HTTP initialize can pass routing and miss the cleanup scan.
+  // The server factory gives a deterministic pause before insertion. Unit tier with
+  // a loopback bridge, covering both task removal and an instance close with its task alive.
+  it.each(['task', 'instance'] as const)('closes a handshake crossing %s cleanup', async scope => {
+    let closeDuringInitialize = true;
     const ctx = { agentKind: 'pi' as const, sessionId: 'pi-session', sessionInstanceId: 'pi-instance', workingDir: '/repo', vendorOptions: {} };
     bridge = await startCodexHttpBridge({
       serverFactories: {
         cindy_orca: () => {
-          bridge?.unregisterSessionCtx('pi-session', ctx);
+          if (closeDuringInitialize) {
+            closeDuringInitialize = false;
+            if (scope === 'task') bridge?.unregisterSessionCtx('pi-session', ctx);
+            else bridge?.closeSessionInstance('pi-instance');
+          }
           return createTestServer();
         },
       },
@@ -1358,8 +1363,9 @@ describe('codexHttpBridge', () => {
     });
     bridge.registerSessionCtx('pi-session', ctx);
     bridge.registerSessionToken('pi-session', 'pi-token');
-    const init = await fetch(
-      withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' }),
+    const url = withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' });
+    const initialize = () => fetch(
+      url,
       {
         method: 'POST',
         headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json', authorization: 'Bearer pi-token' },
@@ -1371,8 +1377,17 @@ describe('codexHttpBridge', () => {
         }),
       },
     );
+    const init = await initialize();
+    expect(init.status).toBe(200);
     await init.text();
     expect(bridge.mcpSessionCount()).toBe(0);
+    if (scope === 'instance') {
+      // A reconnect can reuse the same instance ID after the cleanup.
+      const next = await initialize();
+      expect(next.status).toBe(200);
+      await next.text();
+      expect(bridge.mcpSessionCount()).toBe(1);
+    }
   });
 
   it('rejects an unregistered ?session= query while leaving token-only requests untouched', async () => {

@@ -1,3 +1,5 @@
+import { useWallpaper } from '@/theme/wallpaper';
+import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { useRemoteProjectAliases as useProjectInfoSnapshots } from '@/session/remoteProjectAliases';
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
@@ -123,6 +125,7 @@ import {
   Settings,
   Target,
   UsersRound,
+  Waypoints,
   X,
 } from 'lucide-react-native';
 import {
@@ -244,6 +247,7 @@ import {
 } from '@/session/composerPalette';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import {
+  applyPluginEnginePick,
   applyRemoteAgentPick,
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
@@ -404,6 +408,27 @@ import {
 } from '@/session/providerModelSections';
 import type { MobileModelConfiguration } from '@/session/unifiedMobileModels';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
+import {
+  applyHostModelGroupResult,
+  applyHostModelGroupRoute,
+  buildHostModelGroupRouteNote,
+  resolveHostModelGroup,
+  useHostModelGroupPickerOptions,
+  useHostModelGroups,
+  type HostModelGroupResult,
+} from '@/session/hostModelGroups';
+import {
+  findPluginEngine,
+  isPluginEngineSelectable,
+  pluginEngineModelName,
+  pluginEngineModelRows,
+  pluginEnginePermissionMode,
+  resolvePluginEngineEffort,
+  usePluginEngines,
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  type MobilePluginEngineSelection,
+} from '@/session/pluginEngines';
+import { PluginEngineMark } from '@/session/PluginEngineMark';
 import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
 import { NativePermissionSheet } from '@/session/NativePermissionSheet';
 import { SheetModal } from '@/session/SheetModal';
@@ -502,6 +527,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
   const paneLayout = useSessionPaneLayout();
+  const { selected: wallpaper } = useWallpaper();
+  const headerHeight = useOptionalHeaderHeight();
+  const wallpaperUnderHeader = Platform.OS === 'ios' && !paneLayout.persistent && wallpaper !== 'none';
   const systemBack = useSystemNavigationBack();
   const paneHeader = Platform.OS === 'ios' && paneLayout.persistent && !systemBack;
   // Dev-only:把构建信息从全局浮层挪到这里的顶部展示(试 Fast Refresh)。
@@ -666,6 +694,50 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     && remoteAgentChoice.pick.agentKind === draft.agentKind
     ? remoteAgentChoice.pick
     : null;
+  // 插件引擎(Desktop docs/plans/acp-plugin-bridge.md)：选中被控电脑上的一个插件引擎 = 任务在那台
+  // 以该引擎运行(只在那台本机)。单独存，不进持久草稿；换了电脑、引擎被停用或不可用就不再生效，
+  // 退回草稿里的内置模型(与 Desktop 一致)。旧电脑读不到引擎列表时整段不出现。
+  const [pluginEngineChoice, setPluginEngineChoice] = useState<{
+    controlledDeviceId: string;
+    selection: MobilePluginEngineSelection;
+    permissionMode: string | null;
+  } | null>(null);
+  const pluginEngineDraftEligible = !!selectedDeviceId && !isSharedTaskPeer(selectedDeviceId);
+  const pluginEngines = usePluginEngines(maker, selectedDeviceId, pluginEngineDraftEligible);
+  const activePluginEngine = useMemo(() => {
+    if (!pluginEngineChoice || pluginEngineChoice.controlledDeviceId !== selectedDeviceId) return null;
+    const engine = findPluginEngine(pluginEngines.engines, pluginEngineChoice.selection.providerId);
+    if (!engine || !isPluginEngineSelectable(engine)) return null;
+    const requested = pluginEngineChoice.selection.modelId;
+    const modelId = pluginEngineModelRows(engine, requested).some((row) => row.id === requested)
+      ? requested
+      : PLUGIN_ENGINE_DEFAULT_MODEL;
+    return {
+      engine,
+      modelId,
+      effort: resolvePluginEngineEffort(engine, modelId, pluginEngineChoice.selection.effort),
+      permissionMode: pluginEnginePermissionMode(pluginEngineChoice.permissionMode, engine),
+    };
+  }, [pluginEngineChoice, pluginEngines.engines, selectedDeviceId]);
+  const pluginEnginePick = useMemo(() => activePluginEngine
+    ? {
+        providerId: activePluginEngine.engine.providerId,
+        model: activePluginEngine.modelId,
+        effort: activePluginEngine.effort ?? '',
+        permissionMode: activePluginEngine.permissionMode,
+      }
+    : null, [activePluginEngine]);
+  // 模型组(model-groups.md §6.3)：列出被控电脑的模式；选中后发送时由那台按它的规则选来源，草稿里的模型是
+  // 沿用时的原模型。单独存、不进持久草稿；换了电脑或那台删了这个模式就不再生效。与插件引擎、另一台电脑的模型互斥；
+  // 开了协同时这次不经模式选路(与电脑上相同)。旧电脑读不到模式时整段不出现。
+  const [modelGroupChoice, setModelGroupChoice] = useState<{ controlledDeviceId: string; id: string } | null>(null);
+  const hostModelGroups = useHostModelGroups(selectedDeviceId, maker, pluginEngineDraftEligible);
+  const activeHostModelGroup = useMemo(
+    () => (modelGroupChoice && modelGroupChoice.controlledDeviceId === selectedDeviceId
+      ? hostModelGroups?.find((group) => group.id === modelGroupChoice.id) ?? null
+      : null),
+    [modelGroupChoice, hostModelGroups, selectedDeviceId],
+  );
   // 被控电脑支持给协同 Worker 单独选 Agent 所在电脑(远程供应商)时，Worker 与任务一样可以选其他
   // 电脑 / 分享的供应商，协同也不再与「任务的 Agent 在另一台电脑」互斥。
   const workerAgentLocationSupported = !!selectedDeviceId
@@ -695,7 +767,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   }), [draft.workingDir, draft.workspaceKind]);
   // 旧被控电脑不支持给 Worker 选 Agent 位置：首个 Worker 只能从被控电脑的目录里选，与任务的
   // Agent 在另一台电脑运行对不上，两者仍互斥。
-  const collabEligible = isOrcaCollabEligible(collabTarget)
+  // 插件引擎任务暂不能当协同 Lead(Desktop 同样拒绝)。
+  const collabEligible = !activePluginEngine && isOrcaCollabEligible(collabTarget)
     && (remoteAgentPick === null || workerAgentLocationSupported);
   // 换设备 / 换工作区后,草稿里的协同设置属于旧目标:丢弃,避免在新目标上静默开启。
   // 按草稿武装时的目标比对(而不是「目标一变就清」):返回编辑恢复草稿时目标与草稿一起回填,
@@ -1185,15 +1258,19 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 发送前鉴权门禁(对齐桌面 useVendorAuthGate):选中 agent 在被控端没有已连接
   // 供应商时提前提示 + 拦截创建,不让用户发出注定失败的首条消息。unknown 不拦截。
   // 选了另一台电脑的模型时不按被控电脑判:那一行来自那台已连接的供应商,登录由那台核对。
+  // 插件引擎自带登录(由引擎自己的配置管理)，同样不按被控电脑的内置 Harness 判。
+  // 选着模式时来源由被控电脑在发送时选(只选已连接的)，不按草稿底层模型提示；模式没选到来源、沿用原模型时，
+  // 创建路径再按原模型核对(model-groups.md §6)。
   const agentAuthVerdict = useMemo(
-    () => remoteAgentPick ? ("ready" as const)
+    () => remoteAgentPick || activePluginEngine || activeHostModelGroup ? ("ready" as const)
         : agentAuthGateVerdict({
       providers: deviceProviders.providers,
       loading: deviceProviders.loading,
       error: deviceProviders.error,
       agentKind: draft.agentKind,
     }),
-    [deviceProviders.providers, deviceProviders.loading, deviceProviders.error, draft.agentKind, remoteAgentPick],
+    [deviceProviders.providers, deviceProviders.loading, deviceProviders.error, draft.agentKind, remoteAgentPick,
+      activePluginEngine, activeHostModelGroup],
   );
   // 创建前的 fresh 鉴权确认(绕过缓存现拉):true = 确认无已连接供应商,应拦截。
   // 空目录 / 拉取失败(旧被控端 / 瞬断)与 agentAuthGateVerdict 的 unknown 同语义,
@@ -1306,7 +1383,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     () => ({ attachmentCount: attachments.length + pendingUploads.length }),
     [attachments.length, pendingUploads.length],
   );
-  const runtimePending = isNewSessionRuntimePending({
+  const runtimePending = !pluginEnginePick && isNewSessionRuntimePending({
     settled: !!selectedDeviceId && runtimeSettledDeviceId === selectedDeviceId,
     userTouched: userTouchedRuntimeRef.current,
     remoteAgentPicked: !!remoteAgentPick,
@@ -1338,7 +1415,20 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const remoteAgentModelName = remoteAgentPick && remoteAgentPillProvider
     ? (getModel(remoteAgentPillProvider, remoteAgentPick.model, remoteAgentPick.agentKind)?.name ?? null)
       : null;
-  const pillModelSummary = remoteAgentPick
+  // 选了插件引擎：药丸写引擎的模型(+ 思考深度)，读屏带上引擎名。
+  const pluginEnginePillSummary = activePluginEngine
+    ? [
+        pluginEngineModelName(activePluginEngine.engine, activePluginEngine.modelId)
+          ?? (activePluginEngine.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+            ? t('models.pluginEngines.defaultModel')
+            : activePluginEngine.modelId),
+        activePluginEngine.effort
+          ? t(`models.options.effortLevels.${activePluginEngine.effort}`, { defaultValue: activePluginEngine.effort })
+          : null,
+      ].filter(Boolean).join(' · ')
+    : null;
+  // 草稿底层模型的名字：模式没选到来源、沿用原模型时，说明里写它。
+  const basePillModelSummary = pluginEnginePillSummary ?? (remoteAgentPick
     ? [
         remoteAgentModelName || remoteAgentPick.model,
         effortLabelFromRuntime({ currentModel: null, effortOptions: runtimeOptions.effortOptions }, remoteAgentPick.effort),
@@ -1347,18 +1437,28 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       ? t('session.new.modelLoading')
       : draft.model.trim()
         ? runtimeSummary.modelSummary
-        : t('session.new.noModelSelected');
-  const pillAccessibilityModel = remoteAgentCatalog?.name
+        : t('session.new.noModelSelected'));
+  // 选着模式时写模式名：用哪个来源由被控电脑在发送时决定。
+  const pillModelSummary = activeHostModelGroup?.name ?? basePillModelSummary;
+  const pillAccessibilityModel = activePluginEngine
+    ? [activePluginEngine.engine.name, pillModelSummary].join(' · ')
+    : remoteAgentCatalog?.name
     ? [pillModelSummary, remoteAgentCatalog.name].join(', ')
     : pillModelSummary;
   // 权限按钮 / 权限下拉不体现 plan(对齐桌面 PR#494 / Cursor):计划模式激活时展示
   // 进入前的底层权限档(无记录时回退首个非 plan 档),激活态由 composer 的 PlanModeChip 表达。
-  const displayPermissionMode = draft.permissionMode === 'plan'
+  // 选了插件引擎：权限按该引擎提供的档位(Agent 自己的模式 +「全部允许」)，不显示内置 Harness 的。
+  const pluginEnginePermissionOptions = activePluginEngine
+    ? activePluginEngine.engine.permissionModes.map((mode) => ({ id: mode.id, label: mode.displayName }))
+    : null;
+  const builtinDisplayPermissionMode = draft.permissionMode === 'plan'
     ? prePlanPermissionModeRef.current && prePlanPermissionModeRef.current !== 'plan'
         ? prePlanPermissionModeRef.current
       : (runtimeOptions.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask')
     : draft.permissionMode;
-  const displayPermissionLabel = runtimeOptions.permissionOptions
+  const displayPermissionMode = activePluginEngine ? activePluginEngine.permissionMode : builtinDisplayPermissionMode;
+  const composerPermissionOptions = pluginEnginePermissionOptions ?? runtimeOptions.permissionOptions;
+  const displayPermissionLabel = composerPermissionOptions
     .find((option) => option.id === displayPermissionMode)?.label ?? runtimeSummary.permissionLabel;
   // 对齐桌面 getProjectPickerDisplayName/empty-label:对话→「对话」、选了项目→项目名、
   // project 模式但没目录→「选择项目」(而非泛化的「选择工作区」)。
@@ -1537,10 +1637,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeBranchPreferenceSyncKey,
     worktreeSourceBranch,
   ]);
-  const createValidation = useMemo(
-    () => runtimePending ? t('session.new.modelLoading') : validateNewSessionDraft(draft, draftContent),
-    [draft, draftContent, runtimePending, t],
+  const selectedDraft = useMemo(() => applyPluginEnginePick(draft, pluginEnginePick), [draft, pluginEnginePick]);
+  const pluginEngineWorktreeUnsupported = Boolean(
+    pluginEnginePick && worktreeEnabled && draft.workspaceKind === 'project' && draft.workingDir.trim(),
   );
+  const createValidation = useMemo(() => {
+    if (pluginEngineWorktreeUnsupported) return t('models.pluginEngines.worktreeUnsupported');
+    if (runtimePending) return t('session.new.modelLoading');
+    return validateNewSessionDraft(selectedDraft, draftContent);
+  }, [pluginEngineWorktreeUnsupported, selectedDraft, draftContent, runtimePending, t]);
   const composerHasMessage = draft.firstMessage.trim().length > 0;
   // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
   const voiceStartPendingSeqRef = useRef(0);
@@ -1575,11 +1680,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // memo 住的旧语言校验文案与新 t() 输出不等,字符串比对会让豁免静默失效
   // (review 三轮收口)。
   const createValidationIsMissingPayload = useMemo(
-    () => isNewSessionDraftMissingPayloadOnly(draft, draftContent),
-    [draft, draftContent],
+    () => isNewSessionDraftMissingPayloadOnly(selectedDraft, draftContent),
+    [selectedDraft, draftContent],
   );
   const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))
     && !runtimePending
+    && !pluginEngineWorktreeUnsupported
     && !creating
     && !voiceIsProcessing
     && !worktreeCreateBlocked;
@@ -2356,6 +2462,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
     runtimeActionSeqRef.current += 1; // 使在途的切 agent/恢复回调失效(最新者胜)
     setRemoteAgentChoice(null);
+    setPluginEngineChoice(null);
+    setModelGroupChoice(null);
     forgetRemoteAgentPick(draft.agentKind);
     setDraft((current) => {
       const next = resolveRowSelection({
@@ -2401,6 +2509,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     }))) return false;
     if (deviceAtStart !== selectedDeviceRef.current || sequence !== runtimeActionSeqRef.current) return false;
     userTouchedRuntimeRef.current = true;
+    setPluginEngineChoice(null);
+    setModelGroupChoice(null);
     const fastMode = targetCapabilities.hasFastMode === true && config.fast;
     if (remoteDeviceId) {
       // 模型与来源属于那台电脑:单独记,草稿只跟着换 Agent 与权限(权限仍在被控电脑上生效)。
@@ -2433,10 +2543,59 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   }, [creating, selectedDeviceId, maker, newSessionPreferences, draft.agentKind, draft.permissionMode, requestHostChoiceWrite]);
 
   // 扁平回退(被控端 0 供应商):只落 model、清来源(默认路由),effort 跟随 capabilities reconcile。
+  // 选中插件引擎的一行：任务将以该引擎在被控电脑本机运行；权限模式按该引擎提供的档位(换了引擎用
+  // 它的默认档)，不写内置 Harness 的权限记忆。协同草稿与另一台电脑的模型选择一并作废。
+  const selectPluginEngineForDraft = useCallback((selection: MobilePluginEngineSelection): boolean => {
+    if (creating || !selectedDeviceId) return false;
+    userTouchedRuntimeRef.current = true;
+    runtimeActionSeqRef.current += 1;
+    setRemoteAgentChoice(null);
+    setCollabDraft(null);
+    setModelGroupChoice(null);
+    setPluginEngineChoice((current) => ({
+      controlledDeviceId: selectedDeviceId,
+      selection,
+      permissionMode: current?.controlledDeviceId === selectedDeviceId
+        && current.selection.providerId === selection.providerId ? current.permissionMode : null,
+    }));
+    return true;
+  }, [creating, selectedDeviceId]);
+  const draftPluginEngineOptions = useMemo(() => (
+    pluginEngineDraftEligible && pluginEngines.engines.length
+      ? {
+          engines: pluginEngines.engines,
+          active: activePluginEngine
+            ? {
+                providerId: activePluginEngine.engine.providerId,
+                modelId: activePluginEngine.modelId,
+                ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
+              }
+            : null,
+          onSelect: selectPluginEngineForDraft,
+          onOpen: pluginEngines.refresh,
+        }
+      : undefined
+  ), [activePluginEngine, pluginEngineDraftEligible, pluginEngines.engines, pluginEngines.refresh, selectPluginEngineForDraft]);
+  // 选中一个模式：草稿里的模型不动(那台没有能用的来源时沿用它)；另一台电脑的模型与插件引擎不再生效。
+  const selectModelGroupForDraft = useCallback((id: string): boolean => {
+    if (creating || !selectedDeviceId) return false;
+    userTouchedRuntimeRef.current = true;
+    runtimeActionSeqRef.current += 1;
+    setRemoteAgentChoice(null);
+    setPluginEngineChoice(null);
+    setModelGroupChoice({ controlledDeviceId: selectedDeviceId, id });
+    return true;
+  }, [creating, selectedDeviceId]);
+  const draftModelGroupOptions = useHostModelGroupPickerOptions(
+    hostModelGroups, activeHostModelGroup?.id ?? null, selectModelGroupForDraft, t,
+  );
+
   const selectFlatModel = useCallback((option: MobileModelOption) => {
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
     runtimeActionSeqRef.current += 1; // 使在途的切 agent/恢复回调失效(最新者胜)
     setRemoteAgentChoice(null);
+    setPluginEngineChoice(null);
+    setModelGroupChoice(null);
     forgetRemoteAgentPick(draft.agentKind);
     explicitProviderModelSelectionRef.current = null;
     setDraft((current) =>
@@ -2486,6 +2645,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 用户直接选权限档即生效(独立选择器与模型浮窗共用同一语义),
   // 非 plan 档写 per-agent 记忆(内存 + 落盘;对齐桌面 lastByVendor)。
   const selectPermissionMode = useCallback((mode: string) => {
+    if (activePluginEngine) {
+      // 插件引擎的权限只跟着这次选择，不写内置 Harness 的权限记忆。
+      setPluginEngineChoice((current) => (current ? { ...current, permissionMode: mode } : current));
+      return;
+    }
     void (async () => {
       patchDraft({ permissionMode: mode });
       if (mode === 'plan') return; // 老被控端兼容档,不入记忆
@@ -2500,7 +2664,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         permissionModeForAgent: { agentKind: draft.agentKind, mode },
       });
     })();
-  }, [draft.agentKind, draft.permissionMode, patchDraft]);
+  }, [activePluginEngine, draft.agentKind, draft.permissionMode, patchDraft]);
 
   // —— worktree 资格探测:目录 / 设备 / 链路变化即重探(seq 防竞态,旧结果作废)。
   // CHANNEL_NOT_ALLOWED(老被控端)→ unsupported；OFF 时隐藏，旧 ON 镜像保留关闭
@@ -3494,7 +3658,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
           testID="newSession.modelIndicator"
         >
-          {remoteAgentPick ? (
+          {activePluginEngine ? (
+            <PluginEngineMark iconDataUrl={activePluginEngine.engine.iconDataUrl} size={iconSize.sm} />
+          ) : activeHostModelGroup ? (
+            // 选着模式：用哪个来源由被控电脑在发送时决定，不画某个来源的标(与电脑上选择器同一个图标)。
+            <Waypoints color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : remoteAgentPick ? (
             // 另一台电脑上的模型:那台目录里的来源标,带远程标记。
             remoteAgentPillProvider ? (
               <MobileModelIconMark
@@ -3504,6 +3673,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                 providerId={remoteAgentPillProvider.id}
                 routing={remoteAgentPillProvider.routing}
                 logoKind={remoteAgentPillProvider.logoKind}
+                customIcon={remoteAgentPillProvider.customIcon}
                 remote
               />
             ) : null
@@ -3516,10 +3686,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               providerId={activeSourceProvider.id}
               routing={activeSourceProvider.routing}
               logoKind={activeSourceProvider.logoKind}
+              customIcon={activeSourceProvider.customIcon}
             />
           ) : null}
           <Text style={styles.modelPillText} numberOfLines={1}>{pillModelSummary}</Text>
-          {(remoteAgentPick ? remoteAgentPick.fastMode : triggerFastOn)
+          {!activePluginEngine && !activeHostModelGroup && (remoteAgentPick ? remoteAgentPick.fastMode : triggerFastOn)
             ? (
             <ModelSpeedIcon mode={(remoteAgentPick ? remoteAgentPick.fastMode : draft.fastMode) ?? false} color={colors.textTertiary} size={iconSize.sm} />
           ) : null}
@@ -3935,7 +4106,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // Plan 草稿与底层权限快照由恢复入口一并回填。
   const planModeCapability = runtimeOptions.planModeSupported;
   const legacyPlanSupported = runtimeOptions.permissionOptions.some((option) => option.id === 'plan');
-  const planModeSupported = planModeCapability || legacyPlanSupported;
+  // 插件引擎没有计划模式(Agent 自己的 plan 模式在权限菜单里)。
+  const planModeSupported = !activePluginEngine && (planModeCapability || legacyPlanSupported);
   const planModeOn = planModeCapability ? planModeDraftOn : draft.permissionMode === 'plan';
   const togglePlanMode = useCallback((next: boolean) => {
     if (planModeCapability) {
@@ -3967,10 +4139,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     }
     // 模型仍是占位(最近任务 / 目录未到):不创建,按钮此时本就不可点,这里兜住其它提交入口。
     if (runtimePendingRef.current) return;
+    if (pluginEngineWorktreeUnsupported) {
+      setError(t('models.pluginEngines.worktreeUnsupported'));
+      return;
+    }
     // 旧协议 Plan 依赖会话级 permissionMode，不能安全进入断线创建 / 离线 FIFO。
     // 保留草稿与 Plan 选择，等 relay 和目标电脑恢复后再走原有在线兼容路径。
     if (
-      !planModeCapability
+      !pluginEnginePick
+      && !planModeCapability
       && draft.permissionMode === 'plan'
       && (
         deviceLinkStatus !== 'online'
@@ -3980,7 +4157,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setError(t('session.menu.aiRenameOffline'));
       return;
     }
-    if (!remoteAgentPick && deviceProvidersRef.current.ready && modelNeedsReselection(
+    if (!remoteAgentPick && !pluginEnginePick && deviceProvidersRef.current.ready && modelNeedsReselection(
       deviceProvidersRef.current.modelVisibilityOverrides, draft.agentKind, draft.model, draft.providerId,
     )) {
       setError(t('session.common.modelHiddenReselect', { model: draft.model }));
@@ -4009,7 +4186,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     try {
       if (!isCurrentOwner()) return;
       // 选了另一台电脑的模型:模型 / 来源 / 档位与 Agent 所在电脑一起落进要创建的草稿。
-      let effectiveDraft = applyRemoteAgentPick(draft, remoteAgentPick);
+      // 选了插件引擎：任务按该引擎在被控电脑本机创建(Agent 不在另一台电脑)。
+      let effectiveDraft = applyPluginEnginePick(
+        applyRemoteAgentPick(draft, remoteAgentPick), pluginEnginePick);
       // ㉙ 设备守卫全程化(独立 review P1-1/P1-2):设备快照必须取自**闭包**
       // selectedDeviceId(真正会创建会话的目标设备)——selectedDeviceRef 是渲染后
       // 的最新值,若用户在渲染与点击之间切了设备,ref 已属新设备而闭包 maker/目录
@@ -4057,6 +4236,28 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           name: deviceDisplayName(selectedDeviceId, selectedDeviceName),
         },
       });
+      // 模型组：建任务前请被控电脑按模式选一个现在能用的来源，只用于这次新建(记住的草稿与偏好不变)；
+      // 那台没有能用的来源或模式已删除时沿用原来的模型。
+      const modelGroupAtSend = activeHostModelGroup && !collabDraft && !effectiveDraft.pluginEngine ? activeHostModelGroup : null;
+      const keptModelNameAtSend = basePillModelSummary;
+      let modelGroupResult: HostModelGroupResult | null = null;
+      if (modelGroupAtSend) {
+        modelGroupResult = await resolveHostModelGroup(maker, modelGroupAtSend.id, {
+          hasImages: sendAttachments.some((attachment) => attachment.category === 'image'),
+        });
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+        effectiveDraft = applyHostModelGroupRoute(effectiveDraft, modelGroupResult);
+      }
+      const onModelGroupSessionCreated = modelGroupAtSend
+        ? (createdSessionId: string) => applyHostModelGroupResult(
+            maker, createdSessionId, modelGroupAtSend.id, modelGroupResult,
+            buildHostModelGroupRouteNote(
+              modelGroupResult, keptModelNameAtSend, t, i18nInstance.resolvedLanguage ?? i18nInstance.language,
+              (agentDeviceId) => remoteAgentCatalogs.find((catalog) => catalog.deviceId === agentDeviceId)?.name
+                ?? t('models.modelGroups.anotherDevice'),
+            ),
+          )
+        : undefined;
       const creatingWorktree = worktreeIntent.applicable
         && worktreeIntent.enabled
         && worktreeIntent.eligibility.status === 'eligible';
@@ -4164,7 +4365,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         if (await abortIfDeviceSwitched()) return;
         const guardDeviceId = deviceAtCreate;
         // Agent 在另一台电脑运行:模型属于那台的目录,不按被控电脑的目录校准(由那台在运行时核对)。
-        const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({
+        const runGuard = () => (effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine) ? Promise.resolve({
           rows: [] as readonly ProviderModelRow[], providers: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
         }) : resolveSubmitGuardCatalog({
           deferRefreshToCreation: true,
@@ -4215,7 +4416,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         deviceName: selectedDeviceName,
         draft: effectiveDraft,
         attachments: sendAttachments,
-        planModeArm: planModeCapability && planModeDraftOn,
+        // 插件引擎没有计划模式。
+        planModeArm: planModeCapability && planModeDraftOn && !effectiveDraft.pluginEngine,
         legacyPlanRestore,
         // 首个 Worker 先于 Lead 首条消息创建:把待发送的 Lead 输入作为上下文附在 Worker
         // 任务后(与桌面控制端老被控端兼容路径同口径,见 buildDraftWorkerInitialTask)。
@@ -4237,16 +4439,18 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         // guard、建链、订阅多个 await,期间来源可能再变——verdict 分支若把管线
         // fresh 替换成 null 会绕过最后的联合终检。
         // Agent 在另一台电脑运行时,被控电脑上没有这个 Agent 的登录也照样能建:登录在那台。
-        confirmUnauthenticated: effectiveDraft.agentDeviceId
+        // 插件引擎自带登录(由引擎自己的配置管理)，不按内置 Harness 检查，也不按内置目录校准模型。
+        confirmUnauthenticated: effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine
           ? async () => ({ unauthenticated: false, fresh: null })
           : () => confirmAgentUnauthenticated(agentKindSnapshot, deviceIdSnapshot),
         // 鉴权 fresh 之后联合校验 (model, providerId)(codex review P2):建链/鉴权
         // 期间工作站可能已替换 provider——patch 覆盖本次创建,不再向已删除来源发。
-        revalidateDraftAfterAuth: async (fresh) => revalidateNewSessionDraftAfterAuth(effectiveDraft, fresh,
+        revalidateDraftAfterAuth: effectiveDraft.pluginEngine ? async () => null : async (fresh) => revalidateNewSessionDraftAfterAuth(effectiveDraft, fresh,
           () => targetAgentHasFast(selectedDeviceId, effectiveDraft.agentKind), t),
         authGateHint: agentAuthGateHint(agentKindSnapshot),
         onUnauthenticated: () => evictDeviceProviders(deviceIdSnapshot),
         isCurrentOwner,
+        ...(onModelGroupSessionCreated ? { onSessionCreated: onModelGroupSessionCreated } : {}),
         transport: {
           maker,
           handoffFirstMessage: useDurableCreation ? async (item) => {
@@ -4314,6 +4518,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     selectedDeviceName,
     draft,
     remoteAgentPick,
+    pluginEnginePick,
+    activeHostModelGroup,
+    basePillModelSummary,
+    remoteAgentCatalogs,
     finishVoiceRecording,
     flushRecoveredDraft,
     leaveForeignOutboxRecovery,
@@ -4336,6 +4544,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeBranchPreferenceSyncKey,
     worktreeCaptionKey,
     worktreeEnabled,
+    pluginEngineWorktreeUnsupported,
     prepareWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
     resolveWorktreeCreateErrorKey,
@@ -4358,11 +4567,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setGoalError(t('session.new.enterProjectPath'));
       return;
     }
-    if (!draft.model.trim()) {
+    if (!(pluginEnginePick?.model ?? draft.model).trim()) {
       setGoalError(t('session.new.enterModel'));
       return;
     }
-    if (!remoteAgentPick && deviceProvidersRef.current.ready && modelNeedsReselection(
+    if (pluginEngineWorktreeUnsupported) {
+      setGoalError(t('models.pluginEngines.worktreeUnsupported'));
+      return;
+    }
+    if (!remoteAgentPick && !pluginEnginePick && deviceProvidersRef.current.ready && modelNeedsReselection(
       deviceProvidersRef.current.modelVisibilityOverrides, draft.agentKind, draft.model, draft.providerId,
     )) {
       setGoalError(t('session.common.modelHiddenReselect', { model: draft.model }));
@@ -4428,6 +4641,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     };
     try {
       if (!isCurrentOwner()) return;
+      // 模型组：与普通创建同一流程，先请被控电脑按模式选来源，再按实际要用的来源核对登录；目标文本就是
+      // 第一条消息(没有附件)。选到了来源就不按草稿底层模型拦；沿用原模型时照常核对原模型。
+      const goalModelGroup = activeHostModelGroup && !collabDraft && !pluginEnginePick ? activeHostModelGroup : null;
+      const goalKeptModelName = basePillModelSummary;
+      const goalModelGroupResult = goalModelGroup
+        ? await resolveHostModelGroup(maker, goalModelGroup.id, { hasImages: false })
+        : null;
+      if (goalModelGroup && (!isCurrentOwner() || !ensureDeviceAlive())) return;
+      const goalModeRouted = goalModelGroupResult?.outcome === 'routed';
       // 鉴权门禁(review P2:goal 模式与普通创建同屏同 agent,同样要拦):goal.set 会吞掉
       // fireTurn 的鉴权失败,用户会被带进一个永远跑不起来的目标会话——比普通路径更需要
       // 提前拦截。判定与 create() 完全同款:缓存判死先现拉确认;ready/unknown 与建链并行重验。
@@ -4445,7 +4667,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // Agent 在另一台电脑运行时登录在那台:不按被控电脑的登录拦(agentAuthVerdict 此时恒为 ready)。
       const freshAuth: Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null;
         }> =
-        agentAuthVerdict === 'unauthenticated' || remoteAgentPick
+        agentAuthVerdict === 'unauthenticated' || remoteAgentPick || pluginEnginePick || goalModeRouted
           ? Promise.resolve({ unauthenticated: false, fresh: null })
           : confirmAgentUnauthenticated(draft.agentKind, selectedDeviceId);
       if (!isCurrentOwner()) return;
@@ -4509,7 +4731,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
 
       sessionId = createNewSessionId();
       // 选了另一台电脑的模型:与普通创建同一份覆盖(模型、来源、档位与 Agent 所在电脑)。
-      let effectiveDraft = applyRemoteAgentPick(draft, remoteAgentPick);
+      // 选了插件引擎：任务按该引擎在被控电脑本机创建(Agent 不在另一台电脑)。
+      let effectiveDraft = applyPluginEnginePick(
+        applyRemoteAgentPick(draft, remoteAgentPick), pluginEnginePick);
+      // 模型组选到的来源(开头已选好)：覆盖这次创建的模型、来源与 Agent 所在电脑。
+      effectiveDraft = applyHostModelGroupRoute(effectiveDraft, goalModelGroupResult);
       if (
         worktreeIntent.applicable
         && worktreeIntent.enabled
@@ -4635,7 +4861,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       if (!ensureDeviceAlive()) return;
       const guardDeviceId = deviceAtCreate;
       // Agent 在另一台电脑运行:不按被控电脑的目录校准,也不按它的来源判登录(同 create())。
-      const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({
+      const runGuard = () => (effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine) ? Promise.resolve({
         rows: [] as readonly ProviderModelRow[], providers: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
       }) : resolveSubmitGuardCatalog({
         cached: () => getCachedDeviceProviders(guardDeviceId),
@@ -4707,7 +4933,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         // 「rows.length > 0」条件会让零已连接来源场景漏过门禁。fetchDeviceProvidersFresh
         // 成功已按代际写回缓存,缓存即未过滤的原始 providers。
         const rawProviders = getCachedDeviceProviders(guardDeviceId)?.providers ?? [];
-        if (rawProviders.length > 0
+        if (!goalModeRouted && rawProviders.length > 0
           && connectedProvidersForAgent(rawProviders, draft.agentKind).length === 0) {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
@@ -4764,7 +4990,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         // (与下方设备切换同路径,不裸 return 留 retain-only)。
         if (guardResult.catalogKnown) {
           const rawProviders = getCachedDeviceProviders(guardDeviceId)?.providers ?? [];
-          if (rawProviders.length > 0
+          if (!goalModeRouted && rawProviders.length > 0
             && connectedProvidersForAgent(rawProviders, draft.agentKind).length === 0) {
             const pwt = precreatedWorktree;
             const decision = await resolveStartedDowngradeOrCommit({
@@ -4874,6 +5100,13 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         throw new Error(t('session.new.sessionIdNotAdopted'));
       }
       sessionClaimed = true;
+      if (goalModelGroup) {
+        applyHostModelGroupResult(maker, result.sessionId, goalModelGroup.id, goalModelGroupResult, buildHostModelGroupRouteNote(
+          goalModelGroupResult, goalKeptModelName, t, i18nInstance.resolvedLanguage ?? i18nInstance.language,
+          (agentDeviceId) => remoteAgentCatalogs.find((catalog) => catalog.deviceId === agentDeviceId)?.name
+            ?? t('models.modelGroups.anotherDevice'),
+        ));
+      }
       // goal.set 前置(独立 review round-20 Spec P1-3):createSession 成功后立即完成
       // goal.set,不留「已创建但无目标」的远端会话;本地同步/UI 属 settle 段,排在其后。
       // 注(残余声明):maker 只绑定 deviceId 字符串,底层 invoke 每次读取
@@ -5069,6 +5302,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     confirmAgentUnauthenticated,
     draft,
     remoteAgentPick,
+    pluginEnginePick,
+    activeHostModelGroup,
+    basePillModelSummary,
+    remoteAgentCatalogs,
     goalBusy,
     leaveForeignOutboxRecovery,
     maker,
@@ -5087,6 +5324,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     worktreeApplicable,
     worktreeEligibility,
     worktreeEnabled,
+    pluginEngineWorktreeUnsupported,
     prepareWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
     resolveWorktreeCreateErrorKey,
@@ -5127,7 +5365,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         <SystemNavigationBack label={t('shared.back')} onPress={handleBack} />
       ) : Platform.OS === 'ios' ? (
         <>
-          <Stack.Screen options={{ headerShown: true, headerBackVisible: false, headerShadowVisible: false, title: '', headerStyle: { backgroundColor: colors.surface }, headerTintColor: colors.textPrimary }} />
+          <Stack.Screen options={{ headerShown: true, headerBackVisible: false, headerShadowVisible: false, title: '',
+            headerTransparent: wallpaperUnderHeader, headerStyle: { backgroundColor: wallpaperUnderHeader ? 'transparent' : colors.surface },
+            headerTintColor: colors.textPrimary }} />
           <Stack.Toolbar placement="left">
             <Stack.Toolbar.Button icon="chevron.backward" accessibilityLabel={t('shared.back')} onPress={handleBack} />
           </Stack.Toolbar>
@@ -5141,7 +5381,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         behavior={keyboardAvoidingBehaviorForPlatform(
           Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
         )}
-        style={styles.keyboard}
+        style={[styles.keyboard, wallpaperUnderHeader && { marginTop: headerHeight }]}
       >
         <View style={[styles.screen, paneHeader && styles.paneScreen, composerDock.enabled && { paddingHorizontal: composerGeometry.horizontalInset }]}>
           {Platform.OS !== 'ios' || paneHeader || buildLabel || creating ? (
@@ -5926,10 +6166,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         ) : (
           <ContextSheetGoalCreateForm
             busy={goalBusy}
-            disabled={worktreeCreateBlocked || runtimePending}
+            disabled={worktreeCreateBlocked || runtimePending || pluginEngineWorktreeUnsupported}
             disabledHint={runtimePending
               ? t('session.new.modelLoading')
-              : worktreeCreateBlocked && worktreeControlCaptionKey
+              : pluginEngineWorktreeUnsupported
+                ? t('models.pluginEngines.worktreeUnsupported')
+                : worktreeCreateBlocked && worktreeControlCaptionKey
                 ? t(worktreeControlCaptionKey)
                 : undefined}
             error={goalError}
@@ -6041,6 +6283,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             return result;
           },
           onSelect: selectUnifiedModel,
+          ...(draftPluginEngineOptions ? { pluginEngines: draftPluginEngineOptions } : {}),
+          ...(draftModelGroupOptions ? { modelGroups: draftModelGroupOptions } : {}),
           // 远程 Agent / 供应商分享:其他电脑开放了远程调用的供应商与别人分享给这台电脑的供应商接在
           // 后面,每个供应商一段、标题带电脑名。旧被控电脑上协同草稿与它们互斥(见 collabEligible)。
           ...(remoteAgentSupported && (!collabDraft || workerAgentLocationSupported)
@@ -6154,7 +6398,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         activeMode={displayPermissionMode}
         disabled={creating}
         onSelect={selectPermissionMode}
-        options={runtimeOptions.permissionOptions}
+        options={composerPermissionOptions}
         testID="newSession.permissionSheet"
       />
       {pendingImagePreview.host}
@@ -6313,7 +6557,7 @@ function formatWorkingDirLabel(workingDir: string): string {
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.surface },
+  safeArea: { flex: 1 },
   keyboard: { flex: 1 },
   screen: {
     flex: 1,

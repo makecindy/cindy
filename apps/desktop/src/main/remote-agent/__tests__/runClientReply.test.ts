@@ -19,6 +19,30 @@ afterEach(() => vi.useRealTimers());
 // chunk-count ceiling. The link below models 16 KiB/s + 1s RTT without waiting;
 // gzip, request parsing and complete payload reconstruction remain real.
 describe('RemoteAgentRunClient slow payload delivery', () => {
+  it('delivers a send while company reporting authorization is unresolved', async () => {
+    let finish!: () => void;
+    const authorization = new Promise<void>(resolve => { finish = resolve; });
+    const onSend = vi.fn(() => authorization);
+    const invoke = remoteAgentInvoker('host', async (_device, _channel, args) => {
+      const req = parseRemoteAgentRequest(args[0]);
+      if (req.op === 'call') {
+        client.onData(Buffer.from(JSON.stringify({ t: 'result', callId: req.callId, ok: true, value: 'sent' }) + '\n'), false);
+      }
+      return { ok: true, result: {} };
+    });
+    const client = new RemoteAgentRunClient(randomUUID(), { invoke, unregister() {} } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {}, onSend,
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    try {
+      await expect(client.callWithId(randomUUID(), 'send', ['hello'])).resolves.toBe('sent');
+      expect(onSend).toHaveBeenCalledOnce();
+    } finally {
+      finish();
+      client.abandon('fixture-complete');
+    }
+  });
+
   // Unit: preparation guards did not cover time in Device Link admission. Stop
   // could overtake that queue and the old send would start afterwards. Exercise
   // the real run client + production invoker, delaying only the wire boundary.
@@ -138,6 +162,7 @@ describe('RemoteAgentRunClient slow payload delivery', () => {
             if (request.op === 'upload' && phase === 'upload') {
               uploading();
               await held;
+              throw Object.assign(new Error('queue full'), { code: 'BACKPRESSURE' });
             }
             if (request.op === 'call') client.onData(Buffer.from(`${JSON.stringify({
               t: 'result', callId: request.callId, ok: true, value: null,
@@ -209,6 +234,155 @@ describe('RemoteAgentRunClient slow payload delivery', () => {
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(invoke).not.toHaveBeenCalled();
     expect(client.hasPendingWork).toBe(false);
+  });
+});
+
+// Unit regression (2026-11-18): the startup payload went out one 64 KiB chunk per
+// round trip; on a slow return path 26 chunks took 41s. The receiver stores chunks
+// by (uploadId, index) since its first release, so chunks may overlap on the wire.
+// Exercise the production open() entry with acknowledgements held back by the test.
+describe('RemoteAgentRunClient pipelined upload', () => {
+  type Held = { index: number; uploadId: string; resolve(): void; reject(error: unknown): void };
+  function fixture(fail?: (index: number, attempt: number) => unknown) {
+    const held: Held[] = [];
+    const attempts = new Map<string, number>();
+    const stored = new Map<string, Map<number, Buffer>>();
+    const opened: Array<{ acknowledged: number; chunks: number; payload: unknown }> = [];
+    let inFlight = 0, maxInFlight = 0;
+    const acknowledged = new Map<string, number>();
+    const invoke = async (args: unknown[]) => {
+      const request = parseRemoteAgentRequest(args[0]);
+      if (request.op === 'upload') {
+        const key = `${request.uploadId}:${request.index}`;
+        const attempt = attempts.get(key) ?? 0;
+        attempts.set(key, attempt + 1);
+        const error = fail?.(request.index, attempt);
+        if (error) throw error;
+        inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise<void>((resolve, reject) => held.push({ index: request.index, uploadId: request.uploadId, resolve, reject }));
+        inFlight--;
+        const chunks = stored.get(request.uploadId) ?? new Map<number, Buffer>();
+        chunks.set(request.index, Buffer.from(request.data, 'base64'));
+        stored.set(request.uploadId, chunks);
+        acknowledged.set(request.uploadId, (acknowledged.get(request.uploadId) ?? 0) + 1);
+      } else if (request.op === 'open') {
+        const reference = request.payload as { uploadId: string; chunks: number };
+        const chunks = stored.get(reference.uploadId)!;
+        opened.push({ acknowledged: acknowledged.get(reference.uploadId) ?? 0, chunks: reference.chunks,
+          payload: JSON.parse(gunzipSync(Buffer.concat(Array.from({ length: reference.chunks }, (_, index) => chunks.get(index)!))).toString('utf8')) });
+      }
+      return {};
+    };
+    const poller = {
+      invoke,
+      register(run: { onData(data: Buffer, done: boolean): void }) {
+        run.onData(Buffer.from(`${JSON.stringify({ t: 'started', handle: { id: 'pipelined' } })}\n`), false);
+      },
+      unregister() {},
+    } as unknown as RemoteAgentPoller;
+    const client = (log?: ConstructorParameters<typeof RemoteAgentRunClient>[4]) => new RemoteAgentRunClient(randomUUID(), poller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID, log);
+    /** Acknowledge held chunks oldest first until `done` settles. */
+    const drain = async (done: Promise<unknown>) => {
+      let settled = false;
+      void done.then(() => { settled = true; }, () => { settled = true; });
+      while (!settled) {
+        await new Promise((resolve) => setImmediate(resolve));
+        held.shift()?.resolve();
+      }
+    };
+    return { client, drain, opened, attempts, maxInFlight: () => maxInFlight };
+  }
+  const input = () => ({ sessionId: 'pipelined-fixture', text: randomBytes(800 * 1024).toString('base64') });
+
+  it('keeps several chunks in flight and opens only after every chunk is acknowledged', async () => {
+    const { client, drain, opened, maxInFlight } = fixture();
+    const value = input();
+    const started = client().open('claude-code', value);
+    await drain(started);
+    await expect(started).resolves.toEqual({ id: 'pipelined' });
+    expect(opened).toHaveLength(1);
+    expect(opened[0].chunks).toBeGreaterThan(4);
+    expect(opened[0].acknowledged).toBe(opened[0].chunks);
+    expect(opened[0].payload).toEqual(value);
+    expect(maxInFlight()).toBeGreaterThanOrEqual(2);
+    expect(maxInFlight()).toBeLessThanOrEqual(4);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:RemoteAgentRunClient.open 的启动诊断 total 行;排查时看到上传字节、分段数和各字段大小。
+  // - Bug／规则依据:2026-11-21 联调,启动资料上传 16–65 秒,日志只有耗时,分不清资料大还是线路慢;
+  //   startupTiming.ts 规定诊断只带固定字段名和数字,不带内容。
+  // - 现有覆盖缺口:相邻用例只验证上传与打开顺序,不看成功或失败的诊断。
+  // - 最小失败输入:一份分段载荷,首块拒收,总计行仍应带计划的大小和块数（#11857）。
+  // - tier:unit(进程内 fake poller)。
+  it.each(['ok', 'failed'] as const)('reports planned payload size without content when startup is %s', async (status) => {
+    const rejection = new Error('[REMOTE_AGENT_BUSY] too much staged data');
+    const { client, drain, opened } = fixture((index) =>
+      status === 'failed' && index === 0 ? rejection : undefined);
+    const lines: Array<Record<string, unknown>> = [];
+    const value = { sessionId: 'pipelined-fixture', personal: { text: randomBytes(600 * 1024).toString('base64') },
+      projectFiles: [{ path: 'AGENTS.md', content: 'secret-marker' }] };
+    const started = client({ warn() {}, debug: (_message, meta) => { if (meta) lines.push(meta); } })
+      .open('claude-code', value);
+    await drain(started);
+    if (status === 'failed') {
+      await expect(started).rejects.toBe(rejection);
+      expect(opened).toHaveLength(0);
+    } else {
+      await started;
+    }
+    const total = lines.find((line) => line.stage === 'total');
+    expect(total?.status).toBe(status);
+    expect(total?.payload).toEqual({
+      uploadBytes: expect.any(Number),
+      chunks: opened[0]?.chunks ?? expect.any(Number),
+      fieldBytes: {
+        personal: Buffer.byteLength(JSON.stringify(value.personal)),
+        projectFiles: Buffer.byteLength(JSON.stringify(value.projectFiles)),
+      },
+    });
+    const { uploadBytes, chunks } = total?.payload as { uploadBytes: number; chunks: number };
+    expect(uploadBytes).toBeGreaterThan(0);
+    expect(chunks).toBeGreaterThan(1);
+    expect(JSON.stringify(lines)).not.toMatch(/secret-marker|AGENTS\.md/);
+  });
+
+  it('shares four upload slots among the runs of one computer', async () => {
+    const { client, drain, opened, maxInFlight } = fixture();
+    const both = Promise.all([client().open('claude-code', input()), client().open('codex', input())]);
+    await drain(both);
+    await both;
+    expect(opened).toHaveLength(2);
+    expect(maxInFlight()).toBe(4);
+  });
+
+  it('resends a chunk after a link error with the same index', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const { client, drain, opened, attempts } = fixture((index, attempt) =>
+      index === 1 && attempt === 0 ? Object.assign(new Error('peer busy'), { code: 'BACKPRESSURE' }) : undefined);
+    const started = client().open('claude-code', input());
+    const ticking = (async () => { while (opened.length === 0) await vi.advanceTimersByTimeAsync(100); })();
+    await drain(started);
+    await ticking;
+    await expect(started).resolves.toEqual({ id: 'pipelined' });
+    const [uploadId] = [...attempts.keys()][0].split(':');
+    expect(attempts.get(`${uploadId}:1`)).toBe(2);
+    expect(opened[0].acknowledged).toBe(opened[0].chunks);
+  });
+
+  it('stops sending chunks and never opens after a rejected chunk', async () => {
+    const rejection = new Error('[REMOTE_AGENT_BUSY] too much staged data');
+    const { client, drain, opened, attempts } = fixture((index) => index === 2 ? rejection : undefined);
+    const started = client().open('claude-code', input());
+    await drain(started);
+    await expect(started).rejects.toThrow('too much staged data');
+    expect(opened).toHaveLength(0);
+    // Chunks 0–1 were in flight, 2 failed, at most one more had started before the failure surfaced.
+    expect(Math.max(...[...attempts.keys()].map((key) => Number(key.split(':')[1])))).toBeLessThanOrEqual(3);
+    expect(attempts.get([...attempts.keys()].find((key) => key.endsWith(':2'))!)).toBe(1);
   });
 });
 

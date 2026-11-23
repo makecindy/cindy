@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BILLING_CURRENCY } from '../../../shared/billingCurrency.js';
 
 import {
   projectBillingCatalog,
@@ -7,8 +8,13 @@ import {
   projectBillingPaymentHistory,
   projectBillingPaymentOrder,
   projectBillingPlanChange,
+  projectGiftCardPurchasePolicy,
   projectModelAccessBalance,
   projectModelAccessCreditUsage,
+  projectPurchasedGiftCardCode,
+  isPurchasedGiftCardCursor,
+  isPurchasedGiftCardId,
+  projectPurchasedGiftCardList,
 } from '../projection.js';
 
 const now = '2026-07-23T12:00:00.000Z';
@@ -26,17 +32,32 @@ function historyRecord(overrides: Record<string, unknown> = {}) {
 
 describe('paid history projection', () => {
   it('projects settled invoice data and removes private provider fields', () => {
-    const record = historyRecord();
+    const record = historyRecord({ quantity: 1 });
     expect(projectBillingPaymentHistory({ records: [{ ...record, providerSnapshot: { private: true } }], nextCursor: 'next_page' }))
       .toEqual({ records: [record], nextCursor: 'next_page' });
   });
 
   it('preserves legacy unknown amounts and payment times', () => {
+    // 旧服务端不下发张数：那时只有充值和订阅账单，各按一笔展示。
     const record = historyRecord({
       amountPaidMinor: null, amount: null, paidAt: null, productName: null,
       refundSummary: { status: null, refundedMinor: 100, refundedAmount: '1.00' },
     });
-    expect(projectBillingPaymentHistory({ records: [record], nextCursor: null }).records).toEqual([record]);
+    expect(projectBillingPaymentHistory({ records: [record], nextCursor: null }).records)
+      .toEqual([{ ...record, quantity: 1 }]);
+  });
+
+  // 带 includeGiftCards 的新服务端会混入礼品卡订单；张数缺失就说不清这笔买了几张，整页按异常处理。
+  it('keeps gift card orders with their card count and refuses one without a count', () => {
+    const giftCard = historyRecord({
+      recordId: 'GIFT_CARD:order_9', sourceType: 'GIFT_CARD', sourceId: 'order_9', subscriptionId: null,
+      billingReason: null, periodStartAt: null, periodEndAt: null, quantity: 2,
+    });
+    expect(projectBillingPaymentHistory({ records: [giftCard], nextCursor: null }).records[0])
+      .toMatchObject({ sourceType: 'GIFT_CARD', quantity: 2 });
+    expect(() => projectBillingPaymentHistory({
+      records: [{ ...giftCard, quantity: undefined }], nextCursor: null,
+    })).toThrow();
   });
 
   it('accepts older history responses without a transaction reference', () => {
@@ -1049,5 +1070,208 @@ describe('plan change projection', () => {
       }),
     });
     expect(projected.subscription?.pendingPlanChange).toMatchObject({ targetPlan: null });
+  });
+});
+
+describe('gift card purchase projection', () => {
+  const giftCardProduct = (offers: unknown[]) => ({
+    code: 'gift_card', name: 'Cindy 礼品卡', kind: 'GIFT_CARD', level: null, sortOrder: 3, offers,
+  });
+  const giftOffer = (overrides: Record<string, unknown> = {}) => ({
+    code: 'gift_card_100', name: null, interval: null, currency: 'cny', amount: '100',
+    minAmount: null, maxAmount: null, creditAmount: '100', rolloverCap: null,
+    salesState: 'AVAILABLE', purchasable: true, unavailableReason: null,
+    purchaseOptions: [{ id: 'listing_alipay', provider: 'alipay', capability: 'ONE_TIME_PAYMENT', paymentAction: 'QR_CODE' }],
+    ...overrides,
+  });
+
+  // 面额印在卡面上：固定面额的到账金额必须等于面额；买家自填面额只带范围，到账随所填面额，
+  // 带了固定到账额度的「自填」方案对不上卡面，不能拿来卖。
+  it('keeps fixed and buyer-entered gift card amounts and drops offers whose credit differs from the face value', () => {
+    const catalog = projectBillingCatalog({
+      products: [giftCardProduct([
+        giftOffer(),
+        // 同一个金额写法不同（小数位数不同）仍是同一个面额。
+        giftOffer({ code: 'gift_card_200', amount: '200', creditAmount: '200.000000000' }),
+        giftOffer({ code: 'gift_card_odd', creditAmount: '120' }),
+        giftOffer({ code: 'gift_card_custom', amount: null, creditAmount: null, minAmount: '100', maxAmount: '500' }),
+        giftOffer({ code: 'gift_card_custom_odd', amount: null, creditAmount: '100', minAmount: '100', maxAmount: '500' }),
+        // 面额精度是分：去掉末尾 0 后仍超过两位小数的面额或范围对不上卡面，界面也无法按分校验，不卖。
+        giftOffer({ code: 'gift_card_sub_cent', amount: '20.001', creditAmount: '20.001' }),
+        giftOffer({ code: 'gift_card_custom_sub_cent', amount: null, creditAmount: null, minAmount: '1.005', maxAmount: '500' }),
+        giftOffer({ code: 'gift_card_custom_long', amount: null, creditAmount: null, minAmount: '100.500000000', maxAmount: '500' }),
+        // 整数部分超过 12 位的面额界面无法按分换算，不卖。
+        giftOffer({ code: 'gift_card_huge', amount: '1234567890123', creditAmount: '1234567890123' }),
+        // 0 元的面额不能卖。
+        giftOffer({ code: 'gift_card_zero', amount: '0', creditAmount: '0.00' }),
+        giftOffer({ code: 'gift_card_custom_zero', amount: null, creditAmount: null, minAmount: '0', maxAmount: '500' }),
+      ])],
+    });
+    expect(catalog.products).toHaveLength(1);
+    expect(catalog.products[0]).toMatchObject({ kind: 'GIFT_CARD', level: null });
+    expect(catalog.products[0]!.offers.map((offer) => offer.code))
+      .toEqual(['gift_card_100', 'gift_card_200', 'gift_card_custom', 'gift_card_custom_long']);
+    expect(catalog.products[0]!.offers[2]).toMatchObject({ amount: null, minAmount: '100', maxAmount: '500' });
+    expect(catalog.products[0]!.offers[0]!.purchaseOptions[0]).toMatchObject({ capability: 'ONE_TIME_PAYMENT' });
+  });
+
+  it('carries the product kind and card count on orders and fails closed on an unknown kind', () => {
+    const giftOrder = (overrides: Record<string, unknown> = {}) =>
+      order({ productKind: 'GIFT_CARD', quantity: 3, currency: BILLING_CURRENCY, ...overrides });
+    expect(projectBillingPaymentOrder(giftOrder()))
+      .toMatchObject({ productKind: 'GIFT_CARD', quantity: 3 });
+    expect(projectBillingPaymentOrder(order())).not.toHaveProperty('productKind');
+    expect(() => projectBillingPaymentOrder(order({ productKind: 'VOUCHER' }))).toThrow();
+    expect(() => projectBillingPaymentOrder(giftOrder({ quantity: 0 }))).toThrow();
+    // 礼品卡订单缺张数不能当成一张；币种必须是本区域余额币种，不能按本币说外币的价。
+    expect(() => projectBillingPaymentOrder(giftOrder({ quantity: undefined }))).toThrow();
+    expect(() => projectBillingPaymentOrder(giftOrder({ currency: BILLING_CURRENCY === 'usd' ? 'eur' : 'usd' }))).toThrow();
+  });
+
+  it('reads the purchase limits with the gift card currency casing and never offers more than the window allows', () => {
+    expect(projectGiftCardPurchasePolicy({
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 9, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', minFaceValue: '100', maxFaceValue: '1000',
+      faces: ['cindy', 'cat', '../x'], maxSenderNameLength: 40, maxMessageLength: 120,
+    })).toEqual({
+      currency: 'cny', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', minFaceValue: '100', maxFaceValue: '1000',
+      faces: ['cindy', 'cat'], faceCatalog: [], maxSenderNameLength: 40, maxMessageLength: 120, emailCooldownSeconds: null,
+    });
+    // 旧服务端没有单张面额范围：照常读出其余限制，范围为 null。
+    expect(projectGiftCardPurchasePolicy({
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
+    })).toMatchObject({ minFaceValue: null, maxFaceValue: null, emailCooldownSeconds: null });
+    expect(projectGiftCardPurchasePolicy({
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', emailCooldownSeconds: 60, faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
+    })).toMatchObject({ emailCooldownSeconds: 60 });
+    expect(() => projectGiftCardPurchasePolicy({ currency: 'USD', dailyLimit: 5 })).toThrow();
+    // 新服务端给了面额范围或发信冷却却不合法：按坏响应处理，不当成旧服务端（否则自填面额只按价格方案
+    // 范围校验，下单才被拒）。服务端明确给 null（本区域不支持礼品卡）照常读出。
+    const base = {
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
+    };
+    for (const malformed of [
+      { minFaceValue: 'abc' }, { maxFaceValue: 100 }, { minFaceValue: '1.005' }, { maxOrderAmount: '1000.001' },
+      { maxOrderAmount: '1234567890123' }, { maxOrderAmount: '0' }, { minFaceValue: '0.00' },
+      { emailCooldownSeconds: -1 }, { emailCooldownSeconds: 1.5 },
+    ]) {
+      expect(() => projectGiftCardPurchasePolicy({ ...base, ...malformed })).toThrow();
+    }
+    // 只是小数位写得更长的上限照常读出。
+    expect(projectGiftCardPurchasePolicy({ ...base, maxOrderAmount: '1000.000000000' })).toMatchObject({ maxOrderAmount: '1000.000000000' });
+    // 冷却 0 秒是合法的「不冷却」，不能当成不支持发信，更不能让整份购买设置读取失败。
+    expect(projectGiftCardPurchasePolicy({ ...base, emailCooldownSeconds: 0 })).toMatchObject({ emailCooldownSeconds: 0 });
+    expect(projectGiftCardPurchasePolicy({ ...base, minFaceValue: null, maxFaceValue: null }))
+      .toMatchObject({ minFaceValue: null, maxFaceValue: null });
+  });
+
+  const purchasedCard = (overrides: Record<string, unknown> = {}) => ({
+    cardId: 'card_1', orderId: 'order_9', faceCode: 'cat', amount: '100', currency: BILLING_CURRENCY.toUpperCase(),
+    senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED',
+    claimedAt: null, claimedByName: null, purchasedAt: now, ...overrides,
+  });
+
+  // 卡面改由服务端下发：新卡面的底图、印法与名称照单读进来，客户端不发版就能卖、能画。某一项卡面信息
+  // 不合法只丢弃这一项（界面退回内置卡面），不能让购买设置或「我买的礼品卡」整页读取失败。
+  it('reads server card faces and drops only the face details it cannot draw', () => {
+    const snow = {
+      code: 'snow',
+      names: { en: 'Snow · Night', 'zh-CN': '雪 · 夜色' },
+      imageUrl: 'https://model-access.example.com/api/public/gift-cards/faces/snow.webp?v=0123456789ab',
+      amount: { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' },
+    };
+    const policy = projectGiftCardPurchasePolicy({
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', faces: ['snow', 'cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
+      faceCatalog: [snow, { ...snow, code: 'cindy', imageUrl: 'javascript:alert(1)' }, { ...snow, code: 'leap' }, snow],
+    });
+    expect(policy.faces).toEqual(['snow', 'cindy']);
+    expect(policy.faceCatalog).toEqual([snow]);
+    const list = projectPurchasedGiftCardList({
+      cards: [
+        purchasedCard({ faceCode: 'snow', face: snow }),
+        purchasedCard({ cardId: 'card_2', face: { ...snow, code: 'cat', amount: { ...snow.amount, color: 'red' } } }),
+        purchasedCard({ cardId: 'card_3', face: snow }),
+      ],
+      nextCursor: null,
+    });
+    expect(list.cards.map((card) => [card.cardId, card.faceCode, card.face])).toEqual([
+      ['card_1', 'snow', snow],
+      ['card_2', 'cat', null],
+      ['card_3', 'cat', null],
+    ]);
+  });
+
+  // 领取人昵称只属于「被别人领走」；其它状态即使服务端带了也不展示。
+  it('shows the claimer name only for cards someone else claimed', () => {
+    const list = projectPurchasedGiftCardList({
+      cards: [
+        purchasedCard({ status: 'CLAIMED', claimedAt: now, claimedByName: '阿杰' }),
+        purchasedCard({ cardId: 'card_2', status: 'REDEEMED_BY_YOU', claimedAt: now, claimedByName: '小鱼' }),
+        purchasedCard({ cardId: 'card_1' }),
+      ],
+      nextCursor: 'next.page_1',
+    });
+    expect(list.cards.map((card) => [card.cardId, card.claimedByName, card.currency])).toEqual([
+      ['card_1', '阿杰', BILLING_CURRENCY],
+      ['card_2', null, BILLING_CURRENCY],
+    ]);
+    expect(list.nextCursor).toBe('next.page_1');
+    // 读进来的游标要能原样发回「加载更多」（与 IPC 参数校验同一条规则）；服务端发的是 base64url。
+    expect(isPurchasedGiftCardCursor(list.nextCursor)).toBe(true);
+    for (const cursor of ['abc=', 'a/b', 'x'.repeat(513), '']) {
+      expect(() => projectPurchasedGiftCardList({ cards: [], nextCursor: cursor })).toThrow();
+      expect(isPurchasedGiftCardCursor(cursor)).toBe(false);
+    }
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'SOLD' })], nextCursor: null })).toThrow();
+    // 面额印在卡面上：比分更细的金额按坏响应处理；只是小数位写得更长的照常读出。
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '1.005' })], nextCursor: null })).toThrow();
+    // 卡按本区域余额币种发与入账，兑换时也按它展示：其它币种的卡按坏响应处理，不在列表与兑换之间换币种。
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ currency: 'EUR' })], nextCursor: null })).toThrow();
+    // 整数部分最多 12 位，与购买弹窗按分换算、下单请求的面额校验同一范围。
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '1234567890123' })], nextCursor: null })).toThrow();
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '0' })], nextCursor: null })).toThrow();
+    // 读进来的卡号一定能用来取码和发信（与两个 IPC 请求同一条规则）；不是卡号的按坏响应处理。
+    expect(isPurchasedGiftCardId('card_1') && isPurchasedGiftCardId('3f2b8c1e-0a4d-4c55-9f1e-2b7d9c0e6a11')).toBe(true);
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ cardId: '../card_1' })], nextCursor: null })).toThrow();
+    expect(projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '100.500000000' })], nextCursor: null })
+      .cards.map((card) => card.amount)).toEqual(['100.500000000']);
+    // 退款或拒付还在处理的卡（ON_HOLD）照常读出。
+    expect(projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'ON_HOLD' })], nextCursor: null })
+      .cards.map((card) => card.status)).toEqual(['ON_HOLD']);
+  });
+
+  // 支持发信的服务端每张卡都带 email 字段（没发过为 null），旧服务端没有这个字段时界面不提供
+  // 「发送到邮箱」；新服务端给了却不合法时按坏响应处理，不悄悄当成没发过。
+  it('reads the email delivery, tells whether the server can send by email, and rejects a malformed one', () => {
+    const email = {
+      recipient: 'friend@example.com', status: 'SENT',
+      updatedAt: '2026-11-19T08:05:00.000Z', nextAvailableAt: '2026-11-19T08:06:00.000Z',
+    };
+    const list = projectPurchasedGiftCardList({
+      cards: [
+        purchasedCard({ email }),
+        purchasedCard({ cardId: 'card_4', email: null }),
+      ],
+      nextCursor: null,
+    });
+    expect(list.cards.map((card) => card.email?.status ?? null)).toEqual(['SENT', null]);
+    expect(list.emailSupported).toBe(true);
+    for (const malformed of [{ ...email, status: 'BOUNCED' }, { ...email, nextAvailableAt: 'soon' }, 'sent']) {
+      expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ email: malformed })], nextCursor: null }))
+        .toThrow();
+    }
+    expect(projectPurchasedGiftCardList({ cards: [purchasedCard()], nextCursor: null }))
+      .toMatchObject({ emailSupported: false, cards: [{ email: null }] });
+    expect(projectPurchasedGiftCardList({ cards: [], nextCursor: null }).emailSupported).toBe(false);
+  });
+
+  it('accepts only a well-formed redeem code and returns it in display form', () => {
+    expect(projectPurchasedGiftCardCode({ code: 'c012-3456-789a-bcde' })).toEqual({ code: 'C012-3456-789A-BCDE' });
+    expect(() => projectPurchasedGiftCardCode({ code: 'C012-3456' })).toThrow();
   });
 });

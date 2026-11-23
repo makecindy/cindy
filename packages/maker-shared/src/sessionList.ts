@@ -4,7 +4,7 @@ import { presentationDate, presentationText, type PresentationLocalizer } from '
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import { getSessionListActivityAt, hasPendingSessionInterruption, type SessionInterruptionState } from './sessionActivity.js';
 import type { RemoteSchedule, RemoteScheduleRun } from './scheduleTypes.js';
-import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, scheduleRunMissingPlugin, type FailedScheduleRunSnapshot } from './scheduleModel.js';
+import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, scheduleRunMissingPlugin, readPrCheckDiagnosis, type FailedScheduleRunSnapshot } from './scheduleModel.js';
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
@@ -62,6 +62,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   // 由桌面 sessionToCamel 产出(已处理 clearedAt / rewind / 角色过滤);idle 会话直接显示,
   // 无需 load 完整消息。sessionRowMessagePreview 会读取它。
   preview?: string | null;
+  summary?: string | null;
 }
 
 export interface RemoteSessionListMessageLike {
@@ -718,6 +719,7 @@ export function buildSessionScheduleIndex(
         ...(schedule?.status === 'active' ? nextFireAtField(schedule) : {}),
         failureKind: classifyScheduleFailure(run),
         errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
+        prCheckDiagnosis: run.status === 'failed' ? readPrCheckDiagnosis(run.prCheckDiagnosis ?? run.preRunHookResult?.prCheckDiagnosis) : undefined,
         missingPlugin: run.status === 'failed' ? scheduleRunMissingPlugin(run) : undefined,
       } : undefined;
       const latestFailedRun = candidate && (!existing?.latestFailedRun || compareFailedScheduleRuns(candidate, existing.latestFailedRun) > 0)

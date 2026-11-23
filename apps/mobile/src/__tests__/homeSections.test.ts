@@ -5,12 +5,14 @@ import {
   buildHomeSections,
   buildInboxHomeSections,
   buildMixedHomeRows,
+  movePinnedItem,
   HOME_MAIN_SECTION_KEY,
   homeFolderRowsShareRenderData,
   homeRowsShareRenderData,
   homeRowBefore,
   mergeAutomationItems,
   withMergedAutomationPriority,
+  type InboxTeammateEntry,
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
@@ -41,6 +43,41 @@ function presentation(over: Partial<MobileHomePresentation>): MobileHomePresenta
 }
 
 describe('buildHomeSections', () => {
+  it('keeps dialogue group keys distinct across computers', () => {
+    const chats = ['a', 'b'].map(id => {
+      const item = listItem(id, '2026-06-02T00:00:00Z');
+      return { ...item, session: { ...item.session, deviceLinkDeviceId: id } };
+    });
+    const home = presentation({ chats, deviceFilters: [] });
+    const open = buildHomeSections(home, true, false, { groupDevice: true, groupDialogue: true });
+    expect(open.map(s => s.data[0]?.key)).toEqual(['device:a:dialogue', 'device:b:dialogue']);
+  });
+
+  it('restores manual pin order after sorting the same pins by recent activity', () => {
+    const home = presentation({ pinned: [
+      listItem('old', '2026-06-01T00:00:00Z'), listItem('new', '2026-06-02T00:00:00Z'),
+    ] });
+    const pinnedOrder = movePinnedItem([], [...home.pinned].reverse(), 'old', -1)!;
+    for (const pinnedSort of ['manual', 'activity', 'manual'] as const) {
+      const [pins] = buildHomeSections(home, false, false, { pinnedSort, pinnedOrder });
+      expect(pins.data.map(row => row.key)).toEqual(pinnedSort === 'activity'
+        ? ['pinned:new', 'pinned:old'] : ['pinned:old', 'pinned:new']);
+    }
+  });
+
+  it('moves a re-pinned task ahead of its previous manual position', () => {
+    const pin = (id: string, date: string) => {
+      const item = listItem(id, date);
+      return { ...item, session: { ...item.session, pinnedAt: date } };
+    };
+    const a = pin('a', '2026-06-01'), b = pin('b', '2026-06-02');
+    const pinnedOrder = movePinnedItem([], [b, a], 'a', -1)!;
+    const rows = (pinned: RemoteSessionListItem[]) => buildHomeSections(presentation({ pinned }),
+      false, false, { pinnedOrder })[0].data.map(row => row.key);
+    expect(rows([a, b])).toEqual(['pinned:a', 'pinned:b']);
+    expect(rows([a, pin('b', '2026-06-03')])).toEqual(['pinned:b', 'pinned:a']);
+  });
+
   it('置顶收起时保留分区但清空 data(表头照常渲染,只折叠下属会话)', () => {
     const home = presentation({
       pinned: [listItem('p1', '2026-06-02T00:00:00Z'), listItem('p2', '2026-06-01T00:00:00Z')],
@@ -409,16 +446,7 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
     ]);
   });
 
-  it('平铺时给项目会话和对话会话带来源标签,分组模式不带', () => {
-    const mixed = buildMixedHomeRows(home, { dialogueTitle: '对话' });
-    expect(mixed.filter((row): row is Extract<typeof row, { kind: 'session' }> => row.kind === 'session')
-      .map((row) => [row.item.session.id, row.sourceLabel])).toEqual([
-      ['chat-new', '对话'],
-      ['s1', undefined],
-      ['s2', undefined],
-      ['chat-old', '对话'],
-    ]);
-    // project.title 来自 fixture 里缺省的 undefined —— 上面只断言对话标签。补一个带 title 的项目。
+  it('平铺时只给项目任务标项目名,独立对话和分组内任务省略来源', () => {
     const named = presentation({
       chats: [listItem('chat-new', '2026-06-06T00:00:00Z')],
       projects: [{
@@ -427,12 +455,12 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
       }],
     });
     const namedMixed = buildMixedHomeRows(named, { dialogueTitle: '对话' });
-    expect(namedMixed.map((row) => row.kind === 'session' ? [row.item.session.id, row.sourceLabel] : row.kind)).toEqual([
-      ['chat-new', '对话'],
+    expect(namedMixed.map((row) => row.kind === 'session' ? [row.item.session.id, row.projectLabel ?? row.sourceLabel] : row.kind)).toEqual([
+      ['chat-new', undefined],
       ['s1', 'Cindy'],
     ]);
     const grouped = buildGroupedHomeRows(named, { dialogueTitle: '对话' });
-    expect(grouped.filter((row) => row.kind === 'session').map((row) => row.kind === 'session' ? row.sourceLabel : null))
+    expect(grouped.filter((row) => row.kind === 'session').map((row) => row.kind === 'session' ? row.projectLabel ?? row.sourceLabel : null))
       .toEqual([undefined]);
   });
 
@@ -513,7 +541,7 @@ it('builds inbox sections and recomputes snooze expiry without losing collapsed 
 
 // 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks
 // (by the teammate filter's test) are listed only while they need the user or run.
-it('leaves idle teammate tasks out of the inbox until they need the user or run', () => {
+it('leaves idle teammate conversations out of the inbox until they need the user or run', () => {
   const routine = listItem('routine', '2026-11-18T08:00:00Z');
   (routine.session as { source?: string; companion?: object }).source = 'bot';
   (routine.session as { companion?: object }).companion = { id: 'bot-1', role: 'routine' };
@@ -525,12 +553,43 @@ it('leaves idle teammate tasks out of the inbox until they need the user or run'
     unreadSessionIds: new Set(['routine', 'opened', 'mine']) };
   const ids = (key: string) => buildInboxHomeSections(home, new Set(), signals, Date.now())
     .find(s => s.key === key)!.data.flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
-  expect(ids('inbox-inbox')).toEqual(['mine']);
+  // 2026-11-22: a task the teammate opened in the owner's project comes back with its result like
+  // the owner's own; only the teammate's own conversations stay out until they need the user.
+  expect(ids('inbox-inbox').sort()).toEqual(['mine', 'opened']);
   expect(ids('inbox-working')).toEqual([]);
   routine.pendingInteractionCount = 1;
   signals.runningSessionIds.add('opened');
   expect(ids('inbox-inbox').sort()).toEqual(['mine', 'routine']);
   expect(ids('inbox-working')).toEqual(['opened']);
+});
+
+// 2026-11-20 user decision: a teammate's main conversation is one inbox row placed by whose turn
+// it is. Unit, through the real section builder; existing cases only cover teammate *tasks*.
+// Smallest failing input: an idle read teammate listed at all, or a snooze outliving new input.
+it('places teammate conversations by whose turn it is, ahead of tasks, and leaves idle ones out', () => {
+  const now = Date.parse('2026-11-20T08:00:00Z');
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const home = presentation({ chats: [listItem('task', iso(now))] });
+  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const snooze = { snoozedUntil: iso(now + 3_600_000), snoozedAt: iso(now), userSendAt: null };
+  const teammates: InboxTeammateEntry[] = [
+    { key: 'idle', status: 'idle', snooze: null, activityAt: 9 },
+    { key: 'asks', status: 'awaiting', snooze: null, activityAt: 1 },
+    { key: 'replied', status: 'unread', snooze: null, activityAt: 2 },
+    { key: 'busy', status: 'running', snooze: null, activityAt: 3 },
+    { key: 'later', status: 'awaiting', snooze, activityAt: 4 },
+  ];
+  const rows = (at: number, list = teammates) => Object.fromEntries(buildInboxHomeSections(home, new Set(['inbox-working']), signals, at, list)
+    .map(section => [section.key, { count: section.count, keys: section.data.map(row => row.kind === 'teammate' ? row.teammate.key : row.key),
+      labels: section.data.flatMap(row => row.kind === 'teammate' && row.sourceLabel ? [row.sourceLabel] : []) }]));
+  const listed = rows(now);
+  expect(listed['inbox-inbox']).toMatchObject({ count: 3, keys: ['replied', 'asks', 'inbox::task'] });
+  // A collapsed section still counts its teammate.
+  expect(listed['inbox-working']).toMatchObject({ count: 1, keys: [] });
+  expect(listed['inbox-snoozed']).toMatchObject({ count: 1, keys: ['later'], labels: [new Date(now + 3_600_000).toLocaleString('zh-CN')] });
+  // The wake time passes, or the teammate's conversation receives new input first.
+  expect(rows(now + 3_600_000)['inbox-inbox'].keys).toContain('later');
+  expect(rows(now + 1, [{ ...teammates[4], snooze: { ...snooze, userSendAt: iso(now + 1) } }])['inbox-inbox'].keys).toContain('later');
 });
 
 it('puts a quiet followed task in working and returns it to inbox for results, waiting or pause', () => {
@@ -579,7 +638,9 @@ it.each(['chat', 'project'] as const)('keeps each %s automation run independent 
   const now = Date.parse('2026-11-18T09:00:00Z');
   const make = (id: string, at: string) => ({
     ...listItem(id, at),
+    // A teammate's routine run lives in its project, as on a real host.
     session: { id, source: 'scheduler', status: 'active', updatedAt: at,
+      workingDir: '/Users/me/Library/Application Support/Cindy/owners/o1/bots/mate/workspace',
       taskTeammate: { id: 'mate', name: 'Mate' } },
     scheduleInfo: { scheduleId: 's', scheduleName: 'Routine', running: false,
       latestRunAt: 0, unreadCount: 0, unreadRunIds: [] },
@@ -595,6 +656,7 @@ it.each(['chat', 'project'] as const)('keeps each %s automation run independent 
     if (mode === 'followed' || mode === 'unread') {
       latest.scheduleInfo!.hasActiveFollowUp = true;
       delete (latest.session as { taskTeammate?: unknown }).taskTeammate;
+      delete (latest.session as { workingDir?: unknown }).workingDir;
     }
     const grouped = groupAutomationListItems([latest, older], now, true, () => 'mac');
     expect(grouped).toHaveLength(1);

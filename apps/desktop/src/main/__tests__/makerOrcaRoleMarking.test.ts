@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { createSetSessionThinkingEnabled } from '../maker-ipc/sessionRuntimeAxisSettings';
 
 const registerSource = readFileSync(
   resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
@@ -89,16 +91,17 @@ describe('maker Orca role marking IPC boundary', () => {
     expect(successHookSource).toContain('markKnownOrcaWorkerSession(sessionId);');
   });
 
-  it('rejects Review sessions before thinking can be flipped', () => {
-    const thinkingSource = registerSource.slice(
-      registerSource.indexOf('MAKER_INVOKE.SET_THINKING_ENABLED'),
-      registerSource.indexOf('MAKER_INVOKE.SET_EXTRA_DIRS'),
-    );
-    expectOrder(
-      thinkingSource,
-      'await assertReviewSettingsUnlocked(sessionId);',
-      'await sess.setThinkingEnabled(enabled);',
-    );
+  // The SET_THINKING_ENABLED body after its sender check runs from sessionRuntimeAxisSettings.ts; a
+  // Review task is refused before the runtime's thinking is touched.
+  it('rejects Review sessions before thinking can be flipped', async () => {
+    const setThinkingEnabled = vi.fn(async () => {});
+    const handle = createSetSessionThinkingEnabled({
+      maker: { getSession: () => ({ setThinkingEnabled }) } as never,
+      assertReviewSettingsUnlocked: async () => { throw new Error('Review task settings are fixed to the source task'); },
+      captureSharedTaskSettingGuard: () => Object.assign(() => {}, { admit: () => {} }) as never,
+    });
+    await expect(handle('review-task', true)).rejects.toThrow('Review task settings are fixed to the source task');
+    expect(setThinkingEnabled).not.toHaveBeenCalled();
   });
 });
 

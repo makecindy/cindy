@@ -25,6 +25,8 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     autoRetryLastError(sessionId: string, attemptToken: number): Promise<'resumed' | 'superseded' | 'no-progress'>;
   };
   interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'onInterruptedTurn' | 'noteResumeSendFailed'>;
+  /** Settle a still-current paused retry into history without a banner. Opted into by the Node Host. */
+  settlePausedResumeIntoHistory?: boolean;
   autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
     | 'takeDeferredError' | 'surfaceSuppressedError' | 'flushSuppressedError' | 'beginAttempt' | 'schedule'
@@ -69,6 +71,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
   inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, resumeQuotaWait, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs,
+  settlePausedResumeIntoHistory,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
@@ -180,10 +183,19 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
             let fallbackRebuildSession: RuntimeSession | null = null;
             const isCurrent = () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId)
               && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
+            const ownsAttempt = () => attempt.isCurrent()
+              && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
+            const mayContinue = settlePausedResumeIntoHistory ? () => {
+              if (!ownsAttempt()) return false;
+              if (!inputCoordinator.isExecutionPaused(sessionId)) return true;
+              interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+              autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, { surfaceBanner: false });
+              return false;
+            } : isCurrent;
             try {
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
-              if (!isCurrent()) return;
+              if (!mayContinue()) return;
               const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation || localPreparation
                 ? { session: null, outcome: 'unchanged' }
                 : await maybeApplySessionRuntimeFallback(
@@ -191,14 +203,16 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.episodeAttempt,
                   decision.attemptToken,
                   requireRouteChange,
-                  isCurrent,
+                  settlePausedResumeIntoHistory
+                    ? () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId)
+                    : isCurrent,
                   ...(modelGroupInput ? [{
                     accountUnavailable: isModelGroupConnectionOutOfCredit(signals),
                     hasImages: item.files?.some(file => file.category === 'image') === true,
                   }] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
-              if (!isCurrent()) return;
+              if (!mayContinue()) return;
               if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
                 const released = autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {

@@ -19,6 +19,7 @@ const budgetState = vi.hoisted(() => ({ dir: '' }));
 vi.mock('../../appSessionState.js', async () => {
   const nodePath = await import('node:path');
   return {
+    getDataOwnerLifetime: () => 0,
     ownerScopedUserDataPath: (...parts: string[]): string => nodePath.join(budgetState.dir, ...parts),
     // 预算 store 的 owner 隔离读它；测试里固定成同一个 key 即可。
     activeOwnerScopeKey: (): string => 'test-owner',

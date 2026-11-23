@@ -214,7 +214,7 @@ export function TelegramBotSection({
               spellCheck={false}
               autoComplete="off"
               className={cn(
-                'h-[42px] w-full rounded-full pl-[14px] pr-10',
+                'h-[42px] w-full rounded-full pl-3.5 pr-10',
                 'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
                 'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
                 'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -250,7 +250,7 @@ export function TelegramBotSection({
             autoComplete="off"
             inputMode="numeric"
             className={cn(
-              'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
+              'h-[42px] w-full rounded-full pl-3.5 pr-3.5',
               'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
               'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
               'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -282,7 +282,7 @@ export function TelegramBotSection({
                 disabled={isDisconnecting}
                 aria-label={t('settings.telegramBot.disconnectAria')}
                 className={cn(
-                  'mr-[4px] flex shrink-0 items-center justify-center bg-transparent p-0',
+                  'mr-1 flex shrink-0 items-center justify-center bg-transparent p-0',
                   'text-[var(--settings-trash-icon)] transition-colors hover:text-[var(--settings-trash-icon-hover)]',
                   isDisconnecting && 'cursor-not-allowed opacity-40',
                 )}

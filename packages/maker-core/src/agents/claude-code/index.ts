@@ -147,6 +147,7 @@ import {
   workspaceSettingsOverrideMessage,
 } from './workspace-settings-guard.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
+import { normalizeClaudeContextUsage } from './context-usage.js';
 import { materializeClaudeFlagSettings } from './flag-settings-file.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
@@ -1134,7 +1135,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         query.supportedModels(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () => reject(new Error('supportedModels probe timed out')),
+            () => reject(new Error('Request timed out: supportedModels probe')),
             SUPPORTED_MODELS_PROBE_TIMEOUT_MS,
           );
         }),
@@ -1144,6 +1145,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       return true;
     } catch (error) {
       log.warn('probe failed', { error: String(error) });
+      if (options?.throwOnError) throw error;
       return false;
     } finally {
       if (timer) clearTimeout(timer);
@@ -2273,16 +2275,22 @@ export class ClaudeCodeAgent extends BaseAgent {
     // everything else stays with the native classifier so no call is reviewed twice.
     const nativeAutoPolicyHook: HookCallback = async (input) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true };
-      if (
-        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
-        || !usesNativeClaudeAutoReview()
-      ) return { continue: true };
       const pre = input as PreToolUseHookInput;
       const toolName = pre.tool_name;
       const decide = (permissionDecision: 'allow' | 'ask', reason: string) => ({
         continue: true,
         hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision, permissionDecisionReason: reason },
       });
+      // A user or project `permissions.allow` rule skips canUseTool in every mode, which is where a
+      // channel turn's forced confirmation (non-owner destructive call) is decided. Hand those calls
+      // back to the approval chain in Ask as well as Auto (the modes that accept a turn policy).
+      if (!mutablePlanMode && !planTurnActive && forceTurnConfirmation(toolName, pre.tool_input)) {
+        return decide('ask', 'This channel turn requires confirmation for this action.');
+      }
+      if (
+        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
+        || !usesNativeClaudeAutoReview()
+      ) return { continue: true };
       const isMcp = resolveMcpToolTarget(toolName, registeredMcpServerNames) !== null;
       const mcpPolicy = isMcp ? classifyMcpApprovalPolicy(toolName, pre.tool_input) : null;
       // Requester authority (owner / group guest) and forceConfirmToolCall are only known to
@@ -2761,9 +2769,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (autoDecision.unavailable) {
             autoReviewUnavailableNotice.notify(autoDecision);
             unavailableHandoff = true;
-          } else {
-            autoReviewAskReason = autoDecision.reason;
           }
+          autoReviewAskReason = autoDecision.reason;
           forcePrompt = true;
         }
       } else {
@@ -4261,9 +4268,8 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (autoDecision.unavailable) {
                 autoReviewUnavailableNotice.notify(autoDecision);
                 remoteUnavailableHandoff = true;
-              } else {
-                remoteAutoReviewAskReason = autoDecision.reason;
               }
+              remoteAutoReviewAskReason = autoDecision.reason;
               remoteForcePrompt = true;
             } else {
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';
@@ -4839,6 +4845,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       clearBridgeState();
       pendingToolIds.clear();
       runningBackgroundTasks.clear();
+      clearPendingBashContinuations();
       terminalBackgroundTaskIds.clear();
       closed = true;
       try { dismissAllPending('session_closed', 'deny'); } catch (e) {
@@ -4970,6 +4977,41 @@ export class ClaudeCodeAgent extends BaseAgent {
         commandKind?: BackgroundCommandKind;
       }
     >();
+    // A Bash notification queues native follow-up even though Bash never owns a
+    // product-turn claim. Keep its follow-up visible to idle recyclers through
+    // native execution and delivery; do not block send/steer or make Stop kill a running service.
+    // No polling, synthetic turn or replay: absent provider activity expires at
+    // the existing native continuation grace budget, queried on the next gate.
+    let pendingBashContinuationUntil = 0;
+    let pendingBashContinuationBehindTurn = false;
+    function startPendingBashContinuationGrace(): void {
+      if (pendingBashContinuationBehindTurn && !turnInFlight) {
+        pendingBashContinuationBehindTurn = false;
+        pendingBashContinuationUntil = performance.now() + WAKE_CONTRACT_GRACE_MS;
+      }
+    }
+    const hasPendingBashContinuation = (): boolean => {
+      // Natural terminals start grace at turn end. A synthetic/failed-control
+      // idle transition gets a bounded fallback on first observation, but its
+      // outstanding provider terminal must not consume the queued Bash reply.
+      const now = performance.now();
+      if (pendingBashContinuationBehindTurn && !turnInFlight) {
+        if (pendingBashContinuationUntil === 0) pendingBashContinuationUntil = now + WAKE_CONTRACT_GRACE_MS;
+        else if (pendingBashContinuationUntil <= now) pendingBashContinuationBehindTurn = false;
+      }
+      return (pendingBashContinuationBehindTurn && turnInFlight) || pendingBashContinuationUntil > now;
+    };
+    let bashContinuationInFlight = false;
+    // Native continuations advance turnState.generation too. Only an explicit
+    // send transfers Bash retention beyond an already pending Stop's authority.
+    let lastExplicitSendGeneration = 0;
+    const bashContinuationBoundaries = new Set<AgentEvent>();
+    function clearPendingBashContinuations(): void {
+      pendingBashContinuationUntil = 0;
+      pendingBashContinuationBehindTurn = false;
+      bashContinuationInFlight = false;
+      bashContinuationBoundaries.clear();
+    }
     // Bash 工具调用的命令文本(按 tool_use id)。task_started 只带描述不带命令,后台命令
     // 是「工作」还是「长驻服务」要靠启动它的命令写法判断。有界:只为紧随其后的
     // task_started 服务,超限丢最老的。
@@ -5332,6 +5374,17 @@ export class ClaudeCodeAgent extends BaseAgent {
         return null;
       } else if (status === 'completed' || status === 'failed' || status === 'stopped') {
         const prev = runningBackgroundTasks.get(taskId);
+        if (
+          prev?.taskType === 'local_bash' && status !== 'stopped' &&
+          !closed && continuationCancellationGeneration === null
+        ) {
+          // Completion during an active segment queues a later native reply.
+          // Its startup budget must not run while that segment is still busy.
+          // An in-flight Stop is not cancellation proof; its confirmed path
+          // clears this state, while rejected controls preserve the follow-up.
+          pendingBashContinuationBehindTurn = turnInFlight;
+          pendingBashContinuationUntil = turnInFlight ? 0 : performance.now() + WAKE_CONTRACT_GRACE_MS;
+        }
         runningBackgroundTasks.delete(taskId);
         terminalBackgroundTaskIds.add(taskId);
         const claim = activeContinuationClaim();
@@ -5409,6 +5462,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
 
     const releaseEventAccounting = (event: AgentEvent): void => {
+      bashContinuationBoundaries.delete(event);
       if (event.turnContinuationId !== undefined) {
         const claim = continuationClaims.get(event.turnContinuationId);
         if (claim) {
@@ -5433,6 +5487,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       try {
         for await (const event of eventQueue) {
           try {
+            // Bash retention must cover SDK-produced events still queued for
+            // Host. Release just before its final done is delivered, so that
+            // done's existing idle-refresh callback can observe a safe boundary.
+            bashContinuationBoundaries.delete(event);
             yield event;
           } finally {
             // Code after yield runs when Session asks for the next event, i.e.
@@ -5441,6 +5499,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
         }
       } finally {
+        clearPendingBashContinuations();
         activeContinuationId = null;
         continuationClaims.clear();
         continuationListeners.clear();
@@ -5680,6 +5739,17 @@ export class ClaudeCodeAgent extends BaseAgent {
           pushForwardedEvent(pendingTerminalStatusEvent);
           pendingTerminalStatusEvent = undefined;
         }
+        if (
+          bashContinuationInFlight &&
+          ((e.type === 'done') || (e.type === 'error' && isTerminalAgentErrorEvent(e)))
+        ) {
+          // Some terminal provider responses (notably empty-response) surface
+          // only an error event and never emit done. Keep the same producer to
+          // consumer boundary protection, then release it when Host consumes
+          // that terminal event.
+          bashContinuationInFlight = false;
+          bashContinuationBoundaries.add(e);
+        }
         const continuationBeforeCapture = activeContinuationClaim();
         const isContinuationTerminalDone = captureContinuationBoundary(e);
         const continuationAfterCapture = activeContinuationClaim();
@@ -5786,6 +5856,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
       }
       turnInFlight = false;
+      startPendingBashContinuationGrace();
       clearUpstreamResponseIdle();
       // 本轮已经是静默 /compact。瞬时失败由 onCompactCanceled 打开重试，等下一轮用户
       // turn 结束再压；这里立刻再注入会把 401/过载打成紧循环。
@@ -5865,6 +5936,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // q 换代 = 旧 CLI 子进程已死,其后台任务全部随之终止 —— 清表防 stale 条目
       // 让下次 abort 对不存在的任务空发 stopTask。
       runningBackgroundTasks.clear();
+      clearPendingBashContinuations();
       terminalBackgroundTaskIds.clear();
       void (async () => {
         try {
@@ -5992,9 +6064,15 @@ export class ClaudeCodeAgent extends BaseAgent {
               (
                 ((rawType === 'assistant' || rawType === 'stream_event') &&
                   isTopLevelProviderActivity) ||
-                (activeContinuationClaim()?.state === 'awaiting' && rawType === 'result')
+                ((activeContinuationClaim()?.state === 'awaiting' ||
+                  (!pendingBashContinuationBehindTurn && hasPendingBashContinuation())) && rawType === 'result')
               )
             ) {
+              const hasPendingBash = hasPendingBashContinuation();
+              if (!pendingBashContinuationBehindTurn) {
+                if (hasPendingBash) bashContinuationInFlight = true;
+                pendingBashContinuationUntil = 0;
+              }
               const claim = activeContinuationClaim();
               if (claim?.state === 'awaiting') {
                 // Each task notification queues one SDK continuation segment.
@@ -7083,6 +7161,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
         beginNewTurn(mutableFastMode ? 'priority' : 'standard');
+        lastExplicitSendGeneration = turnState.generation;
+        if (hasPendingBashContinuation()) {
+          pendingBashContinuationBehindTurn = true;
+          pendingBashContinuationUntil = 0;
+        }
         resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
@@ -7321,6 +7404,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           ) {
             throw new Error('Claude graceful stop could not confirm all background task stops');
           }
+          // Only confirmed control revokes Bash follow-up; a rejected or
+          // no-active Stop must leave its runtime protection intact.
+          clearPendingBashContinuations();
           const stoppedClaim = markWakeTasksStopped(fulfilledWakeIds, 'graceful_stop');
           const cancelledContinuation =
             stoppedClaim ?? cancelActiveContinuation('graceful_stop');
@@ -7335,6 +7421,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async abort() {
+        const bashStopGeneration = lastExplicitSendGeneration;
         // 只 interrupt 当前 turn, 不能 abortController.abort() ——
         // 那会杀掉整个 SDK Query, 让 streaming-input 流断开 (for await 抛
         // 'aborted by user' → eventQueue.end()), 后续 send 进黑洞 session 卡死。
@@ -7376,6 +7463,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           const cancelledContinuation = cancelActiveContinuation('bridge_aborted');
           if (!cancelledContinuation) settleActiveContinuation('bridge_aborted');
           runningBackgroundTasks.clear();
+          clearPendingBashContinuations();
           terminalBackgroundTaskIds.clear();
           turnInFlight = false;
           // 本分支自己发 bridge_aborted 终态, send 的收尾责任就此交接完毕 ——
@@ -7437,6 +7525,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           // interrupt ACK guarantees these earlier stop requests have settled,
           // so allSettled intentionally has no extra timeout here.
           const { fulfilledWakeIds } = await settleWakeStopRequests(stopRequests);
+          // ACK is the existing hard-Stop boundary even when the SDK never
+          // drains a result. Release active/queued retention as well as the
+          // startup gap, without clearing a newer user generation's state.
+          if (lastExplicitSendGeneration === bashStopGeneration) clearPendingBashContinuations();
           // interrupt ACK authorizes retiring only wake tasks whose stop RPC
           // also succeeded. Rejected stops remain tracked for provider events,
           // preserving their continuation contract instead of creating an
@@ -7506,6 +7598,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             recordCanceledQueryClose(cancelledQuery, 'user_stop cancellation');
             runningBackgroundTasks.clear();
+            clearPendingBashContinuations();
             terminalBackgroundTaskIds.clear();
             // main 上 #2151 已给 interrupt 成功分支挂了同一守卫; 本 PR 的差异是
             // close-query / 超时 / 抛错 / bridge 分支也一并纳入同一契约。
@@ -7546,6 +7639,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             recordCanceledQueryClose(q, 'user_stop interrupt timeout');
             runningBackgroundTasks.clear();
+            clearPendingBashContinuations();
             terminalBackgroundTaskIds.clear();
             // accept 阶段同上——终态与清理归 send 自己(query 已被关闭, send 的
             // push 会失败并走 finishSendBeforeUserInput)。
@@ -7599,7 +7693,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       countPendingWakeContinuations() {
-        // 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+        // Pending native continuations: wake claims plus bounded Bash startup
+        // retention and its active/queued follow-up. Bash does not acquire a product-turn claim.
         // runningBackgroundTasks 在任务终态时立即出表(noteBackgroundTaskEvent),
         // 因此 listBackgroundTasks() 的空快照**不能**证明后续没有 wake turn ——
         // renderer 的唤醒桥接对账必须以本计数为权威依据(为 0 才允许收口),
@@ -7607,7 +7702,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // cancelled 不计(不会再有 wake turn 跟进);awaiting / active 都计
         // (active 期间主 turn isRunning 本就为 true,双重保护)。
         if (closed) return 0;
-        let n = 0;
+        let n = (hasPendingBashContinuation() ? 1 : 0) +
+          (bashContinuationInFlight ? 1 : 0) + bashContinuationBoundaries.size;
         for (const claim of continuationClaims.values()) {
           if (claim.state === 'awaiting' || claim.state === 'active') n += 1;
         }
@@ -7652,6 +7748,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           abortController.abort();
           // close 会终结 CLI 子进程(本地)/ 远端 session,后台任务随之死亡。
           runningBackgroundTasks.clear();
+          clearPendingBashContinuations();
           terminalBackgroundTaskIds.clear();
           // 启动中途关闭由 startSession 的 catch 删文件; Query 已经建起来之后再关闭
           // 走这里, 覆盖 SDK close 不会再回到那个 catch 的路径。
@@ -7689,6 +7786,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 inputQueue.end();
                 abortController.abort();
                 runningBackgroundTasks.clear();
+                clearPendingBashContinuations();
                 terminalBackgroundTaskIds.clear();
               } catch (e) {
                 log.warn('detach threw', { error: String(e) });
@@ -7725,7 +7823,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (!getContextUsage) {
           throw new Error('Claude Code SDK does not support getContextUsage');
         }
-        return await getContextUsage.call(q) as import('../../types/context-usage.js').ContextUsageData;
+        const usage = await getContextUsage.call(q) as import('../../types/context-usage.js').ContextUsageData;
+        return normalizeClaudeContextUsage(usage);
       },
 
       async readMcpServerTools(serverName: string) {
@@ -8320,6 +8419,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // close 会连 CLI 子进程一起杀,后台任务(含后台命令)随之终止:与其它 close 路径同口径立即清表。
           // 不等下次 send 换 Query 时清,否则宿主在这段空窗里读到的快照仍带着已死的任务。
           runningBackgroundTasks.clear();
+          clearPendingBashContinuations();
           terminalBackgroundTaskIds.clear();
           // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
           // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。

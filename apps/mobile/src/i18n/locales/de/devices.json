@@ -14,7 +14,16 @@
   "usageOnlyDevice": "Nur {{name}}",
   "usagePlans": "Verbleibende Kontingente",
   "usageBudget": "Verbleibendes Periodenbudget",
+  "usageWaiting": "Kontingente und heutige Nutzung erscheinen, sobald dein Computer verbunden ist",
+  "usageUpdateDesktop": "Aktualisiere Cindy auf deinem Computer, um die Nutzung zu sehen",
+  "usageWaitingTitle": "Deine Nutzung erscheint hier",
+  "usageWaitingCopy": "Sobald dein Smartphone mit deinem Computer verbunden ist, werden Kontingente und tägliche Nutzung aller Konten automatisch synchronisiert – meist innerhalb weniger Sekunden.",
+  "usageUpdateDesktopTitle": "Aktualisiere Cindy auf deinem Computer",
+  "usageUpdateDesktopCopy": "Die Cindy-Version auf deinem Computer ist zu alt, um die Nutzung an dein Smartphone zu senden. Nach dem Update erscheint sie hier automatisch.",
   "management": {
+    "addCloud": "Cloud-Computer hinzufügen",
+    "preparingCloud": "Cloud-Computer wird vorbereitet",
+    "manageCloud": "Cloud-Computer verwalten",
     "title": "Geräteverwaltung",
     "openDevice": "Details zu {{name}} anzeigen",
     "details": "Gerätedetails",
@@ -384,6 +393,7 @@
       "showDeviceTasks": "Aufgaben anzeigen",
       "openDevice": "Öffnen",
       "renameDevice": "Umbenennen",
+      "groupDevice": "Gerät",
       "groupProject": "Projekt",
       "sortBy": {
         "priority": "Priorität",
@@ -425,11 +435,15 @@
       "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
       "displayHeading": "Anzeige",
       "view": {
+        "card": "Karten",
         "text": "Text",
         "list": "Liste"
       },
       "taskInfoHeading": "Aufgabeninfo",
       "taskInfo": {
+        "teammate": "Avatar des Freundes",
+        "project": "Projektsymbol und -name",
+        "harness": "Harness-Symbol",
         "time": "Zeit",
         "pr": "PR-Status",
         "tokens": "Tokens",
@@ -440,6 +454,7 @@
       "filterEmptyCopy": "Passe die Filter in den Anzeigeeinstellungen an oder setze sie zurück.",
       "filterTeammatesHeading": "Freunde",
       "filterAnySource": "Alle",
+      "filterHideAutomations": "Automatisierte Aufgaben ausblenden",
       "filterHideAllTeammates": "Alle ausblenden",
       "filterSelectedTeammates": "{{count}} ausgewählt",
       "inbox": {
