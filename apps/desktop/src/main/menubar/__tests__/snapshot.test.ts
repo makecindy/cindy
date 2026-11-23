@@ -136,7 +136,7 @@ describe('buildMenubarView', () => {
     expect(namesById(view)).toEqual({ 'pool-a': `${prefix}1 · ${handle}`, 'pool-b': `${prefix}2 · ${handle}` });
     const reordered = buildMenubarView(input([...sources].reverse(), { settings: { privacy, order: ['pool-b', 'pool-a'] } }));
     expect(namesById(reordered)).toEqual(namesById(view));
-    expect(reordered.headlinePrimary).toBe(`Codex${plan ? ` ${plan}` : ''} · 2 · ${handle} has the most left.`);
+    expect(reordered.headlinePrimary).toBe(`Codex${plan ? ` ${plan}` : ''} 2 · ${handle} has the most left.`);
   });
 
   it('recommends the source with the most room and outlines its tube', () => {
@@ -145,6 +145,19 @@ describe('buildMenubarView', () => {
     const beta = view.sources.find((s) => s.id === 'beta');
     expect(beta).toMatchObject({ value: '80', valueUnit: '%', level: 'normal', fill: 0.8, emphasized: true });
     expect(view.sources.find((s) => s.id === 'alpha')?.emphasized).toBe(false);
+  });
+
+  // #10935 review: hiding the first of three pooled workspaces must not make
+  // the headline's account number point at a different tube (unit tier).
+  it('keeps headline and tube ordinals aligned when an earlier account is hidden', () => {
+    const sources = ['a', 'b', 'c'].map((id, i) => codex(id, 80 - i * 30, {
+      pooled: true, account: 'same@example.com', plan: 'Team',
+    }));
+    const view = buildMenubarView(input(sources, { settings: { hidden: ['a'] } }));
+    expect(view.sources.map(source => source.name)).toEqual(['Team 2 · same', 'Team 3 · same']);
+    expect(view.headlinePrimary).toBe('Codex Team 3 · same has the most left.');
+    expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'en'))?.sources.map(source => source.name))
+      .toEqual(['Team 2 · same', 'Team 3 · same']);
   });
 
   // Shared rule (quota-level): 30% or less left is yellow, 10% or less is red.

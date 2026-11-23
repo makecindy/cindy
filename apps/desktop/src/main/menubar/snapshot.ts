@@ -537,13 +537,10 @@ class Builder {
     const peers = this.visibleSubscriptions().filter(candidate => !candidate.shared
       && candidate.family === source.family && (candidate.plan?.trim() || '') === plan);
     if (peers.length < 2) return title;
-    const name = this.baseName(source);
-    const sameName = peers.filter(candidate => this.baseName(candidate) === name);
-    const ordinal = sameName.length > 1
-      ? String(sameName.map(candidate => candidate.id).sort().indexOf(source.id) + 1)
-      : '';
-    const identity = [ordinal, name].filter(Boolean).join(' · ');
-    return `${title} · ${identity}`;
+    // Reuse the tube's stable pool qualifier, including hidden accounts. Re-numbering
+    // only visible accounts could make the headline point at a different tube.
+    const name = this.who(source);
+    return name === this.baseName(source) ? `${title} · ${name}` : `${source.brand} ${name}`;
   }
 
   private sourceTitle(source: MenubarSourceInput): string {
