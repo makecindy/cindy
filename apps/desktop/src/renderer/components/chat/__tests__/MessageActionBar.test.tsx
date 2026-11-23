@@ -578,6 +578,10 @@ describe('MessageActionBar', () => {
           models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
           perModelCost: [
             {
+              model: 'own-key',
+              money: { amount: 3, currency: 'USD', approximate: false, kind: 'actual-cost' },
+            },
+            {
               model: 'claude-fable-5',
               money: { amount: 0.75, currency: 'CNY', approximate: false, kind: 'actual-cost' },
             },
@@ -590,7 +594,7 @@ describe('MessageActionBar', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '¥2.00' }));
+    fireEvent.click(screen.getByRole('button', { name: '¥2.00 + $3.00' }));
     const tooltip = screen.getByText(
       (_, element) =>
         element?.classList.contains('whitespace-pre-line') === true &&
@@ -601,6 +605,7 @@ describe('MessageActionBar', () => {
         'chat.messageActionBar.userTurnCostDetailsTitle',
         'usageDetails.costLine',
         'usageDetails.costBreakdownHeader',
+        'usageDetails.modelCostLine',
         'usageDetails.modelCostLine',
         'usageDetails.modelCostLine',
         'usageDetails.tokenLine',

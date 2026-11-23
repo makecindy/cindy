@@ -31,6 +31,7 @@ import { gitExec, GitExecError } from '../worktree/gitExec.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import {
+  hasTeammateUpgraded,
   TEAMMATE_MEMORY_MOVE_RECEIPT_FILE,
   TEAMMATE_PROJECT_MEMORY_SEGMENTS,
   legacyTeammateProjectMemoryDir,
@@ -39,7 +40,6 @@ import {
 } from './botProjectMemory.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, type ReadPreviousTemplate } from './botProjectTemplate.js';
-import { routeModelFields } from './botV2Carryover.js';
 import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
@@ -211,6 +211,7 @@ async function copySkillFolders(sourceDir: string, workspace: string): Promise<{
   const root = await fs.realpath(sourceDir).catch(() => sourceDir);
   for (const entry of await readEntries(sourceDir)) {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    if (await kindAt(path.join(path.dirname(sourceDir), 'disabled-skills', entry.name)) !== null) continue;
     const skillRoot = path.join(root, entry.name);
     let target = path.join(targetDir, entry.name);
     const existing = await kindAt(target);
@@ -358,10 +359,10 @@ export function templateFromProjectHistory(workspace: string): ReadPreviousTempl
   return async (relative, sha256) => {
     if (!await isOwnRepository(workspace)) return null;
     const file = relative.split(path.sep).join('/');
-    const { stdout } = await gitExec(['log', '--format=%H', '-n', '50', '--', file], workspace, { timeoutMs: 10_000 });
+    const { stdout } = await gitExec(['log', '--format=%H', '--diff-filter=AM', '-n', sha256 ? '50' : '1', '--', file], workspace, { timeoutMs: 10_000 });
     for (const commit of stdout.split('\n').map(line => line.trim()).filter(Boolean)) {
       const shown = await gitExec(['show', `${commit}:${file}`], workspace, { timeoutMs: 10_000 }).catch(() => null);
-      if (shown && createHash('sha256').update(shown.stdout).digest('hex') === sha256) return shown.stdout;
+      if (shown && (!sha256 || createHash('sha256').update(shown.stdout).digest('hex') === sha256)) return shown.stdout;
     }
     return null;
   };
@@ -485,6 +486,20 @@ function broadcastProjectRegistered(workingDir: string): void {
 /** The project's own nightly review: an ordinary project automation, not a host job. */
 export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
+/** Default Bot tasks inherit at creation; their definitions never contain a model snapshot. */
+export type BotDefaultProjectSchedule = Omit<ProjectScheduleConfig,
+  'followTeammateModel' | 'model' | 'agentKind' | 'modelAgentKind' | 'modelAgentDeviceId'
+  | 'providerId' | 'agentDeviceId' | 'effort' | 'fastMode'>;
+
+/** Shared creation policy for every supplied task; existing choices have no inferred provenance. */
+export function createBotDefaultProjectSchedule(
+  defaults: BotDefaultProjectSchedule,
+  current?: ProjectScheduleConfig,
+): ProjectScheduleConfig {
+  return { ...defaults, ...current,
+    followTeammateModel: current ? current.followTeammateModel : true };
+}
+
 export function botProjectMemoryReview(input: {
   botId: string;
   displayName: string;
@@ -492,10 +507,8 @@ export function botProjectMemoryReview(input: {
   timezone: string;
   /** Localized "{{name}} · …" title template. */
   title: string;
-}): ProjectScheduleConfig {
+}): BotDefaultProjectSchedule {
   const name = input.displayName.trim() || input.botId;
-  // The teammate's own model, also on another computer; one that cannot be kept uses the default.
-  const model = input.route ? routeModelFields(input.route) ?? {} : {};
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
@@ -505,7 +518,6 @@ export function botProjectMemoryReview(input: {
     recurring: true,
     persistentSession: true,
     silentWhenIdle: true,
-    ...model,
   };
 }
 
@@ -542,7 +554,8 @@ export async function ensureBotProjectAutomations(input: {
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
   });
   await loader.upsertSchedule(input.workingDir, {
-    ...defaults, ...current, prompt: legacyHook ? current!.prompt : defaults.prompt,
+    ...createBotDefaultProjectSchedule(defaults, current),
+    prompt: legacyHook ? current!.prompt : defaults.prompt,
     preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
   }, { keepUnreadable: true });
   return true;
@@ -577,15 +590,18 @@ export async function prepareBotProjectWorkspace(input: {
   // Memory and Skills become the project's own, before the first V2 turn reads them. A project
   // memory kept outside the folder (earlier versions) comes first: it is newer than the V1 copy.
   const moved = await moveTeammateMemoryIntoProject({ botId: input.botId, ownerRoot: input.ownerRoot, workspace });
-  const v1Copied = await copyMemoryRecords(botProfileMemoryDir(input.ownerRoot, input.botId), teammateProjectMemoryDir(workspace));
+  const alreadyUpgraded = await hasTeammateUpgraded(input.ownerRoot, input.botId);
+  const v1Copied = alreadyUpgraded ? 0 : await copyMemoryRecords(botProfileMemoryDir(input.ownerRoot, input.botId), teammateProjectMemoryDir(workspace));
   const memoriesCopied = (moved ?? 0) + v1Copied;
-  const skills = await copySkillFolders(path.join(botProfileDir(input.ownerRoot, input.botId), 'skills'), workspace);
+  const skills = alreadyUpgraded
+    ? { copied: 0, targetDir: path.join(workspace, '.agents', 'skills'), skippedLinks: [] }
+    : await copySkillFolders(path.join(botProfileDir(input.ownerRoot, input.botId), 'skills'), workspace);
   if (skills.copied > 0 && skills.targetDir !== path.join(workspace, '.agents', 'skills')) {
     skills.skippedLinks.push(`.agents/skills is a link, so the skills were put in ${path.relative(workspace, skills.targetDir)}/`);
   }
   // The starter template only fills what the teammate does not have yet: its own skills and
   // rules (copied just above) win over a template file of the same name. Before the first version.
-  const templated = await applyTeammateTemplate(workspace, input.displayName);
+  const templated = await applyTeammateTemplate(workspace, input.displayName, undefined, undefined, templateFromProjectHistory(workspace));
   await writeIfMissing(path.join(workspace, 'CLAUDE.md'), '@AGENTS.md\n');
   setBotProjectSkillsDir(input.ownerRoot, input.botId, true);
   let repository: BotProjectPreparation['repository'];

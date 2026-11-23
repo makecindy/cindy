@@ -925,6 +925,30 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     }
   });
 
+  // Regression (owner 2026-11-22): a teammate's daily summary scheduled in a private-chat channel lane
+  // was marked silent, finished with a summary and never reached the chat. A channel lane exists to
+  // talk in that chat, so its scheduled results are posted; silence only quiets desktop notifications.
+  it('伙伴渠道专线上静默的自动任务轮次照样回传终稿', async () => {
+    const silencedRuns = new Set<string>(['quiet']);
+    setSilencedRunProbe((runId) => silencedRuns.has(runId));
+    try {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind: 'chunked-text', im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+      const h = makeSessionHarness('silent-lane');
+      runner.attachSessionOutput(h.session, 'U1', { attached: false, companionChannel: true });
+      const turnOrigin = { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'daily', runId: 'quiet' };
+      h.emit({ type: 'text', data: { text: '今天没有新的重要邮件', isFinal: true }, turnOrigin });
+      h.emit({ type: 'done', data: {}, turnOrigin });
+      await vi.waitFor(() => expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledExactlyOnceWith(
+        'U1', '🤖 自动任务「daily」\n\n今天没有新的重要邮件', { threadTs: undefined },
+      ));
+    } finally {
+      setSilencedRunProbe(null);
+      await runner.disposeAllSessions();
+    }
+  });
+
   it('重启后仅恢复输出监听，不新建会话；重复恢复不会重复回复', async () => {
     const h = makeSessionHarness('cold-session');
     const stub = streamingHandleStub();

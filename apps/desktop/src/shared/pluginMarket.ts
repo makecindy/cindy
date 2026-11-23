@@ -1,6 +1,6 @@
 import type { DownloadProgress } from './downloadProgress';
 import type { GhostManifest, InstalledGhost } from './ghost';
-import type { GhostReadmeContent, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
+import type { GhostReadmeContent, PluginCatalogCounts, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
@@ -76,11 +76,7 @@ export interface PluginMarketQuery {
   /** Readers that only need items/cursors can omit the complete first-page count. */
   counts?: boolean;
 }
-export interface PluginMarketCounts {
-  all: number;
-  public: number;
-  organization: number;
-  personal: number;
+export interface PluginMarketCounts extends PluginCatalogCounts {
   custom: number;
 }
 export interface PluginMarketPage extends PluginMarketSnapshot {

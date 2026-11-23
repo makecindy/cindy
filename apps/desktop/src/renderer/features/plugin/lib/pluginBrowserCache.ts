@@ -1,8 +1,22 @@
 import type { PluginMarketCounts, PluginMarketItem, PluginMarketPage } from '../../../../shared/pluginMarket';
 import type { PluginGridCache } from '../PluginVirtualGrid';
+import { publicPublisherFilter, type PublicPublisherFilter } from './pluginMarketPresentation';
 
 export const PLUGIN_PAGE_SIZE = 10;
 export const PLUGIN_CATALOG_REFRESH_MS = 30_000;
+export const PLUGIN_CACHED_PAGES = 6;
+// Both publisher tabs browse the same public page. The catalog accepts up to 100 summaries.
+export function pluginCatalogPageLimit(scope: string, query: string) {
+  return scope === 'public' && !query.trim() ? 100 : PLUGIN_PAGE_SIZE;
+}
+export function pluginPageSize(items: readonly PluginMarketItem[]) {
+  const size = { all: items.length, official: 0, community: 0 };
+  for (const item of items) {
+    const publisher = publicPublisherFilter(item);
+    if (publisher) size[publisher]++;
+  }
+  return size;
+}
 export interface PluginBrowserCache {
   key: string;
   partitionKey?: string;
@@ -10,13 +24,14 @@ export interface PluginBrowserCache {
   countsKey: string;
   pages: Map<number, PluginMarketItem[]>;
   cursors: Map<number, string | null>;
-  sizes: Map<number, number>;
+  sizes: Map<number, ReturnType<typeof pluginPageSize>>;
   last: number;
   hasNext: boolean;
   counts: PluginMarketCounts | null;
   metadata: PluginMarketPage | null;
   error: number | null;
   grid: PluginGridCache;
+  gridPublisher?: PublicPublisherFilter;
   groups: Map<number, string>;
   lastSource: Map<number, string | null>;
   refreshedAt: number;
@@ -32,7 +47,7 @@ export function emptyPluginBrowserCache(key = '', countsKey = ''): PluginBrowser
     groups: new Map(), lastSource: new Map(), refreshedAt: 0, countsAt: 0 };
 }
 export function pluginBrowserKey(ownerKey: string, catalogKey: string, query = '', scope = 'all') {
-  return JSON.stringify([PLUGIN_PAGE_SIZE, ownerKey, catalogKey, query.trim(), scope]);
+  return JSON.stringify([pluginCatalogPageLimit(scope, query), ownerKey, catalogKey, query.trim(), scope]);
 }
 
 /** Plain IPC values only; keep unchanged projections referentially stable. */

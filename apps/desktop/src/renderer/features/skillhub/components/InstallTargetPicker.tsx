@@ -290,11 +290,11 @@ export function InstallTargetPicker({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next && !installingRef.current) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           aria-labelledby={INSTALL_PICKER_TITLE_ID}
           className={cn(
-            'modal-panel fixed inset-0 z-[9000] m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto outline-none',
+            'modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto outline-none',
             '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-inset [&_button:focus-visible]:ring-[var(--focus-ring-soft)]',
           )}
           onOpenAutoFocus={(event) => {
@@ -320,7 +320,7 @@ export function InstallTargetPicker({
         >
         <div
           className="flex items-start justify-between gap-3"
-          style={{ padding: '20px 18px 12px 18px' }}
+          style={{ padding: 'var(--space-5) var(--space-4) var(--space-3) var(--space-4)' }}
         >
           <div className="flex min-w-0 flex-col" style={{ gap: 'var(--space-1_5)' }}>
             <Dialog.Title

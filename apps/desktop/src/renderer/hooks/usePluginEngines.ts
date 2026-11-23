@@ -34,7 +34,7 @@ const NO_ENGINES: readonly PluginEngineView[] = Object.freeze([]);
 
 interface PluginEnginesApi {
   listPluginEngines?: () => Promise<PluginEngineView[]>;
-  refreshPluginEngines?: () => Promise<void>;
+  refreshPluginEngines?: (targetGhostId?: string) => Promise<void>;
   onPluginEnginesChanged?: (cb: (engines: PluginEngineView[]) => void) => () => void;
 }
 
@@ -47,8 +47,8 @@ function pluginEnginesApi(): PluginEnginesApi | null {
  * like the provider model refresh at the same moment. Main applies a per-plugin cooldown; new
  * models arrive through the change push. Fire-and-forget.
  */
-export function requestPluginEnginesRefresh(): void {
-  void pluginEnginesApi()?.refreshPluginEngines?.().catch((err: unknown) => log.warn('plugin engine refresh failed', err));
+export function requestPluginEnginesRefresh(targetGhostId?: string): void {
+  void pluginEnginesApi()?.refreshPluginEngines?.(targetGhostId).catch((err: unknown) => log.warn('plugin engine refresh failed', err));
 }
 
 let engines: readonly PluginEngineView[] = NO_ENGINES;
@@ -450,7 +450,7 @@ const pickerReadAt = new WeakMap<DeviceCatalogue, number>();
  * DEVICE_PLUGIN_ENGINES_REREAD_MS; a computer keeps its last answer in between.
  * `null` = that computer has not answered yet (or could not be reached).
  */
-export function useDevicesPluginEngines(deviceIds: readonly string[]): {
+export function useDevicesPluginEngines(deviceIds: readonly string[], prefetchOnReconnect = false): {
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>;
   read: (deviceId?: string) => void;
 } {
@@ -471,12 +471,12 @@ export function useDevicesPluginEngines(deviceIds: readonly string[]): {
     }
   }, [sources]);
   const subscribe = useCallback((listener: () => void) => {
-    // Picker candidates share cache updates and read on demand, without causing reconnect prefetch.
-    const offs = sources.map((source) => source.catalogue.subscribe(listener, false));
+    // Picker candidates read on demand. A visible settings list can also recover on reconnect.
+    const offs = sources.map((source) => source.catalogue.subscribe(listener, prefetchOnReconnect));
     return () => {
       for (const off of offs) off();
     };
-  }, [sources]);
+  }, [sources, prefetchOnReconnect]);
   // One map per distinct set of answers, so consumers re-render only when a computer's list changed.
   const cache = useRef<{
     sources: typeof sources;

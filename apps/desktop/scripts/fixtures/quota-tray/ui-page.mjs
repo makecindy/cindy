@@ -4,9 +4,13 @@ export default {
   viewport: { width: 332, height: 700 },
   real: 'QuotaTray, its settings/detail/usage pages, shared presentation contract and buildMenubarView',
   notCovered: 'OS tray hover, native window positioning, persisted user settings and Swift rendering',
-  cases: { default: { about: 'Eight unread tasks, default clipping, settings, provider details and usage navigation' } },
+  cases: {
+    default: { about: 'Eight unread tasks, default clipping, settings, provider details and usage navigation' },
+    crowded: { about: 'Nine sources at the widest panel: every value on one line inside its column, tubes level', viewport: { width: 368, height: 700 } },
+  },
   async check(page, ui) {
     await page.locator('html[data-quota-painted=true]').waitFor();
+    if (ui.case === 'crowded') return checkCrowdedRow(page, ui);
     const natural = Number(await page.locator('html').getAttribute('data-quota-natural-height'));
     await page.setViewportSize({ width: 332, height: Math.ceil(natural) });
     const count = await page.locator('.task-row').count();
@@ -21,7 +25,10 @@ export default {
     await page.locator('.more').click();
     await page.getByRole('button', { name: await ui.t('menubar.ui.settings'), exact: true }).click();
     await page.getByRole('switch', { name: await ui.t('menubar.ui.privacy'), exact: true }).check();
-    await page.locator('select').selectOption('local');
+    const currency = page.getByLabel(await ui.t('menubar.ui.usageCurrency'));
+    await currency.selectOption('USD');
+    await page.getByLabel(await ui.t('menubar.ui.usageScope')).selectOption('local');
+    if (await currency.inputValue() !== 'USD') throw new Error('Changing scope reset the selected usage currency');
     // #11277 review: the last visible source cannot be hidden (Swift panel parity); its switch shakes.
     const sourceSwitches = page.locator('.manage-source input[type=checkbox]');
     const sourceCount = await sourceSwitches.count();
@@ -118,3 +125,40 @@ export default {
     if (await selected.textContent() !== await ui.t('menubar.ui.tabUsage')) throw new Error('Visible tray changed tabs');
   },
 };
+
+/**
+ * Regression (Windows screenshot, 2026-11-22): with nine sources each column is about 34px, and
+ * the 22px values wrapped ("100" over "%"), dropping that column's tube and labels, or ran into
+ * the neighbour ("¥90.20" over "13%"); the fixed 40px tubes stuck out of their columns. Measures
+ * the real panel in the browser, since jsdom has no layout.
+ */
+async function checkCrowdedRow(page, ui) {
+  await page.evaluate(() => document.fonts.ready);
+  // The fit follows font loading through a ResizeObserver, a frame after the card is painted.
+  // Polled as a function: the page's CSP has no 'unsafe-eval', which a string expression needs.
+  await page.waitForFunction(crowdedRowIssues, true, { timeout: 2000 }).catch(() => {});
+  const issues = await page.evaluate(crowdedRowIssues, false);
+  if (issues.length) throw new Error('Crowded source row is uneven: ' + issues.join('; '));
+  await ui.capture('crowded', { locator: page.locator('.sources') });
+}
+
+/** Runs in the page: what keeps the source row from lining up, or only whether nothing does. */
+function crowdedRowIssues(settled) {
+  const issues = [];
+  const columns = [...document.querySelectorAll('.source')];
+  if (columns.length !== 9) issues.push(`${columns.length} columns instead of 9`);
+  const tops = columns.map(column => column.querySelector('.tube').getBoundingClientRect().top);
+  if (Math.max(...tops) - Math.min(...tops) > 0.5) issues.push('tubes start at different heights: ' + tops.join(', '));
+  for (const column of columns) {
+    const box = column.getBoundingClientRect();
+    const name = column.querySelector('.source > span:not(.logo)').textContent;
+    // The value's drawn text, after any scaling, and the tube itself.
+    const text = document.createRange();
+    text.selectNodeContents(column.firstElementChild);
+    const parts = { value: text.getBoundingClientRect(), tube: column.querySelector('.tube').getBoundingClientRect() };
+    for (const [part, rect] of Object.entries(parts)) {
+      if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5) issues.push(`${name}: ${part} leaves its column`);
+    }
+  }
+  return settled ? issues.length === 0 : issues;
+}

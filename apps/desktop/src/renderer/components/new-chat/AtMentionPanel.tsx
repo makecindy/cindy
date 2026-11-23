@@ -550,7 +550,7 @@ export function AtMentionPanel({
         'pointer-events-auto',
         // 内嵌时外壳会把量到的确定高度写到本层 style.height 上，条目多时只滚下面这一层 (#9536)。
         // 没有外壳时高度仍是 auto。data-morph-scroll 告诉外壳不要再出一条滚动条；切页后重新判定。
-        embedded ? 'relative flex min-h-0 max-h-full flex-1 flex-col' : 'absolute left-0 bottom-full mb-2 z-50',
+        embedded ? 'relative flex min-h-0 max-h-full flex-1 flex-col' : 'absolute left-0 bottom-full mb-2 z-float',
       )}
     >
       <div

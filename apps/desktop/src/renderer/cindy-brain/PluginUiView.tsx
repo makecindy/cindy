@@ -16,9 +16,10 @@ function sameContext(left: unknown, right: unknown, depth = 1): boolean {
 }
 
 /** All placements share the standard presenter and its visible-View lifetime. */
-export function PluginUiView({ ghost, viewId, sessionId: requestedSessionId, input, context, onUnavailable, chrome = 'card', sizing = 'content' }: {
+export function PluginUiView({ ghost, viewId, composerPlacement, sessionId: requestedSessionId, input, context, onUnavailable, chrome = 'card', sizing = 'content' }: {
   ghost: InstalledGhost; viewId: string; sessionId: string | null; context?: Record<string, unknown> | (() => Record<string, unknown>);
   input?: Record<string, unknown>;
+  composerPlacement?: string;
   onUnavailable?(): void;
   chrome?: 'card' | 'panel'; sizing?: 'content' | 'fill' | 'sidebar-section';
 }) {
@@ -67,7 +68,7 @@ export function PluginUiView({ ghost, viewId, sessionId: requestedSessionId, inp
   }), [sessionId, hasContext]);
   if (!view) return null;
   return <McpAppCard key={`${instanceId}:${viewId}:${ghost.approval.state === 'approved' ? ghost.approval.revision : ''}`}
-    source={{ instanceId, viewId }} contextSource={contextSource} onUnavailable={onUnavailable}
+    source={{ instanceId, viewId }} composerPlacement={composerPlacement} contextSource={contextSource} onUnavailable={onUnavailable}
     sessionId={view.scope === 'task' ? sessionId : null} clientId={`${instanceId}:${viewId}`}
     chrome={chrome} sizing={sizing} title={view.title} plugin={{ name: ghost.manifest.name, source: ghost.installationSource ?? { kind: 'unknown' } }} />;
 }

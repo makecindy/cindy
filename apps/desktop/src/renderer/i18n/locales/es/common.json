@@ -343,7 +343,7 @@
     "invite": "Copiar invitación",
     "invitationCopied": "Invitación copiada. Pégala en un mensaje para tu compañero de equipo.",
     "tabOwned": "Compartido por mí",
-    "startIntro": "Invita a un compañero a leer todo en esta tarea y trabajar con el mismo Agent.",
+    "startIntro": "Invita a un compañero de equipo a leer todo en esta tarea y trabajar con el mismo Agent.",
     "runsOnThisDevice": "Se ejecuta en este dispositivo",
     "inviteNotice": "Cualquiera que tenga el enlace de invitación puede unirse después de iniciar sesión, con el mismo acceso Agent que el anfitrión.",
     "offlineAutoClose": "El uso compartido finaliza automáticamente si la computadora host permanece desconectada.",
@@ -356,7 +356,7 @@
     "hostOfflineNote": "El uso compartido finaliza automáticamente si esta computadora permanece desconectada. Vuelve a compartir y envía un nuevo enlace de invitación para continuar.",
     "sharingBadge": "Compartiendo",
     "ownedEmptyTitle": "No se comparte nada",
-    "ownedEmptyHint": "Abre cualquier tarea y haz clic en “Compartir tarea” para invitar a un compañero.",
+    "ownedEmptyHint": "Abre cualquier tarea y haz clic en “Compartir tarea” para invitar a un compañero de equipo.",
     "closeAll": "Dejar de compartir todo ({{count}})",
     "closeAllTitle": "¿Dejar de compartir todo?",
     "closeAllBody": "Todos los invitados perderán el acceso a las siguientes tareas y sus enlaces de invitación caducarán.",
@@ -1006,7 +1006,7 @@
     "captureFailed": "No se pudo capturar la pantalla",
     "permission": {
       "title": "Se requiere permiso de grabación de pantalla",
-      "detail": "Para tomar capturas de pantalla, permite {{appName}} en Configuración del sistema > Privacidad y seguridad > Grabación de pantalla y audio del sistema y luego vuelve a abrir {{appName}}.",
+      "detail": "Permite que {{appName}} grabe la pantalla y vuelve a intentarlo. Abre de nuevo la app si macOS te lo pide.",
       "openSettings": "Abrir configuración del sistema",
       "later": "Ahora no"
     },
@@ -1173,12 +1173,12 @@
     "windowsError": "La autorización no se completó. Inténtalo de nuevo en esta computadora.",
     "windowsErrorDetail": "Código de error {{code}}",
     "permissionsTitle": "Permisos de escritorio remoto",
-    "permissionsIntro": "La grabación de pantalla te permite ver el escritorio; la accesibilidad también permite controlarlo. Completa la autorización en la computadora; el estado se actualiza automáticamente.",
+    "permissionsIntro": "En el Mac que quieres controlar, permite la grabación de pantalla para ver el escritorio. Para usar el teclado y el ratón, permite también que Cindy controle apps. Cindy comprueba los permisos automáticamente.",
     "permissionsReady": "Los permisos del sistema están listos. Puedes volver a conectarte.",
     "screenRecording": "Grabación de pantalla",
-    "accessibility": "Accesibilidad",
-    "screenRecordingHelp": "Abre Configuración del sistema y activa la grabación de pantalla para esta aplicación Cindy. Si macOS te pide reiniciar, vuelve a abrir Cindy antes de conectarte.",
-    "accessibilityHelp": "Abre la configuración y activa la accesibilidad para la aplicación que indica el mensaje del sistema. El permiso de entrada real se comprueba automáticamente cuando vuelves.",
+    "accessibility": "Control del teclado y el ratón",
+    "screenRecordingHelp": "Permite que la copia de Cindy que estás usando grabe la pantalla en Grabación de pantalla o Grabación de pantalla y audio del sistema. Vuelve a abrir Cindy si macOS te lo pide.",
+    "accessibilityHelp": "En Privacidad y seguridad, selecciona la app indicada por macOS. Si ves System & App Protection Override, elige las apps que puede controlar. En versiones anteriores, activa Accesibilidad.",
     "permissionChecking": "Comprobando…",
     "permissionGranted": "Concedido",
     "permissionUnknown": "Sin confirmar",
@@ -1194,7 +1194,7 @@
     "title": "Escritorio remoto",
     "allow": "Permitir escritorio remoto",
     "allowHint": "Permite que tus dispositivos con sesión iniciada vean y usen todas las aplicaciones de esta computadora. También activa el control del dispositivo arriba.",
-    "permissionHint": "En la computadora, permite la grabación de pantalla y la accesibilidad en la configuración del sistema y luego vuelve a conectarte.",
+    "permissionHint": "En la computadora, permite la grabación de pantalla y la accesibilidad en la configuración del sistema y luego vuelve a conectarte. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
     "inputUnsupported": "El entorno de escritorio actual de esta computadora no admite el control remoto del teclado y el ratón en Cindy.",
     "controlUnavailable": "El control remoto de teclado y mouse no está disponible temporalmente. Vuelve a conectarte para intentarlo de nuevo.",
     "beingControlled": "Tu escritorio está siendo controlado",
@@ -1311,7 +1311,7 @@
     "privacyScreen": "Pantalla de privacidad durante la conexión",
     "privacyScreenHint": "Cubre la pantalla de esta computadora durante el control remoto. Si alguien hace clic o presiona una tecla frente a la computadora, primero pregunta si quieres desconectarte.",
     "privacyActive": "La pantalla de privacidad está activada. Si alguien hace clic o presiona una tecla frente a la computadora, primero pregunta si quieres desconectarte.",
-    "privacyFailed": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible.",
+    "privacyFailed": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible. Si el equipo remoto es un Mac, comprueba allí el permiso de control de la copia de Cindy en ejecución.",
     "hostMute": "Silenciar computadora controlada",
     "hostMuteHint": "Silenciar la computadora controlada mientras está conectada",
     "hostMuteFailed": "No se puede cambiar el estado de silencio de la computadora controlada",
@@ -1341,7 +1341,7 @@
     "credentialSigningRequired": "A la versión de desarrollo de la Mac le falta la configuración de firma. Configura la firma, reinicia Cindy en la Mac y vuelve a intentarlo.",
     "credentialPasswordRejected": "No se aceptó la contraseña de inicio de sesión de la Mac. Vuelve a ingresarla.",
     "credentialIdentityChanged": "No se pudo verificar la identidad de la computadora. No se envió ninguna contraseña a un dispositivo no verificado.",
-    "credentialAccessibilityRequired": "Permite Cindy en Configuración del sistema → Privacidad y seguridad → Accesibilidad en la Mac y luego vuelve a conectarte.",
+    "credentialAccessibilityRequired": "Comprueba en el Mac el permiso de control de la copia de Cindy que está en ejecución y vuelve a conectarte. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
     "credentialUnlockUnavailable": "No se pudo desbloquear esta Mac de forma segura. Selecciona tu cuenta en su pantalla de bloqueo y luego vuelve a conectarte; si aún falla, desbloquea la Mac localmente.",
     "disconnecting": "Desconectando…",
     "loadingDisplayModes": "Cargando resoluciones…",
@@ -1374,7 +1374,9 @@
       }
     },
     "lockOnExitHintPrivacy": "Muestra la pantalla de privacidad al salir para que la IA siga trabajando; tocar la computadora la bloquea.",
-    "lockedEnablePrivacyHint": "Para que la IA siga usando esta computadora mientras no estás, activa la pantalla de privacidad en su Configuración → General → Cuando no estás."
+    "lockedEnablePrivacyHint": "Para que la IA siga usando esta computadora mientras no estás, activa la pantalla de privacidad en su Configuración → General → Cuando no estás.",
+    "revealCurrentApp": "Mostrar {{app}} en el Finder",
+    "openPermissionInNewWindow": "Abrir en otra ventana"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1810,7 +1812,7 @@
       "activityWaiting": "Necesita tu respuesta",
       "activityCompleted": "Completado",
       "activityError": "Necesita atención",
-      "privateCompanion": "Mensaje de compañero",
+      "privateCompanion": "Mensaje de amigo",
       "untitledTask": "Tarea sin título",
       "activityNow": "Justo ahora",
       "activityMinutes": "Hace {{n}}m",
@@ -1865,6 +1867,8 @@
       "other": "Otro",
       "lowAlert": "Notificar cuando se esté agotando",
       "privacy": "Ocultar información personal",
+      "automaticCurrency": "Automático",
+      "usageCurrency": "Moneda del uso",
       "usageScope": "Alcance del uso",
       "manageFoot": "Administrar proveedores",
       "showSource": "Mostrar {{name}} en el menú",
@@ -2539,8 +2543,8 @@
         "hint": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con Touch ID o tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
         "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre.",
         "preview": "Probar ahora",
-        "previewStarting": "Suelta el mouse y el teclado. En 3 segundos aparecerá la pantalla de privacidad; presiona cualquier tecla para bloquear y luego desbloquea para probarlo.",
-        "previewUnavailable": "No se pudo mostrar la pantalla de privacidad. Reinicia Cindy e inténtalo de nuevo.",
+        "previewStarting": "Preparando la pantalla de privacidad. Suelta el ratón y el teclado. Cuando la pantalla quede cubierta, pulsa una tecla para probar el bloqueo.",
+        "previewUnavailable": "No se pudo activar la pantalla de privacidad. Es posible que la pantalla de la computadora siga visible.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
@@ -2551,7 +2555,10 @@
           "system": "Sistema"
         },
         "hintWindows": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con Windows Hello o tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
-        "hintLinux": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora."
+        "hintLinux": "Cuando la IA necesita la pantalla, esta computadora no la apaga ni se bloquea. Una pantalla de privacidad la cubre y la IA sigue trabajando detrás. Al presionar una tecla o hacer clic se bloquea de inmediato; desbloquéala con tu contraseña. Si no hay tareas en curso, la pantalla se apaga y se bloquea como siempre. Al terminar un control remoto, la pantalla de privacidad también protege esta computadora.",
+        "permissionMissing": "La pantalla de privacidad está desactivada. Cindy necesita permiso para bloquear el Mac cuando alguien haga clic o pulse una tecla.",
+        "checkFailed": "Cindy no pudo comprobar los permisos de la pantalla de privacidad en este equipo.",
+        "saveFailed": "No se pudo guardar el ajuste de la pantalla de privacidad."
       }
     },
     "agentIsland": {
@@ -2955,7 +2962,7 @@
         "dbSlimmingIncludeActiveLabel": "Limpiar tareas no archivadas",
         "dbSlimmingIncludeActiveDescription": "Limpia también las tareas no archivadas anteriores al período seleccionado y quítalas de la lista de tareas",
         "dbSlimmingIncludeActiveConfirmTitle": "¿Incluir tareas no archivadas en la limpieza de la base de datos?",
-        "dbSlimmingIncludeActiveConfirmDescription": "Es posible que una tarea no archivada aún se esté ejecutando incluso cuando tenga más antigüedad que el período seleccionado. La limpieza no espera a que se detenga y los mensajes que agrega después del análisis también pueden eliminarse. Cuando esté habilitado, se limpiarán las tareas desarchivadas, archivadas y eliminadas temporalmente que no se hayan actualizado durante el período seleccionado. Se eliminará el historial de las tareas no archivadas elegibles y se restablecerá su contexto Agent; Las entradas de tareas ordinarias también se eliminarán de la lista, mientras que las tareas principales de los amigos de equipo permanecerán. Una copia de seguridad de la base de datos puede restaurar datos de tareas y mensajes; sin uno, esos datos tampoco se pueden restaurar. Los registros utilizados para revisar o deshacer cambios de archivos de esos mensajes no se incluyen en la copia de seguridad de la base de datos y no se pueden restaurar.",
+        "dbSlimmingIncludeActiveConfirmDescription": "Es posible que una tarea no archivada aún se esté ejecutando incluso cuando tenga más antigüedad que el período seleccionado. La limpieza no espera a que se detenga y los mensajes que agrega después del análisis también pueden eliminarse. Cuando esté habilitado, se limpiarán las tareas desarchivadas, archivadas y eliminadas temporalmente que no se hayan actualizado durante el período seleccionado. Se eliminará el historial de las tareas no archivadas elegibles y se restablecerá su contexto Agent; Las entradas de tareas ordinarias también se eliminarán de la lista, mientras que las tareas principales de los amigos permanecerán. Una copia de seguridad de la base de datos puede restaurar datos de tareas y mensajes; sin uno, esos datos tampoco se pueden restaurar. Los registros utilizados para revisar o deshacer cambios de archivos de esos mensajes no se incluyen en la copia de seguridad de la base de datos y no se pueden restaurar.",
         "dbSlimmingIncludeActiveConfirmButton": "Incluir tareas no archivadas",
         "dbSlimmingIncludeActiveCancelButton": "Mantener tareas sin archivar",
         "dbSlimmingBackupLabel": "Respaldar la base de datos antes de limpiar",
@@ -3207,7 +3214,7 @@
         },
         "accessibility": {
           "label": "Entrada automática",
-          "tooltip": "El permiso de accesibilidad permite que la entrada de voz escriba en otras aplicaciones, lea el texto cercano al cursor como contexto para el refinamiento y detecte ediciones externas para el aprendizaje del diccionario."
+          "tooltip": "Permite que Cindy inserte dictados en las apps elegidas, lea texto cercano al cursor para revisarlo y detecte cambios para el diccionario. Utiliza Accesibilidad o System & App Protection Override, según la opción que muestre tu Mac."
         }
       },
       "interactionSound": {
@@ -4642,6 +4649,22 @@
         "hideProvider": "Ocultar del selector de modelos",
         "showProvider": "Mostrar en el selector de modelos"
       },
+      "plugin": {
+        "title": "Proveedores de complementos",
+        "badge": "Complemento",
+        "rowTip": "{{provider}} · Proporcionado por un complemento",
+        "source": "Proporcionado por un complemento",
+        "declaredName": "Nombre en el complemento: {{name}}",
+        "note": "Este proveedor procede de un complemento instalado y ejecuta las tareas con el motor del propio complemento. El inicio de sesión y la conexión se gestionan en el complemento. Si desactivas o desinstalas el complemento, desaparece de esta lista.",
+        "openPlugin": "Abrir complemento",
+        "resetName": "Restaurar el nombre del complemento",
+        "suspendedBanner": "Este proveedor está deshabilitado: las tareas nuevas y las automatizaciones ya no lo usan, y tus otras computadoras y las personas con quienes compartes tampoco pueden usarlo. El complemento en sí no se ve afectado. Si solo quieres que no aparezca en el selector de modelos, ocúltalo en su lugar.",
+        "hiddenBanner": "Oculto del selector de modelos. Las tareas y las automatizaciones que ya lo usan no se ven afectadas.",
+        "unavailableBanner": "El complemento indica que este motor no puede ejecutarse en este momento. Abre el complemento para ver el motivo.",
+        "unavailableBannerReason": "No puede ejecutarse en este momento: {{reason}}",
+        "modelsEmpty": "Este motor todavía no ha indicado sus modelos, así que las tareas nuevas usan su propio modelo predeterminado. Cuando una tarea se haya ejecutado con él, sus modelos aparecerán aquí.",
+        "modelSwitchAria": "Habilitar {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "Conexión con clave API",
         "replaceKey": "Editar configuración de conexión",
@@ -4706,7 +4729,7 @@
         "more": "Más modelos de voz ({{count}})",
         "manual": "Ingrese un ID de modelo de voz",
         "modelId": "ID del modelo de voz",
-        "modelsHint": "Guardar modelos de voz no inicia la síntesis de voz. Elija voces y reproducción de oraciones en la configuración de voz del compañero.",
+        "modelsHint": "Guardar modelos de voz no inicia la síntesis de voz. Elija voces y reproducción de oraciones en la configuración de voz del amigo.",
         "otherModels": "Chat y otros modelos",
         "separateKey": "La voz requiere una clave API. Esto crea una conexión separada y mantiene su suscripción o conexión de código de dispositivo.",
         "fetchFailed": "El catálogo de modelos no está disponible. Aún puedes agregar modelos de referencia.",
@@ -4925,13 +4948,13 @@
         "workingDirFailed": "No se pudo actualizar el directorio de trabajo. Selecciónelo nuevamente."
       },
       "companion": {
-        "assigned": "Las respuestas provienen del amigo de equipo vinculado.",
-        "description": "Chatea con {{name}} en WeChat, compartiendo memoria y la tarea principal. La conexión WeChat de esta computadora puede pertenecer a un amigo de equipo a la vez.",
-        "other": "WeChat está vinculado a otro amigo de equipo. Primero elimine ese enlace en su configuración de conexión o en la configuración personal de WeChat.",
-        "permissionNote": "Sus mensajes WeChat a este amigo de equipo utilizan su configuración de permisos, incluido el acceso completo. Cambie los permisos debajo de la entrada de chat del amigo de equipo en Cindy. Los mensajes de otras personas siguen restringidos.",
-        "remove": "Quitar enlace de amigo de equipo",
+        "assigned": "Las respuestas provienen del amigo vinculado.",
+        "description": "Chatea con {{name}} en WeChat, compartiendo memoria y la tarea principal. La conexión WeChat de esta computadora puede pertenecer a un amigo a la vez.",
+        "other": "WeChat está vinculado a otro amigo. Primero elimine ese enlace en su configuración de conexión o en la configuración personal de WeChat.",
+        "permissionNote": "Sus mensajes WeChat a este amigo utilizan su configuración de permisos, incluido el acceso completo. Cambie los permisos debajo de la entrada de chat del amigo en Cindy. Los mensajes de otras personas siguen restringidos.",
+        "remove": "Quitar enlace de amigo",
         "useExisting": "Usar el WeChat conectado con {{name}}",
-        "updateFailed": "No se pudo actualizar el enlace. Espere a que finalicen las tareas de WeChat, luego vuelva a intentarlo y verifique que el amigo de equipo esté disponible."
+        "updateFailed": "No se pudo actualizar el enlace. Espere a que finalicen las tareas de WeChat, luego vuelva a intentarlo y verifique que el amigo esté disponible."
       }
     },
     "discordBot": {
@@ -5454,6 +5477,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "No hay ningún modelo auxiliar disponible",
+        "configDescription": "Afecta al nombrado automático de tareas, los resúmenes de tareas fijadas, la ayuda y las tareas de complementos, como la traducción de subtítulos. Corrige los problemas siguientes o elige otros modelos disponibles en Personalizado.",
+        "runtimeTitle": "Las últimas solicitudes a los modelos auxiliares fallaron",
+        "runtimeDescription": "Puede que la red o el servicio no estén disponibles temporalmente. Este aviso desaparece solo cuando las solicitudes vuelven a funcionar. Si sigue apareciendo, elige otros modelos disponibles en Personalizado.",
+        "fallback": "Las tareas de complementos usan temporalmente {{model}} con una intensidad de razonamiento menor, lo que puede ser más lento y consumir más cuota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Abrir proveedores",
+        "customize": "Personalizar modelos auxiliares",
+        "issues": {
+          "signed_out": "Hay que iniciar sesión en Cindy",
+          "provider_disabled": "Proveedor desactivado",
+          "model_disabled": "Modelo desactivado",
+          "payment_required": "No lo incluye tu plan o saldo",
+          "no_credential": "Falta el inicio de sesión o la clave",
+          "unavailable": "Actualmente no disponible"
+        },
+        "toast": {
+          "config": "No hay ningún modelo auxiliar disponible. Afecta al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
+          "runtime": "Las últimas solicitudes a los modelos auxiliares fallaron. Puede afectar al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
+          "open": "Abrir configuración"
+        }
       }
     },
     "compaction": {
@@ -5814,10 +5860,10 @@
         "toggleAria": "Usar los inicios de sesión de mi navegador",
         "confirmTitle": "¿Permitir que el Agent use tus inicios de sesión del navegador?",
         "confirmDescription": "El Agent podrá abrir sitios con tus cuentas que ya tengan la sesión iniciada, incluidos correo electrónico, unidades en la nube y consolas de trabajo. Puedes desactivarlo cuando quieras; la copia se eliminará.",
-        "confirmDescriptionMac": "El Agent podrá abrir sitios con tus cuentas que ya tengan la sesión iniciada, incluidos correo electrónico, unidades en la nube y consolas de trabajo. Para leer los archivos de inicio de sesión de Chrome, también se necesita Acceso total al disco. Puedes desactivarlo cuando quieras; la copia se eliminará.",
+        "confirmDescriptionMac": "El Agent podrá abrir sitios con tus cuentas que ya tengan la sesión iniciada, incluidos correo electrónico, unidades en la nube y consolas de trabajo. Puedes desactivarlo cuando quieras; la copia se eliminará. Si macOS te pide una carpeta, elige la del perfil del navegador que quieras usar.",
         "confirm": "Usar mis inicios de sesión",
-        "readDeniedTitle": "Se necesita Acceso total al disco",
-        "readDeniedDescription": "Cindy necesita este permiso para leer los archivos de inicio de sesión de Chrome. Activa Cindy en Privacidad y seguridad → Acceso total al disco y vuelve a intentarlo.",
+        "readDeniedTitle": "No se puede leer el perfil del navegador",
+        "readDeniedDescription": "En Privacidad y seguridad → Acceso total al disco, selecciona la copia de Cindy que está en uso. Si macOS permite elegir una carpeta, selecciona solo la del perfil del navegador que necesitas y vuelve a intentarlo.",
         "openFullDiskAccess": "Abrir configuración del sistema",
         "readDeniedLater": "Ahora no",
         "toast": {
@@ -5989,7 +6035,7 @@
         "permissionIntro": {
           "title": "Activar la automatización de la computadora",
           "description": "{{appName}} instalará o iniciará Cua Driver localmente para leer la pantalla y realizar acciones como hacer clic y escribir. Actívalo solo si iniciaste intencionalmente una tarea de automatización de la computadora.",
-          "macosDescription": "A continuación, {{appName}} instalará Cua Driver o abrirá su proceso de permisos, y podría abrir Configuración del Sistema de macOS. Primero, concede a CuaDriver los permisos básicos de Accesibilidad y Grabación de pantalla. Durante el uso posterior, macOS podría mostrar confirmaciones adicionales para una aplicación de destino o una acción específica. Aprueba esas solicitudes solo si iniciaste intencionalmente una tarea de Computer Use. Luego, vuelve a {{appName}} y se comprobará automáticamente.",
+          "macosDescription": "{{appName}} instalará o iniciará Cua Driver localmente para leer la pantalla y realizar acciones como hacer clic y escribir. Actívalo solo si iniciaste intencionalmente una tarea de automatización de la computadora. Permite la grabación de pantalla a CuaDriver. En System & App Protection Override, elige las apps que puede controlar. En versiones anteriores de macOS, activa Accesibilidad.",
           "confirm": "Continuar",
           "cancel": "Ahora no"
         },
@@ -6010,8 +6056,8 @@
         },
         "permissions": {
           "title": "Acceso al sistema",
-          "macosHint": "Computer Use necesita Accesibilidad y Grabación de pantalla. Durante el uso, macOS podría mostrar confirmaciones adicionales para una aplicación de destino o una acción.",
-          "accessibilityLabel": "Accesibilidad",
+          "macosHint": "Permite la grabación de pantalla a CuaDriver. En System & App Protection Override, elige las apps que puede controlar. En versiones anteriores, activa Accesibilidad.",
+          "accessibilityLabel": "Control del teclado y el ratón",
           "screenRecordingLabel": "Grabación de pantalla",
           "grant": "Autorizar",
           "accessibility": "Accesibilidad: {{status}}",
@@ -6057,7 +6103,7 @@
           "toggleFailed": "No se pudo cambiar el control directo de la computadora",
           "installFailed": "No se pudo instalar cua-driver",
           "permissionFailed": "Los permisos de Computer Use no están completos",
-          "permissionPending": "Completa los dos permisos del sistema, luego vuelve aquí y haz clic en Volver a comprobar",
+          "permissionPending": "Completa la autorización en el Mac. Si el estado sigue sin actualizarse, vuelve a comprobarlo.",
           "permissionSettingsOpened": "Se abrió la configuración de permisos del sistema. Después de concederlos, vuelve y haz clic en «Volver a comprobar».",
           "permissionSettingsMonitoring": "Se abrió la configuración de permisos del sistema. Completa los permisos y el estado se actualizará automáticamente.",
           "openPermissionSettingsFailed": "No se pudo abrir la configuración de permisos del sistema"
@@ -6896,7 +6942,15 @@
           "encrypted": "Cifrado de extremo a extremo",
           "legacyConnection": "Conexión anterior",
           "encryptionUnknown": "Sin confirmar",
-          "legacyEncryptionHint": "La ruta por relé de la conexión anterior no tiene cifrado de extremo a extremo."
+          "legacyEncryptionHint": "La ruta por relé de la conexión anterior no tiene cifrado de extremo a extremo.",
+          "routePreference": "Selección de ruta",
+          "routeAuto": "Auto",
+          "routeDirect": "Directa",
+          "routeRelay": "Retransmisión",
+          "routeUnavailable": "No disponible",
+          "routeMeasuring": "Midiendo…",
+          "routeDirectUnavailableHint": "La conexión directa no está disponible actualmente en esta red",
+          "routePreferenceFailed": "No se pudo cambiar la ruta. Inténtalo de nuevo."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7118,7 +7172,12 @@
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Incluido en la pantalla de privacidad: esta computadora no entrará en reposo."
+      "keepAwakeIncluded": "Incluido en la pantalla de privacidad: esta computadora no entrará en reposo.",
+      "localNetwork": {
+        "label": "Red local",
+        "deniedHint": "Sin este permiso, los ordenadores y teléfonos de la misma red no pueden conectarse directamente a este ordenador. Pasan por el relé, que es más lento.",
+        "settingsHint": "Activa Cindy en Ajustes del Sistema › Privacidad y seguridad › Red local. Se aplica en cuanto vuelvas."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8640,7 +8699,9 @@
           "unsupported": "Este complemento todavía no permite usar su motor desde otras computadoras.",
           "remoteControlOff": "Esta computadora aún no permite el control remoto, por lo que otras computadoras no pueden usar este motor.",
           "ariaLabel": "Permitir que tus otras computadoras usen {{engine}}",
-          "descriptionShareable": "Cuando está activado, tus otras computadoras y las personas con quienes lo compartas pueden ejecutar tareas con este motor sin instalar el complemento. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea."
+          "descriptionShareable": "Cuando está activado, tus otras computadoras y las personas con quienes lo compartas pueden ejecutar tareas con este motor sin instalar el complemento. El Agent se ejecuta en esta computadora, con el inicio de sesión y la cuota de esta computadora. Los archivos y los comandos permanecen en la computadora donde está la tarea.",
+          "providerDisabled": "Este proveedor está deshabilitado en Proveedores, por lo que otras computadoras no pueden usar este motor.",
+          "openProviders": "Abrir configuración de proveedores"
         },
         "githubRelease": {
           "title": "Actualizaciones del complemento",
@@ -8657,7 +8718,7 @@
           "updated": "Complemento actualizado.",
           "empty": "No hay ninguna versión disponible para instalar.",
           "sign-in": "Inicia sesión en GitHub para buscar actualizaciones.",
-          "forbidden": "Esta sesión de GitHub no tiene acceso de lectura al repositorio privado.",
+          "forbidden": "No se pudo leer la versión publicada en GitHub. Comprueba el enlace del repositorio y los permisos de tu cuenta de GitHub.",
           "unavailable": "No se pudo comprobar ni instalar la actualización. Inténtalo de nuevo."
         },
         "customSlotTitle": "Área de configuración personalizada del complemento",
@@ -9721,6 +9782,12 @@
       "support": "Si esto continúa después de esperar, envía los registros de forma privada a feedback@cindy.app e incluye tu sistema operativo, la versión de Cindy, la hora del error y el código que aparece abajo. No publiques los registros."
     }
   },
+  "legalTermsUpdate": {
+    "title": "Términos actualizados",
+    "body": "Actualizamos los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy> de Cindy. Acéptalos para continuar o cierra sesión.",
+    "agree": "Aceptar",
+    "disagree": "Cerrar sesión"
+  },
   "legacyMigration": {
     "title": "Migrar datos de la versión anterior",
     "description": "Se encontraron datos de una versión anterior en este dispositivo. Tu historial de chat y tus archivos multimedia se migrarán a la nueva ubicación de datos. Si la aplicación anterior sigue ejecutándose, ciérrala por completo primero y mantén {{appName}} abierto durante la migración. Nota: las claves y credenciales autorizadas de terceros no se pueden migrar; después de la migración tendrás que volver a autorizarlas o ingresarlas en Configuración.",
@@ -10060,8 +10127,8 @@
         "prompt-prediction": "Sugerencias de entrada",
         "working-status": "Estado del trabajo",
         "help": "Ayuda",
-        "bot-creation": "Creación de compañeros",
-        "bot-opening": "Saludos de compañeros",
+        "bot-creation": "Creación de amigos",
+        "bot-opening": "Saludos de amigos",
         "group-planning": "Planificación del grupo",
         "ambient-reply": "Decisiones de respuesta",
         "auto-review": "Revisión automática",
@@ -11029,6 +11096,13 @@
         "enabled": "Activado"
       },
       "close": "Cerrar diálogo de descarga"
+    },
+    "localNetwork": {
+      "title": "Permitir acceso a la red local",
+      "relayOnly": "Tus otros dispositivos solo pueden conectarse a este ordenador a través del relé, que es más lento. Permite el acceso para que los dispositivos de la misma red se conecten directamente.",
+      "controlEnabled": "Los dispositivos de la misma red solo pueden controlar este ordenador directamente con acceso a la red local. Si no, pasan por el relé.",
+      "allow": "Permitir",
+      "dismiss": "Ahora no"
     }
   },
   "bots": {
@@ -11088,7 +11162,7 @@
     "creationName": "Nombre",
     "settingsBack": "Volver a Configuración",
     "title": "Amigos",
-    "add": "Agregar amigo de equipo",
+    "add": "Agregar amigo",
     "createWizard": {
       "createFailed": "No se pudo crear el amigo. Inténtalo de nuevo."
     },
@@ -11141,7 +11215,7 @@
     "close": "Cerrar",
     "list": {
       "createMenu": "Crear",
-      "createTeammate": "Nuevo amigo de equipo",
+      "createTeammate": "Nuevo amigo",
       "joinWithLink": "Ingresa el enlace de invitación…",
       "startChat": "Iniciar la conversación",
       "selectChat": "Selecciona un amigo o un chat grupal para empezar a conversar",
@@ -11159,6 +11233,11 @@
       "pinned": "Fijado",
       "needsAttention": "Necesita atención",
       "duplicate": "Duplicar amigo",
+      "duplicating": "Duplicando amigo…",
+      "duplicateFailed": "No se pudo duplicar el amigo.",
+      "duplicateModelRequired": "Para duplicar este amigo, primero elige un modelo predeterminado para los amigos en Configuración.",
+      "pinFailed": "No se pudo cambiar la fijación del amigo.",
+      "hideFailed": "No se pudo ocultar ni mostrar el amigo.",
       "moreActions": "Otras acciones para {{name}}",
       "viewIcons": "Iconos",
       "showCollapsedTeammateAvatars": "Mostrar avatares al contraer",
@@ -11241,7 +11320,7 @@
       "deleteDescription": "Al eliminar a {{name}} permanentemente, se eliminan su perfil, memoria, directorio de trabajo, conexiones de canales y tareas automatizadas. Se conservan el historial de tareas y los worktrees independientes.",
       "working": "Actualizando…",
       "actionFailed": "La acción no se completó. Inténtalo de nuevo en unos momentos.",
-      "deleteFailed": "El amigo de equipo no fue eliminado.",
+      "deleteFailed": "El amigo no fue eliminado.",
       "restart": "Reiniciar amigo",
       "restartDescription": "Detén la ejecución actual y prepara un nuevo inicio. Se conservan el historial de conversaciones, los recuerdos y los archivos.",
       "restarting": "Reiniciando…",
@@ -11368,9 +11447,9 @@
       "open": "Ver la conversación entre amigos",
       "readOnly": "Esta conversación es de solo lectura",
       "close": "Cerrar conversación",
-      "unavailable": "Esta conversación con amigos de equipo ya no está disponible.",
+      "unavailable": "Esta conversación con amigos ya no está disponible.",
       "empty": "Aún no hay mensajes para ver.",
-      "limitReached": "Esta conversación con amigos de equipo llegó a su límite; ambos amigos regresaron a sus tareas principales",
+      "limitReached": "Esta conversación con amigos llegó a su límite; ambos amigos regresaron a sus tareas principales",
       "sentHeader": "Para {{name}}",
       "receivedHeader": "De {{name}}",
       "expandThread": "Mostrar intercambio",
@@ -11397,8 +11476,8 @@
         },
         "title": "Modo de respuesta de IA",
         "settings": "Configuración de respuesta de IA",
-        "companion": "mi amigo de equipo",
-        "choose": "Elige un amigo de equipo",
+        "companion": "mi amigo",
+        "choose": "Elige un amigo",
         "enabled": "Respuestas automáticas",
         "triggerLabel": "Activación",
         "resumeAfter": "Reanudar después de estar ausente",
@@ -11427,8 +11506,8 @@
           "off": "Las respuestas automáticas están desactivadas",
           "offline": "Respuestas pausadas · Computadora desconectada",
           "waiting": "Esperando a que empieces",
-          "unbound": "Ningún amigo de equipo seleccionado",
-          "enabled": "Tu amigo de equipo está listo para responder por ti."
+          "unbound": "Ningún amigo seleccionado",
+          "enabled": "Tu amigo está listo para responder por ti."
         },
         "trigger": {
           "always": "Siempre habilitado",
@@ -11445,7 +11524,7 @@
         "attribution": "{{name}} respondió por {{owner}}",
         "digestNow": "Resumir ahora",
         "digestWorking": "Resumiendo…",
-        "digestSent": "Enviado al chat de tu amigo de equipo",
+        "digestSent": "Enviado al chat de tu amigo",
         "digestFailed": "No se pudo resumir. Inténtalo de nuevo.",
         "digestEmpty": "Nada nuevo que resumir.",
         "joinSetup": "Configura las respuestas de IA después de unirte",
@@ -11489,7 +11568,7 @@
       "loadFailedTitle": "No se pudo cargar este chat grupal",
       "loadFailedDescription": "Cindy no puede leer este chat grupal en este momento. Inténtalo de nuevo o vuelve a Amigos.",
       "unavailableTitle": "Este chat grupal ya no está disponible",
-      "unavailableDescription": "Es posible que haya sido eliminado. Vuelve a Amigos de equipo para abrir otro chat grupal o amigo de equipo.",
+      "unavailableDescription": "Es posible que haya sido eliminado. Vuelve a Amigos para abrir otro chat grupal o amigo.",
       "sidebar": {
         "threadReply": "Respuesta del hilo",
         "title": "Chats grupales",
@@ -11513,7 +11592,7 @@
         "description": "Reúne a varios amigos en un grupo. Di algo y participarán juntos.",
         "namePlaceholder": "p. ej., Viaje de fin de semana",
         "nameRequired": "Introduce un nombre para el grupo",
-        "membersLabel": "Elige amigos de equipo",
+        "membersLabel": "Elige amigos",
         "selectedCount_one": "{{count}} seleccionado, hasta {{max}}",
         "selectedCount_other": "{{count}} seleccionados, hasta {{max}}",
         "minMembers": "Elige al menos {{min}} amigos",
@@ -11535,8 +11614,8 @@
       },
       "composer": {
         "label": "Mensaje de chat grupal",
-        "placeholder": "Dile algo al grupo. @ un amigo de equipo para que solo él responda…",
-        "noMembers": "Ningún amigo de equipo aquí puede responder en este momento. Agregue uno en la configuración del grupo.",
+        "placeholder": "Dile algo al grupo. @ un amigo para que solo él responda…",
+        "noMembers": "Ningún amigo aquí puede responder en este momento. Agregue uno en la configuración del grupo.",
         "tooLong": "Este mensaje es demasiado largo. El límite es de {{max}} caracteres.",
         "sendFailed": "Mensaje no enviado. Inténtalo de nuevo en un momento.",
         "stopFailed": "No se pudo detener esta ronda. Inténtalo de nuevo.",
@@ -11576,8 +11655,8 @@
         "loadEarlier": "Mostrar mensajes anteriores",
         "loadEarlierFailed": "No se pudieron cargar los mensajes anteriores. Inténtalo de nuevo.",
         "emptyTitle": "Aún no hay mensajes en este grupo",
-        "emptyDescription": "Di algo para comenzar y tus amigos de equipo se unirán. @ un amigo de equipo para que solo ellos respondan.",
-        "roundEnded": "Los amigos de equipo terminaron",
+        "emptyDescription": "Di algo para comenzar y tus amigos se unirán. @ un amigo para que solo ellos respondan.",
+        "roundEnded": "Los amigos terminaron",
         "stepTag": "Paso {{count}}",
         "sending": "Enviando",
         "continue": "Continuar la discusión",
@@ -11635,9 +11714,9 @@
         "members": "Miembros",
         "remove": "Quitar",
         "removeNamed": "Quitar a {{name}} del grupo",
-        "minMembers": "Un chat grupal necesita al menos amigos de equipo {{min}}",
+        "minMembers": "Un chat grupal necesita al menos amigos {{min}}",
         "maxMembers": "Hasta {{max}}",
-        "noMoreBots": "No hay otros amigos de equipo disponibles para agregar",
+        "noMoreBots": "No hay otros amigos disponibles para agregar",
         "nameSaveFailed": "No se pudo guardar el nombre del grupo. Se conservó el nombre anterior.",
         "membersSaveFailed": "No se pudieron actualizar los miembros. Inténtalo de nuevo.",
         "replyMode": "Cuando no se @menciona a nadie",
@@ -11646,25 +11725,25 @@
         "replyModeNote": "Los amigos que no tienen nada que añadir se quedan callados. Cada ronda ejecuta hasta 3 pases y 10 mensajes, luego espera a que hagas clic en \"Continuar discusión\".",
         "replyModeSaveFailed": "No se pudo guardar la configuración de respuesta. Inténtalo de nuevo.",
         "delete": "Eliminar chat grupal",
-        "deleteNote": "Sólo se eliminan este chat grupal y sus mensajes. Los amigos de equipo, su memoria y sus chats privados no se ven afectados.",
+        "deleteNote": "Sólo se eliminan este chat grupal y sus mensajes. Los amigos, su memoria y sus chats privados no se ven afectados.",
         "deleteConfirmTitle": "¿Eliminar “{{name}}”?",
         "deleteFailed": "No se pudo eliminar el chat grupal. Inténtalo de nuevo en un momento.",
         "speakingMode": "Orden de intervención",
         "speakingModeAuto": "Automático",
         "speakingModeSequential": "De uno en uno",
         "speakingModeAutoNote": "Sin menciones o con @Todos los amigos: primero piensan a la vez y luego responden uno a uno. Si mencionas amigos, siguen el orden de mención.",
-        "speakingModeSequentialNote": "Un amigo de equipo habla a la vez y cada uno ve las respuestas que tiene delante.",
+        "speakingModeSequentialNote": "Un amigo habla a la vez y cada uno ve las respuestas que tiene delante.",
         "speakingModeSaveFailed": "No se pudo guardar el orden de intervención. Inténtalo de nuevo.",
         "setOrganizer": "Nombrar organizador",
         "setOrganizerNamed": "Nombrar a {{name}} organizador",
-        "organizerNote": "El organizador decide quién realiza cada paso. Por defecto, es el primer amigo de equipo.",
+        "organizerNote": "El organizador decide quién realiza cada paso. Por defecto, es el primer amigo.",
         "organizerSaveFailed": "No se pudo cambiar el organizador. Inténtalo de nuevo.",
         "projectDir": "Carpeta de proyecto",
         "projectDirNone": "Ninguna seleccionada",
         "projectDirChoose": "Elegir carpeta",
         "projectDirChange": "Cambiar carpeta",
         "projectDirClear": "Quitar carpeta",
-        "projectDirNote": "Elige un proyecto existente en este equipo. Si lo dejas vacío, se usará el proyecto del repositorio o el del compañero que ejecute la tarea. La división del trabajo en Git usa un árbol de trabajo independiente.",
+        "projectDirNote": "Elige un proyecto existente en este equipo. Si lo dejas vacío, se usará el proyecto del repositorio o el del amigo que ejecute la tarea. La división del trabajo en Git usa un árbol de trabajo independiente.",
         "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
         "allowMemberInvites": "Permitir que todos inviten amigos",
@@ -11673,8 +11752,8 @@
         "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti."
       },
       "errors": {
-        "memberLimit": "Un chat grupal necesita de 2 a 6 amigos de equipo",
-        "memberUnavailable": "Uno de estos amigos de equipo no está disponible. Elige otro y vuelve a intentarlo.",
+        "memberLimit": "Un chat grupal necesita de 2 a 6 amigos",
+        "memberUnavailable": "Uno de estos amigos no está disponible. Elige otro y vuelve a intentarlo.",
         "mentionUnavailable": "Un miembro mencionado ya no está disponible. Elige a quién mencionar antes de volver a enviar.",
         "mentionAmbiguous": "Hay más de un miembro llamado «{{name}}». Elige a quién te refieres en la lista de @.",
         "notFound": "Este chat grupal ya no existe",
@@ -11944,12 +12023,12 @@
           "removeTitle": "¿Quitar a {{name}} de este grupo?",
           "removeHint": "Perderá el acceso a los mensajes. Sus amigos también saldrán del grupo.",
           "removeOwn": "Quitar del grupo",
-          "removeOwnScope": "Esto solo afecta a este grupo. Tu compañero permanece en tu cuenta.",
+          "removeOwnScope": "Esto solo afecta a este grupo. Tu amigo permanece en tu cuenta.",
           "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
           "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
           "stopAndRemove": "Detener y quitar",
           "leave": "Dejar grupo",
-          "leaveHint": "Saldrás de este grupo junto con tus compañeros. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
+          "leaveHint": "Saldrás de este grupo junto con tus amigos. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
           "soleOwnerHint": "Eres el único miembro que queda. Archiva este grupo para conservar su historial y restaurarlo más adelante.",
           "archive": "Archivar grupo",
           "archiveHint": "Al archivar este grupo, se deshabilita para todos los miembros y se detienen los mensajes nuevos y las ejecuciones de los amigos. El historial se conserva. Busca el grupo para ver su historial o desarchivarlo.",
@@ -12069,7 +12148,7 @@
         "hide": "Quitar de mi lista",
         "hideNote": "Elimina este chat de tu lista en todos tus dispositivos. Esto no cambia la membresía, no elimina el historial, no detiene el trabajo en curso ni afecta a otros miembros.",
         "leave": "Dejar grupo",
-        "leaveNote": "Saldrás de este grupo junto con tus compañeros. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
+        "leaveNote": "Saldrás de este grupo junto con tus amigos. Ya no recibirás mensajes nuevos ni tendrás acceso a su historial.",
         "unavailable": "El servidor o computadora actual aún no admite esta acción.",
         "dissolved": "Este grupo ha sido disuelto. Aún puedes leer el historial disponible.",
         "failed": "No se pudo completar esta acción. Inténtalo de nuevo.",
@@ -12208,49 +12287,18 @@
     },
     "guided": {
       "title": "Crear un amigo",
-      "reviewTitle": "Tu nuevo amigo",
-      "question": "Describe brevemente tus expectativas.",
-      "placeholder": "Por ejemplo, ayúdame a practicar inglés con conversaciones cotidianas y correcciones cuidadosas.",
       "generate": "Crear amigo",
-      "generating": "Dando forma a tu amigo…",
-      "generationFailed": "No se pudo generar tu amigo. Tu idea sigue aquí; vuelve a intentarlo.",
       "modelRequired": "Elige un modelo disponible arriba para continuar.",
       "modelFollowsDefault": "Usa el modelo predeterminado para amigos.",
       "modelForThisBot": "Esta selección se aplica solo a este amigo.",
-      "cindyDescription": "Puedo ayudarte a usar Cindy, conectar tus herramientas y hacer cosas juntos.",
-      "cindySummary": "Administra Cindy, conecta herramientas y haz las cosas.",
-      "openCindy": "Abrir Cindy",
-      "addCindy": "Agregar Cindy",
-      "done": "Listo",
-      "editName": "Editar nombre",
       "duplicateName": "Ese nombre ya está en uso. Elige un nombre que puedas distinguir fácilmente.",
-      "introduction": "Sobre mí",
-      "editIntroduction": "Editar presentación",
-      "refine": "Ajustar amigo",
-      "refinePlaceholder": "¿Qué cambiarías? Por ejemplo, menos formal y un poco más divertido.",
-      "back": "Atrás",
-      "invite": "Invitar amigo",
       "portrait": "Retrato {{number}}",
       "upload": "Subir imagen",
       "generateAvatar": "Generar retrato",
-      "useAvatar": "Usar este retrato",
-      "examples": {
-        "english": {
-          "label": "Practicar inglés",
-          "prompt": "Practica inglés conmigo mediante conversaciones cotidianas. Ten paciencia y corrige con cuidado las expresiones poco naturales."
-        },
-        "ideas": {
-          "label": "Explorar ideas",
-          "prompt": "Un amigo creativo e imaginativo con opiniones propias, que me ayuda a convertir ideas de escritura y de productos en planes prácticos."
-        },
-        "life": {
-          "label": "Hablar de la vida",
-          "prompt": "Un amigo cálido y divertido que escucha los pequeños detalles de mi vida sin apresurarse a dar consejos."
-        }
-      }
+      "useAvatar": "Usar este retrato"
     },
     "import": {
-      "title": "Importar un amigo de equipo",
+      "title": "Importar un amigo",
       "entry": "Importar un Agent",
       "description": "Elige qué traer de Hermes o OpenClaw.",
       "empty": "No se encontró ningún Agent instalado en esta computadora.",
@@ -12265,7 +12313,7 @@
       "takeoverNote": "Las tareas de origen solo se pausan después de verificar sus conexiones de datos. Si no seleccionas alguna dependencia, la tarea de origen sigue en ejecución.",
       "submit": "Importar",
       "back": "Atrás",
-      "open": "amigo de equipo abierto",
+      "open": "amigo abierto",
       "running": "Importando y comprobando conexiones…",
       "complete": "Importación guardada",
       "attention": "Algunos elementos necesitan atención. Consulta los detalles a continuación.",
@@ -12306,18 +12354,18 @@
       "attachmentUnsupported": "Este formato de archivo adjunto aún no es compatible. El original permanece en la fuente.",
       "diskFull": "No hay suficiente espacio en disco. Libera espacio y vuelve a intentarlo.",
       "permissionDenied": "Falta el permiso para leer o guardar este elemento. Corrige los permisos y luego vuelve a intentarlo.",
-      "setupDeferred": "Continúe con el inicio de sesión y la verificación en el chat de amigos de equipo.",
+      "setupDeferred": "Continúe con el inicio de sesión y la verificación en el chat de amigos.",
       "automationInvalid": "No se pudo convertir la definición de la automatización, así que no se creó.",
       "itemFailed": "Este elemento no se completó. Vuelve a intentarlo o consulta los detalles de la importación.",
-      "chatPartial": "Se creó su amigo de equipo, pero parte del contenido no se guardó por completo. Los siguientes puntos todavía necesitan atención; otros contenidos y chat permanecen disponibles.",
-      "imBotOwnerMissing": "No se encontró ningún ID de usuario propietario. Termine de conectar este bot en la página de plataformas de mensajería del amigo de equipo.",
+      "chatPartial": "Se creó su amigo, pero parte del contenido no se guardó por completo. Los siguientes puntos todavía necesitan atención; otros contenidos y chat permanecen disponibles.",
+      "imBotOwnerMissing": "No se encontró ningún ID de usuario propietario. Termine de conectar este bot en la página de plataformas de mensajería del amigo.",
       "imBotGatewayRunning": "La puerta de enlace original todavía usa este bot. Detenla y luego conecta el bot en las plataformas de mensajería.",
-      "imBotInUse": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo de equipo.",
-      "imBotConnectFailed": "No se pudo conectar este bot. Vuelve a intentarlo en la página de plataformas de mensajería del amigo de equipo.",
-      "imBotSourceStopUnconfirmed": "El robot original aún no se ha detenido, por lo que no se lo entregó al amigo de equipo. Puedes conectarlo más tarde en la página de plataformas de mensajería del amigo de equipo.",
+      "imBotInUse": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo.",
+      "imBotConnectFailed": "No se pudo conectar este bot. Vuelve a intentarlo en la página de plataformas de mensajería del amigo.",
+      "imBotSourceStopUnconfirmed": "El robot original aún no se ha detenido, por lo que no se lo entregó al amigo. Puedes conectarlo más tarde en la página de plataformas de mensajería del amigo.",
       "imBotSourceChanged": "El bot original cambió después de la vista previa, así que no se detuvo. Vuelve a cargar la vista previa e importa de nuevo.",
       "bots": "Bots de mensajería",
-      "botsNote": "Después de la importación, estos bots se detienen en {{source}} y el amigo de equipo se hace cargo de ellos.",
+      "botsNote": "Después de la importación, estos bots se detienen en {{source}} y el amigo se hace cargo de ellos.",
       "sourceDisabled": "Ya apagado",
       "botOwner": "ID del propietario {{id}}"
     },
@@ -12408,15 +12456,15 @@
       "transferFailed": "No se pudo mover a {{name}} a “{{device}}”",
       "repair": {
         "action": "Editar perfil y reintentar",
-        "title": "Corregir perfil del compañero",
-        "description": "Al guardar, este compañero se restaurará en este ordenador. Primero se guardará aquí una copia del perfil original.",
+        "title": "Corregir perfil del amigo",
+        "description": "Al guardar, este amigo se restaurará en este ordenador. Primero se guardará aquí una copia del perfil original.",
         "save": "Guardar y restaurar",
         "count": "{{count}} / {{limit}} caracteres",
         "over": "Sobran {{count}} caracteres. Acorta el texto antes de guardar.",
         "changed": "El perfil o el ordenador principal ha cambiado. Recarga el perfil antes de editarlo.",
         "loadFailed": "No se pudo leer el perfil. Inténtalo de nuevo.",
         "backupFailed": "No se pudo guardar una copia del perfil original y no se aplicó la corrección. Comprueba el espacio libre y reintenta.",
-        "saveFailed": "El compañero aún no se ha restaurado. Tus cambios siguen aquí; inténtalo de nuevo.",
+        "saveFailed": "El amigo aún no se ha restaurado. Tus cambios siguen aquí; inténtalo de nuevo.",
         "reload": "Volver a cargar"
       }
     },
@@ -12596,7 +12644,7 @@
           "invalidDingtalk": "Completa tanto el Client ID como el Client Secret.",
           "invalidDiscordToken": "Eso no parece un token de bot.",
           "invalidDiscordOwner": "El ID de usuario debe tener entre 17 y 20 dígitos.",
-          "conflict": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo de equipo.",
+          "conflict": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo.",
           "botUnavailable": "{{name}} no está disponible en este momento. Inténtalo cuando vuelva.",
           "connectFailed": "No se pudo conectar: {{reason}}",
           "failed": "No se pudo terminar. Inténtalo más tarde.",
@@ -12622,6 +12670,7 @@
           "listenPortLabel": "Puerto local de escucha",
           "listenPortPlaceholder": "18747",
           "hint": "Conecta BlueBubbles en la red local. Solo se procesan los chats seleccionados. Detén las demás respuestas automáticas de esos chats antes de conectar.",
+          "automationDenied": "macOS denegó a BlueBubbles el acceso a Mensajes durante el envío. En el Mac donde se ejecuta BlueBubbles, revisa Ajustes del Sistema → Privacidad y seguridad → Automatización.",
           "uncertain": "Hay {{count}} entregas por comprobar. Revisa el historial antes de reintentar para evitar duplicados."
         }
       },
@@ -12869,7 +12918,7 @@
           "detachedBySlash": "🚪 Control remoto terminado: volvemos a nuestros mensajes directos de Discord. Cuando quieras controlar el escritorio otra vez, envía /ctr.",
           "detachedByRevoke": "⚠️ Recuperaste el control desde el escritorio, así que los próximos mensajes vuelven a nuestros mensajes directos de Discord.",
           "notAttached": "🤷 Ahora mismo no controlas ninguna sesión, así que /exctr no tiene nada que hacer.",
-          "companionManagedCommand": "🧭 Este bot ya está en manos de un compañero: el modelo, los permisos y el directorio de trabajo siguen la configuración del compañero. Para cambiarlos, ve a la configuración del compañero en Cindy."
+          "companionManagedCommand": "🧭 Este bot ya está en manos de un amigo: el modelo, los permisos y el directorio de trabajo siguen la configuración del amigo. Para cambiarlos, ve a la configuración del amigo en Cindy."
         },
         "agent": {
           "completedNoText": "✅ Listo (el Agent no dijo nada en este turno)",
@@ -13069,13 +13118,13 @@
           "help": "🤖 Esto es lo que puedo hacer por ti:\n\n/new         Crear una nueva sesión (las anteriores se conservan; en grupos, se crea para el tema actual del grupo)\n/project     Trabajar en una carpeta de proyecto (se ejecuta aquí en el bot, sin tomar el control del escritorio)\n/session     Ver las sesiones recientes del escritorio; toca una para tomar el control y seguir\n/model       Sacar a otro modelo al campo\n/permission  Cambiar el modo de permiso (auto / bypass / ask, etc.)\n/settings    Ver el proyecto, el Agent, el modelo, la intensidad de razonamiento y los permisos actuales\n/ctr         Tomar el control remoto de un proyecto del escritorio (vuelve a enviarlo durante el control para cambiar de sesión)\n/exctr       Dejar el control y volver a la conversación de Telegram\n/help        Ver lo que sé hacer\n\n¿Hay algo en marcha que quieras detener? Envía /stop (o `!stop`): detendré de inmediato la ejecución actual y también retiraré los mensajes en cola. La sesión se conserva para que puedas continuar.\n\nEn un chat privado, solo tienes que enviarme un mensaje. En los grupos solo respondo si me mencionas con @ o respondes a uno de mis mensajes, y recuerdo los mensajes recientes del grupo como contexto.",
           "unknownCommand": "No reconozco el comando `{{cmd}}` 🤔\nComandos que entiendo: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Configuración actual\n\nProyecto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nIntensidad de razonamiento: {{effort}}\nPermisos: {{permission}}\n\nPara cambiarla, envía /project, /model o /permission.",
-          "settingsCompanion": "⚙️ Configuración actual (compañero)\n\nProyecto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nIntensidad de razonamiento: {{effort}}\nPermisos: {{permission}}\n\nEl modelo, los permisos y el directorio de trabajo siguen la configuración del compañero. Cámbialos en la configuración del compañero en Cindy.",
+          "settingsCompanion": "⚙️ Configuración actual (amigo)\n\nProyecto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nIntensidad de razonamiento: {{effort}}\nPermisos: {{permission}}\n\nEl modelo, los permisos y el directorio de trabajo siguen la configuración del amigo. Cámbialos en la configuración del amigo en Cindy.",
           "detachedBySlash": "🚪 Control terminado: volvemos a la conversación de Telegram. La próxima vez que quieras manejar el escritorio a distancia, envía /ctr",
           "detachedByRevoke": "⚠️ Recuperaste el control desde el escritorio. Los siguientes mensajes vuelven a la conversación de Telegram.",
           "notAttached": "🤷 Ahora mismo no controlas ninguna sesión, así que /exctr no tiene nada que hacer.",
-          "companionDmNew": "🧭 Esta es la conversación principal de tu compañero: sigue de forma continua y no abre sesiones nuevas. Si quieres cambiar de tema, solo dilo; para trabajos aparte, tu compañero abre tareas en segundo plano por su cuenta.",
+          "companionDmNew": "🧭 Esta es la conversación principal de tu amigo: sigue de forma continua y no abre sesiones nuevas. Si quieres cambiar de tema, solo dilo; para trabajos aparte, tu amigo abre tareas en segundo plano por su cuenta.",
           "companionLaneNew": "🌱 Se inició una nueva conversación para este grupo. El contexto anterior quedó guardado. ¡Empecemos desde cero!",
-          "companionManagedCommand": "🧭 Esta conexión se ha confiado a un compañero, así que el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del compañero en Cindy."
+          "companionManagedCommand": "🧭 Esta conexión se ha confiado a un amigo, así que el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del amigo en Cindy."
         },
         "agent": {
           "completedNoText": "✅ ¡Listo! (en este turno el Agent no dijo nada)",
@@ -13095,7 +13144,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automatización “{{name}}”",
           "unsupportedOnly": "🙏 No puedo procesar este mensaje:\n{{list}}\n\nLo que sí puedo procesar: texto, imágenes (jpg/png/gif/webp), PDF y archivos de texto de código o configuración.",
           "unsupportedNotice": "ℹ️ No puedo procesar lo siguiente, así que lo dejé a un lado:\n{{list}}\n\nEl resto lo recibí y ya lo estoy procesando.",
-          "companionUnavailable": "⏸ Tu compañero no puede recibir mensajes ahora: {{reason}}",
+          "companionUnavailable": "⏸ Tu amigo no puede recibir mensajes ahora: {{reason}}",
           "authMissing": {
             "currentProvider": "proveedor actual",
             "reasonGatewayKey": "primero hay que configurar una Cindy AI Key",
@@ -13292,7 +13341,7 @@
         },
         "slash": {
           "detachFailed": "❌ No se pudo terminar el control: {{error}}",
-          "companionManaged": "🧭 Esta conexión se cedió a un compañero, así que el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del compañero en Cindy."
+          "companionManaged": "🧭 Esta conexión se cedió a un amigo, así que el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del amigo en Cindy."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 Una tarea de un chat grupal necesita tu aprobación. La tarjeta de aprobación no se publica en el grupo: confírmala aquí.",
@@ -13369,7 +13418,7 @@
           "detachedBySlash": "🚪 Control remoto finalizado. Los siguientes mensajes vuelven a la conversación de WeCom.",
           "detachedByRevoke": "⚠️ Se revocó el control remoto desde Cindy Desktop. Los siguientes mensajes vuelven a la conversación de WeCom.",
           "notAttached": "Ahora mismo no controlas ninguna tarea.",
-          "companionManagedCommand": "🧭 Esta conexión está en manos de un compañero: el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del compañero en Cindy."
+          "companionManagedCommand": "🧭 Esta conexión está en manos de un amigo: el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del amigo en Cindy."
         },
         "agent": {
           "completedNoText": "✅ Tarea completada (sin salida de texto en este turno)",
@@ -13513,9 +13562,9 @@
           "detachedBySlash": "🚪 Control remoto terminado: volvemos a nuestro chat privado. Cuando quieras controlar de nuevo la app de escritorio, envía /ctr",
           "detachedByRevoke": "⚠️ Recuperaste el control desde la app de escritorio. Los próximos mensajes vuelven a nuestro chat privado.",
           "notAttached": "🤷 Ahora mismo no controlas ninguna sesión, así que /exctr no tiene nada que hacer.",
-          "companionDmNew": "🧭 Esta es la conversación principal de tu compañero: continúa siempre y no abre sesiones nuevas. Si quieres cambiar de tema, dilo sin más; para trabajos aparte, tu compañero abrirá una sesión en segundo plano.",
+          "companionDmNew": "🧭 Esta es la conversación principal de tu amigo: continúa siempre y no abre sesiones nuevas. Si quieres cambiar de tema, dilo sin más; para trabajos aparte, tu amigo abrirá una sesión en segundo plano.",
           "companionLaneNew": "🌱 He empezado una conversación nueva para este grupo y he dejado aparte el contexto anterior. ¡Empecemos de cero!",
-          "companionManagedCommand": "🧭 Esta conexión la gestiona un compañero, así que el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del compañero en Cindy."
+          "companionManagedCommand": "🧭 Esta conexión la gestiona un amigo, así que el modelo, los permisos y el directorio de trabajo siguen su configuración. Cámbialos en la configuración del amigo en Cindy."
         },
         "agent": {
           "completedNoText": "✅ Listo (el Agent no dijo nada en este turno)",
@@ -13535,7 +13584,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automatización “{{name}}”",
           "unsupportedOnly": "🙏 No puedo procesar este mensaje:\n{{items}}\n\nLo que sí puedo procesar: texto, imágenes (jpg/png/gif/webp), PDF y archivos de texto de código o configuración.",
           "unsupportedNotice": "ℹ️ No puedo procesar lo siguiente, así que lo dejo aparte:\n{{items}}\n\nEl resto lo he recibido y ya estoy en ello~",
-          "companionUnavailable": "⏸ Tu compañero no puede recibir mensajes ahora mismo: {{reason}}",
+          "companionUnavailable": "⏸ Tu amigo no puede recibir mensajes ahora mismo: {{reason}}",
           "authMissing": {
             "defaultProvider": "proveedor actual",
             "message": "⚠️ Esta conversación usa el proveedor “{{provider}}” ({{model}}): {{reason}}.",
@@ -13791,19 +13840,19 @@
           "delayedReplyQuestion": "Mensaje original: {{question}}",
           "stillProcessing": "Sigo trabajando en ello…",
           "ownerOnlyCommands": "Solo el propietario puede usar los comandos del bot.",
-          "companionManagedCommand": "Abre a este compañero en Cindy: el modelo se cambia en la configuración del compañero y los permisos, debajo del cuadro de entrada de la conversación.",
+          "companionManagedCommand": "Abre a este amigo en Cindy: el modelo se cambia en la configuración del amigo y los permisos, debajo del cuadro de entrada de la conversación.",
           "help": "Comandos disponibles: /new nueva conversación; /stop detener la ejecución actual; /stop all detener todas las ejecuciones; /status ver el estado; /help ver la ayuda.",
           "status_one": "La conexión de Cindy con WeChat funciona correctamente. {{count}} mensaje en cola.",
           "status_other": "La conexión de Cindy con WeChat funciona correctamente. {{count}} mensajes en cola.",
           "status_many": "La conexión de Cindy con WeChat funciona correctamente. {{count}} mensajes en cola.",
           "stopped": "Tarea detenida.",
-          "companionDmNew": "Aquí compartes con tu compañero una misma sesión de larga duración, así que el historial y la memoria se conservan. Para limpiar el contexto, reinicia al compañero en Cindy.",
+          "companionDmNew": "Aquí compartes con tu amigo una misma sesión de larga duración, así que el historial y la memoria se conservan. Para limpiar el contexto, reinicia al amigo en Cindy.",
           "newConversation": "Nueva conversación iniciada.",
           "unknownCommand": "Comando desconocido. Envía /help para ver los comandos disponibles.",
           "overloaded": "Ahora mismo hay muchas tareas de WeChat. Vuelve a intentarlo más tarde."
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "Este mensaje necesita confirmar permisos acción por acción, pero el modelo o el modo de permiso actual del compañero no lo admite, así que no puede iniciarse.\nEl propietario debe abrir a este compañero en Cindy, revisar el modelo en su configuración y elegir “Permisos predeterminados” o “Revisión automática” debajo del cuadro de entrada de la conversación.",
+          "companionPermissionUnsupported": "Este mensaje necesita confirmar permisos acción por acción, pero el modelo o el modo de permiso actual del amigo no lo admite, así que no puede iniciarse.\nEl propietario debe abrir a este amigo en Cindy, revisar el modelo en su configuración y elegir “Permisos predeterminados” o “Revisión automática” debajo del cuadro de entrada de la conversación.",
           "missingAuth": "El Agent actual aún no está autorizado. Conecta primero un servicio de modelos en Cindy.",
           "generic": "Este mensaje no puede iniciarse ahora. Vuelve a intentarlo más tarde."
         },
@@ -14476,6 +14525,7 @@
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",
+      "steerUnsupportedNotice": "Este motor no admite incorporar mensajes. Los mensajes en cola se enviarán cuando termine el turno actual.",
       "resumeAction": "Continuar enviando",
       "resumeAria": "Continuar enviando mensajes en cola",
       "showMore_one": "{{count}} más",
@@ -14624,6 +14674,7 @@
       "steerNotSent": "Mensaje no enviado. La incorporación a la tarea no está disponible temporalmente; se conservó tu borrador.",
       "credentialSwitchApplied": "El cambio de proveedor de modelo ya está en vigor.",
       "credentialSwitchFailed": "No se pudo cambiar el proveedor de modelos. Vuelve a elegir el modelo.",
+      "credentialSwitchKeptSettings": "No se completó el cambio. La tarea seguirá usando la configuración anterior.",
       "modelSwitchContextGuard": {
         "warnToast": "Esta conversación ya usa {{used}}: aproximadamente el {{pct}}% de la capacidad de {{total}} del nuevo modelo",
         "condensedToast": "Las partes anteriores de la conversación se condensarán para ajustarse al nuevo modelo. El historial completo seguirá disponible.",
@@ -15194,7 +15245,6 @@
     "runningStatus": {
       "currentRate": "Última velocidad",
       "lastRequestRate": "Media de la última solicitud",
-      "recentTokenRate": "Reciente {{rate}} tok/s",
       "waitingSample": "Muestreando",
       "averageRate": "Promedio por turno",
       "rateHistory": "Historial de velocidad de generación",
@@ -15898,6 +15948,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "El contexto está lleno, por lo que no se pudo procesar este mensaje. Los mensajes siguientes se procesarán en orden.",
       "attachmentPrefix": "Archivos adjuntos: ",
       "attachmentAttachedAria": "Se adjuntó {{name}}",
       "saveAttachmentAs": "Guardar el adjunto {{name}} como",
@@ -15933,7 +15984,7 @@
         "localApp": "ID de la aplicación: {{id}}",
         "mcpApp": "$t(mcpApps.serverId)",
         "session": "ID de sesión: {{id}}",
-        "teammate": "ID de amigo de equipo: {{id}}",
+        "teammate": "ID de amigo: {{id}}",
         "automation": "ID de automatización: {{id}}",
         "plugin": "ID del complemento: {{id}}",
         "device": "ID del dispositivo: {{id}}",
@@ -15974,7 +16025,7 @@
       "viewThread": "Ver contexto del hilo ({{count}})",
       "memberFromGroup": "{{name}} · del grupo “{{group}}” de {{platform}}",
       "memberFromPlatform": "{{name}} · de un grupo de {{platform}}",
-      "guestFromDm": "{{name}} · de un mensaje directo de {{platform}} (no es el propietario)",
+      "guestFromDm": "{{name}} · de un mensaje directo de {{platform}}",
       "unknownSender": "Miembro del grupo"
     },
     "rewind": {
@@ -16622,6 +16673,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "Añadir equipo en la nube",
+        "preparingCloud": "Preparando el equipo en la nube",
+        "manageCloud": "Gestionar equipo en la nube",
         "allMachines": "Todo",
         "localMachine": "Local",
         "connecting": "Conectando…",
@@ -16758,6 +16812,9 @@
       "taskInfoSummaryNone": "Ninguno",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Icono del harness",
+        "project": "Icono y nombre del proyecto",
+        "teammate": "Avatar del amigo",
         "time": "Hora",
         "pr": "Estado del PR",
         "worktree": "worktree",
@@ -17835,6 +17892,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "No se pudo leer el modelo de la automatización. Cierra y vuelve a abrir el editor para reintentar.",
       "promptDialog": {
         "titleEdit": "Editar automatización",
         "titleCreate": "Crear automatización",
@@ -18178,11 +18236,13 @@
         "effortHeading": "Intensidad de razonamiento",
         "effortDefault": "Predeterminado",
         "followSession": "Seguir sesión",
+        "followTeammate": "Seguir el modelo principal del amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Selector de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Intensidad de razonamiento",
-        "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora."
+        "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora.",
+        "modelGroupTitle": "Grupo de modelos «{{name}}»: elige una fuente al crear una tarea nueva"
       }
     },
     "toast": {
@@ -18732,7 +18792,7 @@
       "expired": "La entrada manual finalizó tras esperar demasiado."
     },
     "failure": {
-      "permission": "Cindy no puede leer la pantalla de esta computadora. Permite el acceso a Cindy en Accesibilidad, dentro de Configuración del sistema.",
+      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
       "target_gone": "La ventana de destino se cerró.",
       "unreadable": "No se puede leer esta pantalla. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
       "action_failed": "Esa acción no surtió efecto. Comprueba la pantalla y vuelve a intentarlo.",
@@ -20549,6 +20609,7 @@
       "totalDetail_other": "{{count}} tarjetas × {{amount}}",
       "pay": "Continuar al pago",
       "refundNote": "Las tarjetas de regalo no se pueden cambiar por dinero. Las tarjetas canjeadas no se reembolsan. Para solicitar el reembolso de una tarjeta sin canjear, ponte en contacto con el soporte.",
+      "termsNote": "Al seleccionar Continuar al pago, aceptas los <terms>Términos de las tarjetas de regalo</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "No se pudieron cargar los límites de compra. Vuelve a intentarlo más tarde.",
       "checkoutSubtitle_one": "Tarjeta de regalo {{amount}} × {{count}} · se emite en cuanto se complete el pago",
@@ -20643,7 +20704,7 @@
     "epermGuidance": {
       "title": "Acceso a la carpeta de macOS denegado",
       "message": "Cindy no puede acceder a tu carpeta {{folder}}",
-      "detail": "macOS denegó el acceso. Abre Configuración del Sistema para conceder permiso y luego vuelve a ejecutar el comando de tu Agent.",
+      "detail": "En Archivos y carpetas, permite que Cindy acceda a esta carpeta y vuelve a intentarlo.",
       "openSystemSettings": "Abrir Configuración del Sistema",
       "cancel": "Cancelar",
       "folderNames": {
@@ -21739,6 +21800,9 @@
     "actionFailed": "No se pudo completar la acción del complemento. Vuelve a intentarlo."
   },
   "mcpApps": {
+    "composerDragFailed": "No se pudo añadir el archivo adjunto. Arrástralo de nuevo o selecciona «Añadir al cuadro de texto».",
+    "composerAttachmentFormat": "Usa una imagen, un PDF o un archivo de texto sin formato de hasta 64 MiB.",
+    "composerAttachmentBusy": "Espera un momento antes de añadir otro archivo adjunto.",
     "sharedTaskReadOnly": "Solo el propietario de la sesión puede interactuar con esta tarjeta.",
     "retry": "Recargar",
     "loadFailed": "La aplicación no se pudo cargar. Comprueba la conexión y vuelve a cargarla.",
@@ -22200,9 +22264,9 @@
       "pick": "Elegir una a una",
       "started": "La importación comenzó en segundo plano. Consulta el progreso en Ajustes → Importación de sesión.",
       "startFailed": "La importación no comenzó. Importa de nuevo desde Ajustes → Importación de sesión.",
-      "teammatesHeading": "Compañeros de equipo",
-      "teammatesHint": "Importa un Agent de otra herramienta como compañero de equipo, con su memoria, sus habilidades y sus automatizaciones.",
-      "importTeammate": "Importar como compañero de equipo"
+      "teammatesHeading": "Amigos",
+      "teammatesHint": "Importa un Agent de otra herramienta como amigo, con su memoria, sus habilidades y sus automatizaciones.",
+      "importTeammate": "Importar como amigo"
     },
     "finish": {
       "title": "Todo listo",
@@ -22752,5 +22816,10 @@
       "auto": "Revisión automática",
       "bypassPermissions": "Acceso completo"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "En «System & App Protection Override», pulsa ⓘ junto a {{app}}. Si no aparece, añade la app en ejecución con +.",
+    "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana."
   }
 }

@@ -21,6 +21,10 @@ CindyAgentNetWaiter *cindy_agent_net_waiter(CindyAgentNetEngine *handle);
 int32_t cindy_agent_net_wait(const CindyAgentNetWaiter *waiter, uint32_t timeout_ms);
 void cindy_agent_net_waiter_free(CindyAgentNetWaiter *waiter);
 char *cindy_agent_net_notification_open(const uint8_t *input, size_t length);
+/* "binary-io" builds, serialized with the handle like a command. Input and output: a little-endian uint32 header length, a
+ * JSON header, then raw bytes. Returns an owned buffer of *out_length bytes, released exactly once with free_bytes. */
+uint8_t *cindy_agent_net_io(CindyAgentNetEngine *handle, const uint8_t *input, size_t length, size_t *out_length);
+void cindy_agent_net_free_bytes(uint8_t *value, size_t length);
 #ifdef __cplusplus
 }
 #endif

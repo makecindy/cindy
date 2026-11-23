@@ -476,8 +476,8 @@ describe('SessionCard review regressions', () => {
 
   it('shows the project source label inline in both list and text modes', () => {
     // The inbox leaves the project name to the row's project icon (2026-11-18 user decision).
-    expect(sessionCardSource).toContain('{sourceLabel && !inboxMode ? (');
-    expect(sessionItemSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(sessionCardSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
+    expect(sessionItemSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
     expect(sessionItemSource).toContain('title={sourceLabel}');
     expect(sessionCardSource).toContain('title={sourceLabel}');
     expect(sessionItemSource).toContain("'inline-flex min-w-0 items-center gap-1 text-xs font-normal'");

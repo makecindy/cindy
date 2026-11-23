@@ -341,6 +341,7 @@ type AuxiliaryModelSettingsPatch =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsPatch;
 type AuxiliaryModelSettingsState =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsState;
+type AuxiliaryModelHealth = import('../shared/auxiliaryModelHealth').AuxiliaryModelHealth;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -418,7 +419,7 @@ interface ComputerDriverInstallResult {
   status: ComputerDriverStatus;
 }
 
-type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult;
+type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult & { continueToScreenRecording?: boolean };
 
 interface ComputerDriverUpdateCheck {
   currentVersion: string | null;
@@ -1228,6 +1229,8 @@ interface ElectronAPI {
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) => () => void;
   osRelease: string;
+  /** Running application bundle name as it appears in a macOS file picker. */
+  macPermissionAppName?: string;
   appVersion: string;
   /** 当前进程是否经 ARM64 转译运行(Apple 芯片上的 Intel 包)。 */
   getArm64Translation?: () => Promise<boolean>;
@@ -2389,6 +2392,7 @@ interface ElectronAPI {
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
+  acceptLegalTermsUpdate: () => Promise<AnalyticsSettingsPayload>;
   onAnalyticsSettingsChange: (callback: (payload: AnalyticsSettingsPayload) => void) => () => void;
 
   // ── 客户端日志上报(设置 → 关于)──
@@ -3287,7 +3291,7 @@ interface ElectronAPI {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ) => () => void;
 
@@ -3313,7 +3317,7 @@ interface ElectronAPI {
     | { type: 'installed-plugin'; ghostId?: string }
     | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
   >;
 
@@ -4341,6 +4345,7 @@ interface ElectronAPI {
   openRemoteDesktop: (target: { deviceId: string; name: string; handoff?: string }) => Promise<void>;
   remoteDesktopViewer: import('../shared/remoteDesktopViewer').RemoteDesktopViewerApi;
   remoteDesktop: import('../shared/remoteDesktop').RemoteDesktopApi;
+  localNetwork: import('../shared/localNetwork').LocalNetworkApi;
   selfHostedRelay: import('../shared/selfHostedRelay').SelfHostedRelayApi;
   sharedTask: {
     host(command: import('@cindy/device-link').SharedTaskHostCommand): Promise<unknown>;
@@ -4373,6 +4378,7 @@ interface ElectronAPI {
     onChanged(cb: (event: { providerId: string }) => void): () => void;
   };
   deviceLink: {
+    cloudComputerEntry(): Promise<unknown>;
     confirmSkillMutation: (deviceId: string, operationId: string) => Promise<import('../shared/remoteSkills').RemoteSkillReceipt>;
     pickPluginPackage: (deviceId: string) => Promise<{ attachment: string } | null>;
     taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest) => Promise<import('@cindy/device-link').TaskMigrationView>;
@@ -4400,6 +4406,11 @@ interface ElectronAPI {
       displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
+    /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好 */
+    setPeerPathPreference?: (
+      deviceId: string,
+      preference: 'auto' | 'direct' | 'relay',
+    ) => Promise<{ deviceId: string; preference: 'auto' | 'direct' | 'relay' }>;
     /** 对端链路拓扑变化,payload 为全量快照 */
     onPeerLinksChanged: (cb: (payload: DeviceLinkPeerLinksSnapshot) => void) => () => void;
     renameDevice: (
@@ -5023,6 +5034,7 @@ interface ElectronAPI {
         sessionId: string;
         totalMoney: import('../shared/regionalMoney').RegionalMoney;
         totalCostUsd?: number;
+        totalCostUsdIsApproximate?: boolean;
       },
       ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
     ) => void,
@@ -5242,6 +5254,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     bots: {
+      ownsProject: (workingDir: string) => Promise<boolean>;
       projectRepository: (botId: string, retry: boolean) => Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus>;
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];
@@ -5811,12 +5824,20 @@ interface ElectronAPI {
      * Asks engine plugins to republish their models, like the provider model refresh when the picker
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
      */
-    refreshPluginEngines?: () => Promise<void>;
+    refreshPluginEngines?: (targetGhostId?: string) => Promise<void>;
     /**
      * Opens or closes one engine of this computer for the owner's other computers
      * (PluginEngineView.remoteUse). The new state also arrives through onPluginEnginesChanged.
      */
     setPluginEngineRemoteUse?: (key: string, enabled: boolean) => Promise<{ supported: boolean; enabled: boolean }>;
+    /**
+     * Renames, hides or turns off one engine of this computer, or turns some of its models off
+     * (Settings → Model providers). Resolves with the engine as it is listed afterwards (null when
+     * its plugin is no longer on); the new list also arrives through onPluginEnginesChanged.
+     */
+    setPluginEnginePrefs?: (
+      input: import('../shared/pluginEngines').PluginEnginePrefsInput,
+    ) => Promise<import('../shared/pluginEngines').PluginEngineView | null>;
     /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
     onPluginEnginesChanged: (
       cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,
@@ -6087,6 +6108,8 @@ interface ElectronAPI {
     onProvidersChanged: (cb: () => void) => () => void;
 
     mcpApps: (sessionId: string | null, input: unknown) => Promise<unknown>;
+    redeemComposerAttachmentDrag: (input: { sessionId: string; ticket: string }) => Promise<void>;
+    onMcpAppComposerAttachment: (cb: (input: import('../shared/mcpApps').McpAppComposerAttachment) => void) => () => void;
     onPluginUiAction: (callback: (input: unknown) => void) => () => void;
     onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
@@ -6996,6 +7019,7 @@ interface ElectronAPI {
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
     ) => Promise<AuxiliaryModelSettingsState>;
+    auxiliaryModelHealthGet: () => Promise<AuxiliaryModelHealth>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;
@@ -7141,7 +7165,11 @@ interface ElectronAPI {
       cb: (payload: { sessionId: string; model: string; providerId: string | null }) => void,
     ) => () => void;
     onSessionCredentialSwitchFailed: (
-      cb: (payload: { sessionId: string; reason: 'apply-failed' | 'rollback-failed' }) => void,
+      cb: (payload: {
+        sessionId: string;
+        reason: 'apply-failed' | 'rollback-failed';
+        previousSettingsRetained?: boolean;
+      }) => void,
     ) => () => void;
 
     /** cc 默认路由会话的生效计费路由(proxy 按请求观察);null = 会话尚未发过请求 */
@@ -7402,6 +7430,7 @@ interface ElectronAPI {
       ) => () => void;
       /** 用量历史聚合 (首页仪表盘)。wire 形态与 main/usage/usageHistory.ts 的 UsageHistoryPayload 同形。 */
       getHistory: (opts?: {
+        currency?: 'USD' | 'CNY';
         days?: number | 'all';
         modelDays?: number | 'all';
         /** 'local' (默认) / 'all' (所有设备合并) / 其它电脑的 deviceId。 */
