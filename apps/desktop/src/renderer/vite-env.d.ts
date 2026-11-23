@@ -2392,6 +2392,7 @@ interface ElectronAPI {
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
+  acceptLegalTermsUpdate: () => Promise<AnalyticsSettingsPayload>;
   onAnalyticsSettingsChange: (callback: (payload: AnalyticsSettingsPayload) => void) => () => void;
 
   // ── 客户端日志上报(设置 → 关于)──
@@ -5253,6 +5254,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     bots: {
+      ownsProject: (workingDir: string) => Promise<boolean>;
       projectRepository: (botId: string, retry: boolean) => Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus>;
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];

@@ -525,7 +525,9 @@ function harness(items: VisiblePluginSummary[], removals: PluginRemovalNotice[] 
       const state = await api.read();
       const matches = state.plugins.filter(item => !options.query
         || [item.name, item.description, item.author, item.ghostId].some(text => text?.toLocaleLowerCase().includes(options.query!.toLocaleLowerCase())));
-      const counts = { all: matches.length, public: 0, organization: 0, personal: 0 };
+      const counts = { all: matches.length, public: 0, organization: 0, personal: 0,
+        official: matches.filter(item => item.scope === 'public' && item.publisherKind === 'official').length,
+        community: matches.filter(item => item.scope === 'public' && item.publisherKind === 'personal').length };
       for (const item of matches) counts[item.scope]++;
       const selected = matches.filter(item => !options.scope || options.scope === 'all' || options.scope === item.scope);
       const offset = Number(options.cursor ?? 0), limit = options.limit ?? 12;
@@ -898,6 +900,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
   it('counts uninstalled market matches through bounded ID verification and retains source conflicts', async () => {
     const items = Array.from({ length: 4 }, (_, index) => summary({
       id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+      publisherKind: index % 2 ? 'personal' : 'official',
     }));
     const h = harness(items);
     runtime.ghosts = [items[0]!, items[1]!, items[3]!].map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
@@ -908,7 +911,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(first.items.map(item => [item.ghostId, item.installState])).toEqual([
       ['tool-2', 'not-installed'], ['tool-3', 'conflict'],
     ]);
-    expect(first.counts).toMatchObject({ all: 2, public: 2 });
+    expect(first.counts).toMatchObject({ all: 2, public: 2, official: 1, community: 1 });
     expect(h.api.resolve).toHaveBeenCalledExactlyOnceWith([
       { key: items[0]!.id, pluginId: items[0]!.id },
       { key: items[1]!.id, pluginId: items[1]!.id },
@@ -916,7 +919,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     const searched = await h.service.query({ query: 'Tool 2', limit: 10, excludeInstalled: true });
     expect(searched.items.map(item => item.ghostId)).toEqual(['tool-2']);
-    expect(searched.counts).toMatchObject({ all: 1, public: 1 });
+    expect(searched.counts).toMatchObject({ all: 1, public: 1, official: 1, community: 0 });
     expect(h.api.resolve).toHaveBeenLastCalledWith(expect.any(Array), 'Tool 2');
     await h.service.query({ limit: 10, excludeInstalled: true, counts: false });
     expect(h.api.resolve).toHaveBeenCalledTimes(2);
@@ -1958,7 +1961,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       dataOwnerId: 'local-v1',
       generation: 2,
     };
-    const publicPlugin = summary();
+    const publicPlugin = summary({ publisherKind: 'personal' });
     const organizationPlugin = summary({
       id: `c${'b'.repeat(24)}`,
       ghostId: 'cindy-team-only',
@@ -1969,6 +1972,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     await expect(h.service.query()).resolves.toMatchObject({
       items: [{ pluginId: publicPlugin.id, scope: 'public' }],
+      counts: { all: 1, public: 1, official: 0, community: 1, organization: 0 },
       unavailableReason: null,
     });
     expect(h.api.read).toHaveBeenCalledTimes(1);

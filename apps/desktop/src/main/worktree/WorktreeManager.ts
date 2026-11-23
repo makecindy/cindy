@@ -52,7 +52,7 @@ import {
 } from './dirty';
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import { withWorktreeRestoreMutation } from './restoreLock';
-import { recycleManagedWorktree } from './managedRecycle';
+import { worktreeManagerPorts } from './WorktreeManagerPorts.js';
 import { withWorktreeResourceLock } from './resourceLock';
 import {
   acquireWorktreeRuntimeLease,
@@ -60,8 +60,7 @@ import {
   reclaimOrphanedWorktreeRuntimeLeases,
   releaseWorktreeRuntimeLease,
 } from './runtimeLeases';
-import * as store from './worktreeStore';
-import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from './precreatedCancellation';
+import * as store from './worktreeStore.js';
 import { createLogger } from '../logger';
 import { getDbClient } from '../localDb/client/current';
 import {
@@ -399,7 +398,7 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 
   await previous.catch(() => {});
   try {
-    return await withPrecreatedSessionOperationLock(sessionId, fn);
+    return await worktreeManagerPorts().withPrecreatedSessionOperationLock(sessionId, fn);
   } finally {
     releaseCurrent();
     if (precreatedWorktreeOperationQueues.get(sessionId) === queued) {
@@ -639,9 +638,14 @@ interface CreatedSnapshot {
   parentEnsured?: string;
   /** git worktree add 已成功执行(此时 worktree path 真实存在)。 */
   worktreeAdded?: { path: string; baseRepo: string; multibox?: boolean };
+  /** Wait for writers before any failed-create rollback, even when metadata was never published. */
+  backgroundCheckout?: Promise<void>;
 }
 
 async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
+  // An unpublished record cannot be found by recovery-key discard later. Never
+  // leave its checkout writer running after the failed-create rollback returns.
+  await snap.backgroundCheckout?.catch(() => undefined);
   // A failed create may already have launched checkout or acquired a task reference.
   if (snap.worktreeAdded) {
     const { path: wp, baseRepo, multibox } = snap.worktreeAdded;
@@ -843,13 +847,16 @@ export interface CreateWorktreeOptions {
    * For callers that hand the directory to a running agent, which must not see a half-written tree.
    */
   awaitFullCheckout?: boolean;
+  /** Host profile/owner fence, checked again immediately before metadata publication. */
+  assertWriteAllowed?: () => void;
   /** Local task creation can become stale while queued or while Git is running. */
   assertCurrent?: () => void;
 }
 
 export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
+  options?.assertWriteAllowed?.();
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
-    assertPrecreatedSessionNotCancelled(req.sessionId);
+    worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
     return createWorktreeInner(req, options);
   });
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
@@ -1029,6 +1036,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
               (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
             ));
             bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
+            snap.backgroundCheckout = bgPromise;
             if (options?.trackBackgroundCheckout) {
               const settled = bgPromise.catch(() => undefined);
               backgroundCheckouts.set(req.sessionId, settled);
@@ -1090,7 +1098,8 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // 8. Recheck after asynchronous Git/setup work before publishing metadata.
       // The profile/session lock also closes the check -> store.set window.
       try {
-        assertPrecreatedSessionNotCancelled(req.sessionId);
+        options?.assertWriteAllowed?.();
+        worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
         options?.assertCurrent?.();
       } catch (error) {
         // Rollback must not race our own background checkout writer.
@@ -1110,7 +1119,13 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         ...(recoveryKey ? { recoveryKey } : {}),
         ephemeral: req.ephemeral ?? false,
       };
-      await timed('persist metadata', () => store.set(req.sessionId, meta));
+      await timed('persist metadata', () => store.set(req.sessionId, meta, async () => {
+        // The registry lock wait is async too: recheck after acquiring it,
+        // immediately before the synchronous read/modify/write.
+        options?.assertWriteAllowed?.();
+        worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
+        options?.assertCurrent?.();
+      }));
 
       log.info(`[worktree:create] total completed in ${Date.now() - totalStartedAt}ms`);
       return { ok: true, meta };
@@ -1197,7 +1212,7 @@ export async function removeWorktreeForSession(
   if (!options.preserveDirty) {
     const meta = store.get(sessionId);
     if (!meta) return;
-    await withWorktreeRestoreMutation(sessionId, () => recycleManagedWorktree(meta, {
+    await withWorktreeRestoreMutation(sessionId, () => worktreeManagerPorts().recycleManagedWorktree(meta, {
       ...options,
       onRemoved: () => removeWorktreeSafeDirectory(meta.baseRepo, meta.path),
     }));
@@ -1531,7 +1546,7 @@ export async function cancelPrecreatedWorktree(
     }
     if (meta?.ephemeral) return { status: 'preserved' };
     if (!options.canRemove || !(await options.canRemove())) return { status: 'preserved' };
-    sealPrecreatedSessionCancellation(sessionId);
+    worktreeManagerPorts().sealPrecreatedSessionCancellation(sessionId);
     return meta
       ? discardPrecreatedWorktree(sessionId, meta.path, {
         ...options,
@@ -1540,7 +1555,9 @@ export async function cancelPrecreatedWorktree(
       : { status: 'absent' };
   });
 }
-export { assertPrecreatedSessionNotCancelled } from './precreatedCancellation';
+export function assertPrecreatedSessionNotCancelled(sessionId: string): void {
+  worktreeManagerPorts().assertPrecreatedSessionNotCancelled(sessionId);
+}
 
 /**
  * 手机在 worktree:create 之前先持久化 sessionId + recoveryKey；若进程在 create

@@ -8603,7 +8603,7 @@
           "updated": "プラグインを更新しました。",
           "empty": "インストールできるリリースはありません。",
           "sign-in": "更新を確認するには GitHub にログインしてください。",
-          "forbidden": "この GitHub アカウントには非公開リポジトリの読み取り権限がありません。",
+          "forbidden": "GitHub のリリース情報を取得できませんでした。リポジトリのリンクと GitHub アカウントのアクセス権限を確認してください。",
           "unavailable": "更新を確認またはインストールできませんでした。もう一度お試しください。"
         },
         "customSlotTitle": "プラグインのカスタム設定エリア",
@@ -9666,6 +9666,12 @@
       "guidance": "しばらく待ってから認証コードを取得してください。再起動、再インストール、ネットワークの変更で制限が解除されるとは限りません。",
       "support": "待ってもログインできない場合は、OS、Cindy のバージョン、発生時刻、下のエラーコードとログを feedback@cindy.app に非公開で送ってください。ログを公開しないでください。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "利用規約を更新しました",
+    "body": "Cindyの<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を更新しました。引き続き利用するには同意してください。",
+    "agree": "同意する",
+    "disagree": "ログアウト"
   },
   "legacyMigration": {
     "title": "旧バージョンのデータを移行",
@@ -17646,6 +17652,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "自動化のモデル設定を読み込めませんでした。エディターを閉じて開き直してください。",
       "promptDialog": {
         "titleEdit": "自動化を編集",
         "titleCreate": "自動化を作成",
@@ -17989,11 +17996,13 @@
         "effortHeading": "推論強度",
         "effortDefault": "デフォルト",
         "followSession": "セッションに従う",
+        "followTeammate": "仲間のメインモデルに従う",
         "modelListAria": "モデル一覧",
         "modelSelectorAria": "モデルセレクター",
         "categoryListAria": "{{category}} モデル",
         "effortListAria": "推論強度",
-        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。"
+        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。",
+        "modelGroupTitle": "モデルグループ「{{name}}」：新しいタスクを作るときにソースを選びます"
       }
     },
     "toast": {
@@ -20332,6 +20341,7 @@
       "totalDetail_other": "{{count}} 枚 × {{amount}}",
       "pay": "支払いへ進む",
       "refundNote": "ギフトカードは現金に交換できません。受け取り済みまたは使用済みのカードは返金できません。未受け取りのカードの返金はサポートにお問い合わせください。",
+      "termsNote": "「支払いへ進む」を選択すると、<terms>ギフトカード利用規約</terms>に同意したものとみなされます。",
       "cancel": "キャンセル",
       "loadFailed": "購入制限を読み込めませんでした。しばらくしてからお試しください。",
       "checkoutSubtitle_other": "ギフトカード {{amount}} × {{count}}・支払いが完了するとすぐに発行されます",

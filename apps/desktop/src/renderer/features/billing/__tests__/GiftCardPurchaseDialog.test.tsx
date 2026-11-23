@@ -8,7 +8,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
   useTranslation: () => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, params?: Record<string, unknown>) =>
-      params ? `${key}:${JSON.stringify(params)}` : key,
+      key === 'billing.giftCardPurchase.termsNote'
+        ? '点击「去支付」即表示你已阅读并同意<terms>《礼品卡购买与使用条款》</terms>。'
+        : params ? `${key}:${JSON.stringify(params)}` : key,
   }),
 }));
 
@@ -17,6 +19,7 @@ vi.mock('../api', () => ({ billingApi: api }));
 
 import type { BillingGiftCardPurchasePolicy } from '../../../../shared/billing';
 import { BILLING_CURRENCY } from '../money';
+import { LEGAL_LINKS } from '../../../../shared/legalLinks';
 import { GiftCardPurchaseDialog } from '../GiftCardPurchaseDialog';
 import {
   customGiftCardRange,
@@ -307,6 +310,18 @@ describe('giftCardCheckoutLine', () => {
     open();
     await screen.findByText(/billing\.giftCardPurchase\.quantityHint/);
     expect(screen.getByText('billing.giftCardPurchase.refundNote')).toBeTruthy();
+  });
+
+  // 依据:付款前须让买家看到并可打开《礼品卡购买与使用条款》;链接走系统浏览器,不在应用内跳转。
+  it('links the gift card terms next to the pay button and opens them in the browser', async () => {
+    const openExternal = vi.fn(async () => ({ success: true }));
+    Object.assign(window, { electronAPI: { ...(window as { electronAPI?: object }).electronAPI, openExternal } });
+    api.getGiftCardPurchasePolicy.mockResolvedValue(policy);
+    open();
+    await screen.findByText(/billing\.giftCardPurchase\.quantityHint/);
+
+    fireEvent.click(screen.getByRole('link', { name: '《礼品卡购买与使用条款》' }));
+    expect(openExternal).toHaveBeenCalledWith(LEGAL_LINKS.giftCardTerms);
   });
 
   it('blocks payment once the 24-hour limit is used up', async () => {

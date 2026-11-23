@@ -130,6 +130,11 @@ import {
   useOwnRemoteProviderList,
   type OwnRemoteProvider,
 } from './OwnRemoteProviders';
+import {
+  OwnRemotePluginEngineDetail,
+  OwnRemotePluginEngineRows,
+  useOwnRemotePluginEngines,
+} from './OwnRemotePluginEngines';
 import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
 import {
   PluginEngineProviderDetail,
@@ -2714,7 +2719,12 @@ export function ProvidersSection() {
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
   const providerGroups = useLocalProviderGroupsState();
-  const { entries: offeredRemoteProviders, hiddenShareIds: groupedShareIds, ownedShares } = useOwnRemoteProviderList();
+  const {
+    entries: offeredRemoteProviders,
+    hiddenShareIds: groupedShareIds,
+    ownedShares,
+    devices: controllableDevices,
+  } = useOwnRemoteProviderList();
   const remoteDisable = useRemoteProviderDisable();
   const ownRemoteProviders = useMemo(() => offeredRemoteProviders.map(entry => remoteDisable.isDisabled(entry.deviceId, entry.provider.id)
     ? { ...entry, provider: { ...entry.provider, suspended: true } } : entry), [offeredRemoteProviders, remoteDisable]);
@@ -2728,8 +2738,15 @@ export function ProvidersSection() {
   const selectedEngine = selectedEngineKey
     ? pluginEngines.find((engine) => engine.key === selectedEngineKey) ?? null
     : null;
-  // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(三者互斥)。
-  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null || selectedEngine !== null;
+  // 自己其他电脑开放的插件引擎：与本机引擎共用选中态，键带前缀不会撞上；那台电脑离线或关掉开放后
+  // 从列表里消失，选中的那一行同样落回普通供应商。
+  const remotePluginEngines = useOwnRemotePluginEngines(controllableDevices, shareManageProviderId === null);
+  const selectedRemoteEngine = selectedEngineKey
+    ? remotePluginEngines.find((entry) => entry.key === selectedEngineKey) ?? null
+    : null;
+  // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(互斥)。
+  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null || selectedEngine !== null
+    || selectedRemoteEngine !== null;
   // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
   const selectProvider = useCallback((providerId: string) => {
     setSelectedShareId(null);
@@ -3801,6 +3818,15 @@ export function ProvidersSection() {
               {renderEngineRows(activeEngines)}
               {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
               {renderRemoteProviderRows(activeRemoteProviders)}
+              {/* 自己其他电脑开放的插件引擎：接在远程供应商后面，图标带远程角标、名字后带「插件」标识。 */}
+              <OwnRemotePluginEngineRows
+                entries={remotePluginEngines}
+                selectedKey={selectedRemoteEngine?.key ?? null}
+                onSelect={key => {
+                  setFocusedModel(null);
+                  selectEngine(key);
+                }}
+              />
               {(sharedLocalProviders.length > 0 || sharedRemoteProviders.length > 0) && (
                 <div
                   data-testid="provider-share-owned"
@@ -3880,7 +3906,9 @@ export function ProvidersSection() {
                   ? `remote:${selectedRemote.key}`
                   : selectedEngine
                     ? `engine:${selectedEngine.key}`
-                    : effectiveSelected?.id
+                    : selectedRemoteEngine
+                      ? `engine:${selectedRemoteEngine.key}`
+                      : effectiveSelected?.id
             }
             className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
@@ -3903,6 +3931,8 @@ export function ProvidersSection() {
                 pendingShareRequests={pendingShareCounts.get(selectedEngine.providerId) ?? 0}
                 onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(selectedEngine.providerId); }}
               />
+            ) : selectedRemoteEngine ? (
+              <OwnRemotePluginEngineDetail entry={selectedRemoteEngine} />
             ) : cindySigninActive ? (
               /* 登录引导是 brand-scale surface(DESIGN §3):48px 标识 → 24px 名字 →
                  一行价值主张 → 赠送余额徽标 → 黑 CTA,间距走 8px 系统。底部留白比

@@ -115,7 +115,7 @@ function usePluginEngineRename(): (engine: PluginEngineView) => Promise<void> {
 }
 
 /** 「插件」标识：告诉用户这一项来自插件，而不是自己添加的连接。 */
-function PluginTag({ size }: { size: 'row' | 'detail' }) {
+export function PluginTag({ size }: { size: 'row' | 'detail' }) {
   const { t } = useTranslation();
   return (
     <span
