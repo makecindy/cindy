@@ -427,7 +427,8 @@ describe('GhostPluginCard', () => {
     });
     expect(update.getAttribute('aria-busy')).toBe('true');
     expect(update.querySelector('.animate-spinner')).toBeTruthy();
-    expect(update.querySelector('.opacity-0')?.textContent).toContain('settings.ghosts.page.updateTo');
+    expect(update.querySelector('.opacity-0')?.textContent).toBe('settings.ghosts.installConsent.confirmUpdate');
+    expect(update.getAttribute('title')).toBe(update.getAttribute('aria-label'));
     expect((update as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -768,17 +769,19 @@ describe('MarketPluginCard', () => {
     ).toBeTruthy();
   });
 
-  it('shows scope, author and downloads without crowding the list with version or machine id', () => {
+  it.each([false, true])('shows one public source, author and downloads on each market card (compact=%s)', (compact) => {
     const { container } = render(
       <MarketPluginCard
+        compact={compact}
         item={{ ...marketPlugin, downloadStatistics: { requestCount: '12480' } }}
         busy={false}
         onSelect={vi.fn()}
         onIconLoadError={vi.fn()}
       />,
     );
-    const metadata = screen.getByText('settings.ghosts.page.origin.public').parentElement;
-    expect(metadata?.textContent).toBe('settings.ghosts.page.origin.public·Cindy·12.4k');
+    expect(screen.getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.page.origin.public')).toBeNull();
+    expect(screen.getByText('Cindy').parentElement?.textContent).toBe('Cindy·12.4k');
     expect(screen.queryByText('v1.3.11')).toBeNull();
     expect(screen.queryByText('google-calendar')).toBeNull();
     expect(container.querySelector('button button')).toBeNull();

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import nodeFs, { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -37,24 +37,31 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
 vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
+import { BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
+import { importBotSkillFiles } from '../botSkillStore.js';
+import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
 
 // Evaluate the actual generated check with real SQLite, in-process. The hook
 // protocol has its own process tests; retain one real spawn below. Repeated
 // cold Node startups made the activity matrix exceed 60s on CI (#10413).
-async function runMemoryCheck(workingDir: string, firedAt: number): Promise<number> {
+async function runMemoryCheck(workingDir: string, firedAt: number,
+  event: { lastFinishedAt?: number; scheduleId?: string; runId?: string; log?: string[] } = {}): Promise<number> {
   let exitCode = 0;
   const output = { write: (_text: string, done?: () => void) => { done?.(); } };
   const script = await fs.readFile(path.join(workingDir, '..', '.memory-review-check-v1.cjs'), 'utf8');
+  const { log, ...fields } = event;
   await new Script(script).runInNewContext({
     require: (name: string) => {
-      if (name !== 'node:sqlite') throw new Error(`Unexpected check dependency: ${name}`);
-      return { DatabaseSync };
+      if (name === 'node:sqlite') return { DatabaseSync };
+      if (name === 'node:fs') return nodeFs;
+      if (name === 'node:path') return path;
+      throw new Error(`Unexpected check dependency: ${name}`);
     },
-    console: { log() {}, error() {} },
+    console: { log: (text: string) => { log?.push(text); }, error() {} },
     process: {
-      stdin: Readable.from([JSON.stringify({ event: 'schedule-pre-run', firedAt })]),
+      pid: process.pid,
+      stdin: Readable.from([JSON.stringify({ event: 'schedule-pre-run', firedAt, ...fields })]),
       stdout: output, stderr: output,
       get exitCode() { return exitCode; },
       set exitCode(value: number) { exitCode = value; },
@@ -63,6 +70,19 @@ async function runMemoryCheck(workingDir: string, firedAt: number): Promise<numb
   });
   return exitCode;
 }
+
+// User decision 2026-11-16 / unit: new supplied tasks must acquire the same model policy
+// through the creation entry, without adding their IDs to the runner or editor.
+// Existing review-only coverage misses a new task definition and an unmarked old snapshot.
+it('gives a new default task model inheritance while retaining every existing model preference', () => {
+  const defaults = { id: 'future-default-task', name: 'Future default', prompt: 'Do useful work', cronExpr: '0 9 * * *' };
+  expect(createBotDefaultProjectSchedule(defaults)).toMatchObject({ ...defaults, followTeammateModel: true });
+  const chosen = { ...defaults, model: 'chosen-c', providerId: 'custom', fastMode: 'ultrafast' as const };
+  expect(createBotDefaultProjectSchedule(defaults, chosen)).toMatchObject(chosen);
+  expect(createBotDefaultProjectSchedule(defaults, chosen).followTeammateModel).toBeUndefined();
+  expect(createBotDefaultProjectSchedule(defaults, { ...defaults, followTeammateModel: false }).followTeammateModel).toBe(false);
+  expect(createBotDefaultProjectSchedule(defaults, { ...defaults, followTeammateModel: true }).followTeammateModel).toBe(true);
+});
 
 // Teammate V2 (2026-11-06): the nightly review is the project's own automation,
 // added once on the teammate's model; an owner's later edit or removal is kept.
@@ -82,12 +102,13 @@ describe('ensureBotProjectAutomations', () => {
     const route = { harness: 'pi' as const, model: 'm1', providerId: 'p1', effort: 'medium', fastMode: false };
     await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir, route })).resolves.toBe(true);
     expect(loader.upsertSchedule).toHaveBeenCalledWith(workingDir, expect.objectContaining({
-      id: BOT_PROJECT_MEMORY_REVIEW_ID, agentKind: 'pi', model: 'm1', providerId: 'p1',
+      id: BOT_PROJECT_MEMORY_REVIEW_ID, followTeammateModel: true,
       name: 'Mimi · Review memory', persistentSession: true, silentWhenIdle: true,
       prompt: expect.stringContaining('teammate id bot-1'),
     }), { keepUnreadable: true });
 
     const supplied = loader.upsertSchedule.mock.calls[0]![1];
+    expect(supplied.model).toBeUndefined();
     // Restoring an already-upgraded project on this computer recreates only its local check.
     const checkFile = path.join(root, '.memory-review-check-v1.cjs');
     await fs.rm(checkFile);
@@ -207,6 +228,155 @@ describe('ensureBotProjectAutomations', () => {
     } finally { db.close(); }
   });
 
+  // User report 2026-11-22: owners who send fewer than 20 messages a day never got their
+  // teammate reviewed, so its saved memories only piled up. Unit, real generated check with
+  // SQLite and files: changed memory or skills admit a review at most weekly; only a review
+  // whose run succeeded consumes them (#12080 review P1); the review's own edits, the supplied
+  // memory guide, the generated MEMORY.md index, the search index, dependency and Python caches
+  // (#12080 review) and self-tests do not count.
+  it('reviews a quiet teammate whose memory or skills changed, at most once a week', async () => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at INTEGER, session_id TEXT);
+      CREATE TABLE sessions(id TEXT PRIMARY KEY, working_dir TEXT, project_dir TEXT);`);
+    const finish = db.prepare('INSERT INTO schedule_runs(id, status, finished_at) VALUES (?, ?, ?)');
+    const day = 86_400_000;
+    const start = Date.now();
+    const touch = async (relative: string, at: number) => {
+      const file = path.join(workingDir, relative);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, relative);
+      await fs.utimes(file, at / 1000, at / 1000);
+    };
+    try {
+      expect(await runMemoryCheck(workingDir, start, { runId: 'r0' })).toBe(2); // Nothing saved yet.
+      await touch('.cindy/memory/README.md', start + 1);
+      await touch('.cindy/memory/MEMORY.md', start + 1); // Rebuilt on every storage start.
+      await touch('.cindy/memory/fts.db', start + 1);
+      await touch('.cindy/memory/.cindy-memory-migration-v1.json', start + 1);
+      await touch('.agents/skills/brew/node_modules/dep/index.js', start + 1);
+      await touch('.agents/skills/brew/__pycache__/tool.cpython-312.pyc', start + 1); // #12080 review
+      await touch('.agents/skills/brew/tool.pyc', start + 1);
+      expect(await runMemoryCheck(workingDir, start + 2, { runId: 'r1' })).toBe(2);
+      await touch('.cindy/memory/coffee.md', start + 3);
+      await touch('.agents/skills/brew/SKILL.md', start + 3);
+      expect(await runMemoryCheck(workingDir, start + 4, { scheduleId: 'self-test', runId: 'self-test' })).toBe(0);
+      const first: string[] = [];
+      expect(await runMemoryCheck(workingDir, start + day, { runId: 'r2', log: first })).toBe(0);
+      expect(first.join('\n')).toContain('.cindy/memory/coffee.md');
+      expect(first.join('\n')).toContain('.agents/skills/brew/SKILL.md');
+      expect(first.join('\n')).not.toMatch(/README|MEMORY\.md|fts\.db|migration|node_modules|\.pyc/);
+      // That run failed before tidying: the next night tries again with the same material.
+      finish.run('r2', 'failed', start + day + 1_000);
+      const retry: string[] = [];
+      expect(await runMemoryCheck(workingDir, start + 2 * day, { runId: 'r3', log: retry })).toBe(0);
+      expect(retry.join('\n')).toContain('.cindy/memory/coffee.md');
+      await touch('.cindy/memory/coffee.md', start + 2 * day + 60_000); // The review tidied it.
+      finish.run('r3', 'success', start + 2 * day + 120_000);
+      expect(await runMemoryCheck(workingDir, start + 3 * day, { runId: 'r4' })).toBe(2);
+      await touch('.cindy/memory/tea.md', start + 4 * day);
+      expect(await runMemoryCheck(workingDir, start + 5 * day, { runId: 'r5' })).toBe(2); // Within the week.
+      const second: string[] = [];
+      expect(await runMemoryCheck(workingDir, start + 9 * day, { runId: 'r6', log: second })).toBe(0);
+      expect(second.join('\n')).toContain('.cindy/memory/tea.md');
+      expect(second.join('\n')).not.toContain('coffee.md');
+      finish.run('r6', 'success', start + 9 * day + 60_000);
+      expect(await runMemoryCheck(workingDir, start + 17 * day, { runId: 'r7' })).toBe(2);
+    } finally { db.close(); }
+  });
+
+  // #12080 review (Codex P2): the review shares the project folder with the teammate's other
+  // tasks. A memory another task saved while the review ran is not the review's own edit and
+  // must wait for the next one. Unit, real generated check with SQLite and files.
+  it('keeps a memory another task saved while the review ran for the next review', async () => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at INTEGER, session_id TEXT);
+      CREATE TABLE sessions(id TEXT PRIMARY KEY, working_dir TEXT, project_dir TEXT);
+      INSERT INTO bot_session_links VALUES ('bot-1', 'chat');`);
+    const day = 86_400_000;
+    const start = Date.now();
+    const touch = async (relative: string, at: number) => {
+      const file = path.join(workingDir, relative);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, relative);
+      await fs.utimes(file, at / 1000, at / 1000);
+    };
+    try {
+      await touch('.cindy/memory/coffee.md', start - 1_000);
+      expect(await runMemoryCheck(workingDir, start, { runId: 'r1' })).toBe(0);
+      // While the review tidies coffee.md, the teammate's chat saves tea.md.
+      await touch('.cindy/memory/coffee.md', start + 60_000);
+      db.prepare("INSERT INTO messages VALUES ('review', 'assistant', NULL, ?, NULL, 'tidying')").run(start + 50_000);
+      db.prepare("INSERT INTO messages VALUES ('chat', 'assistant', NULL, ?, NULL, 'saved')").run(start + 70_000);
+      await touch('.cindy/memory/tea.md', start + 70_000);
+      db.prepare("INSERT INTO schedule_runs VALUES ('r1', 'success', ?, 'review')").run(start + 120_000);
+      const next: string[] = [];
+      expect(await runMemoryCheck(workingDir, start + 8 * day, { runId: 'r2', log: next })).toBe(0);
+      expect(next.join('\n')).toContain('.cindy/memory/tea.md');
+    } finally { db.close(); }
+  });
+
+  // #12080 review P2 (Greptile, Codex): the walk is bounded by entries visited, memory first,
+  // and each folder level before the next, so a large resource folder in an earlier Skill can
+  // neither hold up the check nor hide a later Skill. Unit, real generated check: 2,100 old
+  // files in a-large/data, a new z-new/SKILL.md and a changed memory record.
+  it('bounds the walk of a large Skill folder without hiding later Skills', async () => {
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);`);
+    db.close();
+    const firedAt = Date.now();
+    const skills = path.join(workingDir, '.agents', 'skills');
+    const data = path.join(skills, 'a-large', 'data');
+    await fs.mkdir(data, { recursive: true });
+    await Promise.all(Array.from({ length: 2100 }, (_, i) => fs.writeFile(path.join(data, `f${i}.txt`), '')));
+    await fs.mkdir(path.join(skills, 'z-new'), { recursive: true });
+    await fs.writeFile(path.join(skills, 'z-new', 'SKILL.md'), 'New skill');
+    // The large folder is old material, the new Skill came after the last review.
+    const reviewed = firedAt - 1_000;
+    await fs.writeFile(path.join(root, '.memory-review-state-v1.json'), JSON.stringify({ reviewedAt: 0, since: reviewed }));
+    const old = reviewed / 1000 - 60;
+    await Promise.all(Array.from({ length: 2100 }, (_, i) => fs.utimes(path.join(data, `f${i}.txt`), old, old)));
+    await fs.mkdir(path.join(workingDir, '.cindy', 'memory'), { recursive: true });
+    await fs.writeFile(path.join(workingDir, '.cindy', 'memory', 'coffee.md'), 'Oat milk');
+    const log: string[] = [];
+    expect(await runMemoryCheck(workingDir, firedAt, { log })).toBe(0);
+    expect(log.join('\n')).toContain('.cindy/memory/coffee.md');
+    expect(log.join('\n')).toContain('.agents/skills/z-new/SKILL.md');
+    expect(log.join('\n')).not.toContain('a-large/data');
+    expect(log.join('\n')).toContain('Stopped after 2000 entries');
+  });
+
+  // The check installed before 2026-11-22 (dff1c6e5) only counted messages. Unit, real
+  // installed body + SQLite: upgrading it in place lets a quiet teammate's memory be reviewed.
+  it('upgrades the installed message-only check so saved memory of a quiet teammate is reviewed', async () => {
+    loader.loadProjectSchedules.mockResolvedValueOnce(null);
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const supplied = loader.upsertSchedule.mock.calls[0]![1];
+    const checkFile = path.join(root, '.memory-review-check-v1.cjs');
+    const old = await fs.readFile(new URL('./fixtures/memory-review-dff1c6e5.cjs.txt', import.meta.url), 'utf8');
+    await fs.writeFile(checkFile, `const source = ${JSON.stringify({ databasePath: database.path,
+      botId: 'bot-1', syntheticPrefix: '[UI_ACTION_TRIGGER]' })};\n${old.slice(old.indexOf('\n') + 1)}`);
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);`);
+    db.close();
+    await fs.mkdir(path.join(workingDir, '.cindy', 'memory'), { recursive: true });
+    await fs.writeFile(path.join(workingDir, '.cindy', 'memory', 'coffee.md'), 'Oat milk');
+    const firedAt = Date.now();
+    expect(await runMemoryCheck(workingDir, firedAt)).toBe(2); // Actual installed behavior.
+    loader.loadProjectSchedules.mockResolvedValue([supplied]);
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+    expect(await runMemoryCheck(workingDir, firedAt)).toBe(0);
+    expect(loader.upsertSchedule).toHaveBeenCalledOnce();
+  });
+
   it('upgrades the supplied review while retaining choices, custom checks and removal', async () => {
     const old = { id: BOT_PROJECT_MEMORY_REVIEW_ID, cronExpr: '0 4 * * *', model: 'chosen',
       prompt: "Look back at Old Name's conversations from the last day (teammate id bot-1) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly." };
@@ -317,7 +487,9 @@ describe('moveTeammateMemoryIntoProject', () => {
 });
 
 // 2026-11-09 review: a V1 teammate that already had its own hand-off skill lost it to the
-// starter template's copy during the upgrade. The teammate's own skill must win.
+// starter template's copy during the upgrade. The teammate's own rules must win. Since 2026-11-22
+// the skill is layered: the standard text is Cindy's and the V1 rules move into "Your own rules",
+// which take precedence over the standard, so they are neither lost nor stuck on an old standard.
 describe('prepareBotProjectWorkspace', () => {
   let root = '';
   afterEach(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
@@ -332,8 +504,35 @@ describe('prepareBotProjectWorkspace', () => {
 
     const { workingDir } = await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
     const skill = path.join(workingDir, '.agents', 'skills', 'hand-off');
-    await expect(fs.readFile(path.join(skill, 'SKILL.md'), 'utf8')).resolves.toBe(own);
+    const text = await fs.readFile(path.join(skill, 'SKILL.md'), 'utf8');
+    expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('Owner-specific handover');
     await expect(fs.readFile(path.join(skill, 'checklist.md'), 'utf8')).resolves.toBe('company checklist');
+  });
+
+  // Unit, real project preparation and importer publication. A same-named imported skill used to
+  // be rejected by its freshly installed starter. A completed migration must also honor deletions.
+  it.each([true, false])('adopts imported hand-off rules and keeps its enabled=%s choice on restart', async enabled => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-import-settings-'));
+    const botId = 'imported';
+    const profile = path.join(root, 'bots', botId);
+    const args = { botId, ownerRoot: root, displayName: 'Fixture' };
+    const { workingDir } = await prepareBotProjectWorkspace(args);
+    const files = [{ name: 'SKILL.md', bytes: Buffer.from('---\nname: hand-off\n---\nInclude the project reference.'), executable: false },
+      { name: 'example.txt', bytes: Buffer.from('Example'), executable: false }];
+    const publish = () => importBotSkillFiles(root, botId, 'hand-off', files, () => {}, enabled, importedStandardSkill('hand-off'));
+    await publish();
+    await publish();
+    const folder = path.join(enabled ? path.join(workingDir, '.agents/skills') : path.join(profile, 'disabled-skills'), 'hand-off');
+    const content = await fs.readFile(path.join(folder, 'SKILL.md'), 'utf8');
+    expect(content.slice(content.indexOf(OWN_RULES_HEADING))).toContain('Include the project reference.');
+    expect(await fs.readFile(path.join(folder, 'example.txt'), 'utf8')).toBe('Example');
+    await fs.mkdir(path.join(profile, 'memories'), { recursive: true });
+    await fs.writeFile(path.join(profile, 'memories', 'project_previous.md'), 'Removed in the project');
+    await fs.writeFile(path.join(profile, 'v2-migration.json'), '{}');
+    await prepareBotProjectWorkspace(args);
+    await expect(fs.stat(path.join(teammateProjectMemoryDir(workingDir), 'project_previous.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(folder, 'SKILL.md'), 'utf8')).toBe(content);
+    if (!enabled) await expect(fs.stat(path.join(workingDir, '.agents/skills/hand-off'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   // QA recheck: with the project's Skills folder linked elsewhere, the starter template wrote through the link.

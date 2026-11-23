@@ -429,7 +429,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         :has() 把胶囊底色还原,只让当前按钮高亮,避免双层叠色。 */}
       <div
         className={cn(
-          'flex h-10 items-center rounded-full border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] px-[7px]',
+          'flex h-10 items-center rounded-full border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] px-1.5',
           'transition-colors hover:bg-[var(--sidebar-user-card-bg-hover)]',
           'has-[.flame-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
           'has-[.mobile-download-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
@@ -438,7 +438,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         {renderMoreMenu(
           <button
             aria-label={moreLabel}
-            className={cn('flex min-w-0 flex-1 items-center gap-[10px]', 'text-left')}
+            className={cn('flex min-w-0 flex-1 items-center gap-2.5', 'text-left')}
           >
             {/* Avatar — admin 用户加 1.5px 反色描边 + 右下角盾牌角标 */}
             <div

@@ -3104,7 +3104,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     }
   });
 
-  it('重试耗尽的终态过载错误换成可操作说明(桌面端重试不回流, 必须说清)', async () => {
+  it('重试耗尽的嵌套 529 终态 reason 在官方 Hook 中换成可操作说明', async () => {
     setMainLocale('zh-CN');
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
@@ -3116,7 +3116,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     cb({
       type: 'error',
       data: {
-        message: 'Selected model is at capacity. Please try a different model.',
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
         isTerminal: true,
       },
     });
@@ -3124,8 +3125,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.status).toBe('error');
     expect(outcome.errorMessage).toContain('模型服务繁忙');
     expect(outcome.errorMessage).toContain('在这里重发这条消息');
-    // 上游原文不外发到渠道, 只留在本地日志里。
-    expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
+    // The generic transport message must not replace the user-facing overload diagnosis.
+    expect(outcome.errorMessage).not.toContain('stream disconnected before completion');
   });
 
   it.each([

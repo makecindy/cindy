@@ -537,7 +537,7 @@ export function WorkLouderCodexSettings({
             />
           }
         />
-        <div className="flex flex-col gap-[14px]">
+        <div className="flex flex-col gap-3.5">
 
           <SettingsCard>
             <SettingsRow

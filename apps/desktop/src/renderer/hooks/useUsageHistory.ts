@@ -1,3 +1,4 @@
+import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 /**
  * useUsageHistory — 首页用量仪表盘的数据 hook。
  *
@@ -27,6 +28,7 @@ import {
   normalizeRegionalMoney,
   usdMoney,
   zeroUsageMoney,
+  type MoneyCurrency,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
@@ -83,6 +85,7 @@ const DEVICE_STATUSES = new Set<UsageHistoryDevice['status']>([
 ]);
 
 export interface UsageHistoryPayload {
+  currencies?: MoneyCurrency[];
   generatedAt: number;
   todayKey: string;
   stale?: boolean;
@@ -143,7 +146,7 @@ const STALE_RETRY_DELAY_MS = 800;
 const STALE_RETRY_MAX_DELAY_MS = 30_000;
 // v2 后缀:币种语义改为跟随来源(默认 USD)后,旧构建快照里的金额可能带错标
 // CNY——直接换 key 让旧快照失效,首帧宁可空态也不闪现错单位;旧 key 顺手清理。
-const SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload.v2';
+const SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload.v3';
 const LEGACY_SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload';
 const DEFAULT_SCOPE_KEY = 'anonymous';
 
@@ -192,6 +195,7 @@ interface StoredUsageHistoryModel {
 }
 
 interface StoredUsageHistoryPayload {
+  currencies?: unknown;
   generatedAt?: unknown;
   todayKey?: unknown;
   stale?: unknown;
@@ -360,6 +364,7 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
 
     const devices = parseDevices(parsed.devices);
     return {
+      ...(Array.isArray(parsed.currencies) ? { currencies: parsed.currencies.filter((v): v is MoneyCurrency => v === 'USD' || v === 'CNY') } : {}),
       ...(devices ? { devices } : {}),
       generatedAt: finiteNumber(parsed.generatedAt, Date.now()),
       todayKey: typeof parsed.todayKey === 'string' ? parsed.todayKey : '',
@@ -404,6 +409,7 @@ function serializeForCompare(p: UsageHistoryPayload): string {
 }
 
 interface UsageHistoryScopeState {
+  generation?: number;
   cache: UsageHistoryPayload | null;
   cacheSerialized: string | null;
   inflight: Promise<UsageHistoryPayload | null> | null;
@@ -419,6 +425,7 @@ interface UsageHistoryScopeState {
 }
 
 interface UsageHistoryRequest {
+  currency?: MoneyCurrency;
   days: number | 'all';
   modelDays: number | 'all';
   allowPendingEstimates: boolean;
@@ -500,6 +507,7 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
   setRefreshing(scope, true);
   scope.inflight = window.electronAPI.maker.usage
     .getHistory({
+      ...(scope.request.currency ? { currency: scope.request.currency } : {}),
       days: scope.request.days,
       modelDays: scope.request.modelDays,
       ...(scope.request.device === 'local' ? {} : { device: scope.request.device }),
@@ -586,17 +594,18 @@ function scopeKeyForRequest(scopeKey: string, request: UsageHistoryRequest): str
     request.modelDays === MODEL_WINDOW_DAYS &&
     !request.allowPendingEstimates &&
     request.device === 'local' &&
-    !request.includeTasks
+    !request.includeTasks && !request.currency
   ) {
     return scopeKey;
   }
   // 'local' 沿用旧 key, 升级后已有的本机快照照常 hydrate。
   const deviceSuffix = request.device === 'local' ? '' : `|device=${encodeURIComponent(request.device)}`;
   const taskSuffix = request.includeTasks ? '|tasks=1' : '';
-  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}${taskSuffix}`;
+  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}${taskSuffix}${request.currency ? '|currency=' + request.currency : ''}`;
 }
 
 export function useUsageHistory(opts?: {
+  currency?: MoneyCurrency;
   paused?: boolean;
   userId?: string | null;
   days?: UsageHistoryWindow;
@@ -611,9 +620,11 @@ export function useUsageHistory(opts?: {
   history: UsageHistoryPayload | null;
   refreshing: boolean;
 } {
+  const generation = useOptionalDataOwnerGeneration();
   const paused = opts?.paused ?? false;
   const scopeKey = normalizeScopeKey(opts?.userId);
   const request: UsageHistoryRequest = {
+    currency: opts?.currency,
     days: normalizeWindow(opts?.days, HISTORY_WINDOW_DAYS),
     modelDays: normalizeWindow(opts?.modelDays, MODEL_WINDOW_DAYS),
     allowPendingEstimates: opts?.allowPendingEstimates ?? false,
@@ -644,7 +655,9 @@ export function useUsageHistory(opts?: {
     setScopedHistory(activeScope.cache);
     // mount 与 paused→false (展开瞬间) 都拉一次 — 折叠摘要 / 图表数据都保持新鲜。
     // 收起时跳过后续 push 订阅, 避免每个 turn 触发后台重拉。
-    void load(scopedKey);
+    const ownerChanged = activeScope.generation !== undefined && activeScope.generation !== generation;
+    activeScope.generation = generation;
+    void load(scopedKey, { forceRefresh: ownerChanged });
     setIsRefreshing(activeScope.refreshing);
 
     // paused (卡片收起): 不订阅消费推送, 收起用户的 per-turn 重拉成本归零
@@ -665,8 +678,11 @@ export function useUsageHistory(opts?: {
         void load(scopedKey, { forceRefresh: true, resetPricingRetry: true });
       }, REFRESH_DEBOUNCE_MS);
     };
-    const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(scheduleRefresh);
-    const offTokens = window.electronAPI.maker.usage.onTodayTokensChanged(scheduleRefresh);
+    const refreshTurnUsage = (_value: unknown, stamp?: unknown) => {
+      if (isDataOwnerPushCurrent(stamp)) scheduleRefresh();
+    };
+    const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(refreshTurnUsage);
+    const offTokens = window.electronAPI.maker.usage.onTodayTokensChanged(refreshTurnUsage);
     const offPricing = window.electronAPI.maker.usage.onModelPricingChanged(scheduleRefresh);
     // 任务的标题 / 删除等元数据变化不产生用量:只需重读,Main 在出口按当前库覆盖本机任务
     // 元数据,不强制重聚合。
@@ -703,7 +719,7 @@ export function useUsageHistory(opts?: {
       offPricing();
       if (peerTimer) clearInterval(peerTimer);
     };
-  }, [paused, scopedKey]);
+  }, [paused, scopedKey, generation]);
 
   const history = historyState.scopeKey === scopedKey ? historyState.value : scope.cache;
   const refreshing =

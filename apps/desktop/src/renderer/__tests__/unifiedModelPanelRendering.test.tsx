@@ -233,8 +233,10 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
     unsupported: false,
   }),
 }));
+// Every model is shown unless a case names it here (the picker-visibility switch turned off).
+const hiddenModelIds = vi.hoisted(() => new Set<string>());
 vi.mock('@/state/modelVisibilityPrefs', () => ({
-  isModelEnabled: () => true,
+  isModelEnabled: (_agent: string, _providerId: string, model: { id: string }) => !hiddenModelIds.has(model.id),
   useModelVisibilityVersion: () => 0,
 }));
 vi.mock('@/state/deviceLinkModelMirror', () => ({
@@ -599,6 +601,42 @@ it('shows the model-groups rail only while modes exist', async () => {
   view.rerender(<ModelSelectorContent {...props} modelGroups={picker} />);
   expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
   expect(document.querySelector('[data-rail-item="all"][aria-pressed="true"]')).not.toBeNull();
+});
+
+// model-groups.md §6.3: another computer's own modes sit in that computer's rail segment and are chosen
+// on that computer. Existing cases only cover this computer's modes. Minimal input: no local modes, one
+// remote computer with one mode; tier: unit, real ModelSelectorContent. Failure: the cell is missing, the
+// pick loses the computer (so the local mode with the same id would run), or the remote modes are never read.
+it('lists another computer\'s modes in its own cell and picks them for that computer', async () => {
+  const onSelect = vi.fn();
+  const readDevices = vi.fn();
+  const modelGroups = {
+    config: { routes: [] }, active: null, onSelect, onManage: vi.fn(), readDevices,
+    devices: [{ deviceId: 'desk-2', name: 'Studio', config: { routes: [{ id: 'mode', name: 'Studio mode', strategy: 'order' as const, candidates: [] }] } }],
+  };
+  const remoteAgent = { devices: [{ deviceId: 'desk-2', name: 'Studio' }], selectedDeviceId: null };
+  // 那台一个允许被远程调用的来源都没有：它不在「其他电脑」那一段，模式也不列(选了也跑不起来)。
+  const closed = renderPanel({ remoteAgent, modelGroups });
+  expect(readDevices).toHaveBeenCalled();
+  expect(document.querySelector('[data-rail-item="model-groups:desk-2"]')).toBeNull();
+  closed.unmount();
+  remoteProvidersRef.providers = providersRef.providers.map((provider) => ({ ...provider as object, remoteInvocationEnabled: true }));
+  onTestFinished(() => { remoteProvidersRef.providers = []; });
+  renderPanel({ remoteAgent, modelGroups });
+  // 本机没有模式：本机「模型组」一格不出现；那台电脑的一格照常出现。
+  expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
+  const cell = document.querySelector('[data-rail-item="model-groups:desk-2"]');
+  expect(cell).not.toBeNull();
+  await act(async () => fireEvent.click(cell!));
+  // 另一台电脑的模式不带收藏 ☆，也没有管理入口(那台的模式在那台上改)。
+  expect(document.querySelector('[data-model-group-favorite="mode"]')).toBeNull();
+  expect(document.querySelector('[data-model-groups-manage]')).toBeNull();
+  // Typing in search switches to the all view (PR #11866 review r4650525981): that computer's matching
+  // mode stays listed under its own title instead of disappearing.
+  await act(async () => fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Studio mode' } }));
+  expect(screen.getByText('modelGroups.picker.deviceTitle')).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByText('Studio mode')));
+  expect(onSelect).toHaveBeenCalledWith({ type: 'route', id: 'mode', deviceId: 'desk-2' });
 });
 
 // #10207 / #10235 merge regression: local loading must not label a populated
@@ -5763,4 +5801,61 @@ it.each([
   } finally {
     providersRef.providers = originalProviders;
   }
+});
+
+// Rule (model-selector-unified.md「已隐藏区」): hiding a provider only folds it out of the regular
+// list; it must stay reachable. The gap: every existing case builds the list from visible
+// providers, so a regression that drops hidden providers from the panel's data (the obvious way
+// to implement hiding) leaves the user unable to pick them and loses their favorites. Minimal
+// failing input: one listed provider plus one with `hidden: true`. Tier: component (real
+// ModelSelectorContent + UnifiedModelPanel, catalog from the providers mock).
+describe('providers hidden from the picker stay reachable', () => {
+  const originalProviders = providersRef.providers;
+  afterEach(() => { providersRef.providers = originalProviders; });
+  const source = (id: string, name: string, model: string, extra: Record<string, unknown> = {}) => ({
+    id, name, source: 'user', agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+    connected: true, models: { codex: [{ id: `${id}-model`, name: model, contextWindow: 200_000,
+      efforts: ['high'], defaultEffort: 'high' }] }, ...extra });
+  const memory = { getEffort: () => undefined, getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn() };
+
+  it('folds them under one disclosure that expands, and a click selects the hidden model', async () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    const change = vi.fn();
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', onProviderChange: change, modelMemory: memory });
+    const list = within(screen.getByRole('listbox'));
+    expect(list.getByText('Listed Model')).toBeTruthy();
+    expect(list.queryByText('Hidden Model')).toBeNull();
+    // The rail offers no entry for it either: hiding is about the picker's regular surface.
+    expect(document.querySelector('[data-rail-item="provider:tucked"]')).toBeNull();
+    const toggle = document.querySelector('[data-hidden-models-toggle]') as HTMLElement;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => { fireEvent.click(toggle); });
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => { fireEvent.click(rowFor('Hidden Model')); });
+    expect(change).toHaveBeenCalledWith('tucked', 'tucked-model', expect.any(String), false);
+  });
+
+  // PR #11565 review: a model whose own picker switch is off lives only in the hidden fold. Its
+  // star worked there, but favorites resolved against the regular list, so the saved favorite
+  // never appeared. Minimal input: one listed model, one switched off, starred from the fold.
+  it('a model starred inside the hidden fold shows up under favorites', async () => {
+    hiddenModelIds.add('quiet-model');
+    try {
+      providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('quiet', 'Quiet', 'Switched Off Model')] as never;
+      renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', modelMemory: memory });
+      await act(async () => { fireEvent.click(document.querySelector('[data-hidden-models-toggle]') as HTMLElement); });
+      await act(async () => {
+        fireEvent.click(within(rowFor('Switched Off Model')).getByRole('button', { name: '存为收藏' }));
+      });
+      const favorites = screen.getAllByRole('group').find((group) => group.getAttribute('aria-label') === '收藏');
+      expect(favorites && within(favorites).getByText('Switched Off Model')).toBeTruthy();
+    } finally { hiddenModelIds.delete('quiet-model'); }
+  });
+
+  it('opens the fold by itself when the task is already using a hidden provider', () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'tucked', modelId: 'tucked-model', modelMemory: memory });
+    expect(within(screen.getByRole('listbox')).getByText('Hidden Model')).toBeTruthy();
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+  });
 });

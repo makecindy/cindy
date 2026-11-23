@@ -1,4 +1,4 @@
-import { errorPayload } from './xdt-helper/_payload.js';
+import { controlErrorPayload, type errorPayload } from './xdt-helper/_payload.js';
 
 /**
  * Host decision for one tool call. Tool lists stay stable for a whole session
@@ -34,6 +34,6 @@ export async function withToolCallAuthority<T>(
   } catch {
     decision = { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: '暂时无法确认这次调用的权限，请稍后重试。' };
   }
-  if (!decision.ok) return errorPayload(decision.errorCode, decision.message);
+  if (!decision.ok) return controlErrorPayload(decision);
   return decision.run ? decision.run(operation) : operation();
 }

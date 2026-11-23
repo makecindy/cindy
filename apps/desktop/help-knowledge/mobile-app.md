@@ -37,6 +37,7 @@ Your computer then shows up on the phone automatically. If the phone says the co
 **Remote desktop (see and operate the computer's screen):**
 
 - On the computer, turn on **Allow remote desktop** in **Settings > Remote Connection** (device control must also be on). On macOS, grant **Screen recording** (to view) and **Accessibility** (to control) when prompted; the phone can open the permission guide on the computer.
+  On macOS 27.3 and later, review the running copy of Cindy in **System & App Protection Override** on the Mac.
 - On the phone, tap **Remote desktop** in a task's header, on the computer's task list, or in its device details. Control is requested when you connect; switch on **View only** to just watch.
 - Phone tools include **Keyboard**, **Trackpad** / **Touch** input, **All windows** / **Desktop**, clipboard copy and paste between phone and computer, **Sound**, display quality and resolution, and a Security section (**Lock Computer on Exit**, **Computer privacy screen**, **Clipboard sync**, and on iPhone with a Mac, **Automatically unlock computer**).
 - From another computer on your account, open **Remote desktop** from the sidebar's device scope menu, the button next to a task that runs on that computer, or **Settings > Remote Connection**. It opens in its own window with **Controls** for display, sound, clipboard, and security.

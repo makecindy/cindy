@@ -1515,6 +1515,11 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
   才能这样启动。「允许被远程调用」逐引擎、默认关、只在本机窗口可改(`maker:set-plugin-engine-remote-use` 不进
   device-link allowlist)，与供应商的同名开关同一份按账号的存储。受邀者、供应商组与本机应用不提供插件引擎：
   自带工具是否关掉只能靠插件保证，不得据此把本机开放给其他账号。
+- **在模型供应商里的设置（2026-11-22）**：引擎同时列在「设置 → 模型供应商」，用户可改这台电脑上的显示名、隐藏、
+  停用与逐模型关闭，同样只在本机窗口可改(`maker:set-plugin-engine-prefs` 不进 device-link allowlist)。这些是宿主
+  按账号保存的用户设置(`plugin-engine-prefs.json`)，插件读不到也改不了，不改 manifest、批准状态或已发布的可用状态；
+  停用只是不再用这个引擎开新任务，插件本身、它的工具和页面照常。存量插件影响：无，文件缺失或损坏时引擎照插件
+  声明列出。字段与旧端降级见 [plugin-harnesses.md](protocol-compatibility/plugin-harnesses.md)。
 - **注册表**：`cindy-brain/pluginHarnesses.ts` 只列已启用、已批准、已声明、receipt 已批准且协议已支持的引擎，名称按
   界面语言选取；花名册广播、语言切换与状态发布后重算，内容不变不通知。`spawn` 现算列表，不在列表或已发布不可用即拒绝。
 

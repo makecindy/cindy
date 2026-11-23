@@ -8708,6 +8708,23 @@ describe('remote recovery regression', () => {
     } finally { h.client.stop(); await Promise.allSettled(pending); vi.useRealTimers(); }
   });
 
+  // Unit: iOS repeats network hints on an active relay. A valid frame after the
+  // latest hint proves connectivity even while the debounced probe timer exists.
+  it('admits a background read once traffic has answered the latest network hint', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({});
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); const ws = h.current(); ws.ack();
+      h.client.notifyNetworkChanged();
+      await vi.advanceTimersByTimeAsync(1);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      const read = h.client.invoke('a', { channel: 'git-context:pr-status', args: [] });
+      const sent = ws.sent.at(-1)!;
+      ws.push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: sent.id, src: 'a', payload: { ok: true, result: 1 } });
+      await expect(read).resolves.toEqual({ ok: true, result: 1 });
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('probes the shared relay once, pauses background work, and keeps healthy peers connected', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 1000, pongMissLimit: 100 } });
@@ -10753,6 +10770,25 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       await advance(2_000);
       expect(sendsBySeq(ws).get(next.seq)).toBe(2);
       expect(ws.closed).toBeNull();
+    }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
+  });
+
+  // Unit, real relay send queue with a fake clock: small pushes and results shared one
+  // stalled cumulative ACK on iPhone. Existing pacing only covers a large first frame.
+  it('bounds relay push copies until the first outstanding small result is acknowledged', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const ws = h.current();
+      h.client.sendInvokeResult('dev-b', 'first', { ok: true, result: 1 });
+      h.client.sendPush('dev-b', 'maker:schedule:event', { revision: 2 });
+      const head = parseTransportPayload(ws.sent.find(e => e.id === 'first')!.payload)!.meta;
+      await advance(8_000);
+      expect(ws.sent.filter(e => e.id === 'first').length).toBeGreaterThan(2);
+      expect(sendsBySeq(ws, 'push').get(head.seq + 1)).toBe(2);
+      ws.push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: head.streamId, ackSeq: head.seq },
+      } });
+      await advance(22_000);
+      expect(sendsBySeq(ws, 'push').get(head.seq + 1)).toBeGreaterThan(2);
     }, { pingIntervalMs: 600_000, transportRetryIntervalMs: 2_000 });
   });
 

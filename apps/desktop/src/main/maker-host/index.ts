@@ -40,7 +40,7 @@ import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { installPluginEngines } from './acp-host.js';
-import { builtinAgentKindOrNull, requireBuiltinAgentKind } from './engineKind.js';
+import { builtinAgentKindOrNull } from './engineKind.js';
 import { readCodexThreadStorageReadOnly, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -68,6 +68,7 @@ import {
   CodexAgent,
   configureDefaultImageResizer,
   type AgentKind,
+  type EngineKind,
   type InteractionRequest,
   type AutoReviewDelegate,
   type McpProvider,
@@ -150,6 +151,7 @@ import {
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
+  confirmTaskAction,
   isActiveInputAccountScoped,
   isSessionInTurn,
   wireSessionToIpc,
@@ -695,11 +697,14 @@ export async function refreshCodexGatewayHost(
 let _resolveBotCapabilityAgentKind: BotCapabilityServiceDeps['resolveBotAgentKind'] | null = null;
 // Bootstrap owns IM/hook modules that depend back on this host. Bind their reader
 // once, but read the current owner's stores on each call (including after resetMaker).
+let _iMessageGroup: BotCapabilityServiceDeps['iMessageGroup'];
 let _readBotConversationConnections: BotCapabilityServiceDeps['readConversationConnections'];
 export function setBotConversationConnectionsReader(
   reader: NonNullable<BotCapabilityServiceDeps['readConversationConnections']>,
+  iMessageGroup?: BotCapabilityServiceDeps['iMessageGroup'],
 ): void {
   _readBotConversationConnections = reader;
+  _iMessageGroup = iMessageGroup;
 }
 
 export function setBotCapabilityAgentKindResolver(
@@ -926,11 +931,26 @@ export async function listBotRuntimeMcpServers({ agentKind, remoteHostId }: { ag
   });
 }
 
+// Plugin engines get Cindy tools through the Pi-compatible bridge; session execution keeps its own engine.
+function companionToolAgentKind(kind: EngineKind): AgentKind {
+  return kind === 'acp' ? 'pi' : kind;
+}
+
 function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
-    listMcpServers: (input) => listBotRuntimeMcpServers({ ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate tools') }),
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
+    listMcpServers: (input) => listBotRuntimeMcpServers({
+      ...input,
+      agentKind: companionToolAgentKind(input.agentKind),
+    }),
     markOfficialSkills: markCindyOfficialSkills,
+    isOwnerInput: isActiveInputOwnerAuthored,
+    confirmGroupAccess: (sessionId, input) => confirmTaskAction(sessionId, 'configure_teammate_imessage_group', input),
+    iMessageGroup: async (...args) => {
+      if (!_iMessageGroup) throw new Error('HOST_NOT_READY');
+      return _iMessageGroup(...args);
+    },
     readConversationConnections: async (botId) => {
       if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
       return _readBotConversationConnections(botId);
@@ -1080,6 +1100,7 @@ export function getMaker(): Maker {
         // Reading a status must not put the other computer under control, old versions included.
         invokeStatus: (deviceId: string) => invokeDeviceValue(remoteBackgroundInvoke, deviceId, MACHINE_STATUS_CHANNEL, []),
       },
+      // bootstrap-electron.ts passes supportsRemoteSessionHandoff from this same injection.
       historyRemote: createHistoryRemoteDeps({
         listDevices: () => handleListDevices(deviceDirectoryDeps()),
         invoke: remoteInvoke,
@@ -2437,9 +2458,10 @@ export function getMaker(): Maker {
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
       getUserName: () => getAuthState().user?.name,
+      prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
       listSkills: async ({ agentKind: engineKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
-        const agentKind = requireBuiltinAgentKind(engineKind, 'teammate runtime');
+        const agentKind = companionToolAgentKind(engineKind);
         const result = await _maker.listAgentSkills(agentKind, {
           workingDir,
           remoteHostId,
@@ -2447,7 +2469,10 @@ export function getMaker(): Maker {
         });
         return markCindyOfficialSkills(result.skills, remoteHostId);
       },
-      listMcpServers: (input) => listBotRuntimeMcpServers({ ...input, agentKind: requireBuiltinAgentKind(input.agentKind, 'teammate runtime') }),
+      listMcpServers: (input) => listBotRuntimeMcpServers({
+        ...input,
+        agentKind: companionToolAgentKind(input.agentKind),
+      }),
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
       listBotImChannels: ({ botId }) =>
         [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
@@ -2465,7 +2490,7 @@ export function getMaker(): Maker {
                 isBotToolsetAvailable({
                   botId,
                   workingDir,
-                  agentKind: requireBuiltinAgentKind(agentKind, 'teammate runtime'),
+                  agentKind: companionToolAgentKind(agentKind),
                   remoteHostId,
                   toolsetId: plugin.id,
                 }),
@@ -2704,7 +2729,7 @@ export function getMaker(): Maker {
             // V2 teammates (projectContext) get the ordinary task's MCP and plugin surface.
             ...(botRuntimeSnapshot && !createOpts.botRuntimeProfile?.projectContext
               ? {
-                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[requireBuiltinAgentKind(createOpts.agentKind, 'teammate runtime')] ?? [])
+                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[companionToolAgentKind(createOpts.agentKind)] ?? [])
                     .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))
                     .map((provider) => provider.name),
                   [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [
@@ -2944,7 +2969,7 @@ export function getMaker(): Maker {
     // Anthropic 清单只来自 Claude Code SDK:maker 就绪后主动读一次,不等用户先跑任务
     // (旧缓存也可能缺少 SDK 只以简称返回的当前型号)。登录 / 认领后由对应收口再次请求。
     setAnthropicModelProbe((onSupportedModels, account) =>
-      makerRef.refreshAgentLocalModels('claude-code', { onSupportedModels,
+      makerRef.refreshAgentLocalModels('claude-code', { onSupportedModels, throwOnError: true,
         ...(account ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : {}) }),
     );
     requestAnthropicModelProbe();

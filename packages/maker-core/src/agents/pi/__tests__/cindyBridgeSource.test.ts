@@ -28,6 +28,7 @@ import {
   CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
+import { formatPermissionDenial } from '../../shared/auto-review-decision.js';
 
 it('strips Fast control paths from shell environments without mutating the runner environment', () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
@@ -1608,6 +1609,8 @@ describe('cindy-bridge extension source', () => {
     expect(decode('user-deny')).toBe('User denied this tool call via Cindy.');
     expect(decode('user-deny:Do not publish.')).toBe('User denied this tool call via Cindy: Do not publish.');
     expect(decode('system-deny:session_closed')).toBe('Cindy could not approve this tool call: session_closed');
+    expect(decode('system-deny:interaction_timeout')).toBe(formatPermissionDenial('system', 'interaction_timeout'));
+    expect(decode('system-deny:timeout')).toContain('the user did not reject it');
     expect(decode(undefined)).toBe('Cindy could not approve this tool call.');
     expect(decode('auto-review-deny:' + 'x'.repeat(500))).toBe('Cindy Auto-review denied this tool call: ' + 'x'.repeat(240));
   });

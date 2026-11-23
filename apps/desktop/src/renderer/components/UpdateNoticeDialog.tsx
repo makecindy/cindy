@@ -427,7 +427,7 @@ export function VersionDropdown({
         // suspenders on top of `modal` prop + parent dropdownOpenRef guard.
         onClick={(e) => e.stopPropagation()}
         // Above the AlertDialog layer; long version lists scroll.
-        className="z-[10001] max-h-[400px] overflow-y-auto"
+        className="max-h-[400px] overflow-y-auto"
       >
         {/* The version on screen is the checked radio row. Each row still calls
             onSelect on activation, the current one included, as before. */}
@@ -940,7 +940,7 @@ export function UpdateNoticeDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           // No scrim click-to-dismiss (DESIGN.md closing affordance): the
@@ -949,7 +949,7 @@ export function UpdateNoticeDialog({
 
         <AlertDialog.Content
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             // 920px, not the previous 1240px: the body is a single ~800px
             // reading column now, so the extra width only produced dead margins
             // and made the full-width chrome visibly mismatch the narrow body.

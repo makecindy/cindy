@@ -1537,6 +1537,7 @@ export function useDeviceLinkRemoteProjects(
     });
 
     const offRemoval = subscribeDeviceLinkDeviceRemoval((deviceId) => {
+      revokedDevicesStore.clearRevoked(deviceId);
       // Deletion is authoritative even if the directory is unavailable or a cold read is in flight.
       directoryGeneration += 1;
       cacheHydrationBlocked.add(deviceId);

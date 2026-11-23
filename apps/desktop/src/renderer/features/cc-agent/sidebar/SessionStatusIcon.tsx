@@ -44,6 +44,7 @@ import { useProviderShareAgentDevices } from '@/features/provider-share/useProvi
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../../shared/providerShare';
+import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
 
 /**
@@ -123,6 +124,9 @@ function AgentDeviceVendorIcon({
 export interface SessionStatusIconProps {
   /** Inbox rows use project identity while retaining draft/attention badges. */
   identityIcon?: ReactNode;
+  hideHarness?: boolean;
+  /** Whether this row already displays activity beside its title or preview. */
+  hasSeparateStatusIndicator?: boolean;
   session: Session;
   isRunning: boolean;
   /** /ctr 接管中:图标切 RadioTower。 */
@@ -151,6 +155,8 @@ export interface SessionStatusIconProps {
 
 export function SessionStatusIcon({
   identityIcon,
+  hideHarness = false,
+  hasSeparateStatusIndicator = false,
   session,
   isRunning: isAgentRunning,
   isAttached,
@@ -202,8 +208,12 @@ export function SessionStatusIcon({
     ? t('ccAgent.sidebar.hasDraft')
     : t('ccAgent.sidebar.hasPausedQueue');
 
+  const hideVendor = hideHarness && !identityIcon && !isArchived && !isOrcaLead && !isAttached;
+  const showRunningIndicator = hideVendor && !hasSeparateStatusIndicator && isRunning;
+  if (hideVendor && !showRunningIndicator && !showDraftIndicator && !(showAttentionDot && hasAttentionDot)) return null;
+
   return (
-    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden>
+    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden={showRunningIndicator ? undefined : true}>
       {identityIcon ?? (isArchived ? (
         <Archive
           size={size ?? 12}
@@ -246,7 +256,7 @@ export function SessionStatusIcon({
         >
           <RadioTower size={size ?? 12} strokeWidth={1.75} className="shrink-0" />
         </span>
-      ) : vendor === 'acp' ? (
+      ) : hideVendor ? null : vendor === 'acp' ? (
         <PluginEngineVendorIcon
           providerId={session.providerId}
           // 引擎在自己的另一台电脑上(Agent 在那台，任务在这台)：名称与图标读那台的列表。别人分享的
@@ -282,6 +292,9 @@ export function SessionStatusIcon({
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
         />
       ))}
+      {showRunningIndicator && (
+        <SidebarRightStatusIndicator kind="running" isActive={isActive} className="size-3" />
+      )}
       {showAttentionDot && hasAttentionDot && (
         <AttentionDot size={6} tone={attentionTone} className="absolute -top-0.5 -right-0.5" />
       )}
