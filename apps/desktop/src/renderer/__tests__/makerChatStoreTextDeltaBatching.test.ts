@@ -119,7 +119,7 @@ import {
   __testing as dataOwnerGenerationTesting,
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
-import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../shared/interruptedTurn';
+import { CONTINUE_AFTER_APP_EXIT_PROMPT, CONTINUE_AFTER_ERROR_PROMPT } from '../../shared/interruptedTurn';
 import { piReplyText, piReplyThinking } from '../../test/fixtures/piSuccessfulReply';
 import { createPiTranslateContext, disposePiTranslateContext, translatePiEvent } from '../../../../../packages/maker-core/src/agents/pi/translator';
 import { createAsyncQueue } from '../../../../../packages/maker-core/src/agents/shared/async-queue';
@@ -8883,6 +8883,56 @@ describe('makerChatStore text delta batching', () => {
     await expect(
       makerChatStore.sendUiTrigger(SESSION_ID, '[UI_ACTION_TRIGGER] retry'),
     ).rejects.toThrow(/workdir-missing/);
+  });
+
+  it('queues continuation on the selected local task despite a retained offline same-ID origin', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    expect(getStickySessionDeviceId(SESSION_ID)).toBe('device-1');
+    remoteProjectsStore.clear();
+    deviceLinkInvoke.mockRejectedValueOnce(new Error('[DEVICE_LINK_DEVICE_OFFLINE] target device offline'));
+    vi.mocked(sessionService.get).mockResolvedValueOnce({
+      id: SESSION_ID, agentKind: 'codex', providerId: 'local-provider',
+      sdkSessionId: 'local-thread', workingDir: WORKING_DIR, model: MODEL,
+      effort: EFFORT, permissionMode: PERMISSION_MODE,
+    } as Awaited<ReturnType<typeof sessionService.get>>);
+    deviceLinkInvoke.mockClear();
+
+    await makerChatStore.sendUiTrigger(SESSION_ID, CONTINUE_AFTER_ERROR_PROMPT, null);
+
+    expect(sessionService.get).toHaveBeenCalledWith(SESSION_ID);
+    expect(input.enqueue).toHaveBeenCalledTimes(1);
+    expect(input.enqueue).toHaveBeenCalledWith(SESSION_ID, expect.objectContaining({
+      text: CONTINUE_AFTER_ERROR_PROMPT,
+      createOpts: expect.objectContaining({ agentKind: 'codex', workingDir: WORKING_DIR,
+        providerId: 'local-provider', resumeSessionId: 'local-thread' }),
+    }), expect.anything());
+    expect(deviceLinkInvoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing selected local task without writing to either device', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    vi.mocked(sessionService.get).mockRejectedValueOnce(new Error('local task missing'));
+    deviceLinkInvoke.mockClear();
+
+    await expect(makerChatStore.sendUiTrigger(SESSION_ID, CONTINUE_AFTER_ERROR_PROMPT, null))
+      .rejects.toThrow('local task missing');
+
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.send).not.toHaveBeenCalled();
+    expect(deviceLinkInvoke).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicitly remote continuation on its offline host', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    deviceLinkInvoke.mockReset().mockRejectedValue(new Error('[DEVICE_LINK_DEVICE_OFFLINE] target device offline'));
+
+    await expect(makerChatStore.sendUiTrigger(SESSION_ID, CONTINUE_AFTER_ERROR_PROMPT, 'device-1'))
+      .rejects.toThrow('DEVICE_LINK_DEVICE_OFFLINE');
+
+    expect(deviceLinkInvoke).toHaveBeenCalledTimes(1);
+    expect(deviceLinkInvoke).toHaveBeenCalledWith('device-1', 'local-db:sessions:get', [SESSION_ID]);
+    expect(sessionService.get).not.toHaveBeenCalled();
+    expect(input.enqueue).not.toHaveBeenCalled();
   });
 
   it('requests executor-side interrupted-turn ack for a direct-send continue fallback', async () => {

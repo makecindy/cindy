@@ -144,6 +144,21 @@ describe('伙伴归属表', () => {
 });
 
 describe('通知入口在伙伴投影未加载时的路由', () => {
+  it('passes an explicit local origin through a link targeting this computer', async () => {
+    const openOrdinary = vi.fn();
+    const open = createSessionEntryNavigator({
+      isRemoteDevice: async () => false,
+      readKnownBotRoute: () => null,
+      resolveBotRoute: async () => null,
+      openBotRoute: vi.fn(), consumeAlert: vi.fn(), openOrdinary,
+    });
+
+    open('same', 'message-1', undefined, 'current-device');
+    await Promise.resolve();
+
+    expect(openOrdinary).toHaveBeenCalledWith('same', 'message-1', expect.any(Function), null);
+  });
+
   // External task links carry a device, including this computer's own id. Resolve
   // it within the existing latest-entry guard before consulting local Bot ownership.
   it.each([true, false])('routes an explicit device without letting a same-id local Bot win (remote=%s)', async (remote) => {

@@ -1034,7 +1034,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('scheduleFocusPath(group.scheduleId)');
     // 组头点击:展开打开最新一条;收起且整组是红时打开贡献红点的那条。
     expect(source).toContain('resolveCollapsedGroupHeaderSessionId({');
-    expect(source).toContain('onSessionClick(targetId)');
+    expect(source).toContain('onSessionClick(targetId, undefined, targetSession)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');
     // 自动任务只是展示分组，展开后的每条运行仍须保留普通会话行的移动菜单与搜索高亮。

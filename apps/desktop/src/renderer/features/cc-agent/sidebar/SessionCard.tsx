@@ -425,9 +425,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       if (isEditing) return;
       // 多选(与列表 SessionItem 同口径):透传 shift/⌘/ctrl 修饰键,支持卡片区
       // 范围/加减选;无修饰键即普通导航。
-      onClick(session.id, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey });
+      onClick(session.id, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey }, session);
     },
-    [isEditing, onClick, session.id],
+    [isEditing, onClick, session],
   );
 
   const handleDoubleClick = useCallback(
@@ -694,7 +694,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         if (e.target !== e.currentTarget) return;
         if (!isEditing && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
-          onClick(session.id);
+          onClick(session.id, undefined, session);
         }
       }}
       onContextMenu={(e) => {
