@@ -24,8 +24,8 @@ import type { ProviderView } from '@cindy/model-providers';
 
 type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
   name?: string;
-} & Partial<Pick<ProviderView, 'agents' | 'models' | 'routing' | 'connected' | 'suspended' | 'source'>> & {
-  auth?: { native: string };
+} & Partial<Pick<ProviderView, 'agents' | 'models' | 'routing' | 'connected' | 'suspended' | 'source' | 'subscriptionPool'>> & {
+  auth?: { method?: string; native?: string };
 };
 
 const mocks = vi.hoisted(() => ({
@@ -601,6 +601,31 @@ describe('TodaySpendChip remote Agent account', () => {
     expect(container.textContent).toContain('5h 剩余 88%');
     expect(container.textContent).not.toContain('剩余 10%');
     expect(mocks.remoteHookDeviceIds).toContain('device-agent');
+  });
+
+  // Unit: a provider Cindy created for one Claude account copies the built-in entry, so it has
+  // neither the `anthropic` id nor a native marker. Without the subscriptionPool check the chip
+  // never asked the Agent's computer for this account's quota.
+  it('Agent 在另一台电脑用 Cindy 新建的 Claude 订阅供应商:读那台这个账号的镜像', () => {
+    mocks.remoteClaudeSnapshot = agentSnapshot;
+    mocks.deviceProviders = [{
+      id: 'anthropic-sub-0000abcd', source: 'builtin', connected: true,
+      auth: { method: 'oauth' }, subscriptionPool: 'anthropic',
+    }];
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="cc"
+        providerId="anthropic-sub-0000abcd"
+        modelId="claude-fable-5[1m]"
+        sessionId="session-created-claude-provider"
+        usageAccount={{ kind: 'device', deviceId: 'device-agent' }}
+      />,
+    );
+
+    expect(container.textContent).toContain('5h 剩余 88%');
+    expect(mocks.remoteHookDeviceIds).toContain('device-agent');
+    expect(mocks.remoteProviderIds).toContain('anthropic-sub-0000abcd');
   });
 
   it('远程控制的任务把 Agent 放在第三台电脑:读第三台,不读被控电脑', () => {
