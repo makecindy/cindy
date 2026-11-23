@@ -43,6 +43,11 @@
 - 运行时需要持久化秘密时，复用现有 Main／宿主管理的 credential store 或 Electron
   `safeStorage` 边界。不要新增自定义明文凭证文件，也不要把秘密下放给 Renderer、插件
   或不受信任页面。
+- Pi 扩展配置投影（`<agentHome>/config-overlay/`，见 [PI harness](pi-harness.md) §2）是用户
+  手写的扩展配置文件，不属于 Cindy 凭证库：Cindy 只按原字节单向复制、不生成、不解析其中字段，
+  也不回写（会话内改动随 `configHome` 清扫消失），落盘权限 0o600，内容不进日志、错误或遥测。
+  用户把 API key 写进扩展自己的配置文件，即接受该 key 以明文留在本机；需要加密存放的凭证
+  仍走上面的 credential store。
 - 可信 Node Worker 的显式例外：`node.secretBindings[].oauthSecret` 只能引用本插件
   已声明的 OAuth key；这是调用时的凭证解析边界，不是发布或安装的能力支持门禁。
   引用尚不可用时保留声明，在调用时返回不支持／配置错误，不读取其他插件凭证。

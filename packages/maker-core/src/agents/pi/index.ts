@@ -36,6 +36,10 @@ import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
+import {
+  PI_CONFIG_OVERLAY_LOG_LIMIT,
+  projectPiConfigOverlay,
+} from './config-overlay.js';
 import { findPiCloudContextFile, piCloudContextDisplayPath } from './startup-context-diagnostic.js';
 import { scanPiSessionJsonl } from './session-jsonl-scan.js';
 
@@ -5779,6 +5783,30 @@ export class PiAgent extends BaseAgent {
     try {
       for (const file of globalContextFiles) {
         await writeFile(joinRemotePosixPath(configHome, file.name), file.content);
+      }
+      // 用户扩展配置投影:稳定根 <agentHome>/config-overlay/ 的惰性 json 复制进本次
+      // configHome,让扩展配置跨任务生效。单向快照,会话内改动不写回(见 pi-harness §2);
+      // 投影失败不阻断启动。
+      if (!remote && !isolatedBotProfile(opts.botRuntimeProfile) && !hostedGuest) {
+        const projection = await projectPiConfigOverlay(agentHome, configHome);
+        if (projection.entries.length > 0) {
+          this.deps.logger.debug('pi config overlay projected', {
+            configHomeId: path.basename(configHome),
+            files: projection.entries.map(entry => entry.name),
+          });
+        }
+        if (projection.error) {
+          this.deps.logger.debug('pi config overlay unreadable', {
+            configHomeId: path.basename(configHome),
+            message: projection.error,
+          });
+        }
+        if (projection.rejected.length > 0) {
+          this.deps.logger.debug('pi config overlay rejected files', {
+            configHomeId: path.basename(configHome),
+            rejected: projection.rejected.slice(0, PI_CONFIG_OVERLAY_LOG_LIMIT),
+          });
+        }
       }
       // 远端不 stage 本地 rg(本机二进制远端无意义)—— 远端走 PATH 上的 rg(远端 POSIX
       // 系统常见),与 CC/Codex 远端一致(不注入受管工具路径)。
