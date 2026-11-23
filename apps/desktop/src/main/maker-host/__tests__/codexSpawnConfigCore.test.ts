@@ -1,13 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { setActiveCatalog } from '../active-catalog.js';
 import { createCodexSpawnConfig } from '../codexSpawnConfigCore.js';
 import { prepareCodexBrowserCompanion } from '../codex-browser-companion.js';
+import { prepareCodexCustomContextCatalog } from '../codex-custom-context-catalog.js';
 
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { warn: vi.fn(), error: vi.fn() },
-}));
-vi.mock('../active-catalog.js', () => ({
-  getActiveCatalog: () => ({ providers: [] }), getActiveCatalogRevision: () => 1,
 }));
 vi.mock('../subagent-model-settings-store.js', () => ({
   readSubagentModelSettings: () => ({ codexSmartSubagentRouting: false }),
@@ -15,12 +18,6 @@ vi.mock('../subagent-model-settings-store.js', () => ({
 vi.mock('../codex-smart-subagent-routing.js', () => ({
   prepareCodexSmartSubagentConfig: vi.fn(), codexSmartSubagentRoutingSignature: vi.fn(),
   selectCodexSmartSubagentCandidates: vi.fn(),
-}));
-vi.mock('../codex-custom-provider-route.js', () => ({
-  deriveCodexCustomProviderRoutes: () => [],
-  buildCodexCustomProviderArgs: () => ({ extraArgs: [], extraEnv: {} }),
-  registerCodexScopedCustomProviderRoutes: () => vi.fn(),
-  toCodexCustomProviderHostRoutes: () => [],
 }));
 vi.mock('../codex-custom-context-catalog.js', () => ({
   prepareCodexGuestModelCatalog: async () => ({ extraArgs: [] }),
@@ -40,6 +37,12 @@ vi.mock('../codex-browser-companion.js', () => ({
 const localMcpArgs = ['-c', 'mcp_servers.local_slow.url="http://127.0.0.1:9/mcp"'];
 const browserArgs = ['-c', 'mcp_servers.node_repl.command="local-browser"'];
 
+// The launch factory now provisions native rules in its managed runtime home.
+let scratch: string;
+beforeEach(async () => { scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-codex-spawn-')); });
+afterEach(async () => { await fs.rm(scratch, { recursive: true, force: true }); });
+const fixtureHome = () => path.join(scratch, 'codex-home');
+
 function fixture() {
   const buildSessionMcpConfig = vi.fn(() => ({ 'mcp_servers.local_slow.enabled': true }));
   const getCodexExtraSpawnConfig = vi.fn(async () => ({
@@ -49,7 +52,7 @@ function fixture() {
   const scopedReady = vi.fn(() => true);
   const release = vi.fn(async () => {});
   const prepare = createCodexSpawnConfig({
-    binaryPath: 'unused-test-binary', getCodexHome: () => 'unused-test-home',
+    binaryPath: 'unused-test-binary', getCodexHome: fixtureHome,
     getCodexExtraSpawnConfig,
     broadcastCodexRuntimeRoute: vi.fn(async () => {}),
     readClaudeApiKey: () => null, isReplacedCindyGatewayKey: () => false,
@@ -86,6 +89,7 @@ const guest = {
 describe('Codex spawn MCP ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [] });
     vi.mocked(prepareCodexBrowserCompanion).mockResolvedValue({
       status: 'ready', extraArgs: browserArgs, version: 'fixture', startupTimeoutMs: 10_000,
       browserClientPath: 'unused-browser-client',
@@ -117,6 +121,30 @@ describe('Codex spawn MCP ownership', () => {
     expect(localMcpArgs).not.toContain(browserArgs[1]);
   });
 
+  it('places desktop input rules in the resumed runtime home and leaves external profiles alone', async () => {
+    const historyHome = path.join(scratch, 'codex-accounts', 'a'.repeat(64), 'openai-fixture');
+    const f = fixture();
+    await f.prepare([], { runtimeCodexHome: historyHome });
+    const rules = path.join(historyHome, 'rules', 'cindy-computer-use.rules');
+    expect(await fs.readFile(rules, 'utf8')).toContain('SHELL_DESKTOP_INPUT_NOT_ALLOWED');
+    await expect(fs.stat(path.join(fixtureHome(), 'rules'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const external = path.join(scratch, '.codex');
+    await f.prepare([], { codexHome: external });
+    await expect(fs.stat(path.join(external, 'rules'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await fs.writeFile(rules, '# owner policy');
+    await expect(f.prepare([], { runtimeCodexHome: historyHome })).rejects.toMatchObject({ codexSpawnConfigFatal: true });
+    expect(await fs.readFile(rules, 'utf8')).toBe('# owner policy');
+  });
+
+  it('leaves an external directory behind a linked account parent untouched', async () => {
+    const external = path.join(scratch, 'external');
+    await fs.mkdir(external);
+    await fs.symlink(external, path.join(scratch, 'codex-accounts'), 'junction');
+    const historyHome = path.join(scratch, 'codex-accounts', 'a'.repeat(64), 'openai-fixture');
+    await expect(fixture().prepare([], { runtimeCodexHome: historyHome })).rejects.toMatchObject({ codexSpawnConfigFatal: true });
+    expect(await fs.readdir(external)).toEqual([]);
+  });
+
   it('keeps Review hosts free of local MCP provisioning', async () => {
     const f = fixture();
     const result = await f.prepare([], { hostPurpose: 'review', credentialMode: 'oauth-bearer' });
@@ -130,5 +158,118 @@ describe('Codex spawn MCP ownership', () => {
     f.scopedReady.mockReturnValue(false);
     await expect(f.prepare([], guest)).rejects.toMatchObject({ codexSpawnConfigFatal: true });
     expect(f.release).toHaveBeenCalledOnce();
+  });
+});
+
+// #10523 unit: the real spawn factory must wait for routing or fail before a
+// fallback endpoint is frozen. Listener-only tests missed this config boundary.
+type Ports = Parameters<typeof createCodexSpawnConfig>[0];
+type Context = Parameters<ReturnType<typeof createCodexSpawnConfig>>[1];
+const provider = buildUserProvider({ id: 'fixture-provider', name: 'Fixture', runtimes: { codex: {
+  baseUrl: 'https://provider.invalid/v1', wireProtocol: 'openai-responses', supportsImageGeneration: true,
+  models: [{ id: 'fixture-model', name: 'Fixture model' }, { id: 'owner-only', name: 'Owner only' }],
+} } });
+
+function routeFixture() {
+  let ready = false;
+  const warmup = vi.fn(async () => {});
+  const endpoint = vi.fn(() => ready ? 'http://127.0.0.1:12345' : 'https://fallback.invalid/v1');
+  const release = vi.fn(async () => {});
+  const ports: Ports = {
+    binaryPath: process.execPath, getCodexHome: fixtureHome,
+    getCodexExtraSpawnConfig: vi.fn(async () => ({ extraArgs: [], extraEnv: {}, bridge: null, bridgeServerNames: [] })),
+    broadcastCodexRuntimeRoute: async () => {}, readClaudeApiKey: () => 'fake-key',
+    isReplacedCindyGatewayKey: () => false, hasCodexOAuthLogin: async () => false,
+    listProviders: async () => [], getDesktopSelectableCatalog: () => BUNDLED_CATALOG,
+    resolveDesktopModelContextProviderId: () => null,
+    prepareRemote: vi.fn(async () => ({ extraArgs: ['remote'], extraEnv: {} })),
+    readSubagentOAuth: async () => ({ accessToken: 'fake-token', accountId: null, canDispatch: () => false }),
+    proxy: {
+      setCodexProxyAuthInjection: () => {}, setCodexProxyGatewayKeyReader: () => {}, setCodexSubagentOAuthReader: () => {},
+      ensureCodexProxyReady: warmup, ensureCodexControlPlaneProxyReady: warmup, ensureCodexCustomContextProxyReady: warmup,
+      isCodexProxyHandleReady: () => ready, isCodexControlPlaneProxyHandleReady: () => ready,
+      isCodexCustomContextProxyHandleReady: () => ready,
+      getCodexProxyEndpoint: endpoint, getCodexControlPlaneProxyEndpoint: endpoint, getCodexCustomContextProxyEndpoint: endpoint,
+      releaseCodexCustomContextProxy: release, setCodexAppliedCustomProviderRoutes: vi.fn(),
+    },
+  };
+  return { prepare: createCodexSpawnConfig(ports), ports, warmup, endpoint, release, ready: () => { ready = true; } };
+}
+
+describe('Codex launch requires its local route', () => {
+  beforeEach(() => {
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [provider] });
+    vi.mocked(prepareCodexBrowserCompanion).mockResolvedValue({
+      status: 'ready', extraArgs: [], version: 'fixture', startupTimeoutMs: 10_000,
+      browserClientPath: 'unused-browser-client',
+    });
+  });
+
+  it.each<Context>([
+    { credentialMode: 'gateway-key' },
+    { credentialMode: 'oauth-bearer' },
+    { credentialMode: 'provider-oauth' },
+    { credentialMode: 'gateway-key', hostPurpose: 'control-plane' },
+    { credentialMode: 'gateway-key', hostPurpose: 'review' },
+    { credentialMode: 'gateway-key', accountHostKey: 'account-fixture' },
+    { credentialMode: 'gateway-key', localAuthPolicy: 'isolated', hostScopeKey: 'scope-fixture' },
+    { credentialMode: 'gateway-key', accountHostKey: 'guest-fixture', deviceHostedGuestProviderId: provider.id, deviceHostedGuestSessionId: 'guest' },
+  ])('rejects not-ready configuration as fatal: %j', async ctx => {
+    const f = routeFixture();
+    await expect(f.prepare([], ctx)).rejects.toMatchObject({ codexSpawnConfigFatal: true });
+    expect(f.endpoint).not.toHaveBeenCalled();
+    if (ctx.accountHostKey || ctx.localAuthPolicy === 'isolated') expect(f.release).toHaveBeenCalledOnce();
+  });
+
+  it('waits for warmup, then freezes the ready endpoint and selected custom route', async () => {
+    const f = routeFixture();
+    let complete!: () => void;
+    f.warmup.mockImplementationOnce(() => new Promise(resolve => { complete = () => { f.ready(); resolve(); }; }));
+    let settled = false;
+    const pending = f.prepare([], { credentialMode: 'gateway-key' }).then(value => { settled = true; return value; });
+    await vi.waitFor(() => expect(f.warmup).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    expect(f.endpoint).not.toHaveBeenCalled();
+    complete();
+    const config = await pending;
+    expect(config.codexProxyActive).toBe(true);
+    expect(config.extraArgs.join(' ')).toContain('http://127.0.0.1:12345');
+    expect(config.codexCustomProviderRoutes).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: provider.id })]));
+    expect(config.extraArgs.join(' ')).not.toContain('fallback.invalid');
+  });
+
+  it('can retry materialization after failure without losing the selected route', async () => {
+    const f = routeFixture();
+    await expect(f.prepare([], { credentialMode: 'gateway-key' })).rejects.toMatchObject({ codexSpawnConfigFatal: true });
+    f.ready();
+    const config = await f.prepare([], { credentialMode: 'gateway-key' });
+    expect(config.codexProxyActive).toBe(true);
+    expect(config.codexCustomProviderRoutes).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: provider.id })]));
+  });
+
+  it('freezes only granted models for previous-model compaction on a shared connection', async () => {
+    const f = routeFixture();
+    f.ready();
+    const catalogPath = path.join(scratch, 'fixture-catalog.json');
+    await fs.writeFile(catalogPath, JSON.stringify({ models: [] }));
+    vi.mocked(prepareCodexCustomContextCatalog).mockResolvedValueOnce({ catalogPath, extraArgs: [] });
+    const prepare = createCodexSpawnConfig({
+      ...f.ports,
+      getDesktopSelectableCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      resolveDesktopModelContextProviderId: () => provider.id,
+    });
+    const config = await prepare([], {
+      ...guest, deviceHostedGuestProviderId: provider.id, deviceHostedGuestModelIds: ['fixture-model'],
+      hostPurpose: 'custom-context', customContextHostKey: 'context-fixture', customContextProviderId: provider.id,
+      customContextModel: 'fixture-model', customContextWindow: 272_000,
+    });
+    expect(config.contextProviderModels).toEqual(['fixture-model']);
+    await config.onHostRetired?.();
+  });
+
+  it('leaves remote materialization independent of the local proxy', async () => {
+    const f = routeFixture();
+    expect(await f.prepare([], { remoteHostId: 'remote-fixture', credentialMode: 'gateway-key' })).toEqual({ extraArgs: ['remote'], extraEnv: {} });
+    expect(f.warmup).not.toHaveBeenCalled();
   });
 });

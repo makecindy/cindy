@@ -135,7 +135,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
               />
             ))}
             <NewTaskSelectionRow
-              title={t("session.new.chooseOtherFolder")}
+              title={p.browseLabel ?? t("session.new.chooseOtherFolder")}
               leading={icon(FolderPlus)}
               trailing={icon(ChevronRight)}
               disabled={workspaceUnavailable}
@@ -145,6 +145,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           </>
         ) : browsing ? (
           <>
+            {p.directoryInput}
             <Text
               testID="newSession.remoteBrowseCurrentPath"
               style={{

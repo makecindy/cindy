@@ -30,12 +30,14 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
+import { GEMINI_API_PRESET_ID, newGeminiConnectionId } from '../../../shared/geminiApiConnection';
 import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, builtinChoiceMeta, type ProviderSearchTarget } from './providerSearch';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
 import { presetCandidateRoute, presetModelCandidate, presetRouteHasInterfaceProfiles, presetSupplementalModels } from '../../../shared/providerModelCandidates';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
+import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
 import {
   isLocalRuntimeBetaProviderId,
   LOCAL_ADVANCED_PRESET_IDS,
@@ -279,7 +281,7 @@ export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
 function InfoLine({ text }: { text: string }) {
   return (
     <div className="flex items-start gap-2 text-12" style={{ color: 'var(--text-tertiary)' }}>
-      <Info size={13} className="mt-[1px] shrink-0" />
+      <Info size={13} className="mt-px shrink-0" />
       <span>{text}</span>
     </div>
   );
@@ -496,8 +498,9 @@ export function AddProviderWizard({
   // 已添加（包括断开后保留）的连接不再进向导；声明了媒体清单才展示。
   const builtinApiKeyChoices = useMemo(
     () =>
-      providers.filter(isWizardApiKeyChoice),
-    [providers],
+      providers.filter(p => isWizardApiKeyChoice(p) &&
+        (p.id !== 'gemini' || !presets.some(preset => preset.id === GEMINI_API_PRESET_ID))),
+    [providers, presets],
   );
   const sortedPresets = useMemo(
     () => sortPresetsForRegion(presets, CURRENT_CINDY_REGION),
@@ -786,15 +789,13 @@ export function AddProviderWizard({
       // Open the provider the account ended up in.
       onDone(builtin ? providerId : view.providerId || providerId);
     } catch (error) {
-      const code = extractIpcError(error)?.code;
-      if (localLoginRef.current === login && code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+      const key = subscriptionAccountErrorKey(error);
+      if (localLoginRef.current === login && key)
         toast.error(t(
-          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
-            ? 'subscriptionAccounts.providerManagedAuth'
-            // An older Cindy rejects a placement it does not know instead of joining the built-in provider.
-            : code === 'INVALID_PARAMS' && !builtinChoice(choice, providerId)
-              ? 'subscriptionAccounts.placement.needsUpdate'
-              : 'subscriptionAccounts.failed',
+          // An older Cindy rejects a placement it does not know instead of joining the built-in provider.
+          extractIpcError(error)?.code === 'INVALID_PARAMS' && !builtinChoice(choice, providerId)
+            ? 'subscriptionAccounts.placement.needsUpdate'
+            : key,
         ));
     } finally {
       if (localLoginRef.current === login) {
@@ -1343,8 +1344,9 @@ export function AddProviderWizard({
     }
   }, [sel, apiKey, onDone, t]);
 
+  const bindGeminiImages = sel?.kind === 'preset' && sel.preset.id === GEMINI_API_PRESET_ID && !detected && !(entry?.kind === 'preset' && entry.speechOnly);
   const handleFinish = useCallback(async () => {
-    if (!sel || sel.kind !== 'preset') return;
+    if (savingRef.current || !sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
     const selected = [...picks.entries()]
       .filter(([, value]) => !value.speechReference || value.checked)
@@ -1363,7 +1365,7 @@ export function AddProviderWizard({
         interfaceIds: v.interfaceIds,
         manualSpeech: v.manualSpeech,
       }));
-    if (!selected.some(model => model.checked)) {
+    if (!bindGeminiImages && !selected.some(model => model.checked)) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
     }
@@ -1373,7 +1375,7 @@ export function AddProviderWizard({
     setSaving(true);
     try {
       const existing = new Set(providers.map((p) => p.id));
-      const id = oauthDraft?.id ?? (
+      const id = bindGeminiImages ? newGeminiConnectionId() : oauthDraft?.id ?? (
         preset.id === 'lmstudio' && !detected
           ? MANAGED_LMSTUDIO_PROVIDER_ID
           : uniqueCustomProviderId(
@@ -1427,7 +1429,7 @@ export function AddProviderWizard({
                 : {}),
             };
           });
-        if (agentModels.length === 0) continue;
+        if (agentModels.length === 0 && !bindGeminiImages) continue;
         runtimes[agent] = {
           ...presetConnectionRuntime(preset, agent, agentModels, rt.baseUrl),
           ...(detected?.config.runtimes[agent]?.imageApi ? { imageApi: detected.config.runtimes[agent]!.imageApi } : {}),
@@ -1454,16 +1456,19 @@ export function AddProviderWizard({
         if (oauthDraft) oauthDraftRef.current = oauthDraft;
         return;
       }
-      await (oauthDraft ? updateCustomProvider : createCustomProvider)(
-        {
-          ...(oauthDraft ?? {}),
-          id,
-          name: name.trim() || presetDisplayName(preset, i18n.language),
-          ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
-          runtimes,
-        },
-        keys,
-      );
+      const config: CustomProviderConfig = {
+        ...(oauthDraft ?? {}),
+        id,
+        name: name.trim() || presetDisplayName(preset, i18n.language),
+        ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
+        runtimes,
+      };
+      if (bindGeminiImages) {
+        const result = await createCustomProvider(config, keys, { bindGeminiImages: true });
+        if (!result.ok) throw new Error('Gemini connection was not saved');
+      } else {
+        await (oauthDraft ? updateCustomProvider : createCustomProvider)(config, keys);
+      }
       toast.success(
         t('settings.providers.wizard.createdToast', {
           name: name.trim() || presetDisplayName(preset, i18n.language),
@@ -1477,7 +1482,7 @@ export function AddProviderWizard({
       savingRef.current = false;
       setSaving(false);
     }
-  }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language, detected]);
+  }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language, detected, bindGeminiImages]);
 
   // ── 步骤指示 ─────────────────────────────────────────────────────────
   // 目录步默认按完整路径显示三步(选择供应商 → 连接 → 选择模型);选中真的
@@ -1574,7 +1579,7 @@ export function AddProviderWizard({
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) handleClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
       <Dialog.Content
         ref={panelRef}
         aria-describedby={undefined}
@@ -1590,7 +1595,7 @@ export function AddProviderWizard({
           if (savingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
         }}
         style={WINDOW_NO_DRAG_STYLE}
-        className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+        className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
       >
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
@@ -1973,12 +1978,12 @@ export function AddProviderWizard({
                   {t('settings.providers.custom.fields.apiKey')}
                 </label>
                 <SettingsTextInput
+                  data-settings-search-action="Enter the API key of the built-in provider draft in this wizard"
                   value={apiKey}
                   onChange={setApiKey}
                   size="md"
                   mono
                   secret
-                  secretTipContentClassName="z-[10001]"
                 />
               </div>
             </div>
@@ -2019,14 +2024,15 @@ export function AddProviderWizard({
                     {t('settings.providers.custom.fields.apiKey')}
                   </label>
                   <SettingsTextInput
+                    data-settings-search-action="Enter the API key of the preset provider draft in this wizard"
                     value={apiKey}
                     onChange={setApiKey}
                     placeholder={isMimoTokenPlanPreset(sel.preset) ? 'tp-…' : 'sk-…'}
                     size="md"
                     mono
                     secret
-                    secretTipContentClassName="z-[10001]"
                   />
+                  {bindGeminiImages && <InfoLine text={t('settings.providers.wizard.geminiImageKeyNote')} />}
                   {isMimoTokenPlanPreset(sel.preset) && (
                     <InfoLine text={t('settings.providers.wizard.mimoTokenPlanNote')} />
                   )}
@@ -2357,8 +2363,9 @@ export function AddProviderWizard({
                 size="lg"
                 loading={saving}
                 type="button"
+                data-settings-search-action="Save the provider connection configured in this wizard"
                 onClick={() => void handleFinish()}
-                disabled={saving || fetchState.status === 'fetching' || checkedCount === 0}
+                disabled={saving || fetchState.status === 'fetching' || (!bindGeminiImages && checkedCount === 0)}
               >
                 {t('settings.providers.wizard.finish')}
               </Button>

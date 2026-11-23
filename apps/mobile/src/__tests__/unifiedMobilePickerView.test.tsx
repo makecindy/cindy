@@ -39,7 +39,7 @@ vi.mock('react-native', async () => {
       );
     },
 
-    Pressable: ({ children, onPress, disabled, accessibilityLabel }: any) => el('button', { onClick: onPress, disabled, 'aria-label':accessibilityLabel }, children),
+    Pressable: ({ children, onPress, disabled, accessibilityLabel, testID }: any) => el('button', { onClick: onPress, disabled, 'aria-label':accessibilityLabel, 'data-testid':testID }, children),
     StyleSheet: { create: (styles: any) => styles, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 400, height: 800 }),
   };
@@ -51,7 +51,7 @@ vi.mock('@/components/AppText', async () => {
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('lucide-react-native', () => ({
-  ...Object.fromEntries(['Clock3', 'Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert'].map(key => [key, () => null])),
+  ...Object.fromEntries(['Clock3', 'Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert', 'Waypoints'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
 }));
 vi.mock('react-native-svg', () => ({
@@ -78,7 +78,10 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({...Object.fromEntries(
 vi.mock('@expo/ui', () => ({Host:({children}:any)=>children}));
 vi.mock('@/session/ComposerSheet', () => import('@/session/ComposerSheet.ios'));
 vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title, header }: any) => createElement('div', null, header ?? title, children) }));
-vi.mock('@/session/ComposerNativeRow', () => ({ ComposerNativeRow: ({ leading, title }: any) => createElement('div', null, leading, title) }));
+vi.mock('@/session/ComposerNativeRow', () => ({
+  ComposerNativeRow: ({ leading, title, subtitleContent, subtitle, testID, onPress }: any) =>
+    createElement('div', { 'data-testid': testID, onClick: onPress }, leading, title, subtitleContent ?? subtitle),
+}));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: ({ children }: any) => children, NativeSwitch: () => null, usesNativePullDownMenu: () => true }));
 vi.mock('@/components/MobileAgentMark', () => ({ MobileAgentMark: () => null }));
 // 远程标记由 mark 自己按 remote 画(字形不缩放不移位),桩里只留一个可数的记号。
@@ -241,6 +244,8 @@ it.each([
   expect(list.closest('[aria-hidden="true"]')).toBeNull();
 });
 
+// Unit, 2026-11-18 decision. Each platform must render the reason supplied
+// for a single remote copy on both the source and model rows.
 it.each([
   ['Android', UnifiedModelPickerView],
   ['iOS', IosModelPickerView],
@@ -254,7 +259,7 @@ it.each([
   const filters = [
     { id: 'all', label: 'All' },
     { id: 'account', label: 'Local Provider', providerMark: { name: 'Local Provider' } },
-    remote('studio', 'Studio Mac', 'Claude Sub'),
+    { ...remote('studio', 'Studio Mac', 'Claude Sub'), sourceUnavailableReason: 'Claude Sub on Home Mac is unavailable' },
     remote('office', 'Office PC', 'Codex Sub'),
     remote('studio', 'Studio Mac', 'OpenRouter'),
   ];
@@ -272,6 +277,8 @@ it.each([
   expect(text.indexOf('Studio Mac')).toBeLessThan(text.indexOf('Claude Sub'));
   expect(text.indexOf('OpenRouter')).toBeLessThan(text.indexOf('Office PC'));
   expect(text).not.toContain('Claude Sub · Studio Mac');
+  expect(host.querySelector('[data-testid="modelSheet.source.remote:studio:Claude Sub"]')?.textContent)
+    .toContain('Claude Sub on Home Mac is unavailable');
   // 其他电脑的供应商图标带远程标记,本机的不带。
   expect(host.querySelectorAll('[data-remote-mark]')).toHaveLength(3);
 });
@@ -288,11 +295,16 @@ it.each([
     visible: true, testID: 'modelSheet', title: 'Models', query: '', filter: 'all', filters: [],
     groups: [
       { key: 'account', title: 'Local Provider', rows: [row('local')] },
-      { key: 'remote', title: 'Claude Sub · Studio Mac', rows: [row('remote', { deviceId: 'studio', name: 'Studio Mac' })] },
+      { key: 'remote', title: 'Claude Sub · Studio Mac', rows: [{
+        ...row('remote', { deviceId: 'studio', name: 'Studio Mac' }),
+        sourceUnavailableReason: 'Claude Sub on Home Mac is unavailable',
+      }] },
     ],
   } as any)));
   expect(host.textContent).toContain('Claude Sub · Studio Mac');
   expect(host.querySelectorAll('[data-remote-mark]')).toHaveLength(1);
+  expect(host.querySelector('[data-testid="modelSheet.model.remote"]')?.textContent)
+    .toContain('Claude Sub on Home Mac is unavailable');
 });
 
 it('keeps selection errors visible in the retained native root list', async () => {
@@ -488,3 +500,23 @@ it.each(['drag', 'search', 'close'] as const)('keeps pending compensation cancel
     expect(picker.landed()).toBeNull();
   } finally { picker.cleanup(); }
 });
+
+// model-groups.md §6.2, user 2026-11-20「漏了补全客户端」: the host's model groups are one section at the top of the
+// phone picker on both platforms. Production entry: the platform views. Observable: group rows with their hint,
+// the current one selected, a tap reports the group id. Minimal input: one group row. tier: unit (jsdom).
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'lists the host computer\'s model groups above the models on %s', async (_platform, Component) => {
+    const onSelect = vi.fn();
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'all', groups: [], filters: [],
+      modelGroups: { title: 'Model groups', rows: [{ id: 'night', title: 'Night', subtitle: '2 sources · In order', selected: true }], onSelect },
+    } as any)));
+    expect(host.textContent).toContain('Model groups');
+    expect(host.textContent).toContain('2 sources · In order');
+    expect(host.textContent).not.toContain('models.picker.noResults');
+    const row = host.querySelector('[data-testid="picker.modelGroup.night"]')
+      ?? [...host.querySelectorAll('button')].find(node => node.textContent?.includes('Night'));
+    await act(async () => (row as HTMLElement).click());
+    expect(onSelect).toHaveBeenCalledWith('night');
+  },
+);

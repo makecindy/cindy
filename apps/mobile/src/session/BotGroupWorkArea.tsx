@@ -2,14 +2,14 @@ import { type ReactNode, useCallback, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { canStopBotGroupSpeaker, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { BOT_GROUP_CLIENT_PRIMITIVES, botGroupChatDataFromResource, botGroupResourceRef } from './botGroupRemote';
-import { BotGroupMenu } from './BotGroupMenu';
+
 import { BotGroupSpeakerRow } from './BotGroupSpeakerRow';
 import type { BotGroupIdentity } from './BotGroupAvatars';
 import { Text } from '@/components/AppText';
@@ -40,7 +40,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
       ? [{ executionId: speaker.executionId, deviceId: member.homeDeviceId }] : [];
   });
   const scope = JSON.stringify([accountGeneration, group.id, deviceId, candidates]);
-  const [resolved, setResolved] = useState<{ scope: string; targets: Map<string, { deviceId: string; sessionId: string; botId: string }> }>();
+  const [resolved, setResolved] = useState<{ scope: string; targets: Map<string, { deviceId: string; sessionId: string; botId: string; inputClientId?: string }> }>();
   useFocusEffect(useCallback(() => {
     if (!online || !candidates.length) return;
     let cancelled = false;
@@ -51,7 +51,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
       if (cancelled) return;
       if (reading) { again = true; return; }
       reading = true;
-      const targets = new Map<string, { deviceId: string; sessionId: string; botId: string }>();
+      const targets = new Map<string, { deviceId: string; sessionId: string; botId: string; inputClientId?: string }>();
       await Promise.all(hosts.map(async host => {
         if (getPresenceAvailability(host) === false) return;
         try {
@@ -62,7 +62,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
           if (remote?.id !== group.id) return;
           for (const candidate of candidates.filter(candidate => candidate.deviceId === host)) {
             const speaker = remote.round.speakers.find(speaker => speaker.executionId === candidate.executionId);
-            if (speaker?.sessionId) targets.set(candidate.executionId, { deviceId: host, sessionId: speaker.sessionId, botId: speaker.botId });
+            if (speaker?.sessionId) targets.set(candidate.executionId, { deviceId: host, sessionId: speaker.sessionId, botId: speaker.botId, inputClientId: speaker.inputClientId });
           }
         } catch { /* Generic server status remains available while the computer cannot be reached. */ }
       }));
@@ -83,25 +83,15 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     group.members.some(member => member.botId === speaker.botId))).flatMap(entry => entry.kind === 'work' ? [entry.value] : []);
   if (!speakers.length) return children?.(EMPTY_WORK_ROWS) ?? null;
   const executionSpeakers = speakers.filter(speaker => speaker.activity !== 'planning');
-  const stopPending = stopping || executionSpeakers.filter(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId || group.canStopAll).every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
+  const stopPending = stopping || executionSpeakers.filter(speaker => canStopBotGroupSpeaker(group, speaker)).every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
   const stopButton = (onPress: (() => void) | undefined) => <Pressable testID="botGroup.work.stop" accessibilityRole="button"
     accessibilityLabel={t('groupChat.composer.stop')} accessibilityState={{ disabled: stopPending, busy: stopPending }}
     disabled={stopPending} style={styles.stop} onPress={onPress}>
     <Text style={styles.stopText}>{t(stopPending ? 'groupChat.speaking.stopping' : 'groupChat.progress.stop')}</Text>
   </Pressable>;
-  const canStopMine = group.round.canStop !== false && executionSpeakers.some(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId);
-  const canStopAll = group.supportsScopedStop && group.canStopAll && group.round.othersActive;
-  const controlSpeaker = (canStopMine ? [...executionSpeakers].reverse().find(speaker => speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId) : undefined)
-    ?? (canStopAll ? executionSpeakers.at(-1) : undefined);
-  const stopControl = online && onStop && (canStopMine || canStopAll) ? canStopAll
-      ? <BotGroupMenu title={t('groupChat.progress.stop')} accessibilityLabel={t('groupChat.composer.stop')}
-          disabled={stopPending} testID="botGroup.work.stopMenu" sections={[{ id: 'scope', options: [
-            ...(canStopMine ? [{ id: 'mine', title: t('groupChat.progress.stopMine') }] : []),
-            { id: 'all', title: t('groupChat.progress.stopAll'), subtitle: t('groupChat.progress.stopAllHint'), destructive: true },
-          ] }]} onSelect={id => { void onStop(id === 'all' ? 'all' : undefined); }}>
-          {stopButton}
-        </BotGroupMenu>
-      : stopButton(() => { void onStop(); }) : null;
+  const canStopMine = group.round.canStop !== false && executionSpeakers.some(speaker => canStopBotGroupSpeaker(group, speaker));
+  const controlSpeaker = canStopMine ? [...executionSpeakers].reverse().find(speaker => canStopBotGroupSpeaker(group, speaker)) : undefined;
+  const stopControl = online && onStop && canStopMine ? stopButton(() => { void onStop(); }) : null;
   const rows: BotGroupWorkRow[] = speakers.flatMap((speaker) => {
         const member = group.members.find(member => member.botId === speaker.botId);
         if (!member) return [];
@@ -120,7 +110,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
         return [{ key, executionId: speaker.executionId, sourceMessageId: speaker.sourceMessageId, startedAt: speaker.startedAt, timelineAt: speaker.timelineAt, node: <BotGroupSpeakerRow key={key}
           deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
           identity={{ ...identity, name: displayName, ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
-          executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
+          executionId={speaker.executionId} inputClientId={target ? target.inputClientId : speaker.inputClientId} startedAt={speaker.startedAt} groupId={group.id}
           workStep={plan && step ? { position: step.position + 1, total: plan.steps.length, task: step.task } : undefined}
           revealWaiting={speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId} footer={speaker === controlSpeaker ? stopControl : undefined}
           activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} /> }];

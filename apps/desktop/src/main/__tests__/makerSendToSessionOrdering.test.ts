@@ -190,7 +190,7 @@ describe('sendToSession ordering', () => {
     const pluginStateBlock = extractBetween(
       source,
       'ipcMain.handle(\n    MAKER_INVOKE.PLUGINS_GET_STATE',
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
+      'registerPluginEnableHandlers(',
     );
 
     expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');
@@ -331,7 +331,13 @@ describe('sendToSession ordering', () => {
       'const runQueuedOrcaInterAgentAcceptedCallback = (',
       'const dispatchOrEnqueueOrcaInterAgentMessage = async (',
     );
-    expect(runQueuedCallback).toContain('return queuedAccepted.run(sessionId, item);');
+    // #10803: a persisted scheduler recovery must inherit the original callback
+    // only through the bridge's verified source; otherwise run ownership is lost.
+    // Runtime recovery and cancellation are covered by runnerQueuedDispatch.test.ts.
+    expect(runQueuedCallback).toContain('return queuedAccepted.run(sessionId, item, recoverySourceClientId);');
+    expect(coordinatorBlock).toMatch(
+      /await orcaInterAgentDispatcher\.runQueuedOrcaInterAgentAcceptedCallback\(\s*sessionId,\s*item,\s*restoredFromSnapshot,\s*schedulerQueueBridgeHolder\?\.recoverySourceClientId\(sessionId, item\),?\s*\);/,
+    );
     expect(dispatchBlock).toMatch(
       /registerQueuedOrcaInterAgentAcceptedCallback\(\s*clientId,\s*params\.onAccepted,\s*params\.onAcceptedRollback,\s*params\.onAcceptedCommit,?\s*\);/,
     );
@@ -623,7 +629,7 @@ describe('sendToSession ordering', () => {
     expectOrder(
       setModelBlock,
       'applyRuntimeSelectionAxesWithRecovery({',
-      'await persistSessionFields',
+      'await persistSessionFields(sessionId, patch);',
     );
     expectOrder(
       setModelBlock,
@@ -665,10 +671,12 @@ describe('sendToSession ordering', () => {
       'selection,',
     );
     expect(source).toContain('withSessionLock: withSendToSessionLock,');
-    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);');
+    // Keep the ordering contract and cancellation-signal wiring together;
+    // orcaModelSelectionIntent covers the actual waiting/preparation aborts.
+    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId, undefined, () => stage, signal);');
     expectOrder(
       directSendSwitchBlock,
-      'const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);',
+      'const release = await acquireSendToSessionLock(sessionId, undefined, () => stage, signal);',
       'applyPendingAgentSwitchIfIdle(',
     );
     for (const [operation, call] of [
@@ -1126,7 +1134,7 @@ expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(targ
     expectOrder(
       serviceDispatchBlock,
       'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;',
-      'if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);',
+      'if (!wasLiveBeforeDispatch && !deps.hasPendingAgentSwitch?.(target.sessionId)) {',
     );
     expect(serviceDispatchBlock).not.toContain(
       "target.status === 'idle' || target.status === 'done'",

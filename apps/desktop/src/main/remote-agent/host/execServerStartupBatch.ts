@@ -34,8 +34,9 @@ interface BatchDeps {
  * Codex probes three plugin manifests serially up the Skill's ancestry. Pipeline these
  * ordinary metadata RPCs over the existing tunnel; the task's native exec-server still
  * resolves every unknown path and enforces its sandbox. No new wire method or capability.
- * Only native NotFound replies are reused, for this connection's startup and exact params.
- * Existing files, permission failures and unsupported operations are queried normally.
+ * Only native NotFound replies are cached, for this connection's startup and exact params.
+ * Held queries consume their exact in-flight result, including success and errors;
+ * only absence is cached. Later existing/denied paths are queried normally.
  */
 export function createExecServerStartupBatch(deps: BatchDeps) {
   const prefix = `cindy-startup-${randomUUID()}-`;
@@ -128,7 +129,10 @@ export function createExecServerStartupBatch(deps: BatchDeps) {
     const messages = waiters.get(uri) ?? [];
     waiters.delete(uri);
     for (const message of messages) {
-      if (active && absent.has(uri)) {
+      if (active) {
+        // The held query has the same URI and params/sandbox as this native RPC.
+        // Deliver its result once rather than discarding it and paying another RTT.
+        // Success and non-NotFound errors are not retained for later requests.
         deps.answer(JSON.stringify({ ...rpc, id: parse(message)!.id }));
       } else deps.forward(message);
     }

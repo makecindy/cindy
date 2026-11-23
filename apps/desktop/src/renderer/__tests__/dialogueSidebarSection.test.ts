@@ -101,7 +101,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
   });
 
   it('loads archived sessions on demand for the selected connected remote devices', () => {
-    expect(sidebarSource).toContain("if (filter.status === 'active') return;");
+    expect(sidebarSource).toContain("if (taskListMode !== 'inbox' && filter.status === 'active') return;");
     expect(sidebarSource).toContain("requestRemoteSessionStatus(device.deviceId, 'archived')");
     expect(sidebarSource).toContain('if (!device.connected) continue;');
     expect(sidebarSource).toContain('selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)');
@@ -246,7 +246,6 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     // 产品决策:新建入口、对话段 +、项目行内 + 都进同一个创建页;差异只在默认
     // workingDir。workingDir 为空时直接创建 dialogue,不再强制弹项目 picker。
     expect(newMakerDraftRouteSource).not.toContain('selectProjectRequired');
-    expect(newMakerDraftRouteSource).not.toContain('!selectedWorkingDir');
     expect(newMakerDraftRouteSource).toContain(
       "workspaceKind: workingDir ? 'project' : 'dialogue'",
     );

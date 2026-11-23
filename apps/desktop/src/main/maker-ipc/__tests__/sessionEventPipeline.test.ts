@@ -1,3 +1,6 @@
+import { installCompanyUsageCapture, installExecutionReporting } from '../../usage/companyTokenFacts.js';
+import { botLearningTracker } from '../botLearningTracker.js';
+import { learningTurnIdentity } from '../botLearningFeedback.js';
 import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
@@ -97,6 +100,8 @@ vi.mock('../../usage/modelPricing.js', () => ({
   getGatewayModelPricingForModel: effects.fn('getGatewayModelPricingForModel'),
   getModelPriceQuote: effects.fn('getModelPriceQuote'),
 }));
+// The recorders read the reference pricing core the wrapper below re-exports (3c): the same mock.
+vi.mock('../../usage/referenceModelPricingCore.js', async () => await import('../../usage/referenceModelPricing.js'));
 vi.mock('../../usage/referenceModelPricing.js', () => ({
   readModelPriceOverridesSnapshot: effects.fn('readModelPriceOverridesSnapshot'),
   getClaudeSubscriptionValuePrice: effects.fn('getClaudeSubscriptionValuePrice'),
@@ -180,6 +185,7 @@ vi.mock('../../maker-host/claude-session-background-activity.js', async (importO
   ).hasWorkingBackgroundCommand,
   noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
+  observePluginEngineEvent: effects.fn('observePluginEngineEvent'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
   noteSubagentObservationTurnStarted: effects.fn('noteSubagentObservationTurnStarted'),
@@ -483,6 +489,26 @@ describe('production Session event pipeline', () => {
     } finally { await current.dispose(); }
   });
 
+  // #11032: safe diagnostics must reach live delivery, continuation classification
+  // and the existing persistence writer. No schema/UI/continuation policy changes.
+  it('retains gateway diagnostics for live and persisted watchdog consumers', async () => {
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    const data = { message: 'The model connection has been retrying for 120s without making progress. (HTTP 502)',
+      reason: 'codex_reconnect_stalled', errorStatus: 502, isTerminal: true, idleMs: 120000 };
+    try {
+      h.emit(event('error', data));
+      await microtasks();
+      expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).toHaveBeenCalledWith(
+        'task', 'error', data.message, expect.objectContaining({ reason: data.reason, errorStatus: 502 }), expect.any(Object),
+      );
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'error', data }),
+      }));
+      expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledWith('task', data, null, 'error-row');
+    } finally { await h.dispose(); }
+  });
+
   it('accepts only provider-confirmed sampling items and releases the remainder at done', async () => {
     const current = harness();
     try {
@@ -715,6 +741,42 @@ describe('production Session event pipeline', () => {
     } finally { await h.dispose(); }
   });
 
+  it('hands the coordinator the terminal error message and only bounded structured signals', async () => {
+    // Auto-resume and the usage-limit wait decide on these signals (isInterruptedTurnError,
+    // usageLimitAutoResume), and the Node Host must hand over the same ones; provider data stays bounded.
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      h.emit(event('error', {
+        message: 'Upstream stream ended',
+        sdkError: 'stream_closed',
+        reason: 'upstream',
+        errorStatus: 529,
+        toolLoop: { kind: 'pingpong', count: 4, detail: 'provider text' },
+        outputLimit: { outputTokens: 64, reasoningTokens: 65 },
+        usageLimit: true,
+        usageResetAt: 1_800_000_000_000,
+        codexErrorInfo: 'usageLimitExceeded',
+        extra: 'dropped',
+      }));
+      h.emit(event('error', { message: 'Second failure', usageResetAt: Number.POSITIVE_INFINITY, toolLoop: { kind: 'other', count: 1 } }));
+      const calls = h.deps.agentInputCoordinatorHolder.onTurnEvent.mock.calls.filter(call => call[1] === 'error');
+      expect(calls.map(call => call.slice(0, 4))).toEqual([
+        ['task', 'error', 'Upstream stream ended', {
+          sdkError: 'stream_closed',
+          reason: 'upstream',
+          errorStatus: 529,
+          toolLoop: { kind: 'pingpong', count: 4 },
+          outputLimit: { outputTokens: 64 },
+          usageLimit: true,
+          usageResetAt: 1_800_000_000_000,
+          codexErrorInfo: 'usageLimitExceeded',
+        }],
+        ['task', 'error', 'Second failure', {}],
+      ]);
+    } finally { await h.dispose(); }
+  });
+
   it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
     const h = harness();
     const close = beginQuietScheduledOutput('check', 'check-run');
@@ -761,6 +823,70 @@ describe('production Session event pipeline', () => {
       expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('redacted result');
       expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('safe');
     } finally { close(); await h.dispose(); }
+  });
+
+  // #10499: host-authored notices must be localized before both banner and durable-row delivery.
+  it.each([
+    ["en", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable."],
+    ["en", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Could not verify cindy_helper for this task. Task result reporting may be unavailable."],
+    ["zh-CN", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此任务已启用 cindy_helper，但目前不可用，任务结果可能无法回传。"],
+    ["zh-CN", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。"],
+    ["zh-TW", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此任務已啟用 cindy_helper，但目前無法使用，任務結果可能無法回傳。"],
+    ["zh-TW", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。"],
+    ["ja", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。"],
+    ["ja", "CINDY_EXPECTED_HELPER_UNVERIFIED", "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。"],
+    ["ko", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "이 작업에서 cindy_helper가 활성화되어 있지만 사용할 수 없습니다. 작업 결과를 보고하지 못할 수 있습니다."],
+    ["ko", "CINDY_EXPECTED_HELPER_UNVERIFIED", "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다."],
+    ["es", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está habilitado, pero no está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea."],
+    ["es", "CINDY_EXPECTED_HELPER_UNVERIFIED", "No se pudo comprobar si cindy_helper está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea."],
+    ["fr", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper est activé, mais indisponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis."],
+    ["fr", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis."],
+    ["de", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper ist für diese Aufgabe aktiviert, aber nicht verfügbar. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden."],
+    ["de", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden."],
+    ["pt-PT", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está ativado, mas não está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa."],
+    ["pt-PT", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa."],
+    ["pt-BR", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "cindy_helper está ativado, mas não está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa."],
+    ["pt-BR", "CINDY_EXPECTED_HELPER_UNVERIFIED", "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa."],
+    ["zh-Hant-x-lzh", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此差事已啟用 cindy_helper，然今不可用；差事結果或無法回傳。"],
+    ["zh-Hant-x-lzh", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。"],
+    ["zh-Hans-x-lzh", "CINDY_EXPECTED_HELPER_UNAVAILABLE", "此差事已启用 cindy_helper，然今不可用；差事结果或无法回传。"],
+    ["zh-Hans-x-lzh", "CINDY_EXPECTED_HELPER_UNVERIFIED", "未能核实此差事之 cindy_helper 是否可用；差事结果或无法回传。"],
+  ] as const)('localizes Codex helper diagnostics in %s (%s)', async (locale, code, text) => {
+    setMainLocale(locale);
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value: AgentEvent) => value);
+    try {
+      const errorData = { code, message: 'technical fallback', isTerminal: false };
+      const error = event('error', errorData, { source: 'codex' });
+      h.emit(error);
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain(text);
+      expect(error.data).toEqual(errorData);
+      const noticeData = { code, text: 'technical fallback', isFinal: true };
+      const notice = event('text', noticeData, { source: 'codex', standaloneText: true });
+      h.emit(notice);
+      expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledExactlyOnceWith('task', text, null);
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      expect(notice.data).toEqual(noticeData);
+      h.emit(event('text', { text: 'Actual reply', isFinal: true }, { source: 'codex' }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', expect.objectContaining({ text: 'Actual reply' }), null, undefined);
+      expect(h.handle.send).not.toHaveBeenCalled();
+    } finally { await h.dispose(); }
+  });
+
+  it.each([
+    { source: 'codex' as const, standalone: false },
+    { source: 'pi' as const, standalone: true },
+  ])('does not reinterpret model prose or another harness notice ($source, $standalone)', async ({ source, standalone }) => {
+    setMainLocale('zh-CN');
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation((value: AgentEvent) => value);
+    try {
+      const data = { code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE', text: 'Original prose', isFinal: true };
+      h.emit(event('text', data, { source, ...(standalone ? { standaloneText: true as const } : {}) }));
+      if (standalone) expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Original prose', null);
+      else expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null, undefined);
+    } finally { await h.dispose(); }
   });
 
   it('delivers Pi notices as durable rows without entering model streaming or turn bookkeeping', async () => {
@@ -1021,6 +1147,22 @@ describe('production Session event pipeline', () => {
     h.emit(event('text', { isFinal: true, text: 'real worker reply' }, { source: 'pi' }));
     expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).toHaveBeenCalledWith('task', 'real worker reply', { isFinal: true });
     await h.dispose();
+  });
+
+  // PR #11776 review: a plugin engine's reply between turns has no done to commit it, so it stayed
+  // in memory and was lost on restart. Its final segment commits it; deltas and turn text do not.
+  it('commits a plugin engine reply written between turns at its final segment only', async () => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'acp' });
+    try {
+      h.emit(event('text', { text: 'The content', isFinal: false }, { turnScope: 'background' }));
+      h.emit(event('text', { text: 'In a turn', isFinal: true, isFullText: true }));
+      expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'The content is `finished`', isFinal: true, isFullText: true }, { turnScope: 'background' }));
+      expect(effects.fn('flushAssistantBlock')).toHaveBeenCalledOnce();
+    } finally {
+      await h.dispose();
+    }
   });
 
   it('preserves ordinary Pi text without the Host recovery marker', async () => {
@@ -1539,6 +1681,32 @@ describe('production Session event pipeline', () => {
       });
       expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledWith('task', 'failed-row');
       expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it.each(['claude-code', 'pi'] as const)(
+    'does not seal a partial %s reply as successful when shutdown cancels its turn',
+    async (source) => {
+      const h = harness();
+      h.emit(event('text', { text: 'Working on the remaining changes' }, { source }));
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('partial-row');
+      h.emit(event('done', { status: 'cancelled' }, { source }));
+      expect(effects.fn('markAssistantTurnFailed')).toHaveBeenCalledWith('task', 'partial-row');
+      expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
+      expect(effects.fn('onTurnErrorEvent')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  it.each(['claude-code', 'pi'] as const)(
+    'keeps a normal %s reply eligible for the successful assistant seal',
+    async (source) => {
+      const h = harness();
+      effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('completed-row');
+      h.emit(event('done', { status: 'completed' }, { source }));
+      expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'completed-row', undefined);
+      expect(effects.fn('markAssistantTurnFailed')).not.toHaveBeenCalled();
       await h.dispose();
     },
   );
@@ -2291,7 +2459,7 @@ describe('usage through the production event pipeline', () => {
   // Use the production pipeline to prove that currency recovery does not freeze
   // fallback USD into a receipt, either within a write or across product turns.
   it.each(['during-write', 'next-turn', 'terminal-replay'] as const)(
-    'prices Pi subscription receipts in the recovered account currency (%s)', async mode => {
+    'prices Pi subscription receipts in the original quote currency after account recovery (%s)', async mode => {
       const h = harness();
       pricing(true);
       effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
@@ -2305,9 +2473,9 @@ describe('usage through the production event pipeline', () => {
       h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
       if (mode !== 'during-write') {
         await flushSessionPiTurnUsage();
-        // Unknown currency is pending, not a final USD estimate.
-        expect(writes.mock.calls.every(call => (call as unknown as [string, Array<{ amount: unknown }>])[1]
-          .every(row => row.amount === null))).toBe(true);
+        expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+          currency: 'USD', amount: expect.any(Number), actualCost: false,
+        })]);
       }
       effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
       effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
@@ -2317,7 +2485,7 @@ describe('usage through the production event pipeline', () => {
       }, { source: 'pi' }));
       await flushSessionPiTurnUsage();
       expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
-        currency: 'CNY', amount: expect.any(Number), actualCost: false,
+        currency: 'USD', amount: expect.any(Number), actualCost: false,
       })]);
       await h.dispose();
     },
@@ -2479,6 +2647,58 @@ describe('usage through the production event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // Unit regression: local billing may recognize a saved custom provider even
+  // when this Codex run explicitly used a gateway key. Only the direct run
+  // may reach the enterprise sink; its local ledger is written in both cases.
+  it.each(['provider-oauth', 'gateway-key'])('gates company usage on the executing credential (%s)', async credentialMode => {
+    const h = harness();
+    pricing(false);
+    effects.fn('getSessionProvider').mockReturnValue('custom');
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    const record = vi.fn();
+    installCompanyUsageCapture(() => record);
+    installExecutionReporting({
+      direct: provider => provider === 'custom', available: () => true, challenge: () => null,
+      issue: async () => null, redeem: async () => undefined,
+    });
+    try {
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('done', { usage: { ...usage('codex'), execution: {
+        providerId: 'custom', credentialMode, model: 'test-model',
+      } } }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalled();
+      if (credentialMode === 'gateway-key') {
+        expect(record).not.toHaveBeenCalled();
+      } else {
+        expect(record).toHaveBeenCalledTimes(1);
+        expect(record).toHaveBeenCalledWith([
+          { model: 'test-model', input: 100, output: 20, cacheRead: 10, cacheWrite: 0 },
+        ]);
+      }
+    } finally {
+      installCompanyUsageCapture(() => undefined);
+      installExecutionReporting(undefined);
+      await h.dispose();
+    }
+  });
+
+  // Unit regression: another task's Gateway spawn must not take a native subscription turn.
+  it('settles the executing Codex route and model when the global proxy points elsewhere', async () => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: { ...usage('codex'), execution: {
+      providerId: 'openai', credentialMode: 'oauth-bearer', model: 'test-model',
+    } } }, { source: 'codex' }));
+    await microtasks();
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'test-model#billing=subscription', inputTokensDelta: 100,
+      attribution: { provider: 'openai', billingSource: 'subscription', modelUnconfirmed: true },
+    }));
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
 
   it.each([
     ['codex', 'anthropic', 'claude'],
@@ -2705,6 +2925,127 @@ describe('usage through the production event pipeline', () => {
     expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
       clientId: 'assistant-row', money: expect.objectContaining({ kind: 'actual-cost' }),
     }));
+    await h.dispose();
+  });
+
+  // #11540 review regression, unit: the production done/account_usage entries
+  // must retain model cost attribution and per-receipt subscription overrides.
+  // Existing tests use one selected/served model and one billing route only.
+  // Minimal failures: two served models, or one direct subscription receipt in
+  // a gateway batch. No filesystem/network or extra module loads are needed.
+  // Standalone file wall-clock: 6.69s (284 cases, shared fixture collection).
+  it.each(['test-model', 'codex/gpt-5.5'])(
+    'keeps Codex money with served-model token rows (selected %s)', async selected => {
+      const h = harness();
+      pricing(false);
+      h.emit(event('done', { usage: {
+        promptTokens: 200, completionTokens: 40, cachedTokens: 20,
+        execution: { model: selected, providerId: 'xd', credentialMode: 'gateway-key' },
+        segments: [{ ...segment, model: 'served-a' }, { ...segment, model: 'served-b' }],
+      } }));
+      await microtasks();
+      for (const model of ['served-a', 'served-b']) {
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: `${model}#billing=api`, inputTokensDelta: 100,
+        }));
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: `${model}#billing=api`, inputTokensDelta: 0,
+          money: expect.objectContaining({ amount: 0.000141 }),
+        }));
+        expect(effects.fn('getModelPriceQuote')).toHaveBeenCalledWith(expect.anything(), 'xd',
+          selected.startsWith('codex/') ? selected : model);
+      }
+      expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ amount: 0.000282 }),
+        turnUsageDetails: expect.objectContaining({ perModelCost: [
+          expect.objectContaining({ model: 'served-a' }), expect.objectContaining({ model: 'served-b' }),
+        ] }),
+      }));
+      await h.dispose();
+    },
+  );
+
+  // #11616 review, unit: the production done entry must not report a selected
+  // model as observed when proxy matching supplies no proof. Existing served-model
+  // tests assert cost only. Minimal input is one fallback segment with execution.model.
+  // Cases cover legacy receipts, failed/missing matches, invalid totals and mixed rows.
+  // Uses the existing event fixture, no network or extra module loads.
+  // Standalone wall-clock 9.72s, including 6.99s shared fixture collection for 290 cases.
+  it.each([
+    ['legacy', undefined, true],
+    ['unmatched', false, true],
+    ['confirmed', true, true],
+    ['inconsistent totals', true, false],
+  ] as const)('keeps Codex actual-model confirmation separate from execution (%s)', async (_name, confirmed, reliable) => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: {
+      promptTokens: reliable ? 100 : 101, completionTokens: 20, cachedTokens: 10,
+      execution: { model: 'selected-model', providerId: 'xd', credentialMode: 'gateway-key' },
+      segments: [{ ...segment, model: 'selected-model', modelConfirmed: confirmed }],
+    } }));
+    await microtasks();
+    const tokenWrite = effects.fn('recordModelTurnUsage').mock.calls.find(([row]) => row.inputTokensDelta > 0)?.[0];
+    expect(tokenWrite.inputTokensDelta).toBe(reliable ? 100 : 101);
+    expect(tokenWrite.attribution.modelUnconfirmed).toBe(confirmed && reliable ? undefined : true);
+    await h.dispose();
+  });
+
+  it('keeps confirmation with each Codex model in a mixed turn', async () => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: {
+      promptTokens: 200, completionTokens: 40, cachedTokens: 20,
+      execution: { model: 'selected-model', providerId: 'xd', credentialMode: 'gateway-key' },
+      segments: [
+        { ...segment, model: 'served-model', modelConfirmed: true },
+        { ...segment, model: 'selected-model', modelConfirmed: false },
+      ],
+    } }));
+    await microtasks();
+    const tokenWrites = effects.fn('recordModelTurnUsage').mock.calls
+      .map(([row]) => row).filter(row => row.inputTokensDelta > 0);
+    expect(tokenWrites).toEqual([
+      expect.objectContaining({ model: 'served-model#billing=api',
+        attribution: expect.not.objectContaining({ modelUnconfirmed: true }) }),
+      expect.objectContaining({ model: 'selected-model#billing=api',
+        attribution: expect.objectContaining({ modelUnconfirmed: true }) }),
+    ]);
+    await h.dispose();
+  });
+
+  it.each(['live', 'replay'] as const)('uses reference overrides for direct Pi subscriptions (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    const reference = { override: true };
+    effects.fn('getReferenceModelPricing').mockReturnValue(reference);
+    effects.fn('getCodexProviderSubscriptionValuePrice').mockImplementation((_provider, _model, catalog) => ({
+      providerId: 'openai', modelId: 'chatgpt/gpt-5.5', currency: 'USD',
+      source: 'user-override', approximate: true, inputPerMtok: catalog === reference ? 10 : 1,
+      outputPerMtok: 2, cacheReadPerMtok: 0.1,
+    }));
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    if (mode === 'replay') effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
+    h.emit(event('account_usage', { usage: { settlementId: 'mixed-turn', receipts: [
+      { ...segment, id: 'pi:gateway', recordedAt: Date.now() },
+      { ...segment, model: 'chatgpt/gpt-5.5', id: 'pi:subscription', recordedAt: Date.now() },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    if (mode === 'replay') {
+      const saved = writes.mock.calls[0][1][1];
+      const db = { tx: writes, queryOne: async () => null,
+        query: vi.fn(async (_sql, params) => params[0] === 0 ? [{ rowId: 1, sessionId: 'task',
+          settlementId: 'mixed-turn', receiptId: saved.receiptId, payload: saved.pricingPayload }] : []),
+      } as unknown as DbClient;
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
+      effects.fn('getGatewayModelPricing').mockResolvedValue({ xd: {} });
+      setCurrentDbClient(db, 'mixed-replay');
+      try { await retryPendingPiUsageReceipts(); } finally { clearCurrentDbClient(db); }
+    }
+    expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', expect.arrayContaining([
+      expect.objectContaining({ receiptId: 'pi:subscription', amount: 0.001041, actualCost: false }),
+    ]));
     await h.dispose();
   });
 
@@ -3276,5 +3617,40 @@ describe('Codex generated images through the production event pipeline', () => {
       expect(seen).toEqual(['image', 'done']);
       expect(h.deps.deliverCodexGeneratedImage).not.toHaveBeenCalled();
     } finally { close(); offSeen(); offWire(); await session.close(); await h.dispose(); }
+  });
+});
+
+// #10318: exercise the real pipeline and feedback adapter, not just tracker helpers.
+// One paired Codex write must retain its path across preparation/persistence; stale,
+// child and background traffic must never feed a foreground memory receipt (unit).
+describe('native memory receipt event wiring', () => {
+  it.each(['foreground', 'failed', 'background', 'child', 'old-instance', 'old-generation'])
+  ('keeps memory feedback scoped for %s events', async mode => {
+    const h = harness();
+    const publish = vi.fn();
+    const receipt = { kind: 'memory' as const, key: 'user_tea.md', title: 'Tea', action: 'created' as const };
+    const read = vi.fn(async (paths: readonly string[]) => paths.length ? [receipt] : []);
+    const identity = learningTurnIdentity(h.session);
+    botLearningTracker.markProjectTeammate(h.session.id, read);
+    botLearningTracker.observe(h.session.id, identity, publish);
+    const extra = mode === 'background' ? { turnScope: 'background' as const }
+      : mode === 'child' ? { agentMeta: { parentUuid: 'child' } }
+        : mode === 'old-instance' ? { sessionInstanceId: 'replaced' }
+          : mode === 'old-generation' ? { sessionTurnGeneration: h.session.getTurnGeneration() - 1 } : {};
+    try {
+      h.emit({ type: 'tool_use', source: 'codex', ...extra,
+        data: { toolUseId: 'write-memory', toolName: 'file_change',
+          input: { changes: [{ path: '.cindy/memory/user_tea.md', kind: { type: 'add' } }] } } });
+      h.emit({ type: 'tool_result_full', source: 'codex', ...extra,
+        data: { toolUseId: 'write-memory', fullText: 'add memory', isError: mode === 'failed' } });
+      botLearningTracker.seal(h.session.id, identity, 'reply');
+      await read.mock.results[0].value;
+      expect(read).toHaveBeenCalledWith(mode === 'foreground' ? ['.cindy/memory/user_tea.md'] : []);
+      if (mode === 'foreground') expect(publish).toHaveBeenCalledWith('reply', [receipt]);
+      else expect(publish).not.toHaveBeenCalled();
+    } finally {
+      botLearningTracker.markProjectTeammate(h.session.id);
+      await h.session.close();
+    }
   });
 });

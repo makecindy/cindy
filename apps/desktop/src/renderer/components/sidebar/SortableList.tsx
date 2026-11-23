@@ -75,15 +75,28 @@ import Sortable, { type SortableEvent } from 'sortablejs';
  * 本次手势结束后光标卡在抓取态、再也拖不动(2026-10-20 Dash 实测)。
  */
 let externalAbortRequested = false;
-export function cancelActiveSortable(): void {
-  if (!Sortable.active && !Sortable.dragged) return;
+export function isSortableCancellationRequested(): boolean {
+  return externalAbortRequested;
+}
+
+export function cancelActiveSortable(scope?: string): void {
+  const dragged = Sortable.dragged;
+  if (!Sortable.active && !dragged) return;
+  if (scope && !dragged?.closest(scope)) return;
   externalAbortRequested = true;
   try {
-    document.dispatchEvent(new Event('pointercancel'));
-  } catch {
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    try {
+      document.dispatchEvent(new Event('pointercancel'));
+    } catch {
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    }
+    // Native Sortable ignores pointercancel and listens for dragend on the row.
+    if (dragged && Sortable.active && Sortable.dragged === dragged) {
+      dragged.dispatchEvent(new Event('dragend'));
+    }
+  } finally {
+    externalAbortRequested = false;
   }
-  externalAbortRequested = false;
 }
 
 export interface SortableListProps<T> {
@@ -98,6 +111,8 @@ export interface SortableListProps<T> {
   renderItem: (item: T, index: number) => ReactNode;
   /** 禁用拖拽（例如 sortBy !== 'manual' 时）。 */
   disabled?: boolean;
+  /** Limits gesture cancellation to this group of sortable rows. */
+  sortScope?: string;
   /** 系统 "Reduce motion" 偏好；true 时关掉 SortableJS 自带的过渡动画。 */
   reducedMotion?: boolean;
   /** 可选 CSS selector 指定拖拽手柄；不传则整行可拖。 */
@@ -134,6 +149,7 @@ export function SortableList<T>({
   onReorder,
   renderItem,
   disabled = false,
+  sortScope,
   reducedMotion = false,
   handle,
   onDragActiveChange,
@@ -328,6 +344,7 @@ export function SortableList<T>({
   return (
     <div
       ref={containerRef}
+      data-sortable-scope={sortScope}
       data-sortable-native-dnd={forceFallback ? undefined : 'true'}
       role={role}
       aria-label={ariaLabel}

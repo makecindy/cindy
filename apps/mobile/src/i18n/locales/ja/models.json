@@ -46,35 +46,22 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "このモデルには現在の会話が収まりません",
+    "condensedToast": "新しいモデルに合わせて以前のやり取りを圧縮します。会話履歴はすべて引き続き確認できます。",
     "remoteTitle": "このリモートタスクではモデルを安全に切り替えられません",
-    "description": "現在の会話はすでに {{used}} を使用しており、新しいモデルの上限 {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy は短い要約を作成して続行します。会話履歴は残りますが、すべてがそのまま新しいモデルに渡されるわけではありません。",
     "remoteDescription": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
-    "cancel": "現在のモデルを維持",
-    "confirm": "切り替えて続行"
+    "cancel": "現在のモデルを維持"
   },
   "switchOutcome": {
     "applied": "モデルプロバイダーの切り替えが有効になりました。",
-    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。"
+    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
+    "previousSettingsRetained": "切り替えは完了しませんでした。タスクは引き続き元の設定を使用します。"
   },
   "agentSwitch": {
-    "browseAccessibility": "{{agent}} のモデルを表示",
-    "confirmTitle": "{{agent}} に切り替えますか？",
-    "confirmMessage": "次のメッセージを送信すると、{{appName}} は現在のセッションを {{agent}} に引き継ぎます。2つの Agent はコンテキストやツールの理解が異なる場合があります。確認してから対象のモデルを選択してください。",
-    "cancel": "キャンセル",
-    "confirm": "続けて選択"
-  },
-  "agentRelocation": {
-    "titleOther": "Agent を「{{device}}」で実行しますか？",
-    "titleHost": "Agent を「{{host}}」で実行し直しますか？",
-    "titleHostUnnamed": "Agent をセッションのあるパソコンで実行し直しますか？",
-    "message": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-    "messageNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-    "confirm": "パソコンを切り替える",
-    "cancel": "このままにする"
+    "browseAccessibility": "{{agent}} のモデルを表示"
   },
   "unified": {
-    "accountUnassigned": "アカウント未割り当て",
+    "remoteCopyUnavailableOn": "「{{device}}」の {{provider}} は現在利用できません。",
+    "remoteCopyUnavailableOnTaskComputer": "タスクがあるパソコンの {{provider}} は現在利用できません。",
     "accountCount_other": "{{count}} 個のアカウント",
     "accountFallback": "アカウント {{index}}",
     "favoriteConfiguration": "この設定をお気に入りに追加",
@@ -123,5 +110,44 @@
     "quotaResetIn": "{{duration}}後にリセット",
     "quotaAverageHint": "週間クォータ · アカウントごとの単純平均",
     "quotaResetHint": "現在の利用ペースではリセット時にクォータが残る見込みです。24時間以内は黄色、6時間以内は赤色で表示します。"
+  },
+  "modelGroups": {
+    "title": "モデルグループ",
+    "sourceCount_other": "ソース {{count}} 件",
+    "strategy": {
+      "expiring": "失効が近いものを先に",
+      "order": "順番どおり",
+      "rotate": "交代で",
+      "cheapest": "最も安く"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",
+      "expiring": "クォータの順で先頭",
+      "order": "利用できる先頭のソース",
+      "rotate": "今回はこのソースの番",
+      "only": "今使えるのはこれだけ",
+      "soonest": "すべてのソースのクォータを使い切りました。これが最も早く回復します",
+      "soonestUntil": "すべてのソースのクォータを使い切りました。これが最も早く回復します（{{reset}}）",
+      "cheapest": "定価が最も安い",
+      "cheapestFree": "サブスクリプションのクォータが残っており、追加費用なし",
+      "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
+      "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
+      "exceptionHours": "この時間帯は「{{name}}」を使用",
+      "separator": "、"
+    },
+    "picker": {
+      "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
+      "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
+    },
+    "anotherDevice": "別のコンピュータ"
+  },
+  "pluginEngines": {
+    "genericName": "プラグインエンジン",
+    "defaultModel": "デフォルトモデル",
+    "unavailable": "{{engine}} は利用できません",
+    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}",
+    "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください"
   }
 }

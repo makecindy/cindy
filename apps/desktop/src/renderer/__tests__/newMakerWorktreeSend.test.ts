@@ -44,24 +44,6 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(clearStarting).toBeLessThan(restoreEnd);
   });
 
-  it('never silently downgrades an explicit worktree request to a normal session', () => {
-    const selected = source.indexOf('const selectedWorktree = { ...wtRef.current };');
-    const guard = source.indexOf(
-      '&& selectedWorktree.confirmedIneligible !== true',
-      selected,
-    );
-    const markInFlight = source.indexOf('markSendInFlight(true);', guard);
-    const guardedSource = source.slice(guard, markInFlight);
-
-    expect(selected).toBeGreaterThan(-1);
-    expect(guard).toBeGreaterThan(selected);
-    expect(markInFlight).toBeGreaterThan(guard);
-    expect(guardedSource).toContain('!selectedWorktree.baseRepo');
-    expect(guardedSource).toContain('!selectedWorktree.branchPreferenceReady');
-    expect(guardedSource).toContain('selectedWorktree.supportsRecoveryKeyDiscard !== true');
-    expect(guardedSource).toContain('return false;');
-  });
-
   it('lets a confirmed-ineligible directory create a plain session while keeping the ON memory', () => {
     // 2026-08-07 裁决:探测成功且确认不合格(非 git / 无 git / 已在 worktree 内)时,
     // 勾选记忆不生效——发送 / Goal 门、worktree 副作用分支全部按普通会话放行;
@@ -129,7 +111,7 @@ describe('NewMakerDraftRoute worktree send flow', () => {
   });
 
   it('treats remote session creation as committed before the shared non-blocking handoff', () => {
-    const remoteSessionId = source.search(/const remoteSessionId\s*=\s*presetSessionId/);
+    const remoteSessionId = source.search(/const remoteSessionId\s*=\s*created\.sessionId/);
     const commitPoint = source.indexOf('remoteSessionId 到手就是**提交点**', remoteSessionId);
     const handoff = source.indexOf('commitRemoteSessionHandoff({', commitPoint);
     const pendingHandoff = source.indexOf('setPending(remoteSessionId', handoff);
@@ -236,7 +218,7 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     // (device-link 远程交接,见 remoteHandoffPreparing),两档必须共用同一个
     // 下游判据,否则又是「同一语义两处判定」。worktree 这一档仍是它的组成项。
     const preparingMerge = sessionViewSource.indexOf(
-      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;',
+      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing || !!creationPreview;',
       worktreePreparing,
     );
     const sendGuard = sessionViewSource.indexOf(

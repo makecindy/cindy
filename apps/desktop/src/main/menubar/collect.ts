@@ -1,4 +1,4 @@
-import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { isZhipuCodingPlanRoute, type ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
@@ -77,12 +77,14 @@ export interface MenubarSessionRow {
 }
 
 export interface MenubarCollectDeps {
+  now?: () => number;
   nowMs: number;
   listProviders(): Promise<ProviderView[]>;
   /** Null means the provider still uses the original single-account reader. */
   readSubscriptionPool?(providerId: string): Promise<SubscriptionPoolView | null>;
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
+  readZhipu?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
   readClaude(providerId: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXai(providerId: string): Promise<XaiSubscriptionUsageSnapshot | null>;
@@ -177,6 +179,11 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
       const snapshot = await safe(`xai:${provider.id}`, () => deps.readXai(provider.id), null);
       return xaiSource(provider, snapshot, deps.nowMs);
     }
+    if (deps.readZhipu && provider.auth?.method === 'apiKey'
+      && Object.values(provider.routing ?? {}).some(isZhipuCodingPlanRoute)) {
+      const result = await safe(`zhipu:${provider.id}`, () => deps.readZhipu!(provider.id), null);
+      return zhipuSource(provider, result);
+    }
     return paygSource(provider);
   });
   for (const source of (await Promise.all(subscriptionReads)).flat()) {
@@ -195,7 +202,13 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
 
   const tasks = await collectTasks(deps, localUsage, today, safe);
   const consuming = consumingSourceIds(tasks, providers);
+  const collectedAt = deps.now?.() ?? deps.nowMs;
   for (const source of sources) {
+    // A GLM window may have reset while another provider or task was still loading.
+    if (source.kind === 'subscription' && source.family === 'zhipu') {
+      source.windows = source.windows.filter(window => window.resetsAtMs === null || window.resetsAtMs > collectedAt);
+      if (!source.windows.length) source.updatedAtMs = null;
+    }
     if (consuming.has(source.id) && !(source.kind === 'subscription' && source.pooled)) source.consuming = true;
   }
   const distinct = distinctLocalSubscriptions(sources);
@@ -431,7 +444,7 @@ export function subscriptionPoolSources(provider: ProviderView, pool: Subscripti
       id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
       account: identity,
       plan: (source.family === 'claude'
-        ? formatClaudeSubscriptionPlanLabel(account.plan, account.planTier)
+        ? formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName)
         : formatCodexPlanLabel(account.planType ?? account.plan)) ?? source.plan,
       accountKeys: [...(source.accountKeys ?? []), ...(account.accountKey ? [`${source.family}:verified:${account.accountKey}`] : []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
       pooled: true,
@@ -480,7 +493,7 @@ export function claudeSource(
     logoSvg: familyLogo('claude'),
     brand: 'Claude',
     account: provider.id === 'anthropic' ? null : accountIdentity(provider),
-    plan: formatClaudeSubscriptionPlanLabel(snapshot?.subscriptionType, snapshot?.planTier),
+    plan: formatClaudeSubscriptionPlanLabel(snapshot?.subscriptionType, snapshot?.planTier, snapshot?.planDisplayName),
     windows,
     credits: null,
     creditsUnlimited: false,
@@ -656,6 +669,7 @@ export function usageScope(
 ): MenubarUsageScopeInput {
   const label = (model: string) => modelNames.get(usageModelKey(model)) ?? formatModelShort(model);
   const scope = emptyScope(days, devices);
+  scope.currency = payload?.totals?.today?.currency;
   if (!payload) return scope;
   const indexOfDay = new Map(days.map((day, index) => [day, index]));
   const windows: Array<keyof MenubarUsageScopeData['models']> = ['7', '30', '90'];
@@ -663,10 +677,14 @@ export function usageScope(
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
+    const daily = scope.daily[index];
+    if (row.agentKind === 'auxiliary') {
+      daily.tokens[3] = (daily.tokens[3] ?? 0) + finite(row.tokens);
+      continue;
+    }
     const harness = harnessOf(row.agentKind);
     const slot = HARNESSES.indexOf(harness);
     const money = finite(row.money?.amount);
-    const daily = scope.daily[index];
     daily.money[slot] += money;
     daily.tokens[slot] += finite(row.tokens);
     daily.paid += finite(row.apiMoney?.amount);
@@ -692,14 +710,14 @@ function modelSeries(
   dayCount: number,
   label: (model: string) => string,
 ): MenubarModelSeries {
-  type Entry = { harness: MenubarHarness; money: number[]; tokens: number[]; recent: number };
+  type Entry = { harness: MenubarHarness | 'auxiliary'; money: number[]; tokens: number[]; recent: number };
   const byModel = new Map<string, Entry>();
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
     const name = label(row.model);
     const entry = byModel.get(name)
-      ?? { harness: harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
+      ?? { harness: row.agentKind === 'auxiliary' ? 'auxiliary' : harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
     const tokens = finite(row.tokens);
     entry.money[index] += finite(row.money?.amount);
     entry.tokens[index] += tokens;
@@ -750,16 +768,20 @@ async function collectTasks(
   safe: Safe,
 ): Promise<MenubarTaskInput[]> {
   const tokensBySession = new Map<string, number>();
+  const conversationTokensBySession = new Map<string, number>();
   for (const row of usage?.taskDaily ?? []) {
     if (row.day !== today) continue;
     const [device, ...rest] = row.taskKey.split(':');
     if (device !== 'local') continue;
     const sessionId = rest.join(':');
     tokensBySession.set(sessionId, (tokensBySession.get(sessionId) ?? 0) + finite(row.tokens));
+    conversationTokensBySession.set(sessionId, (conversationTokensBySession.get(sessionId) ?? 0)
+      + Math.max(0, finite(row.tokens) - finite(row.auxiliaryTokens)));
   }
   const meta = new Map((usage?.tasks ?? []).filter((task) => task.deviceId === 'local').map((task) => [task.sessionId, task]));
   const rates = new Map<string, { money: number; tokens: number; harness: MenubarHarness }>();
   for (const row of usage?.modelDaily ?? []) {
+    if (row.agentKind === 'auxiliary') continue;
     if (row.day !== today) continue;
     const rate = rates.get(row.model) ?? { money: 0, tokens: 0, harness: harnessOf(row.agentKind) };
     rate.money += finite(row.money?.amount);
@@ -800,7 +822,7 @@ async function collectTasks(
           harness: harnessOf(row?.agentKind ?? rate?.harness),
           model: model ? formatModelShort(model) : '',
           tokensToday: tokens,
-          valueToday: rate && rate.tokens > 0 ? (tokens * rate.money) / rate.tokens : 0,
+          valueToday: rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
           contextPercent: info && info.contextWindow > 0 ? clampPercent((info.contextTokens / info.contextWindow) * 100) : null,
           running,
           startedAtMs: running ? (activity?.startedAtMs ?? null) : null,
@@ -841,5 +863,30 @@ export function opencodeGoSource(provider: ProviderView, result: ProviderAccount
       windowMinutes: opencodeGoUsageWindowMinutes(w.id) ?? 0,
     })) ?? [],
     credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: snapshot?.fetchedAt ?? null,
+  };
+}
+
+function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null): MenubarSubscriptionInput {
+  const snapshot = result?.status === 'ready' && !result.stale
+    && result.snapshot.kind === 'zhipu-coding-plan-quota' && !result.snapshot.noPlan ? result.snapshot : null;
+  const windows: MenubarWindowInput[] = [];
+  if (snapshot?.fiveHour) {
+    windows.push({
+      kind: 'session', usedPercent: snapshot.fiveHour.usedPercent,
+      resetsAtMs: snapshot.fiveHour.resetsAt, windowMinutes: FIVE_HOUR_MINUTES,
+    });
+  }
+  if (snapshot?.weekly) {
+    windows.push({
+      kind: 'week', usedPercent: snapshot.weekly.usedPercent,
+      resetsAtMs: snapshot.weekly.resetsAt, windowMinutes: WEEK_MINUTES,
+    });
+  }
+  return {
+    kind: 'subscription', id: provider.id, providerId: provider.id, family: 'zhipu',
+    logoSvg: providerLogo(provider.id, provider.name, provider.routing), brand: provider.name || 'GLM Coding Plan',
+    account: null, plan: snapshot?.level?.toUpperCase() || null,
+    windows, credits: null, creditsUnlimited: false, prepaidUsd: null,
+    updatedAtMs: windows.length > 0 ? snapshot?.fetchedAt ?? null : null,
   };
 }

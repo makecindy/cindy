@@ -56,6 +56,10 @@ export function scheduleToProjectConfig(
   schedule: Schedule,
   id = schedule.projectConfigId ?? generateProjectScheduleId(),
 ): ProjectScheduleConfig {
+  // 项目自动化随代码提交给所有成员，插件引擎只存在于装了插件的那台电脑上，不能写进去。
+  if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
+    throw new Error('Plugin engine automations cannot be saved as project automations');
+  }
   return {
     id,
     name: schedule.name,

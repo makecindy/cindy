@@ -323,11 +323,13 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     ...(detail.threadShareUpdates ? { threadShareUpdates: Object.fromEntries(Object.entries(detail.threadShareUpdates)
       .map(([id, share]) => [id, shareWithoutPaths(share)])) } : {}),
     supportsAttachments: true,
+    canStopAll: false,
     supportsScopedStop: detail.serverBacked === true && detail.singleSpeaker === true,
     supportsReadReceipts: detail.serverBacked === true,
     ...(detail.serverBacked === true ? {} : { supportsLocalReadSync: true }),
     supportsPersonalMask: detail.serverBacked === true,
     supportsMemberRemoval: detail.serverBacked === true,
+    supportsOwnBotRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
   };
 }
@@ -597,14 +599,14 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           break;
         case 'stop':
           if (input.scope !== undefined && input.scope !== 'all') throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
-          if (input.scope === 'all' && (!visibleGroup.serverBacked || !visibleGroup.singleSpeaker || !visibleGroup.canStopAll))
+          if (input.scope === 'all')
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'ROLE_REQUIRED');
           result = await current.stopRound(groupId, input.scope);
           break;
         case 'update': {
           // A phone cannot point the group at a folder on this computer.
           const patch: Record<string, unknown> = { groupId };
-          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots'] as const) {
+          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots', 'allowMemberInvites'] as const) {
             if (input[key] !== undefined) patch[key] = input[key];
           }
           if (input.expectedRevision !== undefined) patch.expectedRevision = input.expectedRevision;

@@ -56,7 +56,7 @@ const BODY_MAX = 4500;
 
 export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirmCardProps) {
   const { t, i18n } = useTranslation();
-  const cardRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLFieldSetElement>(null);
   const titleInputId = useId();
   const bodyInputId = useId();
   const publicNameInputId = useId();
@@ -187,10 +187,13 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
   };
 
   return (
-    <div
+    <fieldset
       ref={cardRef}
+      disabled={pending.submitting}
+      aria-busy={pending.submitting}
       tabIndex={-1}
       onKeyDown={(e) => {
+        if (pending.submitting) return;
         // Scoped bubbling excludes other panes and portalled Markdown content.
         if (e.repeat || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node))
           return;
@@ -207,7 +210,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
         }
       }}
       className={cn(
-        'w-full max-w-[914px] overflow-hidden rounded-[12px] border',
+        'w-full max-w-[914px] overflow-hidden rounded-xl border',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
@@ -265,7 +268,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
               maxLength={TITLE_MAX}
               onChange={(e) => updateDraft({ title: e.target.value })}
               className={cn(
-                'mt-1 w-full rounded-[8px] border px-3 py-2',
+                'mt-1 w-full rounded-lg border px-3 py-2',
                 'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
                 'text-13 leading-tight text-[var(--chat-input-text)]',
                 'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
@@ -286,7 +289,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
               onChange={(e) => updateDraft({ body: e.target.value })}
               rows={8}
               className={cn(
-                'mt-1 w-full resize-y rounded-[8px] border px-3 py-2',
+                'mt-1 w-full resize-y rounded-lg border px-3 py-2',
                 'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
                 'font-mono text-13 leading-relaxed text-[var(--chat-input-text)]',
                 'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
@@ -442,7 +445,9 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       {/* Action buttons */}
       <div className="flex flex-wrap items-center justify-end gap-3 border-t border-[var(--chat-input-border)] px-5 py-3">
         <p className="min-w-0 flex-[1_1_220px] text-12 leading-relaxed text-[var(--status-bar-meta)]">
-          {t('issueAgent.confirm.publicationNotice')}
+          {pending.submitting
+            ? t('newChat.permissionPrompt.submitting')
+            : t('issueAgent.confirm.publicationNotice')}
         </p>
         <div className="flex shrink-0 items-center gap-2">
           <Button variant="secondary" size="md" compact type="button" onClick={handleCancel}>
@@ -467,6 +472,6 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
           )}
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 }

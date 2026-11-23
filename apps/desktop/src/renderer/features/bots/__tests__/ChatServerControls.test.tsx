@@ -63,7 +63,7 @@ beforeEach(() => {
   // The thread reply keeps a draft per thread; one test's unsent text must not start the next.
   discardDraft(botGroupThreadDraftKey(group.id, 'root'));
   mocks.materialize.mockReset().mockImplementation(async files => [...files]);
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   mocks.status.mockResolvedValue({ enabled: true, connected: true });
   mocks.mask.mockResolvedValue({ ok: false, errorCode: 'UNSUPPORTED_OPERATION' });
   mocks.mentions.mockResolvedValue({ ok: true, mentions: [{ messageId: 'question', sequence: '1' }], hasMore: false });
@@ -186,6 +186,33 @@ describe('chat interaction controls', () => {
     await act(async () => changed());
     await screen.findByText('No config');
     expect((screen.getByLabelText('Chat draft') as HTMLInputElement).value).toBe('My unfinished message');
+  });
+  // Unit at the real Provider: every group page mounts it, and each read pages all mentions.
+  // Before: the 15s timer kept reading while the window was hidden. With background throttling off
+  // (a running turn or voice call) document.hidden stays false, so the main broadcast must count too.
+  it.each(['document visibility', 'main window broadcast'] as const)('pauses AI reply reads while hidden by %s and reads once on return', async source => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    onTestFinished(() => { vi.useRealTimers(); });
+    let documentHidden = false, broadcast = (_hidden: boolean) => {};
+    const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => documentHidden);
+    onTestFinished(() => visibility.mockRestore());
+    Object.assign(window.electronAPI, { onWindowHiddenChange: (listener: (hidden: boolean) => void) => { broadcast = listener; return () => {}; } });
+    const setHidden = (hidden: boolean) => act(async () => {
+      if (source === 'main window broadcast') broadcast(hidden);
+      else { documentHidden = hidden; document.dispatchEvent(new Event('visibilitychange')); }
+    });
+    mocks.mask.mockResolvedValue({ ok: true, state: maskState() });
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    await screen.findByText('Config ready');
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(1));
+    await setHidden(true);
+    await act(async () => { vi.advanceTimersByTime(45_000); });
+    expect(mocks.mask).toHaveBeenCalledTimes(1);
+    await setHidden(false);
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(2));
+    // A visible page keeps reading for scheduled windows.
+    await act(async () => { vi.advanceTimersByTime(15_000); });
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(3));
   });
   it.each(['Participate', 'Read original'])('retains a failed save after successful %s and retries that save', async operation => {
     let state = maskState(), fail = true;
@@ -524,6 +551,8 @@ describe('chat interaction controls', () => {
     const oldRow = (await screen.findByText('Reply 2')).closest('article');
     const root = screen.getByText('Root message').closest('article')!;
     fireEvent.click(within(root).getByRole('button', { name: k('reactionCount') }));
+    // Sharing intentionally retains all loaded DOM; normal reading only mounts a viewport window.
+    act(() => shareSelectionStore.enter('bot-group:room:thread:root'));
     await screen.findByText('Reply 101');
     expect(screen.getByText('Reply 2').closest('article')).toBe(oldRow);
     expect(screen.getByText('Reply 51')).toBeTruthy();

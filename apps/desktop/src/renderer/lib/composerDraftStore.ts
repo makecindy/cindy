@@ -20,9 +20,15 @@
  *   `onUpdate` hook (every keystroke; cheap Map.set).
  * - `getDraft` is called by `useAttachments` and `ChatInput` after the
  *   sessionId switches, to restore whatever the user left in the new session.
- * - `clearDraft` is called from `dispatchSend` (after a successful send) and
- *   from the session delete/archive flow in `CCAgentSidebarUpper` (to avoid
- *   the Map holding orphan entries for sessions that no longer exist).
+ * - `clearDraft` is called from `dispatchSend` (after a successful send).
+ * - `discardDraft` is called when a session is deleted: the draft and the
+ *   staged attachment copies it owns are released, since the session can no
+ *   longer be opened.
+ * - Archive deliberately keeps the draft. Archive is reversible and asks
+ *   nothing about the draft, so Restore (or opening the archived task, whose
+ *   composer stays usable) must bring back the text and attachments. Kept
+ *   entries are bounded by the renderer lifetime like any other draft; delete
+ *   still releases them.
  *
  * Why a separate module instead of expanding `makerChatStore`:
  * - `makerChatStore` is the chat business state (messages, streaming flags,
@@ -33,6 +39,7 @@
 import type { AttachedFile } from '@/lib/fileTypes';
 import type { BrowserCommentDraftItem } from '@/lib/browserComments';
 import type { ChatQuote } from '@/lib/chatQuotes';
+import type { BotGroupQuoteView } from '../../shared/botGroupChat';
 import {
   appendQuoteToComposerDocument,
   prependLegacyQuotesToComposerDocument,
@@ -79,6 +86,8 @@ export interface ComposerDraft {
   focusAtEnd?: boolean;
   /** @deprecated 旧 renderer 的独立引用数组;saveDraft 会提升为正文节点。 */
   quotes?: ChatQuote[];
+  /** Unsent group reply reference, scoped to the same owner/group as this draft. */
+  botGroupQuote?: BotGroupQuoteView;
   /**
    * 内置浏览器页面评论(browser-comment-chip):待随下一条消息发送的评论列表,
    * composer 渲染为「N 条注释」胶囊,发送时序列化为 `# Browser comments:` 段
@@ -109,8 +118,9 @@ export interface RemoteOptimisticDraftSnapshot {
  * Process-local discard boundary captured by async composer work. A successful
  * send uses `clearDraft` and deliberately does not invalidate this token:
  * files added while the send is settling are newer composer input. Explicit
- * discard (session delete/archive) advances the generation so late work can
- * recycle its files instead of resurrecting the removed draft.
+ * discard (e.g. session delete; archive keeps the draft) advances the
+ * generation so late work can recycle its files instead of resurrecting the
+ * removed draft.
  */
 export interface ComposerDraftDiscardToken {
   ownerScopedKey: string;
@@ -335,6 +345,7 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
   if (!draft) return false;
   if (draft.attachments.length > 0) return true;
   if (draft.quotes && draft.quotes.length > 0) return true;
+  if (draft.botGroupQuote) return true;
   if (draft.browserComments && draft.browserComments.length > 0) return true;
   return tiptapDocHasContent(draft.text);
 }
@@ -547,7 +558,8 @@ function saveDraftAtKey(
  *
  * Call sites:
  * - After successful send (the composer is already cleared).
- * - When a session is deleted or archived (avoid Map leak).
+ *
+ * Session delete uses `discardDraft` instead; archive keeps the draft.
  */
 export function clearDraft(sessionId: string): void {
   const key = draftKey(sessionId);

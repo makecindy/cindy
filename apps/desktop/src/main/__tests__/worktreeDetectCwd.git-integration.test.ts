@@ -4,9 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { AcpAgent, type AcpLineTransport, type Logger } from '@cindy/maker-core';
 
 import { createCheckoutService } from '../worktree/checkout';
-import { createWorktree, detectCwd } from '../worktree/WorktreeManager';
+import '../worktree/WorktreeManagerPorts.desktop';
+import { awaitBackgroundCheckout, createWorktree, detectCwd } from '../worktree/WorktreeManager';
 import { app } from 'electron';
 import type { WorktreeMeta } from '../worktree/types';
 
@@ -31,6 +33,62 @@ vi.mock('../logger', () => ({
 
 const exec = promisify(execFile);
 let fixture: string | undefined;
+
+// #11157: createWorktree must preserve repository/inherited hooks and Git's unset
+// default. Mocked creation tests cannot observe shared config or hook execution.
+// Minimal failure: a repo with core.hooksPath=.custom-hooks, then one creation.
+// Real Git config + main/sibling/new-checkout commits belong in git-integration.
+it.each(['relative', 'absolute', 'inherited', 'unset'] as const)(
+  'preserves hooks configuration and execution when creating a worktree: %s',
+  async (mode) => {
+    fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-create-hooks-'));
+    vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+    const repo = path.join(fixture, 'repo');
+    await fs.mkdir(repo);
+    const globalConfig = path.join(fixture, 'global-config');
+    await fs.writeFile(globalConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig);
+    const git = async (cwd: string, ...args: string[]) =>
+      (await exec('git', args, { cwd, windowsHide: true, timeout: 10_000 })).stdout.trim();
+    await git(repo, 'init', '--initial-branch=main');
+    await git(repo, 'config', 'user.name', 'Test');
+    await git(repo, 'config', 'user.email', 'test@example.invalid');
+    await fs.writeFile(path.join(repo, 'tracked.txt'), 'fixture');
+    await git(repo, 'add', 'tracked.txt');
+    const hooks = mode === 'unset' ? path.join(repo, '.git', 'hooks')
+      : mode === 'relative' ? path.join(repo, '.custom-hooks') : path.join(fixture, 'custom hooks');
+    await fs.mkdir(hooks, { recursive: true });
+    await fs.writeFile(path.join(hooks, 'pre-commit'), '#!/bin/sh\nprintf ran > hook-ran\n', { mode: 0o755 });
+    if (mode !== 'unset') {
+      await git(repo, 'config', mode === 'inherited' ? '--global' : '--local',
+        'core.hooksPath', mode === 'relative' ? '.custom-hooks' : hooks);
+    }
+    if (mode === 'relative') {
+      await git(repo, 'add', '.custom-hooks/pre-commit');
+      await git(repo, 'update-index', '--chmod=+x', '.custom-hooks/pre-commit');
+    }
+    await git(repo, 'commit', '--allow-empty', '-m', 'fixture');
+    expect(await fs.readFile(path.join(repo, 'hook-ran'), 'utf8')).toBe('ran');
+    await fs.unlink(path.join(repo, 'hook-ran'));
+    const sibling = path.join(fixture, 'sibling');
+    await git(repo, 'worktree', 'add', '-b', 'sibling', sibling);
+    const configBefore = await fs.readFile(path.join(repo, '.git', 'config'), 'utf8');
+    const globalBefore = await fs.readFile(globalConfig, 'utf8');
+    const created = await createWorktree(
+      { sessionId: `hooks-${mode}`, baseRepo: repo, name: `hooks-${mode}`, sourceBranch: 'main' },
+      { awaitFullCheckout: true },
+    );
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    if (!created.ok) return;
+    expect(await fs.readFile(path.join(repo, '.git', 'config'), 'utf8')).toBe(configBefore);
+    expect(await fs.readFile(globalConfig, 'utf8')).toBe(globalBefore);
+    for (const cwd of [repo, sibling, created.meta.path]) {
+      await git(cwd, 'commit', '--allow-empty', '-m', 'verify hook');
+      expect(await fs.readFile(path.join(cwd, 'hook-ran'), 'utf8')).toBe('ran');
+    }
+  },
+  30_000,
+);
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -177,7 +235,10 @@ it.for(['unborn', 'committed'] as const)(
 // Rule C: Desktop creation refreshes its selected remote default before checkout;
 // automatic/mobile paths keep the old behavior. Existing detection tests never
 // exercised the created tree. Real Git + local bare remote, git-integration tier.
-it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
+// #11956 / git-integration: HEAD alone is insufficient. Have a synthetic
+// ACP endpoint read a file absent from the base checkout on its first prompt,
+// and exercise a real Git checkout error after ref resolution succeeds.
+it.each(['fresh', 'offline', 'other-source', 'legacy', 'checkout-fails'] as const)(
   'creates from the expected source with default refresh: %s',
   async (mode) => {
     fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-create-default-'));
@@ -199,6 +260,9 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
     const old = await git(repo, 'rev-parse', 'HEAD');
     await git(repo, 'switch', '-c', 'feature');
     await fs.writeFile(path.join(seed, 'tracked.txt'), 'new');
+    await fs.writeFile(path.join(seed, 'marker.txt'), 'selected branch only');
+    await fs.writeFile(path.join(seed, '.gitattributes'), 'marker.txt filter=fixture-marker\n');
+    await git(seed, 'add', 'marker.txt', '.gitattributes');
     await git(seed, 'commit', '-am', 'new');
     await git(seed, 'push', remote, 'main');
     const latest = await git(seed, 'rev-parse', 'HEAD');
@@ -206,6 +270,10 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
       await git(repo, 'remote', 'set-url', 'origin', path.join(fixture, 'missing.git'));
     // A fork's upstream must never silently replace the selected origin default.
     await git(repo, 'remote', 'add', 'upstream', path.join(fixture, 'missing-upstream.git'));
+    if (mode === 'checkout-fails') {
+      await git(repo, 'config', 'filter.fixture-marker.smudge', 'false');
+      await git(repo, 'config', 'filter.fixture-marker.required', 'true');
+    }
     const sourceBranch = mode === 'other-source' ? 'feature' : 'refs/remotes/origin/main';
     const created = await createWorktree(
       { sessionId: mode, baseRepo: repo, name: mode, sourceBranch },
@@ -214,6 +282,13 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
         awaitFullCheckout: true,
       },
     );
+    await expect(fs.access(path.join(repo, 'marker.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await git(repo, 'branch', '--show-current')).toBe('feature');
+    if (mode === 'checkout-fails') {
+      expect(created).toMatchObject({ ok: false, error: { rawStderr: expect.stringContaining('fixture-marker') } });
+      expect(metadata.has(mode)).toBe(false);
+      return;
+    }
     expect(created.ok, JSON.stringify(created)).toBe(true);
     if (!created.ok) return;
     const expected = mode === 'fresh' ? latest : old;
@@ -221,8 +296,105 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
     expect(await fs.readFile(path.join(created.meta.path, 'tracked.txt'), 'utf8')).toBe(
       mode === 'fresh' ? 'new' : 'old',
     );
-    expect(await git(repo, 'branch', '--show-current')).toBe('feature');
+    if (mode === 'fresh') {
+      const read = Promise.withResolvers<{ cwd: string; prompt: unknown; marker: string }>();
+      const logger: Logger = {
+        trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
+      };
+      let onLine: ((line: string) => void) | undefined;
+      let pluginCwd: string;
+      const transport: AcpLineTransport = {
+        write(line) {
+          const { id, method, params } = JSON.parse(line);
+          const reply = (result: object) => queueMicrotask(() => {
+            onLine?.(JSON.stringify({ jsonrpc: '2.0', id, result }));
+          });
+          if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
+          if (method === 'session/new') {
+            pluginCwd = params.cwd;
+            reply({ sessionId: 'fixture-session' });
+          }
+          if (method === 'session/prompt') {
+            void fs.readFile(path.join(pluginCwd, 'marker.txt'), 'utf8').then((marker) => {
+              read.resolve({ cwd: pluginCwd, prompt: params.prompt, marker });
+              reply({ stopReason: 'end_turn' });
+            }, read.reject);
+          }
+        },
+        onLine(listener) {
+          onLine = listener;
+          return () => { onLine = undefined; };
+        },
+        onClose: () => () => {},
+        close: async () => {},
+      };
+      const agent = new AcpAgent({
+        auth: {
+          getState: async () => ({ authenticated: true }),
+          triggerLogin: async () => ({ authenticated: true }),
+          logout: async () => {},
+          getAuthEnv: async () => ({}),
+        },
+        binaryPath: '', runtimeConfig: {}, logger, clientInfo: { name: 'fixture', version: '1' },
+        endpoints: { connect: async () => transport },
+      });
+      const session = await agent.startSession({
+        workingDir: created.meta.path, providerId: 'acp-plugin:fixture:marker', model: '',
+      });
+      try {
+        await session.send({ type: 'user', content: 'Read marker.txt' });
+        await expect(read.promise).resolves.toEqual({
+          cwd: created.meta.path,
+          prompt: [{ type: 'text', text: 'Read marker.txt' }],
+          marker: 'selected branch only',
+        });
+      } finally {
+        await session.close();
+      }
+    } else {
+      await expect(fs.readFile(path.join(created.meta.path, 'marker.txt'), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    }
     expect(created.meta.sourceBranch).toBe(sourceBranch);
   },
   30_000,
 );
+
+// #6792: createWorktree must populate the linked worktree's full index after
+// background checkout. Existing checks use ordinary repositories. Reproduce
+// with a local submodule and inherited recursion before its linked gitdir exists.
+// Real Git configuration and index behavior belong in git-integration.
+it('completes staged checkout with inherited submodule recursion', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-submodule-trial-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, timeout: 10_000 })).stdout.trim();
+  const repo = path.join(fixture, 'repo');
+  const sub = path.join(fixture, 'sub');
+  for (const dir of [repo, sub]) {
+    await fs.mkdir(dir);
+    await git(dir, 'init', '-b', 'main');
+    await git(dir, 'config', 'user.name', 'Cindy fixture');
+    await git(dir, 'config', 'user.email', 'fixture@example.invalid');
+    await fs.writeFile(path.join(dir, 'CLAUDE.md'), 'fixture\n');
+    await fs.writeFile(path.join(dir, 'tracked.txt'), 'fixture\n');
+    await git(dir, 'add', '.');
+    await git(dir, 'commit', '-m', 'fixture');
+  }
+  await git(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', sub, 'deps/sub');
+  await git(repo, 'commit', '-m', 'add local fixture submodule');
+  await git(repo, 'config', 'submodule.recurse', 'true');
+  const result = await createWorktree(
+    { sessionId: 'submodule', baseRepo: repo, name: 'submodule', sourceBranch: 'main' },
+    { trackBackgroundCheckout: true },
+  );
+  await awaitBackgroundCheckout('submodule');
+  expect(result.ok, JSON.stringify(result)).toBe(true);
+  if (!result.ok) return;
+  expect(await git(result.meta.path, 'ls-files')).toBe(
+    await git(repo, 'ls-tree', '-r', '--name-only', 'HEAD'),
+  );
+  expect(await git(result.meta.path, 'status', '--porcelain=v1')).toBe('');
+  expect(await fs.readFile(path.join(result.meta.path, 'tracked.txt'), 'utf8')).toBe('fixture\n');
+  expect(await git(repo, 'config', '--local', 'submodule.recurse')).toBe('true');
+});

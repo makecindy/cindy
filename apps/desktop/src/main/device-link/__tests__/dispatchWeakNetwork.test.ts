@@ -745,25 +745,24 @@ describe('[5] outbox flush 的 presence 显式离线门禁', () => {
 });
 
 describe('[3] outbox 保留时长按 channel 收窄', () => {
-  it('锁「预算 ×2、封顶 120s」联动:表内 channel 跟随共享表,缺省 30s→60s', () => {
+  it('锁「预算 ×2」联动:表内 channel 跟随共享表,缺省 30s→60s', () => {
     // 联动语义从共享表推导,不再硬编码结果值——此断言曾在 #1418/#1477 并行开发
     // 时写死 60s(当时表里还没有 listing 条目),两 PR 各自 CI 都绿、先后合入后
-    // main 变红。表值本身(12s/60s)在下面单独锁定:它们是产品决策,变更时红在
-    // 这里提醒显式确认;而「×2 封顶」的联动对表变更免疫。
+    // main 变红。表值本身(12s/300s)在下面单独锁定:它们是产品决策,变更时红在
+    // 这里提醒显式确认;而「×2」的联动对表变更免疫。worktree:create 2026-11-16 起
+    // 为 300s(Multibox 同步克隆整个工作区),×2 后仍低于全局上限。
     const listingBudget = INVOKE_TIMEOUT_OVERRIDES_MS['local-db:sessions:list'];
     const worktreeBudget = INVOKE_TIMEOUT_OVERRIDES_MS['worktree:create'];
     expect(listingBudget).toBe(12_000);
-    expect(worktreeBudget).toBe(60_000);
+    expect(worktreeBudget).toBe(300_000);
     expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(
       Math.min(listingBudget * 2, 120_000),
     );
     expect(__testing.outboxEntryMaxAgeMs(undefined)).toBe(60_000);
-    expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(
-      Math.min(worktreeBudget * 2, 120_000),
-    );
+    expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(worktreeBudget * 2);
   });
 
-  it('离线慢扫描按逐条 TTL 出清:listing(24s 档)先被丢,长任务 channel 保留到 120s', () => {
+  it('离线慢扫描按逐条 TTL 出清:listing(24s 档)先被丢,长任务 channel 保留到自己的 TTL', () => {
     const sendInvokeResult = vi.fn(() => {
       throw notConnected();
     });
@@ -791,8 +790,11 @@ describe('[3] outbox 保留时长按 channel 收窄', () => {
     vi.advanceTimersByTime(61_000);
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(1); // listing 出清,worktree 保留
 
-    vi.advanceTimersByTime(60_000);
-    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0); // 121s:worktree 也到期
+    const worktreeTtl = __testing.outboxEntryMaxAgeMs('worktree:create');
+    vi.advanceTimersByTime(worktreeTtl - 61_000 - 1_000);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1); // TTL 前一刻仍保留
+    vi.advanceTimersByTime(11_000); // 越过 TTL 且至少经过一次完整的 5s 离线扫描
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0); // worktree 也到期
   });
 });
 

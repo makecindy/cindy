@@ -1,4 +1,7 @@
-import { createElement } from "react";
+// @vitest-environment jsdom
+
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup as render } from "react-dom/server";
 import { expect, it, vi } from "vitest";
 import {
@@ -10,6 +13,10 @@ const themeState = vi.hoisted(() => ({ mode: "light" as "light" | "dark" }));
 
 // User request 2026-10-29. Unit: no existing test renders the real mobile provider
 // mark. The regression is source-host identity combined with theme color.
+vi.mock("expo-image", () => ({
+  Image: ({ source, onError }: { source: { uri: string }; onError: () => void }) =>
+    createElement("img", { src: source.uri, alt: "", onError }),
+}));
 vi.mock("react-native", () => ({
   View: ({ children }: any) => createElement("div", null, children),
   StyleSheet: { create: (styles: unknown) => styles },
@@ -35,8 +42,47 @@ vi.mock("@/session/RemoteSourceMark", () => ({
     createElement("div", { "data-remote": true }, children),
 }));
 
-// These marks are stateless; render the real components without a DOM environment.
+// Static artwork assertions use React’s server renderer.
 const firstPath = (markup: string) => markup.match(/<path d="([^"]+)"/)?.[1];
+
+// Unit: expo-image ignores color-scheme queries in uploaded SVGs. The existing
+// artwork tests cover built-in palettes only. Even one dark query used to reach
+// the decoder unchanged, so inspect the SVG passed by the real provider mark.
+it("resolves exact color-scheme blocks in place when the App theme changes", () => {
+  const base = ".mark{fill:red}";
+  const dark = '.mark{fill:cyan}/* } */.other{font-family:"}"}';
+  const light = ".mark{fill:orangered}";
+  const compound = "@media screen and (prefers-color-scheme: dark){.other{fill:green}}";
+  const width = "@media (min-width:24px){.other{fill:purple}}";
+  const tail = ".last{opacity:.5}";
+  const wrap = (css: string) =>
+    `<svg><style>${css}</style><rect class="mark"/></svg>`;
+  const icon = wrap(
+    `${base}@MEDIA(PREFERS-COLOR-SCHEME:DARK){${dark}}${compound}` +
+    `@media ( prefers-color-scheme : light ) {${light}}${width}${tail}`,
+  );
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const mark = () => <MobileProviderMark name="Enterprise" customIcon={icon} />;
+  const decodedSvg = () => {
+    const uri = container.querySelector("img")?.getAttribute("src") ?? "";
+    expect(uri).toMatch(/^data:image\/svg\+xml;base64,/);
+    return Buffer.from(uri.split(",")[1], "base64").toString("utf8");
+  };
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  try {
+    themeState.mode = "light";
+    act(() => root.render(mark()));
+    expect(decodedSvg()).toBe(wrap(base + compound + light + width + tail));
+    themeState.mode = "dark";
+    act(() => root.render(mark()));
+    expect(decodedSvg()).toBe(wrap(base + dark + compound + width + tail));
+  } finally {
+    act(() => root.unmount());
+    themeState.mode = "light";
+    vi.unstubAllGlobals();
+  }
+});
 
 // Unit: provider ID alone cannot distinguish personal and XD organization.
 it("uses the original XD paths with the supplied theme color and keeps the remote badge", () => {
@@ -74,8 +120,10 @@ it("preserves explicit model brands instead of overriding them with the organiza
       name="Cindy AI"
       logoKind="xd"
       icon="claude"
+      customIcon="<svg/>"
     />,
   );
+  expect(claude).not.toContain("<img");
   expect(firstPath(claude)).toBeTruthy();
   expect(firstPath(claude)).not.toBe(firstPath(xd));
   const cindy = render(
@@ -112,4 +160,34 @@ it("renders independent spectrum marks and follows the active light/dark theme",
   expect(dark.match(/stop-color="[^"]+"/g)).not.toEqual(light.match(/stop-color="[^"]+"/g));
   expect(dark.match(/opacity="[^"]+"/g)).not.toEqual(light.match(/opacity="[^"]+"/g));
   themeState.mode = "light";
+});
+
+// Unit: the real picker mark needs to replace a failed native image with the
+// existing brand, retaining the remote indicator and resetting for a new image.
+it("falls back to the same remote spectrum mark when expo-image reports an error", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const icon = '<svg><title>图</title></svg>';
+  const mark = (customIcon?: string) => (
+    <MobileModelIconMark name="Enterprise Codex" providerId="byok-test" logoKind="openai-spectrum"
+      customIcon={customIcon} remote />
+  );
+  try {
+    act(() => root.render(mark(icon)));
+    const image = container.querySelector("img")!;
+    const uri = `data:image/svg+xml;base64,${Buffer.from(icon).toString("base64")}`;
+    expect(image.getAttribute("src")).toBe(uri);
+    expect(image.closest("[data-remote]")).toBeTruthy();
+    act(() => { image.dispatchEvent(new Event("error")); });
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("[data-remote] linearGradient")).toBeTruthy();
+    act(() => root.render(mark(icon.replace("图", "标"))));
+    expect(container.querySelector("img")).toBeTruthy();
+    act(() => root.render(mark()));
+    expect(container.querySelector("[data-remote] linearGradient")).toBeTruthy();
+  } finally {
+    act(() => root.unmount());
+    vi.unstubAllGlobals();
+  }
 });

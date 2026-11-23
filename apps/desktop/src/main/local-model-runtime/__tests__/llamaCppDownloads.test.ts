@@ -1,7 +1,17 @@
+/**
+ * 测试价值（下载部分，2026-11-17 改走共享下载器后重写）
+ * - 生产入口与可观察结果：downloadLlamaCppAsset —— 只有校验通过的字节落到目标文件；暂停保留
+ *   续传数据、继续后从断点接着下；取消与失败清掉部分文件；坏前缀等待用户显式继续而不被删除。
+ * - Bug／规则依据：verified-downloads.md（统一走 main/downloader，摘要必填，来源白名单逐跳检查）；
+ *   原自写实现的暂停／继续、坏前缀保留语义不得退化。
+ * - 现有覆盖缺口：共享下载器自身的测试不覆盖 llama.cpp 的暂停原因、取消清理和错误名映射。
+ * - 最小失败输入：暂停在 5 字节后再继续；暂停后服务器回错 Content-Range；前缀不可读后继续。
+ * - tier：unit，临时目录真实文件，stub 全局 fetch（outboundFetch 直连路径）。
+ * 连接期计时不覆盖本地前缀哈希由 downloader/__tests__/download.test.ts 覆盖。
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { Readable } from 'node:stream';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -13,11 +23,7 @@ import {
 } from '../llamaCppDownloads.js';
 import { validLlamaCppFile, validLlamaCppRepo } from '../../../shared/llamaCpp.js';
 
-const fsMocks = vi.hoisted(() => ({ stat: vi.fn(), readStream: vi.fn() }));
-vi.mock('node:fs', async (original) => ({
-  ...(await original<typeof import('node:fs')>()),
-  createReadStream: fsMocks.readStream,
-}));
+const fsMocks = vi.hoisted(() => ({ stat: vi.fn() }));
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
   stat: fsMocks.stat,
@@ -25,176 +31,58 @@ vi.mock('node:fs/promises', async (original) => ({
 beforeEach(async () => {
   const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   fsMocks.stat.mockImplementation(fs.stat);
-  const syncFs = await vi.importActual<typeof import('node:fs')>('node:fs');
-  fsMocks.readStream.mockImplementation(syncFs.createReadStream);
 });
 afterEach(() => vi.unstubAllGlobals());
+
+const bytes = Buffer.from('GGUF resumed download');
+const asset = {
+  url: 'https://huggingface.co/owner/repo/resolve/main/model.gguf',
+  size: bytes.length,
+  sha256: createHash('sha256').update(bytes).digest('hex'),
+};
+const noRetry = { retry: { maxAttempts: 1 } };
+async function tempDir() {
+  return mkdtemp(path.join(os.tmpdir(), 'cindy-llamacpp-download-'));
+}
+/** Sends the first five bytes, then holds the connection open until the request aborts. */
+function stallingAfterPrefix(signal: AbortSignal) {
+  return new Response(
+    new ReadableStream({
+      start(c) {
+        c.enqueue(new Uint8Array(bytes.subarray(0, 5)));
+        signal.addEventListener('abort', () => c.error(signal.reason), { once: true });
+      },
+    }),
+    { headers: { 'content-length': String(bytes.length), 'accept-ranges': 'bytes' } },
+  );
+}
+/** Real pause through the public entry: five bytes on disk, then `DOWNLOAD_PAUSED`. */
+async function pausedAfterPrefix(dest: string) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init: RequestInit) => stallingAfterPrefix(init.signal!)),
+  );
+  const controller = new AbortController();
+  const running = downloadLlamaCppAsset(asset, dest, 'hf', controller.signal, () => {}, true);
+  const settled = running.catch((error) => error);
+  // Pause after the prefix reaches disk, not on an earlier progress event.
+  await vi.waitFor(async () =>
+    expect(await readFile(`${dest}.part`)).toEqual(bytes.subarray(0, 5)),
+  );
+  controller.abort('DOWNLOAD_PAUSED');
+  expect((await settled).name).toBe('AbortError');
+}
+
 describe('managed llama.cpp downloads', () => {
   it.each([true, false])(
-    'does not time out local resume verification (complete: %s)',
-    async (complete) => {
-      const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-local-verify-'));
-      const dest = path.join(dir, 'model.gguf');
-      const bytes = Buffer.from('GGUF');
-      const timer = vi.spyOn(globalThis, 'setTimeout');
-      const hasNetworkTimer = () => timer.mock.calls.some((call) => call[1] === 120_000);
-      const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-      try {
-        await writeFile(`${dest}.partial`, complete ? bytes : bytes.subarray(0, 2));
-        fsMocks.stat.mockImplementationOnce(async (file) => {
-          expect(hasNetworkTimer()).toBe(false);
-          return fs.stat(file);
-        });
-        fsMocks.readStream.mockImplementationOnce(() =>
-          Readable.from(
-            (async function* () {
-              expect(hasNetworkTimer()).toBe(false);
-              yield complete ? bytes : bytes.subarray(0, 2);
-              expect(hasNetworkTimer()).toBe(false);
-            })(),
-          ),
-        );
-        const fetchMock = vi.fn(async () => {
-          expect(hasNetworkTimer()).toBe(true);
-          return new Response(bytes.subarray(2), {
-            status: 206,
-            headers: { 'content-range': 'bytes 2-3/4' },
-          });
-        });
-        vi.stubGlobal('fetch', fetchMock);
-        await downloadLlamaCppAsset(
-          {
-            url: 'https://huggingface.co/owner/repo/resolve/main/model.gguf',
-            size: 4,
-            sha256: createHash('sha256').update(bytes).digest('hex'),
-          },
-          dest,
-          'hf',
-          new AbortController().signal,
-          () => {},
-          true,
-        );
-        expect(fetchMock).toHaveBeenCalledTimes(complete ? 0 : 1);
-        expect(await readFile(dest)).toEqual(bytes);
-      } finally {
-        timer.mockRestore();
-        await rm(dir, { recursive: true, force: true });
-      }
-    },
-  );
-  it.each(['timeout', 'cancel'] as const)(
-    'distinguishes a stalled body from %s and cleans partial bytes',
-    async (reason) => {
-      const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-download-timeout-'));
-      const dest = path.join(dir, 'model.gguf');
-      const controller = new AbortController();
-      let stall!: () => void;
-      const original = globalThis.setTimeout;
-      const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
-        ...args: Parameters<typeof setTimeout>
-      ) => {
-        const [fn, ms] = args;
-        if (ms === 120_000) stall = fn as () => void;
-        return original(...args);
-      }) as typeof setTimeout);
-      try {
-        vi.stubGlobal(
-          'fetch',
-          vi.fn(
-            async () =>
-              new Response(
-                new ReadableStream({
-                  start(c) {
-                    c.enqueue(new Uint8Array([1]));
-                  },
-                }),
-              ),
-          ),
-        );
-        const result = downloadLlamaCppAsset(
-          {
-            url: 'https://huggingface.co/owner/repo/resolve/main/model.gguf',
-            size: 2,
-            sha256: '',
-          },
-          dest,
-          'hf',
-          controller.signal,
-          () => {},
-        ).catch((error) => error);
-        await vi.waitFor(async () =>
-          expect(await readFile(`${dest}.partial`)).toEqual(Buffer.from([1])),
-        );
-        if (reason === 'cancel') controller.abort();
-        stall(); // A later timeout must not replace the user's earlier cancellation.
-        const error = await result;
-        if (reason === 'timeout') {
-          expect(error.message).toBe('DOWNLOAD_TIMEOUT');
-          expect(error.name).not.toBe('AbortError');
-        } else expect(error.name).toBe('AbortError');
-        expect(await readdir(dir)).toEqual([]);
-      } finally {
-        controller.abort();
-        timer.mockRestore();
-        await rm(dir, { recursive: true, force: true });
-      }
-    },
-  );
-  it.each(['EACCES', 'EPERM', 'EIO', 'READ_EIO'])(
-    'retains a paused prefix when stat fails with %s',
-    async (code) => {
-      const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-resume-io-'));
-      const dest = path.join(dir, 'model.gguf');
-      const bytes = Buffer.from('saved prefix');
-      try {
-        await writeFile(`${dest}.partial`, bytes);
-        const error = Object.assign(new Error(code), { code });
-        if (code === 'READ_EIO')
-          fsMocks.readStream.mockImplementationOnce(
-            () =>
-              new Readable({
-                read() {
-                  this.destroy(error);
-                },
-              }),
-          );
-        else fsMocks.stat.mockRejectedValueOnce(error);
-        const fetchMock = vi.fn();
-        vi.stubGlobal('fetch', fetchMock);
-        await expect(
-          downloadLlamaCppAsset(
-            {
-              url: 'https://huggingface.co/owner/repo/resolve/main/model.gguf',
-              size: 100,
-              sha256: '',
-            },
-            dest,
-            'hf',
-            new AbortController().signal,
-            () => {},
-            true,
-          ),
-        ).rejects.toThrow('DOWNLOAD_RESUME_READ_FAILED');
-        expect(fetchMock).not.toHaveBeenCalled();
-        expect(await readFile(`${dest}.partial`)).toEqual(bytes);
-      } finally {
-        await rm(dir, { recursive: true, force: true });
-      }
-    },
-  );
-  it.each([true, false])(
-    'resumes and verifies a saved prefix (server honors Range: %s)',
+    'pauses, keeps the prefix and continues from it (server honors Range: %s)',
     async (honorsRange) => {
-      const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-llamacpp-resume-test-'));
-      const bytes = Buffer.from('GGUF resumed download');
-      const asset = {
-        url: 'https://huggingface.co/owner/repo/resolve/main/model.gguf',
-        size: bytes.length,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-      };
+      const dir = await tempDir();
       const dest = path.join(dir, 'model.gguf');
       try {
-        await writeFile(`${dest}.partial`, bytes.subarray(0, 5));
+        await pausedAfterPrefix(dest);
+        expect((await readdir(dir)).sort()).toEqual(['model.gguf.meta.json', 'model.gguf.part']);
+        const seen: number[] = [];
         const fetchMock = vi.fn(async (_url, init) => {
           expect(init.headers.Range).toBe('bytes=5-');
           return honorsRange
@@ -210,9 +98,11 @@ describe('managed llama.cpp downloads', () => {
           dest,
           'hf',
           new AbortController().signal,
-          () => {},
+          (n) => seen.push(n),
           true,
         );
+        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(seen[0]).toBe(honorsRange ? 5 : 0);
         expect(await readFile(dest)).toEqual(bytes);
         expect(await readdir(dir)).toEqual(['model.gguf']);
       } finally {
@@ -220,42 +110,23 @@ describe('managed llama.cpp downloads', () => {
       }
     },
   );
-  it('preserves paused bytes, rejects mismatched ranges, and removes corrupt prefixes', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-llamacpp-pause-test-'));
-    const bytes = Buffer.from('GGUF resumed download');
+  it('removes partial bytes on cancel and when the server returns the wrong range', async () => {
+    const dir = await tempDir();
     const dest = path.join(dir, 'model.gguf');
-    const asset = {
-      url: 'https://huggingface.co/owner/repo/resolve/main/model.gguf',
-      size: bytes.length,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-    };
     try {
-      const controller = new AbortController();
       vi.stubGlobal(
         'fetch',
-        vi.fn(
-          async () =>
-            new Response(
-              new ReadableStream({
-                start(c) {
-                  c.enqueue(bytes.subarray(0, 5));
-                },
-              }),
-            ),
-        ),
+        vi.fn(async (_url: string, init: RequestInit) => stallingAfterPrefix(init.signal!)),
       );
+      const controller = new AbortController();
       const running = downloadLlamaCppAsset(asset, dest, 'hf', controller.signal, () => {}, true);
-      const paused = expect(running).rejects.toThrow();
-      try {
-        // Pause after the prefix reaches disk, not on the transform's earlier progress event.
-        await vi.waitFor(async () => {
-          expect(await readFile(`${dest}.partial`)).toEqual(bytes.subarray(0, 5));
-        });
-      } finally {
-        controller.abort('DOWNLOAD_PAUSED');
-        await paused;
-      }
-      expect(await readFile(`${dest}.partial`)).toEqual(bytes.subarray(0, 5));
+      const settled = running.catch((error) => error);
+      await vi.waitFor(async () => expect(await readFile(`${dest}.part`)).toHaveLength(5));
+      controller.abort();
+      expect((await settled).name).toBe('AbortError');
+      expect(await readdir(dir)).toEqual([]);
+
+      await pausedAfterPrefix(dest);
       vi.stubGlobal(
         'fetch',
         vi.fn(
@@ -267,18 +138,119 @@ describe('managed llama.cpp downloads', () => {
         ),
       );
       await expect(
-        downloadLlamaCppAsset(asset, dest, 'hf', new AbortController().signal, () => {}, true),
+        downloadLlamaCppAsset(
+          asset,
+          dest,
+          'hf',
+          new AbortController().signal,
+          () => {},
+          true,
+          noRetry,
+        ),
       ).rejects.toThrow('DOWNLOAD_FAILED');
-      expect(await readdir(dir)).toEqual([]);
-      await writeFile(`${dest}.partial`, Buffer.alloc(bytes.length, 0));
-      await expect(
-        downloadLlamaCppAsset(asset, dest, 'hf', new AbortController().signal, () => {}, true),
-      ).rejects.toThrow('DOWNLOAD_CHECKSUM');
       expect(await readdir(dir)).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
+  it.each(['EACCES', 'EPERM', 'EIO'])(
+    'retains a paused prefix when stat fails with %s',
+    async (code) => {
+      const dir = await tempDir();
+      const dest = path.join(dir, 'model.gguf');
+      try {
+        await writeFile(`${dest}.part`, bytes.subarray(0, 5));
+        fsMocks.stat.mockRejectedValueOnce(Object.assign(new Error(code), { code }));
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        await expect(
+          downloadLlamaCppAsset(asset, dest, 'hf', new AbortController().signal, () => {}, true),
+        ).rejects.toThrow('DOWNLOAD_RESUME_READ_FAILED');
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(await readFile(`${dest}.part`)).toEqual(bytes.subarray(0, 5));
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+  // Review finding: a full disk while resuming silently paused instead of failing and freeing
+  // the partial file as the pre-shared-downloader code did.
+  it('fails and frees the partial file when the disk fills up while resuming', async () => {
+    const dir = await tempDir();
+    const dest = path.join(dir, 'model.gguf');
+    try {
+      await pausedAfterPrefix(dest);
+      const nodeFs = await import('node:fs');
+      const open = nodeFs.default.promises.open;
+      const diskFull = Object.assign(new Error('ENOSPC: no space left'), { code: 'ENOSPC' });
+      vi.spyOn(nodeFs.default.promises, 'open').mockImplementation(async (...args) => {
+        const handle = await open(...(args as Parameters<typeof open>));
+        handle.writeFile = vi.fn(async () => Promise.reject(diskFull)) as never;
+        return handle;
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response(bytes.subarray(5), {
+              status: 206,
+              headers: { 'content-range': `bytes 5-${bytes.length - 1}/${bytes.length}` },
+            }),
+        ),
+      );
+      await expect(
+        downloadLlamaCppAsset(
+          asset,
+          dest,
+          'hf',
+          new AbortController().signal,
+          () => {},
+          true,
+          noRetry,
+        ),
+      ).rejects.toThrow('DOWNLOAD_FAILED');
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'retains a paused prefix that cannot be read back for verification',
+    async () => {
+      const dir = await tempDir();
+      const dest = path.join(dir, 'model.gguf');
+      try {
+        await pausedAfterPrefix(dest);
+        await chmod(`${dest}.part`, 0o200);
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            async () =>
+              new Response(bytes.subarray(5), {
+                status: 206,
+                headers: { 'content-range': `bytes 5-${bytes.length - 1}/${bytes.length}` },
+              }),
+          ),
+        );
+        await expect(
+          downloadLlamaCppAsset(
+            asset,
+            dest,
+            'hf',
+            new AbortController().signal,
+            () => {},
+            true,
+            noRetry,
+          ),
+        ).rejects.toThrow('DOWNLOAD_RESUME_READ_FAILED');
+        await chmod(`${dest}.part`, 0o600);
+        expect(await readFile(`${dest}.part`)).toEqual(bytes.subarray(0, 5));
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
   it('rejects paths, shell arguments, untrusted hosts and credential-bearing URLs', () => {
     for (const file of [
       'MMPROJ-F16.gguf',
@@ -353,19 +325,12 @@ describe('managed llama.cpp downloads', () => {
     expect(result.revision).toBe('b'.repeat(40));
     expect(result.files.map((f) => f.name)).toEqual(['a.gguf']);
   });
-  it('only promotes verified bytes and removes partial files on checksum failure', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-llamacpp-download-test-'));
-    const bytes = Buffer.from('GGUF test');
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
+  it('only promotes verified bytes and keeps redirects on the allowed hosts', async () => {
+    const dir = await tempDir();
     const fetchMock = vi.fn().mockImplementation(async () => new Response(bytes));
     vi.stubGlobal('fetch', fetchMock);
     try {
       const dest = path.join(dir, 'model.gguf');
-      const asset = {
-        url: 'https://huggingface.co/owner/repo/resolve/main/model.gguf',
-        size: bytes.length,
-        sha256,
-      };
       await downloadLlamaCppAsset(asset, dest, 'hf', new AbortController().signal, () => {});
       expect(await readFile(dest)).toEqual(bytes);
       await expect(
@@ -390,6 +355,7 @@ describe('managed llama.cpp downloads', () => {
           () => {},
         ),
       ).rejects.toThrow('DOWNLOAD_BLOCKED');
+      expect(fetchMock).toHaveBeenLastCalledWith(asset.url, expect.anything());
       expect(await readdir(dir)).toEqual(['model.gguf']);
     } finally {
       await rm(dir, { recursive: true, force: true });

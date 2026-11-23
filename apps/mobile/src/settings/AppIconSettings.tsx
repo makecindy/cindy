@@ -1,8 +1,8 @@
+import { useState } from 'react';
 import { Image, Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
-import { useSettingsRowStyles } from '@/session/SettingsGroupRows';
+import { ChoicePickerRow } from '@/session/SettingsGroupRows';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
 import { APP_ICON_PREVIEWS } from './appIconPreviews.generated';
@@ -17,7 +17,7 @@ import type { AppIconChoice } from './useAppIconChoice';
 export function AppIconSettings({ choice }: { choice: AppIconChoice }) {
   const { t } = useTranslation();
   const { colors, mode } = useTheme();
-  const rowStyles = useSettingsRowStyles();
+  const [expanded, setExpanded] = useState(false);
   const styles = useThemedStyles(makeStyles);
   const { state, select } = choice;
   const label = t('settings.appearance.appIcon.label');
@@ -27,9 +27,11 @@ export function AppIconSettings({ choice }: { choice: AppIconChoice }) {
   const dark = state.darkArtwork && mode === 'dark';
 
   return (
-    <View style={[rowStyles.row, styles.row]} testID="settings.appIcon">
-      <Text style={[rowStyles.rowLabel, styles.label]}>{label}</Text>
-      <View accessibilityLabel={label} accessibilityRole="radiogroup" style={styles.icons}>
+    <View testID="settings.appIcon">
+      <ChoicePickerRow expanded={expanded} label={label}
+        value={t(`settings.appearance.appIcon.options.${state.current}`)}
+        onPress={() => setExpanded(open => !open)} testID="settings.appIcon.open" />
+      {expanded && <View accessibilityLabel={label} accessibilityRole="radiogroup" style={styles.icons}>
         {state.icons.map((icon) => {
           const selected = icon === state.current;
           return (
@@ -38,7 +40,7 @@ export function AppIconSettings({ choice }: { choice: AppIconChoice }) {
               accessibilityRole="radio"
               accessibilityState={{ checked: selected }}
               key={icon}
-              onPress={() => select(icon)}
+              onPress={() => { setExpanded(false); select(icon); }}
               style={({ pressed }) => [
                 styles.tile,
                 selected && { borderColor: colors.textSecondary },
@@ -53,7 +55,7 @@ export function AppIconSettings({ choice }: { choice: AppIconChoice }) {
             </Pressable>
           );
         })}
-      </View>
+      </View>}
     </View>
   );
 }
@@ -66,11 +68,7 @@ const ARTWORK = 44;
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-    row: { gap: spacing.md },
-    // The shared label style stretches along a horizontal row; stacked above
-    // the icons it must keep its own text height instead.
-    label: { flex: 0 },
-    icons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+    icons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
     tile: {
       alignItems: 'center',
       borderColor: 'transparent',

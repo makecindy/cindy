@@ -9,15 +9,21 @@ type Decision = Awaited<ReturnType<ToolCallAuthorizer>>;
 /** These names describe effects, not tool visibility or an Agent permission mode. */
 export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'set_teammate_project',
+  'configure_teammate_imessage_group',
+  'remove_teammate_personal_skill',
   'send_to_session',
   'steer_session',
   'stop_session_turn',
+  'control_session',
   'set_session_runtime',
+  'set_session_tool_catalog',
   'set_app_default_model',
   'update_app_settings',
   'import_theme_package',
   'set_model_configuration',
   'configure_model_provider',
+  'set_provider_share_member_status',
+  'set_provider_share_model_access',
   'configure_model_connection',
   'manage_media_guide',
   'reset_app_settings',
@@ -27,6 +33,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'move_session_queued_message',
   'archive_sessions',
   'unarchive_sessions',
+  'snooze_sessions',
   'delete_session',
   'fork_session',
   'rewind_session',
@@ -38,6 +45,15 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'create_shared_task_invitation',
   'request_remote_control',
 ]);
+
+/** Project access writes must never inherit the trusted helper server's silent approval. */
+export function isProjectAccessAction(tool: string | undefined, args: unknown): boolean {
+  if (tool === 'create_project') return true;
+  if (tool !== 'update_project_info') return false;
+  const input = args as { field?: unknown; value?: unknown } | null;
+  if (!input || input.field !== 'profile') return false;
+  return !!input.value && typeof input.value === 'object' && 'directories' in input.value;
+}
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'start_team',
@@ -54,6 +70,7 @@ export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'idle_worker',
   'end_team',
   'archive_worker',
+  'set_worker_runtime',
 ]);
 
 export interface TaskActionScope {
@@ -136,11 +153,24 @@ export function createTaskActionAuthorizer(deps: {
   return async (call) => {
     const protectedAction =
       call.server === 'cindy_helper'
-        ? TASK_ACTION_TOOLS.has(call.tool) || HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
-        : call.server === 'cindy_scheduler' ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
-        : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
-    if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list') ||
-        (call.tool === 'manage_media_guide' && ['get', 'validate'].includes(String(((call.args as Record<string, unknown>)?.change as Record<string, unknown>)?.action)))) return { ok: true };
+        ? TASK_ACTION_TOOLS.has(call.tool) ||
+          isProjectAccessAction(call.tool, call.args) ||
+          HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
+        : call.server === 'cindy_scheduler'
+          ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
+          : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
+    if (
+      !protectedAction ||
+      (call.tool === 'manage_session_prs' &&
+        (call.args as Record<string, unknown>)?.action === 'list') ||
+      (call.tool === 'manage_media_guide' &&
+        ['get', 'validate'].includes(
+          String(
+            ((call.args as Record<string, unknown>)?.change as Record<string, unknown>)?.action,
+          ),
+        ))
+    )
+      return { ok: true };
     const scope = await deps.capture(call);
     if (!scope) return { ok: true }; // ordinary user-delegated Agent task, unchanged
     if (!call.sessionId) return denied();
@@ -165,8 +195,13 @@ export async function admitTaskAction(
   if (!call.sessionId) return denied();
   try {
     await scope.assertCurrent();
-  } catch {
-    return denied('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'HOST_NOT_READY') {
+      return { ok: false, errorCode: 'HOST_NOT_READY', message: 'The host is not ready to check this action yet.' };
+    }
+    return error instanceof TaskActionAuthorizationError && error.reason
+      ? { ok: false, errorCode: error.code, message: error.reason }
+      : denied('TASK_ACTION_AUTHORIZATION_EXPIRED');
   }
   let consumed = false;
   return {
@@ -268,7 +303,7 @@ export function captureTaskActionGuard(): (() => Promise<void>) | undefined {
 
 export class TaskActionAuthorizationError extends Error {
   readonly code = 'TASK_ACTION_AUTHORIZATION_EXPIRED';
-  constructor() {
+  constructor(readonly reason?: string) {
     super('TASK_ACTION_AUTHORIZATION_EXPIRED');
   }
 }

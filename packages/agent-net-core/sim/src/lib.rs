@@ -83,6 +83,9 @@ pub struct LinkProfile {
     /// Wi-Fi 重传和换信道时就是这样，发送方会以为全丢了。
     pub stall_every_us: u64,
     pub stall_us: u64,
+    /// 抖动不打乱先后：一个包被耽搁时，后面的包也要等它（Wi-Fi 聚合、经 TCP 中转时就是这样）。
+    /// 连续发包时几乎每个包都会碰上最近一段时间里最大的那次耽搁，稀疏的包却碰不上。
+    pub jitter_fifo: bool,
 }
 
 pub struct Link {
@@ -96,6 +99,7 @@ pub struct Link {
     quota_used: u64,
     bucket_tokens: u64,
     bucket_updated: u64,
+    last_arrival: u64,
 }
 
 impl Link {
@@ -107,7 +111,7 @@ impl Link {
             packet_rng.below(2 * profile.burst_every_us);
             packet_rng.below(2 * profile.burst_len_us);
         }
-        let mut link = Self { profile, rng: packet_rng, burst_rng: Rng::new(seed), next_free: 0, burst_start: u64::MAX, burst_end: 0, quota_window: 0, quota_used: 0, bucket_tokens, bucket_updated: 0 };
+        let mut link = Self { profile, rng: packet_rng, burst_rng: Rng::new(seed), next_free: 0, burst_start: u64::MAX, burst_end: 0, quota_window: 0, quota_used: 0, bucket_tokens, bucket_updated: 0, last_arrival: 0 };
         link.schedule_burst(0);
         link
     }
@@ -174,6 +178,10 @@ impl Link {
         let jitter = self.rng.below(profile.jitter_us + 1);
         let wander = if profile.wander_us > 0 && departure % profile.wander_period_us >= profile.wander_period_us / 16 { profile.wander_us } else { 0 };
         let mut arrival = departure + profile.delay_us + wander + jitter;
+        if profile.jitter_fifo {
+            arrival = arrival.max(self.last_arrival);
+            self.last_arrival = arrival;
+        }
         if profile.reorder > 0.0 && self.rng.chance(profile.reorder) {
             arrival += self.rng.below(profile.reorder_extra_us + 1);
         }
@@ -366,6 +374,8 @@ pub struct Outcome {
     pub final_stats: [Option<agent_net_core::Stats>; 2],
     /// 两端握手完成的时刻，见 `Peer::established_at`。
     pub established_at: [Option<u64>; 2],
+    /// 两端各自发出的最长的包，字节。
+    pub largest_packet: [usize; 2],
 }
 
 pub(crate) fn stream_byte(stream: u64, index: u64) -> u8 {
@@ -496,8 +506,10 @@ pub fn run<P: Peer>(a: P, b: P, a_link: LinkProfile, b_link: LinkProfile, worklo
             let wire = &mut outcome.wire_bytes;
             let packets = &mut outcome.packets;
             let trace = &mut outcome.trace;
+            let largest = &mut outcome.largest_packet[index];
             peer.pump(now, &mut |packet| {
                 *wire += packet.len() as u64;
+                *largest = (*largest).max(packet.len());
                 *packets += 1;
                 mix(trace, packet.len() as u64 ^ (now << 8));
                 let (times, count) = out.transmit(now, packet.len());
@@ -713,6 +725,8 @@ pub(crate) fn random_link(rng: &mut Rng, outages: &[(u64, u64)]) -> LinkProfile 
         bucket_depth_bytes: rng.pick(&[20_000, 200_000, 600_000]),
         stall_every_us: 0,
         stall_us: 0,
+        // 不抽随机数：已有种子的线路保持不变。
+        jitter_fifo: false,
     }
 }
 

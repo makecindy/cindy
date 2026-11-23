@@ -99,7 +99,7 @@ function schedule(patch: Partial<Schedule> = {}): Schedule {
     jobType: 'prompt', createdAt: 1, updatedAt: 1, ...patch };
 }
 function mount(initial: Schedule) {
-  const onSubmit = vi.fn(async () => {});
+  const onSubmit = vi.fn(async (_input: unknown, _edit: boolean) => {});
   const element = () => <ScheduleFormDialog open initial={initial} onOpenChange={() => {}} onSubmit={onSubmit} />;
   const view = render(element());
   return { onSubmit, refresh: () => view.rerender(element()),
@@ -310,14 +310,51 @@ it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separa
   }), true));
 });
 
+// UI regression: choosing an exact PR must round-trip independently of time and Webhook settings.
+it('saves a single PR with optional timed checks and can remove the rule', async () => {
+  const form = mount(schedule({}));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));
+  const url = 'https://github.com/example/project/pull/23';
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, prTrigger: { url, change: 'any' }, webhookTrigger: null,
+  }), true));
+  fireEvent.click(screen.getByText('scheduler.prTrigger.timed'));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, prTrigger: { url, change: 'any' },
+  }), true));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
+});
+
+// PR 11309, unit/jsdom: an event-only PR automation created via the API can have recurring=false.
+// Saving from the real editor must send a valid recurring schedule when timed checks are enabled.
+it('enables recurring timed checks for a saved event-only PR automation', async () => {
+  const prTrigger = { url: 'https://github.com/example/project/pull/23', change: 'merged' as const };
+  const form = mount(schedule({ manual: true, recurring: false, prTrigger }));
+  const timedChecks = screen.getByRole('checkbox', { name: 'scheduler.prTrigger.timed' });
+  expect((timedChecks as HTMLInputElement).checked).toBe(false);
+
+  fireEvent.click(timedChecks);
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, recurring: true, prTrigger,
+  }), true));
+});
+
 it('preserves both triggers when editing an existing timed Webhook', async () => {
-  const form = mount(schedule({ webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
+  const form = mount(schedule({ preRunHook: { command: 'node check.mjs https://github.com/example/project/pull/85' },
+    webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
   await screen.findByRole('button', { name: 'routines.advancedSettings' });
   expect(screen.getByRole('radio', { name: 'scheduler.cell.tagWebhook' }).getAttribute('aria-checked')).toBe('true');
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
     manual: false, recurring: true, cronExpr: '0 9 * * *', webhookTrigger: { events: ['issues.opened'], source: { preset: 'github' } },
   }), true));
+  expect(form.onSubmit.mock.lastCall?.[0]).not.toHaveProperty('prTrigger');
 });
 
 // Event picker, unit/jsdom: real form submission must retain filters outside the

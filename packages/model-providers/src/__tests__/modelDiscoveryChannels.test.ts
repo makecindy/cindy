@@ -5,6 +5,87 @@ import { buildUserProvider } from '../user-provider.js';
 import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
+  // #11446 / #8311, unit: real discovery -> refresh -> JSON save -> three engines.
+  // Previous coverage only exercised Go; Zen's image/jpeg persisted false.
+  it.each([
+    ['https://opencode.ai/zen/go/v1/models', 'deepseek-v4.1-flash', 1_000_000],
+    ['https://opencode.ai/inference/go/v1/models', 'deepseek-v4.1-flash', 1_000_000],
+    ['https://opencode.ai/zen/v1/models', 'deepseek-v4.1-flash-free', 200_000],
+    ['https://opencode.ai/inference/v1/models', 'deepseek-v4.1-flash-free', 200_000],
+  ])('restores OpenCode MIME image input on refresh without changing user denials: %s', (sourceUrl, id, context) => {
+    const discovered = parseModelsListResponse({ data: [
+      { id, limit: { context, output: 32_000 },
+        modalities: { input: ['text', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'], output: ['text'] } },
+      { id: 'deepseek-v4-pro', modalities: { input: ['text'], output: ['text'] } },
+    ] }, sourceUrl)!;
+    expect(discovered[0].discoveredMetadata).toMatchObject({ supportsImageInput: true,
+      modalities: { input: ['text', 'image'], output: ['text'] } });
+    const previous = [{ id, name: id, discoveredMetadata: { supportsImageInput: false } }];
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(previous, discovered)));
+    const runtime = { baseUrl: sourceUrl.replace(/\/models$/, ''), models };
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'opencode', name: 'OpenCode', runtimes: { [agent]: runtime } });
+      expect(provider.models[agent]?.find(model => model.id === id)).toMatchObject({
+        supportsImageInput: true, contextWindow: context, maxOutput: 32_000,
+      });
+      expect(provider.models[agent]?.find(model => model.id === 'deepseek-v4-pro')?.supportsImageInput).toBe(false);
+      const disabled = buildUserProvider({ id: 'opencode', name: 'OpenCode', runtimes: { [agent]: {
+        ...runtime, models: models.map((model: typeof previous[number]) => ({ ...model, supportsImageInput: false })),
+      } } });
+      expect(disabled.models[agent]?.find(model => model.id === id)?.supportsImageInput).toBe(false);
+    }
+    expect(previous[0].discoveredMetadata.supportsImageInput).toBe(false);
+  });
+
+  it('keeps coarse OpenCode media types while excluding document MIME from vision', () => {
+    for (const sourceUrl of ['https://opencode.ai/zen/go/v1/models', 'https://opencode.ai/zen/v1/models']) {
+      const [model] = parseModelsListResponse({ data: [{ id: 'media-model', modalities: {
+        input: ['text', 'audio/wav', 'video/mp4', 'application/pdf'], output: ['image/png', 'image'],
+      } }] }, sourceUrl)!;
+      expect(model.discoveredMetadata).toMatchObject({ supportsImageInput: false,
+        modalities: { input: ['text', 'audio', 'video'], output: ['image'] } });
+    }
+  });
+
+  it.each([
+    { input: ['text', 'application/pdf'], output: ['image/png'] },
+    { input: ['text'], output: ['image/png'] },
+  ])('does not infer OpenCode image input from PDF or output MIME: %j', modalities => {
+    for (const sourceUrl of ['https://opencode.ai/zen/go/v1/models', 'https://opencode.ai/zen/v1/models']) {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model', modalities }] },
+        sourceUrl)!;
+      expect(model.discoveredMetadata?.supportsImageInput).toBe(false);
+    }
+  });
+
+  it.each([
+    'https://proxy.example/v1/models',
+    'https://opencode.ai.proxy.example/zen/go/v1/models',
+    'https://opencode.ai/other/v1/models',
+    'http://opencode.ai/zen/v1/models',
+    'https://opencode.ai:8443/zen/v1/models',
+    'https://opencode.ai.proxy.example/zen/v1/models',
+    'https://proxy.example/zen/v1/models',
+    undefined,
+  ])('keeps MIME-only proxy declarations conservative: %s', sourceUrl => {
+    const [model] = parseModelsListResponse({ data: [{ id: 'private-model',
+      modalities: { input: ['text', 'image/jpeg'], output: ['text'] },
+    }] }, sourceUrl)!;
+    expect(model.discoveredMetadata?.supportsImageInput).toBe(false);
+    expect(model.discoveredMetadata?.modalities).toBeUndefined();
+  });
+
+  it.each([{ supports_image_input: false }, { model_info: { supports_vision: false } },
+    { capabilities: { vision: false } }])('keeps explicit OpenCode image denials ahead of MIME: %j', fields => {
+    for (const sourceUrl of ['https://opencode.ai/zen/go/v1/models', 'https://opencode.ai/zen/v1/models']) {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model', ...fields,
+        modalities: { input: ['text', 'image/jpeg', 'audio/wav'], output: ['text', 'image/png'] },
+      }] }, sourceUrl)!;
+      expect(model.discoveredMetadata).toMatchObject({ supportsImageInput: false,
+        modalities: { input: ['text', 'audio'], output: ['text', 'image'] } });
+    }
+  });
+
   it.each([
     { context_length: '1000000' },
     { context_window: '1000000' },
@@ -307,15 +388,72 @@ describe('shared provider discovery', () => {
 });
 
 
-it('does not offer thinking when a complete parameter list explicitly excludes it', () => {
+it('does not infer reasoning support from missing parameter names', () => {
   const models = parseModelsListResponse({ data: [
     { id: 'plain-model', supported_parameters: ['tools', 'temperature'], context_length: 32000 },
     { id: 'undocumented-model' },
     { id: 'reasoning-model', supported_parameters: ['tools', 'reasoning_effort'] },
   ] });
-  expect(models?.[0]?.discoveredMetadata?.efforts).toEqual([]);
+  expect(models?.[0]?.discoveredMetadata?.efforts).toBeUndefined();
   expect(models?.[1]?.discoveredMetadata?.efforts).toBeUndefined();
   expect(models?.[2]?.discoveredMetadata?.efforts).toBeUndefined();
+});
+
+// #11018, unit: parse -> refresh -> JSON save -> real three-engine catalog.
+// Previous coverage treated sparse supported_parameters as an explicit denial and
+// never refreshed a persisted empty efforts list against the known model registry.
+describe('sparse reasoning discovery refresh', () => {
+  it.each([
+    { supported_parameters: ['max_tokens', 'tools'] },
+    {},
+  ])('restores known capabilities after an incomplete response: %j', fields => {
+    const id = 'claude-fable-5-2';
+    const existing = [{ id, name: id, discoveredMetadata: { efforts: [], contextWindow: 128000 } }];
+    const discovered = parseModelsListResponse({ data: [{ id, ...fields }] })!;
+    expect(discovered[0].discoveredMetadata?.efforts).toBeUndefined();
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(existing, discovered)));
+    expect(models[0].discoveredMetadata).not.toHaveProperty('efforts');
+    expect(models[0].discoveredMetadata.contextWindow).toBe(128000);
+    expect(existing[0].discoveredMetadata.efforts).toEqual([]);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const build = (rows: typeof models) => buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models: rows },
+      } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models[agent]![0];
+      const expected = build([{ id, name: id, discoveredMetadata: {} }]);
+      expect(expected.efforts.length).toBeGreaterThan(0);
+      expect(build(models)).toMatchObject({ efforts: expected.efforts, defaultEffort: expected.defaultEffort });
+      for (const override of [{ efforts: ['low' as const], defaultEffort: 'low' as const }, { efforts: [], defaultEffort: null }]) {
+        const manual = mergeDiscoveredRuntimeModels([{ ...existing[0], ...override }], discovered);
+        expect(build(JSON.parse(JSON.stringify(manual)))).toMatchObject(override);
+      }
+    }
+    const unknown = parseModelsListResponse({ data: [{ id: 'private-undocumented', ...fields }] })!;
+    expect(buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { codex: {
+      baseUrl: 'https://relay.example/v1', models: mergeDiscoveredRuntimeModels([], unknown),
+    } } }).models.codex![0]).toMatchObject({ efforts: [], defaultEffort: null, effortsUnknown: true });
+  });
+
+  it.each([
+    { reasoning: false },
+    { model_info: { supports_reasoning: false } },
+    { reasoning: { supportedEfforts: [] } },
+    { reasoning: { supportedEfforts: ['low', 'high'] } },
+  ])('keeps a fresh explicit declaration authoritative: %j', fields => {
+    const id = 'claude-fable-5-2';
+    const discovered = parseModelsListResponse({ data: [{ id, supported_parameters: ['tools'], ...fields }] })!;
+    const expected = 'reasoning' in fields && typeof fields.reasoning === 'object'
+      ? fields.reasoning.supportedEfforts : [];
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels([
+      { id, name: id, discoveredMetadata: { efforts: [] } },
+    ], discovered)));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const model = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models[agent]![0];
+      expect(model.efforts).toEqual(expected);
+      expect(model.effortsUnknown).not.toBe(true);
+    }
+  });
 });
 
 

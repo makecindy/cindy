@@ -1,5 +1,6 @@
 {
   "permission": {
+    "install": "納",
     "mcpComplete": "已畢",
     "mcpCancel": "罷",
     "mode": {
@@ -295,7 +296,7 @@
       "expired": "候之過久，代書已終。"
     },
     "failure": {
-      "permission": "Cindy 無讀此機介面之權柄。請於系統設定之輔助使用中許 Cindy。",
+      "permission": "Cindy 無法讀取這台 Mac 的介面。請檢查執行中的這份 Cindy 是否有控制權限。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
       "target_gone": "目標之窗已闔。",
       "unreadable": "此介面不可讀。可於主機之上徑自竟之，再交還 Agent。",
       "action_failed": "方才之舉未生效，請察介面後再試。",

@@ -10,6 +10,7 @@
  *   - `ready()`:该来源的执行凭证是否就绪(xd = 网关能力,BYO key = key 已存)。
  *     cindyMediaCatalog 的白名单派生用它过滤——凭证未就绪的来源整段不进白名单,
  *     清单里绝不长出「可选但必失败」的型号。
+ *   - `protocolForProvider()`:只读 Guide 协议，不要求执行凭证就绪。
  *   - `backend`:该来源的图像客户端(generate / edit)。派发端按白名单条目的
  *     providerId 归属取通道;**未注册的 providerId 视为不就绪**——即使目录数据
  *     先于通道代码合入(多 PR 乱序),新模型也只是不出现,不会错发到别家通道。
@@ -112,6 +113,10 @@ export class ImageChannelRegistry {
 
   hasProvider(providerId: string): boolean {
     return this.channels.has(providerId);
+  }
+
+  protocolForProvider(providerId: string): ImageProtocol | undefined {
+    return this.channels.get(providerId)?.imageProtocol;
   }
 
   /** 白名单派生用:未注册 = 不就绪(目录数据先行时的乱序安全兜底)。 */

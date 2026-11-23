@@ -39,6 +39,17 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLoginUnbound: () => authState.loggedIn,
 }));
 
+// Unit, #11880 review: prior probe tests only exercised successful wrapping; the pool
+// must receive a typed network failure rather than null. Capture the real wrapper's port.
+const poolProbe = vi.hoisted(() => ({ set: vi.fn() }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({
+  hasConnectedSubscriptionPool: () => false,
+  refreshSubscriptionPoolClaudeModels: vi.fn(async () => false),
+  resetDefaultSubscriptionClaudeDiscovery: vi.fn(),
+  setSubscriptionPoolClaudeModelProbe: poolProbe.set,
+}));
+import { AccountServiceUnreachableError } from '../../subscription-accounts/accountServiceError.js';
+
 import {
   isDegenerateModelListShrink,
   mapAnthropicSdkModels,
@@ -56,6 +67,12 @@ import {
   setActiveCatalog,
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
+import {
+  onClaudeCliLoginStatusChange,
+  peekClaudeCliLoginStatus,
+  publishClaudeCliLoginStatus,
+  resetClaudeCliLoginStatusForTest,
+} from '../claude-native-cli-status.js';
 
 function anthropicIds(): string[] {
   const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
@@ -422,6 +439,20 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
 
   // unit 回归：2.1.321 实报 resolvedModel，description 不再带版本；旧用例只有带版本说明。
   // 经主动发现入口验证活动目录，避免内核支持 5.2 而选择器仍只显示 5.1。
+  it.each([
+    ['Connection error', true],
+    ['Request timed out: supportedModels probe', true],
+    ['cli exited', false],
+  ])('preserves the pool probe failure category: %s', async (message, unreachable) => {
+    const failure = new Error(message);
+    setAnthropicModelProbe(async () => { throw failure; });
+    const wrapped = poolProbe.set.mock.calls.at(-1)![0];
+    const result = wrapped({}, []);
+    if (unreachable) await expect(result).rejects.toBeInstanceOf(AccountServiceUnreachableError);
+    else await expect(result).rejects.toBe(failure);
+    setAnthropicModelProbe(null);
+  });
+
   it('主动探测接受 SDK resolvedModel 并保留 Fable 5.2 的 Fast 能力', async () => {
     setAnthropicModelProbe(async (onModels) => {
       onModels([
@@ -519,6 +550,60 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     await waitForAnthropicDiscoveryIdleForTest();
     expect(anthropicIds()).toEqual(['claude-sonnet-4-5']);
     setAnthropicModelProbe(null);
+  });
+
+  // Standard / #11036 review: the existing status test checked display notifications,
+  // but not their model-discovery side effects. Ultra -> missing -> Ultra must
+  // update the public status without launching another model probe; a real tier,
+  // identity or logout change must still update the available model catalog.
+  it('keeps display-name changes out of model discovery while preserving login changes', async () => {
+    resetClaudeCliLoginStatusForTest();
+    const display = vi.fn();
+    const stopDisplay = onClaudeCliLoginStatusChange(display);
+    const stopModels = onClaudeCliLoginStatusChange(syncAnthropicModelsWithClaudeLogin, {
+      includeDisplayNameChanges: false,
+    });
+    let modelId = 'claude-opus-4-8';
+    const probe = vi.fn(async (onModels: (models: unknown[]) => void) => {
+      onModels([{ value: modelId }]);
+      return true;
+    });
+    setAnthropicModelProbe(probe);
+    const status = { loggedIn: true, email: 'a@example.test', subscriptionType: 'pro',
+      planTier: 'pro', authMethod: 'claude.ai', planDisplayName: 'Ultra' };
+    try {
+      publishClaudeCliLoginStatus(status);
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(anthropicIds()).toEqual(['claude-opus-4-8']);
+      for (const planDisplayName of [undefined, 'Ultra']) {
+        publishClaudeCliLoginStatus({ ...status, planDisplayName });
+        await waitForAnthropicDiscoveryIdleForTest();
+        expect(peekClaudeCliLoginStatus()?.planDisplayName).toBe(planDisplayName);
+        expect(anthropicIds()).toEqual(['claude-opus-4-8']);
+      }
+      expect(display).toHaveBeenCalledTimes(3);
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      const upgraded = { ...status, subscriptionType: 'max', planTier: 'max_20x' };
+      publishClaudeCliLoginStatus(upgraded);
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(probe).toHaveBeenCalledTimes(2);
+
+      modelId = 'claude-sonnet-4-5';
+      publishClaudeCliLoginStatus({ ...upgraded, email: 'b@example.test' });
+      await vi.waitFor(() => expect(anthropicIds()).toEqual(['claude-sonnet-4-5']));
+      expect(probe).toHaveBeenCalledTimes(3);
+
+      authState.loggedIn = false;
+      publishClaudeCliLoginStatus({ loggedIn: false });
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(anthropicIds()).toEqual([]);
+    } finally {
+      stopDisplay();
+      stopModels();
+      resetClaudeCliLoginStatusForTest();
+      setAnthropicModelProbe(null);
+    }
   });
 
   it('同一账号的重复登录态变化不清空清单', async () => {

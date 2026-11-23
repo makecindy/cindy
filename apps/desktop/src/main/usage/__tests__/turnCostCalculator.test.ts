@@ -313,7 +313,6 @@ describe('computeGatewayTurnCost', () => {
         cacheCreateTokens: 0,
       },
       price,
-      'USD',
       segments,
     );
     expect(money?.amount).toBeCloseTo(1.3124601, 9);
@@ -359,9 +358,9 @@ describe('computePriceQuoteTurnMoney', () => {
       { agent: 'claude-code', at: '2026-11-05' },
     );
     // 1_400 × $4 + 501 × $20 + 106_846 × $8 (1h), per Mtok.
-    expect(computePriceQuoteTurnMoney(totals, reference, 'USD', segments)?.amount).toBeCloseTo(0.870388, 6);
+    expect(computePriceQuoteTurnMoney(totals, reference, segments)?.amount).toBeCloseTo(0.870388, 6);
     const without1h = quote('claude-opus-5-5', 4, 20, { cacheCreatePerMtok: 5 });
-    expect(computePriceQuoteTurnMoney(totals, without1h, 'USD', segments)?.amount).toBeCloseTo(0.54985, 6);
+    expect(computePriceQuoteTurnMoney(totals, without1h, segments)?.amount).toBeCloseTo(0.54985, 6);
   });
 
   it('only marks subscription estimates with the subscription-value reason', () => {
@@ -369,7 +368,6 @@ describe('computePriceQuoteTurnMoney', () => {
       computePriceQuoteTurnMoney(
         tokens,
         quote('subscription-model', 2, 10, { source: 'subscription-reference', approximate: true }),
-        'USD',
       )?.estimateReasons,
     ).toEqual(['subscription-value', 'reference-price']);
     for (const source of ['provider-reference', 'user-override'] as const) {
@@ -377,7 +375,6 @@ describe('computePriceQuoteTurnMoney', () => {
         computePriceQuoteTurnMoney(
           tokens,
           quote('reference-model', 2, 10, { source, approximate: true }),
-          'USD',
         )?.estimateReasons,
       ).toEqual(['reference-price']);
     }
@@ -397,7 +394,6 @@ describe('computePriceQuoteTurnMoney', () => {
         approximate: true,
         cacheReadPerMtok: 0.5,
       }),
-      'USD',
     );
     // 179.3k * $2 + 9.3k * $6 + 1.6M * $0.50 = $0.3586 + $0.0558 + $0.80
     expect(money).toMatchObject({
@@ -486,10 +482,7 @@ describe('resolveTurnCost', () => {
     expect(result.money).toBeNull();
   });
 
-  it('projects non-gateway costs to the ledger currency, not the build region', () => {
-    // 账本是单币种的,写入侧只接受账本币种。以 USD 结算的账号在 CN 构建上,若把第三方
-    // 供应商 / 订阅估值按区域折成 CNY,这些金额会被账本守卫整批丢弃 —— 那些渠道的花费
-    // 就再也记不进日账本、按模型统计与「本对话」累计。
+  it('keeps SDK dollars on both USD and CNY ledgers', () => {
     const providerApiOnUsdLedger = resolveTurnCost({
       rawModel: 'gpt-4o',
       tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
@@ -499,7 +492,6 @@ describe('resolveTurnCost', () => {
     });
     expect(providerApiOnUsdLedger.money).toMatchObject({ amount: 2, currency: 'USD' });
 
-    // CNY 账本仍按固定汇率投影(原有行为)。
     const providerApiOnCnyLedger = resolveTurnCost({
       rawModel: 'gpt-4o',
       tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
@@ -507,8 +499,7 @@ describe('resolveTurnCost', () => {
       pricing: catalog(quote('some-other-model', 3, 15, { currency: 'CNY' })),
       context: { providerId: 'openai', billingRoute: 'provider-api', region: 'cn' },
     });
-    expect(providerApiOnCnyLedger.money).toMatchObject({ currency: 'CNY' });
-    expect(providerApiOnCnyLedger.money?.amount).toBeCloseTo(2 * 6.7, 6);
+    expect(providerApiOnCnyLedger.money).toMatchObject({ currency: 'USD', amount: 2 });
   });
 
   it('omits the SDK USD fallback for a CNY-settled account (wrong currency, no discount)', () => {
@@ -989,7 +980,6 @@ describe('subscription value and usage details', () => {
     );
     const value = estimateClaudeSubscriptionTurnValue(
       [resolvedModel('claude-opus-4-8', { inputTokens: 1_000_000, outputTokens: 200_000 })],
-      'USD',
       pricing,
     );
     expect(value).toMatchObject({
@@ -1016,14 +1006,12 @@ describe('subscription value and usage details', () => {
     expect(
       estimateClaudeSubscriptionTurnValue(
         [resolvedModel('opus', { inputTokens: 1_000_000 })],
-        'USD',
         pricing,
       ),
     ).toMatchObject({ amount: 5, kind: 'value-estimate' });
     expect(
       estimateClaudeSubscriptionTurnValue(
         [resolvedModel('claude-sonnet-4-6-20260701', { inputTokens: 1_000_000 })],
-        'USD',
         pricing,
       ),
     ).toMatchObject({ amount: 3, kind: 'value-estimate' });
@@ -1048,7 +1036,6 @@ describe('subscription value and usage details', () => {
     expect(
       estimateClaudeSubscriptionTurnValue(
         [resolvedModel('sonnet', { inputTokens: 1_000_000 })],
-        'USD',
         pricing,
       ),
     ).toMatchObject({ amount: 9, kind: 'value-estimate' });
@@ -1062,12 +1049,11 @@ describe('subscription value and usage details', () => {
           resolvedModel('claude-opus-4-8', { inputTokens: 1_000_000 }, usdMoney(1)),
           resolvedModel('claude-unknown-9', { inputTokens: 1_000_000 }),
         ],
-        'USD',
         {},
       ),
     ).toBeNull();
     expect(
-      estimateClaudeSubscriptionTurnValue([resolvedModel('claude-opus-4-8')], 'USD', {}),
+      estimateClaudeSubscriptionTurnValue([resolvedModel('claude-opus-4-8')], {}),
     ).toBeNull();
   });
 
@@ -1089,8 +1075,8 @@ describe('subscription value and usage details', () => {
       deltas,
       'fallback',
       [
-        resolvedModel('claude-opus-4-8', {}, usdMoney(0.94)),
-        resolvedModel('claude-haiku-4-5', {}, usdMoney(0.8)),
+        resolvedModel('claude-opus-4-8', { inputTokens: 100, outputTokens: 800, cacheReadTokens: 1_000 }, usdMoney(0.94)),
+        resolvedModel('claude-haiku-4-5', { inputTokens: 33, outputTokens: 9_099, cacheCreateTokens: 250 }),
       ],
     );
     expect(details).toMatchObject({
@@ -1102,7 +1088,10 @@ describe('subscription value and usage details', () => {
     });
     expect(details?.perModelCost).toEqual([
       { model: 'claude-opus-4-8', money: usdMoney(0.94), billingSource: 'subscription' },
-      { model: 'claude-haiku-4-5', money: usdMoney(0.8), billingSource: 'subscription' },
+    ]);
+    expect(details?.perModelTokens).toEqual([
+      expect.objectContaining({ model: 'claude-opus-4-8', outputTokens: 800, cacheReadTokens: 1000 }),
+      expect.objectContaining({ model: 'claude-haiku-4-5', outputTokens: 9099, cacheCreateTokens: 250 }),
     ]);
   });
 

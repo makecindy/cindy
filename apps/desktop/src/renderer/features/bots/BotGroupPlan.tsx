@@ -343,7 +343,7 @@ export function BotGroupPlanCard({
           const identity = stepIdentity(step, members);
           const state = botGroupPlanStepState(plan, step);
           return <li key={step.position} data-testid="bot-group-plan-step"
-            className="bot-group-talk-step grid min-h-10 min-w-0 grid-cols-[20px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 py-[7px]">
+            className="bot-group-talk-step grid min-h-10 min-w-0 grid-cols-[20px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 py-1.5">
             <BotAvatar bot={identity} size="xs" className="h-5 w-5 shrink-0 text-11" />
             <span className="min-w-0 flex-1 break-words text-13 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">{identity.name}</span>
             <span className="bot-group-talk-tail col-start-2 flex min-w-0 items-center justify-between gap-2.5">
@@ -579,6 +579,7 @@ export function BotGroupPlanFollowUpRow({
         >
           {t(followUp.kind === 'continue' ? 'bots.groupChat.timeline.continuePlan' : 'bots.groupChat.timeline.retryStep')}
         </Button>
+        {(plan?.kind ? plan.canStop === true : plan?.canStop !== false) && (
         <Button
           type="button"
           variant="secondary"
@@ -590,7 +591,7 @@ export function BotGroupPlanFollowUpRow({
           onClick={onEnd}
         >
           {t(talk ? 'bots.groupChat.timeline.endTalk' : 'bots.groupChat.timeline.endPlan')}
-        </Button>
+        </Button>)}
       </span>
     </DividerRow>
   );

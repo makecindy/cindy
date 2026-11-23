@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}}逾候未始處理，此請已終。",
-        "advice": "請同僚之主人察其機上 Cindy 是否運行、網路是否連線。",
+        "advice": "請同伴之主人察其機上 Cindy 是否運行、網路是否連線。",
         "details": "待 Cindy 與網路復常，請重遣訊。"
       }
     },
@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}不能作覆：今之模型不支援圖。",
         "advice": "請易以支援圖之模型。",
-        "details": "請易以支援圖之模型，或於「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後再遣。"
+        "details": "請易以支援圖之模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}不能作覆：今無可用之模型。",
@@ -280,7 +280,7 @@
     "organizerSaveFailed": "主事未能更換，請再試",
     "projectDir": "案之卷匣",
     "projectDirNone": "未擇",
-    "projectDirNote": "分職行事之時，同伴於此作業。不擇亦可，將用此群議自有之卷匣；若擇 git 案，每次分職新開一 worktree 與分支，不動君手中之程式碼。",
+    "projectDirNote": "可擇本機既有之專案。未擇，則先取倉庫所繫，次取行事同伴之專案。Git 分工另闢 worktree。",
     "add": "增同伴",
     "projectDirOnComputer": "於機上擇之或更換",
     "memberActions": "{{name}} 之所為",
@@ -298,7 +298,9 @@
       "loading": "方讀群之設定…",
       "unavailable": "群之設定讀取未成，請再試"
     },
-    "allowMentionAllBots": "許 @諸同僚",
+    "allowMemberInvites": "許諸成員邀友",
+    "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
+    "allowMentionAllBots": "許 @諸同伴",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
       "title": "訊息告知",
@@ -336,8 +338,8 @@
     "lifecycleUnavailable": "今之伺服器或機尚不支援此舉。",
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
-    "allBotsMentionDisabled": "群主未啟 @諸同僚。",
-    "turnAlreadyStarted": "此同僚已啟，不可略過",
+    "allBotsMentionDisabled": "群主未啟 @諸同伴。",
+    "turnAlreadyStarted": "此同伴已啟，不可略過",
     "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",
     "nothingToStop": "目前無可停止之工作"
   },
@@ -545,7 +547,7 @@
     "replyModeMentionedNote": "無人被 @ 時，同伴不接話。",
     "work": "分職",
     "organizerHint": "排定誰為何步；預設為首位同伴。",
-    "ownFolder": "群自有之卷匣",
+    "ownFolder": "自動擇取",
     "archive": "封存此群",
     "unarchive": "解封存",
     "archiveHint": "封存將對眾成員停用此群，止新訊與同伴行事。舊錄保留，日後可經搜尋尋得此群、觀其舊錄並解封存。",
@@ -581,6 +583,11 @@
     "transferHint": "彼為群主，君將為群執事。",
     "removeTitle": "將 {{name}} 移出此群乎？",
     "removeHint": "該成員將不能再觀或遣訊；其同伴亦將退出。",
+    "removeOwn": "移出群聊",
+    "removeOwnScope": "惟此群受之，夥伴仍存於君之帳號。",
+    "removeOwnHint": "{{name}} 將不復收「{{group}}」之訊息。舊訊仍存，他群與私聊不受影響。",
+    "removeOwnActiveHint": "移出將止其於此群之請求。另啟之任務仍行。",
+    "stopAndRemove": "停止並移出",
     "confirm": "善",
     "inviteTitle": "邀入群議",
     "reusableLink": "長久有效 · 可供多人屢用",

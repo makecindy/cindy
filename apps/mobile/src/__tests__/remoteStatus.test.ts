@@ -152,3 +152,8 @@ describe('remoteStatus', () => {
     }
   });
 });
+
+it('old phone localizes the precondition sent in the existing IPC_ERROR envelope', () => {
+  const error = new DeviceLinkError('IPC_ERROR' as never, '[PRECONDITION_FAILED] synthetic diagnostic');
+  expect(humanizeRemoteError(error)).toBe(i18n.t('deviceLink.remoteError.preconditionFailed'));
+});

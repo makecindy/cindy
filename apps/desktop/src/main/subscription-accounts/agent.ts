@@ -20,6 +20,7 @@ import {
   observeSubscriptionAccountUsage,
   refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels,
+  refreshSubscriptionPoolClaudeModels,
   hasConnectedSubscriptionPool,
   hasUnavailableSubscriptionPoolAccount,
   type SubscriptionAccountLease,
@@ -27,9 +28,10 @@ import {
 import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexProviderId } from './store.js';
 import {
   readMergedProviderAccount,
+  accountProviderId,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
-import { registerSessionSubscriptionAccount } from './session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from './session.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
 interface SubscriptionRouteOptions {
@@ -344,16 +346,24 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         return async (options?: RefreshLocalModelsOptions) => {
           if (target.kind === 'pi') return target.refreshLocalModels(options);
           const provider = target.kind === 'claude-code' ? 'anthropic' : 'openai';
+          const ref = options?.providerId ? resolveSubscriptionPoolProviderRef(options.providerId) : null;
           if (
             !readPool(provider) ||
-            (options?.providerId && options.providerId !== provider) ||
+            (options?.providerId && ref?.kind !== provider) ||
+            (ref && !ref.created && ref.providerId !== provider) ||
+            options?.[NATIVE_SUBSCRIPTION_ACCOUNT] ||
             options?.credentialMode === 'gateway-key'
           )
             return target.refreshLocalModels(options);
+          if (provider === 'anthropic')
+            return refreshSubscriptionPoolClaudeModels(true, options?.providerId ?? undefined);
           if (provider === 'openai' && readPool(provider)?.accounts.some(a => !readLegacyCodexProviderId(a.id))) {
-            await refreshSubscriptionPool(provider);
-            await refreshSubscriptionPoolCodexModels(true);
-            return hasConnectedSubscriptionPool(provider) && !hasUnavailableSubscriptionPoolAccount(provider);
+            const providers = options?.providerId ? [options.providerId]
+              : [...new Set(readPool(provider)!.accounts.filter(account => !readLegacyCodexProviderId(account.id))
+                .map(account => accountProviderId(provider, account.id)))];
+            await Promise.all(providers.map(id => refreshSubscriptionPool(id)));
+            await refreshSubscriptionPoolCodexModels(true, options?.providerId ?? undefined);
+            return providers.some(id => hasConnectedSubscriptionPool(id) && !hasUnavailableSubscriptionPoolAccount(id));
           }
           const lease = await acquireSubscriptionAccount(provider, undefined, [], true);
           try {
@@ -470,6 +480,23 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               lastFailure = failure;
             }
           }
+        };
+      if (property === 'requiresCodexThreadHostTransfer')
+        return async (options: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0]) => {
+          // The live session's host carries the subscription account it runs on. When the target
+          // route stays on that account, compare against that same host instead of mistaking it for
+          // another writer of the thread (which closed and relinked unchanged sessions).
+          // A running account that was since removed or disconnected cannot be the target's writer;
+          // check the target as before instead of failing a switch to another working source.
+          let account: ReturnType<typeof getSessionSubscriptionAccount>;
+          try { account = getSessionSubscriptionAccount(options.sessionId); } catch { account = undefined; }
+          const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
+          // A provider can hold several accounts; its first (`ownAccount`) is only one of them. The
+          // route stays on the running account when that account belongs to the target provider.
+          const sameAccount = account && ref
+            && (accountProviderId(ref.kind, account.id) === ref.providerId || ref.ownAccount === account.id);
+          return target.requiresCodexThreadHostTransfer(sameAccount
+            ? { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : options);
         };
       if (property === 'forkSdkSession')
         return async (options: ForkSdkSessionOptions) => {

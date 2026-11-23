@@ -35,6 +35,7 @@ Two Settings tabs decide which tools the agents get: **Tools** (built-in tools a
   - This switch applies to the project of the session you came from (or to new-session defaults if there isn't one).
 - **Computer automation** (off by default) — lets agents see windows, read the UI, click, and type in local apps. It's powered by the open-source **CUA Driver**, which Cindy installs the first time you turn it on.
   - On macOS it needs **Accessibility** and **Screen Recording** for CuaDriver; Cindy walks you through granting them (**Grant**, **Recheck**). macOS may still ask for extra confirmation for a specific app or action later — approve those only when you've just started a computer-use task.
+    On macOS 27.3 and later, review **CuaDriver** in **System & App Protection Override** and grant Screen Recording separately. Review the access macOS describes before deciding.
   - Windows needs no extra permission; keep the target app visible on the active desktop. On Linux, the desktop session must allow window inspection and input automation.
   - **Check for updates** / **Update** keeps the driver current (you may need to re-grant permissions after an update).
 - **Android automation** (off by default) — lets agents inspect and operate a connected Android phone over ADB. Cindy prepares ADB for you. To connect: use a data-capable USB cable, enable **Developer options** and **USB debugging** on the phone, keep it unlocked, allow the debugging prompt, then click **Recheck**. Pick a default **Device** (or **Auto**) and, if needed, a custom ADB path.

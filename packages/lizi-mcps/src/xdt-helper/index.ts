@@ -37,7 +37,11 @@ export {
 export {
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerSnoozeSessionsTool,
   type ArchiveSessionsDeps,
+  type SnoozeSessionsDeps,
+  type SessionSnoozeChangeItem,
+  type SetSessionsSnoozeResult,
   type SessionStatus,
   type SessionStatusChangeItem,
   type SetSessionsStatusResult,
@@ -118,6 +122,10 @@ export {
   registerUpdateWorkerTool,
   type UpdateWorkerDeps,
 } from './update_worker.js';
+export {
+  registerSetWorkerRuntimeTool,
+  type SetWorkerRuntimeDeps,
+} from './set_worker_runtime.js';
 export {
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,

@@ -9,15 +9,19 @@ export function isCatalogMediaModelVisible(
   modelId: string,
   defaultEnabled?: boolean,
   sourceAgent?: AgentKind,
+  kind?: 'image' | 'video',
 ): boolean {
   try {
     const provider = getActiveCatalog().providers.find((item) => item.id === providerId);
-    const media = [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? [])].find(model => model.id === modelId);
+    const models = kind === 'image' ? provider?.imageModels : kind === 'video' ? provider?.videoModels
+      : [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? [])];
+    const media = models?.find(model => model.id === modelId);
+    const mode = kind === 'image' ? 'image_generation' : kind === 'video' ? 'video_generation' : undefined;
     const agents = sourceAgent ? [sourceAgent] : media?.sourceAgents?.length ? media.sourceAgents
       : media?.sourceAgent ? [media.sourceAgent] : [provider?.agents[0] ?? 'claude-code'];
     return agents.some(agent => isModelVisible(
       getModelVisibilityOverride(agent, providerId, modelId),
-      provider?.models?.[agent]?.find(model => model.id === modelId)?.defaultEnabled ?? defaultEnabled,
+      provider?.models?.[agent]?.find(model => model.id === modelId && (!mode || model.mode === mode))?.defaultEnabled ?? defaultEnabled,
     ));
   } catch {
     return false;

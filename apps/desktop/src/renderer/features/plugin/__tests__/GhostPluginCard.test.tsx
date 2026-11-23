@@ -7,7 +7,7 @@
  * @vitest-environment jsdom
  */
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -42,6 +42,11 @@ import {
   __resetGhostUnreadForTest,
 } from '@/cindy-brain/ghostUnreadStore';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
+import {
+  __resetPluginInstallProgressForTest,
+  beginPluginInstallProgress,
+  failPluginInstallProgress,
+} from '../lib/pluginInstallProgress';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 const {
@@ -422,8 +427,46 @@ describe('GhostPluginCard', () => {
     });
     expect(update.getAttribute('aria-busy')).toBe('true');
     expect(update.querySelector('.animate-spinner')).toBeTruthy();
-    expect(update.querySelector('.opacity-0')?.textContent).toContain('settings.ghosts.page.updateTo');
+    expect(update.querySelector('.opacity-0')?.textContent).toBe('settings.ghosts.installConsent.confirmUpdate');
+    expect(update.getAttribute('title')).toBe(update.getAttribute('aria-label'));
     expect((update as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // 更新进行中：圆环原位替换「更新到」按钮（按钮隐形占位，右列宽度不变）；失败后按钮变「重试」，
+  // 圆环停在原处写失败原因。依据 verified-downloads.md「下载进度与界面」插件更新进度。
+  it('swaps the update pill for the progress ring while updating and offers a retry after failure', () => {
+    __resetPluginInstallProgressForTest();
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      pluginMarket: { onInstallProgress: () => () => undefined },
+    };
+    const onUpdate = vi.fn();
+    render(
+      <GhostPluginCard
+        item={commandPlugin}
+        marketItem={marketPlugin}
+        updateVersion="1.1.0"
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    act(() => beginPluginInstallProgress(marketPlugin.pluginId));
+    expect(screen.getByRole('progressbar').textContent).toBe('downloadProgress.phase.preparing');
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.updateAria' })).toBeNull();
+
+    act(() => failPluginInstallProgress(marketPlugin.pluginId, 'Download timed out'));
+    // The card keeps the short word; the reason stays on hover and for screen readers.
+    const ring = screen.getByRole('progressbar');
+    expect(ring.textContent).toBe('settings.ghosts.updateAll.statusFailed');
+    expect(ring.querySelector('[title]')?.getAttribute('title')).toBe('Download timed out');
+    expect(ring.getAttribute('aria-valuetext')).toContain('Download timed out');
+    // Retry is a square icon button (tooltip "Retry") so the failed state is no wider than the pill.
+    const retry = screen.getByRole('button', { name: 'settings.ghosts.page.updateAria' });
+    expect(retry.textContent).toBe('');
+    fireEvent.click(retry);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    act(() => __resetPluginInstallProgressForTest());
   });
 
   it('sends a tool-only plugin to manage and renders no primary button', () => {
@@ -726,17 +769,19 @@ describe('MarketPluginCard', () => {
     ).toBeTruthy();
   });
 
-  it('shows scope, author and downloads without crowding the list with version or machine id', () => {
+  it.each([false, true])('shows one public source, author and downloads on each market card (compact=%s)', (compact) => {
     const { container } = render(
       <MarketPluginCard
+        compact={compact}
         item={{ ...marketPlugin, downloadStatistics: { requestCount: '12480' } }}
         busy={false}
         onSelect={vi.fn()}
         onIconLoadError={vi.fn()}
       />,
     );
-    const metadata = screen.getByText('settings.ghosts.page.origin.public').parentElement;
-    expect(metadata?.textContent).toBe('settings.ghosts.page.origin.public·Cindy·12.4k');
+    expect(screen.getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.page.origin.public')).toBeNull();
+    expect(screen.getByText('Cindy').parentElement?.textContent).toBe('Cindy·12.4k');
     expect(screen.queryByText('v1.3.11')).toBeNull();
     expect(screen.queryByText('google-calendar')).toBeNull();
     expect(container.querySelector('button button')).toBeNull();

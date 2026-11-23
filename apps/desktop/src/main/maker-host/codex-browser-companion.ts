@@ -4,7 +4,7 @@ import { constants as fsConstants, promises as fsp } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { parse as parseToml } from 'smol-toml';
+import { parseCodexConfigToml as parseToml } from './codex-config-toml.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 

@@ -1,3 +1,4 @@
+import { pluginSourceTooltip } from '@cindy/maker-shared/mcp-apps';
 /**
  * plugin-task —— 右侧栏里跟对话的插件任务页页签(taskView)。
  *
@@ -44,17 +45,18 @@ function useInstalledGhostByInstance(instanceId: string): InstalledGhost | undef
 function PluginTaskTabPillTitle({ state, t }: { state: PluginTaskTabState; t: TFunction }) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   return (
-    <>
+    <span title={ghost ? pluginSourceTooltip(ghost.manifest.name, ghost.installationSource, t, state.resourceViewId ? getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === state.resourceViewId)?.title : undefined) : undefined}>
       {ghost
         ? (state.resourceViewId ? getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === state.resourceViewId)?.title ?? ghost.manifest.name : ghost.manifest.taskView?.title ?? ghost.manifest.name)
         : t('rightSidebar.tabs.kinds.pluginTask')}
-    </>
+    </span>
   );
 }
 
 function PluginTaskTabPillIcon({ state }: { state: PluginTaskTabState }) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   if (ghost?.iconDataUrl) {
+    // design: intrinsic-geometry — 13px 插件品牌图的内容裁剪（图标自身的圆角，不是控件边框），与 plugin-view 页签一致
     return <img src={ghost.iconDataUrl} alt="" width={13} height={13} className="rounded-[3px]" />;
   }
   return <Puzzle size={13} />;
@@ -97,7 +99,7 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
   if (!ghost || ghost.enabled === false) return null;
   const remoteDevice = ctx.deviceLinkDeviceId;
   if (state.resourceViewId) return remoteDevice === null
-    ? <PluginUiView ghost={ghost} viewId={state.resourceViewId} sessionId={ctx.sessionId} input={state.resourceInput} />
+    ? <PluginUiView chrome="panel" sizing="fill" ghost={ghost} viewId={state.resourceViewId} sessionId={ctx.sessionId} composerPlacement={ctx.tabId} input={state.resourceInput} />
     : null;
   if (!ghost.manifest.taskView) return null;
   if (remoteDevice !== null && ghost.manifest.taskView.remote !== true) return null;

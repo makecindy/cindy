@@ -81,6 +81,8 @@ import {
   selectRemoteCodexAccountUsage,
   useRemoteClaudeAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteCodexRefreshState,
+  requestRemoteCodexLiveRefresh,
   useRemoteXaiRateLimit,
   useRemoteXaiSubscriptionUsage,
 } from '@/hooks/useRemoteDeviceUsage';
@@ -89,6 +91,7 @@ import {
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import {
@@ -156,6 +159,7 @@ import {
   sessionAccountCodexPayload,
   sessionAccountDisplay,
   useSessionSubscriptionAccount,
+  sessionSubscriptionPoolProvider,
 } from '../new-chat/SessionSubscriptionAccount';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -661,7 +665,9 @@ function toQuotaHoverCardTurnUsage(
 ): QuotaHoverCardTurnUsage | null {
   if (!summary) return null;
   const { details } = summary;
-  const costText = summary.money
+  const costText = details.userTurnAmounts?.length
+    ? details.userTurnAmounts.map(formatTurnCostMoney).join(' + ')
+    : summary.money
     ? formatTurnCostMoney(summary.money)
     : summary.costUsd != null
       ? formatTurnCostUsd(summary.costUsd)
@@ -693,6 +699,12 @@ function toQuotaHoverCardTurnUsage(
   };
 }
 
+function formatSessionAmounts(amounts: RegionalMoney[] | undefined, fallback: RegionalMoney): string {
+  return (amounts?.length ? amounts : [fallback]).map(money =>
+    money.kind === 'actual-cost' && money.approximate ? `≈${formatTurnCostMoney(money)}` : formatTurnCostMoney(money),
+  ).join(' + ');
+}
+
 /** 把会话金额投影成卡片数据；混合合计保留实际费用与价值估算两条构成。 */
 function toQuotaHoverCardSessionUsage(
   sessionUsage: SessionUsageMoney,
@@ -716,9 +728,9 @@ function toQuotaHoverCardSessionUsage(
     costIsEstimate:
       totalMoney?.kind === 'value-estimate' ||
       Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
-    ...(actualMoney?.amount ? { actualCostText: formatTurnCostMoney(actualMoney) } : {}),
+    ...(actualMoney?.amount ? { actualCostText: formatSessionAmounts(sessionUsage.actualAmounts, actualMoney) } : {}),
     ...(estimatedValueMoney?.amount
-      ? { estimatedValueText: formatTurnCostMoney(estimatedValueMoney) }
+      ? { estimatedValueText: formatSessionAmounts(sessionUsage.estimatedAmounts, estimatedValueMoney) }
       : {}),
   };
 }
@@ -882,6 +894,7 @@ interface TodaySpendChipProps {
   /** 来自 session.totalCostUsd（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialMoney?: RegionalMoney | null;
   sessionInitialCostUsd?: number | null;
+  sessionInitialUsdApproximate?: boolean;
   /** 来自 session.totalTokenUsage（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialTokens?: number | null;
   /** 远端 Codex 由远端 daemon 路由,本机不能拿本地 app-server route / 账号快照来归类。 */
@@ -906,6 +919,7 @@ export function TodaySpendChip({
   sessionId,
   sessionInitialMoney,
   sessionInitialCostUsd,
+  sessionInitialUsdApproximate,
   sessionInitialTokens,
   remoteHostId,
   deviceLinkDeviceId,
@@ -958,8 +972,8 @@ export function TodaySpendChip({
     isDefaultRouteClaudeSession &&
     observedClaudeRoute == null &&
     (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
-  const { providers: localQuotaProviders } = useProviders();
-  const { providers: deviceQuotaProviders } = useDeviceProviders(accountDeviceId ?? undefined);
+  const { providers: localQuotaProviders, loading: localQuotaLoading, error: localQuotaError } = useProviders();
+  const { providers: deviceQuotaProviders, loading: deviceQuotaLoading, error: deviceQuotaError } = useDeviceProviders(accountDeviceId ?? undefined);
   const quotaProviders = isDeviceLinkRemote ? deviceQuotaProviders : localQuotaProviders;
   const selectedQuotaProvider = quotaProviders.find((provider) => provider.id === providerId);
   const isClaudeAccount =
@@ -1023,8 +1037,21 @@ export function TodaySpendChip({
     isCodexBudgetModel && (providerId == null || providerId === 'xd');
   const isCodexXaiProvider =
     vendorKey === 'codex' && (isXaiAccount || (providerId == null && isXaiPrefixedModel));
+  // A saved null route can resume on its pinned account's isolated OAuth host even
+  // when the default host has no login or still reports a gateway credential.
+  // Only an actual task binding establishes this fact; unknown/default reads do not.
+  const implicitCodexAccount = useSessionSubscriptionAccount(null, accountDeviceId,
+    !accountUnreadable && vendorKey === 'codex' && providerId == null &&
+    !remoteHostId && !isCodexXaiProvider && !isCodexGatewayBudgetModel &&
+    sessionSubscriptionPoolProvider('codex', providerId, remoteHostId, undefined, true, {
+      modelId, providers: quotaProviders,
+      catalogReady: isDeviceLinkRemote
+        ? !deviceQuotaLoading && !deviceQuotaError
+        : !localQuotaLoading && !localQuotaError,
+    }) === 'openai');
+  const hasImplicitCodexBinding = implicitCodexAccount?.state === 'bound';
   // 显式 OpenAI 订阅连接在执行端固定走该账号的 OAuth（独立账号有自己的 host）。
-  // 全局 authInjection 只用于未指定来源的旧任务，不能因本机 Codex 断开或其它
+  // 全局 authInjection 仅作为未确认任务绑定的旧来源回退，不能因本机 Codex 断开或其它
   // API host 的状态隐藏所选账号的额度。xAI 由 proxy 注入 SuperGrok OAuth。
   // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
   // device-link 远程 codex 与 SSH 远程同口径:非 xai / 非折扣模型 / 非显式 XD 即按订阅
@@ -1042,7 +1069,7 @@ export function TodaySpendChip({
     (isRemoteCodexSession ||
       isDeviceLinkRemoteCodexOauth ||
       (!isCodexGatewayBudgetModel &&
-        (isOpenAiAccount || (providerId == null && codexAuthInjection === 'oauth-bearer'))));
+        (isOpenAiAccount || (providerId == null && (hasImplicitCodexBinding || codexAuthInjection === 'oauth-bearer')))));
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
   const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
   const isPiGateway =
@@ -1128,21 +1155,19 @@ export function TodaySpendChip({
         (providerId == null || providerId === 'xd')));
   // 账号池：任务固定在一个账号上，用量与账号名只读那个账号，不读默认账号或下一个待分配的账号。
   // 默认账号、没有账号池或旧任务时 taskAccount 不替换用量，原来的读取就是这个账号。
-  const taskAccount = sessionAccountDisplay(
-    useSessionSubscriptionAccount(
-      !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
-        ? providerId
-        : null,
-      accountDeviceId,
-    ),
-    t,
+  const explicitTaskAccount = useSessionSubscriptionAccount(
+    !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
+      ? providerId
+      : null,
+    accountDeviceId,
   );
+  const taskAccount = sessionAccountDisplay(implicitCodexAccount ?? explicitTaskAccount, t);
   const readsTaskAccountUsage = taskAccount?.replacesUsage === true;
   const shouldReadLocalCodexAccountUsage =
     usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
   // session ledger 读取，订阅价值从消息明细重建，再统一汇总成“本对话”投影。
-  const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd);
+  const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd, sessionInitialUsdApproximate);
   const sessionTokens = useSessionTokens(
     vendorKey === 'pi' ||
       isCodexApi ||
@@ -1168,10 +1193,16 @@ export function TodaySpendChip({
   );
   // device-link 远程 codex / chatgpt-bridge:账号所在电脑的权威组合 payload 镜像,选槽 / 选桶
   // 与本机同口径在消费点执行(selectRemoteCodexAccountUsage)。
+  const remoteCodexDeviceId = isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null;
+  const liveRemoteCodex = Boolean(remoteCodexDeviceId && !isChatgptBridge && !isProviderShareAgentDeviceId(remoteCodexDeviceId));
   const remoteCodexAccountPayload = useRemoteCodexAccountUsage(
-    isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null,
+    remoteCodexDeviceId,
     providerId ?? 'openai',
+    // Native quota reads persist a snapshot on the host. Long-lived task chips
+    // share Settings updates and refresh on opening/recovery, without polling.
+    { live: liveRemoteCodex, poll: false },
   );
+  const remoteCodexRefresh = useRemoteCodexRefreshState(liveRemoteCodex ? remoteCodexDeviceId : null, providerId ?? 'openai');
   const taskAccountCodexPayload = React.useMemo(
     () =>
       readsTaskAccountUsage && usesCodexQuotaForm
@@ -1254,6 +1285,12 @@ export function TodaySpendChip({
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage, sessionTokens);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
+  const refreshRemoteCodex = React.useCallback(() => {
+    if (liveRemoteCodex && remoteCodexDeviceId) requestRemoteCodexLiveRefresh(remoteCodexDeviceId, providerId ?? 'openai');
+  }, [liveRemoteCodex, remoteCodexDeviceId, providerId]);
+  React.useEffect(() => {
+    if (quotaPopoverOpen) refreshRemoteCodex();
+  }, [quotaPopoverOpen, refreshRemoteCodex]);
   const costDetails = useUsageCostDetails(sessionId, quotaPopoverOpen);
   // 浮层宿主：紧跟触发器之后（见 popover.tsx 的 portalContainer 注释）。portal 到 body
   // 末尾时，键盘焦点一旦进卡就再也 Tab 不回底栏（用户实测）。
@@ -1460,12 +1497,12 @@ export function TodaySpendChip({
     : [
         sessionUsage.actualMoney?.amount
           ? t('todaySpend.tooltip.sessionUsed', {
-              cost: formatTurnCostMoney(sessionUsage.actualMoney),
+              cost: formatSessionAmounts(sessionUsage.actualAmounts, sessionUsage.actualMoney),
             })
           : null,
         sessionUsage.estimatedValueMoney?.amount
           ? t('todaySpend.codex.sessionValueLabel', {
-              cost: formatTurnCostMoney(sessionUsage.estimatedValueMoney),
+              cost: formatSessionAmounts(sessionUsage.estimatedAmounts, sessionUsage.estimatedValueMoney),
             })
           : null,
       ]
@@ -2060,9 +2097,11 @@ export function TodaySpendChip({
           className="w-auto max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
         >
           <QuotaHoverCard
-            account={codexQuotaReadFailed ? {
+            account={codexQuotaReadFailed || remoteCodexRefresh.failed ? {
               ...account,
-              refreshFailure: { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
+              refreshFailure: liveRemoteCodex
+                ? { retry: refreshRemoteCodex, retrying: remoteCodexRefresh.refreshing }
+                : { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
             } : account}
             nowMs={windowLabelNowMs}
             sessionUsage={quotaCardSessionUsage}
@@ -2087,11 +2126,11 @@ export function TodaySpendChip({
       </Popover>
       <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage} onOpenChange={setResetListOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+          <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
           <Dialog.Content
             aria-describedby={undefined}
             onPointerDownOutside={(event) => event.preventDefault()}
-            className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
+            className="modal-panel fixed left-1/2 top-1/2 z-modal w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               // The confirmation owns focus when it opens after this dialog closes.
@@ -2115,7 +2154,7 @@ export function TodaySpendChip({
                 }} />
             </div>
             <Dialog.Close asChild>
-              <Tip text={t('common.dismiss')} contentClassName="z-[10001]">
+              <Tip text={t('common.dismiss')}>
                 <button type="button" aria-label={t('common.dismiss')}
                   className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-[var(--confirm-desc)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                   <X className="h-4 w-4" aria-hidden="true" />

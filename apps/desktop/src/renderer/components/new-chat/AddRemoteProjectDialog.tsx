@@ -69,6 +69,7 @@ interface Props {
    */
   initialDeviceId?: string | null;
   fixedDeviceId?: string;
+  existingOnly?: boolean;
   title?: string;
   confirmText?: string;
   errorText?: string;
@@ -87,6 +88,7 @@ export function AddRemoteProjectDialog({
   onOpenChange,
   initialDeviceId,
   fixedDeviceId,
+  existingOnly = false,
   title,
   confirmText,
   errorText,
@@ -161,8 +163,8 @@ export function AddRemoteProjectDialog({
     if (!selectedTarget) return null;
     return selectedTarget.kind === 'ssh'
       ? sshBrowseAdapter(selectedTarget.hostId)
-      : deviceLinkBrowseAdapter(selectedTarget.deviceId);
-  }, [selectedTarget?.key]);
+      : deviceLinkBrowseAdapter(selectedTarget.deviceId, existingOnly);
+  }, [selectedTarget?.key, existingOnly]);
   const currentBrowseRef = useRef({ open, adapter });
   currentBrowseRef.current = { open, adapter };
   useEffect(() => {
@@ -348,6 +350,10 @@ export function AddRemoteProjectDialog({
         return;
       }
       if (stat.kind === 'missing') {
+        if (existingOnly) {
+          toast.error(t('newChat.addRemoteProject.toast.addFailed'));
+          return;
+        }
         const ok = await confirm({
           title: t('newChat.addRemoteProject.confirmCreate.title'),
           description: t('newChat.addRemoteProject.confirmCreate.description', {
@@ -383,7 +389,7 @@ export function AddRemoteProjectDialog({
     } finally {
       setBusy(false);
     }
-  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t, errorText]);
+  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t, errorText, existingOnly]);
 
   const noTargets = targets.length === 0;
   // Pi 过滤掉 SSH 后无任何可用目标时,通用空态提示「加个 SSH 主机」是误导(Pi 用不了 SSH)。
@@ -395,11 +401,11 @@ export function AddRemoteProjectDialog({
     <Dialog.Root open={open} onOpenChange={busy ? undefined : onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-50"
+          className="modal-scrim fixed inset-0 z-modal"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-50 flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col"
           style={{
             // Keep the centered shell still across mode changes and async list loading.
             height: noTargets ? undefined : 660,

@@ -49,6 +49,7 @@ import {
   type DbSlimmingResult,
   type DbSlimmingScanResult,
 } from '../../../shared/localDbMaintenance';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 type StatsResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.stats>>;
 type ScanResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.scan>>;
@@ -1108,16 +1109,16 @@ function DatabaseCleanupDialog({
     >
       <AlertDialog.Portal>
         <AlertDialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10020]"
-          style={{ ...WINDOW_DRAG_STYLE, zIndex: 10020 }}
+          className="modal-scrim fixed inset-0 z-modal-nested"
+          style={{ ...WINDOW_DRAG_STYLE, zIndex: Z_INDEX_LAYERS['modal-nested'] }}
         >
           <AlertDialog.Content
             className={cn(
-              'modal-panel fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
+              'modal-panel fixed inset-0 z-modal-nested m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
               'p-4',
               mode === 'report' ? 'select-text' : 'select-none',
             )}
-            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: 10020 }}
+            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: Z_INDEX_LAYERS['modal-nested'] }}
             aria-describedby={mode === 'report' ? bodyId : undefined}
             aria-busy={busy || undefined}
             onEscapeKeyDown={(event) => {
@@ -1192,7 +1193,7 @@ function DatabaseCleanupDialog({
                       </Button>
                     </AlertDialog.Cancel>
                     <Button data-settings-search-action="Confirm the selected database cleanup"
-                      variant="secondary"
+                      variant="primary"
                       size="lg"
                       tone="danger-solid"
                       ref={confirmButtonRef}

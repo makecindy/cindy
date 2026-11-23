@@ -548,6 +548,7 @@ func handoffSnapshot(_ request: [String: Any]) -> [String: Any] {
   let (window, index) = resolved
   var nodes: [[String: Any]] = []
   var walked = 0
+  var depthTruncated = false
   var stack: [(AXUIElement, String, Int, Bool)] = handoffChildren(window).enumerated().reversed().map { ($0.element, String($0.offset), 1, false) }
   while case let (element, ref, depth, inAlert)? = stack.popLast() {
     walked += 1
@@ -557,7 +558,10 @@ func handoffSnapshot(_ request: [String: Any]) -> [String: Any] {
     let role = node?["role"] as? String
     // Interactive leaves: their children are presentation details or menu items read above.
     if ["AXButton", "AXTextField", "AXTextArea", "AXPopUpButton", "AXComboBox", "AXStaticText", "AXCheckBox", "AXRadioButton", "AXSearchField", "AXMenuItem"].contains(role ?? "") { continue }
-    if depth >= handoffMaxDepth { continue }
+    if depth >= handoffMaxDepth {
+      if !handoffChildren(element).isEmpty { depthTruncated = true }
+      continue
+    }
     let alert = inAlert || node?["alert"] as? Bool == true
     let children = handoffChildren(element)
     for (offset, child) in children.enumerated().reversed() { stack.append((child, "\(ref).\(offset)", depth + 1, alert)) }
@@ -567,7 +571,7 @@ func handoffSnapshot(_ request: [String: Any]) -> [String: Any] {
     "frontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
     "window": ["index": index, "title": handoffString(window, kAXTitleAttribute) ?? "",
                "frame": handoffFrame(window) ?? [], "modal": handoffBool(window, kAXModalAttribute) ?? false] as [String: Any],
-    "nodes": nodes, "truncated": walked > handoffMaxWalked || nodes.count >= handoffMaxEmitted,
+    "nodes": nodes, "truncated": depthTruncated || walked > handoffMaxWalked || nodes.count >= handoffMaxEmitted,
   ]
   if let focused = handoffElement(handoffAttr(app, kAXFocusedUIElementAttribute)), handoffIsSecure(focused) {
     result["secureFocused"] = true
@@ -603,7 +607,10 @@ func handoffSecureTarget(_ request: [String: Any]) -> [String: Any] {
 func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
   var pids = Set<Int32>()
   if let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
-    for info in infos where (info[kCGWindowLayer as String] as? Int) == 0 {
+    // Native authentication panels and scripting dialogs can float above normal
+    // windows and belong to accessory processes. Their AX windows still identify
+    // the exact target; window layer / Dock presence are not eligibility rules.
+    for info in infos {
       if let pid = info[kCGWindowOwnerPID as String] as? Int32 { pids.insert(pid) }
     }
   }
@@ -616,7 +623,7 @@ func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
   }
   var apps: [[String: Any]] = []
   for pid in pids {
-    guard let running = NSRunningApplication(processIdentifier: pid), running.activationPolicy == .regular else { continue }
+    guard let running = NSRunningApplication(processIdentifier: pid) else { continue }
     let element = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(element, 0.3)
     let focused = handoffElement(handoffAttr(element, kAXFocusedWindowAttribute))
@@ -625,6 +632,7 @@ func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
        "frame": handoffFrame(window) ?? [], "focused": focused.map { CFEqual($0, window) } ?? false,
        "minimized": handoffBool(window, kAXMinimizedAttribute) ?? false]
     }
+    if running.activationPolicy != .regular && windows.isEmpty { continue }
     // Without `background`, an app is listed only while it has something on screen. With it, every
     // app is, even with no window at all: that is how a closed last window is told from a hidden one.
     if request["background"] as? Bool != true && !onScreen.contains(pid) { continue }
@@ -654,10 +662,12 @@ func handoffType(_ text: String) {
     var units = Array(String(character).utf16)
     for down in [true, false] {
       let event = CGEvent(keyboardEventSource: handoffSource, virtualKey: 0, keyDown: down)
+      event?.flags = []
       event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
       event?.post(tap: .cghidEventTap)
+      // Do not collapse successive Unicode key pairs in the target's input queue.
+      usleep(10000)
     }
-    usleep(4000)
   }
 }
 func handoffClick(_ frame: [Double]) {
@@ -762,21 +772,50 @@ func handoffAct(_ request: [String: Any]) -> [String: Any] {
   case "text":
     guard let value = request["value"] as? String, value.utf16.count <= 4096 else { return ["error": "invalid"] }
     let secure = handoffIsSecure(element)
-    if !secure, AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFString) == .success,
-      (handoffAttr(element, kAXValueAttribute) as? String) == value {
-      _ = handoffFocus(app, element)
-      return ["ok": true, "method": "set"]
+    let codeCell = !secure && value.unicodeScalars.count == 1 && request["allowFocusAdvance"] as? Bool == true
+    // Setting AXValue can submit and remove the last code cell before it can be read back.
+    // Use one real key delivery so that a failed read never causes a second write.
+    if !codeCell, AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFString) == .success {
+      if secure {
+        // A supported native setter delivers the password atomically. Never
+        // read or return a secure field's value; only check its character count.
+        // Browsers update their accessibility cache asynchronously after AXSetValue.
+        // Wait for that acknowledgement without writing the password a second time.
+        for attempt in 0..<11 {
+          guard let count = handoffAttr(element, kAXNumberOfCharactersAttribute) as? NSNumber else {
+            return ["ok": true, "method": "set", "unverified": true]
+          }
+          if count.intValue == value.utf16.count { return ["ok": true, "method": "set"] }
+          if attempt < 10 { usleep(100000) }
+        }
+        return ["error": "verify_failed"]
+      }
+      if (handoffAttr(element, kAXValueAttribute) as? String) == value {
+        _ = handoffFocus(app, element)
+        return ["ok": true, "method": "set"]
+      }
     }
     // Keys go to whichever app is in front: never type unless it is this one.
     guard front, handoffFocus(app, element), handoffFrontPid() == pid else { return ["error": "focus_failed"] }
     handoffKey(0, flags: .maskCommand) // select all
-    handoffKey(51) // delete
+    // Empty code cells often use Backspace to focus the previous cell. Replace
+    // the selection directly instead, whether this cell is empty or already filled.
+    if !codeCell { handoffKey(51) } // delete
+    // Focus and selection changes are asynchronous in browsers. Let them
+    // settle before the first replacement character arrives.
+    usleep(100000)
     guard handoffFocused(app, is: element), handoffFrontPid() == pid else { return ["error": "focus_failed"] }
     handoffTypeAndSettle(value)
-    guard handoffFocused(app, is: element) else { return ["error": "focus_lost"] }
+    if !handoffFocused(app, is: element) {
+      // A one-character code cell can focus its neighbour or submit immediately. There are
+      // no remaining characters to leak into that new field. The host checks the page again
+      // before the next cell. Passwords and ordinary fields retain the strict focus check.
+      guard codeCell, handoffFrontPid() == pid else { return ["error": "focus_lost"] }
+      return ["ok": true, "method": "typed", "unverified": true]
+    }
     if secure {
       if let count = handoffAttr(element, kAXNumberOfCharactersAttribute) as? NSNumber {
-        return count.intValue == value.count ? ["ok": true, "method": "typed"] : ["error": "verify_failed"]
+        return count.intValue == value.utf16.count ? ["ok": true, "method": "typed"] : ["error": "verify_failed"]
       }
       return ["ok": true, "method": "typed", "unverified": true]
     }
@@ -926,8 +965,13 @@ func handoffDetectQr(_ data: Data) -> [[String: Any]] {
 }
 
 #if !DESKTOP_INPUT_TEST
+// AX may be scoped to a single app on macOS 27.3. Desktop input posts CGEvents.
+func desktopInputAuthorized() -> Bool {
+  AXIsProcessTrusted() && CGPreflightPostEventAccess()
+}
 if CommandLine.arguments.contains("--check") {
-  print(AXIsProcessTrusted() ? "ready" : "permission"); exit(0)
+  let granted = CommandLine.arguments.contains("--post-events") ? desktopInputAuthorized() : AXIsProcessTrusted()
+  print(granted ? "ready" : "permission"); exit(0)
 }
 if CommandLine.arguments == [CommandLine.arguments[0], "--handoff-qr"] {
   // One photographed window (JPEG) on stdin: its byte length on a line, then the bytes. Main keeps
@@ -964,7 +1008,10 @@ if CommandLine.arguments.contains("--lock-state") {
 }
 if CommandLine.arguments.contains("--request-permission") {
   let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-  print(AXIsProcessTrustedWithOptions(options) ? "ready" : "permission"); exit(0)
+  // Request only the next missing capability on this explicit local action.
+  guard AXIsProcessTrustedWithOptions(options) else { print("permission"); exit(0) }
+  let granted = !CommandLine.arguments.contains("--post-events") || CGPreflightPostEventAccess() || CGRequestPostEventAccess()
+  print(granted ? "ready" : "permission"); exit(0)
 }
 func ownedConsoleSession() -> [String: Any]? {
   guard let state = CGSessionCopyCurrentDictionary() as? [String: Any],
@@ -1049,6 +1096,30 @@ if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-scree
   print("locked"); exit(0)
 }
 guard AXIsProcessTrusted() else { print("permission"); fflush(stdout); exit(2) }
+if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--editable-at" {
+  guard let session = ownedConsoleSession(), !(session["CGSSessionScreenIsLocked"] as? Bool ?? false),
+    let x = Float(CommandLine.arguments[2]), let y = Float(CommandLine.arguments[3]),
+    x.isFinite, y.isFinite else { exit(2) }
+  let system = AXUIElementCreateSystemWide()
+  AXUIElementSetMessagingTimeout(system, 0.25)
+  var hit: AXUIElement?
+  guard AXUIElementCopyElementAtPosition(system, x, y, &hit) == .success else { exit(2) }
+  // Web fields can expose an inner text node at the tapped point.
+  for _ in 0..<5 {
+    guard let element = hit, handoffBool(element, kAXEnabledAttribute) != false else { break }
+    let role = handoffString(element, kAXRoleAttribute) ?? ""
+    if handoffEditableRoles.contains(role) || handoffIsSecure(element) {
+      // Clicking a read-only preview can leave focus in the previous editor.
+      let focused = handoffElement(handoffAttr(system, kAXFocusedUIElementAttribute))
+      let editable = (handoffBool(element, "AXEditable") != false) &&
+        (focused.map { CFEqual($0, element) } == true || handoffBool(element, kAXFocusedAttribute) == true)
+      print(editable ? "editable" : "other"); exit(0)
+    }
+    if ["AXButton", "AXLink", "AXWindow", "AXWebArea"].contains(role) { break }
+    hit = handoffElement(handoffAttr(element, kAXParentAttribute))
+  }
+  print("other"); exit(0)
+}
 if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   // A single bounded request; values stay on stdin and are never echoed.
   var bytes: [UInt8] = []
@@ -1249,13 +1320,15 @@ if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--window" {
     let pid = Int32(CommandLine.arguments[3]), pid > 0 else { exit(2) }
   confine = HandoffConfine(window: window, pid: pid)
 }
+// Other entrypoints above (e.g. reading a selection) do not post global events.
+guard CGPreflightPostEventAccess() else { print("permission"); fflush(stdout); exit(2) }
 print("ready"); fflush(stdout)
 let watchdog = DispatchSource.makeTimerSource(queue: .global())
 watchdog.schedule(deadline: .now() + 1, repeating: 1)
 watchdog.setEventHandler {
   lock.lock(); defer { lock.unlock() }
   if inputCaller.code() == nil { releaseAll(); exit(77) }
-  if !AXIsProcessTrusted() { releaseAll(); print("error"); fflush(stdout); exit(2) }
+  if !desktopInputAuthorized() { releaseAll(); print("error"); fflush(stdout); exit(2) }
   if Date().timeIntervalSince(lastSeen) > 5 { releaseAll() }
 }
 watchdog.resume()

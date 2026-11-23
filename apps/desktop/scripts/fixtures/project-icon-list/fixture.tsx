@@ -8,7 +8,7 @@ import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 setDataOwnerGeneration('fixture', 1);
 const noop = () => {};
 const examples = [
-  ['Cindy', null, ['完善项目设置界面', '检查手机端交互']],
+  ['Cindy', null, ['完善项目设置界面，让桌面和手机保持一致', '检查手机端交互']],
   ['移动客户端', 'symbol:Smartphone:blue', ['适配窄屏布局']],
   ['设计规范', '🎨', ['整理组件与间距规范']],
   ['品牌网站', 'text:CY:blue', ['更新首页文案']],
@@ -37,11 +37,11 @@ function Preview() {
     <div className="flex flex-col gap-1">{projects.map(project => <ProjectNode key={project.projectKey} project={project}
       statusFilter="active" isCollapsed={collapsed.has(project.projectKey)} parentSectionCollapsed={false}
       activeSessionId="demo-0-0" runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
-      scheduleSessionIndex={new Map()} disableSessionCollapse={false} isProjectPinned={false}
+      scheduleSessionIndex={new Map()} disableSessionCollapse={false}
       onToggle={key=>setCollapsed(prev=>{const next=new Set(prev); if(next.has(key))next.delete(key);else next.add(key);return next;})}
-      onToggleProjectPin={noop} onRenameProject={async()=>{}} onRemoveFromSidebar={noop}
+      onSettings={noop} onRenameProject={async()=>{}}
       onSessionClick={noop} onAction={noop} onRename={noop} onTogglePin={noop} onScheduleAction={noop}
-      onCreateInProject={noop} onOpenConversationSearch={noop} onOpenInExplorer={noop} onImportFromTools={noop}
+      onCreateInProject={noop} onOpenConversationSearch={noop} onOpenInExplorer={noop}
       onBrowseFiles={noop} onArchiveAll={noop} />)}</div>
   </aside>;
 }

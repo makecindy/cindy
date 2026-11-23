@@ -1,3 +1,4 @@
+import { projectForNewTask } from '../mcp-integrations/projectManagementCore.js';
 import { app } from 'electron';
 import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
@@ -31,13 +32,18 @@ import {
   findSchedulerUsageLimitWait,
   getSessionLastUserActionAt,
   hasQueuedSchedulerPrompt,
+  hasPendingSchedulerTargetInput,
   isSchedulerAutoResumePending,
+  isSchedulerSharedReconnectPending,
   isSchedulerPromptTracked,
+  releaseQueuedSchedulerPrompt,
   isSchedulerTargetSessionBusy,
   onSchedulerAutoResumeFailed,
   removeQueuedSchedulerPrompt,
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage } from './storage.desktop';
+import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
+import { admitPluginEngineSwitchTarget } from '../maker-ipc/pluginEngineSessionAdmission.js';
 import { MakerScheduleRunner } from './runner.desktop';
 import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
@@ -51,6 +57,11 @@ import { withTeammateHomeGuard } from './teammateHomeGuard.js';
 import { ownTeammateProjectPrimaryModel, ownTeammateProjectState } from './ownTeammateProject.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { resolveTeammateScheduleModel } from './teammateScheduleModel.js';
+import { withQuietRunArchive } from './quietRunArchive.js';
+import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
+import { createLogger } from '../logger';
+import type { ScheduleRunner } from '@cindy/maker-scheduler';
+import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
@@ -60,6 +71,8 @@ export interface StartSchedulerDeps extends SchedulerHostStartDeps {
   getMainWindow: () => BrowserWindow | null;
   feishuIm: FeishuIM;
 }
+
+const quietRunLog = createLogger('scheduler-host');
 
 const desktop = createSchedulerHost<StartSchedulerDeps>({
   createStorage: getDb => new DrizzleScheduleStorage(getDb),
@@ -78,6 +91,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       wecomGroupPublisher: wecomGroupNotificationService,
     });
     const promptRunner = new MakerScheduleRunner({
+      projectForNewTask,
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,
       getDb: deps.getDb,
@@ -121,23 +135,32 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
       resolveRouteCopyCapabilities,
       resolveDefaultModelRoute: resolveDefaultScheduleRoute,
+      // 插件引擎(docs/plans/acp-plugin-bridge.md)：按本机此刻提供的引擎准入，规则与新建任务相同。
+      admitPluginEngine: (route) => admitPluginEngineSwitchTarget(
+        { providerId: route.providerId, model: route.model, effort: route.effort },
+        listPluginEngineViews(),
+      ),
       // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
       // 先恢复快照再判忙闲；holder 未就绪时恢复返回 false，由 runner 顺延。
       schedulerQueue: {
         getLastUserActionAt: getSessionLastUserActionAt,
         ensureQueueRestored: ensureSchedulerQueueRestored,
         isSessionBusy: isSchedulerTargetSessionBusy,
+        hasPendingInput: hasPendingSchedulerTargetInput,
         hasQueuedPrompt: hasQueuedSchedulerPrompt,
         enqueuePrompt: enqueueSchedulerPrompt,
         removeQueuedPrompt: removeQueuedSchedulerPrompt,
         isPromptTracked: isSchedulerPromptTracked,
+        releasePrompt: releaseQueuedSchedulerPrompt,
         isAutoResumePending: isSchedulerAutoResumePending,
+        isSharedReconnectPending: isSchedulerSharedReconnectPending,
         onAutoResumeFailed: onSchedulerAutoResumeFailed,
         cancelAutoResume: cancelSchedulerAutoResume,
       },
     });
     const scriptRunner = new ScriptScheduleRunner({
       broker: new SchedulerScriptCapabilityBroker({
+        projectForNewTask,
         resolveDefaultModelRoute: resolveDefaultScheduleRoute,
       }),
       logger: deps.logger,
@@ -149,8 +172,18 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
   },
   // A teammate's project automations run only on its main computer (handed away: skipped here).
   captureFireContext: captureScheduledOwnerGuard,
-  wrapRunner: runner => withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
-  isOwnTeammateProject: async workingDir => (await ownTeammateProjectState(workingDir)) !== null,
+  automationAccount: pluginAutomationAccount,
+  // Quiet rounds return an archived target to archived (archive-pauses-automations.md).
+  wrapRunner: (runner): ScheduleRunner => withQuietRunArchive(
+    withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
+    {
+      targetStatus: readScheduledTargetStatus,
+      isRunSilenced: (runId): boolean => getSchedulerIfInitialized()?.isRunSilenced(runId) ?? false,
+      archiveIfUntouched: archiveQuietScheduledTarget,
+      warn: (message, meta) => quietRunLog.warn(message, meta),
+    },
+  ),
+  getTeammateProjectState: ownTeammateProjectState,
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
   dialogueWorkspaceRoots: () => dialogueWorkspaceRoots(),
   onStarted(scheduler, deps, passive) {

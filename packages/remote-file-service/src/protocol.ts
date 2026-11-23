@@ -33,10 +33,10 @@ import type {
 } from '@cindy/file-browser-core';
 
 /** 协议兼容版本:client 与 daemon 严格相等才可用。改动任何请求/响应形状时 +1。 */
-export const FILE_SERVICE_SCHEMA_VERSION = 3;
+export const FILE_SERVICE_SCHEMA_VERSION = 4;
 
 /** 实现版本;含共享扫描器在内的行为变化需 bump,使已安装的远端自动更新。 */
-export const FILE_SERVICE_BUNDLE_VERSION = '0.2.7';
+export const FILE_SERVICE_BUNDLE_VERSION = '0.2.9';
 
 /* ============================== 帧 ============================== */
 
@@ -179,8 +179,8 @@ export interface FsRpcMethods {
     result: FileStat;
   };
   writeFile: {
-    params: { workdir: string; relPath: string; content: string };
-    result: { size: number; mtimeMs: number };
+    params: { workdir: string; relPath: string; content: string; expectedResolvedPath?: string };
+    result: { size: number; mtimeMs: number; resolvedPath?: string };
   };
   createFile: {
     params: { workdir: string; relPath: string };

@@ -412,14 +412,17 @@ function scheduleInfoEqual(a: RemoteSessionScheduleInfo, b: RemoteSessionSchedul
     && !!a.hasUnreadFailedRun === !!b.hasUnreadFailedRun
     && a.latestFailedRun?.runId === b.latestFailedRun?.runId
     && a.latestFailedRun?.firedAt === b.latestFailedRun?.firedAt
+    && a.latestFailedRun?.finishedAt === b.latestFailedRun?.finishedAt
     && a.latestFailedRun?.scheduleId === b.latestFailedRun?.scheduleId
     && a.latestFailedRun?.failureKind === b.latestFailedRun?.failureKind
+    && a.latestFailedRun?.nextFireAt === b.latestFailedRun?.nextFireAt
     && a.latestFailedRun?.errorMsg === b.latestFailedRun?.errorMsg
     && a.running === b.running
     && a.latestRunAt === b.latestRunAt
     && a.scheduleStatus === b.scheduleStatus
     && a.nextFireAt === b.nextFireAt
     && a.allSchedulesStopped === b.allSchedulesStopped
+    && !!a.hasActiveFollowUp === !!b.hasActiveFollowUp
     && stringListsEqual(a.unreadRunIds, b.unreadRunIds);
 }
 

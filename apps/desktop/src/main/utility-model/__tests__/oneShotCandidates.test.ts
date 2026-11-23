@@ -1,5 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const usageSink = vi.hoisted(() => ({ record: vi.fn(async () => {}), close: vi.fn(), begin: vi.fn() }));
+vi.mock('../../usage/auxiliaryUsage.js', () => ({
+  createAuxiliaryUsageRecorder: (attribution: unknown) => {
+    usageSink.begin(attribution);
+    return Object.assign(usageSink.record, { close: usageSink.close });
+  },
+}));
 const localReady = vi.hoisted(() => vi.fn(async () => {}));
+const acquireAccount = vi.hoisted(() => vi.fn(async (): Promise<import('../../subscription-accounts/runtime.js').SubscriptionAccountLease | null> => null));
+const poolMembership = vi.hoisted(() => ({ provider: 'pool-a' }));
+const projectedCatalog = vi.hoisted(() => vi.fn<() => import('@cindy/model-providers').Catalog | undefined>());
+vi.mock('../../subscription-accounts/placement.js', () => ({ accountProviderId: () => poolMembership.provider }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({ acquireSubscriptionAccount: acquireAccount }));
+vi.mock('../../maker-host/createDesktopProviderService.js', async () => {
+  const { getActiveCatalog } = await import('../../maker-host/active-catalog.js');
+  return { getDesktopSelectableCatalog: () => projectedCatalog() ?? getActiveCatalog() };
+});
 vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: localReady }));
 
 vi.mock('electron', () => ({
@@ -139,6 +155,7 @@ import {
 } from '../oneShotCandidates.js';
 import { resetUtilityReasoningMemory } from '../utilityReasoningPlan.js';
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../shared/auxiliaryModelChain.js';
+import { setAuxiliaryChainOutcomeListener } from '../auxiliaryChainOutcomeSink.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const appCapabilities = vi.mocked(getAppCapabilities);
@@ -169,6 +186,9 @@ function makerMock(authenticated: boolean): Maker {
 describe('utility one-shot candidates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    acquireAccount.mockReset().mockResolvedValue(null);
+    projectedCatalog.mockReset();
+    poolMembership.provider = 'pool-a';
     fetchMock.mockReset();
     resetUtilityReasoningMemory();
     chainState.source = 'auto';
@@ -250,6 +270,18 @@ describe('utility one-shot candidates', () => {
     it.each(['auto', 'env'] as const)('does not use a %s auxiliary chain', (source) => {
       chainState.source = source;
       expect(createCustomAutoReviewFallback()).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(readCustomKey).not.toHaveBeenCalled();
+    });
+
+    // Unit regression: the former remote pin must never dispatch to a same-name
+    // local supplier. Both public consumers need coverage; local fixtures are ready.
+    it.each(['text', 'review'] as const)('does not reinterpret remote pins for %s', async consumer => {
+      chainState.refs = ['remote-cat:other:cat:review-a:codex:small'];
+      const result = consumer === 'text'
+        ? await requestUtilityText(makerMock(true), prompt)
+        : await createCustomAutoReviewFallback()!(prompt, options);
+      expect(result.ok).toBe(false);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(readCustomKey).not.toHaveBeenCalled();
     });
@@ -363,6 +395,21 @@ describe('utility one-shot candidates', () => {
       const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
       expect(body).toMatchObject({ reasoning: { effort: 'medium' }, max_output_tokens: 384 });
       expect(body).not.toHaveProperty('thinking');
+    });
+
+    // #8706 unit: the real explicit fallback must classify a gateway quota
+    // rejection before spending requests on the parameter-compatibility ladder.
+    it.each([400, 422])('keeps HTTP %s quota ahead of parameter retries', async (status) => {
+      chainState.refs = ['cat:review-a:codex:small'];
+      fetchMock.mockImplementation(async () => new Response(
+        '{"error":{"type":"insufficient_balance_error","message":"PRIVATE_ECHO"}}', { status },
+      ) as never);
+      const result = await createCustomAutoReviewFallback()!(prompt, options);
+      expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({
+        reason: 'http_error', httpStatus: status, quotaExhausted: true,
+      })] });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_ECHO');
     });
 
     it('does not expand an exhausted custom chain into defaults or the gateway', async () => {
@@ -721,6 +768,56 @@ describe('utility one-shot candidates', () => {
       ],
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // docs/product-rules/auxiliary-model-health.md: every default-chain request tells the
+  // health tracker whether the chain could run. Cancelled or superseded requests say
+  // nothing (an account switch must not raise a problem for the new account).
+  describe('auxiliary health outcome', () => {
+    const outcomes: string[] = [];
+    beforeEach(() => {
+      outcomes.length = 0;
+      setAuxiliaryChainOutcomeListener((outcome) => { outcomes.push(outcome); });
+    });
+    afterEach(() => setAuxiliaryChainOutcomeListener(null));
+
+    it.each([
+      ['no candidate can run', () => makerMock(false), [] as string[], 'no_candidate'],
+      ['every candidate failed', () => {
+        const maker = makerMock(true);
+        vi.mocked(maker.oneShot).mockRejectedValueOnce(new Error('codex down'));
+        return maker;
+      }, ['codex-gpt-5.4-mini'], 'failed'],
+      ['a candidate answered', () => makerMock(true), ['codex-gpt-5.4-mini'], 'success'],
+    ] as const)('%s', async (_name, makeMaker, refs, expected) => {
+      if (refs.length) chainState.refs = [...refs];
+      await requestUtilityText(makeMaker(), 'hello');
+      expect(outcomes).toEqual([expected]);
+    });
+
+    it('stays silent when the caller rejects the final LiteLLM dispatch', async () => {
+      chainState.refs = ['litellm-gpt-5.4-mini'];
+      readKey.mockReturnValue('proxy-key');
+      const beforeDispatch = vi.fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+
+      const result = await requestUtilityText(makerMock(false), 'superseded', { beforeDispatch });
+
+      expect(result.ok).toBe(false);
+      expect(beforeDispatch).toHaveBeenCalledTimes(3);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(outcomes).toEqual([]);
+    });
+
+    it('stays silent when the account changes during the request', async () => {
+      const maker = makerMock(true);
+      vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {
+        ownerState.key = 'owner-b';
+        return { authenticated: true };
+      });
+      await requestUtilityText(maker, 'hello');
+      expect(outcomes).toEqual([]);
+    });
   });
 
   it('falls through failed codex execution and succeeds on LiteLLM', async () => {
@@ -2829,6 +2926,71 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // Unit regression: the public text entry must reserve the selected pool's account,
+  // send only that account's credentials, and release it on every completion path.
+  // Existing tests cover legacy OAuth only, which cannot represent a created pool.
+  it.each(['success', 'http-error', 'revoked', 'auth-error', 'moved', 'timeout', 'cancel'] as const)(
+    'uses and releases the selected subscription pool account: %s', async (outcome) => {
+      projectedCatalog.mockReturnValue({ providers: [{
+        id: 'pool-a', name: 'My subscription', source: 'builtin', subscriptionPool: 'openai',
+        agents: ['codex'], auth: { method: 'oauth' },
+        routing: { codex: { upstream: 'https://chatgpt.example/api/v1', authStrategy: 'oauth-passthrough' } },
+        models: { codex: [{ id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 272_000 }] },
+      }] } as never);
+      const lease = { account: { id: 'pool-account' }, assertDispatchable: vi.fn(),
+        observeFailure: vi.fn(), running: vi.fn(), release: vi.fn() };
+      const accountLease = lease as unknown as import('../../subscription-accounts/runtime.js').SubscriptionAccountLease;
+      if (outcome === 'timeout' || outcome === 'cancel') {
+        vi.useFakeTimers();
+        let finish!: (value: typeof accountLease) => void;
+        acquireAccount.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const controller = new AbortController();
+        const pending = requestUtilityText(makerMock(false), 'garden title', {
+          providerId: 'pool-a', agentKind: 'codex', model: 'gpt-5.5',
+          timeoutMs: 12_000, signal: controller.signal,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        if (outcome === 'cancel') controller.abort();
+        else await vi.advanceTimersByTimeAsync(12_000);
+        await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+        finish(accountLease);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(lease.release).toHaveBeenCalledOnce();
+        expect(lease.running).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+        return;
+      }
+      acquireAccount.mockResolvedValue(accountLease);
+      readCodexDispatchAuth.mockImplementation(async (_provider, account) => {
+        expect(_provider).toBe('openai');
+        expect(account).toBe(lease.account);
+        if (outcome === 'auth-error') throw new Error('expired');
+        if (outcome === 'moved') poolMembership.provider = 'pool-b';
+        return { accessToken: 'fake-pool-token', accountId: 'pool-account', canDispatch: () => outcome !== 'revoked' };
+      });
+      fetchMock.mockResolvedValue(outcome === 'http-error'
+        ? { ok: false, status: 503, text: async () => 'unavailable' } as never
+        : { ok: true, text: async () => 'data: {"type":"response.output_text.delta","delta":"garden"}\ndata: [DONE]\n' } as never);
+      const maker = makerMock(false);
+      const result = await requestUtilityText(maker, 'garden title', {
+        providerId: 'pool-a', agentKind: 'codex', model: 'gpt-5.5',
+      });
+      expect(result.ok).toBe(outcome === 'success');
+      expect(acquireAccount).toHaveBeenCalledWith('pool-a', 'gpt-5.5', [], false, { resuming: false });
+      expect(lease.release).toHaveBeenCalledOnce();
+      if (outcome === 'http-error') {
+        expect(lease.observeFailure).toHaveBeenCalledWith({ errorStatus: 503 }, 'gpt-5.5', 'run');
+        expect(lease.observeFailure.mock.invocationCallOrder[0]).toBeLessThan(lease.release.mock.invocationCallOrder[0]!);
+      }
+      expect(readCodexCreds).not.toHaveBeenCalled();
+      expect(maker.oneShot).not.toHaveBeenCalled();
+      if (outcome === 'revoked' || outcome === 'auth-error' || outcome === 'moved') expect(fetchMock).not.toHaveBeenCalled();
+      else expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+        Authorization: 'Bearer fake-pool-token', 'chatgpt-account-id': 'pool-account',
+      });
+    },
+  );
+
   it('uses OpenAI Codex OAuth and strips the bridge model prefix on the selected route', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -2963,6 +3125,48 @@ describe('utility one-shot candidates', () => {
       max_tokens: 384,
       messages: [{ role: 'user', content: 'classify' }],
     });
+  });
+
+  // #8706 unit: real Response streams through the production HTTP entry. Existing HTTP
+  // failures cover status only, not quota classification, bounded reads or body privacy.
+  it.each([
+    [429, '{"type":"budget_exceeded","message":"ExceededBudget: PRIVATE_ECHO"}', true],
+    [429, '{"message":"Too Many Requests; rate limit exceeded"}', false],
+    [402, 'Payment Required', true],
+    [400, '{"type":"insufficient_balance_error","message":"PRIVATE_ECHO"}', true],
+    [422, '{"code":"insufficient_quota","message":"PRIVATE_ECHO"}', true],
+    [400, '{"message":"invalid parameter"}', false],
+    [422, '{"message":"invalid parameter"}', false],
+    [500, 'budget_exceeded', false],
+  ])('classifies HTTP %s body %s safely', async (status, body, quota) => {
+    readKey.mockReturnValue('synthetic-key');
+    fetchMock.mockResolvedValueOnce(new Response(body, { status }) as never);
+    const result = await requestDedicatedAutoReviewCandidateText('classify', DEDICATED_AUTO_REVIEW_CANDIDATES[0], { timeoutMs: 8000 });
+    expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({
+      reason: 'http_error', httpStatus: status, ...(quota ? { quotaExhausted: true } : {}),
+    })] });
+    if (!result.ok && !quota) expect(result.attempts[0]).not.toHaveProperty('quotaExhausted');
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_ECHO|Payment Required|Too Many Requests/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([429, 400, 422].flatMap(status => [true, false].map(earlyQuota => [status, earlyQuota] as const)))(
+    'bounds and cancels an unfinished HTTP %s error stream (early quota=%s)', async (status, earlyQuota) => {
+    readKey.mockReturnValue('synthetic-key');
+    const cancel = vi.fn();
+    let chunks = 0;
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      // A finite safety ceiling lets the unfixed reader fail without unbounded allocation.
+      if (++chunks > 2) { controller.close(); return; }
+      controller.enqueue(new TextEncoder().encode(earlyQuota ? 'budget_exceeded PRIVATE_ECHO' : 'x'.repeat(8192)));
+    });
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream({ pull, cancel }), { status }) as never);
+    const result = await requestDedicatedAutoReviewCandidateText('classify', DEDICATED_AUTO_REVIEW_CANDIDATES[0], { timeoutMs: 8000 });
+    expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({ reason: 'http_error', httpStatus: status })] });
+    if (!result.ok) expect(result.attempts[0]).toMatchObject(earlyQuota ? { quotaExhausted: true } : { reason: 'http_error' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pull.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_ECHO');
   });
 
   it('keeps Auto-review policy on the system channel and evidence on the user channel', async () => {
@@ -3116,8 +3320,11 @@ describe('utility one-shot candidates', () => {
       }],
     } as never);
     let resolveAuth: ((auth: { accessToken: string; accountId: string }) => void) | undefined;
+    let authStarted!: () => void;
+    const started = new Promise<void>(resolve => { authStarted = resolve; });
     readCodexCreds.mockImplementationOnce(() => new Promise((resolve) => {
       resolveAuth = resolve;
+      authStarted();
     }));
     const controller = new AbortController();
 
@@ -3126,7 +3333,7 @@ describe('utility one-shot candidates', () => {
       DEDICATED_AUTO_REVIEW_CANDIDATES[1],
       { timeoutMs: 12_000, signal: controller.signal },
     );
-    await Promise.resolve();
+    await started;
     controller.abort();
     resolveAuth?.({ accessToken: 'late-token', accountId: 'late-account' });
 
@@ -4570,15 +4777,18 @@ describe('utility one-shot candidates', () => {
     it('keeps the output-budget retry on the accepted native step', async () => {
       activeCatalog.mockReturnValue(xdCatalog('codex', [GPT_SOL]) as never);
       readKey.mockReturnValue('xd-key');
-      const truncated = {
-        ok: true,
-        text: async () => 'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"output":[]}}\n',
-      };
+      const truncated = new Response('data: '+JSON.stringify({ type: 'response.incomplete', response: {
+        model: 'first-backend', usage: { input_tokens: 100, output_tokens: 200 },
+        incomplete_details: { reason: 'max_output_tokens' }, output: [],
+      } })+'\n\n', { headers: { 'content-type': 'text/event-stream' } });
       fetchMock
         .mockResolvedValueOnce(truncated as never)
-        .mockResolvedValueOnce(responsesOk('full answer') as never);
+         .mockResolvedValueOnce({ ok: true, text: async () =>
+          'data: {"type":"response.output_text.delta","delta":"full answer"}\n' +
+          'data: {"type":"response.completed","response":{"model":"second-backend","usage":{"input_tokens":110,"output_tokens":20}}}\n' } as never);
 
       const result = await requestExplicitUtilityText('summarize', {
+        source: 'task-summary', sessionId: 'task-1',
         providerId: 'xd',
         agentKind: 'codex',
         model: 'gpt-6.1-sol',
@@ -4588,6 +4798,14 @@ describe('utility one-shot candidates', () => {
 
       expect(result).toMatchObject({ ok: true, text: 'full answer' });
       expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(usageSink.record).toHaveBeenCalledTimes(2);
+      expect(usageSink.record).toHaveBeenNthCalledWith(1, expect.objectContaining({ inputTokens: 100, outputTokens: 200 }),
+        expect.objectContaining({ source: 'task-summary', sessionId: 'task-1', model: 'first-backend', providerId: 'xd' }));
+      expect(usageSink.record).toHaveBeenNthCalledWith(2, expect.objectContaining({ inputTokens: 110, outputTokens: 20 }),
+        expect.objectContaining({ model: 'second-backend' }));
+      expect(usageSink.close).toHaveBeenCalledOnce();
+      expect(bodyOf(0)).not.toHaveProperty('sessionId');
+      expect(bodyOf(0)).not.toHaveProperty('source');
       expect(urlOf(1)).toBe(`${GATEWAY}/v1/responses`);
       expect(bodyOf(1)).toMatchObject({ reasoning: { effort: 'low' } });
       expect(Number(bodyOf(1).max_output_tokens)).toBeGreaterThan(200);

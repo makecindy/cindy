@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
@@ -13,13 +14,14 @@ import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 // handling and requester identity absent from other transports' tests; no real contacts.
 const connections: BlueBubblesIM[] = [];
 afterEach(async () => { await Promise.all(connections.splice(0).map(im => im.dispose())); });
-async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false, files?: IMHost['files']) {
+async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false,
+  files?: IMHost['files'], groups = false) {
   const secrets = new Map<string, string>();
   let saved: BlueBubblesState | null = initialState;
   let callbackUrl = '';
   let now = 1_000;
-  const chat = { guid: 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
-  const otherChat = { guid: 'any;-;other@example.test', participants: [{ address: 'other@example.test', service: 'iMessage' }] };
+  const chat = { guid: groups ? 'any;+;example-group' : 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
+  const otherChat = { guid: groups ? 'any;+;other-group' : 'any;-;other@example.test', participants: [{ address: 'other@example.test', service: 'iMessage' }] };
   const messages = new Map<string, BlueBubblesMessage>();
   const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only');
   vi.spyOn(api, 'info').mockResolvedValue({ server_version: '1.9.9' });
@@ -61,6 +63,181 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1: retries of one addressed document must use its durable bridge receipt.
+  // A lost response (including after process restart) must not trigger a second POST.
+  it('reuses direct delivery receipts and leaves an uncertain send pending on retry', async () => {
+    const f = await fixture(null, undefined, true);
+    const text = 'QA morning report — 17°C';
+    const send = (id: string) => f.im.sendDirectDelivery(f.chat.guid, text, id);
+    await expect(send('first-document')).resolves.toEqual({ messageId: 'outbound' });
+    await expect(send('first-document')).resolves.toEqual({ messageId: 'outbound' });
+    await expect(f.im.sendDirectDelivery(f.otherChat.guid, text, 'first-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    await expect(f.im.sendDirectDelivery('any;+;group', text, 'first-document')).rejects.toThrow('BLUEBUBBLES_DIRECT_CHAT_REQUIRED');
+    f.send.mockRejectedValueOnce(new Error('lost response'));
+    await expect(send('second-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    const restored = await fixture(f.state(), undefined, true);
+    await expect(restored.im.sendDirectDelivery(f.chat.guid, text, 'second-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    expect(f.send.mock.calls.map(([chat]) => chat)).toEqual([f.chat.guid, f.chat.guid]);
+    expect(restored.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps confirmed parent lookups scoped through duplicate receipts and a failed echo', async () => {
+    const f = await fixture(null, undefined, true, undefined, true);
+    const receipts = new BlueBubblesReceipts(f.storage, 1_000);
+    const sent = { chatId: f.chat.guid, state: 'sent' as const, messageId: 'confirmed-parent' };
+    receipts.outgoing('first', sent);
+    receipts.outgoing('second', sent);
+    const restored = new BlueBubblesReceipts(f.storage, 1_000);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(true);
+    expect(restored.hasSentMessage(f.otherChat.guid, sent.messageId)).toBe(false);
+    restored.recordEcho(f.chat.guid, sent.messageId, 'first', true);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(true);
+    restored.recordEcho(f.chat.guid, sent.messageId, 'second', true);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(false);
+    expect(new BlueBubblesReceipts(f.storage, 1_000).hasSentMessage(f.chat.guid, sent.messageId)).toBe(false);
+  });
+
+  it('loads selected history and the inline reply from the connected chat, including image-only messages', async () => {
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => ({ absPath: `/media/${token}`, url: `cindy-media://${token}` }));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, true);
+    const photo = (guid: string) => ({ guid, transferName: guid + '.png', mimeType: 'image/png' });
+    f.message('a', { text: '', attachments: [photo('one'), photo('two')] });
+    f.message('b', { attachments: [photo('two'), photo('missing'), photo('three')] });
+    f.message('elsewhere', { chats: [f.otherChat], attachments: [photo('private')] });
+    f.message('question', { threadOriginatorGuid: 'a' });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async id => {
+      if (id === 'missing') throw new Error('unavailable');
+      return new Uint8Array([1]);
+    });
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const event = f.received[0]!;
+    expect(event.imessageReplyGuid).toBe('a');
+    const result = await f.im.contextMedia(event, ['elsewhere', 'a', 'b']);
+    expect(result.reply?.messageId).toBe('a');
+    expect(result.attachments.map(file => [file.kind, file.originalName])).toEqual([
+      ['image', 'one.png'], ['image', 'two.png'], ['image', 'three.png']]);
+    expect(result.unavailable).toEqual(['missing.png', '原消息不可用']);
+    expect(download.mock.calls.map(([id]) => id)).toEqual(['one', 'two', 'missing', 'three']);
+  });
+
+  it.each(['image', 'file'] as const)('counts only delivered %s history attachments toward the remaining slot', async kind => {
+    const stored = (id: string) => ({ absPath: `/media/${id}`, url: `cindy-media://${id}`, mimeType: 'image/png', discard: async () => {} });
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => stored(token.endsWith(':duplicate') ? 'current' : 'new'));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, false,
+      { stage: async ({ fileName }) => stored(fileName === 'duplicate.txt' ? 'current' : 'new') });
+    const ext = kind === 'image' ? 'png' : 'txt';
+    f.message('root', { attachments: ['duplicate', 'failed', 'new'].map(guid =>
+      ({ guid, transferName: `${guid}.${ext}`, mimeType: kind === 'image' ? 'image/png' : 'text/plain' })) });
+    f.message('question', { threadOriginatorGuid: 'root' });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async guid => {
+      if (guid === 'failed') throw new Error('temporary failure');
+      return new Uint8Array([1]);
+    });
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const event = { ...f.received[0]!, attachments: Array.from({ length: kind === 'image' ? 5 : 3 }, (_, index) =>
+      ({ ...stored(index === 0 ? 'current' : `current-${index}`), kind, originalName: `current.${ext}` })) };
+    const result = await f.im.contextMedia(event, []);
+    expect(result.attachments.map(item => item.originalName)).toEqual([`new.${ext}`]);
+    expect(result.unavailable).toEqual([`failed.${ext}`]);
+    expect(download.mock.calls.map(([id]) => id)).toEqual(['duplicate', 'failed', 'new']);
+  });
+
+  it('reuses cached reply images after chat validation without pinning or downloading again', async () => {
+    const cached = { absPath: '/media/cached.png', url: 'cindy-media://cached', mimeType: 'image/png' };
+    const getCachedImage = vi.fn(async () => cached);
+    const cacheImage = vi.fn();
+    const f = await fixture(null, { getCachedImage, cacheImage, resolveMediaUrl: () => null }, true);
+    const image = { guid: 'photo', transferName: 'cached.png', mimeType: 'image/png' };
+    f.message('root', { attachments: [image] });
+    f.message('private', { chats: [f.otherChat], attachments: [image] });
+    f.message('question', { threadOriginatorGuid: 'root' });
+    const download = vi.spyOn(f.api, 'download').mockRejectedValue(new Error('offline'));
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const result = await f.im.contextMedia(f.received[0]!, ['private']);
+    expect(result.attachments).toEqual([{ ...cached, kind: 'image', originalName: 'cached.png' }]);
+    expect(result.unavailable).toEqual(['原消息不可用']);
+    expect(getCachedImage).toHaveBeenCalledOnce();
+    expect(getCachedImage).toHaveBeenCalledWith('imessage', `${f.im.botContextId}:photo`,
+      { staging: true, shouldReuse: expect.any(Function) });
+    expect(download).not.toHaveBeenCalled();
+    expect(cacheImage).not.toHaveBeenCalled();
+  });
+
+  it('invokes group replies only for a direct parent confirmed sent by this connection in this chat', async () => {
+    const f = await fixture(null, undefined, true, undefined, true);
+    f.im.onMessage(event => event.delivery?.accept());
+    const another = await fixture(null, undefined, false, undefined, true);
+    f.send.mockResolvedValueOnce({ guid: 'direct-parent' });
+    await f.im.sendText(f.chat.guid, 'confirmed');
+    another.send.mockResolvedValueOnce({ guid: 'other-connection-parent' });
+    await another.im.sendText(another.chat.guid, 'other connection');
+    const receipts = new BlueBubblesReceipts(f.storage, 1_000);
+    receipts.outgoing('unknown-attempt', { chatId: f.chat.guid, state: 'unknown', messageId: 'unknown-parent' });
+    receipts.outgoing('pending-attempt', { chatId: f.chat.guid, state: 'sending', messageId: 'pending-parent' });
+    await f.im.init();
+
+    f.message('direct', { replyToGuid: 'direct-parent' });
+    f.message('both', { replyToGuid: 'direct-parent', text: '@Cindy help' });
+    f.message('nested', { replyToGuid: 'other-member-parent', threadOriginatorGuid: 'direct-parent' });
+    f.message('root-only', { threadOriginatorGuid: 'direct-parent' });
+    f.message('cross-chat', { replyToGuid: 'direct-parent', chats: [f.otherChat] });
+    f.message('other-connection', { replyToGuid: 'other-connection-parent' });
+    f.message('unknown', { replyToGuid: 'unknown-parent' });
+    f.message('pending', { replyToGuid: 'pending-parent' });
+    f.message('plain-text', { text: '@Cindy help' });
+    f.message('quote-text', { text: '> @Cindy help' });
+    f.message('not-allowed', { replyToGuid: 'direct-parent', chats: [{ guid: 'any;+;not-allowed' }] });
+    await Promise.all([f.webhook('direct'), f.webhook('both'), f.webhook('direct'), f.webhook('both')]);
+    await f.im.reconcile();
+    await f.im.reconcile();
+    expect(f.received.filter(event => event.invoked).map(event => event.messageId).sort()).toEqual(['both', 'direct', 'plain-text']);
+    expect(f.received.filter(event => event.ambient).map(event => event.messageId).sort()).toEqual([
+      'cross-chat', 'nested', 'other-connection', 'pending', 'quote-text', 'root-only', 'unknown',
+    ]);
+    expect(f.state().inbox['not-allowed']?.state).toBe('ignored');
+  });
+
+  it('uses only the connected server’s verified address for native mentions and falls back safely when unavailable', async () => {
+    const f = await fixture(null, undefined, false, undefined, true);
+    f.im.onMessage(event => event.delivery?.accept());
+    vi.mocked(f.api.info).mockResolvedValue({ private_api: true, helper_connected: true });
+    const account = vi.spyOn(f.api, 'iMessageAccount').mockResolvedValue({ vetted_aliases: [
+      { Alias: 'Partner@example.test' }, { Alias: '+15551234567' }, { Alias: 'Display Name' }, null,
+    ] });
+    const mention = (address: string) => [{ runs: [] }, { runs: [null, { attributes: {} }, {
+      attributes: { __kIMMentionConfirmedMention: address },
+    }] }];
+    f.message('unconfigured-address', { attributedBody: mention('partner@example.test') });
+    await f.im.reconcile();
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'unconfigured-address', ambient: true });
+    expect(account).not.toHaveBeenCalled();
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(), mentionAddress: 'Partner@example.test' });
+    f.message('right-address', { text: 'Partner help', attributedBody: mention('partner@example.test') });
+    f.message('unbound-alias', { attributedBody: mention('+15551234567') });
+    f.message('wrong-person', { text: 'Partner help', attributedBody: mention('another@example.test') });
+    f.message('wrong-phone', { attributedBody: mention('+15551234568') });
+    f.message('configured-owner', { attributedBody: mention('owner@example.test') });
+    f.message('display-name', { attributedBody: mention('Display Name') });
+    f.message('bold-text', { text: 'Partner help', attributedBody: [{ runs: [{ attributes: { bold: true } }] }] });
+    await f.im.reconcile();
+    expect(f.received.filter(event => event.invoked).map(event => event.messageId)).toEqual(['right-address']);
+    expect(f.received.filter(event => event.ambient)).toHaveLength(7);
+
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(), mentionAddress: '+15551234567' });
+    f.message('bound-phone', { attributedBody: mention('+15551234567') });
+    await f.im.reconcile();
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'bound-phone', invoked: true });
+    account.mockRejectedValue(new Error('helper unavailable'));
+    f.message('unverified-address', { attributedBody: mention('+15551234567') });
+    f.message('text-still-works', { text: '@Cindy help' });
+    await f.im.reconcile();
+    expect(f.received.at(-2)).toMatchObject({ messageId: 'unverified-address', ambient: true, invoked: false });
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'text-still-works', ambient: false, invoked: true });
+  });
+
   // Tier 1, PR #10241/r4556881876: a failed candidate edit used to permanently
   // ignore excluded pending inputs before restoring the old chat allowlist.
   it.each([false, true])('finalizes excluded pending receipts only after the edit commits (write fails: %s)', async failWrite => {
@@ -839,9 +1016,10 @@ describe('BlueBubbles local ingress', () => {
       expect((await f.webhook(guid)).status).toBe(202);
     }
     await f.im.reconcile();
+    // The note says how to reach the original (2026-11-22: the model had only a file name).
     expect(f.received.map(event => [event.text, event.unsupported])).toEqual([
-      ['missing-size', [{ type: 'oversize', label: 'large.bin' }]],
-      ['zero-size', [{ type: 'oversize', label: 'large.bin' }]],
+      ['missing-size', [{ type: 'oversize', retrievable: true, label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=missing-size，attachment_guid=missing-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
+      ['zero-size', [{ type: 'oversize', retrievable: true, label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=zero-size，attachment_guid=zero-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
     ]);
     expect(f.state().inbox['missing-size'].state).toBe('accepted');
     expect(f.state().inbox['zero-size'].state).toBe('accepted');
@@ -853,6 +1031,104 @@ describe('BlueBubbles local ingress', () => {
     expect((await f.webhook('after-oversize')).status).toBe(202);
     await f.im.reconcile();
     expect(f.received.map(event => event.messageId)).toEqual(['missing-size', 'zero-size', 'after-oversize']);
+  });
+
+  // Regression (2026-11-22): BlueBubbles answered a 894 KB photo with a 105 KB copy and the model got it as
+  // the attachment with no hint. A copy shorter than the attachment record is re-read, then labelled with the
+  // original's size and how to fetch it, and never cached as the attachment itself.
+  it('re-reads a short copy, then labels it as a preview of the original', async () => {
+    const cacheImage = vi.fn(async (input: { token: string }) => ({ absPath: `/cache/${input.token}.jpg`, url: `cindy-media://${input.token}` }));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null });
+    f.im.shortCopyRetryMs = 0;
+    const download = vi.spyOn(f.api, 'download').mockResolvedValue(new Uint8Array(104_970));
+    f.message('photo', { attachments: [{ guid: 'img-1', transferName: 'IMG_0106.jpeg', mimeType: 'image/jpeg', totalBytes: 894_420 }] });
+    expect((await f.webhook('photo')).status).toBe(202);
+    await f.im.reconcile();
+    expect(download).toHaveBeenCalledTimes(3);
+    const event = f.received.find(item => item.messageId === 'photo')!;
+    expect(event.attachments).toHaveLength(1);
+    expect(event.unsupported).toEqual([{ type: 'preview', retrievable: true, label:
+      'IMG_0106.jpeg（本轮附件只有 103 KB，原件 873 KB；message_id=photo，attachment_guid=img-1；可用 cindy_imessage.fetch_attachment 取原件）' }]);
+    expect(cacheImage.mock.calls[0][0].token).toMatch(/:img-1:preview$/);
+
+    download.mockClear();
+    download.mockResolvedValueOnce(new Uint8Array(10)).mockResolvedValueOnce(new Uint8Array(894_420));
+    f.message('photo-2', { attachments: [{ guid: 'img-2', transferName: 'IMG_0107.jpeg', mimeType: 'image/jpeg', totalBytes: 894_420 }] });
+    expect((await f.webhook('photo-2')).status).toBe(202);
+    await f.im.reconcile();
+    const complete = f.received.find(item => item.messageId === 'photo-2')!;
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(complete.unsupported).toEqual([]);
+    expect(cacheImage.mock.calls.at(-1)![0].token).toMatch(/:img-2$/);
+    await f.im.dispose();
+  });
+
+  // Originals stream to disk instead of memory; a runaway transfer stops without leaving a partial file.
+  it('streams an original to its destination and stops at the byte limit', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-stream-'));
+    try {
+      const body = () => new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new Uint8Array(3)); controller.enqueue(new Uint8Array(4)); controller.close();
+      } }));
+      const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => body()));
+      const dest = path.join(root, 'clip.mov');
+      await expect(api.downloadToFile('g', dest)).resolves.toBe(7);
+      expect((await fs.stat(dest)).size).toBe(7);
+      // Review (#12146): two concurrent downloads of one original each write their own temporary file.
+      const both = await Promise.all([api.downloadToFile('g', path.join(root, 'twice.mov')), api.downloadToFile('g', path.join(root, 'twice.mov'))]);
+      expect(both).toEqual([7, 7]);
+      expect((await fs.stat(path.join(root, 'twice.mov'))).size).toBe(7);
+      await fs.rm(path.join(root, 'twice.mov'));
+      const capped = path.join(root, 'capped.mov');
+      await expect(api.downloadToFile('g', capped, 5)).rejects.toThrow('BLUEBUBBLES_RESPONSE_TOO_LARGE');
+      expect(await fs.readdir(root)).toEqual(['clip.mov']);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  // fetch_attachment backs on this: only an attachment of a message in this connected chat, streamed to disk.
+  it('fetches an original only for an attachment of a message in that chat', async () => {
+    const f = await fixture();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-original-'));
+    try {
+      f.message('clip', { attachments: [{ guid: 'mov-1', transferName: 'clip.MOV', totalBytes: 5 }] });
+      const toFile = vi.spyOn(f.api, 'downloadToFile').mockImplementation(async (_guid, dest) => { await fs.writeFile(dest, 'hello'); return 5; });
+      const chat = f.chat.guid;
+      const result = await f.im.fetchAttachment(chat, 'clip', 'mov-1', root);
+      expect(result).toMatchObject({ name: 'clip.MOV', bytes: 5, totalBytes: 5, complete: true });
+      expect(result.path.startsWith(root)).toBe(true);
+      await expect(f.im.fetchAttachment(chat, 'clip', 'other-attachment', root)).rejects.toThrow('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
+      expect(toFile).toHaveBeenCalledTimes(1);
+      // Review (#12146): a legal 255-byte name still fits with the guid prefix and the download suffix.
+      const real = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response('hello')));
+      toFile.mockImplementation((guid, dest) => real.downloadToFile(guid, dest));
+      f.message('long', { attachments: [{ guid: 'mov-2', transferName: `${'a'.repeat(251)}.mov`, totalBytes: 5 }] });
+      const long = await f.im.fetchAttachment(chat, 'long', 'mov-2', root);
+      expect(long).toMatchObject({ bytes: 5, complete: true });
+      expect(long.name.endsWith('.mov')).toBe(true);
+      expect(await fs.readFile(long.path, 'utf8')).toBe('hello');
+      // Review (#12146): GUIDs sharing a prefix with one name keep separate files; Windows-reserved characters are replaced.
+      f.message('pair', { attachments: [
+        { guid: 'AAAAAAAA-1', transferName: 'budget?.pdf', totalBytes: 5 },
+        { guid: 'AAAAAAAA-2', transferName: 'budget?.pdf', totalBytes: 5 },
+      ] });
+      const first = await f.im.fetchAttachment(chat, 'pair', 'AAAAAAAA-1', root);
+      const second = await f.im.fetchAttachment(chat, 'pair', 'AAAAAAAA-2', root);
+      expect(first.path).not.toBe(second.path);
+      expect(path.basename(first.path)).not.toMatch(/[<>:"|?*]/);
+      expect(first.name).toBe('budget_.pdf');
+      // Review (#12146): a preview that finishes after the original never replaces it.
+      const bodies = ['complete', 'pre'];
+      const racing = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response(bodies.shift())));
+      toFile.mockImplementation((guid, dest) => racing.downloadToFile(guid, dest));
+      f.message('race', { attachments: [{ guid: 'mov-3', transferName: 'clip.mov', totalBytes: 8 }] });
+      const original = await f.im.fetchAttachment(chat, 'race', 'mov-3', root);
+      const preview = await f.im.fetchAttachment(chat, 'race', 'mov-3', root);
+      expect(original).toMatchObject({ bytes: 8, complete: true });
+      expect(preview).toMatchObject({ bytes: 3, complete: false });
+      expect(preview.path).not.toBe(original.path);
+      expect(await fs.readFile(original.path, 'utf8')).toBe('complete');
+      expect((await fs.readdir(root)).some((entry) => entry.endsWith('.download') || entry.endsWith('.partial'))).toBe(false);
+    } finally { await fs.rm(root, { recursive: true, force: true }); await f.im.dispose(); }
   });
 
   // Tier 1, #9250/r4505831911: failed download/staging has not entered the
@@ -1037,6 +1313,193 @@ describe('BlueBubbles local ingress', () => {
     expect(f.received.map(row => row.messageId)).toEqual(['incoming-1', 'missed-2']);
     expect(f.state().inbox['incoming-1']?.state).toBe('accepted');
     expect(f.send).not.toHaveBeenCalled();
+  });
+
+  // Tier 1: the same Apple account can produce both manual input and bot echoes.
+  it.each([false, true])('correlates machine sends across chat associations (sending chat first: %s)', async sendingFirst => {
+    const f = await fixture(null, undefined, true);
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    await f.im.sendText(f.otherChat.guid, 'machine');
+    const chats = sendingFirst ? [f.otherChat, f.chat] : [f.chat, f.otherChat];
+    f.message('outbound', { isFromMe: true, handle: undefined, chats });
+    f.message('manual', { isFromMe: true, handle: undefined });
+    f.message('elsewhere', { isFromMe: true, handle: undefined, chats: [f.otherChat] });
+    await f.im.reconcile();
+    expect(f.received.map(e => [e.messageId, e.speaker?.id])).toEqual([['manual',config.ownerAddress]]);
+    await f.im.dispose(); await f.im.init();
+    expect(f.received).toHaveLength(1);
+  });
+
+  // Tier 1, #11402: an echo arriving without tempGuid used to leave normal send waiting
+  // in the receive-failure queue. No clock advance or second webhook after the POST.
+  it('keeps the connection healthy and rechecks parked input as soon as the send confirms', async () => {
+    const f = await fixture(null, undefined, true);
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    const statuses: string[] = [];
+    f.im.onStatusChange(status => statuses.push(status.kind));
+    let finish!: (value: { guid: string }) => void;
+    f.send.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const sending = f.im.sendText(f.otherChat.guid, 'outgoing');
+    for (const id of ['echo-without-id', 'manual-during-send']) f.message(id, { isFromMe: true, handle: undefined, chats: [f.chat, f.otherChat] });
+    await f.im.reconcile();
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.received).toHaveLength(0);
+    finish({ guid: 'echo-without-id' });
+    await sending;
+    await vi.waitFor(() => expect(f.state().inbox['manual-during-send']?.state).toBe('accepted'));
+    expect(f.state().inbox['echo-without-id']?.state).toBe('ignored');
+    expect(f.received.map(row => row.messageId)).toEqual(['manual-during-send']);
+    expect(statuses).not.toContain('error');
+  });
+
+  // Tier 1, #11402: one dropped POST response used to block all future manual
+  // input in the chat. A failed scan is insufficient; the next full scan releases it.
+  it('recovers manual input after an unknown send without resending or claiming delivery', async () => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.send.mockRejectedValueOnce(new Error('response lost'));
+    await expect(f.im.sendText(f.chat.guid, 'outgoing')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    // The outgoing copy lacks both a POST result and a temporary GUID. Its
+    // matching content remains ambiguous, while distinct human text can proceed.
+    f.message('late-echo', { isFromMe: true, handle: undefined, text: 'outgoing' });
+    f.message('manual', { isFromMe: true, handle: undefined });
+    await f.webhook('manual');
+    vi.mocked(f.api.history).mockRejectedValueOnce(new Error('history unavailable'));
+    await expect(f.im.reconcile()).rejects.toThrow('history unavailable');
+    expect(f.received).toHaveLength(0);
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['manual']);
+    expect(f.im.health().uncertainSends).toBe(1);
+
+    await f.im.dispose();
+    f.message('manual-after-restart', { isFromMe: true, handle: undefined });
+    await f.im.init();
+    expect(f.received.map(event => event.messageId)).toEqual(['manual', 'manual-after-restart']);
+    // Only the later positive correlation settles this pending copy.
+    expect(f.state().inbox['late-echo'].state).toBe('pending');
+    f.message('same-text-manual', { isFromMe: true, handle: undefined, text: 'outgoing' });
+    await f.im.reconcile();
+    expect(f.state().inbox['same-text-manual'].state).toBe('pending');
+    const row = await f.api.message('late-echo');
+    vi.mocked(f.api.history).mockResolvedValueOnce([{ ...row, tempGuid: f.send.mock.calls[0]![2] }]);
+    await f.im.reconcile();
+    expect(f.state().inbox['late-echo'].state).toBe('ignored');
+    await vi.waitFor(() => expect(f.received.map(event => event.messageId)).toEqual(['manual', 'manual-after-restart', 'same-text-manual']));
+    expect(f.im.health().uncertainSends).toBe(0);
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  // Tier 1, #11402: an uncertain attachment has no comparable text digest.
+  // Its caption or missing metadata must not release it as fresh input.
+  it('isolates a possible file echo while delivering verified plain text', async () => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-bb-send-'));
+    try {
+      const file = path.join(dir, 'sample.txt');
+      await fs.writeFile(file, 'sample');
+      vi.spyOn(f.api, 'sendFile').mockRejectedValueOnce(new Error('no response'));
+      expect((await f.im.sendFile(f.chat.guid, file)).ok).toBe(false);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+    const self = { isFromMe: true, handle: undefined };
+    f.message('file-copy', { ...self, text: 'caption', attachments: [{ guid: 'attachment' }] });
+    f.message('incomplete', { ...self, text: null });
+    f.message('plain-text', { ...self, attachments: [] });
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['plain-text']);
+    expect(f.im.health().uncertainSends).toBe(1);
+  });
+
+  // Tier 1, #11402: scans cannot recover a missing or obsolete comparison key.
+  // The journal survives restarts and still admits independently identified incoming messages.
+  it.each(['legacy', 'rotated-key'])('keeps unidentifiable self input pending with a %s receipt', async scenario => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.send.mockRejectedValueOnce(new Error('no response'));
+    await expect(f.im.sendText(f.chat.guid, 'sample text')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    await f.im.dispose();
+    if (scenario === 'legacy') delete Object.values(f.state().outbox)[0]!.echoSignature;
+    else f.secrets.set('test-bluebubbles-echo-key', 'replacement-test-key');
+    f.message('ambiguous', { isFromMe: true, handle: undefined });
+    f.message('from-peer', { isFromMe: false });
+    await f.im.init();
+    expect(f.received.map(event => event.messageId)).toEqual(['from-peer']);
+    expect(f.state().inbox.ambiguous.state).toBe('pending');
+  });
+
+  // Tier 1, #11402: a verified error echo identifies the outgoing GUID before
+  // the POST returns. It must free the waiting human input without reporting success.
+  it.each(['lookup', 'callback'])('releases manual input on a correlated error echo from %s', async source => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    let reject!: (error: Error) => void;
+    f.send.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const sending = f.im.sendText(f.chat.guid, 'outgoing');
+    const tempGuid = f.send.mock.calls[0]![2];
+    f.message('manual', { isFromMe: true, handle: undefined });
+    await f.im.reconcile();
+    expect(f.received).toHaveLength(0);
+    f.message('failed-echo', { isFromMe: true, ...(source === 'lookup' && { tempGuid, error: 1 }) });
+    await fetch(f.url(), { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'new-message', data: { guid: 'failed-echo', ...(source === 'callback' && { tempGuid, error: 1 }) } }) });
+    try {
+      await vi.waitFor(() => expect(f.received.map(event => event.messageId)).toEqual(['manual']));
+    } finally {
+      reject(new Error('send failed'));
+      await expect(sending).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    }
+    expect(f.im.health().uncertainSends).toBe(0);
+  });
+
+  // Tier 1, #11402: permission requests and ordinary questions may share a DM.
+  // Only a verified owner may consume an owner-scoped answer in that chat.
+  it('keeps an owner-scoped reply pending for the verified speaker', async () => {
+    const f = await fixture();
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(),
+      selfAccountAddresses: { [f.chat.guid]: 'member@example.test' } });
+    const parse = vi.fn((text: string) => text);
+    const answer = f.im.requestTextReply(f.chat.guid, 'Owner response?', parse, undefined, undefined, 'test', 'owner');
+    f.message('member', { text: 'sample member reply', isFromMe: true, handle: undefined });
+    await f.im.reconcile();
+    expect(parse).not.toHaveBeenCalled();
+    expect(f.received[0]?.speaker?.isOwner).toBe(false);
+    f.message('owner', { text: 'sample owner reply' });
+    await f.im.reconcile();
+    await expect(answer).resolves.toBe('sample owner reply');
+  });
+
+  // Tier 1, #11402: a transport-agnostic chat GUID and missing handle cannot
+  // establish iMessage service by themselves. The authenticated chat lookup can.
+  it.each(['SMS', undefined, 'iMessage'])('checks the verified service for handle-less self input (%s)', async service => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    vi.mocked(f.api.chat).mockResolvedValue({ ...f.chat, participants: [{ address: config.ownerAddress, service }] });
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.message('mapped', { isFromMe: true, handle: undefined, chats: [{ guid: f.chat.guid }] });
+    f.message('explicit-sms', { isFromMe: true, handle: undefined, service: 'SMS', chats: [{ guid: f.chat.guid }] });
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(service === 'iMessage' ? ['mapped'] : []);
+  });
+
+  // Tier 1: a verified webhook can arrive before a failing POST returns.
+  it('retains a matching outgoing receipt after a late transport failure', async () => {
+    const f = await fixture(null, undefined, true);
+    f.send.mockImplementationOnce(async (_chat, _body, id) => {
+      f.message('echo', { isFromMe: true, chats: [f.otherChat, f.chat] });
+      await fetch(f.url(), { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'new-message', data: { guid: 'echo', tempGuid: id } }) });
+      await f.im.reconcile();
+      throw new Error('response lost');
+    });
+    await expect(f.im.sendText(f.chat.guid, 'one send')).resolves.toEqual({messageId:'echo'});
+    expect(f.received).toHaveLength(0);
+    expect(f.im.health().uncertainSends).toBe(0);
   });
 
   it('drops own echoes, unrelated chats, reactions and bad callback tokens', async () => {
@@ -1336,4 +1799,37 @@ it('registers and removes only its exact callback while preserving an existing b
   await api.unregisterWebhook(callback);
   expect(rows.map(row => row.id)).toEqual([1]);
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+});
+
+// Tier 1: exercise the HTTP error envelope through final delivery and journal reload.
+// The old transport discarded the AppleScript diagnostic and collapsed attachment errors.
+it.each(['text', 'attachment'] as const)('reports a denied Apple event during final %s delivery without replay', async kind => {
+  const f = await fixture();
+  const fetcher = vi.fn(async () => Response.json({ status: 500, message: kind === 'text' ? 'Message Send Error' : 'Attachment Send Error',
+    error: { type: 'iMessage Error', message: 'Command failed: osascript (synthetic)\n12:19: execution error: Not authorized to send Apple events to Messages. (-1743)\n' } }, { status: 500 }));
+  const api = new BlueBubblesApi(f.api.origin, 'test-only', fetcher);
+  f.send.mockImplementation(api.sendText.bind(api));
+  vi.spyOn(f.api, 'sendFile').mockImplementation(api.sendFile.bind(api));
+  const output = { userId: f.chat.guid, terminal: 'done' as const, text: kind === 'text' ? 'sample' : '',
+    mediaAbsPaths: kind === 'attachment' ? [fileURLToPath(new URL('./api.ts', import.meta.url))] : [] };
+  await expect(f.im.commitFinal(output)).rejects.toThrow('BLUEBUBBLES_AUTOMATION_DENIED');
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  const reopened = await fixture(f.state());
+  expect(reopened.im.health()).toMatchObject({ uncertainSends: 1, automationDenied: true });
+  expect(reopened.send).not.toHaveBeenCalled();
+});
+
+it('keeps a generic attachment failure uncertain even when the command quotes a denial', async () => {
+  const f = await fixture();
+  const response = { status: 500, error: { type: 'iMessage Error',
+    message: 'Command failed: osascript -e "execution error: sample (-1743)"\nexecution error: timed out (-1712)' } };
+  const fetcher = vi.fn(async () => Response.json(response, { status: 500 }));
+  const api = new BlueBubblesApi(f.api.origin, 'test-only', fetcher);
+  vi.spyOn(f.api, 'sendFile').mockImplementation(api.sendFile.bind(api));
+  await expect(f.im.commitFinal({ userId: f.chat.guid, terminal: 'done', text: 'sample',
+    mediaAbsPaths: [fileURLToPath(new URL('./api.ts', import.meta.url))] })).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+  expect(f.im.health().automationDenied).toBeUndefined();
+  expect(f.im.health().uncertainSends).toBe(1);
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

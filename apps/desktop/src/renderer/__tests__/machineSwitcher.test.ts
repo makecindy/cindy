@@ -107,11 +107,11 @@ describe('selectVisibleSessions', () => {
     },
   );
 
-  it('includes local routine and remote channel tasks with exact ownership, excluding private lanes', () => {
+  it('includes projectless group tasks with routine and channel tasks while excluding private lanes', () => {
     const lane = (role: string, device?: string): Session => ({ ...mkSession(role, device), source: 'bot', companion: { id: 'owner', role } });
     expect(selectVisibleSessions([lane('routine'), lane('canonical')],
-      [lane('channel', 'dev-a'), lane('group', 'dev-a'), lane('thread', 'dev-a')], MACHINE_ALL)
-      .map(row => row.id)).toEqual(['routine', 'channel']);
+      [lane('channel', 'dev-a'), { ...lane('group', 'dev-a'), workspaceKind: 'dialogue', projectDir: null }, lane('thread', 'dev-a')], MACHINE_ALL)
+      .map(row => row.id)).toEqual(['routine', 'channel', 'group']);
   });
 
   it('所有(默认)→ 本机 + 全部远程合并(顺序:本地在前)', () => {
@@ -388,9 +388,10 @@ describe('buildSwitcherDevices', () => {
     ]);
   });
 
-  it('被拒设备即使不在全量列表也列出(名字回退到可读提示)', () => {
+  it('尚未拿到完整目录时保留被拒设备，名字回退到可读提示', () => {
     const result = buildSwitcherDevices({
       fullList: [],
+      registeredDeviceIds: null,
       syncedDevices: [],
       revoked: new Set(['gone-dev']),
     });
@@ -408,9 +409,10 @@ describe('buildSwitcherDevices', () => {
     expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connected', online: true }]);
   });
 
-  it('仅有断线缓存的设备仍显示,但状态为 connecting', () => {
+  it('尚未拿到完整目录时仍显示断线缓存，状态为 connecting', () => {
     const result = buildSwitcherDevices({
       fullList: [],
+      registeredDeviceIds: null,
       syncedDevices: [
         { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: false },
       ],

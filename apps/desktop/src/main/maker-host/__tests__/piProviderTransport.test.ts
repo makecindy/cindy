@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { classifyCodexError } from '../../../../../../packages/maker-core/src/agents/codex/translator.js';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import { SseTranslator } from '@cindy/anthropic-responses-bridge';
-import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
+import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels, providerPresetModelRecord } from '@cindy/model-providers';
 import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText, sanitizePiAssistantContent } from '../pi-provider-transport.js';
+import { withCopilotForwardHeaders } from '../copilot-account-url.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
   ...await importOriginal<typeof import('@earendil-works/pi-ai/api/openai-completions')>(),
@@ -646,6 +648,52 @@ it.each(['individual', 'business', 'enterprise'])('sends Copilot Responses edito
   expect(captured).toBe(true);
 });
 
+// #11326, unit: the bundled-model tests cannot catch missing defaults for a newly
+// discovered Responses model. Observe the transparent route and the SDK's fetch input.
+it.each([
+  ['official account', 'https://api.business.githubcopilot.com', true],
+  ['edited endpoint', 'https://api.business.githubcopilot.com.example.org', false],
+] as const)('scopes discovered Copilot Responses headers to the %s', async (_label, upstream, applies) => {
+  const discoveryBase = 'https://api.individual.githubcopilot.com';
+  const id = 'gpt-6.2-sol';
+  const discovered = parseModelsListResponse(
+    { data: [{ id, supported_endpoints: ['/responses'] }] }, discoveryBase + '/models',
+  );
+  const models = mergeDiscoveredRuntimeModels([], discovered!);
+  const config = {
+    id: 'discovered-copilot',
+    name: 'Copilot',
+    runtimes: { pi: { baseUrl: discoveryBase, wireProtocol: 'anthropic-messages' as const, catalogPresetId: 'github-copilot', models } },
+  };
+  const provider = buildUserProvider(config, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  const defaults = providerPresetModelRecord('github-copilot', 'gpt-6.1-sol', 'openai-responses')!.execution.pi.headers!;
+  const route = { upstreamOverride: upstream, pathOverride: '/v1/responses' };
+  const forward = withCopilotForwardHeaders(route, true, {
+    reqId: 1, method: 'POST', url: '/responses', headers: { 'editor-version': 'custom-editor' },
+  });
+  expect(forward?.pathOverride).toBe(route.pathOverride);
+  const forwardHeaders = new Headers(forward?.headerOverride);
+  for (const [name, value] of Object.entries(defaults)) {
+    expect(forwardHeaders.get(name)).toBe(applies && name.toLowerCase() !== 'editor-version' ? value : null);
+  }
+
+  const row = invocationModelRecord(provider.models.pi![0], discoveryBase)!;
+  const outbound = vi.fn<typeof fetch>(async (_url, _init) =>
+    new Response('data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[]}}\n\n',
+      { headers: { 'content-type': 'text/event-stream' } }));
+  const send = createPiProviderFetch({
+    row, providerId: config.id, upstream, copilotOAuth: true, apiKey: 'fixture-token',
+    headers: { 'editor-version': 'custom-editor' }, fetchImpl: outbound,
+  });
+  await (await send('https://unused.invalid', { body: JSON.stringify({ model: id, input: 'ping', max_output_tokens: 16 }) })).text();
+  const [url, init] = outbound.mock.calls[0];
+  expect(String(url)).toBe(upstream + '/responses');
+  const requestHeaders = new Headers(init?.headers);
+  expect(requestHeaders.get('editor-version')).toBe('custom-editor');
+  expect(requestHeaders.get('editor-plugin-version')).toBe(applies ? defaults['Editor-Plugin-Version'] : null);
+  expect(requestHeaders.get('copilot-integration-id')).toBe(applies ? defaults['Copilot-Integration-Id'] : null);
+});
+
 it('reads only a prefix of native adapter error bodies', async () => {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -684,6 +732,57 @@ describe('native provider failure diagnostics', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  // #8974, unit: real Pi SDK -> Responses SSE -> Codex classifier. Existing
+  // status-only tests cannot detect lost safe reasons; only exact structured
+  // context codes qualify, never arbitrary provider prose or a generic 400.
+  it.each([
+    { code: 'context_length_exceeded', type: 'invalid_request_error' },
+    { type: 'context_length_exceeded' },
+  ])('preserves explicit context rejection without forwarding private text: %j', async error => {
+    const fetchImpl = vi.fn(async () => {
+      const bytes = Buffer.from(JSON.stringify({ error: {
+        ...error, message: 'secret-fixture-key private prompt /Users/private/source.ts',
+      } }));
+      // Network chunks may split the enum; an empty chunk must not affect parsing.
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(bytes.subarray(0, 25));
+        controller.enqueue(new Uint8Array());
+        controller.enqueue(bytes.subarray(25));
+        controller.close();
+      } });
+      return new Response(body, { status: 400, headers: { 'content-type': 'application/json' } });
+    });
+    const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl });
+    const text = await (await send('https://unused.invalid', request())).text();
+    const events = text.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+    const failure = events.find(event => event.type === 'response.failed');
+    expect(failure).toBeTruthy();
+    expect(classifyCodexError({ message: failure.response.error.message }).reason).toBe('context-overflow');
+    expect(text).toContain('HTTP 400');
+    const claude = new SseTranslator(row.id);
+    const claudeEvents = events.flatMap(event => claude.push(event));
+    const claudeError = claudeEvents.find(event => event.event === 'error');
+    expect(claudeError?.data.error).toMatchObject({ message: expect.stringContaining('context_length_exceeded') });
+    expect(JSON.stringify(claudeEvents)).not.toMatch(/secret-fixture-key|private prompt|Users\/private/);
+    expect(text).not.toMatch(/secret-fixture-key|private prompt|Users\/private/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    JSON.stringify({ error: { type: 'invalid_request_error', message: 'context_length_exceeded private prompt' } }),
+    JSON.stringify({ error: { code: 'secret-fixture-key', type: 'private_type', message: 'private prompt' } }),
+    JSON.stringify({ error: [{ code: 'context_length_exceeded' }] }),
+    '{"error":{"code":"context_length_exceeded"},"private":"' + 'x'.repeat(NATIVE_ADAPTER_ERROR_BODY_LIMIT) + '"}',
+    '{"error":{"code":"context_length_exceeded"}',
+  ])('keeps unproven or incomplete rejection reasons generic (%#)', async body => {
+    const fetchImpl = vi.fn(async () => new Response(body, { status: 400, headers: { 'content-type': 'application/json' } }));
+    const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl });
+    const text = await (await send('https://unused.invalid', request())).text();
+    expect(text).toContain('category=request_rejected');
+    expect(text).not.toMatch(/context_length_exceeded|secret-fixture-key|private_type|private prompt/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps unknown transport failures unknown and allows a later request to succeed', async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockRejectedValueOnce(new Error('secret-fixture-key https://private.invalid/credential'))
@@ -711,16 +810,17 @@ describe('native provider failure diagnostics', () => {
     expect(text).not.toContain('invalid-json');
   });
 
-  it('does not reuse HTTP failure status from an earlier request', async () => {
+  it.each([401, 400])('does not reuse HTTP %s status or reason from an earlier request', async status => {
     const fetchImpl = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'context_length_exceeded' } }), { status }))
       .mockRejectedValueOnce(new Error('fixture transport failure'));
     const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl });
     const first = await (await send('https://unused.invalid', request())).text();
     const second = await (await send('https://unused.invalid', request())).text();
-    expect(first).toContain('HTTP 401');
+    expect(first).toContain(`HTTP ${status}`);
+    expect(first.includes('context_length_exceeded')).toBe(status === 400);
     expect(second).toContain('category=unknown');
-    expect(second).not.toContain('HTTP 401');
+    expect(second).not.toMatch(/HTTP 40[01]|context_length_exceeded/);
   });
 });
 

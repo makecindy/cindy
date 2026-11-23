@@ -1,10 +1,11 @@
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { GhostCardSessionLink } from './GhostCardSessionLink';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { createRoot } from 'react-dom/client';
 import { MediaScrubber } from '@/components/ui/media-scrubber';
 import { GhostMailHistory } from './GhostMailHistory';
 import { GhostCardForm } from './GhostCardForm';
-import { readGhostCardForm, readGhostCardSupersededBy, readMailCard, mailCardStatus, mailSendRemainingFraction, isLegacyMailCard, readGhostCardFormChange, mergeGhostCardFormValues, trackGhostCardFormDelivery, releaseGhostCardFormDelivery, pendingGhostCardFormDelivery, ghostCardLinkOpensDirectly } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardForm, readGhostCardSupersededBy, readMailCard, mailCardStatus, mailSendRemainingFraction, isLegacyMailCard, readGhostCardFormChange, mergeGhostCardFormValues, trackGhostCardFormDelivery, releaseGhostCardFormDelivery, pendingGhostCardFormDelivery, ghostCardLinkOpensDirectly, visibleMailAttachments } from '@cindy/maker-shared/ghost-card-form';
 import { openMailCard } from '@/features/right-sidebar/lib/mailPreview';
 import sliderCss from '@/components/ui/slider.css?inline';
 /**
@@ -72,6 +73,7 @@ import {
   routeForPicker,
 } from '@/cindy-brain/ghostCardActions';
 import { useRemoteCardIdentity } from '@/cindy-brain/useRemoteCardIdentity';
+import { useRemoteMailImages } from '@/cindy-brain/useRemoteMailImages';
 import { RemoteCardModelRequest, useRemoteCardPromptFor } from './RemoteCardPrompt';
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
@@ -224,14 +226,14 @@ function useRemoteCardSource(callId: string): GhostRemoteCardSource | undefined 
 }
 
 /** A second view of the same card; actions keep the original call identity. */
-export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef, inDialog }: {
-  callId: string; ghostId: string; html: string; sessionId: string; inDialog?: boolean; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
+export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef }: {
+  callId: string; ghostId: string; html: string; sessionId: string; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const themeVars = useGhostCardThemeVars();
   const { t, i18n } = useTranslation();
   const { name, externalLinks } = useGhostCardOwner(callId, ghostId, i18n.language);
   return <GhostCardCanvas callId={callId} html={html} height={GHOST_CARD_HEIGHT_MIN}
-    sessionId={sessionId} themeVars={themeVars} running={false} persistHeight={false} inDialog={inDialog} onEscape={onEscape} settingsButtonRef={settingsButtonRef}
+    sessionId={sessionId} themeVars={themeVars} running={false} persistHeight={false} onEscape={onEscape} settingsButtonRef={settingsButtonRef}
     ariaTitle={t('chat.ghostCall.cardAria', { name, tool: '' })}
     allowExternalLinks={externalLinks} />;
 }
@@ -253,7 +255,6 @@ function GhostCardCanvas({
   allowExternalLinks,
   mailPanel = false,
   persistHeight = true,
-  inDialog = false,
   onEscape,
   settingsButtonRef,
 }: {
@@ -270,7 +271,6 @@ function GhostCardCanvas({
   allowExternalLinks?: boolean;
   mailPanel?: boolean;
   persistHeight?: boolean;
-  inDialog?: boolean;
   onEscape?: () => void;
   settingsButtonRef?: RefObject<HTMLButtonElement | null>;
 }): ReactNode {
@@ -295,6 +295,13 @@ function GhostCardCanvas({
   useEffect(() => () => liveDisposeRef.current?.(), []);
   const formFields = useMemo(() => readGhostCardForm(html), [html]);
   const mail = useMemo(() => readMailCard(html), [html]);
+  // A remote mail card's images stay on its computer; they are read through the remote media path.
+  const remoteMailImageUrls = useMemo(() => !mail ? [] : [
+    ...(mail.images ?? []).map(image => image.url),
+    ...mail.fields.filter(field => field.kind === 'mail-attachments').flatMap(field =>
+      visibleMailAttachments({ [field.name]: field.value }, field.name).flatMap(file => file.previewUrl ? [file.previewUrl] : [])),
+  ], [mail]);
+  const remoteMailImage = useRemoteMailImages(mail ? remote?.deviceId : undefined, remoteMailImageUrls);
   useEffect(() => {
     if (!mail?.pendingSend) return;
     let animatedFill: HTMLElement | null = null;
@@ -977,11 +984,23 @@ function GhostCardCanvas({
         onEnlarge={mail && sessionId && !mailPanel ? () => { void openMailCard(sessionId, callId).catch(() => toast.error(t('chat.ghostCall.formSyncFailed'))); } : undefined}
         readOnly={['sent', 'deleted'].includes(readMailCard(html)?.state ?? '')}
         images={readMailCard(html)?.images}
-        onAttach={readMailCard(html) ? inline => {
+        mediaUrl={remoteMailImage ?? undefined}
+        // A remote task's computer takes files uploaded from here only when it says so (mailUpload).
+        onAttach={readMailCard(html) && (!remote || remote.mailUpload) ? inline => {
           const mail = readMailCard(html)!;
+          const remoteSource = remoteRef.current;
+          if (remoteSource && inline) return;
           setFormBusy(true);
-          const delivery = formDelivery.current.then(() => dispatchGhostCardAction(callId,
-            `mail:${inline ? 'image' : 'attach'}:${mail.key}`, { formValues: formState.current.values }).then(r => r.ok));
+          const delivery = formDelivery.current.then(async () => {
+            if (!remoteSource) return dispatchGhostCardAction(callId,
+              `mail:${inline ? 'image' : 'attach'}:${mail.key}`, { formValues: formState.current.values }).then(r => r.ok);
+            // The file is chosen and uploaded on this computer; only its transfer reference goes over.
+            const picked = await window.electronAPI.ghosts.uploadRemoteMailAttachment(remoteSource.deviceId);
+            if (!picked.ok) return false;
+            if (!picked.attachment) return true;
+            return dispatchGhostCardAction(callId, `mail:attach:${mail.key}`,
+              { formValues: formState.current.values, mailAttachment: picked.attachment }).then(r => r.ok);
+          });
           formDelivery.current = delivery;
           if (sessionId) trackGhostCardFormDelivery(sessionId, `${callId}:${editorId}`, delivery);
           void delivery.then(ok => { if (!ok) toast.error(t('chat.ghostCall.attachmentNotAdded')); }).finally(() => setFormBusy(false));
@@ -998,7 +1017,7 @@ function GhostCardCanvas({
         }} /> : null}
       {/* Editable forms share a frame with their plugin-provided footer.
           Ordinary plugin posters keep their original transparent canvas. */}
-      <div className={formFields ? 'relative overflow-hidden rounded-b-xl border-t border-border' : 'relative overflow-hidden rounded-[10px]'}>
+      <div className={formFields ? 'relative overflow-hidden rounded-b-xl border-t border-border' : 'relative overflow-hidden rounded-xl'}>
         <iframe
           ref={iframeRef}
           sandbox="allow-same-origin"
@@ -1077,10 +1096,10 @@ function GhostCardCanvas({
         />
       ) : null}
       {remotePrompt?.kind === 'model' ? (
-        <RemoteCardModelRequest key={remotePrompt.request.requestId} prompt={remotePrompt} inDialog={inDialog} />
+        <RemoteCardModelRequest key={remotePrompt.request.requestId} prompt={remotePrompt} />
       ) : null}
       {modelAsk ? (
-        <GhostCardModelSelect inDialog={inDialog}
+        <GhostCardModelSelect
           rect={modelAsk.rect}
           initial={modelAsk.initial}
           onSelect={(route) => {
@@ -1117,6 +1136,7 @@ function GhostCardCanvas({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            <DownloadImageMenuItem src={imgMenu.src} />
             <DropdownMenuItem onClick={() => void copyMenuImage()}>
               <Copy className="mr-2 h-4 w-4" />
               {t('chat.media.copyImage')}

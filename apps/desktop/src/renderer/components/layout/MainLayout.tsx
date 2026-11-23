@@ -1,3 +1,4 @@
+import { useRightSidebarMaximizeEscape } from './useRightSidebarMaximizeEscape';
 import { toast } from '@/lib/toast';
 import { openSettingsNavigation } from '@/lib/settingsNavigation';
 import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
@@ -12,6 +13,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { buildSharedTaskInvitationLink, isSharedTaskPeer } from '@cindy/device-link';
 import { JoinSharedTaskDialog } from '@/features/device-link/JoinSharedTaskDialog';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { setPendingGiftCardCode } from '@/features/billing/giftCardIntent';
 import { useRememberMainEntry } from './MainEntryRedirect';
 import { useTranslation } from 'react-i18next';
 
@@ -24,6 +26,7 @@ import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
 import { RightSidebar, type RightSidebarHandle } from '@/components/layout/RightSidebar';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { Sidebar } from '@/components/sidebar/Sidebar';
+import { companionChatTarget } from '@/features/bots/companionChatTarget';
 import { getSplitSessionIds, useSplitGroup } from '@/features/cc-agent/splitGroupStore';
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
@@ -128,6 +131,7 @@ import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
 import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
+import { useAuxiliaryModelHealthNotice } from '@/hooks/useAuxiliaryModelHealth';
 import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
@@ -483,13 +487,23 @@ export function MainLayout() {
     syncNotificationsEnabledToMain();
   }, []);
 
+  // Task and companion focus changes share a split tree. Remounting the
+  // outlet here would lose pending pane closes and in-progress chat input.
+  const contentFeatureKey = companionChatTarget(location.pathname, location.search)
+    ? 'cc-agent'
+    : location.pathname.split('/')[1] || 'root';
   const isSettingsRoute = location.pathname === '/settings';
 
   // 任务浏览栈与它的快捷键监听挂在常驻壳层:设置页会整个卸载左上按钮簇
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
   // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
   // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
-  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration, mode: authMode, user: authUser } = useAuth();
+  // 礼品卡链接到达时的身份。只在确定不是个人身份（未登录 Cindy 账号，或当前是组织身份）时拦下；
+  // 账号资料还没加载出来时照常放行，由计费页自己的可见性判断兜底。用 ref 读最新值，
+  // 不让链接处理器随身份变化重建。
+  const canRedeemGiftCardRef = useRef(true);
+  canRedeemGiftCardRef.current = authMode === 'cloud' && authUser?.membershipKind !== 'org';
   const browseHistory = useSessionBrowseHistory({
     ownerKey: `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`,
   });
@@ -580,6 +594,8 @@ export function MainLayout() {
   useSchemaDriftWarningToast();
   // 语音快捷键在设置页之外自动恢复失败 —— 那时设置页的 toast 不在,只能由常挂载的这里提示。
   useVoiceInputShortcutRecoveryToast();
+  // 辅助模型全部不可用时提示一次（任务命名、摘要、插件任务等都依赖它）。
+  useAuxiliaryModelHealthNotice();
   // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
   usePluginRemovalNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
@@ -702,7 +718,7 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey } = payload;
       if (
         typeof requestId !== 'string' ||
         !requestId ||
@@ -720,6 +736,7 @@ export function MainLayout() {
       navigate('/cc-agent/scheduled', {
         state: pluginScheduleNavigationState({
           kind: 'plugin-schedule-draft',
+          ...(typeof primaryHostKey === 'string' ? { primaryHostKey } : {}),
           requestId,
           ghostId,
           ghostName,
@@ -763,8 +780,9 @@ export function MainLayout() {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -795,6 +813,18 @@ export function MainLayout() {
       }
       if (payload.type === 'plugin') {
         navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
+        return;
+      }
+      if (payload.type === 'gift-card') {
+        // 礼品卡仅限个人用户领取，兑换入口所在的计费页也只对个人身份显示。组织身份或
+        // 未登录时不跳转（否则会落到「通用」页、什么都不发生），提示后丢弃兑换码。
+        if (!canRedeemGiftCardRef.current) {
+          toast.error(t('billing.giftCard.errors.personalRequired'));
+          return;
+        }
+        // 兑换码不进路由 URL：暂存在内存，计费页消费意图时取走。
+        setPendingGiftCardCode(payload.code);
+        navigate('/settings?tab=billing&intent=redeem-gift-card');
         return;
       }
       if (payload.type === 'installed-plugin') {
@@ -851,7 +881,10 @@ export function MainLayout() {
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
         // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
         const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
+        const device = payload.tab === 'remote-control' && payload.focusDeviceId
+          ? '&section=devices&device=' + encodeURIComponent(payload.focusDeviceId)
+          : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}${device}`);
       }
     },
     [navigate, navigateToSession, openShareImport],
@@ -873,6 +906,11 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
       if (payload.type === 'chat-invite' || payload.type === 'chat-invite-malformed') {
+        void pullChatInvitations();
+        return;
+      }
+      // 礼品卡意图同样由 Main 保留到登录之后，和下面几类一样从暂存槽原子取出。
+      if (payload.type === 'gift-card') {
         void pullChatInvitations();
         return;
       }
@@ -1128,24 +1166,8 @@ export function MainLayout() {
       loaded: rsbWindow.loaded,
       detached: rsbDetached,
     });
-  useEffect(() => {
-    if (!isRightSidebarMaximized) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      // 输入态让路 —— 用户在 input / contenteditable 里按 Esc 通常是取消编辑。
-      const target = e.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target?.closest?.('[contenteditable="true"]')
-      ) {
-        return;
-      }
-      setIsRightSidebarMaximized(false);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isRightSidebarMaximized]);
+  const exitRightSidebarMaximize = useCallback(() => setIsRightSidebarMaximized(false), []);
+  useRightSidebarMaximizeEscape(isRightSidebarMaximized, exitRightSidebarMaximize);
   // 折叠 RSB / session 切换 / 主路由切走聊天视图 → 自动退出 maximize。
   useEffect(() => {
     if (isRightSidebarCollapsed && isRightSidebarMaximized) {
@@ -1448,7 +1470,6 @@ export function MainLayout() {
           openPerformanceTrace();
           break;
         case 'new-maker':
-          // 与侧栏同口径：继承当前任务电脑，同机保留草稿项目。
           applicationMenuLog.info('new-maker invoked, navigating to /cc-agent/new');
           navigate('/cc-agent/new', {
             state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0]),
@@ -1918,7 +1939,7 @@ export function MainLayout() {
                     <div
                       data-testid="right-sidebar-fixed-trigger"
                       className={cn(
-                        'pointer-events-none absolute z-50 flex items-center gap-1',
+                        'pointer-events-none absolute z-float flex items-center gap-1',
                         rightSidebarSide === 'left' ? 'left-2 flex-row-reverse' : 'right-2',
                       )}
                       style={
@@ -1953,7 +1974,7 @@ export function MainLayout() {
                     </div>
                   )}
                   <VoiceCallFloatingSlot />
-                  <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
+                  <FadeSwitcher key={contentFeatureKey}>
                     <Outlet context={outletContext} />
                   </FadeSwitcher>
                 </ContentHeaderSlot>
@@ -1961,7 +1982,7 @@ export function MainLayout() {
                 {isMac && rightSidebarPaneAvailable && rsbWindow.loaded && (
                   <div
                     data-testid="right-sidebar-fixed-trigger"
-                    className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+                    className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
                     style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                   >
                     <RightSidebarToggle
@@ -2059,7 +2080,7 @@ export function MainLayout() {
             右上角（系统按钮下一行），与截图中的原位置一致。 */}
         {!isMac && (
           <div
-            className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
             data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >

@@ -121,6 +121,8 @@ export interface AgentCapabilities {
    * 到达时无法安全关联后续模型写入。
    */
   supportsSessionAgentSwitchCas?: boolean;
+  supportsRemoteModelWindowRebuild?: boolean;
+  supportsQueueHeadRetry?: boolean;
   /**
    * 被控端是否支持在开启 Orca Team 时显式设置 Worker 默认权限。
    * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
@@ -313,6 +315,8 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !value.permissionModes.every(isNamedDescriptor) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
+    !isOptionalBoolean(value.supportsRemoteModelWindowRebuild) ||
+    !isOptionalBoolean(value.supportsQueueHeadRetry) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
     !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
@@ -686,11 +690,9 @@ export function evictControlledDeviceCapabilities(taskDeviceId: string): void {
   }
 }
 
-export function refreshControlledDeviceCapabilities(taskDeviceId: string): void {
+export function getMountedControlledDeviceCapabilityTargets(taskDeviceId: string): string[] {
   const devices = new Set([...remoteListeners.keys()].map(key => key.slice(0, key.lastIndexOf(':'))));
-  for (const key of devices) {
-    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) void prefetchDeviceCapabilities(key);
-  }
+  return [...devices].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
@@ -700,6 +702,9 @@ export function evictDeviceCapabilities(
 ): void {
   // A provisional direct target must not evict the host's healthy routed aliases.
   if (!options?.directOnly) {
+    if (!parseModelCatalogKey(deviceId)) {
+      routedCapabilityGenerations.set(deviceId, getRoutedCapabilityGeneration(deviceId) + 1);
+    }
     const scopedDevices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
       .map(key => key.slice(0, key.lastIndexOf(':'))));
     for (const key of scopedDevices) {
@@ -728,6 +733,12 @@ export function evictDeviceCapabilities(
       ...(options?.retainDisplaySnapshot ? { retainDisplaySnapshot: true } : {}),
     });
   }
+}
+
+const routedCapabilityGenerations = new Map<string, number>();
+
+export function getRoutedCapabilityGeneration(deviceId: string): number {
+  return routedCapabilityGenerations.get(deviceId) ?? 0;
 }
 
 /** 只清远程能力，本机目录仍由本地刷新代际管理。 */

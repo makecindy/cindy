@@ -126,10 +126,11 @@ pnpm --filter desktop preview:island-mascots
   不改变旧字段的含义。任务状态、标题、头像与点击目标沿用胶囊优先展示的同一任务；其他任务仍在
   运行时也能展示已完成结果，并在状态行补上运行中的数量。
 - **点击任务**：主进程把当前展示任务的 `taskUrl`（远程任务带 `device`）随内容下发，Widget 的 banner 与 Dynamic Island 都用 `widgetURL` 打开；标题和计数相同但目标变化时也必须更新。字段可选以兼容旧活动。群聊汇总不是任务 ID，暂保留打开应用的行为。
-- **展开计数解释**：只在系统实时活动的展开区域与 `ActivityBanner` 显示两个数字的名称，
-  并在标题下的单行副标题分解「等你处理 / 未读结果」，不增加第三行。当前任务的完成／出错
-  或运行状态与分解内容同行保留。紧凑数字和任务胶囊保持不变。文案通过可选 `countLabels`
-  下发，旧活动缺字段时保留原布局；仅语言变化也会触发内容更新。未读部分包含结果与伙伴
+- **展开计数解释**：只在系统实时活动的展开区域与 `ActivityBanner` 显示两个数字的名称。
+  系统灵动岛在摄像头左侧显示头像，头像旁显示当前任务状态，并在有待查看事项时用第二行分解
+  「等你处理 / 未读结果」。摄像头右侧显示计数，下方整行居中显示任务标题，两端等距留白。各区域由 WidgetKit 分配宽度。
+  普通显示器的 `ActivityBanner` 仍在标题下用单行显示状态与分解。紧凑数字和任务胶囊保持不变。文案通过可选 `countLabels`
+  下发，旧活动缺字段时沿用原有的无标签计数与状态文案；仅语言变化也会触发内容更新。未读部分包含结果与伙伴
   消息，按 `attentionTotal - attentionCount` 展示，不把全部未读都叫完成成功。
 - **提醒展开**：只有「等你处理的任务变多」或「未读完成任务变多」时带 `AlertConfiguration` 更新，系统会把活动
   短暂展开（菜单栏里是药丸下方的展开卡片）；计数下降、切到已有未读结果和普通进度更新不提醒，首次发起也不提醒。提醒音用
@@ -144,5 +145,5 @@ pnpm --filter desktop preview:island-mascots
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer node build.mjs addon <out.node> arm64`，
   再对打包好的 `.app` 运行 `build.mjs extension <App.app> arm64`。
 - **发布签名**：扩展必须带 App Sandbox。`scripts/ci/lib.mjs` 的 `signMacAppWithIdentity` 在签主 app 之前，
-  先用 `live-activity/extension.entitlements` 和发布身份单独签 `Contents/PlugIns/*.appex`；对整个包 `--deep`
+  先用 `live-activity/extension.entitlements` 和发布身份单独签 `Contents/PlugIns/` 里的扩展（桌面小组件扩展除外，它保留安装时生成的 entitlements，见 `native/desktop-widgets/AGENTS.md`）；对整个包 `--deep`
   统一签会丢掉扩展的沙盒权限，扩展将无法加载。

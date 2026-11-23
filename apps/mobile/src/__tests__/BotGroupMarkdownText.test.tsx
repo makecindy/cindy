@@ -58,11 +58,11 @@ vi.mock('@/session/MessageRenderer', async () => {
   const { RichAnswer } = await import('@/session/RichAnswer');
   const { splitRichAnswer } = await import('@cindy/maker-shared/rich-answer');
   const { createContext } = await import('react');
-  return { MessageHeavyContentVisibilityContext: createContext(true), MarkdownBody: ({ text, richStateKey, publicMediaOnly }: any) => createElement('div', { 'data-public-media-only': publicMediaOnly },
+  return { MessageHeavyContentVisibilityContext: createContext(true), MarkdownBody: ({ text, richStateKey, publicMediaOnly, codeCopyEnabled }: any) => createElement('div', { 'data-public-media-only': publicMediaOnly },
     splitRichAnswer(text).map(part => part.kind === 'rich'
       ? createElement(RichAnswer, { key: part.key, source: part.source, complete: true, stateKey: `${richStateKey}:${part.key}`,
         renderMedia: (node: any) => createElement('span', {}, /^https?:/.test(node.props.src) ? node.props.src : node.props.alt),
-        renderMarkdown: (source: string) => createElement(BotGroupMarkdownText, { content: source }) }) : part.source)) };
+        renderMarkdown: (source: string) => createElement(BotGroupMarkdownText, { content: source, richContent: true, interactive: codeCopyEnabled }) }) : part.source)) };
 });
 vi.mock('@/theme', async () => ({
   ...await import('@/theme/tokens'), monoFont: 'Menlo',
@@ -168,6 +168,20 @@ it('keeps table columns aligned across short, long and empty cells, with horizon
   expect([...rows[2].children].map(cell => cell.textContent)).toEqual(['B', '', '进行中']);
   expect(styleOf('很长的说明内容需要在所属单元格内换行，不能串到下一列').fontWeight).toBe('600');
   expect(node.textContent).not.toContain(' | ');
+});
+
+// Batfree feedback / unit: the group renderer owns a separate table path. Copy
+// its complete 2-column grid, and keep share/read-only rendering action-free;
+// existing group tests only exercise code-block copy and individual cell text.
+it.each(['markdown', 'rich-answer'])('copies an entire %s group table and hides the action in noninteractive bodies', async kind => {
+  const table = '| A | B |\n| --- | --- |\n| **1** | 2 |\n| 3 | |';
+  const content = kind === 'markdown' ? table : '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'm', kind: 'markdown', props: { text: table } }) + '\n```';
+  const props = { content, richContent: true, authorKind: 'bot' as const };
+  await act(async () => root.render(createElement(BotGroupMarkdownText, props)));
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="message.markdownTableCopyButton"]')!.click());
+  expect(actions.copy).toHaveBeenCalledExactlyOnceWith('A\tB\n1\t2\n3\t');
+  await act(async () => root.render(createElement(BotGroupMarkdownText, { ...props, interactive: false })));
+  expect(node.querySelector('[data-testid="message.markdownTableCopyButton"]')).toBeNull();
 });
 
 it('expands a short table to the measured message width without changing code blocks', async () => {

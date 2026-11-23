@@ -1,3 +1,4 @@
+import type { BotGroupTextInput } from './botGroupTextInput';
 /**
  * 群聊 @ 点名候选：主群输入框与 Thread 回复框共用的一套状态与候选列表。
  *
@@ -66,7 +67,7 @@ export function useBotGroupMentionPicker({
   onTextChange: (value: string) => void;
   /** Full roster: active members other than you are offered; everyone but you still resolves. */
   members: readonly BotGroupMemberView[];
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  textareaRef: RefObject<BotGroupTextInput | null>;
   /** Labels that mean 「所有人」 when resolving; the first is the one offered. Defaults to the UI label. */
   allLabels?: readonly string[];
   allowMentionAllBots?: boolean;
@@ -199,7 +200,7 @@ export function useBotGroupMentionPicker({
   };
 
   /** Arrow keys, Enter / Tab and Esc while the list is open; true when the key was used. */
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>): boolean => {
     if (!open || !query) return false;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
@@ -253,7 +254,7 @@ export function useBotGroupMentionPicker({
       // Shared menu panel (DESIGN §4): Board border and menu surface; no shadow, per the
       // zero-shadow Bot surfaces (botDesignContract.test.ts). Capped and scrolling so a big
       // roster stays inside a short window or the narrow thread panel.
-      className="absolute bottom-full left-0 z-20 mb-2 flex max-h-72 w-64 max-w-full flex-col gap-0.5 overflow-y-auto rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5"
+      className="absolute bottom-full left-0 z-page-float mb-2 flex max-h-72 w-64 max-w-full flex-col gap-0.5 overflow-y-auto rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5"
     >
       <MenuHighlightLayer />
       {options.map((option, index) => (

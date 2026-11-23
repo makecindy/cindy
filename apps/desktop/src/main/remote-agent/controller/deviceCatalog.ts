@@ -7,12 +7,14 @@
  * 读取时只留那台电脑开了「允许被远程调用」的供应商(`remoteInvocationEnabled === true`)：
  * 换模型、协同 Worker、定时任务的默认来源都只能落在这些供应商上。
  */
-import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, readProviderMetadataContinuity, scrubSharedProvider } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, readProviderMetadataContinuity, readProviderShareGroupSize, scrubSharedProvider } from '@cindy/device-link';
 import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, isModelVisible, remoteInvocationModels, type ProviderView, type AgentKind } from '@cindy/model-providers';
 
 import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines } from '../../../shared/pluginEngines.js';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
+import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWindow.js';
 
 type RemoteInvoke = (
   deviceId: string,
@@ -114,6 +116,20 @@ export async function readDeviceProviderViews(
   return (await readDeviceProviderCatalog(invoke, deviceId, options)).views;
 }
 
+/** Resolve replay capacity from the same admitted device catalog as the route. */
+export function resolveDeviceHandoffWindow(
+  catalog: DeviceProviderCatalogRead, deviceId: string, agentKind: AgentKind, model: string, providerId: string | null,
+): number | null {
+  if (catalog.stale) return null;
+  const providers = catalog.views;
+  const selected = providerId ?? effectiveSourceIdForModel(providers, null, model, agentKind);
+  const provider = providers.find(view => view.id === selected);
+  // A shared group can later choose an execution computer different from the
+  // one advertising the group, so the representative window is insufficient.
+  if (!provider || (isProviderShareAgentDeviceId(deviceId) && readProviderShareGroupSize(provider) !== null)) return null;
+  return resolveVerifiedContextWindow({ providers }, agentKind, provider.id, model);
+}
+
 /** 与普通任务共用授权目录；失败不回落到本机的同名供应商。 */
 export async function readRemoteProviderRoute(route: {
   agentDeviceId: string;
@@ -122,7 +138,8 @@ export async function readRemoteProviderRoute(route: {
   model: string;
 }) {
   const { remoteBackgroundInvoke } = await import('../../device-link');
-  const providers = await readDeviceProviderViews(remoteBackgroundInvoke, route.agentDeviceId);
+  const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, route.agentDeviceId);
+  const providers = catalog.views;
   // 已有远程任务可以未指定来源；只在执行端授权目录内按原生默认规则解析。
   // 显式来源失效仍拒绝，不换到另一个同名模型账号。
   const providerId = route.providerId ?? effectiveSourceIdForModel(providers, null, route.model, route.agentKind);
@@ -131,5 +148,18 @@ export async function readRemoteProviderRoute(route: {
   if (!provider || !model || !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
     throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote provider or model is unavailable.');
   }
-  return { provider, model };
+  return {
+    provider, model,
+    verifiedContextWindow: resolveDeviceHandoffWindow(catalog, route.agentDeviceId, route.agentKind, route.model, providerId),
+  };
+}
+
+/** Read the authorized plugin engine catalog for one execution location. */
+export async function readRemotePluginEngines(deviceId: string) {
+  const { remoteBackgroundInvoke } = await import('../../device-link');
+  const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+  if (!reply.ok) {
+    throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine is unavailable.');
+  }
+  return parseOfferedPluginEngines(reply.result);
 }

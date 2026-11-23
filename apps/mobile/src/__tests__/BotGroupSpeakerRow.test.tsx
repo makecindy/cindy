@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   availability: vi.fn(() => true),
   resourceChanged: vi.fn(() => () => {}),
   focused: true,
+  remoteGroup: null as BotGroupRemoteChatData | null,
 }));
 
 vi.mock('react-native', () => ({
@@ -38,7 +39,7 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invo
   openLink: h.openLink, getPresenceAvailability: h.availability, onRemoteResourceChanged: h.resourceChanged }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/device-link/remoteResources', () => ({ getRemoteResource: vi.fn(async () => null) }));
-vi.mock('@/session/botGroupRemote', () => ({ BOT_GROUP_CLIENT_PRIMITIVES: [], botGroupChatDataFromResource: () => null, botGroupResourceRef: (id: string) => ({ id }) }));
+vi.mock('@/session/botGroupRemote', () => ({ BOT_GROUP_CLIENT_PRIMITIVES: [], botGroupChatDataFromResource: () => h.remoteGroup, botGroupResourceRef: (id: string) => ({ id }) }));
 vi.mock('@/session/BotGroupAvatars', () => ({ BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BotGroupAvatar: () => null }));
 vi.mock('@/session/InteractionPanel', () => ({ InteractionPanel: (props: any) => { h.panel = props; return el('div', { 'data-testid': 'panel' }); } }));
 vi.mock('@/session/remoteSessionStore', async (importOriginal) => {
@@ -84,6 +85,7 @@ beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
   vi.clearAllMocks(); h.pending = {}; h.live = {}; h.panel = null;
   h.focused = true;
+  h.remoteGroup = null;
   remoteSessionStore.clear();
   h.invoke.mockResolvedValue([{ request: { requestId: 'r1' } }]);
   node = document.createElement('div'); root = createRoot(node);
@@ -178,7 +180,7 @@ it.each([
 // tier：unit，原生宿主和远端读取用内存 fake，不连接网络。
 // 复验：保留主干消息工作租约回归；工作区用例覆盖离线、折叠与待确认恢复。
 function workGroup(): BotGroupRemoteChatData {
-  return { id: 'group', members: [{ botId: 'abu', name: '阿布', isOwned: true }, { botId: 'other', name: '其他伙伴', isOwned: false }],
+  return { id: 'group', supportsOwnedStop: true, members: [{ botId: 'abu', name: '阿布', isOwned: true }, { botId: 'other', name: '其他伙伴', isOwned: false }],
     round: { status: 'running', speakers: [
       { botId: 'abu', sessionId: 's1', executionId: 'e1', isSelfRequested: true, executionStatus: 'queued', activity: 'reply' },
       { botId: 'other', sessionId: 's2', executionId: 'e2', isSelfRequested: false, executionStatus: 'running', activity: 'reply' },
@@ -187,6 +189,27 @@ function workGroup(): BotGroupRemoteChatData {
 async function renderWork(group: BotGroupRemoteChatData, online = true, controls: { onStop?: () => Promise<void>; stopping?: boolean } = {}) {
   await act(async () => root.render(el(BotGroupWorkArea, { group, deviceId: 'mac', online, identityFor: (botId, name) => ({ botId, name }), onError: vi.fn(), ...controls })));
 }
+// Unit / #11488: a late-opening phone must read the exact persisted input,
+// including epoch and chat-only queue IDs; older hosts retain the legacy fallback.
+it.each([undefined, 'bot-group:group:e1:3:abu', 'chat-only-queue'].flatMap(inputClientId => [false, true].map(remote => ({ inputClientId, remote }))))('loads existing process history with host input $inputClientId (remote=$remote)', async ({ inputClientId, remote }) => {
+  const group = workGroup();
+  group.round.speakers = [{ ...group.round.speakers[0], executionStatus: 'running', inputClientId }];
+  if (remote) {
+    h.remoteGroup = { ...group, round: { ...group.round, speakers: [...group.round.speakers] } };
+    group.members[0].homeDeviceId = 'executor';
+    group.round.speakers = [{ ...group.round.speakers[0], sessionId: null, inputClientId: 'wrong-host-input' }];
+  }
+  const anchor = inputClientId ?? 'bot-group:group:e1:abu';
+  h.invoke.mockImplementation(async (_device, channel, args) => {
+    if (channel !== 'local-db:messages:around-client-id') return [];
+    if (args[1] !== anchor && args[1] !== 'stage') throw new Error('NOT_FOUND');
+    return [{ clientId: anchor, role: 'user', content: 'hidden input' },
+      { clientId: 'stage', role: 'assistant', content: 'Saved stage before opening', agentMeta: { assistantPhase: 'commentary' } }];
+  });
+  await renderWork(group);
+  expect(h.invoke).toHaveBeenCalledWith(remote ? 'executor' : 'mac', 'local-db:messages:around-client-id', ['s1', anchor, { radius: 80 }]);
+  expect(node.textContent).toContain('Saved stage before opening');
+});
 // Unit regression: two people request the same Cindy; queued and running rows retain distinct attribution.
 it('names each requester on concurrent Cindy progress rows', async () => {
   await i18n.changeLanguage('en');
@@ -318,7 +341,7 @@ it.each([true, false])('labels only an unambiguous current step execution (ident
   expect(rows[2].textContent).not.toContain('Only the current execution');
 });
 
-it('keeps my own companion read-only when someone else requested its work', async () => {
+it('lets me stop my companion without exposing another requester?s pending confirmations', async () => {
   const group = workGroup();
   group.serverBacked = true;
   group.round.speakers[0].isSelfRequested = false;
@@ -326,7 +349,7 @@ it('keeps my own companion read-only when someone else requested its work', asyn
   h.pending.s1 = [{ request: { requestId: 'foreign-request', kind: 'permission' } }];
   await renderWork(group, true, { onStop: vi.fn(async () => undefined) });
   expect(node.querySelectorAll('[data-testid="panel"]')).toHaveLength(0);
-  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+  expect(node.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
   expect(h.subscribe).not.toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
 });
 

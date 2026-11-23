@@ -159,6 +159,8 @@ export interface ImChannelAdapter {
    * 实现; 缺省 = 这个渠道的连接不能交给伙伴, 保持原有路由。
    */
   companionLane?: (userId: string) => ImCompanionLane;
+  /** An explicitly delegated chat stays on its recipient even when the recipient is unavailable. */
+  requiresCompanionLane?(userId: string): boolean;
   /**
    * 公共对话(服务器频道 / thread)不接入本机桌面任务与项目: /ctr /exctr /session /project 及其卡片
    * 按钮对这个 userId 一律不执行。接管会把主人私人桌面任务挂到公共场合, 与频道隔离的承诺冲突。
@@ -179,6 +181,10 @@ export interface ImChannelAdapter {
   getBotDisplayName?(): string;
   /** Terminal output strategy; existing channels use rich-card. */
   output: ImOutputDriver;
+  /** Resolve a persisted dedicated lane against this connection's current chat allowlist. */
+  connectedChatForLane?(botId: string, routeKey: string): string | undefined;
+  /** Legacy scheduler envelope on text transports. Undefined keeps normal formatting, null suppresses the publication. */
+  scheduledNotificationText?(text: string): string | null | undefined;
   config: ImOrchestratorConfig;
   ui: ImUiTextPack;
   sessions: ImSessionNamespace;

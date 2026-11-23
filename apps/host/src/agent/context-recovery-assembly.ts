@@ -29,6 +29,8 @@ import { directoryGrantsForRuntime } from '../../../desktop/src/main/maker-ipc/e
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../../desktop/src/main/device-link/broadcast-tap.ts';
+import { messageToCamel } from '../../../desktop/src/main/localDb/mapper.js';
+import { markOversizedInputSkippedRow } from '../../../desktop/src/main/localDb/messageMutations.js';
 import { getCurrentDbClientSnapshot, getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { botProfiles, botSessionLinks, sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { commitContextRebuildWithPorts } from '../../../desktop/src/main/localDb/contextRebuildPersistence.ts';
@@ -36,6 +38,8 @@ import { findLatestContextRebuildMeta, findLatestUserMessageForRebuild } from '.
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.ts';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../../desktop/src/shared/modelContextLimit.ts';
+import { MESSAGE_METADATA_REFRESH } from '../events.mjs';
+import { explicitPorts } from './explicit-ports.ts';
 
 type Log = ContextOverflowRolloverDeps['log'];
 
@@ -53,8 +57,11 @@ export interface HostRecoveryPorts {
   readSessionExtraDirsFromDb: ReplayContextRecoveryPorts['readSessionExtraDirsFromDb'];
   readSessionWritableDirsFromDb: ReplayContextRecoveryPorts['readSessionWritableDirsFromDb'];
   resolveVerifiedWindow?: ContextOverflowRolloverDeps['resolveVerifiedWindow'];
-  /** Present only while oversized Codex history recovery is open (classifyCodexHistory). */
-  codexHistory?: Pick<ClassifyCodexHistoryPorts, 'readCodexThreadStorageReadOnly' | 'classifyCodexHistoryOversized'>;
+  resolveHandoffWindow?: ContextOverflowRolloverDeps['resolveHandoffWindow'];
+  /** A cold Pi runtime resumed only to read its window and usage (runtime-selection.ts, the desktop's binding). */
+  rehydrateColdPiRuntimeForWindowVerification?: ContextOverflowRolloverDeps['rehydrateColdPiRuntimeForWindowVerification'];
+  /** The native thread locator and classifier used before sending to a task with a saved history error. */
+  codexHistory: Pick<ClassifyCodexHistoryPorts, 'readCodexThreadStorageReadOnly' | 'classifyCodexHistoryOversized'>;
   /** Present only while Pi's unsupported request option recovery is open. */
   piCompat?: {
     read: NonNullable<ContextOverflowRolloverDeps['readPiNativeCompatOverride']>;
@@ -76,7 +83,10 @@ export interface HostRecoveryPorts {
 export interface HostRecoveryRuntimePorts {
   /** The replay turn (turn-executor.mjs replay); the recovery holds the task's send lock. */
   replay: ReplayContextRecoveryPorts['sendToAgentAcceptedUnlocked'];
+  /** Checks the database owner bound to this queue runtime when the turn started. */
+  assertCurrent(): void;
   drainHistories(): Promise<void>;
+  behindDurableWrites(sessionId: string, label: string, write: () => Promise<void>): Promise<void>;
   resetWireNotes(sessionId: string): void;
   readAutoReviewHistory: ReplayContextRecoveryPorts['readAutoReviewHistory'];
   /** The Host coordinator; its clear is the coordinator's, synchronous, as on the desktop (input-queue.mjs). */
@@ -97,30 +107,66 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
   const readSession = (sessionId: string) => readContextRecoverySessionWithPorts({
     getDbClient, sessions, botSessionLinks, botProfiles, eq: (left, right) => eq(left, right),
   }, sessionId);
-  const callbacks: RecoveryCallbackPorts = {
+  const callbacks: RecoveryCallbackPorts = explicitPorts<RecoveryCallbackPorts>({
     getCoordinator: () => runtime.coordinator,
     resetWireNotes: id => runtime.resetWireNotes(id),
-  };
-  return createContextOverflowRollover({
+    persistSkippedOversizedInput: (sessionId, clientId) => {
+      const owner = getCurrentDbClientSnapshot();
+      if (!owner) return;
+      void runtime.behindDurableWrites(sessionId, 'oversized-input-skipped', async () => {
+        runtime.assertCurrent();
+        if (getCurrentDbClientSnapshot() !== owner) return;
+        const row = await markOversizedInputSkippedRow(owner.client, sessionId, clientId);
+        if (row && getCurrentDbClientSnapshot() === owner) {
+          const event = {
+            type: 'message_created', sessionId, messageId: row.id, message: messageToCamel(row),
+            [MESSAGE_METADATA_REFRESH]: true,
+          };
+          host.publish(event);
+        }
+      }).catch(() => host.log.warn('Could not save the skipped input notice', { sessionId }));
+    },
+  });
+  return createContextOverflowRollover(explicitPorts<Parameters<typeof createContextOverflowRollover>[0]>({
     // Plugin-owned and headless plugin setup turns: the Host refuses both inputs today.
     hasExternalRecoveryOwner: () => false,
+    // Ports the Host leaves unbound, each written out (explicit-ports.ts):
+    // - a teammate's own sessions widen the recalled history; the Host refuses teammate tasks, so a
+    //   recovery reads only the current conversation, as the desktop does for an ordinary task.
+    listCompanionSessionIds: undefined,
+    // - Host sessions carry no host-reconciled send_to_session route (coordinator-deps.ts), so a
+    //   replayed source note adds no reply route.
+    sendToSessionHint: undefined,
+    // - a subscription account change that needs a native session handoff: the Host has no
+    //   subscription account handoff before a send yet (release table, row 30), so none is reported.
+    needsNativeSessionHandoff: undefined,
+    // A cold Pi runtime resumed only to read its context for a smaller window: the same binding the
+    // model change uses (register.ts binds one function into both, as here).
+    rehydrateColdPiRuntimeForWindowVerification: host.rehydrateColdPiRuntimeForWindowVerification,
     getSessionRow: readSession,
-    ...(host.codexHistory ? {
-      classifyCodexHistory: (threadId: string) => classifyCodexHistoryWithPorts({
-        captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,
-        ...host.codexHistory!,
-      }, threadId),
-    } : {}),
+    classifyCodexHistory: (threadId: string) => classifyCodexHistoryWithPorts({
+      captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,
+      ...host.codexHistory,
+    }, threadId),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
-    ...(host.resolveVerifiedWindow ? { resolveVerifiedWindow: host.resolveVerifiedWindow } : {}),
+    resolveVerifiedWindow: host.resolveVerifiedWindow,
+    resolveHandoffWindow: host.resolveHandoffWindow,
     listMessages: sessionId => listMessagesForAgentHandoff(sessionId, 400) as ReturnType<ContextOverflowRolloverDeps['listMessages']>,
+    listReplayMessages: sessionId => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
     findLatestUser: sessionId => findLatestUserMessageForRebuild(sessionId) as ReturnType<NonNullable<ContextOverflowRolloverDeps['findLatestUser']>>,
     findLatestRebuildMeta: findLatestContextRebuildMeta,
     getLiveSession: sessionId => host.getMaker().getSession(sessionId),
-    closeSession: sessionId => host.getMaker().closeSession(sessionId, 'runtime-refresh'),
+    closeSession: sessionId => {
+      runtime.assertCurrent();
+      return host.getMaker().closeSession(sessionId, 'runtime-refresh');
+    },
     drainPersistQueue: () => runtime.drainHistories(),
     commitRebuild: (sessionId, handoff, meta, signal) => commitContextRecoveryWithPorts({
-      captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,
+      captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
+      getCurrentDbClientSnapshot: () => {
+        runtime.assertCurrent();
+        return getCurrentDbClientSnapshot();
+      },
       sessions, eq: (left, right) => eq(left, right),
       commitContextRebuild: (id, text, rebuildMeta) => commitContextRebuildWithPorts({
         now: () => Date.now(), createId: () => createId(), tx: (name, args) => getDbClient().tx(name, args),
@@ -130,18 +176,18 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
       createId: () => createId(),
       log: host.log,
     }, sessionId, handoff, meta, signal),
-    setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
-      host.pendingHandoff.set(sessionId, handoff, expectedGeneration),
+    setPendingHandoff: (sessionId, handoff, expectedGeneration) => {
+      runtime.assertCurrent();
+      return host.pendingHandoff.set(sessionId, handoff, expectedGeneration);
+    },
     readPendingHandoffGeneration: sessionId => host.pendingHandoff.readGeneration(sessionId),
     onRebuilt: sessionId => {
       contextRecoveryRebuilt(callbacks, sessionId);
       runtime.noteRebuilt(sessionId);
     },
-    getRecoveryAbortSignal: sessionId => contextRecoveryAbortSignal(callbacks, sessionId),
-    ...(host.piCompat ? {
-      readPiNativeCompatOverride: host.piCompat.read,
-      recordPiNativeCompatOverride: host.piCompat.record,
-    } : {}),
+    getRecoveryAbortSignal: (sessionId, claim) => contextRecoveryAbortSignal(callbacks, sessionId, claim),
+    readPiNativeCompatOverride: host.piCompat?.read,
+    recordPiNativeCompatOverride: host.piCompat?.record,
     replayUserMessage: (sessionId, content, agentFacingWireContent, recovery) => replayContextRecoveryWithPorts({
       getDbClient, sessions, eq: (left, right) => eq(left, right),
       buildCreateOptsWithStderr: host.buildCreateOptsWithStderr,
@@ -170,5 +216,5 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     withSessionLock: withSendToSessionLock,
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log: host.log,
-  });
+  }));
 }
