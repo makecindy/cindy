@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-23T12:43:05.384Z",
+  "updatedAt": "2026-11-23T14:39:22.018Z",
   "models": [
     {
       "id": "openai/gpt-6.2-sol",
@@ -5649,7 +5649,8 @@
             }
           ]
         }
-      ]
+      ],
+      "modelRef": "minimax/minimax-m2.5"
     },
     {
       "id": "aliyun-model-studio-cn/MiniMax/MiniMax-M2.1",
@@ -5979,7 +5980,8 @@
             }
           ]
         }
-      ]
+      ],
+      "modelRef": "deepseek/deepseek-v4-pro"
     },
     {
       "id": "aliyun-model-studio-cn/glm-5.2",
@@ -6069,7 +6071,8 @@
             }
           ]
         }
-      ]
+      ],
+      "modelRef": "z-ai/glm-5.3"
     },
     {
       "id": "aliyun-model-studio-cn/glm-5.3-prime",
@@ -6250,7 +6253,8 @@
             }
           ]
         }
-      ]
+      ],
+      "modelRef": "moonshotai/kimi-k2.7-code"
     },
     {
       "id": "aliyun-model-studio-cn/kimi-k3",
@@ -6280,7 +6284,8 @@
             }
           ]
         }
-      ]
+      ],
+      "modelRef": "moonshotai/kimi-k3"
     },
     {
       "id": "aliyun-model-studio-cn/kimi/kimi-k2.5",
@@ -7978,7 +7983,8 @@
             }
           ]
         }
-      ]
+      ],
+      "modelRef": "xiaomi/mimo-v2.6-pro-ultraspeed"
     },
     {
       "id": "ant-ling/Ling-3.2-flash",
