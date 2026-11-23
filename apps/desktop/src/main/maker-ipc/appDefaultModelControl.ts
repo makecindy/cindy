@@ -97,6 +97,34 @@ export async function inspectAppDefaultModel() {
   return { current, available };
 }
 
+/**
+ * This computer's plugin engines as choices for a teammate's own model chain, the same engines
+ * the teammate settings editor lists: available, not hidden from this computer's pickers, with
+ * the models the user left on (or the engine default). Never valid as the application default,
+ * which only routes built-in engines (`normalizeModelRoute`).
+ */
+export function teammatePluginEngineModelChoices(engines: ReturnType<typeof listPluginEngineViews> = listPluginEngineViews()) {
+  return engines.filter(engine => engine.availability.state !== 'unavailable' && !engine.hidden && !engine.suspended)
+    .flatMap(engine => {
+      const models = engine.models.length > 0 || engine.defaultModelAllowed === false
+        ? engine.models
+        : [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: PLUGIN_ENGINE_DEFAULT_MODEL }];
+      return models.map(model => {
+        const efforts = (model.efforts ?? []).filter(isPluginEngineEffort);
+        const route: BotModelRoute = { harness: 'acp', providerId: engine.providerId, model: model.id, effort: '', fastMode: false };
+        return { id: JSON.stringify([route.harness, route.providerId, route.model]), route, efforts,
+          supportsFastMode: false, supportsUltrafastMode: false, teammateOnly: true as const,
+          engine: engine.name, ...(model.displayName && model.displayName !== model.id ? { displayName: model.displayName } : {}) };
+      });
+    });
+}
+
+/** Model choices for a teammate's own chain: the application's choices plus this computer's plugin engines. */
+export async function inspectTeammateModelChoices() {
+  const { current, available } = await inspectAppDefaultModel();
+  return { current, available: [...available, ...teammatePluginEngineModelChoices()] };
+}
+
 export interface TaskModelSelection {
   id: string;
   effort?: string;
