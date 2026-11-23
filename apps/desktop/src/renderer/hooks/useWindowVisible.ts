@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
+
 export function isWindowVisiblyFocused(): boolean {
   return document.visibilityState === 'visible' && document.hasFocus();
 }
@@ -60,4 +62,36 @@ export function useDocumentVisible(enabled = true): boolean {
   }, [enabled]);
 
   return visible;
+}
+
+/** Shown to the user: the document is visible and Main has not reported the window hidden. */
+export function isWindowShown(): boolean {
+  return isDocumentVisible() && !isWindowHidden();
+}
+
+/**
+ * Like useDocumentVisible, but also honours Main's `window-hidden-change` broadcast. While a turn
+ * or a voice call keeps background throttling off, a hidden or minimized window still reports
+ * `visibilityState === 'visible'` (see hiddenAnimationGate), so the document signal alone is not
+ * enough for work that must only happen while the user can see the window.
+ */
+export function useWindowShown(): boolean {
+  const [shown, setShown] = useState(() => typeof document === 'undefined' || isWindowShown());
+
+  useEffect(() => {
+    let windowHidden = isWindowHidden();
+    const update = () => setShown(isDocumentVisible() && !windowHidden);
+    const offHidden = window.electronAPI?.onWindowHiddenChange?.((hidden) => {
+      windowHidden = hidden;
+      update();
+    });
+    update();
+    document.addEventListener('visibilitychange', update);
+    return () => {
+      offHidden?.();
+      document.removeEventListener('visibilitychange', update);
+    };
+  }, []);
+
+  return shown;
 }

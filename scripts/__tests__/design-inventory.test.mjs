@@ -834,7 +834,7 @@ test('plugins.installed 纳入直接渲染子组件与 plugin-motion.css', () =>
     'PluginManagementLayout',
     'MarketPluginDetailView',
     'PluginProjectMenu',
-    'MyPublishesSection',
+    'MyPluginsPage',
     'AddMarketplaceDialog',
     'UpdateAllDialog',
   ]) {
@@ -849,7 +849,7 @@ test('plugins.installed 纳入直接渲染子组件与 plugin-motion.css', () =>
   const { surfaces } = buildGeneratedSurfaces(ROOT, {});
   const generated = surfaces.find((surface) => surface.id === 'desktop.plugins.installed');
   assert.ok(generated.styleSources.some((file) => file.endsWith('plugin-motion.css')));
-  assert.ok(generated.styleSources.some((file) => file.endsWith('MyPublishesSection.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('MyPluginsPage.tsx')));
 });
 
 test('主窗口壳纳入全局基础样式 globals.css', () => {

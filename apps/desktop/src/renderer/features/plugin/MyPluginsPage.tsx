@@ -32,7 +32,13 @@ import type {
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import { PLUGIN_MANAGEMENT_FRAME_CLASS, PluginManagementPage } from './PluginManagementLayout';
 import { GhostPluginIcon } from './GhostPluginIcon';
-import { PluginPublishDialog, type PluginPublishDialogRequest, type PluginSubmitOptions } from './PluginPublishDialog';
+import { PluginPublishDialog, type PluginPublishDialogRequest, type PluginSubmitOptions, type TeamPublishingOption } from './PluginPublishDialog';
+import { TeamPluginDetail } from './team/TeamPluginDetail';
+import { TeamPluginRows } from './team/TeamPluginRows';
+import { TeamPublishResults } from './team/TeamPublishResults';
+import { matchesTeamFilter, matchesTeamQuery } from './team/teamPluginModel';
+import { useTeamPlugins } from './team/useTeamPlugins';
+import { ORGANIZATION_REVIEW_ID_PREFIX } from '../../../shared/pluginAuthor';
 export type { PluginSubmitOptions } from './PluginPublishDialog';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
@@ -57,6 +63,7 @@ export interface MyPluginsPageCache {
 export function MyPluginsPage({
   reader,
   localPlugins,
+  teamPublishing,
   installedPluginCount,
   onSubmitUpdate,
   onPrepare,
@@ -71,6 +78,8 @@ export function MyPluginsPage({
 }: {
   reader: PluginContributionsApi;
   localPlugins: readonly GhostPluginListItem[];
+  /** Organization identity: the publish dialog offers team sharing first. */
+  teamPublishing?: TeamPublishingOption;
   installedPluginCount: number;
   cache: MyPluginsPageCache;
   onSubmitUpdate: (instanceId: string, options?: PluginSubmitOptions) => Promise<boolean>;
@@ -168,6 +177,29 @@ export function MyPluginsPage({
   const contributor = mode === 'cloud' && (user?.membershipKind === 'personal' || user?.membershipKind === 'org');
   const openPicker = () => {
     setPicker({ id: ++pickerSequence.current, owner: ownerKey, open: true });
+  };
+  // Organization identity: the page also manages team-shared plugins (#1541).
+  const isOrg = contributor && user?.membershipKind === 'org';
+  const teamPluginId = isOrg ? params.get('teamPlugin') : null;
+  const [teamRefresh, setTeamRefresh] = useState(0);
+  // Read only while the list is shown; the team detail reads its own plugin.
+  // Review results of team plugins come from the change signal; when they move, read the list again.
+  const teamReviewSignal = reviewUpdates.updates
+    .filter((item) => item.pluginId.startsWith(ORGANIZATION_REVIEW_ID_PREFIX)).map((item) => item.key).join('|');
+  const team = useTeamPlugins(Boolean(isOrg) && ownerMatches && !teamPluginId && !selectedId, ownerKey,
+    `${teamRefresh}:${teamReviewSignal}`);
+  const teamLocalPlugins = teamPublishing?.plugins ?? [];
+  const openTeamDetail = (pluginId: string) => {
+    if (scrollFrame.current) listScroll.current = scrollFrame.current.scrollTop;
+    cache.scroll = listScroll.current;
+    const next = new URLSearchParams(params);
+    next.set('teamPlugin', pluginId);
+    setParams(next);
+  };
+  const closeTeamDetail = () => {
+    const next = new URLSearchParams(params);
+    next.delete('teamPlugin');
+    setParams(next, { replace: true });
   };
 
   useEffect(() => { setPicker(null); }, [selectedId]);
@@ -372,7 +404,9 @@ export function MyPluginsPage({
   }, [refresh, loadVersions]);
   const refreshAllRef = useRef(refreshAll);
   refreshAllRef.current = refreshAll;
-  const reviewSignature = reviewUpdates.updates.map(item => item.key).sort().join('|');
+  // Public results only: a team result changing must not reload (and reset) the public list.
+  const reviewSignature = reviewUpdates.updates
+    .filter(item => !item.pluginId.startsWith(ORGANIZATION_REVIEW_ID_PREFIX)).map(item => item.key).sort().join('|');
   const lastReviewRefresh = useRef('');
   useEffect(() => {
     const signature = `${ownerKey}:${reviewSignature}`;
@@ -674,7 +708,12 @@ export function MyPluginsPage({
     if (visibleSnapshotId && !visibleHasContent) void loadSnapshot(visibleSnapshotId);
   }, [selectedKey, visibleSnapshotId, visibleHasContent, loadSnapshot, historyOpen]);
   const isDetail = Boolean(selectedId);
-  const listEmpty = page?.plugins.length === 0;
+  const teamPlugins = team.status === 'unsupported' ? null : team.plugins;
+  const visibleTeamPlugins = teamPlugins?.filter((entry) => matchesTeamFilter(entry, filter) && matchesTeamQuery(entry, query)) ?? null;
+  const showTeamGroup = Boolean(isOrg) && team.status !== 'unsupported';
+  const publicEmpty = page?.plugins.length === 0;
+  // With team sharing, the page is empty only when both groups are.
+  const listEmpty = publicEmpty && (!showTeamGroup || (team.status === 'ready' && visibleTeamPlugins?.length === 0 && !team.nextCursor));
   const rowAction = (
     <span className="my-plugins-chevron inline-flex items-center justify-end gap-1 text-13 text-[var(--text-secondary)]">
       {t(`${copy}.versionManagement`)}
@@ -773,7 +812,10 @@ export function MyPluginsPage({
         aria-label={t(`${copy}.${isDetail ? 'refreshDetail' : 'refreshList'}`)}
         loading={loading || versionsLoading}
         disabled={!contributor}
-        onClick={() => void refreshAll()}
+        onClick={() => {
+          if (isOrg && !isDetail) setTeamRefresh((value) => value + 1);
+          void refreshAll();
+        }}
       >
         <RotateCw size={16} />
       </Button>
@@ -1097,6 +1139,34 @@ export function MyPluginsPage({
     {publishingContent}
   </section>;
 
+  if (teamPluginId) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <main className="app-wallpaper-surface min-h-0 flex-1 overflow-y-auto bg-[var(--surface)]" onScroll={onScroll}>
+          <PluginDetailTopBar label={t(`${copy}.myPlugins`)} onBack={closeTeamDetail} scrolled={scrolled}
+            frameClassName={PLUGIN_MANAGEMENT_FRAME_CLASS} />
+          <PluginManagementPage className="pt-6">
+            <TeamPluginDetail
+              key={JSON.stringify([ownerKey, teamPluginId])}
+              pluginId={teamPluginId}
+              memberName={user?.name ?? null}
+              localPlugins={teamLocalPlugins}
+              onStartPublish={teamPublishing?.onStart ?? (async () => false)}
+              renderHeaderAction={(refreshTeam, teamLoading) => (
+                <Tip text={t(`${copy}.refreshDetail`)}>
+                  <Button variant="secondary" tone="quiet" size="sm" className="size-7 p-0"
+                    aria-label={t(`${copy}.refreshDetail`)} loading={teamLoading} onClick={refreshTeam}>
+                    <RotateCw size={16} />
+                  </Button>
+                </Tip>
+              )}
+            />
+          </PluginManagementPage>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <main
@@ -1146,7 +1216,7 @@ export function MyPluginsPage({
                 ) : null}
                 {!isDetail ? (
                   <p className="mt-1 text-14 leading-6 text-[var(--text-tertiary)]">
-                    {t(`${copy}.intro`)}
+                    {t(`${copy}.${isOrg ? 'introWithTeam' : 'intro'}`)}
                   </p>
                 ) : null}
               </div>
@@ -1164,6 +1234,7 @@ export function MyPluginsPage({
               refreshButton
             )}
           </header>
+          {!isDetail && contributor ? <TeamPublishResults /> : null}
           {!contributor ? (
             <div className="space-y-4">
               <p role="status" className="text-14 leading-6 text-[var(--text-secondary)]">
@@ -1243,6 +1314,12 @@ export function MyPluginsPage({
                       ) : null}
                     </div>
                   ) : null}
+                  {showTeamGroup && !listEmpty && page ? (
+                    <GroupHeading label={t(`${copy}.target.public`)} count={page.plugins.length} more={Boolean(page.nextCursor)} />
+                  ) : null}
+                  {showTeamGroup && !listEmpty && publicEmpty ? (
+                    <p className="pb-5 text-14 leading-[1.714] text-[var(--text-tertiary)]">{t(`${copy}.${query || filter !== 'all' ? 'noMatches' : 'empty'}`)}</p>
+                  ) : null}
                   {page?.plugins.length ? (
                     <div className="my-plugins-table">
                       <div
@@ -1314,6 +1391,32 @@ export function MyPluginsPage({
                       {t(`${copy}.loadMore`)}
                     </Button>
                   ) : null}
+                  {showTeamGroup && !listEmpty ? (
+                    <section aria-label={t('settings.ghosts.page.origin.organization')} className="mt-8">
+                      <GroupHeading label={t('settings.ghosts.page.origin.organization')}
+                        count={visibleTeamPlugins?.length ?? null}
+                        more={'nextCursor' in team && Boolean(team.nextCursor)} />
+                      {team.status === 'failed' ? (
+                        <p role="alert" className="pb-3 text-14 leading-[1.714] text-[var(--text-secondary)]">
+                          {t(team.errorKey, { defaultValue: t(`${copy}.loadFailed`) })}
+                        </p>
+                      ) : null}
+                      {visibleTeamPlugins === null ? (
+                        team.status === 'loading' ? <p role="status" className="text-14 text-[var(--text-secondary)]">{t(`${copy}.loading`)}</p> : null
+                      ) : visibleTeamPlugins.length ? (
+                        <TeamPluginRows plugins={visibleTeamPlugins} localPlugins={teamLocalPlugins}
+                          memberName={user?.name ?? null} reviewUpdates={reviewUpdates.updates} onOpen={openTeamDetail} />
+                      ) : (
+                        <p className="text-14 leading-[1.714] text-[var(--text-tertiary)]">{t(`${copy}.${query || filter !== 'all' ? 'noMatches' : 'empty'}`)}</p>
+                      )}
+                      {'nextCursor' in team && team.nextCursor ? (
+                        <Button variant="secondary" className="mt-4" loading={team.status === 'loading'}
+                          disabled={team.status === 'loading'} onClick={team.loadMore}>
+                          {t(`${copy}.loadMore`)}
+                        </Button>
+                      ) : null}
+                    </section>
+                  ) : null}
                 </>
               ) : currentDetail && plugin ? (
                 <>
@@ -1346,6 +1449,7 @@ export function MyPluginsPage({
           ownerKey={ownerKey}
           reader={reader}
           localPlugins={localPlugins}
+          team={teamPublishing}
           installedPluginCount={installedPluginCount}
           onPrepare={onPrepare}
           onSubmitUpdate={onSubmitUpdate}
@@ -1357,5 +1461,15 @@ export function MyPluginsPage({
         />
       ) : null}
     </div>
+  );
+}
+
+/** 「公开市场 / 团队共享」 group title with its count, shown only for organization identities. */
+function GroupHeading({ label, count, more = false }: { label: string; count: number | null; more?: boolean }) {
+  return (
+    <h2 className="flex items-baseline gap-2 pb-2 text-16 font-medium leading-[1.5] text-[var(--text-primary)]">
+      <span>{label}</span>
+      {count !== null ? <span className="text-13 font-normal tabular-nums text-[var(--text-tertiary)]">{count}{more ? '+' : ''}</span> : null}
+    </h2>
   );
 }

@@ -1935,19 +1935,50 @@ contextBridge.exposeInMainWorld('electronAPI', {
     detail: (pluginId: string, cursor?: string) => ipcRenderer.invoke('plugin-contributions:detail', { pluginId, ...(cursor ? { cursor } : {}) }),
   } satisfies import('../shared/pluginContributions').PluginContributionsApi,
   pluginPublisher: {
-    start: (filePath: string): Promise<{ transferId: string; uploadId: string | null }> =>
-      ipcRenderer.invoke('plugin-publisher:start', filePath),
+    startInstalled: (
+      instanceId: string,
+      expected?: import('../shared/pluginContributions').ContributionInstallationBinding,
+    ): Promise<{ transferId: string; uploadId: string | null }> =>
+      ipcRenderer.invoke('plugin-publisher:start-installed', { instanceId, ...(expected ? { expected } : {}) }),
     status: (transferId: string): Promise<{ progress: unknown }> =>
       ipcRenderer.invoke('plugin-publisher:status', transferId),
     cancel: (transferId: string): Promise<{ cancelled: boolean }> =>
       ipcRenderer.invoke('plugin-publisher:cancel', transferId),
-    listMine: (cursor?: string): Promise<{ releases: unknown[]; nextCursor: string | null }> =>
-      ipcRenderer.invoke('plugin-publisher:list-mine', cursor ? { cursor } : {}),
     onProgress: fanOutPluginPublisherProgress,
     onConfirm: fanOutPluginPublisherConfirm,
-    resolveConfirm: (requestId: string, confirmed: boolean): Promise<{ handled: boolean }> =>
-      ipcRenderer.invoke('plugin-publisher:resolve-confirm', { requestId, confirmed }),
+    resolveConfirm: (
+      requestId: string,
+      confirmed: boolean,
+      visibilityAudience?: import('../shared/pluginAuthor').AuthorVisibilityAudience,
+    ): Promise<{ handled: boolean }> =>
+      ipcRenderer.invoke('plugin-publisher:resolve-confirm', {
+        requestId,
+        confirmed,
+        ...(visibilityAudience ? { visibilityAudience } : {}),
+      }),
   },
+  pluginAuthor: {
+    listPlugins: (cursor?: string) => ipcRenderer.invoke('plugin-author:list-plugins', cursor),
+    reviewUpdates: () => ipcRenderer.invoke('plugin-author:review-updates'),
+    plugin: (pluginId: string) => ipcRenderer.invoke('plugin-author:plugin', pluginId),
+    updatePlugin: (pluginId: string, update: import('../shared/pluginAuthor').PersonalPluginUpdate) =>
+      ipcRenderer.invoke('plugin-author:update-plugin', { pluginId, update }),
+    cancelReview: (pluginId: string, releaseId: string) =>
+      ipcRenderer.invoke('plugin-author:cancel-review', { pluginId, releaseId }),
+    releases: (pluginId: string, cursor?: string) =>
+      ipcRenderer.invoke('plugin-author:releases', { pluginId, ...(cursor ? { cursor } : {}) }),
+    maintainers: (pluginId: string) => ipcRenderer.invoke('plugin-author:maintainers', pluginId),
+    addMaintainer: (pluginId: string, membershipId: string) =>
+      ipcRenderer.invoke('plugin-author:add-maintainer', { pluginId, membershipId }),
+    removeMaintainer: (pluginId: string, authorizationId: string) =>
+      ipcRenderer.invoke('plugin-author:remove-maintainer', { pluginId, authorizationId }),
+    departments: () => ipcRenderer.invoke('plugin-author:departments'),
+    departmentMembers: (departmentId: string, page: number) =>
+      ipcRenderer.invoke('plugin-author:department-members', { departmentId, page }),
+    searchColleagues: (query: string) => ipcRenderer.invoke('plugin-author:search-colleagues', query),
+    lookupColleagues: (membershipIds: string[]) =>
+      ipcRenderer.invoke('plugin-author:lookup-colleagues', membershipIds),
+  } satisfies import('../shared/pluginAuthor').PluginAuthorRendererApi,
   voiceConversation: {
     promoteTurn: (callId, inputId) => ipcRenderer.invoke("voice-conversation:promote-turn", callId, inputId),
     submitTurn: (callId, inputId, text, forceHandoff) => ipcRenderer.invoke("voice-conversation:submit-turn", callId, inputId, text, forceHandoff),
