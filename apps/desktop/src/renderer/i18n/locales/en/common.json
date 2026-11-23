@@ -22216,6 +22216,11 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Sign-in method",
+      "secretHint": "The key goes only to the plugin, which keeps it in this account's own folder. Cindy doesn't store it or send it to other computers.",
+      "browserHint": "The plugin opens your browser. Finish signing in there, then come back."
+    },
     "placement": {
       "needsUpdate": "The computer running this needs a Cindy update before accounts can be moved this way.",
       "moveTo": "Move to…",

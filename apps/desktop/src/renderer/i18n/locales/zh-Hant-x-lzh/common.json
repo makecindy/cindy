@@ -22128,6 +22128,11 @@
     }
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登入之法",
+      "secretHint": "Key 唯付法器，藏於此帳號之篋；Cindy 不存，亦不傳他機。",
+      "browserHint": "法器將啟瀏覽器，登入畢，歸此。"
+    },
     "placement": {
       "needsUpdate": "行此事之機當先更新 Cindy，方可如是調號。",
       "moveTo": "移至…",

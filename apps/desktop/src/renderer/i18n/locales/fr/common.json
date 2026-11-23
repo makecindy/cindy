@@ -22428,6 +22428,11 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Méthode de connexion",
+      "secretHint": "La clé est transmise uniquement au plugin, qui la conserve dans le dossier propre à ce compte. Cindy ne la stocke pas et ne l’envoie pas à d’autres ordinateurs.",
+      "browserHint": "Le plugin ouvre votre navigateur. Terminez la connexion là-bas, puis revenez ici."
+    },
     "placement": {
       "needsUpdate": "Cindy doit être mis à jour sur l'ordinateur qui exécute cette opération pour déplacer des comptes ainsi.",
       "moveTo": "Déplacer vers…",

@@ -48,7 +48,9 @@ Claude 后台任务唤醒的新轮次即使第一条响应就是限额错误、�
 
 按顺序取第一个可用的：
 
-1. 限额错误自带的结构化时刻（Claude 订阅：SDK `rate_limit_event`）。
+1. 限额错误自带的结构化时刻（Claude 订阅：SDK `rate_limit_event`）。插件引擎（2026-11-23，未发布）：插件在错误分类
+   `error.data._meta.cindy` 里给的 `resetsAt`（[协议](../dev-rules/protocol-compatibility/plugin-harnesses.md#引擎账号多账号2026-11-23未发布)）；
+   插件引擎任务只认这一个来源，不读快照、不解析错误原文，没给时间就只报错。
 2. 会话实际使用的订阅账号用量窗口，且窗口已用满。本机按既有 reader 刷新；远程 Agent
    经已有 device-link 余量通道读执行电脑，独立账号必须核对回包的 providerId。
    Claude 查询等待既有 CLI `get_usage` 刷新完成，保留节流和失败退避，不新增登录或凭证读取。

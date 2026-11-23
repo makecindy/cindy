@@ -22128,6 +22128,11 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登入方式",
+      "secretHint": "Key 只交給插件，儲存在這個帳號自己的資料夾裡；Cindy 不會保存，也不會傳到其他電腦。",
+      "browserHint": "插件會開啟瀏覽器，在那裡完成登入後回到這裡。"
+    },
     "placement": {
       "needsUpdate": "執行這項操作的電腦需要先更新 Cindy，才能這樣調整帳號。",
       "moveTo": "移到…",

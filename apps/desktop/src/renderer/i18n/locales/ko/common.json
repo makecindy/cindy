@@ -22128,6 +22128,11 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "로그인 방법",
+      "secretHint": "키는 플러그인에만 전달되며 이 계정 전용 폴더에 저장됩니다. Cindy는 키를 저장하지 않고 다른 컴퓨터로 보내지도 않습니다.",
+      "browserHint": "플러그인이 브라우저를 엽니다. 브라우저에서 로그인을 마친 뒤 여기로 돌아오세요."
+    },
     "placement": {
       "needsUpdate": "이 작업을 실행하는 컴퓨터의 Cindy를 업데이트해야 계정을 이렇게 조정할 수 있습니다.",
       "moveTo": "이동…",
