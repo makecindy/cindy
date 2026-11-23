@@ -1316,7 +1316,7 @@ import {
 } from '../maker-host/pi-native-compat-overrides-store.js';
 import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
-import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
+import { agentHandoffPending, peekAgentHandoffForSend } from './agentHandoffPendingSingleton.js';
 import {
   rememberSessionLastLiveUsage,
 } from './sessionLastLiveUsage.js';
@@ -5163,7 +5163,10 @@ const subscriptionAccountRecoveryDeps = {
 } satisfies AccountFailoverDeps;
 
 /** 直发路径在 createSession / 重读 live session 之前换掉不能用的订阅账号、关掉不健康原生会话。 */
-export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
+export async function prepareUnhealthySessionForSend(
+  sessionId: string,
+  outboundUserClientId?: string,
+): Promise<boolean> {
   const switched = await prepareSubscriptionAccountForSend(sessionId, {
     ...subscriptionAccountRecoveryDeps,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
@@ -5172,7 +5175,8 @@ export async function prepareUnhealthySessionForSend(sessionId: string): Promise
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
     },
   }) || await prepareSubscriptionAccountFailover(sessionId, subscriptionAccountRecoveryDeps);
-  return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? false);
+  return switched ||
+    (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId, outboundUserClientId) ?? false);
 }
 
 let runtimePluginBudgetClearer: ((sessionId: string) => void) | undefined;
@@ -18444,7 +18448,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // session-agent-switch:lazy-create 前以 DB 行为真源校正 createOpts(定义见
     // reconcileCreateOptsAgainstDb;GET_CONTEXT_USAGE 的 lazy 分支共用)。
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
-    peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
+    peekPendingHandoff: peekAgentHandoffForSend,
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
     peekPlanReconcileNote: async (sessionId) => {
       const snapshot = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
@@ -18531,8 +18535,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentInputCoordinatorHolder?.setProviderGroupSendReconnect(sessionId, null);
       });
     },
-    prepareUnhealthySession: (sessionId) =>
-      prepareUnhealthySessionForSend(sessionId),
+    prepareUnhealthySession: prepareUnhealthySessionForSend,
     workdirDiagnostics: workdirLog,
     log,
   });
@@ -18724,7 +18727,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   contextOverflowRolloverHolder = createContextOverflowRollover({
     sendToSessionHint: confirmedSendToSessionHint,
     hasExternalRecoveryOwner: (sessionId) =>
-      isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
+      hasLocalAgentVisibleRuntime(sessionId) || isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
     needsNativeSessionHandoff: (id, row) => needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke),
     classifyCodexHistory: (threadId) => classifyCodexHistoryWithPorts({
@@ -20116,7 +20119,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
     // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
     onUserEnqueue: (sessionId) => {
-      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId, 'queued-input');
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
       // The user turn can dispatch before the backoff callback observes that its
       // recovery was superseded. Fail the scheduler waiter synchronously so it
@@ -20143,7 +20146,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     },
     onAutomaticEnqueue: (sessionId, item) => {
-      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId, 'queued-input');
       // 协同消息(Lead 给 Worker 派活、Worker 的回报到达 Lead)：供应商组按「有人接手」处理——这一趟换电脑停下，
       // 那条消息开始新的一轮(provider-groups.md §6.1「协同任务」)。不重置中断自愈的预算。
       if (item?.origin?.kind === 'orca') providerGroupService?.noteUserAction(sessionId);

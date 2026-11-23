@@ -23,6 +23,7 @@ import {
   type ContextRecoveryTerminalPorts,
 } from '../maker-ipc/contextRecoveryTerminal';
 import { isTerminalTurnErrorEvent } from '../maker-ipc/sessionTurnActivityTracker';
+import { hasLocalAgentVisibleRuntime, registerLocalAgentVisibleRuntime } from '../local-agent/visibleSessions';
 import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 
 const mainRoot = resolve(__dirname, '..');
@@ -2016,6 +2017,40 @@ describe('local-application visible task host', () => {
 });
 
 describe('Desktop recovery assembly ordering and fences', () => {
+  // PR #8248 P1 / guard: verify the actual Desktop ownership binding. Factory
+  // coverage already supplies an external owner; it cannot catch an omitted
+  // registration check. One visible local app and one Pi 413 must preserve the app's runtime.
+  it('declines automatic Pi 413 recovery for a visible local application task', async () => {
+    const h = recoveryFixture();
+    const sessionId = 'local-app-pi-413';
+    const closeAppRuntime = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const unregister = registerLocalAgentVisibleRuntime(sessionId, closeAppRuntime);
+    try {
+      h.row.agentKind = 'pi';
+      h.row.botStatus = 'inactive';
+      Object.assign(h.bindings, {
+        createContextOverflowRollover, hasLocalAgentVisibleRuntime,
+        maker: { closeSession, getSession: () => undefined },
+        builtinLiveSession: () => ({ isTurnRunning: () => false }),
+        listMessagesForAgentHandoff: async () => [{ clientId: 'original', role: 'user', content: 'Read the report' }],
+        withSendToSessionLock: (_id: string, work: () => Promise<boolean>) => work(),
+        withRehydrateCloseSuppressed: (_id: string, work: () => Promise<boolean>) => work(),
+      });
+      const rollover = await recoveryAssembly<ReturnType<typeof createContextOverflowRollover>>(h.bindings);
+      const error = { message: 'HTTP 413: request body too large' };
+      expect(rollover.claim(sessionId)).toBe('claimed');
+      const recovered = await rollover.tryRecover(sessionId, error);
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(recovered).toBe(false);
+      expect(h.bindings.drainPersistQueue).not.toHaveBeenCalled();
+      expect(closeAppRuntime).not.toHaveBeenCalled();
+      expect(hasLocalAgentVisibleRuntime(sessionId)).toBe(true);
+    } finally {
+      unregister();
+    }
+  });
+
   // L343 / guard: run the register.ts binding and the real claim/settlement and
   // queue. Adapter-only coverage cannot distinguish a removed Session binding
   // from the same instance advancing after a terminal has been attributed.

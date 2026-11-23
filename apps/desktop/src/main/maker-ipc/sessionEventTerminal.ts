@@ -36,6 +36,7 @@ import { type OrcaTeamService } from './orcaTeamService.js';
 import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
+  isPiRequestBodyTooLarge,
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
@@ -323,6 +324,8 @@ export function finishSessionTerminalEvent(
       session, event, attributedEvent, broadcastEvent, eventAgentMeta,
       isPlannedUpgradeClose, isRemoteAuthRetry, isGatewayProxyTokenRecovery,
       autoResumeSuppressesPersist, persistId, inputClientId: prepared.activeInputId ?? undefined,
+      isPiBodyLimitError: event.type === 'error' && session.agentKind === 'pi'
+        && isPiRequestBodyTooLarge(attributedEvent.data),
     };
     const overflowClaim = claimContextRecoveryTerminal(contextRecoveryPorts, contextRecoveryInput);
     const deferUnsuccessfulProductTurn = (): void => {

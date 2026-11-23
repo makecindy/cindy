@@ -259,7 +259,7 @@ function event(
 
 const actualSnapshotWriter = await vi.importActual<typeof import('../../sessionSpendBroadcaster.js')>('../../sessionSpendBroadcaster.js');
 
-function harness(remoteHandle?: AgentSessionHandle) {
+function harness(agentKind: 'codex' | 'pi' = 'codex', remoteHandle?: AgentSessionHandle) {
   const log = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -272,7 +272,7 @@ function harness(remoteHandle?: AgentSessionHandle) {
   const ended = deferred();
   const handle = remoteHandle ?? {
     id: 'provider',
-    agentKind: 'codex',
+    agentKind,
     model: 'test-model',
     send: vi.fn(async () => {}),
     close: vi.fn(async () => {
@@ -286,7 +286,7 @@ function harness(remoteHandle?: AgentSessionHandle) {
   } as unknown as AgentSessionHandle;
   const session = new Session({
     id: 'task',
-    agentKind: 'codex',
+    agentKind,
     workDir: '/unused',
     handle,
     capabilities: {} as never,
@@ -1270,7 +1270,7 @@ describe('production Session event pipeline', () => {
       workspace: new ExecutorWorkspace({ workingDir: process.cwd() }),
       recordApproval: vi.fn(), newId: () => 'request', dispose: async () => {},
     });
-    const h = harness(proxy.handle);
+    const h = harness('codex', proxy.handle);
     const iterator = proxy.handle.events()[Symbol.asyncIterator]();
     const deliver = async (value: AgentEvent) => {
       proxy.onEvent(value);
@@ -1449,6 +1449,40 @@ describe('production Session event pipeline', () => {
       null,
       'error-row',
     );
+    await h.dispose();
+  });
+
+  it.each([
+    { agentKind: 'pi', recovered: true, surfaceDuringRecovery: false },
+    { agentKind: 'pi', recovered: false, surfaceDuringRecovery: false },
+    { agentKind: 'pi', recovered: false, surfaceDuringRecovery: true },
+    { agentKind: 'codex', recovered: false, surfaceDuringRecovery: false },
+  ] as const)('claims a first request-body 413 only for Pi (%s)', async ({ agentKind, recovered, surfaceDuringRecovery }) => {
+    const h = harness(agentKind);
+    const claim = vi.fn((_sessionId: string, _turn: unknown, recoverable: boolean) =>
+      recoverable ? 'claimed' as const : 'idle' as const);
+    const tryRecover = vi.fn(async (_sessionId, _error, _turn, surfaceFailure: () => void) => {
+      if (surfaceDuringRecovery) {
+        await Promise.resolve();
+        surfaceFailure();
+      }
+      return recovered;
+    });
+    (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = { claim, tryRecover };
+    const errorData = { message: '413 Failed to buffer the request body: length limit exceeded' };
+    h.emit(event('error', errorData, { source: agentKind }));
+    expect(claim).toHaveBeenCalledWith('task', { instanceId: undefined, generation: undefined }, agentKind === 'pi');
+    expect(tryRecover).toHaveBeenCalledTimes(agentKind === 'pi' ? 1 : 0);
+    if (agentKind === 'pi') {
+      expect(tryRecover).toHaveBeenCalledWith(
+        'task', expect.objectContaining(errorData),
+        { instanceId: undefined, generation: undefined }, expect.any(Function),
+      );
+      expect(effects.fn('broadcast')).not.toHaveBeenCalled();
+    }
+    await microtasks();
+    expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(agentKind === 'pi' && recovered ? 0 : 1);
+    expect(effects.fn('reserveTurnErrorPersistId')).toHaveBeenCalledTimes(agentKind === 'pi' && recovered ? 0 : 1);
     await h.dispose();
   });
 

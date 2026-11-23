@@ -29,6 +29,8 @@ type Input = Pick<PreparedSessionEvent, 'event' | 'attributedEvent' | 'broadcast
   autoResumeSuppressesPersist: boolean;
   inputClientId?: string;
   persistId: SessionDeliveryResult['persistId'];
+  /** Classified by launchers that support automatic Pi request-body recovery. */
+  isPiBodyLimitError?: boolean;
 };
 
 /** Must run synchronously before any terminal observer can release its owner. */
@@ -48,6 +50,7 @@ export function claimContextRecoveryTerminal(ports: ContextRecoveryTerminalPorts
             generation: event.sessionTurnGeneration,
             ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
           }, ports.isContextOverflowErrorData(attributedEvent.data)
+            || input.isPiBodyLimitError === true
             || ports.isOversizedHistoryErrorData(attributedEvent.data)
             || ports.isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
         : 'idle';
@@ -107,13 +110,16 @@ export function settleContextRecoveryTerminal(ports: ContextRecoveryTerminalPort
         ports.onTurnErrorEvent(session.id, overflowErrorPayload, eventAgentMeta, overflowPersistId);
         notifyUnsuccessfulProductTurn();
       };
-      void ports.getRollover()
-        ?.tryRecover(session.id, overflowErrorData, {
-          instanceId: event.sessionInstanceId,
-          generation: event.sessionTurnGeneration,
-          ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
-        })
-        .then((recovered) => {
+      const turn = {
+        instanceId: event.sessionInstanceId,
+        generation: event.sessionTurnGeneration,
+        ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
+      };
+      const activeRollover = ports.getRollover();
+      const recovery = input.isPiBodyLimitError
+        ? activeRollover?.tryRecover(session.id, overflowErrorData, turn, surfaceOverflowFailure)
+        : activeRollover?.tryRecover(session.id, overflowErrorData, turn);
+      void recovery?.then((recovered) => {
           if (recovered) {
             if (ports.getSuppressedBroadcasts().get(session.id)?.event === broadcastEvent) {
               ports.getSuppressedBroadcasts().delete(session.id);

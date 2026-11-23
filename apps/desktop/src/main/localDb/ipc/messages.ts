@@ -1048,6 +1048,7 @@ export function commitContextRebuild(
     sourceAgentKind?: 'cc' | 'codex' | 'pi';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
+    followUpHandoff?: string;
     expectedClearedAt?: number | null;
     expectedSdkSessionId?: string;
     replacementRoute?: ContextRebuildArgs['replacementRoute'];
