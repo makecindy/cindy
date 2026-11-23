@@ -28,6 +28,50 @@ export const JSONRPC_INTERNAL_ERROR = -32603;
  */
 export const ACP_STEERING_METHOD = '_session/steering';
 
+/**
+ * Cindy extension (docs/dev-rules/protocol-compatibility/plugin-harnesses.md 引擎账号): an entry may
+ * classify a JSON-RPC error of `session/new|load|resume|prompt` as
+ * `error.data._meta.cindy = { kind, resetsAt?, model? }` so Cindy can cool the account and move the
+ * task to another one. Unknown kinds are ordinary errors.
+ */
+export type AcpCindyErrorKind = 'usage-limit' | 'auth-required' | 'overloaded';
+export interface AcpCindyError {
+  kind: AcpCindyErrorKind;
+  /** Unix epoch milliseconds at which the usage limit resets. */
+  resetsAt?: number;
+  model?: string;
+}
+
+export function readAcpCindyError(data: unknown): AcpCindyError | null {
+  const meta = asRecord(asRecord(asRecord(data)._meta).cindy);
+  const kind = meta.kind;
+  if (kind !== 'usage-limit' && kind !== 'auth-required' && kind !== 'overloaded') return null;
+  const resetsAt = meta.resetsAt;
+  const model = meta.model;
+  return {
+    kind,
+    ...(kind === 'usage-limit' && typeof resetsAt === 'number' && Number.isSafeInteger(resetsAt) && resetsAt > 0
+      ? { resetsAt } : {}),
+    ...(typeof model === 'string' && model.length > 0 && model.length <= 256 ? { model } : {}),
+  };
+}
+
+/**
+ * Turn-error fields Cindy's failure policy already understands (usage limit with its reset time,
+ * overloaded service) for a classified agent error. A failed sign-in is carried by the turn's
+ * `acp-auth-required` reason instead, so it never enters the built-in engines' login retries.
+ */
+export function acpCindyErrorSignals(error: AcpCindyError): Record<string, unknown> {
+  switch (error.kind) {
+    case 'usage-limit':
+      return { usageLimit: true, ...(error.resetsAt !== undefined ? { usageResetAt: error.resetsAt } : {}) };
+    case 'overloaded':
+      return { errorStatus: 529 };
+    case 'auth-required':
+      return {};
+  }
+}
+
 export type AcpRecord = Record<string, unknown>;
 
 export type AcpContentBlock =

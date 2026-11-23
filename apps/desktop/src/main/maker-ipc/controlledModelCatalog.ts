@@ -1,6 +1,7 @@
 import { PROVIDER_SHARE_GROUP_STATUS_REQUEST, scrubSharedProviderCatalog, type InvokeResultPayload } from '@cindy/device-link';
 import { MODEL_CATALOG_READ_CHANNELS, type ControlledModelLocation } from '../../shared/controlledModelCatalog.js';
 import { extractIpcError } from '../../shared/ipcError.js';
+import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -11,6 +12,34 @@ import { throwIpcError } from '../utils/ipcValidate.js';
  * snapshot path does not cover plugin engines.
  */
 const PLUGIN_ENGINE_LIST = PLUGIN_ENGINES_INVOKE.LIST;
+
+/**
+ * The source read must settle before the controller's own 30s request does, so the controller
+ * receives this computer's answer (a temporary failure) instead of timing out itself.
+ */
+export const CONTROLLED_SOURCE_READ_TIMEOUT_MS = 20_000;
+
+/**
+ * Temporary source failures keep their temporary meaning across the extra hop. Reporting them as
+ * PRECONDITION_FAILED made Desktop and Mobile pickers drop a share's catalog (and stop retrying)
+ * every time the sharer's computer was briefly slow or offline.
+ */
+const TEMPORARY_SOURCE_FAILURES: Readonly<Record<string, IpcErrorCode>> = {
+  TIMEOUT: 'DEVICE_LINK_TIMEOUT', INVOKE_TIMEOUT: 'DEVICE_LINK_TIMEOUT', DEVICE_LINK_TIMEOUT: 'DEVICE_LINK_TIMEOUT',
+  DEVICE_OFFLINE: 'DEVICE_LINK_DEVICE_OFFLINE', DEVICE_LINK_DEVICE_OFFLINE: 'DEVICE_LINK_DEVICE_OFFLINE',
+  NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED', DEVICE_LINK_NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
+  LINK_CLOSED: 'DEVICE_LINK_NOT_CONNECTED', LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
+  PEER_RESET: 'DEVICE_LINK_NOT_CONNECTED', NETWORK_ERROR: 'DEVICE_LINK_NOT_CONNECTED',
+  BACKPRESSURE: 'DEVICE_LINK_BUSY', RATE_LIMITED: 'DEVICE_LINK_BUSY', SERVICE_UNAVAILABLE: 'DEVICE_LINK_BUSY',
+  DEVICE_LINK_BUSY: 'DEVICE_LINK_BUSY',
+  DEVICE_UNRESPONSIVE: 'DEVICE_LINK_DEVICE_UNRESPONSIVE', DEVICE_LINK_DEVICE_UNRESPONSIVE: 'DEVICE_LINK_DEVICE_UNRESPONSIVE',
+};
+
+function temporarySourceFailure(code: unknown, message: unknown): IpcErrorCode | undefined {
+  const fromMessage = typeof message === 'string' ? /^\[([A-Z_]+)\]/.exec(message)?.[1] : undefined;
+  const key = typeof code === 'string' && code !== 'IPC_ERROR' ? code : fromMessage;
+  return key ? TEMPORARY_SOURCE_FAILURES[key] : undefined;
+}
 
 export interface ControlledModelCatalogDeps {
   assertCaller(): void;
@@ -68,7 +97,25 @@ export function createControlledModelCatalogReader(deps: ControlledModelCatalogD
     // A share is one provider: a built-in provider share offers no plugin engine, so it is not asked.
     const sharedProviderId = isProviderShareAgentDeviceId(deviceId) ? source.favoriteSource?.providerId : undefined;
     if (pluginEngineRead && sharedProviderId !== undefined && !pluginEngineKeyFromProviderId(sharedProviderId)) return [];
-    const result = await deps.invoke(deviceId, request.channel as string, request.args, assertOwner);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let result: InvokeResultPayload;
+    try {
+      result = await Promise.race([
+        deps.invoke(deviceId, request.channel as string, request.args, assertOwner),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(Object.assign(new Error('Model source read timed out'), { code: 'TIMEOUT' })),
+            CONTROLLED_SOURCE_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (error) {
+      const row = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {};
+      const temporary = temporarySourceFailure(row.code, row.message);
+      if (!temporary) throw error;
+      assertOwner();
+      throwIpcError(temporary, 'Model source is temporarily unavailable');
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     assertOwner();
     // A revoked/paused share or a disabled device must not publish a late catalog.
     const current = await deps.locations();
@@ -87,6 +134,8 @@ export function createControlledModelCatalogReader(deps: ControlledModelCatalogD
       if (result.error.code === 'CHANNEL_NOT_ALLOWED') {
         throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', result.error.message);
       }
+      const temporary = temporarySourceFailure(result.error.code, result.error.message);
+      if (temporary) throwIpcError(temporary, 'Model source is temporarily unavailable');
       throwIpcError('PRECONDITION_FAILED', 'Model source is currently unavailable');
     }
     if (pluginEngineRead) {

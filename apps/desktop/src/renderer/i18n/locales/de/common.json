@@ -689,6 +689,7 @@
     },
     "picker": {
       "unavailable": "Freigabe nicht verfügbar",
+      "offline": "{{name}} · Vorübergehend offline",
       "hostOutdated": "Die Cindy-Version auf dem Computer des Eigentümers ist zu alt, um diese Modelle aufzulisten. Bitte den Eigentümer, Cindy zu aktualisieren, und versuche es dann erneut.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -22215,6 +22216,11 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Anmeldemethode",
+      "secretHint": "Der Schlüssel geht nur an das Plugin, das ihn im eigenen Ordner dieses Kontos speichert. Cindy speichert ihn nicht und sendet ihn nicht an andere Computer.",
+      "browserHint": "Das Plugin öffnet deinen Browser. Melde dich dort an und kehre dann hierher zurück."
+    },
     "placement": {
       "needsUpdate": "Auf dem ausführenden Computer muss Cindy aktualisiert werden, bevor Konten so verschoben werden können.",
       "moveTo": "Verschieben nach…",

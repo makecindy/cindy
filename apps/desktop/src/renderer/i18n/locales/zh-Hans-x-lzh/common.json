@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "已不可用之分享",
+      "offline": "{{name}} · 暂离线",
       "hostOutdated": "分享者机上之 Cindy 版本过旧，读不得此等模型。请彼更新 Cindy 而后再试。",
       "numbered": "{{name}} ({{index}})"
     },
@@ -22127,6 +22128,11 @@
     }
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登录之法",
+      "secretHint": "Key 唯付法器，藏于此账号之箧；Cindy 不存，亦不传他机。",
+      "browserHint": "法器将启浏览器，登录毕，归此。"
+    },
     "placement": {
       "needsUpdate": "行此事之机当先更新 Cindy，方可如是调号。",
       "moveTo": "移至…",

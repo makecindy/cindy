@@ -54,7 +54,8 @@ export interface AcpUpdateTranslatorOptions {
 
 export type AcpTurnOutcome =
   | { stopReason: AcpStopReason; usage?: AcpTurnUsage }
-  | { error: string; reason?: string };
+  /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
+  | { error: string; reason?: string; signals?: Record<string, unknown> };
 
 function clip(text: string): string {
   return text.length > MAX_TOOL_OUTPUT_CHARS ? `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n…` : text;
@@ -230,7 +231,12 @@ export class AcpUpdateTranslator {
     if ('error' in outcome) {
       events.push({
         type: 'error',
-        data: { message: outcome.error, isTerminal: true, ...(outcome.reason ? { reason: outcome.reason } : {}) },
+        data: {
+          ...(outcome.signals ?? {}),
+          message: outcome.error,
+          isTerminal: true,
+          ...(outcome.reason ? { reason: outcome.reason } : {}),
+        },
       });
       return events;
     }

@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import { AcpLineDecoder, AcpLineTooLongError, type AcpLineTransport, type AcpTransportClosed } from './line-transport.js';
 import {
+  AcpAccountError,
   AcpAuthRequiredError,
   AcpResumeUnavailableError,
   openAcpSession,
@@ -27,6 +28,7 @@ import {
 import type { AcpRecord } from './protocol.js';
 import { AcpAgent, acpMcpServersFromBridge } from './acp-agent.js';
 import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '../base-agent.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { Session } from '../../session.js';
 
@@ -88,7 +90,8 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
         toClient({ jsonrpc: '2.0', id: message.id, result });
       } catch (error) {
         const code = typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : -32603;
-        toClient({ jsonrpc: '2.0', id: message.id, error: { code, message: (error as Error).message } });
+        const data = (error as { data?: unknown }).data;
+        toClient({ jsonrpc: '2.0', id: message.id, error: { code, message: (error as Error).message, ...(data !== undefined ? { data } : {}) } });
       }
       return;
     }
@@ -256,6 +259,19 @@ describe('openAcpSession handshake', () => {
     expect(session.resumeOutcome).toBe(outcome);
     await Promise.resolve();
     expect(events).toEqual([]);
+  });
+
+  // 引擎账号(plugin-harnesses.md 引擎账号，2026-11-23)：入口把账号原因写在 error.data._meta.cindy 里，Cindy 据此冷却账号、
+  // 换号；消息只用 Cindy 自己的稳定码，不带 Agent 原文。最小失败输入：session/new 报额度用完并给重置时间。
+  it('turns an account classification on session/new into an account error the host can switch on', async () => {
+    const agent = createFakeAgent({
+      handlers: { 'session/new': () => { throw Object.assign(new Error('quota'), { code: -32603, data: { _meta: { cindy: { kind: 'usage-limit', resetsAt: 1_900_000_000_000 } } } }); } },
+    });
+    const failure = await openAcpSession({ transport: agent.transport, cwd: '/w', clientInfo: { name: 'c', version: '1' } })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AcpAccountError);
+    expect((failure as AcpAccountError).message).toMatch(/^\[SUBSCRIPTION_ACCOUNT_LIMITED\]/);
+    expect((failure as AcpAccountError).signals).toEqual({ usageLimit: true, usageResetAt: 1_900_000_000_000 });
   });
 
   it('refuses to silently start fresh when the agent cannot resume', async () => {
@@ -712,6 +728,22 @@ describe('AcpSession stop and failure', () => {
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
   });
 
+  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段；不认识的 kind 照普通错误处理。
+  it.each([
+    { kind: 'usage-limit', resetsAt: 1_900_000_000_000, expected: { reason: 'acp-usage-limit', usageLimit: true, usageResetAt: 1_900_000_000_000 } },
+    { kind: 'overloaded', expected: { reason: 'acp-overloaded', errorStatus: 529 } },
+    { kind: 'auth-required', expected: { reason: 'acp-auth-required' } },
+    { kind: 'something-new', expected: { reason: 'acp-request-failed' } },
+  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, expected }) => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.prompts[0]!.settle.reject(Object.assign(new Error('upstream said no'), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
+    expect(events.at(-1)?.data).toMatchObject({ isTerminal: true, ...expected });
+  });
+
   it('close() ends a running turn, closes the agent session and waits for the endpoint', async () => {
     const agent = createFakeAgent({
       agentCapabilities: { sessionCapabilities: { close: {} } },
@@ -985,6 +1017,27 @@ describe('AcpAgent (the acp engine)', () => {
     expect(seen).toEqual(['dsh-acp:dsh']);
     await expect(createAcpAgent(() => agent.transport).startSession({ workingDir: '/w', model: '', providerId: 'anthropic' })).rejects.toThrow('harness id');
     await expect(createAcpAgent(() => agent.transport).startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', remoteHostId: 'box' })).rejects.toThrow("'remoteSession' not supported");
+  });
+
+  // 引擎账号：宿主账号池选中 Cindy 加的账号时，入口带着这个账号的目录启动；插件原有的登录照旧不带参数。
+  // 拿出来的单独供应商(`…~<后缀>`)跑同一个引擎。最小失败输入：带账号能力启动；默认登录；带后缀的供应商 id。
+  it('starts the engine on the account the host picked, and a taken-out provider on its engine', async () => {
+    const connects: Array<{ key: string; options: unknown }> = [];
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async (key, options) => { connects.push({ key, options }); return createFakeAgent().transport; } },
+    });
+    const account = (configDir: string, defaultProfile: boolean) => ({
+      id: 'a', configDir, defaultProfile, assertCurrent() {}, readState: async () => ({ authenticated: true }),
+    });
+    await engine.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh~ab12cd34', [NATIVE_SUBSCRIPTION_ACCOUNT]: account('/accounts/a', false) });
+    await engine.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', [NATIVE_SUBSCRIPTION_ACCOUNT]: account('', true) });
+    expect(connects).toEqual([
+      { key: 'dsh-acp:dsh', options: { accountDir: '/accounts/a' } },
+      { key: 'dsh-acp:dsh', options: undefined },
+    ]);
   });
 
   // 用户决定（2026-11-19）：协作 Worker 整体信任插件 Agent，它的工具调用按任务自己发起（能回报 Lead）；
