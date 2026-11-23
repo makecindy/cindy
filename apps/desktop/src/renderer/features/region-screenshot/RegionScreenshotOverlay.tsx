@@ -170,6 +170,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const modLabel = isMac ? '⌘' : 'Ctrl+';
   const rootRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLCanvasElement>(null);
+  const pixelSampler = useRef<OffscreenCanvasRenderingContext2D | null>(null);
   const annotationCanvasRef = useRef<HTMLCanvasElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -695,6 +696,16 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     if (rect && !rectContains(rect, point)) return null;
     const x = Math.min(frameSize.width - 1, Math.max(0, Math.floor(((point.x - (rect?.x ?? 0)) * frameSize.width) / (rect?.width ?? size.width))));
     const y = Math.min(frameSize.height - 1, Math.max(0, Math.floor(((point.y - (rect?.y ?? 0)) * frameSize.height) / (rect?.height ?? size.height))));
+    if (current.preview && !longResultRef.current) {
+      // Sample in the same output color space as the exported selection.
+      const ctx = pixelSampler.current ??= new OffscreenCanvas(1, 1).getContext('2d', {
+        colorSpace: 'srgb', willReadFrequently: true,
+      });
+      if (!ctx) return null;
+      ctx.drawImage(current.preview, x, y, 1, 1, 0, 0, 1, 1);
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      return { r, g, b };
+    }
     const index = (y * frameSize.width + x) * 4;
     return { r: frameData.data[index], g: frameData.data[index + 1], b: frameData.data[index + 2] };
   }, []);
