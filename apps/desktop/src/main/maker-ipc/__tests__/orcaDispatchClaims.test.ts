@@ -7,6 +7,7 @@ import {
   noteLeadTurnDeclaration,
   reconcileLeadTurnDeclaration,
   resetDispatchClaimState,
+  sessionInstanceToken,
   settleDispatchClaimIncident,
   toDispatchClaimNotice,
   type LeadDispatchFact,
@@ -29,6 +30,40 @@ afterEach(() => {
 });
 
 describe('lead turn declaration reconciliation', () => {
+  it('keeps a rebuilt instance first dispatch when the turn counter restarts', () => {
+    const oldSession = {};
+    const newSession = {};
+
+    noteLeadDispatchFact(
+      'lead-1',
+      fact({
+        dispatchId: 'mq-old',
+        turnGeneration: 8,
+        instanceToken: sessionInstanceToken(oldSession),
+      }),
+    );
+    expect(dispatchFactsForTurn('lead-1', 8)).toHaveLength(1);
+
+    noteLeadDispatchFact(
+      'lead-1',
+      fact({
+        dispatchId: 'mq-new',
+        turnGeneration: 1,
+        instanceToken: sessionInstanceToken(newSession),
+      }),
+    );
+
+    expect(dispatchFactsForTurn('lead-1', 1).map((entry) => entry.dispatchId)).toEqual(['mq-new']);
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [],
+      dispatched: [{ workerId: 'worker-1', messageId: 'mq-new' }],
+      pending: [],
+      turnGeneration: 1,
+    });
+    expect(reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 1))).toEqual({
+      consistent: true,
+    });
+  });
   it('accepts a declaration that matches the host dispatch records', () => {
     noteLeadDispatchFact('lead-1', fact());
 

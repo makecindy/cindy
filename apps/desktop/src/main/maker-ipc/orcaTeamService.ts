@@ -20,6 +20,7 @@ import {
   noteLeadTurnDeclaration,
   reconcileLeadTurnDeclaration,
   resetDispatchClaimState,
+  sessionInstanceToken,
   settleDispatchClaimIncident,
   toDispatchClaimNotice,
 } from './orcaDispatchClaims.js';
@@ -1434,8 +1435,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
       // 轮次在**请求时**取：排队投递可能晚于本轮收口才落地，落地时才读会把它记到下一轮头上。
-      const dispatchTurnGeneration =
-        deps.getLiveSession(link.leadSessionId)?.getTurnGeneration?.() ?? 0;
+      const leadRuntime = deps.getLiveSession(link.leadSessionId);
+      const dispatchTurnGeneration = leadRuntime?.getTurnGeneration?.() ?? 0;
       let result: DispatchWorkerMessageResult;
       try {
         await params.assertCurrent?.();
@@ -1511,6 +1512,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         workerLabel,
         delivery,
         ...(delivery === 'queued' ? { queuedMessageId: result.clientId } : {}),
+        ...(leadRuntime ? { instanceToken: sessionInstanceToken(leadRuntime) } : {}),
         at: Date.now(),
       });
       if (result.mode === 'dispatched') {

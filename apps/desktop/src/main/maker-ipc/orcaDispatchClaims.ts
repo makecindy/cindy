@@ -25,6 +25,24 @@ export interface LeadDispatchFact {
   delivery: OrcaDispatchDelivery;
   queuedMessageId?: string;
   at: number;
+  /**
+   * 写下这条凭据的会话实例。投递落地可能晚于换实例，只靠轮次分不开「新实例第 1 轮」
+   * 与「旧实例迟到的第 1 轮」，所以凭据自带实例身份。
+   */
+  instanceToken?: number;
+}
+
+const instanceTokens = new WeakMap<object, number>();
+let nextInstanceToken = 1;
+
+/** 会话实例的稳定标记：同一个运行时对象始终得到同一个号。 */
+export function sessionInstanceToken(session: object): number {
+  let token = instanceTokens.get(session);
+  if (token === undefined) {
+    token = nextInstanceToken++;
+    instanceTokens.set(session, token);
+  }
+  return token;
 }
 
 /** Lead 声明的一条指派：想让哪个 Worker 做什么。 */
@@ -85,6 +103,8 @@ interface LeadLedger {
    * 所以地板只降不升；一致后清空。
    */
   incidentFloor: number | null;
+  /** 账本属于哪个会话实例。换实例后旧账整体作废，新实例从第一条凭据重新记。 */
+  instanceToken?: number;
 }
 
 const ledgers = new Map<string, LeadLedger>();
@@ -126,11 +146,23 @@ function ledgersReset(ledger: LeadLedger): void {
   ledger.escalated = false;
   ledger.escalatedAt = null;
   ledger.incidentFloor = null;
+  ledger.instanceToken = undefined;
 }
 
 /** 记一条宿主派发凭据。真实派发重置抑制状态：同一个动作值得重新判定。 */
 export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFact): void {
   const ledger = ledgerFor(leadSessionId);
+  if (
+    fact.instanceToken !== undefined &&
+    ledger.instanceToken !== undefined &&
+    fact.instanceToken !== ledger.instanceToken
+  ) {
+    // 换了会话实例：旧账本连同升级进度作废，并把轮次降到新实例这一轮，
+    // 否则随后的收口按「轮次回退」再清一次，会把这条新凭据一起抹掉。
+    ledgersReset(ledger);
+    ledger.turnGeneration = fact.turnGeneration;
+  }
+  if (fact.instanceToken !== undefined) ledger.instanceToken = fact.instanceToken;
   ledger.facts.push(fact);
   if (ledger.facts.length > MAX_FACTS) ledger.facts.splice(0, ledger.facts.length - MAX_FACTS);
   // 凭据不参与轮次观察：投递落地可能晚于它所属的轮次收口，迟到的旧凭据既不能抹掉
