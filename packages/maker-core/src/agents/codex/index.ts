@@ -48,8 +48,11 @@ import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh 
 import {
   BaseAgent,
   LOCAL_AGENT_CLIENT,
+  ASYNC_QUESTION_ANSWER,
+  AUTO_REVIEW_DELEGATED_CONTINUATION,
   AUTO_REVIEW_SOURCE_CONTENT,
   INHERITED_CAPABILITY_SELECTION,
+  MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
   OneShotError,
@@ -72,7 +75,7 @@ import {
   botRuntimeSkillPolicy,
   isolatedBotProfile,
 } from '../base-agent.js';
-import { skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
+import { canonicalSkillPath, skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
 import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
@@ -7112,8 +7115,8 @@ assertRouteCurrent();
 
     const toTurnInput = async (
       content: UserMessage['content'],
+      sendOpts?: SendOptions,
       pinnedSkill?: PinnedSkillInvocation,
-      sourceContent?: UserMessage['content'],
     ): Promise<UserInput[]> => {
       if (reviewMode) {
         if (pinnedSkill) {
@@ -7131,10 +7134,10 @@ assertRouteCurrent();
         return toAppServerInput(content, opts.workingDir);
       }
 
-      const slash = parseLeadingSlashToken(
-        (pinnedSkill && typeof sourceContent === 'string' ? sourceContent : content).trim(),
-      );
+      const sourceContent = sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT];
+      const wireSlash = parseLeadingSlashToken(content.trim());
       if (pinnedSkill) {
+        const slash = typeof sourceContent === 'string' ? parseLeadingSlashToken(sourceContent.trim()) : wireSlash;
         const normalizedSlashName = slash?.name.toLowerCase();
         const normalizedSkillName = pinnedSkill.name.toLowerCase();
         if (
@@ -7152,26 +7155,44 @@ assertRouteCurrent();
         // Authenticate the command from Host-owned source text, but assemble the
         // prompt from the wire text. Notes can precede the command and library
         // mappings can follow it; neither may disappear when using a pinned Skill.
-        const wireSlash = parseLeadingSlashToken(content.trim());
         const prompt = (wireSlash?.name.toLowerCase() === normalizedSlashName
           ? wireSlash.rest
           : content).trim();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       }
+
+      // Only the Main-attested local composer input can restore a slash that
+      // Host notes moved away from the start of the wire message.
+      const context = sendOpts?.[MAIN_OWNED_SEND_CONTEXT];
+      const localSource = context?.origin.kind === 'desktop'
+        && !opts.remoteHostId && !hosted && !isolatedBotProfile(opts.botRuntimeProfile)
+        && (!sendOpts?.origin || sendOpts.origin.kind === 'user' && !sendOpts.origin.surface)
+        && !sendOpts?.[ASYNC_QUESTION_ANSWER] && !sendOpts?.[AUTO_REVIEW_DELEGATED_CONTINUATION]
+        ? context.rawChannelText
+        : undefined;
+      const slash = localSource === undefined ? wireSlash : parseLeadingSlashToken(localSource.trim());
       if (!slash) return toAppServerInput(content, opts.workingDir);
 
       try {
-        const { skills } = await this.listSkillsForCwd(opts.workingDir, false);
+        const { skills } = localSource === undefined
+          ? await this.listSkillsForCwd(opts.workingDir, false)
+          : await this.listSkillsForHost(host, opts.workingDir, false);
         // 受邀者：斜杠只解析它自己带来的技能与 Codex 自带技能，不把本机用户的技能文件交给模型。
         const skill = selectInvocableCodexSkill(
           guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
           slash.name,
         );
-        if (!skill) return toAppServerInput(content, opts.workingDir);
+        if (!skill || (localSource !== undefined && disabledSkillSnapshot.length > 0
+          && disabledSkillSnapshot.includes(canonicalSkillPath(skill.path)))) {
+          return toAppServerInput(content, opts.workingDir);
+        }
 
         const inputs: UserInput[] = [{ type: 'skill', name: skill.name, path: skill.path }];
-        const prompt = slash.rest.trim() || skill.interface?.defaultPrompt?.trim() || '';
+        const defaultPrompt = skill.interface?.defaultPrompt?.trim();
+        const prompt = wireSlash?.name.toLowerCase() === slash.name.toLowerCase()
+          ? wireSlash.rest.trim() || defaultPrompt
+          : content;
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       } catch (err) {
@@ -14230,8 +14251,8 @@ assertRouteCurrent();
         try {
           turnInput = await toTurnInput(
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
+            sendOpts,
             sendOpts?.[PINNED_SKILL_INVOCATION],
-            sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT],
           );
         } catch (e) {
           isTurnStartPending = false;
@@ -14882,7 +14903,7 @@ assertRouteCurrent();
         // Validate content before steering. `toTurnInput` can touch local
         // files/images; if that fails, leaving the current turn untouched is
         // better than sending a broken 插话.
-        const input = await toTurnInput(message.content);
+        const input = await toTurnInput(message.content, sendOpts);
         rejectIfCancelled(sendOpts, 'steer');
         if (closed) {
           throw new Error('No active Codex turn to steer: session is closed');

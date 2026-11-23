@@ -32,6 +32,7 @@ import {
   AgentStartupCleanupPendingError,
   type AgentDeps,
   type AgentSessionHandle,
+  type SendOptions,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -9008,6 +9009,46 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.send({ type: 'user', content: wire }, { [AUTO_REVIEW_SOURCE_CONTENT]: '/learn release flow' });
       const turnStart = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as TurnStartParams;
       expect(turnStart.input).toEqual([{ type: 'text', text: wire }]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    { source: '/probe 参数  "a b"\nnext line', local: true, enabled: true, selected: true },
+    { source: '/probe', local: true, enabled: false, selected: false },
+    { source: '/probe', local: true, enabled: true, hostDisabled: true, selected: false },
+    { source: '/unknown 参数', local: true, enabled: true, selected: false },
+    { source: 'Explain /probe', local: true, enabled: true, selected: false },
+    { source: '/probe 参数', local: false, enabled: true, selected: false },
+  ])('dispatches decorated local Skill input on send and steer: $source (local=$local, enabled=$enabled, hostDisabled=$hostDisabled)', async ({ source, local, enabled, hostDisabled, selected }) => {
+    const skillPath = '/repo/.agents/skills/probe/SKILL.md';
+    const wire = `[UI language] 简体中文\n\n${source}\n`;
+    const agent = new CodexAgent({ ...createDeps(), getDisabledSkillPaths: () => hostDisabled ? [skillPath] : [] });
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.SkillsList) return { data: [{ cwd: '/repo', errors: [], skills: [
+        { name: 'probe', path: skillPath, enabled, scope: 'repo' },
+      ] }] };
+      if (method === Method.TurnStart) return { turn: { id: 'probe-turn' } };
+      if (method === Method.TurnSteer) return { turnId: 'probe-turn' };
+      return undefined;
+    }, { userAgent: 'mock-codex/0.167.2' });
+    const handle = await agent.startSession({ sessionId: 'session-desktop-skill', model: 'gpt-5.4', workingDir: '/repo' });
+    const options: SendOptions = {
+      [AUTO_REVIEW_SOURCE_CONTENT]: source,
+      ...(local ? { [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: source } } : {}),
+    };
+    const expected = [
+      ...(selected ? [{ type: 'skill', name: 'probe', path: skillPath }] : []),
+      { type: 'text', text: wire },
+    ];
+    try {
+      await handle.send({ type: 'user', content: wire }, options);
+      await handle.steer({ type: 'user', content: wire }, options);
+      for (const method of [Method.TurnStart, Method.TurnSteer]) {
+        const request = host.request.mock.calls.find(([rpc]) => rpc === method)?.[1];
+        expect(request).toMatchObject({ input: expected });
+      }
     } finally {
       await handle.close();
     }

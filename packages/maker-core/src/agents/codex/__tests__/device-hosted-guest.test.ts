@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps, DeviceHostedSession, StartSessionOptions } from '../../base-agent.js';
+import { MAIN_OWNED_SEND_CONTEXT } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import { AppServerClient, AppServerRequestTimeoutError, type RequestProgressDeadline } from '../app-server/client.js';
 import { Method } from '../app-server/protocol.js';
@@ -955,6 +956,21 @@ describe('Codex device-hosted guest sessions', () => {
     const expectedPath = name === 'guest' ? fixture.guestSkill : fixture.hostSkill;
     expect(skillInputs.map((item) => item.path)).toEqual(resolved ? [expectedPath] : []);
     await handle.close();
+  });
+
+  it('does not restore a decorated Skill command in a hosted guest session', async () => {
+    const fixture = await startHosted({ guest: true, guestHome: true });
+    const handle = await fixture.started;
+    const raw = '/guest go';
+    const wire = `[UI language] English\n\n${raw}`;
+    try {
+      await handle.send({ type: 'user', content: wire }, {
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: raw },
+      });
+      expect(threadParams(fixture.request, Method.TurnStart).input).toEqual([{ type: 'text', text: wire }]);
+    } finally {
+      await handle.close();
+    }
   });
 
   it('drops the spawn model-override switch from a shared user\'s app-server configuration', () => {
