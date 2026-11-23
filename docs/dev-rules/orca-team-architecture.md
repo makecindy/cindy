@@ -543,6 +543,8 @@ runtime 已在线的 session 之后才成为 Lead（例如从协同面板开启�
 
    `hasPendingWorkerReports` 只统计仍欠回报的 Worker，不代表仍在运行的 Worker。最后一份回报被接收时，沿已有 `onLeadWorkerReportsSettled` 通知灵动岛；Lead 自身忙碌或有队列时仍由其现有完成规则处理。相较旧实现等 Worker 终态再清 pending，这可能更早解除 Lead 的完成暂缓；不另增加「Worker 仍在工作」条件。
 
+   本机 ACP Worker 的派单正常结束（`end_turn`）且轮末自动回报被接收后，同一 Session 实例及回合可以再自动补报一次定稿的回合外答复。补报沿已有回报队列发送，归属原 Worker 派单，并在发送前检查团队成员关系、回合代次和手动停止。逐段流式输出、与轮末回报相同的文字、重复定稿和已主动回报的结果不会重复投递。补报不会重新占用 Lead 的待回报状态，也不会生成一次新的 Worker 终态。实现见 `sessionEventStreamCore.ts` 和 `orcaTeamService.ts`。
+
 4a. **冷启动 Lead 的回报先留存，再恢复投递（状态：不变量）**<br>
    宿主接管 `send_to_lead` 时先核对 Worker 关系，不为取得 Lead 实例提前启动远程 Agent。
    Lead 尚无运行时的报告进入原输入队列；快照持久化成功前不返回 queued，也不派发。

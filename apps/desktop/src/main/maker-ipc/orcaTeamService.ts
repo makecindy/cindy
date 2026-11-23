@@ -315,6 +315,8 @@ export interface WorkerTerminalTurnParams {
   sessionId: string;
   status: 'done' | 'error';
   finalText: string;
+  /** A local ACP prompt returned end_turn and may still produce a final reply. */
+  allowBackgroundReply?: boolean;
   /** Provider/session diagnostic used when an error turn has no assistant output. */
   diagnostic?: string;
   capture?: WorkerTerminalTurnCapture;
@@ -621,6 +623,7 @@ export interface OrcaTeamService {
     position: number;
   }): Promise<MoveWorkerQueuedMessageResult>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
+  reportWorkerBackgroundReply(sessionId: string, runtime: NonNullable<WorkerTerminalTurnCapture['runtime']>, text: string): Promise<void>;
   clearAutoBridgeState(sessionId: string): void;
   /**
    * The receipt says how an accepted report was taken: delivered to the Lead now (direct send or
@@ -711,6 +714,12 @@ export function findFocusTargetWorker<
 
 export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamService {
   const autoBridge = new Map<string, AutoBridgeState>();
+  // The normal report settles the pending assignment. Keep eligibility for one
+  // supplement on that exact live runtime, without keeping the Lead pending.
+  const backgroundReplies = new WeakMap<
+    NonNullable<WorkerTerminalTurnCapture['runtime']>,
+    { assignment: AutoBridgeState; primaryText: string; primaryAccepted: Promise<boolean>; claimed: boolean }
+  >();
   const queueControl = createSessionQueueControlService({
     getSnapshot: async (sessionId) => {
       const snapshot = await deps.getSessionQueueSnapshot(sessionId);
@@ -900,7 +909,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   async function bridgeWorkerCompletion(
     sessionId: string,
-    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string; remoteReport?: WorkerTerminalTurnParams['remoteReport'] },
+    turn: Pick<WorkerTerminalTurnParams, 'status' | 'finalText' | 'diagnostic' | 'remoteReport' | 'allowBackgroundReply'>,
     state: AutoBridgeState | undefined,
   ): Promise<'accepted' | 'deferred' | 'rejected' | 'skipped'> {
     if (!state) return 'skipped';
@@ -930,17 +939,24 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const report = turn.status === 'error'
       ? `${ORCA_AUTO_BRIDGE_FAILURE_HEADER}\n\n${finalText}\n\n${buildWorkerFailureRecoveryNote(sessionId)}`
       : `[Auto-bridged: worker 已完成，系统自动回传结果]\n\n${finalText}`;
-    let accepted = false;
-    try {
-      accepted = (await deps.sendAutoBridgeToLead(
-        state.leadSessionId, report, state.workerId,
-        ...(turn.remoteReport ? [turn.remoteReport] as const : []),
-      )).accepted;
-    } catch (err) {
-      deps.log.warn('orca auto-bridge failed', {
-        sessionId, err: err instanceof Error ? err.message : String(err),
-      });
+    const primaryAccepted = (async () => {
+      try {
+        return (await deps.sendAutoBridgeToLead(
+          state.leadSessionId, report, state.workerId,
+          ...(turn.remoteReport ? [turn.remoteReport] as const : []),
+        )).accepted;
+      } catch (err) {
+        deps.log.warn('orca auto-bridge failed', {
+          sessionId, err: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      }
+    })();
+    const runtime = state.productTerminal?.runtime;
+    if (turn.allowBackgroundReply && turn.status === 'done' && !turn.remoteReport && runtime) {
+      backgroundReplies.set(runtime, { assignment: state, primaryText: finalText, primaryAccepted, claimed: false });
     }
+    const accepted = await primaryAccepted;
     return withWorkerTransition(state.workerId, async () => {
       if (autoBridge.get(sessionId) !== state) return 'skipped';
       state.inFlight = false;
@@ -951,6 +967,39 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       state.retryAfterRejectedDelivery = true;
       return 'rejected';
     });
+  }
+
+  async function reportWorkerBackgroundReply(
+    sessionId: string,
+    runtime: NonNullable<WorkerTerminalTurnCapture['runtime']>,
+    text: string,
+  ): Promise<void> {
+    const reply = backgroundReplies.get(runtime);
+    const finalText = text.trim();
+    if (!reply || reply.claimed || !finalText || finalText === reply.primaryText) return;
+    const { assignment } = reply;
+    const isCurrent = () => {
+      const pending = autoBridge.get(sessionId);
+      return backgroundReplies.get(runtime) === reply
+        && (!pending || pending === assignment)
+        && !deps.getManualInterrupt(sessionId)
+        && deps.getLiveSession(sessionId) === runtime
+        && runtime.getTurnGeneration?.() === assignment.productTerminal?.turnGeneration;
+    };
+    if (!isCurrent()) return;
+    // Claim before the first await so duplicate final events cannot send twice.
+    reply.claimed = true;
+    if (!await reply.primaryAccepted || !isCurrent()) return;
+    while (assignment.reportsInFlight.size) await Promise.all([...assignment.reportsInFlight]);
+    const workers = await deps.listWorkersByLead(assignment.leadSessionId);
+    if (!isCurrent() || !workers.some(worker =>
+      worker.id === assignment.workerId && worker.sessionId === sessionId && worker.session.agentKind === 'acp'
+    )) return;
+    await deps.sendAutoBridgeToLead(
+      assignment.leadSessionId,
+      `[Auto-bridged: worker 回合外答复补充]\n\n${finalText}`,
+      assignment.workerId,
+    );
   }
 
   /**
@@ -2306,15 +2355,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           ? text.slice(-MAX_CAPTURED_TEXT)
           : (state.capturedText + text).slice(-MAX_CAPTURED_TEXT);
     },
+    reportWorkerBackgroundReply,
     clearAutoBridgeState(sessionId) {
+      const runtime = deps.getLiveSession(sessionId);
+      if (runtime) backgroundReplies.delete(runtime);
       clearRuntimeState(sessionId);
     },
     captureLocalWorkerReport(sessionId) {
-      const state = autoBridge.get(sessionId);
+      const runtime = deps.getLiveSession(sessionId);
+      const background = runtime ? backgroundReplies.get(runtime) : undefined;
+      const state = autoBridge.get(sessionId) ?? background?.assignment;
       // Direct user turns have no Lead obligation. In particular, a late callback must
       // not look up and settle a new assignment that did not exist at capture time.
       if (!state) return async () => {};
-      const runtime = deps.getLiveSession(sessionId);
       const generation = runtime?.getTurnGeneration?.();
       if (state.productTerminal && (
         state.productTerminal.runtime !== runtime
@@ -2334,6 +2387,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         try {
           await withWorkerTransition(state.workerId, async () => {
             const provisional = provisionalDispatches.get(sessionId);
+            if (accepted && runtime && background?.assignment === state && backgroundReplies.get(runtime) === background) {
+              backgroundReplies.delete(runtime);
+            }
             if (accepted && (autoBridge.get(sessionId) === state
               || provisional?.previousPendingIdentity === state)) settlePendingReport(state);
           });

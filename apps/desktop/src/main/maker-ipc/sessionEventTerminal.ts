@@ -662,6 +662,9 @@ export function finishSessionTerminalEvent(
               sessionId: session.id,
               status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
               finalText: workerTerminalFinalText,
+              ...(session.agentKind === 'acp' && !session.remoteHostId && !session.agentDeviceId &&
+                event.type === 'done' && (event.data as { stopReason?: unknown } | null)?.stopReason === 'end_turn'
+                ? { allowBackgroundReply: true } : {}),
               diagnostic: workerTerminalDiagnostic,
               capture: workerTerminalCapture,
             });

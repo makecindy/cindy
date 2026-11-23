@@ -2891,6 +2891,55 @@ describe('OrcaTeamService', () => {
     expect(leadMessages).toEqual(['[Auto-bridged: worker 已完成，系统自动回传结果]\n\n部分输出']);
   });
 
+  // #12206, unit: through Lead dispatch and the Worker terminal/text entry points,
+  // a finalized ACP reply after the normal report adds one report for that assignment.
+  // Prior terminal tests end before this event, so cannot catch the missing supplement.
+  it.each(['duplicate', 'stopped', 'unavailable', 'new turn', 'manual report'] as const)(
+    'gates an ACP background answer after the original report: %s',
+    async (scenario) => {
+      let generation = 1;
+      const runtime = { isTurnRunning: () => false, getTurnGeneration: () => generation };
+      const { service, deps, setWorker, setWorkers, setManualInterrupt } = createDeps({
+        getLiveSession: () => runtime,
+      });
+      const worker = createWorker();
+      setWorker({ ...worker, session: { ...worker.session, agentKind: 'acp' } });
+      await service.sendToWorker({
+        callerLeadSessionId: worker.leadSessionId,
+        targetSessionId: worker.sessionId,
+        message: 'Run the assignment',
+      });
+      await service.handleWorkerTerminalTurn({
+        sessionId: worker.sessionId,
+        status: 'done',
+        finalText: 'waiting for result',
+        allowBackgroundReply: true,
+      });
+      expect(service.hasPendingWorkerReports(worker.leadSessionId)).toBe(false);
+      expect(deps.sendAutoBridgeToLead).toHaveBeenCalledExactlyOnceWith(
+        worker.leadSessionId,
+        expect.stringContaining('waiting for result'),
+        worker.id,
+      );
+
+      if (scenario === 'stopped') setManualInterrupt('input_stop');
+      if (scenario === 'unavailable') setWorkers([]);
+      if (scenario === 'new turn') generation += 1;
+      if (scenario === 'manual report') await service.captureLocalWorkerReport(worker.sessionId)(true);
+
+      await Promise.all([
+        service.reportWorkerBackgroundReply(worker.sessionId, runtime, 'final marker'),
+        service.reportWorkerBackgroundReply(worker.sessionId, runtime, 'final marker'),
+      ]);
+      expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(scenario === 'duplicate' ? 2 : 1);
+      if (scenario === 'duplicate') {
+        expect(deps.sendAutoBridgeToLead).toHaveBeenLastCalledWith(
+          worker.leadSessionId, expect.stringContaining('final marker'), worker.id,
+        );
+      }
+    },
+  );
+
   it('bridges the terminal diagnostic when an errored worker produced no output', async () => {
     const leadMessages: string[] = [];
     const { service } = createDeps({

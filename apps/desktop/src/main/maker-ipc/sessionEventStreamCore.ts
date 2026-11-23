@@ -13,7 +13,8 @@ import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 export interface PersistSessionStreamEventDeps {
-  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'captureWorkerText'> | null;
+  readonly orcaTeamServiceForEvents: (Pick<OrcaTeamService, 'captureWorkerText'> &
+    Partial<Pick<OrcaTeamService, 'reportWorkerBackgroundReply'>>) | null;
   readonly log: Pick<ReturnType<typeof createLogger>, 'warn'>;
 }
 
@@ -69,11 +70,12 @@ export function persistSessionStreamEventCore(
   }
   if (event.type === 'text') {
     const td = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;
+    const backgroundAcpText = session.agentKind === 'acp' && event.turnScope === 'background';
     // A Host runtime-recovery notice (#4349) is not the worker's reply: it is
     // persisted and broadcast like any assistant text below, but must never be
     // captured as an Orca worker result. Otherwise an error terminal that lacks
     // finalText could fall back to the localized recovery prompt as the "result".
-    if (typeof td?.text === 'string' && event.runtimeRecovery !== true) {
+    if (typeof td?.text === 'string' && event.runtimeRecovery !== true && !backgroundAcpText) {
       deps.orcaTeamServiceForEvents?.captureWorkerText(session.id, td.text, {
         isFinal: td.isFinal === true,
       });
@@ -99,10 +101,16 @@ export function persistSessionStreamEventCore(
     // A plugin engine's reply between turns has no done to commit it; its final
     // segment (closed by maker-core once the agent pauses) is the whole message.
     if (
-      session.agentKind === 'acp' && event.turnScope === 'background'
-      && td?.isFinal === true && td.isFullText === true
+      backgroundAcpText && td?.isFinal === true && td.isFullText === true
     ) {
       flushAssistantBlock(session.id, eventAgentMeta);
+      if (typeof td.text === 'string' && event.runtimeRecovery !== true &&
+        !session.remoteHostId && !session.agentDeviceId) {
+        void deps.orcaTeamServiceForEvents?.reportWorkerBackgroundReply?.(session.id, session, td.text)
+          .catch((err) => deps.log.warn('orca background reply delivery failed', {
+            sessionId: session.id, err: err instanceof Error ? err.message : String(err),
+          }));
+      }
     }
   } else if (event.type === 'tool_use') {
     // tool_use 边界:先 flush 在飞 assistant(保证 assistant 行先于其 tool_use 入队
