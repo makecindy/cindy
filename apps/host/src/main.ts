@@ -2313,6 +2313,10 @@ function startDeviceLink(): void {
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
     sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true,
+    closeRuntimeSession: id => withSendToSessionLock(id, async () => {
+      await agentGraph?.maker.closeSession(id);
+      interactions.detach(id, 'session_closed');
+    }),
     onProjectTaskStatus: (sessionId, status) => {
       eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
     },

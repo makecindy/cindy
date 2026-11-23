@@ -1060,3 +1060,18 @@ test('send: only a registered project becomes recent and is announced; an unchan
   assert.equal(f.events.length, events, 'nothing is announced once the owner changed during the send');
   assert.equal((await f.row('sent')).userSendAt, 6_000, 'the entry\'s own database is still stamped');
 });
+
+test('archive and soft-delete persist terminal status and clear pin summary/snooze', async t => {
+  const f = await fixture(t);
+  await f.task('arch');
+  await f.database.drizzle.update(sessions).set({ pinnedAt: 1000, summary: 'pinned', snoozedUntil: Date.now() + 60_000, snoozedAt: 1000 }).where(eq(sessions.id, 'arch'));
+  const archived = await f.update('arch', { status: 'archived', pinnedAt: null });
+  assert.equal(archived.status, 'archived');
+  assert.equal(archived.pinnedAt, null);
+  assert.equal(archived.snoozedUntil, null);
+  assert.equal((await f.row('arch')).summary, null);
+  await f.task('del');
+  const deleted = await f.update('del', { status: 'deleted' });
+  assert.equal(deleted.status, 'deleted');
+  assert.equal((await f.row('del')).status, 'deleted');
+});

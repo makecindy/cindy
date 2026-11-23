@@ -160,6 +160,8 @@ export interface HostDeviceLinkPorts {
   onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
+  closeRuntimeSession(sessionId: string, opts?: unknown): Promise<void>;
+  closeRuntimeSession(sessionId: string, opts?: unknown): Promise<void>;
   /** The desktop-compatible maker:send transaction (agent/input-queue.mjs). */
   send(sessionId: string, message: unknown, createOpts?: unknown, sendOpts?: unknown): Promise<unknown>;
   /** Captures the current clear boundary and input generation before a direct send. */
@@ -209,6 +211,8 @@ function readGitSafetyWire() {
     defaultAutoSnapshotEnabled: state.defaults.autoSnapshotEnabled,
   };
 }
+
+const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges', 'deleteTarget', 'archiveSideChatParentId']);
 
 export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const log = createLogger('host-device-link');
@@ -336,6 +340,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     const name = await worktrees.suggestName(requireString(body.baseRepo, 'baseRepo'));
     assertCurrent();
     return { name };
+  });
+  registry.register('worktree:removal-preview', async ([sessionId]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) return { hasWorktree: false, dirty: false };
+    const result = await worktrees.getRemovalPreview(sessionId);
+    assertCurrent();
+    return result;
   });
   registry.register('worktree:create', async ([raw]) => {
     refuseWhileHeld();
@@ -466,6 +477,45 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     // The precreated flow supplies its id up front. Serialize the DB/runtime
     // claim and path backfill with discard/cancel's final ownership check.
     return requestedId ? withSendToSessionLock(requestedId, create) : create();
+  });
+  registry.register(MAKER_INVOKE.CLOSE_SESSION, async ([sessionId, opts]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+    refuseWhileHeld();
+    await deps.closeRuntimeSession(sessionId, opts);
+    assertCurrent();
+  });
+  registry.register('local-db:sessions:patch-meta', async ([id, rawPatch]) => {
+    assertCurrent();
+    const sessionId = requireString(id, 'id');
+    const raw = requireObject(rawPatch, 'patch');
+    for (const key of Object.keys(raw)) {
+      if (!REMOTE_EDITABLE_META.has(key)) throwIpcError('INVALID_PARAMS', `field not allowed in patch-meta: ${key}`);
+    }
+    const { discardWorktreeChanges, deleteTarget, archiveSideChatParentId, ...patch } = raw;
+    if ('archiveSideChatParentId' in raw) {
+      if (typeof archiveSideChatParentId !== 'string' || !archiveSideChatParentId
+        || patch.status !== 'archived' || Object.keys(raw).length !== 2) {
+        throwIpcError('INVALID_PARAMS', 'Invalid linked follow-up archive intent');
+      }
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Linked side-chat archive is not supported on the Node Host');
+    }
+    if (discardWorktreeChanges !== undefined) {
+      if (discardWorktreeChanges !== true || patch.status !== 'archived') {
+        throwIpcError('INVALID_PARAMS', 'discardWorktreeChanges requires status archived');
+      }
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Discarding worktree changes on archive is not supported on the Node Host');
+    }
+    if (deleteTarget !== undefined && ((deleteTarget !== 'side-chat' && deleteTarget !== 'task') || patch.status !== 'deleted')) {
+      throwIpcError('INVALID_PARAMS', 'deleteTarget requires status deleted');
+    }
+    if (patch.status !== undefined && patch.status !== 'active' && patch.status !== 'archived' && patch.status !== 'deleted') {
+      throwIpcError('INVALID_PARAMS', `invalid status: ${String(patch.status)}`);
+    }
+    if (patch.title !== undefined && typeof patch.title !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'title must be a string');
+    }
+    return call('/api/sessions/update', { sessionId, patch });
   });
   registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => {
     // The preview is a read. Like project-info writes at the service boundary,

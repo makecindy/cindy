@@ -134,7 +134,7 @@ export function createHostSessionUpdate(deps: {
       workspaceKind: patch.workspaceKind,
       snoozedUntil: patch.status === 'active' ? undefined : patch.snoozedUntil,
       // The shared mapper clears both snooze fields on archive. Restore uses the transaction below.
-      status: patch.status === 'archived' ? 'archived' : undefined,
+      status: patch.status === 'archived' || patch.status === 'deleted' ? patch.status : undefined,
     } as Parameters<typeof sessionPatchToRow>[0], { bumpUpdatedAt: false });
     await relocateClaudeTranscriptsForMove(explicitPorts<Parameters<typeof relocateClaudeTranscriptsForMove>[0]>({
       sid: sessionId, p: patch, beforeMove,
@@ -143,7 +143,7 @@ export function createHostSessionUpdate(deps: {
     }));
     const update: Record<string, unknown> = { ...(isSettingsOnly ? {} : { updatedAt: Date.now() }), ...setObj };
     if (typeof patch.title === 'string') update.title = patch.title;
-    if (patch.pinnedAt === null) update.pinnedAt = null;
+    if (patch.pinnedAt === null) { update.pinnedAt = null; update.summary = null; }
     else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
     if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
     // As writeSessionPatch: nothing to write is no write (a model pick alone is an intent, not a column).
@@ -169,7 +169,7 @@ export function createHostSessionUpdate(deps: {
     // As updateSessionInDb's broadcast: the project the mapper dropped goes out with the move.
     const published = setObj.projectDir !== undefined ? { ...patch, projectDir: row.projectDir } : patch;
     const result = sessionToCamel({ ...row, messageCount: 0 });
-    const snooze = patch.snoozedUntil !== undefined || patch.status === 'active' || patch.status === 'archived'
+    const snooze = patch.snoozedUntil !== undefined || patch.status === 'active' || patch.status === 'archived' || patch.status === 'deleted'
       ? { snoozedUntil: result.snoozedUntil, snoozedAt: result.snoozedAt } : {};
     deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: { ...published, ...snooze }, status: row.status });
     if (hasBudget) {
