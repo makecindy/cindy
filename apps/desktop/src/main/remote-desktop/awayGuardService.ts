@@ -91,6 +91,12 @@ export interface AwayGuardServiceDeps {
   onComputerInUseChange(listener: () => void): () => void;
   /** A remote viewer is connected to this desktop (control or view-only) right now. */
   remoteInUse(): boolean;
+  /**
+   * End transient windows that sit above the masks, e.g. the frozen region-screenshot
+   * overlay (`screen-saver` + 1). The cover must never leave a captured desktop on screen
+   * (docs/product-rules/privacy-screen.md「隐私屏不是认证边界」).
+   */
+  closeTransientOverlays?(): void;
   seedScreenLocked(locked: boolean): void;
   msSinceOwnerInput(): number | null;
   /** Work needs the screen awake (see displayDemand.ts); otherwise the system sleeps and locks. */
@@ -610,6 +616,10 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         if (!deps.screenLocked()) throw new Error('DESKTOP_LOCK_PENDING');
         releaseHeld();
       }
+      // Nothing may sit above the masks: a region-screenshot selection draws the frozen
+      // desktop one level higher and would stay visible over the cover for as long as it
+      // is open. The cover wins; the owner can start a new selection after unlocking.
+      deps.closeTransientOverlays?.();
       ownerPromptAnswered = false;
       const current = ++generation;
       coverLockTransition = lockTransition;

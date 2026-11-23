@@ -116,6 +116,18 @@ export function initRegionScreenshot(): void {
   syncShortcut();
 }
 
+/**
+ * End an in-progress selection without touching the shortcut or the window pool.
+ *
+ * The frozen screenshot overlay sits one level above the privacy-screen masks, so a
+ * selection left open while the cover rises stays visible on top of it. The cover wins:
+ * Main ends the selection instead of exposing a captured desktop
+ * (docs/product-rules/privacy-screen.md).
+ */
+export function closeActiveRegionScreenshot(): void {
+  active?.close();
+}
+
 export function stopRegionScreenshot(): void {
   for (const dispose of disposers.splice(0)) dispose();
   if (registeredAccelerator) globalShortcut.unregister(registeredAccelerator);

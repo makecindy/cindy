@@ -206,6 +206,8 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   let remoteInUse = false;
   const excluded: number[][] = [];
   const sessionChanges: Array<() => void> = [];
+  // Transient windows above the masks: the frozen region-screenshot overlay.
+  let transientOverlaysClosed = 0;
   startAwayGuard({
     excludedWindows: (ids: number[]) => {
       excluded.push([...ids]);
@@ -221,12 +223,18 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
       return () => {};
     },
     remoteInUse: () => remoteInUse,
+    closeTransientOverlays: () => {
+      transientOverlaysClosed++;
+    },
     seedScreenLocked: () => {},
     msSinceOwnerInput: () => Infinity,
   });
   await vi.advanceTimersByTimeAsync(30_000);
   const mask = state.windows.at(-1) as MaskLike;
   expect(mask).toBeDefined();
+  // The frozen region-screenshot overlay draws at `screen-saver` + 1, above the masks:
+  // the cover ends it instead of leaving a captured desktop on screen.
+  expect(transientOverlaysClosed).toBe(1);
   // The covered tick arms the prompt: the cover holds the display and input is shielded.
   await vi.advanceTimersByTimeAsync(2_000);
   await settle();

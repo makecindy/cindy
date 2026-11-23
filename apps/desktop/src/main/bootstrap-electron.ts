@@ -1108,7 +1108,12 @@ import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
 import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
-import { initRegionScreenshot, setRegionScreenshotLocale, stopRegionScreenshot } from './region-screenshot/index.js';
+import {
+  closeActiveRegionScreenshot,
+  initRegionScreenshot,
+  setRegionScreenshotLocale,
+  stopRegionScreenshot,
+} from './region-screenshot/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
 import { getRenderWatchdogContext } from './renderWatchdogContext.js';
 import {
@@ -5379,6 +5384,9 @@ const registerIpcHandlers = () => {
       // A viewer that just disconnected may still have injected input landing: the native
       // helper keeps ownership until it closes (inputHost waits up to 1.5 s for that).
       remoteInUse: () => remoteDesktop.hasActiveLease || remoteDesktop.leaseJustEnded(),
+      // The frozen selection overlay is one level above the masks: end it with the cover so
+      // a captured desktop is not left on screen while the owner is away.
+      closeTransientOverlays: closeActiveRegionScreenshot,
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });
