@@ -149,7 +149,8 @@ export function AddRemoteProjectDialog({
   const [deviceExisting, setDeviceExisting] = useState<ExistingRemoteProject[]>([]);
   const [existingLoading, setExistingLoading] = useState(false);
   // path 初始空 —— existing 模式下「添加」靠选中项目填充;进 browse 模式才置 `~` 并 ls。
-  const [path, setPath] = useState<string>('');
+  const [{ value: path, typed: pathWasTyped }, setPath] = useState({ value: '', typed: false });
+  const selectPath = useCallback((value: string) => setPath({ value, typed: false }), []);
   const [parent, setParent] = useState<string | null>(null);
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [drives, setDrives] = useState<NonNullable<BrowseListResult['drives']>>([]);
@@ -244,7 +245,10 @@ export function AddRemoteProjectDialog({
         setParent(res.parent);
         setEntries(res.entries);
         setDrives(res.drives ?? []);
-        if (res.resolvedPath) setPath(current => current === targetPath ? res.resolvedPath : current);
+        const resolvedPath = res.resolvedPath;
+        if (resolvedPath) {
+          setPath(current => current.value === targetPath ? { value: resolvedPath, typed: false } : current);
+        }
         setLoadingList(false);
         for (let attempt = 0; res.drivesPending && attempt < 3; attempt += 1) {
           try { res = await browseApi.listDir(res.resolvedPath); }
@@ -267,11 +271,11 @@ export function AddRemoteProjectDialog({
   useEffect(() => {
     if (!open) return;
     setMode('existing');
-    setPath('');
+    selectPath('');
     setEntries([]);
     setDrives([]);
     setParent(null);
-  }, [open, selectedTarget?.key]);
+  }, [open, selectedTarget?.key, selectPath]);
 
   // device-link「已有项目」:隧道拉被控端 recent_workdirs(SSH 走同步 memo,不进这里)。
   // 用局部 cancelled 作废旧请求,不动 requestSeqRef(那是 browse 的 ls 序号)。
@@ -305,38 +309,42 @@ export function AddRemoteProjectDialog({
     requestSeqRef.current += 1;
     setEntries([]);
     setParent(null);
-    setPath('~');
+    selectPath('~');
     void refreshList(adapter, '~');
-  }, [open, mode, adapter, refreshList]);
+  }, [open, mode, adapter, refreshList, selectPath]);
 
   const handleEntryClick = useCallback((entry: BrowseEntry) => {
     // 单击 = 选中(把路径填进输入框),不进入。
-    setPath(entry.childPath);
-  }, []);
+    selectPath(entry.childPath);
+  }, [selectPath]);
 
   const handleEntryDouble = useCallback(
     (entry: BrowseEntry) => {
-      setPath(entry.childPath);
+      selectPath(entry.childPath);
       if (adapter) void refreshList(adapter, entry.childPath);
     },
-    [adapter, refreshList],
+    [adapter, refreshList, selectPath],
   );
 
   const isEntrySelected = useCallback((entry: BrowseEntry): boolean => path === entry.childPath, [path]);
 
   const handleParent = useCallback(() => {
     if (parent == null || !adapter) return;
-    setPath(parent);
+    selectPath(parent);
     void refreshList(adapter, parent);
-  }, [parent, adapter, refreshList]);
+  }, [parent, adapter, refreshList, selectPath]);
 
   const handleAddProject = useCallback(async (explicitPath?: string) => {
     if (!selectedTarget || !adapter) return;
-    const dir = (explicitPath ?? path).trim();
-    if (!dir) {
+    const candidatePath = explicitPath ?? path;
+    const trimmedPath = candidatePath.trim();
+    if (!trimmedPath) {
       toast.error(t('newChat.addRemoteProject.toast.pathEmpty'));
       return;
     }
+    // Leading or trailing whitespace can be part of a directory selected over SSH.
+    const preservePath = selectedTarget.kind === 'ssh' && (explicitPath !== undefined || !pathWasTyped);
+    const dir = preservePath ? candidatePath : trimmedPath;
     setBusy(true);
     const generation = requestSeqRef.current;
     const isCurrent = () => generation === requestSeqRef.current && currentBrowseRef.current.open
@@ -389,7 +397,7 @@ export function AddRemoteProjectDialog({
     } finally {
       setBusy(false);
     }
-  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t, errorText, existingOnly]);
+  }, [selectedTarget, adapter, path, pathWasTyped, confirm, onProjectAdded, onOpenChange, t, errorText, existingOnly]);
 
   const noTargets = targets.length === 0;
   // Pi 过滤掉 SSH 后无任何可用目标时,通用空态提示「加个 SSH 主机」是误导(Pi 用不了 SSH)。
@@ -527,7 +535,7 @@ export function AddRemoteProjectDialog({
                   fullWidth
                   onValueChange={(next) => {
                     setMode(next);
-                    if (next === 'existing') setPath('');
+                    if (next === 'existing') selectPath('');
                   }}
                   options={[
                     { value: 'existing', label: t('newChat.addRemoteProject.tabExisting') },
@@ -566,7 +574,7 @@ export function AddRemoteProjectDialog({
                           <button
                             key={project.path}
                             type="button"
-                            onClick={() => setPath(project.path)}
+                            onClick={() => selectPath(project.path)}
                             onDoubleClick={() => void handleAddProject(project.path)}
                             title={project.path}
                             disabled={busy}
@@ -625,7 +633,7 @@ export function AddRemoteProjectDialog({
                         <input
                           type="text"
                           value={path}
-                          onChange={(e) => setPath(e.target.value)}
+                          onChange={(e) => setPath({ value: e.target.value, typed: true })}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.nativeEvent.isComposing && adapter) {
                               void refreshList(adapter, path);
@@ -659,7 +667,7 @@ export function AddRemoteProjectDialog({
                     {drives.length > 1 ? <div className="flex shrink-0 flex-wrap gap-2" role="group" aria-label={t('newChat.addRemoteProject.path')}>
                       {drives.map(drive => <Button key={drive.path} variant="secondary" size="sm"
                         type="button" disabled={busy || loadingList} aria-pressed={drive.current}
-                        onClick={() => { setPath(drive.path); if (adapter) void refreshList(adapter, drive.path); }}>
+                        onClick={() => { selectPath(drive.path); if (adapter) void refreshList(adapter, drive.path); }}>
                         {drive.name}
                       </Button>)}
                     </div> : null}
