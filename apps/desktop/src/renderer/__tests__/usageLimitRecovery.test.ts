@@ -110,7 +110,8 @@ describe('usage limit recovery detection', () => {
       resetAtMs: Date.parse('2026-08-31T23:58:29.000Z'),
       isAccountUsageLimit: true,
       planType: 'business',
-      resetAtSource: 'structured',
+      // resets_at 嵌在报错原文的 JSON 里(不是顶层结构化字段),走文本里的 epoch 分支。
+      resetAtSource: 'epoch',
     });
   });
 
@@ -135,7 +136,7 @@ describe('usage limit recovery detection', () => {
         },
         NOW,
       ),
-    ).toEqual({ resetAtMs: Date.parse('2026-01-24T13:10:00.000Z') });
+    ).toEqual({ resetAtMs: Date.parse('2026-01-24T13:10:00.000Z'), resetAtSource: 'time-of-day' });
   });
 
   // Unit regression: the screenshot's text-only five-hour error was not recognized,
@@ -146,7 +147,7 @@ describe('usage limit recovery detection', () => {
         { message: `${message} · resets 2:30am (Pacific/Auckland)` },
         Date.parse('2026-11-11T10:00:00Z'),
         { localTimeZoneTrusted: false },
-      )).toEqual({ resetAtMs: Date.parse('2026-11-11T13:30:00Z') });
+      )).toEqual({ resetAtMs: Date.parse('2026-11-11T13:30:00Z'), resetAtSource: 'time-of-day' });
     },
   );
 
@@ -174,7 +175,7 @@ describe('usage limit recovery detection', () => {
         },
         Date.parse('2026-01-24T23:00:00.000Z'),
       ),
-    ).toEqual({ resetAtMs: Date.parse('2026-01-25T00:00:00.000Z') });
+    ).toEqual({ resetAtMs: Date.parse('2026-01-25T00:00:00.000Z'), resetAtSource: 'time-of-day' });
   });
 
   it('keeps weekly limits actionable without guessing an unsupported weekday reset time', () => {
