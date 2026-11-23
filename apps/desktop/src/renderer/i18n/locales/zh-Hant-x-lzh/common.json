@@ -15329,6 +15329,7 @@
       "codexHelperUnverified": "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。",
       "requestFormatError": "應用程式所發請求格式有謬，此答未能竟。",
       "replyFailed": "答未竟",
+      "queuedSendRecovery": "前訊未遣。點「再試」可依原樣遣發。若遣新訊，則取代前訊。",
       "retryTitle": "再遣末一訊",
       "cancelTitle": "闔謬誤之示",
       "retry": "再試",

@@ -15403,6 +15403,7 @@
       "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "replyFailed": "Could not complete the reply",
+      "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
