@@ -126,6 +126,36 @@ describe('hooks migration — incremental detection (#8858)', () => {
     expect(await fs.readFile(path.join(wd, '.codex', 'config.toml'), 'utf8')).toBe(toml);
   });
 
+  // PR #12283: detect/convertHooks must fill an existing TOML reference like JSON.
+  // The previous unit case only covered an unrelated TOML command and had no script.
+  it.each(['json', 'toml'] as const)('fills only the missing script referenced by an existing %s event', async (format) => {
+    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: {
+      Stop: commandGroup('sh .claude/hooks/new.sh', 'sh .claude/hooks/other.sh'),
+    } }));
+    await writeConfig('.claude/hooks/new.sh', 'echo new');
+    await writeConfig('.claude/hooks/other.sh', 'echo other');
+    const file = format === 'toml' ? '.codex/config.toml' : '.codex/hooks.json';
+    const contents = format === 'toml'
+      ? '# preserve this comment\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "sh .codex/hooks/new.sh"\n'
+      : JSON.stringify({ hooks: { Stop: commandGroup('sh .codex/hooks/new.sh') } });
+    await writeConfig(file, contents);
+
+    const item = await pendingHooks();
+    expect(item?.subItems?.map(entry => entry.name)).toEqual(['new.sh']);
+    await writeConfig(file, contents.replace('new.sh', 'unrelated.sh'));
+    expect((await convertHooks(item!)).status).toBe('skipped');
+    await expect(fs.stat(path.join(wd, '.codex', 'hooks'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeConfig(file, contents);
+    expect((await convertHooks(item!)).status).toBe('success');
+    expect(await fs.readFile(path.join(wd, file), 'utf8')).toBe(contents);
+    expect(await fs.readdir(path.join(wd, '.codex', 'hooks'))).toEqual(['new.sh']);
+    expect(await fs.readFile(path.join(wd, '.codex', 'hooks', 'new.sh'), 'utf8')).toBe('echo new');
+    if (format === 'toml') {
+      await expect(fs.stat(path.join(wd, '.codex', 'hooks.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(await pendingHooks()).toBeUndefined();
+  });
+
   it('adds only a missing event when the other event is already present in TOML', async () => {
     const toml = '# keep\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "true"\n';
     const sessionStart = commandGroup('echo start');

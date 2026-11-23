@@ -60,6 +60,15 @@ async function readScript(wd: string, name: string): Promise<Script | undefined>
 
 type Adapted = { handler: Fields & { command: string }; script?: Script };
 
+function referencesScript(groups: unknown, matcher: unknown, command: string): boolean {
+  if (!Array.isArray(groups)) return false;
+  // Removing quotes is equivalent only for a plain relative path without spaces.
+  const unquoted = command.replace(/"(\.codex\/hooks\/[\p{L}\p{N}_.-]+)"/u, '$1');
+  return groups.some(group => isPlainObject(group) && (group.matcher ?? '') === (matcher ?? '')
+    && Array.isArray(group.hooks) && group.hooks.some(handler => isPlainObject(handler)
+      && handler.type === 'command' && (handler.command === command || handler.command === unquoted)));
+}
+
 async function adaptHandler(
   event: string, matcher: unknown, handler: unknown, gitRoot: boolean,
   scriptFor: (name: string) => Promise<Script | undefined>,
@@ -121,6 +130,7 @@ export async function planCodexHooks(wd: string) {
 
   const legacy = missingHookEvents(events, [], 'to-codex');
   const updates: Fields = {};
+  let wrapFlat = false;
   const scripts = new Map<string, Script>();
   const entries = new Map<string, NonNullable<MigrationItem['subItems']>[number]>();
   const cache = new Map<string, Script | undefined>();
@@ -134,13 +144,15 @@ export async function planCodexHooks(wd: string) {
   }
 
   for (const [event, groups] of Object.entries(events)) {
-    if (!Array.isArray(groups) || Object.hasOwn(toml, event)) continue;
-    const existing = Object.hasOwn(old, event);
-    const sameLegacy = existing && isDeepStrictEqual(old[event], legacy[event]);
+    if (!Array.isArray(groups)) continue;
+    const hasToml = Object.hasOwn(toml, event);
+    const nativeGroups = hasToml ? toml[event] : old[event];
+    const sameLegacy = !hasToml && isDeepStrictEqual(nativeGroups, legacy[event]);
     const replacements = sameLegacy ? structuredClone(legacy[event]) as Array<{ hooks: unknown[] }> : undefined;
     const additions = [];
     const adapted: Adapted[] = [];
     const repairs: Adapted[] = [];
+    const missingReferences: Adapted[] = [];
     for (const [i, group] of groups.entries()) {
       if (!portableGroup(event, group)) continue;
       const handlers = [];
@@ -149,6 +161,9 @@ export async function planCodexHooks(wd: string) {
         if (!action) continue;
         handlers.push(action.handler);
         adapted.push(action);
+        if (action.script?.missing && referencesScript(nativeGroups, group.matcher, action.handler.command)) {
+          missingReferences.push(action);
+        }
         // Earlier versions left this Claude-only variable in an otherwise rewritten command.
         // Only repair an exact old event with the matching script already present.
         const previousHandler = replacements?.[i].hooks[j];
@@ -161,12 +176,13 @@ export async function planCodexHooks(wd: string) {
       if (handlers.length) additions.push({ ...group, hooks: handlers });
     }
     if (!adapted.length) continue;
-    if (existing && !repairs.length && !isDeepStrictEqual(old[event], additions)) continue;
-    if (!existing) updates[event] = additions;
-    else if (repairs.length) updates[event] = replacements;
+    if (nativeGroups === undefined) updates[event] = additions;
+    if (repairs.length) updates[event] = replacements;
+    const wrapEvent = flat && !hasToml && isDeepStrictEqual(nativeGroups, additions);
+    wrapFlat ||= wrapEvent;
 
-    for (const { handler, script } of repairs.length ? repairs : adapted) {
-      if (existing && !repairs.length && !flat && !script?.missing) continue;
+    const selected = nativeGroups === undefined || wrapEvent ? adapted : [...repairs, ...missingReferences];
+    for (const { handler, script } of selected) {
       if (script) scripts.set(script.name, script);
       const name = script?.name ?? handler.command;
       entries.set(name, {
@@ -178,7 +194,7 @@ export async function planCodexHooks(wd: string) {
   }
   if (!entries.size) return;
   const metadata = flat ? Object.fromEntries(Object.entries(previous).filter(([key]) => !(key in old))) : previous;
-  const next = { ...metadata, hooks: { ...old, ...updates } };
+  const next = wrapFlat || Object.keys(updates).length ? { ...metadata, hooks: { ...old, ...updates } } : previous;
   const hash = createHash('sha256').update(JSON.stringify(next));
   for (const script of scripts.values()) hash.update(script.name).update(script.bytes);
   return { id: 'hooks:' + hash.digest('hex'), previous, next, targetMode: targetStat?.mode, scripts, subItems: [...entries.values()] };
