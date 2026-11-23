@@ -32,7 +32,7 @@ vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({
   save: (value: Record<string, unknown>) => { assistantStore.value = structuredClone(value); },
 }) }));
 beforeEach(() => { workspaceSettings.clear(); taskCardStore.value = {}; assistantStore.value = {}; });
-const migration = vi.hoisted(() => ({ read: vi.fn<(_groupId: string) => { roomId: string; sequence: number; version: 2 } | null>(() => null) }));
+const migration = vi.hoisted(() => ({ read: vi.fn<(_groupId: string) => { roomId: string; sequence: number; version: 2 } | null>(() => null), save: vi.fn() }));
 const sendJournal = vi.hoisted(() => ({ enabled: false, rows: new Map<string, { intent?: unknown; receipt?: string }>() }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({
   read: (key: string) => sendJournal.enabled ? sendJournal.rows.get(key) ?? null : null,
@@ -42,7 +42,7 @@ vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({
 }) }));
 beforeEach(() => { sendJournal.enabled = false; sendJournal.rows.clear(); });
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
-vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: migration.read, save: vi.fn() }) }));
+vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: migration.read, save: migration.save }) }));
 vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }) } }));
 // The real filesystem, except an `lstat` failure a test injects for a delivery file.
@@ -224,6 +224,92 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+
+  // #7401 / unit: run the actual Desktop timer and migration against the
+  // smallest repro, a failing GET /import. Earlier importer tests bypassed scheduling.
+  it.each([
+    [404, 'CONVERSATION_NOT_FOUND', []],
+    [409, 'CONVERSATION_ARCHIVED', []],
+    [503, 'UPSTREAM_FAILED', [60_000, 120_000, 240_000, 300_000, 300_000]],
+  ] as const)('bounds background import attempts after %s %s', async (status, code, delays) => {
+    const source = '10000000-0000-4000-8000-000000000088';
+    service.dispose();
+    service = withChatServer({ listGroups: async () => ({ ok: true, groups: [{ id: source, name: 'Old group', members: [] }] }),
+      dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    const progress = `/conversations/${roomId}/import?sourceId=${source}`;
+    fixture.handle.mockImplementation((route, method) => {
+      if (route === '/conversations' && method === 'POST') return { body: { id: roomId } };
+      if (route === progress) return { status, body: { error: { code } } };
+      return response(route);
+    });
+    const attempts = () => fixture.handle.mock.calls.filter(([route]) => route === progress).length;
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(attempts()).toBe(1);
+    for (const [index, delay] of delays.entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(attempts()).toBe(index + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts()).toBe(index + 2);
+    }
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(attempts()).toBe(delays.length + 1);
+    const group = await service.getGroup(source);
+    expect(group.ok && group.group.migrationPending).toBe(false);
+  });
+
+  // #7401 / unit: a pass can contain both a terminal group and a temporarily
+  // unavailable group. Retrying the second must neither retry nor stall the first.
+  it('retries only the group that can recover in a mixed history import', async () => {
+    const archived = '10000000-0000-4000-8000-000000000088';
+    const recoverable = '10000000-0000-4000-8000-000000000089';
+    const localGroups = [archived, recoverable].map(id => ({ id, name: 'Old group', members: [] }));
+    service.dispose();
+    service = withChatServer({ listGroups: async () => ({ ok: true, groups: localGroups }),
+      dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    let available = false;
+    let unarchived = false;
+    migration.read.mockImplementation(source => migration.save.mock.calls.findLast(([id]) => id === source)?.[1] ?? null);
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/conversations' && method === 'POST') return { body: { id: body.sourceId } };
+      if (route === `/conversations/${archived}` && method === 'PATCH' && body.archived === false) unarchived = true;
+      if (route === `/conversations/${archived}/snapshot`) return { body: {
+        room: { ...room(archived), archived: !unarchived },
+        members: [{ id: selfId, kind: 'human', name: 'Me', state: 'joined', role: 'owner' }], messages: [], cursor: '1',
+      } };
+      if (route === `/conversations/${archived}/import?sourceId=${archived}`) {
+        return unarchived ? { body: { sourceId: null } } : { status: 409, body: { error: { code: 'CONVERSATION_ARCHIVED' } } };
+      }
+      if (route === `/conversations/${recoverable}/import?sourceId=${recoverable}`) {
+        return available ? { body: { sourceId: null } } : { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } };
+      }
+      return response(route);
+    });
+    const db = await import('../../localDb/client/current.js');
+    const emptyRows = () => Object.assign(Promise.resolve([]), { limit: async () => [], orderBy: () => ({ limit: async () => [] }) });
+    const mockDb = vi.spyOn(db, 'getDbClient').mockReturnValue({
+      drizzle: { select: () => ({ from: () => ({ where: emptyRows }) }) },
+    } as unknown as ReturnType<typeof db.getDbClient>);
+    const requests = () => fixture.handle.mock.calls.filter(([route, method]) => route === '/conversations' && method === 'POST')
+      .map(([, , body]) => body.sourceId);
+    try {
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(requests()).toEqual([archived, recoverable]);
+      available = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(migration.save).toHaveBeenCalledExactlyOnceWith(recoverable, { roomId: recoverable, sequence: 0, version: 2 });
+      expect(requests()).toEqual([archived, recoverable, recoverable]);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(requests()).toEqual([archived, recoverable, recoverable]);
+      expect(await service.chatServer!.manage({
+        groupId: archived, action: { type: 'archive', archived: false, expectedRevision: 1 },
+      })).toMatchObject({ ok: true });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(migration.save).toHaveBeenLastCalledWith(archived, { roomId: archived, sequence: 0, version: 2 });
+    } finally {
+      mockDb.mockRestore();
+    }
+  });
 
   // #10822 / unit: getGroup + dismissPlan exercise the production server
   // projection and existing stop action. Earlier tests never combined a failed

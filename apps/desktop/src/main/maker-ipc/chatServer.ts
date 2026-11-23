@@ -189,6 +189,18 @@ class SettlementRefused extends Error {
   constructor(readonly refusal: unknown) { super('SETTLEMENT_REFUSED'); }
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
+const HISTORY_UPGRADE_RETRY_DELAYS_MS = [60_000, 120_000, 240_000, 300_000, 300_000];
+function historyUpgradeRetryAt(error: unknown, failures: number): number {
+  const delay = HISTORY_UPGRADE_RETRY_DELAYS_MS[failures - 1];
+  if (delay === undefined) return Infinity;
+  return Math.max(Date.now() + delay, error instanceof ChatResponseError ? error.retryAt ?? 0 : 0);
+}
+function isTerminalHistoryUpgradeError(error: unknown): error is ChatResponseError {
+  return error instanceof ChatResponseError && (
+    (error.status === 404 && error.message === 'CONVERSATION_NOT_FOUND')
+    || (error.status === 409 && ['CONVERSATION_ARCHIVED', 'CONVERSATION_DISSOLVED'].includes(error.message))
+  );
+}
 /** A read list is served from memory this long; a receipt for the group ends it sooner. */
 /** How long the positions of a snapshot are trusted while my messages in it are unread; a lost receipt is healed by reading it again. */
 const OTHERS_READ_RECHECK_MS = 30_000;
@@ -860,11 +872,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let upgrade: Promise<Map<string, string>> | undefined;
   let upgradeRetryAt = 0;
   const upgradeErrors = new Map<string, string>();
+  // Keep refusal and retry state within this account/endpoint controller.
+  // Recreating the controller gives restored groups and recovered networks a fresh attempt.
+  type UpgradeRetry = { failures: number; at: number; archived: boolean };
+  let upgradeRetries = new Map<string, UpgradeRetry>();
+  let upgradePassFailures = 0;
   const runUpgrade = async (mode: 'background' | 'foreground'): Promise<Map<string, string>> => {
     upgradeRetryAt = Infinity;
     await register(mode);
     const db = getDbClient().drizzle;
-    let incomplete = false;
+    const groups = await localSources();
+    const nextRetries = new Map<string, UpgradeRetry>();
+    const startedAt = Date.now();
+    const due = groups.filter(group => {
+      const retry = upgradeRetries.get(group.id);
+      if (!retry || retry.at <= startedAt) return true;
+      nextRetries.set(group.id, retry);
+      return false;
+    });
     await migrateLocalGroups({ api, current, selfId,
       onRoom: (source, room) => { upgradedGroups.set(source, room); upgradeErrors.delete(source); changed(room); },
       afterMessages: async (source, room) => {
@@ -893,13 +918,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         upgradeErrors.delete(source); changed(room);
       },
       onError: (source, error) => {
-        incomplete = true;
-        upgradeErrors.set(source, error instanceof Error ? error.message : 'IMPORT_FAILED');
-        deps.log?.warn('Group history upgrade will retry', { groupId: source, ...chatErrorDiagnostic(error) });
+        const terminal = isTerminalHistoryUpgradeError(error);
+        const failures = (upgradeRetries.get(source)?.failures ?? 0) + 1;
+        const at = terminal ? Infinity : historyUpgradeRetryAt(error, failures);
+        nextRetries.set(source, { failures, at, archived: terminal && error.message === 'CONVERSATION_ARCHIVED' });
+        const retrying = Number.isFinite(at);
+        if (retrying) upgradeErrors.set(source, error instanceof Error ? error.message : 'IMPORT_FAILED');
+        else upgradeErrors.delete(source);
+        deps.log?.warn(retrying ? 'Group history upgrade will retry' : 'Group history upgrade stopped',
+          { groupId: source, ...chatErrorDiagnostic(error) });
         changed(upgradedGroups.get(source) ?? source);
       },
       receipts: chatMigrationReceipts(config.baseUrl, selfId, current),
-      groups: localSources,
+      groups: async () => due,
       messages: async (groupId, after) => {
         const rows = await db.select().from(botGroupMessages).where(and(eq(botGroupMessages.groupId, groupId), gt(botGroupMessages.sequence, after)))
           .orderBy(asc(botGroupMessages.sequence)).limit(100);
@@ -924,7 +955,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       },
       attachments: (room, source, files, author) => media.upload(room, source, files, author),
     });
-    upgradeRetryAt = incomplete ? Date.now() + 60000 : Infinity;
+    upgradeRetries = nextRetries;
+    upgradePassFailures = 0;
+    for (const { at } of upgradeRetries.values()) upgradeRetryAt = Math.min(upgradeRetryAt, at);
     return upgradedGroups;
   };
   function ensureUpgrade(mode: 'background' | 'foreground'): Promise<Map<string, string>> {
@@ -933,7 +966,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // No migration ran when registration was locally deferred. Do not cache
         // that rejection as a failed import for a later foreground caller.
         if (error instanceof WorkRequestDeferred) { upgrade = undefined; upgradeRetryAt = Date.now() + 2000; }
-        else upgradeRetryAt = Date.now() + 60000;
+        else upgradeRetryAt = historyUpgradeRetryAt(error, ++upgradePassFailures);
       }
       throw error;
     });
@@ -949,6 +982,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       void ensureUpgrade('background').catch(() => undefined);
     }
   };
+  function resumeUnarchivedUpgrade(roomId: string) {
+    // Wait for the current pass to publish its retry map before changing it.
+    void (upgrade ?? Promise.resolve()).catch(() => undefined).then(() => {
+      if (!current()) return;
+      for (const [source, retry] of upgradeRetries) {
+        if (retry.archived && (upgradedGroups.get(source) ?? source) === roomId) {
+          upgradeRetries.delete(source);
+          upgradeRetryAt = Math.min(upgradeRetryAt, Date.now());
+        }
+      }
+    });
+  }
   async function localSources() {
     const db = getDbClient().drizzle;
     const result = await local.listGroups();
@@ -4031,6 +4076,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       await api(`/conversations/${target}${route}`, type === 'update' || type === 'archive' ? 'PATCH' : 'POST', {
         operationId: randomUUID(), ...payload, ...(ownCompanion ? { action: 'leave' } : {}), ...(type === 'archive' ? { archived: action.archived } : {}),
       }, actorId);
+      if (action.type === 'archive' && !action.archived) resumeUnarchivedUpgrade(target);
       changed(target); return {};
     }),
     status: async () => ({ enabled: true, connected: current() && connected, ...(current() && personalMask ? { personalMask: true } : {}) }),
