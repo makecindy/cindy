@@ -81,8 +81,8 @@ describe('hooks migration — incremental detection (#8858)', () => {
   });
 
   it.each(['codex', 'claude-code'] as const)('to %s discovers a missing script even when both directories and configs exist', async (agentKind) => {
-    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: {} }));
-    await writeConfig('.codex/hooks.json', JSON.stringify({ hooks: {} }));
+    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { Stop: commandGroup('sh .claude/hooks/new.sh') } }));
+    await writeConfig('.codex/hooks.json', JSON.stringify({ hooks: { Stop: commandGroup('sh ".codex/hooks/new.sh"') } }));
     await fs.mkdir(path.join(wd, '.claude', 'hooks'), { recursive: true });
     await fs.mkdir(path.join(wd, '.codex', 'hooks'), { recursive: true });
     const source = agentKind === 'codex' ? '.claude' : '.codex';
@@ -187,17 +187,17 @@ describe('hooks migration — incremental detection (#8858)', () => {
     expect(await pendingHooks('claude-code')).toBeUndefined();
   });
 
-  it.each(['', '# hooks only in a comment', '[hooks]', 'model = "example"', '[hooks]\nStop = "invalid"', '[[hooks.Stop]]\nbroken = ['])('does not treat empty, missing or invalid TOML hooks as coverage: %j', async (toml) => {
+  it.each(['', '# hooks only in a comment', '[hooks]', 'model = "example"'])('does not treat empty, missing or invalid TOML hooks as coverage: %j', async (toml) => {
     await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { Stop: commandGroup('true') } }));
     await writeConfig('.codex/config.toml', toml);
     expect(await pendingHooks()).toBeDefined();
   });
 
-  it('refuses conversion against malformed TOML without modifying the target', async () => {
+  it.each(['[[hooks.Stop]]\nbroken = [', '[hooks]\nStop = "invalid"'])('refuses malformed native hooks without modifying the target: %j', async (toml) => {
     await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { Stop: commandGroup('true') } }));
-    const toml = '[[hooks.Stop]]\nbroken = [';
     await writeConfig('.codex/config.toml', toml);
     await writeConfig('.claude/hooks/new.sh', 'echo new');
+    expect(await pendingHooks()).toBeUndefined();
     expect((await convertHooks(toCodexItem())).status).toBe('failed');
     expect(await fs.readFile(path.join(wd, '.codex', 'config.toml'), 'utf8')).toBe(toml);
     await expect(fs.stat(path.join(wd, '.codex', 'hooks.json'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -209,6 +209,82 @@ describe('hooks migration — incremental detection (#8858)', () => {
     await fs.mkdir(path.join(wd, source, 'hooks'), { recursive: true });
     await writeConfig(`${source}/${agentKind === 'codex' ? 'settings.json' : 'hooks.json'}`, JSON.stringify({ hooks: {} }));
     expect(await pendingHooks(agentKind)).toBeUndefined();
+  });
+});
+
+// Regression (unit): the old converter reported success for a Claude-only edit
+// payload and left the Bash script path dependent on Claude's environment.
+describe('Claude command hooks offered to Codex', () => {
+  const guard = [
+    'import json',
+    'import sys',
+    'command = json.load(sys.stdin).get("tool_input", {}).get("command", "")',
+    'if command == "blocked":',
+    '    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"}}))',
+  ].join('\n');
+  const sourceCommand = 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/policy.py"';
+  const legacyCommand = sourceCommand.replace('.claude/', '.codex/');
+  const bash = (...commands: string[]) => [{ matcher: 'Bash', ...commandGroup(...commands)[0] }];
+  const edit = [{ matcher: 'Edit|Write', ...commandGroup('jq -r .tool_input.file_path')[0] }];
+
+  it('offers and writes only the compatible command and its referenced script', async () => {
+    await fs.mkdir(path.join(wd, '.git'));
+    await writeConfig('.claude/hooks/policy.py', guard);
+    await writeConfig('.claude/hooks/unrelated.py', 'pass');
+    await writeConfig('.claude/hooks/ask.py', guard.replace('"deny"', '"ask"'));
+    await writeConfig('.claude/hooks/path.py', guard.replace('"command"', '"file_path"'));
+    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: {
+      PreToolUse: [...bash(sourceCommand, sourceCommand.replace('policy.py', 'ask.py'), sourceCommand.replace('policy.py', 'path.py')), ...edit],
+      PostToolUse: edit,
+    } }));
+    const item = await pendingHooks();
+    expect(item?.subItems?.map(entry => entry.name)).toEqual(['policy.py']);
+    expect((await convertHooks(item!)).status).toBe('success');
+    const { hooks } = JSON.parse(await fs.readFile(toCodexItem().target, 'utf8'));
+    expect(Object.keys(hooks)).toEqual(['PreToolUse']);
+    expect(hooks.PreToolUse).toHaveLength(1);
+    expect(hooks.PreToolUse[0].hooks).toHaveLength(1);
+    expect(hooks.PreToolUse[0].hooks[0].command).not.toContain('CLAUDE_PROJECT_DIR');
+    expect(await fs.readdir(path.join(wd, '.codex/hooks'))).toEqual(['policy.py']);
+    expect(await pendingHooks()).toBeUndefined();
+  });
+
+  it('skips an edit-only, unsupported or unreferenced script even on a stale convert request', async () => {
+    await writeConfig('.claude/hooks/format.py', 'pass');
+    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: {
+      PostToolUse: edit, Notification: commandGroup('true'),
+      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'prompt', prompt: 'check' }] }],
+    } }));
+    expect(await pendingHooks()).toBeUndefined();
+    expect((await convertHooks(toCodexItem())).status).toBe('skipped');
+    await expect(fs.stat(path.join(wd, '.codex'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('repairs an exact old path, preserves other events, and rechecks user edits after detection', async () => {
+    await fs.mkdir(path.join(wd, '.git'));
+    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { PreToolUse: bash(sourceCommand), PostToolUse: edit } }));
+    await writeConfig('.claude/hooks/policy.py', guard);
+    await writeConfig('.codex/hooks/policy.py', guard);
+    const legacy = JSON.stringify({ description: 'keep', hooks: { PreToolUse: bash(legacyCommand), PostToolUse: edit } });
+    await writeConfig('.codex/hooks.json', legacy);
+    const item = await pendingHooks();
+    expect(item).toBeDefined();
+    await writeConfig('.codex/hooks/policy.py', '# hand-edited');
+    expect((await convertHooks(item!)).status).toBe('skipped');
+    expect(await fs.readFile(item!.target, 'utf8')).toBe(legacy);
+    await writeConfig('.codex/hooks/policy.py', guard);
+    const edited = legacy.replace('CLAUDE_PROJECT_DIR', 'CUSTOM_DIR');
+    await writeConfig('.codex/hooks.json', edited);
+    expect(await pendingHooks()).toBeUndefined();
+    expect((await convertHooks(item!)).status).toBe('skipped');
+    expect(await fs.readFile(item!.target, 'utf8')).toBe(edited);
+    await writeConfig('.codex/hooks.json', legacy);
+    expect((await convertHooks(item!)).status).toBe('success');
+    const repaired = JSON.parse(await fs.readFile(item!.target, 'utf8'));
+    expect(repaired.description).toBe('keep');
+    expect(repaired.hooks.PostToolUse).toEqual(edit);
+    expect(repaired.hooks.PreToolUse[0].hooks[0].command).not.toContain('CLAUDE_PROJECT_DIR');
+    expect(await pendingHooks()).toBeUndefined();
   });
 });
 
@@ -249,7 +325,8 @@ describe('convertHooks — to-codex', () => {
     }));
 
     const r = await convertHooks(toCodexItem());
-    expect(r.status).toBe('success'); // still success because script was copied
+    expect(r.status).toBe('skipped');
+    await expect(fs.stat(path.join(wd, '.codex/hooks/p.sh'))).rejects.toMatchObject({ code: 'ENOENT' });
     const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
     expect(json.hooks.PreToolUse).toBe('USER_ORIGINAL');
   });
@@ -260,13 +337,13 @@ describe('convertHooks — to-codex', () => {
       hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo stop' }] }] },
     }));
     await fs.mkdir(path.join(wd, '.codex'), { recursive: true });
-    await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({ PreToolUse: 'FLAT' }));
+    await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({ PreToolUse: commandGroup('echo previous') }));
 
     const r = await convertHooks({ ...toCodexItem(), source: path.join(wd, '.claude', 'hooks') });
     expect(r.status).toBe('success');
     const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
     expect(json.PreToolUse).toBeUndefined();
-    expect(json.hooks.PreToolUse).toBe('FLAT');
+    expect(json.hooks.PreToolUse).toEqual(commandGroup('echo previous'));
     expect(json.hooks.Stop).toBeDefined();
   });
 
@@ -283,14 +360,14 @@ describe('convertHooks — to-codex', () => {
   });
   it('upgrades a legacy flat hooks.json even when no event or script is added', async () => {
     await fs.mkdir(path.join(wd, '.claude'), { recursive: true });
-    await fs.writeFile(path.join(wd, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ a: 1 }] } }));
+    await fs.writeFile(path.join(wd, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: commandGroup('true') } }));
     await fs.mkdir(path.join(wd, '.codex'), { recursive: true });
-    await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({ Stop: [{ a: 1 }] }));
+    await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({ Stop: commandGroup('true') }));
 
     const r = await convertHooks(toCodexItem());
     expect(r.status).toBe('success');
     const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
-    expect(json).toEqual({ hooks: { Stop: [{ a: 1 }] } });
+    expect(json).toEqual({ hooks: { Stop: commandGroup('true') } });
   });
 });
 

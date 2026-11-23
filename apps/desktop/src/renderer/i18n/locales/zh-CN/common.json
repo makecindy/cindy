@@ -12726,16 +12726,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "检测到工作区配置可转换",
-        "description": "当前工作区包含 {{sourceAgent}} 的项目级配置。是否为 {{targetAgent}} 生成对应配置？这些更改只会写入当前工作区目录。",
-        "primary": "转换",
-        "cancel": "暂不转换"
+        "title": "要让 {{targetAgent}} 也使用这些项目设置吗？",
+        "description": "这个项目为 {{sourceAgent}} 配好了以下设置。你可以在项目里为 {{targetAgent}} 添加一份，也可以直接开始任务。",
+        "primary": "添加到 {{targetAgent}}",
+        "cancel": "直接开始任务"
       },
       "running": {
-        "title": "正在转换配置…",
-        "description": "正在为 {{targetAgent}} 写入工作区配置，请勿关闭窗口。",
-        "primary": "转换",
-        "cancel": "暂不转换"
+        "title": "正在添加项目设置…",
+        "description": "正在将 {{targetAgent}} 的设置保存到当前项目。",
+        "primary": "正在添加…",
+        "cancel": "直接开始任务"
+      },
+      "items": {
+        "agents-md": "项目说明和工作约定",
+        "agents": "项目自定义的助手角色",
+        "hooks": "自动执行的操作（如运行项目脚本）",
+        "mcp": "外部工具连接"
       }
     },
     "confirmDialog": {
