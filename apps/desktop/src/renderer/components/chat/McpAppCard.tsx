@@ -3,6 +3,7 @@ import { Maximize2 } from 'lucide-react';
 import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { McpAppPermissionPrompt } from './McpAppPermissionPrompt';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
+import { observeHostTheme, readHostColorScheme } from '@/cindy-brain/ghostPanelTheme';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -24,6 +25,10 @@ import { desktopMcpAppHeights } from '@/lib/mcpAppMeasuredHeights';
 import { createLogger } from '@/lib/logger';
 import { Spinner } from '@/components/ui/spinner';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
+import { findMcpAppBackdropColor } from './mcpAppBackdrop';
+import { getDraft } from '@/lib/composerDraftStore';
+import { getDataOwnerGeneration, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 
 // Local diagnostics only: renderer logs remain excluded from log uploads. Never
 // log the original exception; it may contain HTML, tool data or credential URLs.
@@ -151,6 +156,7 @@ interface McpAppCardProps {
   fallbackText?: string;
   plugin?: unknown;
   customMcp?: unknown;
+  composerPlacement?: string;
   chrome?: 'card' | 'panel';
   sizing?: 'content' | 'fill' | 'sidebar-section';
   source?: { instanceId: string; viewId: string };
@@ -194,7 +200,7 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, composerPlacement, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
   const { t, i18n } = useTranslation();
   const [canFullscreen, setCanFullscreen] = useState(false);
   const appTitle = title || t('mcpApps.appName');
@@ -226,6 +232,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const [retained, setRetained] = useState(false);
   const enabled = visible || retained;
   const updateContextRef = useRef<(() => void) | undefined>(undefined);
+  const backdropPaintRef = useRef<(() => void) | undefined>(undefined);
 
   useLayoutEffect(() => {
     if (fixed) return;
@@ -265,7 +272,12 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     observer.observe(element);
     document.addEventListener('visibilitychange', update);
     const stopWindowHidden = window.electronAPI?.onWindowHiddenChange?.((hidden) => { windowHidden = hidden; update(); });
-    const stopRegions = subscribePluginUiRegions(update);
+    const stopRegions = subscribePluginUiRegions(() => {
+      // Sidebar/panel visibility updates the document data attribute rather than
+      // the theme class. Repaint this card without observing the whole document.
+      backdropPaintRef.current?.();
+      update();
+    });
     return () => {
       observer.disconnect();
       document.removeEventListener('visibilitychange', update);
@@ -305,6 +317,39 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     heightGuard.resize(element.clientWidth);
     let frame: HTMLIFrameElement | undefined;
     let localViewId: string | undefined;
+    const paintFrameBackdrop = () => {
+      if (frame) frame.style.backgroundColor = findMcpAppBackdropColor(element);
+    };
+    backdropPaintRef.current = paintFrameBackdrop;
+    const syncSandboxScheme = () => {
+      if (frame?.contentWindow && localViewId) frame.contentWindow.postMessage(
+        { type: 'cindy:sandbox-color-scheme', scheme: readHostColorScheme() },
+        `cindy-mcp-app://${localViewId}`,
+      );
+    };
+    // The same declared View may be placed on multiple messages in one task.
+    const draftResourceKey = (key: string) => composerPlacement ? JSON.stringify([composerPlacement, key]) : key;
+    // Drafts are stored per data owner. A delivery that arrives after an account
+    // switch belongs to the previous owner and must not enter the new one's draft.
+    const draftOwner = getDataOwnerGeneration();
+    const stopComposerAttachment = deviceId === undefined && sessionId !== null
+      ? window.electronAPI?.maker?.onMcpAppComposerAttachment?.((payload) => {
+          // Accept a delivery that crosses teardown: the listener lives until close()
+          // settles, after which Main can no longer send for this View.
+          if (payload.sessionId !== sessionId || payload.viewId !== localViewId) return;
+          const sameOwner = isDataOwnerIdCurrent(draftOwner);
+          if ('requestId' in payload) {
+            const key = draftResourceKey(payload.resourceKey);
+            const present = sameOwner && !!getDraft(sessionId)?.attachments.some(file => file.mcpAppResourceKey === key);
+            void window.electronAPI.maker.mcpApps(sessionId, { op: 'host-result', requestId: payload.requestId, result: present }).catch(() => {});
+            return;
+          }
+          if (!sameOwner) return;
+          appendMcpAppComposerAttachment(sessionId, {
+            ...payload.attachment, mcpAppResourceKey: draftResourceKey(payload.attachment.mcpAppResourceKey),
+          });
+        })
+      : undefined;
     const invoke: AppInvoker = (id, input) =>
       window.electronAPI.maker.mcpApps(id, deviceId ? { ...input, deviceId } : input);
     const post = (message: AppRpc) => frame?.contentWindow?.postMessage(message, '*');
@@ -494,6 +539,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         frame.title = appTitle;
         frame.addEventListener('load', () => {
           if (disposed) return;
+          // A theme change during navigation can precede the wrapper's message listener.
+          syncSandboxScheme();
           if (phase === 'sandbox') phase = 'initialize';
           staticTimer = setTimeout(() => { if (!handshakeStarted) reveal(); }, 150);
         }, { once: true });
@@ -503,17 +550,20 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'",
         );
         frame.style.cssText = 'width:100%;height:100%;display:block;border:0;opacity:0;pointer-events:none';
-        frame.src = `cindy-mcp-app://${localViewId}/sandbox`;
+        frame.src = `cindy-mcp-app://${localViewId}/sandbox?scheme=${readHostColorScheme()}`;
         element.appendChild(frame);
+        paintFrameBackdrop();
         maxTimer = setTimeout(reveal, 1_500);
       })
       .catch((error) => {
         fail(error);
       });
-    const themeObserver = new MutationObserver(update);
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
+    // Same-mode theme switches change only data-theme and the token stylesheet,
+    // so watch the full host theme surface, as plugin panels do.
+    const stopThemeObserver = observeHostTheme(() => {
+      syncSandboxScheme();
+      paintFrameBackdrop();
+      update();
     });
     const sizeObserver = new ResizeObserver(update);
     sizeObserver.observe(element);
@@ -532,8 +582,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       controller.prepareNativeClose();
       unsubscribeContext?.();
       pendingContext = undefined;
-      themeObserver.disconnect();
+      stopThemeObserver();
       sizeObserver.disconnect();
+      if (backdropPaintRef.current === paintFrameBackdrop) backdropPaintRef.current = undefined;
       // Layout cleanup runs before React removes the ancestor message tree.
       // Keep a live frame connected for the bounded teardown, including on failure.
       if (frame) {
@@ -562,13 +613,14 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         .close()
         .catch(() => {})
         .finally(() => {
+          stopComposerAttachment?.();
           frame?.remove();
           frame = undefined;
           window.removeEventListener('message', receive);
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, sidebarSection, heights, heightKey, rememberLayout]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, composerPlacement, sidebarSection, heights, heightKey, rememberLayout]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;
@@ -603,6 +655,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [mode]);
+  // The card keeps one live iframe while switching between inline and fullscreen.
+  // Repaint its fallback only after those layout-driving props change.
+  useLayoutEffect(() => { backdropPaintRef.current?.(); }, [fixed, mode, chrome, sizing]);
   useLayoutEffect(() => { updateContextRef.current?.(); }, [fixed, mode]);
   // Exit locally; the modal blocks the window.
   const exitFullscreen = () => {

@@ -89,12 +89,17 @@ export type DesktopHostReply =
     }
   | null;
 export type WindowsDesktopSupport = 'ready' | 'missing' | 'installRequired' | 'unavailable';
+/** Only the local settings renderer receives an installation path. */
+export type LocalDesktopPermissions = RemoteDesktopPermissions & {
+  appBundlePath?: string;
+  separateWindowRetries?: DesktopPermission[];
+};
 export interface RemoteDesktopApi {
   state(checkWindowsSupport?: boolean): Promise<DesktopLocalState>;
   enable(enabled: boolean): Promise<void>;
   windowsSupport(enabled: boolean): Promise<void>;
   stop(): Promise<void>;
-  permissions(): Promise<RemoteDesktopPermissions>;
+  permissions(): Promise<LocalDesktopPermissions>;
   openPermission(permission: DesktopPermission): Promise<void>;
   dismissPermissionGuide(): Promise<void>;
 }

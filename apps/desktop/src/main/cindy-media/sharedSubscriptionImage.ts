@@ -7,5 +7,7 @@ export function subscriptionImageModelId(providerId: string): string {
 /** The built-in OpenAI row can also list Platform API models. A share uses subscription OAuth only. */
 export function canShareSubscriptionImage(provider: Provider, modelId: string): boolean {
   return isOpenAiSubscriptionProvider(provider) && !isOrganizationManagedProvider(provider)
+    // Created pools use a local account lease. Remote dispatch still uses the built-in or legacy route.
+    && provider.subscriptionPool !== 'openai'
     && (provider.id !== 'openai' || modelId === subscriptionImageModelId(provider.id));
 }

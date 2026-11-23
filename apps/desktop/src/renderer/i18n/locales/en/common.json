@@ -989,7 +989,7 @@
     "captureFailed": "Could not capture the screen",
     "permission": {
       "title": "Screen Recording Permission Required",
-      "detail": "To take screenshots, allow {{appName}} in System Settings > Privacy & Security > Screen & System Audio Recording, then reopen {{appName}}.",
+      "detail": "Allow {{appName}} to record the screen, then try again. Reopen the app if macOS asks.",
       "openSettings": "Open System Settings",
       "later": "Not Now"
     },
@@ -1156,12 +1156,12 @@
     "windowsError": "Authorization was not completed. Try again on this computer.",
     "windowsErrorDetail": "Error code {{code}}",
     "permissionsTitle": "Remote desktop permissions",
-    "permissionsIntro": "Screen recording lets you view the desktop. Accessibility also enables control. Complete authorization on the computer; status updates automatically.",
+    "permissionsIntro": "On the Mac you want to connect to, allow screen recording to view the desktop. To use the keyboard and mouse, also allow Cindy to control apps. Cindy checks again automatically.",
     "permissionsReady": "System permissions are ready. You can reconnect.",
     "screenRecording": "Screen recording",
-    "accessibility": "Accessibility",
-    "screenRecordingHelp": "Open System Settings and enable screen recording for this Cindy app. If macOS asks you to restart, reopen Cindy before connecting.",
-    "accessibilityHelp": "Open settings and enable accessibility for the app identified by the system prompt. The actual input permission is checked automatically when you return.",
+    "accessibility": "Keyboard and mouse control",
+    "screenRecordingHelp": "Allow the running copy of Cindy under Screen Recording or Screen & System Audio Recording. Reopen Cindy if macOS asks.",
+    "accessibilityHelp": "In Privacy & Security, select the app named in the system prompt. If you see System & App Protection Override, choose the apps it may control. On earlier versions, enable Accessibility.",
     "permissionChecking": "Checking…",
     "permissionGranted": "Granted",
     "permissionUnknown": "Unconfirmed",
@@ -1356,7 +1356,9 @@
       }
     },
     "lockOnExitHintPrivacy": "Shows the privacy screen when you exit, so AI can keep working; touching the computer locks it.",
-    "lockedEnablePrivacyHint": "To let AI keep using this computer while you're away, turn on the privacy screen in its Settings → General → When You're Away."
+    "lockedEnablePrivacyHint": "To let AI keep using this computer while you're away, turn on the privacy screen in its Settings → General → When You're Away.",
+    "revealCurrentApp": "Show {{app}} in Finder",
+    "openPermissionInNewWindow": "Open in a new window"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3174,7 +3176,7 @@
         },
         "accessibility": {
           "label": "Automatic input",
-          "tooltip": "Accessibility permission lets voice input type into other apps, read nearby cursor text for refinement context, and detect external edits for dictionary learning."
+          "tooltip": "Allow Cindy to insert dictation in selected apps, read text around the cursor for refinement, and detect edits for the dictionary. Use Accessibility or System & App Protection Override, whichever your Mac shows."
         }
       },
       "interactionSound": {
@@ -5417,6 +5419,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "No auxiliary model is available",
+        "configDescription": "Automatic task naming, pinned task summaries, Help and plugin tasks such as subtitle translation are affected. Fix the issues below, or choose other available models under Custom.",
+        "runtimeTitle": "Recent auxiliary model requests failed",
+        "runtimeDescription": "The network or service may be temporarily unavailable. This notice clears on its own once requests succeed. If it keeps appearing, choose other available models under Custom.",
+        "fallback": "Plugin tasks are temporarily using {{model}} at a lower reasoning effort, which may be slower and use more quota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Open Providers",
+        "customize": "Customize auxiliary models",
+        "issues": {
+          "signed_out": "Sign in to Cindy required",
+          "provider_disabled": "Provider disabled",
+          "model_disabled": "Model disabled",
+          "payment_required": "Not included in your plan or balance",
+          "no_credential": "Sign-in or API key missing",
+          "unavailable": "Currently unavailable"
+        },
+        "toast": {
+          "config": "No auxiliary model is available. Task naming, summaries and plugin tasks such as subtitle translation are affected.",
+          "runtime": "Recent auxiliary model requests failed. Task naming, summaries and plugin tasks such as subtitle translation may be affected.",
+          "open": "Open Settings"
+        }
       }
     },
     "compaction": {
@@ -5777,10 +5802,10 @@
         "toggleAria": "Use my browser logins",
         "confirmTitle": "Let the agent use your browser logins?",
         "confirmDescription": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted.",
-        "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. Reading Chrome’s login files also needs Full Disk Access. You can turn this off anytime; the copy will be deleted.",
+        "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted. If macOS asks you to choose a folder, select the browser profile folder you want to use.",
         "confirm": "Use my logins",
-        "readDeniedTitle": "Full Disk Access Needed",
-        "readDeniedDescription": "Cindy needs this permission to read Chrome’s login files. Turn on Cindy under Privacy & Security → Full Disk Access, then try again.",
+        "readDeniedTitle": "Cannot read the browser profile",
+        "readDeniedDescription": "Select the running copy of Cindy in Privacy & Security → Full Disk Access. If macOS offers Choose Folder, select only the browser profile folder you need, then try again.",
         "openFullDiskAccess": "Open System Settings",
         "readDeniedLater": "Not Now",
         "toast": {
@@ -5952,7 +5977,7 @@
         "permissionIntro": {
           "title": "Enable computer automation",
           "description": "{{appName}} will install or start Cua Driver locally to read the screen and perform actions such as clicking and typing. Enable it only when you intentionally started a computer automation task.",
-          "macosDescription": "{{appName}} will install or open Cua Driver's permission flow next, and may jump to macOS System Settings. First grant the core Accessibility and Screen Recording permissions to CuaDriver. During later use, macOS may still show additional confirmations for a target app or a specific action. Only approve those prompts when you intentionally started a Computer Use task. Then return to {{appName}} and it will check automatically.",
+          "macosDescription": "{{appName}} will install or start Cua Driver on this Mac to read the screen and perform actions such as clicking and typing. Enable it only when you intentionally started a computer automation task. Allow Screen Recording for CuaDriver. In System & App Protection Override, choose the apps it may control. On earlier macOS versions, enable Accessibility.",
           "confirm": "Continue",
           "cancel": "Not now"
         },
@@ -5973,8 +5998,8 @@
         },
         "permissions": {
           "title": "System access",
-          "macosHint": "Computer Use needs Accessibility and Screen Recording. During actual use, macOS may still show additional confirmations for a target app or action.",
-          "accessibilityLabel": "Accessibility",
+          "macosHint": "Allow Screen Recording for CuaDriver. In System & App Protection Override, choose the apps it may control. On earlier versions, enable Accessibility.",
+          "accessibilityLabel": "Keyboard and mouse control",
           "screenRecordingLabel": "Screen Recording",
           "grant": "Grant",
           "accessibility": "Accessibility: {{status}}",
@@ -6020,7 +6045,7 @@
           "toggleFailed": "Failed to toggle direct computer control",
           "installFailed": "Failed to install cua-driver",
           "permissionFailed": "Computer Use permissions are not complete",
-          "permissionPending": "Finish the two system permissions, then return here and click Recheck",
+          "permissionPending": "Finish authorizing on the Mac. If the status still hasn’t updated, select Recheck.",
           "permissionSettingsOpened": "System permission settings opened. After granting, come back and click “Recheck”.",
           "permissionSettingsMonitoring": "System permission settings opened. Finish the permissions and the status will update automatically.",
           "openPermissionSettingsFailed": "Failed to open system permission settings"
@@ -6850,7 +6875,15 @@
           "encrypted": "End-to-end encrypted",
           "legacyConnection": "Older connection",
           "encryptionUnknown": "Not confirmed",
-          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
+          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted.",
+          "routePreference": "Route preference",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relay",
+          "routeUnavailable": "Unavailable",
+          "routeMeasuring": "Measuring…",
+          "routeDirectUnavailableHint": "Direct connection is currently unavailable on this network",
+          "routePreferenceFailed": "Could not switch route. Try again."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -11110,6 +11143,11 @@
       "pinned": "Pinned",
       "needsAttention": "Needs attention",
       "duplicate": "Duplicate buddy",
+      "duplicating": "Duplicating buddy…",
+      "duplicateFailed": "Couldn’t duplicate the buddy.",
+      "duplicateModelRequired": "To duplicate this buddy, first choose a default model for buddies in Settings.",
+      "pinFailed": "Couldn’t change the buddy’s pin.",
+      "hideFailed": "Couldn’t change whether the buddy is hidden.",
       "moreActions": "More actions for {{name}}",
       "viewIcons": "Icons",
       "showCollapsedTeammateAvatars": "Show avatars when collapsed",
@@ -12144,46 +12182,15 @@
     },
     "guided": {
       "title": "Create a buddy",
-      "reviewTitle": "Your new buddy",
-      "question": "Briefly describe your expectations.",
-      "placeholder": "For example, help me practice English through everyday conversation and thoughtful corrections.",
       "generate": "Create buddy",
-      "generating": "Shaping your buddy…",
-      "generationFailed": "Could not generate your buddy. Your idea is still here; try again.",
       "modelRequired": "Choose an available model above to continue.",
       "modelFollowsDefault": "Follows the default buddy model.",
       "modelForThisBot": "This selection applies only to this buddy.",
-      "cindyDescription": "I can help you use Cindy, connect your tools, and get things done together.",
-      "cindySummary": "Manage Cindy, connect tools, and get things done.",
-      "openCindy": "Open Cindy",
-      "addCindy": "Add Cindy",
-      "done": "Done",
-      "editName": "Edit name",
       "duplicateName": "That name is taken. Choose a name you can easily tell apart.",
-      "introduction": "About me",
-      "editIntroduction": "Edit introduction",
-      "refine": "Adjust buddy",
-      "refinePlaceholder": "What would you change? For example, less formal and a little more playful.",
-      "back": "Back",
-      "invite": "Invite buddy",
       "portrait": "Portrait {{number}}",
       "upload": "Upload image",
       "generateAvatar": "Generate portrait",
-      "useAvatar": "Use this portrait",
-      "examples": {
-        "english": {
-          "label": "Practice English",
-          "prompt": "Practice English with me through everyday conversation. Be patient and correct unnatural expressions thoughtfully."
-        },
-        "ideas": {
-          "label": "Explore ideas",
-          "prompt": "An imaginative creative partner with opinions, helping me develop writing and product ideas into practical plans."
-        },
-        "life": {
-          "label": "Talk about life",
-          "prompt": "A warm, funny companion who listens to the little things in my life without rushing to give advice."
-        }
-      }
+      "useAvatar": "Use this portrait"
     },
     "import": {
       "title": "Import a buddy",
@@ -12548,6 +12555,7 @@
           "listenPortLabel": "Local listening port",
           "listenPortPlaceholder": "18747",
           "hint": "Connect to your BlueBubbles server on the local network. Only selected chats are handled. Stop any other automatic responder for these chats before connecting.",
+          "automationDenied": "macOS denied BlueBubbles access to Messages during a send. On the Mac running BlueBubbles, check System Settings → Privacy & Security → Automation.",
           "uncertain": "{{count}} deliveries need checking. Review the chat history before retrying to avoid duplicates."
         }
       },
@@ -14396,7 +14404,6 @@
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
-
       "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
       "resumeAction": "Continue sending",
       "resumeAria": "Continue sending queued messages",
@@ -15137,7 +15144,6 @@
     "runningStatus": {
       "currentRate": "Latest speed",
       "lastRequestRate": "Last request average",
-      "recentTokenRate": "Recent {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Turn average",
       "rateHistory": "Generation speed history",
@@ -15909,7 +15915,7 @@
       "viewThread": "View thread context ({{count}})",
       "memberFromGroup": "{{name}} · from {{platform}} group “{{group}}”",
       "memberFromPlatform": "{{name}} · from a {{platform}} group",
-      "guestFromDm": "{{name}} · from {{platform}} DM (not the owner)",
+      "guestFromDm": "{{name}} · from {{platform}} DM",
       "unknownSender": "Group member"
     },
     "rewind": {
@@ -16646,7 +16652,7 @@
       "taskInfo": {
         "harness": "Harness icon",
         "project": "Project icon and name",
-        "teammate": "Teammate avatar",
+        "teammate": "Buddy avatar",
         "time": "Time",
         "pr": "PR status",
         "worktree": "worktree",
@@ -20498,7 +20504,7 @@
     "epermGuidance": {
       "title": "macOS folder access denied",
       "message": "Cindy cannot access your {{folder}} folder",
-      "detail": "macOS denied access. Open System Settings to grant permission, then run your agent command again.",
+      "detail": "In Files & Folders, allow Cindy to access this folder, then try again.",
       "openSystemSettings": "Open System Settings",
       "cancel": "Cancel",
       "folderNames": {
@@ -21587,6 +21593,9 @@
     "actionFailed": "This plugin action could not be completed. Try again."
   },
   "mcpApps": {
+    "composerDragFailed": "Couldn’t add the attachment. Drag it again or select “Add to composer”.",
+    "composerAttachmentFormat": "Use an image, PDF or plain text file up to 64 MiB.",
+    "composerAttachmentBusy": "Wait a moment, then add the attachment again.",
     "sharedTaskReadOnly": "Only the session owner can interact with this card.",
     "retry": "Reload",
     "loadFailed": "The app could not load. Check the connection and reload.",

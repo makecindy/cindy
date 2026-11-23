@@ -322,7 +322,7 @@ import {
   startImConnection,
   stopImConnection,
 } from './im';
-import { buildBotImConnectionListPayload } from './im/shared/botImConnectionRuntime.js';
+import { buildBotImConnectionListPayload, configureTeammateIMessageGroup, listTeammateIMessageGroups } from './im/shared/botImConnectionRuntime.js';
 import { readWechatChannelSettings } from './im/wechat/channelSettings.js';
 import { readXCompanionAssignment } from './hook-control/ipc.js';
 import type { BotControlState } from '@cindy/mcps';
@@ -725,7 +725,8 @@ import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './devic
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
-import { acquireSubscriptionAccount, attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
+import { acquireSubscriptionAccount, attachDefaultSubscriptionPool, disconnectSubscriptionPool, hasCreatedOpenAiImageAuth } from './subscription-accounts/runtime.js';
+import { resolveSubscriptionPoolProvider } from './subscription-accounts/placement.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
 import {
@@ -733,6 +734,7 @@ import {
   hasInFlightRemoteInvokes,
   setHistoryToolNameReader,
   setUsageWidgetSnapshotReader,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
   setAgentNetSwitchRemoteHandler,
@@ -751,6 +753,7 @@ import { registerRemoteResourcesIpc } from './device-link/remoteResourcesIpc';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
   registerWorktreeIpc,
+  WorktreeManager,
   WorktreePool,
   reconcilePendingSafeDirectoryCleanups,
   worktreeStore,
@@ -1276,7 +1279,7 @@ import {
   getLiveScreenHost,
   pluginLiveScreenViews,
 } from './cindy-brain/index.js';
-import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
+import { createCodexImageAuthAcquirer, setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
 import { writeTempFile, materializeDirectSendOssAttachments } from './maker-ipc/normalizeAttachments.desktop.js';
 import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
@@ -3070,27 +3073,12 @@ registerLayoutIpc();
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
 setCodexImageAuthBinding({
-  async acquireRemoteAuth(providerId, modelId) {
-    const lease = await acquireSubscriptionAccount(providerId, modelId, [], false, { remote: true, capability: 'image.generate' });
-    let proof: (() => boolean) | undefined;
-    return {
-      async getAuth() {
-        const auth = await getChatgptBridgeAuthForDispatch(providerId, lease?.account);
-        proof = auth.canDispatch;
-        return auth;
-      },
-      assertDispatchable() {
-        lease?.assertDispatchable();
-        if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
-      },
-      async onAuthFailure(failure) {
-        lease?.observeFailure({ errorStatus: failure.status, message: failure.body }, modelId, 'run');
-        await invalidateChatgptBridgeAuth(failure, providerId, lease?.account);
-      },
-      release() { lease?.release(); },
-    };
-  },
+  acquireAuth: createCodexImageAuthAcquirer({
+    resolveSubscriptionPoolProvider, acquireSubscriptionAccount,
+    getChatgptBridgeAuthForDispatch, invalidateChatgptBridgeAuth,
+  }),
   hasAuth: (providerId) => codexAccountState(providerId).authenticated,
+  hasPoolImageAuth: hasCreatedOpenAiImageAuth,
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,
 });
@@ -5315,7 +5303,29 @@ const registerIpcHandlers = () => {
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
   // 多控制端重连风暴中会互相挤爆对方的可靠传输窗口。
+  let lastActivityRevision: number | undefined;
+  const readHostActivity = () => getAgentIslandService()?.getForegroundTaskActivity() ?? null;
+  let summaryTimer: ReturnType<typeof setTimeout> | undefined;
+  const stopIslandUpdates = getAgentIslandService()?.subscribeTaskOverview(() => {
+    // Tool and text updates can be much more frequent than changes to the three counts.
+    if (summaryTimer) return;
+    summaryTimer = setTimeout(() => {
+      summaryTimer = undefined;
+      publishHostTaskActivity(() => {
+        const summary = readHostActivity();
+        if (!summary || summary.revision === lastActivityRevision) return null;
+        lastActivityRevision = summary.revision;
+        return summary;
+      });
+    }, 80);
+    summaryTimer.unref();
+  });
+  if (stopIslandUpdates) onQuit('foreground-task-activity', () => {
+    clearTimeout(summaryTimer);
+    stopIslandUpdates();
+  });
   setSessionsSubscribedListener((controllerDeviceId) => {
+    publishHostTaskActivity(readHostActivity, controllerDeviceId);
     getAgentIslandService()?.replaySessionActivity((payload) => {
       pushSessionActivityToController(controllerDeviceId, payload);
     });
@@ -7191,11 +7201,12 @@ const registerIpcHandlers = () => {
       const connections: NonNullable<BotControlState['conversations']>['connections'] =
         buildBotImConnectionListPayload(botId).connections
           .map(record => ({ channel: record.service ?? record.channel, connectionId: record.id, status: record.status.kind }));
+      connections.push(...listTeammateIMessageGroups(botId));
       if (readWechatChannelSettings().companionBotId === botId) connections.push({ channel: 'wechat', status: 'assigned' });
       const x = readXCompanionAssignment();
       if (x?.botId === botId) connections.push({ channel: 'x', status: x.enabled ? 'assigned' : 'disabled' });
       return connections;
-    });
+    }, configureTeammateIMessageGroup);
     // 模型供应商目录(providers.json)按「OSS 真源 / bundled 兜底」加载一次存内存:必须在第一次
     // getMakerCore()(下面构造 Maker、同步从 getActiveCatalog() 派生 availableModels)之前完成,
     // 否则首个进程会用内置兜底目录派生模型清单。ensureActiveCatalogLoaded 幂等且永不抛
@@ -7945,6 +7956,7 @@ const registerIpcHandlers = () => {
       app.getPath('userData'),
       app.getPath('appData'),
     ),
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
   });
   // 新电脑设置(docs/product-rules/new-device-setup-migration.md)：从同账号另一台电脑读取非秘密配置，
@@ -7956,6 +7968,7 @@ const registerIpcHandlers = () => {
       app.getPath('userData'),
       app.getPath('appData'),
     ),
+    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
     getMainWindow: () => mainWindowRef,
     getLegacyMigrated: () => didMigrateLegacyDataForUser(authManager.getCurrentUserId()),
   });
@@ -10125,14 +10138,18 @@ app.on('ready', async () => {
   // Cindy-owned Skill activation and all home-level projections happen through
   // one stable-owner boundary. Passive shared-userData instances may consume the
   // active bundle but cannot switch it or its projections.
-  try {
-    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
-  } catch (error) {
+  //
+  // Warm-up only; the first window does not wait for it. Every Agent launch and
+  // Skill listing awaits the same preparation itself, and PreparationCache lets
+  // them join this run instead of starting another. Waiting here cost 0.7–3.9 s
+  // before the main window, and with a saved sign-in the owner is usually still
+  // being restored, so the owner guard rejected this pass anyway.
+  void desktopClaudeAuthAdapter.ensureSharedGlobalSkills().catch((error: unknown) => {
     // A broken optional Skill must not block the desktop from starting.
     createLogger('built-in-skills').warn('built-in Skill preparation failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-  }
+  });
 
   // macOS App Translocation fix: when the user launches the app without
   // dragging it to /Applications first, macOS runs it from a read-only
@@ -10237,6 +10254,20 @@ app.on('ready', async () => {
     resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
     requestWorktreeRecycle,
     lookupSessionWorktreeBinding: (sessionId) => worktreeStore.get(sessionId)?.path ?? null,
+    localPluginWorktrees: {
+      create: (request, assertCurrent) => {
+        if (worktreeStore.get(request.sessionId)) {
+          throwIpcError('PRECONDITION_FAILED', 'The task already has a worktree');
+        }
+        return WorktreeManager.createWorktree(request, {
+          awaitFullCheckout: true,
+          refreshDefaultSource: true,
+          assertCurrent,
+        });
+      },
+      discard: (sessionId, managedPath, canRemove) =>
+        WorktreeManager.discardPrecreatedWorktree(sessionId, managedPath, { canRemove }),
+    },
     closeIdleSessionForMove: closeIdleDesktopSessionForMove,
     // 任务级窗口预算落库后的运行时应用：与模型级上限编辑同一套「关 handle
     // 冷重建 / 回合中登记 pending」语义。

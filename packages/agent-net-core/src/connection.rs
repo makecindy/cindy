@@ -141,7 +141,7 @@ const STREAM_ACTIVE_US: u64 = 1_000_000;
 const INTERACTIVE_WINDOW_RESERVE: u64 = 16;
 /// 每个往返最多这么多个分片的交互流数据不用等节奏和拥塞窗口。
 const INTERACTIVE_ROUND_SEGMENTS: usize = 8;
-/// 一个确认包最多带这么多条流的额度。
+/// 一个确认包最多带这么多条流的额度；回探测的确认不受它限制（见 [`Connection::write_grants`]）。
 const MAX_GRANTS_PER_PACKET: usize = 2;
 
 /// 传输策略；只影响发送节奏和冗余，不改变线格式。
@@ -488,6 +488,8 @@ pub struct Connection {
     peer_window_max: u32,
     /// 收到过对端的确认，`peer_window_max` 是对端说的，不再是猜的。
     peer_window_known: bool,
+    /// 收到了探测：下一个确认带上放得下的所有额度（见 [`Self::write_grants`]）。
+    grant_all: bool,
     probe_at: Option<u64>,
     probe_interval_us: u64,
     probe_due: bool,
@@ -634,6 +636,7 @@ impl Connection {
             peer_window: Self::initial_window(&config),
             peer_window_max: Self::initial_window(&config),
             peer_window_known: false,
+            grant_all: false,
             probe_at: None,
             probe_interval_us: config.probe_initial_us,
             probe_due: false,
@@ -1347,10 +1350,11 @@ impl Connection {
                 Frame::Ping => {
                     ack_eliciting = true;
                     urgent = true;
-                    // 对端可能是等额度等到了探测：额度帧丢光时靠这里补。
+                    // 对端可能是等额度等到了探测：额度帧丢光时靠这里补。它等的是哪条流不知道，回它的确认把每条流的都带上。
                     for state in self.recv_streams.values_mut() {
                         state.grant_repeats = state.grant_repeats.max(1);
                     }
+                    self.grant_all = true;
                 }
                 Frame::Credit { stream, end } => {
                     if let Some(state) = self.send_streams.get_mut(&stream) {
@@ -2555,10 +2559,16 @@ impl Connection {
     }
 
     /// 把还没告诉对端的流量额度写进这个包，放不下的留给后面的确认。
+    ///
+    /// 平时一个确认最多带 [`MAX_GRANTS_PER_PACKET`] 条；回探测的确认带上放得下的所有额度。探测会把每条流都标成要重发，
+    /// 原来回它的确认也只带得下编号最小的两条：编号靠后的流最初那几份额度一旦没送到，之后每个探测换来的都还是前两条，
+    /// 那条流就一直停在初始的 128 个分片上（2026-11-22：会话 v2 的正文流是一条连接的第 6 条流，手机轮询慢一点、探测和
+    /// 整批数据一起到，就停在 160 KB）。
     fn write_grants(&mut self, out: &mut [u8], mut used: usize) -> usize {
+        let limit = if core::mem::take(&mut self.grant_all) { usize::MAX } else { MAX_GRANTS_PER_PACKET };
         let mut written = 0;
         for (&id, state) in self.recv_streams.iter_mut() {
-            if written == MAX_GRANTS_PER_PACKET || used + wire::CREDIT_FRAME_LEN > out.len() {
+            if written == limit || used + wire::CREDIT_FRAME_LEN > out.len() {
                 break;
             }
             if state.grant_repeats > 0 && id != DEFAULT_STREAM {

@@ -977,7 +977,7 @@
     "captureFailed": "화면을 캡처하지 못했습니다",
     "permission": {
       "title": "화면 기록 권한이 필요합니다",
-      "detail": "스크린샷을 찍으려면 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 기록에서 {{appName}}을(를) 허용한 다음 {{appName}}을(를) 다시 여세요.",
+      "detail": "{{appName}}의 화면 기록을 허용한 뒤 다시 시도하세요. macOS에서 요청하면 앱을 다시 여세요.",
       "openSettings": "시스템 설정 열기",
       "later": "나중에"
     },
@@ -1144,12 +1144,12 @@
     "windowsError": "승인이 완료되지 않았습니다. 이 컴퓨터에서 다시 시도하세요.",
     "windowsErrorDetail": "오류 코드 {{code}}",
     "permissionsTitle": "원격 데스크톱 권한",
-    "permissionsIntro": "데스크톱을 보려면 화면 기록 권한이, 조작하려면 손쉬운 사용 권한도 필요합니다. 컴퓨터에서 허용하면 상태가 자동으로 갱신됩니다.",
+    "permissionsIntro": "제어할 Mac에서 화면 기록을 허용하면 데스크탑을 볼 수 있습니다. 키보드와 마우스를 사용하려면 Cindy에 앱 제어도 허용하세요. 권한 상태는 자동으로 확인됩니다.",
     "permissionsReady": "시스템 권한이 준비되었습니다. 다시 연결할 수 있습니다.",
     "screenRecording": "화면 기록",
-    "accessibility": "손쉬운 사용",
-    "screenRecordingHelp": "시스템 설정을 열고 현재 Cindy 앱의 화면 기록을 허용하세요. 재시작을 요청하면 Cindy를 다시 연 후 연결하세요.",
-    "accessibilityHelp": "설정을 열고 시스템 권한 안내에 표시된 앱의 손쉬운 사용을 허용하세요. 돌아오면 실제 입력 권한을 자동 확인합니다.",
+    "accessibility": "키보드 및 마우스 제어",
+    "screenRecordingHelp": "화면 기록 또는 화면 및 시스템 오디오 녹음에서 현재 실행 중인 Cindy의 화면 기록을 허용하세요. macOS에서 요청하면 Cindy를 다시 여세요.",
+    "accessibilityHelp": "개인정보 보호 및 보안에서 시스템이 안내하는 앱을 선택하세요. System & App Protection Override가 보이면 제어를 허용할 앱을 선택하고, 이전 버전에서는 손쉬운 사용을 켜세요.",
     "permissionChecking": "확인 중…",
     "permissionGranted": "허용됨",
     "permissionUnknown": "확인되지 않음",
@@ -1343,7 +1343,9 @@
       }
     },
     "lockOnExitHintPrivacy": "종료하면 프라이버시 화면을 표시하여 AI가 계속 작업할 수 있습니다. 컴퓨터를 건드리면 잠깁니다.",
-    "lockedEnablePrivacyHint": "자리를 비운 동안에도 AI가 이 컴퓨터를 계속 사용하게 하려면, 이 컴퓨터의 “설정 → 일반 → 자리를 비울 때”에서 프라이버시 화면을 켜세요."
+    "lockedEnablePrivacyHint": "자리를 비운 동안에도 AI가 이 컴퓨터를 계속 사용하게 하려면, 이 컴퓨터의 “설정 → 일반 → 자리를 비울 때”에서 프라이버시 화면을 켜세요.",
+    "revealCurrentApp": "Finder에서 {{app}} 보기",
+    "openPermissionInNewWindow": "새 윈도우에서 열기"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3144,7 +3146,7 @@
         },
         "accessibility": {
           "label": "자동 입력",
-          "tooltip": "손쉬운 사용 권한은 다른 앱에 음성 입력 결과를 자동으로 넣고, 정리용 커서 주변 텍스트를 읽고, 외부 수정 내용을 감지해 사전을 학습하는 데 사용됩니다."
+          "tooltip": "선택한 앱에 받아쓰기를 입력하고, 문장을 다듬기 위해 커서 주변의 텍스트를 읽고, 사전에 반영할 수정 내용을 감지하도록 Cindy에 허용합니다. Mac에 표시되는 손쉬운 사용 또는 System & App Protection Override에서 허용하세요."
         }
       },
       "interactionSound": {
@@ -5374,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "사용할 수 있는 보조 모델이 없습니다",
+        "configDescription": "작업 자동 이름 지정, 고정된 작업 요약, Help, 자막 번역 같은 플러그인 작업에 영향을 줍니다. 아래 문제를 해결하거나 「사용자 지정」에서 사용할 수 있는 다른 모델을 선택하세요.",
+        "runtimeTitle": "최근 보조 모델 요청이 계속 실패했습니다",
+        "runtimeDescription": "네트워크나 서비스가 일시적으로 불안정할 수 있습니다. 요청이 성공하면 이 알림은 자동으로 사라집니다. 계속 표시되면 「사용자 지정」에서 사용할 수 있는 다른 모델을 선택하세요.",
+        "fallback": "플러그인 작업이 일시적으로 {{model}}을(를) 낮은 추론 강도로 사용하고 있습니다. 더 느리고 할당량을 더 많이 쓸 수 있습니다.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "제공자 열기",
+        "customize": "보조 모델 사용자 지정",
+        "issues": {
+          "signed_out": "Cindy 로그인 필요",
+          "provider_disabled": "제공자 비활성화됨",
+          "model_disabled": "모델 비활성화됨",
+          "payment_required": "현재 요금제 또는 잔액으로 사용할 수 없음",
+          "no_credential": "로그인 정보 또는 키 없음",
+          "unavailable": "현재 사용할 수 없음"
+        },
+        "toast": {
+          "config": "사용할 수 있는 보조 모델이 없습니다. 작업 이름 지정, 요약, 자막 번역 같은 플러그인 작업에 영향을 줍니다.",
+          "runtime": "최근 보조 모델 요청이 계속 실패했습니다. 작업 이름 지정, 요약, 자막 번역 같은 플러그인 작업에 영향을 줄 수 있습니다.",
+          "open": "설정 열기"
+        }
       }
     },
     "compaction": {
@@ -5734,10 +5759,10 @@
         "toggleAria": "내 브라우저 로그인 사용",
         "confirmTitle": "Agent가 브라우저 로그인을 사용하도록 할까요?",
         "confirmDescription": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다.",
-        "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. Chrome 로그인 파일을 읽으려면 ‘전체 디스크 접근 권한’도 필요합니다. 언제든 끌 수 있으며, 복사본은 삭제됩니다.",
+        "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다. macOS에서 폴더를 선택하라고 하면 사용할 브라우저 프로필 폴더를 선택하세요.",
         "confirm": "내 로그인 사용",
-        "readDeniedTitle": "전체 디스크 접근 권한이 필요합니다",
-        "readDeniedDescription": "Chrome 로그인 파일을 읽으려면 시스템이 Cindy를 허용해야 합니다. 개인 정보 보호 및 보안 → 전체 디스크 접근 권한에서 Cindy를 켠 다음 다시 시도하세요.",
+        "readDeniedTitle": "브라우저 프로필을 읽을 수 없음",
+        "readDeniedDescription": "개인정보 보호 및 보안 → 전체 디스크 접근 권한에서 실행 중인 Cindy를 선택하세요. 폴더를 선택할 수 있다면 필요한 브라우저 프로필 폴더만 선택한 뒤 다시 시도하세요.",
         "openFullDiskAccess": "시스템 설정 열기",
         "readDeniedLater": "나중에",
         "toast": {
@@ -5909,7 +5934,7 @@
         "permissionIntro": {
           "title": "컴퓨터 자동 조작 활성화",
           "description": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요.",
-          "macosDescription": "다음 단계에서 {{appName}}가 Cua Driver 설치 또는 권한 부여 흐름을 열고, 필요하면 macOS 시스템 설정으로 이동합니다. 먼저 CuaDriver에 손쉬운 사용 및 화면 기록 기본 권한을 부여하세요. 이후 실제 사용 중에는 macOS가 대상 앱이나 특정 동작에 대해 추가 확인을 표시할 수 있습니다. 사용자가 직접 Computer Use 작업을 시작한 경우에만 승인하세요. 완료 후 {{appName}}로 돌아오면 자동으로 확인하고 활성화합니다.",
+          "macosDescription": "{{appName}}가 Cua Driver를 로컬에 설치하거나 시작하여 화면을 읽고 클릭, 입력 등의 작업을 수행합니다. 사용자가 직접 컴퓨터 자동 조작 작업을 시작한 경우에만 활성화하세요. CuaDriver에 화면 기록을 허용하세요. System & App Protection Override에서 제어를 허용할 앱을 선택하고, 이전 macOS 버전에서는 손쉬운 사용을 켜세요.",
           "confirm": "계속",
           "cancel": "나중에"
         },
@@ -5930,8 +5955,8 @@
         },
         "permissions": {
           "title": "시스템 권한",
-          "macosHint": "Computer Use에는 손쉬운 사용 및 화면 기록 권한이 필요합니다. 실제 사용 중에는 macOS가 대상 앱이나 동작에 대해 추가 확인을 표시할 수 있습니다.",
-          "accessibilityLabel": "손쉬운 사용",
+          "macosHint": "CuaDriver에 화면 기록을 허용하세요. System & App Protection Override에서 제어를 허용할 앱을 선택하고, 이전 버전에서는 손쉬운 사용을 켜세요.",
+          "accessibilityLabel": "키보드 및 마우스 제어",
           "screenRecordingLabel": "화면 기록",
           "grant": "허용",
           "accessibility": "손쉬운 사용: {{status}}",
@@ -5977,7 +6002,7 @@
           "toggleFailed": "컴퓨터 직접 제어 전환 실패",
           "installFailed": "cua-driver 설치 실패",
           "permissionFailed": "Computer Use 권한 설정이 완료되지 않았습니다",
-          "permissionPending": "두 시스템 권한을 허용한 후 여기로 돌아와 다시 확인을 누르세요",
+          "permissionPending": "Mac에서 권한 설정을 마치세요. 상태가 바뀌지 않으면 다시 확인하세요.",
           "permissionSettingsOpened": "시스템 권한 설정을 열었습니다. 권한 부여를 마친 뒤 여기로 돌아와 \"다시 확인\"을 눌러 주세요.",
           "permissionSettingsMonitoring": "시스템 권한 설정을 열었습니다. 권한 부여를 마치면 상태가 자동으로 업데이트됩니다.",
           "openPermissionSettingsFailed": "시스템 권한 설정을 열지 못했습니다"
@@ -6807,7 +6832,15 @@
           "encrypted": "종단 간 암호화",
           "legacyConnection": "이전 연결",
           "encryptionUnknown": "확인되지 않음",
-          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다."
+          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다.",
+          "routePreference": "경로 선택",
+          "routeAuto": "자동",
+          "routeDirect": "직접",
+          "routeRelay": "중계",
+          "routeUnavailable": "사용 불가",
+          "routeMeasuring": "측정 중…",
+          "routeDirectUnavailableHint": "현재 네트워크에서는 이 기기에 직접 연결할 수 없습니다",
+          "routePreferenceFailed": "경로를 전환하지 못했습니다. 다시 시도해 주세요."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -11065,6 +11098,11 @@
       "pinned": "고정됨",
       "needsAttention": "확인 필요",
       "duplicate": "동반자 복제",
+      "duplicating": "동반자를 복제하는 중…",
+      "duplicateFailed": "동반자를 복제하지 못했습니다.",
+      "duplicateModelRequired": "복제하기 전에 설정에서 동반자의 기본 사용 모델을 선택하세요.",
+      "pinFailed": "동반자 고정 상태를 변경하지 못했습니다.",
+      "hideFailed": "동반자 숨김 상태를 변경하지 못했습니다.",
       "moreActions": "{{name}} 추가 작업",
       "viewIcons": "아이콘",
       "showCollapsedTeammateAvatars": "접었을 때 아바타 표시",
@@ -12099,46 +12137,15 @@
     },
     "guided": {
       "title": "동반자 만들기",
-      "reviewTitle": "새로운 동반자",
-      "question": "기대하는 점을 간단히 적어 주세요.",
-      "placeholder": "예를 들어, 일상 대화로 영어를 연습하고 표현도 꼼꼼하게 교정받고 싶어요.",
       "generate": "동반자 만들기",
-      "generating": "동반자를 구상하고 있어요…",
-      "generationFailed": "생성하지 못했습니다. 입력 내용은 남아 있으니 다시 시도해 주세요.",
       "modelRequired": "위에서 사용 가능한 모델을 선택한 후 계속해 주세요.",
       "modelFollowsDefault": "동반자 기본 모델을 따릅니다.",
       "modelForThisBot": "이 선택은 이 동반자에게만 적용됩니다.",
-      "cindyDescription": "Cindy 사용과 도구 연결을 도와드리고 함께 일을 마무리할게요.",
-      "cindySummary": "Cindy 관리, 도구 연결, 일 마무리.",
-      "openCindy": "Cindy 열기",
-      "addCindy": "Cindy 추가",
-      "done": "완료",
-      "editName": "이름 편집",
       "duplicateName": "같은 이름의 동반자가 있습니다. 구분하기 쉬운 이름을 선택해 주세요.",
-      "introduction": "자기소개",
-      "editIntroduction": "자기소개 편집",
-      "refine": "동반자 조정",
-      "refinePlaceholder": "어떤 점을 바꿀까요? 예를 들어, 조금 더 편하고 유머 있게.",
-      "back": "뒤로",
-      "invite": "동반자 초대",
       "portrait": "프로필 사진 {{number}}",
       "upload": "이미지 업로드",
       "generateAvatar": "프로필 사진 생성",
-      "useAvatar": "이 사진 사용",
-      "examples": {
-        "english": {
-          "label": "영어 연습",
-          "prompt": "일상 대화로 영어를 연습하고 싶어요. 인내심 있게 듣고 부자연스러운 표현을 꼼꼼히 교정해 주세요."
-        },
-        "ideas": {
-          "label": "아이디어 나누기",
-          "prompt": "상상력과 주관을 갖춘 창작 동반자. 글쓰기와 제품 아이디어를 구체적인 계획으로 발전시키고 싶어요."
-        },
-        "life": {
-          "label": "일상 이야기",
-          "prompt": "따뜻하고 유머 있는 동반자. 성급하게 조언하기보다 일상의 작은 이야기를 들어줬으면 해요."
-        }
-      }
+      "useAvatar": "이 사진 사용"
     },
     "import": {
       "title": "동반자 가져오기",
@@ -12511,6 +12518,7 @@
           "listenPortLabel": "로컬 수신 포트",
           "listenPortPlaceholder": "18747",
           "hint": "로컬 네트워크의 BlueBubbles에 연결하여 선택한 채팅만 처리합니다. 연결 전에 해당 채팅의 다른 자동 응답 프로그램을 중지하세요.",
+          "automationDenied": "전송 중에 macOS가 BlueBubbles의 메시지 앱 제어 요청을 거부했습니다. BlueBubbles가 실행 중인 Mac에서 시스템 설정 → 개인정보 보호 및 보안 → 자동화를 확인하세요.",
           "uncertain": "메시지 {{count}}개의 처리 결과를 확인해야 합니다. 중복을 피하려면 재시도 전에 채팅 기록을 확인하세요."
         }
       },
@@ -14342,7 +14350,6 @@
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
-
       "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
       "resumeAction": "계속 전송",
       "resumeAria": "대기열 메시지 전송 계속",
@@ -15073,7 +15080,6 @@
     "runningStatus": {
       "currentRate": "최근 속도",
       "lastRequestRate": "최근 요청 평균",
-      "recentTokenRate": "최근 {{rate}} tok/s",
       "waitingSample": "측정 중",
       "averageRate": "이번 턴 평균",
       "rateHistory": "생성 속도 추이",
@@ -15844,7 +15850,7 @@
       "viewThread": "스레드 컨텍스트 보기 ({{count}})",
       "memberFromGroup": "{{name}} · {{platform}} 그룹 「{{group}}」에서",
       "memberFromPlatform": "{{name}} · {{platform}} 그룹에서",
-      "guestFromDm": "{{name}} · {{platform}} DM에서 (소유자 아님)",
+      "guestFromDm": "{{name}} · {{platform}} DM에서",
       "unknownSender": "그룹 구성원"
     },
     "rewind": {
@@ -16572,7 +16578,7 @@
       "taskInfo": {
         "harness": "Harness 아이콘",
         "project": "프로젝트 아이콘 및 이름",
-        "teammate": "동료 아바타",
+        "teammate": "동반자 아바타",
         "time": "시간",
         "pr": "PR 상태",
         "worktree": "worktree",
@@ -20415,7 +20421,7 @@
     "epermGuidance": {
       "title": "macOS 폴더 접근이 거부되었습니다",
       "message": "Cindy가 {{folder}} 폴더에 접근할 수 없습니다",
-      "detail": "macOS에서 접근을 거부했습니다. 시스템 설정을 열어 권한을 부여한 다음 Agent 명령을 다시 실행하세요.",
+      "detail": "파일 및 폴더에서 Cindy가 이 폴더에 접근하도록 허용한 뒤 다시 시도하세요.",
       "openSystemSettings": "시스템 설정 열기",
       "cancel": "취소",
       "folderNames": {
@@ -21500,6 +21506,9 @@
     "actionFailed": "플러그인 작업을 완료하지 못했습니다. 다시 시도해 주세요."
   },
   "mcpApps": {
+    "composerDragFailed": "첨부하지 못했습니다. 다시 드래그하거나 ‘입력창에 추가’를 선택하세요.",
+    "composerAttachmentFormat": "이미지, PDF, 일반 텍스트 파일을 각각 최대 64 MiB까지 첨부할 수 있습니다.",
+    "composerAttachmentBusy": "잠시 후 첨부 파일을 추가해 주세요.",
     "sharedTaskReadOnly": "이 카드는 세션 소유자만 조작할 수 있습니다.",
     "retry": "다시 불러오기",
     "loadFailed": "앱을 불러오지 못했습니다. 연결을 확인한 후 다시 불러오세요.",

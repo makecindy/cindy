@@ -472,6 +472,7 @@ import {
   closeComputerPermissionGuideWindow,
   finishComputerPermissionAppDrag,
   getComputerPermissionGuideStatus,
+  getComputerPermissionPaneUrl,
   openComputerPermissionPaneForStatus,
   isComputerPermissionGuideWebContents,
   refreshComputerPermissionGuideWindow,
@@ -479,8 +480,8 @@ import {
   showComputerPermissionGuideWindow,
   startComputerPermissionAppDrag,
 } from '../computer-permission-guide/window.js';
-import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
-import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
+import { MAC_ACCESSIBILITY_SETTINGS_URL, parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
+import { getComputerPermissionGuideMode } from './computerPermissionGuideEligibility.js';
 import {
   resolveSessionQueueCounts,
   type SessionQueueInspectionEntry,
@@ -782,7 +783,13 @@ import { botGroupFolderPath, createBotGroupWorkDir } from './botGroupWorkDir.js'
 import { createBotGroupAttachmentStore } from './botGroupAttachments.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
-import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from './pluginTaskDefaultRoute.js';
+import {
+  auxiliaryChainSessionCandidates,
+  pluginTaskRouteAttempts,
+  pluginTaskSelectionIsOpen,
+  resolveLightestPluginTaskFallback,
+} from './pluginTaskDefaultRoute.js';
+import { reportPluginTaskAuxiliaryFallback } from '../utility-model/auxiliaryModelHealthService.js';
 import { findRepositoryFolders, folderRepositories } from './groupProjectFolder.js';
 import { runGit } from '../git-review/gitRunner.js';
 import { markGroupCindyTask } from './groupCollaborationSkill.js';
@@ -804,6 +811,7 @@ import { withSessionPermissionChange } from './sessionPermissionChange.js';
 import { retryBotWelcomePermissionDispatch, withBotPermissionChange } from './botPermissionDispatch.js';
 import { getPluginHostToolCaller } from '../mcp-integrations/hostToolCaller.js';
 import {
+  botRuntimeRefreshNeedsReplacement,
   createBotCompactRuntimeRefreshCoordinator,
   prepareBotCapabilityEpochBeforeSend,
   refreshBotRuntimeAfterModelSelection,
@@ -9556,7 +9564,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     botId: string;
     sessionId: string;
     eventType: 'compact-runtime-refresh-requested' | 'compact-runtime-refresh-applied' |
-      'compact-runtime-refresh-deferred' | 'compact-runtime-refresh-failed';
+      'compact-runtime-refresh-deferred' | 'compact-runtime-refresh-failed' |
+      'compact-runtime-refresh-skipped';
     boundary: BotCompactBoundary;
     profileVersion: number;
     reason?: string;
@@ -9719,19 +9728,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // currently healthy runtime. Resolve the exact native Skill/MCP/
         // Toolset bundle before closeSession so a failed preflight leaves the
         // old process and its resume ownership untouched.
-        await withRehydrateCloseSuppressed(expectedSession.id, async () => {
+        const replaced = await withRehydrateCloseSuppressed(expectedSession.id, async () => {
           const refreshed = await replaceBotRuntimeAfterPreflight({
-            preflight: async () => {
-              await preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts);
-            },
+            // An epoch confirmed unchanged against an applied baseline (e.g. a
+            // V2 teammate memory edit) is not worth a restart; no baseline still rebuilds.
+            preflight: async () => botRuntimeRefreshNeedsReplacement(
+              await preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts),
+            ),
             isCurrentOwner: () => maker.getSession(expectedSession.id) === expectedSession,
             isIdle: () => !isRuntimeBusy(),
             close: () => maker.closeSession(expectedSession.id, 'runtime-refresh'),
             bootstrap: async () => (await bootstrapSession(createOpts)).session,
           });
+          if (!refreshed) return false;
           await markOrcaRoleIfNeeded(refreshed.id, createOpts.orcaRole);
           broadcastSessionCreated(refreshed.id);
+          return true;
         });
+        if (!replaced) {
+          await recordBotCompactRuntimeLifecycle({
+            botId: row.botId,
+            sessionId: expectedSession.id,
+            eventType: 'compact-runtime-refresh-skipped',
+            boundary,
+            profileVersion: row.profileVersion,
+            reason: 'runtime-epoch-unchanged',
+          });
+          // Not 'deferred': the coordinator drops the pending mark and keeps the runtime.
+          return 'not-bot';
+        }
         await recordBotCompactRuntimeLifecycle({
           botId: row.botId,
           sessionId: expectedSession.id,
@@ -14293,6 +14318,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               assertPlugin(pluginId);
               break;
             } catch { execution = undefined; }
+          }
+          if (execution) reportPluginTaskAuxiliaryFallback(null);
+          else {
+            execution = await resolveLightestPluginTaskFallback(resolveSessionExecution, selection);
+            assertPlugin(pluginId);
+            if (execution.providerId) reportPluginTaskAuxiliaryFallback({ ...execution, providerId: execution.providerId });
           }
         }
         execution ??= await resolveSessionExecution(selection, sourceSessionId);
@@ -19016,7 +19047,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }, (sessionId, requestId) => {
     const session = pageApprovalSessions.get(requestId);
     if (session?.id === sessionId) allowHostPagePermission(session, requestId);
-  });
+  }, (win) => win === getDeepLinkMainWindow() || isSecondaryAppWindow(win));
   registerMakerSessionSendHandler(
     {
       handle(channel, handler) {
@@ -23257,6 +23288,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
  * bootstrap 在 splash 之后的同一时刻调用。只用模块级依赖，不闭合 `registerMakerIpc` 的状态。
  */
 export function registerComputerUseIpc(): void {
+  let permissionGrantGeneration = 0;
   // ── Local desktop computer-use (Settings →「电脑使用」) ─────────────────
   // Probe the installed CuaDriver used by the phase-one Computer Use runtime.
   ipcMain.handle(
@@ -23290,25 +23322,42 @@ export function registerComputerUseIpc(): void {
     if (!options) {
       throwIpcError('INVALID_PARAMS', 'Invalid Computer Use permission request');
     }
-    const shouldShowGuide = shouldUseComputerPermissionGuide({
+    const generation = ++permissionGrantGeneration;
+    const guideMode = getComputerPermissionGuideMode({
+      systemVersion: process.platform === 'darwin' ? process.getSystemVersion?.() : undefined,
       platform: process.platform,
       showGuide: options.showGuide,
       appBundlePath: getComputerDriverAppBundlePath(),
-      systemVersion: process.getSystemVersion?.(),
     });
     try {
       // Permission snapshots are mutable TCC state and cannot be accepted from
       // Renderer. Re-establish the state in Main immediately before guide side
       // effects, bypassing both daemon and probe caches.
-      const initialStatus = shouldShowGuide
+      const initialStatus = guideMode !== 'driver'
         ? await getComputerDriverStatus({
             forcePermissionProbe: true,
             freshPermissionProbe: true,
             bypassPermissionProbeCache: true,
           })
         : undefined;
-      if (shouldShowGuide) {
-        if (!initialStatus) throw new Error('Computer Use permission guide status unavailable');
+      if (guideMode === 'settings' && initialStatus) {
+        const cancelled = { ok: false, stdout: '', stderr: '', status: initialStatus };
+        if (generation !== permissionGrantGeneration) return cancelled;
+        const url = getComputerPermissionPaneUrl(initialStatus);
+        if (!url) return { ok: true, stdout: '', stderr: '', status: initialStatus };
+        // An explicit badge click already opened the user's chosen pane.
+        if (!options.openedPaneUrl) {
+          await shell.openExternal(url).catch((error) => {
+            log.warn('opening macOS permission settings failed', { error: String(error) });
+          });
+        }
+        if (generation !== permissionGrantGeneration) return cancelled;
+        const result = await grantComputerDriverPermissions(initialStatus);
+        return !options.openedPaneUrl && url === MAC_ACCESSIBILITY_SETTINGS_URL
+          ? { ...result, continueToScreenRecording: true }
+          : result;
+      }
+      if (guideMode === 'drag' && initialStatus) {
         if (options.openedPaneUrl) {
           seedOpenedPermissionPane(options.openedPaneUrl);
         }
@@ -23324,7 +23373,7 @@ export function registerComputerUseIpc(): void {
       }
       return await grantComputerDriverPermissions(initialStatus);
     } catch (err) {
-      if (shouldShowGuide) closeComputerPermissionGuideWindow();
+      if (guideMode === 'drag') closeComputerPermissionGuideWindow();
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }
   });
@@ -23362,6 +23411,7 @@ export function registerComputerUseIpc(): void {
     if (!cancelledFromGuide) {
       assertTrustedAppRendererEvent(_event);
     }
+    permissionGrantGeneration++;
     cancelComputerDriverPermissionGrant();
     closeComputerPermissionGuideWindow();
     if (cancelledFromGuide) {

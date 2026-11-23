@@ -108,7 +108,7 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
-type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'agentDeviceId' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
   scheduledModelBaseline?: string | null;
 };
 export type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;

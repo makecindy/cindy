@@ -9,7 +9,7 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES, type RelayRoute } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
@@ -45,6 +45,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     connectSession?(key: string): Promise<boolean>;
     /** See `PortableSocket.restrictPeers`. */
     restrictPeers?(rule: PeerRule): void;
+    /** Change a peer's local path preference (`auto` / `direct` / `relay`). */
+    setPeerPathPreference?(deviceId: string, preference: PathPreference): void;
   };
 export function workerClient(client: AgentNetClient) {
   return { base: client.base, identity: client.identity, certificate: client.certificate, rootPublicKey: client.rootPublicKey,
@@ -98,6 +100,9 @@ interface PeerStatus {
   available: boolean;
   path: 'direct' | 'relay' | null;
   rttMs: number | null;
+  directRttMs?: number | null;
+  relayRttMs?: number | null;
+  pathPreference?: PathPreference;
   dialing: boolean;
 }
 
@@ -107,7 +112,13 @@ function peerRoute(status: PeerStatus | undefined): 'direct' | 'relay' | 'connec
 }
 
 function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: ReadonlyMap<string, PeerStatus>): boolean {
-  for (const [id, status] of next) if (peerRoute(status) !== peerRoute(previous.get(id))) return true;
+  for (const [id, status] of next) {
+    const prev = previous.get(id);
+    if (peerRoute(status) !== peerRoute(prev)) return true;
+    if ((status.pathPreference ?? 'auto') !== (prev?.pathPreference ?? 'auto')) return true;
+    if ((status.directRttMs != null) !== (prev?.directRttMs != null)) return true;
+    if ((status.relayRttMs != null) !== (prev?.relayRttMs != null)) return true;
+  }
   for (const [id, status] of previous) if (!next.has(id) && peerRoute(status)) return true;
   return false;
 }
@@ -267,6 +278,9 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   restrictPeers(rule: PeerRule): void {
     if (!this.closed) this.worker.postMessage({ type: 'restrict', rule: { allowed: rule.allowed && [...rule.allowed], refused: [...rule.refused] } });
   }
+  setPeerPathPreference(deviceId: string, preference: PathPreference): void {
+    if (!this.closed) this.worker.postMessage({ type: 'set-peer-path-preference', deviceId, preference });
+  }
   get bufferedAmount() { return this.queued + this.remoteQueued; }
   /** See PortableSocket.onDrain: fires when `bufferedAmount` falls back to DRAIN_LOW_WATER_BYTES after having been above. */
   onDrain(listener: () => void): void { this.on('drain', listener); }
@@ -303,16 +317,38 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   pathTo(id: string) { return this.status.get(this.sessions.device(id) ?? id)?.path ?? null; }
   peerSnapshot(id: string) {
     const status = this.status.get(this.sessions.device(id) ?? id);
-    return status?.path ? { path: status.path, rttMs: status.rttMs } : null;
+    return status?.path ? {
+      path: status.path,
+      rttMs: status.rttMs,
+      ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
+      ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
+      ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+    } : null;
   }
   /** Actual and in-progress transport routes to devices in this account's directory. */
-  peerRoutes(): Array<{ deviceId: string; path: 'direct' | 'relay' | 'connecting'; rttMs: number | null }> {
+  peerRoutes(): Array<{
+    deviceId: string;
+    path: 'direct' | 'relay' | 'connecting';
+    rttMs: number | null;
+    directRttMs?: number | null;
+    relayRttMs?: number | null;
+    pathPreference?: PathPreference;
+  }> {
     if (this.closed || this.closeTimer) return [];
     const routes = [];
     for (const [deviceId, status] of this.status) {
       if (deviceId === this.deviceId || !this.directory.has(deviceId)) continue;
       const path = peerRoute(status);
-      if (path) routes.push({ deviceId, path, rttMs: status.rttMs });
+      if (path) {
+        routes.push({
+          deviceId,
+          path,
+          rttMs: status.rttMs,
+          ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
+          ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
+          ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+        });
+      }
     }
     return routes;
   }

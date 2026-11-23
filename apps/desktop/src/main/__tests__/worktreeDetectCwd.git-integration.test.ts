@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { AcpAgent, type AcpLineTransport, type Logger } from '@cindy/maker-core';
 
 import { createCheckoutService } from '../worktree/checkout';
 import { awaitBackgroundCheckout, createWorktree, detectCwd } from '../worktree/WorktreeManager';
@@ -233,7 +234,10 @@ it.for(['unborn', 'committed'] as const)(
 // Rule C: Desktop creation refreshes its selected remote default before checkout;
 // automatic/mobile paths keep the old behavior. Existing detection tests never
 // exercised the created tree. Real Git + local bare remote, git-integration tier.
-it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
+// #11956 / git-integration: HEAD alone is insufficient. Have a synthetic
+// ACP endpoint read a file absent from the base checkout on its first prompt,
+// and exercise a real Git checkout error after ref resolution succeeds.
+it.each(['fresh', 'offline', 'other-source', 'legacy', 'checkout-fails'] as const)(
   'creates from the expected source with default refresh: %s',
   async (mode) => {
     fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-create-default-'));
@@ -255,6 +259,9 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
     const old = await git(repo, 'rev-parse', 'HEAD');
     await git(repo, 'switch', '-c', 'feature');
     await fs.writeFile(path.join(seed, 'tracked.txt'), 'new');
+    await fs.writeFile(path.join(seed, 'marker.txt'), 'selected branch only');
+    await fs.writeFile(path.join(seed, '.gitattributes'), 'marker.txt filter=fixture-marker\n');
+    await git(seed, 'add', 'marker.txt', '.gitattributes');
     await git(seed, 'commit', '-am', 'new');
     await git(seed, 'push', remote, 'main');
     const latest = await git(seed, 'rev-parse', 'HEAD');
@@ -262,6 +269,10 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
       await git(repo, 'remote', 'set-url', 'origin', path.join(fixture, 'missing.git'));
     // A fork's upstream must never silently replace the selected origin default.
     await git(repo, 'remote', 'add', 'upstream', path.join(fixture, 'missing-upstream.git'));
+    if (mode === 'checkout-fails') {
+      await git(repo, 'config', 'filter.fixture-marker.smudge', 'false');
+      await git(repo, 'config', 'filter.fixture-marker.required', 'true');
+    }
     const sourceBranch = mode === 'other-source' ? 'feature' : 'refs/remotes/origin/main';
     const created = await createWorktree(
       { sessionId: mode, baseRepo: repo, name: mode, sourceBranch },
@@ -270,6 +281,13 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
         awaitFullCheckout: true,
       },
     );
+    await expect(fs.access(path.join(repo, 'marker.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await git(repo, 'branch', '--show-current')).toBe('feature');
+    if (mode === 'checkout-fails') {
+      expect(created).toMatchObject({ ok: false, error: { rawStderr: expect.stringContaining('fixture-marker') } });
+      expect(metadata.has(mode)).toBe(false);
+      return;
+    }
     expect(created.ok, JSON.stringify(created)).toBe(true);
     if (!created.ok) return;
     const expected = mode === 'fresh' ? latest : old;
@@ -277,7 +295,65 @@ it.each(['fresh', 'offline', 'other-source', 'legacy'] as const)(
     expect(await fs.readFile(path.join(created.meta.path, 'tracked.txt'), 'utf8')).toBe(
       mode === 'fresh' ? 'new' : 'old',
     );
-    expect(await git(repo, 'branch', '--show-current')).toBe('feature');
+    if (mode === 'fresh') {
+      const read = Promise.withResolvers<{ cwd: string; prompt: unknown; marker: string }>();
+      const logger: Logger = {
+        trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
+      };
+      let onLine: ((line: string) => void) | undefined;
+      let pluginCwd: string;
+      const transport: AcpLineTransport = {
+        write(line) {
+          const { id, method, params } = JSON.parse(line);
+          const reply = (result: object) => queueMicrotask(() => {
+            onLine?.(JSON.stringify({ jsonrpc: '2.0', id, result }));
+          });
+          if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
+          if (method === 'session/new') {
+            pluginCwd = params.cwd;
+            reply({ sessionId: 'fixture-session' });
+          }
+          if (method === 'session/prompt') {
+            void fs.readFile(path.join(pluginCwd, 'marker.txt'), 'utf8').then((marker) => {
+              read.resolve({ cwd: pluginCwd, prompt: params.prompt, marker });
+              reply({ stopReason: 'end_turn' });
+            }, read.reject);
+          }
+        },
+        onLine(listener) {
+          onLine = listener;
+          return () => { onLine = undefined; };
+        },
+        onClose: () => () => {},
+        close: async () => {},
+      };
+      const agent = new AcpAgent({
+        auth: {
+          getState: async () => ({ authenticated: true }),
+          triggerLogin: async () => ({ authenticated: true }),
+          logout: async () => {},
+          getAuthEnv: async () => ({}),
+        },
+        binaryPath: '', runtimeConfig: {}, logger, clientInfo: { name: 'fixture', version: '1' },
+        endpoints: { connect: async () => transport },
+      });
+      const session = await agent.startSession({
+        workingDir: created.meta.path, providerId: 'acp-plugin:fixture:marker', model: '',
+      });
+      try {
+        await session.send({ type: 'user', content: 'Read marker.txt' });
+        await expect(read.promise).resolves.toEqual({
+          cwd: created.meta.path,
+          prompt: [{ type: 'text', text: 'Read marker.txt' }],
+          marker: 'selected branch only',
+        });
+      } finally {
+        await session.close();
+      }
+    } else {
+      await expect(fs.readFile(path.join(created.meta.path, 'marker.txt'), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    }
     expect(created.meta.sourceBranch).toBe(sourceBranch);
   },
   30_000,

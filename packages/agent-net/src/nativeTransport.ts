@@ -1,6 +1,8 @@
 import {
-  AGENT_NET_SESSION_V1, ChannelEvents, DRAIN_LOW_WATER_BYTES, MAX_EARLY_SESSION_BYTES, SESSION_LANE_KINDS, SESSION_LANE_PRIORITY,
-  type PeerChannel, type RosterEntry, type SessionLaneName, type SessionWire, type Transport, type TransportOptions,
+  AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, DRAIN_LOW_WATER_BYTES, EARLY_BODY_EVENT_BYTES, MAX_EARLY_SESSION_BYTES,
+  SESSION_BODY_HEADER_BYTES, SESSION_BODY_KIND,
+  SESSION_LANE_KINDS, SESSION_LANE_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName,
+  type SessionWire, type Transport, type TransportOptions,
 } from './types.js';
 import { concatBytes, decodeUtf8, fromBase64Url, keyHex, toBase64Url, utf8 } from './portableBytes.js';
 
@@ -90,6 +92,11 @@ const MAX_STUN_SERVERS = 4;
 const DATA = 0x44;
 const CONTROL = 0x43;
 const LANE_BY_KIND = new Map<number, SessionLaneName>(Object.entries(SESSION_LANE_KINDS).map(([lane, kind]) => [kind, lane as SessionLaneName]));
+/**
+ * Session v2 body streams one connection keeps at once, until what they carried was acknowledged; more messages go on their lanes
+ * as in v1. The core allows 64 streams per connection, five of them this channel's own.
+ */
+const MAX_NATIVE_BODIES = 32;
 /** Per poll and outgoing stream, at most this many native writes of `WRITE_CHUNK` bytes. */
 const WRITES_PER_STREAM = 8;
 const WRITE_CHUNK = 65_536;
@@ -163,6 +170,12 @@ export class NativeTransport implements Transport {
   private waits = false;
   /** `binary-io`: writes, relayed datagrams and polls go through `io` (`exchange`). */
   private readonly binary: boolean;
+  /**
+   * Session v2 body streams (opened here, read from peers): only on an engine whose core sends every stream's credit when answering
+   * a probe (`probe-grants`). An older core sends the two lowest streams' only, and a body is a connection's sixth stream: when its
+   * first credit did not get through, the peer stops at 128 segments for good (2026-11-22, CI). Such a phone keeps to v1.
+   */
+  readonly bodies: boolean;
   /** `binary-io` with `native-wait`: a waiting `io` call is out (`restBinary`); it reads for JS, a drive meanwhile does not. */
   private resting = false;
   /** Polls a waiting `io` call brought back while a drive ran: the drive applies them before anything it reads itself. */
@@ -220,6 +233,7 @@ export class NativeTransport implements Transport {
     this.features = new Set(Array.isArray(identity.features) ? identity.features : []);
     this.waits = enhanced && this.features.has('native-wait') && typeof engine.wait === 'function';
     this.binary = enhanced && this.features.has('binary-io') && typeof engine.io === 'function';
+    this.bodies = enhanced && this.features.has('probe-grants');
     this.relayUdpServer = options.relayUdpServer;
     this.localAddresses = addresses;
     this.candidateList = this.computeCandidates();
@@ -705,13 +719,26 @@ class Outgoing {
   push(bytes: Uint8Array): void { this.items.push({ bytes, offset: 0 }); this.queued += bytes.length; }
 }
 
+/**
+ * Session v2: one message body on a stream of its own (types.ts SESSION_BODY_KIND). `closing`: complete (or given up), the stream
+ * ends once its bytes are with the engine; `ended`: the end went to the engine, it stays counted until the core holds none of it.
+ */
+class Body extends Outgoing {
+  closing = false;
+  ended = false;
+  abandoned = false;
+}
+
 class NativeChannel implements PeerChannel {
   private events = new ChannelEvents();
   private readonly data = new Outgoing('normal', true);
   private readonly control = new Outgoing('interactive', false);
   /** Session lanes, opened on first use after the peer declared session support (as the Desktop's CoreChannel). */
   private lanes: Record<SessionLaneName, Outgoing> | null = null;
-  private streams = new Map<number, { kind: number | null; text: string }>();
+  /** Session v2 body streams this side opened, until the core holds nothing of them. */
+  private bodies: Body[] = [];
+  /** `key`: a body stream's key, once its four bytes arrived after the kind (`head` collects them). */
+  private streams = new Map<number, { kind: number | null; text: string; key?: number | null; head?: number[] }>();
   private state: NativeState | null = null;
   private candidates: Address[] = [];
   private candidateCursor = 0;
@@ -726,6 +753,10 @@ class NativeChannel implements PeerChannel {
   private sessionHandler: ((lane: SessionLaneName, bytes: Uint8Array) => void) | null = null;
   private earlySession: Array<[SessionLaneName, Uint8Array]> = [];
   private earlySessionBytes = 0;
+  private bodyHandler: ((key: number, bytes: Uint8Array | null) => void) | null = null;
+  private earlyBodies: Array<[number, Uint8Array | null]> = [];
+  /** This side declared `AGENT_NET_SESSION_V2`: the peer may open body streams. */
+  private bodiesDeclared = false;
   private readonly drainHandlers: Array<() => void> = [];
   private readonly pathHandlers: Array<(path: 'direct' | 'relay' | null) => void> = [];
   private reportedPath = '';
@@ -753,14 +784,18 @@ class NativeChannel implements PeerChannel {
   /** Bytes still waiting here for the engine, or a close still draining: the transport keeps polling fast. */
   get moving(): boolean {
     return !this.disposed && (this.closeDeadline > 0 || this.data.queued > 0 || this.control.queued > 0
-      || (this.lanes !== null && (this.lanes.control.queued > 0 || this.lanes.normal.queued > 0 || this.lanes.background.queued > 0)));
+      || (this.lanes !== null && (this.lanes.control.queued > 0 || this.lanes.normal.queued > 0 || this.lanes.background.queued > 0))
+      || this.bodies.some(body => body.queued > 0 || (body.closing && !body.ended)));
   }
+  /** Session v2: this channel opens and reads body streams (as the Desktop's CoreChannel); not on a plain-native transport. */
+  get sessionBodies(): boolean { return this.owner.bodies; }
   onDrain(handler: () => void): void { this.drainHandlers.push(handler); }
 
   /** See CoreChannel.declareSessions (transport.ts): once per connection, on the control stream older nodes read only for candidates. */
   declareSessions(features: readonly string[] = []): void {
     if (!this.owner.enhanced || this.sessionsDeclared || this.events.closed) return;
     this.sessionsDeclared = true;
+    this.bodiesDeclared = features.includes(AGENT_NET_SESSION_V2);
     this.control.push(utf8(`${JSON.stringify({ session: [AGENT_NET_SESSION_V1, ...features] })}\n`));
     this.owner.wake();
   }
@@ -776,21 +811,67 @@ class NativeChannel implements PeerChannel {
       };
       this.lanes = { control: open('control'), normal: open('normal'), background: open('background') };
     }
-    const lanes = this.lanes;
+    const lanes = this.lanes, channel = this;
     return {
       write: (lane, bytes) => { if (!this.events.closed) { lanes[lane].push(bytes); this.owner.wake(); } },
       // As the Desktop (transport.ts): control and normal lanes count what the core still buffers, so a slow line pushes
       // back before a megabyte of pushes queues ahead of interactive replies; the background lane (file blocks) counts
       // only what waits here, so a download does not hold back task text.
       get bufferedAmount() {
-        return lanes.control.queued + lanes.control.core + lanes.normal.queued + lanes.normal.core + lanes.background.queued;
+        return lanes.control.queued + lanes.control.core + lanes.normal.queued + lanes.normal.core + lanes.background.queued + channel.bodiesBuffered();
       },
       onData: (handler) => {
         this.sessionHandler = handler;
         for (const [lane, bytes] of this.earlySession.splice(0)) handler(lane, bytes);
         this.earlySessionBytes = 0;
       },
+      openBody: (lane, key) => this.openBody(lane, key),
+      onBody: (handler) => {
+        this.bodyHandler = handler;
+        for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
+      },
     };
+  }
+  /** Session v2: bodies count like their lanes, on the control and normal lanes with what the core still buffers. */
+  private bodiesBuffered(): number {
+    let total = 0;
+    for (const body of this.bodies) total += body.queued + (body.priority === 'background' ? 0 : body.core);
+    return total;
+  }
+  /** Session v2: a stream of its own for one message body, at its lane's priority; opened in the engine with its first write. */
+  private openBody(lane: SessionLaneName, key: number): SessionBodyWriter | null {
+    if (!this.owner.bodies || this.events.closed || this.bodies.length >= MAX_NATIVE_BODIES) return null;
+    const body = new Body(SESSION_LANE_PRIORITY[lane], false);
+    const head = new Uint8Array(SESSION_BODY_HEADER_BYTES);
+    head[0] = SESSION_BODY_KIND;
+    new DataView(head.buffer).setUint32(1, key, false);
+    body.push(head);
+    this.bodies.push(body);
+    this.owner.wake();
+    return {
+      write: (bytes) => { if (!this.events.closed && !body.closing) { body.push(bytes); this.owner.wake(); } },
+      finish: () => { if (!body.closing) { body.closing = true; this.owner.wake(); } },
+      abandon: () => this.abandonBody(body),
+    };
+  }
+  /** What waits here is dropped, and what the engine's core has not sent (`abandon`): the peer sees the body end short. */
+  private abandonBody(body: Body): void {
+    if (body.abandoned || this.disposed) return;
+    body.abandoned = true;
+    body.closing = true;
+    body.items = [];
+    body.queued = 0;
+    if (!body.ended) { this.owner.wake(); return; }
+    if (body.stream !== null) {
+      void this.owner.call({ op: 'abandon', id: this.id, stream: body.stream }).catch(() => undefined);
+    }
+  }
+  private sessionBody(key: number, bytes: Uint8Array | null): void {
+    if (this.bodyHandler) { this.bodyHandler(key, bytes); return; }
+    // Every event counts, an end too: a peer that never attaches its session cannot pile up empty streams for free.
+    this.earlySessionBytes += (bytes?.length ?? 0) + EARLY_BODY_EVENT_BYTES;
+    if (this.earlySessionBytes > MAX_EARLY_SESSION_BYTES) { this.close({ drain: false }); return; }
+    this.earlyBodies.push([key, bytes && bytes.slice()]);
   }
   private sessionData(lane: SessionLaneName, bytes: Uint8Array): void {
     if (this.sessionHandler) { this.sessionHandler(lane, bytes); return; }
@@ -799,9 +880,12 @@ class NativeChannel implements PeerChannel {
     this.earlySession.push([lane, bytes.slice()]);
   }
 
-  /** Control first, then the interactive lane, normal traffic, and the background lane last. */
+  /** Control first, then the interactive lane, normal traffic, and the background lane last; each lane's bodies after it. */
   private order(): Outgoing[] {
-    return this.owner.enhanced ? [this.control, ...(this.lanes ? [this.lanes.control, this.lanes.normal] : []), this.data, ...(this.lanes ? [this.lanes.background] : [])] : [this.data];
+    if (!this.owner.enhanced) return [this.data];
+    const bodies = (priority: Outgoing['priority']) => this.bodies.filter(body => body.priority === priority && !body.ended);
+    return [this.control, ...(this.lanes ? [this.lanes.control] : []), ...bodies('interactive'), ...(this.lanes ? [this.lanes.normal] : []),
+      ...bodies('normal'), this.data, ...(this.lanes ? [this.lanes.background] : []), ...bodies('background')];
   }
   get connectionId(): number { return this.id; }
   /** Hands queued bytes to the engine in `order`. */
@@ -815,6 +899,13 @@ class NativeChannel implements PeerChannel {
   private async drained(before: number): Promise<void> {
     if (this.disposed) return;
     if (this.owner.enhanced && before > DRAIN_LOW_WATER_BYTES && this.bufferedAmount <= DRAIN_LOW_WATER_BYTES) for (const handler of this.drainHandlers) handler();
+    // A body whose bytes are all with the engine ends (one never opened there just ends); `receive` lets it go once the core holds none.
+    for (const body of [...this.bodies]) {
+      if (!body.closing || body.ended || body.items.length || this.disposed) continue;
+      body.ended = true;
+      if (body.stream !== null) await this.owner.call({ op: body.abandoned ? 'abandon' : 'finish', id: this.id, stream: body.stream });
+    }
+    if (this.disposed) return;
     const order = this.order();
     if (this.closeDeadline && !this.finished && order.every(outgoing => !outgoing.items.length)) {
       this.finished = true;
@@ -836,8 +927,10 @@ class NativeChannel implements PeerChannel {
     for (const outgoing of this.order()) {
       while (outgoing.items.length && outgoing.items[0].offset >= outgoing.items[0].bytes.length) outgoing.items.shift();
       if (!outgoing.items.length || budget.bytes <= 0 || budget.writes <= 0) continue;
-      if (outgoing.stream === null) outgoing.stream = await this.owner.call<number>({ op: 'openStream', id: this.id, priority: outgoing.priority });
+      if (outgoing.stream === null && !await this.open(outgoing)) continue;
       if (this.disposed) return [];
+      // Given up while its stream opened.
+      if (!outgoing.items.length) continue;
       let index = 0, offset = outgoing.items[0].offset;
       for (let turn = 0; turn < (outgoing.short ? 1 : WRITES_PER_STREAM) && index < outgoing.items.length && budget.bytes > 0 && budget.writes > 0; turn++) {
         const item = outgoing.items[index];
@@ -867,9 +960,22 @@ class NativeChannel implements PeerChannel {
     if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return; }
     await this.drained(this.plannedFrom);
   }
+  /**
+   * Opens `outgoing`'s stream in the engine. A body the engine has no stream for yet (`STREAM_LIMIT`: earlier ones are not all
+   * acknowledged) waits for the next turn; for the channel's own streams it is an error, as before.
+   */
+  private async open(outgoing: Outgoing): Promise<boolean> {
+    if (!(outgoing instanceof Body)) {
+      outgoing.stream = await this.owner.call<number>({ op: 'openStream', id: this.id, priority: outgoing.priority });
+      return true;
+    }
+    try { outgoing.stream = await this.owner.call<number>({ op: 'openStream', id: this.id, priority: outgoing.priority }); }
+    catch (error) { if ((error as Error)?.message === 'STREAM_LIMIT') return false; throw error; }
+    return true;
+  }
   private async flushStream(outgoing: Outgoing): Promise<void> {
     if (!outgoing.items.length) return;
-    if (outgoing.stream === null) outgoing.stream = await this.owner.call<number>({ op: 'openStream', id: this.id, priority: outgoing.priority });
+    if (outgoing.stream === null && !await this.open(outgoing)) return;
     for (let turn = 0; turn < WRITES_PER_STREAM && outgoing.items.length && !this.disposed; turn++) {
       const item = outgoing.items[0], part = item.bytes.subarray(item.offset, item.offset + WRITE_CHUNK);
       const written = await this.owner.call<number>({ op: 'write', id: this.id, stream: outgoing.stream, data: toBase64Url(part) });
@@ -890,12 +996,12 @@ class NativeChannel implements PeerChannel {
         for (const handler of this.pathHandlers) handler(current);
       }
     }
-    if (Array.isArray(state.buffered)) {
-      const core = new Map(state.buffered);
-      for (const outgoing of [this.data, this.control, ...(this.lanes ? Object.values(this.lanes) : [])]) {
-        outgoing.core = outgoing.stream === null ? 0 : core.get(outgoing.stream) ?? 0;
-      }
+    const core = Array.isArray(state.buffered) ? new Map(state.buffered.map(([stream, bytes]) => [stream, bytes])) : null;
+    for (const outgoing of [this.data, this.control, ...(this.lanes ? Object.values(this.lanes) : []), ...this.bodies]) {
+      outgoing.core = outgoing.stream === null || !core ? 0 : core.get(outgoing.stream) ?? 0;
     }
+    // An ended body leaves once the core holds none of it (builds without `stream-buffered`: at once).
+    if (this.bodies.some(body => body.ended && body.core === 0)) this.bodies = this.bodies.filter(body => !body.ended || body.core > 0);
     // Retired channels cannot send, but already-written peer frames may arrive
     // after a replacement handshake. Keep receive alive for the bounded drain;
     // local send ACK completion alone says nothing about incoming bytes.
@@ -911,6 +1017,19 @@ class NativeChannel implements PeerChannel {
       let data = chunk.data;
       if (stream.kind === null && data.length) { stream.kind = data[0]; data = data.subarray(1); }
       if (stream.kind === DATA) { if (data.length) this.events.data(data); continue; }
+      if (stream.kind === SESSION_BODY_KIND && this.owner.enhanced) {
+        // Only after this side declared v2: before that it is a stream kind this node does not take, as on older nodes.
+        if (!this.bodiesDeclared) { this.close({ drain: false }); return; }
+        // Its key (4 bytes, big-endian) follows the kind; it may arrive over several chunks.
+        stream.head ??= [];
+        while (stream.key == null && data.length) {
+          stream.head.push(data[0]); data = data.subarray(1);
+          if (stream.head.length === 4) stream.key = new DataView(Uint8Array.from(stream.head).buffer).getUint32(0, false);
+        }
+        if (stream.key != null && data.length) this.sessionBody(stream.key, data);
+        if (this.disposed) return;
+        continue;
+      }
       const lane = !this.owner.enhanced || stream.kind === null ? undefined : LANE_BY_KIND.get(stream.kind);
       if (lane) { if (data.length) this.sessionData(lane, data); if (this.disposed) return; continue; }
       if (stream.kind === CONTROL) {
@@ -923,8 +1042,10 @@ class NativeChannel implements PeerChannel {
       } else if (stream.kind !== null) { this.close({ drain: false }); return; }
     }
     for (const event of state.events) if (event.kind === 'finish') {
-      if (this.streams.get(event.stream)?.kind === DATA) { this.close(); return; }
+      const stream = this.streams.get(event.stream);
+      if (stream?.kind === DATA) { this.close(); return; }
       this.streams.delete(event.stream);
+      if (stream?.kind === SESSION_BODY_KIND && stream.key != null && this.owner.enhanced) { this.sessionBody(stream.key, null); if (this.disposed) return; }
     }
     if (!this.events.closed && now() >= this.nextProbe && this.candidates.length) {
       this.nextProbe = now() + 10_000;
@@ -972,8 +1093,9 @@ class NativeChannel implements PeerChannel {
     if (this.disposed) return;
     this.disposed = true;
     for (const item of this.data.items) this.owner.release(item.bytes.length - item.offset);
-    for (const outgoing of [this.data, this.control, ...(this.lanes ? Object.values(this.lanes) : [])]) { outgoing.items = []; outgoing.queued = 0; }
-    this.streams.clear(); this.earlySession = []; this.events.close(); this.owner.detach(this.id);
+    for (const outgoing of [this.data, this.control, ...(this.lanes ? Object.values(this.lanes) : []), ...this.bodies]) { outgoing.items = []; outgoing.queued = 0; }
+    this.bodies = [];
+    this.streams.clear(); this.earlySession = []; this.earlyBodies = []; this.events.close(); this.owner.detach(this.id);
   }
 }
 

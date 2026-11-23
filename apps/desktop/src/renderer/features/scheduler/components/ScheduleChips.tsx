@@ -176,7 +176,7 @@ export function ProjectChip({
         active={open}
         disabled={disabled}
         variant="pill"
-        className="[&>span:nth-child(2)]:min-w-[94px] max-w-[220px] gap-[7px]"
+        className="[&>span:nth-child(2)]:min-w-[94px] max-w-[220px] gap-1.5"
       />
     </FolderPickerPopover>
   );
@@ -407,7 +407,7 @@ export function ScheduleChip({
           }}
         >
           <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-            <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-[3px]">
+            <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-0.5">
               {(['cron', 'interval'] as const).map((mode) => {
                 const active = timingMode === mode;
                 return (

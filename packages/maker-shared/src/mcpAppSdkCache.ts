@@ -5,7 +5,10 @@ type Sdk = NonNullable<McpAppDocument['sdk']>;
 /** Wire hash: SHA-256 (UTF-8), lowercase hex, of this fixed-order JSON tuple. */
 export function mcpAppSdkCacheText(sdk: Sdk): string {
   const addon = sdk.addons?.['cindy/view-state'];
-  return JSON.stringify([sdk.source, addon?.source ?? null, addon?.reactSource ?? null]);
+  const composer = sdk.addons?.['cindy/composer-attachment'];
+  return composer
+    ? JSON.stringify([sdk.source, addon?.source ?? null, addon?.reactSource ?? null, composer.source])
+    : JSON.stringify([sdk.source, addon?.source ?? null, addon?.reactSource ?? null]);
 }
 
 /** Optimization only: eviction never limits which Apps can be opened. */
@@ -53,9 +56,13 @@ export class McpAppSdkCache {
     }
     if (document.sdk && typeof document.sdk.source === 'string') {
       const addon = document.sdk.addons?.['cindy/view-state'];
+      const composer = document.sdk.addons?.['cindy/composer-attachment'];
       const sdk: Sdk = Object.freeze({ source: document.sdk.source, ...(addon &&
         typeof addon.source === 'string' && typeof addon.reactSource === 'string' ? {
-          addons: Object.freeze({ 'cindy/view-state': Object.freeze({ source: addon.source, reactSource: addon.reactSource }) }),
+          addons: Object.freeze({
+            'cindy/view-state': Object.freeze({ source: addon.source, reactSource: addon.reactSource }),
+            ...(composer && typeof composer.source === 'string' ? { 'cindy/composer-attachment': Object.freeze({ source: composer.source }) } : {}),
+          }),
         } : {}) });
       const text = mcpAppSdkCacheText(sdk);
       if (text.length <= 4 * 1024 * 1024) {
