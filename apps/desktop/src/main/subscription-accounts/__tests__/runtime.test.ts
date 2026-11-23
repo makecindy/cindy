@@ -3451,6 +3451,8 @@ describe('native account assignment on the executing computer', () => {
   // Unit regression (2026-11-13): account pools rejected ChatGPT before the upstream could
   // spend credits. Prior coverage asserted exhausted windows were admission failures; it never
   // started/resumed a full-window account with available, unknown or depleted cached credits.
+  // 2026-11-24 user decision: with every account's plan used up, credits remain the last resort,
+  // and the pre-send check must not hand the task to another credits-only account.
   it.each([
     { hasCredits: true, unlimited: false, balance: '52768.87' },
     null,
@@ -3470,10 +3472,48 @@ describe('native account assignment on the executing computer', () => {
     ] as const) {
       const lease = await acquireSubscriptionAccount('openai', 'gpt-6', [...keys], false, options);
       expect(lease?.account.configDir).toBe('accountId' in options ? 'openai/second' : 'openai/default');
-      expect(readSubscriptionAccountBlocked('openai', lease!.accountId, 'gpt-6')).toBe(false);
       lease!.release();
     }
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', model: 'gpt-6', sdkSessionId: 'thread-old' };
+    const rebuild = vi.fn(async () => {});
+    expect(await readSubscriptionAccountSwitch('existing', async () => row)).toBeNull();
+    expect(await prepareSubscriptionAccountFailover('existing', {
+      readSession: async () => row, isRunning: () => false, rebuild,
+    })).toBe(false);
+    expect(rebuild).not.toHaveBeenCalled();
     expect(h.bindings.get('task:existing')?.accountId).toBe('default');
+  });
+
+  // 2026-11-24 user report: a pool of two ChatGPT accounts kept assigning and resuming tasks on the
+  // account whose weekly plan showed 0% left (spending credits) while the other had 49% left.
+  // Production entries: acquireSubscriptionAccount (new pick) and the pre-send failover; observable
+  // result: the task lands on / moves to the account with plan quota, keeping credits as the last
+  // resort once that account is full. Existing coverage only proved credits-only accounts stay
+  // admissible. Minimal failing input: 'order' pool, first account at 100%, second at 20%. tier: unit.
+  it('prefers ChatGPT accounts with plan quota over credits for new and bound tasks', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({ codexUsage: { appServerBuckets: { codex: {
+      limitId: 'codex', updatedAt: Date.now(),
+      primary: { usedPercent: dir.endsWith('default') ? 100 : 20, windowMinutes: 10080, resetsAt: Date.now() / 1000 + 86400 },
+      secondary: null,
+    } }, webSnapshot: null }, codexCredits: { hasCredits: true, unlimited: false, balance: '32402.89' } }));
+    const fresh = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:new']);
+    expect(fresh?.accountId).toBe('second');
+    // The account with plan quota is full (limit 1): credits on the exhausted account are the last resort.
+    const fallback = await acquireSubscriptionAccount('openai', 'gpt-6', ['task:other']);
+    expect(fallback?.accountId).toBe('default');
+    fallback!.release();
+    fresh!.release();
+
+    h.bindings.set('task:existing', { providerId: 'openai', accountId: 'default' });
+    const row = { status: 'active', providerId: 'openai', agentKind: 'codex', model: 'gpt-6', sdkSessionId: 'thread-old' };
+    const rebuild = vi.fn(async () => {});
+    expect(await readSubscriptionAccountSwitch('existing', async () => row)).toBe('local#openai:default');
+    expect(await prepareSubscriptionAccountFailover('existing', {
+      readSession: async () => row, isRunning: () => false, rebuild,
+    })).toBe(true);
+    expect(rebuild).toHaveBeenCalledOnce();
+    expect(h.bindings.get('task:existing')?.accountId).toBe('second');
   });
 
   // Regression: a pinned exhausted account was reported as login-or-reset even
@@ -5340,7 +5380,7 @@ describe('native account assignment on the executing computer', () => {
     const chosen = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', []);
     expect(chosen?.account.configDir).toBe('openai/second');
     try {
-      // The other account can ask upstream to spend credits even though its plan window is full.
+      // With the account that has plan quota full, the other one asks upstream to spend credits.
       const credits = await acquireSubscriptionAccount('openai', 'chatgpt/gpt-6-astra', ['task:new']);
       expect(credits?.account.configDir).toBe('openai/default');
       credits?.release();

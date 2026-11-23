@@ -203,11 +203,26 @@ Claude 保留官方 `subscriptionType` 与 `planTier`，另存可选 `planDispla
 
 - **ChatGPT credits 准入修复（2026-11-13）**：账号池不能把套餐 5 小时／周窗口用满当成请求不可用。
   新任务、原账号续聊、旧连接固定账号、同账号远程与供应商组入口都交给上游判断是否能使用 credits；
-  缓存余额有值、未知或显示耗尽均不代替上游准入。窗口仍用于展示与新分配排序，不能仅凭窗口用满
-  交接已有任务。真实限额、登录和过载错误仍按原规则冷却、换号与等待，不因显示有 credits 立即重试。
+  缓存余额有值、未知或显示耗尽均不代替上游准入。窗口仍用于展示与新分配排序；窗口用满不拒绝请求，
+  但在多账号供应商里优先换到套餐还有余量的账号（见下条 2026-11-24）。真实限额、登录和过载错误仍按原规则冷却、换号与等待，不因显示有 credits 立即重试。
   Anthropic 保持窗口准入；重置卡提前唤醒仍须确认实际账号的套餐额度恢复。实现与回归见
   `subscription-accounts/runtime.ts`、`provider-group/usage.ts`、`subscription-accounts/__tests__/runtime.test.ts`
   及 `provider-group/__tests__/router.usage.test.ts`。
+- **ChatGPT 套餐用完先换号（2026-11-24 用户裁决）**：用户反馈一个供应商里两个 ChatGPT 账号，套餐周额度
+  明显到 0% 的那个仍在接新任务、已有任务也一直留在上面花 credits，另一个账号还剩 49%。credits 只作最后手段：
+  - 新分配先只在**可信快照**（10 分钟内）显示该模型套餐窗口没用完的账号里按原策略、并发上限、权重和冷却选；
+    这些账号都满载、不可用或额度未知且读取仍在进行时不回退（读取中先等），全部读完仍没有可接的才把套餐用完的账号
+    作为 credits 账号纳入同一次选择。
+  - 已绑定任务在发送前（含新开原生会话与同账号远程 Agent 的 `blocked`／`switchAvailable` 判断）把「套餐用完」也当作
+    需要换号，但只换到套餐还有余量的账号；其他账号也都用完、满载或不可用时留在原账号，照常交给上游用 credits，
+    不为换到另一个只能花 credits 的账号丢掉原生上下文。登录失效、真实失败冷却等不能用的情况仍可换到 credits 账号。
+  - 运行中的回合不打断：套餐在回合中途用完时继续由上游判断，下一次发送前再换号。
+  - 额度未知不算用完；供应商组看到的整池投影仍不按套餐窗口拦截（池内有 credits 账号就算有容量），
+    上游的准入判断与真实失败冷却不变。
+  沿用既有字段与通道：执行电脑对 ChatGPT 账号的 `blocked` 取值范围变大，`switchAvailable` 仍是真实选号准入的只读结果；
+  旧控制端两者都为真才交接，行为一致；新控制端连旧执行电脑时旧端不报套餐用完，保持原行为。官方与自建中转无需适配。
+  实现见 `subscription-accounts/runtime.ts`（`readSubscriptionAccountBlockReason`、`planQuotaOnly`）与 `failover.ts`，
+  回归见 `subscription-accounts/__tests__/runtime.test.ts` 的「prefers ChatGPT accounts with plan quota」。
 
 - 首次空目录登录或明确使用 CLI 默认账号时使用官方默认目录（`~/.claude` / `~/.codex`）；新增账号使用用户目录下带 Cindy 随机标识的兄弟目录。目录名不含邮箱，不接受 Renderer 或远程传入任意路径。
 - 登录交给未修改的官方 CLI。Claude 使用 `CLAUDE_CONFIG_DIR`，Codex 使用 `CODEX_HOME`。Cindy 不实现 Claude OAuth，也不读取或复制 Claude 凭证。
