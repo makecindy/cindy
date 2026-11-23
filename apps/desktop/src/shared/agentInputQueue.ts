@@ -1,3 +1,4 @@
+import { isWindowsPathLike } from './workingDir.js';
 import type { AgentRequestReceipt } from './forwardedRequest.js';
 import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
@@ -1258,7 +1259,11 @@ export function buildMakerUserMessage(
     const pathOrigin = type === 'image' && f.pathOrigin === 'desktop-host'
       ? { pathOrigin: f.pathOrigin }
       : {};
-    if (f.url) {
+    const source = f.url || f.path;
+    // A pasted/selected local file can retain its old path alongside complete bytes.
+    if (f.base64 && source && (source.startsWith('/') || isWindowsPathLike(source))) {
+      blocks.push({ type, base64: f.base64, mimeType: f.mimeType, ...pathOrigin });
+    } else if (f.url) {
       blocks.push({ type, path: f.url, mimeType: f.mimeType, ...pathOrigin });
     } else if (f.path && !f.path.startsWith('clipboard://')) {
       blocks.push({ type, path: f.path, mimeType: f.mimeType, ...pathOrigin });

@@ -8,7 +8,7 @@ const source = readFileSync(resolve(__dirname, '../components/new-chat/HomeUsage
 describe('HomeUsageDashboard account isolation contract', () => {
   it('shows cached usage immediately while marking background refresh', () => {
     expect(source).toContain(
-      'const { history, refreshing: usageRefreshing } = useUsageHistory({ paused: collapsed, userId: user?.id });',
+      'const { history, refreshing: usageRefreshing } = useUsageHistory({ currency, paused: collapsed, userId: user?.id });',
     );
     expect(source).toContain('const { user } = useAuth();');
     expect(source).toContain('const layoutHistory = history ?? emptyLayoutHistory;');

@@ -1656,7 +1656,6 @@ function ExpandedView({
     () => filterSidebarTasks(statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex),
     [statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex],
   );
-  // The inbox counts a task as a teammate's by the same test as the teammate filter.
   // A teammate's own conversations and its project's tasks stay out of the inbox until they need the
   // owner; a task it opened elsewhere is ordinary work (shared with the phone).
   const isInboxTeammateTask = isTeammateOwnInboxTask;
@@ -4148,7 +4147,7 @@ function CollapsedView({
   return (
     <div
       className={cn(
-        'flex min-h-0 flex-1 flex-col items-center gap-[3px] overflow-y-auto px-2 pt-3 pb-2',
+        'flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto px-2 pt-3 pb-2',
         // rail 太窄，原生 scrollbar 会吃掉瓷砖宽度——隐藏，滚动靠 wheel/trackpad
         '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
       )}
@@ -4191,7 +4190,7 @@ function CollapsedView({
         onClick={() => navigateToView('bots')}
       />
 
-      <div className="my-[7px] h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />
+      <div className="my-1.5 h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />
 
       {/* 置顶 / 项目 / 对话 三段导航(hover 出可交互二级面板,项目段三级级联)。 */}
       <RailNav

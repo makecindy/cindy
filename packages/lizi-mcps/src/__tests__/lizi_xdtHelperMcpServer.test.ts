@@ -2090,3 +2090,20 @@ it('discovers and generates settings links on the task computer', async () => {
       .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   } finally { await server.close(); }
 });
+
+// Unit, agent-user-parity.md「第一时间能发现」(PR #12041 review): the first
+// list_tools overview must name snooze and its cross-computer scope, not only
+// the expanded control list.
+it('names snooze_sessions and its cross-computer scope in the control overview', async () => {
+  const setSessionsSnooze = vi.fn(async () => ({ ok: true as const, changed: [] }));
+  const server = createXdtHelperMcpServer({ setSessionsSnooze }, { agentKind: 'codex', workingDir: '/tmp', sessionId: 's' });
+  const client = new Client({ name: 'snooze-discovery', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} })) as { categories: Array<{ name: string; description: string }> };
+    const control = overview.categories.find((c) => c.name === 'control');
+    expect(control?.description).toMatch(/snooze_sessions[^；]*支持本机与跨电脑（deviceId::sessionId）/);
+    expect(server.hostTools.describe('snooze_sessions')).toMatchObject({ category: 'control' });
+  } finally { await client.close(); await server.close(); }
+});

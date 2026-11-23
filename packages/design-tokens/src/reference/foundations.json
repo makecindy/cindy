@@ -717,6 +717,10 @@
         "$type": "number",
         "$value": 10020
       },
+      "z-modal-blocking": {
+        "$type": "number",
+        "$value": 10050
+      },
       "z-toast": {
         "$type": "number",
         "$value": 10100

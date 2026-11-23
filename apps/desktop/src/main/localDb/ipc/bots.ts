@@ -760,6 +760,7 @@ export async function listBotDmThreads(botId: string, rootSessionId: string): Pr
  * release their live runtimes.
  */
 export async function archiveBotChannelLanes(input: {
+  botId?: string;
   routeKey?: string;
   routeKeyPrefix?: string;
   exceptBotId?: string | null;
@@ -767,6 +768,7 @@ export async function archiveBotChannelLanes(input: {
   const owner = captureBotOperationOwner();
   const result = await getDbClient().tx<{ archivedSessionIds: string[] }>('bots.archiveChannelLanes', {
     routeKey: input.routeKey ?? null,
+    botId: input.botId,
     routeKeyPrefix: input.routeKeyPrefix ?? null,
     exceptBotId: input.exceptBotId ?? null,
     now: Date.now(),

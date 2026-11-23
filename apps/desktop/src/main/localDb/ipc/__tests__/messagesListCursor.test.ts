@@ -1802,6 +1802,26 @@ describe('media user-round costs', () => {
     return { sqlite, db };
   }
 
+  // SQLite/IPC: historical mixed turns have per-model facts but only one scalar.
+  // Include an unpriced final continuation on a narrow page to check the whole round.
+  it('recovers both native currencies on a historical continuation from recorded models', async () => {
+    const { sqlite } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1 });
+    const dollars = actual(1);
+    const yuan = { ...actual(3), currency: 'CNY' };
+    insertCostMessage(sqlite, { id: 'segment', role: 'assistant', createdAt: 2, agentMeta: {
+      turnCost: dollars, turnUsageDetails: { perModelCost: [
+        { model: 'own-key', money: dollars }, { model: 'gateway', money: yuan },
+      ] },
+    } });
+    insertCostMessage(sqlite, { id: 'final', role: 'assistant', createdAt: 3 });
+    expect(await readPriorUserRoundCost('s1', 'final')).toMatchObject({ amounts: [dollars, yuan] });
+    registerMessageIpc();
+    const rows = await h.handlers.get('local-db:messages:list')!({}, 's1', { limit: 1 }) as Array<{ id: string; agentMeta: unknown }>;
+    expect(rows).toMatchObject([{ id: 'final', agentMeta: { turnUsageDetails: { userTurnAmounts: [dollars, yuan] } } }]);
+    expect(sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'final'").pluck().get()).toBeNull();
+  });
+
   it('adds media to the visible round, keeps raw subscription valuation, and does not carry it to the next user', async () => {
     const { sqlite, db } = fixture();
     insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1, agentMeta: { mediaCosts: [actual(0.75)] } });

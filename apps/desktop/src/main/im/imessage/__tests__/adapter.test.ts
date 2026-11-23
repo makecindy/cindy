@@ -1,3 +1,8 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import * as storage from '../../ownerScopedStorage';
+import { directDeliveryFile, prepareDirectDelivery } from '../directDelivery';
 import { expect, it, vi } from 'vitest';
 import { BlueBubblesIM, type IMMessageEvent } from '@cindy/im';
 import type { InteractionRequest } from '@cindy/maker-core';
@@ -135,4 +140,53 @@ it.each(['abort', 'release'])('clears the matching question waiter on host %s', 
     await im.dispose();
     await cancelled;
   } finally { lease.release(); await im.dispose(); }
+});
+
+// Tier 1: only the addressed DM may retrieve the original, even when another
+// connected DM on the same companion asks. Transport tests cannot see lane scope.
+it('recovers the saved direct document verbatim only for its recipient and date', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-addressed-document-'));
+  const privatePath = vi.spyOn(storage, 'ownerScopedImUserDataPath').mockImplementation((...parts) => path.join(root, ...parts));
+  const send = vi.fn(async (_chat: string, _text: string, _requestId: string) => ({ messageId: 'accepted' }));
+  const origin = 'http://127.0.0.1:1234', connectionId = '123456abcdef';
+  const target = 'any;-;one@example.test';
+  const im = { connectedOrigin: origin, isGroup: (id: string) => id.includes(';+;'), sendDirectDelivery: send, commitFinal: vi.fn() };
+  const adapter = wireIMessageOrchestrator(im as never, {} as never,
+    { instanceKey: 'test', companionBotId: 'bot', connectionId }) as unknown as ImChannelAdapter;
+  const scopeFor = (chatId: string, messageId = 'request') => {
+    const scope = adapter.channelToolScopeFor!({ chatId, messageId } as IMMessageEvent);
+    if (scope?.channel !== 'imessage') throw new Error('Expected an iMessage scope');
+    return scope;
+  };
+  try {
+    const text = 'QA morning report\nWeather: 17°C';
+    const file = directDeliveryFile('bot', connectionId, origin, target);
+    const record = prepareDirectDelivery(file, text);
+    expect(scopeFor('any;+;group').readDirectDelivery).toBeUndefined();
+    expect(scopeFor('any;-;two@example.test').readDirectDelivery!(0)).toBeNull();
+    const first = scopeFor(target);
+    expect(first.readDirectDelivery!(record.createdAt + 1)).toBeNull();
+    expect(first.readDirectDelivery!(record.createdAt)).toEqual({ text, createdAt: record.createdAt });
+    const second = scopeFor(target, 'explicit-second-request');
+    expect(second.readDirectDelivery!(0)?.text).toBe(text);
+    const updatedText = 'New document for the same recipient';
+    prepareDirectDelivery(file, updatedText);
+    const third = scopeFor(target, 'third-request');
+    expect(third.readDirectDelivery!(0)?.text).toBe(updatedText);
+    expect(send).not.toHaveBeenCalled();
+
+    await first.commitChunkedFinal!({ userId: target, text: text.replace('\n', '  \n'), terminal: 'done' });
+    expect(send).toHaveBeenLastCalledWith(target, text, expect.any(String));
+    const firstReply = send.mock.calls[0][2];
+    await first.commitChunkedFinal!({ userId: target, text, terminal: 'done' });
+    expect(send).toHaveBeenLastCalledWith(target, text, firstReply);
+    await second.commitChunkedFinal!({ userId: target, text, terminal: 'done' });
+    expect(send).toHaveBeenLastCalledWith(target, text, expect.any(String));
+    expect(send.mock.calls[2][2]).not.toBe(firstReply);
+    await third.commitChunkedFinal!({ userId: target, text: updatedText, terminal: 'done' });
+    expect(send).toHaveBeenLastCalledWith(target, updatedText, expect.any(String));
+  } finally {
+    privatePath.mockRestore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

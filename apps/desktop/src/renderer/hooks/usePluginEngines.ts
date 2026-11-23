@@ -34,7 +34,7 @@ const NO_ENGINES: readonly PluginEngineView[] = Object.freeze([]);
 
 interface PluginEnginesApi {
   listPluginEngines?: () => Promise<PluginEngineView[]>;
-  refreshPluginEngines?: () => Promise<void>;
+  refreshPluginEngines?: (targetGhostId?: string) => Promise<void>;
   onPluginEnginesChanged?: (cb: (engines: PluginEngineView[]) => void) => () => void;
 }
 
@@ -47,8 +47,8 @@ function pluginEnginesApi(): PluginEnginesApi | null {
  * like the provider model refresh at the same moment. Main applies a per-plugin cooldown; new
  * models arrive through the change push. Fire-and-forget.
  */
-export function requestPluginEnginesRefresh(): void {
-  void pluginEnginesApi()?.refreshPluginEngines?.().catch((err: unknown) => log.warn('plugin engine refresh failed', err));
+export function requestPluginEnginesRefresh(targetGhostId?: string): void {
+  void pluginEnginesApi()?.refreshPluginEngines?.(targetGhostId).catch((err: unknown) => log.warn('plugin engine refresh failed', err));
 }
 
 let engines: readonly PluginEngineView[] = NO_ENGINES;

@@ -402,7 +402,7 @@ import {
   type BuiltInSkillDraftIntent,
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
-import { consumeComposerMentionDrop } from '@/lib/composerDrop';
+import { consumeComposerMentionDrop, isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { hasSplitGroupSessionType } from './splitGroupDnd';
 import { splitGroupStore } from './splitGroupStore';
 import {
@@ -5999,6 +5999,7 @@ function CCAgentSessionContent({
               等待态由 main 权威维护,error 为空。 */}
             {credentialSwitchWait && !error && (
               <CredentialSwitchWaitBanner
+                sessionId={sessionId}
                 blockedBySessionIds={credentialSwitchWait.blockedBySessionIds}
                 onCancel={(() => {
                   // 取消目标 = 等待中的那条消息(clientId 绑定);老被控端缺省时回落队首。
@@ -6314,7 +6315,7 @@ function CCAgentSessionContent({
         data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           if (cindyMakeInputLocked) return;
@@ -6322,20 +6323,20 @@ function CCAgentSessionContent({
           if (dragCounterRef.current === 1) setIsDragOver(true);
         }}
         onDragOver={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = cindyMakeInputLocked ? 'none' : 'copy';
         }}
         onDragLeave={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current -= 1;
           if (dragCounterRef.current === 0) setIsDragOver(false);
         }}
         onDrop={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current = 0;
@@ -7137,6 +7138,7 @@ function CCAgentSessionContent({
                         sessionId={sessionId}
                         sessionInitialMoney={session?.totalMoney ?? null}
                         sessionInitialCostUsd={session?.totalCostUsd ?? null}
+                        sessionInitialUsdApproximate={session?.totalCostUsdIsApproximate}
                         sessionInitialTokens={session?.totalTokenUsage ?? null}
                         remoteHostId={session?.remoteHostId ?? null}
                         deviceLinkDeviceId={remoteDeviceId ?? null}
@@ -7598,18 +7600,21 @@ export function RunningStatusBar({
       !backgroundTasksRunning &&
       !workflowWaiting,
   });
+  // The panel shows the turn's last reading at any age; the status bar only a live one.
   const latestRate = rateHistory.latestRate;
+  const liveRate = rateHistory.latestRateFresh ? latestRate : null;
   const usageMeta = resolveRunningUsageMeta({
     outputTokens: rateOutputTokens,
     generationDurationMs: rateDurationMs,
     generationReliable: rateReliable,
     tokenUsage: Math.max(tokenUsage, displayTokens),
-    latestRate,
+    latestRate: liveRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
+  const liveRateText = liveRate !== null ? formatRecentOutputTokenRate(liveRate) : null;
   const showRate = tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0);
-  const rateText = !isHidden && !reconnecting && usageMeta.kind === 'rate' && showRate && latestRateText !== null
-    ? t(tokenSpeed?.measurement ? 'chat.runningStatus.recentTokenRate' : 'chat.runningStatus.tokenRate', { rate: latestRateText })
+  const rateText = !isHidden && !reconnecting && usageMeta.kind === 'rate' && showRate && liveRateText !== null
+    ? t('chat.runningStatus.tokenRate', { rate: liveRateText })
     : null;
   const averageRate = tokenSpeed?.measurement
     ? tokenSpeed.measurement.average === null ? null : formatRecentOutputTokenRate(tokenSpeed.measurement.average)

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
-import { createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
+import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker.js';
 import { admitTaskAction } from '../../maker-ipc/taskActionAuthorization.js';
 
@@ -169,5 +169,27 @@ describe('remote session archive status', () => {
     const setStatus = createRemoteSessionsStatusSetter({ invoke, captureAccess: () => { throw new Error('switching'); } });
     expect(await setStatus(request)).toMatchObject({ errorCode: 'HOST_NOT_READY', changed: [] });
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+// Agent snooze_sessions on another computer (2026-11-22): the same patch-meta call the
+// inbox makes there, accepted only when the returned row carries the requested wake time.
+describe('remote task snooze', () => {
+  const until = '2026-12-01T01:00:00.000Z';
+  it('patches only snoozedUntil and treats a mismatched receipt as unknown', async () => {
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => ({
+      ok: true as const,
+      result: { id: args[0], status: 'active', title: 't', workingDir: null, snoozedUntil: args[0] === 's1' ? until : null },
+    }));
+    const snooze = createRemoteSessionsSnoozeSetter({ invoke, captureAccess: () => () => {} });
+    expect(await snooze({ deviceId: 'studio', sessionIds: ['s1', 's2', 's3'], snoozedUntil: until })).toMatchObject({
+      ok: false, errorCode: 'REMOTE_RESULT_UNKNOWN',
+      changed: [{ sessionId: 's1', snoozedUntil: until, title: 't' }],
+      failedSessionId: 's2', remainingSessionIds: ['s3'],
+    });
+    expect(invoke.mock.calls.map((call) => call.slice(1, 3))).toEqual([
+      ['local-db:sessions:patch-meta', ['s1', { snoozedUntil: until }]],
+      ['local-db:sessions:patch-meta', ['s2', { snoozedUntil: until }]],
+    ]);
   });
 });

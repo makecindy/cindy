@@ -95,6 +95,12 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | 权限 | `session/request_permission` → `interaction_request`（kind = permission） |
 | 模型 / 推理强度 | 类别为 `model` 的配置项 / `reasoning_effort` 配置项 → `setModel` / `setEffort` |
 
+本机 Desktop 的普通新建任务（[#11956](https://github.com/makecindy/cindy/issues/11956)）：
+项目和插件引擎均在本机时，可选择源分支并启用 Git worktree。宿主等受管 worktree 完整检出，
+才用新目录创建任务；第一条消息启动时，`session/new.cwd` 使用同一目录。检出失败时保留原草稿和附件，
+不在基础仓库创建任务或发送。未启用 worktree 或直接选择已有 worktree 时，仍在所选目录运行。
+此行为不改变 Orca、远程建任务、SSH 或远程引擎的 worktree 约束。
+
 不支持的能力（分叉、回退、会话树、手动压缩、记忆、计划模式、Fast）在 `Capabilities` 中
 如实标为不支持，界面按现有能力开关隐藏，不伪装成功。
 
@@ -145,7 +151,9 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
   取值。均为现有列，不需要数据库迁移。界面展示的历史来自 Cindy 自己落库的消息，不依赖 Agent
   回放。
 - **模型选择器**：ACP Agent 作为独立的「引擎」分组出现，不伪造成供应商（伪造供应商会迫使
-  `model-providers` 的类型扩大）。模型列表在任务启动后从配置项获得，按「插件 Agent + 账号」
+  `model-providers` 的类型扩大）。2026-11-22 起引擎同时列在「设置 → 模型供应商」，带「插件」标识，可在那里改名、
+  隐藏、停用和逐模型关闭；这只是视图与设置层的并列，`model-providers` 的类型与普通供应商的存储仍不变，见
+  [协议记录](../dev-rules/protocol-compatibility/plugin-harnesses.md)。模型列表在任务启动后从配置项获得，按「插件 Agent + 账号」
   缓存，下次直接显示；首次只显示「默认模型」。不为探测模型额外创建会话，避免在 Agent 侧留下
   垃圾会话。
 - **权限**：第一期提供两档：「逐项确认」（转给用户确认卡）与「全部允许」（自动选 allow_once）。

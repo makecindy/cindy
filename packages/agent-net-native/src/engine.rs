@@ -17,13 +17,18 @@ const SEND_PACKET_SIZE: usize = 1350 - udp_paths::UP_OVERHEAD;
 /// bandwidth and round trip. Interop with 128-segment peers is the core's (packages/agent-net-core/sim/results/2026-11-17-window-interop).
 const SEND_WINDOW: u32 = 8192;
 const SEND_BUFFER_BYTES: usize = 24 << 20;
-/// Streams this side opened whose send-buffer size `poll` reports (data, control and the three session lanes).
-const MAX_REPORTED_STREAMS: usize = 16;
+/// Streams this side opened whose send-buffer size `poll` reports: data, control, the three session lanes and the session's
+/// body streams (JS keeps at most 32, nativeTransport.ts `MAX_NATIVE_BODIES`). A stream the core retired is reported once, then
+/// leaves the set.
+const MAX_REPORTED_STREAMS: usize = 40;
 /// What this build adds over the first native release; JS checks it before using any of them (an older
 /// installed binary keeps working with newer JS, without these).
 /// `stream-levels`（2026-11-22）：`openStream` 认 `level`（核心的八档，0 最急），`abandon` 放弃一条流，`buffered` 的每一项
 /// 在 `[流, 缓冲字节]` 后面多两项 `[累计确认字节, 停顿毫秒]`（只读前两项的旧 JS 不受影响）。
-const FEATURES: [&str; 6] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels"];
+/// `stream-retired`（2026-11-22）：`buffered` 里核心已经收回的流报一次就不再报，名额（`MAX_REPORTED_STREAMS`）留给新开的流。
+/// `probe-grants`（2026-11-22）：核心回对端探测的确认带上所有流的额度。没有它的核心只带编号最小的两条，对端开的第 6 条流
+/// 最初的额度没送到时一直停在 128 个分片上；JS 只在有它的引擎上用会话 v2 的正文流（nativeTransport.ts `bodies`）。
+const FEATURES: [&str; 8] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired", "probe-grants"];
 /// Relayed datagrams the application still has to carry over its relay WebSocket; beyond this the oldest go (the
 /// transport resends them). Only fills while the application does not poll.
 const MAX_OUTBOX: usize = 1024;
@@ -476,11 +481,13 @@ impl NativeEngine {
             let security = connection.security_stats();
             // Bytes still in the core's send buffer per stream this side opened (not sent yet, or sent and unacknowledged): the
             // session's backlog reading counts them, as the Desktop's does (transport.ts `coreBufferedBytes`).
+            let mut retired = Vec::new();
             let buffered: Vec<Value> = self.local_streams.get(&id).into_iter().flatten()
                 .map(|stream| match connection.stream_progress(now, *stream) {
                     Some(progress) => json!([stream, progress.buffered, progress.acked_bytes, progress.stalled_us / 1000]),
-                    None => json!([stream, 0, null, 0]),
+                    None => { retired.push(*stream); json!([stream, 0, null, 0]) },
                 }).collect();
+            if let Some(reported) = self.local_streams.get_mut(&id) { for stream in retired { reported.remove(&stream); } }
             connections.push(json!({"id":id,"established":connection.is_established(),"dead":connection.is_dead(),
                 "closedByPeer":connection.closed_by_peer(),"remoteKey":encoded(connection.remote_static()),
                 "unacked":connection.connection().has_unacked_data(),

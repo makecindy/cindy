@@ -400,6 +400,7 @@ export class SendStream {
     this.queued = 0;
     this.finishing = true;
     this.finished = true;
+    this.connection.sendStreams.delete(this.id);
     this.connection.endpoint.schedule();
     return Math.max(0, dropped) + local;
   }
@@ -441,6 +442,9 @@ export class SendStream {
     if (this.queue.length === 0 && this.finishing && !this.finished) {
       this.finished = core.conn_finish(this.connection.id, this.id) === 1;
     }
+    // 交完了：这里再没有它的事（进度、缓冲和放弃都按流号直接问核心），不再留在连接的表里。会话一条大消息一条流，
+    // 长连着的连接上流越来越多，每一轮都要过一遍这张表（2026-11-22）。
+    if (this.finished && this.queue.length === 0) this.connection.sendStreams.delete(this.id);
     return moved;
   }
 }
@@ -959,8 +963,13 @@ export class Endpoint extends EventEmitter {
     }
   }
 
+  /**
+   * 短于计时器精度的等待由核心判断等不等得起，计时器准的系统（Linux、macOS，精度 1 毫秒）也一样。原来这些系统一律当作等不起：
+   * 两毫秒没有包到达就一轮一轮看时间，按速率发包的整段传输都占满一个核（2026-11-22，Linux、Electron 42、20 Mbit 的 4G 线路：
+   * 每 MiB 285–470 毫秒 CPU，Device Link 43–46）。按 1 毫秒的计时器醒来时，核心把这期间攒下的包补发（最多一毫秒的量）。
+   */
   private needsFineTimer(): boolean {
-    return TIMER_GRANULARITY_US <= 1_000 || this.call((core) => core.fine_timer(TIMER_GRANULARITY_US)) === 1;
+    return this.call((core) => core.fine_timer(TIMER_GRANULARITY_US)) === 1;
   }
 
   private armTimer(): void {
