@@ -524,6 +524,22 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(read.content![0].text)).toContain('true');
   });
 
+  it('never names a batch after a live call id', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    messages[22] = call('call-22', 'bash', { command: 'echo folded ' + 'y'.repeat(300) });
+    messages[23] = result('call-22', 'bash', 'ok '.repeat(200));
+    // A provider id that looks like the alias of a real call would shadow the batch.
+    messages.push(call('batch:call-22', 'bash', { command: 'echo decoy' }), result('batch:call-22', 'bash', 'decoy'));
+    const view = projection(context, messages)!;
+    const alias = /cindy_toolfold_read\("([^"]+)"\)/.exec(records(view).join('\n'))![1];
+    expect(alias).not.toBe('batch:call-22');
+    expect(alias.length).toBeLessThanOrEqual(4096);
+    const read = await tool.execute('t-shadow', { call_id: alias });
+    expect(read.isError).toBeUndefined();
+    expect(String(read.content![0].text)).toContain('run step 0');
+  });
+
   it('keeps a pinned call verbatim while its parallel siblings stay folded', async () => {
     const { context, tool } = loadExtension();
     const trip: Message = {

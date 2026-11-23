@@ -472,11 +472,24 @@ export default function (pi) {
   // 取回工具的 call_id 有 4096 字符上限；provider 的超长 id 再加前缀就越界，别名只留
   // 尾部（批内映射按别名登记，取回照常）。
   var MAX_CALL_ID_CHARS = 4096;
-  function batchAlias(firstId) {
-    var raw = 'batch:' + String(firstId);
-    if (raw.length <= MAX_CALL_ID_CHARS) return raw;
-    var head = 'batch:';
-    return head + raw.slice(raw.length - (MAX_CALL_ID_CHARS - head.length));
+  function batchAlias(ids, liveIds) {
+    // 可读形式 batch:<首条 id> 要同时满足：不超取回参数上限、不被某条真实调用 id 遮住
+    // （provider 的 id 本身可能就是 batch: xxx）。都不满足时退回整批成员的指纹。
+    var plain = 'batch:' + String(ids[0]);
+    if (plain.length <= MAX_CALL_ID_CHARS && liveIds[plain] !== true) return plain;
+    var hash = 2166136261;
+    var joined = ids.join('\u0000');
+    for (var i = 0; i < joined.length; i++) {
+      hash ^= joined.charCodeAt(i);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    var alias = 'batch:' + hash.toString(16);
+    var attempt = 0;
+    while (liveIds[alias] === true && attempt < 8) {
+      attempt += 1;
+      alias = 'batch:' + hash.toString(16) + '.' + attempt;
+    }
+    return alias;
   }
 
   function foldable(id) {
@@ -815,15 +828,19 @@ export default function (pi) {
         for (var pb3 in prunedBatch) liveBatches[prunedBatch[pb3]] = true;
         for (var pb4 in batchCalls) if (!liveBatches[pb4]) delete batchCalls[pb4];
       }
-      // One batch, one id: the batch is named after its first call, prefixed so it can never
-      // collide with a real call id (the same string is also a call the reader may open).
-      var batchId = batchAlias(candidates[0].calls[0].id);
       var batchIds = [];
       for (var m = 0; m < candidates.length; m++) {
-        for (var mi = 0; mi < candidates[m].calls.length; mi++) {
-          var bc = String(candidates[m].calls[mi].id);
-          markFolded(bc, candidates[m].sizes[bc] || 0, batchId);
-          batchIds.push(bc);
+        for (var mi = 0; mi < candidates[m].calls.length; mi++) batchIds.push(String(candidates[m].calls[mi].id));
+      }
+      var liveIds = Object.create(null);
+      for (var lv = 0; lv < trips.length; lv++) {
+        for (var lc = 0; lc < trips[lv].calls.length; lc++) liveIds[String(trips[lv].calls[lc].id)] = true;
+      }
+      var batchId = batchAlias(batchIds, liveIds);
+      for (var m2 = 0; m2 < candidates.length; m2++) {
+        for (var mi2 = 0; mi2 < candidates[m2].calls.length; mi2++) {
+          var bc = String(candidates[m2].calls[mi2].id);
+          markFolded(bc, candidates[m2].sizes[bc] || 0, batchId);
         }
       }
       batchCalls[batchId] = batchIds;
