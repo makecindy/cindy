@@ -8,9 +8,9 @@ import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.
 import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
 import { AUTOMATION_DENIED, BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { isHeicPhoto, localHeicPreview } from './heic.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 
-/** BlueBubbles can answer before Messages has the full file; its record states the real size. */
 /**
  * The on-disk name of a fetched original, kept within one 255-byte file name together with the
  * `<digest16>-preview-` prefix (25 bytes); downloads stage under their own short names. Keeps the extension and
@@ -33,6 +33,7 @@ function attachmentFileName(raw: string): string {
   return stem + ext;
 }
 
+/** BlueBubbles can answer before Messages has the full file; its record states the real size. */
 function isShortCopy(attachment: BlueBubblesAttachment, bytes: Uint8Array): boolean {
   return (attachment.totalBytes ?? 0) > 0 && bytes.byteLength < attachment.totalBytes!;
 }
@@ -835,14 +836,32 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (this.live(generation) && receipts.isPending(guid)) this.metadata.set(guid, message);
   }
 
-  private async stageAttachment(attachment: BlueBubblesAttachment, bytes: Uint8Array) {
+  private async stageAttachment(attachment: BlueBubblesAttachment, bytes: Uint8Array, api: BlueBubblesApi, generation: number) {
     const name = attachment.transferName || attachment.guid;
     const kind = classifyInboundAttachment(attachment.mimeType, name);
-    if (kind.kind === 'file') return this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name });
+    const token = `${this.botContextId}:${attachment.guid}`;
+    if (kind.kind === 'image' && isHeicPhoto(bytes)) {
+      // Keep the original retrievable by GUID even if the bridge has no working decoder.
+      const cachePreview = async (preview: Uint8Array | null, mimeType: string) => {
+        this.assertLive(generation);
+        if (!preview?.byteLength) return null;
+        try {
+          return await this.host.media?.cacheImage({ integration: 'imessage', token: token + ':preview',
+            buffer: preview, mimeType, staging: true });
+        } catch (error) {
+          if (!(error instanceof UnsupportedInboundMediaError)) throw error;
+          return null;
+        }
+      };
+      // Prefer the local decoder so mislabeled files do not depend on bridge-side MIME detection.
+      const stored = await cachePreview(await localHeicPreview(bytes), 'image/jpeg')
+        ?? await cachePreview(await api.downloadImagePreview(attachment.guid).catch(() => null), 'image/png');
+      return { stored, heic: true };
+    }
+    if (kind.kind === 'file') return { stored: await this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name }) };
     // A short copy is never cached as the attachment itself, so a later read downloads it again.
-    const preview = isShortCopy(attachment, bytes);
-    const params = { integration: 'imessage' as const, token: `${this.botContextId}:${attachment.guid}${preview ? ':preview' : ''}`, buffer: bytes, mimeType: kind.mimeType };
-    return kind.kind === 'image' ? this.host.media?.cacheImage({ ...params, staging: true }) : this.host.media?.cacheMedia?.(params);
+    const params = { integration: 'imessage' as const, token: token + (isShortCopy(attachment, bytes) ? ':preview' : ''), buffer: bytes, mimeType: kind.mimeType };
+    return { stored: kind.kind === 'image' ? await this.host.media?.cacheImage({ ...params, staging: true }) : await this.host.media?.cacheMedia?.(params) };
   }
 
   /** Only read the explicit reply and selected background from this connected chat. */
@@ -895,7 +914,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           if (!stored) {
             const bytes = await api.download(item.guid);
             this.assertLive(generation);
-            stored = await this.stageAttachment(item, bytes);
+            const result = await this.stageAttachment(item, bytes, api, generation);
+            stored = result.stored;
+            if (result.heic && !stored) {
+              unavailable.push(`${name}（${originalPointer(guid, item.guid)}）`);
+              continue;
+            }
             if (isShortCopy(item, bytes)) unavailable.push(`${name}（只拿到 ${formatBytes(bytes.byteLength)} 的预览，原件 ${formatBytes(item.totalBytes!)}；${originalPointer(guid, item.guid)}）`);
           }
           if (!this.live(generation)) await stored?.discard?.();
@@ -942,6 +966,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           }
         } catch (error) {
           this.assertLive(generation);
+          if (error instanceof BlueBubblesApiError && error.code === 'BLUEBUBBLES_HTTP_404') {
+            event.unsupported.push({ type: 'unavailable', label: name });
+            continue;
+          }
           if (!(error instanceof BlueBubblesApiError) || error.code !== 'BLUEBUBBLES_RESPONSE_TOO_LARGE') throw error;
           oversize();
           continue;
@@ -955,7 +983,13 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         const kind = classifyInboundAttachment(attachment.mimeType, name);
         let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined;
         try {
-          stored = await this.stageAttachment(attachment, bytes);
+          const result = await this.stageAttachment(attachment, bytes, api, generation);
+          stored = result.stored;
+          if (result.heic) {
+            if (!isShortCopy(attachment, bytes)) event.unsupported.push({ type: 'original', retrievable: true,
+              label: `${name}（HEIC 原件；${originalPointer(guid, attachment.guid)}）` });
+            if (!stored) continue;
+          }
         } catch (error) {
           if (!(error instanceof UnsupportedInboundMediaError)) throw error;
           event.unsupported.push({ type: 'unsupported', label: name });
