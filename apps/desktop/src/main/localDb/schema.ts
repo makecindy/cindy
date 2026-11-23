@@ -106,6 +106,7 @@ const SESSION_SOURCES = [
   'telegram',
   'x',
   'discord',
+  'discord-hook',
   'wechat',
   'dingtalk',
   'wecom',

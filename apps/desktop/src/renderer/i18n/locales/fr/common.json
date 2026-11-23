@@ -6615,7 +6615,7 @@
           "defaultWorkspaceChip": "Par défaut : {{name}}",
           "defaultWorkspaceAria": "Choisir le projet par défaut des tâches transmises",
           "defaultWorkspaceRadioAria": "Définir « {{name}} » comme projet par défaut",
-          "defaultWorkspaceRowHint": "Le projet sélectionné est le projet par défaut : les conversations Telegram, Feishu / Lark et X qui n'ont pas choisi de projet y exécutent leurs tâches.",
+          "defaultWorkspaceRowHint": "Le projet sélectionné est le projet par défaut : les conversations Telegram, Feishu / Lark, X et Discord qui n'ont pas choisi de projet y exécutent leurs tâches.",
           "defaultProjectTag": "Par défaut",
           "defaultProjectFullAccessWarning": "Le projet par défaut « {{name}} » est en Accès complet : une @mention depuis n'importe quel groupe s'y exécute avec un accès complet.",
           "sharedSettingsPointer": "Les projets, modèles et autorisations sont partagés par tous les bots officiels.",
@@ -6860,6 +6860,40 @@
           "workingDeviceThisComputer": "Cet ordinateur",
           "workingDeviceUnknown": "Ordinateur de travail pas encore synchronisé",
           "workingDeviceUnnamed": "Ordinateur sans nom"
+        },
+        "discord": {
+          "description": "Associez votre compte Discord et transmettez des tâches à Cindy via le bot officiel, en message privé ou sur un serveur.",
+          "disabledHint": "Activez l'interrupteur pour obtenir un code d'association, puis envoyez-le au bot Cindy dans Discord.",
+          "toggleAria": "Activer/désactiver la connexion Discord",
+          "connect": "Associer Discord",
+          "openApp": "Ajouter Cindy à Discord",
+          "cancel": "Annuler l'association",
+          "retry": "Réessayer l'association",
+          "openBot": "Ouvrir le bot",
+          "addToGroup": "Ajouter à un serveur",
+          "unlink": "Dissocier Discord",
+          "unlinkConfirmTitle": "Dissocier Discord ?",
+          "unlinkConfirmDescription": "Discord ne transmettra plus de messages à cet appareil. Vos projets locaux et les autres canaux ne sont pas affectés.",
+          "status": {
+            "checking": "Vérification de la prise en charge par le serveur…",
+            "unavailable": "Indisponible sur ce serveur",
+            "disabled": "Désactivé",
+            "none": "Non associé",
+            "pending": "Envoyez le code au bot Cindy",
+            "awaiting_confirmation": "Confirmez l'association dans Discord",
+            "confirmed": "Associé en tant que {{user}}",
+            "denied": "Association refusée",
+            "expired": "Code d'association expiré",
+            "failed": "Échec de l'association",
+            "revoked": "Association supprimée",
+            "superseded": "Associé à un autre appareil"
+          },
+          "bindCode": {
+            "label": "Code d'association",
+            "copy": "Copier le code",
+            "copied": "Code d'association copié",
+            "hint": "Envoyez ce code au bot Cindy en message privé dans Discord, ou exécutez /bind avec ce code. Cindy n'est pas encore ajouté ? Ajoutez-le d'abord à Discord."
+          }
         }
       },
       "summary": {
@@ -7092,6 +7126,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "Modifiable une fois {{provider}} connecté (activez son interrupteur ci-dessus et attendez la connexion).",
         "offlineLocal": "{{provider}} est hors ligne. Les modifications sont enregistrées sur cet ordinateur et seront synchronisées avec la fiche du modèle dans la conversation à la reconnexion.",
         "requireBinding": "Terminez d'abord l'association du compte {{provider}}.",

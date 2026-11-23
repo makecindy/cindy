@@ -6509,7 +6509,7 @@
           "defaultWorkspaceChip": "デフォルト: {{name}}",
           "defaultWorkspaceAria": "タスク発行時に使う既定のプロジェクトを選択",
           "defaultWorkspaceRadioAria": "「{{name}}」を既定のプロジェクトに設定",
-          "defaultWorkspaceRowHint": "選択中が既定のプロジェクトです。Telegram・Feishu / Lark・X でプロジェクトを個別に選んでいない会話のタスクはここで実行されます。",
+          "defaultWorkspaceRowHint": "選択中が既定のプロジェクトです。Telegram・Feishu / Lark・X・Discord でプロジェクトを個別に選んでいない会話のタスクはここで実行されます。",
           "defaultProjectTag": "既定",
           "defaultProjectFullAccessWarning": "既定のプロジェクト「{{name}}」の権限はフルアクセスです。どのグループから @ で呼ばれても、この中でフルアクセスで実行されます。",
           "sharedSettingsPointer": "プロジェクト・モデル・権限はすべての公式ボットで共通です。",
@@ -6750,6 +6750,40 @@
           "workingDeviceThisComputer": "このパソコン",
           "workingDeviceUnknown": "作業用パソコンはまだ同期されていません",
           "workingDeviceUnnamed": "名前のないパソコン"
+        },
+        "discord": {
+          "description": "Discord アカウントを連携し、DM やサーバーで公式 bot 経由で Cindy にタスクを依頼できます。",
+          "disabledHint": "スイッチをオンにすると連携コードが発行されます。Discord で Cindy bot に送信して連携を完了してください。",
+          "toggleAria": "Discord 接続を切り替える",
+          "connect": "Discord と連携",
+          "openApp": "Cindy を Discord に追加",
+          "cancel": "連携をキャンセル",
+          "retry": "連携を再試行",
+          "openBot": "Bot を開く",
+          "addToGroup": "サーバーに追加",
+          "unlink": "Discord の連携を解除",
+          "unlinkConfirmTitle": "Discord の連携を解除しますか？",
+          "unlinkConfirmDescription": "Discord からこのデバイスへメッセージを送れなくなります。ローカルプロジェクトとほかのチャネルには影響しません。",
+          "status": {
+            "checking": "サーバー対応を確認中…",
+            "unavailable": "このサーバーでは利用できません",
+            "disabled": "無効",
+            "none": "未連携",
+            "pending": "連携コードを Cindy bot に送信してください",
+            "awaiting_confirmation": "Discord で連携を確認してください",
+            "confirmed": "{{user}} と連携済み",
+            "denied": "連携が拒否されました",
+            "expired": "連携コードの期限が切れました",
+            "failed": "連携に失敗しました",
+            "revoked": "連携を解除しました",
+            "superseded": "別のデバイスに連携されています"
+          },
+          "bindCode": {
+            "label": "連携コード",
+            "copy": "コードをコピー",
+            "copied": "連携コードをコピーしました",
+            "hint": "Discord の DM でこのコードを Cindy bot に送信するか、Discord で /bind を実行してコードを入力してください。Cindy をまだ追加していない場合は、先に Discord に追加してください。"
+          }
         }
       },
       "summary": {
@@ -6982,6 +7016,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピューターに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
