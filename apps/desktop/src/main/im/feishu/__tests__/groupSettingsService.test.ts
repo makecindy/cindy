@@ -218,5 +218,13 @@ describe('feishu group settings service', () => {
     expect(resolveProject).toHaveBeenCalledTimes(1);
     expect(resolveProject).toHaveBeenCalledWith('project-a', []);
     expect(syncProjectWorkspaces).toHaveBeenCalled();
+
+    // 打开飞书卡片时的概要(2026-11-23 用户反馈收起时的群数与头像要展开一次才出现): 仍认得这个群
+    // 单独绑了项目, 但不为显示群数去解析项目模型(要列供应商、可能问另一台电脑), 也不重复读群名单。
+    resolveProject.mockClear();
+    const summary = await listFeishuGroupSettingsForUi(im, { summary: true });
+    expect(summary.groups[0]!.project).toMatchObject({ name: 'project-a', available: true, config: null });
+    expect(resolveProject).not.toHaveBeenCalled();
+    expect((im as unknown as { callApi: ReturnType<typeof vi.fn> }).callApi).toHaveBeenCalledTimes(1);
   });
 });

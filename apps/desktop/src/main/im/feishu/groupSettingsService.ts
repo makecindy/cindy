@@ -1,9 +1,10 @@
 /**
  * 设置页「群聊」：列出个人飞书 / Lark 机器人所在的群并保存按群设置。
  *
- * 群名单向飞书接口「获取用户或机器人所在的群列表」读取：只在设置页打开这块时读，同一机器人
- * 30 秒内复用上一次结果、并发打开共用一次请求，不轮询、不重试。读不到（缺权限或网络）时退回
- * 机器人用过的群（本机任务记录）与已保存设置的群。
+ * 群名单向飞书接口「获取用户或机器人所在的群列表」读取：设置页打开飞书卡片时读一次概要（收起的
+ * 「群聊」标题旁的群数与头像），展开「群聊」时再读完整列表；同一机器人 30 秒内复用上一次结果、
+ * 并发打开共用一次请求，不轮询、不重试。读不到（缺权限或网络）时退回机器人用过的群（本机任务
+ * 记录）与已保存设置的群。概要不解析群绑定项目的模型：那一步要列供应商、可能问另一台电脑。
  *
  * 项目在两端之间只用不透明标记指代：列表给出侧栏项目的标记与名字，保存时按当前项目清单找回
  * 目录，清单里已经没有的标记按失败处理，不接受渲染端传来的路径。
@@ -204,9 +205,13 @@ function viewOf(
   };
 }
 
+/**
+ * `summary` = 只给收起时的群数、单独设置数与头像用：不解析项目模型，每个群的 `project.config`
+ * 都是 null，不能拿来显示或保存编辑器里的继承值。
+ */
 export async function listFeishuGroupSettingsForUi(
   im: GroupListPorts,
-  options: { refresh?: boolean } = {},
+  options: { refresh?: boolean; summary?: boolean } = {},
 ): Promise<FeishuGroupSettingsList> {
   const projects = await projectOptions();
   const publicProjects = projects.map(({ token, name, permissionMode }) => ({ token, name, permissionMode }));
@@ -236,7 +241,7 @@ export async function listFeishuGroupSettingsForUi(
   }
   const stored = new Map(listFeishuGroupSettings(botAppId).map((entry) => [entry.chatId, entry.settings]));
   const boundDirs = new Set([...stored.values()].flatMap((settings) => (settings.projectDir ? [settings.projectDir] : [])));
-  const configs = await projectConfigs(projects, boundDirs);
+  const configs = options.summary ? new Map<string, ProjectConfig>() : await projectConfigs(projects, boundDirs);
   const groups: FeishuGroupSettingsView[] = [];
   const seen = new Set<string>();
   for (const group of listed) {

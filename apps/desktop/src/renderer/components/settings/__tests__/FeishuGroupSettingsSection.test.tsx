@@ -6,8 +6,8 @@
  *
  * 依据: 群里任何成员 @ 机器人都会用这个群的权限档, 所以把一个群改成「完全访问」前必须经
  * Cindy 的确认框写明是哪个群, 取消就不保存; 其余档位直接保存, 恢复按钮清掉覆写。跟随的群在
- * 控件里显示正在继承的模型与推理强度, 只改推理强度也要存成这个群的设置。整块默认收起, 展开前
- * 不读群名单(只打开飞书卡片不向飞书多发请求)。绑定了项目的群跟随「项目与模型」里那个项目
+ * 控件里显示正在继承的模型与推理强度, 只改推理强度也要存成这个群的设置。整块默认收起, 打开
+ * 飞书卡片时只读概要(群数与头像, 不解析项目模型), 第一次展开才读完整列表。绑定了项目的群跟随「项目与模型」里那个项目
  * (只有没绑项目的群才跟随「新对话配置」); 换项目会让群里新任务的权限变宽时先确认。
  * 生产入口: FeishuGroupSettingsSection 经 preload 的 feishuGroupSettingsList / Set 读写。
  * 缺口: 主进程用例只覆盖存储与建任务读取, 没有界面的确认、继承显示与分组。
@@ -197,33 +197,36 @@ it('单独设置过的群与跟随的群分两组; 跟随组多于 5 个时先�
   expect(await within(follow).findByText('跟随群5')).toBeTruthy();
 });
 
-it('默认收起, 展开前不读群名单; 读过之后收起时在标题旁标出群数与单独设置数, 并露出群头像', async () => {
+// 2026-11-23 用户反馈: 收起时标题旁的群数与群头像要先展开一次才出现。最小失败输入: 只打开飞书
+// 卡片(挂载本块)、不点展开, 名单里一个单独设置的群和一个跟随的群。
+it('默认收起, 不展开就在标题旁标出群数与单独设置数并露出群头像; 第一次展开才读完整列表', async () => {
   state.list.mockResolvedValue(
     listOf([FOLLOWING, { ...FOLLOWING, chatId: 'oc_custom', name: '单独群', permissionMode: 'auto' }]),
   );
   render(<FeishuGroupSettingsSection />);
   const header = sectionHeader();
+  const section = header.closest('section')!;
   expect(header.getAttribute('aria-expanded')).toBe('false');
   expect(screen.queryByRole('button', { name: 'settings.feishuBot.groups.refresh' })).toBeNull();
-  expect(state.list).not.toHaveBeenCalled();
+  // 只读概要(不解析项目模型), 两个群共用同一张替身头像。
+  await waitFor(() => expect(section.querySelectorAll(`img[src="${FOLLOWING.avatarUrl}"]`).length).toBe(2));
+  expect(section.textContent).toContain('settings.feishuBot.groups.groupCount:2');
+  expect(section.textContent).toContain('settings.feishuBot.groups.customCount:1');
+  expect(state.list).toHaveBeenCalledExactlyOnceWith({ summary: true });
 
   fireEvent.click(header);
   expect(await screen.findByText('单独群')).toBeTruthy();
-  expect(state.list).toHaveBeenCalledExactlyOnceWith(false);
+  expect(state.list).toHaveBeenLastCalledWith({ refresh: false });
 
   fireEvent.click(header);
   expect(header.getAttribute('aria-expanded')).toBe('false');
   expect(header.textContent).toContain('settings.feishuBot.groups.expand');
-  const section = header.closest('section')!;
   expect(section.textContent).toContain('settings.feishuBot.groups.groupCount:2');
-  expect(section.textContent).toContain('settings.feishuBot.groups.customCount:1');
-  // 收起后(退场动画结束)只剩头像预览, 两个群共用同一张替身头像。
-  await waitFor(() => expect(section.querySelectorAll(`img[src="${FOLLOWING.avatarUrl}"]`).length).toBe(2));
   // 再展开沿用已读到的名单, 不重复请求; 要最新名单用「刷新」。
   fireEvent.click(header);
-  expect(state.list).toHaveBeenCalledTimes(1);
+  expect(state.list).toHaveBeenCalledTimes(2);
   fireEvent.click(await screen.findByRole('button', { name: 'settings.feishuBot.groups.refresh' }));
-  await waitFor(() => expect(state.list).toHaveBeenLastCalledWith(true));
+  await waitFor(() => expect(state.list).toHaveBeenLastCalledWith({ refresh: true }));
 });
 
 const PROJECT_ROUTE = {
@@ -286,6 +289,7 @@ it('绑定会放宽群里新任务权限的项目前先确认, 取消不保存; 
 
 it('收起时点标题行任意位置也能展开(鼠标); 点按钮不会重复切换', async () => {
   render(<FeishuGroupSettingsSection />);
+  await screen.findByText('settings.feishuBot.groups.groupCount:1');
   fireEvent.click(screen.getByText('settings.feishuBot.groups.description'));
   expect(sectionHeader().getAttribute('aria-expanded')).toBe('true');
   fireEvent.click(sectionHeader());

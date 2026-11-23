@@ -1,8 +1,9 @@
 /**
  * 个人飞书 / Lark 机器人卡片里的「群聊」：给机器人所在的某个群单独指定项目、模型（含推理强度）与权限。
  *
- * 整块默认收起（同 IM 渠道卡片的折叠写法），第一次展开才去飞书读群名单，只打开飞书卡片不多发请求；
- * 读过之后收起时在标题旁显示群数与单独设置数。
+ * 整块默认收起（同 IM 渠道卡片的折叠写法）。打开飞书卡片时读一次概要，收起状态就在标题旁显示群数、
+ * 单独设置数与几个群头像，不必先展开一次；概要不解析项目模型，第一次展开才读完整列表（群名单与
+ * 概要共用主进程 30 秒内的结果，不重复向飞书请求）。
  *
  * 列表分两组：单独设置过的群在上，跟随渠道设置的群在下（多于 5 个时先显示 4 个）；群多时可按群名
  * 搜索。分组按打开列表或展开另一个群时的状态排，正在编辑的群不会因为保存而在两组之间跳动。
@@ -88,6 +89,8 @@ export function FeishuGroupSettingsSection() {
   const { t } = useTranslation();
   const groupSetting = useSettingDefinition(imBotSettings.feishuGroups);
   const [list, setList] = useState<FeishuGroupSettingsList | null>(null);
+  /** 收起时的概要（群数、单独设置数、头像）；读到完整列表后以列表为准。 */
+  const [preview, setPreview] = useState<readonly FeishuGroupSettingsView[] | null>(null);
   const [channel, setChannel] = useState<ImDefaultSettingsState | null>(null);
   const [sectionOpen, setSectionOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -111,7 +114,7 @@ export function FeishuGroupSettingsSection() {
     setLoading(true);
     setLoadFailed(false);
     void Promise.all([
-      window.electronAPI.maker.feishuGroupSettingsList(refresh),
+      window.electronAPI.maker.feishuGroupSettingsList({ refresh }),
       window.electronAPI.maker.imDefaultSettingsGet('feishu'),
     ])
       .then(([next, defaults]) => {
@@ -128,7 +131,23 @@ export function FeishuGroupSettingsSection() {
       });
   }, []);
 
-  // 第一次展开才读；读失败后用「刷新」重试。
+  // 打开飞书卡片（本块挂载）时读一次概要，收起状态也能看到有哪些群；读不到就不显示概要。
+  useEffect(() => {
+    let alive = true;
+    void window.electronAPI.maker
+      .feishuGroupSettingsList({ summary: true })
+      .then((next) => {
+        if (alive) setPreview(next.groups);
+      })
+      .catch(() => {
+        // 概要只是提示；展开时的完整读取会报出失败。
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 第一次展开才读完整列表；读失败后用「刷新」重试。
   useEffect(() => {
     if (!sectionOpen || requested.current) return;
     requested.current = true;
@@ -244,12 +263,14 @@ export function FeishuGroupSettingsSection() {
   const foldable = !searching && following.length > FOLD + 1;
   const shownFollowing = foldable ? following.slice(0, FOLD) : following;
   const hiddenFollowing = foldable ? following.slice(FOLD) : [];
-  const customCount = (list?.groups ?? []).filter(hasOverrides).length;
+  // 标题旁的群数与收起时的头像：读到完整列表（含之后的保存）以列表为准，之前用概要。
+  const headerGroups = list?.groups ?? preview ?? [];
+  const customCount = headerGroups.filter(hasOverrides).length;
 
   return (
     <section {...groupSetting.anchorProps} className="flex flex-col py-1" aria-label={groupSetting.title}>
       {/* 收起时要一眼看出能点开：整行可点（鼠标，带悬停底色），键盘与读屏用右侧的「展开 / 收起」按钮；
-          读过群名单后，收起时在说明下露出几个群头像。 */}
+          收起时在说明下露出几个群头像。 */}
       <div
         onClick={toggleSection}
         className="-mx-2 flex cursor-pointer select-none items-center gap-3 rounded-xl px-2 py-2 transition-colors duration-[var(--motion-fast)] hover:bg-[var(--surface-hover-soft)]"
@@ -262,9 +283,9 @@ export function FeishuGroupSettingsSection() {
             <h3 id={titleId} className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
               {groupSetting.title}
             </h3>
-            {list && list.groups.length > 0 && (
+            {headerGroups.length > 0 && (
               <span className="text-12 leading-none tabular-nums text-[var(--text-tertiary)]">
-                {t('settings.feishuBot.groups.groupCount', { count: list.groups.length })}
+                {t('settings.feishuBot.groups.groupCount', { count: headerGroups.length })}
                 {customCount > 0 && ` · ${t('settings.feishuBot.groups.customCount', { count: customCount })}`}
               </span>
             )}
@@ -272,7 +293,7 @@ export function FeishuGroupSettingsSection() {
           <p className="mt-2 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
             {groupSetting.description}
           </p>
-          {!sectionOpen && list && list.groups.length > 0 && <GroupAvatarStack groups={list.groups} />}
+          {!sectionOpen && headerGroups.length > 0 && <GroupAvatarStack groups={headerGroups} />}
         </div>
         <div className="flex shrink-0 items-center gap-2" onClick={(event) => event.stopPropagation()}>
           {sectionOpen && (

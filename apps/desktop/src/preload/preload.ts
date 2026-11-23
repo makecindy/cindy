@@ -8207,8 +8207,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel): Promise<ImDefaultSettingsState> =>
       ipcRenderer.invoke('maker:im-default-settings:reset', channel),
     /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
-    feishuGroupSettingsList: (refresh?: boolean): Promise<FeishuGroupSettingsList> =>
-      ipcRenderer.invoke('maker:feishu-group-settings:list', refresh === true),
+    feishuGroupSettingsList: (options?: { refresh?: boolean; summary?: boolean }): Promise<FeishuGroupSettingsList> =>
+      ipcRenderer.invoke('maker:feishu-group-settings:list', {
+        refresh: options?.refresh === true,
+        summary: options?.summary === true,
+      }),
     feishuGroupSettingsSet: (
       chatId: string,
       patch: FeishuGroupSettingsPatch,

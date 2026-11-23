@@ -37,10 +37,15 @@ function parseName(value: unknown): string | null {
 export function registerFeishuGroupSettingsIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.FEISHU_GROUP_SETTINGS_LIST,
-    async (event, rawRefresh: unknown): Promise<FeishuGroupSettingsList> => {
+    async (event, rawOptions: unknown): Promise<FeishuGroupSettingsList> => {
       assertTrustedAppRendererEvent(event);
-      // 只有用户点「刷新」才跳过 30 秒内的群名单；其余值一律按普通读取。
-      return listFeishuGroupSettingsForUi(feishuIm, { refresh: rawRefresh === true });
+      // 只有用户点「刷新」才跳过 30 秒内的群名单、只有收起时的概要才跳过项目模型；其余值一律按
+      // 普通读取。
+      const options = rawOptions !== null && typeof rawOptions === 'object' ? (rawOptions as Record<string, unknown>) : {};
+      return listFeishuGroupSettingsForUi(feishuIm, {
+        refresh: options.refresh === true,
+        summary: options.summary === true,
+      });
     },
   );
   ipcMain.handle(
