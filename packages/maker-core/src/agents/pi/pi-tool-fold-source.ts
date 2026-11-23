@@ -6,9 +6,9 @@
  *
  * 为什么：pi 每一步都把整段会话重发给模型；一条工具往返从产生到被压缩之前，每一步都重新
  * 计一次费。实测长会话里 87% 的注入内容就是工具往返（命令原文 + 输出），折叠后输入 token
- * 约 −27%（见 PR 实测数据）。
+ * 约 −59% / −49%（见 PR 实测数据）。
  *
- * 四条设计约束，改之前先读：
+ * 六条设计约束，改之前先读：
  *  1. 折叠一旦发生就必须持久（进程内 foldedIds），否则下一次请求投影又变回原文，前缀缓存
  *     每步都失效。pi 的 context 钩子是「按请求重算」的，状态只能自己留。
  *  2. 新折叠按批进行。每步多折一条 = 每步都在历史中段改一次前缀，后面的上下文全部变成
@@ -41,10 +41,9 @@
  * CINDY_PI_TOOL_FOLD_GIANT_BUDGET（巨型结果总字符预算，默认 2000000）、
  * CINDY_PI_TOOL_FOLD_ARG_CHARS（参数超过多少字符才折，默认 200；0 = 只折结果不折参数）。
  *
- * 回放（两条重会话，keep=4/pairs=32/chars=36000，价格为实测 cacheRead 折扣）：
- * 参数≥200 才折 → 上下文 −25.5% / −22.6%，净 +$2.70 / +$0.49；只折结果 → −17.4% / −14.1%，
- * 净 +$1.32 / −$0.12；照折全部参数 → −25.2% / −22.4%，净 +$2.64 / +$0.47。
- * 小参数不折不是省钱，是省一次重建、并且不让历史里出现能被执行形状的参数对象。
+ * 回放（两条重会话，keep=4/pairs=32/chars=36000，重建按相邻请求的投影前缀差异计）：
+ * 每批一条记录 → 上下文 −59.2% / −49.0%，净 +$15.44 / +$2.18；旧的逐条指针形态
+ * → −26.7% / −20.9%，净 +$4.59 / +$0.37。
  */
 
 export const CINDY_TOOL_FOLD_EXTENSION_FILENAME = 'cindy-tool-fold.ts';
@@ -719,7 +718,7 @@ export default function (pi) {
   // 错位处读起。缺项也是成员：它的一行说明就是该成员的页内容，走同一个游标、同一条
   // 读取预算（整行放行，不按偏移切开）。页尾不另附缺项清单——那是第二条不受预算约束的
   // 输出路径（成批缺项配长调用 id 时一页就越过读取上限，而且每页重复）。代价只与页本身
-  // 有关：先只定位，再从 from 起拼到读满为止。
+  // 有关：成员轮到才解析，从 from 起拼到读满为止。
   function readBatch(refId, key, params) {
     var entry = refs.get(refId);
     var ids = entry ? entry.ids : [];
@@ -732,22 +731,32 @@ export default function (pi) {
       }
     }
     var skip = params && typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
-    var found = [];
-    for (var i = at; i < ids.length; i++) found.push(resolve(String(ids[i])));
     var parts = [];
     var size = 0;
     var recovered = 0;
     var shown = 0;
     var next = null;
     var over = 0;
-    for (var p = 0; p < found.length && next === null; p++) {
+    var stale = null;
+    // 成员轮到才解析（resolve 要扫那条结果的全文找标记），每页的成本只与页本身有关；
+    // 页尾已经没有整批缺项清单，不需要预先解析整段余量。
+    for (var p = 0; at + p < ids.length && next === null; p++) {
       var memberId = String(ids[at + p]);
+      var found = resolve(memberId);
       // 游标成员已不在：成员内偏移随之作废，不能落到下一条成员头上（缺项说明从不按偏移
       // 切开，所以带偏移的缺项游标只可能是陈旧坐标）。
-      if (p === 0 && found[0].ok !== true) skip = 0;
-      var line = found[p].ok === true ? null : missingLine(memberId, found[p]);
-      var member = (line === null ? renderOriginal(found[p]).text : line).slice(skip);
-      if (member === '') { skip = 0; shown += 1; continue; }
+      if (p === 0 && found.ok !== true) skip = 0;
+      var line = found.ok === true ? null : missingLine(memberId, found);
+      var source = line === null ? renderOriginal(found).text : line;
+      if (source === '') { skip = 0; shown += 1; continue; }
+      var member = source.slice(skip);
+      if (member === '') {
+        // 偏移越过了游标成员现有的全文（续读期间它被截短）：偏移是陈旧坐标，从头给出并在
+        // 页首说明。静默略过会让模型把缺了一条的半批当成整批原文。
+        stale = '[stale cursor: offset ' + skip + ' is past the end of ' + memberId + ' (' + source.length + ' chars now); shown from the start]';
+        skip = 0;
+        member = source;
+      }
       var gap = parts.length > 0 ? 2 : 0;
       var room = RECOVERY_READ_MAX_CHARS - size - gap;
       if (room <= 0) { next = { id: memberId, offset: skip }; break; }
@@ -768,7 +777,7 @@ export default function (pi) {
     // 出口不变量：除整行放行的那一条缺项说明外，页正文不越过读取上限。取回结果不经入库
     // 截断，越界会原样进入下一次请求。
     if (size - over > RECOVERY_READ_MAX_CHARS) throw new Error('tool-fold page overflow: ' + (size - over));
-    var text = parts.join('\n\n');
+    var text = (stale === null ? '' : stale + '\n\n') + parts.join('\n\n');
     if (next !== null) {
       text += '\n\n[truncated: ' + (ids.length - at - shown) + ' round-trips not shown in batch ' + key + '. Call cindy_toolfold_read again with batch: '
         + JSON.stringify(key) + ', from: ' + JSON.stringify(next.id) + ', offset: ' + next.offset + ' to continue.]';

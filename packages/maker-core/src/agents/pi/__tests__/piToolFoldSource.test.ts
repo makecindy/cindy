@@ -1127,6 +1127,9 @@ describe('cindy-tool-fold extension source', () => {
     // 游标成员自己被删：成员内偏移随之作废——缺项说明从头给出，下一条成员不被截头。
     const afterLoss = await page({ batch: batchId, from: 'call-5', offset: 10 });
     expect(afterLoss.startsWith(gone + '\n\n' + full[6].slice(0, 300))).toBe(true);
+    // 游标偏移越过成员现有的全文（续读期间它被截短）：偏移作废、页首说明、从头给出，不静默略过。
+    const stale = await page({ batch: batchId, from: 'call-7', offset: 1000000 });
+    expect(stale.startsWith('[stale cursor: offset 1000000 is past the end of call-7 (' + full[7].length + ' chars now); shown from the start]\n\n' + full[7])).toBe(true);
     expect((await tool.execute('x', { batch: batchId, from: 'call-99' })).isError).toBe(true);
   });
 
