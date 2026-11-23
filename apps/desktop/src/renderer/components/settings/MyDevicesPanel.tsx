@@ -364,7 +364,25 @@ export function MyDevicesPanel({
                     })
                   : `${t('settings.devices.thisDevice')} · ${t(`settings.devices.linkStatus.${s.linkStatus}`)}`}
               </span>
-              {activeConnectionIssue ? (
+              {activeConnectionIssue?.kind === 'device-removed' && activeConnectionIssue.rejoinable ? (
+                // 官方网络上被移除:在本机点「重新加入」就回来,不需要重新登录。
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-11 text-[var(--error-fg)]">
+                    {t('settings.devices.rejoin.hint')}
+                  </span>
+                  <Button data-setting-id={remoteControlSettings.devices.id}
+                    variant="secondary"
+                    size="sm"
+                    compact
+                    loading={s.rejoining}
+                    disabled={s.rejoining}
+                    type="button"
+                    onClick={() => void s.rejoin()}
+                  >
+                    {t('settings.devices.rejoin.action')}
+                  </Button>
+                </div>
+              ) : activeConnectionIssue ? (
                 <span className="text-11 text-[var(--error-fg)]">
                   {t(`settings.devices.connectionIssue.${activeConnectionIssue.kind}`)}
                 </span>

@@ -7323,6 +7323,7 @@ const MessageItem = memo(function MessageItem({
             delivery={message.delivery}
             goalBadge={message.goalBadge}
             blockedByGhost={message.blockedByGhost}
+            inputNotice={message.inputNotice}
             simplifiedBotConversation={simplifiedBotConversation}
             replyQuote={message.replyQuote}
           />

@@ -91,9 +91,11 @@ export function createBotModelRouteApplier(deps: {
   onApplied(sessionId: string): Promise<void>;
 }) {
   return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<RuntimeRoute> => {
-    // A same-plugin model change goes directly to ACP. Keep the saved choice pending until that prompt is finished.
+    // A same-plugin model change on the same location goes directly to ACP. Keep the saved choice pending until that prompt is finished.
     if (current.agentKind === 'acp' && route.agentKind === 'acp'
-      && current.providerId === route.providerId && !deps.isIdle(sessionId)) {
+      && current.providerId === route.providerId
+      && (current.agentDeviceId ?? null) === (route.agentDeviceId ?? null)
+      && !deps.isIdle(sessionId)) {
       throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
     }
     const resolved = await deps.stage(sessionId, route, current) ?? route;

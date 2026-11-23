@@ -41,6 +41,12 @@ beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearP
 afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); clearGiftCard(); vi.useRealTimers(); });
 
 describe('mobile native deep-link redirects', () => {
+  it.each(['cindy', 'cindycn', 'cindydev'])('opens a ready device in the %s app', scheme => {
+    for (const initial of [true, false]) {
+      expect(redirectSystemPath({ path: scheme + '://devices/guest-42', initial })).toBe('/devices/guest-42');
+    }
+  });
+
   // 契约：礼品卡兑换码等同于余额，原生入口必须在交给路由前把它收进内存。此前没有任何用例
   // 覆盖 gift 链接；单元层即可验证（一条原生 URL，无网络、存储或原生运行时）。
   it.each([true, false])('receives gift card links without routing their redeem code (initial=%s)', initial => {

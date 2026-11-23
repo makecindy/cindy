@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
-    "failed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut."
+    "failed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",
+    "previousSettingsRetained": "Dieser Wechsel konnte nicht abgeschlossen werden. Die Aufgabe verwendet weiterhin die bisherigen Einstellungen."
   },
   "agentSwitch": {
     "browseAccessibility": "Modelle für {{agent}} durchsuchen"

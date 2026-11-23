@@ -9,13 +9,15 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES, type RelayRoute } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
 export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
   'send' | 'close' | 'terminate' | 'bufferedAmount' | 'onDrain' | 'deviceId' |
   'replaceClient' | 'supports' | 'knowsPeer' | 'certificateFor' | 'scopedPeerTarget' | 'pathTo' | 'peerSnapshot'> & {
+    /** Session requests to a relayed peer timed out (AgentNetWorkerSocket.relayStalled). */
+    relayStalled?(): void;
     on(event: string, listener: (...args: any[]) => void): void;
     once(event: string, listener: (...args: any[]) => void): void;
     removeListener(event: string, listener: (...args: any[]) => void): void;
@@ -43,6 +45,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     connectSession?(key: string): Promise<boolean>;
     /** See `PortableSocket.restrictPeers`. */
     restrictPeers?(rule: PeerRule): void;
+    /** Change a peer's local path preference (`auto` / `direct` / `relay`). */
+    setPeerPathPreference?(deviceId: string, preference: PathPreference): void;
   };
 export function workerClient(client: AgentNetClient) {
   return { base: client.base, identity: client.identity, certificate: client.certificate, rootPublicKey: client.rootPublicKey,
@@ -96,6 +100,9 @@ interface PeerStatus {
   available: boolean;
   path: 'direct' | 'relay' | null;
   rttMs: number | null;
+  directRttMs?: number | null;
+  relayRttMs?: number | null;
+  pathPreference?: PathPreference;
   dialing: boolean;
 }
 
@@ -105,7 +112,13 @@ function peerRoute(status: PeerStatus | undefined): 'direct' | 'relay' | 'connec
 }
 
 function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: ReadonlyMap<string, PeerStatus>): boolean {
-  for (const [id, status] of next) if (peerRoute(status) !== peerRoute(previous.get(id))) return true;
+  for (const [id, status] of next) {
+    const prev = previous.get(id);
+    if (peerRoute(status) !== peerRoute(prev)) return true;
+    if ((status.pathPreference ?? 'auto') !== (prev?.pathPreference ?? 'auto')) return true;
+    if ((status.directRttMs != null) !== (prev?.directRttMs != null)) return true;
+    if ((status.relayRttMs != null) !== (prev?.relayRttMs != null)) return true;
+  }
   for (const [id, status] of previous) if (!next.has(id) && peerRoute(status)) return true;
   return false;
 }
@@ -188,6 +201,10 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     for (const ws of this.network.values()) this.probeRelayConnection(ws);
     this.worker.postMessage({ type: 'network-changed' });
   }
+  /** Session requests to a relayed peer timed out: let the transport judge whether relay UDP carries data (relayUdp.ts). */
+  relayStalled(): void {
+    if (!this.closed) this.worker.postMessage({ type: 'relay-stalled' });
+  }
   private readonly probing = new WeakSet<WebSocket>();
   /** Relay connections open now. The socket stays open without one (direct peers keep working); `relay` reports the change. */
   private relayOpen = 0;
@@ -223,7 +240,14 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     this.relayUdpRtt = typeof rtt === 'number' && Number.isFinite(rtt) && rtt >= 0 ? rtt : null;
     if (via === this.relayVia) return;
     this.relayVia = via;
-    this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}`);
+    const suspension = via === 'websocket' ? reported?.udpSuspension : undefined;
+    const cause = suspension?.reason === 'data-silence' ? 'carried no data back'
+      : suspension?.reason === 'request-timeouts' ? 'session requests over it timed out'
+        : suspension?.reason === 'unacked-sends' ? 'packets sent over it went unacknowledged' : null;
+    const why = cause && typeof suspension?.cooldownMs === 'number'
+      ? ` (relay UDP answered registrations but ${cause}; retrying UDP in ${Math.round(suspension.cooldownMs / 1000)}s)`
+      : '';
+    this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}${why}`);
     this.emit('relay-route', via);
   }
   private readonly pingSentAt = new WeakMap<WebSocket, number>();
@@ -253,6 +277,9 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   }
   restrictPeers(rule: PeerRule): void {
     if (!this.closed) this.worker.postMessage({ type: 'restrict', rule: { allowed: rule.allowed && [...rule.allowed], refused: [...rule.refused] } });
+  }
+  setPeerPathPreference(deviceId: string, preference: PathPreference): void {
+    if (!this.closed) this.worker.postMessage({ type: 'set-peer-path-preference', deviceId, preference });
   }
   get bufferedAmount() { return this.queued + this.remoteQueued; }
   /** See PortableSocket.onDrain: fires when `bufferedAmount` falls back to DRAIN_LOW_WATER_BYTES after having been above. */
@@ -290,16 +317,38 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   pathTo(id: string) { return this.status.get(this.sessions.device(id) ?? id)?.path ?? null; }
   peerSnapshot(id: string) {
     const status = this.status.get(this.sessions.device(id) ?? id);
-    return status?.path ? { path: status.path, rttMs: status.rttMs } : null;
+    return status?.path ? {
+      path: status.path,
+      rttMs: status.rttMs,
+      ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
+      ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
+      ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+    } : null;
   }
   /** Actual and in-progress transport routes to devices in this account's directory. */
-  peerRoutes(): Array<{ deviceId: string; path: 'direct' | 'relay' | 'connecting'; rttMs: number | null }> {
+  peerRoutes(): Array<{
+    deviceId: string;
+    path: 'direct' | 'relay' | 'connecting';
+    rttMs: number | null;
+    directRttMs?: number | null;
+    relayRttMs?: number | null;
+    pathPreference?: PathPreference;
+  }> {
     if (this.closed || this.closeTimer) return [];
     const routes = [];
     for (const [deviceId, status] of this.status) {
       if (deviceId === this.deviceId || !this.directory.has(deviceId)) continue;
       const path = peerRoute(status);
-      if (path) routes.push({ deviceId, path, rttMs: status.rttMs });
+      if (path) {
+        routes.push({
+          deviceId,
+          path,
+          rttMs: status.rttMs,
+          ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
+          ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
+          ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+        });
+      }
     }
     return routes;
   }

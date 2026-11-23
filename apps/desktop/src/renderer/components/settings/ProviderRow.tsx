@@ -41,7 +41,7 @@ export function ProviderRow({
       disabled={busy || buttonProps.disabled}
       aria-busy={busy}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+        'flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
         className,
       )}
     >

@@ -240,7 +240,9 @@ describe('usePendingAlertAttention (派生收敛)', () => {
     expect(clearMock).toHaveBeenCalledWith('s1', { intent: 'explicit' });
   });
 
-  it('未认领错误尾行时,user 行不打 IPC', async () => {
+  // L343 / unit: an older user row with notice metadata still goes through
+  // the real attention listener and cannot create a new error-tail unread dot.
+  it.each([undefined, { inputNotice: 'oversized-input-skipped' }])('未认领错误尾行时,user 行不打 IPC (%j)', async (agentMeta) => {
     interruptedPendingMock.mockResolvedValue([]);
     errorTailPendingMock.mockResolvedValue([]);
     renderHook(() => usePendingAlertAttention());
@@ -248,10 +250,11 @@ describe('usePendingAlertAttention (派生收敛)', () => {
 
     await refreshPendingAlerts();
     errorTailPendingMock.mockClear();
-    createdListeners[0]!({ sessionId: 's1', message: { role: 'user' } });
+    createdListeners[0]!({ sessionId: 's1', message: { role: 'user', agentMeta } });
     await Promise.resolve();
     await Promise.resolve();
     expect(errorTailPendingMock).not.toHaveBeenCalled();
+    expect(addMock).not.toHaveBeenCalled();
   });
 
   it('assistant 行不触发错误尾行重算', async () => {

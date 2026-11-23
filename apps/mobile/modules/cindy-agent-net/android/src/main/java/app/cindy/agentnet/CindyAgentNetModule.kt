@@ -19,6 +19,7 @@ class CindyAgentNetModule : Module() {
   private val lan = mutableMapOf<String, AgentNetLan>()
   private external fun nativeCreate(input: ByteArray): Long
   private external fun nativeCommand(id: Long, input: ByteArray): String?
+  private external fun nativeIo(id: Long, input: ByteArray): ByteArray?
   private external fun nativeDestroy(id: Long)
   private external fun nativePump(id: Long): Long
   private external fun nativeWaiter(id: Long): Long
@@ -61,8 +62,11 @@ class CindyAgentNetModule : Module() {
       work = false
       had
     }
+    /** A waiting call returns now and reads (`binary-io`: JS needs to be back sooner than that call's limit). */
+    fun kick() = synchronized(signal) { work = true; signal.notifyAll() }
   }
-  private val pumps = mutableMapOf<String, Pump>()
+  /** Changed under `lock`; `kick` reads it from the JS thread without taking `lock`, which a long command may hold. */
+  private val pumps = java.util.concurrent.ConcurrentHashMap<String, Pump>()
   /** `wait` blocks for up to its limit: its own threads, so it holds up neither Expo's shared function queue nor `command`. */
   private val waitThreads = Executors.newCachedThreadPool()
   private fun waitForWork(id: String, maxMs: Int): Boolean {
@@ -83,6 +87,23 @@ class CindyAgentNetModule : Module() {
       }
     }
     return ready || pump.await(maxMs)
+  }
+  /**
+   * `binary-io` (engine.rs `io`): one frame in, one out. With `waitMs` it first waits as `wait` does and reads only once the
+   * engine has something for JS (an empty result otherwise), so the answer to a request comes back in the call that waited
+   * for it. `kick`: the engine takes a turn after this call, and a waiting call reads if there is something for JS (what
+   * this call wrote may have left a datagram for the relay WebSocket, which no packet on the socket would announce).
+   */
+  private fun io(id: String, input: ByteArray, waitMs: Int, kick: Boolean): ByteArray {
+    if (input.size > 4 * 1024 * 1024) failure("AGENT_NET_COMMAND_TOO_LARGE")
+    if (waitMs > 0 && !waitForWork(id, waitMs)) return ByteArray(0)
+    return synchronized(lock) {
+      if (destroyed) failure("AGENT_NET_ENGINE_CLOSED")
+      val handle = handles[id] ?: failure("AGENT_NET_ENGINE_CLOSED")
+      val output = nativeIo(handle, input) ?: failure("AGENT_NET_COMMAND_FAILED")
+      if (kick && nativePump(handle).let { it >= 0 && it and 1L == 1L }) pumps[id]?.kick()
+      output
+    }
   }
   private fun failure(code: String): Nothing = throw CodedException(code, code, null)
   private fun input(value: String): ByteArray = value.toByteArray(Charsets.UTF_8).also {
@@ -133,6 +154,16 @@ class CindyAgentNetModule : Module() {
         catch (_: Throwable) { promise.reject(CodedException("AGENT_NET_COMMAND_FAILED", "AGENT_NET_COMMAND_FAILED", null)) }
       }
     }
+    AsyncFunction("io") { id: String, input: ByteArray, waitMs: Int, kick: Boolean, promise: Promise ->
+      val run = Runnable {
+        try { promise.resolve(io(id, input, waitMs, kick)) }
+        catch (error: CodedException) { promise.reject(error) }
+        catch (_: Throwable) { promise.reject(CodedException("AGENT_NET_COMMAND_FAILED", "AGENT_NET_COMMAND_FAILED", null)) }
+      }
+      // A waiting call blocks for up to its limit: on the wait threads, like `wait`.
+      if (waitMs > 0) waitThreads.execute(run) else run.run()
+    }
+    Function("kick") { id: String -> pumps[id]?.kick(); Unit }
     AsyncFunction("destroy") { id: String ->
       synchronized(lock) { pumps.remove(id)?.closed = true; handles.remove(id)?.let { nativeDestroy(it) }; Unit }
     }

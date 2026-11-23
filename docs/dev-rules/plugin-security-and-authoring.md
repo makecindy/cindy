@@ -1515,8 +1515,21 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
   才能这样启动。「允许被远程调用」逐引擎、默认关、只在本机窗口可改(`maker:set-plugin-engine-remote-use` 不进
   device-link allowlist)，与供应商的同名开关同一份按账号的存储。受邀者、供应商组与本机应用不提供插件引擎：
   自带工具是否关掉只能靠插件保证，不得据此把本机开放给其他账号。
+- **在模型供应商里的设置（2026-11-22）**：引擎同时列在「设置 → 模型供应商」，用户可改这台电脑上的显示名、隐藏、
+  停用与逐模型关闭，同样只在本机窗口可改(`maker:set-plugin-engine-prefs` 不进 device-link allowlist)。这些是宿主
+  按账号保存的用户设置(`plugin-engine-prefs.json`)，插件读不到也改不了，不改 manifest、批准状态或已发布的可用状态；
+  停用只是不再用这个引擎开新任务，插件本身、它的工具和页面照常。存量插件影响：无，文件缺失或损坏时引擎照插件
+  声明列出。字段与旧端降级见 [plugin-harnesses.md](protocol-compatibility/plugin-harnesses.md)。
 - **注册表**：`cindy-brain/pluginHarnesses.ts` 只列已启用、已批准、已声明、receipt 已批准且协议已支持的引擎，名称按
   界面语言选取；花名册广播、语言切换与状态发布后重算，内容不变不通知。`spawn` 现算列表，不在列表或已发布不可用即拒绝。
+- **引擎账号（2026-11-23，未发布）**：插件在 `PUT /harnesses` 发布 `accounts.methods` 后，Cindy 为每个添加的账号建一个按账号隔离的目录，
+  启动时以宿主固定的 `--cindy-account-dir <目录>` 交给入口；注册表核对目录是这个引擎根目录下的一级子目录且引擎声明了登录方式，否则拒绝启动，
+  插件仍没有参数面。账号状态、登录、取消与按账号用量只调用主 worker 的固定方法名，参数由注册表拼好，回包按协议白名单校验后才用
+  （身份只留邮箱、名字、说明与套餐，`fingerprint` 不出 Main）。**凭证交接的唯一例外**：用户为 `kind: 'secret'` 的方式在本机 Cindy 弹窗
+  里填的 Key，由 Main 原样交给该插件 worker 一次，用于写进这个账号目录里外部 Agent 自己的凭据存储——Cindy 不保存、不记日志、不进模型；
+  带 Key 的命令只接受本机受信窗口，device-link 一律拒绝，Helper 工具没有这个参数。这与插件自己的设置页收 Key 是同一信任边界（插件 worker
+  本来就能读写这台电脑的文件），不扩大权限。不增加 manifest 字段、权限行或批准状态，存量插件影响：无。字段与旧端降级见
+  [plugin-harnesses.md](protocol-compatibility/plugin-harnesses.md#引擎账号多账号2026-11-23未发布)。
 
 存量插件影响：无。旧 Host 装下、manifest 已声明 `harnesses` 的插件升级后照常启用，只是引擎不生效；回归见
 `ghostLocalInstallIdentity.test.ts`（旧 receipt 升级）与 `ghostInstallConsent.test.ts`。协议记录见

@@ -1,3 +1,4 @@
+import { acceptedAttachmentReplay, type ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { TRUSTED_DESKTOP_QUEUE_ORIGIN, type TrustedDesktopQueueOriginReceipt } from './queuedInputOrigin.js';
 export { TRUSTED_DESKTOP_QUEUE_ORIGIN, TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT, stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin, restoreTrustedDesktopQueuedOrigin, revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../shared/forwardedRequest.js';
@@ -377,7 +378,7 @@ export interface MakerSendTransactionDeps {
     role: 'lead' | 'worker' | null | undefined,
   ): Promise<void>;
   broadcastSessionCreated(sessionId: string): void;
-  prepareSendUserMessage(sessionId: string, message: unknown): Promise<IpcUserMessage>;
+  prepareSendUserMessage(sessionId: string, message: unknown, replay?: typeof ACCEPTED_ATTACHMENT_REPLAY): Promise<IpcUserMessage>;
   /**
    * Direct device-link sends may carry OSS attachment references that need to
    * become local paths before normalization. Keep this after the transaction's
@@ -1215,15 +1216,22 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const nextInput = typeof message === 'string' ? message
         : message && typeof message === 'object' && 'content' in message ? message.content : undefined;
       const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
-      await deps.applyPendingAgentSwitch?.(
-        sessionId,
-        requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
-          ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
-          ...(scheduled ? { scheduled: true } : {}),
-          ...(clientId ? { clientId } : {}),
-          ...(nextInputChars > 0 ? { nextInputChars } : {}),
-        } : undefined,
-      );
+      try {
+        await deps.applyPendingAgentSwitch?.(
+          sessionId,
+          requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
+            ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
+            ...(scheduled ? { scheduled: true } : {}),
+            ...(clientId ? { clientId } : {}),
+            ...(nextInputChars > 0 ? { nextInputChars } : {}),
+          } : undefined,
+        );
+      } catch (error) {
+        if (!isCredentialModeSwitchBusyError(error)) throw error;
+        return toCompatibleMakerSendResult(createHostSendFailure('CREDENTIAL_SWITCH_BUSY', error.message, {
+          busySessionIds: error.sessionIds,
+        }));
+      }
       try {
         const promptPreparation = deps.prepareRuntimePrompt?.(sessionId);
         if (promptPreparation) {
@@ -1518,7 +1526,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       };
       let normalized: IpcUserMessage;
       try {
-        normalized = await deps.prepareSendUserMessage(sessionId, outgoingMessage);
+        const replay = acceptedAttachmentReplay(requestedSendOpts);
+        normalized = replay
+          ? await deps.prepareSendUserMessage(sessionId, outgoingMessage, replay)
+          : await deps.prepareSendUserMessage(sessionId, outgoingMessage);
       } catch (err) {
         await cleanupRejectedMaterialization();
         throw err;

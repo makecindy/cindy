@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "모델 제공자 전환이 적용되었습니다.",
-    "failed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요."
+    "failed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요.",
+    "previousSettingsRetained": "전환이 완료되지 않았습니다. 작업에는 이전 설정이 계속 적용됩니다."
   },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} 모델 보기"

@@ -61,7 +61,7 @@ async function selectDiscoveredModels() {
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
   await act(async () => {});
   for (const checkbox of screen.getAllByRole('checkbox')) {
-    if (checkbox.getAttribute('aria-checked') !== 'true') fireEvent.click(checkbox);
+    if (!(checkbox as HTMLInputElement).checked) fireEvent.click(checkbox);
   }
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
   await act(async () => {});
@@ -2333,7 +2333,7 @@ describe('new-connection identification', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
     await act(async () => {});
     expect(screen.getAllByRole('checkbox')).toHaveLength(84);
-    expect(screen.getAllByRole('checkbox').every(row => row.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(screen.getAllByRole('checkbox').every(row => !(row as HTMLInputElement).checked)).toBe(true);
     expect(fetchProviderModels).toHaveBeenCalledOnce();
   });
   it.each([
@@ -2986,13 +2986,16 @@ describe('Magpie source metadata through the connection form', () => {
     expect(entries.map(entry => entry.capabilities[agent]!.wireModelId)).toEqual(discovered.map(model => model.id));
   });
 
-  it('clears a disappeared source on successful refresh while retaining opaque identity and unlisted manual rows', async () => {
+  it('clears a disappeared source and stale discoveredCost on successful refresh while retaining opaque identity and unlisted manual rows', async () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
     window.electronAPI.maker.fetchProviderModels = vi.fn().mockResolvedValue({ ok: true, models: [
       { id: 'foo', name: 'foo', discoverySnapshotId: 'snapshot-no-source' },
     ] });
     const initial: CustomProviderConfig = { id: 'magpie-form', name: 'Magpie', auth: { method: 'none' }, runtimes: {
-      codex: { baseUrl: 'http://127.0.0.1:1234/v1', models: [discovered[1], { ...discovered[0], name: 'Manual override' }] },
+      codex: { baseUrl: 'http://127.0.0.1:1234/v1', models: [
+        { ...discovered[1], discoveredCost: { input: 2, output: 8 } },
+        { ...discovered[0], name: 'Manual override', discoveredCost: { input: 1, output: 4 } },
+      ] },
     } };
     render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
@@ -3004,7 +3007,10 @@ describe('Magpie source metadata through the connection form', () => {
     const models = customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes.codex.models;
     expect(models.find((model: { id: string }) => model.id === 'foo')).toMatchObject({ opaqueModelId: true, discoverySnapshotId: 'snapshot-no-source' });
     expect(models.find((model: { id: string }) => model.id === 'foo').discoveredSource).toBeUndefined();
-    expect(models.find((model: { id: string }) => model.id === 'chatgpt/foo')).toMatchObject({ ...discovered[0], name: 'Manual override' });
+    expect(models.find((model: { id: string }) => model.id === 'foo').discoveredCost).toBeUndefined();
+    expect(models.find((model: { id: string }) => model.id === 'chatgpt/foo')).toMatchObject({
+      ...discovered[0], name: 'Manual override', discoveredCost: { input: 1, output: 4 },
+    });
   });
 });
 
@@ -3086,7 +3092,7 @@ describe('model summary and explicit model selection', () => {
     expect(screen.getByText(`${availableLabel}:84`)).toBeTruthy();
     fireEvent.click(fetchButton());
     const reopened = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
-    expect(within(reopened).getAllByRole('checkbox').every(row => row.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(within(reopened).getAllByRole('checkbox').every(row => !(row as HTMLInputElement).checked)).toBe(true);
     fireEvent.click(within(reopened).getByRole('checkbox', { name: /summary-1$/ }));
     fireEvent.click(within(reopened).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());
@@ -3101,7 +3107,7 @@ describe('model summary and explicit model selection', () => {
     expect(screen.getByText(`${selectedLabel}:1`)).toBeTruthy();
     fireEvent.click(fetchButton());
     const picker = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
-    expect(within(picker).getByRole('checkbox', { name: /summary-0$/ }).getAttribute('aria-checked')).toBe('true');
+    expect((within(picker).getByRole('checkbox', { name: /summary-0$/ }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(within(picker).getByRole('checkbox', { name: /summary-1$/ }));
     fireEvent.click(within(picker).getByRole('button', { name: 'settings.providers.custom.cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());

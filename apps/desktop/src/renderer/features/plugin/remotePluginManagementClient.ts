@@ -99,10 +99,12 @@ export function parsePluginManagementMarketPage(value: unknown): PluginMarketPag
       || !data.customSourceCounts.every(item => item && typeof item.name === 'string'
         && data.customSourceNames.includes(item.name) && Number.isSafeInteger(item.count) && item.count >= 0)
       || new Set(data.customSourceCounts.map(item => item.name)).size !== data.customSourceCounts.length))
-    || (data.counts !== null && (!data.counts || !['all', 'public', 'organization', 'personal', 'custom'].every(key => {
-      const count = data.counts![key as keyof typeof data.counts];
-      return Number.isSafeInteger(count) && count >= 0;
-    }) || data.counts.all !== data.counts.public + data.counts.organization + data.counts.personal + data.counts.custom)))
+    || (data.counts !== null && (!data.counts || !(['all', 'public', 'organization', 'personal', 'custom', 'official', 'community'] as const).every(key => {
+      const count = data.counts![key];
+      if ((key === 'official' || key === 'community') && count === undefined) return true;
+      return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
+    }) || (data.counts.official ?? 0) + (data.counts.community ?? 0) > data.counts.public
+      || data.counts.all !== data.counts.public + data.counts.organization + data.counts.personal + data.counts.custom)))
     throw new Error('INVALID_RESPONSE');
   return { ...data, ...snapshot.market };
 }

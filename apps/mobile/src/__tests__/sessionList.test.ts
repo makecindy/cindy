@@ -172,12 +172,16 @@ describe('sessionList', () => {
 
   it('builds home card previews: running shows running/automation text, otherwise latest message', () => {
     const base = toRemoteSessionListItem(session('base', {
+      summary: '置顶任务摘要',
       preview: '任务摘要',
       lastMessagePreview: '最近消息',
     } as Partial<RemoteSession>), Date.now(), undefined, 0, '索引消息');
 
     // 非运行态:显示最近消息预览(纯字符串契约,与 maker-shared 一致)。
     expect(buildRemoteSessionCardPreview(base)).toBe('索引消息');
+    expect(buildRemoteSessionCardPreview(base, { running: true, pinnedCard: true })).toBe('置顶任务摘要');
+    expect(buildRemoteSessionCardPreview({ ...base, session: { ...base.session, summary: ' ' } },
+      { running: true, pinnedCard: true })).toBe('索引消息');
     // 运行态:显示「运行中」。
     expect(buildRemoteSessionCardPreview(base, { running: true })).toBe('运行中');
     // 运行态 + 自动化:显示「自动化执行中」。

@@ -35,7 +35,17 @@
   "retryAccess": "Reintentar acceso",
   "recheck": "Comprobar de nuevo",
   "deviceRemovedTitle": "Dispositivo eliminado",
-  "deviceRemovedHint": "Cierra sesión y vuelve a iniciarla para volver a unirte a la lista de dispositivos.",
+  "deviceRemovedHint": "Este teléfono se eliminó de tu cuenta. Toca «Volver a unirse» para recuperarlo.",
+  "rejoin": {
+    "action": "Volver a unirse",
+    "busy": "Volviendo a unirse",
+    "doneTitle": "Se volvió a unir",
+    "agentNetUnavailable": "El servicio Agent-Net aún no admite volver a unirse, así que este teléfono se conecta sin Agent-Net por ahora.",
+    "failedTitle": "No se pudo volver a unir",
+    "failed": "Comprueba la red e inténtalo de nuevo.",
+    "unsupported": "El servicio aún no admite volver a unirse. Cierra sesión y vuelve a iniciarla.",
+    "agentNetUnsupported": "El servicio Agent-Net aún no admite volver a unirse. Desactiva «Usar solo conexiones cifradas» para recuperar este teléfono sin Agent-Net."
+  },
   "authFailedTitle": "El inicio de sesión expiró",
   "authFailedHint": "Tu inicio de sesión ha caducado. Cierra sesión y vuelve a iniciarla.",
   "replacedTitle": "Conexión reemplazada",

@@ -6,7 +6,7 @@ import { MAX_MEDIA_OBJECT_BYTES } from '@cindy/agent-net-protocol';
 import { emptySharingState, type SharingState, type SharingStorage } from '@cindy/device-link-sharing/repositories';
 import type { TenantJoinRequest } from './identity.js';
 
-export interface DeviceRecord { certificate: DeviceCertificate; name: string; revokedAt: number | null; notBefore?: number;
+export interface DeviceRecord { certificate: DeviceCertificate; name: string; revokedAt: number | null; notBefore?: number; membershipGeneration?: string;
   metadata?: DeviceMetadata; lastSeenAt?: number; reportedName?: string; customName?: string | null; }
 export interface PendingJoin { request: JoinRequest; pollHash: string; expiresAt: number; status: 'pending' | 'approved' | 'rejected'; certificate?: DeviceCertificate; }
 export interface MediaRecord { owner: string; recipient: string; size: number; received: number; expiresAt: number; }

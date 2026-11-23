@@ -118,7 +118,11 @@ export function readModelDisableOverrides(): ModelDisableOverrides {
 /** Taking an account out must not re-enable models. Persist the complete override copy before
  * publishing its provider; unlike a best-effort batch toggle, a capacity failure aborts the move.
  */
-export function copyProviderDisableOverrides(sourceId: string, targetId: string): void {
+export function copyProviderDisableOverrides(
+  sourceId: string,
+  targetId: string,
+  remappedModel?: { source: string; target: string },
+): void {
   if (!sourceId || !targetId || sourceId === targetId) return;
   store.invalidateIfChanged();
   const current = store.read();
@@ -126,7 +130,10 @@ export function copyProviderDisableOverrides(sourceId: string, targetId: string)
   const disabledProviders = { ...current.disabledProviders };
   const prefix = `${sourceId}:`;
   for (const key of Object.keys(current.disabledModels)) {
-    if (key.startsWith(prefix)) disabledModels[modelDisableKey(targetId, key.slice(prefix.length))] = true;
+    if (!key.startsWith(prefix)) continue;
+    const modelId = key.slice(prefix.length);
+    const targetModelId = modelId === remappedModel?.source ? remappedModel.target : modelId;
+    disabledModels[modelDisableKey(targetId, targetModelId)] = true;
   }
   if (current.disabledProviders[sourceId]) disabledProviders[targetId] = true;
   // The split-out account inherits the picker choice too, or a hidden connection reappears.

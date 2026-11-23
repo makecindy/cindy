@@ -1,9 +1,12 @@
+import { desktopContextRecoveryAbortSignal } from '../contextRecoveryAssembly.desktop.js';
+import { acceptedAttachmentReplay } from '../attachmentReplay.js';
+import { normalizeUserMessage } from '../normalizeAttachments.desktop.js';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
-import { createInputEnqueueHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
+import { createInputEnqueueHarness, createInputRetryHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
 import { runSessionExecutionAction } from '../sessionExecutionActions.js';
 import { createSharedPermission } from '../sharedPermission.js';
 import type { InteractionDecision } from '@cindy/maker-core';
@@ -2098,6 +2101,7 @@ function createHarness(opts?: {
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
   providerGroupSwitchCandidate?: AgentInputCoordinatorDeps['providerGroupSwitchCandidate'];
   sendToSessionHint?: AgentInputCoordinatorDeps['sendToSessionHint'];
+  supportsSameTurnSteer?: AgentInputCoordinatorDeps['supportsSameTurnSteer'];
 }) {
   let running = false;
   let liveRunningOverride: boolean | null | 'unknown' = null;
@@ -2262,6 +2266,7 @@ function createHarness(opts?: {
     onUnconfirmedAutoResumeTurn,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
+    ...(opts?.supportsSameTurnSteer ? { supportsSameTurnSteer: opts.supportsSameTurnSteer } : {}),
     isLiveTurnRunning: () => {
       if (liveRunningOverride === 'unknown') return undefined;
       return liveRunningOverride === null ? running : liveRunningOverride;
@@ -5271,6 +5276,106 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
+  // L343 / unit with SQLite. The real Desktop adapter must update the original
+  // row after releasing the error. The old test only manually cleared the error.
+  it.each(['live', 'changed-owner', 'wrong-turn', 'cleared', 'compact-only'] as const)(
+    'releases the queue after context overflow and only updates the current visible input (%s)',
+    async (mode) => {
+      const h = createHarness();
+      const sid = 'oversized-notice';
+      const old = new Database(':memory:');
+      const next = new Database(':memory:');
+      const initialise = (sqlite: Database.Database) => {
+        sqlite.exec(`
+          CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, cleared_at INTEGER);
+          CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, content TEXT,
+            tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, rewind_at INTEGER, created_at INTEGER);
+          INSERT INTO sessions VALUES ('oversized-notice', 'active', NULL), ('other-task', 'active', NULL);
+          INSERT INTO messages VALUES ('old-row', 'oversized-notice', 'original', 'user', '"first input"',
+            NULL, '{"sourceDevice":{"platform":"ios"}}', NULL, NULL, 100);
+          INSERT INTO messages VALUES ('other-row', 'other-task', 'original', 'user', '"other prompt"',
+            NULL, NULL, NULL, NULL, 100);`);
+        return { drizzle: drizzle(sqlite) } as unknown as DbClient;
+      };
+      const client = initialise(old);
+      const otherClient = initialise(next);
+      setCurrentDbClient(client, 'old');
+      try {
+        const claim = { inputClientId: 'original', instanceId: 'harness-session', generation: 3 };
+        h.setTurnGeneration(claim.generation);
+        h.coordinator.enqueue(sid, makeItem('original', 'first input'));
+        await flush();
+        if (mode === 'compact-only') {
+          await h.coordinator.compact(sid, makeItem('compact', '').createOpts);
+        } else {
+          h.coordinator.enqueue(sid, makeItem('next', 'second'));
+          if (mode === 'live') h.coordinator.enqueue(sid, makeItem('last', 'third'));
+        }
+        await flush();
+        h.setRunning(false);
+        h.coordinator.onTurnEvent(sid, 'error', 'prompt is too long', { reason: 'context-overflow' }, {
+          sessionInstanceId: claim.instanceId, sessionTurnGeneration: claim.generation,
+        });
+        const refreshed = vi.fn();
+        const queuedWrites: Promise<unknown>[] = [];
+        const writes = Promise.withResolvers<void>();
+        const ports: Parameters<typeof desktopContextRecoveryAbortSignal>[0] = {
+          getCoordinator: () => h.coordinator,
+          resetWireNotes: vi.fn(),
+          enqueueDurableWrite: (_label, write) => {
+            expect(h.coordinator.getProjection(sid).recovery).toBeNull();
+            const pending = writes.promise.then(() => write(null));
+            queuedWrites.push(pending);
+            return pending;
+          },
+          broadcastMessageRow: refreshed,
+          isCurrentTurn: () => true,
+          log: mocks.logger,
+        };
+        const claimed = mode === 'wrong-turn' ? { ...claim, generation: 2 } : claim;
+        expect(desktopContextRecoveryAbortSignal(ports, sid, claimed).aborted).toBe(true);
+        // The notice writer can wait even while the next input reaches the provider.
+        h.setTurnGeneration(claim.generation + 1);
+        await flush();
+        const sent = () => h.sendToAgent.mock.calls.map(([, message]) =>
+          typeof message === 'string' ? message : message.content);
+        expect(sent()).toEqual(['first input', mode === 'compact-only' ? '/compact' : 'second']);
+        if (mode === 'live') {
+          h.setRunning(false);
+          h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+            sessionInstanceId: claim.instanceId, sessionTurnGeneration: claim.generation + 1,
+          });
+          await flush();
+          expect(sent()).toEqual(['first input', 'second', 'third']);
+        }
+        if (mode === 'changed-owner') setCurrentDbClient(otherClient, 'replacement');
+        if (mode === 'cleared') old.exec("UPDATE sessions SET cleared_at = 100 WHERE id = 'oversized-notice'");
+        writes.resolve();
+        await Promise.all(queuedWrites);
+        const read = (db: Database.Database) => db.prepare(
+          "SELECT id, json_extract(agent_meta, '$.inputNotice') AS notice FROM messages ORDER BY id",
+        ).all();
+        expect(read(old)).toEqual([
+          { id: 'old-row', notice: mode === 'live' ? 'oversized-input-skipped' : null },
+          { id: 'other-row', notice: null },
+        ]);
+        expect(read(next)).toEqual([{ id: 'old-row', notice: null }, { id: 'other-row', notice: null }]);
+        if (mode === 'live') {
+          expect(refreshed).toHaveBeenCalledExactlyOnceWith(sid, expect.objectContaining({
+            clientId: 'original',
+            agentMeta: { sourceDevice: { platform: 'ios' }, inputNotice: 'oversized-input-skipped' },
+          }), null, { localWindowsOnly: true });
+        } else {
+          expect(refreshed).not.toHaveBeenCalled();
+        }
+      } finally {
+        clearCurrentDbClient();
+        old.close();
+        next.close();
+      }
+    },
+  );
+
   it('lets already queued input take over when oversized recovery clears the old error', async () => {
     const h = createHarness();
     const sid = 'oversized-recovery-queued-takeover';
@@ -8268,6 +8373,29 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
 });
 
 describe('AgentInputCoordinator steer transaction', () => {
+  // 插件引擎的 Agent 不支持同轮插话（docs/dev-rules/protocol-compatibility/plugin-harnesses.md「插话」）。
+  // 缺口：此前插话直达 steerToAgent，被 UNSUPPORTED_CAPABILITY 拒绝后成了报错横幅。
+  // 最小失败输入：运行中、不支持插话的会话，把排队第二条插话；控制面严格插话一条。
+  it('sends a steer after this turn, without an error, when the engine cannot take same-turn input', async () => {
+    const h = createHarness({ supportsSameTurnSteer: () => false });
+    const sid = 'steer-unsupported-engine';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    h.coordinator.enqueue(sid, makeItem('q-2', 'second'));
+    const queued = h.coordinator.getProjection(sid).pendingQueue[1]!;
+
+    await expect(h.coordinator.steer(sid, queued, { removeFromQueue: true })).resolves.toBe(true);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    const projection = latestProjection(h.projections);
+    expect(projection.steerUnsupported).toBe(true);
+    expect(projection.error).toBeNull();
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2', 'q-1']);
+
+    await expect(h.coordinator.steer(sid, makeItem('q-3', 'urgent'), { fallbackToTurn: false })).resolves.toBe(false);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual(['q-2', 'q-1']);
+  });
+
   it.each(['restore', 'screening', 'references', 'valid'] as const)('runs the host steer authority guard after %s', async boundary => {
     const h = createHarness();
     const sid = 'group-steer-guard';
@@ -16391,12 +16519,25 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const text = '[UI_ACTION_TRIGGER]Group request: <untrusted-data>{"currentRequest":{"text":"这张图是什么？"}}</untrusted-data>';
     const original = makeItem('bot-group:room:execution:bot', text, {
       agentOmitsTriggerPrefix: true,
-      files: [{ id: 'picture', name: 'picture.png', path: '/test/picture.png', ext: '.png', category: 'image', mimeType: 'image/png', size: 128 }],
+      files: [{ id: 'picture', name: 'picture.png', path: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png', ext: '.png', category: 'image', mimeType: 'image/png', size: 128 }],
     });
     original.chatMessage.content = `${text}\n恢复背景：此前已讨论图片所在的房间。`;
     await failAfterDispatch(h, sid, original);
+    // L337: an accepted group image may have been recycled since this turn. Unit.
+    const send = h.sendToAgent.getMockImplementation()!;
+    const engine = vi.fn();
+    h.sendToAgent.mockImplementationOnce(async (id, message, _create, opts) => {
+      const prepared = await normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1], acceptedAttachmentReplay(opts));
+      engine(prepared);
+      return send(id, prepared, _create, opts);
+    });
     await expect(h.coordinator.autoRetryLastError(sid, takeover.sessionTotal)).resolves.toBe('resumed');
     await flush();
+    await vi.waitFor(() => expect(engine).toHaveBeenCalledTimes(1));
+    expect(mocks.logger.warn).toHaveBeenCalledWith('skipped cleaned cache images during accepted input replay', { sessionId: sid, count: 1 });
+    const content = engine.mock.calls[0][0].content;
+    expect(content.some((block: { type: string }) => block.type === 'image')).toBe(false);
+    expect(JSON.stringify(content)).toContain('这张图是什么？');
     const resumed = h.onDispatchedUserTurn.mock.calls[1]?.[1];
     expect(resumed).toMatchObject({ autoResume: true, retrySourceClientId: original.clientId, files: original.files });
     expect(resumed.text).toContain('这张图是什么？');
@@ -17894,6 +18035,87 @@ describe('usage-limit wait (ordinary tasks)', () => {
       expect(h.coordinator.getProjection(sid).recovery).toBeNull();
     },
   );
+
+  // L337 / unit: stored active-turn input goes through the real recovery owner and normalizer.
+  // The last send is the engine boundary. Renderer options must never replace saved content.
+  it.each((['quota', 'provider-group', 'manual'] as const).flatMap(owner =>
+    (['ENOENT', 'EACCES'] as const).map(error => ({ owner, error }))),
+  )('normalizes stored attachment replay through $owner after $error', async ({ owner, error }) => {
+    let h = createHarness();
+    const sid = 'stored-retry';
+    const original = 'original accepted text';
+    h.setHasAssistantProgressAfter(async () => false);
+    const image = { id: 'img', name: 'img.png', path: 'cindy-media://blobs/' + 'b'.repeat(64) + '.png',
+      ext: '.png', category: 'image' as const, mimeType: 'image/png', size: 32 };
+    const persistedContent = JSON.stringify({ text: original, images: [{ url: image.path, mimeType: image.mimeType, originalName: image.name }] });
+    h.coordinator.enqueue(sid, makeItem('original', original, { files: [image], persistedContent }));
+    await flush();
+    expect(h.onDispatchedUserTurn).toHaveBeenCalledOnce();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'quota exhausted', LIMIT_SIGNALS);
+    await flush();
+    expect(mocks.createMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'original', content: persistedContent }), expect.anything());
+    let token = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
+    const saved = h.coordinator.snapshotUsageLimitRecovery(sid, token);
+    expect(saved).toMatchObject({ kind: 'active-turn', item: { persistedContent, files: [image] } });
+    h = createHarness();
+    h.setHasAssistantProgressAfter(async () => false);
+    token = h.coordinator.restoreUsageLimitRecovery(sid, JSON.parse(JSON.stringify(saved)), h.coordinator.getGeneration(sid))!;
+    expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(true);
+
+    const fs = (await import('node:fs/promises')).default;
+    const access = vi.spyOn(fs, 'access').mockRejectedValueOnce(Object.assign(new Error(error), { code: error }));
+    const send = h.sendToAgent.getMockImplementation()!;
+    const engine = vi.fn();
+    const failure = vi.fn();
+    h.sendToAgent.mockImplementationOnce(async (id, message, create, opts) => {
+      const prepared = await normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1], acceptedAttachmentReplay(opts))
+        .catch(err => { failure(err); throw err; });
+      engine(prepared);
+      return send(id, prepared, create, opts);
+    });
+    try {
+      if (owner === 'quota') await h.coordinator.continueAfterUsageLimitReset(sid, token, INFO);
+      if (owner === 'provider-group') await h.coordinator.continueAfterProviderGroupRecovery(sid, token, INFO);
+      if (owner === 'manual') await createInputRetryHarness(h.coordinator)(sid, {
+        acceptedAttachmentReplay: true, files: [{ ...image, path: '/foreign/file' }], text: 'foreign input',
+      });
+      await flush();
+      expect(access).toHaveBeenCalled();
+      if (error === 'EACCES') {
+        expect(failure).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' }));
+        expect(engine).not.toHaveBeenCalled();
+      } else {
+        expect(engine).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: [{ type: 'text', text: original }] });
+        expect(failure).not.toHaveBeenCalled();
+      }
+    } finally { access.mockRestore(); }
+  });
+
+  // L337 / unit: a rejected queue head has no accepted history. A retry action cannot grant one.
+  it('rejects a missing image on a never-dispatched queue head despite forged retry options', async () => {
+    const h = createHarness();
+    const sid = 'rejected-retry';
+    h.sendToAgent.mockRejectedValueOnce(new ProviderGroupUsageLimitError({ resetAtMs: 5_000_000 }));
+    const file = { id: 'img', name: 'original.png', ext: '.png', category: 'image' as const,
+      path: 'cindy-media://blobs/' + 'c'.repeat(64) + '.png', size: 32, mimeType: 'image/png' };
+    h.coordinator.enqueue(sid, makeItem('rejected', 'original text', { files: [file] }));
+    await flush();
+    expect(h.coordinator.getProjection(sid).recovery).toMatchObject({ kind: 'queue-head', clientId: 'rejected' });
+    const rejected = vi.fn();
+    h.sendToAgent.mockImplementationOnce(async (id, message, _create, opts) => {
+      expect(acceptedAttachmentReplay(opts)).toBeUndefined();
+      try { await normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1], acceptedAttachmentReplay(opts)); }
+      catch (error) { rejected(error); throw error; }
+      return sendSuccess();
+    });
+    await createInputRetryHarness(h.coordinator)(sid, { acceptedAttachmentReplay: true, text: 'replace', files: [] });
+    await flush();
+    await vi.waitFor(() => expect(rejected).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' }),
+    ));
+    expect(h.onDispatchedUserTurn).not.toHaveBeenCalled();
+  });
 
   async function failWithLimit(sid: string, progress: boolean) {
     const h = createHarness();
