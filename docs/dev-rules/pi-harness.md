@@ -447,7 +447,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    目前注入三份:Cindy-owned `cindy-bridge`(权限门 / MCP 桥)、`cindy-subagent`(子代理)、
    `cindy-tool-fold`(**实验功能,默认不注入** —— 设置 → 通用 → 实验性功能里显式打开后,之后
    启动的 Pi Agent 会话才加载:在 `context` 钩子里把较老的「工具调用 + 结果」折掉,只留最近 4 次
-   原文;老往返的调用块与结果消息一起消失,**同一条 assistant 消息里的其它块(正文)留在原位**
+   原文;老往返的调用块与结果消息一起消失,**同一条 assistant 消息里的正文 `text` 块留在原位**(`thinking` 不重发,随调用块一起丢——留着单会话可占 2.7M 字符)
    ——整条删除会吞掉模型自己写的计划与结论,而它们无法从 `findOriginal` 取回;每批折叠只留**一条**
    assistant 文本记录
    (形如 `[folded] 32 round-trips, bash 32, 786432 chars, read with cindy_toolfold_read("batch:call_x")`,
