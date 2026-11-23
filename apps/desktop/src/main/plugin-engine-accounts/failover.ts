@@ -42,7 +42,10 @@ export interface PluginEngineFailoverDeps {
 }
 
 interface TaskAccount {
+  /** The provider the account belongs to now: the replacement is picked there. */
   providerId: string;
+  /** The provider the task is routed to; it stays the task's route after the handoff. */
+  routeProviderId: string;
   engineKey: string;
   accountId: string;
   model: string | undefined;
@@ -62,6 +65,7 @@ function taskAccount(sessionId: string, row: PluginEngineFailoverSession | null)
   return {
     providerId: pool.accounts.some(account => account.id === binding.accountId)
       ? pluginEngineProviderId(ref.engineKey, suffix) : ref.providerId,
+    routeProviderId: ref.providerId,
     engineKey: ref.engineKey,
     accountId: binding.accountId,
     model: row.model ?? undefined,
@@ -92,7 +96,9 @@ async function handOff(
     // Context first: a failed binding write leaves a recoverable handoff on the old account.
     if (row.sdkSessionId) await deps.rebuild(sessionId, assertCurrent);
     assertCurrent();
-    await lease.bind([`task:${sessionId}`]);
+    // The handoff keeps the task's route (a taken-out provider merged back included): bind through it,
+    // so the next start keeps this account instead of picking again in a provider with no accounts.
+    await lease.bind([`task:${sessionId}`], task.routeProviderId);
     lease.reserveForTask(sessionId);
     deps.log?.('plugin engine account: moved task before send', {
       sessionId, engine: task.engineKey, reason, from: task.accountId, to: lease.accountId,

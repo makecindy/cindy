@@ -270,6 +270,29 @@ describe('plugin engine account pool', () => {
       .rejects.toThrow('account_mismatch');
   });
 
+  // Review of #12242: a task of a taken-out provider merged back keeps that provider as its route, so
+  // the handoff must bind through it. Minimal input: task on S bound to A, S merged back, A paused.
+  it('keeps a handed-off task on its new account when its taken-out provider was merged back', async () => {
+    const S = `${PROVIDER}~ab12cd34`;
+    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, providers: { ab12cd34: { strategy: 'least' } }, placement: { [A]: 'ab12cd34' } }));
+    const lease = await acquirePluginEngineAccount(S, undefined, ['task:t1']);
+    expect(lease!.accountId).toBe(A);
+    await lease!.bind(['task:t1', 'native:native-1']);
+    lease!.release();
+    await updatePluginEnginePool(ENGINE, pool => ({
+      strategy: pool.strategy,
+      accounts: pool.accounts.map(account => account.id === A ? { ...account, paused: true } : account),
+    }));
+    const deps = {
+      readSession: async () => ({ status: 'active', providerId: S, agentKind: 'acp', model: null, sdkSessionId: 'native-1' }),
+      isRunning: () => false,
+      rebuild: async (_id: string, assertCurrent: () => void) => { assertCurrent(); },
+    };
+    expect(await preparePluginEngineAccountForSend('t1', deps)).toBe(true);
+    const next = await acquirePluginEngineAccount(S, undefined, ['task:t1'], { resuming: false });
+    expect(next).toMatchObject({ accountId: B, pinned: true });
+  });
+
   // Review of #12242: the same login added twice counts once, and pausing the first of its directories
   // left none to take tasks. Minimal input: A and B report one fingerprint, A paused; then both on.
   it('lets the other directory of a login added twice take tasks when one is paused, and counts their load once', async () => {

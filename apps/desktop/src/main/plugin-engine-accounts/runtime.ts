@@ -430,7 +430,11 @@ export interface PluginEngineAccountLease {
   pinned: boolean;
   assertDispatchable(): void;
   observeFailure(error: unknown, model: string | undefined, phase: 'start' | 'run'): boolean;
-  bind(keys: string[]): Promise<void>;
+  /**
+   * Records the account for these keys, through the provider the task is routed to (by default the
+   * provider this lease was taken from).
+   */
+  bind(keys: string[], via?: string): Promise<void>;
   reserveForTask(taskId: string): void;
   running(active: boolean): void;
   release(): void;
@@ -650,9 +654,9 @@ export async function acquirePluginEngineAccount(
       changed(engineKey);
       return true;
     },
-    async bind(ids) {
+    async bind(ids, via = providerId) {
       assertCurrent();
-      await writePluginEngineBindings(engineKey, ids, selected, providerId);
+      await writePluginEngineBindings(engineKey, ids, selected, via);
       assertCurrent();
     },
     reserveForTask(taskId) {
