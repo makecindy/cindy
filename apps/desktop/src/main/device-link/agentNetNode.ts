@@ -138,14 +138,19 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
    */
   function ensureClient(options: { rejoin?: boolean } = {}): Promise<AgentNetClient> {
     const rejoin = options.rejoin === true;
-    // An ordinary renewal in flight would not lift a removal: a rejoin does not wait on it (nor it on a rejoin).
-    const inFlight = rejoin ? rejoining : enrolling;
+    const inFlight = rejoining ?? (!rejoin ? enrolling : null);
     if (inFlight) return inFlight;
+    const pendingRenewal = rejoin ? enrolling : null;
     const work = (async () => {
       assertCurrent();
       const base = ports.base(), subject = ports.subject();
       if (!base || !subject) throw new Error('AGENT_NET_UNAVAILABLE');
       const slot = slotFor(base, subject);
+      if (pendingRenewal) {
+        await pendingRenewal.catch(() => undefined);
+        assertCurrent();
+        if (ports.base() !== base || ports.subject() !== subject) throw new Error('AGENT_NET_OWNER_CHANGED');
+      }
       let stored = await read(slot); assertCurrent();
       if (!stored) { stored = { version: 1, seed: randomBytes(32).toString('base64url') }; await ports.writeSecret(slot, JSON.stringify(stored)); }
       const ready = rejoin ? null : toClient(base, slot, stored);

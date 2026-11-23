@@ -216,3 +216,31 @@ describe('createAgentNetNode', () => {
     await expect(node.rejoin()).rejects.toThrow('ENROLLMENT_SERVICE_UNAVAILABLE');
   });
 });
+
+
+// Exercise Node Host's real member and rejoin entry points with an in-flight certificate response.
+it('uses the rejoined Host certificate for a member request during rejoin', async () => {
+  const { ports, state } = fixture();
+  const waiting = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const enroll = ports.enroll;
+  ports.enroll = async (base, body) => {
+    const result = await enroll(base, body);
+    if (!(body as { rejoin?: boolean }).rejoin) { started.resolve(); await waiting.promise; }
+    return result;
+  };
+  const node = createAgentNetNode(ports);
+  const ordinary = node.member();
+  await started.promise;
+  const rejoin = node.rejoin();
+  // rejoin reads the saved identity and then registers its in-flight work.
+  await Promise.resolve();
+  const reconnect = node.member();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const startedBeforeRenewalFinished = state.enrollments;
+  waiting.resolve();
+  const [previous, , connected] = await Promise.all([ordinary, rejoin, reconnect]);
+  expect(startedBeforeRenewalFinished).toBe(1);
+  expect(connected.certificate.signature).not.toBe(previous.certificate.signature);
+  expect((await node.member()).certificate.signature).toBe(connected.certificate.signature);
+});

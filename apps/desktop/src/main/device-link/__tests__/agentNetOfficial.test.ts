@@ -125,3 +125,25 @@ it('does not retain a certificate past expiry or after an authoritative renewal 
   };
   await expect(ensureOfficialAgentNetClient('Unit device')).rejects.toMatchObject({ status: 0 });
 });
+
+// Hold an ordinary enrollment open while Rejoin and the next connection request their credentials.
+it('uses the rejoined certificate for a connection arriving during rejoin', async () => {
+  const waiting = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  state.beforeIssue = async () => {
+    if (state.requests === 1) { started.resolve(); await waiting.promise; }
+  };
+  const ordinary = ensureOfficialAgentNetClient('Unit device');
+  await started.promise;
+  const rejoin = ensureOfficialAgentNetClient('Unit device', { rejoin: true });
+  const reconnect = ensureOfficialAgentNetClient('Unit device');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const startedBeforeRenewalFinished = state.requests;
+  waiting.resolve();
+  const [previous, restored, connected] = await Promise.all([ordinary, rejoin, reconnect]);
+  expect(startedBeforeRenewalFinished).toBe(1);
+  expect(connected.certificate.signature).toBe(restored.certificate.signature);
+  expect(previous.certificate.signature).not.toBe(restored.certificate.signature);
+  expect(currentOfficialAgentNetClient()?.certificate.signature).toBe(restored.certificate.signature);
+  expect(state.requests).toBe(2);
+});

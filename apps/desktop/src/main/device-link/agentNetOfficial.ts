@@ -85,9 +85,13 @@ export function ensureOfficialAgentNetClient(name: string, options: { rejoin?: b
   const url = new URL(base);
   if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:'
     && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new Error('SECURE_AGENT_NET_URL_REQUIRED');
-  // An ordinary renewal in flight would not lift a removal: a rejoin does not wait on it.
-  const key = scope + '\0' + base + (rejoin ? '\0rejoin' : '');
-  const existing = inflight.get(key); if (existing) return existing;
+  const routineKey = scope + '\0' + base;
+  const rejoinKey = routineKey + '\0rejoin';
+  const key = rejoin ? rejoinKey : routineKey;
+  const existing = inflight.get(rejoinKey) ?? (!rejoin ? inflight.get(routineKey) : undefined);
+  if (existing) return existing;
+  // Finish any earlier write before restoring the membership. New callers use the restored identity.
+  const pendingRenewal = rejoin ? inflight.get(routineKey) : undefined;
   const locked = async <T>(operation: () => Promise<T> | T): Promise<T> => {
     const lock = relayDataPath('secrets', slot + '.initialize.lock');
     await fs.mkdir(path.dirname(lock), { recursive: true, mode: 0o700 }); assertCurrent();
@@ -96,6 +100,7 @@ export function ensureOfficialAgentNetClient(name: string, options: { rejoin?: b
     });
   };
   const work = (async () => {
+    if (pendingRenewal) await pendingRenewal.catch(() => undefined);
     const secrets = await locked(() => {
       let value = readRelaySecrets(slot, { fresh: true });
       if (!value && existsSync(relayDataPath('secrets', slot + '.enc'))) throw new Error('AGENT_NET_IDENTITY_UNREADABLE');

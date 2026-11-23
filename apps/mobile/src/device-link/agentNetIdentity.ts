@@ -160,6 +160,8 @@ export async function ensureMobileAgentNetIdentity(options: MobileAgentNetEnroll
   const guard = ownerGuard(owner, scope, options.deviceId);
   guard();
   const rejoin = options.rejoin === true && !getActiveSelfHostedRelay();
+  const pendingRejoin = inflight.get(scope + '\0rejoin');
+  if (pendingRejoin) return pendingRejoin;
   if (!rejoin && cached?.scope === scope && cached.api.certificate.expiresAt - Date.now() > 24 * 60 * 60_000) return cached;
   const flightKey = rejoin ? scope + '\0rejoin' : scope;
   const existing = inflight.get(flightKey); if (existing) return existing;
