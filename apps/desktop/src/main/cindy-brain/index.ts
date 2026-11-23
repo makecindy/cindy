@@ -571,6 +571,8 @@ import {
   getGhostConfirmDialogBridge,
   initGhostConfirmDialogBridge,
 } from './ghostConfirmDialogBridge.js';
+import { GhostFormSlot } from './formSlot.js';
+import { getGhostFormDialogBridge, initGhostFormDialogBridge } from './ghostFormDialogBridge.js';
 import {
   createForgeOidcInstallMainWindowSender,
   forgeOidcInstallConfirmFacts,
@@ -1438,6 +1440,7 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   getGhostSetupInteractionBridge()?.cleanupAll('session_aborted');
   getGhostGrantConfirmBridge()?.cleanupAll('session_aborted');
   getGhostConfirmDialogBridge()?.cancelAll();
+  getGhostFormDialogBridge()?.cancelAll();
   modelPickerSingleton?.cancel();
   getForgeOidcInstallConfirmBridge()?.cancelAll();
   installConsentWindowBridge.cancelAll();
@@ -4266,6 +4269,68 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
     });
   }
   return confirmSlotSingleton;
+}
+
+let formSlotSingleton: GhostFormSlot | null = null;
+
+/** 表单弹窗通道(main → 获得焦点的**单个**窗口);超时/切账号时再发 dismissed 收起。 */
+export const GHOST_FORM_CHANNEL = 'ghosts:form-request';
+export const GHOST_FORM_DISMISSED_CHANNEL = 'ghosts:form-dismissed';
+
+/** 获得焦点的受信 Cindy 窗口;没有就是用户没在看 Cindy。 */
+function focusedTrustedWindow(): BrowserWindow | null {
+  const win = BrowserWindow.getFocusedWindow();
+  return win && !win.isDestroyed() && isTrustedAppRendererWindow(win) ? win : null;
+}
+
+/**
+ * 表单弹窗槽单例(form):资格审/净化/限速/单飞/前台判断在 GhostFormSlot,往返、超时、
+ * 窗口关闭收尾在 GhostFormDialogBridge,这里只组装"投给哪个窗口"。
+ * 只投获得焦点的那个窗口:用户正在那里点的按钮,表单就该弹在那里。
+ */
+export function getGhostFormSlot(): GhostFormSlot {
+  if (!formSlotSingleton) {
+    const bridge =
+      getGhostFormDialogBridge() ??
+      initGhostFormDialogBridge({
+        deliver: (payload) => {
+          const win = focusedTrustedWindow();
+          if (!win) return null;
+          const contents = win.webContents;
+          const ownerStamp = getGhostOwnerPushStamp();
+          sendGhostContentsPush(contents, GHOST_FORM_CHANNEL, payload, ownerStamp);
+          return {
+            windowId: contents.id,
+            dismiss: (requestId) => {
+              if (!contents.isDestroyed()) sendGhostContentsPush(contents, GHOST_FORM_DISMISSED_CHANNEL, { requestId }, ownerStamp);
+            },
+            onClosed: (callback) => {
+              const onGone = () => callback();
+              const onNavigate = (_event: unknown, _url: string, isSameDocument: boolean, isMainFrame: boolean) => {
+                if (isMainFrame && !isSameDocument) callback();
+              };
+              contents.once('destroyed', onGone);
+              contents.on('render-process-gone', onGone);
+              contents.on('did-start-navigation', onNavigate);
+              return () => {
+                if (contents.isDestroyed()) return;
+                contents.removeListener('destroyed', onGone);
+                contents.removeListener('render-process-gone', onGone);
+                contents.removeListener('did-start-navigation', onNavigate);
+              };
+            },
+          };
+        },
+        log,
+      });
+    formSlotSingleton = new GhostFormSlot({
+      getGhost: findGhostForInstanceId,
+      hasFocusedWindow: () => focusedTrustedWindow() !== null,
+      showForm: (params) => bridge.request(params),
+      log,
+    });
+  }
+  return formSlotSingleton;
 }
 
 let modelPickerSingleton: GhostModelPicker | null = null;
@@ -10318,6 +10383,11 @@ export function registerGhostIpc(): void {
     if (type === 'confirm-request') {
       return getGhostConfirmSlot().handleRequest(id, payload);
     }
+    // form-request = 表单弹窗(form 槽):校验/限速/单飞/前台判断在 formSlot,往返在
+    // ghostFormDialogBridge。ok:true 只代表问到了,答案看 outcome。
+    if (type === 'form-request') {
+      return getGhostFormSlot().handleRequest(id, payload);
+    }
     if (type === 'model-picker-request') {
       const target = ghostInstallMutationTargetFor(id);
       return getGhostModelPicker().request(id, payload, () =>
@@ -10353,6 +10423,20 @@ export function registerGhostIpc(): void {
     const bridge = getGhostConfirmDialogBridge();
     if (!bridge) return { handled: false };
     return { handled: bridge.resolve(p.requestId, p.confirmed) };
+  });
+
+  // ── 表单弹窗回包(form 槽)──────────────────────────────────────────
+  // 只认投递目标那个窗口的回包(桥按 webContents id 比对);answer 的形状与值由桥和槽
+  // 按原表单收口,畸形回包一律按取消结算。
+  ipcMain.handle('ghosts:form:resolve', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const p = raw as { requestId?: unknown; answer?: unknown } | null;
+    if (!p || typeof p.requestId !== 'string' || p.requestId.length === 0 || p.requestId.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'requestId must be a non-empty string');
+    }
+    const bridge = getGhostFormDialogBridge();
+    if (!bridge) return { handled: false };
+    return { handled: bridge.resolve(event.sender.id, p.requestId, p.answer) };
   });
 
   ipcMain.handle('forge-oidc-install:resolve-confirm', async (event, raw: unknown) => {

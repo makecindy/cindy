@@ -8426,6 +8426,8 @@
         "badgeDetail": "有新內容時，它可以在左側導航的插件入口和自己的卡片上點亮一個綠點，並附一句話摘要；你開啟它的面板即清零。綠點不出聲、不震動，也不會進入系統通知中心，和上面的系統提示是兩項獨立權限。",
         "confirm": "可彈出確認框徵求你同意",
         "confirmDetail": "它動手前可以彈一個和 Cindy 同款的確認框來問你，問句由它提供、框上會標註它的名字；同意還是取消都由你親手點，它自己點不了。同時最多一個確認框，彈得太頻會被攔下。",
+        "form": "可彈出表單請你填寫",
+        "formDetail": "它可以彈一個和 Cindy 同款的表單請你填寫，表單上會標註它的名字；填好的內容只有你點「儲存」後才交給它，點取消什麼都不給。只在你正看著 Cindy 時彈出，同時最多一個表單，彈得太頻會被攔下。",
         "fsWrite": "可管理自己的私有檔案",
         "fsWriteDetail": "可讀寫、列舉和刪除自己的私有資料。當前 Agent 呼叫期間，也可讀取、列舉和監聽任務的工作目錄。寫入與刪除沿用任務權限；允許寫入不代表允許刪除。呼叫結束即停止監聽。檔案操作均由宿主執行。",
         "deviceSync": "在你的電腦間同步插件資料",
@@ -8728,6 +8730,8 @@
         "slotNetwork": "網路存取",
         "slotNotify": "系統提示",
         "slotBadge": "未讀角標",
+        "slotConfirm": "確認彈窗",
+        "slotForm": "表單彈窗",
         "slotFs": "寫檔案",
         "slotLibrary": "持久作品庫",
         "slotSkill": "Agent 技能",
@@ -8847,6 +8851,17 @@
       "saveAs": {
         "dialogTitle": "插件「{{name}}」另存為",
         "dialogMessage": "插件「{{name}}」請求你另存一份拷貝"
+      },
+      "form": {
+        "save": "儲存",
+        "cancel": "取消",
+        "addItem": "新增",
+        "removeItem": "刪除",
+        "removeNamed": "刪除「{{name}}」",
+        "required": "這一項必填",
+        "incomplete": "還有必填項沒填",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "插件「{{name}}」請你填寫"
       },
       "confirm": {
         "dialogTitle": "插件「{{name}}」請你確認"

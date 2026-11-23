@@ -8392,6 +8392,8 @@
         "badgeDetail": "有新內容時，其可於左側導覽之法器入口及自身卡片上亮一綠點，並附一句摘要；君啟其面板即清零。綠點無聲、不震，亦不入系統通知中心，與上述系統提示為兩項獨立之權柄。",
         "confirm": "可彈確認框徵君同意",
         "confirmDetail": "其行事前可彈一與 Cindy 同款之確認框問君，所問由其提供，框上標其名；允或罷皆由君親點，其不能自點。同時至多一框，彈之過頻即被攔下。",
+        "form": "可彈表單請君填寫",
+        "formDetail": "其可彈一與 Cindy 同款之表單請君填寫，單上標其名；所填唯君點「存之」後方交予之，罷則一無所與。唯君正觀 Cindy 時方彈，同時至多一單，彈之過頻即被攔下。",
         "fsWrite": "可管理自己的私有檔案",
         "fsWriteDetail": "可讀寫、列舉和刪除自己的私有資料。當前 Agent 呼叫期間，也可讀取、列舉和監聽差事的工作目錄。寫入與刪除沿用差事權限；允許寫入不代表允許刪除。呼叫結束即停止監聽。檔案操作均由宿主執行。",
         "deviceSync": "於君諸機間同步法器資料",
@@ -8714,6 +8716,8 @@
         "slotNetwork": "網路存取",
         "slotNotify": "系統之示",
         "slotBadge": "未讀之標",
+        "slotConfirm": "確認之框",
+        "slotForm": "表單之框",
         "slotFs": "寫卷",
         "slotLibrary": "久藏之庫",
         "slotSkill": "Agent 技藝",
@@ -8833,6 +8837,17 @@
       "saveAs": {
         "dialogTitle": "法器「{{name}}」另存為",
         "dialogMessage": "法器「{{name}}」請君另存一份"
+      },
+      "form": {
+        "save": "存之",
+        "cancel": "罷",
+        "addItem": "增之",
+        "removeItem": "刪之",
+        "removeNamed": "刪「{{name}}」",
+        "required": "此項必填",
+        "incomplete": "尚有必填之項未填",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "法器「{{name}}」請君填寫"
       },
       "confirm": {
         "dialogTitle": "法器「{{name}}」請君確認"

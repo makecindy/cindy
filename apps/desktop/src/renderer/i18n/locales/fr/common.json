@@ -8541,6 +8541,8 @@
         "badgeDetail": "Lorsqu'il a du nouveau, il peut afficher un point vert sur l'entrée Plugins de la navigation de gauche et sur sa propre carte, avec un résumé d'une ligne. Ouvrir son panneau efface le point. Le point n'émet aucun son, ne vibre pas, n'atteint jamais le centre de notifications du système, et constitue une autorisation distincte des bannières système.",
         "confirm": "Peut vous demander une confirmation dans une boîte de dialogue",
         "confirmDetail": "Avant d'agir, il peut ouvrir une boîte de dialogue semblable à celles de Cindy pour vous demander votre accord. La question provient du plugin et la boîte de dialogue porte son nom ; vous seul pouvez cliquer sur confirmer ou annuler (le plugin ne le peut pas). Une seule boîte de dialogue à la fois, et les demandes trop fréquentes sont bloquées.",
+        "form": "Peut vous demander de remplir un formulaire",
+        "formDetail": "Il peut ouvrir un formulaire semblable à ceux de Cindy pour vous demander des informations. Le formulaire affiche le nom du plugin ; ce que vous saisissez ne lui est transmis que lorsque vous cliquez sur Enregistrer, et rien n'est transmis si vous annulez. Il ne s'ouvre que lorsque vous utilisez Cindy, un seul formulaire à la fois, et les demandes trop fréquentes sont bloquées.",
         "fsWrite": "Peut gérer ses fichiers privés",
         "fsWriteDetail": "Peut lire, écrire, lister et supprimer ses propres données privées. Pendant un appel Agent actif, il peut aussi lire, lister et surveiller le répertoire de travail de la tâche. Écritures et suppressions suivent les autorisations de la tâche ; autoriser une écriture n'autorise pas la suppression. La surveillance s'arrête à la fin de l'appel. Toutes les opérations sont exécutées par l'hôte.",
         "deviceSync": "Synchroniser les données du plugin entre vos ordinateurs",
@@ -8843,6 +8845,8 @@
         "slotNetwork": "Accès réseau",
         "slotNotify": "Bannières système",
         "slotBadge": "Badge de non-lu",
+        "slotConfirm": "Boîtes de dialogue de confirmation",
+        "slotForm": "Formulaires",
         "slotFs": "Écriture de fichiers",
         "slotLibrary": "Bibliothèque persistante",
         "slotSkill": "Skills de l'Agent",
@@ -8962,6 +8966,17 @@
       "saveAs": {
         "dialogTitle": "Plugin « {{name}} » · Enregistrer sous",
         "dialogMessage": "Le plugin « {{name}} » vous demande d'enregistrer une copie"
+      },
+      "form": {
+        "save": "Enregistrer",
+        "cancel": "Annuler",
+        "addItem": "Ajouter",
+        "removeItem": "Supprimer",
+        "removeNamed": "Supprimer {{name}}",
+        "required": "Ce champ est obligatoire",
+        "incomplete": "Des champs obligatoires sont vides",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Le plugin « {{name}} » vous demande de remplir ce formulaire"
       },
       "confirm": {
         "dialogTitle": "Le plugin « {{name}} » a besoin de votre confirmation"

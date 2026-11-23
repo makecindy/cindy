@@ -8541,6 +8541,8 @@
         "badgeDetail": "Quando houver novidades, pode mostrar um ponto verde na entrada Plugins da navegação à esquerda e no próprio cartão, com um resumo de uma linha. Abrir o painel remove o ponto. O ponto não emite som, não vibra, nunca aparece na central de notificações do sistema e é uma permissão separada das dicas do sistema.",
         "confirm": "Pode pedir sua confirmação em uma caixa de diálogo",
         "confirmDetail": "Antes de agir, ele pode abrir uma caixa de diálogo com a aparência da Cindy para fazer uma pergunta. A pergunta vem do plugin, identificado pelo nome na caixa de diálogo. Só você pode confirmar ou cancelar; o plugin não pode. Só pode haver uma caixa de diálogo por vez, e perguntas frequentes demais são bloqueadas.",
+        "form": "Pode pedir que você preencha um formulário",
+        "formDetail": "Ele pode abrir um formulário com a aparência dos formulários da Cindy para pedir informações. O formulário mostra o nome do plugin; o que você preencher só chega a ele quando você clica em Salvar, e nada é enviado se você cancelar. Só abre enquanto você está usando a Cindy, no máximo um formulário por vez, e pedidos frequentes demais são bloqueados.",
         "fsWrite": "Pode gerenciar seus arquivos privados",
         "fsWriteDetail": "Pode ler, gravar, listar e excluir seus próprios dados privados. Durante uma chamada ativa do Agent também pode ler, listar e monitorar o diretório de trabalho da tarefa. Gravações e exclusões seguem as permissões da tarefa; permitir uma gravação não permite excluir. O monitoramento termina com a chamada. O host executa todas as operações.",
         "deviceSync": "Sincronizar dados do plugin entre seus computadores",
@@ -8843,6 +8845,8 @@
         "slotNetwork": "Acesso à rede",
         "slotNotify": "Dicas do sistema",
         "slotBadge": "Indicador de não lidos",
+        "slotConfirm": "Caixas de diálogo de confirmação",
+        "slotForm": "Formulários",
         "slotFs": "Gravação de arquivos",
         "slotLibrary": "Biblioteca persistente",
         "slotSkill": "Skills do Agent",
@@ -8962,6 +8966,17 @@
       "saveAs": {
         "dialogTitle": "Plugin “{{name}}” — Salvar como",
         "dialogMessage": "O plugin “{{name}}” está solicitando que você salve uma cópia"
+      },
+      "form": {
+        "save": "Salvar",
+        "cancel": "Cancelar",
+        "addItem": "Adicionar",
+        "removeItem": "Remover",
+        "removeNamed": "Remover {{name}}",
+        "required": "Este campo é obrigatório",
+        "incomplete": "Há campos obrigatórios em branco",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "O plugin “{{name}}” pede que você preencha este formulário"
       },
       "confirm": {
         "dialogTitle": "O plugin “{{name}}” precisa da sua confirmação"

@@ -8469,6 +8469,8 @@
         "badgeDetail": "When it has something new, it can show a green dot on the Plugins entry in the left navigation and on its own card, with a one-line summary. Opening its panel clears the dot. The dot makes no sound, does not vibrate, never reaches your system notification center, and is a permission separate from system tips.",
         "confirm": "Can ask for your confirmation in a dialog",
         "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
+        "form": "Can ask you to fill in a form",
+        "formDetail": "It can open a form that looks like Cindy's own and ask you to fill it in. The form is labeled with the plugin's name; what you enter reaches the plugin only after you click Save, and nothing is sent if you cancel. It opens only while you're looking at Cindy, at most one form at a time, and asking too often is blocked.",
         "fsWrite": "Can manage its private files",
         "fsWriteDetail": "Can read, write, list and delete its own private data. During an Agent call, it can also read, list and watch the task's working directory. Writes and deletions follow the task's permissions; approving a write does not approve deletion. Watching stops when the call ends. All file operations run in the host.",
         "deviceSync": "Sync plugin data between your computers",
@@ -8771,6 +8773,8 @@
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
         "slotBadge": "Unread badge",
+        "slotConfirm": "Confirmation dialogs",
+        "slotForm": "Form dialogs",
         "slotFs": "File writing",
         "slotLibrary": "Durable library",
         "slotSkill": "Agent skills",
@@ -8890,6 +8894,17 @@
       "saveAs": {
         "dialogTitle": "Plugin “{{name}}” — Save As",
         "dialogMessage": "Plugin “{{name}}” is asking you to save a copy"
+      },
+      "form": {
+        "save": "Save",
+        "cancel": "Cancel",
+        "addItem": "Add",
+        "removeItem": "Remove",
+        "removeNamed": "Remove {{name}}",
+        "required": "This field is required",
+        "incomplete": "Some required fields are empty",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Plugin “{{name}}” asks you to fill in this form"
       },
       "confirm": {
         "dialogTitle": "Plugin “{{name}}” needs your confirmation"

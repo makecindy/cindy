@@ -829,6 +829,10 @@ const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
 // main 只投单个窗口(不广播),所以这里落地的窗口就是该弹框的唯一归属。
 const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
 const fanOutGhostConfirmDismissed = createIpcFanOut('ghosts:confirm-dismissed');
+// 插件表单弹窗(form 槽:renderer 画主机表单,答复回 main)。main 只投获得焦点的那个窗口;
+// 超时或切账号时再发 dismissed 收起。
+const fanOutGhostFormRequest = createIpcFanOut('ghosts:form-request');
+const fanOutGhostFormDismissed = createIpcFanOut('ghosts:form-dismissed');
 const fanOutGhostModelPickerRequest = createIpcFanOut('ghosts:model-picker:request');
 const fanOutGhostModelPickerDismissed = createIpcFanOut('ghosts:model-picker:dismissed');
 const fanOutForgeOidcInstallConfirmRequest = createIpcFanOut('forge-oidc-install:confirm-request');
@@ -1720,6 +1724,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 管子请求。requestId 是 main 铸的,陌生/重复 id 由桥忽略。
     resolveConfirm: (requestId: string, confirmed: boolean): Promise<{ handled: boolean }> =>
       ipcRenderer.invoke('ghosts:confirm:resolve', { requestId, confirmed }),
+    onFormRequest: fanOutGhostFormRequest,
+    onFormDismissed: fanOutGhostFormDismissed,
+    // 表单弹窗回包(form 槽):main 只认投递目标窗口的回包,并按原表单收口 values。
+    resolveForm: (requestId: string, answer: import('../shared/ghostForm').GhostFormAnswer): Promise<{ handled: boolean }> =>
+      ipcRenderer.invoke('ghosts:form:resolve', { requestId, answer }),
     onForgeOidcInstallConfirmRequest: fanOutForgeOidcInstallConfirmRequest,
     resolveForgeOidcInstallConfirm: (
       requestId: string,

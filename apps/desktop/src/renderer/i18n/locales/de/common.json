@@ -8469,6 +8469,8 @@
         "badgeDetail": "Bei Neuigkeiten kann es einen grünen Punkt am Eintrag „Plugins“ in der linken Navigation und auf seiner eigenen Karte anzeigen, zusammen mit einer einzeiligen Zusammenfassung. Beim Öffnen seines Panels verschwindet der Punkt. Der Punkt erzeugt weder Ton noch Vibration, erscheint nie in der Mitteilungszentrale deines Systems und erfordert eine eigene Berechtigung, unabhängig von Systemhinweisen.",
         "confirm": "Kann dich in einem Dialog um Bestätigung bitten",
         "confirmDetail": "Kann vor einer Aktion einen Dialog öffnen, der wie ein eigener Dialog von Cindy aussieht. Die Frage stammt vom Plugin und der Dialog ist mit dessen Namen gekennzeichnet. Nur du kannst bestätigen oder abbrechen – das Plugin kann es nicht. Es ist höchstens ein Dialog gleichzeitig möglich; zu häufige Anfragen werden blockiert.",
+        "form": "Kann dich bitten, ein Formular auszufüllen",
+        "formDetail": "Es kann ein Formular öffnen, das wie Cindys eigene aussieht, und dich um Angaben bitten. Das Formular zeigt den Namen des Plugins; deine Eingaben erhält es erst, wenn du auf Speichern klickst, und beim Abbrechen erhält es nichts. Es öffnet sich nur, während du Cindy verwendest, höchstens ein Formular gleichzeitig, und zu häufige Anfragen werden blockiert.",
         "fsWrite": "Kann eigene private Dateien verwalten",
         "fsWriteDetail": "Kann eigene private Daten lesen, schreiben, auflisten und löschen. Während eines aktiven Agent-Aufrufs kann es auch das Arbeitsverzeichnis der Aufgabe lesen, auflisten und überwachen. Schreiben und Löschen folgen den Aufgabenberechtigungen; eine Schreibfreigabe erlaubt kein Löschen. Die Überwachung endet mit dem Aufruf. Alle Dateivorgänge führt der Host aus.",
         "deviceSync": "Plugin-Daten zwischen deinen Computern synchronisieren",
@@ -8771,6 +8773,8 @@
         "slotNetwork": "Netzwerkzugriff",
         "slotNotify": "Systemhinweise",
         "slotBadge": "Ungelesen-Anzeige",
+        "slotConfirm": "Bestätigungsdialoge",
+        "slotForm": "Formulardialoge",
         "slotFs": "Dateien schreiben",
         "slotLibrary": "Dauerhafte Bibliothek",
         "slotSkill": "Agent-Skills",
@@ -8890,6 +8894,17 @@
       "saveAs": {
         "dialogTitle": "Plugin „{{name}}“ — Speichern unter",
         "dialogMessage": "Plugin „{{name}}“ bittet dich, eine Kopie zu speichern"
+      },
+      "form": {
+        "save": "Speichern",
+        "cancel": "Abbrechen",
+        "addItem": "Hinzufügen",
+        "removeItem": "Entfernen",
+        "removeNamed": "{{name}} entfernen",
+        "required": "Dieses Feld ist erforderlich",
+        "incomplete": "Pflichtfelder sind leer",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Das Plugin „{{name}}“ bittet dich, dieses Formular auszufüllen"
       },
       "confirm": {
         "dialogTitle": "Plugin „{{name}}“ benötigt deine Bestätigung"

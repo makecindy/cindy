@@ -113,6 +113,7 @@ export const LEGACY_GHOST_SLOTS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'device-sync',
@@ -1109,6 +1110,7 @@ export interface GhostManifest {
   notify?: true;
   badge?: true;
   confirm?: true;
+  form?: true;
   fs?: true;
   /** 持久作品库；卸载不删数据，位置和删除由 Host 设置页管理。 */
   library?: true;
@@ -1325,6 +1327,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -1339,6 +1342,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -1368,6 +1372,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   notify: 'notify',
   badge: 'badge',
   confirm: 'confirm',
+  form: 'form',
   fs: 'fs',
   library: 'library',
   deviceSync: 'device-sync',
@@ -4123,6 +4128,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(prepared.schemaVersion === 3 && slots.includes('notify') ? { notify: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('badge') ? { badge: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('confirm') ? { confirm: true as const } : {}),
+      ...(prepared.schemaVersion === 3 && slots.includes('form') ? { form: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('fs') ? { fs: true as const } : {}),
       ...(slots.includes('device-sync') ? { deviceSync: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('library')
