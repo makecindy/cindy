@@ -101,25 +101,27 @@ function sanitizeSection(raw: unknown): Record<string, true> {
 function normalize(raw: unknown): ModelAccessPrefs {
   if (!raw || typeof raw !== 'object') return { disabledModels: {}, disabledProviders: {}, hiddenProviders: {} };
   const disabledModels = sanitizeSection('disabledModels' in raw ? raw.disabledModels : undefined);
-  // Old splits copied the source's full image ID. Treat it as a disable on the
-  // standalone provider only when both namespaces are proven for this owner.
-  // The next model write persists the canonical keys; enabling clears the disable.
+  // Old splits copied the original image ID verbatim, including moves back to a
+  // native connection. Only remap between two known OpenAI subscription IDs.
+  // Persist the canonical keys on the next model write; enabling clears them.
   let created: Readonly<Record<string, CreatedSubscriptionProvider>> | null | undefined;
   let legacy: Readonly<Record<string, string>> | null | undefined;
+  const isAccountProvider = (id: string) => {
+    if (created === undefined) created = readCreatedSubscriptionProvidersIfReadable();
+    if (created?.[id]?.kind === 'openai') return true;
+    if (legacy === undefined) legacy = readOpenAiLegacyAccountsIfReadable();
+    return !!legacy && Object.hasOwn(legacy, id);
+  };
   for (const key in disabledModels) {
-    if (!key.startsWith('openai-sub-') || !key.endsWith(SUBSCRIPTION_IMAGE_ID_SUFFIX)) continue;
+    if (!key.endsWith(SUBSCRIPTION_IMAGE_ID_SUFFIX)) continue;
     const separator = key.indexOf(':');
     const sourceEnd = key.length - SUBSCRIPTION_IMAGE_ID_SUFFIX.length;
     if (separator < 0 || separator + 1 >= sourceEnd) continue;
     const providerId = key.slice(0, separator);
     const sourceId = key.slice(separator + 1, sourceEnd);
-    if (sourceId === providerId) continue; // Already canonical.
-    if (created === undefined) created = readCreatedSubscriptionProvidersIfReadable();
-    if (created?.[providerId]?.kind !== 'openai') continue;
-    if (sourceId !== 'openai') {
-      if (legacy === undefined) legacy = readOpenAiLegacyAccountsIfReadable();
-      if (!legacy || !Object.hasOwn(legacy, sourceId)) continue;
-    }
+    // The built-in pool was only ever a source of copied disables.
+    if (providerId === 'openai' || sourceId === providerId || !isAccountProvider(providerId)
+      || (sourceId !== 'openai' && !isAccountProvider(sourceId))) continue;
     disabledModels[modelDisableKey(providerId, subscriptionImageModelId(providerId))] = true;
     delete disabledModels[key];
   }

@@ -252,11 +252,11 @@ Claude 的模型发现不新增启动、续聊、换号或切模型的准入门�
 目录声明了图像默认值时也使用该 ID，不继承内置 OpenAI 的 Platform API 型号、其他媒体清单或凭证。
 设置页保留未就绪的图像行；开关按该来源账号池的媒体就绪状态判断，不用聊天连接态或发现清单替代。
 就绪使用现有账号刷新读到的图像 OAuth 材料，不发试生成请求；上游仍决定实际出图准入。
-生成与编辑只在所选供应商当前归属的账号内租用一次，发送前复核归属及鉴权，不能回落到内置 OpenAI
-或跟随已并出的账号。拿出账号时，GPT Image Gen 的停用设置随图像 ID 改到独立供应商名下；
-旧版从内置 OpenAI 或当前 owner 已登记的旧 Codex 连接复制的图像停用，以同一独立供应商的新 ID
-生效，下次写入模型偏好时归并。不按名称或型号后缀猜测来源。手动启用清除该停用，重启不会
-重新关闭，也不影响原来源。实现见 `active-catalog.ts`、
+生成与编辑只在所选供应商当前归属的账号内租用一次，不能回落到内置 OpenAI 或跟随已并出的账号。
+就绪、选号及实际发送前分别检查池的图像停用项，以及导入账号原 Codex 连接自己的图像停用项；
+原连接停用不影响池内其他可用账号。拿出账号（包括回到原 Codex 连接）时，按目标图像 ID 复制停用项。
+旧版复制的图像停用仅在当前 owner 能确认源与目标均为对应 OpenAI 订阅供应商时，按目标的新 ID 生效；
+下次写入模型偏好时归并。手动启用清除该停用，重启不会重新关闭，也不影响原来源。实现见 `active-catalog.ts`、
 `codexImageAuthBinding.ts`、`subscription-accounts/runtime.ts` 和 `model-disable-store.ts`；
 回归见 `providerCatalogRealmReload.test.ts`、`subscription-accounts/__tests__/runtime.test.ts`
 和 `model-disable-store.test.ts`。

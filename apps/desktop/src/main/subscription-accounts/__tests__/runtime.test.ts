@@ -166,7 +166,10 @@ vi.mock('../../ownerContext.js', async (importOriginal) => ({
     return path.join(h.modelPrefsDir, ...parts);
   },
 }));
-vi.mock('../../maker-host/model-disable-store.js', () => ({ copyProviderDisableOverrides: h.copyOverrides }));
+vi.mock('../../maker-host/model-disable-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../maker-host/model-disable-store.js')>();
+  return { ...actual, copyProviderDisableOverrides: h.copyOverrides };
+});
 vi.mock('../../usage/accountUsageStorage.js', () => ({
   readStoredAccountUsage: async (kind: string, id: string) => structuredClone(h.storedUsage.get(`${kind}:${id}`) ?? null),
   writeStoredAccountUsage: async (kind: string, id: string, value: object | null, current = () => true) => {
@@ -201,10 +204,13 @@ vi.mock('node:fs/promises', () => ({
 vi.mock('../../remote-agent/host/tunnel.js', () => ({ createRunTunnel: async () => ({
   baseUrl: 'http://tunnel.invalid', token: 'synthetic-token', close: async () => {},
 }) }));
+// This fixture has no remote grants; only the real local access checks run below.
+vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => false }));
+vi.mock('../../device-link/remoteModelAccess.js', () => ({ remoteModelAccess: { allows: () => false } }));
 vi.mock('../legacyAccountAccess.js', () => ({
   legacyCodexAccountCanRun: h.accountAllowed,
   openAiRouteAllowsModel: h.routeAllowed,
-  subscriptionRouteAllowsModel: (_provider: string, model: string, options: unknown) => h.routeAllowed(model, options),
+  subscriptionRouteAllowsModel: (provider: string, model: string, options: unknown) => h.routeAllowed(model, options, provider),
   setLegacyCodexAccountPaused: h.setLegacyPaused,
 }));
 vi.mock('../store.js', () => ({
@@ -326,6 +332,7 @@ import {
 import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import { BUNDLED_CATALOG, isModelDisabled, type ProviderView } from '@cindy/model-providers';
+import { readModelDisableOverrides, setModelsDisabled } from '../../maker-host/model-disable-store.js';
 import { resolveSubscriptionPoolProvider } from '../placement.js';
 import { createAccountCodexImageChannel, createCodexImageAuthAcquirer, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
@@ -1209,35 +1216,92 @@ describe('duplicate subscription account profiles', () => {
     }
   });
 
-  // #11948 / unit: a merged legacy image model's existing off switch uses
-  // the original provider namespace even when the destination's switch is on.
-  it('respects a merged legacy account’s own image model disable switch', async () => {
+  // #12129 review, unit: exercise the real preference checks and outbound fence.
+  // A legacy source disable must block its own account in a different image namespace.
+  it('honors original and pool image disables through the outbound dispatch boundary', async () => {
     const providerId = 'openai-sub-image-fixture';
     const legacyId = 'openai-imported';
     const model = `${providerId}/gpt-image-2`;
+    const legacyModel = `${legacyId}/gpt-image-2`;
+    const { legacyCodexAccountCanRun, subscriptionRouteAllowsModel } =
+      await vi.importActual<typeof import('../legacyAccountAccess.js')>('../legacyAccountAccess.js');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pooled-image-policy-'));
+    h.modelPrefsDir = root;
+    h.accountAllowed.mockImplementation(legacyCodexAccountCanRun);
+    h.routeAllowed.mockImplementation((modelId, options, id) => subscriptionRouteAllowsModel(id, modelId, options));
     h.pools.openai = {
-      strategy: 'order', accounts: [account('default'), account('second')],
-      legacyCodexAccounts: { [legacyId]: 'second' },
+      strategy: 'order', accounts: [account('imported'), account('second')],
+      legacyCodexAccounts: { [legacyId]: 'imported' },
     };
     h.created[providerId] = { kind: 'openai', name: 'Independent', account: 'second' };
-    h.placement['openai:second'] = providerId;
-    h.tokens.mockResolvedValue({
-      accessToken: 'fixture-token', chatgptAccountId: 'fixture-workspace', canDispatch: () => true,
+    h.placement['openai:imported'] = providerId;
+    h.tokens.mockImplementation(async (directory: string) => ({
+      accessToken: `fixture-token:${directory}`, chatgptAccountId: `fixture-workspace:${directory}`,
+      canDispatch: () => true,
+    }));
+    const provider = {
+      ...BUNDLED_CATALOG.providers.find(candidate => candidate.id === 'openai')!,
+      id: providerId, subscriptionPool: 'openai' as const,
+    };
+    const upstream = vi.fn<typeof fetch>(async () => Response.json({ data: [{ b64_json: 'iVBORw0KGgo=' }] }));
+    let duringTransport: (() => void) | undefined;
+    setCodexImageAuthBinding({
+      hasPoolImageAuth: hasCreatedOpenAiImageAuth,
+      getAuth: async () => { throw new Error('Unexpected fallback to non-leased credentials'); },
+      onAuthFailure: vi.fn(),
+      acquireAuth: createCodexImageAuthAcquirer({
+        resolveSubscriptionPoolProvider, acquireSubscriptionAccount,
+        async getChatgptBridgeAuthForDispatch(family, selected) {
+          if (family !== 'openai' || !selected?.readCodexTokens) throw new Error('Missing image lease');
+          const tokens = await selected.readCodexTokens();
+          return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId, canDispatch: tokens.canDispatch! };
+        },
+        invalidateChatgptBridgeAuth: async () => false,
+      }),
     });
-    await refreshSubscriptionPool(providerId, true);
-    expect(hasCreatedOpenAiImageAuth(providerId)).toBe(true);
-    const options = { capability: 'image.generate' as const };
-    const lease = await acquireSubscriptionAccount(providerId, model, [], false, options);
     try {
-      expect(lease?.accountId).toBe('second');
-      h.accountAllowed.mockImplementation((provider: string, modelId: string) =>
-        provider !== legacyId || modelId !== `${legacyId}/gpt-image-2`);
-      expect(hasCreatedOpenAiImageAuth(providerId)).toBe(false);
-      expect(() => lease?.assertDispatchable()).toThrow('does not allow this model');
-      await expect(acquireSubscriptionAccount(providerId, model, [], false, options))
-        .rejects.toThrow('No subscription account is available');
+      const channel = createAccountCodexImageChannel(providerId, () => provider, {
+        async fetchImplementation(input, init, assertDispatchable) {
+          duringTransport?.();
+          assertDispatchable?.();
+          return upstream(input, init);
+        },
+      });
+      const params = { model, prompt: 'Draw a circle' };
+      await refreshSubscriptionPool(providerId, true);
+      expect(channel.ready()).toBe(true);
+
+      setModelsDisabled(legacyId, [legacyModel], true);
+      expect(channel.ready()).toBe(false);
+      await expect(channel.generateImage(params)).rejects.toThrow('No subscription account is available');
+      expect(upstream).not.toHaveBeenCalled();
+
+      setModelsDisabled(legacyId, [legacyModel], false);
+      duringTransport = () => setModelsDisabled(legacyId, [legacyModel], true);
+      await expect(channel.generateImage(params)).rejects.toThrow('does not allow this model');
+      expect(upstream).not.toHaveBeenCalled();
+
+      h.placement['openai:second'] = providerId;
+      await refreshSubscriptionPool(providerId, true);
+      expect(channel.ready()).toBe(true);
+      duringTransport = () => setModelsDisabled(providerId, [model], true);
+      await expect(channel.generateImage(params)).rejects.toThrow('Subscription image source does not allow this model');
+      expect(channel.ready()).toBe(false);
+      expect(upstream).not.toHaveBeenCalled();
+      await expect(channel.generateImage(params)).rejects.toThrow('Subscription image source does not allow this model');
+      expect(upstream).not.toHaveBeenCalled();
+
+      setModelsDisabled(providerId, [model], false);
+      duringTransport = undefined;
+      await channel.generateImage(params);
+      expect(upstream).toHaveBeenCalledTimes(1);
+      expect(upstream.mock.calls[0]?.[1]?.headers).toMatchObject({
+        Authorization: 'Bearer fixture-token:openai/second',
+      });
     } finally {
-      lease?.release();
+      setCodexImageAuthBinding(null);
+      h.modelPrefsDir = null;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -4521,7 +4585,7 @@ describe('native account assignment on the executing computer', () => {
   // #12129 review, unit: a built-in or registered legacy pool with a disabled image
   // must persist the new row's exact key; the placement-only cases mock that write.
   it.each(['openai', 'codex-native-old'])('keeps GPT Image Gen disabled after splitting from %s', async sourceId => {
-    const { copyProviderDisableOverrides, readModelDisableOverrides, setModelsDisabled } =
+    const { copyProviderDisableOverrides } =
       await vi.importActual<typeof import('../../maker-host/model-disable-store.js')>('../../maker-host/model-disable-store.js');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-split-model-prefs-'));
     h.modelPrefsDir = root;
@@ -4565,6 +4629,28 @@ describe('native account assignment on the executing computer', () => {
       setModelsDisabled(providerId, [modelId], false);
       expect(isModelDisabled(readModelDisableOverrides(), providerId, modelId)).toBe(false);
       expect(isModelDisabled(readModelDisableOverrides(), sourceId, sourceImage)).toBe(true);
+
+      if (legacy) {
+        // Return the imported account to its original connection from a disabled
+        // pool. Its old connection was enabled before the move back.
+        setModelsDisabled(sourceId, [sourceImage], false);
+        await runSubscriptionAccountCommand({
+          action: 'place', providerId: sourceId, accountId: originalAccount, target: providerId,
+        });
+        setModelsDisabled(providerId, [modelId], true);
+        await runSubscriptionAccountCommand({
+          action: 'place', providerId, accountId: originalAccount, target: null,
+        });
+        expect((await readSubscriptionPool(sourceId)).accounts.map(a => a.id)).toEqual([originalAccount]);
+        expect((await readSubscriptionPool(providerId)).accounts.map(a => a.id)).toEqual(['second']);
+        const persisted = JSON.parse(fs.readFileSync(path.join(root, 'model-disable-prefs.json'), 'utf8'));
+        expect(persisted.disabledModels).toMatchObject({ [`${sourceId}:${sourceImage}`]: true });
+        expect(persisted.disabledModels).not.toHaveProperty(`${sourceId}:${modelId}`);
+        setModelsDisabled(sourceId, [sourceImage], false);
+        const restored = readModelDisableOverrides();
+        expect(isModelDisabled(restored, sourceId, sourceImage)).toBe(false);
+        expect(isModelDisabled(restored, providerId, modelId)).toBe(true);
+      }
     } finally {
       h.modelPrefsDir = null;
       fs.rmSync(root, { recursive: true, force: true });

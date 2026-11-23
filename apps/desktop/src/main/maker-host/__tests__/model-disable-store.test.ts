@@ -109,10 +109,13 @@ describe('旧媒体 modelId 停用项迁移', () => {
     expect(readPrefsFile().disabledModels['ambiguous-xd:openai/gpt-image-2']).toBeUndefined();
   });
 
-  // #12129 review, unit: a split saved a built-in or native connection's image ID
-  // on the new provider. The legacy-source proof is the actual owner-scoped pool file.
-  it.each(['openai', 'codex-native-old'])('recovers a copied %s image disable and keeps manual enable after restart', async sourceId => {
-    const provider = 'openai-sub-1234abcd';
+  // #12129 reviews, unit: recover off switches copied during a split in either
+  // direction. The native-connection proof is the actual owner-scoped pool file.
+  it.each([
+    ['openai', 'openai-sub-1234abcd'],
+    ['codex-native-old', 'openai-sub-1234abcd'],
+    ['openai-sub-1234abcd', 'codex-native-old'],
+  ])('recovers the image disable copied from %s to %s until explicitly enabled', async (sourceId, provider) => {
     const other = 'openai-sub-5678abcd';
     const unregistered = 'openai-sub-9999abcd';
     const oldId = `${sourceId}/gpt-image-2`;
@@ -139,7 +142,7 @@ describe('旧媒体 modelId 停用项迁移', () => {
       const accountId = 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc';
       fs.writeFileSync(path.join(prefsDir, 'subscription-accounts.json'), JSON.stringify({
         pools: { openai: {
-          strategy: 'least', accounts: [{ id: accountId }], legacyCodexAccounts: { [sourceId]: accountId },
+          strategy: 'least', accounts: [{ id: accountId }], legacyCodexAccounts: { 'codex-native-old': accountId },
         } },
       }));
     }

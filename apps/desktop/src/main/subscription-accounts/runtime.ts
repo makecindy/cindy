@@ -1138,6 +1138,7 @@ export function hasCreatedOpenAiImageAuth(providerId: string): boolean {
   if (!state || !isCurrentRuntime(state)) return false;
   const found = poolFor(providerId);
   if (found?.kind !== 'openai' || !found.ref.created) return false;
+  if (!subscriptionRouteAllowsModel(providerId, subscriptionImageModelId(providerId))) return false;
   return providerAccounts('openai', found.pool.accounts, providerId).some(account => {
     const cached = state.cache.get(keyOf('openai', account.id));
     const legacy = readLegacyCodexProviderId(account.id);
@@ -2503,6 +2504,11 @@ export async function acquireSubscriptionAccount(
   const createdImage = ref.created && provider === 'openai' && options.capability === 'image.generate';
   if (createdImage && model !== subscriptionImageModelId(providerId))
     throw new Error('No subscription account is available');
+  const assertImagePoolAccess = () => {
+    if (createdImage && !subscriptionRouteAllowsModel(providerId, model, options))
+      throw new Error('Subscription image source does not allow this model');
+  };
+  assertImagePoolAccess();
   const pool = readPool(provider);
   if (!pool) return null;
   const state = currentRuntime();
@@ -2595,6 +2601,7 @@ export async function acquireSubscriptionAccount(
   }
   const selectAccount = () => {
     assertOwner(state);
+    assertImagePoolAccess();
     // Settings may change while the official CLI is answering.
     const latest = readPool(provider);
     if (!latest || (latest.disconnected && selectionProvider === provider)) throw new Error('Subscription accounts changed');
@@ -2649,7 +2656,7 @@ export async function acquireSubscriptionAccount(
           && (!needsModelMembership || codexAccountSupportsModel(state, a.id, model))
           && (control || !imported || legacyCodexAccountCanRun(imported, createdImage ? subscriptionImageModelId(imported) : model, {
             remote: options.remote === true, ownComputer: options.ownComputer === true,
-            newRoute: (!binding || rebind) && !options.resuming,
+            newRoute: createdImage || ((!binding || rebind) && !options.resuming),
           }) === true),
         running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
         // Control leases reserve no slot. Pinned tasks never re-pick, so the limit only gates new assignments.
@@ -2792,6 +2799,7 @@ export async function acquireSubscriptionAccount(
     if (createdImage && (accountProviderId('openai', selected) !== providerId
       || !resolveSubscriptionPoolProvider(providerId)?.created))
       throw new Error('Subscription image account was moved or disconnected');
+    assertImagePoolAccess();
     if (selected === 'default' && !defaultAccountBound(provider))
       throw new Error('Subscription account was disconnected');
     const imported = provider === 'openai' ? readLegacyCodexProviderId(selected) : undefined;
