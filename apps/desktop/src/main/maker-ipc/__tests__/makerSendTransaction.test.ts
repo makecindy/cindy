@@ -32,7 +32,6 @@ import {
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE, projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
-import { MESSAGE_SOURCE_TASK_HANDLING } from '@cindy/maker-shared/message-source';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { describe, expect, it, vi } from 'vitest';
@@ -3994,7 +3993,7 @@ describe('message source notes', () => {
     await transaction.sendToAgentAccepted('session-1', 'hello', undefined, {
       persistUserMessage: { clientId: 'm-1', content: 'hello', origin: taskOrigin },
     });
-    const sourceNote = `[消息来源] 本条由任务「整理周报」(session_id: sender-1) 发送，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}`;
+    const sourceNote = '[消息来源] 本条由任务「整理周报」(session_id: sender-1) 发送，不是用户本人输入。';
     const sent = sentText(session) as string;
     expect(sent).toBe(`${sourceNote}\n\nHANDOFF\n\nhello`);
     expect(sent.split('[消息来源]')).toHaveLength(2);
@@ -4014,7 +4013,7 @@ describe('message source notes', () => {
       },
     });
     expect(sentText(session)).toBe(
-      `[消息来源] 本条由伙伴「小助手」(bot_id: bot-7) 通过任务 (session_id: sender-1) 发送，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}\n\nhello`,
+      `[消息来源] 本条由伙伴「小助手」(bot_id: bot-7) 通过任务 (session_id: sender-1) 发送，不是用户本人输入。\n\nhello`,
     );
   });
 

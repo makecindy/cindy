@@ -15,7 +15,6 @@ import {
   readWireSourceDevice,
   readWireSourcePlugin,
 } from '../messageSourceNote';
-import { MESSAGE_SOURCE_TASK_HANDLING } from '@cindy/maker-shared/message-source';
 
 const taskOrigin = {
   kind: 'session',
@@ -39,10 +38,9 @@ describe('buildWireMessageSourceNote', () => {
       .toContain('主人对本任务的请求');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'delegated-continuation', request: { ...request, ownerVerified: true } } }))
       .toContain('主人对本任务的请求');
-    expect(verified).not.toContain('不代表用户本人的请求');
+    expect(verified).not.toContain('不是用户本人输入');
     const unverified = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } });
     expect(unverified).toContain('未核实为主人本人');
-    expect(unverified).toContain(MESSAGE_SOURCE_TASK_HANDLING);
     expect(unverified).not.toContain('主人对本任务的请求');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request: { userText: null } } }))
       .toBe(buildWireMessageSourceNote({ origin }));
@@ -89,14 +87,14 @@ describe('buildWireMessageSourceNote', () => {
 
   it('describes task, partner, plugin and shared-member senders with ids', () => {
     expect(buildWireMessageSourceNote({ origin: taskOrigin })).toBe(
-      `[消息来源] 本条由任务「周报」(session_id: s-1) 发送，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}`,
+      '[消息来源] 本条由任务「周报」(session_id: s-1) 发送，不是用户本人输入。',
     );
     expect(
       buildWireMessageSourceNote({
         origin: { ...taskOrigin, senderBotId: 'b-1', senderBotName: '小助手' },
       }),
     ).toBe(
-      `[消息来源] 本条由伙伴「小助手」(bot_id: b-1) 通过任务 (session_id: s-1) 发送，不代表用户本人的请求。${MESSAGE_SOURCE_TASK_HANDLING}`,
+      '[消息来源] 本条由伙伴「小助手」(bot_id: b-1) 通过任务 (session_id: s-1) 发送，不是用户本人输入。',
     );
     expect(
       buildWireMessageSourceNote({ sourcePlugin: { pluginId: 'p-1', name: 'Reviewer' } }),

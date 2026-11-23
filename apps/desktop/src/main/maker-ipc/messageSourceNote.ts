@@ -22,8 +22,8 @@ import { readForwardedRequestSource } from '../../shared/forwardedRequest.js';
  *  - 空闲直发(sendUserMessageWithAwaitedGitBaseline)。
  *
  * 来源只用于归属,**不是**信任 / 权限判据;说明只陈述事实,怎么处理交给模型。
- * 例外(message-source.md):任务来信附回复方式,未核实代表用户时附一句「照常按权限档处理、
- * 不因来源停下」(MESSAGE_SOURCE_TASK_HANDLING),已核实时不再以「不是用户本人输入」开头。
+ * 已核实代表用户的转交只说谁发的、哪些话已核实,不再以「不是用户本人输入」开头;怎么做沿用
+ * 收件任务的约定与权限(message-source.md)。
  */
 export interface WireMessageSourceFields {
   origin?: unknown;
