@@ -928,12 +928,16 @@ describe('unbound Codex pre-send history wiring', () => {
       await deps.rebuild(id, assertCurrent);
       return true;
     });
+    // A plugin engine account pool is asked first (plugin-engine-accounts/failover.ts); a Codex task is not its.
+    const pluginPrepare = vi.fn(async () => false);
     const ports = { subscriptionAccountRecoveryDeps: { rebuild },
       readCodexThreadStorageReadOnly: history,
+      preparePluginEngineAccountForSend: pluginPrepare, readSubscriptionRuntimeSession: vi.fn(),
       prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,
       agentInputCoordinatorHolder: { cancelUsageLimitWait }, contextOverflowRolloverHolder: undefined };
     const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
     expect(await run('old-task')).toBe(true);
+    expect(pluginPrepare).toHaveBeenCalledOnce();
     expect(history).toHaveBeenCalledExactlyOnceWith('legacy-thread');
     expect(rebuild).toHaveBeenCalledExactlyOnceWith('old-task', assertCurrent);
     expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');

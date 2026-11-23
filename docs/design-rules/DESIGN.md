@@ -751,6 +751,8 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 - **Title / description**: `--confirm-title` / `--confirm-desc`; title medium (500), description regular (400).
 - **Buttons**: pill (9999px); primary = inverse neutral (`--confirm-btn-primary-*`, not an automatic CTA assignment), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
 - **Button order** (maintainer ruling 2026-11-11, C-01 — supersedes the DS-6 primary → third → Cancel order): Cancel is leftmost and the primary action rightmost, in both visual and DOM order. With three actions the order is Cancel → optional third action → primary (e.g. Cancel / Don't Save / Save). This applies to every modal footer, including hand-built dialogs; `ConfirmDialog` has a single fixed order with no per-caller switch.
+- **Plugin form dialog layout** (user decision 2026-11-23, after the stacked first version read as wordy and grew with every list item): `GhostFormDialogHost` has a fixed height `min(640px, 85vh)` at the 600px form width; the body scrolls between two full-width hairlines, so adding or removing list items never resizes the dialog. Fields are label-left rows (104px label column, control on the right; one column below 520px) built on `FormField`. List items collapse to one-line summaries — the first text field as the title, the selected select/choice labels as the detail — and only one item is expanded at a time; a new item opens expanded. Required fields reserve no feedback space: they are checked on Save, which expands the first incomplete item and shows the inline error there (a collapsed incomplete item shows an error-coloured summary).
+- **Plugin form dialog extra action** (user decision 2026-11-23): `GhostFormDialogHost` (the plugin `form` capability) may carry one extra action such as 「删除关注」. It does not commit the form, so — like the wizard back navigation below — it sits alone at the left of the footer (`Button variant="secondary"`, `tone="danger"` when destructive), while Cancel → primary stay right-aligned per the button-order rule above. When the plugin asks for the trash icon it is the square icon-only form of that button (36px, `Trash2` 16px) with the action text as its `Tip` and accessible name. Deletion confirms through the shared `ConfirmDialog` with the destructive variant. Other dialogs keep the C-01 order, including a third action that is part of committing (e.g. Don't Save).
 - **Focus on open**: dismissible forms focus their primary input. Ordinary AlertDialog confirmation retains Cancel by default; explicit `autoFocusConfirm` focuses the primary action, while a required typed confirmation takes precedence. Initial focus does not depend on button position. Enter activates the focused button (or confirms from a satisfied typed-confirmation field) and Esc cancels unless an action is in progress.
 - **Closing affordance** (made explicit 2026-07-30, updated 2026-09-24, widened 2026-10-01): **no modal dialog closes by clicking the scrim** — forms, wizards, catalogs, confirmations, progress/copy dialogs and informational notices alike, on desktop and mobile. They close only through their own controls (Cancel / primary action / ×) or Esc (Android: Back). A mis-tap outside must not discard an in-progress form or interrupt a flow. Radix `Dialog.Content` therefore always sets `onPointerDownOutside={(event) => event.preventDefault()}`; hand-built scrims only block the click (and keep focus inside so Esc still works). Not covered: media viewers (lightboxes), anchored menus and plain popovers, side drawers and mobile bottom sheets, which keep tap-outside dismissal — except an anchored input popover holding text the user is typing (e.g. the plugin card prompt popover), which follows this rule and closes only via Cancel / Send / Esc. Dialogs with a Cancel action carry **no top-right × close icon** — a × coexisting with Cancel is a spec violation. Confirm-tier dialogs built on AlertDialog (ConfirmDialog) also do **not** close on scrim click. The provider form has no ×; its image-generation interruption confirmation remains a separate business layer. Implementation and regressions: [AddProviderWizard](../../apps/desktop/src/renderer/components/settings/AddProviderWizard.tsx), [provider dialog tests](../../apps/desktop/src/renderer/components/settings/__tests__/CustomProviderDialogAccessibility.test.tsx).
 - **Multi-step dialogs / wizards** (registered 2026-07-30, first consumer: Add-Provider wizard): the step indicator lives in the header row (round numbered chips — current step solid `--accent-cta-bg` with `--surface-on-card` text, completed steps ✓ on `--surface-chip`, upcoming outlined `--border-default`). Footer: **back navigation ("← 上一步") is a left-aligned bare text button** (`--text-secondary`, 13px/500, no background — the §5 bare-text-button exemption, no radius) — navigation is not a commit action and must not sit inside the right-aligned pill group; commit actions (取消 / 下一步 / 完成) remain right-aligned pills per the button rule above. Catalog/list steps put the scrollable region between **two full-width 1px `--border-default` hairlines**, with permanent entries (e.g. 自定义端点) pinned below the scroll region, always visible. Width matches the custom-provider form dialog (600px, `min(600px, 100vw-32px)`) so the two provider dialogs read as one family; height is capped at `min(640px, 85vh)` — on large displays a catalog dialog must not stretch toward full-screen height (2026-07-30 ruling).
@@ -1093,8 +1095,10 @@ tailwind-merge，调用方传入的 `z-<层名>` 会覆盖组件的默认层。
 | `dropdown` | 10010 | 菜单与弹出层 | `DropdownMenu`、`Popover`、`MorphPopover`、`Select` / `SelectParts` 的默认值；模型选择器的二级面板 |
 | `tooltip` | 10011 | 悬停提示 | `Tip` / `Tooltip` 的默认值；自绘的图表提示 |
 | `modal-popover-nested` | 10020 | 浮层上的浮层 | 弹出层里再弹出的浮层，以及其中的 Tip（如定时任务表单） |
+| `modal-blocking` | 10050 | 全局阻断提示 | 只经 `confirm({ blocking: true })` 使用（现为登录过期）；遮罩与面板同值，其中 Tip 取 +1 |
 | `toast` | 10100 | 通知 | Toast 容器 |
 | `toast-top` | 10101 | 通知之上 | 下载 Toast、庆祝动画（`ConfettiBurst` 默认值，额度重置动画同层） |
+| `blocking-gate` | 10200 | 必须先处理才能继续使用的整窗遮挡 | 协议更新确认（`LegalTermsUpdateGate`）及其加载中的透明遮挡；盖过通知，只用于不处理就不能继续用的场景 |
 
 使用规则：
 
@@ -1109,6 +1113,17 @@ tailwind-merge，调用方传入的 `z-<层名>` 会覆盖组件的默认层。
   `modal` 层弹窗的，面板也用 `z-modal`，让后挂载的弹窗按 DOM 顺序在上（`ConfirmDialog` 的遮罩和面板
   都在 `modal`）。叠在弹窗上的二级弹窗用 `modal-nested`；内嵌的 `ConfirmDialog` 传
   `zIndex={Z_INDEX_LAYERS['modal-nested']}`。
+- **全局阻断提示**（2026-11-22 维护者裁决）：`modal-blocking` 只给「不处理就无法继续使用应用」的全局提示，
+  现在只有登录过期。普通确认、二级弹窗和授权请求（插件确认、插件安装授权、本机 Agent 确认等）都不得使用；
+  调用方只能经全局 `confirm()` 的 `blocking: true` 拿到这一层，不写 `z-modal-blocking`，也不传
+  `Z_INDEX_LAYERS['modal-blocking']`（`modalBlockingLayer.guard.test.ts` 拦截）。阻断提示走独立槽位：
+  不排在普通确认后面、立即显示，多个阻断提示之间依次显示；关闭后焦点回到被它打断的弹窗。阻断提示在显示或排队期间，
+  新来的普通确认暂缓、只排队不显示，阻断提示全部关闭后再依次出现（Radix 按挂载顺序管理焦点与 Esc，不看层级，
+  之后才挂载的普通确认会抢走焦点）；阻断提示打开前已在显示的普通确认原地保留在它下面。界面里自己挂载的
+  `ConfirmDialog`（如关窗确认）同样如此：阻断提示显示期间新打开的先不挂载，阻断提示关闭后再出现，由
+  `ConfirmDialog` 统一处理，调用方不用改。直接用 Radix Dialog / AlertDialog 的弹窗不在此列。没有取消按钮时
+  焦点落在主按钮；Esc 与点「重新登录」一样关闭提示（结算为取消，登录过期两者都进入登出），只关提示本身，
+  不关下面的弹窗。Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住它的是结果反馈而不是另一个要处理的问题。
 - **组件内部的局部叠放**只和同一组件里的兄弟元素比较，不进全局刻度，见下方例外。
 
 登记的例外与子档（保留字面量，新增同类须在这里登记）：

@@ -50,6 +50,28 @@ function entry(kind: 'gateway' | 'chat-only' = 'gateway') {
 }
 
 describe('model harness choices', () => {
+  // #4477 unit: the remote model row previously skipped native metadata entirely.
+  // The target's 100K preview must win over the local preferences and static catalog.
+  it.each([true, false])('shows remote native metadata without a controller/catalog fallback (available=%s)', async available => {
+    const local = vi.fn().mockResolvedValue({ codexContext: { contextWindow: 272_000 } });
+    const invoke = vi.fn().mockResolvedValue({ codexContext: available ? { contextWindow: 100_000 } : null });
+    Object.assign(window, { electronAPI: { maker: { getModelContextLimit: local }, deviceLink: { invoke } } });
+    const model = entry();
+    const capability = model.capabilities.codex!;
+    const rendered = render(<ModelConfigFlyout entry={model} deviceId="execution-device"
+      config={{ engine: 'codex', agent: 'codex', capability, efforts: [], effort: null, fast: false,
+        fastCapable: false, customized: false, wireModelId: capability.wireModelId }}
+      state="recommended" sourceLabel="Cindy AI" price={null} effortLabelOf={(_, effort) => effort}
+      onEngineChange={vi.fn()} onEffortChange={vi.fn()} onFastChange={vi.fn()}
+      onResetToRecommended={vi.fn()} onAddFavorite={vi.fn()} onRemoveFavorite={vi.fn()} />);
+    expect(await screen.findByText(available ? /Cindy AI · 100K 上下文/ : /Cindy AI · 未读取到 CLI 配置/)).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith('execution-device', 'maker:model-context-limit:get', [{
+      providerId: 'xd', agent: 'codex', modelId: capability.wireModelId,
+    }]);
+    expect(local).not.toHaveBeenCalled();
+    rendered.unmount();
+    Reflect.deleteProperty(window, 'electronAPI');
+  });
   it.each(['cc', 'codex', 'pi'] as const)('shows the saved budget and refreshed default for %s', async (engine) => {
     let changed: (() => void) | undefined;
     const unsubscribe = vi.fn();

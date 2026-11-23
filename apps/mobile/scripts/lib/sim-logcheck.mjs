@@ -57,7 +57,7 @@ export function removeMetroLog(path) {
 export function metroLogEnv(path, existingNodeOptions = "") {
   const preload = `--require ${JSON.stringify(TEE_PRELOAD)}`;
   return {
-    CINDY_METRO_LOG_PATH: path,
+    CINDY_METRO_LOG_PATH: path ?? "",
     NODE_OPTIONS: [existingNodeOptions.trim(), preload]
       .filter(Boolean)
       .join(" "),

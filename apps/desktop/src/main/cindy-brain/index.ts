@@ -404,7 +404,9 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
-import { configurePluginHarnessRegistry, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
+import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
 import {
   handleGhostSetupStatusRequest,
@@ -569,6 +571,8 @@ import {
   getGhostConfirmDialogBridge,
   initGhostConfirmDialogBridge,
 } from './ghostConfirmDialogBridge.js';
+import { GhostFormSlot } from './formSlot.js';
+import { getGhostFormDialogBridge, initGhostFormDialogBridge } from './ghostFormDialogBridge.js';
 import {
   createForgeOidcInstallMainWindowSender,
   forgeOidcInstallConfirmFacts,
@@ -719,7 +723,6 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
-  isOrganizationManagedProvider,
   isProviderDisabled,
   type MediaCapability,
   type ProviderView,
@@ -780,7 +783,7 @@ import { isProviderRouteMutationInProgress, getProviderRouteCredentialRevision }
 import { geminiImageAgent, geminiImageConnectionId, resolveGeminiImageKey, savedGeminiRouteMatches } from '../maker-host/gemini-image-connection.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
-import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
+import { codexImageAccountKind, createAccountCodexImageChannel, getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import {
   createByokImageChannel,
@@ -1437,6 +1440,7 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   getGhostSetupInteractionBridge()?.cleanupAll('session_aborted');
   getGhostGrantConfirmBridge()?.cleanupAll('session_aborted');
   getGhostConfirmDialogBridge()?.cancelAll();
+  getGhostFormDialogBridge()?.cancelAll();
   modelPickerSingleton?.cancel();
   getForgeOidcInstallConfirmBridge()?.cancelAll();
   installConsentWindowBridge.cancelAll();
@@ -2406,6 +2410,8 @@ export function acceptPluginInvocation(id: string, invocationId: string): void {
 
 /** Both sandbox pages and Node workers release their Host-owned resources here. */
 function disposePluginRuntimeHostServices(id: string): void {
+  // 插件停用、卸载、崩溃或熔断:它的表单按取消结算并收起,不再占着全局唯一的表单位置。
+  getGhostFormDialogBridge()?.cancelAll(id);
   networkSlotSingleton?.disposeGhost(id);
   fsSlotSingleton?.disposePlugin(id);
   getDesktopHostTerminalService(false)?.disposePlugin(id);
@@ -3426,6 +3432,7 @@ async function applyGhostAssistantRenderCard(
     GHOST_CARD_UPDATED_CHANNEL,
     {
       callId: clientId,
+      sessionId,
       ghostId: card.ghostId,
       toolUseId: null,
       html: sanitized.html,
@@ -4265,6 +4272,68 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
     });
   }
   return confirmSlotSingleton;
+}
+
+let formSlotSingleton: GhostFormSlot | null = null;
+
+/** 表单弹窗通道(main → 获得焦点的**单个**窗口);超时/切账号时再发 dismissed 收起。 */
+export const GHOST_FORM_CHANNEL = 'ghosts:form-request';
+export const GHOST_FORM_DISMISSED_CHANNEL = 'ghosts:form-dismissed';
+
+/** 获得焦点的受信 Cindy 窗口;没有就是用户没在看 Cindy。 */
+function focusedTrustedWindow(): BrowserWindow | null {
+  const win = BrowserWindow.getFocusedWindow();
+  return win && !win.isDestroyed() && isTrustedAppRendererWindow(win) ? win : null;
+}
+
+/**
+ * 表单弹窗槽单例(form):资格审/净化/限速/单飞/前台判断在 GhostFormSlot,往返、超时、
+ * 窗口关闭收尾在 GhostFormDialogBridge,这里只组装"投给哪个窗口"。
+ * 只投获得焦点的那个窗口:用户正在那里点的按钮,表单就该弹在那里。
+ */
+export function getGhostFormSlot(): GhostFormSlot {
+  if (!formSlotSingleton) {
+    const bridge =
+      getGhostFormDialogBridge() ??
+      initGhostFormDialogBridge({
+        deliver: (payload) => {
+          const win = focusedTrustedWindow();
+          if (!win) return null;
+          const contents = win.webContents;
+          const ownerStamp = getGhostOwnerPushStamp();
+          sendGhostContentsPush(contents, GHOST_FORM_CHANNEL, payload, ownerStamp);
+          return {
+            windowId: contents.id,
+            dismiss: (requestId) => {
+              if (!contents.isDestroyed()) sendGhostContentsPush(contents, GHOST_FORM_DISMISSED_CHANNEL, { requestId }, ownerStamp);
+            },
+            onClosed: (callback) => {
+              const onGone = () => callback();
+              const onNavigate = (_event: unknown, _url: string, isSameDocument: boolean, isMainFrame: boolean) => {
+                if (isMainFrame && !isSameDocument) callback();
+              };
+              contents.once('destroyed', onGone);
+              contents.on('render-process-gone', onGone);
+              contents.on('did-start-navigation', onNavigate);
+              return () => {
+                if (contents.isDestroyed()) return;
+                contents.removeListener('destroyed', onGone);
+                contents.removeListener('render-process-gone', onGone);
+                contents.removeListener('did-start-navigation', onNavigate);
+              };
+            },
+          };
+        },
+        log,
+      });
+    formSlotSingleton = new GhostFormSlot({
+      getGhost: findGhostForInstanceId,
+      hasFocusedWindow: () => focusedTrustedWindow() !== null,
+      showForm: (params) => bridge.request(params),
+      log,
+    });
+  }
+  return formSlotSingleton;
 }
 
 let modelPickerSingleton: GhostModelPicker | null = null;
@@ -5515,23 +5584,12 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registeredCustomImageAccounts,
   );
   for (const provider of imageProviders) {
-    if (
-      isOrganizationManagedProvider(provider) ||
-      provider.auth.native !== 'codex' ||
-      registeredCodexImageAccounts.has(provider.id)
-    )
-      continue;
+    if (!codexImageAccountKind(provider) || registeredCodexImageAccounts.has(provider.id)) continue;
     const providerId = provider.id;
     imageChannelRegistrySingleton.register(
       providerId,
-      createCodexImageChannel({
-        providerId,
-        hasOAuthLogin: () => getCodexImageAuthBinding().hasAuth?.(providerId) === true,
-        getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
-        onAuthFailure: async (failure) => {
-          await getCodexImageAuthBinding().onAuthFailure(failure, providerId);
-        },
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      createAccountCodexImageChannel(providerId, () => getActiveCatalog().providers.find(p => p.id === providerId), {
+        fetchImplementation: outboundFetch,
         beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
       }),
     );
@@ -5803,7 +5861,7 @@ configureProviderMediaRuntime({
       }
     };
     beforeDispatch();
-    const remoteAuth = await getCodexImageAuthBinding().acquireRemoteAuth?.(providerId, model);
+    const remoteAuth = await getCodexImageAuthBinding().acquireAuth?.(providerId, model, true);
     if (!remoteAuth) throw new Error('SHARED_IMAGE_UNAVAILABLE');
     try {
       const channel = createCodexImageChannel({
@@ -8891,6 +8949,10 @@ async function uninstallGhostAndCleanupLocked(
     removeGhostKvBestEffort(publishedModelsStore(), storagePart, log);
     removeGhostKvBestEffort(publishedHarnessesStore(), storagePart, log);
     if (storagePart) {
+      // 引擎账号(subscription-account-pools.md 插件引擎的账号)：Cindy 为它的引擎加的账号目录与设置随卸载删除，停用保留。
+      await forgetPluginEngineAccountsOfPlugin(storagePart).catch((err) => {
+        log.warn('plugin engine accounts cleanup failed', { id: storagePart, error: err instanceof Error ? err.message : String(err) });
+      });
       try {
         await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', storagePart), {
           recursive: true,
@@ -9193,7 +9255,7 @@ export function registerGhostIpc(): void {
   if (ipcRegistered) return;
   ipcRegistered = true;
   // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。
-  setGhostToolApprovalResolver(runtimePluginHost.resolveToolApproval);
+  setGhostToolApprovalResolver(runtimePluginHost.resolveToolApproval, runtimePluginHost.resolveStartupToolApproval);
   const readMail = createMailReader({
     plugins: () => availableGhosts().flatMap(g => {
       if (!g.enabled || g.approval.state !== 'approved' || g.manifest.mail !== true || !g.manifest.mailReader ||
@@ -9525,13 +9587,35 @@ export function registerGhostIpc(): void {
     uiLocale: () => currentGhostAppContext().context.uiLocale,
     spawn: (ghostId, harnessId, options) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId, options),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
-    readUsage: async (ghostId, harnessId) => {
+    readUsage: async (ghostId, harnessId, accountDir) => {
       const owner = captureDataOwnerBroadcastScope();
       const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
-        type: 'node-request', method: 'usage', params: { harnessId }, timeoutMs: 26000,
+        type: 'node-request', method: 'usage',
+        params: { harnessId, ...(accountDir !== undefined ? { accountDir } : {}) }, timeoutMs: 26000,
+      });
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) return null;
+      if (response.ok) return response.result;
+      switch (response.errorCode) {
+        case 'TIMEOUT':
+        case 'RATE_LIMITED':
+        case 'PROCESS_START_FAILED':
+        case 'PROCESS_EXITED':
+        case 'PROTOCOL_ERROR':
+        case 'INTERNAL':
+          return PLUGIN_USAGE_WORKER_FAILURE;
+        default:
+          return null;
+      }
+    },
+    // 引擎账号(plugin-harnesses.md 引擎账号)：方法名与参数由注册表固定，回包按协议校验后才用。
+    callAccount: async (ghostId, method, params, timing) => {
+      const owner = captureDataOwnerBroadcastScope();
+      const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
+        type: 'node-request', method, params, ...timing,
       });
       return response.ok && isDataOwnerBroadcastScopeCurrent(owner) ? response.result : null;
     },
+    accountRoot: pluginEngineAccountRoot,
     log,
   });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识
@@ -10302,6 +10386,11 @@ export function registerGhostIpc(): void {
     if (type === 'confirm-request') {
       return getGhostConfirmSlot().handleRequest(id, payload);
     }
+    // form-request = 表单弹窗(form 槽):校验/限速/单飞/前台判断在 formSlot,往返在
+    // ghostFormDialogBridge。ok:true 只代表问到了,答案看 outcome。
+    if (type === 'form-request') {
+      return getGhostFormSlot().handleRequest(id, payload);
+    }
     if (type === 'model-picker-request') {
       const target = ghostInstallMutationTargetFor(id);
       return getGhostModelPicker().request(id, payload, () =>
@@ -10337,6 +10426,20 @@ export function registerGhostIpc(): void {
     const bridge = getGhostConfirmDialogBridge();
     if (!bridge) return { handled: false };
     return { handled: bridge.resolve(p.requestId, p.confirmed) };
+  });
+
+  // ── 表单弹窗回包(form 槽)──────────────────────────────────────────
+  // 只认投递目标那个窗口的回包(桥按 webContents id 比对);answer 的形状与值由桥和槽
+  // 按原表单收口,畸形回包一律按取消结算。
+  ipcMain.handle('ghosts:form:resolve', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const p = raw as { requestId?: unknown; answer?: unknown } | null;
+    if (!p || typeof p.requestId !== 'string' || p.requestId.length === 0 || p.requestId.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'requestId must be a non-empty string');
+    }
+    const bridge = getGhostFormDialogBridge();
+    if (!bridge) return { handled: false };
+    return { handled: bridge.resolve(event.sender.id, p.requestId, p.answer) };
   });
 
   ipcMain.handle('forge-oidc-install:resolve-confirm', async (event, raw: unknown) => {
@@ -10980,8 +11083,9 @@ export function registerGhostIpc(): void {
       updateKey: activeOwnerScopeKey(),
       tempRoot: app.getPath('temp'),
       isCurrentOwner: () => ghostOwnerScope.isStable(owner),
-      download: (file, asset, callbacks) => downloadGithubPluginRelease(
-        outboundFetch as typeof fetch, token, source.repository, asset, file, callbacks,
+      download: (file, _asset, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, check.authenticated ? token : null, source.repository,
+        release, file, callbacks,
       ),
       install: async file => {
         const { ghost } = await installLocalFile(event.sender, owner, file, {
@@ -11139,14 +11243,16 @@ export function registerGhostIpc(): void {
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
     if (action === 'sign-in') return openGithubSignIn();
     const token = await readLocalGithubToken();
-    const result = await checkGithubPluginRelease(outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version);
+    const { check, authenticated } = await checkGithubPluginRelease(
+      outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version,
+    );
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
-    if (action === 'check' || !token || typeof expectedAssetId !== 'number') return result;
+    if (action === 'check' || typeof expectedAssetId !== 'number') return check;
     const instance = installedGhostStoragePart(target);
     const approval = ghostInstallApprovalToken(target.approval);
     const ownerStamp = getGhostOwnerPushStamp();
     return installCheckedGithubPluginRelease({
-      check: result,
+      check,
       expectedAssetId,
       pending: githubReleaseUpdates,
       updateKey: JSON.stringify([activeOwnerScopeKey(), instance]),
@@ -11157,8 +11263,10 @@ export function registerGhostIpc(): void {
           sendGhostContentsPush(event.sender, GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL, { instanceId: instance, progress }, ownerStamp);
         }
       },
-      download: (file, release, callbacks) =>
-        downloadGithubPluginRelease(outboundFetch as typeof fetch, token, repository, release, file, callbacks),
+      download: (file, release, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, authenticated ? token : null, repository,
+        { ...release, pluginId: target.manifest.id }, file, callbacks,
+      ),
       async install(file, release) {
         const updated = await updateLocalFile(event.sender, owner, file, {
           expectedPackageSha256: release.sha256,

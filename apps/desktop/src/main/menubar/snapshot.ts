@@ -39,16 +39,21 @@ import {
 } from '../../shared/menubarQuota.js';
 
 export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
-export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'shared';
+export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'zhipu' | 'plugin' | 'shared';
 
 export interface MenubarWindowInput {
-  kind: 'session' | 'week' | 'scoped' | 'period';
-  /** Model name for scoped windows ("Fable"). */
+  kind: 'session' | 'week' | 'scoped' | 'period' | 'custom';
+  /** Model name for scoped windows ("Fable"), or plugin-provided label for custom windows. */
   label?: string | null;
   /** 0...100 used. */
   usedPercent: number;
   resetsAtMs: number | null;
   windowMinutes: number;
+}
+
+export interface MenubarCurrencyBalance {
+  currency: string;
+  amount: number;
 }
 
 export interface MenubarSubscriptionInput {
@@ -66,6 +71,8 @@ export interface MenubarSubscriptionInput {
   plan: string | null;
   /** Empty while the first read is still pending. */
   windows: MenubarWindowInput[];
+  /** Currency balances reported by a plugin engine (may accompany or replace percentage windows). */
+  balances?: readonly MenubarCurrencyBalance[];
   /** Codex extra credits; null when the account reports none. */
   credits: number | null;
   creditsUnlimited: boolean;
@@ -226,13 +233,15 @@ const MIN_PACE_ELAPSED = 0.03;
 const ROOMY_CELL_LIMIT = 4;
 /** Settings' soft daily limit for a period quota: period total / 30 × 4.5 (a display hint, not a cap). */
 const DAILY_SOFT_LIMIT_FACTOR = 4.5;
-const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3, 'opencode-go': 4, shared: 5 };
+const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3, 'opencode-go': 4, zhipu: 5, plugin: 6, shared: 7 };
 const FAMILY_COLORS: Record<MenubarFamily, MenubarColor[]> = {
   claude: ['claude', 'claude2', 'claude3'],
   codex: ['codex'],
   grok: ['fill'],
   kimi: ['fill'],
   'opencode-go': ['fill'],
+  zhipu: ['fill'],
+  plugin: ['fill'],
   shared: ['fill'],
 };
 const HARNESS_ORDER: MenubarHarness[] = ['claude-code', 'codex', 'pi'];
@@ -403,6 +412,32 @@ class Builder {
     return `${currency === 'CNY' ? '¥' : '$'}${amount}`;
   }
 
+  /** Format an arbitrary ISO-4217 currency balance from a plugin engine. */
+  private currencyMoney(value: number, currency: string, exact = false): string {
+    if (currency === 'USD' || currency === 'CNY') {
+      return exact ? this.exactMoney(value, currency) : this.balanceMoney(value, currency);
+    }
+    try {
+      return new Intl.NumberFormat(this.input.locale, {
+        style: 'currency',
+        currency,
+        ...(exact
+          ? { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+          : { maximumFractionDigits: value >= 100 ? 0 : 2 }),
+      }).format(value);
+    } catch {
+      return `${currency} ${value.toFixed(2)}`;
+    }
+  }
+
+  private validBalances(source: MenubarSubscriptionInput): MenubarCurrencyBalance[] {
+    return (source.balances ?? []).filter((row) => typeof row.currency === 'string' && Number.isFinite(row.amount));
+  }
+
+  private primaryBalance(source: MenubarSubscriptionInput): MenubarCurrencyBalance | null {
+    return this.validBalances(source)[0] ?? null;
+  }
+
   private tokens(value: number): string {
     const millions = value / 1e6;
     if (millions >= 1000) return `${(millions / 1000).toFixed(1)}B`;
@@ -471,6 +506,7 @@ class Builder {
   }
 
   private windowLabel(window: MenubarWindowInput): string {
+    if (window.kind === 'custom') return window.label?.trim() || this.t('window.week');
     if (window.kind === 'period') return this.t(window.label === 'limit_month_code' ? 'window.kimiMonthCode' : 'window.kimiMonthTotal');
     if (window.kind === 'session') return this.t('window.session', { hours: Math.round(window.windowMinutes / 60) });
     if (window.kind === 'scoped') return this.t('window.scoped', { model: window.label ?? '' });
@@ -557,7 +593,9 @@ class Builder {
           || FAMILY_ORDER[a.family] - FAMILY_ORDER[b.family],
       );
     if (subscriptions[0]) return subscriptions[0];
-    return this.visible.find((source) => source.kind === 'balance' && source.available > 0) ?? null;
+    const wallet = this.visible.find((source) => source.kind === 'balance' && source.available > 0);
+    if (wallet) return wallet;
+    return this.visibleSubscriptions().find((source) => !source.lastSeenAtMs && (this.primaryBalance(source)?.amount ?? 0) > 0) ?? null;
   }
 
   /** The subscription closest to empty that still has room. */
@@ -618,7 +656,7 @@ class Builder {
       // "Used up" is only true when something was actually measured empty.
       const measured =
         this.visible.some((source) => source.kind === 'balance')
-        || this.visibleSubscriptions().some((source) => this.usableRemaining(source) !== null);
+        || this.visibleSubscriptions().some((source) => this.usableRemaining(source) !== null || (!source.lastSeenAtMs && this.primaryBalance(source) !== null));
       if (!measured) {
         const unread = this.visibleSubscriptions().length > 0;
         return unread
@@ -710,6 +748,29 @@ class Builder {
     const state = this.state(source);
     const name = this.who(source);
     if (!state.limit || state.remaining === null) {
+      const balance = this.primaryBalance(source);
+      if (balance) {
+        const seenAtMs = source.lastSeenAtMs ?? null;
+        const formatted = this.currencyMoney(balance.amount, balance.currency);
+        const level: MenubarLevel = balance.amount > 0 ? 'normal' : 'error';
+        const labelName = source.brand === name ? name : `${source.brand} ${name}`;
+        return {
+          ...base,
+          emphasized,
+          name,
+          value: formatted,
+          valueUnit: null,
+          valueLabel: null,
+          level,
+          fill: balance.amount > 0 ? 1 : 0,
+          reserve: false,
+          when: seenAtMs !== null ? this.ago(seenAtMs) : '',
+          whenLevel: 'normal',
+          resetsAtMs: null,
+          ...(seenAtMs !== null ? { stale: true } : {}),
+          accessibilityLabel: `${labelName} ${formatted}`,
+        };
+      }
       return {
         ...base,
         emphasized: false,
@@ -924,6 +985,34 @@ class Builder {
       ? { kind: 'open-app' }
       : { kind: 'new-task', providerId: source.providerId };
     if (!limit) {
+      const balances = this.validBalances(source);
+      if (balances.length > 0) {
+        const primary = balances[0]!;
+        const updated = source.updatedAtMs ? this.t('fact.updatedAgo', { ago: this.ago(source.updatedAtMs) }) : '';
+        const balanceFacts: MenubarFact[] = balances.map((row, index) => ({
+          label: this.t('fact.balance'),
+          value: this.currencyMoney(row.amount, row.currency, true),
+          sub: index === 0 ? updated : row.currency,
+        }));
+        return {
+          id: source.id,
+          logoSvg: source.logoSvg,
+          title,
+          plan: source.plan ?? '',
+          rings: [{ fraction: primary.amount > 0 ? 1 : 0, color: primary.amount > 0 ? 'ink' : 'error' }],
+          bigValue: this.currencyMoney(primary.amount, primary.currency),
+          bigUnit: null,
+          bigColor: null,
+          bigCompact: true,
+          bigCaption: this.t('detail.balanceCaption'),
+          legend: [],
+          sayPrimary: this.t('say.balance'),
+          saySecondary: null,
+          facts: [...balanceFacts, ...this.accountFacts(source)],
+          actionLabel,
+          action,
+        };
+      }
       return {
         id: source.id,
         logoSvg: source.logoSvg,
@@ -1040,6 +1129,13 @@ class Builder {
     }
     if (source.prepaidUsd !== null) {
       facts.push({ label: this.t('fact.prepaid'), value: `$${source.prepaidUsd.toFixed(2)}`, sub: this.t('fact.xaiAccount') });
+    }
+    for (const row of this.validBalances(source)) {
+      facts.push({
+        label: this.t('fact.balance'),
+        value: this.currencyMoney(row.amount, row.currency, true),
+        sub: source.brand,
+      });
     }
     facts.push(...this.accountFacts(source));
     return {
@@ -1163,7 +1259,9 @@ class Builder {
       .join(' + ');
     const subtitle = source.family === 'codex'
       ? `Codex${plan}`
-      : this.t('manage.subscription', { plan: source.plan ?? source.brand, windows: windows || '—' });
+      : !windows && this.primaryBalance(source)
+        ? this.t('manage.balance')
+        : this.t('manage.subscription', { plan: source.plan ?? source.brand, windows: windows || '—' });
     return source.device ? this.t('manage.onDevice', { name: source.device.name, subtitle }) : subtitle;
   }
 
@@ -1171,7 +1269,10 @@ class Builder {
     if (source.kind === 'balance') return this.balanceMoney(source.available, source.currency);
     if (source.kind === 'payg') return '—';
     const remaining = this.remaining(source);
-    if (remaining === null) return '—';
+    if (remaining === null) {
+      const balance = this.primaryBalance(source);
+      return balance ? this.currencyMoney(balance.amount, balance.currency) : '—';
+    }
     if (remaining <= 0 && (source.creditsUnlimited || (source.credits ?? 0) > 0)) return this.t('cell.credits');
     return `${Math.round(remaining)}%`;
   }
@@ -1233,7 +1334,16 @@ class Builder {
       }
       if (source.kind !== 'subscription') continue;
       const remaining = this.usableRemaining(source);
-      if (remaining === null) continue;
+      if (remaining === null) {
+        if (!source.lastSeenAtMs) {
+          const balance = this.primaryBalance(source);
+          if (balance) {
+            known += 1;
+            if (balance.amount > 0) return false;
+          }
+        }
+        continue;
+      }
       known += 1;
       if (remaining > QUOTA_CRIT_REMAINING_PERCENT) return false;
     }

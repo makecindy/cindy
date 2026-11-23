@@ -387,6 +387,19 @@ export function ImDefaultSettingsSection({
           )}
           <ModelSelector
             remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
+            // 字段上的模型名 / 来源图标按已存路由所在的目录解析(另一台电脑或分享的供应商),
+            // 只传 remoteAgent 时 trigger 只查本机目录,远程模型显示成「模型信息暂不可用」。
+            deviceId={agentDeviceId ?? undefined}
+            agentDevice={
+              agentDeviceId
+                ? {
+                    deviceId: agentDeviceId,
+                    name:
+                      routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ??
+                      null,
+                  }
+                : null
+            }
             fastModeConfigurable={false}
             unifiedAgents={pickerAgents}
             onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {

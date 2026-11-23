@@ -1810,6 +1810,109 @@ async function postWithAuth(url: string, body: unknown, authorization: string): 
   return { status: res.status, text: await res.text() };
 }
 
+async function postMessages(url: string): Promise<{ status: number; text: string }> {
+  const res = await fetch(`${url}/v1/messages?beta=true`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'thread-id': 'thread-a' },
+    body: JSON.stringify({ model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] }),
+  });
+  return { status: res.status, text: await res.text() };
+}
+
+// 测试价值(unit,真实回环 HTTP):生产入口 createAnthropicCompatProxy 的转发路径拼接。
+// #12233 抓包实证:自定义供应商的 Messages 地址常存成 …/v1(Pi/Codex 通道需要带 /v1),
+// Claude Code CLI 自己又补 /v1/messages,转发层把上游 basePath 与有效请求路径直接相加,
+// 拼出 /v1/v1/messages,上游空 404 被误报为「模型不存在」;连接探测
+// (joinAnthropicMessagesUrl)已去重,所以「测试连接」通过而会话失败。Bug 依据:#12233;
+// 现有覆盖缺口:转发用例的 upstream 一律不带路径前缀,从未覆盖 basePath 与入站 /v1 的
+// 重叠。最小失败输入:upstream base 以 /v1 结尾 + 入站 POST /v1/messages?beta=true →
+// 修复前上游实收 /v1/v1/messages?beta=true。tier:unit(真实回环服务器,不 mock 网络层)。
+describe('anthropic-compat-proxy upstream base /v1 overlap (#12233)', () => {
+  it('forwards /v1/messages to a /v1-suffixed base without duplicating the prefix, keeping ?beta=true', async () => {
+    // 模拟上游仅在 /v1/messages 返回有效回复,其它路径空 404(对齐 issue 抓包)。
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      seen.push(req.url ?? '');
+      if (req.url === '/v1/messages?beta=true') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    const port = await listenOnAvailableLoopbackPort(server);
+    upstreamClose = () => new Promise<void>((r) => server.close(() => r()));
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `http://127.0.0.1:${port}/v1`,
+      transformRequest: [],
+    });
+
+    const result = await postMessages(proxy.url);
+    expect(result.status).toBe(200);
+    expect(seen).toEqual(['/v1/messages?beta=true']);
+  });
+
+  it('removes only the overlapping segment for a gateway-prefixed base (/proxy/v1 → /proxy/v1/messages)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${upstream.url}/proxy/v1`,
+      transformRequest: [],
+    });
+
+    const result = await postMessages(proxy.url);
+    expect(result.status).toBe(200);
+    expect(upstream.paths).toEqual(['/proxy/v1/messages?beta=true']);
+  });
+
+  it('honors an explicit requestPath override through the same single join rule', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${upstream.url}/proxy/v1`,
+      transformRequest: [],
+      routingTransform: () => ({ pathOverride: '/v1/messages?beta=true' }),
+    });
+
+    // 入站路径刻意与 pathOverride 不同（否则转发层忽略 override 时本用例也会过，
+    // 「显式 requestPath 优先」这条规则就没有回归保护——greptile P2 指出）。
+    const res = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'thread-id': 'thread-a' },
+      body: JSON.stringify({ model: 'claude-test', input: 'hi' }),
+    });
+    expect(res.status).toBe(200);
+    expect(upstream.paths).toEqual(['/proxy/v1/messages?beta=true']);
+  });
+
+  it('keeps bases without a trailing /v1 untouched (no over-stripping)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${upstream.url}/api`,
+      transformRequest: [],
+    });
+
+    const result = await postMessages(proxy.url);
+    expect(result.status).toBe(200);
+    expect(upstream.paths).toEqual(['/api/v1/messages?beta=true']);
+  });
+});
+
 describe('anthropic-compat-proxy routingTransform', () => {
   it('routes an explicit upstream override without resolving an unavailable default upstream', async () => {
     const custom = await startFakeUpstream((_i, _b, res) => {

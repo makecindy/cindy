@@ -91,9 +91,15 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | 文本 / 思考 | `agent_message_chunk` / `agent_thought_chunk` → `text` / `thinking` |
 | 工具 | `tool_call` / `tool_call_update` → `tool_use` / `tool_result`（同一 `toolCallId` 合并） |
 | 计划 | `plan` → 折叠为任务内的待办展示（第一期可只记录为文本） |
-| 用量 | `usage_update` → 上下文用量 |
+| 用量 | `usage_update` → 上下文用量；`session/prompt` 结果里的 `usage`（本轮 token）→ `done.data.usage`，供「远程与分享」页按使用方的用量与插件的 did-turn-end 使用。`inputTokens` 按不含缓存记：对端的 `totalTokens` 等于输入 + 输出时，说明它的输入含缓存，先扣掉缓存。对端不报时只记轮数（2026-11-23） |
 | 权限 | `session/request_permission` → `interaction_request`（kind = permission） |
 | 模型 / 推理强度 | 类别为 `model` 的配置项 / `reasoning_effort` 配置项 → `setModel` / `setEffort` |
+
+本机 Desktop 的普通新建任务（[#11956](https://github.com/makecindy/cindy/issues/11956)）：
+项目和插件引擎均在本机时，可选择源分支并启用 Git worktree。宿主等受管 worktree 完整检出，
+才用新目录创建任务；第一条消息启动时，`session/new.cwd` 使用同一目录。检出失败时保留原草稿和附件，
+不在基础仓库创建任务或发送。未启用 worktree 或直接选择已有 worktree 时，仍在所选目录运行。
+此行为不改变 Orca、远程建任务、SSH 或远程引擎的 worktree 约束。
 
 不支持的能力（分叉、回退、会话树、手动压缩、记忆、计划模式、Fast）在 `Capabilities` 中
 如实标为不支持，界面按现有能力开关隐藏，不伪装成功。

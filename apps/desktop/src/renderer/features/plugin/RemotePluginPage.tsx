@@ -60,7 +60,7 @@ import { PluginProjectMenu } from './PluginScopePicker';
 import { toGhostPluginDetail, toGhostPluginListItem } from './lib/ghostPluginViewModel';
 import {
   marketItemMatchesInstalledGhost,
-  pluginPresentationOrigin,
+  publicPublisherFilter,
 } from './lib/pluginMarketPresentation';
 import {
   hasPluginManagement,
@@ -243,10 +243,12 @@ export function RemotePluginPage({
     const items = (market?.items ?? []).filter(item =>
       `${item.name} ${item.description ?? ''} ${item.ghostId} ${item.author ?? ''}`.toLocaleLowerCase().includes((input.query ?? '').toLocaleLowerCase())
       && (!input.excludeInstalled || (item.installState !== 'installed' && item.installState !== 'update-available')));
-    const counts = { all: items.length, public: 0, organization: 0, personal: 0, custom: 0 };
+    const counts = { all: items.length, public: 0, organization: 0, personal: 0, custom: 0, official: 0, community: 0 };
     for (const item of items) {
       if (item.sourceType !== 'server') counts.custom++;
       else counts[item.scope]++;
+      const group = publicPublisherFilter(item);
+      if (group) counts[group]++;
     }
     const filtered = items.filter(item => !input.scope || input.scope === 'all'
       || (input.scope === 'custom' ? item.sourceType !== 'server' : item.sourceType === 'server' && item.scope === input.scope));
@@ -734,12 +736,6 @@ export function RemotePluginPage({
       .toLocaleLowerCase()
       .includes(normalizedQuery),
   );
-  const availableMarket =
-    snapshot?.market.items.filter(
-      (i) => !snapshot.ghosts.some((g) => marketItemMatchesInstalledGhost(i, g)),
-    ) ?? [];
-  const marketOrigins = ['all', ...new Set(availableMarket.map(pluginPresentationOrigin))];
-  const effectiveOriginFilter = marketOrigins.includes(originFilter) ? originFilter : 'all';
   const pageHeading = (
     <header className="mb-8" data-catalog-region="heading">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -896,6 +892,7 @@ export function RemotePluginPage({
                 {!unsupported && !query.trim() ? <><div ref={secondaryTabs} className="h-0" /><div className="sticky top-0 z-raised mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
                   <SegmentedControl role="tablist" height={38} optionHeight={32}
                     optionClassName="plugin-management-tab min-w-[88px] px-4 text-13" value={catalogTab} onValueChange={value => {
+                    if (value === 'market' && catalogTab !== 'market') setOriginFilter('official');
                     setCatalogTab(value);
                     const root = catalogScroller.current, tabs = secondaryTabs.current;
                     if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
@@ -1004,7 +1001,7 @@ export function RemotePluginPage({
                   ownerKey={JSON.stringify([device.deviceId, scope.current.owner])}
                   catalogKey={i18n.language}
                   revision={JSON.stringify([snapshot?.market.items.map(item => [item.pluginId, item.installState, item.version]), snapshot?.market.customSourceNames])} installedItems={snapshot?.market.items}
-                  query={query} scope={originFilter === 'public' || originFilter === 'organization' || originFilter === 'custom' ? originFilter : 'all'}
+                  query={query} scope={originFilter}
                   onScope={value => {
                     setOriginFilter(value);
                     const root = catalogScroller.current, tabs = secondaryTabs.current;

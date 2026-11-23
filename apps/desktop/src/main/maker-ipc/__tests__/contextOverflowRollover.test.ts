@@ -763,6 +763,26 @@ describe('createContextOverflowRollover', () => {
       expect(deps.setPendingHandoff).not.toHaveBeenCalled();
     });
 
+  // Review of #12242: a plugin engine task's runtime is not a built-in live session, so an account
+  // handoff left it open and the next send still ran on the old account. Minimal input: no built-in
+  // live session, an idle (then a busy) runtime seen only by the any-engine lookup.
+  it('retires a plugin engine runtime before committing an account handoff, and never a busy one', async () => {
+    const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
+    deps.getLiveSession.mockReturnValue(undefined);
+    const idle = { isTurnRunning: () => false, listBackgroundTasks: () => [] };
+    await createContextOverflowRollover({ ...deps, getRuntimeSession: () => idle })
+      .prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    expect(deps.closeSession).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(deps.closeSession.mock.invocationCallOrder[0]!).toBeLessThan(deps.commitRebuild.mock.invocationCallOrder[0]!);
+
+    const busy = makeDeps([msg('user', 'keep this context', 'u1')]);
+    busy.getLiveSession.mockReturnValue(undefined);
+    await expect(createContextOverflowRollover({ ...busy, getRuntimeSession: () => ({ isTurnRunning: () => true }) })
+      .prepareNativeSessionRecovery('s1', 'retain-route', vi.fn())).rejects.toThrow('running');
+    expect(busy.closeSession).not.toHaveBeenCalled();
+    expect(busy.commitRebuild).not.toHaveBeenCalled();
+  });
+
   it('does not commit an account handoff after the user stops recovery', async () => {
     const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
     const recovery = createContextOverflowRollover(deps);

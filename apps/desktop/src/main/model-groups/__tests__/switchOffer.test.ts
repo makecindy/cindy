@@ -24,7 +24,7 @@ import {
   type ModelGroupTraceQuota,
 } from '../../../shared/modelGroups.js';
 import type { ModelGroupCandidateFacts } from '../pick.js';
-import { computeModelGroupSwitchOffer, type ModelGroupSwitchOfferSessionRow } from '../switchOffer.js';
+import { computeModelGroupSwitchOffer, isModelGroupRecoverySource, type ModelGroupSwitchOfferSessionRow } from '../switchOffer.js';
 
 const paths = vi.hoisted(() => ({ file: '', owner: 'owner-1' as string | null }));
 
@@ -167,7 +167,7 @@ describe('computeModelGroupSwitchOffer', () => {
     ['the route was deleted', { config: { routes: [] } }],
     ['a goal task', { goal: true }],
     ['a shared task', { shared: true }],
-    ['a scheduled run', { row: { source: 'scheduler' } }],
+    ['an IM task', { row: { source: 'feishu' } }],
     ['a companion', { row: { source: 'bot' } }],
     ['an SSH task', { row: { remoteHostId: 'host-1' } }],
     ['an Agent running on another computer', { row: { agentDeviceId: 'dev-2' } }],
@@ -175,6 +175,17 @@ describe('computeModelGroupSwitchOffer', () => {
   ] as const)('offers nothing for %s', async (_name, input) => {
     const d = deps(input as Parameters<typeof deps>[0]);
     expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
+  });
+
+  // 2026-11-22 user decision (model-groups.md §6.1): a mode belongs to the task, and recovery is common to all of them,
+  // so a task an automation opened through a mode gets the same offer (and, with automatic fallback on, the same
+  // takeover). PR #11881 review r4661455498: automation tasks were excluded. Minimal input: the recorded task, from
+  // the scheduler. Failure: no offer.
+  it('offers the next source for a task an automation opened through a mode', async () => {
+    const offer = await computeModelGroupSwitchOffer(deps({ row: { source: 'scheduler' } }), 's1');
+    expect(offer).not.toBeNull();
+    expect(isModelGroupRecoverySource('scheduler')).toBe(true);
+    expect(isModelGroupRecoverySource('bot')).toBe(false);
   });
 
   it('offers nothing without a record and does not read the task', async () => {

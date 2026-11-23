@@ -112,13 +112,15 @@ export interface IMessageToolScope {
   channel: 'imessage';
   readDirectDelivery?: (after: number) => { text: string; createdAt: number } | null;
   readArchive?: (query: string | undefined, before: number | undefined, limit: number) => Promise<unknown>;
-  im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health'>;
+  im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health' | 'fetchAttachment'>;
   botId: string;
   laneUserId: string;
   chatId: string;
   chatKind: 'direct' | 'group';
   requesterIsOwner: boolean;
   companion: true;
+  /** Host-resolved lane scopes (no inbound lease): throws once the turn it was resolved for is gone. */
+  assertCurrent?: () => void;
 }
 
 export interface DiscordToolScope {

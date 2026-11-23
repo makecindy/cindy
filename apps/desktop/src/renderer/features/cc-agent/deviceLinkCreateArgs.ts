@@ -143,12 +143,16 @@ export interface DeviceLinkSubmissionParams {
   capabilityAgentKind: AgentKind;
   /** 远程 Agent:运行 Agent 的另一台电脑;缺省 = 被控电脑本身。 */
   agentDeviceId?: string | null;
-  /** 被控电脑上的插件引擎(agentKind='acp', providerId='acp-plugin:<ghostId>:<harnessId>')。 */
+  /**
+   * 插件引擎(agentKind='acp', providerId='acp-plugin:<ghostId>:<harnessId>')。`agentDeviceId` 缺省 =
+   * 被控电脑自己的引擎；否则是被控电脑名单里同账号另一台电脑或它收到的分享，Agent 在那里运行。
+   */
   pluginEngine?: {
     providerId: string;
     model: string;
     effort: PluginEngineEffort | '';
     permissionMode: PermissionMode;
+    agentDeviceId?: string;
   };
 }
 
@@ -183,6 +187,7 @@ export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): Devi
       permissionMode: p.pluginEngine.permissionMode,
       fastMode: false,
       providerId: p.pluginEngine.providerId,
+      agentDeviceId: p.pluginEngine.agentDeviceId,
     });
   }
   const providerId = p.candidate.providerId || effectiveSourceIdForModel(

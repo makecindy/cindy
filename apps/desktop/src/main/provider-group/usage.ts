@@ -16,7 +16,7 @@ export const PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS = 1_500;
 const REMOTE_USAGE_CACHE_MS = 15_000;
 const MAX_CACHED_ACCOUNTS = 512;
 const WEEK_MS = 7 * 86_400_000;
-const FIVE_HOURS_MS = 5 * 3_600_000;
+export const FIVE_HOURS_MS = 5 * 3_600_000;
 
 /**
  * 5 小时配额用到这么多以上算快满：离重置还早时先不分新任务，免得刚开始就撞上限、被迫换电脑丢上下文
