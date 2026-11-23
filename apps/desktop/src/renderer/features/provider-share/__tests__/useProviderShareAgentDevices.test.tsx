@@ -336,6 +336,24 @@ describe('useProviderShareAgentDevices', () => {
     await waitFor(() => expect(result.current.devices).toEqual([]));
   });
 
+  // Gap (2026-11-23): one timeout re-reading the controlled host's share list hid its shares until the
+  // next focus, so shares blinked in remote-control tasks. Minimal input: list, then a timeout refresh.
+  it.each([
+    ['[DEVICE_LINK_TIMEOUT] slow host', 1],
+    ['[DEVICE_LINK_CHANNEL_NOT_ALLOWED] old host', 0],
+  ] as const)('keeps the confirmed host list only through a temporary failure (%s)', async (failure, kept) => {
+    initial = [share({ shareId: 'both' })];
+    invoke.mockResolvedValue(hostShares({ shareId: 'both' }));
+    const { result } = renderHook(() => useProviderShareAgentDevices([], 'host-b'));
+    await waitFor(() => expect(result.current.devices).toHaveLength(1));
+    invoke.mockRejectedValueOnce(new Error(failure));
+    const calls = invoke.mock.calls.length;
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(invoke.mock.calls.length).toBe(calls + 1));
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.devices).toHaveLength(kept);
+  });
+
   it('does not use another host’s result or a late disconnected response', async () => {
     initial = [share({ shareId: 'both' })];
     let finish!: (value: unknown) => void;

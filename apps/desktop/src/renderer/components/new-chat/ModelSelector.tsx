@@ -128,6 +128,7 @@ import {
   prefetchDeviceProviders,
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
+import { isTemporaryCatalogFailure } from '@/lib/temporaryCatalogFailure';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
@@ -163,7 +164,6 @@ import {
   isSubscriptionDirectModel,
 } from '../../../shared/subscriptionModels';
 import { extractIpcError } from '@/utils/ipcError';
-import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { seedDefaultFavorite } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
@@ -1279,9 +1279,7 @@ interface RemoteProviderLoadState {
  * and only clear when the picker was opened (2026-11-23 field report).
  */
 function isTemporaryFailureWithSnapshot(error: string | null | undefined, hasSnapshot: boolean): boolean {
-  if (!error || !hasSnapshot) return false;
-  if (extractIpcError(new Error(error))?.code === 'MODEL_VISIBILITY_NOT_READY') return false;
-  return isTransientRemoteError(error) || isDeviceUnresponsiveRemoteError(error);
+  return hasSnapshot && isTemporaryCatalogFailure(error);
 }
 
 /**
@@ -1785,7 +1783,9 @@ function ModelSelectorContentView({
     () => remoteAgentDeviceIds.map(id => modelCatalogKey(id, remoteAgent?.catalogHostDeviceId)!),
     [remoteAgentDeviceIds, remoteAgent?.catalogHostDeviceId],
   );
-  const scopedCatalogs = useDevicesProviders(remoteCatalogKeys);
+  // Keep each computer's rows while its catalog refreshes (and through a temporary read failure), as
+  // the single-device catalog already does; disconnects, refusals and expiry still clear them.
+  const scopedCatalogs = useDevicesProviders(remoteCatalogKeys, { retainDisplaySnapshot: true });
   const remoteDeviceCatalogs = useMemo(() => new Map(remoteAgentDeviceIds.map((id, index) =>
     [id, scopedCatalogs.get(remoteCatalogKeys[index])!] as const)), [remoteAgentDeviceIds, remoteCatalogKeys, scopedCatalogs]);
   // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
