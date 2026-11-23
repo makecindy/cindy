@@ -2393,9 +2393,6 @@ interface ElectronAPI {
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
   acceptLegalTermsUpdate: () => Promise<AnalyticsSettingsPayload>;
-  /** 仅分离侧栏 / 单页签窗口的专用 preload 提供:是否需要在主窗口确认更新后的协议。 */
-  getLegalTermsUpdateRequired?: () => Promise<boolean>;
-  onLegalTermsUpdateRequiredChange?: (cb: (required: boolean) => void) => () => void;
   onAnalyticsSettingsChange: (callback: (payload: AnalyticsSettingsPayload) => void) => () => void;
 
   // ── 客户端日志上报(设置 → 关于)──

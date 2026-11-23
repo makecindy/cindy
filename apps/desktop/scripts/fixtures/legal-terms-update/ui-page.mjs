@@ -4,7 +4,7 @@ export default {
   name: 'legal-terms-update',
   entry: './fixture.tsx',
   viewport: { width: 1040, height: 680 },
-  real: 'LegalTermsUpdateGate, DetachedLegalTermsUpdateBlocker, PendingInputBlocker, shared modal scrim/panel and localized strings',
+  real: 'LegalTermsUpdateGate, PendingInputBlocker, shared modal scrim/panel and localized strings',
   notCovered: 'Main-process consent records, sign-out after declining, the update notice deferral in MainLayout',
   stubs: {
     'src/renderer/contexts/AuthContext':
@@ -12,7 +12,6 @@ export default {
   },
   cases: {
     default: { about: 'An existing personal account must agree to the updated Terms of Service and Privacy Policy before using Cindy' },
-    detached: { about: 'A detached sidebar window is blocked and points back to the main window', data: { window: 'detached' } },
     narrow: { about: 'The confirmation at a narrow window width', viewport: { width: 420, height: 640 } },
   },
   async ready(page) {
@@ -21,12 +20,6 @@ export default {
   async check(page, ui) {
     const dialog = page.getByRole('alertdialog');
     await dialog.getByText(await ui.t('legalTermsUpdate.title'), { exact: true }).waitFor();
-    if (ui.data.window === 'detached') {
-      await dialog.getByText(await ui.t('legalTermsUpdate.detachedBody'), { exact: true }).waitFor();
-      assert.equal(await dialog.getByRole('button').count(), 0);
-      await ui.capture('detached');
-      return;
-    }
     const agree = dialog.getByRole('button', { name: await ui.t('legalTermsUpdate.agree'), exact: true });
     assert.equal(await agree.evaluate((el) => el === document.activeElement), true);
     await ui.capture('confirm');

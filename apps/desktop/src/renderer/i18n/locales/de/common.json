@@ -9714,8 +9714,7 @@
     "title": "Bedingungen aktualisiert",
     "body": "Cindys <terms>Nutzungsbedingungen</terms> und <privacy>Datenschutzerklärung</privacy> wurden aktualisiert. Stimme zu, um fortzufahren, oder melde dich ab.",
     "agree": "Zustimmen",
-    "disagree": "Abmelden",
-    "detachedBody": "Lies die Bedingungen im Cindy-Hauptfenster und stimme zu, um Cindy weiter zu nutzen."
+    "disagree": "Abmelden"
   },
   "legacyMigration": {
     "title": "Daten aus der vorherigen Version migrieren",

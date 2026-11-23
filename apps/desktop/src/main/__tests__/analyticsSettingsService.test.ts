@@ -35,10 +35,8 @@ vi.mock('../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
 }));
 vi.mock('../lifecycle', () => ({ onQuit: vi.fn() }));
-const trustedTopLevel = vi.hoisted(() => ({ value: true }));
 vi.mock('../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
-  isTrustedTopLevelCindyRendererEvent: () => trustedTopLevel.value,
 }));
 
 const isLocalMode = vi.fn(() => false);
@@ -503,21 +501,6 @@ describe('legal terms update consent', () => {
     fakeSettings.privacyConsentAccepted = true;
 
     expect(consent({})).toMatchObject({ legalTermsUpdateRequired: false });
-  });
-
-  // 分离侧栏窗口只读这一个布尔;不是 Cindy 自有页面的发送方拿不到。
-  it('answers detached windows with only the update-required flag, and only for Cindy pages', async () => {
-    const service = await importService();
-    service.noteAuthColdStartState({ isAuthenticated: true }, null);
-    service.initAnalyticsSettingsService();
-    const query = await registeredHandler('legal-terms:update-required-get');
-
-    trustedTopLevel.value = true;
-    expect(query({})).toBe(true);
-
-    trustedTopLevel.value = false;
-    expect(() => query({})).toThrow();
-    trustedTopLevel.value = true;
   });
 
   // 企业 SSO 与「跳过登录」被登录页协议门豁免,没有同意记录,也不被更新确认拦住。

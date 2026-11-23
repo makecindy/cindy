@@ -57,8 +57,6 @@ import type {
   SidebarTabWindowsState,
 } from '../shared/sidebarTabWindow';
 
-import { ANALYTICS_SETTINGS_CHANGE_CHANNEL } from '../shared/analyticsSettings';
-
 type ApplicationMenuLocale = SupportedLocale;
 
 function onPayload<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -172,17 +170,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onPayload('auth:state-change', cb),
   onAuthSessionExpired: (cb: (payload: unknown) => void): (() => void) =>
     onPayload('auth:session-expired', cb),
-
-  // 协议更新确认的只读桥:分离窗口只需知道是否要挡住界面;同意 / 退出登录都在主窗口完成,
-  // 这里不暴露任何写入或认证状态变更能力。推送复用设置广播,只取出这一个布尔。
-  getLegalTermsUpdateRequired: (): Promise<boolean> =>
-    ipcRenderer.invoke('legal-terms:update-required-get'),
-  onLegalTermsUpdateRequiredChange: (cb: (required: boolean) => void): (() => void) =>
-    onPayload<unknown>(ANALYTICS_SETTINGS_CHANGE_CHANNEL, (payload) => {
-      if (!payload || typeof payload !== 'object') return;
-      const required = (payload as Record<string, unknown>).legalTermsUpdateRequired;
-      if (typeof required === 'boolean') cb(required);
-    }),
 
   // 鈹€鈹€ 鍙充晶鏍忓瓙绐楀彛涓撶敤 API 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 

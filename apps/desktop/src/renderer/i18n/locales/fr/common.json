@@ -9786,8 +9786,7 @@
     "title": "Conditions mises à jour",
     "body": "Nous avons mis à jour les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy>. Acceptez pour continuer ou déconnectez-vous.",
     "agree": "Accepter",
-    "disagree": "Déconnexion",
-    "detachedBody": "Consultez et acceptez les conditions dans la fenêtre principale de Cindy pour continuer."
+    "disagree": "Déconnexion"
   },
   "legacyMigration": {
     "title": "Migrer les données de la version précédente",

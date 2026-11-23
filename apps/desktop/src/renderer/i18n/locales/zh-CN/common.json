@@ -9671,8 +9671,7 @@
     "title": "服务条款和隐私协议已更新",
     "body": "Cindy 的<terms>服务条款</terms>和<privacy>隐私协议</privacy>已更新，请阅读并同意后继续使用。",
     "agree": "同意",
-    "disagree": "退出登录",
-    "detachedBody": "请在 Cindy 主窗口阅读并同意后继续使用。"
+    "disagree": "退出登录"
   },
   "legacyMigration": {
     "title": "迁移旧版本数据",

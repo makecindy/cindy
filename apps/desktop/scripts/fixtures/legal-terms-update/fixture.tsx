@@ -1,5 +1,4 @@
 import { AppFrame, mountPage, subscription } from '../../ui-page/harness';
-import { DetachedLegalTermsUpdateBlocker } from '../../../src/renderer/components/auth/DetachedLegalTermsUpdateBlocker';
 import { LegalTermsUpdateGate } from '../../../src/renderer/components/auth/LegalTermsUpdateGate';
 
 const payload = (legalTermsUpdateRequired: boolean) => ({
@@ -31,14 +30,12 @@ mountPage({
     getAnalyticsSettings: async () => payload(true),
     onAnalyticsSettingsChange: subscription('analyticsSettingsChange'),
     acceptLegalTermsUpdate: async () => payload(false),
-    getLegalTermsUpdateRequired: async () => true,
-    onLegalTermsUpdateRequiredChange: subscription('legalTermsUpdateRequiredChange'),
     openExternal: async () => ({ success: true }),
   }),
-  render: (ctx) => (
+  render: () => (
     <>
       <Background />
-      {ctx.data.window === 'detached' ? <DetachedLegalTermsUpdateBlocker /> : <LegalTermsUpdateGate />}
+      <LegalTermsUpdateGate />
     </>
   ),
 });
