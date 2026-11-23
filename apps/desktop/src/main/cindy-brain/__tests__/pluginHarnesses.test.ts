@@ -8,6 +8,7 @@ import {
   configurePluginHarnessRegistry,
   createPluginHarnessRegistry,
   PLUGIN_HARNESS_REFRESH_COOLDOWN_MS,
+  PLUGIN_USAGE_WORKER_FAILURE,
   requestPluginHarnessRefresh,
   resetPluginHarnessRefreshForTests,
   type PluginHarnessRegistryDeps,
@@ -85,6 +86,23 @@ describe('plugin harness registry', () => {
       return { updatedAt: 1234, balances: [row] };
     };
     expect(await registry.readUsage(key)).toBeNull();
+  });
+
+  it('reports retryable worker failures only to remote readers of a still-approved engine', async () => {
+    const { registry, deps, publish, setGhosts } = setup([ghost()]);
+    publish({ harnesses: [{ id: 'dsh', available: true, reportsUsage: true }] });
+    const key = 'dsh-plugin:dsh';
+    const remote = { reportWorkerFailure: true };
+    deps.readUsage = async () => null;
+    expect(await registry.readUsage(key, undefined, remote)).toBeNull();
+    deps.readUsage = async () => PLUGIN_USAGE_WORKER_FAILURE;
+    expect(await registry.readUsage(key)).toBeNull();
+    await expect(registry.readUsage(key, undefined, remote)).rejects.toThrow('Plugin usage worker unavailable');
+    deps.readUsage = async () => {
+      setGhosts([ghost({ approvedHarnesses: [] })]);
+      return PLUGIN_USAGE_WORKER_FAILURE;
+    };
+    expect(await registry.readUsage(key, undefined, remote)).toBeNull();
   });
 
   // 引擎账号(subscription-account-pools.md 插件引擎的账号)：账号目录只给声明了登录方式的引擎，且只能是 Cindy

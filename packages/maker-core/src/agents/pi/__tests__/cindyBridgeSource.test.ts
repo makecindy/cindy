@@ -2519,6 +2519,63 @@ it.each(['list_machines', 'ask_user_question_async', 'manage_user_questions'])('
   expect(direct.resolveHookedCall('read', {})).toBeNull();
 });
 
+it('classifies MCP discovery errors by the registered server before matching the tool (#6926)', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+  };
+  runInNewContext(compiled, context);
+
+  const gateway = new context.Gateway();
+  const client = {};
+  gateway.add('demo', client, [{ name: 'inspect' }], 'Demo');
+  gateway.add('one', client, [{ name: 'inspect' }], 'Shared');
+  gateway.add('two', client, [{ name: 'inspect' }], 'Shared');
+  gateway.add('cindy_memory', client, [{ name: 'call_tool' }]);
+  gateway.setServerDisplayName('offline', 'Offline');
+  gateway.markUnavailable('offline', 'Connection closed');
+  let listTools!: (id: string, input: { server?: string; tool?: string }) => Promise<{ details: unknown }>;
+  gateway.register({
+    registerTool: (tool: { name: string; execute: typeof listTools }) => {
+      if (tool.name === 'cindy_mcp_list_tools') listTools = tool.execute;
+    },
+  }, { botMemoryFacade: true });
+
+  const discover = async (server: string, tool?: string) =>
+    (await listTools('lookup', tool ? { server, tool } : { server })).details;
+  const unknown = {
+    ok: false,
+    errorCode: 'UNKNOWN_SERVER',
+    requested: 'missing',
+    availableServers: ['Demo', 'Shared'],
+    unavailableServers: [{ server: 'offline', reason: 'Connection closed' }],
+  };
+  expect(await discover('missing', 'inspect')).toEqual(unknown);
+  expect(await discover('missing')).toEqual(unknown);
+  expect(await discover('Offline', 'inspect')).toMatchObject({
+    errorCode: 'SERVER_UNAVAILABLE', reason: 'Connection closed',
+  });
+  expect(await discover('Demo', 'missing')).toMatchObject({
+    errorCode: 'UNKNOWN_TOOL', availableTools: ['inspect'],
+  });
+  expect(await discover('Shared', 'inspect')).toMatchObject({
+    errorCode: 'AMBIGUOUS_SERVER', matchingServerIds: ['one', 'two'],
+  });
+  expect(await discover('demo', 'inspect')).toMatchObject({
+    ok: true, tools: [{ server: 'Demo', serverId: 'demo', name: 'inspect', inputSchema: { type: 'object' } }],
+  });
+  expect(await discover('cindy_memory', 'call_tool')).toMatchObject({
+    errorCode: 'UNKNOWN_TOOL', availableTools: [],
+  });
+  expect(await discover('cindy_memory')).toMatchObject({ errorCode: 'UNKNOWN_SERVER' });
+});
+
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(

@@ -99,6 +99,8 @@ export interface PluginHarness {
   defaultMode?: GhostHarnessMode;
 }
 
+export const PLUGIN_USAGE_WORKER_FAILURE = Symbol('plugin usage worker failure');
+
 export interface PluginHarnessRegistry {
   /** 已启用 + 已批准 + 已声明 + 协议已支持。 */
   list(): PluginHarness[];
@@ -146,7 +148,7 @@ export interface PluginHarnessRegistryDeps {
 }
 
 export interface ReconcilablePluginHarnessRegistry extends PluginHarnessRegistry {
-  readUsage(key: string, accountDir?: string): Promise<GhostHarnessUsage | null>;
+  readUsage(key: string, accountDir?: string, options?: { reportWorkerFailure: boolean }): Promise<GhostHarnessUsage | null>;
   /** The plugin's view of one account (no `accountDir` = the agent's original login). */
   readAccountStatus(key: string, accountDir?: string): Promise<GhostHarnessAccountStatus | null>;
   /**
@@ -264,7 +266,7 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         listeners.delete(listener);
       };
     },
-    async readUsage(key, accountDir) {
+    async readUsage(key, accountDir, options) {
       const read = deps.readUsage;
       if (!read) return null;
       const find = () => findLive(key, (item) => !!item.reportsUsage
@@ -272,7 +274,11 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
       const harness = find();
       if (!harness) return null;
       const raw = await (accountDir === undefined ? read(harness.ghostId, harness.harnessId) : read(harness.ghostId, harness.harnessId, accountDir));
-      return find() ? parseGhostHarnessUsage(raw) ?? null : null;
+      if (!find()) return null;
+      if (raw === PLUGIN_USAGE_WORKER_FAILURE && options?.reportWorkerFailure) {
+        throw new Error('Plugin usage worker unavailable');
+      }
+      return parseGhostHarnessUsage(raw) ?? null;
     },
     async readAccountStatus(key, accountDir) {
       const call = deps.callAccount;
@@ -392,8 +398,8 @@ export function reconcilePluginHarnesses(ghosts?: InstalledGhost[]): void {
   registry.reconcile(ghosts);
 }
 
-export function readPluginHarnessUsage(key: string, accountDir?: string): Promise<GhostHarnessUsage | null> {
-  return accountDir === undefined ? registry.readUsage(key) : registry.readUsage(key, accountDir);
+export function readPluginHarnessUsage(key: string, accountDir?: string, options?: { reportWorkerFailure: boolean }): Promise<GhostHarnessUsage | null> {
+  return registry.readUsage(key, accountDir, options);
 }
 
 export function readPluginHarnessAccountStatus(key: string, accountDir?: string): Promise<GhostHarnessAccountStatus | null> {

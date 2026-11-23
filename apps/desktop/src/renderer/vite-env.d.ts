@@ -2757,7 +2757,7 @@ interface ElectronAPI {
     cb: (payload: {
       selectDraftAgent?: true;
       appDefaultSelection?: import('../shared/appDefaultModelSelection').AppDefaultModelSelection;
-      agent: 'claude-code' | 'codex' | 'pi';
+      agent: 'claude-code' | 'codex' | 'pi' | 'acp';
       providerId: string;
       modelId: string;
       active: boolean;
