@@ -15138,6 +15138,7 @@
       "subagentStarted": "Subagent {{name}} 已啟動",
       "showDetails": "展開 Subagent 詳情",
       "hideDetails": "收起 Subagent 詳情",
+      "noDetailsAvailable": "暫無可顯示的詳細資料",
       "showFullResult": "展開完整結果",
       "hideFullResult": "收起結果",
       "provider": {

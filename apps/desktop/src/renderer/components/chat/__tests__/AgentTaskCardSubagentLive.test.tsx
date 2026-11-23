@@ -6,8 +6,7 @@
 // Codex 此前没有数据源、只能渲染一句「已启动」就地收口。补上子线程实时事件后,两者必须
 // 长得一样 —— 同样的 provider·状态·tokens·工具调用数·耗时,且 codex 不多出冗余文案。
 
-import { render } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -15,10 +14,6 @@ vi.mock('react-i18next', () => ({
     t: (key: string, vars?: Record<string, unknown>) =>
       vars && Object.keys(vars).length > 0 ? `${key}:${JSON.stringify(vars)}` : key,
   }),
-}));
-
-vi.mock('@/hooks/useExpandedBlockMemory', () => ({
-  useExpandedBlockMemory: () => ({ expanded: false, setExpanded: vi.fn() }),
 }));
 
 vi.mock('@/lib/makerTransport', () => ({
@@ -44,10 +39,6 @@ vi.mock('@/features/right-sidebar/plugins/background-tasks/WorkflowAgentStrip', 
 
 vi.mock('@/features/cc-agent/embeddedSessionNavigation', () => ({
   useSidebarPanelReachable: () => false,
-}));
-
-vi.mock('@/components/ui/collapse', () => ({
-  Collapse: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
 vi.mock('@/lib/modelShortLabel', () => ({
@@ -107,7 +98,8 @@ describe('AgentTaskCard codex subagent live state', () => {
 
   it('keeps the localized receipt for history replay (no live update)', () => {
     // 历史回放拿不到 live update(agent_task_update 不落库),回执是唯一可读摘要。
-    const { container } = render(<AgentTaskCard toolCall={spawnToolCall()} result="/root/scout" />);
+    const { container, getByRole } = render(<AgentTaskCard toolCall={{ ...spawnToolCall(), clientId: 'history' }} result="/root/scout" />);
+    fireEvent.click(getByRole('button', { name: 'chat.agentTask.showDetails' }));
     expect(container.textContent ?? '').toContain('chat.agentTask.subagentStarted');
     expect(container.textContent ?? '').not.toContain('/root/');
   });
@@ -123,5 +115,23 @@ describe('AgentTaskCard codex subagent live state', () => {
     const text = container.textContent ?? '';
     expect(text).toContain('chat.agentTask.status.completed');
     expect(text).not.toContain('chat.agentTask.status.running');
+  });
+  it.each(['running', 'completed'] as const)('gives an expanded %s Codex card a useful empty state', (status) => {
+    const toolCall = { ...spawnToolCall(), clientId: `empty-${status}` };
+    const { getByRole, getByText, queryByText, rerender } = render(
+      <AgentTaskCard toolCall={toolCall} result="/root/scout" update={{ ...liveCodexUpdate, status }} />,
+    );
+    const emptyDetails = 'chat.agentTask.noDetailsAvailable';
+    expect(queryByText(emptyDetails)).toBeNull();
+
+    fireEvent.click(getByRole('button', { name: 'chat.agentTask.showDetails' }));
+
+    expect(getByText(emptyDetails)).toBeTruthy();
+    rerender(
+      <AgentTaskCard toolCall={toolCall} result="/root/scout"
+        update={{ ...liveCodexUpdate, status: 'completed', summary: 'R=42' }} />,
+    );
+    expect(getByText('R=42')).toBeTruthy();
+    expect(queryByText(emptyDetails)).toBeNull();
   });
 });

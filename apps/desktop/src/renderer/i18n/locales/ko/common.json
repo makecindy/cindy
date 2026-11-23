@@ -15139,6 +15139,7 @@
       "subagentStarted": "하위 에이전트 {{name}} 시작됨",
       "showDetails": "하위 에이전트 세부 정보 보기",
       "hideDetails": "하위 에이전트 세부 정보 숨기기",
+      "noDetailsAvailable": "표시할 세부 정보가 없습니다.",
       "showFullResult": "전체 결과 보기",
       "hideFullResult": "결과 접기",
       "provider": {

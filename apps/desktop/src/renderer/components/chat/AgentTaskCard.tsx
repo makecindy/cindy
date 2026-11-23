@@ -317,6 +317,8 @@ export function AgentTaskCard({
       : resultIsClaudeLaunchReceipt
         ? detailText(update?.summary)
         : detailText(result, update?.summary);
+  const showEmptyCodexDetails = isSubagent && provider === 'codex'
+    && !description && !summary && !update?.lastToolName && !update?.outputFile;
   const piResultNeedsCollapse = Boolean(
     isPiDurableSubagent
       && summary
@@ -612,6 +614,7 @@ export function AgentTaskCard({
                   expanded={expanded}
                 />
               )}
+              {showEmptyCodexDetails && <p>{t('chat.agentTask.noDetailsAvailable')}</p>}
               {description && <p className="mb-1">{description}</p>}
               {summary && (
                 <>

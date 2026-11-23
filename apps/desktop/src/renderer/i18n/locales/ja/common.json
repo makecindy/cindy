@@ -15139,6 +15139,7 @@
       "subagentStarted": "サブエージェント {{name}} を起動しました",
       "showDetails": "サブエージェント詳細を表示",
       "hideDetails": "サブエージェント詳細を隠す",
+      "noDetailsAvailable": "表示できる詳細はありません。",
       "showFullResult": "結果をすべて表示",
       "hideFullResult": "結果を折りたたむ",
       "provider": {

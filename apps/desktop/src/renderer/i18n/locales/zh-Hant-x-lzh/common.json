@@ -15130,6 +15130,7 @@
       "subagentStarted": "Subagent {{name}} 已啟",
       "showDetails": "展 Subagent 詳情",
       "hideDetails": "收 Subagent 詳情",
+      "noDetailsAvailable": "暫無詳情可示。",
       "showFullResult": "展全果",
       "hideFullResult": "收其果",
       "provider": {

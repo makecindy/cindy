@@ -15290,6 +15290,7 @@
       "subagentStarted": "Subagent {{name}} iniciado",
       "showDetails": "Mostrar detalles de Subagent",
       "hideDetails": "Ocultar detalles de Subagent",
+      "noDetailsAvailable": "No hay detalles disponibles.",
       "showFullResult": "Mostrar resultado completo",
       "hideFullResult": "Contraer resultado",
       "provider": {
