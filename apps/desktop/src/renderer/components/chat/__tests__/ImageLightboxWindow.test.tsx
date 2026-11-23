@@ -98,7 +98,14 @@ function renderLightbox(onClose = vi.fn()) {
 
 function flushFrame(): Promise<void> {
   return act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+    await Promise.resolve();
   });
 }
 
@@ -296,6 +303,81 @@ describe('ImageLightbox non-modal window', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(foregroundClose).toHaveBeenCalledTimes(1), { timeout: 1000 });
     expect(backgroundClose).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：拖动标题栏与调整尺寸手柄捕获指针；pointerup 落进 iframe
+  //   后 lostpointercapture 收尾，后续 pointermove 不再移动/缩放浮窗。
+  // - Bug／规则依据：#11952 round 15 review PRRT_kwDOTgdRUs66s5l5；
+  //   docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有用例只在父窗口派发 pointerup，没有覆盖 iframe 释放与失捕获路径。
+  // - 最小失败输入：pointerdown 捕获指针 -> pointermove 改变矩形 -> lostpointercapture
+  //   -> 再 pointermove；修复前手势不清空、矩形继续变化。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测低于 10s。
+  it.each(['header', 'resize'])('captures %s pointers and ends on lostpointercapture', async (kind) => {
+    for (const method of ['setPointerCapture', 'releasePointerCapture', 'hasPointerCapture']) {
+      if (!(method in HTMLElement.prototype)) {
+        Object.defineProperty(HTMLElement.prototype, method, {
+          configurable: true,
+          writable: true,
+          value: () => undefined,
+        });
+      }
+    }
+    const setPointerCapture = vi
+      .spyOn(HTMLElement.prototype, 'setPointerCapture')
+      .mockImplementation(() => undefined);
+    vi.spyOn(HTMLElement.prototype, 'hasPointerCapture').mockImplementation(() => true);
+    const releasePointerCapture = vi
+      .spyOn(HTMLElement.prototype, 'releasePointerCapture')
+      .mockImplementation(() => undefined);
+    renderLightbox();
+    const handle =
+      kind === 'header'
+        ? dragHandle()
+        : document.querySelector<HTMLElement>('[data-preview-resize-handle]')!;
+    expect(handle).toBeTruthy();
+    fireEvent.pointerDown(handle, {
+      pointerId: 7,
+      button: 0,
+      buttons: 1,
+      clientX: 200,
+      clientY: 60,
+    });
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    fireEvent.pointerMove(window, {
+      pointerId: 7,
+      buttons: 1,
+      clientX: 160,
+      clientY: 100,
+    });
+    await flushFrame();
+    const stableRect = {
+      left: panel().style.left,
+      top: panel().style.top,
+      width: panel().style.width,
+      height: panel().style.height,
+    };
+    const lost = new Event('lostpointercapture');
+    Object.defineProperty(lost, 'pointerId', { value: 7 });
+    await act(async () => {
+      fireEvent(window, lost);
+    });
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    fireEvent.pointerMove(window, {
+      pointerId: 7,
+      buttons: 0,
+      clientX: 40,
+      clientY: 20,
+    });
+    await flushFrame();
+    expect({
+      left: panel().style.left,
+      top: panel().style.top,
+      width: panel().style.width,
+      height: panel().style.height,
+    }).toEqual(stableRect);
+    setPointerCapture.mockRestore();
   });
 
   it('keeps collection arrow keys inside the non-modal preview focus scope', async () => {

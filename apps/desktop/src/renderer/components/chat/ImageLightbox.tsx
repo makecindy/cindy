@@ -243,6 +243,7 @@ function ImagePreviewResizeHandle({
     clientY: number,
     pointerId: number,
     direction: PreviewResizeDirection,
+    target: EventTarget | null,
   ) => void;
 }) {
   return (
@@ -270,7 +271,7 @@ function ImagePreviewResizeHandle({
         if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
-        onResizeStart(event.clientX, event.clientY, event.pointerId, 'se');
+        onResizeStart(event.clientX, event.clientY, event.pointerId, 'se', event.currentTarget);
       }}
       onClick={(event) => event.stopPropagation()}
     >
@@ -864,7 +865,7 @@ function ImageLightboxContent({
       if (event.button !== 0 || isPreviewHeaderInteractiveTarget(event.target)) return;
       event.preventDefault();
       focusPreviewPanel();
-      startDrag(event.clientX, event.clientY, event.pointerId);
+      startDrag(event.clientX, event.clientY, event.pointerId, event.currentTarget);
     },
     [focusPreviewPanel, startDrag],
   );

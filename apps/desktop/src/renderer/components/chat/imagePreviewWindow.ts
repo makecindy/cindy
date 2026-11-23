@@ -181,6 +181,7 @@ export function useImagePreviewWindow(options: {
   const gestureRef = useRef<PreviewWindowGesture | null>(null);
   const frameRef = useRef<FrameHandle | null>(null);
   const pendingRectRef = useRef<PreviewWindowRect | null>(null);
+  const captureTargetRef = useRef<HTMLElement | null>(null);
 
   const applyRectNow = useCallback((next: PreviewWindowRect) => {
     rectRef.current = next;
@@ -209,12 +210,26 @@ export function useImagePreviewWindow(options: {
     [applyRectNow],
   );
 
+  const releasePointerCapture = useCallback((pointerId: number) => {
+    const target = captureTargetRef.current;
+    captureTargetRef.current = null;
+    if (!target) return;
+    try {
+      if (typeof target.hasPointerCapture !== 'function' || target.hasPointerCapture(pointerId)) {
+        target.releasePointerCapture?.(pointerId);
+      }
+    } catch {
+      // A detached handle or stale pointer id cannot keep a gesture alive.
+    }
+  }, []);
+
   const endGesture = useCallback(
     (pointerId?: number) => {
       const gesture = gestureRef.current;
       if (!gesture) return;
       if (pointerId !== undefined && gesture.pointerId !== pointerId) return;
       gestureRef.current = null;
+      releasePointerCapture(gesture.pointerId);
       if (frameRef.current !== null) {
         cancelFrame(frameRef.current);
         frameRef.current = null;
@@ -224,7 +239,27 @@ export function useImagePreviewWindow(options: {
       if (pending) applyRectNow(pending);
       if (gesture.moved) onGestureEndRef.current?.(true);
     },
-    [applyRectNow],
+    [applyRectNow, releasePointerCapture],
+  );
+
+  const onLostPointerCapture = useCallback(
+    (event: Event) => {
+      endGesture((event as PointerEvent).pointerId);
+    },
+    [endGesture],
+  );
+
+  const capturePointer = useCallback(
+    (target: EventTarget | null, pointerId: number) => {
+      if (!(target instanceof HTMLElement) || typeof target.setPointerCapture !== 'function') return;
+      try {
+        target.setPointerCapture(pointerId);
+        captureTargetRef.current = target;
+      } catch {
+        // Pointer capture is best-effort; window pointerup/cancel/blur still end the gesture.
+      }
+    },
+    [],
   );
 
   useEffect(() => {
@@ -258,15 +293,17 @@ export function useImagePreviewWindow(options: {
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
+    window.addEventListener('lostpointercapture', onLostPointerCapture);
     window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('lostpointercapture', onLostPointerCapture);
       window.removeEventListener('blur', onBlur);
       cancelPendingFrame();
     };
-  }, [cancelPendingFrame, endGesture, scheduleRect]);
+  }, [cancelPendingFrame, endGesture, onLostPointerCapture, scheduleRect]);
 
   useEffect(() => {
     const onResize = () => {
@@ -285,7 +322,7 @@ export function useImagePreviewWindow(options: {
   }, [applyRectNow, cancelPendingFrame]);
 
   const startDrag = useCallback(
-    (clientX: number, clientY: number, pointerId: number) => {
+    (clientX: number, clientY: number, pointerId: number, target: EventTarget | null) => {
       cancelPendingFrame();
       gestureRef.current = {
         kind: 'drag',
@@ -297,12 +334,19 @@ export function useImagePreviewWindow(options: {
         moved: false,
       };
       setMode('free');
+      capturePointer(target, pointerId);
     },
-    [cancelPendingFrame],
+    [cancelPendingFrame, capturePointer],
   );
 
   const startResize = useCallback(
-    (clientX: number, clientY: number, pointerId: number, direction: PreviewResizeDirection) => {
+    (
+      clientX: number,
+      clientY: number,
+      pointerId: number,
+      direction: PreviewResizeDirection,
+      target: EventTarget | null,
+    ) => {
       cancelPendingFrame();
       gestureRef.current = {
         kind: 'resize',
@@ -315,8 +359,9 @@ export function useImagePreviewWindow(options: {
         moved: false,
       };
       setMode('free');
+      capturePointer(target, pointerId);
     },
-    [cancelPendingFrame],
+    [cancelPendingFrame, capturePointer],
   );
 
   const dock = useCallback(
