@@ -8,10 +8,17 @@
  * 避免非目标平台上整套用例空跑通过。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import os from 'node:os';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { ensureSystemBinPathForMachineId, resolveRuntimeDeviceId } from '../deviceId.js';
+import {
+  DEVICE_IDENTITY_FILE,
+  ensureSystemBinPathForMachineId,
+  resolveRuntimeDeviceId,
+  resolveRuntimeDeviceIdentity,
+  writeReplacementDeviceId,
+} from '../deviceId.js';
 
 const PATCHES_PATH = process.platform === 'darwin' || process.platform === 'linux';
 
@@ -26,6 +33,46 @@ it('preserves the isolated identity and only probes hardware for a normal instan
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
   }
+});
+
+// 2026-11-23：两台 Windows 共用 MachineGuid，用户在冲突提示里给其中一台换了身份。
+// 入口：resolveRuntimeDeviceIdentity（Desktop authManager 与 Node Host 共用）。
+// 不变量：没换过身份的电脑（没有记录、记录损坏、记录属于别的硬件）一律照旧用硬件身份；
+// 换过的只在原硬件上生效，显式隔离覆盖始终优先。最小失败输入：写入记录后再次启动。
+describe('replacement device identity', () => {
+  const originalPath = process.env.PATH;
+  let profileDir: string;
+  beforeEach(() => { profileDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-device-identity-')); });
+  afterEach(() => {
+    rmSync(profileDir, { recursive: true, force: true });
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  });
+
+  it('applies only on the hardware it replaced and never overrides an isolated instance', () => {
+    expect(resolveRuntimeDeviceIdentity(() => 'hw-a', ' ', profileDir)).toEqual({ deviceId: 'hw-a', source: 'hardware', hardwareId: 'hw-a' });
+
+    const replacement = writeReplacementDeviceId(profileDir, 'hw-a');
+    expect(replacement).toMatch(/^[0-9a-f]{64}$/);
+    expect(resolveRuntimeDeviceIdentity(() => 'hw-a', ' ', profileDir))
+      .toEqual({ deviceId: replacement, source: 'replacement', hardwareId: 'hw-a' });
+    // 数据目录被复制到另一台电脑，或硬件身份变了：回到那台电脑自己的硬件身份。
+    expect(resolveRuntimeDeviceId(() => 'hw-b', ' ', profileDir)).toBe('hw-b');
+    expect(resolveRuntimeDeviceId(() => 'hw-a', ' isolated ', profileDir)).toBe('isolated');
+    // 没传数据目录的调用方(旧入口)不受影响。
+    expect(resolveRuntimeDeviceId(() => 'hw-a', ' ')).toBe('hw-a');
+  });
+
+  it.each([
+    ['not JSON', '{'],
+    ['unknown version', JSON.stringify({ version: 2, deviceId: 'a'.repeat(64), replaces: 'hw-a' })],
+    ['malformed id', JSON.stringify({ version: 1, deviceId: 'short', replaces: 'hw-a' })],
+    ['same as hardware', JSON.stringify({ version: 1, deviceId: 'b'.repeat(64), replaces: 'b'.repeat(64) })],
+  ])('falls back to the hardware identity when the record is %s', (_label, contents) => {
+    writeFileSync(path.join(profileDir, DEVICE_IDENTITY_FILE), contents);
+    const hardware = contents.includes('b'.repeat(64)) ? 'b'.repeat(64) : 'hw-a';
+    expect(resolveRuntimeDeviceIdentity(() => hardware, ' ', profileDir)).toMatchObject({ deviceId: hardware, source: 'hardware' });
+  });
 });
 
 // Execute the production IPC registration adapter without booting Electron.

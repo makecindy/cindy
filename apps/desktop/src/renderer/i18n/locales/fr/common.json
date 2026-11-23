@@ -7118,7 +7118,7 @@
       "connectionIssue": {
         "device-removed": "Cet appareil a été retiré de votre compte. Déconnectez-vous puis reconnectez-vous sur cet appareil.",
         "auth-failed": "Connexion expirée : veuillez vous reconnecter",
-        "replaced": "Connexion remplacée par une autre instance de cet appareil",
+        "replaced": "Connexion reprise par une autre instance de Cindy, sur cet ordinateur ou sur un autre ordinateur reconnu comme celui-ci",
         "too-many-connections": "Limite de connexions atteinte pour ce compte",
         "version-mismatch": "Version de protocole incompatible : veuillez mettre à jour l'application",
         "unstable": "La connexion se coupe et se rétablit sans cesse : vérifiez le réseau, ou redémarrez Cindy si le problème persiste",
@@ -7177,6 +7177,22 @@
       },
       "control": "Contrôler",
       "standbyHint": "Une autre instance de Cindy sur cet ordinateur utilise la connexion à distance. Fermez-la et cette instance prendra automatiquement le relais.",
+      "identityConflict": {
+        "notice": "Cet ordinateur et « {{name}} » sont reconnus comme le même ordinateur : ils s’évincent mutuellement de la connexion à distance et peuvent être déconnectés. Donner une nouvelle identité à l’un des deux règle le problème.",
+        "replace": "Donner une nouvelle identité à cet ordinateur",
+        "blockedSelfHostedRelay": "Cet ordinateur utilise votre propre relais : son identité ne peut pas être changée pour l’instant. Revenez au relais Cindy, puis changez-la ici.",
+        "confirmTitle": "Donner une nouvelle identité à cet ordinateur ?",
+        "confirmRestart": "Cindy redémarre immédiatement et les tâches en cours sont interrompues.",
+        "confirmNewDevice": "Après le redémarrage, reconnectez-vous une fois. Cet ordinateur apparaît alors comme un nouvel ordinateur dans la liste des appareils.",
+        "confirmKeptByOther": "Les réglages enregistrés sous l’ancienne identité, comme le nom de l’appareil, l’ordinateur principal de vos amis et les fournisseurs partagés, restent sur « {{name}} ». Reconfigurez-les sur cet ordinateur.",
+        "confirmOtherUnaffected": "« {{name}} » reste inchangé. Rien à faire sur cet ordinateur-là.",
+        "confirmAction": "Changer d’identité et redémarrer Cindy",
+        "failed": "Impossible de donner une nouvelle identité à cet ordinateur",
+        "toastTitle": "Cet ordinateur et « {{name}} » sont reconnus comme le même ordinateur",
+        "toastBody": "Ils s’évincent mutuellement de la connexion à distance et peuvent être déconnectés. Donner une nouvelle identité à l’un des deux règle le problème.",
+        "toastAction": "Ouvrir la liaison d’appareils",
+        "toastDismiss": "Plus tard"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"

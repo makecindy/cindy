@@ -15,6 +15,7 @@ import {
   type DeviceLinkConnectionIssue,
   type DeviceLinkPeerRouteStateChanged,
   type DeviceLinkPeerTransportReset,
+  type DeviceLinkReplacedEvent,
   type DeviceLinkStatus,
   type InboundFrameHandler,
 } from './client.js';
@@ -205,6 +206,21 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
    */
   onLegacyConnectionIssue(cb: (issue: DeviceLinkConnectionIssue | null) => void): () => void {
     return this.legacy?.onConnectionIssue(cb) ?? (() => undefined);
+  }
+
+  /**
+   * The cross-account and compatibility connections register the same device identity on the official relay, so another
+   * computer with that identity replaces them too. Both the signal and the host's cool-down cover every such connection.
+   */
+  override onReplaced(cb: (event: DeviceLinkReplacedEvent) => void): () => void {
+    const offs = [super.onReplaced(cb), this.crossAccount?.onReplaced(cb), this.legacy?.onReplaced(cb)];
+    return () => { for (const off of offs) off?.(); };
+  }
+
+  override setDuplicateIdentityCooldown(active: boolean): void {
+    super.setDuplicateIdentityCooldown(active);
+    this.crossAccount?.setDuplicateIdentityCooldown(active);
+    this.legacy?.setDuplicateIdentityCooldown(active);
   }
 
   override crossAccountConnection(): DeviceLinkClient {

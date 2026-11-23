@@ -13,15 +13,86 @@
  * before the module that reads the device id loads.
  */
 
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
+
+/**
+ * A computer whose hardware id collides with another computer's (Windows images
+ * deployed without regenerating MachineGuid) can take a new identity on the user's
+ * request. The record lives at the profile root, shared by Desktop and the Node Host.
+ */
+export const DEVICE_IDENTITY_FILE = 'device-identity.json';
+const REPLACEMENT_DEVICE_ID = /^[0-9a-f]{64}$/;
+
+export interface RuntimeDeviceIdentity {
+  deviceId: string;
+  source: 'override' | 'hardware' | 'replacement';
+  /** The hardware id read on this start; null under an explicit override. */
+  hardwareId: string | null;
+}
+
+/**
+ * The replacement only applies on the computer whose hardware id it replaced: a
+ * profile copied to another computer, or a hardware id changed afterwards, falls back
+ * to that hardware id instead of carrying the identity elsewhere. A missing or
+ * malformed record means no replacement.
+ */
+export function readReplacementDeviceId(profileDir: string, physicalId: string): string | null {
+  let raw: string | null;
+  try {
+    raw = readAtomicFileSync(path.join(profileDir, DEVICE_IDENTITY_FILE));
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const record = JSON.parse(raw) as { version?: unknown; deviceId?: unknown; replaces?: unknown };
+    if (record?.version !== 1 || record.replaces !== physicalId) return null;
+    if (typeof record.deviceId !== 'string' || !REPLACEMENT_DEVICE_ID.test(record.deviceId)) return null;
+    return record.deviceId === physicalId ? null : record.deviceId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Gives this computer a new random identity in the same shape as the hardware-derived
+ * one (64 lowercase hex, within the server's 64-character limit). Takes effect on the
+ * next start; returns the new id.
+ */
+export function writeReplacementDeviceId(profileDir: string, physicalId: string): string {
+  const deviceId = randomBytes(32).toString('hex');
+  atomicWriteFileSync(
+    path.join(profileDir, DEVICE_IDENTITY_FILE),
+    JSON.stringify({ version: 1, deviceId, replaces: physicalId, createdAt: Date.now() }),
+  );
+  return deviceId;
+}
 
 /** Auth, remote registration and the Node launcher must use one identity. An
  * explicitly isolated instance must never silently register its physical host. */
-export function resolveRuntimeDeviceId(readPhysicalId: () => string, override = process.env.XDT_DEVICE_ID_OVERRIDE): string {
+export function resolveRuntimeDeviceIdentity(
+  readPhysicalId: () => string,
+  override = process.env.XDT_DEVICE_ID_OVERRIDE,
+  profileDir?: string,
+): RuntimeDeviceIdentity {
   const explicit = override?.trim();
-  if (explicit) return explicit;
+  if (explicit) return { deviceId: explicit, source: 'override', hardwareId: null };
   ensureSystemBinPathForMachineId();
-  return readPhysicalId();
+  const hardwareId = readPhysicalId();
+  const replacement = profileDir ? readReplacementDeviceId(profileDir, hardwareId) : null;
+  return replacement
+    ? { deviceId: replacement, source: 'replacement', hardwareId }
+    : { deviceId: hardwareId, source: 'hardware', hardwareId };
+}
+
+export function resolveRuntimeDeviceId(
+  readPhysicalId: () => string,
+  override = process.env.XDT_DEVICE_ID_OVERRIDE,
+  profileDir?: string,
+): string {
+  return resolveRuntimeDeviceIdentity(readPhysicalId, override, profileDir).deviceId;
 }
 
 /**

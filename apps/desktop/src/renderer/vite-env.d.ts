@@ -4391,6 +4391,7 @@ interface ElectronAPI {
       directDataDeviceIds?: string[];
       connectionIssue: DeviceLinkConnectionIssuePayload | null;
       standby: boolean;
+      identityConflict?: import('../shared/deviceLinkIpc').DeviceLinkIdentityConflict | null;
       controlledBy: Array<{ deviceId: string; name: string }>;
       revokedControllers: string[];
       disabledControlDeviceIds: string[];
@@ -4422,6 +4423,8 @@ interface ElectronAPI {
     deleteDevice: (deviceId: string) => Promise<{ deviceId: string; deleted: boolean }>;
     /** 本机被移除后「重新加入」(官方网络) */
     rejoin: () => Promise<{ agentNet: 'rejoined' | 'skipped' | 'failed' }>;
+    /** 设备身份冲突时给这台电脑换一个新身份；成功后应用随即重启。 */
+    replaceDeviceIdentity: () => Promise<{ restarting: true }>;
     // —— 控制端:远程会话视图 ——
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;
@@ -4449,6 +4452,10 @@ interface ElectronAPI {
     ) => () => void;
     /** 同机单持有者仲裁角色变化。 */
     onOwnershipChanged: (cb: (payload: { standby: boolean }) => void) => () => void;
+    /** 另一台电脑在用本机设备身份的确认 / 撤销。 */
+    onIdentityConflict?: (
+      cb: (payload: { conflict: import('../shared/deviceLinkIpc').DeviceLinkIdentityConflict | null }) => void,
+    ) => () => void;
     /** 云端设备目录被明确拒绝后，已挂载的设备列表立即失效。 */
     onDeviceDirectoryInvalidated?: (cb: () => void) => () => void;
     /** 控制端:被控端转发回来的 renderer 广播事件 */

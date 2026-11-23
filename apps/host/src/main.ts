@@ -462,7 +462,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
   });
   const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
-  const verifiedDeviceId = resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, ''));
+  const verifiedDeviceId = resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '', resolveHostDataDir()));
   const client = new CindyAuthClient({
     baseUrl: endpoints.authApiBaseUrl,
     region: realm,
@@ -495,7 +495,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
     confirmCloudGuestWhenOnline(() => base, () => currentSessionToken, hostAuthFetch);
   }
   currentDeviceId = verifiedDeviceId;
-  remoteIdentityReady = canRegisterHostDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, ''));
+  remoteIdentityReady = canRegisterHostDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '', resolveHostDataDir()));
   return { ...mapMembershipToAuthUser(membership, me.passportId), orgSlug: decodeAccessTokenOrgSlug(sessionToken) };
 }
 
@@ -1674,7 +1674,7 @@ const serverDeps = {
           const client = new CindyAuthClient({
             baseUrl: endpoints.authApiBaseUrl,
             region: realm,
-            deviceId: resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '')),
+            deviceId: resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '', resolveHostDataDir())),
             clientType: 'desktop',
             fetch: (input, init) => hostAuthFetch(input, init),
           });

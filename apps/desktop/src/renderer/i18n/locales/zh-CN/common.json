@@ -7008,7 +7008,7 @@
       "connectionIssue": {
         "device-removed": "设备已从账号中移除，请在本设备退出后重新登录。",
         "auth-failed": "登录已失效，请重新登录",
-        "replaced": "连接已被本设备上的另一个实例取代",
+        "replaced": "连接被另一个 Cindy 取代，它可能在本机，也可能在另一台被识别成同一台的电脑上",
         "too-many-connections": "同账号连接数已达上限",
         "version-mismatch": "协议版本不一致，请升级应用",
         "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy",
@@ -7067,6 +7067,22 @@
       },
       "control": "控制",
       "standbyHint": "本机另一 Cindy 实例正在使用远程连接。关闭它后，本实例会自动接管。",
+      "identityConflict": {
+        "notice": "这台电脑和「{{name}}」被识别成了同一台电脑，两边会互相挤掉远程连接，还可能被退出登录。在其中一台上换一个新身份就能解决。",
+        "replace": "给这台电脑换一个新身份",
+        "blockedSelfHostedRelay": "这台电脑正在使用自己的中转，现在不能换身份。切回官方中转后，就可以在这里换。",
+        "confirmTitle": "给这台电脑换一个新身份？",
+        "confirmRestart": "Cindy 会马上重启，正在进行的任务会中断。",
+        "confirmNewDevice": "重启后需要重新登录一次，这台电脑会作为一台新电脑出现在设备列表里。",
+        "confirmKeptByOther": "原来记在这个身份下的设置（如设备名、伙伴的主力电脑、分享出去的供应商）会留给「{{name}}」，这台电脑需要重新设置。",
+        "confirmOtherUnaffected": "「{{name}}」保持不变，不用再到那台电脑上操作。",
+        "confirmAction": "换身份并重启 Cindy",
+        "failed": "未能给这台电脑换身份",
+        "toastTitle": "这台电脑和「{{name}}」被识别成了同一台电脑",
+        "toastBody": "两台电脑会互相挤掉远程连接，还可能被退出登录。在其中一台上换一个新身份就能解决。",
+        "toastAction": "打开设备互联",
+        "toastDismiss": "稍后处理"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"

@@ -7051,7 +7051,7 @@
       "connectionIssue": {
         "device-removed": "This device was removed from your account. Sign out and sign in again on this device.",
         "auth-failed": "Sign-in expired — sign in again",
-        "replaced": "Connection replaced by another instance of this device",
+        "replaced": "Connection taken over by another Cindy, either on this computer or on another computer recognized as this one",
         "too-many-connections": "Connection limit reached for this account",
         "version-mismatch": "Protocol version mismatch — update the app",
         "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists",
@@ -7110,6 +7110,22 @@
       },
       "control": "Control",
       "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically.",
+      "identityConflict": {
+        "notice": "This computer and “{{name}}” are recognized as the same computer, so they keep pushing each other off remote connections and may get signed out. Giving one of them a new identity fixes it.",
+        "replace": "Give this computer a new identity",
+        "blockedSelfHostedRelay": "This computer is using your own relay, so it can’t get a new identity right now. Switch back to Cindy relay, then change it here.",
+        "confirmTitle": "Give this computer a new identity?",
+        "confirmRestart": "Cindy restarts right away, and tasks in progress are interrupted.",
+        "confirmNewDevice": "After the restart, sign in once more. This computer then appears as a new computer in the device list.",
+        "confirmKeptByOther": "Settings saved under the old identity, such as the device name, your buddies’ main computer and shared providers, stay with “{{name}}”. Set them up again on this computer.",
+        "confirmOtherUnaffected": "“{{name}}” stays as it is. Nothing needs to be done on that computer.",
+        "confirmAction": "Change identity and restart Cindy",
+        "failed": "Could not give this computer a new identity",
+        "toastTitle": "This computer and “{{name}}” are recognized as the same computer",
+        "toastBody": "They keep pushing each other off remote connections and may get signed out. Giving one of them a new identity fixes it.",
+        "toastAction": "Open Device Link",
+        "toastDismiss": "Not now"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
