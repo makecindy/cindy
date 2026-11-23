@@ -4234,6 +4234,8 @@ export class AgentInputCoordinator {
     const deliveryIds = [...new Set([...(current.mergedDeliveryClientIds ?? []), ...(replacement.mergedDeliveryClientIds ?? [])])];
     if (deliveryIds.length) replacement.mergedDeliveryClientIds = deliveryIds;
     if (current.clientId === replacement.clientId) {
+      const refreshWait = this.botCapabilityRefreshWaits.get(current);
+      if (refreshWait) this.botCapabilityRefreshWaits.set(replacement, refreshWait);
       if (this.restoredQueueItems.has(current)) this.restoredQueueItems.add(replacement);
       if (this.manualUiInputs.has(current) && isManualUiOrigin(replacement.origin) && !syntheticTriggerKind(replacement.text)) {
         this.manualUiInputs.add(replacement);
@@ -4386,7 +4388,11 @@ export class AgentInputCoordinator {
     if (fromIndex < insertIndex) insertIndex -= 1;
     if (fromIndex === insertIndex) return this.getProjection(sessionId);
     next.splice(insertIndex, 0, entry);
+    const previousHead = state.pendingQueue[0];
     state.pendingQueue = next;
+    if (previousHead !== next[0] && this.botCapabilityRefreshWaits.has(previousHead)) {
+      this.scheduleDrain(sessionId, 'bot-capability-refresh-head-moved');
+    }
     // 拖拽重排后等待中的消息不再是队首 → 等待态失效(横幅/自动重发都以队首为目标)。
     // 清掉并重新 drain:新队首仍撞 busy 会带自己的 clientId 重建等待,不撞则直接派发。
     if (
@@ -6619,7 +6625,8 @@ export class AgentInputCoordinator {
       const timer = setTimeout(() => {
         wait.timer = null;
         wait.waiting = false;
-        if (this.states.get(sessionId) === state && state.pendingQueue[0] === head) {
+        const currentHead = state.pendingQueue[0];
+        if (this.states.get(sessionId) === state && currentHead && this.botCapabilityRefreshWaits.get(currentHead) === wait) {
           this.scheduleDrain(sessionId, 'bot-capability-refresh-retry');
         }
       }, BOT_CAPABILITY_REFRESH_RETRY_DELAY_MS);
@@ -6639,7 +6646,7 @@ export class AgentInputCoordinator {
       if (wait.timer) clearTimeout(wait.timer);
       wait.timer = null;
       wait.waiting = false;
-      if (item === state.pendingQueue[0]) this.scheduleDrain(sessionId, 'bot-capability-refresh-ready');
+      this.scheduleDrain(sessionId, 'bot-capability-refresh-ready');
     }
   }
 

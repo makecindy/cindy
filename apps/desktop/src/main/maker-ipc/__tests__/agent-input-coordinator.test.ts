@@ -2997,6 +2997,60 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 });
 
 describe('AgentInputCoordinator send transaction', () => {
+  it.each(['text', 'content', 'replace'])('dispatches edited companion input after a refresh wait (%s)', async (edit) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-edit';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('waiting', 'original'));
+      await flush();
+
+      const updated = makeItem('waiting', 'edited');
+      if (edit === 'text') h.coordinator.updateText(sid, 'waiting', 'edited');
+      else if (edit === 'content') h.coordinator.updateContent(sid, 'waiting', updated);
+      else h.coordinator.replaceQueuedMessage(sid, 'waiting', updated);
+      h.coordinator.wakeSession(sid, 'unrelated-wake');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      if (edit === 'text') await vi.runOnlyPendingTimersAsync();
+      else h.coordinator.onBotCapabilityRefreshReady(sid);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'edited' });
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('checks the new queue head when a companion input waiting for refresh moves back', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-reorder';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('first', 'first'));
+      h.coordinator.enqueue(sid, makeItem('second', 'second'));
+      await flush();
+
+      h.coordinator.move(sid, 'first', 2);
+      await flush();
+      expect(h.sendToAgent.mock.calls[1]?.[3].persistUserMessage?.clientId).toBe('second');
+
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId))
+        .toEqual(['first', 'second', 'first']);
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(['refresh ready', 'fallback timer'])('dispatches the original companion queue head once via %s', async (wake) => {
     vi.useFakeTimers();
     try {
