@@ -419,7 +419,7 @@ export default function (pi) {
     var tally = [];
     for (var n = 0; n < names.length; n++) tally.push(names[n] + ' ' + batch.names[names[n]]);
     return '[folded] ' + batch.dropped + (batch.dropped === 1 ? ' round-trip, ' : ' round-trips, ') + tally.join(', ') + ', ' + batch.chars +
-      ' chars, read with cindy_toolfold_read("' + batch.ref + '")';
+      ' chars, read with cindy_toolfold_read({ batch: "' + batch.ref + '" })';
   }
 
   function allFolded(trip) {
@@ -470,7 +470,7 @@ export default function (pi) {
    * 登记一次删除：返回稳定的 refId。成员集合只用来让同一批在后续投影里复用同一个 id，
    * 身份本身在这里分配（不能复用真实调用 id，否则会被它遮住；也不截断拼接，否则撞名）。
    */
-  function admitRef(ids, liveIds) {
+  function admitRef(ids) {
     var key = ids.join('\u0000');
     var known = refByKey[key];
     if (known !== undefined) return known;
@@ -478,7 +478,7 @@ export default function (pi) {
     do {
       refSeq += 1;
       refId = 'r' + refSeq;
-    } while (liveIds[refId] === true || refs.has(refId) || refLegacy[refId] !== undefined);
+    } while (refs.has(refId) || refLegacy[refId] !== undefined);
     refs.set(refId, { ids: ids.slice() });
     refByKey[key] = refId;
     // 旧记录的兼容入口：本进程内更早渲染过的 batch:<首条 id> 仍能打开同一批。
@@ -713,20 +713,34 @@ export default function (pi) {
       properties: {
         // 上限按 Pi 可能发出的最长调用 id 定：Gemini 历史里出现过 2,000+ 字符的 id，
         // 折叠/截断提示写的是完整 id，约束必须容得下它，否则提示要求的值取不回原文。
-        call_id: { type: 'string', minLength: 1, maxLength: 4096, description: 'Batch or tool call id from the folded or truncated record.' },
+        // 批次与真实调用是两个命名空间：只用一个字段时，后出现的同名调用会遮住批次
+        // （或反过来），分配时避让只能挡住当时已有的 id。
+        batch: { type: 'string', minLength: 1, maxLength: 64, description: 'Batch id from a "[folded]" record, e.g. r7.' },
+        call_id: { type: 'string', minLength: 1, maxLength: 4096, description: 'Single tool call id from a folded or truncated record.' },
         offset: { type: 'integer', minimum: 0, description: 'Character offset to continue from when the previous read stopped at the per-read limit.' },
       },
-      required: ['call_id'],
+      required: [],
       additionalProperties: false,
     },
     execute: async function (_toolCallId, params) {
+      var batchParam = params && typeof params.batch === 'string' ? params.batch : '';
       var id = params && typeof params.call_id === 'string' ? params.call_id : '';
-      if (!id) throw new Error('call_id is required');
-      var batchRef = refIdOf(id);
-      if (batchRef !== null && foldedIds[id] === undefined) {
+      if (!batchParam && !id) throw new Error('pass either batch or call_id');
+      if (batchParam) {
+        var batchRef = refIdOf(batchParam);
+        if (batchRef === null) {
+          return { content: [{ type: 'text', text: 'Cannot recover batch ' + batchParam + ': no such batch in this session.' }], isError: true };
+        }
         var batch = batchOriginal(batchRef);
-        if (batch.recovered === 0) return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': ' + batch.text }], isError: true };
-        return readSlice(id, batch.text, params);
+        if (batch.recovered === 0) return { content: [{ type: 'text', text: 'Cannot recover batch ' + batchParam + ': ' + batch.text }], isError: true };
+        return readSlice(batchParam, batch.text, params);
+      }
+      // 旧记录里的 batch:<首条 id> 仍按批处理；新记录改用 batch 字段，与调用 id 分开。
+      var legacyRef = id.indexOf('batch:') === 0 && foldedIds[id] === undefined ? refIdOf(id) : null;
+      if (legacyRef !== null) {
+        var legacyBatch = batchOriginal(legacyRef);
+        if (legacyBatch.recovered === 0) return { content: [{ type: 'text', text: 'Cannot recover batch ' + id + ': ' + legacyBatch.text }], isError: true };
+        return readSlice(id, legacyBatch.text, params);
       }
       var original = findOriginal(id);
       if (!original || original.ok !== true) {
@@ -846,11 +860,7 @@ export default function (pi) {
       for (var m = 0; m < candidates.length; m++) {
         for (var mi = 0; mi < candidates[m].calls.length; mi++) batchIds.push(String(candidates[m].calls[mi].id));
       }
-      var liveIds = Object.create(null);
-      for (var lv = 0; lv < trips.length; lv++) {
-        for (var lc = 0; lc < trips[lv].calls.length; lc++) liveIds[String(trips[lv].calls[lc].id)] = true;
-      }
-      var batchId = admitRef(batchIds, liveIds);
+      var batchId = admitRef(batchIds);
       for (var m2 = 0; m2 < candidates.length; m2++) {
         for (var mi2 = 0; mi2 < candidates[m2].calls.length; mi2++) {
           var bc = String(candidates[m2].calls[mi2].id);
@@ -859,7 +869,9 @@ export default function (pi) {
       }
     }
 
-    var plan = new Array(messages.length);   // undefined = keep, 'drop', or { message }
+    // 输出安排（outline）与单条调用的折叠信息（foldInfo）是两个东西：同名会被 var 提升
+    // 覆盖掉已经写好的删除安排，等于把折过的原文又放回来。
+    var outline = new Array(messages.length);   // undefined = keep, 'drop', or { message }
     var records = Object.create(null);
     var groups = Object.create(null);
     var dirty = false;
@@ -890,12 +902,11 @@ export default function (pi) {
           keepBlocks.push(keptBlock);
         }
         if (keepBlocks === null) {
-          plan[unit.start] = 'drop';
+          outline[unit.start] = 'drop';
         } else {
-          plan[unit.start] = { message: Object.assign({}, assistant, { content: keepBlocks }) };
+          outline[unit.start] = { message: Object.assign({}, assistant, { content: keepBlocks }) };
         }
-        for (var d2 = 0; d2 < unit.indexes.length; d2++) plan[unit.indexes[d2]] = 'drop';
-        dirty = true;
+        for (var d2 = 0; d2 < unit.indexes.length; d2++) outline[unit.indexes[d2]] = 'drop';        dirty = true;
         continue;
       }
       var blocks = assistant.content;
@@ -907,9 +918,9 @@ export default function (pi) {
         if (block && block.type === 'toolCall' && foldable(String(block.id))) {
           // Fold arguments only past the budget; below it the pointer is larger than the
           // payload and the call block is the shape the model re-sends by accident.
-          var plan = unit.folds[String(block.id)];
-          var foldArgs = Boolean(plan && plan.foldArgs === true);
-          callsById[String(block.id)] = { call: block, argsFolded: foldArgs, foldResult: Boolean(plan && plan.foldResult === true) };
+          var foldInfo = unit.folds[String(block.id)];
+          var foldArgs = Boolean(foldInfo && foldInfo.foldArgs === true);
+          callsById[String(block.id)] = { call: block, argsFolded: foldArgs, foldResult: Boolean(foldInfo && foldInfo.foldResult === true) };
           if (foldArgs) {
             nextContent.push(foldedCall(block));
             argsReplaced = true;
@@ -923,7 +934,7 @@ export default function (pi) {
       // Fold per call, not per trip: a pinned call keeps its own payload verbatim while
       // its parallel siblings stay folded.
       if (argsReplaced) {
-        plan[unit.start] = { message: Object.assign({}, assistant, { content: nextContent }) };
+        outline[unit.start] = { message: Object.assign({}, assistant, { content: nextContent }) };
         dirty = true;
       }
       for (var r = 0; r < unit.results.length; r++) {
@@ -932,7 +943,7 @@ export default function (pi) {
         if (!entry || !entry.foldResult) continue;
         var record = foldedResult(result, entry.call, entry.argsFolded);
         if (!record) continue;
-        plan[unit.indexes[r]] = { message: record };
+        outline[unit.indexes[r]] = { message: record };
         dirty = true;
       }
     }
@@ -955,7 +966,7 @@ export default function (pi) {
         final.push(records[fi]);
         synthetic.add(records[fi]);
       }
-      var op = plan[fi];
+      var op = outline[fi];
       if (op === 'drop') continue;
       final.push(op ? op.message : messages[fi]);
       sources.push(fi);

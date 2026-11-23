@@ -73,7 +73,7 @@ function records(messages: Message[]): string[] {
 }
 
 function refsOf(messages: Message[]): string[] {
-  return records(messages).flatMap((line) => Array.from(line.matchAll(/cindy_toolfold_read\("([^"]+)"\)/g), (match) => match[1]));
+  return records(messages).flatMap((line) => Array.from(line.matchAll(/cindy_toolfold_read\(\{ batch: "([^"]+)" \}\)/g), (match) => match[1]));
 }
 
 function textChars(messages: Message[]): number {
@@ -122,7 +122,7 @@ describe('cindy-tool-fold extension source', () => {
     expect((resident.content as Block[]).find((block) => block.type === 'toolCall')).toEqual((messages[64].content as Block[])[0]);
     expect(out.slice(out.length - 14)).toEqual(messages.slice(66));
     const first = foldedText.slice(foldedText.indexOf('[folded]'));
-    expect(first).toMatch(/^\[folded\] 32 round-trips, bash 32, \d+ chars, read with cindy_toolfold_read\("r\d+"\)$/m);
+    expect(first).toMatch(/^\[folded\] 32 round-trips, bash 32, \d+ chars, read with cindy_toolfold_read\(\{ batch: "r\d+" \}\)$/m);
     // No command text and no per-call statistics survive in assistant position.
     expect(first).not.toContain('run step 0');
     expect(first).not.toContain('ok');
@@ -542,8 +542,8 @@ describe('cindy-tool-fold extension source', () => {
       ...pairs(40),
     ];
     const view = projection(context, messages)!;
-    const batchId = /cindy_toolfold_read\("([^"]+)"\)/.exec(records(view).join('\n'))![1];
-    const read = await tool.execute('t-batch', { call_id: batchId });
+    const batchId = /cindy_toolfold_read\(\{ batch: "([^"]+)" \}\)/.exec(records(view).join('\n'))![1];
+    const read = await tool.execute('t-batch', { batch: batchId });
     const text = String(read.content![0].text);
     expect(text).toContain('B ok');
     expect(text).toMatch(/missing 1 of \d+ round-trips/);
@@ -560,25 +560,38 @@ describe('cindy-tool-fold extension source', () => {
     const ref = refsOf(out)[0];
     // 批 id 在登记时分配，与成员 id 长度无关：不会超 4096 的取回参数上限。
     expect(ref.length).toBeLessThanOrEqual(8);
-    const read = await tool.execute('t-long-id', { call_id: ref });
+    const read = await tool.execute('t-long-id', { batch: ref });
     expect(read.isError).toBeUndefined();
     expect(String(read.content![0].text)).toContain('true');
   });
 
-  it('never hands out a batch id that a live call already uses', async () => {
+  it('keeps batch refs and call ids in separate namespaces', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);
-    // provider 的 id 可能就是 r1/r2：分配的 refId 必须跳过已占用的名字，否则
-    // 取回会打开错误的调用，而不是这一批。
+    // provider 的 id 叫 r1 完全合法：批用 batch 参数、调用用 call_id 参数，
+    // 两个名字空间不共享，所以同名的批和调用可以各自打开。
     messages.push(call('r1', 'bash', { command: 'echo decoy one' }), result('r1', 'bash', 'decoy one'));
-    messages.push(call('r2', 'bash', { command: 'echo decoy two' }), result('r2', 'bash', 'decoy two'));
     const view = projection(context, messages)!;
     const ref = refsOf(view)[0];
-    expect(['r1', 'r2']).not.toContain(ref);
-    const read = await tool.execute('t-shadow', { call_id: ref });
-    expect(read.isError).toBeUndefined();
-    expect(String(read.content![0].text)).toContain('run step 0');
-    expect(String(read.content![0].text)).not.toContain('decoy');
+    expect(ref).toBe('r1');
+    const batchRead = await tool.execute('t-batch', { batch: ref });
+    expect(String(batchRead.content![0].text)).toContain('run step 0');
+    expect(String(batchRead.content![0].text)).not.toContain('decoy one');
+    const callRead = await tool.execute('t-call', { call_id: 'r1' });
+    expect(String(callRead.content![0].text)).toContain('echo decoy one');
+  });
+
+  it('keeps folding after a pin instead of reviving dropped originals', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    projection(context, messages);
+    await tool.execute('t-pin', { call_id: 'call-5' });
+    // 钉住之后重投影：删除安排（outline）不能被单条调用信息覆盖，否则整批原文又冒出来。
+    const second = projection(context, messages)!;
+    expect(records(second).join('\n')).toContain('[folded]');
+    expect(callIds(second)).toContain('call-5');
+    expect(callIds(second)).not.toContain('call-6');
+    expect(textChars(second)).toBeLessThanOrEqual(textChars(messages));
   });
 
   it('keeps a pinned call verbatim while its parallel siblings stay folded', async () => {
@@ -696,7 +709,7 @@ describe('cindy-tool-fold extension source', () => {
     // The recovery was over the per-read budget, so it is not pinned back in: the trip
     // stays collapsed instead of paying twice for the same text.
     expect(callIds(view)).not.toContain('call-2');
-    expect(records(view).join('\n')).toMatch(/read with cindy_toolfold_read\("r\d+"\)/);
+    expect(records(view).join('\n')).toMatch(/read with cindy_toolfold_read\(\{ batch: "r\d+" \}\)/);
   });
 
   it('bounds retained giant payloads by aggregate characters, not just entry count', async () => {
@@ -832,7 +845,7 @@ describe('cindy-tool-fold extension source', () => {
     const refs = refsOf(second);
     expect(refs).toHaveLength(2);
     expect(refs).toContain(oldRef);
-    const reopened = await Promise.all(refs.map((ref) => tool.execute('t-' + ref, { call_id: ref })));
+    const reopened = await Promise.all(refs.map((ref) => tool.execute('t-' + ref, { batch: ref })));
     expect(String(reopened[0].content![0].text)).toContain('run step 0');
     expect(String(reopened[1].content![0].text)).toContain('run step 120');
     // The newer backlog folds too, and the newest 1 pair stays verbatim (KEEP=1).
@@ -936,7 +949,7 @@ describe('cindy-tool-fold extension source', () => {
       for (const id of callIds(out)) expect(before.has(id)).toBe(true);
       expect(JSON.stringify(projection(context, out))).toBe(JSON.stringify(out));
       for (const ref of refsOf(out)) {
-        const read = await tool.execute('t-' + ref, { call_id: ref });
+        const read = await tool.execute('t-' + ref, { batch: ref });
         expect(read.isError).toBeUndefined();
       }
     }
