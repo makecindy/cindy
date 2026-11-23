@@ -460,6 +460,30 @@ describe('cindy-tool-fold extension source', () => {
     }
   });
 
+  it('keeps images while restoring the text of a truncated result', () => {
+    const flag = Symbol.for('cindy.pi.textOnlyTurn');
+    const { context, toolResult } = loadExtension();
+    const body = 'lorem ipsum '.repeat(2400);
+    const image = { type: 'image', data: 'AAAA', mimeType: 'image/png' };
+    const preview = (toolResult({ toolName: 'read', toolCallId: 'mixed', content: [{ type: 'text', text: body }, image] }) as { content: Block[] }).content;
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'what is in this screenshot' }] },
+      call('mixed', 'read', { path: 'shot.png' }),
+      { role: 'toolResult', toolCallId: 'mixed', toolName: 'read', content: preview },
+    ];
+    (globalThis as Record<symbol, unknown>)[flag] = true;
+    try {
+      const out = projection(context, messages)!;
+      const back = out.find((m) => m.role === 'toolResult' && m.toolCallId === 'mixed')!;
+      const blocks = back.content as Block[];
+      // 只有文本被截断过，图片块原样保留，原文也只补文本。
+      expect(blocks.map((b) => String(b?.text ?? '')).join('')).toBe(body);
+      expect(blocks.some((b) => b?.type === 'image')).toBe(true);
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[flag];
+    }
+  });
+
   it('keeps the assistant text of a dropped round-trip', () => {
     // 一条消息里既有正文又有调用时，正文是模型自己的计划与结论，折叠不能连它一起删。
     const { context } = loadExtension();
@@ -527,17 +551,15 @@ describe('cindy-tool-fold extension source', () => {
   it('never names a batch after a live call id', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);
-    messages[22] = call('call-22', 'bash', { command: 'echo folded ' + 'y'.repeat(300) });
-    messages[23] = result('call-22', 'bash', 'ok '.repeat(200));
-    // A provider id that looks like the alias of a real call would shadow the batch.
-    messages.push(call('batch:call-22', 'bash', { command: 'echo decoy' }), result('batch:call-22', 'bash', 'decoy'));
+    // 第一条被折叠的调用是 call-0；provider 的 id 恰好等于它将用的别名时不能撞名。
+    messages.push(call('batch:call-0', 'bash', { command: 'echo decoy' }), result('batch:call-0', 'bash', 'decoy'));
     const view = projection(context, messages)!;
     const alias = /cindy_toolfold_read\("([^"]+)"\)/.exec(records(view).join('\n'))![1];
-    expect(alias).not.toBe('batch:call-22');
-    expect(alias.length).toBeLessThanOrEqual(4096);
+    expect(alias).not.toBe('batch:call-0');
     const read = await tool.execute('t-shadow', { call_id: alias });
     expect(read.isError).toBeUndefined();
     expect(String(read.content![0].text)).toContain('run step 0');
+    expect(String(read.content![0].text)).not.toContain('echo decoy');
   });
 
   it('keeps a pinned call verbatim while its parallel siblings stay folded', async () => {

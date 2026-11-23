@@ -452,25 +452,26 @@ export default function (pi) {
       var message = messages[i];
       if (!message || message.role !== 'toolResult') continue;
       if (!Array.isArray(message.content) || message.content.length === 0) continue;
-      var onlyText = true;
-      for (var b = 0; b < message.content.length; b++) {
-        var part = message.content[b];
-        if (!part || part.type !== 'text' || typeof part.text !== 'string') { onlyText = false; break; }
-      }
-      if (!onlyText) continue;
-      var block = { text: textOf(message.content) };
       var full = giants.get(String(message.toolCallId));
-      if (full === undefined || full.length <= block.text.length) continue;
-      if (full.length - block.text.length > left) continue;
-      left -= full.length - block.text.length;
+      if (full === undefined) continue;
+      var preview = '';
+      var others = [];
+      for (var pb = 0; pb < message.content.length; pb++) {
+        var part = message.content[pb];
+        if (part && part.type === 'text' && typeof part.text === 'string') preview += part.text;
+        else others.push(part);
+      }
+      if (full.length <= preview.length) continue;
+      if (full.length - preview.length > left) continue;
+      left -= full.length - preview.length;
       if (out === null) out = messages.slice();
-      out[i] = Object.assign({}, message, { content: [{ type: 'text', text: full }] });
+      // 图片等非文本块照旧留着：被截断的只有文本，原文也只会存文本。
+      out[i] = Object.assign({}, message, { content: [{ type: 'text', text: full }].concat(others) });
     }
     return out === null ? undefined : out;
   }
 
-  // 取回工具的 call_id 有 4096 字符上限；provider 的超长 id 再加前缀就越界，别名只留
-  // 尾部（批内映射按别名登记，取回照常）。
+  // 取回工具的 call_id 有 4096 字符上限，别名可能超出这个额度，也可能遮住真实调用 id。
   var MAX_CALL_ID_CHARS = 4096;
   function batchAlias(ids, liveIds) {
     // 可读形式 batch:<首条 id> 要同时满足：不超取回参数上限、不被某条真实调用 id 遮住
