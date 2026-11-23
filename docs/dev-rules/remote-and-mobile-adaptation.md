@@ -507,6 +507,11 @@ WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢�
   每轮事件循环看一次时间（Windows 的计时器要 15.6 毫秒，见 `TIMER_GRANULARITY_US`）。数据稳定在传时，对端每两个包回一个确认，
   每个到达的包本来就带着核心走一轮、把到点的包发出去；现在最近 2 毫秒收到过包就不看时间，只设 1 毫秒的计时器兜底
   （`wakePlan`、`INBOUND_CLOCK_US`）。每一阵开头、第一个确认回来之前的那一个往返没有到达可依靠，照旧看时间。
+  2026-11-22 又查到计时器准的系统上仍然空转：Linux、macOS 的计时器精度是 1 毫秒，`needsFineTimer` 原来不问核心，把这些系统上所有
+  短于一毫秒的等待都当成等不起，确认包成批到达、两批之间超过 2 毫秒时就一轮一轮看时间。现在和 Windows 一样由核心的 `fine_timer`
+  判断（每毫秒要发 64 KB 以上才看时间）。容器弱网（Linux、Electron 42）：每 MiB 的 CPU 4G 线路 224–460 → 145–228 毫秒，跨国线路
+  410–580 → 140–250 毫秒，速度不变。回归：`socket.integration.test.ts`「leaves the driver thread mostly idle…」（改前 Linux 上事件循环
+  利用率 0.43–0.47，改后 0.11）。
 - **日志看不出对端走直连还是中转。** 连接都是先经中转建立、再换到直连，而 `agent-net peer … connected via …` 只在建立和断开时记。
   现在已连上的对端换路径时再记一行 `agent-net peer … moved from relay to direct`（或反过来），来回跳动时每台对端 30 秒最多一行，
   之后记下最后停在哪条路（`workerSocket.ts` 的 `logPath`）。只写缩短的设备号和路径，不写地址。

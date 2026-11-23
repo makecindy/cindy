@@ -62,7 +62,7 @@ export function RenameSessionsConfirmCard({
             {t('renameSessions.confirm.description', { count: pending.changes.length })}
           </p>
         </div>
-        <span className="shrink-0 rounded-[6px] border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
+        <span className="shrink-0 rounded-full border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
           {t('renameSessions.confirm.count', { count: pending.changes.length })}
         </span>
       </div>

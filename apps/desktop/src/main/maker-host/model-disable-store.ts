@@ -151,7 +151,7 @@ export function readModelDisableOverrides(): ModelDisableOverrides {
 export function copyProviderDisableOverrides(
   sourceId: string,
   targetId: string,
-  renameModel?: { from: string; to: string },
+  remappedModel?: { source: string; target: string },
 ): void {
   if (!sourceId || !targetId || sourceId === targetId) return;
   store.invalidateIfChanged();
@@ -162,7 +162,8 @@ export function copyProviderDisableOverrides(
   for (const key of Object.keys(current.disabledModels)) {
     if (!key.startsWith(prefix)) continue;
     const modelId = key.slice(prefix.length);
-    disabledModels[modelDisableKey(targetId, modelId === renameModel?.from ? renameModel.to : modelId)] = true;
+    const targetModelId = modelId === remappedModel?.source ? remappedModel.target : modelId;
+    disabledModels[modelDisableKey(targetId, targetModelId)] = true;
   }
   if (current.disabledProviders[sourceId]) disabledProviders[targetId] = true;
   // The split-out account inherits the picker choice too, or a hidden connection reappears.

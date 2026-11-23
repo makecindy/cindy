@@ -452,7 +452,9 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 冻结输入。本地摘要再失败即正常报错，不循环切换。尚未结算的原生 exec continuation 无法跨
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
-Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
+Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志
+（唯一例外：每次响应的计时 trace 行只读来显示 tok/s，不驱动任何行为，见
+[实时生成速度](protocol-compatibility/live-generation-speed.md)），
 不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
 改写为历史故障（包括读取已保存消息时）。收到当前 turn 的原生 `contextCompaction`
 开始事件后，取消短重连计时，压缩期间交给既有 upstream-idle 长超时保护；完成后恢复

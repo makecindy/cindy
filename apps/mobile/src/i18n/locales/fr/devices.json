@@ -396,6 +396,7 @@
       "showDeviceTasks": "Afficher les tâches",
       "openDevice": "Ouvrir",
       "renameDevice": "Renommer",
+      "groupDevice": "Appareil",
       "groupProject": "Projet",
       "sortBy": {
         "priority": "Priorité",
@@ -437,11 +438,15 @@
       "showCollapsedTeammateAvatars": "Afficher les avatars en mode réduit",
       "displayHeading": "Affichage",
       "view": {
+        "card": "Cartes",
         "text": "Texte",
         "list": "Liste"
       },
       "taskInfoHeading": "Infos de la tâche",
       "taskInfo": {
+        "teammate": "Avatar de l'ami",
+        "project": "Icône et nom du projet",
+        "harness": "Icône du harness",
         "time": "Date",
         "pr": "Statut de la PR",
         "tokens": "Jetons",

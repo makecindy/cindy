@@ -834,6 +834,7 @@ export interface BotsCreateThreadLaneArgs {
  * exceptBotId 非空时保留该伙伴的专线(改绑时只收旧伙伴的)。
  */
 export interface BotsArchiveChannelLanesArgs {
+  botId?: string;
   routeKey: string | null;
   routeKeyPrefix: string | null;
   exceptBotId: string | null;

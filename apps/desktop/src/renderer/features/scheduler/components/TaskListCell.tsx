@@ -267,7 +267,7 @@ export function TaskListCell({
       onKeyDown={handleKeyDown}
       onContextMenu={handleContextMenu}
       className={cn(
-        'group relative flex cursor-pointer flex-col gap-[5px] rounded-[10px] px-[14px] py-3',
+        'group relative flex cursor-pointer flex-col gap-1 rounded-xl px-[14px] py-3',
         'outline-none transition-colors',
         'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
         selected

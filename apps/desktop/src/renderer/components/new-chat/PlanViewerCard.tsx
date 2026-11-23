@@ -164,7 +164,7 @@ export function PlanViewerCard({
             onClick={() => onStateChange(lastExpandedState)}
             aria-label={t('newChat.planReview.restoreAria')}
             className={cn(
-              'flex h-[28px] w-[28px] items-center justify-center rounded-[6px]',
+              'flex h-[28px] w-[28px] items-center justify-center rounded-lg',
               'transition-colors hover:bg-[var(--plan-toolbar-btn-hover-bg)]',
             )}
           >
@@ -346,7 +346,7 @@ export function PlanViewerCard({
                     type="button"
                     onClick={() => handleScrollToAnchor(entry.id)}
                     className={cn(
-                      'flex items-center rounded-[6px] px-[8px] py-[6px] text-left',
+                      'flex items-center rounded-lg px-[8px] py-[6px] text-left',
                       'text-12',
                       'transition-colors hover:bg-[var(--plan-outline-active-bg)]',
                       // v1: no scroll-spy. Items are neutral by default and
@@ -405,7 +405,7 @@ function ToolbarButton({
         onClick={onClick}
         aria-label={label}
         className={cn(
-          'flex h-[28px] w-[28px] items-center justify-center rounded-[6px]',
+          'flex h-[28px] w-[28px] items-center justify-center rounded-lg',
           'transition-colors hover:bg-[var(--plan-toolbar-btn-hover-bg)]',
           active && 'bg-[var(--plan-toolbar-btn-hover-bg)]',
         )}
