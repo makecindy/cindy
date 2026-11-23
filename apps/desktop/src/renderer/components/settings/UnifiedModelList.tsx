@@ -1036,16 +1036,18 @@ export function UnifiedModelList({
       (row.aliasRows ?? [row]).every(member => member.avail.every(agent =>
         member.byAgent[agent]?.userModelConfig?.missingUpstream === true,
       ));
+    const name = (
+      <span className="min-w-0 truncate text-14 font-medium" style={{ color }}>
+        {localizedModelName(rep.name, t)}
+      </span>
+    );
+    if (!absentFromAllRoutes) return name;
     return (
       <span className="flex min-w-0 flex-col">
-        <span className="truncate text-14 font-medium" style={{ color }}>
-          {localizedModelName(rep.name, t)}
+        {name}
+        <span className="break-words text-12 text-[var(--text-secondary)]">
+          {t('settings.providers.models.withdrawn.rowStatus')}
         </span>
-        {absentFromAllRoutes && (
-          <span className="break-words text-12 text-[var(--text-secondary)]">
-            {t('settings.providers.models.withdrawn.rowStatus')}
-          </span>
-        )}
       </span>
     );
   };
