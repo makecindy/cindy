@@ -1,8 +1,9 @@
-import { useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 
-import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
+
+import { useExclusiveLayer } from './exclusiveLayer';
 
 /**
  * 判定未完成时的透明遮挡层:不显示任何内容(避免每次启动都闪一下),但接住鼠标与键盘输入、
@@ -14,27 +15,7 @@ import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 export function PendingInputBlocker({ testId }: { testId: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // layout effect:在浏览器绘制、用户能操作之前就加锁并收拢焦点。
-  useLayoutEffect(() => {
-    const releaseLock = acquireAppInteractionLock();
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const root = containerRef.current;
-    root?.focus();
-    const inerted: HTMLElement[] = [];
-    if (root?.parentElement) {
-      for (const child of Array.from(root.parentElement.children)) {
-        if (child !== root && child instanceof HTMLElement && !child.inert) {
-          child.inert = true;
-          inerted.push(child);
-        }
-      }
-    }
-    return () => {
-      for (const el of inerted) el.inert = false;
-      releaseLock();
-      opener?.focus();
-    };
-  }, []);
+  useExclusiveLayer(containerRef);
 
   const keepFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Tab') {
@@ -52,7 +33,7 @@ export function PendingInputBlocker({ testId }: { testId: string }) {
       onKeyDown={keepFocus}
       onMouseDown={(event) => event.currentTarget.focus()}
       className="fixed inset-0 outline-none"
-      style={{ background: 'transparent', zIndex: Z_INDEX_LAYERS['blocking-gate'] }}
+      style={{ background: 'transparent', zIndex: Z_INDEX_LAYERS['blocking-gate'], pointerEvents: 'auto' }}
     />,
     document.body,
   );

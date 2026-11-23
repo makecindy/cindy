@@ -13,12 +13,12 @@ import { parseLegalSegments } from '@/components/login/LoginControls';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
-import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { createLogger } from '@/lib/logger';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
+import { useExclusiveLayer } from './exclusiveLayer';
 import { setLegalTermsGateBlocking } from './legalTermsGateState';
 import { PendingInputBlocker } from './PendingInputBlocker';
 
@@ -78,28 +78,8 @@ function LegalTermsUpdateDialog({ onAccept }: { onAccept: () => Promise<void> })
   const containerRef = useRef<HTMLDivElement | null>(null);
   const agreeRef = useRef<HTMLButtonElement | null>(null);
 
-  // layout effect:加锁、聚焦「同意」、背景 inert 都在绘制前完成;从加载遮挡层切换过来时
-  // 前一层的清理与这里的接管在同一次提交里,中间不会有按键落到被盖住的控件上。
-  useLayoutEffect(() => {
-    const releaseLock = acquireAppInteractionLock();
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    agreeRef.current?.focus();
-    const root = containerRef.current;
-    const inerted: HTMLElement[] = [];
-    if (root?.parentElement) {
-      for (const child of Array.from(root.parentElement.children)) {
-        if (child !== root && child instanceof HTMLElement && !child.inert) {
-          child.inert = true;
-          inerted.push(child);
-        }
-      }
-    }
-    return () => {
-      for (const el of inerted) el.inert = false;
-      releaseLock();
-      opener?.focus();
-    };
-  }, []);
+  // 独占交互:加锁、聚焦「同意」、背景与之后新出现的弹窗都 inert(见 exclusiveLayer)。
+  useExclusiveLayer(containerRef, agreeRef);
 
   const openLink = (url: string) => {
     void window.electronAPI?.openExternal?.(url).catch(() => undefined);
@@ -159,7 +139,7 @@ function LegalTermsUpdateDialog({ onAccept }: { onAccept: () => Promise<void> })
         if (event.target === event.currentTarget) agreeRef.current?.focus();
       }}
       className="modal-scrim fixed inset-0 outline-none"
-      style={{ ...WINDOW_DRAG_STYLE, zIndex }}
+      style={{ ...WINDOW_DRAG_STYLE, zIndex, pointerEvents: 'auto' }}
     >
       <div
         className="modal-panel fixed inset-0 m-auto flex h-fit w-full select-none flex-col p-4"

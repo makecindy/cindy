@@ -215,6 +215,30 @@ describe('LegalTermsUpdateGate', () => {
     expect(screen.getByTestId('gate-blocking').textContent).toBe('false');
   });
 
+  // 依据:任何来源的弹窗(App 级 IPC 宿主、插件等)在确认期间挂到 body 下,都不能抢走焦点或让
+  // 「同意」不可用;确认后它们恢复可用。集中处理,不依赖每个宿主各自暂缓。
+  it('keeps dialogs that appear later underneath and inert, and restores them after agreeing', async () => {
+    render(<LegalTermsUpdateGate />);
+    await screen.findByTestId('legal-terms-update-dialog');
+
+    const lateDialog = document.createElement('div');
+    const lateButton = document.createElement('button');
+    lateButton.textContent = 'late dialog';
+    lateDialog.appendChild(lateButton);
+    await act(async () => {
+      document.body.appendChild(lateDialog);
+    });
+    expect(lateDialog.inert).toBe(true);
+
+    lateButton.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    expect(document.activeElement).toBe(screen.getByTestId('legal-terms-update-agree'));
+
+    fireEvent.click(screen.getByText('legalTermsUpdate.agree'));
+    await act(async () => {});
+    expect(lateDialog.inert).toBe(false);
+    lateDialog.remove();
+  });
+
   it('treats Escape as not agreeing', async () => {
     render(<LegalTermsUpdateGate />);
     const dialog = await screen.findByTestId('legal-terms-update-dialog');
