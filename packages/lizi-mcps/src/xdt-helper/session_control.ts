@@ -51,6 +51,7 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
     profile: SessionRuntimeProfile;
   } | null;
   fallbackEnabled?: boolean;
+  manualCompact?: { operationId: string; status: string; tokensBefore?: number; estimatedTokensAfter?: number; noop?: boolean; errorCode?: string };
 }
 
 export interface SessionControlDeps {
@@ -59,6 +60,7 @@ export interface SessionControlDeps {
     targetSessionId: string;
     action: 'pause' | 'resume' | 'retry' | 'compact';
     instructions?: string;
+    selfPiCaller?: { instanceId: string; signal?: AbortSignal };
   }): Promise<ControlResult<{ result: unknown }, string>>;
   updateQueuedMessage(params: {
     callerSessionId?: string;
@@ -159,6 +161,8 @@ export function registerControlSessionTool(registry: XdtHelperToolRegistry, deps
     description: '控制本机指定任务：pause 暂停后续输入和待答交互的执行，不中止已在运行的模型或工具；' +
       '暂停不冻结 IM 渠道已发出提问的原有超时，到期按原逻辑取消。' +
       'resume 解除执行暂停并恢复原队列；retry 复用原错误重试；compact 复用引擎原生手动压缩。' +
+      '本机 Pi 伙伴压缩自己的当前对话时，带 operationId 的 requested 表示已受理，将在本轮正常结束后执行。' +
+      '用 get_session_runtime 的 manual_compact 核对同一 operationId 的终态；受理后无需再调用 compact。' +
       '送达未知的消息不会自动重放；显式 resume/retry 沿用用户继续／重试入口，调用前须核实投递状态。' +
       '原生能力不支持时明确报错。Agent 与声明 control 的插件共用原生产事务。',
     inputShape: {
@@ -166,10 +170,16 @@ export function registerControlSessionTool(registry: XdtHelperToolRegistry, deps
       action: z.enum(['pause', 'resume', 'retry', 'compact']),
       instructions: z.string().max(32768).optional().describe('仅 compact 支持的压缩说明。'),
     },
-    handler: async ({ session_id, action, instructions }) => {
+    handler: async ({ session_id, action, instructions }, signal) => {
       if (instructions !== undefined && action !== 'compact')
         return errorPayload('INVALID_ARGS', 'instructions is only supported for compact');
+      const caller = deps.getSessionContext();
+      const selfPiCaller = action === 'compact' && caller.agentKind === 'pi' && !caller.remoteHostId
+        && caller.sessionId === session_id && caller.sessionInstanceId
+        && caller.mcpCallerAttested && caller.mcpCallerKind === 'root'
+        ? { instanceId: caller.sessionInstanceId, signal } : undefined;
       const result = await deps.controlSession!({ targetSessionId: session_id, action,
+        ...(selfPiCaller ? { selfPiCaller } : {}),
         ...(instructions !== undefined ? { instructions } : {}) });
       return result.ok ? okPayload({ session_id, action, result: result.result }) : mapControlFailure(result);
     },
@@ -399,6 +409,7 @@ export function registerGetSessionRuntimeTool(
     description:
       '只读查询本机 session 的统一状态：记录生命周期、运行/等待/正常结束/出错结束、标题工作流语义、' +
       '开始时间、最后活动时间、动作摘要、优雅停止状态，以及运行时模型组合、待生效修改和 generation；' +
+      '查询自身会话时 manual_compact 可返回当前实例最近一次延后压缩的 operationId、状态、原生估算或错误码。' +
       'pending.source=user 表示用户在面板里登记、下一条消息发送时才生效的选择。不返回提示词正文、工具参数或凭证。',
     inputShape: {
       session_id: z.string().min(1).optional().describe('目标 session id；省略时查询当前任务。'),
@@ -437,6 +448,8 @@ export function registerGetSessionRuntimeTool(
             }
           : null,
         fallback_enabled: runtime.fallbackEnabled ?? false,
+        ...(targetSessionId === requireCallerSession(deps) && runtime.manualCompact
+          ? { manual_compact: runtime.manualCompact } : {}),
       });
     },
   });

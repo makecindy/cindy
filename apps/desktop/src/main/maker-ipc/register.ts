@@ -493,6 +493,7 @@ import {
   createSessionControlService,
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
+import { createDeferredSessionCompact } from './deferredSessionCompact.js';
 import { runSessionExecutionAction } from './sessionExecutionActions.js';
 import {
   createQueueReorderAdapter,
@@ -17584,7 +17585,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { pluginId, ...(name ? { name } : {}) };
   }
 
+  const deferredCompact = createDeferredSessionCompact();
   const sessionControlService = createSessionControlService({
+    deferSelfPiCompact: async ({ targetSessionId: id, instanceId, signal, instructions, beforeMutation, beforeDelivery }) => {
+      const sess = maker.getSession(id);
+      if (!sess || sess.instanceId !== instanceId || !sess.isTurnRunning() || sess.agentKind !== 'pi') return null;
+      const turnGeneration = sess.getTurnGeneration();
+      const companion = await readCompanionFailoverSnapshot(id);
+      if (companion?.role !== 'canonical' && companion?.role !== 'thread') return null;
+      await beforeMutation();
+      if (!sess.capabilities.manualCompact?.supported) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
+      }
+      if (signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Request cancelled before compact was scheduled');
+      const result = deferredCompact.request(sess, {
+        turnGeneration, signal, isCurrent: () => maker.getSession(id) === sess,
+        dispatch: (checkBoundary, signal) => withSendToSessionLock(id, () => sess.compactSession(instructions, async () => {
+          signal.throwIfAborted();
+          await beforeDelivery();
+          // Recheck in the native RPC lane. A newer turn must never be interrupted.
+          await checkBoundary();
+        }), () => 'self-pi-compact', signal),
+      });
+      if (!result) throwIpcError('SESSION_RUNNING', 'The turn changed or a compaction is already pending');
+      return result;
+    },
     runSessionAction: params => runSessionExecutionAction(params, {
       coordinator: inputCoordinator, persist: awaitAgentInputQueueSnapshotPersistence,
       interactions: {
@@ -17617,11 +17642,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const profiles = await readSessionRuntimeProfiles(sessionId);
       if (!profiles) throw new Error(`session ${sessionId} not found`);
       const activity = await readCanonicalSessionActivity(sessionId);
-      const turnControl = maker.getSession(sessionId)?.getTurnControlSnapshot();
+      const liveSession = maker.getSession(sessionId);
+      const turnControl = liveSession?.getTurnControlSnapshot();
+      const manualCompact = liveSession && deferredCompact.get(liveSession);
       const botFallback = await readBotFallbackCandidate(sessionId, profiles.effective);
       return {
         ...activity,
         permissionMode: (await maker.getSessionMeta(sessionId))?.permissionMode,
+        ...(manualCompact ? { manualCompact } : {}),
         turnGeneration: turnControl?.turnGeneration ?? null,
         gracefulStopState: turnControl?.gracefulStopState ?? 'none',
         runtimeGeneration: profiles.control.generation,

@@ -1,12 +1,14 @@
 import { formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createXdtHelperMcpServer } from '@cindy/mcps';
+import type { AgentEvent, Session } from '@cindy/maker-core';
+import { createDeferredSessionCompact } from '../deferredSessionCompact.js';
 import { handlePluginHostToolRequest } from '../../cindy-brain/hostToolSlot.js';
 import { authorizePluginHostToolCall, getPluginHostToolCaller } from '../../mcp-integrations/hostToolCaller.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
-import { admitPluginTaskAction, admitTaskAction } from '../taskActionAuthorization.js';
+import { admitPluginTaskAction, admitTaskAction, createTaskActionAuthorizer } from '../taskActionAuthorization.js';
 import {
   authorizeSessionQueueReorder,
   createSessionControlService,
@@ -258,6 +260,103 @@ describe('session control domain service', () => {
       targetSessionId: 'pi-task', action: 'compact', instructions: 'Keep decisions',
     }));
   });
+
+  // #12170 / unit: an authorized helper call targeting its own running Pi turn must get
+  // a trackable receipt before native compact can abort anything. Plugin probes only test
+  // external delivery. The minimum reproducer is one compact call in one live turn.
+  it.each(['complete', 'noop', 'native error', 'stop', 'newer turn', 'external'] as const)(
+    'reports self-compaction through the helper boundary (%s)', async outcome => {
+      const { deps, live } = setup();
+      const operation = createDeferredSessionCompact();
+      let running = true;
+      let generation = 3;
+      let onEvent: Parameters<Session['onEvent']>[0] | undefined;
+      const session = {
+        ...live,
+        sdkSessionId: '/fixture/pi-session.jsonl',
+        isTurnRunning: () => running,
+        getTurnGeneration: () => generation,
+        stablePermissionModeState: { mode: 'bypassPermissions' as const, generation: 0 },
+        stablePlanModeState: { enabled: false, generation: 0 },
+        onEvent: (listener: Parameters<Session['onEvent']>[0]) => {
+          onEvent = listener;
+          return () => { onEvent = undefined; };
+        },
+        onStatusChange: () => () => {},
+      };
+      const dispatchNative = vi.fn(async () => {
+        if (outcome === 'native error') throw new Error('native compaction failed');
+        return outcome === 'noop' ? { noop: true } : { tokensBefore: 120, estimatedTokensAfter: 30 };
+      });
+      const deferSelfPiCompact: NonNullable<SessionControlServiceDeps['deferSelfPiCompact']> = async params => {
+        expect(params.instanceId).toBe('pi-instance');
+        await params.beforeMutation();
+        return operation.request(session, {
+          turnGeneration: generation, signal: params.signal, isCurrent: () => true,
+          dispatch: async checkBoundary => {
+            await params.beforeDelivery();
+            await checkBoundary();
+            return dispatchNative();
+          },
+        });
+      };
+      const service = createSessionControlService({
+        ...deps, deferSelfPiCompact,
+        getSessionRuntimeDetails: async sessionId => ({
+          ...await deps.getSessionRuntimeDetails(), manualCompact: sessionId === 'target' ? operation.get(session) : undefined,
+        }),
+      });
+      const server = createXdtHelperMcpServer({
+        sessionControl: service,
+        authorizeCall: createTaskActionAuthorizer({ confirm: async () => true, capture: async () => ({
+          key: 'current-turn', ownerInput: true, delegated: false, assertCurrent: async () => {},
+          assertDeliveryCurrent: async () => {},
+        }) }),
+      }, { agentKind: 'pi', sessionId: 'target', workingDir: '/fixture', getSessionContext: () => ({
+        agentKind: 'pi', sessionId: 'target', workingDir: '/fixture', sessionInstanceId: 'pi-instance',
+        mcpCallerKind: 'root', mcpCallerAttested: true,
+      }) });
+      const call = async (tool: string, args: Record<string, unknown>) => {
+        const result = await server.hostTools.call(tool, args);
+        const content = result.content[0];
+        return JSON.parse(content.type === 'text' ? content.text : '{}');
+      };
+      try {
+        const requested = await call('control_session', {
+          action: 'compact', session_id: outcome === 'external' ? 'other' : 'target', instructions: 'Keep the decision',
+        });
+        if (outcome === 'external') {
+          expect(requested).toMatchObject({ ok: true, result: { executionPaused: true } });
+          expect(operation.get(session)).toBeUndefined();
+          expect(deps.runSessionAction).toHaveBeenCalledTimes(1);
+          return;
+        }
+        expect(requested).toMatchObject({ ok: true, result: { status: 'requested', operationId: expect.any(String) } });
+        expect(deps.runSessionAction).not.toHaveBeenCalled();
+        expect(dispatchNative).not.toHaveBeenCalled();
+
+        running = false;
+        const done = { type: 'done', sessionTurnGeneration: generation, source: 'pi',
+          data: { status: outcome === 'stop' ? 'cancelled' : 'completed' } } satisfies AgentEvent;
+        if (outcome === 'newer turn') generation += 1;
+        onEvent?.(done);
+        onEvent?.(done);
+
+        const expected = outcome === 'native error' ? { status: 'failed', errorCode: 'COMPACT_FAILED' }
+          : outcome === 'stop' || outcome === 'newer turn' ? { status: 'cancelled' }
+          : outcome === 'noop' ? { status: 'completed', noop: true }
+          : { status: 'completed', tokensBefore: 120, estimatedTokensAfter: 30 };
+        await vi.waitFor(async () => {
+          expect(await call('get_session_runtime', {})).toMatchObject({
+            manual_compact: { ...expected, operationId: requested.result.operationId },
+          });
+        });
+        expect(dispatchNative).toHaveBeenCalledTimes(outcome === 'stop' || outcome === 'newer turn' ? 0 : 1);
+      } finally {
+        await server.close();
+      }
+    },
+  );
 
   // UI parity: machine-generated rows are not editable, even with plugin control.
   it.each([

@@ -15,6 +15,13 @@ Claude 复用原 `/compact`，Codex/Pi 复用原生压缩及既有锁与临时�
 发送前复核原派发授权。成功沿用原生估算值，`noop:true` 表示未压缩，实际 RPC 失败返回
 `COMPACT_FAILED`。仅 Pi 接受非空压缩说明；现有 `retry` 按任务错误恢复事务执行。
 
+本机 Pi 伙伴直聊通过 `control_session` 压缩自身正在执行的会话时，`requested` 带
+`operationId`，表示宿主已受理。宿主等原轮次正常结束并复核实例、权限与派发授权，再发送一次
+原生 `compact`。原轮次取消、会话切换或等待超过十分钟时取消派发。调用方通过
+`get_session_runtime.manual_compact` 查看当前运行实例最近一次回执，按同一 `operationId` 核对。
+`completed` 可带原生估算或 `noop`，`cancelled` 表示尚未派发，`failed` 带 `COMPACT_FAILED`。
+插件与外部目标沿用原回执。
+
 存量插件影响：无，不更改原声明、批准和安装数据，无需迁移。
 不增加 Device Link channel、relay kind 或跨电脑操作；自建中转仍透传原有 Host 请求，无需适配。
 验证：sessionControlTools、sessionControlService、sessionQueueInspection、sessionQueueControl、
