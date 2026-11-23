@@ -12,7 +12,8 @@
  *  - text:      `{ text, isFinal: false }` deltas, then `{ text, isFinal: true, isFullText: true }` per segment
  *  - thinking:  `stage: 'start' | 'delta' | 'final'` with a stable `blockId`
  *  - tools:     `tool_use` (including input patches), then paired results when the call settles
- *  - turn end:  `done` with `result` = last non-empty assistant segment
+ *  - turn end:  `done` with `result` = last non-empty assistant segment, and the
+ *               turn's tokens in `usage` when the agent reported them
  *
  * Usage, configuration and session-info updates are session state and are
  * handled by `AcpSession`, not here.
@@ -30,6 +31,7 @@ import {
   type AcpRecord,
   type AcpStopReason,
   type AcpToolCallFields,
+  type AcpTurnUsage,
 } from './protocol.js';
 
 const MAX_TOOL_OUTPUT_CHARS = 200_000;
@@ -51,7 +53,7 @@ export interface AcpUpdateTranslatorOptions {
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason }
+  | { stopReason: AcpStopReason; usage?: AcpTurnUsage }
   | { error: string; reason?: string };
 
 function clip(text: string): string {
@@ -239,6 +241,8 @@ export class AcpUpdateTranslator {
         status: outcome.stopReason === 'cancelled' ? 'cancelled' : 'completed',
         result: outcome.stopReason === 'cancelled' ? '' : result,
         stopReason: outcome.stopReason,
+        // A cancelled turn still spent the tokens the agent reports for it.
+        ...(outcome.usage ? { usage: outcome.usage } : {}),
       },
     });
     return events;

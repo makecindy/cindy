@@ -91,7 +91,7 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | 文本 / 思考 | `agent_message_chunk` / `agent_thought_chunk` → `text` / `thinking` |
 | 工具 | `tool_call` / `tool_call_update` → `tool_use` / `tool_result`（同一 `toolCallId` 合并） |
 | 计划 | `plan` → 折叠为任务内的待办展示（第一期可只记录为文本） |
-| 用量 | `usage_update` → 上下文用量 |
+| 用量 | `usage_update` → 上下文用量；`session/prompt` 结果里的 `usage`（本轮 token）→ `done.data.usage`，供「远程与分享」页按使用方的用量与插件的 did-turn-end 使用。`inputTokens` 按不含缓存记：对端的 `totalTokens` 等于输入 + 输出时，说明它的输入含缓存，先扣掉缓存。对端不报时只记轮数（2026-11-23） |
 | 权限 | `session/request_permission` → `interaction_request`（kind = permission） |
 | 模型 / 推理强度 | 类别为 `model` 的配置项 / `reasoning_effort` 配置项 → `setModel` / `setEffort` |
 

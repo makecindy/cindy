@@ -81,6 +81,18 @@ export interface AcpConfigOption {
 
 export type AcpStopReason = 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'refusal' | 'cancelled';
 
+/**
+ * Tokens one prompt turn used, from the `usage` of the `session/prompt` result. Field names follow
+ * the per-turn `done.data.usage` other engines emit, so usage ledgers and plugins read it without
+ * an ACP branch. `inputTokens` excludes cached tokens.
+ */
+export interface AcpTurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 
 /** Union of `ToolCall` and `ToolCallUpdate`: every field but the id may be absent. */
@@ -264,4 +276,35 @@ const STOP_REASONS: ReadonlySet<string> = new Set(['end_turn', 'max_tokens', 'ma
 export function normalizeStopReason(raw: unknown): AcpStopReason {
   const stopReason = asRecord(raw).stopReason;
   return typeof stopReason === 'string' && STOP_REASONS.has(stopReason) ? stopReason as AcpStopReason : 'end_turn';
+}
+
+function tokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * `usage` of a `session/prompt` result (ACP `PromptResponse.usage`, unstable): the tokens of this
+ * turn only, not a session total. Absent or malformed usage is `undefined`, never zero, so a turn
+ * without a report is not recorded as free.
+ *
+ * Agents disagree on whether `inputTokens` already contains the cached tokens. `totalTokens`
+ * settles it: Antigravity reports input + output + cached = total (input excludes the cache),
+ * while an agent passing through OpenAI-style counts reports input + output = total. Counting the
+ * cache twice would inflate usage, so the second form is converted to the first.
+ */
+export function normalizeTurnUsage(raw: unknown): AcpTurnUsage | undefined {
+  const usage = asRecord(asRecord(raw).usage);
+  const input = tokenCount(usage.inputTokens);
+  const outputTokens = tokenCount(usage.outputTokens);
+  if (input === null || outputTokens === null) return undefined;
+  const cacheReadTokens = tokenCount(usage.cachedReadTokens) ?? 0;
+  const cacheCreationTokens = tokenCount(usage.cachedWriteTokens) ?? 0;
+  const cached = cacheReadTokens + cacheCreationTokens;
+  const inputIncludesCache = cached > 0 && tokenCount(usage.totalTokens) === input + outputTokens;
+  return {
+    inputTokens: inputIncludesCache ? Math.max(0, input - cached) : input,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+  };
 }

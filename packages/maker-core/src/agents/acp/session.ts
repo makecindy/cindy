@@ -41,6 +41,7 @@ import {
   normalizePermissionOptions,
   normalizeStopReason,
   normalizeToolCallFields,
+  normalizeTurnUsage,
   type AcpAuthMethod,
   type AcpConfigOption,
   type AcpContentBlock,
@@ -740,7 +741,11 @@ export class AcpSession {
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null }).then(
-      (result) => this.finishTurn(turn.token, { stopReason: normalizeStopReason(result) }),
+      (result) => {
+        // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
+        const usage = normalizeTurnUsage(result);
+        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage } : {}) });
+      },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );
   }
