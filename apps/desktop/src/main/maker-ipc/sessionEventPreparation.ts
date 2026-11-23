@@ -1,3 +1,4 @@
+import { beginCompanyTurn } from '../usage/companyTokenFacts.js';
 import { NATIVE_HISTORY_CHECKPOINT } from '../remote-agent/nativeHistoryTransfer.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
@@ -307,7 +308,9 @@ export function prepareSessionEvent(
       }
       if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
         && admitUsage?.() !== false && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
-        deps.turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id, undefined, event.source));
+        const context = captureTurnUsageContext(session.id, undefined, event.source, session.model);
+        if (!session.remoteHostId && !session.agentDeviceId) beginCompanyTurn(context, context.providerId, event.source);
+        deps.turnUsageContextBySession.set(session.id, context);
       }
     } else if (endsForegroundTurnByStatus(data, isContinuationBoundary, event)) {
       shouldMarkTurnStatusIdleAfterBroadcast = true;
@@ -459,6 +462,7 @@ export function prepareSessionEvent(
     attributedEvent,
     botTaskResultInputIds,
     pluginTargetInputIds,
+    activeInputId,
     groupLaneInputClientId,
     broadcastEvent,
     eventAgentMeta,

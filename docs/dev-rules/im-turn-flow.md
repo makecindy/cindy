@@ -177,7 +177,10 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 6. **群历史租约与渠道工具租约**：`beginGroupHistoryAccess` / `beginChannelToolScope` 都在 provider 真正
    开始这一轮前登记、终态释放；`sessionInstanceId` 挡住旧实例借用新权限。轮次内原生 API 的目标 chat 与
    触发者身份只来自租约，不来自模型参数，无租约时 fail closed；飞书 `send_*_to_user` 的主人通知
-   例外见上节，不扩大原生 API 的作用域。每个可绑定渠道的 `channelNoteSourceFor` 都要在 `[渠道说明]`
+   例外见上节，不扩大原生 API 的作用域。iMessage 伙伴渠道专线另有一条无租约路径（2026-11-22）：
+   当前输入是主人在 Cindy 里的输入、或本轮是 scheduler 时，`im/imessage/laneScope.ts` 由宿主把作用域
+   解析为这条专线自己的聊天（主人输入保留主人身份，scheduler 不带主人身份），会话实例或输入边界变化即作废；
+   入站租约存在时始终以租约为准。伙伴渠道专线上的 scheduler 轮次不因「静默运行」压下渠道终稿。每个可绑定渠道的 `channelNoteSourceFor` 都要在 `[渠道说明]`
    末尾给 `toolsHint` 点名本轮可用的渠道工具（Telegram：`TELEGRAM_TOOLS_HINT`；飞书：`feishuToolsHint`），
    Agent 不该靠摸瞎试工具才知道自己在哪个渠道；新增可绑定渠道时四件事一起补——渠道说明提示、
    `channelToolScopeFor` 作用域、轮次内直通工具、以及该渠道工具在**三个 Harness** 的挂载门禁
@@ -399,11 +402,11 @@ Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入�
 - 官方 [消息接口](https://docs.discord.com/developers/resources/message) 现已提供 Search Guild Messages；锁定的 discord.js 14.27 没有高级搜索 helper，薄适配使用同一 SDK 的固定 REST 端点与限流队列，始终限定 channel_id 并再次过滤原生 channel_id。`202/code=110000` 返回 `DISCORD_SEARCH_INDEXING` 与 retryAfter，不轮询；`429` 与权限错误结构化报告。MESSAGE_CONTENT 的 [HTTP 与 Gateway 边界](https://docs.discord.com/developers/events/gateway#http-restrictions) 分别检查，不把缺正文误报为完整历史。
 - 共享 runner 的成功收尾与明确 terminal error 文本都先调用 Discord 的 durable terminal sink，无论进度卡是否创建成功；流式卡只作进度。终稿文本先原子落在账号隔离 `discord-final-text/<连接摘要>.json` 再发送，原始触发 ID 的摘要立即成为“已完成模型轮次”墓碑，与分段送达状态分开。当前进程、连接恢复与重启只补未确认分段，不再调用模型；进行中崩溃不自动恢复执行。文字转为平台文本后分段，禁止隐式 @ 提醒。
 - 待送正文最多 256 份 / 总账 4 MiB，创建后 24 小时只结束补送并清正文；完成输入墓碑独立于投递期限，最多 4096 份，容量不足时先回收最老的无正文墓碑，不挤掉仍待送的正文。送达后立即清正文，送达 ID 最多保留 1 小时。读路径和恢复路径清理过期正文与回执；容量不足、原子写失败明确记录错误，不绕过出箱发送。状态工具可查原 lane 的 pending / uncertain，不读其它公开 lane 的记录。
-- 发起轮的账号、bot/主人、连接绑定与授权代次随输入锚定，await 后再核对。凭证仅检查文件元数据、不读回 Token。解绑、换 bot/主人/伙伴绑定或撤销目标 grant 使旧结果失效。目标 grant 代次作为宿主私有元数据随原白名单/连接文档原子保存，不进远端协议；撤销再授权仍推进代次，修改其它连接、其它服务器或不影响目标的频道选择不取消本目标积压。凭证文件代次仍仅归当前连接。
+- 发起轮的账号、bot/主人、连接绑定与授权代次随输入锚定，await 后再核对。凭证代次经原子备份恢复读取：新版本外层载荷对含随机 revision 的完整加密文件表示求 SHA-256；未改写的旧 base64 载荷保留文件元数据代次，以兼容升级前的 pending 终稿。不解密或返回 Token；下一次成功写入才原子安装新代次（实现与回归：[ownerScopedStorage.ts](../../apps/desktop/src/main/im/ownerScopedStorage.ts)、[ownerScopedStorage.test.ts](../../apps/desktop/src/main/im/__tests__/ownerScopedStorage.test.ts)）。解绑、换 bot/主人/伙伴绑定或撤销目标 grant 使旧结果失效。目标 grant 代次作为宿主私有元数据随原白名单/连接文档原子保存，不进远端协议；撤销再授权仍推进代次，修改其它连接、其它服务器或不影响目标的频道选择不取消本目标积压。凭证文件代次仍仅归当前连接。
 - POST 前持久记 sending；收到分段回执后记 sent。断线前已确认的分段不重复，明确 429 尊重等待时间；POST 回执丢失或崩溃遗留 sending 转 uncertain，留待主人通过历史核实，**不自动重发**。Discord enforce_nonce 只覆盖几分钟，不承诺 24 小时 exactly-once。附件沿用即时发送且没有持久 pin，发送使用原触发的 receipt 租约，在取频道的 await 后、发送前仍复核成员资格与目标 grant 代次；不能宣称附件必达，普通进程重启恢复仅承诺文本补送。并发打开同一账号资料的多个宿主尚未做出箱互斥验收。
 - 进度消息 ID 随文字终稿持久保存；即时与恢复送达共用原 lane / bot 授权检查清理占位，不依赖附件发送。清理遇到明确权限拒绝、无效请求或目标不存在时结束该项并继续其它频道；限流与临时失败沿原出箱退避重试，但优先发送其它 pending 终稿，不重发已确认正文。
 - 一条终稿变成 uncertain 不阻塞其余 pending；明确 429 的等待截止时间由所有 drain / complete 入口共用。空正文不发文字 POST，仍可即时上传正文托管图片；正文图与工具附件按路径去重，单张失败不阻塞其余附件。
-- setConfig 尝试期间暂停出箱并等待已开始的 POST 收口；只有配置成功才取消旧绑定的输出。凭证保存或连接失败并确认回滚后，仅刷新凭证元数据代次，保持原目标 grant 校验，保留 pending 与尚未提交的旧终稿；撤权后重新授权仍取消旧输出。
+- setConfig 尝试期间暂停出箱并等待已开始的 POST 收口；只有配置成功才取消旧绑定的输出。凭证保存或连接失败并确认回滚后，仅刷新凭证文件代次，保持原目标 grant 校验，保留 pending 与尚未提交的旧终稿；撤权后重新授权仍取消旧输出。
 
 实现与回归：`discord/context.ts`、`mcp-integrations/discordMcpServer.ts`、`discord/finalTextStorage.ts`、`packages/lizi-im/src/discord/{operations,finalTextOutbox}.ts` 及各自测试；共享终态接线由 `turnRunnerSendOutcome.test.ts` 验证。
 

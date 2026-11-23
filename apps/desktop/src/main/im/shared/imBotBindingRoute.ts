@@ -21,7 +21,7 @@ export type ImCompanionSessionResult =
 
 export interface ImCompanionRouteDeps {
   /** 连接(本渠道 + botContextId)已交给的伙伴 id; 未交出返回 null。同步、可在热路径调用。 */
-  readBinding(botContextId: string): string | null;
+  readBinding(botContextId: string, chatId?: string): string | null;
   /**
    * 解析伙伴的落点任务。create=false 只查已有的(不建行、不恢复主任务), 查不到返回 null;
    * create=true 时确保存在(主任务走伙伴主任务恢复入口, 专线幂等创建)。
@@ -32,7 +32,7 @@ export interface ImCompanionRouteDeps {
     create: boolean;
   }): Promise<ImCompanionSessionResult | null>;
   /** 归档一条专线(群里 `/new`), 返回被归档的任务 id。 */
-  archiveLane(routeKey: string): Promise<string[]>;
+  archiveLane(routeKey: string, botId?: string): Promise<string[]>;
   /**
    * 发送前守卫(伙伴暂停 / 归档 → 返回原因, 不发送; 否则对齐模型链、刷新能力纪元)。
    * 必须在拿 send 锁之前调用。

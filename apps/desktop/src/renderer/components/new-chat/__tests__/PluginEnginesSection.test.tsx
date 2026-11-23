@@ -108,6 +108,7 @@ import { ModelSelector, ModelSelectorContent } from '../ModelSelector';
 import { PermissionSelector } from '../PermissionSelector';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  controlledPluginEngineSources,
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
   remotePluginEngineChoices,
@@ -129,6 +130,7 @@ import {
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
 import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../../../shared/pluginEngines';
+import { createIpcError } from '../../../../shared/ipc-errors';
 
 const modes: PluginEngineView['permissionModes'] = [
   { id: 'ask', displayName: 'Ask' },
@@ -491,6 +493,36 @@ describe('plugin engines in the new-task picker', () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-11-22(插件引擎进入「设置 → 模型供应商」)：用户在那里隐藏的引擎不在选择器里占位，已选着它的任务照常显示；
+  // 另一台电脑把自己的引擎隐藏，是那台电脑选择器的事，开放给本机任务用的那一份照常列出。
+  // 依据：configuration-and-overrides.md「隐藏只改陈列」。最小失败输入：隐藏的引擎仍占一格；当前任务选着的引擎被
+  // 隐藏后从选择器里消失；主人隐藏后借用方也看不到。tier：unit(jsdom)。
+  it('keeps an engine the user hid out of the picker, except for the task already on it or a borrowing computer', () => {
+    const hiddenDsh = { ...dsh, hidden: true as const };
+    const view = renderDraftPicker({ engines: [hiddenDsh, known], active: null, onSelect: vi.fn() });
+    expect(screen.queryByRole('button', { name: 'DeepSeek Harness' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'OpenCode' })).toBeTruthy();
+    view.unmount();
+
+    const active = renderDraftPicker({
+      engines: [hiddenDsh, known],
+      active: { providerId: dsh.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL },
+      onSelect: vi.fn(),
+    });
+    expect(screen.getByRole('button', { name: 'DeepSeek Harness' })).toBeTruthy();
+    active.unmount();
+
+    const borrowed = remotePluginEngineChoices(
+      [{ deviceId: 'computer-b', name: 'Studio Mac' }],
+      new Map([['computer-b', [{ ...hiddenDsh, remoteUse: { supported: true, enabled: true } }]]]),
+      (id, name) => name ?? id,
+    );
+    expect(borrowed).toHaveLength(1);
+    expect(borrowed[0]).not.toHaveProperty('hidden');
+    renderDraftPicker({ engines: borrowed, active: null, onSelect: vi.fn() });
+    expect(screen.getByRole('button', { name: 'DeepSeek Harness · Studio Mac' })).toBeTruthy();
+  });
+
   // 第三期(2026-11-20)：自己另一台电脑上的引擎。同一个插件两台都装时 providerId 相同，只有所在电脑不同。
   it('lists an engine of another computer under that computer and keeps it apart from this computer’s engine of the same plugin', () => {
     const onSelect = vi.fn();
@@ -595,6 +627,42 @@ describe('plugin engines in the new-task picker', () => {
       expect(invoke).not.toHaveBeenCalled();
       await act(async () => { picker.result.current.read(); });
       expect(picker.result.current.catalogues.get(deviceId)).toEqual([dsh]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // 2026-11-23 用户反馈：A 远控 B 新建任务时看不到 B 收到的插件供应商分享(内置供应商分享可以)。
+  // 生产入口与可观察结果：controlledPluginEngineSources + useDevicesPluginEngines + remotePluginEngineChoices；
+  // B 名单里的同账号电脑与插件供应商分享成为候选，列表经 B 的 maker:model-catalog:read 读取，选中后 Agent 在那个来源运行；
+  // 内置供应商分享不列，旧版 B 拒绝代读时只是不列出。最小失败输入与 tier：unit(jsdom)，B 名单含插件分享 share:p。
+  it('offers the engines of the task computer’s sources under remote control, read through that computer', async () => {
+    const shared = { ...engine('dsh-acp:dsh', 'DeepSeek Harness'), remoteUse: { supported: true, shareSupported: true, enabled: true } };
+    const sources = controlledPluginEngineSources('device-b', [
+      { deviceId: 'device-a', name: 'Studio' },
+      { deviceId: 'share:p', name: 'DSH · Magi', favoriteSource: { providerId: shared.providerId } },
+      { deviceId: 'share:builtin', name: 'Anthropic · Magi', favoriteSource: { providerId: 'anthropic' } },
+    ], (id) => (id === 'share:p' ? '来自 Magi 的分享' : null));
+    expect(sources.map((source) => [source.deviceId, source.name])).toEqual([['device-a', 'Studio'], ['share:p', '来自 Magi 的分享']]);
+    // The task computer has not listed its sources (older computer, or not read yet): nothing extra is offered.
+    expect(controlledPluginEngineSources(undefined, [{ deviceId: 'device-a', name: 'Studio' }], () => null)).toEqual([]);
+    const invoke = vi.fn(async (host: string, channel: string, args: unknown[]) => {
+      if (host !== 'device-b' || channel !== 'maker:model-catalog:read') throw new Error('read outside the task computer');
+      if ((args[0] as { agentDeviceId?: string }).agentDeviceId === 'device-a') {
+        throw createIpcError('INVALID_PARAMS', 'Invalid model catalog read');
+      }
+      return [shared];
+    });
+    vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+    try {
+      const picker = renderHook(() => useDevicesPluginEngines(sources.map((source) => source.catalogueKey!)));
+      await act(async () => { picker.result.current.read(); });
+      const choices = remotePluginEngineChoices(sources, picker.result.current.catalogues, (id, name) => name ?? id);
+      expect(choices.map((choice) => [choice.providerId, choice.deviceId, choice.deviceName]))
+        .toEqual([[shared.providerId, 'share:p', '来自 Magi 的分享']]);
+      expect(pluginEngineSessionCreateFields(resolveActivePluginEngine(choices, {
+        providerId: shared.providerId, deviceId: 'share:p', modelId: PLUGIN_ENGINE_DEFAULT_MODEL,
+      })!)).toMatchObject({ providerId: shared.providerId, agentDeviceId: 'share:p' });
     } finally {
       vi.unstubAllGlobals();
     }

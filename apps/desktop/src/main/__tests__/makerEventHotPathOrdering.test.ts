@@ -948,15 +948,16 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain('await getGatewayModelPricingForModel()');
     expect(claudeDoneSource).toContain(': getReferenceModelPricing();');
     expect(claudeDoneSource).toContain(
-      'const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(',
+      'const { turnMoney, actualByCurrency, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(',
     );
     expect(claudeDoneSource).toContain('providerId: sessionProviderForBilling');
     expect(claudeDoneSource).toContain('billingRoute,');
     expect(claudeDoneSource).toContain(
       'const claudeUsageSegments = normalizeTurnUsageSegments(doneData?.usageSegments);',
     );
-    expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');
-    expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
+    expect(claudeDoneSource).toContain('for (const amount of actualByCurrency)');
+    expect(claudeDoneSource).toContain('recordTurnSpend(amount);');
+    expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, amount);');
     expect(claudeDoneSource).toContain('subscriptionEstimate ?? unpricedSubscriptionValueMarker()');
     expect(claudeDoneSource).toContain('money: modelRowMoney,');
     // 订阅轮复用计费解析结果打 #billing=subscription 标记,
@@ -967,9 +968,9 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain(
       "const isSubscriptionValueRow = m.source === 'subscription'",
     );
-    expect(claudeDoneSource).toContain('const subscriptionTurnEstimates: RegionalMoney[] = [];');
+    expect(claudeDoneSource).toContain('const estimatedAmounts = sumMoneyByCurrency(perModel.flatMap(');
     expect(claudeDoneSource).toMatch(
-      /computePriceQuoteTurnMoney\(\s*m\.deltas,\s*\(sessionProviderForBilling\s*\? getCodexProviderSubscriptionValuePrice\(sessionProviderForBilling, m\.model, pricing, undefined, undefined, 'claude-code'\)\s*: undefined\) \?\? getSubscriptionValuePriceFor\('claude-code', m\.model, pricing\),\s*currentLedgerCurrency\(\),\s*m\.segments,\s*\)/,
+      /computePriceQuoteTurnMoney\(\s*m\.deltas,\s*\(sessionProviderForBilling\s*\? getCodexProviderSubscriptionValuePrice\(sessionProviderForBilling, m\.model, pricing, undefined, undefined, 'claude-code'\)\s*: undefined\) \?\? getSubscriptionValuePriceFor\('claude-code', m\.model, pricing\),\s*m\.segments,\s*\)/,
     );
     // 订阅判定对齐 proxy 路由: 显式选 Anthropic, 或默认路由优先按 observed route, 未观察再回落无网关 key 启发式
     expect(claudeDoneSource).toContain("turnContext.subscriptionKind === 'claude'");
@@ -1023,7 +1024,7 @@ describe('maker:event hot path ordering', () => {
     );
     expect(piDoneSource).toContain('money ?? unpricedSubscriptionValueMarker()');
     expect(piDoneSource).toContain('money: modelRowMoney,');
-    expect(piDoneSource).toContain('if (actualMoney && !identified)');
+    expect(piDoneSource).toMatch(/if \(!identified\) \{\s*for \(const amount of actualAmounts\) \{\s*await recordTurnSpend\(amount\);\s*await recordSessionTurnSpend\(session.id, amount\)/);
     expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
     // 消息 / 调度落库失败同样落进 catch:兜底只补写正常分支尚未发起的模型组,
     // 不重放已写过的用量(否则任务与模型用量翻倍)。

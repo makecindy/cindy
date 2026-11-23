@@ -149,6 +149,30 @@ describe('代输入 requests the agent makes', () => {
     if (errorCode === 'TARGET_IS_CINDY') expect(problem!.message).toContain('request_input_handoff');
   });
 
+  // 2026-11-21 teammate review: a locked computer answered with a pending receipt and
+  // only later ended as screen_locked, each try counting against the hourly limit.
+  // #12017 review: only an explicit `locked` from the preflight counts; it gives the same
+  // guidance as a card that locks later, and a screenshot QR handoff is not checked at all.
+  it('reports a screen that is already locked when the agent asks', async () => {
+    const h = harness(undefined, async () => ({ text: 'https://passport.feishu.cn/qr/abc', jpeg: Buffer.from('jpeg'), width: 8, height: 8 }));
+    h.desktop.driver.windows = async () => { throw new Error('locked'); };
+    const problem = await h.service.checkTarget({ app: 'Example' });
+    expect(problem?.errorCode).toBe('SCREEN_LOCKED');
+    expect(problem!.message).toContain('Cindy\'s remote desktop');
+    expect(buildInputHandoffContinuation({ status: 'failed', reason: 'failure', steps: 0, failure: 'screen_locked' }))
+      .toContain(problem!.message);
+    expect(h.snapshots).toEqual([]);
+    expect(h.notified).toEqual([]);
+    expect((await h.service.startImageQr({ sessionId: 'task', purpose: 'Scan to sign in', image: Buffer.from('png') })).ok).toBe(true);
+    // Without Accessibility the preflight reads no window, so it cannot know.
+    h.desktop.driver.permission = async () => 'missing';
+    expect(await h.service.checkTarget({ app: 'Example' })).toBeNull();
+    // Any other failure to list windows is no evidence of a lock: the session decides.
+    h.desktop.driver.permission = async () => 'granted';
+    h.desktop.driver.windows = async () => { throw new Error('unavailable'); };
+    expect(await h.service.checkTarget({ app: 'Example' })).toBeNull();
+  });
+
   it('closes a waiting card when the owner writes in the task, without a second turn, and tells the agent once', async () => {
     const h = harness();
     await startReady(h);
@@ -313,7 +337,11 @@ describe('代输入 continuation for the agent', () => {
   it('asks the owner to unlock a locked computer instead of retrying on its own', () => {
     const text = buildInputHandoffContinuation({ status: 'failed', reason: 'failure', steps: 0, failure: 'screen_locked' });
     expect(text).toContain('failure=screen_locked');
-    expect(text).toContain('only after they say it is unlocked');
+    expect(text).toContain('only after they confirm it is unlocked');
+    // The owner is often away: say what still works from the phone.
+    expect(text).toContain('Cindy\'s remote desktop');
+    expect(text).toContain('not from the single-window view');
+    expect(text).toContain('sudo -A');
   });
 });
 

@@ -130,6 +130,8 @@ export function resolveScheduleModelEfforts(input: {
 }
 
 export interface ScheduleFormState {
+  /** Project review opt-in; empty model alone never means buddy inheritance. */
+  followTeammateModel?: boolean;
   deadline?: string;
   sourceExpireAt?: number;
   name: string;
@@ -172,6 +174,11 @@ export interface ScheduleFormState {
    */
   pluginEngine?: PluginEngineSelection | null;
   modelAgentDeviceId?: string;
+  /**
+   * 模型组(模式)id：设了时新建任务按模式选来源(model-groups.md §6.3)，下面的具体模型是选不出来时沿用的。
+   * 选任何一个具体模型或插件引擎都会清掉它。
+   */
+  modelGroup?: string;
   /** The bound task's baseline, independent of the editable model choice. Form-only. */
   boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
   model: string;
@@ -723,6 +730,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     agentKind: scheduleAgentKindForForm(form),
     modelAgentKind: !isScript ? form.modelAgentKind : undefined,
     modelAgentDeviceId: !isScript && (form.model.trim() || form.modelAgentKind) ? form.modelAgentDeviceId : undefined,
+    // 恒带 key：去掉模式时 undefined 沿 patch 契约清空。脚本与插件引擎任务不按模式选。
+    modelGroup: !isScript && !form.pluginEngine && form.modelGroup ? form.modelGroup : undefined,
     // 恒带 key:运行位置与模型 / 来源成对,update 时 undefined 清回本机。只有每次新建任务
     // (含持续会话首次与重建)才用它;绑定任务的运行位置跟随任务本身。
     agentDeviceId:
@@ -832,6 +841,7 @@ export function scheduleToUserCreateInput(
     agentKind: schedule.modelAgentKind ?? schedule.agentKind,
     modelAgentKind: schedule.modelAgentKind,
     modelAgentDeviceId: schedule.modelAgentDeviceId,
+    modelGroup: schedule.modelGroup,
     model: schedule.model,
     providerId: schedule.providerId,
     agentDeviceId: schedule.agentDeviceId,

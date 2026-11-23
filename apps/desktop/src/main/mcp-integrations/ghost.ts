@@ -778,6 +778,20 @@ function isInsideSessionWorkdir(targetAbs: string, workdirAbs: string | null): b
 
 
 /**
+ * 确认卡超时 = 没人点，不是用户拒绝。卡片目前只在运行 Cindy 的电脑上出现（手机只显示
+ * 「只能在电脑上处理」，IM 只收到文字提醒），所以模型重试只会再等一轮，必须停手转告。
+ * 超时后卡片已撤下，用户回到电脑也点不到旧卡，只能等用户就位后由 Agent 重新发起。
+ */
+const DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS =
+  'Cindy 在运行它的那台电脑上弹出了确认卡，时限内没有人确认，本次调用已取消，那张卡也已撤下。这不是用户拒绝。'
+  + '这类确认目前只能在那台电脑上处理，手机和 IM 里都无法确认。不要自动重试；请告诉用户这一步需要在那台电脑上点允许，'
+  + '等用户表示已在电脑旁后再重新调用一次（会弹出新的确认卡）';
+const GRANT_CONFIRM_TIMEOUT_MESSAGE =
+  `文件授权确认超时：${DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS}，或改用不需要这次授权的办法（例如请用户把文件放进当前工作目录，或作为附件发进对话）。`;
+const LOCAL_PATH_REVEAL_TIMEOUT_MESSAGE =
+  `本机路径确认超时：${DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS}，或改用不需要本机路径的办法（例如直接用受管地址把媒体展示给用户，并说明你没能自己检查）。`;
+
+/**
  * 弹过户确认卡并等待用户决定。message 是可直达模型的人话(拒绝/超时要能让
  * 模型停手转告用户,而不是自纠重试)。
  */
@@ -885,7 +899,7 @@ async function requestGrantConfirm(params: {
     ok: false,
     message:
       decision.reason === 'timeout'
-        ? '过户确认超时:用户未在时限内响应,本次调用已取消;如仍需要,请提醒用户后重试'
+        ? GRANT_CONFIRM_TIMEOUT_MESSAGE
         : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
           ? `Cindy 已取消本次过户请求（${decision.reason}），并非用户手动拒绝。`
           : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
@@ -977,15 +991,17 @@ async function requestMediaPathRevealConfirm(params: {
   });
   if (expired()) return denied;
   if (decision.confirmed) return { ok: true, isCurrent };
+  // Nobody answered: keep it apart from DENIED so the Agent does not read it as a refusal.
+  if (decision.reason === 'timeout') {
+    return { ok: false, errorCode: 'LOCAL_PATH_REVEAL_TIMEOUT', message: LOCAL_PATH_REVEAL_TIMEOUT_MESSAGE };
+  }
   return {
     ok: false,
     errorCode: 'LOCAL_PATH_REVEAL_DENIED',
     message:
-      decision.reason === 'timeout'
-        ? '本机路径确认超时，本次调用已取消；如仍需要，请提醒用户后重试'
-        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
-          ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
-          : '用户未允许把本机路径返回给 Agent，不要重试',
+      decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+        ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
+        : '用户未允许把本机路径返回给 Agent，不要重试',
   };
 }
 

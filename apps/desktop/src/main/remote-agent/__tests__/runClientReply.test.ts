@@ -19,6 +19,30 @@ afterEach(() => vi.useRealTimers());
 // chunk-count ceiling. The link below models 16 KiB/s + 1s RTT without waiting;
 // gzip, request parsing and complete payload reconstruction remain real.
 describe('RemoteAgentRunClient slow payload delivery', () => {
+  it('delivers a send while company reporting authorization is unresolved', async () => {
+    let finish!: () => void;
+    const authorization = new Promise<void>(resolve => { finish = resolve; });
+    const onSend = vi.fn(() => authorization);
+    const invoke = remoteAgentInvoker('host', async (_device, _channel, args) => {
+      const req = parseRemoteAgentRequest(args[0]);
+      if (req.op === 'call') {
+        client.onData(Buffer.from(JSON.stringify({ t: 'result', callId: req.callId, ok: true, value: 'sent' }) + '\n'), false);
+      }
+      return { ok: true, result: {} };
+    });
+    const client = new RemoteAgentRunClient(randomUUID(), { invoke, unregister() {} } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {}, onSend,
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    try {
+      await expect(client.callWithId(randomUUID(), 'send', ['hello'])).resolves.toBe('sent');
+      expect(onSend).toHaveBeenCalledOnce();
+    } finally {
+      finish();
+      client.abandon('fixture-complete');
+    }
+  });
+
   // Unit: preparation guards did not cover time in Device Link admission. Stop
   // could overtake that queue and the old send would start afterwards. Exercise
   // the real run client + production invoker, delaying only the wire boundary.

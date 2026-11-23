@@ -249,7 +249,7 @@ export function SlashCommandPalette({
     <div
       ref={rootRef}
       className={cn(
-        'pointer-events-auto absolute left-0 bottom-full mb-2 z-50',
+        'pointer-events-auto absolute left-0 bottom-full mb-2 z-float',
       )}
     >
       {/* Panel */}
@@ -335,7 +335,7 @@ export function SlashCommandPalette({
           onMouseLeave={() => onTooltipHoverChange?.(false)}
           onMouseDown={() => onTooltipHoverChange?.(true)}
           className={cn(
-            'fixed z-[60] w-[280px] overflow-y-auto rounded-xl border p-3.5',
+            'fixed z-float-top w-[280px] overflow-y-auto rounded-xl border p-3.5',
             'bg-[var(--cmd-palette-bg)]',
             'border-[var(--cmd-palette-border)]',
           )}

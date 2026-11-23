@@ -89,7 +89,7 @@ vi.mock('../analytics-settings-store', () => ({
   migrateExistingLoginAsConsented: (signedIn: boolean) => migrateExistingLoginAsConsented(signedIn),
   closeLegacyConsentMigration: () => closeLegacyConsentMigration(),
   acceptPrivacyConsent: vi.fn(),
-  setAnalyticsEnabled: vi.fn(),
+  setAnalyticsEnabled: (enabled: boolean) => { fakeSettings.analyticsEnabled = enabled; },
   clearAnalyticsEnabledOverride: vi.fn(),
   // store 侧的真实语义(构建闸在真实实现里另算,这里按已同意 && 开关开启放行),
   // 这样「本地模式闸」是否生效可以被独立断言。
@@ -97,6 +97,19 @@ vi.mock('../analytics-settings-store', () => ({
   isAnalyticsEnabledCustomized: () => false,
   readAnalyticsSettings: () => ({ ...fakeSettings }),
 }));
+
+/** <userData>/legal-terms-consent.json 的内存替身:本机最近一次同意的协议版本。 */
+const fakeLegalTerms: { acceptedVersion: string | null } = { acceptedVersion: null };
+vi.mock('../legal-terms-store', async () => {
+  const { LEGAL_TERMS_VERSION } = await import('../../shared/legalTermsVersion');
+  return {
+    readLegalTermsConsentStatus: () =>
+      fakeLegalTerms.acceptedVersion === LEGAL_TERMS_VERSION ? 'current' : 'outdated',
+    acceptCurrentLegalTerms: () => {
+      fakeLegalTerms.acceptedVersion = LEGAL_TERMS_VERSION;
+    },
+  };
+});
 
 async function importService() {
   vi.resetModules();
@@ -110,6 +123,7 @@ beforeEach(() => {
   fakeSettings.privacyConsentAccepted = false;
   fakeSettings.analyticsEnabled = true;
   fakeSettings.legacyConsentMigrationClosed = false;
+  fakeLegalTerms.acceptedVersion = null;
   migrateExistingLoginAsConsented.mockClear();
   // mockClear 只清调用记录、**不还原 implementation**:用例里注入的 throw 替身若不在
   // 这里恢复,会泄漏到后续用例,把「不该关窗 / 不该迁移」的断言变成假绿(异常被吞掉,
@@ -382,6 +396,27 @@ describe('local-mode reporting gate', () => {
     expect(broadcasts.at(-1)).toMatchObject({ allowed: false, privacyConsentAccepted: true });
   });
 
+  // 真实设置入口必须区分用户主动打开与登录态重播，避免把旧的企业退出偏好覆盖。
+  it('distinguishes an explicit switch change from an auth-state refresh', async () => {
+    fakeSettings.privacyConsentAccepted = true;
+    const service = await importService();
+    service.initAnalyticsSettingsService();
+    const onChange = vi.fn();
+    const unsubscribe = service.onAnalyticsPermissionChange(onChange);
+    const { ipcMain } = await import('electron');
+    const setter = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === 'analytics:settings-set-enabled')![1];
+    const event = {} as Electron.IpcMainInvokeEvent;
+
+    setter(event, false);
+    setter(event, true);
+    authStateListener?.();
+    expect(onChange.mock.calls).toEqual([[false, false], [true, true], [true, undefined]]);
+
+    unsubscribe();
+    setter(event, false);
+    expect(onChange).toHaveBeenCalledTimes(3);
+  });
+
   it('unsubscribes from auth state on quit teardown', async () => {
     const service = await importService();
     service.initAnalyticsSettingsService();
@@ -431,5 +466,47 @@ describe('local-mode reporting gate', () => {
 
     isLocalMode.mockReturnValue(true);
     expect(() => authStateListener?.()).not.toThrow();
+  });
+});
+
+/**
+ * 协议更新确认的判定(legalTermsUpdateRequired)。依据:产品要求「已登录的老用户必须确认
+ * 新版协议才能继续使用,新用户不受影响」。经真实 IPC handler 驱动,按广播出去的结论断言。
+ * 覆盖缺口:renderer 只在个人账号登录时弹窗,那一半由 LegalTermsUpdateGate 的测试覆盖。
+ */
+describe('legal terms update consent', () => {
+  async function registeredHandler(channel: string) {
+    const { ipcMain } = await import('electron');
+    const call = vi.mocked(ipcMain.handle).mock.calls.find(([name]) => name === channel);
+    if (!call) throw new Error(`no handler for ${channel}`);
+    return call[1] as (event: unknown) => Record<string, unknown>;
+  }
+
+  it('asks a user who only agreed to the old terms (existing signed-in user) to confirm the update', async () => {
+    const service = await importService();
+    service.noteAuthColdStartState({ isAuthenticated: true }, null);
+
+    expect(service.analyticsSettingsPayload().legalTermsUpdateRequired).toBe(true);
+
+    service.initAnalyticsSettingsService();
+    const accept = await registeredHandler('analytics:legal-terms-accept');
+    expect(accept({})).toMatchObject({ legalTermsUpdateRequired: false });
+    expect(broadcasts.at(-1)).toMatchObject({ legalTermsUpdateRequired: false });
+  });
+
+  it('does not ask a new user who agreed on the login page', async () => {
+    const service = await importService();
+    service.initAnalyticsSettingsService();
+    const consent = await registeredHandler('analytics:consent-accept');
+    fakeSettings.privacyConsentAccepted = true;
+
+    expect(consent({})).toMatchObject({ legalTermsUpdateRequired: false });
+  });
+
+  // 企业 SSO 与「跳过登录」被登录页协议门豁免,没有同意记录,也不被更新确认拦住。
+  it('never asks someone without a privacy consent record', async () => {
+    const service = await importService();
+
+    expect(service.analyticsSettingsPayload().legalTermsUpdateRequired).toBe(false);
   });
 });
