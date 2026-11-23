@@ -9,6 +9,10 @@ import {
   consumeDesktopEntryIntent,
   useDesktopEntryIntent,
 } from '@/device-link/desktopEntryIntent';
+import {
+  NEW_SESSION_ORIGIN_PARAM,
+  WIDGET_NEW_SESSION_ORIGIN,
+} from '@/session/newSessionOrigin';
 import { useEntryWidgetSync } from './useEntryWidgetSync';
 
 export function DesktopEntryHost({ ready }: { ready: boolean }) {
@@ -25,7 +29,11 @@ export function DesktopEntryHost({ ready }: { ready: boolean }) {
     consumeDesktopEntryIntent(intent.id);
     if (!link) return;
     if (link.kind === 'new-task') {
-      router.push('/sessions/new');
+      // 带来源参数：新建页据此读「桌面小组件」那份默认，而不是应用内默认。
+      router.push({
+        pathname: '/sessions/new',
+        params: { [NEW_SESSION_ORIGIN_PARAM]: WIDGET_NEW_SESSION_ORIGIN },
+      });
       return;
     }
     router.push({

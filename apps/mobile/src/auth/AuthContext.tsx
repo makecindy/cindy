@@ -132,6 +132,7 @@ import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/d
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearAllMobileOfflineInboxIntents } from '@/session/offlineInboxIntents';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
+import { clearNewSessionDefaultsForAccount } from '@/session/newSessionDefaultsStore';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
@@ -3245,6 +3246,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearCachedHomeListSnapshot().catch(() => undefined);
     await clearAllMobileOfflineInboxIntents().catch(() => undefined);
     await clearHomeSessionPrCache().catch(() => undefined);
+    // 新建任务的默认电脑 / 工作区按账号保存在本机，登出与终止会话时清掉这一份。
+    await clearNewSessionDefaultsForAccount(cleanupAccountKey).catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
     clearChatServerMediaCache({ clearNativeImageCache: true });

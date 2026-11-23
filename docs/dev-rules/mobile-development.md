@@ -976,6 +976,15 @@ Provider 只碰当前版式里存在的 id —— RemoteViews 对不存在的 id
 → 第一台可用电脑」解析，模型随之取该电脑的新建任务默认；目录读不到时退回记住的那台 —— 这两处
 不会同时空着。回归：`newSession.test.ts` 的 `resolveNewSessionDeviceOptions`。
 
+新建任务页的默认电脑与默认工作区由两份档案决定（应用内 / 桌面小组件），规则见
+[手机新建任务的默认电脑与工作区](../product-rules/mobile-new-task-defaults.md)。`DesktopEntryHost` 消费
+新建任务深链时向 `/sessions/new` 传 `newSessionOrigin=widget`（`newSessionOrigin.ts`），页面据此读
+组件档案；只在这个深链上算组件打开，其余入口一律应用内。两份档案与原来的「记住上次」一起在
+`useNewSessionWorkspacePreferences` 里读，工作区落定在 `useNewSessionInitialWorkspace`，纯解析在
+`newSessionDefaults.ts`。默认按账号存本机（`newSessionDefaultsStore.ts`），登出在 `clearLocalSession`
+清掉该账号这一份。设置弹窗只在 Android 渲染；不改原生配置，不触发指纹冷更。回归：
+`newSessionDefaults.test.ts`、`newSessionWorkspaceEffects.test.tsx`。
+
 Kotlin 与资源改动进入 Android runtime fingerprint，需要新原生包；旧安装包里没有这个模块，
 `requireOptionalNativeModule` 返回 null，同步整体跳过。
 
