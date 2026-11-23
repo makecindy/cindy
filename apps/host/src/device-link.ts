@@ -156,6 +156,7 @@ export interface HostDeviceLinkPorts {
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
   isBusyForProjectArchive(sessionId: string): boolean;
+  sessionInTurn(sessionId: string): boolean;
   onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
@@ -285,6 +286,18 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     const result = await mkdirP(requireString(obj.path, 'path'));
     assertCurrent();
     return result;
+  });
+  registry.register(MAKER_INVOKE.SESSION_IN_TURN, ([sessionId]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+    return deps.sessionInTurn(sessionId);
+  });
+  registry.register(MAKER_INVOKE.INPUT_GET_PROJECTION, async ([sessionId]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
+    const projection = await call('/api/input/projection', { sessionId }) as Record<string, unknown>;
+    assertCurrent();
+    return { ...projection, inputDeliveryVersion: 1 };
   });
   // The remote project/draft flow reads the Host-owned persisted mirror. The getter
   // hydrates the shared reader on first use after every Host restart.

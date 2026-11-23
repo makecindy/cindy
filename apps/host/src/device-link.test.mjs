@@ -145,7 +145,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       modelChoices.push({ id, model, origin: readDeviceLinkModelSelectionOrigin() });
       return { deferred: true };
     },
-    input: { enqueue: async (sessionId, item) => {
+    input: {
+      projection: async sessionId => ({ sessionId, pendingQueue: [], turnInProgress: false, clearBoundaryMs: null }),
+      enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
       const projection = { sessionId, pendingQueue: [item], turnInProgress: false };
@@ -159,7 +161,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     worktreeCreates.push({ request, options });
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
-  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
     send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
@@ -267,6 +269,14 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(sent.result.message, 'hello');
   assert.equal(sent.result.sendOpts.expectedClearBoundaryMs, null);
   assert.equal(sent.result.sendOpts.expectedInputGeneration, 0);
+  const inTurn = await clients[0].invoke('host', { channel: 'maker:session-in-turn', args: ['task'] });
+  assert.equal(inTurn.ok, true, JSON.stringify(inTurn));
+  assert.equal(inTurn.result, false);
+  const projection = await clients[0].invoke('host', { channel: 'maker:input:get-projection', args: ['task'] });
+  assert.equal(projection.ok, true, JSON.stringify(projection));
+  assert.equal(projection.result.sessionId, 'task');
+  assert.equal(projection.result.turnInProgress, false);
+  assert.equal(projection.result.inputDeliveryVersion, 1);
   const chosen = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
     agent: 'pi', providerId: 'inferx', modelId: 'kimi-k3.1-pro', active: true,
     markModelChoice: true, selectDraftAgent: true, effort: 'max', fast: true, thinking: false,
@@ -638,7 +648,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   });
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
-  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async route => { reached.push(route); return { status: 404, body: { message: `unexpected ${route}` } }; },
     subscribe: () => () => {},
@@ -754,7 +764,7 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   let primary, compatibility;
   t.mock.method(AgentNetWorkerSocket, 'open', async () => (primary = wire()));
   const host = createHostDeviceLink({
-    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
     createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
@@ -832,7 +842,7 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
   let held = holdMessage;
   let canRegister = false;
   const host = createHostDeviceLink({
-    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => null, canRegister: () => canRegister, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
     createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
