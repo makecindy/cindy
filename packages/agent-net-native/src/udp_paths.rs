@@ -530,7 +530,7 @@ mod tests {
     use super::*;
 
     struct Fixture { path: RelayUdp, udp: Udp, relay: UdpSocket, credentials: Credentials, now: u64, acking: bool,
-        registrations: Vec<bool>, relayed_sends: (u64, u64) }
+        registrations: Vec<bool>, seen: u64, relayed_sends: (u64, u64) }
     impl Fixture {
         fn up() -> Self {
             let relay = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -541,7 +541,7 @@ mod tests {
             let mut path = RelayUdp::new(&format!("127.0.0.1:{}", relay.local_addr().unwrap().port())).unwrap();
             path.set_credentials(Some(credentials.clone()));
             let mut fixture = Self { path, udp: Udp::new(socket), relay, credentials, now: 1_000_000, acking: true,
-                registrations: Vec::new(), relayed_sends: (0, 0) };
+                registrations: Vec::new(), seen: 0, relayed_sends: (0, 0) };
             fixture.step(2_000);
             assert!(fixture.path.up(fixture.now), "acknowledged registrations bring relay UDP up");
             fixture
@@ -555,12 +555,21 @@ mod tests {
                 self.serve();
             }
         }
+        /// Takes every registration sent so far. Loopback delivery is not immediate everywhere (macOS): it waits, briefly, for
+        /// the ones the path has sent and the relay has not seen yet.
         fn serve(&mut self) {
             let mut buffer = [0u8; 2048];
-            while let Ok((length, _)) = self.relay.recv_from(&mut buffer) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+            loop {
+                let Ok((length, _)) = self.relay.recv_from(&mut buffer) else {
+                    if self.seen >= self.path.counter || std::time::Instant::now() >= deadline { break; }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                };
                 let packet = &buffer[..length];
                 if packet[0] != UDP_RELAY_REGISTER { continue; }
                 let counter = &packet[1 + SESSION_BYTES..1 + SESSION_BYTES + COUNTER_BYTES];
+                self.seen = self.seen.max(u64::from_be_bytes(counter.try_into().expect("eight bytes")));
                 self.registrations.push(packet[1 + SESSION_BYTES + COUNTER_BYTES] == 1);
                 if !self.acking { continue; }
                 let mut ack = vec![UDP_RELAY_REGISTER_ACK];
