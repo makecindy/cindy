@@ -11,6 +11,7 @@ import {
   modelGroupAgentDeviceId,
   modelGroupCandidateKey,
   modelGroupSelectionForOwner,
+  modelGroupResolveResultForRemote,
   modelGroupsConfigForRemote,
   normalizeModelGroupsConfig,
   sanitizeModelGroupRouteNote,
@@ -97,7 +98,10 @@ export function registerModelGroupsIpc(): void {
       ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
       ...(value.remoteInvocableOnly === true ? { remoteInvocableOnly: true } : {}),
     };
-    return resolver.resolve(request);
+    // 在 await 之前读：调用来源只在同步段里可靠。
+    const remote = isDeviceLinkInvoke();
+    const result = await resolver.resolve(request);
+    return remote ? modelGroupResolveResultForRemote(result) : result;
   });
   ipcMain.handle(MODEL_GROUPS_IPC.COMMIT, (event, decisionId: unknown) => {
     assertModelGroupsCaller(event);

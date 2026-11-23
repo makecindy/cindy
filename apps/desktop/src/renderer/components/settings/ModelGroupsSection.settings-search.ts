@@ -29,6 +29,8 @@ export const modelGroupsSettings = defineSettings({
       'modelGroups.strategy.weighted.title',
       'modelGroups.settings.weight',
       'modelGroups.settings.exceptions.title',
+      'modelGroups.settings.exceptions.days',
+      'modelGroups.settings.exceptions.daysHint',
       'modelGroups.settings.sources',
       'modelGroups.settings.try.title',
       'modelGroups.settings.effort',

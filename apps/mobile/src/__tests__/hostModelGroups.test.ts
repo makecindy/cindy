@@ -168,5 +168,11 @@ describe('host model group strategies', () => {
     expect(reason('headroom')).toBe('models.modelGroups.why.headroom');
     expect(reason('drainNext')).toBe('models.modelGroups.why.drainNext');
     expect(reason('weighted')).toBe('models.modelGroups.why.weighted');
+    // Newer hosts send an older stand-in in `why` and the real reason in `pickWhy`.
+    const fromNewHost = parseHostModelGroupResult({
+      outcome: 'routed', groupName: 'G', route: { agentKind: 'codex', providerId: 'a', model: 'gpt' },
+      modelName: 'GPT', sourceName: 'A', why: 'order', pickWhy: 'drainNext', quota: null, trace: [],
+    });
+    expect(buildHostModelGroupRouteNote(fromNewHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.drainNext');
   });
 });

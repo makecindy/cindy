@@ -21,6 +21,8 @@ import type { ProviderView } from '@cindy/model-providers';
 
 import {
   modelGroupCandidateKey,
+  modelGroupResolveResultForRemote,
+  modelGroupResolveResultFromRemote,
   modelGroupsConfigForRemote,
   normalizeModelGroupsConfig,
   sanitizeModelGroupSelection,
@@ -498,6 +500,49 @@ describe('strategies added on 2026-11-21', () => {
     resolver.commit(two.decisionId!);
     const three = await resolver.resolve({ selection });
     expect([one, two, three].map((r) => r.outcome === 'routed' && r.route.providerId)).toEqual(['a', 'a', 'b']);
+  });
+
+  it('weighted starts over when the weights change, and drops a pick made under the old weights', async () => {
+    const withWeights = (a: number, b: number): ModelGroupsConfig => ({ routes: [{ id: 'r1', name: 'R', strategy: 'weighted', candidates: [
+      { agentKind: 'codex', providerId: 'a', model: 'gpt', weight: a },
+      { agentKind: 'codex', providerId: 'b', model: 'gpt', weight: b },
+    ] }] });
+    let groups = withWeights(1000, 1);
+    const view = (id: string) => ({
+      id, name: id, source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+      models: { codex: [{ id: 'gpt', name: 'GPT', mode: 'chat', efforts: [] }] },
+    }) as unknown as ProviderView;
+    const resolver = createModelGroupResolver({
+      config: () => groups, views: async () => [view('a'), view('b')], agents: () => ['codex'],
+      harnessInstalled: async () => true, quotaWindows: async () => new Map(), scope: () => 'owner', now: () => NOW,
+    });
+    const selection = { type: 'route', id: 'r1' } as const;
+    const adopt = async () => {
+      const result = await resolver.resolve({ selection });
+      resolver.commit(result.decisionId!);
+      return result.outcome === 'routed' ? result.route.providerId : '';
+    };
+    for (let i = 0; i < 20; i += 1) await adopt();
+    // 按旧比例选好、还没采用时改成 1:1：这一步不记进新计数。
+    const stale = await resolver.resolve({ selection });
+    groups = withWeights(1, 1);
+    resolver.commit(stale.decisionId!);
+    const picks: string[] = [];
+    for (let i = 0; i < 4; i += 1) picks.push(await adopt());
+    expect(picks.join('')).toBe('abab');
+  });
+
+  it('sends phones and other computers a reason they already know, with the real one alongside', () => {
+    const entry = { agentKind: 'codex', providerId: 'a', model: 'gpt', modelName: 'GPT', sourceName: 'A', quota: null } as const;
+    const result: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'G', route: { agentKind: 'codex', providerId: 'a', model: 'gpt' },
+      modelName: 'GPT', sourceName: 'A', why: 'drainNext', quota: null,
+      trace: [{ ...entry, state: 'picked', why: 'drainNext' }, { ...entry, providerId: 'b', state: 'standby', why: 'standby' }],
+    };
+    const wire = JSON.parse(JSON.stringify(modelGroupResolveResultForRemote(result)));
+    expect([wire.why, wire.pickWhy, wire.trace[0].why, wire.trace[0].pickWhy, wire.trace[1].pickWhy])
+      .toEqual(['order', 'drainNext', 'order', 'drainNext', undefined]);
+    expect(modelGroupResolveResultFromRemote(wire)).toEqual(result);
   });
 
   // 2026-11-11 是星期三(本机时区)，13 日星期五，14 日星期六。

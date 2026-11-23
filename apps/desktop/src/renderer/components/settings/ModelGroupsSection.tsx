@@ -102,15 +102,15 @@ function NameRow({ value, label, hint, onCommit }: { value: string; label: strin
   );
 }
 
-/** 「按权重」时每个来源的权重：失焦或回车时保存，1–1000，空着或不是数字时恢复原值。 */
-function WeightInput({ value, label, onCommit }: { value: number; label: string; onCommit(next: number): void }) {
+/** 「按权重」时每个来源的权重：失焦或回车时保存，1–1000，空着或不是数字时恢复原值；保存失败也恢复成已保存的值。 */
+function WeightInput({ value, label, onCommit }: { value: number; label: string; onCommit(next: number): Promise<boolean> }) {
   const [draft, setDraft] = useState(String(value));
   const commit = () => {
     const parsed = Number(draft.trim());
     if (!draft.trim() || !Number.isFinite(parsed)) { setDraft(String(value)); return; }
     const next = modelGroupWeight(parsed);
     setDraft(String(next));
-    if (next !== value) onCommit(next);
+    if (next !== value) void onCommit(next).then((saved) => { if (!saved) setDraft(String(value)); });
   };
   return (
     <SettingsTextInput
@@ -298,7 +298,7 @@ export function ModelGroupsSection() {
                                 key={`${modelGroupCandidateKey(candidate)}:${modelGroupWeight(candidate.weight)}`}
                                 value={modelGroupWeight(candidate.weight)}
                                 label={t('modelGroups.settings.weightAria', { name: label })}
-                                onCommit={(weight) => void updateRoute(route.id, (current) => ({
+                                onCommit={(weight) => updateRoute(route.id, (current) => ({
                                   ...current,
                                   candidates: current.candidates.map((item, i) => {
                                     if (i !== index) return item;

@@ -17,6 +17,9 @@
     旧选法(`order` / `expiring` / `rotate`)，真实选法放在新字段 `pick`；新版两端都先读 `pick`。选路始终由模式所在的那台
     电脑做，旧设备只是选法的标签不准，模式照样能选。手机今后认不出的选法只是不写标签，不再丢掉整条模式。
     时段例外多了可选的 `days`(0–6，与 `Date#getDay` 相同)，来源多了可选的 `weight`；旧版忽略这两个字段，只影响显示。
+    `model-groups:resolve` 的结果同理：`why` 与 trace 里每项的 `why` 遇到 `drain`/`drainNext`/`headroom`/`weighted` 时换成
+    `order`/`order`/`expiring`/`rotate`，真实原因放在 `pickWhy`(`modelGroupResolveResultForRemote`)；新版先读 `pickWhy`，
+    旧版把旧原因写进任务说明，不会出现原样的文案键。
   - `model-groups:resolve`：请那台按自己的模式选。选择只带 `{ type: 'route', id }`(控制端去掉位置字段，被控端也会去掉)；
     `context.hasImages` 与 `location.agentDeviceId`(进行中的任务只在它所在的位置里选)沿用本机接口的语义。
     可选 `remoteInvocableOnly: true`：Agent 将在这台为另一台电脑运行，只用这台开了「允许被远程调用」的连接，

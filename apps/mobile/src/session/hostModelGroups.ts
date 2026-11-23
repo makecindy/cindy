@@ -185,7 +185,8 @@ export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | 
     route: { agentKind, providerId, model, ...(agentDeviceId ? { agentDeviceId } : {}), ...(effort ? { effort } : {}) },
     modelName: str(value.modelName, 256) || model,
     sourceName: str(value.sourceName, 256) || providerId,
-    why: str(value.why, 32),
+    // Newer hosts send the real reason in `pickWhy` and an older stand-in in `why` for apps that predate it.
+    why: str(value.pickWhy, 32) || str(value.why, 32),
     quota: used === null ? null : { usedPercent: used, resetAtMs: num(quota?.resetAtMs) },
     limitedUntilMs: num(picked?.limitedUntilMs),
     exceptions,

@@ -13,6 +13,7 @@ import { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import { USD_TO_CNY_FIXED_RATE, type ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import {
   modelGroupCandidateKey,
+  modelGroupWeight,
   type ModelGroupAppliedException,
   type ModelGroupCandidate,
   type ModelGroupResolveRequest,
@@ -138,19 +139,28 @@ function scopedWindowApplies(scopedTo: string, modelId: string, modelName: strin
   return modelName.toLowerCase().includes(scopedTo.toLowerCase());
 }
 
+/** 「按权重」计数对应的那份权重：来源或权重变了，旧计数按新比例算不对，从头开始。 */
+function weightSignature(route: ModelGroupRoute): string {
+  return route.candidates.map((candidate) => `${modelGroupCandidateKey(candidate)}=${modelGroupWeight(candidate.weight)}`).join('\u0001');
+}
+
 export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   /** 「轮流」「用完再换」上一次选中的候选；只在内存里，重启后从第一个开始。 */
   const lastPicked = new Map<string, string>();
-  /** 「按权重」每条路线的计数；只在内存里，重启后重新开始。 */
-  const weightCounters = new Map<string, ReadonlyMap<string, number>>();
+  /** 「按权重」每条路线的计数与当时的权重；只在内存里，重启或改了来源、权重后重新开始。 */
+  const weightCounters = new Map<string, { signature: string; counters: ReadonlyMap<string, number> }>();
+  const countersFor = (key: string, signature: string) => {
+    const stored = weightCounters.get(key);
+    return stored?.signature === signature ? stored.counters : undefined;
+  };
   const pending = new Map<string, {
     scope: string; at: number; selection: ModelGroupResolveRequest['selection']; result: ModelGroupResolveResult; routeId?: string;
-    weightStep?: ModelGroupWeightStep;
+    weightStep?: { step: ModelGroupWeightStep; signature: string };
   }>();
 
   function prepare(
     request: ModelGroupResolveRequest, scope: string, result: ModelGroupResolveResult, routeId?: string,
-    weightStep?: ModelGroupWeightStep,
+    weightStep?: { step: ModelGroupWeightStep; signature: string },
   ): ModelGroupResolveResult {
     if (request.dryRun || scope !== deps.scope()) return result;
     // 未采用的结果不写盘；限制暂存数量和生命周期，避免取消操作不断积累。
@@ -174,7 +184,12 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     if (item.result.outcome === 'routed' && item.routeId) {
       lastPicked.set(`${item.scope}\u0000${item.routeId}`, modelGroupCandidateKey(item.result.route));
       const key = `${item.scope}\u0000${item.routeId}`;
-      if (item.weightStep) weightCounters.set(key, applyModelGroupWeightStep(weightCounters.get(key), item.weightStep));
+      // 选路之后改了来源或权重：这一步是按旧比例算的，不记，按新配置从头开始。
+      const routeNow = item.weightStep && deps.config().routes.find((route) => route.id === item.routeId);
+      if (item.weightStep && routeNow && weightSignature(routeNow) === item.weightStep.signature) {
+        const { signature, step } = item.weightStep;
+        weightCounters.set(key, { signature, counters: applyModelGroupWeightStep(countersFor(key, signature), step) });
+      }
     }
     return true;
   }
@@ -288,7 +303,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const facts = await inspect(route, views);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
-      weightCounters: weightCounters.get(`${scope}\u0000${route.id}`),
+      weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),
     });
     const exceptions: ModelGroupAppliedException[] = [
       ...via,
@@ -311,7 +326,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       modelName: entry.modelName, sourceName: entry.sourceName,
       why: entry.why, quota: entry.quota, trace: picked.trace,
       ...(exceptions.length > 0 ? { exceptions } : {}),
-    }, route.id, picked.weightStep);
+    }, route.id, picked.weightStep ? { step: picked.weightStep, signature: weightSignature(target.route) } : undefined);
   }
 
   /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置与「按权重」的计数。 */

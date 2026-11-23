@@ -62,6 +62,41 @@ export function modelGroupsConfigForRemote(config: ModelGroupsConfig): ModelGrou
   };
 }
 
+/**
+ * 选路结果里的原因同理：旧版不认识新原因，会把文案键原样写进任务。发给别的设备时 why 换成最接近的旧原因，
+ * 真实原因放在 pickWhy；新版先读 pickWhy(modelGroupResolveResultFromRemote)。
+ */
+const LEGACY_WHY: Partial<Record<ModelGroupTraceWhy, ModelGroupTraceWhy>> = {
+  drain: 'order', drainNext: 'order', headroom: 'expiring', weighted: 'rotate',
+};
+
+type WithPickWhy<T> = T & { pickWhy?: ModelGroupTraceWhy };
+
+function legacyWhy<T extends { why: ModelGroupTraceWhy }>(entry: T): WithPickWhy<T> {
+  const legacy = LEGACY_WHY[entry.why];
+  return legacy ? { ...entry, why: legacy, pickWhy: entry.why } : entry;
+}
+
+function realWhy<T extends { why: ModelGroupTraceWhy }>(entry: WithPickWhy<T>): T {
+  const { pickWhy, ...rest } = entry;
+  const known = typeof pickWhy === 'string' && (Object.keys(LEGACY_WHY) as string[]).includes(pickWhy);
+  return (known ? { ...rest, why: pickWhy } : rest) as unknown as T;
+}
+
+/** 发给手机与另一台电脑的选路结果(model-groups:resolve 经 device-link)。 */
+export function modelGroupResolveResultForRemote(result: ModelGroupResolveResult): ModelGroupResolveResult {
+  const trace = result.trace.map(legacyWhy);
+  return result.outcome === 'routed' ? { ...legacyWhy(result), trace } : { ...result, trace };
+}
+
+/** 从另一台电脑收到的选路结果：有 pickWhy 时换回真实原因。 */
+export function modelGroupResolveResultFromRemote(result: ModelGroupResolveResult): ModelGroupResolveResult {
+  const trace = (result.trace ?? []).map((entry) => realWhy(entry as WithPickWhy<ModelGroupTraceEntry>));
+  return result.outcome === 'routed'
+    ? { ...realWhy(result as WithPickWhy<typeof result>), trace }
+    : { ...result, trace };
+}
+
 export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi';
 
 /** 一个已连接的模型：与新任务选择器选中一行时得到的组合相同。 */
