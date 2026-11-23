@@ -601,6 +601,24 @@ describe('utility one-shot candidates', () => {
         expect(JSON.stringify(usageSink.record.mock.calls)).not.toMatch(/PRIVATE_ECHO|Not now/);
       });
 
+    // Unit: billed tokens and a finished empty choice are both HTTP successes, but
+    // neither proves that a draft can generate a title. Only a usable title may commit.
+    it('requires returned title text before enabling a model', async () => {
+      const models = chainState.refs.slice(0, 1);
+      const save = () => saveAuxiliaryModelSettings({ models }, new Set(models), new Set(), { maker: makerMock(true) });
+      for (const payload of [
+        { usage: { completion_tokens: 3 } },
+        { choices: [{ message: { content: '' }, finish_reason: 'stop' }] },
+      ]) {
+        fetchMock.mockImplementation(async () => new Response(JSON.stringify(payload)) as never);
+        expect(await save()).toMatchObject({ ok: false, model: models[0] });
+        expect(writeChain).not.toHaveBeenCalled();
+      }
+      fetchMock.mockResolvedValue(response('Desk organization'));
+      expect(await save()).toMatchObject({ ok: true, tested: models });
+      expect(writeChain).toHaveBeenCalledExactlyOnceWith({ models }, expect.any(Function));
+    });
+
     it('keeps a rejected backup out of settings, then saves both tested routes after a retry', async () => {
       const save = () => saveAuxiliaryModelSettings({ models: chainState.refs }, new Set(chainState.refs), new Set(), { maker: makerMock(true) });
       fetchMock.mockResolvedValueOnce(new Response('Denied', { status: 403 }) as never);

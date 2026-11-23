@@ -125,3 +125,4 @@ export function useAuxiliaryRouteHealth(onChange?: (event: AuxiliaryModelHealthE
     return () => { disposed = true; off?.(); };
   }, [dataOwnerId, dataOwnerGeneration, onChange, sessionId]);
   return rows.filter(row => isDataOwnerPushStampCurrent(row.ownerStamp));
+}
