@@ -401,7 +401,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         const boundAgent = form.targetSessionId && form.targetSessionId !== PENDING_SESSION_ID &&
           form.boundAgent?.sessionId !== form.targetSessionId
           ? { sessionId: form.targetSessionId, agentKind: form.agentKind } : form.boundAgent;
-        return { ...form, ...selection, boundAgent, modelAgentKind: selection.agentKind, pluginEngine: null, modelGroup: undefined };
+        return { ...form, ...selection, followTeammateModel: false, boundAgent, modelAgentKind: selection.agentKind, pluginEngine: null, modelGroup: undefined };
       }
       const agentKind = followedAgentKind ??
         (form.boundAgent?.sessionId === form.targetSessionId
@@ -425,7 +425,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
 
   // 选模式：具体模型留作选不出来时沿用的，插件引擎不再生效。
   const selectModelGroup = useCallback((modelGroup: string) => {
-    setForm((f) => ({ ...f, modelGroup, pluginEngine: null }));
+    setForm((f) => ({ ...f, modelGroup, pluginEngine: null, followTeammateModel: false }));
   }, []);
 
   const selectPluginEngine = useCallback((selection: PluginEngineSelection) => {

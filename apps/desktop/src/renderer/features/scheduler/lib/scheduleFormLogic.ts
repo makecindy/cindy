@@ -130,6 +130,8 @@ export function resolveScheduleModelEfforts(input: {
 }
 
 export interface ScheduleFormState {
+  /** Project review opt-in; empty model alone never means buddy inheritance. */
+  followTeammateModel?: boolean;
   deadline?: string;
   sourceExpireAt?: number;
   name: string;

@@ -55,12 +55,14 @@ import { DesktopNotifier } from './notifier.desktop';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
 import { withTeammateHomeGuard } from './teammateHomeGuard.js';
+import { ownTeammateProjectPrimaryModel, ownTeammateProjectState } from './ownTeammateProject.js';
+import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
+import { resolveTeammateScheduleModel } from './teammateScheduleModel.js';
 import { withQuietRunArchive } from './quietRunArchive.js';
 import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
 import { createLogger } from '../logger';
 import type { ScheduleRunner } from '@cindy/maker-scheduler';
 import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
-import { ownTeammateProjectState } from './ownTeammateProject.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
@@ -105,6 +107,11 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
       },
       onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
+      resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {
+        follows: (dir, id): Promise<boolean> => desktop.getProjectAutomationLoader().followsTeammateModel(dir, id),
+        isOwnProject: async dir => (await ownTeammateProjectState(dir)) !== null,
+        primaryModel: dir => ownTeammateProjectPrimaryModel(dir, readEffectiveBotModelChain),
+      }),
       findUsageLimitWait: findSchedulerUsageLimitWait,
       acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
       prepareModelPreferences: prepareScheduledModelPreferencesUnderLock,

@@ -17892,6 +17892,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Não foi possível ler o modelo da automação. Feche e reabra o editor para tentar novamente.",
       "promptDialog": {
         "titleEdit": "Editar automação",
         "titleCreate": "Criar automação",
@@ -18235,6 +18236,7 @@
         "effortHeading": "Esforço de raciocínio",
         "effortDefault": "Padrão",
         "followSession": "Seguir sessão",
+        "followTeammate": "Seguir o modelo principal do amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Seletor de modelo",
         "categoryListAria": "Modelos de {{category}}",

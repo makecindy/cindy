@@ -17652,6 +17652,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "未能读取自动化模型设置，请关闭编辑器后重开再试。",
       "promptDialog": {
         "titleEdit": "修自运",
         "titleCreate": "立自运",
@@ -17995,6 +17996,7 @@
         "effortHeading": "思之深浅",
         "effortDefault": "常例",
         "followSession": "随差事",
+        "followTeammate": "随同伴主模型",
         "modelListAria": "模型录",
         "modelSelectorAria": "择模型",
         "categoryListAria": "{{category}} 模型",
