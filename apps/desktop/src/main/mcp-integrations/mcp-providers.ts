@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { gateBuiltinMcpProviders } from './provider-gate.js';
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { resolveIMessageLaneScope } from '../im/imessage/laneScope';
 import { createDiscordMcpServer } from './discordMcpServer';
 import { DiscordOperationError } from '@cindy/im';
 import { createTerminalToolExecutor } from '../terminal/terminalToolAccess.js';
@@ -104,7 +105,8 @@ import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.desktop.js';
 import { getComputerMcpDeps } from './computer.desktop.js';
 import { discordIm, feishuIm, wechatIm } from '../im';
-import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
+import { directDeliveryFile, prepareDirectDelivery } from '../im/imessage/directDelivery';
+import { getBotFeishuTransport, getBotIMessageDirectTarget, getBotIMessageLaneTarget } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
@@ -167,6 +169,7 @@ import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
   setSessionsStatusInDb,
+  setSessionsSnoozeInDb,
 } from '../localDb/ipc/sessions.js';
 import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
@@ -180,7 +183,7 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
-import { createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
+import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
@@ -191,6 +194,7 @@ import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 import { resolveSessionTeammate } from '../maker-ipc/sessionTeammate.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
@@ -702,7 +706,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       // 运行位置与模型:与协同 Worker 的 list_available_models 同一份 host 实现。
-      listModels: wrap((s, params) => s.listAvailableModels(params)),
+      // 本机还列出用户的模型组(模式)，定时任务的 modelGroup 传其 id(model-groups.md §6.3)。
+      listModels: wrap(async (s, params) => {
+        const result = await s.listAvailableModels(params);
+        if (!result.ok || params.agentDeviceId) return result;
+        const modelGroups = readModelGroupsConfig().routes.map((route) => ({
+          id: route.id,
+          name: route.name,
+          strategy: route.strategy,
+          sources: route.candidates.filter((candidate) => !candidate.off).length,
+        }));
+        return modelGroups.length > 0 ? { ...result, modelGroups } : result;
+      }),
       logger: createLogger('mcp/cindy_scheduler'),
     },
     // cindy_ssh: agent 直接在已配置 SSH 主机上执行命令(远端零安装)。
@@ -1157,7 +1172,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return result.ok ? { ok: true as const, sessionId, status: 'deleted' as const } : result;
         }
         try {
-          await patchSessionMetaInDb(sessionId, { status: 'deleted' }, { beforeWrite: captureTaskActionSyncGuard() });
+          const guard = captureTaskActionSyncGuard();
+          const row = await getSessionRowSnapshotStrict(sessionId);
+          await assertCurrent();
+          await patchSessionMetaInDb(sessionId, {
+            status: 'deleted', ...(row?.sideChatPromoted && { deleteTarget: 'task' as const }),
+          }, { beforeWrite: guard });
           return { ok: true as const, sessionId, status: 'deleted' as const };
         } catch (error) {
           return { ok: false as const, errorCode: isIpcError(error) ? error.code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task deletion failed.' };
@@ -1216,6 +1236,30 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
+      setSessionsSnooze: async ({ sessionIds, snoozedUntil }) => {
+        if (!tryGetDbClient()) {
+          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready', changed: [] };
+        }
+        const codeOf = (err: unknown) => isIpcError(err) && ['NOT_FOUND', 'PRECONDITION_FAILED', 'INVALID_PARAMS'].includes(err.code)
+          ? (err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : err.code) : 'INTERNAL';
+        try {
+          // Like deletion: the sync guard runs inside patch-meta, right before each write.
+          const guard = captureTaskActionSyncGuard();
+          const { changed, error } = await setSessionsSnoozeInDb(sessionIds, snoozedUntil, assertTaskActionCurrent, guard);
+          if (!error) return { ok: true, changed };
+          const index = sessionIds.indexOf(error.sessionId);
+          return {
+            ok: false, errorCode: codeOf(error.cause), changed,
+            message: error.cause instanceof Error ? error.cause.message : String(error.cause),
+            failedSessionId: error.sessionId, remainingSessionIds: sessionIds.slice(index + 1),
+          };
+        } catch (err) {
+          return { ok: false, errorCode: codeOf(err), message: err instanceof Error ? err.message : String(err), changed: [] };
+        }
+      },
+      setRemoteSessionsSnooze: deps.historyRemote
+        ? createRemoteSessionsSnoozeSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })
+        : undefined,
       listAvailableModels: async params => {
         if (params.callerSessionId && isSessionSharedTaskActive(params.callerSessionId))
           return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
@@ -1715,7 +1759,51 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     isEnabled: ctx => hasImChannelVendorOptions(ctx.vendorOptions, 'imessage')
       || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
     toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
-      instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
+      instance: createIMessageMcpServer({
+        getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+        sendDirectDelivery: async (context, targetSessionId, text) => {
+          const db = tryGetDbClient();
+          const session = context.sessionId;
+          if (!db || !session || !context.sessionInstanceId) throw new Error('OWNER_INPUT_REQUIRED');
+          const owner = activeOwnerScopeKey();
+          const boundary = getTaskActionInputState(session).boundary;
+          const assertCurrent = () => {
+            const input = getTaskActionInputState(session);
+            if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey() || db !== tryGetDbClient() ||
+                !input.ownerInput || input.boundary !== boundary || getTaskActionSession(session)?.instanceId !== context.sessionInstanceId) {
+              throw new Error('OWNER_INPUT_REQUIRED');
+            }
+          };
+          assertCurrent();
+          const link = await db.queryOne<{ botId: string; role: string; routeKey: string | null }>(
+            `SELECT src.bot_id AS botId, dest.role, dest.route_key AS routeKey FROM bot_session_links src
+             JOIN bot_profiles p ON p.id = src.bot_id AND p.status = 'active'
+             JOIN bot_session_links dest ON dest.bot_id = p.id AND dest.archived_at IS NULL
+             JOIN sessions s ON s.id = dest.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE src.session_id = ? AND src.role = 'canonical' AND src.archived_at IS NULL
+             AND dest.session_id = ? AND dest.role IN ('canonical', 'channel')`, [session, targetSessionId]);
+          assertCurrent();
+          if (!link || (link.role === 'channel' && !link.routeKey)) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const target = getBotIMessageDirectTarget(link.botId, link.role === 'canonical' ? null : link.routeKey);
+          if (!target) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const file = directDeliveryFile(link.botId, target.connection, target.origin, target.chat);
+          const record = prepareDirectDelivery(file, text);
+          const receipt = await target.im.sendDirectDelivery(target.chat, text, record.requestId);
+          assertCurrent();
+          return receipt;
+        },
+        laneScope: (context) => resolveIMessageLaneScope(context, {
+          session: getTaskActionSession,
+          input: id => getTaskActionInputState(id),
+          channelLink: async id => (await tryGetDbClient()?.queryOne<{ botId: string; routeKey: string | null }>(
+            `SELECT l.bot_id AS botId, l.route_key AS routeKey FROM bot_session_links l
+             JOIN bot_profiles p ON p.id = l.bot_id AND p.status = 'active'
+             JOIN sessions s ON s.id = l.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE l.session_id = ? AND l.role = 'channel' AND l.archived_at IS NULL`, [id])) ?? null,
+          target: getBotIMessageLaneTarget,
+          boundary: () => isAppSessionBoundaryPending() ? Symbol('pending') : `${activeOwnerScopeKey()}`,
+        }),
+      }) }),
   });
 
   gated.push({

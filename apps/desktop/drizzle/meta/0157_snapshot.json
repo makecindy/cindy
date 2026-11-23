@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a0937906-85a1-44b4-8bba-628c746ec084",
+  "id": "bf760ffb-b44b-4425-bc29-65dcede97952",
   "prevId": "d917d993-dd4d-4547-84ba-a4636a221f7d",
   "tables": {
     "account_usage_snapshots": {
@@ -4635,51 +4635,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "project_task_companions": {
-      "name": "project_task_companions",
-      "columns": {
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "bot_id": {
-          "name": "bot_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "project_task_companions_session_id_sessions_id_fk": {
-          "name": "project_task_companions_session_id_sessions_id_fk",
-          "tableFrom": "project_task_companions",
-          "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "recent_workdirs": {
       "name": "recent_workdirs",
       "columns": {
@@ -6285,6 +6240,14 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'desktop'"
+        },
+        "side_chat_promoted": {
+          "name": "side_chat_promoted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
         },
         "feishu_open_id": {
           "name": "feishu_open_id",

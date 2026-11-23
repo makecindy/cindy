@@ -909,8 +909,9 @@ The personal runtime also seals the same English privacy usage strings as the Fo
 resources when the declaration is missing: without `NSLocalNetworkUsageDescription` the personal
 app and every agent, SSH or scheduled child process it is responsible for receive `EHOSTUNREACH`
 ("No route to host") even for the LAN gateway (2026-11). An already installed runtime gets the
-declaration only from the next personal build; afterwards check System Settings → Privacy &
-Security → Local Network for the personal app.
+declaration only from the next personal build. macOS does not ask again for an app it already
+refused silently, so the app now detects the denial itself and offers to open System Settings →
+Privacy & Security → Local Network (see `remote-and-mobile-adaptation.md`).
 
 Mobile debug recording includes non-secret push registration stages, realm, app variant, APNs
 environment and numeric HTTP failure status. It never records the native token or authorization

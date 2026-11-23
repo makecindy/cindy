@@ -121,14 +121,14 @@ export function NewProjectFromTaskDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !submitting.current && onOpenChange(open)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           onOpenAutoFocus={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             if (submitting.current || event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto p-4 outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[85vh] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto p-4 outline-none"
         >
           <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
             {t('ccAgent.sidebar.newProjectDialog.title')}

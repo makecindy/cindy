@@ -1,6 +1,7 @@
 /** Ordinary task creation, shared by local IPC and authenticated Host clients.
  * Entry adapters validate caller identity; this service owns identical task data,
  * draft lifecycle, directory grants and model admission on every launcher. */
+import { isAbsolute } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { getCurrentDbClientSnapshot } from '../client/current.js';
 import { sessions } from '../schema.js';
@@ -12,8 +13,9 @@ import { resolveBusinessSessionId } from '../../sessionIds.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { supportsProjectTaskCompanion } from '../../../shared/projectTaskCompanion.js';
 import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
-import { throwIpcError } from '../../utils/ipcValidate.js';
+import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
 import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
@@ -22,6 +24,8 @@ import { touchRecentWorkdir } from './recentWorkdirsCore.js';
 import { managedWorktreeRoot } from '../../worktree/managedResourcePath.js';
 import { withWorktreeResourceLocks } from '../../worktree/resourceLock.js';
 import { createLogger } from '../../logger.js';
+import { withSessionRouteLock } from '../sessionRouteLock.js';
+import type { CreateWorktreeReq, CreateWorktreeResp } from '../../worktree/types.js';
 
 const log = createLogger('local-db-sessions');
 export interface UserSessionCreatePorts {
@@ -29,6 +33,10 @@ export interface UserSessionCreatePorts {
   senderId: number;
   userDataDir: string;
   notifyPluginSessionCreated(input: { sessionId: string; workdir?: string }): void;
+  localPluginWorktrees?: {
+    create(request: CreateWorktreeReq, assertCurrent: () => void): Promise<CreateWorktreeResp>;
+    discard(sessionId: string, path: string, canRemove: () => Promise<boolean>): Promise<unknown>;
+  };
 }
 
 export async function withWorktreeMutation<T>(resources: string[], task: () => Promise<T>): Promise<T> {
@@ -57,7 +65,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     const id = resolveBusinessSessionId(bodyObj.id);
     // 未发送任务（新建页开始输入时先建出来，见 provisionalSessions.ts）：只给本机普通任务，
     // 延后的创建副作用在第一次发送转正时补做。
-    const { provisional: provisionalFlag, projectCompanionId, ...bodyWithoutProvisional } = bodyObj;
+    const { provisional: provisionalFlag, localPluginWorktree, projectCompanionId, ...sessionBody } = bodyObj;
     const provisional = provisionalFlag === true;
     if (provisional && (
       bodyObj.remoteHostId || bodyObj.agentDeviceId || bodyObj.orcaRole || bodyObj.source !== undefined
@@ -65,21 +73,28 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     )) {
       throwIpcError('INVALID_PARAMS', 'only ordinary local tasks can be opened before the first send');
     }
-    const createBody = bodyWithoutProvisional as Parameters<typeof sessionCreateToRow>[1];
+    const createBody = sessionBody as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
     const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi', 'acp']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
     }
     if (bodyObj.agentKind === 'acp') {
-      // Plugin engine tasks (docs/plans/acp-plugin-bridge.md): chosen on this computer only,
-      // through the plugin harness id, and never run remotely.
+      // Plugin engine tasks (docs/plans/acp-plugin-bridge.md): chosen at the computer the task is
+      // on, through the plugin harness id. The engine is this computer's, or one that another
+      // computer of the same account opened for remote use; never an SSH host or a shared provider.
       if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'plugin engine tasks can only be created on this computer');
       if (!pluginEngineKeyFromProviderId(typeof bodyObj.providerId === 'string' ? bodyObj.providerId : null)) {
         throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
       }
-      if (bodyObj.remoteHostId || bodyObj.agentDeviceId) {
-        throwIpcError('INVALID_PARAMS', 'plugin engine tasks run on this computer only');
+      if (bodyObj.remoteHostId) {
+        throwIpcError('INVALID_PARAMS', 'plugin engine tasks do not run in SSH workspaces');
+      }
+      if (bodyObj.agentDeviceId !== undefined && bodyObj.agentDeviceId !== null
+        && (typeof bodyObj.agentDeviceId !== 'string'
+          || isSharedTaskPeer(bodyObj.agentDeviceId)
+          || Boolean(parseProviderSharePeer(bodyObj.agentDeviceId)))) {
+        throwIpcError('INVALID_PARAMS', 'invalid agentDeviceId for plugin engine task');
       }
     }
     if (
@@ -117,6 +132,23 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
       normalizeWorkingDirForStorage(
         typeof createBody?.workingDir === 'string' ? createBody.workingDir : null,
       ) ?? undefined;
+    const worktrees = ports.localPluginWorktrees;
+    let worktreeRequest: CreateWorktreeReq | undefined;
+    if (localPluginWorktree !== undefined) {
+      if (!worktrees || bodyObj.agentKind !== 'acp' || requestedKind !== 'project' ||
+        provisional || bodyObj.source !== undefined || bodyObj.orcaRole || bodyObj.agentDeviceId ||
+        !explicitWorkingDir || !isAbsolute(explicitWorkingDir) || explicitWorkingDir.includes('\0') ||
+        explicitWorkingDir.length > 4096) {
+        throwIpcError('INVALID_PARAMS', 'Worktree creation requires an ordinary local plugin engine project task');
+      }
+      const request = requireObject(localPluginWorktree, 'localPluginWorktree');
+      const name = requireString(request.name, 'worktree.name');
+      const sourceBranch = requireString(request.sourceBranch, 'worktree.sourceBranch');
+      if (name.length > 20 || sourceBranch.length > 1024 || sourceBranch.startsWith('-') || sourceBranch.includes('\0')) {
+        throwIpcError('INVALID_PARAMS', 'Invalid worktree name or source branch');
+      }
+      worktreeRequest = { sessionId: id, baseRepo: explicitWorkingDir, name, sourceBranch };
+    }
     assertRendererSessionSourceAllowed({
       source: bodyObj.source,
       workingDir: explicitWorkingDir,
@@ -188,8 +220,39 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     try {
       ({ row: insertRow } = await openSession({ id, now, assertCurrent: assertOwner,
         body: { ...createBody, ...membership, workspaceKind, workingDir },
-        ...(provisional ? { deferGitInit: true } : {}),
+        ...(provisional || worktreeRequest ? { deferGitInit: true } : {}),
       }, async (prepared, assertCurrent) => {
+        if (worktreeRequest && worktrees) {
+          // Do not publish a base-repo task while checkout is still in flight.
+          // Model admission is already complete, before the first Git write.
+          const request = worktreeRequest;
+          await withSessionRouteLock(id, async () => {
+            const isUnclaimed = async () => {
+              assertCurrent();
+              const [existing] = await db.select({ id: sessions.id }).from(sessions)
+                .where(eq(sessions.id, id)).limit(1);
+              assertCurrent();
+              return !existing;
+            };
+            if (!(await isUnclaimed())) throwIpcError('PRECONDITION_FAILED', 'The task already exists');
+            const result = await worktrees.create(request, assertCurrent);
+            if (!result.ok) throwIpcError('PRECONDITION_FAILED', 'Could not create the task worktree');
+            const worktreePath = normalizeWorkingDirForStorage(result.meta.path)!;
+            try {
+              await withWorktreeMutation([worktreePath], async () => {
+                assertCurrent();
+                await db.insert(sessions).values({ ...prepared, workingDir: worktreePath, worktreePath });
+              });
+            } catch (error) {
+              // A committed row or an unavailable owner/DB is never safe to discard.
+              await worktrees.discard(id, result.meta.path, isUnclaimed).catch(() => {
+                log.warn('Could not discard an unclaimed plugin task worktree', { sessionId: id });
+              });
+              throw error;
+            }
+          });
+          return;
+        }
         const resource = !prepared.remoteHostId && prepared.workingDir
           ? managedWorktreeRoot(prepared.workingDir) : null;
         const insert = async () => {

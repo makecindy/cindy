@@ -399,6 +399,7 @@ export function createHostCodexRuntime(options: {
         });
     },
     getCodexSubagentIdentity: ({ childThreadId }) => proxy.getObservedCodexSubagentIdentity(childThreadId),
+    getRejectedCodexDownshiftModel: proxy.getRejectedCodexDownshiftModel,
     armCodexHttpRecovery: proxy.armCodexHttpRecovery,
     registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => { check(); proxy.registerChildThread(parentThreadId, childThreadId); },
   } satisfies Partial<AgentDeps>;

@@ -26,7 +26,7 @@ const TOOL: ToolDescriptor = {
   description: '向指定 worker 投递消息',
   inputSchema: { type: 'object', properties: { message: { type: 'string' } } },
 };
-const TOOL_CHANGED: ToolDescriptor = { ...TOOL, description: '向指定 worker 投递消息（v2）' };
+const TOOL_CHANGED = { ...TOOL, description: 'Updated delivery instructions. '.repeat(80) };
 
 function fingerprint(tool: ToolDescriptor): string {
   const description = typeof tool.description === 'string' && tool.description.length > 0
@@ -184,6 +184,7 @@ function loadGateway(options: {
   // executeResolvedCall 走 tool.client.request；用最小 client 桩替代 HTTP 层，
   // 每次真实调用都会在 requests 里留下一条，正好用来断言“恰好执行一次”。
   const httpClient = {
+    close: async () => {},
     request: async (_method: string, params: { name: string; arguments: unknown }) => {
       requests.push(params);
       return { content: [{ type: 'text', text: 'delivered' }] };
@@ -211,15 +212,18 @@ function loadGateway(options: {
     disk,
     callRaw: (args: Record<string, unknown> = { message: 'hi' }) =>
       callTool.execute('call-1', { server: 'cindy_orca', tool: 'send_to_worker', args }),
-    // 默认模拟真实模型的两步：第一次被路标拦下 → 查完 schema 重发。只有验证拦截语义的用例
-    // 用 callRaw；其他错误（如 zod 拒参）原样抛出，不在此处吞掉。
+    // 只对披露回执重试：小定义可以直接使用，大定义先按名称查阅。
     call: async (args: Record<string, unknown> = { message: 'hi' }) => {
       const input = { server: 'cindy_orca', tool: 'send_to_worker', args };
       try {
         return await callTool.execute('call-1', input);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes('Inspect this tool before execution')) throw error;
+        if (message.includes('Inspect this tool before execution')) {
+          await listTools.execute('list-1', { server: input.server, tool: input.tool });
+        } else if (!message.includes('Tool call did not run.')) {
+          throw error;
+        }
         return callTool.execute('call-2', input);
       }
     },
@@ -228,16 +232,17 @@ function loadGateway(options: {
 }
 
 describe('MCP gateway schema disclosure', () => {
-  it('blocks the first uninspected call with a signpost, records the fingerprint, and lets the retry through', async () => {
+  it('returns the compact definition on first use, persists its fingerprint, and executes the retry once', async () => {
     const { gateway, callRaw, requests, warnings, writes, disk } = loadGateway();
     const resolved = gateway.resolveCall({ server: 'cindy_orca', tool: 'send_to_worker' }) as { tool: unknown };
     // 事前未披露
     expect((gateway as unknown as { isSchemaDisclosed(c: unknown): boolean })
       .isSchemaDisclosed(resolved)).toBe(false);
 
-    // 第一次：被拦下，一个 MCP 请求都不该发出去；回执必须指名要查的 server/tool
+    // 首次回执带工具地址和完整定义，尚未向 MCP 发送请求。
     const first = await callRaw().then(() => null, (error: Error) => error);
-    expect(first?.message).toContain('Inspect this tool before execution');
+    expect(first?.message).toContain('Tool call did not run.');
+    expect(first?.message).toContain(JSON.stringify({ description: TOOL.description, inputSchema: TOOL.inputSchema }));
     expect(first?.message).toContain('"server":"cindy_orca"');
     expect(first?.message).toContain('"tool":"send_to_worker"');
     expect(requests).toHaveLength(0);
@@ -246,7 +251,7 @@ describe('MCP gateway schema disclosure', () => {
     expect(disk.value?.entries['cindy_orca\u0000send_to_worker']).toBe(fingerprint(TOOL));
     expect(writes).toHaveLength(1);
 
-    // 第二次（模型照路标查完 schema 后重发）：放行并执行成功
+    // 小定义无需额外查询即可重试。
     const result = await callRaw();
     expect(requests).toHaveLength(1);
     expect(result).toMatchObject({ content: [{ type: 'text', text: 'delivered' }] });
@@ -269,12 +274,12 @@ describe('MCP gateway schema disclosure', () => {
     expect(writes).toHaveLength(0);
   });
 
-  it('re-arms the gate when the tool schema actually changes and lets the retry through', async () => {
+  it('re-arms the gate when a compact definition grows and returns the new definition through a named lookup', async () => {
     const stored: DisclosedFile = {
       version: 1,
       entries: { 'cindy_orca\u0000send_to_worker': fingerprint(TOOL) },
     };
-    const { gateway, httpClient, callRaw, requests, warnings, disk } = loadGateway({ stored });
+    const { gateway, httpClient, callRaw, list, requests, warnings, disk } = loadGateway({ stored });
 
     // 同一会话内工具描述变化（MCP 重连后拿到新 schema）
     gateway.add('cindy_orca', httpClient, [TOOL_CHANGED]);
@@ -283,13 +288,15 @@ describe('MCP gateway schema disclosure', () => {
       .isSchemaDisclosed(changed)).toBe(false);
 
     const first = await callRaw().then(() => null, (error: Error) => error);
-    expect(first?.message).toContain('"tool":"send_to_worker"');
+    expect(first?.message).toContain('cindy_mcp_list_tools with {"server":"cindy_orca","tool":"send_to_worker"}');
+    expect(first?.message).not.toContain(TOOL_CHANGED.description);
+    expect(disk.value?.entries['cindy_orca\u0000send_to_worker']).toBe(fingerprint(TOOL_CHANGED));
+    await expect(list()).resolves.toMatchObject({ details: { tools: [TOOL_CHANGED] } });
     expect(requests).toHaveLength(0);
 
     await callRaw();
     expect(requests).toHaveLength(1);
     expect(warnings.some((line) => line.includes('auto-disclosed on first call'))).toBe(true);
-    expect(disk.value?.entries['cindy_orca\u0000send_to_worker']).toBe(fingerprint(TOOL_CHANGED));
   });
 
   it('merges a record another instance wrote after startup instead of overwriting it', async () => {
@@ -369,7 +376,7 @@ describe('MCP gateway schema disclosure', () => {
     const second = loadGateway();
     await second.call();
     expect(second.requests).toHaveLength(1);
-    expect(second.disk.value?.entries['cindy_orca send_to_worker']).toBe(fingerprint(TOOL));
+    expect(second.disk.value?.entries['cindy_orca\u0000send_to_worker']).toBe(fingerprint(TOOL));
   });
 
   it('keeps another instance newer fingerprint when persisting a different tool', async () => {
@@ -377,19 +384,19 @@ describe('MCP gateway schema disclosure', () => {
     // A 之后只为 Y 落盘。磁盘优先 + 只覆盖本次键：X 必须保持新指纹，不能被 A 内存
     // 里的旧值回退——否则下次启动 A 会把 X 判为未披露。
     const { gateway, disk, externalWrite } = loadGateway({
-      stored: { version: 1, entries: { 'cindy_orca send_to_worker': fingerprint(TOOL) } },
+      stored: { version: 1, entries: { 'cindy_orca\u0000send_to_worker': fingerprint(TOOL) } },
     });
     const newer = fingerprint(TOOL_CHANGED);
-    externalWrite({ version: 1, entries: { 'cindy_orca send_to_worker': newer } });
+    externalWrite({ version: 1, entries: { 'cindy_orca\u0000send_to_worker': newer } });
 
     // A 为另一个工具 Y 显式披露（list_tools 单工具查询的生产路径）。
     const other = { name: 'list_workers', description: '列出 workers', inputSchema: { type: 'object' } };
-    gateway.add('cindy_orca', { request: async () => ({ content: [] }) }, [other]);
+    gateway.add('cindy_orca', { request: async () => ({ content: [] }), close: async () => {} }, [other]);
     await (gateway as unknown as { listResult: (params: unknown) => Promise<unknown> })
       .listResult({ server: 'cindy_orca', tool: 'list_workers' });
 
-    expect(disk.value?.entries['cindy_orca send_to_worker']).toBe(newer);
-    expect(disk.value?.entries['cindy_orca list_workers']).toBe(fingerprint(other));
+    expect(disk.value?.entries['cindy_orca\u0000send_to_worker']).toBe(newer);
+    expect(disk.value?.entries['cindy_orca\u0000list_workers']).toBe(fingerprint(other));
   });
 
 

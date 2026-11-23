@@ -1,3 +1,4 @@
+import { beginCompanyTurn } from '../usage/companyTokenFacts.js';
 import { NATIVE_HISTORY_CHECKPOINT } from '../remote-agent/nativeHistoryTransfer.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
@@ -128,6 +129,7 @@ export function prepareSessionEvent(
   deps: PrepareSessionEventDeps,
   session: Session,
   event: AgentEvent,
+  admitUsage?: () => boolean,
 ) {
   // Host projections (Session.holdEventStream follow-ups) were already persisted
   // and published to renderers by the host that requested the hold.
@@ -305,13 +307,15 @@ export function prepareSessionEvent(
       }
       if (
         (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') &&
-        !deps.turnModelPromiseBySession.has(session.id)
+        admitUsage?.() !== false && !deps.turnModelPromiseBySession.has(session.id)
       ) {
         deps.turnModelPromiseBySession.set(session.id, deps.readSessionModelForUsage(session.id));
       }
       if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
-        && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
-        deps.turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id, undefined, event.source));
+        && admitUsage?.() !== false && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
+        const context = captureTurnUsageContext(session.id, undefined, event.source);
+        if (!session.remoteHostId && !session.agentDeviceId) beginCompanyTurn(context, context.providerId, event.source);
+        deps.turnUsageContextBySession.set(session.id, context);
       }
     } else if (endsForegroundTurnByStatus(data, isContinuationBoundary, event)) {
       shouldMarkTurnStatusIdleAfterBroadcast = true;
@@ -399,7 +403,7 @@ export function prepareSessionEvent(
     // EVENT broadcast 后结束逻辑 turn，并保留 terminal grace 给 renderer 收尾；
     // 可重试 error 保持 running。
     shouldMarkTurnTerminalIdleAfterBroadcast = true;
-    if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') {
+    if (admitUsage?.() !== false && (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi')) {
       deps.turnModelPromiseBySession.delete(session.id);
       // A paired done may still carry usage after this error. Retain its billing
       // identity until done; a new product turn overwrites it using wasInTurn.
@@ -463,6 +467,7 @@ export function prepareSessionEvent(
     attributedEvent,
     botTaskResultInputIds,
     pluginTargetInputIds,
+    activeInputId,
     groupLaneInputClientId,
     broadcastEvent,
     eventAgentMeta,

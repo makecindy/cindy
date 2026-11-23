@@ -62,14 +62,11 @@ import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
 } from '../../../shared/interruptedTurn.js';
-import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/codexSubscriptionValue.js';
-import { normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
+import { turnEstimateAmounts } from '../../../shared/turnEstimateAmounts.js';
 import { readSessionCostDetails } from '../../usage/sessionCostDetails.js';
 import {
   addCompatibleRegionalMoney,
-  asValueEstimateMoney,
-  normalizeRegionalMoney,
-  usdMoney,
+  sumMoneyByCurrency,
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
@@ -173,26 +170,25 @@ function broadcastOwnedPayload(
   channel: string,
   payload: unknown,
   ownerScope?: DataOwnerBroadcastScope | null,
+  localWindowsOnly = false,
 ): void {
   const ownerStamp = ownerStampForBroadcast(ownerScope);
   if (ownerStamp === null) return;
-  if (ownerScope !== undefined && ownerScope !== null) {
-    broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
-  } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast(channel, payload);
-  } else {
-    broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
+  const includeOwnerStamp = ownerScope != null || ownerStamp !== undefined;
+  if (!localWindowsOnly) {
+    if (includeOwnerStamp) {
+      broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
+    } else {
+      broadcastTap.tapWindowBroadcast(channel, payload);
+    }
   }
-  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      if (hasCapturedScope) {
+      if (includeOwnerStamp) {
         win.webContents.send(channel, payload, ownerStamp);
-      } else if (ownerStamp === undefined) {
-        win.webContents.send(channel, payload);
       } else {
-        win.webContents.send(channel, payload, ownerStamp);
+        win.webContents.send(channel, payload);
       }
     } catch {
       /* swallow per-window broadcast failures */
@@ -260,6 +256,7 @@ function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
 export interface EstimatedSessionValueEntry {
   clientId: string;
   money: RegionalMoney;
+  additionalEstimates?: RegionalMoney[];
   costUsd?: number;
 }
 
@@ -553,13 +550,15 @@ export function registerMessageIpc(
         ),
       );
     const entries = extractEstimatedSessionValueEntries(rows);
-    const totalValueMoney = addCompatibleRegionalMoney(entries.map((entry) => entry.money));
+    const totalValueAmounts = sumMoneyByCurrency(entries.flatMap(entry => [entry.money, ...(entry.additionalEstimates ?? [])]));
+    const totalValueMoney = addCompatibleRegionalMoney(totalValueAmounts);
     const hasCompleteUsdProjection = entries.every((entry) => typeof entry.costUsd === 'number');
     return {
       ...(options?.includeBreakdown === true ? { costBreakdown: await readSessionCostDetails(
         getDbClient(), sid, options.clientId === undefined ? undefined : requireString(options.clientId, 'clientId'),
       ) } : {}),
       totalValueMoney,
+      ...(totalValueAmounts.length > 1 && { totalValueAmounts }),
       ...(hasCompleteUsdProjection
         ? {
             totalValueUsd: entries.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
@@ -725,20 +724,22 @@ export async function runMessagesListImportSideEffects(
 /**
  * 消息行广播:本机全部窗口 + device-link tap 通道(控制端镜像)。renderer 的
  * handleMessageCreatedRaw 对已存在 clientId 走 merge/替换语义,因此**更新**行
- * (如 dismiss)复用同一事件即可让 peer 视图刷新,无需新增 onUpdated 通道。
+ * (如 dismiss)复用同一事件即可让 peer 视图刷新。localWindowsOnly 将刷新限制在本机窗口。
  */
 export function broadcastMessageRow(
   sessionId: string,
   msg: Message,
   ownerScope?: DataOwnerBroadcastScope | null,
+  options?: { localWindowsOnly: boolean },
 ): void {
   // Main-created rows may bypass the DB mapper. Never broadcast View-only data
   // to top-level renderers or same-account control devices.
   const historyContent = projectMcpAppHistory(msg.content, msg.agentMeta?.mcpApp === true);
   const content = msg.role === 'agent_switch' ? projectHandoffPreview(historyContent) : historyContent;
   const message = content === msg.content ? msg : { ...msg, content };
-  broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope);
-  if (msg.role === 'user' || msg.role === 'assistant') {
+  const localWindowsOnly = options?.localWindowsOnly ?? false;
+  broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope, localWindowsOnly);
+  if (!localWindowsOnly && (msg.role === 'user' || msg.role === 'assistant')) {
     if (hasTaskChangeListener('message')) publishTaskChange({ kind: 'message', sessionId, message }, ownerStampForBroadcast(ownerScope));
     scheduleBotRemoteResourceChangedForSession(sessionId, ownerScope?.ownerScopeKey);
   }
@@ -1459,51 +1460,14 @@ export function extractEstimatedSessionValueEntries(
     } catch {
       continue;
     }
-    if (meta?.turnCostIsEstimate !== true) {
-      const estimate = addCompatibleRegionalMoney((normalizeTurnUsageDetails(meta?.turnUsageDetails)?.perModelCost ?? [])
-        .filter(item => item.money.kind === 'value-estimate').map(item => item.money));
-      if (estimate?.amount) entries.push({ clientId: row.clientId, money: estimate,
-        ...(estimate.currency === 'USD' ? { costUsd: estimate.amount } : {}) });
-      continue;
-    }
-    const structured = normalizeRegionalMoney(meta.turnCost);
-    if (structured && structured.amount > 0) {
-      const recomputed =
-        structured.currency === 'USD'
-          ? resolveStaleCodexSubscriptionValueEstimate(
-              structured.amount,
-              normalizeTurnUsageDetails(meta.turnUsageDetails),
-              meta.model,
-            )
-          : null;
-      const money = asValueEstimateMoney({
-        ...structured,
-        amount: recomputed ?? structured.amount,
-      });
-      entries.push({
-        clientId: row.clientId,
-        money,
-        ...(money.currency === 'USD' ? { costUsd: money.amount } : {}),
-      });
-      continue;
-    }
-    if (
-      typeof meta.turnCostUsd !== 'number' ||
-      !Number.isFinite(meta.turnCostUsd) ||
-      meta.turnCostUsd <= 0
-    ) {
-      continue;
-    }
-    const recomputed = resolveStaleCodexSubscriptionValueEstimate(
-      meta.turnCostUsd,
-      normalizeTurnUsageDetails(meta.turnUsageDetails),
-      meta.model,
-    );
-    const costUsd = recomputed ?? meta.turnCostUsd;
+    if (!meta) continue;
+    const [money, ...additionalEstimates] = turnEstimateAmounts(meta);
+    if (!money) continue;
     entries.push({
       clientId: row.clientId,
-      money: usdMoney(costUsd, 'value-estimate', 'legacy-usd'),
-      costUsd,
+      money,
+      ...(additionalEstimates.length ? { additionalEstimates } : {}),
+      ...(money.currency === 'USD' && !additionalEstimates.length ? { costUsd: money.amount } : {}),
     });
   }
   return entries;

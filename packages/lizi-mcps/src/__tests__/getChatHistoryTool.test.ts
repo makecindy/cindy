@@ -55,6 +55,43 @@ describe('get_chat_history remote errors', () => {
 });
 
 describe('get_chat_history cursor pagination', () => {
+  // 测试价值
+  // - 生产入口与可观察结果：经 MCP registry 调用真实 get_chat_history，观察可选字段 image_view_hint。
+  // - Bug／规则依据：历史里出现受管图片地址时，模型要先用 resolve_local_path 打开；两种地址各自都要能识别，
+  //   而两种地址也都可能指向文档（例如缓存的 PDF），文档不能被提示成图片。
+  // - 现有覆盖缺口：此前正例把两种地址放在同一条消息里，删掉任一种识别都测不出来。
+  // - 最小失败输入：一条只含某一种地址的消息（图片后缀 / .pdf）。
+  // - tier：unit；覆盖工具注册、历史读取和可选提示字段。
+  const historyWithText = (text: string) => ({
+    listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
+    getMessages: vi.fn(async () => ({ ok: true as const, page: {
+      items: [{ id: 'm1', sessionId: 'task', sessionWorkingDir: null, sessionAgentKind: 'cc', sessionTitle: 'Task',
+        role: 'user', content: { text }, toolUseId: null,
+        agentMeta: null, createdAt: 1000, rewindAt: null }], nextCursor: null, hasMore: false,
+    } })),
+  }) satisfies XdtHelperHistoryDeps;
+
+  it.each([
+    ['cindy-media', 'see cindy-media://blobs/' + 'a'.repeat(64) + '.png'],
+    ['xdt-image', 'see xdt-image://task/cache-entry.png'],
+  ])('adds one image viewing hint for a %s image address', async (_scheme, text) => {
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history: historyWithText(text) });
+    const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] })) as Record<string, unknown>;
+    expect(result.image_view_hint).toContain('resolve_local_path');
+    expect(result.image_view_hint).toContain('重发');
+  });
+
+  it.each([
+    ['cindy-media', 'see cindy-media://blobs/' + 'd'.repeat(64) + '.pdf'],
+    ['xdt-image', 'see xdt-image://feishu-media-files/doc-token.pdf'],
+  ])('does not add an image viewing hint for a %s PDF attachment', async (_scheme, text) => {
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history: historyWithText(text) });
+    const result = parseText(await registry.call('get_chat_history', { session_ids: ['task'] }));
+    expect(result).not.toHaveProperty('image_view_hint');
+  });
+
   // Unit, lifecycle #15: the storage row id differs from the UI/native anchor.
   // Existing cursor cases never expose a message, so they cannot catch losing clientId.
   it.each([undefined, 'native-anchor'])('preserves optional message clientId %s for history operations', async clientId => {

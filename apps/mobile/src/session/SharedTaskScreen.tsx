@@ -1,3 +1,4 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
 import type { ViewInstance } from 'react-native';
 import { type ReactNode, type Ref } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
@@ -16,6 +17,7 @@ export function SharedTaskScreen({ title, onClose, children, management = false 
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   return <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.root}>
+      <WallpaperBackdrop />
     {(!management || Platform.OS === 'ios') && <SimpleStackHeader scrollEdge title={management ? t('settings.title') : title} onBack={onClose} />}
     <KeyboardAvoidingView style={styles.body} enabled={Platform.OS === 'ios'} behavior="padding">
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={[styles.content, management && styles.managementContent]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">

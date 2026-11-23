@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 import { readCreateSessionOpts, withCreateSessionStderr } from '../sessionRequest';
 
@@ -28,6 +29,20 @@ describe('session IPC request parsing', () => {
       extraDirs: ['D:\\refs'],
       vendorOptions: { source: 'draft' },
     });
+  });
+
+  // model-groups/sessionStart.ts: the mode token is handed over only inside main. A renderer or another device
+  // passing one could settle someone else's pick on its own task. Minimal input: an IPC body carrying the field.
+  it('drops host-owned model group and companion state supplied by the caller', () => {
+    const opts = readCreateSessionOpts({
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      workingDir: '/workspace',
+      modelGroupStart: 'tok',
+      projectCompanion: { botId: 'unverified', revision: 1 },
+    });
+    expect('modelGroupStart' in opts).toBe(false);
+    expect('projectCompanion' in opts).toBe(false);
   });
 
   it('rejects invalid create-session required fields before Maker side effects', () => {
@@ -174,14 +189,22 @@ describe('session IPC request parsing', () => {
     expect(allocateDialogueWorkspace).not.toHaveBeenCalled();
   });
 
-  // Plugin ACP engines (docs/plans/acp-plugin-bridge.md): a task names its harness and runs here.
+  // Plugin ACP engines (docs/plans/acp-plugin-bridge.md): a task names its harness. It runs here,
+  // on another computer of the same account, or on a direct provider share; never in an SSH
+  // workspace or on an invalid peer target.
   it.each([
     { name: 'without a harness id', body: {}, error: 'providerId acp-plugin' },
     { name: 'with a catalog provider', body: { providerId: 'anthropic' }, error: 'providerId acp-plugin' },
-    { name: 'on an SSH host', body: { providerId: 'acp-plugin:dsh-acp:dsh', remoteHostId: 'box' }, error: 'this computer only' },
-    { name: 'on another computer', body: { providerId: 'acp-plugin:dsh-acp:dsh', agentDeviceId: 'device-1' }, error: 'this computer only' },
+    { name: 'on an SSH host', body: { providerId: 'acp-plugin:dsh-acp:dsh', remoteHostId: 'box' }, error: 'SSH workspaces' },
+    { name: 'on a shared-task peer', body: { providerId: 'acp-plugin:dsh-acp:dsh', agentDeviceId: sharedTaskHostPeer('s1', 'dev-1') }, error: 'agentDeviceId must be a device id' },
   ])('rejects a plugin engine task $name', ({ body, error }) => {
     expect(() => readCreateSessionOpts({ agentKind: 'acp', model: 'default', workingDir: '/workspace', ...body })).toThrow(error);
+  });
+
+  it.each(['device-1', 'share:6f1c'])('accepts a plugin engine task whose agent runs on %s', (agentDeviceId) => {
+    expect(readCreateSessionOpts({
+      agentKind: 'acp', model: 'default', workingDir: '/workspace', providerId: 'acp-plugin:dsh-acp:dsh', agentDeviceId,
+    })).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', agentDeviceId });
   });
 
   it('accepts a local plugin engine task that names its harness', () => {

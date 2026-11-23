@@ -6,6 +6,11 @@
  * 让发送方的 socket 缓冲真实地堵住（中转和 Main 的排队上限因此会生效）。不模拟丢包。
  * DeviceLinkClient 用生产默认计时，不覆盖重发和超时参数。
  *
+ * 用产品的运行时跑：`ELECTRON_RUN_AS_NODE=1 pnpm exec electron --import tsx <脚本>`。同一个 Node 版本，
+ * Electron 的加密库（BoringSSL）和独立 Node（OpenSSL）每个包的开销不一样：2026-11-21 独立 Node 24.19 上用原始字节作密钥的
+ * HMAC 一次 13 微秒、Electron 里 3.4 微秒，不限速线路上 Agent-Net 在独立 Node 里只跑到 Electron 里的一半（10 对 21 MB/s），
+ * 每 MiB 的 CPU 高一倍。2026-11-20 的对比报告就是用独立 Node 跑的，把这个差距写成了产品的差距。不在 Electron 里时启动会提示。
+ *
  * 默认只在本机回环运行；`--remote-network <地址>:<端口>` 时中转与线路在另一台电脑上（network-process.ts 的 --listen），
  * 两台设备仍在本进程里，数据走两台电脑之间的真实线路。临时目录建在系统临时目录下并在结束时删除；
  * 身份和配对秘密只在内存里（压测专用、用完即弃），不读用户凭据。
@@ -183,7 +188,10 @@ async function processNetwork(profile: LinkProfile, cleanup: Array<() => Promise
     child.close();
   });
   // --no-line（只配 --remote-network）：不经线路代理，设备直接连另一台电脑上的中转；没有计量。
-  await call('init', { profile, direct: !!remote && process.argv.includes('--no-line') });
+  const direct = !!remote && process.argv.includes('--no-line');
+  // 明文直连拿不到中转的 UDP 凭据，Agent-Net 的数据报全走中转 WebSocket（见 network-process.ts 的说明）。
+  if (direct) console.warn('note: --no-line connects to the relay over plain http, so Agent-Net modes get no relay UDP: their datagrams go over the relay WebSocket (TCP).');
+  await call('init', { profile, direct });
   return {
     meters,
     async syncMeters() { Object.assign(meters, await call<Meters>('meters')); },
@@ -295,7 +303,14 @@ async function startV1Network(directory: string, network: BenchNetwork) {
   return { host: connect(base.host, owner.credential), controller: connect(base.controller, admitted.credential) };
 }
 
+let runtimeNoted = false;
+
 export async function setup(profile: LinkProfile, module: WebAssembly.Module, mode: SocketMode = 'worker') {
+  if (!runtimeNoted && !process.versions.electron) {
+    runtimeNoted = true;
+    console.error('note: not running under Electron. CPU per MiB and speed on unlimited lines differ from the product; '
+      + 'run with ELECTRON_RUN_AS_NODE=1 pnpm exec electron --import tsx <script> (see harness.ts).');
+  }
   const cleanup: Array<() => Promise<unknown> | unknown> = [];
   const prefix = path.join(tmpdir(), 'cindy-agent-net-bench-');
   const directory = await mkdtemp(prefix);

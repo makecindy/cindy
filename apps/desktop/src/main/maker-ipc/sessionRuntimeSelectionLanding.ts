@@ -48,6 +48,10 @@ export function createSelectSameAgentModel(ports: {
       ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
     }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
       runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
+      credentialSelectionAxes: intent.credentialSelectionAxes ?? {
+        effort: !intent.configStaged && intent.effort !== undefined,
+        fastMode: !intent.configStaged && intent.fastMode !== undefined,
+      },
       deviceLinkModelSelectionOrigin: intent.deviceLinkModelSelectionOrigin,
       nextInputChars, assertSelectionCurrent, beforeMutation, pendingSelectionAccess });
     if (result.contextWindowConfirmationRequired !== undefined) {

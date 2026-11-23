@@ -38,6 +38,7 @@
 | 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13 |
 | 字号、字重、行高 | Tailwind 字号档位 | §3 |
 | 动效 | Motion Token | §14.4 |
+| 叠放顺序（z-index） | 层级刻度 `z-<层名>`；共享浮层的默认层级 | §6 层级刻度 |
 | 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md)（规则见[工程约定](../dev-rules/engineering-conventions.md) §5.1） |
 | 文案里出现「任务／对话／消息」 | 已裁决的叫法 | [任务与对话命名](../product-rules/task-and-conversation-naming.md) |
 | 修改 Token、主题或标准组件 | 现有生成链路 | [治理合同](./design-governance.md)、[Token README](../../packages/design-tokens/README.md) |
@@ -745,7 +746,7 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 **Cindy Make preflight exception (owner decision, 2026-09-20):** this progress dialog uses a top-right × instead of a footer Cancel. The header stays visible while the report scrolls. The ×, Esc and scrim all open the same confirmation, with live copy distinguishing environment preparation, source preparation, upstream search and finished checks. Explain that stopping shared preparation also stops its Settings projection and that prepared resources are kept. Creating the build session temporarily disables dismissal. This exception supersedes the general closing-affordance rule below only for `CindyMakePreflightDialog`; the request form keeps its existing footer.
 
 - **Overlay** (blur added 2026-10-04): every modal scrim — Radix `Dialog.Overlay` / `AlertDialog.Overlay`, hand-built scrims and the Radix side drawers — uses the shared `.modal-scrim` class (`styles/globals.css`): `--overlay-modal` (Light `rgba(0,0,0,0.5)` / Dark `rgba(0,0,0,0.7)`) plus a 4px `backdrop-filter` blur of whatever is behind; on Windows (`html[data-platform='win32']`) there is no blur, the same reason as the opaque Windows menus (§15.12). Desktop attachment previews float over the same `.modal-scrim` (2026-11-03, see [attachment-preview.md](attachment-preview.md)); unlike dialogs, a click on their scrim closes the preview. Never write a scrim colour, `bg-black/…`, `backdrop-blur-*` or an inline background at the call site; to change depth or blur, change the token or the class, never one component. Not dialogs and therefore not covered: the lighter whole-window closing dim in `WindowControls.tsx`, the tap-to-close drawer scrims in `DiffPanelShell.tsx`, the login brand canvas (§16) and the transparent click blocker behind anchored plugin-card prompts.
-- **Tooltips opened inside the modal** (2026-09-08, DS-6 review fix): the shared `Tip` portals its content to `document.body` on the default `z-[60]` layer — **below** the `z-[10000]` modal overlay, so an unraised tooltip is covered by its own dialog. Any `Tip` whose trigger lives inside a modal must raise its content above the host dialog: pass `contentClassName="z-[10001]"` to `Tip`, and `secretTipContentClassName="z-[10001]"` on `Input` for the password reveal button (both DS-6 forms do). This mirrors the existing `z-[10001]` popover/dropdown convention inside `z-[10000]` dialogs.
+- **Tooltips, menus and popovers opened inside the modal** (2026-09-08 DS-6 review fix; superseded 2026-11-22 by the §6 z-index layers): the shared `Tip` used to portal on `z-[60]` and the shared menus/popovers on `z-50`, both **below** the `z-[10000]` overlay, so every call site inside a dialog had to raise them by hand. Their defaults now sit above all dialogs — `Tip` on `tooltip` (10011), `DropdownMenu` / `Popover` / `MorphPopover` / `Select` on `dropdown` (10010) — so do not pass `contentClassName`, `secretTipContentClassName` or a `z-*` class to lift them. Dialog layers (`modal` / `modal-raised` / `modal-nested`) and the rules for nested dialogs are in §6.
 - **Container**: every centered modal panel uses the shared `.modal-panel` class — 12px radius, `--confirm-bg` Card fill, 1px Board (`--border-default`) outline and the registered floating-layer shadow `--shadow-menu` — the same shadow as menu panels (2026-10-04 unification; user ruling the same day). Bot dialogs share this panel; the Bot zero-shadow rule covers in-page Bot surfaces, not modal panels. Call sites never add their own radius, background, border colour or shadow, nor glass `--cmd-palette-bg`; they set only width, position, padding (16px `p-4` by default) and layout. Radix side drawers keep their own edge-anchored panel and share only the scrim. Guard: `__tests__/modalSurfaceContract.test.ts`. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`). The DS-6 multi-runtime provider and MCP forms use 600px with the same 16px viewport gutters and a scrollable body capped within 88vh.
 - **Title / description**: `--confirm-title` / `--confirm-desc`; title medium (500), description regular (400).
 - **Buttons**: pill (9999px); primary = inverse neutral (`--confirm-btn-primary-*`, not an automatic CTA assignment), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
@@ -867,6 +868,16 @@ When the initiating computer itself only accepts encrypted connections, the same
 - Spacing values come from the generated DTCG spacing source, not a hand-written list: `space-*` in `packages/design-tokens/src/reference/foundations.json` → `--space-*` in `generated/tokens.css`; `tailwind.config.ts` maps every Tailwind spacing class to these variables, and the layer guard (`scripts/shared/design-layer-report.mjs`) accepts the same `semantic.foundations.space-*` source. The scale is on a 4px base (`space-1` = 4px) with `space-px` (1px) and the half steps `space-0_5` / `1_5` / `2_5` / `3_5` (2 / 6 / 10 / 14px), up to `space-96` (384px); 28, 36, 44 or 56px are ordinary steps. A value outside that source needs a token change first (2026-11-11 maintainer ruling, audit B-04).
 - Standard Button action frames use 24px horizontal padding and vertical centering within the Button's fixed height (§4); do not add 10px top/bottom padding to that height. Registered keycaps, data marks and bare-text buttons follow their component treatments; a `<button>` tag alone does not assign this padding to a visible layer or hit region (§5 Border Radius Scale).
 - Container padding: dialogs 16px (`p-4`, see §4 Dialog & Modal); Select listbox panels 6–8px and shared menu panels `p-1` (see §4 Select & Dropdown)
+- **Registered spacing exceptions (owner decision 2026-11-22, Desktop hard-coded value inventory).** The values below stay off the scale because they are derived from other geometry; changing one alone misaligns its partner. Paths are under `apps/desktop/src/renderer/`. Anything not listed here moves to the scale.
+  - *Hanging indents* — the indent equals an icon or avatar plus its gap, so the second line starts under the title text: `pl-[23px]` (15px icon + 8) in `SystemCard` and `LearnStatusCard`; `pl-[26px]` / `ml-[26px]` (18px icon + 8) in the model rows of `ModelSelector`, `PluginEnginesSection`, `PluginModelsSection`, `UnifiedModelRow`, `ModelGroupsPickerSection`, `ModelSourceDetails` and the role dropdown `RolePillDropdown`; `pl-[38px]` (28px avatar + 10) in `UserMessage` and `BotGroupLiveStatus`; `pl-[30px]` in `AgentActionRow` expanded content and the file-search result rows (`workdir-browse/search/SearchResults`); `pl-[18px]` in `HookTaskCard`; `ml-[22px]` (14px spinner + 8) in `CheckoutFeedback`; `pl-[22px]` in the collapsed avatar strip of `TeammatesSection` (list `pl-3` + row `px-2.5`, so the strip lines up with the list-mode avatars); the narrow My plugins version row `3.75rem` (48px icon + 12, `plugin-motion.css`).
+  - *Optical alignment (1–3px)* — `mt-[3px]` / `my-[3px]` that set an icon or mark on the first text line (`UpdateNoticeDialog`, `SystemCard`, `PlanActionCard`, `UnifiedModelRail`, `RemoteSection`, `SessionShareImportWizard`, `QuotaHoverCard`, `BotCollaborationCard`, `FirstRunGuide`, right-sidebar `TabBar`, `TerminalTabBody`, `resource-usage.css`); the tag and quick-start pills' `padding: 2px 8px 3px` in `globals.css` (1px extra below centres the text optically); the chip's `py-[0.5px]` in `AgentActionRow`.
+  - *Composer break-out set* — the composer editor sits 3px above and 11px right of its box and pulls back with matching negative margins: `.ProseMirror` `py-[3px] -my-[3px] pr-[11px]`, `EditorContent` `-mr-[11px]` with `w-[calc(100%+11px)]`, the prompt preview, recommendation and voice hint overlays (`py-[3px] pr-[11px]`, mirroring the editor's 3px; `ChatInput`), the top slot `px-[11px]` (`ChatInput`) and `COMPOSER_CONTENT_CLASS` `px-[11px] pt-[11px]` (`ComposerCard`). Change them as one set.
+  - *Usage chart grid* — the 3px gaps and gutters in `UsageHeatmap`, `UsageDailyBars` and `UsageTokenBars` belong to the geometry in [usage-history-charts.md](./usage-history-charts.md).
+  - *Platform and window geometry* — `pl-[78px]` in `ContentHeader` and the 82px left inset of `RemoteDesktopViewerWindow` (macOS, not full screen) clear the traffic-light buttons; the transparent voice-input windows' shadow margins (see §6) are `p-[52px]` in `VoiceInputOverlay` and `p-[34px]` in `VoiceInputDictionaryToast`.
+  - *Frozen or self-contained surfaces* — the login family (`LoginControls` and the `LegacyMigrationDialog` geometry frozen from the Figma migration at ×0.72, §16); the CodeMirror document theme (`markdown/codemirrorGithubTheme.ts` paddings and margins, plus the truncated-file banner `px-[30px]` in `workdir-browse/FileBodyView`, which matches `.cm-content`, matching GitHub's editor); Markdown body block margins of 18px (`MarkdownRenderer`, GitHub body rhythm); the Windows tray quota card (`styles/quota-tray.css`, its own window without `tokens.css`, sized to the macOS panel); the `ThemeBrandLockup` 9px icon-to-wordmark gap (brand geometry, §6); the overlapping plugin icons' `-0.45rem` (`plugin-motion.css`, an overlap amount, not spacing).
+  - *Break-out offsets* — a negative margin that cancels a control's own height so it does not grow the row it sits in: `-my-[5px]` on the 28px lane toggle in `BotChannelsPage` (28 − 10 = the 18px line of 12px text).
+  - *Not hard-coded values* — spacing computed at runtime (tree depth, popover side, avatar size), relative units (`em`, `%`, `vh`) that follow the font size, and `calc()` / `env()` with layout variables.
+- **Registered spacing debt kept as is (owner decision 2026-11-22).** These 18px paddings stay because there is no neighbouring section to merge them into a `gap`, and the scale has no 18px step: `pt-[18px]` at the top of the `ScheduleFormDialog` body; in `SettingsView`, the `pb-[18px]` under the back-navigation row of the settings sidebar, and the bottom `pb-[18px]` of the Pi extensions section (extensions subpage), the stream fade section (Appearance), the Providers section, the Computer Use section and the Agent island section. Move them to the scale when those pages are restructured.
 
 ### Layout Structure (App)
 
@@ -960,7 +971,8 @@ Desktop 伙伴列表的状态、尺寸与选中态见 [桌面伙伴与群列表�
 
 | Category | Scope | Corner radius |
 | --- | --- | --- |
-| **Keyboard keycap** | Every visible keyboard shortcut frame, whether rendered as `<kbd>` or as an interactive button that accepts the shortcut. Border, fill, padding and text colors stay appropriate to the surrounding surface; the radius is the shared cross-surface rule. *(Registered 2026-09-06, #4001.)* | 4px |
+| **Keyboard keycap** | Every visible keyboard shortcut frame, whether rendered as `<kbd>` or as an interactive button that accepts the shortcut. Border, fill, padding and text colors stay appropriate to the surrounding surface; the radius is the shared cross-surface rule. *(Registered 2026-09-06, #4001.)* The 15px outlined provider-letter mark in `ModelSelector` takes the same treatment *(owner decision 2026-11-22)*. | 4px |
+| **Text highlight mark** | The background behind matched or changed text runs: inline diff add/remove (`review/DiffViewer/inlineDiff.ts`), document and editor find matches (`.doc-search-mark`, `.cm-doc-search-match` in `globals.css`), sidebar search matches (`ConversationSearchBox`) and file-search matches (`workdir-browse/search/SearchResults`). Not a control frame; any other text mark needs its own adjudication. *(Owner decision 2026-11-22.)* | 2px |
 | **Data mark** | A visible layer inside a chart or visualization whose shape belongs to the data rather than to the control. Members below. *(Registered 2026-09-07.)* | 0px or 2px, pinned per member |
 | **Bot Market opening bubble tail** | Only the opening-line bubble in the Bot Market detail header (`BotMarketDialog`): 12px bubble with a square bottom-left corner joined to a curved SVG tail on the left that follows the bubble fill and border. Not a general chat-bubble shape; any other bubble needs its own adjudication. *(User ruling 2026-10-15; decision log 10-15.)* | 12px, bottom-left square + tail |
 
@@ -974,10 +986,14 @@ Desktop 伙伴列表的状态、尺寸与选中态见 [桌面伙伴与群列表�
 | `usage-token-bar` | The coloured bar representing one day's token volume in `UsageTokenBars`. Excludes the hit region, outer container and tooltip. Its own clipping may follow the same treatment. Top-only rounding or square baseline corners are not variants of this registration. | 2px, all four corners |
 | `workflow-status-cell` | The coloured micro-cell in the agent status strip (background-tasks panel detail + workflow chat card). | 2px, all four corners |
 | `system-category-square` | The registered per-category status square in SystemCard. | 2px, all four corners |
+| `usage-daily-stack` | The clipped column of stacked model segments in `UsageDailyBars` (home usage card). Excludes the hit region and tooltip. | 2px, all four corners |
+| `usage-share-bar` | Proportion bars whose segment widths are token shares: the tooltip bar in `UsageBarsTooltip`, the breakdown bar and the in-cell share bar in `UsageBreakdownTables`, and the provider usage bar in `ProviderUsageSection`. | 2px, all four corners |
+| `usage-legend-swatch` | The 8px colour square keyed to a model, harness or task series: `UsageBarsTooltip` rows (including the outlined “more” swatch), `UsageBreakdownTables` `Swatch` and `UsageTaskTable`. | 2px, all four corners |
+| `rich-answer-track` | The 8px value track of a rich-answer chart (`chat/rich-answer.css`). | 2px, all four corners |
 
-*A member ID identifies an approved visual role, not a filename or an entire component subtree. Reuse within its stated scope and semantics-preserving refactors do not require a new radius ruling; keep implementation references current. A new role, wider scope or changed geometry requires adjudication. Component entries reference the member ID and record other dimensions and interaction details instead of maintaining a second radius value.*
+*`usage-daily-stack`, `usage-share-bar`, `usage-legend-swatch` and `rich-answer-track` were registered by owner decision 2026-11-22 (Desktop hard-coded value inventory).* *A member ID identifies an approved visual role, not a filename or an entire component subtree. Reuse within its stated scope and semantics-preserving refactors do not require a new radius ruling; keep implementation references current. A new role, wider scope or changed geometry requires adjudication. Component entries reference the member ID and record other dimensions and interaction details instead of maintaining a second radius value.*
 
-*The last two members absorb the narrow "status micro-cells (2px)" exception registered 2026-07-28. Their value and their components are unchanged; what changes is the basis — they are classified by the role their shape plays, not by being ≤8px and non-interactive. See the decision log for the two scope changes this entails. The first two members likewise carry the usage-chart geometry that #4064 phrased as a separate "usage data marks (2px)" exception; that parallel wording was folded into these registrations when this section merged; their dimensions live in [usage-history-charts.md](./usage-history-charts.md) (§4 Usage History Charts).*
+*`workflow-status-cell` and `system-category-square` absorb the narrow "status micro-cells (2px)" exception registered 2026-07-28. Their value and their components are unchanged; what changes is the basis — they are classified by the role their shape plays, not by being ≤8px and non-interactive. See the decision log for the two scope changes this entails. `usage-heatmap-day` and `usage-token-bar` likewise carry the usage-chart geometry that #4064 phrased as a separate "usage data marks (2px)" exception; that parallel wording was folded into these registrations when this section merged; their dimensions live in [usage-history-charts.md](./usage-history-charts.md) (§4 Usage History Charts).*
 
 **Evidence required to register a new data mark** — what an adjudication request must establish. **Not** a self-service test that admits a layer automatically:
 
@@ -991,6 +1007,15 @@ Ordinary input options, control selected-states and action frames do **not** ent
 
 **Pixels and intrinsic geometry within images, icons and other assets are not control frames.** Existing approved content and cropping treatments follow their owning component specifications; any surrounding action frame is assigned separately. Replacing an asset within such a treatment does not register a new shape.
 
+**Registered content and self-contained shapes (owner decision 2026-11-22).** Paths are under `apps/desktop/src/renderer/`:
+
+- *Icon and image crops* — 16px plugin icon images at 4px (`cindy-brain/GhostConfirmDialogHost`, `ui/toast/Toast`), the plugin model icon at 4px (`PluginModelsSection`), the 13px plugin tab icon at 3px (`right-sidebar/plugins/plugin-task`, declared with `intrinsic-geometry`), the plugin icon masks at mini 5px and menu 7px (`plugin/GhostPluginIcon`, same family as the 22% squircle) and the 16px icon skeleton in `SessionImportSection`.
+- *Illustrations* — the WorkLouder keyboard board outline (20px, `WorkLouderCodexKeyboardLayout`) and the mini bars in the appearance theme previews (3px, `AppearanceSection`).
+- *Content typography* — Markdown inline code and inline links at 6px (`MarkdownRenderer`, GitHub styling); the CodeMirror document theme's buttons (6px, `markdown/codemirrorGithubTheme.ts`); the scrollbar thumb (6px with a 3px transparent border, `globals.css`).
+- *Login family* — the login captcha overlay (18px, `login/LoginCaptchaOverlay`) and the `LegacyMigrationDialog` card (26px, frozen from the Figma migration at ×0.72); see §16.
+
+**Registered debt kept as is (owner decision 2026-11-22).** Non-keycap `rounded-[4px]` remains on the two 16px toggle squares in `MachineSwitcherMenu` (8px would read as a circle), the bordered chip in `AgentActionRow`, the experimental page's inline styles (`MakerExperimentalView`, migrate with that page) and the inline code in `SystemCard` (align with Markdown inline code when that card is reworked).
+
 A new content-owned outline or mixed object not covered by an existing specification **must be submitted for adjudication**. Reviewers report unresolved classification and request the missing decision; they must **neither force the object into the pill tier solely because it is clickable nor approve an unregistered exception**.
 
 #### Step 2 — Control tiers
@@ -1003,7 +1028,7 @@ Ordinary control frames, containers and inner-control surfaces not covered by St
 
 **A layer with no frame or surface to round needs no corner-radius assignment.** This does not authorize a control to discard its prescribed frame treatment merely by omitting a fill or border. A transient hover or pressed surface on an ordinary control remains that control's frame and takes its assigned tier.
 
-**A focus or selection indicator is a separate visual treatment.** Its appearance alone does not create a new ordinary control frame or reclassify the associated layer. Registered bare-text buttons (wizard back-navigation "← 上一步", the §16.3 login text-button category, and the hidden-channel record text in the §4 Desktop hidden channel records entry) remain frameless and retain their visible focus treatment (the login text buttons do not have one yet; `login-flow.md` §16.3 records the gap); new bare-text-button usages must still be registered in the introducing component entry.
+**A focus or selection indicator is a separate visual treatment.** Its appearance alone does not create a new ordinary control frame or reclassify the associated layer. Registered bare-text buttons (wizard back-navigation "← 上一步", the §16.3 login text-button category, the hidden-channel record text in the §4 Desktop hidden channel records entry, and — owner decision 2026-11-22 — the task links in `BotStartedTasks`, the disclosure summary in `BotSkillPage` and the text links in `UsageTaskTable` and `BotCapabilitySettings`, whose 4px radius only shapes the focus ring) remain frameless and retain their visible focus treatment (the login text buttons do not have one yet; `login-flow.md` §16.3 records the gap); new bare-text-button usages must still be registered in the introducing component entry.
 
 Evaluate the approved component treatment across its states, including shared styles and pseudo-elements. **The absence of a local background or border class is not evidence of frameless status.**
 
@@ -1040,7 +1065,74 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 | Lifted (Card)      | Card fill (`#ffffff` Light / `#2c2c2a` Dark) + optional 1px Board outline | Login cards, raised panels                     |
 | Floating           | Card fill + 1px Board outline + `--shadow-menu`                           | Menus, popovers, modal dialogs (every dialog, confirm or not) |
 
-**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the mobile home drawer exception above, the PDF page in the document preview, whose white page would otherwise merge with a light surface, the stick cap of the WorkLouder device illustration, the `ThemeBrandLockup` icon, and the token-gated floating-layer exceptions and the Slider thumb (§15.18) / Segmented selected-pill (§4) exceptions registered in §10 — `--shadow-menu` (menus, popovers, modal panels and every other layer floating above content: tooltips, jump and new-message chips, find bars, toasts and floating notices, owner decision 2026-11-07) / `--cmd-palette-shadow` / `--segmented-selected-shadow` (`--confirm-shadow` stays registered for theme compatibility but is no longer consumed by dialogs); never add ad-hoc shadows to in-page elements. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
+**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the mobile home drawer exception above, the PDF page in the document preview, whose white page would otherwise merge with a light surface, the stick cap of the WorkLouder device illustration, the `ThemeBrandLockup` icon, and the token-gated floating-layer exceptions and the Slider thumb (§15.18) / Segmented selected-pill (§4) exceptions registered in §10 — `--shadow-menu` (menus, popovers, modal panels and every other layer floating above content: tooltips, jump and new-message chips, find bars, toasts and floating notices, owner decision 2026-11-07) / `--cmd-palette-shadow` / `--segmented-selected-shadow` (`--confirm-shadow` stays registered for theme compatibility but is no longer consumed by dialogs); never add ad-hoc shadows to in-page elements. Two single-use shadows are also registered (owner decision 2026-11-22): the inset shadow of the Windows tray quota card's glass well (`styles/quota-tray.css` `.tube`, the same well as the §2 gradient exception) and the live-device glow in the remote connection topology (`remote-connection-v2.css` `.rcv2-tile[data-live]`, 1px ring at 30% plus `0 4px 18px` at 22%, as specified in §4 Remote connection V2 topology); neither becomes a token. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
+
+**Transparent window shadow margins (owner decision 2026-11-22).** A floating card that lives in its own transparent window keeps an empty margin around the card so its shadow is not clipped by the window edge. The margin is shared with the main process, which sizes and places the window from it: `VoiceInputOverlay` `p-[52px]` ↔ `OVERLAY_SHADOW_PADDING = 52` and `VoiceInputDictionaryToast` `p-[34px]` ↔ `DICTIONARY_TOAST_SHADOW_PADDING = 34` in `apps/desktop/src/main/voice-input/global.ts`. Change each pair together; changing only the renderer moves the card off its anchor.
+
+### 层级刻度（z-index，2026-11-22 维护者裁决）
+
+桌面端的叠放顺序只用下面这套层名，不在调用处写 `z-[N]` 或预设的 `z-10`…`z-50`。数值的唯一来源是
+`packages/design-tokens` 的 foundations（`z-*`），生成到 `tokens.css` 的 `--z-*` 变量、Tailwind 的
+`z-<层名>` 类，以及 `styles/generated/token-mappings.ts` 的 `Z_INDEX_LAYERS`（style 计算、组件
+`zIndex` 参数等需要数字的地方用它）。改值只改 token 源并重新生成。`cn()` 已把层名登记进
+tailwind-merge，调用方传入的 `z-<层名>` 会覆盖组件的默认层。
+
+| 层名 | 值 | 用途 | 谁用 |
+| --- | ---: | --- | --- |
+| `below` | -1 | 放到内容之下 | 少量背景层；多数负 z 是例外，见下 |
+| `raised` | 10 | 页内略高一层 | 吸顶栏、拖拽调整手柄、角标、页内遮罩 |
+| `page-float` | 20 | 页内浮起 | 标题栏动作、页内浮动提示 |
+| `page-overlay` | 30 | 页内覆盖 | 页内吸顶覆盖、页内菜单 |
+| `page-top` | 40 | 页内最上 | 回到底部、新消息提示、Diff 抽屉 |
+| `float` | 50 | 非菜单的窗口级浮层 | 横幅、更新提示、悬浮预览、窗口控件、侧边抽屉面板 |
+| `float-top` | 60 | 盖过横幅的浮层 | 新手引导条、迁移引导条、选区引用按钮 |
+| `fullscreen` | 9999 | 全屏层 | 灯箱、启动页、致命错误页、拖拽影像、文件右键菜单 |
+| `modal` | 10000 | 弹窗遮罩 | 所有弹窗的遮罩；`ConfirmDialog` 默认值 |
+| `modal-raised` | 10001 | 弹窗面板 | 弹窗面板（压住自己的遮罩） |
+| `modal-nested` | 10002 | 二级弹窗 | 叠在另一个弹窗上的弹窗（遮罩与面板同值，按 DOM 顺序） |
+| `dropdown` | 10010 | 菜单与弹出层 | `DropdownMenu`、`Popover`、`MorphPopover`、`Select` / `SelectParts` 的默认值；模型选择器的二级面板 |
+| `tooltip` | 10011 | 悬停提示 | `Tip` / `Tooltip` 的默认值；自绘的图表提示 |
+| `modal-popover-nested` | 10020 | 浮层上的浮层 | 弹出层里再弹出的浮层，以及其中的 Tip（如定时任务表单） |
+| `modal-blocking` | 10050 | 全局阻断提示 | 只经 `confirm({ blocking: true })` 使用（现为登录过期）；遮罩与面板同值，其中 Tip 取 +1 |
+| `toast` | 10100 | 通知 | Toast 容器 |
+| `toast-top` | 10101 | 通知之上 | 下载 Toast、庆祝动画（`ConfettiBurst` 默认值，额度重置动画同层） |
+| `blocking-gate` | 10200 | 必须先处理才能继续使用的整窗遮挡 | 协议更新确认（`LegalTermsUpdateGate`）及其加载中的透明遮挡；盖过通知，只用于不处理就不能继续用的场景 |
+
+使用规则：
+
+- **共享组件不用再抬层级。** Tip 默认在 `tooltip`，菜单、Popover、MorphPopover、Select 默认在 `dropdown`，
+  都已高于弹窗、二级弹窗和灯箱。在弹窗、灯箱、插件面板里使用时不传 `contentClassName` /
+  `secretTipContentClassName` / `className` 去抬层级；只有父浮层本身在 `dropdown` 层而子浮层要压住它时，
+  才用 `modal-popover-nested`。
+- **自绘浮层**（直接用 Radix Popover / Tooltip，或 `fixed` 定位的面板）按用途选层：菜单和弹出层用
+  `dropdown`，提示用 `tooltip`，横幅等非菜单浮层用 `float`。挂在共享浮层上的二级面板也用 `dropdown`，
+  不能停在 `float`，否则会被父浮层盖住。
+- **弹窗**：遮罩 `z-modal`，面板 `z-modal-raised`。弹窗打开期间会调用全局 `confirm()` 或再打开
+  `modal` 层弹窗的，面板也用 `z-modal`，让后挂载的弹窗按 DOM 顺序在上（`ConfirmDialog` 的遮罩和面板
+  都在 `modal`）。叠在弹窗上的二级弹窗用 `modal-nested`；内嵌的 `ConfirmDialog` 传
+  `zIndex={Z_INDEX_LAYERS['modal-nested']}`。
+- **全局阻断提示**（2026-11-22 维护者裁决）：`modal-blocking` 只给「不处理就无法继续使用应用」的全局提示，
+  现在只有登录过期。普通确认、二级弹窗和授权请求（插件确认、插件安装授权、本机 Agent 确认等）都不得使用；
+  调用方只能经全局 `confirm()` 的 `blocking: true` 拿到这一层，不写 `z-modal-blocking`，也不传
+  `Z_INDEX_LAYERS['modal-blocking']`（`modalBlockingLayer.guard.test.ts` 拦截）。阻断提示走独立槽位：
+  不排在普通确认后面、立即显示，多个阻断提示之间依次显示；关闭后焦点回到被它打断的弹窗。阻断提示在显示或排队期间，
+  新来的普通确认暂缓、只排队不显示，阻断提示全部关闭后再依次出现（Radix 按挂载顺序管理焦点与 Esc，不看层级，
+  之后才挂载的普通确认会抢走焦点）；阻断提示打开前已在显示的普通确认原地保留在它下面。界面里自己挂载的
+  `ConfirmDialog`（如关窗确认）同样如此：阻断提示显示期间新打开的先不挂载，阻断提示关闭后再出现，由
+  `ConfirmDialog` 统一处理，调用方不用改。直接用 Radix Dialog / AlertDialog 的弹窗不在此列。没有取消按钮时
+  焦点落在主按钮；Esc 与点「重新登录」一样关闭提示（结算为取消，登录过期两者都进入登出），只关提示本身，
+  不关下面的弹窗。Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住它的是结果反馈而不是另一个要处理的问题。
+- **组件内部的局部叠放**只和同一组件里的兄弟元素比较，不进全局刻度，见下方例外。
+
+登记的例外与子档（保留字面量，新增同类须在这里登记）：
+
+- **组件内局部叠放 0–5**：只在同一层叠上下文里比较兄弟元素（灯箱内部、登录控件、手柄图示、滑杆等）。
+- **负 z**：放到内容之下的背景层（壁纸、按钮叠层、离屏宿主等）。
+- **运行时计算**：`ConfirmDialog` 内提示取弹窗 `zIndex + 1`、列表按顺序叠放、拖拽中的标签临时 +1。
+- **登录页层叠上下文**：品牌舞台 9980 < 登录面板 9990 < 启动页 9999，以及登录根节点内部的 30/40/50 相对层级。
+- **子档**：拖拽落点框 9998（必须低于 `fullscreen` 的拖拽影像）；全局拖入文件提示 100（高于页内、低于所有弹窗）；
+  侧栏抽屉 15（高于页内 `raised`、低于标题栏 `page-float`）；侧栏悬浮面板 48 / 49（必须低于 `dropdown`，
+  行内右键菜单要画在面板之上）。
 
 ## 7. Do's and Don'ts
 

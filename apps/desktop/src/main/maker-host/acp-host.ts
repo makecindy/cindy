@@ -48,7 +48,7 @@ export interface BuildAcpAgentOpts {
   makerMemory?: AgentDeps['makerMemory'];
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
   /** Starts the declared entry of a listed harness in raw-stdio mode. */
-  spawnHarness(key: string): Promise<NodeWorkerProcess>;
+  spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean }): Promise<NodeWorkerProcess>;
 }
 
 export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
@@ -64,7 +64,15 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
     preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, logger, ctx),
     clientInfo: { name: 'cindy', title: 'Cindy', version: opts.appVersion },
     endpoints: {
-      connect: async (key) => createAcpProcessTransport(await opts.spawnHarness(key), logger),
+      connect: async (key, options) => createAcpProcessTransport(
+        options?.remoteWorkspace || options?.guestWorkspace
+          ? await opts.spawnHarness(key, {
+              ...(options.remoteWorkspace ? { remoteWorkspace: true } : {}),
+              ...(options.guestWorkspace ? { guestWorkspace: true } : {}),
+            })
+          : await opts.spawnHarness(key),
+        logger,
+      ),
     },
     onSessionCapabilities: rememberCapabilities,
   });
@@ -94,7 +102,7 @@ export function installPluginEngines(opts: InstallPluginEnginesOpts): () => void
       ...(opts.mcpProviders ? { mcpProviders: opts.mcpProviders } : {}),
       ...(opts.makerMemory ? { makerMemory: opts.makerMemory } : {}),
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
-      spawnHarness: (key) => registry.spawn(key),
+      spawnHarness: (key, options) => (options ? registry.spawn(key, options) : registry.spawn(key)),
     });
     registered = opts.maker.registerAgent('acp', agent);
     if (registered) opts.logger.info('plugin engine registered', { harnesses: list.length });

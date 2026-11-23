@@ -25,6 +25,7 @@ export { ACP_PERMISSION_MODES, buildAcpCapabilities, describeAcpModels } from '.
 export {
   AcpAuthRequiredError,
   AcpProtocolVersionError,
+  AcpRequiredMcpUnavailableError,
   AcpResumeUnavailableError,
   AcpSession,
   openAcpSession,
@@ -39,5 +40,6 @@ export {
   acpMcpServersFromBridge,
   acpProviderIdForHarness,
   type AcpAgentDeps,
+  type AcpEndpointConnectOptions,
   type AcpEndpointLauncher,
 } from './acp-agent.js';

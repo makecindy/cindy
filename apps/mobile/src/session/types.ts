@@ -66,6 +66,7 @@ export interface RemoteSession {
   totalMoney?: RemoteMoney;
   /** 旧 Desktop / USD 账本兼容字段。 */
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
   contextTokens?: number;
   contextWindow?: number;
   clearedAt?: string | null;
@@ -92,8 +93,13 @@ export interface RemoteSession {
   pluginEngineSwitchIntent?: import('./pluginEngines').MobilePluginEngineSwitchIntent | null;
   /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
   source?: string | null;
+  sideChatPromoted?: true;
   companion?: import("./teammateTaskSource").TaskCompanion;
   taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
+  /** Owning Lead on this device, when the active team is known. */
+  orcaLeadSessionId?: string;
+  /** Live Worker question state, independent of Agent Island visibility. */
+  orcaHasPendingQuestion?: boolean;
   orcaRole?: 'lead' | 'worker' | string | null;
   /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
   orcaRemoteLead?: {
@@ -121,6 +127,8 @@ export interface RemoteSession {
   /** device-link 会话列表带的最近一条 user/assistant 消息纯文本预览(桌面 sessionToCamel 产出,
    *  已处理 clearedAt / rewind),供首页 idle 会话直接显示,无需 load 完整消息。 */
   preview?: string | null;
+  /** Stable summary already supplied by hosts for pinned cards. */
+  summary?: string | null;
   /** client-local:冷启动由首页快照缓存种入的行(remoteSessionStore.hydrateDeviceSessionsIfEmpty
    *  打标)。缓存行字段经瘦身/截断,只能用于列表渲染与跳转,不能作为发送参数——会话页在
    *  fresh 元数据(getSession→upsert)到达前据此禁发。fresh 对象来自服务器,天然无此标记。 */

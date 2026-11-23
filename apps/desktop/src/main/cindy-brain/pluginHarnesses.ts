@@ -31,8 +31,28 @@ import { approvedGhostHarnesses, type InstalledGhost } from '../../shared/ghost.
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { NodeWorkerProcess } from './nodeRuntimeBroker.js';
 
+/** How one engine process is started. */
+export interface PluginHarnessSpawnOptions {
+  /**
+   * The task's files and commands are on another computer: the entry is started with
+   * GHOST_HARNESS_REMOTE_WORKSPACE_ARG and must leave file and command work to Cindy's tools.
+   * Refused unless the plugin published `remoteWorkspace` for this engine.
+   */
+  remoteWorkspace?: boolean;
+  /**
+   * The task belongs to another Cindy account (provider sharing): the entry is started with
+   * GHOST_HARNESS_GUEST_WORKSPACE_ARG alongside GHOST_HARNESS_REMOTE_WORKSPACE_ARG. Refused unless
+   * the plugin published both `remoteWorkspace` and `guestWorkspace` for this engine.
+   */
+  guestWorkspace?: boolean;
+}
+
 export interface PluginHarness {
   reportsUsage?: true;
+  /** The plugin says this engine can serve a task whose files are on another computer. */
+  remoteWorkspace?: true;
+  /** The plugin says this engine isolates personal context/tools for shared users. */
+  guestWorkspace?: true;
   /** `${ghostId}:${harnessId}`,任务记录里的稳定标识。 */
   key: string;
   ghostId: string;
@@ -57,7 +77,7 @@ export interface PluginHarnessRegistry {
   /** 列表内容变化时通知(内容不变不通知);返回取消订阅函数。 */
   onChange(listener: (list: PluginHarness[]) => void): () => void;
   /** 原样 stdio 启动引擎入口;不在 list 中或已发布不可用时拒绝。 */
-  spawn(key: string): Promise<NodeWorkerProcess>;
+  spawn(key: string, options?: PluginHarnessSpawnOptions): Promise<NodeWorkerProcess>;
 }
 
 export interface PluginHarnessRegistryDeps {
@@ -70,7 +90,7 @@ export interface PluginHarnessRegistryDeps {
   /** 当前界面语言(app-context 的 uiLocale)。 */
   uiLocale(): string;
   /** broker.spawnHarness:fork 前后按安装、批准与 owner 现查守门。 */
-  spawn(ghostId: string, harnessId: string): Promise<NodeWorkerProcess>;
+  spawn(ghostId: string, harnessId: string, options?: PluginHarnessSpawnOptions): Promise<NodeWorkerProcess>;
   /**
    * 请插件重新发布引擎状态(含模型列表):给插件逻辑页发 `{ type: 'harnesses-refresh-requested' }`。
    * 逻辑页不在线时返回 false。缺省 = 不支持刷新。
@@ -126,6 +146,8 @@ function projectHarnesses(deps: PluginHarnessRegistryDeps, ghosts: InstalledGhos
           : { state: 'unknown' },
         ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
         ...(status?.reportsUsage && ghost.manifest.node?.protocol === 'json-rpc-stdio' ? { reportsUsage: true } : {}),
+        ...(status?.remoteWorkspace ? { remoteWorkspace: true } : {}),
+        ...(status?.remoteWorkspace && status?.guestWorkspace ? { guestWorkspace: true } : {}),
         ...(status?.models ? { models: status.models.map((model) => ({ ...model, ...(model.efforts ? { efforts: [...model.efforts] } : {}) })) } : {}),
         ...(status?.modes ? { modes: [...status.modes] } : {}),
         ...(status?.defaultMode ? { defaultMode: status.defaultMode } : {}),
@@ -183,7 +205,7 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
       const raw = await read(ghostId, harness.harnessId);
       return find() ? parseGhostHarnessUsage(raw) ?? null : null;
     },
-    async spawn(key) {
+    async spawn(key, options) {
       // 现算而不是读缓存:停用、撤权或刚发布的不可用状态都必须在启动这一刻生效。
       let harness: PluginHarness;
       try {
@@ -192,11 +214,23 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         if (current.availability.state === 'unavailable') {
           throw new Error(`Task engine ${current.name} is unavailable${current.availability.message ? `: ${current.availability.message}` : ''}`);
         }
+        // 插件没有声明能把文件与命令交给 Cindy 时,它的工具只会作用在本机:项目不在这里,不能启动。
+        if ((options?.remoteWorkspace || options?.guestWorkspace) && !current.remoteWorkspace) {
+          throw new Error(`Task engine ${current.name} cannot run a task whose files are on another computer`);
+        }
+        if (options?.guestWorkspace && !current.guestWorkspace) {
+          throw new Error(`Task engine ${current.name} cannot be shared with other accounts`);
+        }
         harness = current;
       } catch (error) {
         throw new AgentStartupStoppedError(error);
       }
-      return deps.spawn(harness.ghostId, harness.harnessId);
+      return (options?.remoteWorkspace || options?.guestWorkspace)
+        ? deps.spawn(harness.ghostId, harness.harnessId, {
+            remoteWorkspace: true,
+            ...(options?.guestWorkspace ? { guestWorkspace: true } : {}),
+          })
+        : deps.spawn(harness.ghostId, harness.harnessId);
     },
     reconcile(ghosts) {
       reconcile(ghosts);
@@ -221,7 +255,7 @@ const registry = createPluginHarnessRegistry({
   isAvailable: (ghostId) => registryDeps.isAvailable(ghostId),
   readAvailability: (ghostId) => registryDeps.readAvailability(ghostId),
   uiLocale: () => registryDeps.uiLocale(),
-  spawn: (ghostId, harnessId) => registryDeps.spawn(ghostId, harnessId),
+  spawn: (ghostId, harnessId, options) => (options ? registryDeps.spawn(ghostId, harnessId, options) : registryDeps.spawn(ghostId, harnessId)),
   readUsage: async (ghostId, harnessId) => registryDeps.readUsage?.(ghostId, harnessId),
   log: { warn: (message, meta) => registryDeps.log?.warn(message, meta) },
 });
@@ -257,10 +291,14 @@ const lastRefreshRequestAt = new Map<string, number>();
  * 引擎状态与模型列表。插件怎么取模型由插件自己决定；结果经 `PUT /harnesses` 回来，照常对账。
  * 只发给当前列出引擎的插件；冷却内与逻辑页不在线时不发(不在线的下次再试)。
  */
-export function requestPluginHarnessRefresh(now = Date.now()): void {
+export function requestPluginHarnessRefresh(now = Date.now(), targetGhostId?: string): void {
   const send = registryDeps.requestRefresh;
   if (!send) return;
-  const ghostIds = new Set(registry.list().map((harness) => harness.ghostId));
+  const harnesses = registry.list();
+  const ghostIds = new Set(
+    (targetGhostId ? harnesses.filter((harness) => harness.ghostId === targetGhostId) : harnesses)
+      .map((harness) => harness.ghostId),
+  );
   for (const ghostId of ghostIds) {
     const last = lastRefreshRequestAt.get(ghostId);
     if (last !== undefined && now - last < PLUGIN_HARNESS_REFRESH_COOLDOWN_MS) continue;

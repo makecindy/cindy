@@ -165,7 +165,7 @@ export function AddDirectoryPanel({
   const rowClass = (disabled?: boolean) =>
     cn(
       COMPOSER_MENU_ROW,
-      'flex w-full items-center gap-2 px-[10px] text-left',
+      'flex w-full items-center gap-2 px-2.5 text-left',
       disabled && 'cursor-not-allowed opacity-50',
     );
 
@@ -189,10 +189,10 @@ export function AddDirectoryPanel({
         // 标题、搜索框与「选择其他文件夹」固定，只有目录列表滚动(与项目选择器一致)。
         // 高度由外层 MorphPopover 的确定高度经 flex-1 传下来；不用 h-full，
         // 否则父层只有 max-h-full 时高度仍是 auto，列表会按全部内容撑高 (#9536)。
-        className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden p-[6px]"
+        className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden p-1.5"
       >
         <MenuHighlightLayer />
-        <div className="flex h-[32px] items-center gap-1 pb-[2px]">
+        <div className="flex h-[32px] items-center gap-1 pb-0.5">
           <button
             type="button"
             onMouseDown={(event) => event.preventDefault()}
@@ -210,19 +210,19 @@ export function AddDirectoryPanel({
             {t('extraDirs.addTitle')}
           </span>
           <Tip text={t('extraDirs.writableHintDetail')} side="top">
-            <span className="ml-auto shrink-0 pr-[6px] text-12 text-[var(--cmd-palette-item-meta)]">
+            <span className="ml-auto shrink-0 pr-1.5 text-12 text-[var(--cmd-palette-item-meta)]">
               {t('extraDirs.writableHint')}
             </span>
           </Tip>
         </div>
         {/* 有搜索框时省掉分组标题：新建任务页面板只有 240px，标题再占一行列表就只剩两行多。 */}
         {!showSearch && (
-          <div className="flex h-[24px] items-center px-[10px] text-12 font-medium text-[var(--cmd-palette-item-meta)]">
+          <div className="flex h-[24px] items-center px-2.5 text-12 font-medium text-[var(--cmd-palette-item-meta)]">
             {t('newChat.folderPicker.recent')}
           </div>
         )}
         {showSearch && (
-          <div className="px-[4px] pb-[6px]">
+          <div className="px-1 pb-1.5">
             <div className="relative">
               <Search
                 size={12}
@@ -281,7 +281,7 @@ export function AddDirectoryPanel({
           {visibleOptions.length === 0 && (
             <div
               role="status"
-              className="flex h-[40px] select-none items-center px-[10px] text-13 text-[var(--cmd-palette-empty)]"
+              className="flex h-[40px] select-none items-center px-2.5 text-13 text-[var(--cmd-palette-empty)]"
             >
               {query && showSearch ? t('extraDirs.noMatchingRecent') : t('extraDirs.noRecent')}
             </div>
@@ -290,11 +290,11 @@ export function AddDirectoryPanel({
         {failed && (
           <ErrorNotice
             role="alert"
-            className="mx-[4px] my-[4px]"
+            className="mx-1 my-1"
             message={t('extraDirs.addFailed')}
           />
         )}
-        <div role="separator" className="my-[6px] border-t border-[var(--cmd-palette-border)]" />
+        <div role="separator" className="my-1.5 border-t border-[var(--cmd-palette-border)]" />
         <button
           ref={focusedIndex === rowCount - 1 ? focusedRowRef : undefined}
           type="button"

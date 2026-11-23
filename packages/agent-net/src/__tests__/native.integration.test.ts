@@ -22,6 +22,7 @@ import { PROTOCOL_VERSION } from '@cindy/device-link-protocol';
 import { AgentNetSocket } from '../socket.js';
 import { AgentNetSocket as PortableSocket } from '../portableSocket.js';
 import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
+import { SessionLanes } from '../session/lanes.js';
 import { PortableAgentNetClient, type BinarySocket } from '../portableClient.js';
 import type { SocketClient } from '../socketPorts.js';
 import { uploadNativeMedia, readNativeMedia } from '../nativeMedia.js';
@@ -122,7 +123,7 @@ async function until(action: () => Promise<boolean>, timeoutMs = 5000) {
   }
 }
 
-it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP streams through the real native C ABI', async () => {
+it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP streams, levels and abandoned streams through the real native C ABI', async () => {
   const native = new NativePeer();
   const seed = Buffer.alloc(32, 31).toString('base64url'); // Public, deterministic unit fixture.
   await native.call({ seed, context: 'unit-native-interop', deviceId: 'native-host' }, 'create');
@@ -144,8 +145,11 @@ it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP
   });
   cleanups.push(() => endpoint.close());
   const connection: Connection = endpoint.connect(Buffer.from(identity.transportKey, 'base64url'), { address: '127.0.0.1', port: identity.udpPort });
-  const output: Buffer[] = [];
-  connection.on('stream', (stream: RecvStream) => stream.on('data', data => output.push(Buffer.from(data))));
+  const output: Buffer[] = [], byStream = new Map<number, number>(), ended = new Set<number>();
+  connection.on('stream', (stream: RecvStream) => {
+    stream.on('data', data => { output.push(Buffer.from(data)); byStream.set(stream.id, (byStream.get(stream.id) ?? 0) + data.length); });
+    stream.on('end', () => ended.add(stream.id));
+  });
   let nativeId: number | undefined;
   await until(async () => {
     const poll = await native.call({ op: 'poll' });
@@ -166,6 +170,40 @@ it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP
   expect(await native.call({ op: 'write', id: nativeId, stream, data: payload.toString('base64url') })).toBe(payload.length);
   await until(async () => { await native.call({ op: 'poll' }); return Buffer.concat(output).length >= payload.length; });
   expect(Buffer.concat(output)).toEqual(payload);
+
+  // 2026-11-22, core v2-1 (docs/agent-net-session-plan.md section 7 items 1, 3, 5) through both drivers. The native engine opens a
+  // stream on one of the eight levels and abandons it right after writing: Node reads exactly what went out before, then its end.
+  expect(connection.supportsLevels).toBe(true);
+  const abandoned = await native.call({ op: 'openStream', id: nativeId, level: 5 }) as number;
+  await expect(native.call({ op: 'openStream', id: nativeId, level: 8 })).rejects.toThrow('INVALID_PRIORITY');
+  let written = 0;
+  for (let i = 0; i < 8; i++) written += await native.call({ op: 'write', id: nativeId, stream: abandoned, data: Buffer.alloc(65_536, i).toString('base64url') });
+  const dropped = await native.call({ op: 'abandon', id: nativeId, stream: abandoned }) as number;
+  expect(dropped).toBeGreaterThan(0);
+  await until(async () => { await native.call({ op: 'poll' }); return ended.has(abandoned); });
+  expect(byStream.get(abandoned) ?? 0).toBe(written - dropped);
+  // Node abandons its own stream once part of it was acknowledged: the native engine reads the rest of what went out, then the end.
+  const nativeRead = new Map<number, number>(), nativeEnded = new Set<number>();
+  const pollNative = async () => {
+    for (const state of (await native.call({ op: 'poll' })).connections) {
+      for (const chunk of state.data) nativeRead.set(chunk.stream, (nativeRead.get(chunk.stream) ?? 0) + Buffer.from(chunk.data, 'base64url').length);
+      for (const event of state.events) if (event.kind === 'finish') nativeEnded.add(event.stream);
+    }
+  };
+  // Written and finished, then given up (a result its caller cancelled): even with everything and the end handed to the core, the
+  // core still drops what it has not sent. The native side does not read meanwhile, so nothing more is acknowledged.
+  const total = 1 << 20, outgoing = connection.openStream(5);
+  outgoing.write(Buffer.alloc(total, 9));
+  outgoing.finish();
+  await until(async () => { await pollNative(); return (outgoing.progress()?.ackedBytes ?? 0) > 100_000; });
+  expect(outgoing.progress()!.stalledUs).toBeLessThan(2_000_000);
+  expect(connection.sendProgress()!.queued[5]).toBeGreaterThan(0);
+  await until(async () => outgoing.handedOver);
+  const nodeDropped = outgoing.abandon();
+  expect(nodeDropped).toBeGreaterThan(0);
+  expect(outgoing.abandon()).toBeNull();
+  await until(async () => { await pollNative(); return nativeEnded.has(outgoing.id); }, 10_000);
+  expect(nativeRead.get(outgoing.id)).toBe(total - nodeDropped!);
   expect(captured.length).toBeGreaterThan(3);
   expect(captured.some(packet => packet.includes('PRIVATE_NATIVE_INTEROP_MESSAGE_'))).toBe(false);
   await native.call({ op: 'admit', peers: [] });
@@ -420,13 +458,16 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
  * - 生产入口与可观察结果：手机用的 PortableSocket.useSessions + NativeTransport，真实编译的原生库（C 接口）、真实 V2 中转与
  *   Node 节点（电脑一端）。会话上建链、调用、拿回 1 MB 结果；中转转发的数据报经 UDP 收发；STUN 查到的地址成为候选。
  *   旧安装包里的原生库（没有 features、不认新操作）配新 JS 时，会话照样可用，也不去调新操作。
+ *   会话 v2（2026-11-22）：两端都宣告了 agent-net-session-v2，大结果两个方向都走自己的流（手机的 NativeChannel、电脑的
+ *   CoreChannel 各开各收），三种原生库上都一样，拿回的内容与 v1 相同。
  * - Bug／规则依据：docs/agent-net-session-plan.md 第 10 节阶段 4（手机接入会话层与原生接口）、第 8 节中转 UDP；
  *   docs/dev-rules/mobile-development.md 冷更边界：热更的 JS 必须能在旧原生包上运行。
  * - 现有覆盖缺口：原生通道没有会话通道，手机只走 Device Link 帧；原生库没有中转 UDP 和 STUN，现有用例都不覆盖。
  * - 最小失败输入：一次建链、一次请求、一个 1 MB 结果；去掉原生的会话通道（不宣告、不开流）时会话一直不出现，
- *   去掉中转 UDP 时 1 MB 全经 WebSocket 回来。
+ *   去掉中转 UDP 时 1 MB 全经 WebSocket 回来；电脑向手机要一个 800 KB 的结果；手机读错流的键或不把流交给引擎时，
+ *   结果一直不到；手机不宣告 v2 时大结果不走流。
  * - tier：integration，真实回环中转与 UDP，不开局域网发现。 */
-it.skipIf(!library)('carries sessions on the real native engine, relays them over UDP, and keeps working on an older native build', async () => {
+it.skipIf(!library)('carries sessions on the real native engine, relays them over UDP, over the binary bridge, and on an older native build', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-native-'));
   cleanups.push(async () => {
     if (path.dirname(path.resolve(directory)) !== path.resolve(tmpdir())
@@ -457,12 +498,47 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
     onRequest: (request) => { host.session(member.deviceId)!.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : request.args[0] }); },
   }) });
   hello(host);
-  for (const build of ['current', 'older'] as const) {
+  const phoneLarge = 'phone-session-result-'.repeat(40_000);
+  // Body streams are read on both sides (v2 is declared and used whenever both ends read them; on the phone, only on an engine with
+  // `probe-grants`).
+  const bodies = vi.spyOn(SessionLanes.prototype, 'receiveBody');
+  cleanups.push(async () => { bodies.mockRestore(); });
+  for (const build of ['current', 'older', 'binary'] as const) {
     const peer = new NativePeer();
-    await peer.call({ seed, context, deviceId: member.deviceId, enhancedTransport: build === 'current' }, 'create');
-    const newOps: string[] = [];
-    // An installed binary from before this change: no `features`, and the operations it lacks fail as unknown.
-    const port: NativeEnginePort = build === 'current' ? { command: value => peer.call(value), destroy: () => peer.destroy() } : {
+    await peer.call({ seed, context, deviceId: member.deviceId, enhancedTransport: build !== 'older' }, 'create');
+    const newOps: string[] = [], commands: string[] = [];
+    let ioCalls = 0, work = false;
+    // As CindyAgentNetModule: the engine's own turn, and `io` that first waits for the engine to have something for JS.
+    const turn = async () => {
+      const state = await peer.call(null, 'pump') as number;
+      if (state < 0) throw new Error('NATIVE_ENGINE_FAILURE');
+      if (state & 1) work = true;
+    };
+    const waitForWork = async (maxMs: number) => {
+      const deadline = Date.now() + maxMs;
+      await turn();
+      while (!work && Date.now() < deadline) { await new Promise(resolve => setTimeout(resolve, 2)); await turn(); }
+      const had = work; work = false;
+      return had;
+    };
+    // `current`: this binary behind an adapter without `io` (as an app module from before it), each call answered 5 ms late as on a
+    // phone whose JS thread is busy: the computer's probe then arrives with the first window of a large result, and a core that
+    // answered it with the two lowest streams' credit only left the body (the sixth stream) at 128 segments (2026-11-22, CI).
+    // `binary`: the whole of it.
+    const port: NativeEnginePort = build === 'current' ? {
+      command: async value => { await new Promise(resolve => setTimeout(resolve, 5)); return peer.call(value); },
+      destroy: () => peer.destroy() } : build === 'binary' ? {
+      command: value => { commands.push(String(value.op)); return peer.call(value); },
+      wait: waitForWork,
+      async io(input, waitMs = 0, kick = false) {
+        if (waitMs > 0 && !await waitForWork(waitMs)) return new Uint8Array(0);
+        ioCalls++;
+        const output = Buffer.from(await peer.call(Buffer.from(input).toString('base64'), 'io') as string, 'base64');
+        if (kick) await turn();
+        return new Uint8Array(output);
+      },
+      kick() { work = true; },
+      destroy: () => peer.destroy() } : {
       async command(value) {
         if (value.op === 'stun' || value.op === 'relayUdp') { newOps.push(value.op); throw new Error('UNKNOWN_NATIVE_OPERATION'); }
         const result = await peer.call(value);
@@ -487,9 +563,13 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
           }) } } });
         return transport;
       } } });
-    phone.useSessions({ laneFor: () => 'normal', handlers: () => ({}) });
+    // Closed even when an assertion below fails: its relay WebSocket and polling would otherwise keep the test worker alive.
+    cleanups.push(() => phone.close());
+    phone.useSessions({ laneFor: () => 'normal', handlers: () => ({
+      onRequest: (request) => { phone.session(owner.deviceId)!.respond(request.id, { ok: true, result: phoneLarge }); },
+    }) });
     hello(phone);
-    if (build === 'current') {
+    if (build !== 'older') {
       // The relay's STUN answered on the engine's own port, and relayed datagrams switched to UDP once it acknowledged.
       await until(async () => transport!.candidates().some(candidate => candidate.address === '127.0.0.1'));
       await until(async () => transport!.relayOverUdp);
@@ -500,10 +580,22 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
     const session = phone.session(owner.deviceId)!;
     await expect(session.open({ controllerName: 'phone' }, 5_000)).resolves.toEqual({ appVersion: 'host' });
     await expect(session.request('test:echo', [build], { timeoutMs: 5_000 })).resolves.toEqual({ ok: true, result: build });
-    const before = relayedOverWebSocket;
+    const before = relayedOverWebSocket, bodyBytes = () => bodies.mock.calls.filter(([, bytes]) => bytes).length;
+    const bodiesBefore = bodyBytes();
     await expect(session.request('test:large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: large });
-    if (build === 'current') expect(relayedOverWebSocket - before).toBeLessThan(256 * 1024);
-    else { expect(newOps).toEqual([]); expect(relayedOverWebSocket - before).toBeGreaterThan(large.length / 2); }
+    // An engine without `probe-grants` (here the older build, which reports no features) keeps to v1: no body streams.
+    if (build === 'older') expect(bodyBytes()).toBe(bodiesBefore); else expect(bodyBytes()).toBeGreaterThan(bodiesBefore);
+    const fromPhone = bodyBytes();
+    await expect(host.session(member.deviceId)!.request('test:phone-large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: phoneLarge });
+    if (build === 'older') expect(bodyBytes()).toBe(fromPhone); else expect(bodyBytes()).toBeGreaterThan(fromPhone);
+    if (build === 'older') { expect(newOps).toEqual([]); expect(relayedOverWebSocket - before).toBeGreaterThan(large.length / 2); }
+    else expect(relayedOverWebSocket - before).toBeLessThan(256 * 1024);
+    if (build === 'binary') {
+      // Reads, writes after a connection's first bytes, and relayed datagrams all went through `io`.
+      expect(ioCalls).toBeGreaterThan(0);
+      expect(commands.filter(op => op === 'poll' || op === 'datagram')).toEqual([]);
+      expect(commands.filter(op => op === 'write').length).toBeLessThanOrEqual(2);
+    }
     // The next build reconnects as the same phone right away: its new connection replaces this one on the host, which may
     // not have noticed this close yet (relayed close packets race the relay WebSocket's own close).
     phone.close();

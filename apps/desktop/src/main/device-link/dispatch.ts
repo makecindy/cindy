@@ -1,3 +1,4 @@
+import { TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT, type ForegroundHostTaskActivity } from '@cindy/device-link';
 import type { readUsageWidgetSnapshot } from '../quota-overview/service.js';
 import type { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import type { prepareShareAvailability } from './providerShareAvailability.js';
@@ -43,6 +44,12 @@ import {
 import type { requestFilePeer, stopFilePeers } from './filePeer';
 import type { requestTaskMigration } from '../task-migration/service';
 import { normalizeProviderOrder } from "../../shared/providerOrder.js";
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  PLUGIN_ENGINES_INVOKE,
+  parseOfferedPluginEngines,
+  pluginEngineKeyFromProviderId,
+} from '../../shared/pluginEngines.js';
 import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
 /**
  * dispatch —— device-link 被控端隧道层。
@@ -90,6 +97,8 @@ import {
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
+  type ProviderPickerModel,
   DL_VOICE_DICTIONARY_GET_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
@@ -207,6 +216,7 @@ type RemoteReviewInputGuard = (sessionId: string) => void | Promise<void>;
 export interface ProviderShareAccessPort {
   remoteModels?(providerId: string): string[] | null;
   modelAllowed?(controller: string, providerId: string, model: string): boolean;
+  refreshPluginEngine?(providerId: string): void;
   insights?(controller: string, request: unknown): Promise<unknown>;
   insightsCurrent?(controller: string, result: unknown): boolean;
   guestAccess(controller: string): { shareId: string; memberId: string; providerId: string } | null;
@@ -716,6 +726,18 @@ function invokeControllerCapabilities(payload: InvokePayload): string[] {
   );
 }
 
+function providerPickerRequest(payload: InvokePayload): 'available' | ProviderPickerModel {
+  const { retainedModel } = payload.args![0] as { retainedModel?: Partial<ProviderPickerModel> };
+  if (retainedModel === undefined) return 'available';
+  const { agent, modelId, providerId } = retainedModel ?? {};
+  if ((agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi') ||
+    typeof modelId !== 'string' || !modelId ||
+    (providerId !== null && (typeof providerId !== 'string' || !providerId))) {
+    throw new Error('[INVALID_PARAMS] Invalid retained model');
+  }
+  return { agent, modelId, providerId };
+}
+
 function optionalControllerCapabilities(
   value: { capabilities?: unknown },
 ): string[] | undefined {
@@ -1135,7 +1157,7 @@ function projectInvokeResultForTunnel(
     return result;
   }
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown;
-    providerContinuity?: unknown };
+    providerContinuity?: unknown; deferredProviderIds?: string[] };
   if (!Array.isArray(r.providers)) return result;
   const modelVisibilityOverrides = r.modelVisibilityOverrides
     && typeof r.modelVisibilityOverrides === 'object'
@@ -1147,6 +1169,7 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    if (!sameAccountController || p.source !== 'organization') delete rest.customIcon;
     if (!sameAccountController) {
       delete rest.subscriptionPoolTarget;
       delete rest.subscriptionAccountKeys;
@@ -1210,6 +1233,7 @@ function projectInvokeResultForTunnel(
   const continuity = readProviderMetadataContinuity(r);
   return {
     providers,
+    ...(sameAccountController && Array.isArray(r.deferredProviderIds) ? { deferredProviderIds: r.deferredProviderIds } : {}),
     ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
     ...(Array.isArray(r.providerOrder) ? { providerOrder: normalizeProviderOrder(r.providerOrder) } : {}),
     providerContinuity: continuity ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
@@ -2372,6 +2396,20 @@ function clearAllSessionActivityStages(): void {
   for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
   for (const dst of [...sessionPatchStages.keys()]) clearSessionPatchStage(dst);
   for (const dst of [...latestStatePushStages.keys()]) clearLatestStatePushStage(dst);
+}
+
+// Same-account iPhones opt in. Use the existing owner-fenced, coalescing sessions
+// queue, including for a subscription replay directed at just one controller.
+function publishHostTaskActivity(read: () => ForegroundHostTaskActivity | null, target?: string): void {
+  if (!activeClient || !hasRemoteBotSessionLookup() || !readDeviceLinkSettings().remoteControlEnabled) return;
+  const peers = subscriptions.getControllersForTopic('sessions').filter(dst =>
+    (!target || dst === target) && isSameAccountController(dst) && !isControllerRevoked(dst)
+      && subscriptions.controllerSupports(dst, TASK_ACTIVITY_CAPABILITY));
+  if (!peers.length) return;
+  const summary = read();
+  if (!summary) return;
+  const stamp = broadcastTap.getSafeDataOwnerPushStamp?.();
+  for (const dst of peers) stageLatestStatePush(dst, TASK_ACTIVITY_SNAPSHOT, TASK_ACTIVITY_SNAPSHOT, summary, stamp);
 }
 
 /**
@@ -4762,6 +4800,8 @@ const PROVIDER_SHARE_CHANNELS: ReadonlySet<string> = new Set([
   'maker:get-capabilities',
   'maker:list-available-agents',
   'maker:agent:status',
+  PLUGIN_ENGINES_INVOKE.LIST,
+  PLUGIN_ENGINES_INVOKE.REFRESH,
 ]);
 const PROVIDER_SHARE_AGENT_ARG_CHANNELS: ReadonlySet<string> = new Set(['maker:get-capabilities', 'maker:agent:status']);
 const PROVIDER_SHARE_AGENT_KINDS: ReadonlySet<string> = new Set(['claude-code', 'codex', 'pi']);
@@ -4802,6 +4842,28 @@ async function sharedProviderView(
 async function projectProviderShareRead(
   src: string, channel: string, args: unknown[], result: unknown, providerId: string,
 ): Promise<{ ok: true; value: unknown } | Extract<InvokeResultPayload, { ok: false }>> {
+  if (channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
+    return { ok: true, value: undefined };
+  }
+  if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+    if (!pluginEngineKeyFromProviderId(providerId)) return { ok: true, value: [] };
+    const engines = parseOfferedPluginEngines(result)
+      .filter((engine) => engine.providerId === providerId && engine.remoteUse?.shareSupported === true)
+      .map(({ reportsUsage: _reportsUsage, ...engine }) => {
+        const models = providerShareAccess?.modelAllowed
+          ? engine.models.filter((model) => providerShareAccess!.modelAllowed!(src, providerId, model.id))
+          : engine.models;
+        const defaultModelAllowed = providerShareAccess?.modelAllowed
+          ? providerShareAccess.modelAllowed(src, providerId, PLUGIN_ENGINE_DEFAULT_MODEL)
+          : true;
+        return {
+          ...engine,
+          models,
+          ...(defaultModelAllowed ? {} : { defaultModelAllowed: false }),
+        };
+      });
+    return { ok: true, value: engines };
+  }
   if (channel === 'maker:provider:list') {
     const request = args[0];
     const wantsStatus = request && typeof request === 'object' && !Array.isArray(request)
@@ -4956,6 +5018,16 @@ async function runProviderShareInvoke(
   if (PROVIDER_SHARE_AGENT_ARG_CHANNELS.has(payload.channel) && !PROVIDER_SHARE_AGENT_KINDS.has(String(args[0]))) {
     return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] unknown agent' } };
   }
+  if (payload.channel === PLUGIN_ENGINES_INVOKE.REFRESH) {
+    if (pluginEngineKeyFromProviderId(access.providerId)) {
+      providerShareAccess?.refreshPluginEngine?.(access.providerId);
+    }
+    if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
+    return { ok: true, result: undefined };
+  }
+  if (payload.channel === PLUGIN_ENGINES_INVOKE.LIST && !pluginEngineKeyFromProviderId(access.providerId)) {
+    return { ok: true, result: [] };
+  }
   const result = await runAuthorizedInvoke(src, payload, timing);
   if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
   if (payload.channel === REMOTE_AGENT_CHANNEL || !result.ok) return result;
@@ -5072,6 +5144,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       const code = /\bMIGRATION_[A-Z_]+\b/.exec(error instanceof Error ? error.message : '')?.[0] ?? 'MIGRATION_FAILED';
       return { ok: false, error: { code: 'IPC_ERROR', message: code } };
     }
+  }
+  if (payload.channel === TASK_ACTIVITY_SNAPSHOT && !isSameAccountController(src)) {
+    return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'An account-owned link is required' } };
   }
   if (payload.channel === SETUP_SNAPSHOT_CHANNEL) {
     // 只给同账号电脑：共享任务访客与供应商分享受邀者是其他账号(它们的通道清单里也没有它)。
@@ -5406,6 +5481,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       {
         controllerDeviceId: src,
         channel: payload.channel,
+        ...(listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1) && isSameAccountController(src)
+          ? { providerPicker: providerPickerRequest(payload) } : {}),
         sharedTask: getDeviceLinkInvokeContext()?.sharedTask,
         sharedTaskSetting: getDeviceLinkInvokeContext()?.sharedTaskSetting,
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
@@ -5675,6 +5752,7 @@ return {
   getActiveControllers,
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   pushToTopicSubscribers,
   dropAllControllers,

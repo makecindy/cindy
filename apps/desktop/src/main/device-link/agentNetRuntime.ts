@@ -4,7 +4,7 @@ import { createPrivateKey, randomUUID } from 'node:crypto';
 import { app } from 'electron';
 import { currentLinkTraffic } from './linkTraffic.desktop.js';
 import { openLinkWebSocket } from './linkWebSocket.desktop.js';
-import { AgentNetWorkerSocket, type AgentNetAppSocket, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
+import { AgentNetWorkerSocket, type AgentNetAppSocket, type PathPreference, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
 import { isScopedPeer } from '@cindy/device-link';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof } from '@cindy/agent-net-relay/client';
@@ -129,6 +129,8 @@ function relayChanged(): void {
 }
 /** 这台电脑换了网络：Agent-Net 主连接马上探测中转、从新地址发包（AgentNetWorkerSocket.networkChanged）。Agent-Net 关着时什么也不做。 */
 export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
+/** 发往这个对端的会话请求超时、它此刻走中转：让承载它的连接判断中转 UDP 是否只通登记（relayUdp.ts noteStall）。 */
+export function agentNetRelayStalled(peer: string): void { sessionSocket(peer)?.relayStalled?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
 export function agentNetNoteDeviceRemoved(deviceId: string): void { currentMembership()?.noteRemoved(deviceId); }
 /** 官方 Agent-Net 上认不认这台设备：Device Link 里删掉了、还没重新登录的不认（packages/agent-net/src/membership.ts）；自建中转上都认。 */
@@ -375,6 +377,10 @@ export function agentNetPeerSnapshot(id: string) { return current?.peerSnapshot(
 export function agentNetPeerRoutes() {
   return current?.peerRoutes().filter(({ deviceId }) => !isScopedPeer(deviceId) && agentNetDeviceAccepted(deviceId)) ?? [];
 }
+export function setAgentNetPeerPathPreference(deviceId: string, preference: PathPreference): void {
+  current?.setPeerPathPreference?.(deviceId, preference);
+  pathChanged();
+}
 export function currentAgentNetScopedTarget(peer: string) { return current?.scopedPeerTarget(peer) ?? null; }
 export function agentNetMediaTarget(peer: string) {
   if (!current?.knowsPeer(peer)) return null;
@@ -567,7 +573,9 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   const connectedAt = new Map<string, number>();
   const notifyCovered = new Set<string>();
   let socket: AgentNetWorkerSocket;
+  const initialPeerPathPreferences = readDeviceLinkSettings().peerPathPreferences;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
+    ...(initialPeerPathPreferences ? { initialPeerPathPreferences } : {}),
     observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
