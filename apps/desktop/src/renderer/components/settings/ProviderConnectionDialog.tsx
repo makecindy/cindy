@@ -1891,7 +1891,7 @@ export function ProviderConnectionDialog({
         modalities: latest?.modalities ?? m.modalities,
         officialDocs: latest?.officialDocs ?? m.officialDocs,
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
-        discoveredCost: m.discoveredCost ?? latest?.discoveredCost,
+        discoveredCost: m.discoveredCost,
         discoveredSource: m.discoveredSource,
         discoverySnapshotId: m.discoverySnapshotId,
         opaqueModelId: m.opaqueModelId || latest?.opaqueModelId,

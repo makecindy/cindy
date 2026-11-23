@@ -13208,7 +13208,8 @@
           "subject": {
             "githubIssue": "‘GitHub 이슈 제출’ 확인 카드",
             "renameSessions": "‘작업 이름 일괄 변경’ 확인 카드",
-            "pluginFileGrant": "‘플러그인 파일 권한 부여’ 확인 카드"
+            "pluginFileGrant": "‘플러그인 파일 권한 부여’ 확인 카드",
+            "mediaPathReveal": "‘Agent에게 컴퓨터에 있는 미디어 파일 위치 알려 주기’ 확인 카드"
           }
         },
         "replyWords": {

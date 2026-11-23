@@ -13372,7 +13372,8 @@
           "subject": {
             "githubIssue": "La carte de confirmation « Soumettre une issue GitHub »",
             "renameSessions": "La carte de confirmation « Renommer des tâches en lot »",
-            "pluginFileGrant": "La carte de confirmation « Autorisation de fichiers du plugin »"
+            "pluginFileGrant": "La carte de confirmation « Autorisation de fichiers du plugin »",
+            "mediaPathReveal": "La carte de confirmation « Permettre à l’Agent d’obtenir l’emplacement d’un fichier multimédia sur l’ordinateur »"
           }
         },
         "replyWords": {
