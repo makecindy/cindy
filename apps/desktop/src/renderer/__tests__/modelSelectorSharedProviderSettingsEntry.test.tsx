@@ -158,7 +158,7 @@ async function browse(name: string) {
 beforeEach(() => {
   catalogs.shareError = null;
   catalogs.shareLoading = false;
-  catalogs.byDevice['share:abc'] = [{ ...(catalogs.byDevice['share:abc'][0] as object), connected: true }];
+  catalogs.byDevice['share:abc'] = [{ ...(catalogs.byDevice['share:abc'][0] as object), connected: true, hidden: false }];
   shareState.received = [];
   vi.clearAllMocks();
   resetEnginePrefs();
@@ -203,6 +203,17 @@ describe('模型面板底部「配置模型」', () => {
     await browse(SHARE_CELL);
     expect(screen.getAllByRole('status').some((node) => node.textContent?.includes('providerShare.received.offlineNote'))).toBe(true);
     expect(screen.queryByText('newChat.modelSelector.search.noResults')).toBeNull();
+  });
+
+  // Review (#12246): keeping an offline share must not bring back a share its owner hid from the
+  // picker. Minimal input: the same offline share, with its provider marked hidden.
+  it('does not bring a hidden share back into the rail while its owner computer is offline', () => {
+    catalogs.byDevice['share:abc'] = [{ ...(catalogs.byDevice['share:abc'][0] as object), connected: false, hidden: true }];
+    shareState.received = [{ shareId: 'abc', memberId: 'm', providerId: 's-shared', providerLabel: 'S Shared',
+      hostDeviceId: 'host', deviceName: 'Cindy', owner: { displayName: 'Magi', avatarUrl: null, region: 'global' },
+      status: 'active', hostOnline: false, hostCapable: false }];
+    renderPanel();
+    expect(screen.queryByRole('button', { name: SHARE_CELL })).toBeNull();
   });
 
   it('本机目录照旧显示，打开供应商页不带目标', () => {

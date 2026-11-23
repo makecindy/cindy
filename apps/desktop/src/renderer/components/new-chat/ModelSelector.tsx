@@ -1973,12 +1973,14 @@ function ModelSelectorContentView({
       // computer went offline, so the provider reads as disconnected) stays in the rail like a
       // loading or failed share, so it does not vanish and reappear with the owner's presence
       // (2026-11-23 用户裁决「保留并标注」). The empty panel shows the existing status note.
+      // Same rail rule as above: a share the owner or the user hid, or one folded by run location,
+      // stays out of the rail unless the task is using it.
       if (isProviderShareAgentDeviceId(device.deviceId) && shared.length > 0) {
         const listed = shared.map((provider) => provider.id).filter((providerId) =>
           !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId))
-          && !hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId));
-        return [{ deviceId: device.deviceId, providers: shared,
-          providerIds: listed.length > 0 ? listed : [shareProviderIdOf(device.deviceId)], entries: [] }];
+          && ((!hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId))
+            || (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)));
+        if (listed.length > 0) return [{ deviceId: device.deviceId, providers: shared, providerIds: listed, entries: [] }];
       }
       return [];
     });
