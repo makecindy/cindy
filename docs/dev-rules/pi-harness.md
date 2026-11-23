@@ -412,7 +412,12 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    本地非 Review、非隔离 Bot（V2 伙伴项目里的主人私聊按普通任务）、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
    `--extension` 把仓库原路径交给 Pi：`.pi/skills` 与 cwd→git root 内 `.agents/skills`
    的目录型 Skill、`.pi/prompts/*.md`、`.pi/extensions/*.ts` 与 `*/index.ts`。越界 symlink
-   不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode；按普通任务装配的伙伴会话另挂伙伴自有技能（`ownSkills`）。Review、Bot、子代理、
+   不传入。若过滤和去重后仍有托管 Skill，且 argv 超出平台预算，启动时把追加、托管与
+   项目 Skill 的全部显式 `--skill` 原路径按原顺序交给会话独占的 `configHome` 扩展，由
+   Pi 原生 `resources_discover` 加载，保留同名 Skill 的优先级。`--no-skills` 仍可禁用
+   隐式扫描，显式路径沿用启动时的过滤结果。组装后的 argv 仍须通过平台预算校验。
+   见 [Pi 启动装配](../../packages/maker-core/src/agents/pi/index.ts)。
+   root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode；按普通任务装配的伙伴会话另挂伙伴自有技能（`ownSkills`）。Review、Bot、子代理、
    离线 `forkSdkSession` 克隆进程与远端会话不带这些项目资源。随后以 `resumeSessionId`
    恢复的本地根任务（含 fork 之后的恢复）与普通本地任务相同，加载项目资源。
    不得读取/复制项目 `.pi/settings.json`，不得传 `--approve`，
@@ -424,7 +429,8 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    空闲口径与 closeIfIdle 一致：turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
    rewind 等宿主排他操作、已跟踪后台任务及待续报 continuation 存续时绝不回收；
    后台状态读取失败也保留运行时），由既有 lazy bootstrap
-   以相同的显式装配语义重扫重建 —— 资源集合是 spawn argv 的输入，只能进程重建时重算；
+   以相同的显式装配语义重扫重建：资源集合是启动装配的输入，只在进程重建时重算，
+   重建时也重新判断 argv 预算，并按当次筛选后的路径重建所需扩展。
    远端/Bot/受邀者会话无启动快照，不参与漂移检测。
 9. **Pi bash bounded timeout**:Cindy 覆盖的模型可调 `bash` 在 execute 入口强制默认
    `300s`、上限 `1800s`。缺省或非正数用默认;大于上限或非有限数字 fail-fast(参数错误,
