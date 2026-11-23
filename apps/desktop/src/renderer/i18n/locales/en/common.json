@@ -289,7 +289,7 @@
     "leaveShort": "Leave",
     "joinTab": "Join Shared Task",
     "joinedEmptyTitle": "No shared tasks joined",
-    "joinedEmptyHint": "Open an invitation link from a teammate to join a shared task.",
+    "joinedEmptyHint": "Open an invitation link from a collaborator to join a shared task.",
     "joinedLoadFailed": "Could not load your joined shared tasks. Try again.",
     "joinedTab": "Joined by Me",
     "reconnecting": "Reconnecting…",
@@ -305,7 +305,7 @@
     "joined": "Joined Shared Task",
     "joinedBody": "You can view earlier messages, tool results and attachments, and message the same Agent.",
     "enterTask": "Enter Task",
-    "inviteBoxTitle": "Send the invitation link to your teammates",
+    "inviteBoxTitle": "Send the invitation link to your collaborators",
     "roleGuest": "Guest",
     "removeShort": "Remove",
     "removeNamedTitle": "Remove {{name}}?",
@@ -336,13 +336,13 @@
     "host": "Host",
     "remove": "Remove Guest",
     "invite": "Copy invitation",
-    "invitationCopied": "Invitation copied. Paste it into a message to your teammate.",
+    "invitationCopied": "Invitation copied. Paste it into a message to your collaborator.",
     "tabOwned": "Shared by Me",
-    "startIntro": "Invite a partner to read everything in this task and work with the same Agent.",
+    "startIntro": "Invite a collaborator to read everything in this task and work with the same Agent.",
     "runsOnThisDevice": "Runs on this device",
     "inviteNotice": "Anyone holding the invitation link can join after signing in, with the same Agent access as the host.",
     "offlineAutoClose": "Sharing ends automatically if the host computer stays offline.",
-    "inviteBoxHint": "Send the link to your teammate. They can open it to join, or paste it into Join Shared Task in Cindy.",
+    "inviteBoxHint": "Send the link to your collaborator. They can open it to join, or paste it into Join Shared Task in Cindy.",
     "invitationMessage": "You’re invited to join “{{title}}”\n{{link}}\nOpen the link to join. If Cindy doesn’t open, choose Join Shared Task in Cindy and paste this link.",
     "membersWithLimit": "Members · {{count}} (up to 2 guests)",
     "me": "Me",
@@ -351,7 +351,7 @@
     "hostOfflineNote": "Sharing ends automatically if this computer stays offline. Start sharing again and send a new invitation link to resume.",
     "sharingBadge": "Sharing",
     "ownedEmptyTitle": "Nothing is being shared",
-    "ownedEmptyHint": "Open any task and click “Share Task” to invite a partner.",
+    "ownedEmptyHint": "Open any task and click “Share Task” to invite a collaborator.",
     "closeAll": "Stop all sharing ({{count}})",
     "closeAllTitle": "Stop all sharing?",
     "closeAllBody": "All guests will lose access to the tasks below, and their invitation links will expire.",
@@ -989,7 +989,7 @@
     "captureFailed": "Could not capture the screen",
     "permission": {
       "title": "Screen Recording Permission Required",
-      "detail": "To take screenshots, allow {{appName}} in System Settings > Privacy & Security > Screen & System Audio Recording, then reopen {{appName}}.",
+      "detail": "Allow {{appName}} to record the screen, then try again. Reopen the app if macOS asks.",
       "openSettings": "Open System Settings",
       "later": "Not Now"
     },
@@ -1156,12 +1156,12 @@
     "windowsError": "Authorization was not completed. Try again on this computer.",
     "windowsErrorDetail": "Error code {{code}}",
     "permissionsTitle": "Remote desktop permissions",
-    "permissionsIntro": "Screen recording lets you view the desktop. Accessibility also enables control. Complete authorization on the computer; status updates automatically.",
+    "permissionsIntro": "On the Mac you want to connect to, allow screen recording to view the desktop. To use the keyboard and mouse, also allow Cindy to control apps. Cindy checks again automatically.",
     "permissionsReady": "System permissions are ready. You can reconnect.",
     "screenRecording": "Screen recording",
-    "accessibility": "Accessibility",
-    "screenRecordingHelp": "Open System Settings and enable screen recording for this Cindy app. If macOS asks you to restart, reopen Cindy before connecting.",
-    "accessibilityHelp": "Open settings and enable accessibility for the app identified by the system prompt. The actual input permission is checked automatically when you return.",
+    "accessibility": "Keyboard and mouse control",
+    "screenRecordingHelp": "Allow the running copy of Cindy under Screen Recording or Screen & System Audio Recording. Reopen Cindy if macOS asks.",
+    "accessibilityHelp": "In Privacy & Security, select the app named in the system prompt. If you see System & App Protection Override, choose the apps it may control. On earlier versions, enable Accessibility.",
     "permissionChecking": "Checking…",
     "permissionGranted": "Granted",
     "permissionUnknown": "Unconfirmed",
@@ -1177,7 +1177,7 @@
     "title": "Remote desktop",
     "allow": "Allow remote desktop",
     "allowHint": "Allow your signed-in devices to view and operate all apps on this computer. Also enable device control above.",
-    "permissionHint": "On the computer, allow screen recording and accessibility in system settings, then reconnect.",
+    "permissionHint": "On the computer, allow screen recording and accessibility in system settings, then reconnect. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
     "inputUnsupported": "This computer’s current desktop environment does not support remote keyboard and mouse control in Cindy.",
     "controlUnavailable": "Remote keyboard and mouse control is temporarily unavailable. Reconnect to try again.",
     "beingControlled": "Your desktop is being controlled",
@@ -1294,7 +1294,7 @@
     "privacyScreen": "Privacy screen while connected",
     "privacyScreenHint": "Covers this computer’s screen during remote control. If someone clicks or presses a key at the computer, it asks before disconnecting.",
     "privacyActive": "Privacy screen is on. If someone clicks or presses a key at the computer, it asks before disconnecting.",
-    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
+    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible. If the host is a Mac, check the running Cindy app’s control permission on that Mac.",
     "hostMute": "Mute controlled computer",
     "hostMuteHint": "Mute the controlled computer while connected",
     "hostMuteFailed": "Couldn’t change the controlled computer’s mute state",
@@ -1324,7 +1324,7 @@
     "credentialSigningRequired": "The Mac development build is missing its signing configuration. Restart Cindy on the Mac with signing configured, then try again.",
     "credentialPasswordRejected": "The Mac login password was not accepted. Enter it again.",
     "credentialIdentityChanged": "The computer identity could not be verified. No password was sent to an unverified device.",
-    "credentialAccessibilityRequired": "Allow Cindy in System Settings → Privacy & Security → Accessibility on the Mac, then reconnect.",
+    "credentialAccessibilityRequired": "On the Mac, check control access for the running copy of Cindy, then reconnect. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
     "credentialUnlockUnavailable": "Could not safely unlock this Mac. Select your account on its lock screen, then reconnect; if it still fails, unlock the Mac locally.",
     "disconnecting": "Disconnecting…",
     "loadingDisplayModes": "Loading resolutions…",
@@ -1356,7 +1356,9 @@
       }
     },
     "lockOnExitHintPrivacy": "Shows the privacy screen when you exit, so AI can keep working; touching the computer locks it.",
-    "lockedEnablePrivacyHint": "To let AI keep using this computer while you're away, turn on the privacy screen in its Settings → General → When You're Away."
+    "lockedEnablePrivacyHint": "To let AI keep using this computer while you're away, turn on the privacy screen in its Settings → General → When You're Away.",
+    "revealCurrentApp": "Show {{app}} in Finder",
+    "openPermissionInNewWindow": "Open in a new window"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1833,6 +1835,8 @@
       "other": "Other",
       "lowAlert": "Notify when running low",
       "privacy": "Hide personal info",
+      "automaticCurrency": "Auto",
+      "usageCurrency": "Usage currency",
       "usageScope": "Usage covers",
       "manageFoot": "Manage providers",
       "showSource": "Show {{name}} in the menu",
@@ -2501,8 +2505,8 @@
         "hint": "When AI needs the screen, this computer won't turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password. With no tasks running, the display sleeps and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
         "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
         "preview": "Try it now",
-        "previewStarting": "Let go of the mouse and keyboard. In 3 seconds the privacy screen appears; press any key to lock, then unlock to try it.",
-        "previewUnavailable": "Couldn't show the privacy screen. Restart Cindy and try again.",
+        "previewStarting": "Preparing the privacy screen. Let go of the mouse and keyboard. Once the screen is covered, press a key to test locking.",
+        "previewUnavailable": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
         "delay": {
           "30": "30 sec",
           "60": "1 min",
@@ -2513,7 +2517,10 @@
           "system": "System"
         },
         "hintWindows": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Windows Hello or your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
-        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too."
+        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
+        "permissionMissing": "The privacy screen is off. Cindy needs permission to lock the Mac when someone clicks or presses a key.",
+        "checkFailed": "Cindy couldn’t check the privacy screen permissions on this computer.",
+        "saveFailed": "Could not save the privacy screen setting."
       }
     },
     "agentIsland": {
@@ -3169,7 +3176,7 @@
         },
         "accessibility": {
           "label": "Automatic input",
-          "tooltip": "Accessibility permission lets voice input type into other apps, read nearby cursor text for refinement context, and detect external edits for dictionary learning."
+          "tooltip": "Allow Cindy to insert dictation in selected apps, read text around the cursor for refinement, and detect edits for the dictionary. Use Accessibility or System & App Protection Override, whichever your Mac shows."
         }
       },
       "interactionSound": {
@@ -4586,6 +4593,22 @@
         "hideProvider": "Hide from Model Picker",
         "showProvider": "Show in Model Picker"
       },
+      "plugin": {
+        "title": "Providers from plugins",
+        "badge": "Plugin",
+        "rowTip": "{{provider}} · Provided by a plugin",
+        "source": "Provided by a plugin",
+        "declaredName": "Name in the plugin: {{name}}",
+        "note": "This provider comes from an installed plugin and runs tasks on the plugin’s own engine. Sign-in and connection are managed in the plugin. If you turn off or uninstall the plugin, it disappears from this list.",
+        "openPlugin": "Open plugin",
+        "resetName": "Restore name from plugin",
+        "suspendedBanner": "This provider is disabled, so new tasks and automations no longer use it, and your other computers and people you share with can’t use it either. The plugin itself is unaffected. To only keep it out of the model picker, hide it instead.",
+        "hiddenBanner": "Hidden from the model picker. Tasks and automations that already use it are unaffected.",
+        "unavailableBanner": "The plugin reports that this engine can’t run right now. Open the plugin to see why.",
+        "unavailableBannerReason": "Can’t run right now: {{reason}}",
+        "modelsEmpty": "This engine hasn’t listed its models yet, so new tasks use its own default model. After a task has run on it, its models appear here.",
+        "modelSwitchAria": "Enable {{model}}"
+      },
       "builtinApiKey": {
         "subtitle": "API key connection",
         "replaceKey": "Edit connection settings",
@@ -5396,6 +5419,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "No auxiliary model is available",
+        "configDescription": "Automatic task naming, pinned task summaries, Help and plugin tasks such as subtitle translation are affected. Fix the issues below, or choose other available models under Custom.",
+        "runtimeTitle": "Recent auxiliary model requests failed",
+        "runtimeDescription": "The network or service may be temporarily unavailable. This notice clears on its own once requests succeed. If it keeps appearing, choose other available models under Custom.",
+        "fallback": "Plugin tasks are temporarily using {{model}} at a lower reasoning effort, which may be slower and use more quota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Open Providers",
+        "customize": "Customize auxiliary models",
+        "issues": {
+          "signed_out": "Sign in to Cindy required",
+          "provider_disabled": "Provider disabled",
+          "model_disabled": "Model disabled",
+          "payment_required": "Not included in your plan or balance",
+          "no_credential": "Sign-in or API key missing",
+          "unavailable": "Currently unavailable"
+        },
+        "toast": {
+          "config": "No auxiliary model is available. Task naming, summaries and plugin tasks such as subtitle translation are affected.",
+          "runtime": "Recent auxiliary model requests failed. Task naming, summaries and plugin tasks such as subtitle translation may be affected.",
+          "open": "Open Settings"
+        }
       }
     },
     "compaction": {
@@ -5756,10 +5802,10 @@
         "toggleAria": "Use my browser logins",
         "confirmTitle": "Let the agent use your browser logins?",
         "confirmDescription": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted.",
-        "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. Reading Chrome’s login files also needs Full Disk Access. You can turn this off anytime; the copy will be deleted.",
+        "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted. If macOS asks you to choose a folder, select the browser profile folder you want to use.",
         "confirm": "Use my logins",
-        "readDeniedTitle": "Full Disk Access Needed",
-        "readDeniedDescription": "Cindy needs this permission to read Chrome’s login files. Turn on Cindy under Privacy & Security → Full Disk Access, then try again.",
+        "readDeniedTitle": "Cannot read the browser profile",
+        "readDeniedDescription": "Select the running copy of Cindy in Privacy & Security → Full Disk Access. If macOS offers Choose Folder, select only the browser profile folder you need, then try again.",
         "openFullDiskAccess": "Open System Settings",
         "readDeniedLater": "Not Now",
         "toast": {
@@ -5931,7 +5977,7 @@
         "permissionIntro": {
           "title": "Enable computer automation",
           "description": "{{appName}} will install or start Cua Driver locally to read the screen and perform actions such as clicking and typing. Enable it only when you intentionally started a computer automation task.",
-          "macosDescription": "{{appName}} will install or open Cua Driver's permission flow next, and may jump to macOS System Settings. First grant the core Accessibility and Screen Recording permissions to CuaDriver. During later use, macOS may still show additional confirmations for a target app or a specific action. Only approve those prompts when you intentionally started a Computer Use task. Then return to {{appName}} and it will check automatically.",
+          "macosDescription": "{{appName}} will install or start Cua Driver on this Mac to read the screen and perform actions such as clicking and typing. Enable it only when you intentionally started a computer automation task. Allow Screen Recording for CuaDriver. In System & App Protection Override, choose the apps it may control. On earlier macOS versions, enable Accessibility.",
           "confirm": "Continue",
           "cancel": "Not now"
         },
@@ -5952,8 +5998,8 @@
         },
         "permissions": {
           "title": "System access",
-          "macosHint": "Computer Use needs Accessibility and Screen Recording. During actual use, macOS may still show additional confirmations for a target app or action.",
-          "accessibilityLabel": "Accessibility",
+          "macosHint": "Allow Screen Recording for CuaDriver. In System & App Protection Override, choose the apps it may control. On earlier versions, enable Accessibility.",
+          "accessibilityLabel": "Keyboard and mouse control",
           "screenRecordingLabel": "Screen Recording",
           "grant": "Grant",
           "accessibility": "Accessibility: {{status}}",
@@ -5999,7 +6045,7 @@
           "toggleFailed": "Failed to toggle direct computer control",
           "installFailed": "Failed to install cua-driver",
           "permissionFailed": "Computer Use permissions are not complete",
-          "permissionPending": "Finish the two system permissions, then return here and click Recheck",
+          "permissionPending": "Finish authorizing on the Mac. If the status still hasn’t updated, select Recheck.",
           "permissionSettingsOpened": "System permission settings opened. After granting, come back and click “Recheck”.",
           "permissionSettingsMonitoring": "System permission settings opened. Finish the permissions and the status will update automatically.",
           "openPermissionSettingsFailed": "Failed to open system permission settings"
@@ -6829,7 +6875,15 @@
           "encrypted": "End-to-end encrypted",
           "legacyConnection": "Older connection",
           "encryptionUnknown": "Not confirmed",
-          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
+          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted.",
+          "routePreference": "Route preference",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relay",
+          "routeUnavailable": "Unavailable",
+          "routeMeasuring": "Measuring…",
+          "routeDirectUnavailableHint": "Direct connection is currently unavailable on this network",
+          "routePreferenceFailed": "Could not switch route. Try again."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -8573,7 +8627,9 @@
           "unsupported": "This plugin doesn’t support using its engine from other computers yet.",
           "remoteControlOff": "This computer doesn’t allow remote control yet, so other computers can’t use this engine.",
           "ariaLabel": "Allow your other computers to use {{engine}}",
-          "descriptionShareable": "When on, your other computers and people you share with can run tasks with this engine without installing the plugin. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on."
+          "descriptionShareable": "When on, your other computers and people you share with can run tasks with this engine without installing the plugin. The Agent runs on this computer, using this computer’s sign-in and quota. Files and commands stay on the computer the task is on.",
+          "providerDisabled": "This provider is disabled in Providers, so other computers can’t use this engine.",
+          "openProviders": "Open Provider Settings"
         },
         "githubRelease": {
           "title": "Plugin updates",
@@ -11087,6 +11143,11 @@
       "pinned": "Pinned",
       "needsAttention": "Needs attention",
       "duplicate": "Duplicate buddy",
+      "duplicating": "Duplicating buddy…",
+      "duplicateFailed": "Couldn’t duplicate the buddy.",
+      "duplicateModelRequired": "To duplicate this buddy, first choose a default model for buddies in Settings.",
+      "pinFailed": "Couldn’t change the buddy’s pin.",
+      "hideFailed": "Couldn’t change whether the buddy is hidden.",
       "moreActions": "More actions for {{name}}",
       "viewIcons": "Icons",
       "showCollapsedTeammateAvatars": "Show avatars when collapsed",
@@ -12121,46 +12182,15 @@
     },
     "guided": {
       "title": "Create a buddy",
-      "reviewTitle": "Your new buddy",
-      "question": "Briefly describe your expectations.",
-      "placeholder": "For example, help me practice English through everyday conversation and thoughtful corrections.",
       "generate": "Create buddy",
-      "generating": "Shaping your buddy…",
-      "generationFailed": "Could not generate your buddy. Your idea is still here; try again.",
       "modelRequired": "Choose an available model above to continue.",
       "modelFollowsDefault": "Follows the default buddy model.",
       "modelForThisBot": "This selection applies only to this buddy.",
-      "cindyDescription": "I can help you use Cindy, connect your tools, and get things done together.",
-      "cindySummary": "Manage Cindy, connect tools, and get things done.",
-      "openCindy": "Open Cindy",
-      "addCindy": "Add Cindy",
-      "done": "Done",
-      "editName": "Edit name",
       "duplicateName": "That name is taken. Choose a name you can easily tell apart.",
-      "introduction": "About me",
-      "editIntroduction": "Edit introduction",
-      "refine": "Adjust buddy",
-      "refinePlaceholder": "What would you change? For example, less formal and a little more playful.",
-      "back": "Back",
-      "invite": "Invite buddy",
       "portrait": "Portrait {{number}}",
       "upload": "Upload image",
       "generateAvatar": "Generate portrait",
-      "useAvatar": "Use this portrait",
-      "examples": {
-        "english": {
-          "label": "Practice English",
-          "prompt": "Practice English with me through everyday conversation. Be patient and correct unnatural expressions thoughtfully."
-        },
-        "ideas": {
-          "label": "Explore ideas",
-          "prompt": "An imaginative creative partner with opinions, helping me develop writing and product ideas into practical plans."
-        },
-        "life": {
-          "label": "Talk about life",
-          "prompt": "A warm, funny companion who listens to the little things in my life without rushing to give advice."
-        }
-      }
+      "useAvatar": "Use this portrait"
     },
     "import": {
       "title": "Import a buddy",
@@ -12525,6 +12555,7 @@
           "listenPortLabel": "Local listening port",
           "listenPortPlaceholder": "18747",
           "hint": "Connect to your BlueBubbles server on the local network. Only selected chats are handled. Stop any other automatic responder for these chats before connecting.",
+          "automationDenied": "macOS denied BlueBubbles access to Messages during a send. On the Mac running BlueBubbles, check System Settings → Privacy & Security → Automation.",
           "uncertain": "{{count}} deliveries need checking. Review the chat history before retrying to avoid duplicates."
         }
       },
@@ -12781,7 +12812,7 @@
           "detachedBySlash": "🚪 Remote control ended — we’re back in our Discord DM. Send /ctr whenever you want to control the desktop again.",
           "detachedByRevoke": "⚠️ You took back control on the desktop, so further messages go to our Discord DM again.",
           "notAttached": "🤷 You’re not controlling any session right now, so /exctr has nothing to do.",
-          "companionManagedCommand": "🧭 This bot has been handed over to a teammate — its model, permissions, and working directory follow the teammate’s settings. To change them, go to the teammate’s settings in Cindy."
+          "companionManagedCommand": "🧭 This bot has been handed over to a buddy — its model, permissions, and working directory follow the buddy’s settings. To change them, go to the buddy’s settings in Cindy."
         },
         "agent": {
           "completedNoText": "✅ Done (the Agent didn’t say anything this turn)",
@@ -12975,13 +13006,13 @@
           "help": "🤖 Here's what I can do:\n\n/new         Create a new session (old ones are kept; in groups, it's created for the current group topic)\n/project     Work in a project folder (runs here in the bot, doesn't take over desktop)\n/session     List recent desktop sessions; tap one to take it over and keep chatting\n/model       Bring in a different model\n/permission  Change the permission mode (auto / bypass / ask, etc.)\n/settings    See the current project, Agent, model, effort, and permissions\n/ctr         Remotely take over a project on desktop (send it again during a takeover to switch sessions)\n/exctr       End the takeover and go back to the Telegram chat\n/help        See what I can do\n\nSomething running that you want to stop? Send /stop (or `!stop`) — I'll halt the current run right away and drop any queued messages. The session is kept so you can continue.\n\nIn a direct chat, just send me a message. In groups, I only respond when you @ me or reply to one of my messages — and I remember recent group messages for context.",
           "unknownCommand": "I don't recognize the command `{{cmd}}` 🤔\nCommands I understand: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Current settings\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nTo change them, send /project, /model, or /permission.",
-          "settingsCompanion": "⚙️ Current settings (teammate)\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nModel, permissions, and working directory follow the teammate's settings. Change them in the teammate settings in Cindy.",
+          "settingsCompanion": "⚙️ Current settings (buddy)\n\nProject: {{workspace}}\nAgent: {{agent}}\nModel: {{model}}\nEffort: {{effort}}\nPermissions: {{permission}}\n\nModel, permissions, and working directory follow the buddy's settings. Change them in the buddy settings in Cindy.",
           "detachedBySlash": "🚪 Takeover ended — we're back to the Telegram chat. Send /ctr next time you want to control desktop remotely.",
           "detachedByRevoke": "⚠️ You ended the takeover from desktop. New messages go back to the Telegram chat.",
           "notAttached": "🤷 You're not controlling any session right now, so /exctr has nothing to do.",
-          "companionDmNew": "🧭 This is your teammate's main conversation — it keeps going and doesn't open new sessions. To change the subject, just say so; for separate work, your teammate starts background tasks on its own.",
+          "companionDmNew": "🧭 This is your buddy's main conversation — it keeps going and doesn't open new sessions. To change the subject, just say so; for separate work, your buddy starts background tasks on its own.",
           "companionLaneNew": "🌱 Started a new conversation for this group. Earlier context has been put away — let's start fresh!",
-          "companionManagedCommand": "🧭 This connection has been handed to a teammate, so model, permissions, and working directory follow the teammate's settings. Change them in the teammate settings in Cindy."
+          "companionManagedCommand": "🧭 This connection has been handed to a buddy, so model, permissions, and working directory follow the buddy's settings. Change them in the buddy settings in Cindy."
         },
         "agent": {
           "completedNoText": "✅ All done (the Agent didn't say anything this turn)",
@@ -13000,7 +13031,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automation “{{name}}”",
           "unsupportedOnly": "🙏 I can't take this message:\n{{list}}\n\nWhat I can handle: text, images (jpg/png/gif/webp), PDFs, and code or config text files.",
           "unsupportedNotice": "ℹ️ I can't process the following, so I've set it aside:\n{{list}}\n\nGot the rest — working on it now.",
-          "companionUnavailable": "⏸ Your teammate can't take messages right now: {{reason}}",
+          "companionUnavailable": "⏸ Your buddy can't take messages right now: {{reason}}",
           "authMissing": {
             "currentProvider": "current provider",
             "reasonGatewayKey": "a Cindy AI Key needs to be set up first",
@@ -13197,7 +13228,7 @@
         },
         "slash": {
           "detachFailed": "❌ Couldn't end the takeover: {{error}}",
-          "companionManaged": "🧭 This connection is handed over to a teammate, so the model, permissions and working directory follow the teammate's settings. Change them in the teammate settings in Cindy."
+          "companionManaged": "🧭 This connection is handed over to a buddy, so the model, permissions and working directory follow the buddy's settings. Change them in the buddy settings in Cindy."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 A task in a group chat needs your approval. The approval card isn't posted in the group — confirm it here.",
@@ -13270,7 +13301,7 @@
           "detachedBySlash": "🚪 Takeover ended. New messages go back to this WeCom chat.",
           "detachedByRevoke": "⚠️ The takeover was revoked in Cindy Desktop. New messages go back to this WeCom chat.",
           "notAttached": "You're not controlling any task right now.",
-          "companionManagedCommand": "🧭 This connection is handed over to a teammate, so the model, permissions, and working directory follow the teammate settings. Change them in the teammate settings in Cindy."
+          "companionManagedCommand": "🧭 This connection is handed over to a buddy, so the model, permissions, and working directory follow the buddy settings. Change them in the buddy settings in Cindy."
         },
         "agent": {
           "completedNoText": "✅ Task complete (no text output this turn)",
@@ -13413,9 +13444,9 @@
           "detachedBySlash": "🚪 Remote control ended — we're back in our DM. Send /ctr whenever you want to control the desktop app again",
           "detachedByRevoke": "⚠️ You ended remote control from the desktop app. New messages will go to our DM again.",
           "notAttached": "🤷 You aren't controlling any session right now, so /exctr has nothing to do.",
-          "companionDmNew": "🧭 This is your teammate's main conversation. It keeps going and won't start a new session. Just say so if you want to change the subject; for separate work, your teammate will start a background session on its own.",
+          "companionDmNew": "🧭 This is your buddy's main conversation. It keeps going and won't start a new session. Just say so if you want to change the subject; for separate work, your buddy will start a background session on its own.",
           "companionLaneNew": "🌱 Started a new conversation for this group and set the previous context aside. Let's start fresh!",
-          "companionManagedCommand": "🧭 This connection is managed by a teammate, so the model, permissions, and working directory follow the teammate's settings. Change them in the teammate's settings in Cindy."
+          "companionManagedCommand": "🧭 This connection is managed by a buddy, so the model, permissions, and working directory follow the buddy's settings. Change them in the buddy's settings in Cindy."
         },
         "agent": {
           "completedNoText": "✅ Done (the Agent didn't say anything this turn)",
@@ -13434,7 +13465,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automation “{{name}}”",
           "unsupportedOnly": "🙏 I can't take in this message:\n{{items}}\n\nWhat I can handle: text, images (jpg/png/gif/webp), PDFs, and code or config text files.",
           "unsupportedNotice": "ℹ️ I can't handle the following, so I've set it aside:\n{{items}}\n\nGot the rest — working on it~",
-          "companionUnavailable": "⏸ Your teammate can't take messages right now: {{reason}}",
+          "companionUnavailable": "⏸ Your buddy can't take messages right now: {{reason}}",
           "authMissing": {
             "defaultProvider": "current provider",
             "message": "⚠️ This conversation uses the provider “{{provider}}” ({{model}}): {{reason}}.",
@@ -13689,18 +13720,18 @@
           "delayedReplyQuestion": "Original message: {{question}}",
           "stillProcessing": "Still working on it…",
           "ownerOnlyCommands": "Only the owner can use bot commands.",
-          "companionManagedCommand": "Open this teammate in Cindy: change the model in the teammate's settings, and switch permissions below the input box.",
+          "companionManagedCommand": "Open this buddy in Cindy: change the model in the buddy's settings, and switch permissions below the input box.",
           "help": "Commands: /new start a new conversation; /stop stop the current run; /stop all stop all runs; /status check status; /help show help.",
           "status_one": "Cindy's WeChat connection is OK. {{count}} message queued.",
           "status_other": "Cindy's WeChat connection is OK. {{count}} messages queued.",
           "stopped": "Stopped.",
-          "companionDmNew": "Here you share one long-running session with the teammate, so history and memory are kept. To clean up the context, restart the teammate in Cindy.",
+          "companionDmNew": "Here you share one long-running session with the buddy, so history and memory are kept. To clean up the context, restart the buddy in Cindy.",
           "newConversation": "Started a new conversation.",
           "unknownCommand": "Unknown command. Send /help to see available commands.",
           "overloaded": "WeChat is handling a lot of tasks right now. Try again later."
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "This message needs a permission confirmation for each action, but the teammate's current model or permission mode doesn't support that, so the message can't start.\nThe owner should open this teammate in Cindy, check the model in the teammate's settings, and choose Default permissions or Auto-review below the input box.",
+          "companionPermissionUnsupported": "This message needs a permission confirmation for each action, but the buddy's current model or permission mode doesn't support that, so the message can't start.\nThe owner should open this buddy in Cindy, check the model in the buddy's settings, and choose Default permissions or Auto-review below the input box.",
           "missingAuth": "The current Agent isn't authorized yet. Connect a model service in Cindy first.",
           "generic": "This message can't start right now. Try again later."
         },
@@ -14373,6 +14404,7 @@
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
+      "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
       "resumeAction": "Continue sending",
       "resumeAria": "Continue sending queued messages",
       "showMore_one": "{{count}} more",
@@ -14520,6 +14552,7 @@
       "steerNotSent": "Message not sent. Steer is temporarily unavailable; your draft has been kept.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",
+      "credentialSwitchKeptSettings": "The switch didn’t complete. The task will keep using its previous settings.",
       "modelSwitchContextGuard": {
         "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
         "condensedToast": "Earlier parts of the conversation will be condensed for the new model. Your full conversation history stays available.",
@@ -15111,7 +15144,6 @@
     "runningStatus": {
       "currentRate": "Latest speed",
       "lastRequestRate": "Last request average",
-      "recentTokenRate": "Recent {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Turn average",
       "rateHistory": "Generation speed history",
@@ -15806,6 +15838,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "The context is full, so this message couldn’t be processed. The remaining messages will be processed in order.",
       "attachmentPrefix": "Attachments: ",
       "attachmentAttachedAria": "Attached {{name}}",
       "saveAttachmentAs": "Save attachment {{name}} as",
@@ -15882,7 +15915,7 @@
       "viewThread": "View thread context ({{count}})",
       "memberFromGroup": "{{name}} · from {{platform}} group “{{group}}”",
       "memberFromPlatform": "{{name}} · from a {{platform}} group",
-      "guestFromDm": "{{name}} · from {{platform}} DM (not the owner)",
+      "guestFromDm": "{{name}} · from {{platform}} DM",
       "unknownSender": "Group member"
     },
     "rewind": {
@@ -16485,6 +16518,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "Add cloud computer",
+        "preparingCloud": "Cloud computer · preparing",
+        "manageCloud": "Manage cloud computer",
         "allMachines": "All",
         "localMachine": "Local",
         "connecting": "Connecting…",
@@ -16620,6 +16656,9 @@
       "taskInfoSummaryNone": "None",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Harness icon",
+        "project": "Project icon and name",
+        "teammate": "Buddy avatar",
         "time": "Time",
         "pr": "PR status",
         "worktree": "worktree",
@@ -18583,7 +18622,7 @@
       "expired": "Input handoff ended after waiting too long."
     },
     "failure": {
-      "permission": "Cindy can't read this computer's screen. Allow Cindy under Accessibility in System Settings.",
+      "permission": "Cindy can’t read the interface on this Mac. Check control access for the running copy of Cindy. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility.",
       "target_gone": "The target window was closed.",
       "unreadable": "This screen can't be read. You can finish it on the host computer, then hand back to the agent.",
       "action_failed": "That action didn't take effect. Check the screen and try again.",
@@ -20470,7 +20509,7 @@
     "epermGuidance": {
       "title": "macOS folder access denied",
       "message": "Cindy cannot access your {{folder}} folder",
-      "detail": "macOS denied access. Open System Settings to grant permission, then run your agent command again.",
+      "detail": "In Files & Folders, allow Cindy to access this folder, then try again.",
       "openSystemSettings": "Open System Settings",
       "cancel": "Cancel",
       "folderNames": {
@@ -21559,6 +21598,9 @@
     "actionFailed": "This plugin action could not be completed. Try again."
   },
   "mcpApps": {
+    "composerDragFailed": "Couldn’t add the attachment. Drag it again or select “Add to composer”.",
+    "composerAttachmentFormat": "Use an image, PDF or plain text file up to 64 MiB.",
+    "composerAttachmentBusy": "Wait a moment, then add the attachment again.",
     "sharedTaskReadOnly": "Only the session owner can interact with this card.",
     "retry": "Reload",
     "loadFailed": "The app could not load. Check the connection and reload.",
@@ -22006,9 +22048,9 @@
       "pick": "Choose one by one",
       "started": "Import started in the background. Check progress in Settings → Session Import.",
       "startFailed": "The import did not start. Import again from Settings → Session Import.",
-      "teammatesHeading": "Teammates",
-      "teammatesHint": "Import an Agent from another tool as a teammate, with its memory, skills and automations.",
-      "importTeammate": "Import as a teammate"
+      "teammatesHeading": "Buddies",
+      "teammatesHint": "Import an Agent from another tool as a buddy, with its memory, skills and automations.",
+      "importTeammate": "Import as a buddy"
     },
     "finish": {
       "title": "You are all set",
@@ -22557,5 +22599,10 @@
       "auto": "Auto-review",
       "bypassPermissions": "Full access"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "In System & App Protection Override, select {{app}} and click ⓘ. If it’s missing, use + to add the running app.",
+    "review": "$t(macControlPermission.selectApp)\nIf offered, Choose Apps limits which apps it can control. Full control gives the app access to all apps and data. If you agree, acknowledge each item, then choose Allow at the bottom."
   }
 }

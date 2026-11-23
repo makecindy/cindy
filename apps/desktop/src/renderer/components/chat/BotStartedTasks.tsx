@@ -26,6 +26,7 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { toast } from '@/lib/toast';
 import { useSessionLinkTarget } from './SessionLinkChip';
 import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
+import { canonicalBotSessionId, useBotProfiles } from '@/features/bots/botStore';
 
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_FOCUS_CLASS } from './chatChrome';
 import type { RenderItem } from './messageWorkGroups';
@@ -85,15 +86,40 @@ export function collectBotStartedTasks(turn: readonly ChatMessage[]): BotStarted
   return [...tasks.values()];
 }
 
+/**
+ * The buddy behind this session, when that session lives on this computer. A remote
+ * session can carry the same bare id as a local buddy's canonical chat, so the
+ * device has to agree before a local name may replace the remote title.
+ */
+export function currentBuddyName(
+  sessionId: string | undefined,
+  onThisComputer: boolean,
+  bots: ReturnType<typeof useBotProfiles>,
+): string | null {
+  if (!sessionId || !onThisComputer) return null;
+  const bare = sessionId.includes('::') ? sessionId.slice(sessionId.lastIndexOf('::') + 2) : sessionId;
+  const name = bots.find((bot) => {
+    const canonical = canonicalBotSessionId(bot);
+    return canonical === sessionId || canonical === bare;
+  })?.name.trim();
+  return name || null;
+}
+
 /** The live title of a task this chat refers to; remote chats read that computer's mirror. */
 export function useLinkedTaskTitle(sessionId: string | undefined, hostSessionId: string | undefined, fallback: string | null): string | null {
+  const selfDeviceId = useOptionalAuthDeviceId();
+  const target = parseSourceSessionTarget(sessionId);
   const hostDeviceId = getStickySessionDeviceId(hostSessionId);
+  // An explicit receipt device wins over the computer hosting the teammate chat.
+  // Only a session owned by this computer may borrow a local buddy's name.
+  const deviceId = target?.deviceId ?? hostDeviceId ?? getStickySessionDeviceId(sessionId);
+  const buddyName = currentBuddyName(sessionId, !deviceId || deviceId === selfDeviceId, useBotProfiles());
   const localTitle = useSyncExternalStore(
     (onChange) => sessionsStore.subscribe(onChange),
     () => (hostDeviceId || !sessionId ? null : sessionsStore.getTitleById(sessionId)),
   );
   const remoteTitle = useRemoteSessionTitle(hostDeviceId ? sessionId : undefined);
-  return (hostDeviceId ? remoteTitle : localTitle) || fallback;
+  return buddyName || (hostDeviceId ? remoteTitle : localTitle) || fallback;
 }
 
 /** Opens a task this chat refers to, or null where the chat cannot navigate there. */

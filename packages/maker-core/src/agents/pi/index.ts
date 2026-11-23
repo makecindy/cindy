@@ -4216,7 +4216,8 @@ export class PiAgent extends BaseAgent {
       // The catalog path may alias a managed source. Apply the managed grant and
       // activation checks once, including paths already selected by the Bot.
       const additionalSkillPaths = [...new Map([
-        ...(loadProjectResourcesInPlace || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
+        // In-place launches already pass project skills; a teammate's own skills live outside the project and still mount.
+        ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (loadProjectResourcesInPlace ? botSkillSelection.ownSkillPaths : botSkillSelection.explicitSkillPaths).filter((skillPath) =>
           !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
         // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local, non-Review runtime only.
         ...(opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (opts.hostSkills ?? []).map((skill) => skill.path)),

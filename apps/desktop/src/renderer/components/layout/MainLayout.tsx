@@ -131,6 +131,7 @@ import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
 import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
+import { useAuxiliaryModelHealthNotice } from '@/hooks/useAuxiliaryModelHealth';
 import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
@@ -593,6 +594,8 @@ export function MainLayout() {
   useSchemaDriftWarningToast();
   // 语音快捷键在设置页之外自动恢复失败 —— 那时设置页的 toast 不在,只能由常挂载的这里提示。
   useVoiceInputShortcutRecoveryToast();
+  // 辅助模型全部不可用时提示一次（任务命名、摘要、插件任务等都依赖它）。
+  useAuxiliaryModelHealthNotice();
   // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
   usePluginRemovalNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
@@ -779,7 +782,7 @@ export function MainLayout() {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -878,7 +881,10 @@ export function MainLayout() {
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
         // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
         const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
+        const device = payload.tab === 'remote-control' && payload.focusDeviceId
+          ? '&section=devices&device=' + encodeURIComponent(payload.focusDeviceId)
+          : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}${device}`);
       }
     },
     [navigate, navigateToSession, openShareImport],

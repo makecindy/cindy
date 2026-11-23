@@ -2267,8 +2267,11 @@ function handleResult(
   // Snap to this turn's streamed main-thread usage: the result aggregate can be
   // a session total turned into a wrong delta, and a bad snap is worse than the estimate.
   liveGeneration.tokenSpeed.stop(mainTurnOutputTokens(ctx.tracker));
-  // Display only: lets the finished message show the chart the turn ran with.
-  const generationTrace = liveGeneration.reliable ? liveGeneration.tokenSpeed.trace() : undefined;
+  // Display only: lets the finished message show the chart the turn ran with. The meter pairs
+  // each main-thread request with its own usage and invalidates itself on a broken clock, so
+  // it does not depend on `reliable`, which covers the legacy counters: those fail closed when
+  // the turn's aggregate includes subagent output (a quarter of real Claude turns lost the chart).
+  const generationTrace = liveGeneration.tokenSpeed.trace();
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {

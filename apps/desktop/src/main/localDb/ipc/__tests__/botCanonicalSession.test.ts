@@ -277,6 +277,7 @@ import {
   markBotProfileRuntimeApplied,
   markBotProfileRuntimeFailed,
 } from '../../../maker-ipc/botProfileRuntime';
+import { botRuntimeRefreshNeedsReplacement } from '../../../maker-ipc/botCompactRuntimeRefresh';
 import { createBotDirectMessageService } from '../../../maker-ipc/botDirectMessageService';
 import { configureBotCanonicalReplacementCoordinator } from '../../../maker-ipc/botCanonicalReplacementCoordinator';
 import type { MakerSessionCreateOpts } from '../../../maker-ipc/sessionRequest';
@@ -309,6 +310,7 @@ function createDb(filename = ':memory:'): void {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -2536,6 +2538,38 @@ describe('Bot canonical Session lifecycle', () => {
     expect(h.searchConversations.mock.lastCall?.[0].filters.sessionIds).toHaveLength(4);
   });
 
+  // DB tier, review r4657940362. Verify the actual session chosen by the iMessage adapter and
+  // turn runner for two groups sharing one transport, beyond the HTTP receiver's dedup receipt.
+  it('routes only the delegated iMessage group to its new teammate session', async () => {
+    const { BlueBubblesIM } = await import('@cindy/im');
+    // The application-wide maker IPC registers native windows at import. This test only needs its
+    // disposable vendor-options subscription; the adapter, turn runner and lane database are real.
+    vi.doMock('../../../maker-ipc/register', () => ({ registerSwitchedSessionVendorOptionsResolver: () => () => {} }));
+    const { wireIMessageOrchestrator } = await import('../../../im/imessage/adapter')
+      .finally(() => vi.doUnmock('../../../maker-ipc/register'));
+    const store = await import('../../../im/shared/botImConnectionStore');
+    await invoke('local-db:bots:create', { id: 'bot-2', name: 'Group recipient' });
+    const selected = 'any;+;selected', other = 'any;+;control';
+    const authorization = 'ab'.repeat(32);
+    const connectionId = 'abcd12345678';
+    const contextId = `imessage-${connectionId}`;
+    const im = new BlueBubblesIM({} as never, { contextId: () => contextId } as never);
+    vi.spyOn(im, 'groupAuthorization').mockReturnValue(authorization);
+    const read = vi.spyOn(store, 'readBotImConnection').mockReturnValue({
+      id: connectionId, botId: 'bot-1', channel: 'imessage', createdAt: 1, botContextId: contextId,
+      iMessageGroupRoutes: { [selected]: { botId: 'bot-2', authorization, revision: 'abcdef123456', replyMode: 'always' } },
+    });
+    const router = wireIMessageOrchestrator(im, {} as never, { instanceKey: connectionId, companionBotId: 'bot-1', connectionId });
+    try {
+      for (const [group, botId] of [[selected, 'bot-2'], [other, 'bot-1']]) {
+        const target = await router.turnRunner.resolveRouteTarget(contextId, group);
+        expect(target?.botOwned).toEqual({ botId, lane: 'channel' });
+        const saved = h.sqlite!.prepare('SELECT bot_id,route_key FROM bot_session_links WHERE session_id=?').get(target!.row.id);
+        expect(saved).toMatchObject({ bot_id: botId, route_key: `im:imessage:${contextId}:g:${group}` });
+      }
+    } finally { router.unregister(); read.mockRestore(); await im.dispose(); }
+  });
+
   it('creates one IM channel lane per route key, notifies the task list and keeps it out of private history search', async () => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
@@ -3160,6 +3194,35 @@ describe('Bot canonical Session lifecycle', () => {
       expect((await hydrateBotProfileRuntime(makeOpts(), deps))?.runtimeEpochChanged).toBe(false);
       updatedAt = 'v2';
       expect((await hydrateBotProfileRuntime(makeOpts(), deps))?.runtimeEpochChanged).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // PR #11992 review (P1): a refresh signal may skip the rebuild only after a
+  // real comparison. If the first runtime-applied write failed (Maker still
+  // publishes the runtime), there is no baseline: a later Profile change must
+  // still rebuild instead of being read as "unchanged".
+  it('keeps rebuilding on refresh signals until an applied baseline exists', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+    try {
+      const created = await invoke('local-db:bots:create-canonical-session', {
+        botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      });
+      const makeOpts = (): MakerSessionCreateOpts => ({
+        id: created.session.id, agentKind: 'codex', workingDir: created.session.workingDir,
+        workspaceKind: 'dialogue', model: 'gpt-5', permissionMode: 'bypassPermissions',
+      });
+      await hydrateBotProfileRuntime(makeOpts()); // started, but never marked applied
+      await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { inputHandoff: false } });
+      const noBaseline = await hydrateBotProfileRuntime(makeOpts(), {}, { persistSnapshot: false });
+      expect(noBaseline?.runtimeEpochChanged).toBe(false);
+      expect(botRuntimeRefreshNeedsReplacement(noBaseline)).toBe(true);
+
+      await markBotProfileRuntimeApplied((await hydrateBotProfileRuntime(makeOpts()))!);
+      const unchanged = await hydrateBotProfileRuntime(makeOpts(), {}, { persistSnapshot: false });
+      expect(botRuntimeRefreshNeedsReplacement(unchanged)).toBe(false);
     } finally {
       clock.mockRestore();
     }
@@ -5302,6 +5365,28 @@ afterAll(() => {
 
 
 describe('Bot self control uses the same profile authority as settings', () => {
+  // DB tier: a versioned project file must use the same save and readback as the settings page.
+  it('applies only supported fields from the bound project and rejects stale files', async () => {
+    const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const sessionId = canonical.session.id;
+    const profile = await invoke('local-db:bots:get', 'bot-1');
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { projectMode: true } });
+    const service = createBotCapabilityService(capabilityDeps);
+    const current = await service.inspect({ callerSessionId: sessionId });
+    if (!current.ok) throw new Error(current.message);
+    const expectedVersion = current.state.profile.version;
+    const folder = join(profile.homeDir, 'workspace', '.cindy', 'settings');
+    mkdirSync(folder, { recursive: true });
+    const file = join(folder, 'profile.json');
+    const request = { callerSessionId: sessionId, expectedVersion, fromProject: true as const };
+    writeFileSync(file, JSON.stringify({ expectedVersion, permissions: 'trusted' }));
+    expect(await service.updateProfile(request)).toMatchObject({ ok: false });
+    writeFileSync(file, JSON.stringify({ expectedVersion, description: 'Family assistant', userContextSource: '' }));
+    expect(await service.updateProfile(request)).toMatchObject({ ok: true });
+    expect(await service.inspect({ callerSessionId: sessionId })).toMatchObject({ state: { profile: { description: 'Family assistant' } } });
+    expect(await service.updateProfile(request)).toMatchObject({ ok: false });
+  });
+
   it('reads only its own state and patches requested fields without replacing independent configuration', async () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;
@@ -5797,4 +5882,29 @@ it('rejects a roster read before DbClient publication instead of reporting no bu
   await expect(invoke('local-db:bots:list', undefined)).resolves.toEqual(
     expect.arrayContaining([expect.objectContaining({ id: 'bot-1' })]),
   );
+});
+
+// PR #12070 review: Bot creation and settings read the Skill catalog before any Agent launches;
+// startup only warms the shared Skill preparation, so the catalog must join it first.
+describe('Bot capability Skill catalog', () => {
+  it('joins shared Skill preparation before listing Skills for creation', async () => {
+    const order: string[] = [];
+    const service = createBotCapabilityService({
+      ...capabilityDeps,
+      prepareSharedSkills: async () => { order.push('prepare'); },
+      getMaker: () => ({
+        listAgentSkills: async () => {
+          order.push('list');
+          return { skills: [{ name: 'release-check', description: 'Release checklist', enabled: true }] };
+        },
+      }) as never,
+    });
+
+    const result = await service.forCreation({
+      botId: 'bot-new', workingDir: '/bots/bot-new/workspace', agentKind: 'pi', assertOwner: () => undefined,
+    });
+
+    expect(order).toEqual(['prepare', 'list']);
+    expect(result.skill.map((entry) => entry.name)).toContain('release-check');
+  });
 });

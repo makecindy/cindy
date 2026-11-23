@@ -103,6 +103,30 @@ export const isLinkAddress = (address: PeerAddress): address is LinkAddress => '
 
 export type Priority = 'interactive' | 'normal' | 'background';
 const PRIORITY_CODE: Record<Priority, number> = { interactive: 0, normal: 1, background: 2 };
+/**
+ * 八档优先级里的一档，0 最急（核心的 `Priority::level`）；`interactive`、`normal`、`background` 是其中的 1、3、6，0 和 1 按交互流对待。
+ * 只认三档的旧核心（没有 `conn_open_stream_level`）上开流会抛错，调用方先看 {@link Connection.supportsLevels}。
+ */
+export const PRIORITY_LEVELS = 8;
+export const PRIORITY_LEVEL: Record<Priority, number> = { interactive: 1, normal: 3, background: 6 };
+
+/** 一条发出的流的进展，见核心的 `Connection::stream_progress`。 */
+export interface StreamProgress {
+  /** 累计被对端确认的字节，含流头。 */
+  ackedBytes: number;
+  /** 还在核心发送缓冲里的字节，不含还排在这里没交给核心的（{@link SendStream.pendingBytes}）。 */
+  bufferedBytes: number;
+  /** 有字节在等时，距上一次有字节被确认（或开始等）过了多少微秒；没有字节在等时是 0。 */
+  stalledUs: number;
+}
+
+/** 一条连接发送方向的进展，见核心的 `Connection::send_progress`。 */
+export interface SendProgress {
+  /** 每一档还在核心发送缓冲里的字节，下标是档。 */
+  queued: number[];
+  /** 有数据没被确认时，距上一次有数据被确认（或开始等）过了多少微秒。 */
+  stalledUs: number;
+}
 
 export interface EndpointOptions {
   /** 本机长期身份，X25519 私钥。 */
@@ -194,6 +218,10 @@ interface Exports {
   close(id: number): number;
   local_address_change(now: number): void;
   probe(id: number, now: number): number;
+  /** 下面三个是 2026-11-22 加的（仅测速探测、动态切换中继优先级、取路径探测往返），旧核心没有。 */
+  measure_probe?(id: number, now: number): number;
+  conn_set_prefer_relay?(id: number, prefer: number): number;
+  conn_poll_probe_rtt?(id: number): number;
   conn_state(id: number): number;
   conn_remote_static(id: number): number;
   conn_remote_payload(id: number): number;
@@ -203,6 +231,12 @@ interface Exports {
   /** 一条流还在核心发送缓冲里的字节；没有这个导出的核心（旧版）不提供。 */
   conn_stream_buffered?(id: number, stream: number): number;
   conn_finish(id: number, stream: number): number;
+  /** 下面四个是 2026-11-22 加的（八档优先级、放弃流、进展），旧核心没有。 */
+  conn_open_stream_level?(id: number, level: number): number;
+  conn_set_level?(id: number, stream: number, level: number): number;
+  conn_abandon?(id: number, stream: number): number;
+  conn_stream_progress?(id: number, now: number, stream: number): number;
+  conn_send_progress?(id: number, now: number): number;
   conn_recv(id: number, now: number, stream: number): number;
   conn_poll_event(id: number): number;
   conn_stats(id: number): number;
@@ -315,6 +349,7 @@ export class SendStream {
   private queued = 0;
   private finishing = false;
   private finished = false;
+  private abandoned = false;
 
   constructor(
     private readonly connection: Connection,
@@ -354,6 +389,45 @@ export class SendStream {
     this.connection.endpoint.schedule();
   }
 
+  /**
+   * 放弃这条流：排在这里的和核心里还没发出的字节都不再发，流随即结束；已经发出、还没确认的照常送到（见核心的 `abandon_stream`）。
+   * 对端看到的是一条提前结束的流，要自己看出内容不全。`finish` 之后也能放弃：结束标记还没发出时，核心里没发的字节照样丢掉。
+   * 返回丢掉的字节数；核心没有这个能力（旧版）、已经放弃过、结束标记已经发出、流不在了或连接关了时返回 `null`，这时什么都没改。
+   */
+  abandon(): number | null {
+    if (this.connection.closed || this.abandoned) return null;
+    const dropped = this.connection.endpoint.call((core) => (core.conn_abandon ? core.conn_abandon(this.connection.id, this.id) : -3));
+    const local = this.queued;
+    if (dropped === -3 || (dropped < 0 && local === 0)) return null;
+    this.abandoned = true;
+    this.queue.length = 0;
+    this.queued = 0;
+    this.finishing = true;
+    this.finished = true;
+    this.connection.sendStreams.delete(this.id);
+    this.connection.endpoint.schedule();
+    return Math.max(0, dropped) + local;
+  }
+
+  /** 这条流的进展；核心不提供（旧版）、连接关了时是 `null`；写完并全部被确认后是 `null`（流在核心里已经不在了）。 */
+  progress(): StreamProgress | null {
+    if (this.connection.closed) return null;
+    return this.connection.endpoint.call((core, io) => {
+      if (!core.conn_stream_progress) return null;
+      const count = core.conn_stream_progress(this.connection.id, this.connection.endpoint.now(), this.id);
+      if (count < 3) return null;
+      const view = io();
+      const v = new Float64Array(view.buffer.slice(view.byteOffset, view.byteOffset + count * 8));
+      return { ackedBytes: v[0], bufferedBytes: v[1], stalledUs: v[2] };
+    });
+  }
+
+  /** 调到八档里的第 `level` 档（见 {@link PRIORITY_LEVELS}），下一个分片起生效。核心不支持或流不在了时返回 false。 */
+  setLevel(level: number): boolean {
+    if (this.connection.closed || !Number.isInteger(level) || level < 0 || level >= PRIORITY_LEVELS) return false;
+    return this.connection.endpoint.call((core) => (core.conn_set_level ? core.conn_set_level(this.connection.id, this.id, level) === 1 : false));
+  }
+
   /** @internal 尽量把排队的数据交给核心，返回是否交出了数据。 */
   drain(core: Exports, io: () => Uint8Array, now: number): boolean {
     let moved = false;
@@ -372,6 +446,9 @@ export class SendStream {
     if (this.queue.length === 0 && this.finishing && !this.finished) {
       this.finished = core.conn_finish(this.connection.id, this.id) === 1;
     }
+    // 交完了：这里再没有它的事（进度、缓冲和放弃都按流号直接问核心），不再留在连接的表里。会话一条大消息一条流，
+    // 长连着的连接上流越来越多，每一轮都要过一遍这张表（2026-11-22）。
+    if (this.finished && this.queue.length === 0) this.connection.sendStreams.delete(this.id);
     return moved;
   }
 }
@@ -411,9 +488,21 @@ export class Connection extends EventEmitter {
     super();
   }
 
-  /** 开一条发往对端的流。流数到了上限时抛错。 */
-  openStream(priority: Priority = 'normal'): SendStream {
-    const id = this.endpoint.call((core) => core.conn_open_stream(this.id, PRIORITY_CODE[priority])) >>> 0;
+  /** 核心认八档优先级（{@link PRIORITY_LEVELS}）、能放弃流、报进展：2026-11-22 以后的核心。 */
+  get supportsLevels(): boolean {
+    return this.endpoint.call((core) => typeof core.conn_open_stream_level === 'function');
+  }
+
+  /**
+   * 开一条发往对端的流。`priority` 是三档的名字，或八档里的第几档（只在 {@link supportsLevels} 时）。流数到了上限、
+   * 档不合法或核心不认八档时抛错。
+   */
+  openStream(priority: Priority | number = 'normal'): SendStream {
+    const id = this.endpoint.call((core) => {
+      if (typeof priority === 'string') return core.conn_open_stream(this.id, PRIORITY_CODE[priority]);
+      if (!core.conn_open_stream_level || !Number.isInteger(priority) || priority < 0 || priority >= PRIORITY_LEVELS) return 0;
+      return core.conn_open_stream_level(this.id, priority);
+    }) >>> 0;
     if (id === 0) throw new Error('cannot open stream');
     const stream = new SendStream(this, id);
     this.sendStreams.set(id, stream);
@@ -474,6 +563,37 @@ export class Connection extends EventEmitter {
     });
     this.endpoint.schedule();
     return started === 1;
+  }
+
+  /** 仅探测到 `address` 的可达性与往返时间（不切数据路径）；结果经 `probe-rtt` 事件通知。 */
+  measure(address: PeerAddress): boolean {
+    const started = this.endpoint.call((core, _io, addr) => {
+      if (!core.measure_probe) return 0;
+      this.endpoint.encode(addr(), address);
+      return core.measure_probe(this.id, this.endpoint.now());
+    });
+    this.endpoint.schedule();
+    return started === 1;
+  }
+
+  /** 动态切换这条连接是否优先走中继（不改变当前活动路径，需再 `probe` 目标路径以切换）。 */
+  setPreferRelay(prefer: boolean): void {
+    this.endpoint.call((core) => {
+      core.conn_set_prefer_relay?.(this.id, prefer ? 1 : 0);
+    });
+  }
+
+  /** 发送方向的进展；核心不提供（旧版）或连接关了时是 `null`。 */
+  sendProgress(): SendProgress | null {
+    if (this.closed) return null;
+    return this.endpoint.call((core, io) => {
+      if (!core.conn_send_progress) return null;
+      const count = core.conn_send_progress(this.id, this.endpoint.now());
+      if (count !== PRIORITY_LEVELS + 1) return null;
+      const view = io();
+      const v = new Float64Array(view.buffer.slice(view.byteOffset, view.byteOffset + count * 8));
+      return { queued: Array.from(v.subarray(0, PRIORITY_LEVELS)), stalledUs: v[PRIORITY_LEVELS] };
+    });
   }
 
   stats(): ConnectionStats | null {
@@ -824,6 +944,18 @@ export class Endpoint extends EventEmitter {
           connection.emit('stream', stream);
         }
       }
+      if (this.core?.conn_poll_probe_rtt) {
+        for (;;) {
+          if (connection.closed) return;
+          const sample = this.call((core, _io, addr) => {
+            const rttUs = core.conn_poll_probe_rtt!(connection.id);
+            return rttUs >= 0 ? { address: decodeAddress(addr()), rttUs } : null;
+          });
+          if (!sample) break;
+          progressed = true;
+          connection.emit('probe-rtt', sample.address, sample.rttUs);
+        }
+      }
       for (const id of [0, ...connection.recvStreams.keys()]) {
         for (;;) {
           if (connection.closed) return;
@@ -865,8 +997,13 @@ export class Endpoint extends EventEmitter {
     }
   }
 
+  /**
+   * 短于计时器精度的等待由核心判断等不等得起，计时器准的系统（Linux、macOS，精度 1 毫秒）也一样。原来这些系统一律当作等不起：
+   * 两毫秒没有包到达就一轮一轮看时间，按速率发包的整段传输都占满一个核（2026-11-22，Linux、Electron 42、20 Mbit 的 4G 线路：
+   * 每 MiB 285–470 毫秒 CPU，Device Link 43–46）。按 1 毫秒的计时器醒来时，核心把这期间攒下的包补发（最多一毫秒的量）。
+   */
   private needsFineTimer(): boolean {
-    return TIMER_GRANULARITY_US <= 1_000 || this.call((core) => core.fine_timer(TIMER_GRANULARITY_US)) === 1;
+    return this.call((core) => core.fine_timer(TIMER_GRANULARITY_US)) === 1;
   }
 
   private armTimer(): void {

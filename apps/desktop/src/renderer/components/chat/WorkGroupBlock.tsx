@@ -177,7 +177,7 @@ function ThinkingActivityRow({ activity }: { activity: ProjectedThinkingActivity
       aria-expanded={canExpand ? expanded : undefined}
       onClick={() => setExpanded((value) => !value)}
       className={cn(
-        'flex w-full min-w-0 gap-1.5 px-2 py-[3px] text-left outline-none',
+        'flex w-full min-w-0 gap-1.5 px-2 py-0.5 text-left outline-none',
         ACTIVITY_ROW_RADIUS_CLASS,
         expanded ? 'items-start' : 'items-center',
         canExpand
@@ -269,7 +269,7 @@ function ThinkingLineRow({
       data-scroll-disclosure-header=""
       onClick={onActivate}
       className={cn(
-        'group flex w-full min-w-0 cursor-pointer select-none items-center gap-1.5 px-2 py-[3px] text-left outline-none',
+        'group flex w-full min-w-0 cursor-pointer select-none items-center gap-1.5 px-2 py-0.5 text-left outline-none',
         'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         ACTIVITY_ROW_RADIUS_CLASS,
         ACTIVITY_ROW_COLOR_TRANSITION_CLASS,

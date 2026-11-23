@@ -700,4 +700,26 @@ describe('Bot named worker transactions', () => {
     expect(db.prepare("SELECT role FROM bot_session_links WHERE bot_id = 'bot-1'").pluck().get())
       .toBe('route');
   });
+  // A buddy created from a template keeps the template name as its canonical chat
+  // title. Hand-off chips read that title, so a rename has to carry over.
+  it('renames the canonical chat together with the buddy', () => {
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'renamed-bot', displayName: 'Old Name', description: '', avatar: '', avatarColor: 'blue',
+      identitySource: 'identity', capabilitiesJson: JSON.stringify({ modelChain: [] }), now: 1,
+    } });
+    tx(db, { name: 'bots.replaceCanonicalSession', args: {
+      botId: 'renamed-bot', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      session: { id: 'renamed-session', title: 'Old Name', workingDir: '/tmp/renamed-session',
+        workspaceKind: 'dialogue', model: 'temporary', effort: 'high', permissionMode: 'ask',
+        agentKind: 'codex', remoteHostId: null, providerId: null, extraDirs: '[]',
+        source: 'bot', createdAt: 2, updatedAt: 2 }, now: 2,
+    } });
+    tx(db, { name: 'bots.updateProfile', args: {
+      id: 'renamed-bot', expectedCurrentVersion: 1, now: 3,
+      displayName: 'New Name', profileContentChanged: false,
+    } });
+    expect(db.prepare('SELECT title FROM sessions WHERE id = ?').pluck().get('renamed-session'))
+      .toBe('New Name');
+  });
+
 });

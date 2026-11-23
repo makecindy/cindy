@@ -26,6 +26,9 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import { machineIdSync } from 'node-machine-id';
+import { writeDeviceLinkSetting } from './device-link/settings-store.desktop';
+import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
+import { enrollTestCloudDesktop } from './cloudDesktopTestEnrollment';
 import {
   AuthApiError,
   CindyAuthClient,
@@ -416,6 +419,8 @@ let confirmedAccountDeletionCredential: {
   realm: AuthRegion;
 } | null = null;
 
+const desktopAuthFetch: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
+
 function createAuthClient(
   realm: AuthRegion = pendingAuthRealm ?? activeAuthRealm,
 ): CindyAuthClient {
@@ -435,7 +440,7 @@ function createAuthClient(
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
     fetch: withProviderResponseDiagnostics(
-      scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+      scenarioFetch ?? desktopAuthFetch,
       (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
     ),
     onRequestError: (apiPath, status, error) => {
@@ -4965,6 +4970,9 @@ export async function updateServerProfile(
   };
 }
 
+let enterpriseGuestSignIn: Promise<AuthState> | null = null;
+let cloudDesktopTestEnrollment: Promise<void> | null = null;
+
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
   if (authRefreshOverride) {
     receiveHostAuthState(await authRefreshOverride());
@@ -5122,6 +5130,93 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     }
   }
   if (!persistedSession) {
+    if (process.platform === 'linux' && !isPassiveSharedUserDataInstance()) {
+      const guest=await readCloudGuest();
+      if (guest && !await cloudGuestSaved(guest)) {
+        if (!enterpriseGuestSignIn &&
+          (coldStartRecoveryStopped || authStateEpoch !== initializeStartEpoch || pendingAuthRealm || currentUser))
+          return snapshotAuthState();
+        enterpriseGuestSignIn ??= (async () => {
+          // Recover the account-free projection before exposing a sign-in screen.
+          await finishColdStartSignedOut('cold-start-cloud-guest');
+          if (coldStartRecoveryStopped || pendingAuthRealm || currentUser) return snapshotAuthState();
+          const epoch = loginFlowEpoch;
+          const authEpoch = authStateEpoch;
+          const superseded = () => coldStartRecoveryStopped || epoch !== loginFlowEpoch ||
+            authEpoch !== authStateEpoch || pendingAuthRealm || currentUser;
+          const store = {
+            read(key: string) {
+              const value = readAtomicSafe(key);
+              if (value === null && !isAtomicPersistedSecretAbsent(key))
+                throw new Error('Cloud guest credential storage is unavailable');
+              return value;
+            },
+            write(key: string, value: string) {
+              if (!writeAtomicSafe(key, value)) throw new Error('Cloud guest credential storage is unavailable');
+            },
+            remove: removeSafe,
+            withLock<T>(task: () => Promise<T>) {
+              return withCrossProcessLock(authAccountVaultLockPath(), { label: 'cloud-guest-pkce', waitMs: 5_000 }, async (lock) => {
+                if (!lock.held) throw accountVaultLockError(lock.reason);
+                return task();
+              });
+            },
+          };
+          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch);
+          if (superseded()) return snapshotAuthState();
+          const client = createAuthClient(AUTH_REGION);
+          const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);
+          if (pair.status !== 'ok') throw new Error('Cloud guest sign-in did not complete');
+          if (pair.membership.kind !== 'org' || pair.membership.id !== guest.membershipId ||
+            pair.membership.orgId !== guest.organizationId || superseded()) {
+            await client.logout(pair.accessToken);
+            throw new Error('Cloud guest owner changed');
+          }
+          // The account owner chose a controllable desktop at checkout. Apply this on the freshly bound guest.
+          await writeDeviceLinkSetting('remoteControlEnabled', true);
+          await writeDeviceLinkSetting('remoteDesktopEnabled', true);
+          await completeLogin(pair, epoch);
+          await markCloudGuestSaved(guest, store);
+          confirmCloudGuestWhenOnline(
+            () => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
+          );
+          return snapshotAuthState();
+        })().catch(() => {
+          log.warn('Cloud guest sign-in did not complete');
+          return snapshotAuthState();
+        }).finally(() => { enterpriseGuestSignIn = null; });
+        const completion = enterpriseGuestSignIn;
+        return awaitWithStartupTimeout(completion, {
+          timeoutMs: COLD_START_AUTH_GATE_TIMEOUT_MS,
+          onTimeout: () => {
+            options.onColdStartPending?.(completion);
+            if (ownerChangeShellGate.isPending() || sealedLoginFlowCommitDepths.size > 0)
+              return snapshotLoggedOutAuthState(true);
+            return snapshotAuthState();
+          },
+        });
+      }
+    }
+    const socket = process.env.CINDY_CLOUD_DESKTOP_TEST_SOCKET;
+    if (socket && !app.isPackaged && process.platform === 'linux' && process.getuid && !isPassiveSharedUserDataInstance()) {
+      const epoch = loginFlowEpoch;
+      cloudDesktopTestEnrollment ??= enrollTestCloudDesktop(socket, process.getuid(), deviceId, async (code, verifier, id) => {
+        const client = createAuthClient(AUTH_REGION);
+        const pair = await client.exchangeAuthorizationCode(code, verifier);
+        if (pair.status !== 'ok') throw new Error('Cloud desktop authorization did not complete');
+        if (pair.membership.kind !== 'personal' || pair.membership.id !== id || pendingAuthRealm || currentUser) {
+          await client.logout(pair.accessToken);
+          throw new Error('Cloud desktop test identity changed');
+        }
+        await completeLogin(pair, epoch);
+      });
+      try {
+        await cloudDesktopTestEnrollment;
+        return snapshotAuthState();
+      } catch {
+        log.warn('Cloud desktop test enrollment unavailable');
+      }
+    }
     return finishColdStartSignedOut('cold-start-no-persisted-session');
   }
   const storedToken = persistedSession.refreshToken;
@@ -5505,6 +5600,14 @@ async function runColdStartRefreshFlow(
         clearReplacementIntegrationReloadTimers();
       },
     });
+    if (process.platform === 'linux' && refreshData.membership.kind === 'org' &&
+      activeAuthRealm === storedRealm && currentUser?.id === refreshData.membership.id) {
+      confirmCloudGuestWhenOnline(
+        () => getClientEndpointForRealm(storedRealm, 'modelAccessApiBaseUrl'),
+        () => activeAuthRealm === storedRealm ? getAccessToken() : null,
+        desktopAuthFetch,
+      );
+    }
     await migrateLocalProviderBindingsAfterCloudCommit(refreshData.membership.id);
     // Schedule with the epoch this flow actually commits under (flowAuthEpoch, which
     // moves forward when the flow accepts its own startup-gate fallback) — passing the
