@@ -1067,6 +1067,7 @@ import {
   isLibraryExtraDirSlot,
   libraryExtraDirSlot,
   libraryRootFromSlot,
+  replaceUserExtraDirs,
   splitExtraDirSlots,
   validateExtraDirs,
 } from './extraDirsValidator.js';
@@ -4418,13 +4419,12 @@ export function applyDirectoryGrants(
     let dirsToApply = requestedDirs;
     if (axis === 'extraDirs') {
       const persisted = await readSessionExtraDirsFromDb(sessionId);
-      const { user: dbUser, library: dbLibrary } = splitExtraDirSlots(persisted);
+
       if (options.replaceLibrarySlot) {
         const { library } = splitExtraDirSlots(requestedDirs);
-        dirsToApply = [...dbUser, ...library];
+        dirsToApply = [...splitExtraDirSlots(persisted).user, ...library];
       } else {
-        const { user } = splitExtraDirSlots(requestedDirs);
-        dirsToApply = [...user, ...dbLibrary];
+        dirsToApply = replaceUserExtraDirs(requestedDirs, persisted);
       }
     }
     const result = await applyRemoteDirectoryGrantUpdate(axis, dirsToApply, {

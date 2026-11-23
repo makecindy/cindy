@@ -498,7 +498,7 @@ import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
-import { resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
+import { resumeDeletedPiSubagentCleanup, setWorktreePathInDb } from './localDb/ipc/sessions';
 import {
   didMigrateLegacyDataForUser,
   registerLegacyMigrationIpc,
@@ -753,6 +753,7 @@ import { registerRemoteResourcesIpc } from './device-link/remoteResourcesIpc';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
   registerWorktreeIpc,
+  configureWorktreeStoreDbSync,
   WorktreeManager,
   WorktreePool,
   reconcilePendingSafeDirectoryCleanups,
@@ -2084,6 +2085,8 @@ configureMigrationRuntime({
   isPackaged: app.isPackaged,
 });
 configureSqliteVecExtPath(resolveDesktopSqliteVecExtPath(app.isPackaged));
+// The Worktree registry keeps sessions.worktree_path as a denormalized snapshot.
+configureWorktreeStoreDbSync(setWorktreePathInDb);
 // Database startup reaches the user through these ports; the Node host installs
 // headless equivalents instead of importing Electron.
 configureUiText((key, fallback) => {
