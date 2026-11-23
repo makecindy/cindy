@@ -458,7 +458,9 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    `cindy_toolfold_read` 取回原文,取回过的
    钉住到下一条用户消息或钉住预算耗尽(按最近取回时间戳 LRU)。折叠按批进行以保住前缀缓存,
    扩展自身另认 `CINDY_PI_TOOL_FOLD=off` 作进程内总闸;宿主 `text-only` 回合会禁用全部工具,
-   这时扩展按 bridge 发布的 `cindy.pi.textOnlyTurn` 标记整段不折叠,避免模型看到无法取回的摘要;受邀者/Review/仅宿主工具会话因工具门不放行 `cindy_toolfold_read`
+   这时扩展按 bridge 发布的 `cindy.pi.textOnlyTurn` 标记整段不折叠,并把仍在钉住预算内的入库原文
+   放回(否则模型既看不到被截断的尾部、也调不了取回);批次 id 为 `batch:`+首条 call id,
+   超过取回参数 4096 字符上限时只保留尾部;受邀者/Review/仅宿主工具会话因工具门不放行 `cindy_toolfold_read`
    而不加载该扩展;远端会话的折叠配置键需显式转发进 spawn env)。
 11. **正式包后台脚本启动边界**:Desktop 正式包保持 `RunAsNode=false`,因此 Main 的
    `process.execPath` 是 Cindy 应用程序,**不是 Node 可执行文件**。Pi Subagent 的 durable

@@ -443,6 +443,42 @@ export default function (pi) {
     try { return globalThis[Symbol.for('cindy.pi.textOnlyTurn')] === true; } catch (err) { return false; }
   }
 
+  // 文本回合禁用了所有工具：被 ingest 截断、原文还留在 giants 里的结果，模型既看不到
+  // 全文也调不了取回，只能瞎猜。把仍在预算内的原文放回去，超预算的保持预览。
+  function expandRetained(messages) {
+    var out = null;
+    var left = PIN_BUDGET_CHARS;
+    for (var i = 0; i < messages.length; i++) {
+      var message = messages[i];
+      if (!message || message.role !== 'toolResult') continue;
+      if (!Array.isArray(message.content) || message.content.length === 0) continue;
+      var onlyText = true;
+      for (var b = 0; b < message.content.length; b++) {
+        var part = message.content[b];
+        if (!part || part.type !== 'text' || typeof part.text !== 'string') { onlyText = false; break; }
+      }
+      if (!onlyText) continue;
+      var block = { text: textOf(message.content) };
+      var full = giants.get(String(message.toolCallId));
+      if (full === undefined || full.length <= block.text.length) continue;
+      if (full.length - block.text.length > left) continue;
+      left -= full.length - block.text.length;
+      if (out === null) out = messages.slice();
+      out[i] = Object.assign({}, message, { content: [{ type: 'text', text: full }] });
+    }
+    return out === null ? undefined : out;
+  }
+
+  // 取回工具的 call_id 有 4096 字符上限；provider 的超长 id 再加前缀就越界，别名只留
+  // 尾部（批内映射按别名登记，取回照常）。
+  var MAX_CALL_ID_CHARS = 4096;
+  function batchAlias(firstId) {
+    var raw = 'batch:' + String(firstId);
+    if (raw.length <= MAX_CALL_ID_CHARS) return raw;
+    var head = 'batch:';
+    return head + raw.slice(raw.length - (MAX_CALL_ID_CHARS - head.length));
+  }
+
   function foldable(id) {
     return foldedIds[id] !== undefined && !pinned.has(id);
   }
@@ -690,7 +726,10 @@ export default function (pi) {
     if (!messages || messages.length === 0) return undefined;
     // Host text-only turns block every tool, cindy_toolfold_read included. Leave the history
     // unfolded for that request so the model never sees a summary it cannot expand.
-    if (textOnlyTurnActive()) return undefined;
+    if (textOnlyTurnActive()) {
+      var retained = expandRetained(messages);
+      return retained === undefined ? undefined : { messages: retained };
+    }
 
     // Turn boundary: pins live until the next user message. 判定用「最后一条 user 消息的
     // 身份」而不是条数：压缩会减少保留的 user 消息，条数可能被新回合刚好补平，边界就
@@ -761,7 +800,7 @@ export default function (pi) {
       }
       // One batch, one id: the batch is named after its first call, prefixed so it can never
       // collide with a real call id (the same string is also a call the reader may open).
-      var batchId = 'batch:' + String(candidates[0].calls[0].id);
+      var batchId = batchAlias(candidates[0].calls[0].id);
       var batchIds = [];
       for (var m = 0; m < candidates.length; m++) {
         for (var mi = 0; mi < candidates[m].calls.length; mi++) {

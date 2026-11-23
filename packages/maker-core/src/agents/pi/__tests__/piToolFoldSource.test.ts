@@ -435,6 +435,45 @@ describe('cindy-tool-fold extension source', () => {
     expect(records(projection(context, messages)).length).toBeGreaterThan(0);
   });
 
+  it('restores retained results on text-only turns, where no tool can fetch them', async () => {
+    const flag = Symbol.for('cindy.pi.textOnlyTurn');
+    const { context, toolResult } = loadExtension();
+    const body = 'lorem ipsum '.repeat(2400);
+    const truncated = toolResult({ toolName: 'read', toolCallId: 'big-read', content: [{ type: 'text', text: body }] }) as { content: Block[] } | undefined;
+    expect(truncated).toBeDefined();
+    const preview = truncated!.content;
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'summarize the log' }] },
+      call('big-read', 'read', { path: 'big.log' }),
+      { role: 'toolResult', toolCallId: 'big-read', toolName: 'read', content: preview },
+    ];
+    const previewChars = preview.map((b) => String(b.text ?? '')).join('').length;
+    expect(previewChars).toBeLessThan(body.length);
+    (globalThis as Record<symbol, unknown>)[flag] = true;
+    try {
+      const out = projection(context, messages);
+      const back = out.find((m) => m.role === 'toolResult' && m.toolCallId === 'big-read');
+      // 工具被禁，摘要里的“去读”没有任何可行性；整段原文在预算内就要放回去。
+      expect((back!.content ?? []).map((b) => String(b?.text ?? '')).join('')).toBe(body);
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[flag];
+    }
+  });
+
+  it('keeps a batch alias inside the recovery schema limit for huge provider ids', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    const longId = 'call_' + 'z'.repeat(4100);
+    messages[22] = call(longId, 'bash', { command: 'true' });
+    messages[23] = result(longId, 'bash', 'r'.repeat(3000));
+    const out = projection(context, messages);
+    const alias = /cindy_toolfold_read\("([^"]+)"\)/.exec(records(out)[0])![1];
+    expect(alias.length).toBeLessThanOrEqual(4096);
+    const read = await tool.execute('t-long-id', { call_id: alias });
+    expect(read.isError).toBeUndefined();
+    expect(String(read.content![0].text)).toContain('true');
+  });
+
   it('keeps a pinned call verbatim while its parallel siblings stay folded', async () => {
     const { context, tool } = loadExtension();
     const trip: Message = {
