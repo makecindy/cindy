@@ -134,7 +134,7 @@ const mocks = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   showMessageBox: vi.fn(),
   openExternal: vi.fn(),
-  readdir: vi.fn<(...args: unknown[]) => Promise<string[]>>(() => Promise.resolve([])),
+  opendir: vi.fn<(...args: unknown[]) => Promise<{ read(): Promise<null>; close(): Promise<void> }>>(),
   assertTrustedAppRendererEvent: vi.fn(),
 }));
 
@@ -143,11 +143,11 @@ vi.mock('../../security/trustedAppRenderer.js', async (importOriginal) => ({
   assertTrustedAppRendererEvent: mocks.assertTrustedAppRendererEvent,
 }));
 
-// 受保护目录引导会由 Main 亲自 readdir 核实一次;只替换这一个 API,其余 fs/promises
+// 受保护目录引导由 Main 打开目录并读取一项。只替换 opendir，其余 fs/promises
 // 保持真实。默认让读取失败(EPERM),模拟 macOS 真的拒绝了访问。
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
-  readdir: mocks.readdir,
+  opendir: mocks.opendir,
 }));
 
 function tccDeniedError(): NodeJS.ErrnoException {
@@ -283,8 +283,8 @@ beforeEach(async () => {
   mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
   mocks.openExternal.mockReset();
   mocks.openExternal.mockResolvedValue(undefined);
-  mocks.readdir.mockReset();
-  mocks.readdir.mockRejectedValue(tccDeniedError());
+  mocks.opendir.mockReset();
+  mocks.opendir.mockRejectedValue(tccDeniedError());
   resetEpermGuidanceForTest();
   // Card-click tests register a process-wide badge callback closing over their
   // service. Do not let later TTL tests call back into that previous service
@@ -2974,7 +2974,7 @@ describe('AgentIslandService native publishing', () => {
       );
 
       await vi.waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith(
-        'x-apple.systempreferences:com.apple.preference.security?Privacy_DocumentsFolder',
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders',
       ));
       expect(mocks.showMessageBox).toHaveBeenCalledWith(
         mainWindow,
@@ -3033,16 +3033,16 @@ describe('AgentIslandService native publishing', () => {
       };
 
       // 粗筛命中,但 Main 亲自读得动 → 那条 EPERM 与 TCC 无关,不得打扰用户。
-      mocks.readdir.mockResolvedValue([]);
+      mocks.opendir.mockResolvedValue({ read: async () => null, close: async () => {} });
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'claude-code' }, event);
-      await vi.waitFor(() => expect(mocks.readdir).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(mocks.opendir).toHaveBeenCalledTimes(1));
       expect(mocks.showMessageBox).not.toHaveBeenCalled();
 
       // 等首轮探测完整收尾并释放同目录的探测占位,否则第二条事件会被串行化挡掉。
       await new Promise((resolve) => setImmediate(resolve));
 
       // 且没有吃掉该目录的提醒名额:之后真被系统拒绝时仍然提示。
-      mocks.readdir.mockRejectedValue(tccDeniedError());
+      mocks.opendir.mockRejectedValue(tccDeniedError());
       service.handleAgentEvent({ sessionId: 's2', agentKind: 'claude-code' }, event);
       await vi.waitFor(() => expect(mocks.showMessageBox).toHaveBeenCalledTimes(1));
     } finally {

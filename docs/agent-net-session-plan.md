@@ -257,6 +257,8 @@ Device Link 只为两类对端保留：还是旧版本的 Cindy，以及没打�
    **2026-11-22**：WASM 导出 `conn_open_stream_level`、`conn_set_level`、`conn_abandon`、`conn_stream_progress`、`conn_send_progress`，
    `node.mts` 按导出在不在判断（`Connection.supportsLevels`、`SendStream.abandon/progress/setLevel`、`Connection.sendProgress`）；
    手机原生库报告 `stream-levels`：`openStream` 认 `level`、新增 `abandon`，`buffered` 每项后面多两项累计确认字节与停顿毫秒。
+   同日 v2-2 在 CI 上查出核心回探测的确认只带两条流的额度，后开的流可能一直停在初始额度上；核心改为回探测时带上所有流的额度，
+   手机原生库报告 `probe-grants`，只有这样的手机才用会话 v2（见 `dev-rules/protocol-compatibility/agent-net-session.md`）。
 
 7. **对抖动不敏感的起速。** 阶段 0 查清了「经中转速度跑不上去」的原因（见基线报告「速度为什么跑不上去」）：
    核心把往返比最低值高出 4–16 毫秒当成排队，判定排队后巡航只发 90%、不再探测余量；抖动估计取相邻样本之差，
@@ -576,6 +578,11 @@ Device Link 之间的自动换路，Agent-Net 默认按正常处理。
 | v2-5 | 每个主题一条推送流 | 5.2、5.3 与事件批分界不变；顺序风险最高，放最后 |
 
 **进展**：v2-1 的第 7 节第 4 项和按档防饿死已完成（2026-11-19，见第 7 节第 1、4 项）；2026-11-22 第 1 项多档、第 3 项发送方放弃、第 5 项进展统计、第 6 项两端驱动完成，第 2 项核对后上限不调（见第 7 节）；基准脚本还没做。
+v2-2 的第一步（2026-11-22，[会话层记录](dev-rules/protocol-compatibility/agent-net-session.md)「会话 v2」）：会话层协商
+（`agent-net-session-v2`）、64 KiB 以上的消息走自己的流、结果按进展判超时（正文停住 15 秒才算超时）、调用方取消时放弃没发完的结果，
+Desktop、Node Host 与手机三种通道都有。先后与 v1 完全一样：交互请求仍等之前的普通请求（上面每秒 64 KB 档的 19.8 秒仍在），
+放宽要业务声明哪些请求互不依赖，按业务在 v2-3 里做。正文里长的规范 base64 字符串（文件块、上传块）按字节传，少约四分之一，
+业务仍拿到同一个字符串；业务自己直接传字节（不经 base64）随 v2-3 做。
 v2-3 里远程任务上传先做了两步、不改协议（2026-11-19）：上传块同时在途（最多 4 块），Agent-Net 会话上走后台通道；拉取回包按回程速度
 定大小（`poll.maxBytes`）。细则见 [远程与手机适配](dev-rules/remote-and-mobile-adaptation.md) 的上传段与拉取段。
 

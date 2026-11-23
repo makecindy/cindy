@@ -420,7 +420,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           </div>
         )}
         <div data-selection-quote-body="" className="contents">
-          {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId,
+          {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId, clientId: messageClientId,
             disabled: !!ghostRenderCard || !!remoteHostId,
             context: () => ({ message: { clientId: messageClientId, role: 'assistant', content, isStreaming } }) } : undefined,
           ghostRenderCard && messageClientId && !showOriginal ? (

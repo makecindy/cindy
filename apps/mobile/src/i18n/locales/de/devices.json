@@ -393,6 +393,7 @@
       "showDeviceTasks": "Aufgaben anzeigen",
       "openDevice": "Öffnen",
       "renameDevice": "Umbenennen",
+      "groupDevice": "Gerät",
       "groupProject": "Projekt",
       "sortBy": {
         "priority": "Priorität",
@@ -434,11 +435,15 @@
       "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
       "displayHeading": "Anzeige",
       "view": {
+        "card": "Karten",
         "text": "Text",
         "list": "Liste"
       },
       "taskInfoHeading": "Aufgabeninfo",
       "taskInfo": {
+        "teammate": "Avatar des Freundes",
+        "project": "Projektsymbol und -name",
+        "harness": "Harness-Symbol",
         "time": "Zeit",
         "pr": "PR-Status",
         "tokens": "Tokens",

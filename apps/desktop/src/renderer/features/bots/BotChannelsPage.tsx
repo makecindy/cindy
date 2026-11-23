@@ -251,6 +251,9 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
+                {view.health?.automationDenied && (
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.automationDenied')}</p>
+                )}
                 {view.health && view.health.uncertainInputs + view.health.uncertainSends > 0 ? (
                   <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
                     count: view.health.uncertainInputs + view.health.uncertainSends,
@@ -561,6 +564,7 @@ function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
       <div className="flex items-center justify-between text-12 font-medium text-[var(--text-primary)]">
         <span>{t('bots.channels.lanes.title', { platform })}</span>
         <ChromeIconButton
+          // -my-[5px]：28px 按钮抵消到 18px 文字行高，标题行不被撑高（DESIGN.md §5 破出抵消）。
           className="-my-[5px] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           aria-label={t(expanded ? 'bots.channels.lanes.collapse' : 'bots.channels.lanes.expand', { platform })}
           aria-expanded={expanded}

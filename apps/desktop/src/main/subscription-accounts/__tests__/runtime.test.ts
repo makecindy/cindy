@@ -262,6 +262,7 @@ import {
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   hasConnectedSubscriptionPool,
+  hasCreatedOpenAiImageAuth,
   lastConfirmedSubscriptionModelsAt,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
@@ -275,7 +276,7 @@ import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/cod
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
-import { getSessionSubscriptionAccount } from '../session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from '../session.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
 import { getActiveCatalogWithCodexModels } from '../../maker-host/active-catalog.js';
 import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
@@ -311,7 +312,9 @@ import {
 } from '../../maker-ipc/sessionAgentSwitchHandler.js';
 import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
-import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { resolveSubscriptionPoolProvider } from '../placement.js';
+import { createAccountCodexImageChannel, createCodexImageAuthAcquirer, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
 import { setAnthropicModelProbe, refreshAnthropicModelsFromProbe, syncAnthropicModelsWithClaudeLogin } from '../../maker-host/model-discovery/anthropic.js';
 const account = (id: string) => ({ id, paused: false, limit: 1, weight: 1 });
@@ -1110,6 +1113,116 @@ describe('duplicate subscription account profiles', () => {
       expect(() => lease?.assertDispatchable()).not.toThrow();
       allowed = false;
       expect(() => lease?.assertDispatchable()).toThrow('Subscription account remote access was revoked');
+    } finally {
+      lease?.release();
+    }
+  });
+
+  // #11948 / unit: unlike legacy images, the created provider has chat auth without
+  // image OAuth until the native bridge is readable. Exercise real pooling and the
+  // hosted serializer; only the native credential transport and HTTP are synthetic.
+  it('uses only the selected provider’s image account and stops if it moves before dispatch', async () => {
+    const providerId = 'openai-sub-image-fixture';
+    const model = `${providerId}/gpt-image-2`;
+    const image = 'iVBORw0KGgo=';
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.created[providerId] = { kind: 'openai', name: 'Independent', account: 'second' };
+    h.placement['openai:second'] = providerId;
+    let imageAuth = false;
+    h.tokens.mockImplementation(async (directory: string) => {
+      if (directory === 'openai/second' && !imageAuth) throw new Error('No native OAuth material');
+      return { accessToken: `fixture-token:${directory}`, chatgptAccountId: `fixture-workspace:${directory}`, canDispatch: () => true };
+    });
+    const provider = {
+      ...BUNDLED_CATALOG.providers.find(candidate => candidate.id === 'openai')!,
+      id: providerId, subscriptionPool: 'openai' as const,
+    };
+    const fetchImplementation = vi.fn<typeof fetch>(async () => Response.json({ data: [{ b64_json: image }] }));
+    let moveOnSecondRead = false;
+    let reads = 0;
+    const legacy = vi.fn(async () => { throw new Error('Unexpected legacy credential read'); });
+    const observed = vi.fn(() => hasCreatedOpenAiImageAuth(providerId));
+    const unsubscribe = onSubscriptionPoolCodexModelsChanged(observed);
+    setCodexImageAuthBinding({
+      hasPoolImageAuth: hasCreatedOpenAiImageAuth,
+      getAuth: legacy,
+      onAuthFailure: vi.fn(),
+      acquireAuth: createCodexImageAuthAcquirer({
+        resolveSubscriptionPoolProvider, acquireSubscriptionAccount,
+        async getChatgptBridgeAuthForDispatch(family, selected) {
+          if (family !== 'openai' || !selected?.readCodexTokens) {
+            throw new Error('Image dispatch did not bind a native OpenAI account');
+          }
+          const tokens = await selected.readCodexTokens();
+          if (++reads === 2 && moveOnSecondRead) delete h.placement['openai:second'];
+          return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId, canDispatch: tokens.canDispatch! };
+        },
+        invalidateChatgptBridgeAuth: async () => false,
+      }),
+    });
+    try {
+      const channel = createAccountCodexImageChannel(providerId, () => provider, { fetchImplementation });
+      const params = { model, prompt: 'Draw a circle' };
+      await refreshSubscriptionPool('openai', true);
+      await refreshSubscriptionPool(providerId, true);
+      expect(hasConnectedSubscriptionPool(providerId)).toBe(true);
+      expect(channel.ready()).toBe(false);
+      await expect(channel.generateImage(params)).rejects.toThrow('No subscription account is available');
+      expect(fetchImplementation).not.toHaveBeenCalled();
+
+      imageAuth = true;
+      await refreshSubscriptionPool(providerId, true);
+      expect(channel.ready()).toBe(true);
+      expect(observed).toHaveLastReturnedWith(true);
+      await expect(channel.generateImage(params)).resolves.toEqual({ data: [{ b64_json: image }] });
+      const [url, init] = fetchImplementation.mock.calls[0]!;
+      expect(url).toBe('https://chatgpt.com/backend-api/codex/images/generations');
+      expect(init?.headers).toMatchObject({
+        Authorization: 'Bearer fixture-token:openai/second',
+        'ChatGPT-Account-Id': 'fixture-workspace:openai/second',
+      });
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-image-2' });
+
+      reads = 0;
+      moveOnSecondRead = true;
+      await expect(channel.generateImage(params)).rejects.toThrow('Subscription image account was moved');
+      expect(channel.ready()).toBe(false);
+      await expect(channel.generateImage(params)).rejects.toThrow('No subscription account is available');
+      expect(fetchImplementation).toHaveBeenCalledTimes(1);
+      expect(legacy).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      setCodexImageAuthBinding(null);
+    }
+  });
+
+  // #11948 / unit: a merged legacy image model's existing off switch uses
+  // the original provider namespace even when the destination's switch is on.
+  it('respects a merged legacy account’s own image model disable switch', async () => {
+    const providerId = 'openai-sub-image-fixture';
+    const legacyId = 'openai-imported';
+    const model = `${providerId}/gpt-image-2`;
+    h.pools.openai = {
+      strategy: 'order', accounts: [account('default'), account('second')],
+      legacyCodexAccounts: { [legacyId]: 'second' },
+    };
+    h.created[providerId] = { kind: 'openai', name: 'Independent', account: 'second' };
+    h.placement['openai:second'] = providerId;
+    h.tokens.mockResolvedValue({
+      accessToken: 'fixture-token', chatgptAccountId: 'fixture-workspace', canDispatch: () => true,
+    });
+    await refreshSubscriptionPool(providerId, true);
+    expect(hasCreatedOpenAiImageAuth(providerId)).toBe(true);
+    const options = { capability: 'image.generate' as const };
+    const lease = await acquireSubscriptionAccount(providerId, model, [], false, options);
+    try {
+      expect(lease?.accountId).toBe('second');
+      h.accountAllowed.mockImplementation((provider: string, modelId: string) =>
+        provider !== legacyId || modelId !== `${legacyId}/gpt-image-2`);
+      expect(hasCreatedOpenAiImageAuth(providerId)).toBe(false);
+      expect(() => lease?.assertDispatchable()).toThrow('does not allow this model');
+      await expect(acquireSubscriptionAccount(providerId, model, [], false, options))
+        .rejects.toThrow('No subscription account is available');
     } finally {
       lease?.release();
     }
@@ -2408,6 +2521,73 @@ describe('tasks using imported Codex connections', () => {
     h.pools.openai.accounts = [account('default')];
     await expect(agent.startSession({ providerId: 'openai-old', sessionId: 'old-task' } as StartSessionOptions)).rejects.toThrow();
     expect(start).toHaveBeenCalledOnce();
+  });
+
+  // Regression (2026-11-22): the writer check must compare against the host the session actually runs on,
+  // which carries its subscription account; a route onto another account still compares without it.
+  it('checks the thread writer host with the account the session runs on, only for that account', async () => {
+    h.pools.openai = {
+      strategy: 'round', accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = { id: 'imported', configDir: 'openai/imported', assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      h.pools.openai.legacyCodexAccounts = { 'openai-old': 'default' };
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[2][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'other', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[3][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
+  // Review (#12144): a created provider can hold several accounts; its first account is only one of them.
+  // A session running on another account of that same provider keeps its own host.
+  it('keeps the running account when it is a later account of the target provider', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('second'), account('third'), account('elsewhere')] };
+    h.created.cprov = { kind: 'openai', name: 'Team', account: 'second' };
+    h.placement['openai:second'] = 'cprov';
+    h.placement['openai:third'] = 'cprov';
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = (id: string) => ({ id, configDir: `openai/${id}`, assertCurrent() {}, readState: async () => ({ authenticated: true }) });
+    const third = running('third');
+    let release = registerSessionSubscriptionAccount('lane', third);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(third);
+    } finally { release(); }
+    release = registerSessionSubscriptionAccount('lane', running('elsewhere'));
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
+  // Review (#12144): once the running account is removed, switching the idle task to another source must
+  // still reach the target's writer check instead of failing on the stale account.
+  it('checks another target normally when the running account was removed', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('default')] };
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => true);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    let removed = false;
+    const running = { id: 'gone', configDir: 'openai/gone', readState: async () => ({ authenticated: true }),
+      assertCurrent() { if (removed) throw new Error('Subscription account was disconnected'); } };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    removed = true;
+    try {
+      await expect(agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'anthropic-api', model: 'm', threadId: 't' }))
+        .resolves.toBe(true);
+      await expect(agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' }))
+        .resolves.toBe(true);
+      expect(check.mock.calls.map(([options]) => options[NATIVE_SUBSCRIPTION_ACCOUNT])).toEqual([undefined, undefined]);
+    } finally { release(); }
   });
 
   it('forks old history through the same imported account and reconnects through its old login', async () => {
@@ -4272,7 +4452,10 @@ describe('native account assignment on the executing computer', () => {
     await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
     const [created] = Object.keys(h.created);
     expect(created).toMatch(new RegExp(`^${kind}-sub-`));
-    expect(h.copyOverrides).toHaveBeenCalledWith(kind, created);
+    const copiedOverrides = kind === 'openai'
+      ? [kind, created, { source: 'openai/gpt-image-2', target: `${created}/gpt-image-2` }]
+      : [kind, created];
+    expect(h.copyOverrides).toHaveBeenCalledWith(...copiedOverrides);
     expect(await ids(kind)).toEqual(['default', 'second']);
     expect(await pick(created!)).toBe(`${kind}/third`);
     // Review regression: a task switched to another provider used to keep its old account. A fresh
@@ -4307,7 +4490,7 @@ describe('native account assignment on the executing computer', () => {
     expect(hasConnectedSubscriptionPool(created!)).toBe(true);
     // Deleting a created provider stops using only its own accounts.
     await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
-    expect(h.copyOverrides).toHaveBeenLastCalledWith(kind, created);
+    expect(h.copyOverrides).toHaveBeenLastCalledWith(...copiedOverrides);
     await runSubscriptionAccountCommand({ action: 'remove-provider', providerId: created! });
     expect(h.pools[kind]!.accounts.map(a => a.id)).toEqual(['default', 'second']);
     expect(h.created).toEqual({});
