@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRef, useState, type ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   SidebarActivityClock,
@@ -15,8 +16,10 @@ import { SessionShareExportDialog } from '../features/cc-agent/sidebar/SessionSh
 
 const translate = (key: string, options?: { count?: number }) =>
   options?.count === undefined ? key : `${key}: ${options.count}`;
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate, i18n: { language: 'en' } }) }));
-vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: React.ReactNode }) => children }));
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: translate, i18n: { language: 'en' } }),
+}));
 // Row presentation and unopened project settings are unrelated to folding. The
 // real ProjectNode, SessionEntryList, grouping, toggle and clock remain loaded.
 vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({
@@ -25,7 +28,6 @@ vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({
   SessionCard: ({ session }: { session: Session }) => <button>{session.title}</button>,
 }));
-vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({ AutomationSessionGroupItem: () => null }));
 vi.mock('../features/cc-agent/sidebar/ProjectSettingsDialog', () => ({ ProjectSettingsDialog: () => null }));
 
 // #11233: real list/project entry points must change visible rows with time and
@@ -236,6 +238,53 @@ describe('sidebar idle folding interactions', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
     act(() => vi.advanceTimersByTime(60_000));
     expect(screen.queryByRole('button', { name: 'Export task' })).toBeNull();
+  });
+
+  // #11252: the task menu and export tests do not use the automation folder's
+  // independent Radix menu. Two runs form a folder and the latest crosses the cutoff. Unit/jsdom.
+  it('keeps an automation folder menu open after its latest run becomes idle', () => {
+    const runs = [
+      task('weekly-run', 29.5, { source: 'scheduler' }),
+      task('previous-run', 90, { source: 'scheduler' }),
+    ];
+    const schedule = {
+      scheduleId: 'weekly',
+      scheduleName: 'Weekly automation',
+      scheduleStatus: 'active' as const,
+      unreadRunIds: [],
+      unreadFailedRunIds: [],
+      hasUnreadRun: false,
+    };
+    const onScheduleAction = vi.fn();
+    render(
+      <MemoryRouter>
+        <SessionEntryList
+          {...listProps(runs)}
+          onScheduleAction={onScheduleAction}
+          scheduleSessionIndex={new Map(runs.map((run) => [run.id, schedule]))}
+        />
+      </MemoryRouter>,
+      { wrapper: Preview },
+    );
+
+    const more = screen.getByRole('button', { name: 'ccAgent.sidebar.automationGroup.menu.more' });
+    act(() => more.focus());
+    vi.setSystemTime(now + 60_000);
+    fireEvent.keyDown(more, { key: 'Enter' });
+    const menu = screen.getByRole('menu');
+    expect(menu.contains(document.activeElement)).toBe(true);
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByRole('menu')).toBe(menu);
+
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'ccAgent.sidebar.automationGroup.menu.edit' }));
+    expect(onScheduleAction).toHaveBeenCalledWith(expect.objectContaining({ scheduleId: 'weekly' }), 'edit');
+    expect(screen.queryByRole('menu')).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+      more.blur();
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.queryByText('Weekly automation')).toBeNull();
   });
 
   it('keeps the default 24h behavior without scheduling a periodic refresh', () => {

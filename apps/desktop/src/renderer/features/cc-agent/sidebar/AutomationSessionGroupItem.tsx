@@ -812,6 +812,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                               <button
                                 type="button"
                                 data-automation-group-inline-action="true"
+                                data-sidebar-activity-overlay={menuOpen ? '' : undefined}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   event.currentTarget.blur();
