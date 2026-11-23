@@ -698,6 +698,7 @@
     },
     "picker": {
       "unavailable": "Partilha indisponível",
+      "offline": "{{name}} · Offline de momento",
       "hostOutdated": "A versão da Cindy no computador do proprietário é demasiado antiga para listar estes modelos. Peça-lhe para atualizar a Cindy e tente novamente.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -6949,7 +6950,15 @@
           "encrypted": "Encriptação ponto a ponto",
           "legacyConnection": "Ligação anterior",
           "encryptionUnknown": "Não confirmado",
-          "legacyEncryptionHint": "O caminho via relay da ligação anterior não tem encriptação ponto a ponto."
+          "legacyEncryptionHint": "O caminho via relay da ligação anterior não tem encriptação ponto a ponto.",
+          "routePreference": "Escolha de rota",
+          "routeAuto": "Auto",
+          "routeDirect": "Direta",
+          "routeRelay": "Retransmissão",
+          "routeUnavailable": "Indisponível",
+          "routeMeasuring": "A medir…",
+          "routeDirectUnavailableHint": "A ligação direta não está disponível nesta rede de momento",
+          "routePreferenceFailed": "Não foi possível alterar a rota. Tente novamente."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7123,6 +7132,15 @@
         "unstable": "A ligação está constantemente a cair e a restabelecer-se — verifique a rede ou reinicie o Cindy se o problema persistir",
         "agent-net-relay-down": "Não é possível aceder ao relay do Agent-Net; a restabelecer a ligação. Os computadores ligados diretamente continuam a funcionar; os outros dispositivos não conseguem ligar-se por agora"
       },
+      "rejoin": {
+        "hint": "Este dispositivo foi removido da sua conta. Selecione «Reingressar» para o trazer de volta.",
+        "action": "Reingressar",
+        "done": "Reingresso concluído",
+        "doneWithoutAgentNet": "Reingresso concluído. O Agent-Net ainda não foi restaurado, por isso será usado o Device Link por agora",
+        "unsupported": "O servidor ainda não permite reingressar. Termine sessão e volte a iniciar sessão neste dispositivo",
+        "agentNetFailed": "O Agent-Net ainda não foi restaurado. Desative «Usar apenas Agent-Net» para ligar pelo Device Link por agora",
+        "failed": "Não foi possível reingressar. Verifique a sua rede e tente novamente"
+      },
       "refresh": "Atualizar",
       "empty": "Ainda não há outros dispositivos. Inicie sessão no {{appName}} com a mesma conta noutro computador e este aparecerá aqui.",
       "thisDevice": "Este dispositivo",
@@ -7140,7 +7158,7 @@
       "renameCancel": "Cancelar",
       "delete": "Eliminar",
       "deleteTitle": "Eliminar «{{name}}»?",
-      "deleteMessage": "Remover este dispositivo da sua conta e desligar o acesso remoto. As sessões e os ficheiros serão mantidos. Inicie sessão novamente nesse dispositivo para voltar a adicioná-lo.",
+      "deleteMessage": "Remover este dispositivo da sua conta e desligar o acesso remoto. As sessões e os ficheiros serão mantidos. Selecione «Reingressar» nesse dispositivo para o trazer de volta.",
       "deleteOnlineHint": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
       "error": {
         "unavailable": "O serviço Device Link está indisponível (não ativado no servidor ou erro de rede)",
@@ -8717,7 +8735,7 @@
           "updated": "Plugin atualizado.",
           "empty": "Nenhuma versão disponível para instalar.",
           "sign-in": "Inicie sessão no GitHub para procurar atualizações.",
-          "forbidden": "Esta conta do GitHub não tem acesso de leitura ao repositório privado.",
+          "forbidden": "Não foi possível ler a versão publicada no GitHub. Verifique a ligação do repositório e as permissões da sua conta do GitHub.",
           "unavailable": "Não foi possível verificar ou instalar a atualização. Tente novamente."
         },
         "customSlotTitle": "Área de definições personalizadas do plugin",
@@ -9780,6 +9798,12 @@
       "guidance": "Aguarde antes de pedir outro código. Reiniciar, reinstalar ou mudar de rede não garante que o limite seja levantado.",
       "support": "Se o problema continuar após aguardar, envie os registos em privado para feedback@cindy.app com o seu sistema operativo, a versão de Cindy, a hora do erro e o código abaixo. Não publique registos."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Termos atualizados",
+    "body": "Atualizámos os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy. Aceite para continuar a utilizar ou termine sessão.",
+    "agree": "Aceitar",
+    "disagree": "Terminar sessão"
   },
   "legacyMigration": {
     "title": "Migrar dados da versão anterior",
@@ -13365,7 +13389,8 @@
           "subject": {
             "githubIssue": "O cartão de confirmação «Submeter Issue do GitHub»",
             "renameSessions": "O cartão de confirmação «Mudar o nome de tarefas em lote»",
-            "pluginFileGrant": "O cartão de confirmação «Autorização de ficheiros do plugin»"
+            "pluginFileGrant": "O cartão de confirmação «Autorização de ficheiros do plugin»",
+            "mediaPathReveal": "O cartão de confirmação «Permitir que o Agent obtenha a localização de um ficheiro multimédia no computador»"
           }
         },
         "replyWords": {
@@ -14518,7 +14543,6 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens em fila",
       "pausedFooter": "Tarefa parada, fila em pausa",
-
       "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar a enviar",
       "resumeAria": "Continuar a enviar mensagens em fila",
@@ -17886,6 +17910,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Não foi possível ler o modelo da automação. Feche e volte a abrir o editor para tentar novamente.",
       "promptDialog": {
         "titleEdit": "Editar automatização",
         "titleCreate": "Criar automatização",
@@ -18229,11 +18254,13 @@
         "effortHeading": "Esforço de raciocínio",
         "effortDefault": "Predefinido",
         "followSession": "Seguir sessão",
+        "followTeammate": "Seguir o modelo principal do amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Seletor de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
-        "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador."
+        "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador.",
+        "modelGroupTitle": "Grupo de modelos «{{name}}»: escolhe uma fonte ao criar uma nova tarefa"
       }
     },
     "toast": {
@@ -20600,6 +20627,7 @@
       "totalDetail_other": "{{count}} cartões × {{amount}}",
       "pay": "Continuar para o pagamento",
       "refundNote": "Os cartões de oferta não podem ser trocados por dinheiro. Os cartões utilizados não são reembolsáveis. Para pedir o reembolso de um cartão por utilizar, contacte o suporte.",
+      "termsNote": "Ao selecionar Continuar para o pagamento, aceita os <terms>Termos do cartão de oferta</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
       "checkoutSubtitle_one": "Cartão de oferta {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
@@ -22407,6 +22435,11 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Método de início de sessão",
+      "secretHint": "A chave vai apenas para o plugin, que a guarda na pasta própria desta conta. O Cindy não a guarda nem a envia para outros computadores.",
+      "browserHint": "O plugin abre o browser. Conclui o início de sessão aí e depois volta aqui."
+    },
     "placement": {
       "needsUpdate": "É necessário atualizar o Cindy no computador que executa esta operação para mover contas assim.",
       "moveTo": "Mover para…",

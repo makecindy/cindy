@@ -1,6 +1,6 @@
 /** BlueBubbles REST transport. Credentials never leave the configured origin. */
 import { createWriteStream } from 'node:fs';
-import { rename, rm } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -164,10 +164,23 @@ export class BlueBubblesApi {
         if (size > limit) counted.destroy(new BlueBubblesApiError('BLUEBUBBLES_RESPONSE_TOO_LARGE'));
       });
       await pipeline(counted, createWriteStream(partial, { mode: 0o600, flags: 'wx' }));
-      await rename(partial, dest);
+      // Windows may briefly lock the destination during another rename or a scanner read.
+      // Retry atomic replacement only; never unlink the existing original to make room.
+      const backoff = [10, 20, 40, 80, 160];
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await fs.rename(partial, dest);
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException | null)?.code;
+          const delay = backoff[attempt];
+          if (delay === undefined || !code || !['EPERM', 'EACCES', 'EBUSY'].includes(code)) throw error;
+          await new Promise<void>(resolve => setTimeout(resolve, delay));
+        }
+      }
       return size;
     } catch (error) {
-      await rm(partial, { force: true }).catch(() => {});
+      await fs.rm(partial, { force: true }).catch(() => {});
       // fetch errors may contain the query password, remote text or URL.
       if (error instanceof BlueBubblesApiError) throw error;
       throw new BlueBubblesApiError('BLUEBUBBLES_REQUEST_FAILED');

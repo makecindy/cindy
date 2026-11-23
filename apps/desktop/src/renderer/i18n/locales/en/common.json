@@ -689,6 +689,7 @@
     },
     "picker": {
       "unavailable": "Unavailable share",
+      "offline": "{{name}} · Offline for now",
       "hostOutdated": "The Cindy version on the owner’s computer is too old to list these models. Ask them to update Cindy, then try again.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -6882,7 +6883,15 @@
           "encrypted": "End-to-end encrypted",
           "legacyConnection": "Older connection",
           "encryptionUnknown": "Not confirmed",
-          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
+          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted.",
+          "routePreference": "Route preference",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relay",
+          "routeUnavailable": "Unavailable",
+          "routeMeasuring": "Measuring…",
+          "routeDirectUnavailableHint": "Direct connection is currently unavailable on this network",
+          "routePreferenceFailed": "Could not switch route. Try again."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7056,6 +7065,15 @@
         "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists",
         "agent-net-relay-down": "Can't reach the Agent-Net relay, reconnecting. Computers connected directly still work; other devices can't connect for now"
       },
+      "rejoin": {
+        "hint": "This device was removed from your account. Select Rejoin to bring it back.",
+        "action": "Rejoin",
+        "done": "Device rejoined",
+        "doneWithoutAgentNet": "Device rejoined. Agent-Net isn’t back yet, so Device Link is used for now",
+        "unsupported": "The server doesn’t support rejoining yet. Sign out and sign in again on this device",
+        "agentNetFailed": "Agent-Net isn’t back yet. Turn off “Use Only Agent-Net” to connect with Device Link for now",
+        "failed": "Couldn’t rejoin. Check your network and try again"
+      },
       "refresh": "Refresh",
       "empty": "No other devices yet. Sign in to {{appName}} with the same account on another computer and it will show up here.",
       "thisDevice": "This device",
@@ -7073,7 +7091,7 @@
       "renameCancel": "Cancel",
       "delete": "Delete",
       "deleteTitle": "Delete “{{name}}”?",
-      "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Sign in again on that device to rejoin.",
+      "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Select Rejoin on that device to bring it back.",
       "deleteOnlineHint": "This server does not yet support removing online devices. Retry after the service is upgraded.",
       "error": {
         "unavailable": "Device Link service is unavailable (not enabled on server or network error)",
@@ -8645,7 +8663,7 @@
           "updated": "Plugin updated.",
           "empty": "No installable release is available.",
           "sign-in": "Sign in to GitHub to check for updates.",
-          "forbidden": "This GitHub sign-in cannot read the private repository.",
+          "forbidden": "Could not read the GitHub release. Check the repository link and your GitHub account’s access.",
           "unavailable": "Couldn't check or install the update. Try again."
         },
         "customSlotTitle": "Plugin custom settings area",
@@ -9708,6 +9726,12 @@
       "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
       "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Terms Updated",
+    "body": "We've updated Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>. Agree to keep using Cindy, or log out.",
+    "agree": "Agree",
+    "disagree": "Logout"
   },
   "legacyMigration": {
     "title": "Migrate data from the previous version",
@@ -13254,7 +13278,8 @@
           "subject": {
             "githubIssue": "The “Submit GitHub Issue” confirmation card",
             "renameSessions": "The “Rename tasks in bulk” confirmation card",
-            "pluginFileGrant": "The “Plugin file access” confirmation card"
+            "pluginFileGrant": "The “Plugin file access” confirmation card",
+            "mediaPathReveal": "The “Let the Agent get a media file’s location on the computer” confirmation card"
           }
         },
         "replyWords": {
@@ -14403,7 +14428,6 @@
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
-
       "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
       "resumeAction": "Continue sending",
       "resumeAria": "Continue sending queued messages",
@@ -17720,6 +17744,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Could not read the automation’s model preference. Close and reopen the editor to retry.",
       "promptDialog": {
         "titleEdit": "Edit Automation",
         "titleCreate": "Create Automation",
@@ -18063,11 +18088,13 @@
         "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
+        "followTeammate": "Follow buddy’s primary model",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",
         "effortListAria": "Reasoning effort",
-        "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer."
+        "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer.",
+        "modelGroupTitle": "Model group “{{name}}”: picks a source when a run starts a new task"
       }
     },
     "toast": {
@@ -20412,6 +20439,7 @@
       "totalDetail_other": "{{count}} cards × {{amount}}",
       "pay": "Continue to Payment",
       "refundNote": "Gift cards can't be exchanged for cash. Claimed or redeemed cards are non-refundable. To request a refund for a card that hasn't been claimed, contact support.",
+      "termsNote": "By selecting Continue to Payment, you agree to the <terms>Gift Card Terms</terms>.",
       "cancel": "Cancel",
       "loadFailed": "Couldn’t load the gift card purchase limits. Try again later.",
       "checkoutSubtitle_one": "Gift card {{amount}} × {{count}} · Issued as soon as payment succeeds",
@@ -22195,6 +22223,11 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Sign-in method",
+      "secretHint": "The key goes only to the plugin, which keeps it in this account's own folder. Cindy doesn't store it or send it to other computers.",
+      "browserHint": "The plugin opens your browser. Finish signing in there, then come back."
+    },
     "placement": {
       "needsUpdate": "The computer running this needs a Cindy update before accounts can be moved this way.",
       "moveTo": "Move to…",

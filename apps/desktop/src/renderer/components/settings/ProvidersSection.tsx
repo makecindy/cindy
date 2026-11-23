@@ -130,6 +130,11 @@ import {
   useOwnRemoteProviderList,
   type OwnRemoteProvider,
 } from './OwnRemoteProviders';
+import {
+  OwnRemotePluginEngineDetail,
+  OwnRemotePluginEngineRows,
+  useOwnRemotePluginEngines,
+} from './OwnRemotePluginEngines';
 import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
 import {
   PluginEngineProviderDetail,
@@ -1023,39 +1028,56 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  // The catalog already identifies saved pools. Match that layout while refreshing its accounts.
-  const [pooled, setPooled] = useState(provider?.subscriptionAccountPool === providerId);
-  const [poolConnected, setPoolConnected] = useState(provider?.connected === true);
-  const [poolUnknown, setPoolUnknown] = useState(false);
+  const [pool, setPool] = useState<SubscriptionPoolView>();
+  const [connected, setConnected] = useState(provider?.connected === true);
+  const [readUnknown, setReadUnknown] = useState(false);
   const [busy, setBusy] = useState(false);
   const login = useRef<string | null>(null);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
-    let current = true;
-    const refresh = () => window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId })
-      .then(view => { if (current) {
+    let revision = 0;
+    const refresh = async () => {
+      const request = ++revision;
+      try {
+        const view = await window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId });
+        if (request !== revision) return;
         const connected = view.accounts.some(account => account.status === 'ready' || account.status === 'limited');
         // Accounts that could not be read are unknown, not signed out (2026-11-18): offering
         // sign-in here made a network problem look like a lost login.
         const unknown = !connected && view.accounts.some(account => account.status === 'unavailable');
-        setPooled(view.configured);
-        setPoolConnected(connected);
-        setPoolUnknown(unknown);
+        setPool(view);
+        setConnected(connected);
+        setReadUnknown(unknown);
         onPoolConnectionChange?.(view.configured && !unknown ? connected : null);
-      } }).catch(() => {});
+      } catch {
+        if (request === revision) setReadUnknown(true);
+      }
+    };
     refreshRef.current = refresh;
     void refresh();
     const off = window.electronAPI.subscriptionAccounts.onChanged(event => { if (event.providerId === providerId) void refresh(); });
     return () => {
-      current = false; off();
+      ++revision;
+      off();
       onPoolConnectionChange?.(null);
       if (login.current) void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
     };
   }, [providerId, onPoolConnectionChange]);
+  // The catalog already identifies saved pools. Match that layout while refreshing its accounts.
+  const pooled = pool?.configured ?? (provider?.subscriptionAccountPool === providerId);
   if (!pooled) return providerId === 'anthropic'
     ? <AnthropicHeader provider={provider} onChanged={onChanged}>{children}</AnthropicHeader>
     : <OpenAiHeader provider={provider} onChanged={onChanged}>{children}</OpenAiHeader>;
-  const connected = poolConnected;
+  const poolUnknown = !connected && readUnknown;
+  const accounts = pool?.accounts;
+  // Without a default or a single account to reconnect, the user chooses the account in its row.
+  const account = accounts?.length === 1 ? accounts[0] : accounts?.find(account => account.id === 'default');
+  const signIn = account ? { action: 'login' as const, accountId: account.id }
+    : accounts?.length === 0 ? { action: 'add' as const } : undefined;
+  const actionLabel = login.current ? 'settings.providers.button.cancel'
+    : connected ? 'settings.providers.button.disconnect'
+    : poolUnknown ? 'subscriptionAccounts.signIn.retry'
+    : signIn ? 'subscriptionAccounts.login' : undefined;
   const act = async () => {
     if (poolUnknown && !login.current) {
       // Re-read only; a recovered account announces itself to the account list as well.
@@ -1072,9 +1094,9 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
     setBusy(true);
     try {
       if (connected && provider) await disconnectProvider(provider, await window.electronAPI.maker.listProviders());
-      else {
+      else if (signIn) {
         login.current = crypto.randomUUID();
-        await window.electronAPI.subscriptionAccounts.command({ action: 'login', providerId, accountId: 'default', loginKey: login.current });
+        await window.electronAPI.subscriptionAccounts.command({ ...signIn, providerId, loginKey: login.current });
       }
       onChanged();
     } catch (error) {
@@ -1086,8 +1108,9 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
     icon={providerId === 'anthropic' ? <AnthropicMark size={18} /> : <OpenAIMark size={18} />}
     title={provider?.name ?? (providerId === 'anthropic' ? 'Anthropic' : 'OpenAI')}
     subtitle={t('subscriptionAccounts.title')}
-    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting' : poolUnknown ? 'subscriptionAccounts.unavailable' : 'settings.providers.pill.disconnected') }}
-    primaryAction={{ label: t(login.current ? 'settings.providers.button.cancel' : connected ? 'settings.providers.button.disconnect' : poolUnknown ? 'subscriptionAccounts.signIn.retry' : 'subscriptionAccounts.login'), onClick: () => void act(), disabled: busy && !login.current }} />;
+    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting'
+      : poolUnknown ? 'subscriptionAccounts.unavailable' : pool ? 'settings.providers.pill.disconnected' : 'subscriptionAccounts.signIn.checking') }}
+    primaryAction={actionLabel ? { label: t(actionLabel), onClick: () => void act(), disabled: busy && !login.current } : undefined} />;
 }
 
 /**
@@ -2714,7 +2737,12 @@ export function ProvidersSection() {
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
   const providerGroups = useLocalProviderGroupsState();
-  const { entries: offeredRemoteProviders, hiddenShareIds: groupedShareIds, ownedShares } = useOwnRemoteProviderList();
+  const {
+    entries: offeredRemoteProviders,
+    hiddenShareIds: groupedShareIds,
+    ownedShares,
+    devices: controllableDevices,
+  } = useOwnRemoteProviderList();
   const remoteDisable = useRemoteProviderDisable();
   const ownRemoteProviders = useMemo(() => offeredRemoteProviders.map(entry => remoteDisable.isDisabled(entry.deviceId, entry.provider.id)
     ? { ...entry, provider: { ...entry.provider, suspended: true } } : entry), [offeredRemoteProviders, remoteDisable]);
@@ -2728,8 +2756,15 @@ export function ProvidersSection() {
   const selectedEngine = selectedEngineKey
     ? pluginEngines.find((engine) => engine.key === selectedEngineKey) ?? null
     : null;
-  // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(三者互斥)。
-  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null || selectedEngine !== null;
+  // 自己其他电脑开放的插件引擎：与本机引擎共用选中态，键带前缀不会撞上；那台电脑离线或关掉开放后
+  // 从列表里消失，选中的那一行同样落回普通供应商。
+  const remotePluginEngines = useOwnRemotePluginEngines(controllableDevices, shareManageProviderId === null);
+  const selectedRemoteEngine = selectedEngineKey
+    ? remotePluginEngines.find((entry) => entry.key === selectedEngineKey) ?? null
+    : null;
+  // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(互斥)。
+  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null || selectedEngine !== null
+    || selectedRemoteEngine !== null;
   // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
   const selectProvider = useCallback((providerId: string) => {
     setSelectedShareId(null);
@@ -3801,6 +3836,15 @@ export function ProvidersSection() {
               {renderEngineRows(activeEngines)}
               {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
               {renderRemoteProviderRows(activeRemoteProviders)}
+              {/* 自己其他电脑开放的插件引擎：接在远程供应商后面，图标带远程角标、名字后带「插件」标识。 */}
+              <OwnRemotePluginEngineRows
+                entries={remotePluginEngines}
+                selectedKey={selectedRemoteEngine?.key ?? null}
+                onSelect={key => {
+                  setFocusedModel(null);
+                  selectEngine(key);
+                }}
+              />
               {(sharedLocalProviders.length > 0 || sharedRemoteProviders.length > 0) && (
                 <div
                   data-testid="provider-share-owned"
@@ -3880,7 +3924,9 @@ export function ProvidersSection() {
                   ? `remote:${selectedRemote.key}`
                   : selectedEngine
                     ? `engine:${selectedEngine.key}`
-                    : effectiveSelected?.id
+                    : selectedRemoteEngine
+                      ? `engine:${selectedRemoteEngine.key}`
+                      : effectiveSelected?.id
             }
             className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
@@ -3903,6 +3949,8 @@ export function ProvidersSection() {
                 pendingShareRequests={pendingShareCounts.get(selectedEngine.providerId) ?? 0}
                 onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(selectedEngine.providerId); }}
               />
+            ) : selectedRemoteEngine ? (
+              <OwnRemotePluginEngineDetail entry={selectedRemoteEngine} />
             ) : cindySigninActive ? (
               /* 登录引导是 brand-scale surface(DESIGN §3):48px 标识 → 24px 名字 →
                  一行价值主张 → 赠送余额徽标 → 黑 CTA,间距走 8px 系统。底部留白比

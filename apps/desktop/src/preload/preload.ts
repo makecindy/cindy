@@ -2610,6 +2610,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** 登录页协议门放行时调用一次(个人账号登录链路;SSO 与跳过登录豁免不调用);幂等。 */
   acceptPrivacyConsent: (): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:consent-accept'),
+  /** 主界面协议更新确认弹窗点「同意」:记录当前协议版本;幂等。 */
+  acceptLegalTermsUpdate: (): Promise<AnalyticsSettingsPayload> =>
+    ipcRenderer.invoke('analytics:legal-terms-accept'),
   onAnalyticsSettingsChange: (
     callback: (payload: AnalyticsSettingsPayload) => void,
   ): (() => void) =>
@@ -2622,7 +2625,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         typeof raw.allowed !== 'boolean' ||
         typeof raw.privacyConsentAccepted !== 'boolean' ||
         typeof raw.analyticsEnabled !== 'boolean' ||
-        typeof raw.analyticsEnabledCustomized !== 'boolean'
+        typeof raw.analyticsEnabledCustomized !== 'boolean' ||
+        typeof raw.legalTermsUpdateRequired !== 'boolean'
       ) {
         return;
       }
@@ -2631,6 +2635,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         analyticsEnabled: raw.analyticsEnabled,
         analyticsEnabledCustomized: raw.analyticsEnabledCustomized,
         allowed: raw.allowed,
+        legalTermsUpdateRequired: raw.legalTermsUpdateRequired,
       });
     }),
 
@@ -5320,6 +5325,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('device-link:set-device-control-enabled', { deviceId, enabled }),
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照(轮询 + onPeerLinksChanged) */
     getPeerLinks: (): Promise<DeviceLinkPeerLinksSnapshot> => ipcRenderer.invoke('device-link:get-peer-links'),
+    /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好(auto / direct / relay) */
+    setPeerPathPreference: (
+      deviceId: string,
+      preference: 'auto' | 'direct' | 'relay',
+    ): Promise<{ deviceId: string; preference: 'auto' | 'direct' | 'relay' }> =>
+      ipcRenderer.invoke('device-link:set-peer-path-preference', { deviceId, preference }),
     /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
     onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
     listDevices: (): Promise<{
@@ -5360,6 +5371,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('device-link:rename-device', { deviceId, name }),
     deleteDevice: (deviceId: string): Promise<{ deviceId: string; deleted: boolean }> =>
       ipcRenderer.invoke('device-link:delete-device', { deviceId }),
+    /** 本机被移除后「重新加入」(官方网络) */
+    rejoin: (): Promise<{ agentNet: 'rejoined' | 'skipped' | 'failed' }> => ipcRenderer.invoke('device-link:rejoin'),
     // —— 控制端:远程会话视图 ——
     openLink: (deviceId: string): Promise<{ appVersion: string; allowlistHash: string }> =>
       ipcRenderer.invoke('device-link:open-link', { deviceId }),
@@ -6361,6 +6374,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;
       }> => ipcRenderer.invoke('local-db:bots:model-chain-settings-set', body),
+      ownsProject: (workingDir: string): Promise<boolean> =>
+        ipcRenderer.invoke('local-db:bots:owns-project', workingDir),
       list: (body?: {
         lastReadAtByBotId?: Record<string, number>;
         welcomeContext?: import('../shared/botWelcomeContext').BotWelcomeContext;
@@ -6814,8 +6829,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listPluginEngines: (): Promise<import('../shared/pluginEngines.js').PluginEngineView[]> =>
       ipcRenderer.invoke('maker:list-plugin-engines'),
     /** Private account snapshot for one approved engine on this computer. */
-    getPluginEngineUsage: (key: string): Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null> =>
-      ipcRenderer.invoke('maker:get-plugin-engine-usage', key),
+    getPluginEngineUsage: (key: string, task?: { sessionId: string }): Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null> =>
+      task ? ipcRenderer.invoke('maker:get-plugin-engine-usage', key, task) : ipcRenderer.invoke('maker:get-plugin-engine-usage', key),
     /** Asks engine plugins to republish their models (cooldown in main); results arrive as a change push. */
     refreshPluginEngines: (targetGhostId?: string): Promise<void> => ipcRenderer.invoke('maker:refresh-plugin-engines', targetGhostId),
     /** Opens or closes one engine of this computer for the owner's other computers. */

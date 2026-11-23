@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "已不可用之分享",
+      "offline": "{{name}} · 暂离线",
       "hostOutdated": "分享者机上之 Cindy 版本过旧，读不得此等模型。请彼更新 Cindy 而后再试。",
       "numbered": "{{name}} ({{index}})"
     },
@@ -6839,7 +6840,15 @@
           "encrypted": "端对端加密",
           "legacyConnection": "旧版连接",
           "encryptionUnknown": "尚未核实",
-          "legacyEncryptionHint": "旧路经中继时，内容未施端对端加密。"
+          "legacyEncryptionHint": "旧路经中继时，内容未施端对端加密。",
+          "routePreference": "择路",
+          "routeAuto": "自动",
+          "routeDirect": "直连",
+          "routeRelay": "中继",
+          "routeUnavailable": "不可达",
+          "routeMeasuring": "测速中…",
+          "routeDirectUnavailableHint": "今网路未能直达此器",
+          "routePreferenceFailed": "易道未成，请复试之"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7013,6 +7022,15 @@
         "unstable": "连接屡断屡连，请察网络；若持续如此，请重启 Cindy",
         "agent-net-relay-down": "不能达 Agent-Net 中转，方复连；已直连之电脑如常可用，余设备暂不能连"
       },
+      "rejoin": {
+        "hint": "此设备已自名籍中移除，点「重新加入」即可复归。",
+        "action": "重新加入",
+        "done": "已重新加入",
+        "doneWithoutAgentNet": "已重新加入，Agent-Net 暂未复，姑以 Device Link 相连",
+        "unsupported": "服务器尚不支持重新加入，请于此设备辞出后重新登录",
+        "agentNetFailed": "Agent-Net 暂未复。解「唯用 Agent-Net」之限，可先以 Device Link 相连",
+        "failed": "重新加入未成，请察网络后再试"
+      },
       "refresh": "重整",
       "empty": "海内尚无知己机。于另一台机上以同一名籍登录 {{appName}}，此处即见之。",
       "thisDevice": "此机",
@@ -7030,7 +7048,7 @@
       "renameCancel": "罢",
       "delete": "删",
       "deleteTitle": "删「{{name}}」乎？",
-      "deleteMessage": "将此设备自名籍中移除，并中断远程连接。设备上之差事与卷仍存，重新登录后可再加入。",
+      "deleteMessage": "将此设备自名籍中移除，并中断远程连接。设备上之差事与卷仍存，其后于彼设备点「重新加入」即可复归。",
       "deleteOnlineHint": "今服务器尚不支持移除在线设备，请俟服务升级后再试。",
       "error": {
         "unavailable": "设备互联服务暂不可用(服务端未激活或网络有异)",
@@ -8588,7 +8606,7 @@
           "updated": "法器已更新。",
           "empty": "暂无可安装的版本。",
           "sign-in": "请登录 GitHub 后检查更新。",
-          "forbidden": "当前 GitHub 登录无权读取此私有仓库。",
+          "forbidden": "无法读取 GitHub Release。请检查仓库链接和 GitHub 账号的访问权限。",
           "unavailable": "无法检查或安装更新，请重试。"
         },
         "customSlotTitle": "法器自订设置区",
@@ -9665,6 +9683,12 @@
       "guidance": "请稍待再取验证码。重新启动、重新安装或切换网络，皆不保解除限制。",
       "support": "稍待之后仍无法登录，请将记录私下寄予 feedback@cindy.app，并附操作系统、Cindy 版本、出错时间及下方错误码。请勿公开发布记录。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "服务条款与隐私政策已更",
+    "body": "Cindy 之<terms>服务条款</terms>与<privacy>隐私政策</privacy>已更，请阅而允之，方可续用。",
+    "agree": "允",
+    "disagree": "辞出"
   },
   "legacyMigration": {
     "title": "迁旧版之数据",
@@ -13201,7 +13225,8 @@
           "subject": {
             "githubIssue": "「呈 GitHub Issue」之确认卡",
             "renameSessions": "「批次易差事之名」之确认卡",
-            "pluginFileGrant": "「法器卷帙授权」之确认卡"
+            "pluginFileGrant": "「法器卷帙授权」之确认卡",
+            "mediaPathReveal": "「许 Agent 知图等媒体卷于机上之所在」之确认卡"
           }
         },
         "replyWords": {
@@ -14349,7 +14374,6 @@
       "regionAria": "待遣之讯队列",
       "listAria": "队列之讯",
       "pausedFooter": "差事已止，队列暂停",
-
       "steerUnsupportedNotice": "此引擎不受插话，待遣之讯俟此轮毕乃遣。",
       "resumeAction": "续遣",
       "resumeAria": "续遣队列之讯",
@@ -17646,6 +17670,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "未能读取自动化模型设置，请关闭编辑器后重开再试。",
       "promptDialog": {
         "titleEdit": "修自运",
         "titleCreate": "立自运",
@@ -17989,11 +18014,13 @@
         "effortHeading": "思之深浅",
         "effortDefault": "常例",
         "followSession": "随差事",
+        "followTeammate": "随同伴主模型",
         "modelListAria": "模型录",
         "modelSelectorAria": "择模型",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "思之深浅",
-        "boundLocationLocked": "所系差事仍于原机行之，请择彼机之模型。"
+        "boundLocationLocked": "所系差事仍于原机行之，请择彼机之模型。",
+        "modelGroupTitle": "模型组「{{name}}」：新立任务则依式择源"
       }
     },
     "toast": {
@@ -20332,6 +20359,7 @@
       "totalDetail_other": "{{count}} 张 × {{amount}}",
       "pay": "去支付",
       "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持人员。",
+      "termsNote": "点「去支付」，即为已阅并允<terms>《礼品卡购买与使用条款》</terms>。",
       "cancel": "取消",
       "loadFailed": "暂时无法读取购买限制，请稍后重试。",
       "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",
@@ -22107,6 +22135,11 @@
     }
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登录之法",
+      "secretHint": "Key 唯付法器，藏于此账号之箧；Cindy 不存，亦不传他机。",
+      "browserHint": "法器将启浏览器，登录毕，归此。"
+    },
     "placement": {
       "needsUpdate": "行此事之机当先更新 Cindy，方可如是调号。",
       "moveTo": "移至…",

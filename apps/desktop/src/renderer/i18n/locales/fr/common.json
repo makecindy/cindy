@@ -698,6 +698,7 @@
     },
     "picker": {
       "unavailable": "Partage indisponible",
+      "offline": "{{name}} · Hors ligne pour le moment",
       "hostOutdated": "La version de Cindy sur l'ordinateur du propriétaire est trop ancienne pour lister ces modèles. Demandez-lui de mettre à jour Cindy, puis réessayez.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -6949,7 +6950,15 @@
           "encrypted": "Chiffrée de bout en bout",
           "legacyConnection": "Ancienne connexion",
           "encryptionUnknown": "Non confirmé",
-          "legacyEncryptionHint": "Le chemin via le relais de l’ancienne connexion n’est pas chiffré de bout en bout."
+          "legacyEncryptionHint": "Le chemin via le relais de l’ancienne connexion n’est pas chiffré de bout en bout.",
+          "routePreference": "Choix de la route",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relais",
+          "routeUnavailable": "Indisponible",
+          "routeMeasuring": "Mesure…",
+          "routeDirectUnavailableHint": "La connexion directe est actuellement indisponible sur ce réseau",
+          "routePreferenceFailed": "Impossible de changer d’itinéraire. Veuillez réessayer."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7123,6 +7132,15 @@
         "unstable": "La connexion se coupe et se rétablit sans cesse : vérifiez le réseau, ou redémarrez Cindy si le problème persiste",
         "agent-net-relay-down": "Relais Agent-Net injoignable, reconnexion en cours. Les ordinateurs connectés directement fonctionnent toujours ; les autres appareils ne peuvent pas se connecter pour le moment"
       },
+      "rejoin": {
+        "hint": "Cet appareil a été retiré de votre compte. Choisissez « Rejoindre » pour le rétablir.",
+        "action": "Rejoindre",
+        "done": "Appareil rétabli",
+        "doneWithoutAgentNet": "Appareil rétabli. Agent-Net n'est pas encore rétabli : Device Link est utilisé en attendant",
+        "unsupported": "Le serveur ne permet pas encore de rejoindre. Déconnectez-vous puis reconnectez-vous sur cet appareil",
+        "agentNetFailed": "Agent-Net n'est pas encore rétabli. Désactivez « Utiliser uniquement Agent-Net » pour vous connecter via Device Link en attendant",
+        "failed": "Impossible de rejoindre. Vérifiez votre connexion réseau et réessayez"
+      },
       "refresh": "Actualiser",
       "empty": "Aucun autre appareil pour l'instant. Connectez-vous à {{appName}} avec le même compte sur un autre ordinateur et il apparaîtra ici.",
       "thisDevice": "Cet appareil",
@@ -7140,7 +7158,7 @@
       "renameCancel": "Annuler",
       "delete": "Supprimer",
       "deleteTitle": "Supprimer « {{name}} » ?",
-      "deleteMessage": "Retirer cet appareil de votre compte et couper l'accès à distance. Ses sessions et fichiers sont conservés. Reconnectez-vous sur cet appareil pour le rajouter.",
+      "deleteMessage": "Retirer cet appareil de votre compte et couper l'accès à distance. Ses sessions et fichiers sont conservés. Choisissez « Rejoindre » sur cet appareil pour le rétablir.",
       "deleteOnlineHint": "Ce serveur ne permet pas encore de retirer des appareils en ligne. Réessayez après la mise à niveau du service.",
       "error": {
         "unavailable": "Le service de liaison d'appareils est indisponible (non activé sur le serveur ou erreur réseau)",
@@ -8717,7 +8735,7 @@
           "updated": "Plugin mis à jour.",
           "empty": "Aucune version installable disponible.",
           "sign-in": "Connectez-vous à GitHub pour rechercher des mises à jour.",
-          "forbidden": "Ce compte GitHub ne peut pas lire le dépôt privé.",
+          "forbidden": "Impossible de lire la version publiée sur GitHub. Vérifiez le lien du dépôt et les droits d’accès de votre compte GitHub.",
           "unavailable": "Impossible de vérifier ou d’installer la mise à jour. Réessayez."
         },
         "customSlotTitle": "Zone de paramètres personnalisés du plugin",
@@ -9780,6 +9798,12 @@
       "guidance": "Patientez avant de demander un autre code. Redémarrer, réinstaller ou changer de réseau ne garantit pas la levée de la limite.",
       "support": "Si le problème persiste après l'attente, envoyez en privé les journaux à feedback@cindy.app en indiquant votre système d'exploitation, votre version de Cindy, l'heure de l'erreur et le code ci-dessous. Ne publiez pas les journaux publiquement."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Conditions mises à jour",
+    "body": "Nous avons mis à jour les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy>. Acceptez pour continuer ou déconnectez-vous.",
+    "agree": "Accepter",
+    "disagree": "Déconnexion"
   },
   "legacyMigration": {
     "title": "Migrer les données de la version précédente",
@@ -13365,7 +13389,8 @@
           "subject": {
             "githubIssue": "La carte de confirmation « Soumettre une issue GitHub »",
             "renameSessions": "La carte de confirmation « Renommer des tâches en lot »",
-            "pluginFileGrant": "La carte de confirmation « Autorisation de fichiers du plugin »"
+            "pluginFileGrant": "La carte de confirmation « Autorisation de fichiers du plugin »",
+            "mediaPathReveal": "La carte de confirmation « Permettre à l’Agent d’obtenir l’emplacement d’un fichier multimédia sur l’ordinateur »"
           }
         },
         "replyWords": {
@@ -14518,7 +14543,6 @@
       "regionAria": "File d'attente des messages",
       "listAria": "Messages en file d'attente",
       "pausedFooter": "Tâche arrêtée, file d'attente en pause",
-
       "steerUnsupportedNotice": "Ce moteur ne permet pas de réorienter. Les messages en attente seront envoyés à la fin du tour en cours.",
       "resumeAction": "Reprendre l'envoi",
       "resumeAria": "Reprendre l'envoi des messages en file d'attente",
@@ -17886,6 +17910,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Impossible de lire le modèle de l’automatisation. Fermez puis rouvrez l’éditeur pour réessayer.",
       "promptDialog": {
         "titleEdit": "Modifier l'automatisation",
         "titleCreate": "Créer une automatisation",
@@ -18229,11 +18254,13 @@
         "effortHeading": "Effort de raisonnement",
         "effortDefault": "Par défaut",
         "followSession": "Suivre la session",
+        "followTeammate": "Suivre le modèle principal de l’ami",
         "modelListAria": "Liste des modèles",
         "modelSelectorAria": "Sélecteur de modèle",
         "categoryListAria": "Modèles {{category}}",
         "effortListAria": "Effort de raisonnement",
-        "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur."
+        "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur.",
+        "modelGroupTitle": "Groupe de modèles « {{name}} » : choisit une source à la création d’une nouvelle tâche"
       }
     },
     "toast": {
@@ -20600,6 +20627,7 @@
       "totalDetail_other": "{{count}} cartes × {{amount}}",
       "pay": "Continuer vers le paiement",
       "refundNote": "Les cartes cadeaux ne peuvent pas être échangées contre de l’argent. Une carte récupérée ou utilisée n’est pas remboursable. Pour demander le remboursement d’une carte non récupérée, contactez le support.",
+      "termsNote": "En sélectionnant Continuer vers le paiement, vous acceptez les <terms>Conditions des cartes cadeaux</terms>.",
       "cancel": "Annuler",
       "loadFailed": "Impossible de charger les limites d’achat. Réessayez plus tard.",
       "checkoutSubtitle_one": "Carte cadeau {{amount}} × {{count}} · émise dès le paiement réussi",
@@ -22407,6 +22435,11 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Méthode de connexion",
+      "secretHint": "La clé est transmise uniquement au plugin, qui la conserve dans le dossier propre à ce compte. Cindy ne la stocke pas et ne l’envoie pas à d’autres ordinateurs.",
+      "browserHint": "Le plugin ouvre votre navigateur. Terminez la connexion là-bas, puis revenez ici."
+    },
     "placement": {
       "needsUpdate": "Cindy doit être mis à jour sur l'ordinateur qui exécute cette opération pour déplacer des comptes ainsi.",
       "moveTo": "Déplacer vers…",

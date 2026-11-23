@@ -593,6 +593,15 @@ interface InflightRunDiagnostic extends SchedulerInflightRun {
   durationMs: number;
 }
 
+/** 模型组 id：去空白；空或 null = 没选模式。过长的 id 不是 model-groups.json 里能有的，拒绝。 */
+export function normalizeScheduleModelGroup(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new Error('modelGroup must be a model group id');
+  const id = value.trim();
+  if (id.length > 64) throw new Error('modelGroup is not a model group id');
+  return id || undefined;
+}
+
 export class Scheduler extends EventEmitter {
   private readonly storage: ScheduleStorage;
   private readonly runner: ScheduleRunner;
@@ -2679,6 +2688,7 @@ export class Scheduler extends EventEmitter {
       preRunHook: input.preRunHook ?? undefined,
       preRunPlugin: this.resolveNewPreRunPlugin(normalizePreRunPlugin(input.preRunPlugin) ?? undefined),
       agentDeviceId: input.agentDeviceId ?? undefined,
+      modelGroup: normalizeScheduleModelGroup(input.modelGroup),
       executionMode: input.executionMode ?? 'agent',
       scriptConfig: normalizeScriptConfig(input.scriptConfig),
       manual,
@@ -2800,6 +2810,19 @@ export class Scheduler extends EventEmitter {
         if (!Object.prototype.hasOwnProperty.call(patch, key)) updates[key] = undefined;
       }
       if (!Object.prototype.hasOwnProperty.call(patch, 'fastMode')) updates.fastMode = false;
+    }
+    // 模型组：显式给了按调用方意图(空 = 去掉模式)。改了具体模型或运行位置却没提模式的调用方(旧版手机端、
+    // 只认识具体模型的工具)选的是一个具体来源，沿用旧模式会让新选的来源永远不生效，所以一并去掉模式；
+    // 原样回传不算改。modelAgentDeviceId 的 '' (本机)与不设(跟着任务)意思不同，不合并。
+    if (Object.prototype.hasOwnProperty.call(patch, 'modelGroup')) {
+      updates.modelGroup = normalizeScheduleModelGroup(patch.modelGroup);
+    } else if (existing.modelGroup && (
+      (['agentKind', 'modelAgentKind', 'model', 'providerId', 'agentDeviceId'] as const).some((key) =>
+        Object.prototype.hasOwnProperty.call(patch, key) &&
+        (patch[key] || undefined) !== (existing[key] || undefined))
+      || (Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId') &&
+        (patch.modelAgentDeviceId ?? undefined) !== (existing.modelAgentDeviceId ?? undefined)))) {
+      updates.modelGroup = undefined;
     }
     // 运行位置与来源/模型成对:来源属于那台电脑的目录。改了路由却没带运行位置的
     // 调用方(旧版手机端 / 旧版桌面远程编辑不认识这个字段)选的是本机目录,

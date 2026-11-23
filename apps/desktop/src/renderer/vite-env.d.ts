@@ -144,6 +144,8 @@ interface DeviceLinkConnectionIssuePayload {
   closeCode?: number;
   detail?: string;
   at: number;
+  /** 官方网络上的「已移除」:可以在本机「重新加入」 */
+  rejoinable?: true;
 }
 
 /** 设备互联:presence 推送快照 */
@@ -2392,6 +2394,7 @@ interface ElectronAPI {
   setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
   resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
   acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
+  acceptLegalTermsUpdate: () => Promise<AnalyticsSettingsPayload>;
   onAnalyticsSettingsChange: (callback: (payload: AnalyticsSettingsPayload) => void) => () => void;
 
   // ── 客户端日志上报(设置 → 关于)──
@@ -4405,6 +4408,11 @@ interface ElectronAPI {
       displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
+    /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好 */
+    setPeerPathPreference?: (
+      deviceId: string,
+      preference: 'auto' | 'direct' | 'relay',
+    ) => Promise<{ deviceId: string; preference: 'auto' | 'direct' | 'relay' }>;
     /** 对端链路拓扑变化,payload 为全量快照 */
     onPeerLinksChanged: (cb: (payload: DeviceLinkPeerLinksSnapshot) => void) => () => void;
     renameDevice: (
@@ -4412,6 +4420,8 @@ interface ElectronAPI {
       name: string | null,
     ) => Promise<{ deviceId: string; name: string; manualName?: string | null }>;
     deleteDevice: (deviceId: string) => Promise<{ deviceId: string; deleted: boolean }>;
+    /** 本机被移除后「重新加入」(官方网络) */
+    rejoin: () => Promise<{ agentNet: 'rejoined' | 'skipped' | 'failed' }>;
     // —— 控制端:远程会话视图 ——
     openLink: (deviceId: string) => Promise<{ appVersion: string; allowlistHash: string }>;
     closeLink: (deviceId: string) => Promise<{ ok: true }>;
@@ -5248,6 +5258,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     bots: {
+      ownsProject: (workingDir: string) => Promise<boolean>;
       projectRepository: (botId: string, retry: boolean) => Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus>;
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];
@@ -5812,7 +5823,8 @@ interface ElectronAPI {
      */
     listPluginEngines: () => Promise<import('../shared/pluginEngines').PluginEngineView[]>;
     /** Read the private account snapshot of one approved plugin engine. */
-    getPluginEngineUsage?: (key: string) => Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null>;
+    /** `task`: a local task whose engine keeps accounts reads its own account's usage (2026-11-23). */
+    getPluginEngineUsage?: (key: string, task?: { sessionId: string }) => Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null>;
     /**
      * Asks engine plugins to republish their models, like the provider model refresh when the picker
      * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
