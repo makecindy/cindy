@@ -100,7 +100,7 @@ export function cachedHostModelGroups(deviceId: string): HostModelGroup[] | null
 
 /** 来源数 · 选法 · 推理强度，与电脑上选择器里模型组那一行同一写法。 */
 export function hostModelGroupHint(group: HostModelGroup, t: TFunction): string {
-  return [t('models.modelGroups.sourceCount', { count: group.sources }), t(`models.modelGroups.strategy.${group.strategy}`),
+  return [t('models.modelGroups.sourceCount', { count: group.sources }), group.strategy ? t(`models.modelGroups.strategy.${group.strategy}`) : '',
     group.effort ? t(`models.options.effortLevels.${group.effort}`, { defaultValue: group.effort }) : ''].filter(Boolean).join(' · ');
 }
 
@@ -185,7 +185,8 @@ export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | 
     route: { agentKind, providerId, model, ...(agentDeviceId ? { agentDeviceId } : {}), ...(effort ? { effort } : {}) },
     modelName: str(value.modelName, 256) || model,
     sourceName: str(value.sourceName, 256) || providerId,
-    why: str(value.why, 32),
+    // Newer hosts send the real reason in `pickWhy` and an older stand-in in `why` for apps that predate it.
+    why: str(value.pickWhy, 32) || str(value.why, 32),
     quota: used === null ? null : { usedPercent: used, resetAtMs: num(quota?.resetAtMs) },
     limitedUntilMs: num(picked?.limitedUntilMs),
     exceptions,
@@ -248,7 +249,9 @@ function whyText(result: Extract<HostModelGroupResult, { outcome: 'routed' }>, t
       return result.limitedUntilMs
         ? t('models.modelGroups.why.soonestUntil', { reset: formatReset(result.limitedUntilMs, locale) })
         : t('models.modelGroups.why.soonest');
-    case 'order': case 'rotate': case 'only': case 'cheapest': case 'cheapestFree':
+    case 'headroom':
+      return left !== null ? t('models.modelGroups.why.headroomQuota', { left }) : t('models.modelGroups.why.headroom');
+    case 'order': case 'rotate': case 'only': case 'cheapest': case 'cheapestFree': case 'drain': case 'drainNext': case 'weighted':
       return t(`models.modelGroups.why.${result.why}`);
     default:
       return '';

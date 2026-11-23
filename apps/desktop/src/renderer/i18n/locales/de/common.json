@@ -22380,6 +22380,18 @@
       "cheapest": {
         "title": "Am günstigsten",
         "hint": "Nutzt zuerst Abos mit verbleibendem Kontingent, ohne Zusatzkosten; der Rest folgt vom niedrigsten zum höchsten Listenpreis, Quellen ohne Preis kommen zuletzt."
+      },
+      "drain": {
+        "title": "Aufbrauchen, dann weiter",
+        "hint": "Nutzt die zuletzt verwendete Quelle weiter, bis ihr Kontingent aufgebraucht oder sie nicht verfügbar ist, und wechselt dann zur nächsten; bei Erholung früherer Quellen wird nicht zurückgewechselt."
+      },
+      "headroom": {
+        "title": "Meistes Restkontingent",
+        "hint": "Nutzt zuerst die Quelle mit dem größten Anteil an verbleibendem Kontingent (das Wochenkontingent, falls vorhanden); Quellen ohne lesbares Kontingent kommen zuletzt."
+      },
+      "weighted": {
+        "title": "Nach Gewichtung",
+        "hint": "Verteilt neue Aufgaben im Verhältnis der Gewichtungen abwechselnd auf die Quellen; nicht verfügbare Quellen setzen diesmal aus."
       }
     },
     "picker": {
@@ -22407,6 +22419,11 @@
       "tight": "Das 5-Stunden-Kontingent ist fast voll und wird vorerst übersprungen",
       "cheapest": "Niedrigster Listenpreis",
       "cheapestFree": "Abo-Kontingent übrig, keine Zusatzkosten",
+      "drain": "Wird weiter genutzt, bis ihr Kontingent aufgebraucht ist",
+      "drainNext": "Die vorige Quelle war aufgebraucht oder nicht verfügbar, daher diese",
+      "headroom": "Meistes Restkontingent",
+      "headroomQuota": "Noch {{left}} % Kontingent, mehr als jede andere Quelle",
+      "weighted": "Laut Gewichtung an der Reihe",
       "noVision": "Die Nachricht enthält Bilder, und diese Quelle kann keine Bilder sehen",
       "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
       "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
@@ -22426,6 +22443,9 @@
       "effort": "Denkintensität",
       "effortUnset": "Nicht festgelegt",
       "effortHint": "Unterstützt das gewählte Modell diese Stufe nicht, läuft es mit seinem Standard.",
+      "weight": "Gewichtung",
+      "weightAria": "Gewichtung für „{{name}}“",
+      "weightHint": "Bei „Nach Gewichtung“ erhält eine höhere Gewichtung mehr neue Aufgaben. 1–1000.",
       "sources": "Nutzbare Quellen",
       "sourcesHint": "Verschiedene Modelle können nebeneinander stehen. Die Aufgabe zeigt, welches verwendet wurde.",
       "sourcesEmpty": "Noch keine Quellen. Füge unten ein verbundenes Modell hinzu.",
@@ -22458,6 +22478,7 @@
         "empty": "Noch keine Ausnahmen. Jede neue Aufgabe folgt der Auswahlregel oben.",
         "imageRule": "Wenn die Nachricht Bilder enthält, nur Quellen verwenden, die Bilder sehen können",
         "hoursRule": "{{from}}–{{to}}: „{{name}}“ verwenden",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: „{{name}}“ verwenden",
         "remove": "Diese Ausnahme entfernen",
         "add": "Ausnahme hinzufügen",
         "choose": "Situation auswählen",
@@ -22466,6 +22487,9 @@
         "from": "Von",
         "to": "Bis",
         "useRoute": "Stattdessen verwenden",
+        "days": "Tage",
+        "daysHint": "Ohne Auswahl gilt es jeden Tag. Ein Zeitraum über Mitternacht zählt zu dem Tag, an dem er beginnt.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Hinzufügen",
         "sameHour": "Beginn und Ende dürfen nicht gleich sein.",
         "full": "Bis zu {{count}} Ausnahmen.",
