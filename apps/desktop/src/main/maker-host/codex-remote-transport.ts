@@ -231,6 +231,8 @@ exec "$CODEX" "$@"
   const pendingWrites: Array<{ line: string; resolve: () => void; reject: (e: Error) => void }> = [];
 
   let state: State = 'connecting';
+  let attachedSocketPath: string | undefined;
+  let sshReadyAt: number | undefined;
   let channel: ExecStreamHandle | null = null;
   let receiver: WsReceiver | null = null;
   let sender: WsSender | null = null;
@@ -240,7 +242,7 @@ exec "$CODEX" "$@"
   let handshakeDone = false;
   let handshakeTimer: NodeJS.Timeout | null = null;
 
-  const fireClose = (reason: string): void => {
+  const fireClose = (reason: string, reconnectable = false): void => {
     if (state === 'closed') return;
     state = 'closed';
     if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null; }
@@ -253,7 +255,7 @@ exec "$CODEX" "$@"
     channel = null;
     receiver = null;
     sender = null;
-    const info: TransportCloseInfo = { reason };
+    const info: TransportCloseInfo = reconnectable ? { reason, reconnectable } : { reason };
     for (const cb of closeHandlers) {
       try { cb(info); } catch { /* handler should not throw */ }
     }
@@ -397,7 +399,14 @@ exec "$CODEX" "$@"
     // 2) Open the proxy as a long-lived ssh exec channel.
     // Quote socketPath defensively (POSIX) — daemon may put it in a path with spaces.
     const cmd = codexCmd(['app-server', 'proxy', '--sock', socketPath]);
+    const readyAt = opts.remoteHost.snapshot().statusChangedAt;
     const ch = await opts.remoteHost.execStream(cmd);
+    if (state === 'closed') {
+      ch.kill();
+      return;
+    }
+    attachedSocketPath = socketPath;
+    sshReadyAt = readyAt;
     channel = ch;
 
     ch.onStderr((s) => {
@@ -411,7 +420,7 @@ exec "$CODEX" "$@"
     ch.onClose((info) => {
       if (state !== 'closed') {
         const reason = info.signal ? `signal=${info.signal}` : `exit code=${info.code ?? 'null'}`;
-        fireClose(`proxy channel closed (${reason})`);
+        fireClose(`proxy channel closed (${reason})`, state === 'open' && info.code == null && !info.signal);
       }
     });
     ch.onError((err) => {
@@ -539,6 +548,37 @@ exec "$CODEX" "$@"
   });
 
   return {
+    async reconnect(signal: AbortSignal): Promise<Transport> {
+      if (!attachedSocketPath || sshReadyAt === undefined) throw new Error('Codex proxy never connected');
+      const previousReadyAt = sshReadyAt;
+      await new Promise<void>((resolve, reject) => {
+        const settle = (error?: Error) => {
+          stopListening();
+          signal.removeEventListener('abort', abort);
+          if (error) reject(error);
+          else resolve();
+        };
+        const abort = () => settle(new Error('SSH recovery cancelled'));
+        const check = (snapshot: ReturnType<RemoteHost['snapshot']>) => {
+          if (snapshot.status === 'ready' && snapshot.statusChangedAt > previousReadyAt) settle();
+          else if (snapshot.status === 'disconnected' || snapshot.status === 'failed') {
+            settle(new Error('SSH host did not recover'));
+          }
+        };
+        const stopListening = opts.remoteHost.onStatus(check);
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+        else check(opts.remoteHost.snapshot());
+      });
+      signal.throwIfAborted();
+      return createSshDaemonTransport({
+        ...opts,
+        beforeDaemonProbe: undefined,
+        autoStartDaemon: false,
+        socketPath: attachedSocketPath,
+      });
+    },
+
     writeLine(line: string): Promise<void> {
       if (state === 'closed') {
         return Promise.reject(new Error('SshDaemonTransport.writeLine after close'));

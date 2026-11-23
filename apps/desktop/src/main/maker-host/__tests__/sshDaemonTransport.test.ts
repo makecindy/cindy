@@ -26,13 +26,15 @@
  * with no compile-time signal — this test catches it.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
 import {
   WS_GUID,
   computeWsAccept,
+  createSshDaemonTransport,
   shellQuote,
 } from '../codex-remote-transport';
 
@@ -161,5 +163,69 @@ describe('ws/lib internals (round-trip via require)', () => {
     for (const chunk of captured) receiver.write(chunk);
     // Receiver fires 'message' synchronously after the last byte of a complete frame.
     expect(received).toEqual([payload]);
+  });
+});
+
+
+// Unit regression for #7393. Only a new SSH-ready generation may open another
+// proxy to the same daemon socket; reconnecting must never restart that daemon.
+describe('SSH daemon proxy recovery', () => {
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: () => logger };
+
+  it('waits for the new SSH generation before opening a proxy to the same daemon', async () => {
+    let snapshot = { status: 'ready', statusChangedAt: 1 };
+    let onStatus: ((value: typeof snapshot) => void) | undefined;
+    const exec = vi.fn();
+    const channels: Array<{ disconnect: () => void }> = [];
+    const execStream = vi.fn(async (_command: string) => {
+      let feed: (bytes: Buffer) => void;
+      let close: (info: { code: null; signal: undefined }) => void;
+      channels.push({ disconnect: () => close({ code: null, signal: undefined }) });
+      return {
+        onClose: (fn: typeof close) => { close = fn; },
+        onStdoutBytes: (fn: typeof feed) => { feed = fn; },
+        onStderr: () => {},
+        onError: () => {},
+        kill: vi.fn(),
+        write(bytes: Buffer | string) {
+          const key = /Sec-WebSocket-Key: (.+)\r\n/i.exec(bytes.toString())?.[1];
+          if (key) {
+            const accept = computeWsAccept(key);
+            queueMicrotask(() => feed(Buffer.from(
+              'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n' +
+              'Connection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n',
+            )));
+          }
+        },
+      };
+    });
+    const remoteHost = {
+      exec, execStream, snapshot: () => snapshot,
+      onStatus(fn: typeof onStatus) { onStatus = fn; return () => { onStatus = undefined; }; },
+    } as unknown as RemoteHost;
+    const initial = createSshDaemonTransport({ remoteHost, socketPath: '/tmp/codex.sock', logger });
+    let replacement: Awaited<ReturnType<NonNullable<typeof initial.reconnect>>> | undefined;
+    try {
+      await initial.writeLine('first channel');
+      const closed = vi.fn();
+      initial.onClose(closed);
+      channels[0].disconnect();
+      expect(closed).toHaveBeenCalledWith(expect.objectContaining({ reconnectable: true }));
+      const pending = initial.reconnect!(AbortSignal.timeout(1000));
+      expect(execStream).toHaveBeenCalledTimes(1);
+      snapshot = { status: 'ready', statusChangedAt: 2 };
+      onStatus?.(snapshot);
+      replacement = await pending;
+      await replacement.writeLine('replacement channel');
+      expect(execStream).toHaveBeenCalledTimes(2);
+      expect(execStream.mock.calls[1][0]).toBe(execStream.mock.calls[0][0]);
+      expect(exec).not.toHaveBeenCalled();
+      snapshot = { status: 'disconnected', statusChangedAt: 3 };
+      await expect(replacement.reconnect!(AbortSignal.timeout(1000))).rejects.toThrow('SSH host did not recover');
+      expect(execStream).toHaveBeenCalledTimes(2);
+    } finally {
+      await replacement?.close();
+      await initial.close();
+    }
   });
 });
