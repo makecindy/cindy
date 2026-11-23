@@ -107,9 +107,9 @@ function projection(handler: Handler, messages: Message[]): Message[] {
   return changed ? changed.messages : messages;
 }
 
-/** 翻完整批并把页拼回去；每页都不得超过 limit（读取上限 + 最长调用 id 的一条续读提示）。 */
+/** 翻完整批并把页拼回去；每页都不得超过 limit（上限以内的成员 + 至多一条整行放行的缺项说明 + 一条续读提示）。 */
 async function readWholeBatch(tool: Tool, batchId: string, limit: number) {
-  const next = (body: string) => /from: ("(?:[^"\\]|\\.)*"), offset: (\d+) to continue\.\]$/.exec(body);
+  const next = (body: string) => /at: (\d+), offset: (\d+) to continue\.\]$/.exec(body);
   const pages: string[] = [];
   let joined = '';
   let params: Record<string, unknown> = { batch: batchId };
@@ -122,7 +122,7 @@ async function readWholeBatch(tool: Tool, batchId: string, limit: number) {
     // 成员内部续读的两页之间没有分隔；成员开头续读的补回成员之间的分隔。
     joined += (pages.length > 1 && Number(params.offset) > 0 ? '' : (pages.length > 1 ? '\n\n' : '')) + body;
     if (!again) break;
-    params = { batch: batchId, from: JSON.parse(again[1]), offset: Number(again[2]) };
+    params = { batch: batchId, at: Number(again[1]), offset: Number(again[2]) };
   }
   return { pages, joined };
 }
@@ -188,7 +188,7 @@ describe('cindy-tool-fold extension source', () => {
     // "command -> conclusion" is exactly what the model re-uses as its own narration.
     expect(record).not.toContain(args.path);
     expect(callIds(out)).not.toContain('call-0');
-    const batch = await tool.execute('t-batch', { call_id: 'batch:call-0' });
+    const batch = await tool.execute('t-batch', { batch: refsOf(out)[0] });
     expect(String(batch.content![0].text)).toContain(args.path);
   });
 
@@ -607,6 +607,8 @@ describe('cindy-tool-fold extension source', () => {
     // provider 的 id 叫 r1 完全合法：批用 batch 参数、调用用 call_id 参数，
     // 两个名字空间不共享，所以同名的批和调用可以各自打开。
     messages.push(call('r1', 'bash', { command: 'echo decoy one' }), result('r1', 'bash', 'decoy one'));
+    // 调用 id 以 "batch:" 开头也只是一个调用 id：标识符按字段解释，不按字符串形状猜含义。
+    messages.push(call('batch:call-0', 'bash', { command: 'echo decoy three' }), result('batch:call-0', 'bash', 'decoy three'));
     const view = projection(context, messages)!;
     const ref = refsOf(view)[0];
     expect(ref).toBe('r1');
@@ -615,6 +617,9 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(batchRead.content![0].text)).not.toContain('decoy one');
     const callRead = await tool.execute('t-call', { call_id: 'r1' });
     expect(String(callRead.content![0].text)).toContain('echo decoy one');
+    const shapedRead = await tool.execute('t-shaped', { call_id: 'batch:call-0' });
+    expect(String(shapedRead.content![0].text)).toContain('echo decoy three');
+    expect(String(shapedRead.content![0].text)).not.toContain('run step 0');
   });
 
   it('keeps a batch readable after a later call takes the same id and folds', async () => {
@@ -1099,7 +1104,7 @@ describe('cindy-tool-fold extension source', () => {
     const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '4000' });
     const batchId = refsOf(projection(context, messages)!)[0];
     const page = async (params: Record<string, unknown>) => String((await tool.execute('p' + reads++, params)).content![0].text);
-    const next = (body: string) => /from: ("(?:[^"\\]|\\.)*"), offset: (\d+) to continue\.\]$/.exec(body);
+    const next = (body: string) => /at: (\d+), offset: (\d+) to continue\.\]$/.exec(body);
     let reads = 0;
     const first = await page({ batch: batchId });
     expect(first.length).toBeLessThanOrEqual(4300);
@@ -1108,7 +1113,7 @@ describe('cindy-tool-fold extension source', () => {
     const pruned = messages.filter((message) => !(message.role === 'toolResult' && message.toolCallId === 'call-5')
       && !(message.role === 'assistant' && (message.content as Block[]).some((block) => block.id === 'call-5')));
     projection(context, pruned);
-    let params: Record<string, unknown> = { batch: batchId, from: JSON.parse(resume[1]), offset: Number(resume[2]) };
+    let params: Record<string, unknown> = { batch: batchId, at: Number(resume[1]), offset: Number(resume[2]) };
     let joined = first.replace(/\n\n\[truncated: [^\n]*\]$/, '');
     for (let guard = 0; guard < 40; guard += 1) {
       let body = await page(params);
@@ -1119,18 +1124,18 @@ describe('cindy-tool-fold extension source', () => {
       // 续读点落在成员内部时两页之间没有分隔；落在成员开头时补回成员之间的分隔。
       joined += (Number(params.offset) > 0 ? '' : '\n\n') + body;
       if (!again) break;
-      params = { batch: batchId, from: JSON.parse(again[1]), offset: Number(again[2]) };
+      params = { batch: batchId, at: Number(again[1]), offset: Number(again[2]) };
     }
     // 分页拼回去与逐条读取逐字相同，只少被删的那一条；缺项在它的成员位置上被点名。
     const gone = '[missing round-trip call-5 (not in this session); re-run that command]';
     expect(joined).toBe([...full.slice(0, 5), gone, ...full.slice(6)].join('\n\n'));
     // 游标成员自己被删：成员内偏移随之作废——缺项说明从头给出，下一条成员不被截头。
-    const afterLoss = await page({ batch: batchId, from: 'call-5', offset: 10 });
+    const afterLoss = await page({ batch: batchId, at: 5, offset: 10 });
     expect(afterLoss.startsWith(gone + '\n\n' + full[6].slice(0, 300))).toBe(true);
     // 游标偏移越过成员现有的全文（续读期间它被截短）：偏移作废、页首说明、从头给出，不静默略过。
-    const stale = await page({ batch: batchId, from: 'call-7', offset: 1000000 });
+    const stale = await page({ batch: batchId, at: 7, offset: 1000000 });
     expect(stale.startsWith('[stale cursor: offset 1000000 is past the end of call-7 (' + full[7].length + ' chars now); shown from the start]\n\n' + full[7])).toBe(true);
-    expect((await tool.execute('x', { batch: batchId, from: 'call-99' })).isError).toBe(true);
+    expect((await tool.execute('x', { batch: batchId, at: 99 })).isError).toBe(true);
   });
 
   it('keeps missing-member lines inside the read budget: a missing member is page content, not a footer', async () => {
@@ -1147,9 +1152,10 @@ describe('cindy-tool-fold extension source', () => {
     expect(batchId).toBeTruthy();
     // 压缩把整批成员都删了：100 条缺项、每条 id 2,000 字符，点名本身约 20 万字符。
     projection(context, [{ role: 'user', content: [{ type: 'text', text: 'continue' }] }]);
-    const { pages, joined } = await readWholeBatch(tool, batchId, 120000 + 4096 + 300);
-    expect(pages.length).toBe(2);
     const lines = ids.slice(0, 96).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
+    // 续读游标是位置、不带调用 id：每页只有上限以内的成员、至多一条整行放行的说明、一条续读提示。
+    const { pages, joined } = await readWholeBatch(tool, batchId, 120000 + lines[0].length + 300);
+    expect(pages.length).toBe(2);
     expect(joined).toBe(lines.join('\n\n'));
     // 最新 4 条仍在上下文里，不进批；第一页点到第 58 条就停，不替后面 38 条点名。
     expect(pages[0]).toContain(lines[57]);
@@ -1174,8 +1180,8 @@ describe('cindy-tool-fold extension source', () => {
     // 说明行 564 / 1,464 / 3,064 字符，预算 1,000：第一条放下后只剩 434，第二条整行放行
     // （不按偏移切开——否则下一页的「游标成员已不在 → 偏移作废」会让它永远从头重发）；
     // 第三条另起一页，整行放行。
-    const { pages, joined } = await readWholeBatch(tool, batchId, 1000 + 4096 + 300);
     const lines = ids.slice(0, 3).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
+    const { pages, joined } = await readWholeBatch(tool, batchId, 1000 + Math.max(...lines.map((line) => line.length)) + 300);
     expect(pages).toEqual([lines[0] + '\n\n' + lines[1], lines[2]]);
     expect(joined).toBe(lines.join('\n\n'));
   });

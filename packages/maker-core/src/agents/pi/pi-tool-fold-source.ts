@@ -149,7 +149,6 @@ export default function (pi) {
   var refSeq = 0;
   var refs = new Map();
   var refByKey = Object.create(null);
-  var refLegacy = Object.create(null);
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
   // victim is the least-recently-recovered entry, not the earliest-pinned one.
   var pinned = new Map();
@@ -490,18 +489,17 @@ export default function (pi) {
     do {
       refSeq += 1;
       refId = 'r' + refSeq;
-    } while (refs.has(refId) || refLegacy[refId] !== undefined);
+    } while (refs.has(refId));
     refs.set(refId, { ids: ids.slice() });
     refByKey[key] = refId;
-    // 旧记录的兼容入口：本进程内更早渲染过的 batch:<首条 id> 仍能打开同一批。
-    refLegacy['batch:' + String(ids[0])] = refId;
     return refId;
   }
 
+  // 标识符只按它所在的字段解释：batch 字段里只认登记过的批 id。曾经按「batch:<首条 id>」
+  // 的字符串形状去兼容更早草稿渲染过的记录，但投影不落盘、进程内代码不变，那种字符串
+  // 没有合法来源，只会把真实调用 id（provider 可以生成任意字符串）劫持成批。
   function refIdOf(entryId) {
-    if (refs.has(entryId)) return entryId;
-    var legacy = refLegacy[entryId];
-    return legacy === undefined ? null : legacy;
+    return refs.has(entryId) ? entryId : null;
   }
 
   function foldable(id) {
@@ -526,16 +524,17 @@ export default function (pi) {
   }
 
   /** Admit a giant payload; evict oldest entries until the aggregate bound holds. */
-  function admitGiant(id, text, blocks) {
-    var kept = blocks || [{ type: 'text', text: text }];
-    var cost = costOfContent(kept);
+  function admitGiant(id, blocks, makeText) {
+    var cost = costOfContent(blocks);
     if (cost > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
+    // 先按大小决定收不收，再要全文：被拒的载荷不该先付一整份副本的内存。
+    var text = makeText();
     if (giants.has(id)) {
       giantBytes -= giants.get(id).bytes;
       giants.delete(id);
     }
     // Also keep the block structure: a flattened string cannot put text back between images.
-    giants.set(id, { text: text, blocks: kept, bytes: cost });
+    giants.set(id, { text: text, blocks: blocks, bytes: cost });
     giantBytes += cost;
     while (giants.size > 1 && (giants.size > GIANT_KEEP || giantBytes > GIANT_BUDGET_CHARS)) {
       var oldest = giants.keys().next().value;
@@ -563,9 +562,7 @@ export default function (pi) {
       if (block && block.type === 'text' && typeof block.text === 'string') total += block.text.length;
     }
     if (total <= INGEST_LIMIT) return null;
-    var full = textOf(blocks);
-    admitGiant(id, full, blocks);
-    var retained = (giants.get(id) || {}).text === full;
+    var retained = admitGiant(id, blocks, function () { return textOf(blocks); });
     var kept = 0;
     var truncated = 0;
     var parts = [];
@@ -713,22 +710,19 @@ export default function (pi) {
     };
   }
 
-  // 整批取回按「成员游标」分页：from 指定起始成员，offset 只在这个成员内部生效。
-  // 续读坐标必须是稳定身份——整批拼接后的字符偏移会随成员被压缩删掉而漂移，后一页就从
+  // 整批取回按「成员游标」分页：at 是起始成员在登记表里的位置，offset 只在这个成员内部
+  // 生效。续读坐标必须是宿主自己的稳定身份——整批拼接后的字符偏移会随成员被压缩删掉而
+  // 漂移，后一页就从
   // 错位处读起。缺项也是成员：它的一行说明就是该成员的页内容，走同一个游标、同一条
   // 读取预算（整行放行，不按偏移切开）。页尾不另附缺项清单——那是第二条不受预算约束的
   // 输出路径（成批缺项配长调用 id 时一页就越过读取上限，而且每页重复）。代价只与页本身
-  // 有关：成员轮到才解析，从 from 起拼到读满为止。
+  // 有关：成员轮到才解析，从 at 起拼到读满为止。
   function readBatch(refId, key, params) {
     var entry = refs.get(refId);
     var ids = entry ? entry.ids : [];
-    var at = 0;
-    var from = params && typeof params.from === 'string' ? params.from : '';
-    if (from !== '') {
-      at = ids.indexOf(from);
-      if (at === -1) {
-        return { text: 'cannot continue at ' + JSON.stringify(from) + ': not a member of this batch. Read the batch again without "from".', recovered: 0 };
-      }
+    var at = params && typeof params.at === 'number' && params.at > 0 ? Math.floor(params.at) : 0;
+    if (at >= ids.length) {
+      return { text: 'cannot continue at ' + at + ': batch ' + key + ' has ' + ids.length + ' members. Read the batch again without "at".', recovered: 0 };
     }
     var skip = params && typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
     var parts = [];
@@ -759,7 +753,7 @@ export default function (pi) {
       }
       var gap = parts.length > 0 ? 2 : 0;
       var room = RECOVERY_READ_MAX_CHARS - size - gap;
-      if (room <= 0) { next = { id: memberId, offset: skip }; break; }
+      if (room <= 0) { next = { at: at + shown, offset: skip }; break; }
       if (line === null) recovered += 1;
       if (member.length <= room || line !== null) {
         // 缺项说明整行放行：越过剩余空间也只越过这一行，下一条成员另起一页。
@@ -770,7 +764,7 @@ export default function (pi) {
       } else {
         parts.push(member.slice(0, room));
         size += gap + room;
-        next = { id: memberId, offset: skip + room };
+        next = { at: at + shown, offset: skip + room };
       }
       skip = 0;
     }
@@ -780,7 +774,7 @@ export default function (pi) {
     var text = (stale === null ? '' : stale + '\n\n') + parts.join('\n\n');
     if (next !== null) {
       text += '\n\n[truncated: ' + (ids.length - at - shown) + ' round-trips not shown in batch ' + key + '. Call cindy_toolfold_read again with batch: '
-        + JSON.stringify(key) + ', from: ' + JSON.stringify(next.id) + ', offset: ' + next.offset + ' to continue.]';
+        + JSON.stringify(key) + ', at: ' + next.at + ', offset: ' + next.offset + ' to continue.]';
     }
     return { text: text, recovered: recovered };
   }
@@ -832,8 +826,10 @@ export default function (pi) {
         // （或反过来），分配时避让只能挡住当时已有的 id。
         batch: { type: 'string', minLength: 1, maxLength: 64, description: 'Batch id from a "[folded]" record, e.g. r7.' },
         call_id: { type: 'string', minLength: 1, maxLength: 4096, description: 'Single tool call id from a folded or truncated record.' },
-        from: { type: 'string', minLength: 1, maxLength: 4096, description: 'Batch reads only: the member id to start from, exactly as the previous page named it. Members before it stay skipped.' },
-        offset: { type: 'integer', minimum: 0, description: 'Characters to skip inside the text being read: inside the member named by "from" for a batch, inside that round-trip for a call id. The previous page states the value to pass.' },
+        // 游标不用成员 id：那是 provider 生成的外部字符串，长度不受控，放进 schema 就得设
+        // 上限，一旦超长整段余量就取不回。位置是宿主自己的坐标，整数、有界、登记后不变。
+        at: { type: 'integer', minimum: 0, description: 'Batch reads only: position of the first member to return, exactly as the previous page stated. Members before it stay skipped.' },
+        offset: { type: 'integer', minimum: 0, description: 'Characters to skip inside the text being read: inside the member at position "at" for a batch, inside that round-trip for a call id. The previous page states the value to pass.' },
       },
       required: [],
       additionalProperties: false,
@@ -850,13 +846,6 @@ export default function (pi) {
         var batch = readBatch(batchRef, batchParam, params);
         if (batch.recovered === 0) return { content: [{ type: 'text', text: 'Cannot recover batch ' + batchParam + ': ' + batch.text }], isError: true };
         return { content: [{ type: 'text', text: batch.text }] };
-      }
-      // 旧记录里的 batch:<首条 id> 仍按批处理；新记录改用 batch 字段，与调用 id 分开。
-      var legacyRef = id.indexOf('batch:') === 0 && foldedIds[id] === undefined ? refIdOf(id) : null;
-      if (legacyRef !== null) {
-        var legacyBatch = readBatch(legacyRef, id, params);
-        if (legacyBatch.recovered === 0) return { content: [{ type: 'text', text: 'Cannot recover batch ' + id + ': ' + legacyBatch.text }], isError: true };
-        return { content: [{ type: 'text', text: legacyBatch.text }] };
       }
       var original = findOriginal(id);
       if (!original || original.ok !== true) {
@@ -876,7 +865,7 @@ export default function (pi) {
         // 再拼一次调用说明与参数（续读的 offset 随之失真）。
         if (raw.length <= PIN_BUDGET_CHARS && raw.length <= RECOVERY_READ_MAX_CHARS) {
           pinOriginal(id);
-        } else if (!admitGiant(String(id), String(original.result || ''), [{ type: 'text', text: String(original.result || '') }])) {
+        } else if (!admitGiant(String(id), [{ type: 'text', text: String(original.result || '') }], function () { return String(original.result || ''); })) {
           // 转存被拒（超出内存预算）时不能退回钉住：那等于让一次取回把整段原文塞回
           // 上下文，把读上限和 pin 预算一起作废。这里 fail-closed，保持折叠并说明原因。
           return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': the payload is over the retention budget, so it was not retained; re-run the command instead.' }], isError: true };
@@ -966,10 +955,8 @@ export default function (pi) {
           if (!alive) refs.delete(refId);
         });
         refByKey = Object.create(null);
-        refLegacy = Object.create(null);
         refs.forEach(function (entry, refId) {
           refByKey[entry.ids.join('\u0000')] = refId;
-          refLegacy['batch:' + String(entry.ids[0])] = refId;
         });
       }
       var batchIds = [];
