@@ -1,3 +1,4 @@
+import { chatCompatibilityCapabilities } from '@cindy/model-compat';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -1754,6 +1755,23 @@ describe('translateResponsesRequest', () => {
       namespace: 'mcp',
     });
   });
+
+  it.each(['https://api.z.ai/api/coding/paas/v4', 'https://open.bigmodel.cn/api/coding/paas/v4'])(
+    'retains GLM-5.4 thinking when returning a tool result on %s',
+    upstreamBase => {
+      const model = 'glm-5.4';
+      const capabilities = chatCompatibilityCapabilities({ upstreamBase, model, harness: 'codex', protocol: 'openai-chat' });
+      const request = translateResponsesRequest(base({ model, input: [
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'inspect the file' }] },
+        { type: 'function_call', call_id: 'c1', name: 'read', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+      ] }), { capabilities });
+      expect(request.messages).toMatchObject([
+        { role: 'assistant', reasoning_content: 'inspect the file', tool_calls: [{ id: 'c1' }] },
+        { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+      ]);
+    },
+  );
 
   it('gates replayed reasoning history by provider capability', () => {
     const source = base({
