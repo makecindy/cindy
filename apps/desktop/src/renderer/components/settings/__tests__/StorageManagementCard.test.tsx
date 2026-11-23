@@ -70,6 +70,7 @@ function storageApi() {
 
 function maintenanceApi() {
   return {
+    cancelScan: vi.fn(async () => {}),
     getLastResult: vi.fn(async () => null),
     scan: vi.fn(async (input: {
       archiveAgeMonths: '7-days' | 1 | 3 | 6;
@@ -844,6 +845,23 @@ describe('StorageManagementCard database cleanup', () => {
     expect(
       await screen.findByText('settings.about.storage.dbSlimmingReportTasksWithActive'),
     ).toBeTruthy();
+  });
+
+  // #11628 unit: releasing the modal must also discard a late scan result.
+  it('unlocks the window on cancel and keeps a late result out of view', async () => {
+    const api = window.electronAPI.localDb.maintenance;
+    const result = await maintenanceApi().scan({ archiveAgeMonths: 1 });
+    let finish!: () => void;
+    vi.mocked(api.scan).mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve(result);
+    }));
+    render(<StorageManagementCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingScanButton' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.about.storage.cancelButton' }));
+    expect(api.cancelScan).toHaveBeenCalledOnce();
+    expect(document.body.dataset.appInteractionLocked).not.toBe('1');
+    await act(async () => finish());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
   it('locks the full window while a database scan is running, then shows results in a dialog', async () => {

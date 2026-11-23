@@ -53,6 +53,7 @@ interface DirectoryGrant {
 export interface LocalDbMaintenanceIpcDeps {
   captureOwner(): OwnerSnapshot | null;
   isOwnerCurrent(snapshot: OwnerSnapshot): boolean;
+  getClient?(): Pick<import('../client/DbClient').DbClient, 'corruptionError' | 'observeCorruption'> | null;
   scanDatabase?: typeof scanDbSlimmingPreview;
   getDbClientOwnerId(): string | null;
   getCurrentDbPath(): string | null;
@@ -67,7 +68,7 @@ export interface LocalDbMaintenanceIpcDeps {
 
 /** Main-owned grants keep Renderer-supplied ids from becoming path or time authorization. */
 export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcDeps) {
-  let scanPending = false;
+  let pending: { owner: OwnerSnapshot; controller: AbortController } | null = null;
   const scanGrants = new Map<string, ScanGrant>();
   const directoryGrants = new Map<string, DirectoryGrant>();
   const resultCache = new Map<string, DbSlimmingResultRecord>();
@@ -108,31 +109,41 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
   };
 
   return {
+    cancelScan(): void {
+      if (pending && deps.isOwnerCurrent(pending.owner)) pending.controller.abort();
+    },
     async scan(input: DbSlimmingScanInput): Promise<DbSlimmingScanResult> {
       const archiveAgeMonths = validateArchiveAge(input?.archiveAgeMonths);
       const includeActiveTasks = validateIncludeActiveTasks(input?.includeActiveTasks);
       const owner = captureReadyOwner();
       const scannedAt = Date.now();
       const archivedBeforeMs = archiveCutoffForAge(scannedAt, archiveAgeMonths);
-      if (scanPending) {
+      if (pending) {
         throwIpcError('PRECONDITION_FAILED', 'database scan is already running');
       }
       const dbFilePath = deps.getCurrentDbPath();
       if (!dbFilePath || !fs.existsSync(dbFilePath)) {
         throwIpcError('PRECONDITION_FAILED', 'database path is unavailable');
       }
-      scanPending = true;
+      const client = deps.getClient?.();
+      if (client?.corruptionError) throw client.corruptionError;
+      const controller = new AbortController();
+      pending = { owner, controller };
+      const current = () => deps.isOwnerCurrent(owner) && deps.getDbClientOwnerId() === owner.ownerId &&
+        deps.getCurrentDbPath() === dbFilePath && deps.getClient?.() === client;
       try {
         const row = await (deps.scanDatabase ?? scanDbSlimmingPreview)({
           dbFilePath,
           archivedBeforeMs,
           includeActiveTasks,
-          isOwnerCurrent: () => deps.isOwnerCurrent(owner) &&
-            deps.getDbClientOwnerId() === owner.ownerId &&
-            deps.getCurrentDbPath() === dbFilePath,
+          onDatabaseError: (error) => {
+            if (current()) client?.observeCorruption?.(error);
+          },
+          signal: controller.signal,
+          isOwnerCurrent: () => current() && !client?.corruptionError,
         });
         assertOwnerCurrent(owner);
-        if (deps.getCurrentDbPath() !== dbFilePath) {
+        if (!current() || client?.corruptionError || controller.signal.aborted) {
           throwIpcError('PRECONDITION_FAILED', 'database path changed during scan');
         }
         const databaseBytes = estimateDbFilesBytes(dbFilePath);
@@ -161,7 +172,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
         });
         return result;
       } finally {
-        scanPending = false;
+        pending = null;
       }
     },
 
@@ -251,6 +262,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
           );
         }
         assertOwnerCurrent(owner);
+        if (deps.getClient?.()?.corruptionError) throwIpcError('PRECONDITION_FAILED', 'database unavailable');
         const liveScan = scanGrants.get(scan.scanId);
         if (
           liveScan !== scan ||

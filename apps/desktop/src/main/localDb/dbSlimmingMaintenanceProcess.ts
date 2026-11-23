@@ -1,7 +1,8 @@
+import { isSqliteCorruption } from './client/sqliteCorruption';
 import fs from 'node:fs';
 
 import { runDbSlimmingMaintenance } from './dbSlimmingMaintenance';
-import { readDbSlimmingPreview } from './dbSlimmingScanQuery';
+import { readLeasedDbSlimmingPreview } from './dbSlimmingScanQuery';
 import type {
   DbSlimmingProcessCommand,
   DbSlimmingProcessInput,
@@ -72,14 +73,15 @@ async function run(input: DbSlimmingProcessInput): Promise<void> {
   );
 }
 
-processPort.on('message', (event) => {
+processPort.on('message', async (event) => {
   const command = event.data as Partial<DbSlimmingProcessCommand> | undefined;
   if (command?.type === 'scan' && !started && command.input) {
     started = true;
     try {
-      post({ type: 'scan-result', row: readDbSlimmingPreview(command.input) });
+      const row = await readLeasedDbSlimmingPreview(command.input);
+      post({ type: 'scan-result', row });
     } catch (error) {
-      post({ type: 'error', error: { message: error instanceof Error ? error.message : String(error) } });
+      post({ type: 'error', error: { message: error instanceof Error ? error.message : String(error), code: isSqliteCorruption(error) ? (error as { code: string }).code : undefined } });
     }
     return;
   }

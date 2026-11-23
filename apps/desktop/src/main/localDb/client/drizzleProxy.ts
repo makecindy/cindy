@@ -29,14 +29,16 @@ const fakeSqliteClient = {
   },
 };
 
+type QueryTransport = Pick<DbTransport, 'send'>;
+
 const terminalMethods = new Set(['all', 'get', 'run', 'values', 'execute', 'then', 'catch', 'finally']);
 
-export function createDrizzleProxy(transport: DbTransport | (() => DbTransport)) {
+export function createDrizzleProxy(transport: QueryTransport | (() => QueryTransport)) {
   const db = drizzle(fakeSqliteClient as unknown as Database.Database, { schema });
   return wrapDrizzleObject(db, transport);
 }
 
-function wrapDrizzleObject<T>(target: T, transport: DbTransport | (() => DbTransport)): T {
+function wrapDrizzleObject<T>(target: T, transport: QueryTransport | (() => QueryTransport)): T {
   if (!target || (typeof target !== 'object' && typeof target !== 'function')) return target;
 
   const proxy = new Proxy(target as AnyObject, {
@@ -61,7 +63,7 @@ function wrapDrizzleObject<T>(target: T, transport: DbTransport | (() => DbTrans
   return proxy as T;
 }
 
-function terminalExecutor(prop: string, builder: AnyObject, transport: DbTransport | (() => DbTransport)) {
+function terminalExecutor(prop: string, builder: AnyObject, transport: QueryTransport | (() => QueryTransport)) {
   const getTransport = () => typeof transport === 'function' ? transport() : transport;
   if (prop === 'then') {
     return (onfulfilled?: (value: unknown) => unknown, onrejected?: (reason: unknown) => unknown) =>
@@ -86,7 +88,7 @@ function terminalExecutor(prop: string, builder: AnyObject, transport: DbTranspo
   return () => executeRun(builder, getTransport());
 }
 
-async function executeAll<T>(builder: AnyObject, transport: DbTransport): Promise<T[]> {
+async function executeAll<T>(builder: AnyObject, transport: QueryTransport): Promise<T[]> {
   if (hasSelectFields(builder)) {
     const { sql, params } = toSql(builder);
     const fieldsList = orderSelectedFields(builder.config.fields);
@@ -124,7 +126,7 @@ function returningFieldsList(value: AnyObject): SelectedField[] | null {
     : null;
 }
 
-async function executeGet<T>(builder: AnyObject, transport: DbTransport): Promise<T | undefined> {
+async function executeGet<T>(builder: AnyObject, transport: QueryTransport): Promise<T | undefined> {
   if (hasSelectFields(builder)) {
     const { sql, params } = toSql(builder);
     const fieldsList = orderSelectedFields(builder.config.fields);
@@ -148,14 +150,14 @@ function normalizeJoins(value: unknown): Record<string, boolean> | undefined {
   return value && typeof value === 'object' ? (value as Record<string, boolean>) : undefined;
 }
 
-async function executeValues(builder: AnyObject, transport: DbTransport): Promise<unknown[][]> {
+async function executeValues(builder: AnyObject, transport: QueryTransport): Promise<unknown[][]> {
   const { sql, params } = toSql(builder);
   return transport.send<unknown[][]>('rawAll', { sql, params });
 }
 
 async function executeRun(
   builder: AnyObject,
-  transport: DbTransport,
+  transport: QueryTransport,
 ): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
   const { sql, params } = toSql(builder);
   return transport.send('run', { sql, params });

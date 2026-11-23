@@ -39,6 +39,18 @@ describe('DbClient', () => {
     }
   });
 
+  // #11628 db tier: a sibling reader reports corruption before this worker touches the bad page.
+  it('blocks an already-built Drizzle write after the maintenance reader reports corruption', async () => {
+    const client = await createDbClient({ useInlineWorker: true });
+    try {
+      const write = client.drizzle.delete(schema.sessions);
+      client.observeCorruption?.(Object.assign(new Error('damaged page'), { code: 'SQLITE_CORRUPT' }));
+      await expect(write.run()).rejects.toMatchObject({ code: 'DB_TRANSPORT_NOT_SENT' });
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it('falls back to worker-thread when utility-process is requested', async () => {
     const client = await createDbClient({ transport: 'utility-process', useInlineWorker: true });
     try {

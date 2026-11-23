@@ -9712,6 +9712,7 @@ const registerIpcHandlers = () => {
         !isAppSessionBoundaryPending() &&
         getActiveAppSession().dataOwnerId === ownerId &&
         activeOwnerScopeKey() === scopeKey,
+      getClient: tryGetDbClient,
       getDbClientOwnerId: getCurrentDbClientUserId,
       getCurrentDbPath: () => {
         const ownerId = getActiveAppSession().dataOwnerId;
@@ -9828,6 +9829,10 @@ const registerIpcHandlers = () => {
     ipcMain.handle('local-db:maintenance:scan', (event, input) => {
       assertTrustedAppRendererEvent(event);
       return invokeLocalDbMaintenanceIpc('scan', () => localDbMaintenanceHandlers.scan(input));
+    });
+    ipcMain.handle('local-db:maintenance:cancel-scan', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('cancel-scan', () => localDbMaintenanceHandlers.cancelScan());
     });
     ipcMain.handle('local-db:maintenance:choose-backup-directory', (event) => {
       assertTrustedAppRendererEvent(event);

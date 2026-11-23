@@ -1,3 +1,4 @@
+import { acquireSchemaMigrationReaderLease } from './schemaMigrationLease';
 import { createRequire } from 'node:module';
 import type Database from 'better-sqlite3';
 
@@ -65,5 +66,16 @@ export function readDbSlimmingPreview(input: DbSlimmingScanInput): ScanAggregate
       ) as ScanAggregateRow;
   } finally {
     db.close();
+  }
+}
+
+// The utility process owns the lease so its lifetime covers the native handle even if Main exits.
+export async function readLeasedDbSlimmingPreview(input: DbSlimmingScanInput): Promise<ScanAggregateRow> {
+  const held = await acquireSchemaMigrationReaderLease(input.dbFilePath);
+  if (!held.acquired) throw new Error('database maintenance lease unavailable');
+  try {
+    return readDbSlimmingPreview(input);
+  } finally {
+    held.lease.release();
   }
 }

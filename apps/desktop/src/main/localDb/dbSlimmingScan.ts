@@ -16,6 +16,8 @@ export interface DbSlimmingScanOptions {
   dbFilePath: string;
   archivedBeforeMs: number;
   includeActiveTasks: boolean;
+  onDatabaseError?(error: Error): void;
+  signal?: AbortSignal;
   isOwnerCurrent(): boolean;
 }
 
@@ -46,6 +48,7 @@ export async function scanDbSlimmingPreview(
     const finish = (unconfirmed = false): void => {
       if (settled) return;
       settled = true;
+      options.signal?.removeEventListener('abort', cancel);
       clearTimeout(deadline);
       clearTimeout(terminationTimer);
       clearInterval(ownerCheck);
@@ -67,6 +70,7 @@ export async function scanDbSlimmingPreview(
         failure = killError;
       }
     };
+    const cancel = () => stop(createIpcError('PRECONDITION_FAILED', 'database scan cancelled'));
     let deadline = setTimeout(
       () => stop(new Error('database scan process did not become ready')),
       DB_SLIMMING_WORKER_READY_TIMEOUT_MS,
@@ -75,9 +79,17 @@ export async function scanDbSlimmingPreview(
       if (!options.isOwnerCurrent())
         stop(createIpcError('PRECONDITION_FAILED', 'database owner changed during scan'));
     }, 1000);
+    options.signal?.addEventListener('abort', cancel, { once: true });
     child.on('message', (message) => {
-      if (stopping || !message || typeof message !== 'object') return;
+      if (!message || typeof message !== 'object') return;
       const event = message as DbSlimmingProcessMessage;
+      if (event.type === 'error') {
+        const error = Object.assign(new Error(event.error.message), { code: event.error.code });
+        options.onDatabaseError?.(error);
+        stop(error);
+        return;
+      }
+      if (stopping) return;
       if (event.type === 'ready' && !ready) {
         ready = true;
         if (!options.isOwnerCurrent()) {
@@ -106,8 +118,6 @@ export async function scanDbSlimmingPreview(
       } else if (event.type === 'scan-result' && ready) {
         row = event.row;
         stop();
-      } else if (event.type === 'error') {
-        stop(new Error(event.error.message));
       }
     });
     child.on('error', (...errors) =>

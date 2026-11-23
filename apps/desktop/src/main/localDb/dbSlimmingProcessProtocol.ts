@@ -27,4 +27,4 @@ export type DbSlimmingProcessMessage =
       meta?: unknown;
     }
   | { type: 'result'; outcome: RunDbSlimmingMaintenanceOutcome }
-  | { type: 'error'; error: { message: string; stack?: string } };
+  | { type: 'error'; error: { message: string; stack?: string; code?: string } };

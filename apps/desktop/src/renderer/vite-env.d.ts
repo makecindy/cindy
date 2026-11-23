@@ -5122,6 +5122,7 @@ interface ElectronAPI {
       scan: (
         input: import('../shared/localDbMaintenance').DbSlimmingScanInput,
       ) => Promise<import('../shared/localDbMaintenance').DbSlimmingScanResult>;
+      cancelScan(): Promise<void>;
       chooseBackupDirectory: () => Promise<
         import('../shared/localDbMaintenance').DbSlimmingBackupDirectorySelection
       >;

@@ -42,10 +42,12 @@ function createHarness() {
   const confirmWithoutBackup = vi.fn(async () => true);
   const revealFile = vi.fn(async () => true);
   const relaunch = vi.fn();
+  const client = { corruptionError: null as Error | null, observeCorruption: vi.fn() };
   const handlers = createLocalDbMaintenanceIpcHandlers({
     captureOwner: () => ({ ...owner }),
     isOwnerCurrent: (snapshot) =>
       snapshot.ownerId === owner.ownerId && snapshot.scopeKey === owner.scopeKey,
+    getClient: () => client,
     scanDatabase: queryOne,
     getDbClientOwnerId: () => dbClientOwnerId,
     getCurrentDbPath: () => dbFilePath,
@@ -58,6 +60,7 @@ function createHarness() {
     relaunch,
   });
   return {
+    client,
     handlers,
     confirmActiveTaskCleanup,
     confirmWithoutBackup,
@@ -86,6 +89,18 @@ describe('local database maintenance IPC', () => {
       messageCount: 3,
       estimatedMessageBytes: 4_096,
     });
+  });
+
+  it('rejects scans on a quarantined client and discards a cancelled result', async () => {
+    const { handlers, client, queryOne } = createHarness();
+    client.corruptionError = new Error('damaged page');
+    await expect(handlers.scan({ archiveAgeMonths: 1 })).rejects.toThrow('damaged page');
+    expect(queryOne).not.toHaveBeenCalled();
+    client.corruptionError = null;
+    const scan = handlers.scan({ archiveAgeMonths: 1 });
+    handlers.cancelScan();
+    await expect(scan).rejects.toThrow('[PRECONDITION_FAILED]');
+    await expect(handlers.scan({ archiveAgeMonths: 1 })).resolves.toMatchObject({ messageCount: 3 });
   });
 
   it('bounds concurrent scans, rejects a stale owner result and releases the guard for retry', async () => {

@@ -93,6 +93,7 @@ export function createDbClientForHandle(deps: DbHandleClientDeps): DbClient {
       guardedDrizzle ??= drizzle(guard(deps.db), { schema });
       return guardedDrizzle;
     },
+    observeCorruption: (error: Error) => boundary.observeError(error),
     get corruptionError() { return boundary.failure; },
     get vecAvailable() {
       return isSqliteVecAvailable();

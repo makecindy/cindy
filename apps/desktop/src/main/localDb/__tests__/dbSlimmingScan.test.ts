@@ -8,7 +8,8 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DB_SLIMMING_SCAN_TIMEOUT_MS, scanDbSlimmingPreview } from '../dbSlimmingScan';
-import { readDbSlimmingPreview } from '../dbSlimmingScanQuery';
+import { acquireSchemaMigrationWriterLease } from '../schemaMigrationLease';
+import { readLeasedDbSlimmingPreview, readDbSlimmingPreview } from '../dbSlimmingScanQuery';
 import { DB_SLIMMING_WORKER_TERMINATION_TIMEOUT_MS } from '../dbSlimmingWorkerClient';
 const moduleEntry = createRequire(import.meta.url).resolve('better-sqlite3');
 
@@ -65,6 +66,33 @@ function options() {
 }
 
 describe('isolated read-only database scan', () => {
+  it('excludes a preview while replacement owns the same database and releases its lease afterward', async () => {
+    const writer = await acquireSchemaMigrationWriterLease(dbFilePath);
+    if (!writer.acquired) throw new Error('fixture could not acquire writer lease');
+    try {
+      await expect(readLeasedDbSlimmingPreview(input())).rejects.toThrow('lease unavailable');
+    } finally {
+      writer.lease.release();
+    }
+    await expect(readLeasedDbSlimmingPreview(input())).resolves.toMatchObject({ messageCount: 2 });
+    const nextWriter = await acquireSchemaMigrationWriterLease(dbFilePath);
+    expect(nextWriter.acquired).toBe(true);
+    if (nextWriter.acquired) nextWriter.lease.release();
+  });
+
+  it('delivers a queued corruption report even after cancellation has requested termination', async () => {
+    const child = new ScanProcess();
+    const controller = new AbortController();
+    const onDatabaseError = vi.fn();
+    const result = scanDbSlimmingPreview({ ...options(), signal: controller.signal, onDatabaseError }, () => child);
+    child.emit('message', { type: 'ready' });
+    controller.abort();
+    child.emit('message', { type: 'error', error: { code: 'SQLITE_CORRUPT', message: 'bad page' } });
+    expect(onDatabaseError).toHaveBeenCalledWith(expect.objectContaining({ code: 'SQLITE_CORRUPT' }));
+    child.emit('exit', 0);
+    await expect(result).rejects.toThrow('cancelled');
+  });
+
   it('reads committed WAL rows with the original cutoff, task scope and UTF-8 estimates', async () => {
     const bytesPerMessage = ['d', 'client', 'assistant', '中文😀', '{"x":1}', 'codex'].reduce(
       (total, value) => total + Buffer.byteLength(value),
