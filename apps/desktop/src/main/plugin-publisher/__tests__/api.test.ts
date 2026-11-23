@@ -23,7 +23,7 @@ function okPrepare() {
 }
 
 describe('PluginPublisherApi', () => {
-  it('prepare / status / list use Connection JWT and skip Access Token refresh', async () => {
+  it('prepare / commit / status use Connection JWT and skip Access Token refresh', async () => {
     const fetchImpl = vi.fn(async (apiPath: string) => {
       if (apiPath === '/api/publisher/uploads') return okPrepare();
       if (apiPath.endsWith('/commit')) return { uploadId: 'upload-1', status: 'validating' };
@@ -51,7 +51,6 @@ describe('PluginPublisherApi', () => {
     await api.prepare({ sizeBytes: 12, sha256: SHA });
     await api.commit('upload-1');
     await api.status('upload-1');
-    await api.listMine();
 
     expect(fetchImpl).toHaveBeenCalled();
     for (const call of fetchImpl.mock.calls as unknown as Array<[string, Record<string, unknown>]>) {
@@ -125,23 +124,6 @@ describe('PluginPublisherApi', () => {
         version: null,
         reviewStatus: null,
         failure: unknownFailure,
-      })
-      .mockResolvedValueOnce({
-        releases: [
-          {
-            uploadId: 'upload-unknown',
-            status: 'failed',
-            pluginId: null,
-            releaseId: null,
-            ghostId: null,
-            version: null,
-            reviewStatus: null,
-            failure: unknownFailure,
-            createdAt: '2026-08-19T08:15:00.000Z',
-            updatedAt: '2026-08-19T08:16:00.000Z',
-          },
-        ],
-        nextCursor: null,
       });
     const api = new PluginPublisherApi({
       getClientVersion: () => '1.2.3',
@@ -152,12 +134,10 @@ describe('PluginPublisherApi', () => {
     });
 
     const status = await api.status('upload-unknown');
-    const list = await api.listMine();
 
     expect(onUnknownFailureCode).toHaveBeenCalledOnce();
     expect(onUnknownFailureCode).toHaveBeenCalledWith('PUBLISH_FUTURE_POLICY');
     expect(status.failure?.message).toBe(unknownFailure.message);
-    expect(list.releases[0]?.failure?.message).toBe(unknownFailure.message);
   });
 
   it('saturates unknown failure reports instead of evicting and flooding logs', () => {

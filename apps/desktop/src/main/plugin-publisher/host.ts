@@ -17,7 +17,18 @@ import { isReservedConnectionPluginSlug } from '../cindy-brain/connectionAudienc
 import { createLogger } from '../logger.js';
 import { onQuit } from '../lifecycle.js';
 import { PluginMarketApi } from '../plugin-market/api.js';
+import { createPluginAuthorApi } from '../plugin-author/host.js';
+import type { PublisherAudienceHint } from '../../shared/pluginPublisher.js';
 import { PluginPublisherApi } from './api.js';
+import { loadPublisherAudienceContext } from './audienceContext.js';
+import type { ContributionInstallationBinding } from '../../shared/pluginContributions.js';
+import {
+  getPreparedContribution,
+  prepareInstalledContribution,
+  readContributionInstallation,
+  releasePreparedContribution,
+} from '../plugin-contributions/prepared.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { PluginPublisherConfirmBridge } from './confirmBridge.js';
 import {
   createPluginPublisherOrchestrator,
@@ -150,7 +161,7 @@ export function getPluginPublisherOrchestrator(): PluginPublisherOrchestrator {
           version: inspected.canonicalManifest.version,
         };
       },
-      confirm(facts, signal) {
+      confirm(facts, signal, audience) {
         const ownerStamp = getActiveDataOwnerPushStamp();
         return confirmBridge.request(
           0,
@@ -160,7 +171,18 @@ export function getPluginPublisherOrchestrator(): PluginPublisherOrchestrator {
             return sendToTrustedAppWindows(PLUGIN_PUBLISHER_CONFIRM_CHANNEL, request) > 0;
           },
           signal,
+          audience,
         );
+      },
+      audienceContext(input, signal) {
+        return loadPublisherAudienceContext({
+          api: createPluginAuthorApi(),
+          async existsInOrganization(ghostId, orgSlug) {
+            const response = await new PluginMarketApi(undefined, () => app.getVersion())
+              .resolve([{ key: 'publish-target', ghostId, namespace: orgSlug }]);
+            return response.results.some((result) => result.status === 'available');
+          },
+        }, input, signal);
       },
       onProgress(progress: PluginPublisherProgress) {
         sendToTrustedAppWindows(PLUGIN_PUBLISHER_PROGRESS_CHANNEL, progress);
@@ -208,6 +230,7 @@ export function startPluginPublish(
   filePath: string,
   requester: WebContents | null = null,
   sourceBinding?: PluginPublisherSourceBinding,
+  audienceHint?: PublisherAudienceHint,
 ) {
   const identity = currentPublisherIdentity();
   if (!identity) {
@@ -216,7 +239,8 @@ export function startPluginPublish(
   log.info('plugin publish started');
   return getPluginPublisherOrchestrator().start(filePath, {
     ...(sourceBinding ? { sourceBinding } : {}),
-    confirm: (facts, signal) => {
+    ...(audienceHint ? { audienceHint } : {}),
+    confirm: (facts, signal, audience) => {
       const ownerStamp = getActiveDataOwnerPushStamp();
       const requesterId = requester && !requester.isDestroyed() ? requester.id : 0;
       if (requester && !requester.isDestroyed()) trackPublisherConfirmRequester(requester);
@@ -232,7 +256,39 @@ export function startPluginPublish(
           return sendToTrustedAppWindows(PLUGIN_PUBLISHER_CONFIRM_CHANNEL, request) > 0;
         },
         signal,
+        audience,
       );
     },
   });
+}
+
+/**
+ * UI publishing to the organization from an installed local plugin (#1541). The renderer names
+ * an installation; Main resolves and snapshots the exact approved installation itself (the same
+ * primitive as public contributions) and never accepts a file path from the renderer.
+ */
+export async function startInstalledPluginPublish(
+  instanceId: string,
+  expected: ContributionInstallationBinding | undefined,
+  requester: WebContents,
+) {
+  if (!currentPublisherIdentity()) throwIpcError('PERMISSION_DENIED', '需要组织身份才能发布到团队共享');
+  const { source } = readContributionInstallation(instanceId, expected);
+  if (source.kind !== 'local') {
+    throwIpcError('PERMISSION_DENIED', 'Only local plugin installations can be published to the organization');
+  }
+  const prepared = await prepareInstalledContribution(instanceId, 'manual', expected);
+  const entry = getPreparedContribution(prepared.preparedId);
+  // The transfer owns these bytes until it terminates.
+  entry.pinned = true;
+  try {
+    return startPluginPublish(entry.filePath, requester, {
+      manifestId: prepared.ghostId,
+      packageSha256: prepared.sha256,
+      onTerminal: () => releasePreparedContribution(prepared.preparedId),
+    });
+  } catch (error) {
+    await releasePreparedContribution(prepared.preparedId);
+    throw error;
+  }
 }

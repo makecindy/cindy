@@ -1,4 +1,5 @@
 import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
+import { PLUGIN_AUTHOR_IPC_ERROR_CODES } from './pluginAuthor';
 import { WRITABLE_DIRECTORY_GRANT_ERROR_CODES, type WritableDirectoryGrantErrorCode } from './writableDirectoryGrantError';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
 
@@ -81,6 +82,7 @@ export type IpcErrorCode =
   | 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
   | WritableDirectoryGrantErrorCode
   | (typeof CONTRIBUTION_ERROR_CODES)[number]
+  | (typeof PLUGIN_AUTHOR_IPC_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
   | 'INVALID_PARAMS'
@@ -374,6 +376,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   ...WRITABLE_DIRECTORY_GRANT_ERROR_CODES,
   ...COMPANION_IMPORT_ERROR_CODES,
   ...CONTRIBUTION_ERROR_CODES,
+  ...PLUGIN_AUTHOR_IPC_ERROR_CODES,
   'INVALID_PARAMS',
   'NOT_FOUND',
   'INTERNAL',
