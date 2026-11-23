@@ -14,6 +14,7 @@ import {
   getGhostCardEntry,
   getGhostCardSnapshot,
   ingestCardPush,
+  retainLocalCardSession,
   subscribeGhostCards,
 } from '@/cindy-brain/ghostCardStore';
 
@@ -51,6 +52,42 @@ const push = (callId: string, over: Partial<Parameters<typeof ingestCardPush>[0]
 });
 
 describe('ghostCardStore', () => {
+  // Unit: the 513th saved card crosses the budget. Finished animations and cards
+  // from callers without a session ID must be recoverable by call ID alone.
+  it.each([{ sessionId: 'old', animatedHtml: '<b>live</b>' }, { sessionId: null }])(
+    'reclaims finished historical pushes %o', async (extra) => {
+      mockApi(async () => ({ card: { ghostId: 'g1', html: '<p>x</p>', height: 240 } }));
+      for (let i = 0; i <= 512; i++) ingestCardPush(push(String(i), { ...extra, state: 'done' }));
+      await vi.waitFor(() => expect(getGhostCardEntry('0')).toBeUndefined());
+      ensureCard('0', 'reopened');
+      await vi.waitFor(() => expect(getGhostCardEntry('0')).toMatchObject({ status: 'ready', html: '<p>x</p>' }));
+    },
+  );
+
+  // Unit: two consumers can share an active task. Crossing the 512-card limit by
+  // one must preserve both their history and a push whose database write failed.
+  it('keeps the last visible view and restores evicted history after it closes', async () => {
+    const rows = Array.from({ length: 512 }, (_, i) => ({
+      callId: 'history-' + i, ghostId: 'g1', html: '<p>saved</p>', height: 80,
+    }));
+    const list = vi.fn(async () => ({ cards: rows }));
+    mockApi(async () => ({ card: null }), list);
+    ingestCardPush(push('unsaved', { sessionId: 'background', turnCard: true }));
+    const closeTask = retainLocalCardSession('task');
+    const closePreview = retainLocalCardSession('task');
+    await vi.waitFor(() => expect(getGhostCardEntry('history-0')?.status).toBe('ready'));
+    closeTask();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(getGhostCardEntry('history-0')?.status).toBe('ready');
+    closePreview();
+    await vi.waitFor(() => expect(getGhostCardEntry('history-0')).toBeUndefined());
+    expect(getGhostCardEntry('unsaved')?.status).toBe('ready');
+    const closeAgain = retainLocalCardSession('task');
+    await vi.waitFor(() => expect(getGhostCardEntry('history-0')?.status).toBe('ready'));
+    expect(list).toHaveBeenCalledTimes(2);
+    closeAgain();
+  });
+
   it('preserves the logical identity of an in-place plugin on its live card', () => {
     ingestCardPush(push('org', { ghostId: 'helper', logicalGhostId: '_ns__acme__helper', sessionId: 'session-a' }));
     expect(getGhostCardSnapshot().liveCards[0]).toMatchObject({
