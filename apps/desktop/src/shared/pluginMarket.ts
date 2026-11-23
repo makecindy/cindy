@@ -93,7 +93,7 @@ export interface PluginRemovalUserNotice {
   name: string | null;
 }
 
-export type OfficialModelPlugin = Pick<PluginMarketItem, 'pluginId' | 'ghostId' | 'name' | 'description'>;
+export type OfficialModelPlugin = Pick<PluginMarketItem, 'pluginId' | 'ghostId' | 'namespace' | 'name' | 'description'>;
 export interface OfficialModelPluginPage {
   officialIds: string[];
   totalOfficial: number | null;

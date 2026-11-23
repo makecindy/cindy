@@ -1350,7 +1350,7 @@ export class PluginMarketService {
         this.officialEngineCapabilities.set(key, capability);
       }
       if (capability.hasEngine)
-        items.push({ pluginId: plugin.id, ghostId: plugin.ghostId, name: plugin.name, description: plugin.description });
+        items.push({ pluginId: plugin.id, ghostId: plugin.ghostId, ...deliveryNamespaceFields(plugin), name: plugin.name, description: plugin.description });
     }
     return { items, nextCursor: page.nextCursor, officialIds: candidates.map(plugin => plugin.id), totalOfficial: page.counts?.official ?? null };
   }

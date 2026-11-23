@@ -10,7 +10,7 @@ import { pluginMarketErrorKey } from '@/features/plugin/lib/pluginMarketErrorKey
 import { requestPluginEnginesRefresh, usePluginEngines } from '@/hooks/usePluginEngines';
 import { extractIpcError } from '@/utils/ipcError';
 import { ghostInstallApprovalToken } from '../../../shared/ghost';
-import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
+import { installedGhostStoragePart, sameDeliveryNamespaceState } from '../../../shared/pluginIdentity';
 import type { OfficialModelPlugin, PluginMarketDetail } from '../../../shared/pluginMarket';
 
 const GhostSettingsWebview = lazy(async () => ({ default: (await import('@/cindy-brain/GhostSettingsWebview')).GhostSettingsWebview }));
@@ -24,9 +24,9 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
   const { t } = useTranslation();
   const ghosts = useInstalledGhosts();
   // Ignore unrelated plugin notifications so a settings webview keeps its form and login state.
-  const identity = JSON.stringify(ghosts.filter(g => g.manifest.id === item.ghostId).map(g => [
-    installedGhostStoragePart(g), g.namespace, g.manifest.version, ghostInstallApprovalToken(g.approval), g.enabled, Boolean(g.retirement),
-  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  const local = ghosts.find(g => marketItemMatchesInstalledGhost(item, g));
+  const identity = local ? JSON.stringify([installedGhostStoragePart(local), local.manifest.version,
+    ghostInstallApprovalToken(local.approval), local.enabled, Boolean(local.retirement)]) : '';
   const [reload, setReload] = useState(0);
   const [result, setResult] = useState<{ detail?: PluginMarketDetail; error?: string; identity: string }>();
   const [busy, setBusy] = useState(false);
@@ -43,7 +43,7 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
       try {
         const detail = await window.electronAPI.pluginMarket.detail(item.pluginId);
         if (!active || !isDataOwnerGenerationCurrent(owner)) return;
-        if (detail.pluginId !== item.pluginId || detail.ghostId !== item.ghostId ||
+        if (detail.pluginId !== item.pluginId || detail.ghostId !== item.ghostId || !sameDeliveryNamespaceState(item, detail) ||
             detail.scope !== 'public' || detail.sourceType !== 'server' || detail.publisherKind !== 'official' ||
             !detail.manifest.harnesses?.some(engine => engine.protocol === 'acp')) {
           setResult({ error: 'settings.ghosts.market.errors.stateChanged', identity });
@@ -59,7 +59,7 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
   }, [item, owner, identity, reload]);
   const detail = result?.identity === identity ? result.detail : undefined;
   const installed = detail?.installState === 'installed' || detail?.installState === 'update-available';
-  const ghost = detail && installed ? ghosts.find(g => marketItemMatchesInstalledGhost(detail, g)) : undefined;
+  const ghost = installed ? local : undefined;
   const approved = ghost?.approval.state === 'approved' && !ghost.retirement;
   const instance = ghost && installedGhostStoragePart(ghost);
   const configured = approved && ghost.enabled;
