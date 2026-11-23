@@ -147,9 +147,6 @@ export function UploadLogsActionRow({
               {t('settings.about.logUpload.unavailableNotConfigured')}
             </p>
           )}
-          {state.targetConfigured && !state.manualUploadAvailable && !needsConsent && (
-            <p className={descriptionClassName}>{t('settings.about.logUpload.errorFailed')}</p>
-          )}
           {needsConsent && (
             <p className={descriptionClassName}>
               <Trans

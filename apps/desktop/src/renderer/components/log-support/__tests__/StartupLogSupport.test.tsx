@@ -146,7 +146,10 @@ describe('startup log support', () => {
       manualUploadConsentRequired: false,
     });
     render(<UploadLogsRow />);
-    await screen.findByText(zhCN.settings.about.logUpload.errorFailed);
+    await waitFor(() => expect(screen.queryByText(
+      zhCN.settings.about.logUpload.unavailableNotConfigured,
+    )).toBeNull());
+    expect(screen.queryByText(zhCN.settings.about.logUpload.errorFailed)).toBeNull();
     expect(screen.queryByRole('button', { name: '同意隐私协议并上传' })).toBeNull();
     const upload = screen.getByRole('button', { name: zhCN.settings.about.logUpload.uploadButton });
     expect((upload as HTMLButtonElement).disabled).toBe(true);
