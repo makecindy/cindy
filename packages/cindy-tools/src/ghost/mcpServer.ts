@@ -188,6 +188,7 @@ const D_GHOST_FORGE_PACK = [
   "把一个插件源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件。",
   "缺省只打包并返回产物路径；intent=publish 时额外返回一次性 publishToken。",
   "intent=publish 仅企业组织成员可用，用于发布到当前组织；公开市场投稿走 §7.3，个人账号仍可使用缺省的纯打包模式。",
+  "成功结果的 publishTargets 是当前登录身份可用的发布目标：只有 public 表示个人身份，发布时直接走公开市场，不询问发布目标；为 null 表示当前 Host 无法判断身份，目标不明确时照常询问。",
   "releaseNotes 若填写须为 ghost.json 顶层纯文本；缺字段仍可打包、安装；首次上架可省略，曾上架插件的后续提审必须非空。打包成功不代表通过发布预检，个人发布从已安装实例走 ghost_contribution_prepare，见手册 §7.3。",
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
   "隐藏文件 / *.cindy)。会话工作目录内直接打包；工作目录外走当前会话权限",
@@ -216,8 +217,10 @@ const D_GHOST_FORGE_PUBLISH = [
   "仅企业组织成员可用;个人账号不可用。",
   "本工具立即返回 transferId(以及稍后才有的 uploadId),传输在后台跑;",
   "用 ghost_forge_publish_status 查阶段与结果。不要把它和 ghost_forge_pack 混成一次调用:",
-  "打包失败和发布失败语义不同。主机会弹出确认屏(组织 / 插件 id / 版本 / 大小),",
-  "用户确认后才真正开传。立即失败会返回结构化 code；传输开始后的失败看 status 的 message,",
+  "打包失败和发布失败语义不同。主机会弹出确认屏(组织 / 插件 id / 版本 / 大小 / 可见范围),",
+  "用户在确认屏选择可见范围并确认后才真正开传；不要额外询问可见范围。",
+  "用户主动说了只给哪些部门、成员或邮箱时，把原话里的名字放进 audience_hint，确认屏会预先选好，对不上的名字由用户在确认屏补选；用户没说时不要传。",
+  "立即失败会返回结构化 code；传输开始后的失败看 status 的 message,",
   "不要按固定枚举分支。",
 ].join("\n");
 
@@ -228,12 +231,23 @@ const D_GHOST_FORGE_PUBLISH_STATUS = [
   "不要按固定枚举分支。",
 ].join("\n");
 
+const audienceHintNames = z.array(z.string().trim().min(1).max(320)).max(20).optional();
+
 export const ghostForgePublishInputSchema = z
   .object({
     token: z
       .string()
       .min(1)
       .describe("ghost_forge_pack(intent=publish) 返回的一次性 publishToken"),
+    audience_hint: z
+      .object({
+        departments: audienceHintNames.describe("用户原话里的部门名"),
+        members: audienceHintNames.describe("用户原话里的成员姓名或邮箱"),
+        emails: audienceHintNames.describe("用户原话里的完整邮箱"),
+      })
+      .strict()
+      .optional()
+      .describe("仅当用户主动说了可见范围时传；确认屏据此预先选好，不代替用户确认"),
   })
   .strict();
 
@@ -1254,10 +1268,13 @@ export async function handleForgeInstall(
 /** ghost_forge_publish 的 handler 主体(导出供单测)。 */
 export async function handleForgePublish(
   deps: CindyGhostsMcpDeps,
-  input: { token: string },
+  input: z.infer<typeof ghostForgePublishInputSchema>,
 ): Promise<McpTextResult> {
   try {
-    const result = await deps.forgePublish({ token: input.token });
+    const result = await deps.forgePublish({
+      token: input.token,
+      ...(input.audience_hint ? { audienceHint: input.audience_hint } : {}),
+    });
     if (!result.ok) {
       deps.logger?.warn("ghost_forge_publish rejected", {
         errorCode: result.errorCode,
@@ -1661,7 +1678,7 @@ export function createCindyGhostsMcpServer(
     inputSchema: z.object({ plugin_id: contributionId, release_id: contributionId, sha256: z.string().regex(/^[a-f0-9]{64}$/), revision: z.string().datetime() }).strict() },
     async ({ plugin_id, release_id, sha256, revision }) => contribute({ action: 'cancel-review', pluginId: plugin_id, release: { releaseId: release_id, sha256, revision } }));
   server.registerTool('ghost_my_plugins', {
-    description: '读取当前登录账号本人向公开市场提交的插件列表或精确详情。个人和组织成员均可使用，组织管理员不因此获得其他成员投稿的管理权。搜索/筛选/分页由服务端执行；详情分当前市场、最近提交、已留存内容和独立处理历史，退回原因完整返回。只查询本人，不审核、不代修、不发通知。修改作者源码后重新安装并使用，再从当前实例准备发布更新，不直接修改 Host 管理的安装目录。历史内容和 releaseNotes 取对应版本提审快照。个人投稿的展示署名暂由服务端返回为空，作者绑定和提审昵称仍完整记录。不从 ghost.json.author 或当前账号昵称补齐。客户端界面与本工具不提供匿名设置；官方 Cindy 与组织规则不变。',
+    description: '读取当前登录账号本人向公开市场提交的插件列表或精确详情。个人和组织成员均可使用，组织管理员不因此获得其他成员投稿的管理权。搜索/筛选/分页由服务端执行；详情分当前市场、最近提交、已留存内容和独立处理历史，退回原因完整返回。只查询本人，不审核、不代修、不发通知。修改作者源码后重新安装并使用，再从当前实例准备发布更新，不直接修改 Host 管理的安装目录。历史内容和 releaseNotes 取对应版本提审快照。个人投稿的展示署名暂由服务端返回为空，作者绑定和提审昵称仍完整记录。不从 ghost.json.author 或当前账号昵称补齐。客户端界面与本工具不提供匿名设置；官方 Cindy 与组织规则不变。结果的 publishTargets 是当前登录身份可用的发布目标：只有 public 表示个人身份，发布时直接走公开市场，不询问发布目标；为 null 表示当前 Host 无法判断身份，目标不明确时照常询问。',
     inputSchema: z.object({ plugin_id: contributionId.optional(), submission_id: contributionId.optional(), query: z.string().max(200).optional(), filter: z.enum(['all', 'pending', 'needs_action', 'published']).optional(), cursor: z.string().max(4096).optional() }).strict() },
     async ({ plugin_id, submission_id, ...input }) => {
       if (submission_id && !plugin_id) return textResult({ ok: false, errorCode: 'INVALID_ARGUMENT' }, true);

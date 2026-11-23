@@ -306,6 +306,7 @@ vi.mock('../../plugin-contributions/prepared.js', () => ({
 }));
 
 const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt, setPageControlGhostProvider } = await import('../ghost.desktop');
+const { publishTargetsFromIdentity } = await import('../ghost');
 const { createCindyGhostsMcpServer, handleGhostList, handleGhostInfo, handleGhostCall, handleGhostManual } = await import('cindy-tools');
 const chatAttachments = await import('../../cindy-media/chatAttachments');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
@@ -716,7 +717,9 @@ describe('Forge session workdir gate', () => {
   });
 
   it('consumes the publish token and binds publisher input to ticket id, SHA and cleanup', async () => {
-    const result = await makeDeps().forgePublish({ token: 'publish-token-1' });
+    // #1541: the audience the user named in the conversation reaches the confirmation screen.
+    const audienceHint = { departments: ['技术部'], members: ['王一鸣'] };
+    const result = await makeDeps().forgePublish({ token: 'publish-token-1', audienceHint });
     expect(result).toMatchObject({ ok: true, transferId: 'transfer-1', uploadId: null });
     expect(publishTicketConsumeMock).toHaveBeenCalledWith('publish-token-1');
     expect(startPluginPublishMock).toHaveBeenCalledWith(
@@ -727,6 +730,7 @@ describe('Forge session workdir gate', () => {
         packageSha256: 'a'.repeat(64),
         onTerminal: expect.any(Function),
       }),
+      audienceHint,
     );
     const binding = (
       startPluginPublishMock.mock.calls as unknown as Array<[
@@ -3784,7 +3788,20 @@ describe('personal contribution account surface', () => {
     communityReadMock.mockResolvedValueOnce({ plugins: [] });
     liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
       isCurrent: () => true, contributionAccountAllowed: async () => true });
-    await expect(makeDeps().communityContribution!({ action: 'list' })).resolves.toEqual({ ok: true, result: { plugins: [] } });
+    await expect(makeDeps().communityContribution!({ action: 'list' })).resolves.toEqual({
+      ok: true, result: { plugins: [] }, publishTargets: ['organization', 'public'],
+    });
+    // Review fix: a Host without the organization publisher (the headless Node Host) cannot tell
+    // the identity apart and must not present an organization member as personal.
+    expect(publishTargetsFromIdentity(undefined)).toBeNull();
+    expect(publishTargetsFromIdentity(() => null)).toEqual(['public']);
+    expect(publishTargetsFromIdentity(() => ({ membershipId: 'm' }))).toEqual(['organization', 'public']);
+    // #1541: a personal identity only has the public market, so the Agent must not ask.
+    currentPublisherIdentityMock.mockReturnValue(null);
+    communityReadMock.mockResolvedValueOnce({ plugins: [] });
+    await expect(makeDeps().communityContribution!({ action: 'list' })).resolves.toEqual({
+      ok: true, result: { plugins: [] }, publishTargets: ['public'],
+    });
   });
 
   it('returns a known publishing precondition so the author can fix the original package', async () => {

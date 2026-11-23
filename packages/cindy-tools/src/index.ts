@@ -18,6 +18,7 @@ export type {
   CindyForgePackErrorCode,
   CindyForgePackResult,
   CindyForgeInstallResult,
+  CindyForgePublishAudienceHint,
   CindyForgePublishErrorCode,
   CindyForgePublishResult,
   CindyForgePublishStatusResult,
