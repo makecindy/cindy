@@ -23,6 +23,8 @@ import type { AuxiliaryModelSettingsState } from '../../../shared/auxiliaryModel
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { useRemoteAuxiliaryRoutes } from './useRemoteAuxiliaryRoutes';
 import { isRemoteAuxiliaryModelRef } from '../../../shared/remoteAuxiliaryModelRef';
+import { AuxiliaryModelHealthNotice } from './AuxiliaryModelHealthNotice';
+import { useAuxiliaryModelHealth } from '@/hooks/useAuxiliaryModelHealth';
 
 const log = createLogger('AuxiliaryModelSection');
 
@@ -50,6 +52,7 @@ export function AuxiliaryModelSection() {
   const remote = useRemoteAuxiliaryRoutes(pickerOpen);
   const pendingRef = useRef(false);
   const modelVisibilityVersion = useModelVisibilityVersion();
+  const health = useAuxiliaryModelHealth();
 
   useEffect(() => {
     let disposed = false;
@@ -214,6 +217,15 @@ export function AuxiliaryModelSection() {
             </div>
           }
         />
+
+        {health?.status === 'unavailable' ? (
+          <SettingsBlock>
+            <AuxiliaryModelHealthNotice
+              health={health}
+              onCustomize={showCustom ? undefined : () => selectMode('custom')}
+            />
+          </SettingsBlock>
+        ) : null}
 
         {showCustom ? (
           <>

@@ -393,6 +393,7 @@
       "showDeviceTasks": "タスクを表示",
       "openDevice": "開く",
       "renameDevice": "名前を変更",
+      "groupDevice": "デバイス",
       "groupProject": "プロジェクト",
       "sortBy": {
         "priority": "優先度",
@@ -434,11 +435,15 @@
       "showCollapsedTeammateAvatars": "折りたたみ時にアバターを表示",
       "displayHeading": "表示",
       "view": {
+        "card": "カード",
         "text": "テキスト",
         "list": "リスト"
       },
       "taskInfoHeading": "タスク情報",
       "taskInfo": {
+        "teammate": "仲間のアバター",
+        "project": "プロジェクトのアイコンと名前",
+        "harness": "Harness アイコン",
         "time": "時間",
         "pr": "PR ステータス",
         "tokens": "トークン",

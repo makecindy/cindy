@@ -843,6 +843,8 @@ export interface CreateWorktreeOptions {
    * For callers that hand the directory to a running agent, which must not see a half-written tree.
    */
   awaitFullCheckout?: boolean;
+  /** Local task creation can become stale while queued or while Git is running. */
+  assertCurrent?: () => void;
 }
 
 export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
@@ -893,6 +895,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
 
     // 1. detect
     const cwdInfo = await timed('detect cwd', () => detectCwd(req.baseRepo));
+    options?.assertCurrent?.();
     if (!cwdInfo.gitInstalled) {
       return {
         ok: false,
@@ -965,6 +968,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
 
     // 4. mkdirp parent
     return await withWorktreeResourceLock(worktreePath, async (): Promise<CreateWorktreeResp> => {
+      options?.assertCurrent?.();
       await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
       const parentDir = path.dirname(worktreePath);
       await timed('ensure parent directory', () => fs.mkdir(parentDir, { recursive: true }));
@@ -1005,33 +1009,43 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       }
       snap.worktreeAdded = { path: worktreePath, baseRepo, multibox: useMultibox };
 
-      // 5b. stageCheckout: 同步拉 agent 启动必读文件(.claude/.sivi/CLAUDE.md/...),
-      //     后台跑全 checkout。fullCheckoutPromise 故意 fire-and-forget,
-      //     失败仅日志, 不阻塞 IPC 返回。Multibox 返回时目录已完整, 没有后台 checkout。
+      // Built-in task startup still gets the staged fast path. Callers that need
+      // the complete tree can check it out once, without the selective pass or
+      // its exclusions. Multibox already returns a complete tree.
       let bgPromise: Promise<void> | undefined;
       if (!useMultibox) {
         const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
         if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
         try {
-          const stageRes = await timed('stage checkout', () => stageCheckout(
-            worktreePath,
-            (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
-          ));
-          bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
-          if (options?.trackBackgroundCheckout) {
-            const settled = bgPromise.catch(() => undefined);
-            backgroundCheckouts.set(req.sessionId, settled);
-            void settled.finally(() => {
-              if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
-            });
+          if (options?.awaitFullCheckout) {
+            await timed('full checkout', () => gitExec(
+              ['checkout', '--no-recurse-submodules', 'HEAD', '--', '.'],
+              worktreePath,
+              { onSpawn: (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid) },
+            ));
+          } else {
+            const stageRes = await timed('stage checkout', () => stageCheckout(
+              worktreePath,
+              (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+            ));
+            bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
+            if (options?.trackBackgroundCheckout) {
+              const settled = bgPromise.catch(() => undefined);
+              backgroundCheckouts.set(req.sessionId, settled);
+              void settled.finally(() => {
+                if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
+              });
+            }
           }
         } catch (err) {
-          await releaseWorktreeRuntimeLease(checkoutLease);
-          // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
+          if (options?.awaitFullCheckout) throw err;
+          // Preserve the staged path's existing fail-soft behavior.
           log.warn(
             `[worktree] stageCheckout failed for ${worktreePath}:`,
             err instanceof Error ? err.message : String(err),
           );
+        } finally {
+          if (!bgPromise) await releaseWorktreeRuntimeLease(checkoutLease);
         }
       }
       // 防止 unhandled rejection(stageCheckout 已设 .catch 但再保险一次)
@@ -1077,12 +1091,12 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // The profile/session lock also closes the check -> store.set window.
       try {
         assertPrecreatedSessionNotCancelled(req.sessionId);
+        options?.assertCurrent?.();
       } catch (error) {
         // Rollback must not race our own background checkout writer.
         await bgPromise?.catch(() => undefined);
         throw error;
       }
-      if (options?.awaitFullCheckout && bgPromise) await bgPromise;
       // store + DB
       const meta: WorktreeMeta = {
         sessionId: req.sessionId,

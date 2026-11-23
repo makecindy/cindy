@@ -326,6 +326,9 @@ import {
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
 import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
+import * as providerMediaRuntime from '../../cindy-media/providerMediaRuntime.js';
+import { createAccountCodexImageChannel, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
+import { ImageChannelRegistry } from '../../cindy-brain/imageChannelRegistry.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
 import { listEvaluationModels } from '../../cindy-evaluate/models.js';
 import { setModelVisibilityMirror, clearModelVisibilityMirror } from '../model-visibility-mirror.js';
@@ -663,18 +666,59 @@ describe('provider catalog realm reload', () => {
   // page was opened. Real provider list wiring; account reads are stood in by `h.refreshed`.
   it('reads created subscription providers with the built-in one when listing providers', async () => {
     const previous = getActiveCatalog();
+    const providerId = 'openai-sub-fixture';
+    const modelId = `${providerId}/gpt-image-2`;
+    const registry = new ImageChannelRegistry();
+    let readyProvider = 'openai';
+    setCodexImageAuthBinding({
+      hasPoolImageAuth: id => id === readyProvider,
+      getAuth: vi.fn(),
+      onAuthFailure: vi.fn(),
+    });
+    registry.register(providerId, createAccountCodexImageChannel(
+      providerId, () => getActiveCatalog().providers.find(provider => provider.id === providerId), {},
+    ));
+    const readyModels = vi.spyOn(providerMediaRuntime, 'listReadyProviderMediaModels').mockImplementation(() =>
+      registry.isProviderReady(providerId, modelId) ? [{
+        providerId, id: modelId, name: 'GPT Image Gen', mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      }] : []);
     h.pool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
     h.created = { 'openai-sub-fixture': { kind: 'openai', name: 'OpenAI · second', account: 'second' } };
+    h.poolModelsByProvider = { 'openai-sub-fixture': [{
+      id: 'gpt-fixture', name: 'Fixture', contextWindow: 100_000, efforts: [], defaultEffort: null,
+    }] };
     try {
-      setActiveCatalog(BUNDLED_CATALOG);
+      const catalog = structuredClone(BUNDLED_CATALOG);
+      catalog.providers.find(provider => provider.id === 'openai')!.imageDefaults = {
+        standard: 'openai/gpt-image-2',
+      };
+      setActiveCatalog(catalog);
       h.customProviderRead.mockResolvedValue([]);
       await refreshCustomProvidersIntoCatalog();
       const service = getDesktopProviderService({ allowSideEffects: false });
       const created = async (snapshotOnly: boolean) =>
         (await service.listProviders({ snapshotOnly })).find(provider => provider.id === 'openai-sub-fixture');
       expect((await created(true))?.connected).toBe(false);
-      expect((await created(false))?.connected).toBe(true);
+      activeCatalogForHostParity.setOpenAiImagesApiKeyConfigured(true);
+      expect(await created(false)).toMatchObject({
+        connected: true,
+        models: expect.objectContaining({ codex: expect.arrayContaining([expect.objectContaining({ id: 'gpt-fixture' })]) }),
+        imageModels: [{ id: modelId, name: 'GPT Image Gen' }],
+        availableMediaModelIds: [],
+      });
+      expect(getActiveCatalog().providers.find(provider => provider.id === providerId)?.imageDefaults)
+        .toEqual({ standard: modelId });
+      readyProvider = providerId;
+      expect(await created(false)).toMatchObject({
+        imageModels: [{ id: modelId, name: 'GPT Image Gen' }],
+        availableMediaModelIds: [modelId],
+      });
     } finally {
+      readyModels.mockRestore();
+      setCodexImageAuthBinding(null);
+      activeCatalogForHostParity.setOpenAiImagesApiKeyConfigured(false);
+      h.poolModelsByProvider = {};
       h.pool = null;
       h.created = {};
       h.refreshed.clear();

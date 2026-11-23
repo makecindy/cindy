@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { createOrcaTeamService, type OrcaTeamServiceDeps } from '../orcaTeamService.js';
-import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
+import { pluginTaskRouteAttempts, resolveLightestPluginTaskFallback, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
 import { Session } from '@cindy/maker-core';
 import { handlePluginTaskRequest } from '../../cindy-brain/taskSlot.js';
@@ -1798,6 +1798,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
       codex: [{ id: f.route.providerId, name: 'provider', models: ['next', 'cheap', 'nolow', 'onpi'] }] },
       resolveDefaultProviderIdForModel: () => f.route.providerId }),
   });
+  const reportFallback = vi.fn();
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const resolveStart = source.indexOf('    const resolveRoute = async');
   const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
@@ -1808,6 +1809,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
       getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
       auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
       isRemoteAuxiliaryModelRef: () => false,
+      resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: reportFallback,
       savedPluginTaskRemoteRoute, readPluginRouteProviders: async () => [],
       // Remote catalog admission is covered by resolveRemotePluginTaskRoute's own tests; mark the path taken.
       resolveRemotePluginTaskRoute: async (route: PluginTaskRoute) => ({ ...route, viaRemoteCatalog: true }) };
@@ -1825,8 +1827,16 @@ it('an open plugin selection without a source session follows the auxiliary chai
     .resolves.toMatchObject({ model: 'cheap', effort: 'low' });
   // Only when no candidate offers a light level does a model route at its default effort.
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }])).resolves.toMatchObject({ model: 'nolow' });
-  // No usable candidate: the new-task selection remains the last resort.
+  // No usable candidate: the new-task selection remains the last resort, at its
+  // lightest accepted effort, and the user is told (auxiliary-model-health.md, 2026-11-23).
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'next', effort: 'high' });
+  expect(reportFallback).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'next' }));
+  selected.model = 'cheap';
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'cheap', effort: 'low' });
+  selected.model = 'next';
+  // A chain candidate that runs clears the fallback note.
+  await run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]);
+  expect(reportFallback).toHaveBeenLastCalledWith(null);
   // An explicit plugin model never consults the chain.
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], { model: 'next' })).resolves.toMatchObject({ model: 'next' });
   // Rule (2026-11-16): a saved run location applies without an explicit route and is admitted
@@ -1918,7 +1928,7 @@ it.each([
     // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
     getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
     auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute,
-    isRemoteAuxiliaryModelRef: () => false };
+    isRemoteAuxiliaryModelRef: () => false, resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: () => {} };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;

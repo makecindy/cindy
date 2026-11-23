@@ -989,7 +989,7 @@
     "captureFailed": "Bildschirm konnte nicht aufgenommen werden",
     "permission": {
       "title": "Berechtigung zur Bildschirmaufnahme erforderlich",
-      "detail": "Erlaube {{appName}} für Bildschirmaufnahmen unter Systemeinstellungen > Datenschutz & Sicherheit > Bildschirm- & Systemaudioaufnahme und öffne {{appName}} anschließend erneut.",
+      "detail": "Erlaube {{appName}}, den Bildschirm aufzunehmen, und versuche es erneut. Öffne die App erneut, wenn macOS dich dazu auffordert.",
       "openSettings": "Systemeinstellungen öffnen",
       "later": "Nicht jetzt"
     },
@@ -1156,12 +1156,12 @@
     "windowsError": "Die Autorisierung wurde nicht abgeschlossen. Versuche es auf diesem Computer erneut.",
     "windowsErrorDetail": "Fehlercode {{code}}",
     "permissionsTitle": "Remotedesktop-Berechtigungen",
-    "permissionsIntro": "Mit der Bildschirmaufnahme kannst du den Desktop ansehen. Bedienungshilfen ermöglichen zusätzlich die Steuerung. Erteile die Berechtigungen am Computer; der Status wird automatisch aktualisiert.",
+    "permissionsIntro": "Erlaube auf dem gesteuerten Mac die Bildschirmaufnahme, um den Schreibtisch zu sehen. Für Tastatur und Maus muss Cindy auch Apps steuern dürfen. Cindy prüft die Freigaben automatisch.",
     "permissionsReady": "Die Systemberechtigungen sind erteilt. Du kannst die Verbindung wiederherstellen.",
     "screenRecording": "Bildschirmaufnahme",
-    "accessibility": "Bedienungshilfen",
-    "screenRecordingHelp": "Öffne die Systemeinstellungen und aktiviere die Bildschirmaufnahme für diese Cindy-App. Falls macOS dich zu einem Neustart auffordert, öffne Cindy erneut, bevor du die Verbindung herstellst.",
-    "accessibilityHelp": "Öffne die Einstellungen und aktiviere die Bedienungshilfen für die App, die in der Systemaufforderung angegeben ist. Die tatsächliche Eingabeberechtigung wird bei deiner Rückkehr automatisch geprüft.",
+    "accessibility": "Tastatur- und Maussteuerung",
+    "screenRecordingHelp": "Erlaube der laufenden Cindy-App unter „Bildschirmaufnahme“ oder „Aufnahme von Bildschirm & Systemaudio“, den Bildschirm aufzunehmen. Öffne Cindy erneut, wenn macOS dich dazu auffordert.",
+    "accessibilityHelp": "Wähle in „Datenschutz & Sicherheit“ die App aus dem Systemdialog. Unter „System & App Protection Override“ kannst du festlegen, welche Apps sie steuern darf. Aktiviere bei älteren Versionen die Bedienungshilfen.",
     "permissionChecking": "Wird geprüft…",
     "permissionGranted": "Erteilt",
     "permissionUnknown": "Unbestätigt",
@@ -1356,7 +1356,9 @@
       }
     },
     "lockOnExitHintPrivacy": "Zeigt beim Beenden den Sichtschutz, damit die KI weiterarbeiten kann; eine Berührung am Computer sperrt ihn.",
-    "lockedEnablePrivacyHint": "Damit die KI diesen Computer weiter nutzen kann, während du weg bist, aktiviere auf ihm den Sichtschutz unter Einstellungen → Allgemein → Wenn du weg bist."
+    "lockedEnablePrivacyHint": "Damit die KI diesen Computer weiter nutzen kann, während du weg bist, aktiviere auf ihm den Sichtschutz unter Einstellungen → Allgemein → Wenn du weg bist.",
+    "revealCurrentApp": "{{app}} im Finder zeigen",
+    "openPermissionInNewWindow": "In neuem Fenster öffnen"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3174,7 +3176,7 @@
         },
         "accessibility": {
           "label": "Automatische Eingabe",
-          "tooltip": "Mit der Bedienungshilfen-Berechtigung kann die Spracheingabe Text in andere Apps eingeben, Text nahe dem Cursor als Kontext für die Überarbeitung lesen und externe Änderungen zum Lernen für das Wörterbuch erkennen."
+          "tooltip": "Cindy darf Diktate in ausgewählten Apps einfügen, Text am Cursor zur Überarbeitung lesen und Änderungen für das Wörterbuch erkennen. Verwende je nach Anzeige auf deinem Mac „Bedienungshilfen“ oder „System & App Protection Override“."
         }
       },
       "interactionSound": {
@@ -5424,6 +5426,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Kein Hilfsmodell verfügbar",
+        "configDescription": "Betroffen sind automatische Aufgabentitel, Zusammenfassungen angehefteter Aufgaben, die Hilfe und Plugin-Aufgaben wie die Untertitelübersetzung. Behebe die Probleme unten oder wähle unter „Benutzerdefiniert“ andere verfügbare Modelle aus.",
+        "runtimeTitle": "Die letzten Anfragen an Hilfsmodelle sind fehlgeschlagen",
+        "runtimeDescription": "Netzwerk oder Dienst sind möglicherweise vorübergehend nicht erreichbar. Dieser Hinweis verschwindet von selbst, sobald Anfragen wieder gelingen. Wenn er bestehen bleibt, wähle unter „Benutzerdefiniert“ andere verfügbare Modelle aus.",
+        "fallback": "Plugin-Aufgaben verwenden vorübergehend {{model}} mit niedrigerer Denkintensität. Das kann langsamer sein und mehr Kontingent verbrauchen.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Anbieter öffnen",
+        "customize": "Hilfsmodelle anpassen",
+        "issues": {
+          "signed_out": "Anmeldung bei Cindy erforderlich",
+          "provider_disabled": "Anbieter deaktiviert",
+          "model_disabled": "Modell deaktiviert",
+          "payment_required": "Nicht in deinem Tarif oder Guthaben enthalten",
+          "no_credential": "Anmeldung oder Schlüssel fehlt",
+          "unavailable": "Derzeit nicht verfügbar"
+        },
+        "toast": {
+          "config": "Kein Hilfsmodell verfügbar. Aufgabentitel, Zusammenfassungen und Plugin-Aufgaben wie die Untertitelübersetzung sind betroffen.",
+          "runtime": "Die letzten Anfragen an Hilfsmodelle sind fehlgeschlagen. Aufgabentitel, Zusammenfassungen und Plugin-Aufgaben wie die Untertitelübersetzung können betroffen sein.",
+          "open": "Einstellungen öffnen"
+        }
       }
     },
     "compaction": {
@@ -5784,10 +5809,10 @@
         "toggleAria": "Meine Browser-Anmeldedaten verwenden",
         "confirmTitle": "Dem Agent Zugriff auf deine Browser-Anmeldedaten erlauben?",
         "confirmDescription": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
-        "confirmDescriptionMac": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Zum Lesen der Chrome-Anmeldedateien ist außerdem Festplattenvollzugriff erforderlich. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
+        "confirmDescriptionMac": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht. Wenn macOS nach einem Ordner fragt, wähle den benötigten Browserprofilordner.",
         "confirm": "Meine Anmeldedaten verwenden",
-        "readDeniedTitle": "Festplattenvollzugriff erforderlich",
-        "readDeniedDescription": "Cindy benötigt diese Berechtigung, um die Chrome-Anmeldedateien zu lesen. Aktiviere Cindy unter Datenschutz & Sicherheit → Festplattenvollzugriff und versuche es erneut.",
+        "readDeniedTitle": "Browserprofil kann nicht gelesen werden",
+        "readDeniedDescription": "Wähle die laufende Cindy-App unter „Datenschutz & Sicherheit → Festplattenvollzugriff“. Wenn macOS die Ordnerauswahl anbietet, wähle nur den benötigten Browserprofilordner und versuche es erneut.",
         "openFullDiskAccess": "Systemeinstellungen öffnen",
         "readDeniedLater": "Nicht jetzt",
         "toast": {
@@ -5959,7 +5984,7 @@
         "permissionIntro": {
           "title": "Computerautomatisierung aktivieren",
           "description": "{{appName}} installiert oder startet Cua Driver lokal, um den Bildschirm zu lesen und Aktionen wie Klicken und Tippen auszuführen. Aktiviere dies nur, wenn du bewusst eine Aufgabe zur Computerautomatisierung gestartet hast.",
-          "macosDescription": "{{appName}} installiert als Nächstes Cua Driver oder öffnet dessen Berechtigungsdialog. Dabei können die macOS-Systemeinstellungen geöffnet werden. Erteile CuaDriver zuerst die grundlegenden Berechtigungen für Bedienungshilfen und Bildschirmaufnahme. Bei der späteren Nutzung kann macOS weitere Bestätigungen für eine Ziel-App oder eine bestimmte Aktion anzeigen. Bestätige diese nur, wenn du bewusst eine Aufgabe zur Computernutzung gestartet hast. Kehre dann zu {{appName}} zurück. Die Prüfung erfolgt automatisch.",
+          "macosDescription": "{{appName}} installiert oder startet Cua Driver lokal, um den Bildschirm zu lesen und Aktionen wie Klicken und Tippen auszuführen. Aktiviere dies nur, wenn du bewusst eine Aufgabe zur Computerautomatisierung gestartet hast. Erlaube CuaDriver die Bildschirmaufnahme. Wähle unter „System & App Protection Override“ die Apps, die es steuern darf. Aktiviere bei älteren macOS-Versionen die Bedienungshilfen.",
           "confirm": "Weiter",
           "cancel": "Nicht jetzt"
         },
@@ -5980,8 +6005,8 @@
         },
         "permissions": {
           "title": "Systemzugriff",
-          "macosHint": "Die Computernutzung erfordert die Berechtigungen für Bedienungshilfen und Bildschirmaufnahme. Bei der Nutzung kann macOS weitere Bestätigungen für eine Ziel-App oder eine bestimmte Aktion anzeigen.",
-          "accessibilityLabel": "Bedienungshilfen",
+          "macosHint": "Erlaube CuaDriver die Bildschirmaufnahme. Wähle unter „System & App Protection Override“ die Apps, die es steuern darf. Aktiviere bei älteren Versionen die Bedienungshilfen.",
+          "accessibilityLabel": "Tastatur- und Maussteuerung",
           "screenRecordingLabel": "Bildschirmaufnahme",
           "grant": "Erteilen",
           "accessibility": "Bedienungshilfen: {{status}}",
@@ -6027,7 +6052,7 @@
           "toggleFailed": "Direkte Computersteuerung konnte nicht umgeschaltet werden",
           "installFailed": "cua-driver konnte nicht installiert werden",
           "permissionFailed": "Berechtigungen für die Computernutzung sind unvollständig",
-          "permissionPending": "Erteile beide Systemberechtigungen, kehre dann hierher zurück und klicke auf „Erneut prüfen“",
+          "permissionPending": "Schließe die Freigabe auf dem Mac ab. Falls sich der Status nicht aktualisiert, wähle „Erneut prüfen“.",
           "permissionSettingsOpened": "Systemeinstellungen für Berechtigungen geöffnet. Kehre nach dem Erteilen zurück und klicke auf „Erneut prüfen“.",
           "permissionSettingsMonitoring": "Systemeinstellungen für Berechtigungen geöffnet. Erteile die Berechtigungen; der Status wird automatisch aktualisiert.",
           "openPermissionSettingsFailed": "Systemeinstellungen für Berechtigungen konnten nicht geöffnet werden"
@@ -12538,6 +12563,7 @@
           "listenPortLabel": "Lokaler Empfangsport",
           "listenPortPlaceholder": "18747",
           "hint": "Verbinde dich mit deinem BlueBubbles-Server im lokalen Netzwerk. Nur ausgewählte Chats werden verarbeitet. Stoppe vor dem Verbinden alle anderen automatischen Antwortdienste für diese Chats.",
+          "automationDenied": "macOS hat BlueBubbles beim Senden den Zugriff auf Nachrichten verweigert. Prüfe auf dem Mac mit BlueBubbles die Systemeinstellungen unter „Datenschutz & Sicherheit“ → „Automation“.",
           "uncertain": "{{count}} Zustellungen müssen geprüft werden. Prüfe vor einem erneuten Versuch den Chatverlauf, um Duplikate zu vermeiden."
         }
       },
@@ -15081,7 +15107,6 @@
     "runningStatus": {
       "currentRate": "Letzte Geschwindigkeit",
       "lastRequestRate": "Durchschnitt der letzten Anfrage",
-      "recentTokenRate": "Zuletzt {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Durchschnitt dieser Runde",
       "rateHistory": "Verlauf der Generierungsgeschwindigkeit",
@@ -15853,7 +15878,7 @@
       "viewThread": "Thread-Kontext anzeigen ({{count}})",
       "memberFromGroup": "{{name}} · aus der {{platform}}-Gruppe „{{group}}“",
       "memberFromPlatform": "{{name}} · aus einer {{platform}}-Gruppe",
-      "guestFromDm": "{{name}} · aus einer {{platform}}-Direktnachricht (nicht der Eigentümer)",
+      "guestFromDm": "{{name}} · aus einer {{platform}}-Direktnachricht",
       "unknownSender": "Gruppenmitglied"
     },
     "rewind": {
@@ -20478,7 +20503,7 @@
     "epermGuidance": {
       "title": "macOS-Ordnerzugriff verweigert",
       "message": "Cindy kann nicht auf deinen Ordner {{folder}} zugreifen",
-      "detail": "macOS hat den Zugriff verweigert. Öffne die Systemeinstellungen, um den Zugriff zu erlauben, und führe dann deinen Agent-Befehl erneut aus.",
+      "detail": "Erlaube Cindy unter „Dateien & Ordner“ den Zugriff auf diesen Ordner und versuche es erneut.",
       "openSystemSettings": "Systemeinstellungen öffnen",
       "cancel": "Abbrechen",
       "folderNames": {
@@ -21567,6 +21592,9 @@
     "actionFailed": "Die Plugin-Aktion konnte nicht abgeschlossen werden. Versuche es erneut."
   },
   "mcpApps": {
+    "composerDragFailed": "Der Anhang konnte nicht hinzugefügt werden. Ziehe ihn erneut oder wähle „Zum Eingabefeld hinzufügen“.",
+    "composerAttachmentFormat": "Bilder, PDF- und reine Textdateien dürfen bis zu 64 MiB groß sein.",
+    "composerAttachmentBusy": "Bitte warte kurz, bevor du einen weiteren Anhang hinzufügst.",
     "sharedTaskReadOnly": "Nur der Besitzer der Sitzung kann mit dieser Karte interagieren.",
     "retry": "Neu laden",
     "loadFailed": "Die App konnte nicht geladen werden. Prüfe die Verbindung und lade sie neu.",

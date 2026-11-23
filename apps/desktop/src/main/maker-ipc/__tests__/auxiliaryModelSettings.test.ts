@@ -6,8 +6,18 @@ vi.mock('../../app-settings/runtime.js', () => ({ registerRuntimeSettingsSection
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: remoteMocks.owner, isAppSessionBoundaryPending: () => false }));
 
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { ipcMain } from 'electron';
+import { notifyAppSettingsChanged } from '../../app-settings/changes.js';
+import { getDesktopSelectableCatalog } from '../../maker-host/createDesktopProviderService.js';
+import { readAuxiliaryModelSettings, readAuxiliaryModelSettingsState, writeAuxiliaryModelSettingsPatch } from '../../utility-model/auxiliary-model-settings-store.js';
+import { reportAuxiliaryChainOutcome } from '../../utility-model/auxiliaryChainOutcomeSink.js';
+import { hasOneshotProviderCredential } from '../../utility-model/oneshotProviderUsability.js';
+import { MAKER_INVOKE } from '../channels.js';
+
+vi.mock('../../app-settings/changes.js', () => ({ notifyAppSettingsChanged: vi.fn() }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
-  getDesktopSelectableCatalog: () => ({ providers: [] }),
+  getDesktopSelectableCatalog: vi.fn(() => ({ providers: [] })),
 }));
 
 vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => 'Cindy AI · 心动' }));
@@ -40,7 +50,7 @@ vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
 }));
 
 vi.mock('../../utility-model/oneshotProviderUsability.js', () => ({
-  hasOneshotProviderCredential: () => false,
+  hasOneshotProviderCredential: vi.fn(() => false),
 }));
 
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({
@@ -57,7 +67,6 @@ import {
   parseAuxiliaryModelSettingsPatch,
   registerAuxiliaryModelSettingsIpc,
 } from '../auxiliary-model-settings.js';
-import { MAKER_INVOKE } from '../channels.js';
 import { setRemoteUtilityTextClient } from '../../utility-model/remote/registry.js';
 
 const PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
@@ -148,6 +157,44 @@ describe('remote auxiliary settings save', () => {
 });
 
 describe('auxiliary model settings IPC helpers', () => {
+  // Unit: a native Settings save must clear the observed config problem without
+  // a later health read or model request (auxiliary-model-health.md, recovery).
+  it('announces recovery when saving a usable replacement for a missing model', async () => {
+    const missing = 'cat:missing:codex:old-model';
+    const store = vi.mocked(readAuxiliaryModelSettings);
+    const state = vi.mocked(readAuxiliaryModelSettingsState);
+    const write = vi.mocked(writeAuxiliaryModelSettingsPatch);
+    const catalogRead = vi.mocked(getDesktopSelectableCatalog);
+    const credentials = vi.mocked(hasOneshotProviderCredential);
+    store.mockReturnValue({ models: [missing] });
+    const saved = { value: { models: [PIN] }, isCustomized: true, customizedKeys: ['models'], defaults: { models: [] } };
+    state.mockReturnValue(saved);
+    write.mockImplementation(async () => {
+      store.mockReturnValue({ models: [PIN] });
+    });
+    catalogRead.mockReturnValue(catalog());
+    credentials.mockReturnValue(true);
+    try {
+      registerAuxiliaryModelSettingsIpc();
+      reportAuxiliaryChainOutcome('no_candidate');
+      const notify = vi.mocked(notifyAppSettingsChanged);
+      expect(notify).toHaveBeenCalledWith('auxiliary-model-health');
+      notify.mockClear();
+
+      const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === MAKER_INVOKE.AUXILIARY_MODEL_SETTINGS_SET)?.[1];
+      expect(handler).toBeDefined();
+      await expect(handler!({} as Electron.IpcMainInvokeEvent, { models: [PIN] })).resolves.toMatchObject({ models: [PIN] });
+      expect(notify).toHaveBeenCalledExactlyOnceWith('auxiliary-model-health');
+    } finally {
+      reportAuxiliaryChainOutcome('success');
+      store.mockReset();
+      state.mockReset();
+      write.mockReset();
+      catalogRead.mockReset();
+      credentials.mockReset();
+    }
+  });
+
   // Unit: retain experimental remote settings for removal, but reject new selections.
   // Existing persisted-route cases do not distinguish execution computers.
   it('keeps a remote selection unavailable even when the local route is usable', () => {

@@ -1093,6 +1093,7 @@ tailwind-merge，调用方传入的 `z-<层名>` 会覆盖组件的默认层。
 | `dropdown` | 10010 | 菜单与弹出层 | `DropdownMenu`、`Popover`、`MorphPopover`、`Select` / `SelectParts` 的默认值；模型选择器的二级面板 |
 | `tooltip` | 10011 | 悬停提示 | `Tip` / `Tooltip` 的默认值；自绘的图表提示 |
 | `modal-popover-nested` | 10020 | 浮层上的浮层 | 弹出层里再弹出的浮层，以及其中的 Tip（如定时任务表单） |
+| `modal-blocking` | 10050 | 全局阻断提示 | 只经 `confirm({ blocking: true })` 使用（现为登录过期）；遮罩与面板同值，其中 Tip 取 +1 |
 | `toast` | 10100 | 通知 | Toast 容器 |
 | `toast-top` | 10101 | 通知之上 | 下载 Toast、庆祝动画（`ConfettiBurst` 默认值，额度重置动画同层） |
 
@@ -1109,6 +1110,17 @@ tailwind-merge，调用方传入的 `z-<层名>` 会覆盖组件的默认层。
   `modal` 层弹窗的，面板也用 `z-modal`，让后挂载的弹窗按 DOM 顺序在上（`ConfirmDialog` 的遮罩和面板
   都在 `modal`）。叠在弹窗上的二级弹窗用 `modal-nested`；内嵌的 `ConfirmDialog` 传
   `zIndex={Z_INDEX_LAYERS['modal-nested']}`。
+- **全局阻断提示**（2026-11-22 维护者裁决）：`modal-blocking` 只给「不处理就无法继续使用应用」的全局提示，
+  现在只有登录过期。普通确认、二级弹窗和授权请求（插件确认、插件安装授权、本机 Agent 确认等）都不得使用；
+  调用方只能经全局 `confirm()` 的 `blocking: true` 拿到这一层，不写 `z-modal-blocking`，也不传
+  `Z_INDEX_LAYERS['modal-blocking']`（`modalBlockingLayer.guard.test.ts` 拦截）。阻断提示走独立槽位：
+  不排在普通确认后面、立即显示，多个阻断提示之间依次显示；关闭后焦点回到被它打断的弹窗。阻断提示在显示或排队期间，
+  新来的普通确认暂缓、只排队不显示，阻断提示全部关闭后再依次出现（Radix 按挂载顺序管理焦点与 Esc，不看层级，
+  之后才挂载的普通确认会抢走焦点）；阻断提示打开前已在显示的普通确认原地保留在它下面。界面里自己挂载的
+  `ConfirmDialog`（如关窗确认）同样如此：阻断提示显示期间新打开的先不挂载，阻断提示关闭后再出现，由
+  `ConfirmDialog` 统一处理，调用方不用改。直接用 Radix Dialog / AlertDialog 的弹窗不在此列。没有取消按钮时
+  焦点落在主按钮；Esc 与点「重新登录」一样关闭提示（结算为取消，登录过期两者都进入登出），只关提示本身，
+  不关下面的弹窗。Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住它的是结果反馈而不是另一个要处理的问题。
 - **组件内部的局部叠放**只和同一组件里的兄弟元素比较，不进全局刻度，见下方例外。
 
 登记的例外与子档（保留字面量，新增同类须在这里登记）：

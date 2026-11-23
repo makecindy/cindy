@@ -341,6 +341,7 @@ type AuxiliaryModelSettingsPatch =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsPatch;
 type AuxiliaryModelSettingsState =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsState;
+type AuxiliaryModelHealth = import('../shared/auxiliaryModelHealth').AuxiliaryModelHealth;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -418,7 +419,7 @@ interface ComputerDriverInstallResult {
   status: ComputerDriverStatus;
 }
 
-type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult;
+type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult & { continueToScreenRecording?: boolean };
 
 interface ComputerDriverUpdateCheck {
   currentVersion: string | null;
@@ -6100,6 +6101,8 @@ interface ElectronAPI {
     onProvidersChanged: (cb: () => void) => () => void;
 
     mcpApps: (sessionId: string | null, input: unknown) => Promise<unknown>;
+    redeemComposerAttachmentDrag: (input: { sessionId: string; ticket: string }) => Promise<void>;
+    onMcpAppComposerAttachment: (cb: (input: import('../shared/mcpApps').McpAppComposerAttachment) => void) => () => void;
     onPluginUiAction: (callback: (input: unknown) => void) => () => void;
     onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
@@ -7009,6 +7012,7 @@ interface ElectronAPI {
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
     ) => Promise<AuxiliaryModelSettingsState>;
+    auxiliaryModelHealthGet: () => Promise<AuxiliaryModelHealth>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;

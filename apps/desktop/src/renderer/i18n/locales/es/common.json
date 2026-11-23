@@ -1006,7 +1006,7 @@
     "captureFailed": "No se pudo capturar la pantalla",
     "permission": {
       "title": "Se requiere permiso de grabación de pantalla",
-      "detail": "Para tomar capturas de pantalla, permite {{appName}} en Configuración del sistema > Privacidad y seguridad > Grabación de pantalla y audio del sistema y luego vuelve a abrir {{appName}}.",
+      "detail": "Permite que {{appName}} grabe la pantalla y vuelve a intentarlo. Abre de nuevo la app si macOS te lo pide.",
       "openSettings": "Abrir configuración del sistema",
       "later": "Ahora no"
     },
@@ -1173,12 +1173,12 @@
     "windowsError": "La autorización no se completó. Inténtalo de nuevo en esta computadora.",
     "windowsErrorDetail": "Código de error {{code}}",
     "permissionsTitle": "Permisos de escritorio remoto",
-    "permissionsIntro": "La grabación de pantalla te permite ver el escritorio; la accesibilidad también permite controlarlo. Completa la autorización en la computadora; el estado se actualiza automáticamente.",
+    "permissionsIntro": "En el Mac que quieres controlar, permite la grabación de pantalla para ver el escritorio. Para usar el teclado y el ratón, permite también que Cindy controle apps. Cindy comprueba los permisos automáticamente.",
     "permissionsReady": "Los permisos del sistema están listos. Puedes volver a conectarte.",
     "screenRecording": "Grabación de pantalla",
-    "accessibility": "Accesibilidad",
-    "screenRecordingHelp": "Abre Configuración del sistema y activa la grabación de pantalla para esta aplicación Cindy. Si macOS te pide reiniciar, vuelve a abrir Cindy antes de conectarte.",
-    "accessibilityHelp": "Abre la configuración y activa la accesibilidad para la aplicación que indica el mensaje del sistema. El permiso de entrada real se comprueba automáticamente cuando vuelves.",
+    "accessibility": "Control del teclado y el ratón",
+    "screenRecordingHelp": "Permite que la copia de Cindy que estás usando grabe la pantalla en Grabación de pantalla o Grabación de pantalla y audio del sistema. Vuelve a abrir Cindy si macOS te lo pide.",
+    "accessibilityHelp": "En Privacidad y seguridad, selecciona la app indicada por macOS. Si ves System & App Protection Override, elige las apps que puede controlar. En versiones anteriores, activa Accesibilidad.",
     "permissionChecking": "Comprobando…",
     "permissionGranted": "Concedido",
     "permissionUnknown": "Sin confirmar",
@@ -1374,7 +1374,9 @@
       }
     },
     "lockOnExitHintPrivacy": "Muestra la pantalla de privacidad al salir para que la IA siga trabajando; tocar la computadora la bloquea.",
-    "lockedEnablePrivacyHint": "Para que la IA siga usando esta computadora mientras no estás, activa la pantalla de privacidad en su Configuración → General → Cuando no estás."
+    "lockedEnablePrivacyHint": "Para que la IA siga usando esta computadora mientras no estás, activa la pantalla de privacidad en su Configuración → General → Cuando no estás.",
+    "revealCurrentApp": "Mostrar {{app}} en el Finder",
+    "openPermissionInNewWindow": "Abrir en otra ventana"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3212,7 +3214,7 @@
         },
         "accessibility": {
           "label": "Entrada automática",
-          "tooltip": "El permiso de accesibilidad permite que la entrada de voz escriba en otras aplicaciones, lea el texto cercano al cursor como contexto para el refinamiento y detecte ediciones externas para el aprendizaje del diccionario."
+          "tooltip": "Permite que Cindy inserte dictados en las apps elegidas, lea texto cercano al cursor para revisarlo y detecte cambios para el diccionario. Utiliza Accesibilidad o System & App Protection Override, según la opción que muestre tu Mac."
         }
       },
       "interactionSound": {
@@ -5482,6 +5484,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "No hay ningún modelo auxiliar disponible",
+        "configDescription": "Afecta al nombrado automático de tareas, los resúmenes de tareas fijadas, la ayuda y las tareas de complementos, como la traducción de subtítulos. Corrige los problemas siguientes o elige otros modelos disponibles en Personalizado.",
+        "runtimeTitle": "Las últimas solicitudes a los modelos auxiliares fallaron",
+        "runtimeDescription": "Puede que la red o el servicio no estén disponibles temporalmente. Este aviso desaparece solo cuando las solicitudes vuelven a funcionar. Si sigue apareciendo, elige otros modelos disponibles en Personalizado.",
+        "fallback": "Las tareas de complementos usan temporalmente {{model}} con una intensidad de razonamiento menor, lo que puede ser más lento y consumir más cuota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Abrir proveedores",
+        "customize": "Personalizar modelos auxiliares",
+        "issues": {
+          "signed_out": "Hay que iniciar sesión en Cindy",
+          "provider_disabled": "Proveedor desactivado",
+          "model_disabled": "Modelo desactivado",
+          "payment_required": "No lo incluye tu plan o saldo",
+          "no_credential": "Falta el inicio de sesión o la clave",
+          "unavailable": "Actualmente no disponible"
+        },
+        "toast": {
+          "config": "No hay ningún modelo auxiliar disponible. Afecta al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
+          "runtime": "Las últimas solicitudes a los modelos auxiliares fallaron. Puede afectar al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
+          "open": "Abrir configuración"
+        }
       }
     },
     "compaction": {
@@ -5842,10 +5867,10 @@
         "toggleAria": "Usar los inicios de sesión de mi navegador",
         "confirmTitle": "¿Permitir que el Agent use tus inicios de sesión del navegador?",
         "confirmDescription": "El Agent podrá abrir sitios con tus cuentas que ya tengan la sesión iniciada, incluidos correo electrónico, unidades en la nube y consolas de trabajo. Puedes desactivarlo cuando quieras; la copia se eliminará.",
-        "confirmDescriptionMac": "El Agent podrá abrir sitios con tus cuentas que ya tengan la sesión iniciada, incluidos correo electrónico, unidades en la nube y consolas de trabajo. Para leer los archivos de inicio de sesión de Chrome, también se necesita Acceso total al disco. Puedes desactivarlo cuando quieras; la copia se eliminará.",
+        "confirmDescriptionMac": "El Agent podrá abrir sitios con tus cuentas que ya tengan la sesión iniciada, incluidos correo electrónico, unidades en la nube y consolas de trabajo. Puedes desactivarlo cuando quieras; la copia se eliminará. Si macOS te pide una carpeta, elige la del perfil del navegador que quieras usar.",
         "confirm": "Usar mis inicios de sesión",
-        "readDeniedTitle": "Se necesita Acceso total al disco",
-        "readDeniedDescription": "Cindy necesita este permiso para leer los archivos de inicio de sesión de Chrome. Activa Cindy en Privacidad y seguridad → Acceso total al disco y vuelve a intentarlo.",
+        "readDeniedTitle": "No se puede leer el perfil del navegador",
+        "readDeniedDescription": "En Privacidad y seguridad → Acceso total al disco, selecciona la copia de Cindy que está en uso. Si macOS permite elegir una carpeta, selecciona solo la del perfil del navegador que necesitas y vuelve a intentarlo.",
         "openFullDiskAccess": "Abrir configuración del sistema",
         "readDeniedLater": "Ahora no",
         "toast": {
@@ -6017,7 +6042,7 @@
         "permissionIntro": {
           "title": "Activar la automatización de la computadora",
           "description": "{{appName}} instalará o iniciará Cua Driver localmente para leer la pantalla y realizar acciones como hacer clic y escribir. Actívalo solo si iniciaste intencionalmente una tarea de automatización de la computadora.",
-          "macosDescription": "A continuación, {{appName}} instalará Cua Driver o abrirá su proceso de permisos, y podría abrir Configuración del Sistema de macOS. Primero, concede a CuaDriver los permisos básicos de Accesibilidad y Grabación de pantalla. Durante el uso posterior, macOS podría mostrar confirmaciones adicionales para una aplicación de destino o una acción específica. Aprueba esas solicitudes solo si iniciaste intencionalmente una tarea de Computer Use. Luego, vuelve a {{appName}} y se comprobará automáticamente.",
+          "macosDescription": "{{appName}} instalará o iniciará Cua Driver localmente para leer la pantalla y realizar acciones como hacer clic y escribir. Actívalo solo si iniciaste intencionalmente una tarea de automatización de la computadora. Permite la grabación de pantalla a CuaDriver. En System & App Protection Override, elige las apps que puede controlar. En versiones anteriores de macOS, activa Accesibilidad.",
           "confirm": "Continuar",
           "cancel": "Ahora no"
         },
@@ -6038,8 +6063,8 @@
         },
         "permissions": {
           "title": "Acceso al sistema",
-          "macosHint": "Computer Use necesita Accesibilidad y Grabación de pantalla. Durante el uso, macOS podría mostrar confirmaciones adicionales para una aplicación de destino o una acción.",
-          "accessibilityLabel": "Accesibilidad",
+          "macosHint": "Permite la grabación de pantalla a CuaDriver. En System & App Protection Override, elige las apps que puede controlar. En versiones anteriores, activa Accesibilidad.",
+          "accessibilityLabel": "Control del teclado y el ratón",
           "screenRecordingLabel": "Grabación de pantalla",
           "grant": "Autorizar",
           "accessibility": "Accesibilidad: {{status}}",
@@ -6085,7 +6110,7 @@
           "toggleFailed": "No se pudo cambiar el control directo de la computadora",
           "installFailed": "No se pudo instalar cua-driver",
           "permissionFailed": "Los permisos de Computer Use no están completos",
-          "permissionPending": "Completa los dos permisos del sistema, luego vuelve aquí y haz clic en Volver a comprobar",
+          "permissionPending": "Completa la autorización en el Mac. Si el estado sigue sin actualizarse, vuelve a comprobarlo.",
           "permissionSettingsOpened": "Se abrió la configuración de permisos del sistema. Después de concederlos, vuelve y haz clic en «Volver a comprobar».",
           "permissionSettingsMonitoring": "Se abrió la configuración de permisos del sistema. Completa los permisos y el estado se actualizará automáticamente.",
           "openPermissionSettingsFailed": "No se pudo abrir la configuración de permisos del sistema"
@@ -12638,6 +12663,7 @@
           "listenPortLabel": "Puerto local de escucha",
           "listenPortPlaceholder": "18747",
           "hint": "Conecta BlueBubbles en la red local. Solo se procesan los chats seleccionados. Detén las demás respuestas automáticas de esos chats antes de conectar.",
+          "automationDenied": "macOS denegó a BlueBubbles el acceso a Mensajes durante el envío. En el Mac donde se ejecuta BlueBubbles, revisa Ajustes del Sistema → Privacidad y seguridad → Automatización.",
           "uncertain": "Hay {{count}} entregas por comprobar. Revisa el historial antes de reintentar para evitar duplicados."
         }
       },
@@ -15213,7 +15239,6 @@
     "runningStatus": {
       "currentRate": "Última velocidad",
       "lastRequestRate": "Media de la última solicitud",
-      "recentTokenRate": "Reciente {{rate}} tok/s",
       "waitingSample": "Muestreando",
       "averageRate": "Promedio por turno",
       "rateHistory": "Historial de velocidad de generación",
@@ -15994,7 +16019,7 @@
       "viewThread": "Ver contexto del hilo ({{count}})",
       "memberFromGroup": "{{name}} · del grupo “{{group}}” de {{platform}}",
       "memberFromPlatform": "{{name}} · de un grupo de {{platform}}",
-      "guestFromDm": "{{name}} · de un mensaje directo de {{platform}} (no es el propietario)",
+      "guestFromDm": "{{name}} · de un mensaje directo de {{platform}}",
       "unknownSender": "Miembro del grupo"
     },
     "rewind": {
@@ -20669,7 +20694,7 @@
     "epermGuidance": {
       "title": "Acceso a la carpeta de macOS denegado",
       "message": "Cindy no puede acceder a tu carpeta {{folder}}",
-      "detail": "macOS denegó el acceso. Abre Configuración del Sistema para conceder permiso y luego vuelve a ejecutar el comando de tu Agent.",
+      "detail": "En Archivos y carpetas, permite que Cindy acceda a esta carpeta y vuelve a intentarlo.",
       "openSystemSettings": "Abrir Configuración del Sistema",
       "cancel": "Cancelar",
       "folderNames": {
@@ -21765,6 +21790,9 @@
     "actionFailed": "No se pudo completar la acción del complemento. Vuelve a intentarlo."
   },
   "mcpApps": {
+    "composerDragFailed": "No se pudo añadir el archivo adjunto. Arrástralo de nuevo o selecciona «Añadir al cuadro de texto».",
+    "composerAttachmentFormat": "Usa una imagen, un PDF o un archivo de texto sin formato de hasta 64 MiB.",
+    "composerAttachmentBusy": "Espera un momento antes de añadir otro archivo adjunto.",
     "sharedTaskReadOnly": "Solo el propietario de la sesión puede interactuar con esta tarjeta.",
     "retry": "Recargar",
     "loadFailed": "La aplicación no se pudo cargar. Comprueba la conexión y vuelve a cargarla.",

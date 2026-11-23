@@ -247,6 +247,7 @@ import type {
   AuxiliaryModelSettingsPatch,
   AuxiliaryModelSettingsState,
 } from '../shared/auxiliaryModelSettings';
+import type { AuxiliaryModelHealth } from '../shared/auxiliaryModelHealth';
 import {
   isModelVisibilityLegacyOwnerClaim,
   type ModelVisibilityLegacyOwnerClaim,
@@ -895,6 +896,7 @@ const fanOutMakerLocalModelInstallProgress = createIpcFanOut('maker:local-model:
 const fanOutMakerProviderOAuthProgress = createIpcFanOut('maker:provider:oauth:progress');
 // 自定义 MCP 服务器增删改广播 → 设置页 McpServersSection refetch。
 const fanOutMakerMcpChanged = createIpcFanOut('maker:mcp:changed');
+const fanOutMcpAppComposerAttachment = createIpcFanOut('maker:mcp-apps:composer-attachment');
 // 自定义供应商上游错误的结构化广播（payload = { agent, providerId, providerName, code, retryable, status }）。
 const fanOutMakerProviderUpstreamError = createIpcFanOut('maker:provider:upstream-error');
 // Claude Auto classifier 失败后单会话降级到 ask 的结构化广播。
@@ -1151,7 +1153,7 @@ interface ComputerDriverInstallResult {
   status: ComputerDriverStatus;
 }
 
-type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult;
+type ComputerDriverPermissionGrantResult = ComputerDriverInstallResult & { continueToScreenRecording?: boolean };
 
 interface ComputerDriverUpdateCheck {
   currentVersion: string | null;
@@ -7194,6 +7196,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLocalModelInstallProgress: fanOutMakerLocalModelInstallProgress,
 
     mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    redeemComposerAttachmentDrag: (input: { sessionId: string; ticket: string }): Promise<void> =>
+      ipcRenderer.invoke('maker:redeem-composer-attachment-drag', input),
+    onMcpAppComposerAttachment: (cb: (input: import('../shared/mcpApps').McpAppComposerAttachment) => void) =>
+      fanOutMcpAppComposerAttachment((data) => cb(data as import('../shared/mcpApps').McpAppComposerAttachment)),
     onPluginUiAction: (callback: (input: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, input: unknown) => callback(input);
       ipcRenderer.on('plugin-ui:action', listener);
@@ -8195,6 +8201,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       patch: AuxiliaryModelSettingsPatch,
     ): Promise<AuxiliaryModelSettingsState> =>
       ipcRenderer.invoke('maker:auxiliary-model-settings:set', patch),
+    /** Whether any auxiliary model can run now; changes arrive as app-settings section `auxiliary-model-health`. */
+    auxiliaryModelHealthGet: (): Promise<AuxiliaryModelHealth> =>
+      ipcRenderer.invoke('maker:auxiliary-model-health:get'),
 
     // Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。
     // 并发上限即刻生效;优先级降档对在跑 agent 进程约 15s 内生效(watcher 轮询);

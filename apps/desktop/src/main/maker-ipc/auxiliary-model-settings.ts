@@ -29,6 +29,7 @@ import {
   readAuxiliaryModelSettingsState,
   writeAuxiliaryModelSettingsPatch,
 } from '../utility-model/auxiliary-model-settings-store.js';
+import { refreshAuxiliaryModelHealth, registerAuxiliaryModelHealthIpc } from '../utility-model/auxiliaryModelHealthService.js';
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
 import {
   buildTextOneshotPinOptions,
@@ -196,6 +197,7 @@ export function parseAuxiliaryModelSettingsPatch(
 }
 
 export function registerAuxiliaryModelSettingsIpc(): void {
+  registerAuxiliaryModelHealthIpc();
   ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_SETTINGS_GET, (event) => {
     assertTrustedAppRendererEvent(event);
     try {
@@ -239,6 +241,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
       if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throwIpcError('PERMISSION_DENIED', 'Account changed');
       const patch = parseAuxiliaryModelSettingsPatch(rawPatch, allowedPins, persistedPins);
       await writeAuxiliaryModelSettingsPatch(patch);
+      refreshAuxiliaryModelHealth();
       return settingsWire();
     } catch (error) {
       if (isIpcError(error)) throw error;
