@@ -1254,10 +1254,17 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
   const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` :
     agentRelocationLabel(data, sessionId, t) ??
     t('chat.systemCard.agentSwitch.label', { from: fromLabel, to: toLabel });
+  const fallback = data?.switchReason === 'quota-rebalance' && data.startupFallback && typeof data.startupFallback === 'object'
+    ? agentRelocationPlace(data.startupFallback as Record<string, unknown>, sessionId, t)
+    : null;
+  const failedDevice = typeof data?.toAgentDeviceName === 'string' ? data.toAgentDeviceName : '';
+  const failure = fallback ? (failedDevice
+    ? t('chat.systemCard.agentSwitch.startupFailedOn', { device: failedDevice })
+    : t('chat.systemCard.agentSwitch.startupFailedAfterMove')) : null;
 
   return (
-    <div className="w-full select-none py-2" role="separator" aria-label={coverage ? `${label} · ${coverage}` : label}>
-      <div className="flex w-full items-center gap-3">
+    <div className="w-full select-none py-2">
+      <div className="flex w-full items-center gap-3" role="separator" aria-label={coverage ? `${label} · ${coverage}` : label}>
         <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
         <button
           type="button"
@@ -1326,6 +1333,11 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
           </div>
         ) : null}
       </Collapse>
+      {failure && fallback && (
+        <div className="mt-2 text-center text-11 text-muted-foreground" role="separator" aria-label={`${failure} · ${fallback}`}>
+          {failure} · {fallback}
+        </div>
+      )}
     </div>
   );
 }

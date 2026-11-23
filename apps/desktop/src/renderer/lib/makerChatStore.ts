@@ -20368,6 +20368,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         string,
         unknown
       >;
+      const startupFallback = c.startupFallback && typeof c.startupFallback === 'object'
+        ? c.startupFallback as Record<string, unknown> : null;
       return {
         clientId: m.clientId,
         role: 'assistant' as const,
@@ -20390,6 +20392,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           ...(typeof c.toAgentDeviceName === 'string'
             ? { toAgentDeviceName: c.toAgentDeviceName } : {}),
           ...(c.switchReason === 'quota-rebalance' ? { switchReason: c.switchReason } : {}),
+          ...(startupFallback && (startupFallback.toAgentDeviceId === null || typeof startupFallback.toAgentDeviceId === 'string')
+            ? { startupFallback: {
+                toAgentDeviceId: startupFallback.toAgentDeviceId,
+                toAgentDeviceName: typeof startupFallback.toAgentDeviceName === 'string' ? startupFallback.toAgentDeviceName : null,
+              } }
+            : {}),
         },
       };
     }

@@ -15889,7 +15889,9 @@
         "relocatedTo": "Agent 已改到 {{device}} 上執行",
         "relocatedTaskComputer": "Agent 已改到任務所在的電腦上執行",
         "relocatedElsewhere": "Agent 已改到另一台電腦上執行",
-        "quotaRebalance": "這個帳號的配額更該先用"
+        "quotaRebalance": "這個帳號的配額更該先用",
+        "startupFailedOn": "Agent 未能在 {{device}} 上啟動",
+        "startupFailedAfterMove": "換電腦後 Agent 未能啟動"
       },
       "handoffCoverage": {
         "complete": "已完整接續對話",

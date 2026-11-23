@@ -37,6 +37,20 @@ it('says why the task moved when the user switched accounts to use quota first',
   expect(screen.getByRole('separator').getAttribute('aria-label')).toBe('Agent 已改到 Office PC 上运行 · 这个账号的配额更该先用');
 });
 
+// #12182: the existing quota move only reports B. Exercise the actual card
+// with a confirmed startup fallback to the computer hosting the task.
+it('shows where the Agent started after the announced computer failed to start it', async () => {
+  await i18n.changeLanguage('zh-CN');
+  render(<SystemCard cardType="agent-switch" data={{
+    toAgentDeviceId: 'device-b', toAgentDeviceName: 'B', switchReason: 'quota-rebalance',
+    startupFallback: { toAgentDeviceId: null, toAgentDeviceName: 'A' },
+  }} />);
+  expect(screen.getAllByRole('separator').map(row => row.getAttribute('aria-label'))).toEqual([
+    'Agent 已改到 B 上运行 · 这个账号的配额更该先用',
+    'Agent 未能在 B 上启动 · Agent 已改到这台电脑上运行',
+  ]);
+});
+
 describe('command card localization boundaries', () => {
   it.each(SUPPORTED_LOCALES)('localizes card labels while preserving command data: %s', async (locale) => {
     await i18n.changeLanguage(locale);

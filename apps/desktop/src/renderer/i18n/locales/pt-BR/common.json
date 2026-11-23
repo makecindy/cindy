@@ -16061,7 +16061,9 @@
         "relocatedTo": "O Agent agora é executado em {{device}}",
         "relocatedTaskComputer": "O Agent agora é executado no computador da tarefa",
         "relocatedElsewhere": "O Agent agora é executado em outro computador",
-        "quotaRebalance": "a cota dele deve ser usada primeiro"
+        "quotaRebalance": "a cota dele deve ser usada primeiro",
+        "startupFailedOn": "Não foi possível iniciar o Agent em {{device}}",
+        "startupFailedAfterMove": "Não foi possível iniciar o Agent após trocar de computador"
       },
       "handoffCoverage": {
         "complete": "Conversa transferida na íntegra",

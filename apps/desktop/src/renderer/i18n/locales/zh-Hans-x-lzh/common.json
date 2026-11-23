@@ -15881,7 +15881,9 @@
         "relocatedTo": "Agent 已移至 {{device}} 运行",
         "relocatedTaskComputer": "Agent 已移至差事所在之机运行",
         "relocatedElsewhere": "Agent 已移至他机运行",
-        "quotaRebalance": "此名籍之限额宜先用"
+        "quotaRebalance": "此名籍之限额宜先用",
+        "startupFailedOn": "Agent 未能于 {{device}} 启动",
+        "startupFailedAfterMove": "易机后 Agent 未能启动"
       },
       "handoffCoverage": {
         "complete": "言谈已全续",

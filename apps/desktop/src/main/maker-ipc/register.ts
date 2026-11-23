@@ -563,6 +563,7 @@ import {
   commitMessageDeletion,
   createMessage as createDbMessage,
   findLatestContextRebuildMeta,
+  recordQuotaRebalanceStartupFallback,
   rewindPersistedUserMessageAfterClear,
   findParkedEngineSession,
   getMessageDeletionTarget,
@@ -9131,6 +9132,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!agentOnOtherDevice) await admitLocalRoute();
     assertAccess?.();
     let nativeRelocation: Awaited<ReturnType<typeof relocateForFreshStart>> | undefined;
+    let failedColdStartDevice: string | null | undefined;
     while (!session) {
       assertAccess?.();
       try {
@@ -9220,6 +9222,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           && (!reconnect || (o.agentDeviceId === reconnect.shareDeviceId && !o.remoteHostId))
           ? await providerGroupService?.prepareGuestStartSwitch(o.id) : null;
         if (!next && !guestRelocation) throw error;
+        // Cold startup has no relocation boundary. Remember the first failure,
+        // then report the confirmed destination once the startup loop completes.
+        if (next && !o.resumeSessionId && failedColdStartDevice === undefined) {
+          failedColdStartDevice = failedRoute.agentDeviceId;
+        }
         // 同 Harness 先搬原生记录；源端不可用或目标不支持时交接，绝不将旧电脑的 ID 直接用于目标端。
         if (o.id && o.resumeSessionId) {
           const target = next
@@ -9331,6 +9338,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('PRECONDITION_FAILED', 'Could not save the selected model provider. Retry the task.');
     }
     assertAccess?.();
+    if (failedColdStartDevice !== undefined && failedColdStartDevice !== session.agentDeviceId) {
+      const ready = session;
+      await recordQuotaRebalanceStartupFallback(ready.id, failedColdStartDevice, {
+        toAgentDeviceId: ready.agentDeviceId,
+        toAgentDeviceName: describeAgentDevice(ready.agentDeviceId),
+      }, () => {
+        assertResumeRecoveryCurrent();
+        if (maker.getSession(ready.id) !== ready || ready.hasStartedClosing()) {
+          throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        }
+      }).catch(error => log.warn('provider group: startup fallback history update failed', {
+        sessionId: ready.id,
+        errorName: error instanceof Error ? error.name : typeof error,
+      }));
+      assertAccess?.();
+    }
     if (reconnectHandoff) {
       const { from, to } = reconnectHandoff;
       assertResumeRecoveryCurrent();

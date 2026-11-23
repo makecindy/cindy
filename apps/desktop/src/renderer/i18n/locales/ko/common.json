@@ -15890,7 +15890,9 @@
         "relocatedTo": "이제 Agent가 {{device}}에서 실행됩니다",
         "relocatedTaskComputer": "이제 Agent가 작업이 있는 컴퓨터에서 실행됩니다",
         "relocatedElsewhere": "이제 Agent가 다른 컴퓨터에서 실행됩니다",
-        "quotaRebalance": "이 계정의 할당량을 먼저 쓰기 위해"
+        "quotaRebalance": "이 계정의 할당량을 먼저 쓰기 위해",
+        "startupFailedOn": "{{device}}에서 Agent를 시작하지 못했습니다",
+        "startupFailedAfterMove": "컴퓨터를 변경한 후 Agent를 시작하지 못했습니다"
       },
       "handoffCoverage": {
         "complete": "전체 대화를 이어받음",

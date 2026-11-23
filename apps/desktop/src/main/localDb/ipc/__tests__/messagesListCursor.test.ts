@@ -108,6 +108,7 @@ import {
   findPendingForkOrigin,
   getMessageDeletionTarget,
   markLatestAgentHandoffConsumed,
+  recordQuotaRebalanceStartupFallback,
   readPriorUserRoundCost,
   registerMessageIpc,
   updateMessageContent,
@@ -193,6 +194,36 @@ function insertCostMessage(
       rewindAt: input.rewindAt ?? null,
     });
 }
+
+// #12182: the real history writer must add the confirmed location to the
+// pending quota move while leaving that same row as the only handoff source.
+// Earlier cursor and handoff tests do not cover annotating an existing move.
+describe('quota move startup fallback in task history', () => {
+  it.each([
+    { reason: 'quota-rebalance', consumed: false, failed: 'B', clearedAt: null, annotated: true },
+    { reason: undefined, consumed: false, failed: 'B', clearedAt: null, annotated: false },
+    { reason: 'quota-rebalance', consumed: true, failed: 'B', clearedAt: null, annotated: false },
+    { reason: 'quota-rebalance', consumed: false, failed: 'C', clearedAt: null, annotated: false },
+    { reason: 'quota-rebalance', consumed: false, failed: 'B', clearedAt: 1000, annotated: false },
+  ])('annotates only the visible, unconsumed quota move to the failed device ($reason, $consumed, $failed, $clearedAt)', async ({
+    reason, consumed, failed, clearedAt, annotated,
+  }) => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1', clearedAt);
+    const content = { switchReason: reason, consumed, handoff: 'preserve prior context', toAgentDeviceId: 'B' };
+    sqlite.prepare(
+      "INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('switch', 'switch', 's1', 'agent_switch', ?, 1000)",
+    ).run(JSON.stringify(content));
+    const location = { toAgentDeviceId: null, toAgentDeviceName: 'A' };
+
+    await recordQuotaRebalanceStartupFallback('s1', failed, location, () => {});
+    const rows = sqlite.prepare('SELECT content FROM messages WHERE session_id = ?').all('s1') as { content: string }[];
+    expect(rows.map(row => JSON.parse(row.content))).toEqual([
+      annotated ? { ...content, startupFallback: location } : content,
+    ]);
+    expect(await findPendingAgentHandoff('s1')).toBe(consumed || clearedAt ? null : content.handoff);
+  });
+});
 
 describe('local-db:messages:list cursor', () => {
   // DB regression: sealing a six-message page previously used 15 reads,

@@ -1581,6 +1581,48 @@ export async function updateAgentSwitchBoundaryContent(
   return true;
 }
 
+/** Annotate the announced move without adding a second handoff boundary. */
+export async function recordQuotaRebalanceStartupFallback(
+  sessionId: string,
+  failedDeviceId: string | null,
+  location: { toAgentDeviceId: string | null; toAgentDeviceName: string | null },
+  assertCurrent: () => void,
+): Promise<void> {
+  const ownerScope = captureOwnerBroadcastScope();
+  const db = getDbClient().drizzle;
+  const [boundary] = await db.select({
+    id: messages.id, role: messages.role, content: messages.content,
+  }).from(messages).innerJoin(sessions, eq(sessions.id, messages.sessionId))
+    .where(and(
+      eq(messages.sessionId, sessionId),
+      eq(sessions.status, 'active'),
+      or(and(eq(messages.role, 'agent_switch'), isNull(messages.rewindAt)), eq(messages.role, 'context_rebuild')),
+      or(isNull(sessions.clearedAt), gt(messages.createdAt, sql`${sessions.clearedAt}`)),
+    ))
+    .orderBy(desc(messages.createdAt), desc(sql`${messages}.rowid`)).limit(1);
+  if (boundary?.role !== 'agent_switch') return;
+  const content = parseAgentMetaRecord(boundary.content);
+  if (content?.switchReason !== 'quota-rebalance' || content.consumed !== false
+    || content.toAgentDeviceId !== failedDeviceId || content.startupFallback !== undefined) return;
+  assertCurrent();
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  const [updated] = await db.update(messages)
+    .set({ content: JSON.stringify({ ...content, startupFallback: location }) })
+    .where(and(
+      eq(messages.id, boundary.id),
+      eq(messages.content, boundary.content),
+      isNull(messages.rewindAt),
+      sql`exists (
+        select 1 from ${sessions} where ${sessions.id} = ${messages.sessionId} and ${sessions.status} = 'active'
+        and (${sessions.clearedAt} is null or ${sessions.clearedAt} < ${messages.createdAt})
+      )`,
+    )).returning();
+  if (updated) {
+    assertCurrent();
+    broadcastMessageRow(sessionId, messageToCamel(updated), ownerScope);
+  }
+}
+
 /** vendor accepted 后持久化最新 handoff 消费位；内存 registry 不等待这笔辅助写。 */
 export function markLatestAgentHandoffConsumed(sessionId: string): Promise<void> {
   return markLatestAgentHandoffConsumedWithPorts({

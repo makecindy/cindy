@@ -15955,7 +15955,9 @@
         "relocatedTo": "Agent now runs on {{device}}",
         "relocatedTaskComputer": "Agent now runs on the task’s computer",
         "relocatedElsewhere": "Agent now runs on another computer",
-        "quotaRebalance": "its quota should be used first"
+        "quotaRebalance": "its quota should be used first",
+        "startupFailedOn": "Agent could not start on {{device}}",
+        "startupFailedAfterMove": "Agent could not start after the move"
       },
       "handoffCoverage": {
         "complete": "Full conversation carried over",

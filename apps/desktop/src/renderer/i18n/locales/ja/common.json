@@ -15890,7 +15890,9 @@
         "relocatedTo": "Agent を {{device}} で実行するようにしました",
         "relocatedTaskComputer": "Agent をタスクのあるパソコンで実行するようにしました",
         "relocatedElsewhere": "Agent を別のパソコンで実行するようにしました",
-        "quotaRebalance": "こちらのクォータを先に使うため"
+        "quotaRebalance": "こちらのクォータを先に使うため",
+        "startupFailedOn": "{{device}} で Agent を起動できませんでした",
+        "startupFailedAfterMove": "パソコンの切り替え後に Agent を起動できませんでした"
       },
       "handoffCoverage": {
         "complete": "会話をすべて引き継ぎました",

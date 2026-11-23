@@ -15918,7 +15918,9 @@
         "relocatedTo": "Agent läuft jetzt auf {{device}}",
         "relocatedTaskComputer": "Agent läuft jetzt auf dem Computer der Aufgabe",
         "relocatedElsewhere": "Agent läuft jetzt auf einem anderen Computer",
-        "quotaRebalance": "sein Kontingent sollte zuerst genutzt werden"
+        "quotaRebalance": "sein Kontingent sollte zuerst genutzt werden",
+        "startupFailedOn": "Agent konnte auf {{device}} nicht gestartet werden",
+        "startupFailedAfterMove": "Agent konnte nach dem Computerwechsel nicht gestartet werden"
       },
       "handoffCoverage": {
         "complete": "Gespräch vollständig übernommen",

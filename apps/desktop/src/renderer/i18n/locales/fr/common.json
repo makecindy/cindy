@@ -16061,7 +16061,9 @@
         "relocatedTo": "L'Agent s'exécute désormais sur {{device}}",
         "relocatedTaskComputer": "L'Agent s'exécute désormais sur l'ordinateur de la tâche",
         "relocatedElsewhere": "L'Agent s'exécute désormais sur un autre ordinateur",
-        "quotaRebalance": "son quota doit être utilisé en priorité"
+        "quotaRebalance": "son quota doit être utilisé en priorité",
+        "startupFailedOn": "Agent n’a pas pu démarrer sur {{device}}",
+        "startupFailedAfterMove": "Agent n’a pas pu démarrer après le changement d’ordinateur"
       },
       "handoffCoverage": {
         "complete": "Conversation reprise intégralement",
