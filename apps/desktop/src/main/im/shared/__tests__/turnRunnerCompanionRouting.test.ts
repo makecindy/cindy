@@ -16,6 +16,13 @@ import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, c
 afterEach(() => clearSessionRuntimeControlState('mimi-main'));
 
 import type { AgentEvent, MakerEvent, Session, SessionSendResult, TurnPermissionPolicy } from '@cindy/maker-core';
+import { createHash } from 'node:crypto';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import * as ownerStorage from '../../ownerScopedStorage';
+import { isIMessageSteeringEnabled } from '../../imessage/steering';
+import type { IMessageToolScope } from '../channelToolScope';
 import type { ChannelIM } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
@@ -315,6 +322,82 @@ beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
 
 describe('turnRunner: connection handed to a companion bot', () => {
+  // Tier 1: one busy owner DM shares a task with Desktop; a fifth chat must still defer.
+  // Existing route tests only send idle messages and never exercise same-turn admission.
+  it('steers exactly the configured iMessage chats into their own live inbound turns', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'imessage-steering-'));
+    const file = path.join(directory, 'steering.json');
+    const location = vi.spyOn(ownerStorage, 'ownerScopedImUserDataPath').mockReturnValue(file);
+    const chats = [OWNER, 'g/group', 'dm-a', 'dm-b'];
+    const connection = 'test-connection';
+    try {
+      await writeFile(file, JSON.stringify({ routes: chats.map(chat => ({
+        botId: binding, connectionId: connection,
+        chatSha256: createHash('sha256').update(chat).digest('hex'),
+      })) }));
+      runner = createTurnRunner({
+        ...fakeAdapter, channel: 'imessage',
+        companionLane: chat => chat === OWNER ? { kind: 'owner-dm' }
+          : chat.startsWith('g/') ? { kind: 'group', chatId: chat, threadId: '' }
+          : { kind: 'guest-dm', userId: chat },
+        steerWhileBusy: (bot, chat) => isIMessageSteeringEnabled(connection, bot, chat),
+      }, fakeRepo, fakeCards, { companion: companion as unknown as ImCompanionRouteDeps });
+      const receive = (chat: string, text: string, owner = chat === OWNER) => runner.dispatchAgentTurn({
+        queueMode: 'external', beforeProviderStart: async () => {}, botContextId: BOT_CONTEXT,
+        userId: chat, text, attachments: [], userMessageId: chat + text, requesterIsOwner: owner,
+        channelToolScope: { channel: 'imessage', botId: BOT_CONTEXT, laneUserId: chat, chatId: chat,
+          im: mocks.im as unknown as IMessageToolScope['im'], requesterIsOwner: owner,
+          companion: true, chatKind: chat.startsWith('g/') ? 'group' : 'direct' },
+      });
+      const create = mocks.getMaker().createSession;
+      const original = create.getMockImplementation();
+      create.mockImplementation(async (args: { id: string }) => {
+        const session: Session = await original(args);
+        const h = harnesses.get(args.id)!;
+        if (!session.steer) {
+          Object.assign(session, { getTurnGeneration: () => 1, capabilities: { sameTurnSteer: { supported: true } },
+            steer: vi.fn(async (_msg, opts) => { await opts.beforeProviderStart(); }) });
+          h.send.mockImplementation(async (_msg, opts) => {
+            await opts.beforeProviderStart();
+            await opts.onAccepted();
+            vi.mocked(session.isTurnRunning).mockReturnValue(true);
+            return { accepted: true };
+          });
+        }
+        return session;
+      });
+      for (const chat of [...chats, 'dm-other']) {
+        const first = await receive(chat, 'first');
+        expect(first.kind).toBe('accepted');
+        if (first.kind !== 'accepted') throw new Error(first.reason);
+        const h = harnesses.get(first.sessionId)!;
+        const follow = await receive(chat, 'follow ' + chat);
+        if (chats.includes(chat)) {
+          expect(follow).toMatchObject({ kind: 'accepted', sessionId: first.sessionId, terminal: first.terminal });
+          expect(h.session.steer).toHaveBeenCalledTimes(1);
+          expect(JSON.stringify(vi.mocked(h.session.steer).mock.calls[0]![0])).toContain('follow ' + chat);
+        } else {
+          expect(follow.kind).toBe('busy');
+          expect(h.session.steer).not.toHaveBeenCalled();
+        }
+        if (chat === OWNER) expect((await receive(chat, 'changed authority', false)).kind).toBe('busy');
+        expect(h.send).toHaveBeenCalledOnce();
+        if (chat === OWNER) {
+          h.emit({ type: 'done', data: {} } as AgentEvent);
+          await first.terminal;
+          // Desktop now occupies the same canonical session, with no IM lease.
+          expect((await receive(chat, 'during desktop turn')).kind).toBe('busy');
+          vi.mocked(h.session.isTurnRunning).mockReturnValue(false);
+          expect((await receive(chat, 'idle again')).kind).toBe('accepted');
+          expect(h.send).toHaveBeenCalledTimes(2);
+        }
+      }
+    } finally {
+      location.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   // PR #10271, unit: cold wiring used to start the exhausted legacy source before the shared
   // pre-send recovery could run. A real runner input must use the recovered row on its first startup.
   it.each([false, true])('prepares a cold legacy task before wiring its first channel message (temporary settings: %s)', async temporary => {

@@ -104,7 +104,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | 建任务 | `sessionRepo.createSession` 确定性 id upsert；`createFreshSession`（`/new` 轮换事务）；随后 `maker.createSession` —— 2026-10 起两处建行都经 `openChannelSession` → **`openSession`**（模型准入） | `session-runner` 新任务的 `maker.createSession`、`/new` 的 `desktopSessionStorage.create` —— 同样经 `openChannelSession` → **`openSession`** | **公共入口 `openSession`**（已完成，批次 2）；渠道专属建行在 commit 回调里。live session 仍各自 `maker.createSession`，未改用 register 内部的 `bootstrapSession`（会新增项目上下文 / Orca 指令注入等行为，见 §6） |
 | 默认配置 | `resolveImSessionDefaults(channel)` + 跟随渠道默认（`channelDefaultRouteSync`） | `resolveNewSessionConfig`（目录偏好 > 全局 IM 默认 > 清单首项；权限档规则见 `defaults.ts`）+ 共用 `createDefaultRouteFollower` 跟随默认 | 渠道策略（台账第三节「新会话的默认…从哪读」有意不同） |
 | 命令 | `messageHandler.processOne` → `slashCommands`（注册表 `botCommands.ts`） | 服务端分发命令，桌面只收 `query.*` | 渠道适配（官方命令分发在服务端） |
-| 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；无插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
+| 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；iMessage 精确匹配的聊天可插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
 | 输入拼装 | `prepareAgentTurnText`（群上下文 / ambient 提示）+ `buildImChannelNote` + `buildImUserMessage`；派发时前置交接 / 计划对账 / Goal 提示 | `buildContextPrefix` + `composeXPrompt` + `buildHookPromptNote`；同样前置交接 / 计划对账（仅 IM 来源）/ Goal 提示 | 共用流程（前置层同一份；渠道说明文案有意不同，见台账「入站上下文」） |
 | 用户消息落库 | 部分渠道提前落库（`persistInboundUserMessageEarly`），`onAccepted` 补 `imSource` | 只在 `onAccepted` 落库，`agentMeta.hookSource` | 共用流程（`onAccepted` 落库；提前落库保留为渠道能力） |
 | 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram / X / 飞书）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
@@ -318,10 +318,17 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 | 排队消息在桌面端可见 / 可删 | 不可见 | 不可见 | 迁到 coordinator 后自然可见、可删（删除即视同撤回：IM 撤排队表情，hook 回 `turn.end(cancelled)`） |
 | 排队上限 | 无上限 | 每会话 20 | 各自保留：IM 不限，hook 仍按 20 拒收 |
 | 停止时同任务已排队的消息 | `/stop` 一并清掉 `sendQueue` | 服务端 `/stop` 只对正在跑的那一个 requestId 发 `task.cancel`；desktop hook 队列里同任务已排队的请求照常接着跑（本 PR 前即如此） | 未改：一并清掉等于替用户丢弃没被取消的请求、并以 cancelled 收口，属产品语义；随批次 3（hook 队列并入 coordinator）一起定 |
-| 插话（steer） | 无 | 无 | 不新增 |
+| 插话（steer） | iMessage 可按聊天开启，见下文；其他个人渠道无 | 无 | 通用迁移不扩大开启范围 |
 | 模型准入（`openSession`） | 只做凭证检查 | 新任务做路由检查 | 已按 Dash 指定改走 `openSession` 准入：新任务的模型 / 来源 / 推理强度 / Fast 不被支持时直接拒绝（文案「不会自动更换模型或供应商」），准入还会规范化来源与推理强度；渠道默认配置若指向已停用的模型，新任务会建不出来（以前会照建） |
 | live session 改走 `bootstrapSession` | 不注入项目上下文 / Orca 指令 | 同左 | 未改：改了等于给 IM / hook 任务新增项目上下文与 Orca 指令注入、目录授权准备等行为，属产品决定 |
 | 缺口 2b / 2e / 2f / 默认配置取值链 | 见台账 | 见台账 | 各自保留，合并只共享实现骨架 |
+
+iMessage 伙伴连接可通过当前账号目录的 `imessage/steering.json` 为指定聊天开启忙时插话。
+文件格式为 `{"routes":[{"connectionId":"…","botId":"…","chatSha256":"…"}]}`，
+摘要取原始 BlueBubbles chat GUID 的 UTF-8 SHA-256 小写十六进制。删除条目即可关闭，
+新聊天默认排队；聊天名单、群激活方式和权限仍由原连接管理。每次入站仍按原路由开轮或查找在途轮次。
+只有该连接、伙伴、聊天、发言权限和仍有效的 iMessage 轮次都匹配，且引擎支持同轮插话，才向其追加输入。
+主人私聊复用伙伴主任务时，来自桌面或定时执行的轮次继续排队。投递结果不明时保留原收件回执供核查。
 
 ### 同一 Cindy 电脑上的多个飞书机器人（2026-11-10，未发布）
 
