@@ -143,7 +143,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSessionWithStream(throughSession = false, providerId?: string) {
+async function startSessionWithStream(throughSession = false, providerId?: string, model = 'claude-opus-4-6') {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -165,7 +165,7 @@ async function startSessionWithStream(throughSession = false, providerId?: strin
   const agent = new ClaudeCodeAgent(createDeps());
   const handle = await agent.startSession({
     sessionId: 'session-auto-turn',
-    model: 'claude-opus-4-6',
+    model,
     providerId,
     workingDir,
     permissionMode: 'acceptEdits',
@@ -257,6 +257,68 @@ describe('ClaudeCodeAgent auto-continued turn in-flight tracking', () => {
       await session!.close();
     }
   });
+
+  // #10748 / unit: the native SDK Query carries reject events without request
+  // ownership. Translator-only tests miss the provider-initiated turn reset.
+  it.each(['provider wake', 'subagent rejection'] as const)(
+    'settles native SDK quota and transport signals separately after %s', async scenario => {
+      const { session, stream, events } = await startSessionWithStream(true, 'anthropic', 'claude-sonnet-4-6');
+      const sdkSession = session!;
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(1794574745138);
+      const resetsAt = 1794607200;
+      const weekly = "You've hit your weekly limit · resets 5pm";
+      const network = 'API Error: The operation timed out.';
+      const errorEnvelope = {
+        ...assistantText(network), error: 'server_error', parent_tool_use_id: null,
+      };
+      try {
+        await sdkSession.send('start work');
+        if (scenario === 'provider wake') {
+          stream.emit(successResult());
+          await waitFor(() => events.some(e => e.type === 'done'), 'initial turn settled');
+          events.length = 0;
+        }
+        stream.emit({
+          type: 'rate_limit_event', session_id: 'sdk-session',
+          rate_limit_info: {
+            status: 'rejected', resetsAt,
+            rateLimitType: scenario === 'provider wake' ? 'seven_day' : 'seven_day_opus',
+          },
+        });
+        if (scenario === 'subagent rejection') {
+          stream.emit({
+            ...assistantText(weekly), error: 'rate_limit', parent_tool_use_id: 'opus-task',
+          });
+          stream.emit({
+            type: 'rate_limit_event', session_id: 'sdk-session',
+            rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour', resetsAt },
+          });
+          stream.emit({ ...assistantText('Main Sonnet request continued.'), parent_tool_use_id: null });
+        }
+        stream.emit(errorEnvelope);
+        stream.emit({
+          ...successResult(), is_error: true, terminal_reason: 'api_error', stop_reason: 'stop_sequence',
+          result: scenario === 'provider wake' ? weekly : network,
+        });
+        await waitFor(() => events.some(e => e.type === 'done'), 'SDK error turn settled');
+        const errors = events.filter(e => e.type === 'error');
+        expect(errors).toHaveLength(1);
+        if (scenario === 'provider wake') {
+          expect(errors[0].data).toMatchObject({
+            message: weekly, sdkError: 'rate_limit', isTerminal: true, usageLimit: true, usageResetAt: resetsAt * 1000,
+          });
+        } else {
+          expect(errors[0].data).toMatchObject({ message: network, sdkError: 'server_error', isTerminal: true });
+          expect(errors[0].data).not.toHaveProperty('usageLimit');
+          expect(errors[0].data).not.toHaveProperty('usageResetAt');
+        }
+      } finally {
+        clock.mockRestore();
+        stream.end();
+        await sdkSession.close();
+      }
+    },
+  );
 
   // #10748 / unit: exercise the native subscription Query through send, Stop
   // and Session settlement. Reset-only translator tests cannot detect stale quota

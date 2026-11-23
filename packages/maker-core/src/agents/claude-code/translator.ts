@@ -100,7 +100,7 @@ export interface TurnState {
     retryAttempt?: number;
     maxRetries?: number;
   } | null;
-  /** Periodic subscription windows rejected during this turn. */
+  /** Session-level quota candidates received since the preceding turn settled. */
   rejectedSubscriptionWindows?: Map<string, number>;
   /**
    * 本 turn 是否由 maker 侧主动 interrupt(用户点停止 handle.abort() / upstream
@@ -2481,7 +2481,12 @@ function handleResult(
     const errDetail = redactSensitiveText(rawResult);
     const errorStatus = resultSignals.errorStatus ?? pendingApiError?.errorStatus;
     const usageLimit = pendingApiError?.usageLimit === true || resultSignals.usageLimit;
-    const rejectedThisTurn = msg.terminal_reason === 'api_error' ? ctx.turn.rejectedSubscriptionWindows : undefined;
+    // SDKRateLimitEvent has no request or parent-tool ID. The terminal result
+    // must corroborate the candidate before it can override a transport envelope.
+    const resultConfirmsPeriodicLimit =
+      /\byou(?:'|’)ve hit your (?:session|weekly|5[- ]hour) limit\b/i.test(rawResult);
+    const rejectedThisTurn = msg.terminal_reason === 'api_error' && resultConfirmsPeriodicLimit
+      ? ctx.turn.rejectedSubscriptionWindows : undefined;
     const confirmedSubscriptionLimit = Boolean(rejectedThisTurn?.size);
     // 多个窗口同时被拒时取最晚的重置,早醒只会再撞一次限额。已过点也照带:
     // 下游按零延迟立即续跑,丢掉反而只能等手动恢复。但过点的只用一次——到点后
