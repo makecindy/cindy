@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { currentOperationBudget, operationCheckpoint } from '../utils/operationBudget';
+import { currentOperationBudget, operationCheckpoint, quarantineGitDirectory } from '../utils/operationBudget';
 
 import {
   GitSnapshotCoordinator,
@@ -682,6 +682,45 @@ describe('GitSnapshotCoordinator', () => {
     await coordinator.onTurnEnd('s1');
 
     expect(deps.createShadowMarker).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-22 CI：turn end 失败时，after-edit 和它内层 catch 里的 gap marker 共用同一份
+  // 已中止的预算，一起被取消，这一轮的改后保存点就静默消失了 —— 用户回退时既没有回退点，
+  // 也看不到任何缺口记录。最小失败输入：基线已建成，但轮到 turn end 时仓库已不可写。
+  it('records the turn-end gap under its own budget when the turn-end operation cannot run', async () => {
+    const repoRoot = '/quarantined-repo';
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: repoRoot, agentKind: 'codex' }),
+      detectRepoRoot: vi.fn().mockResolvedValue(repoRoot),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    expect(deps.createShadowSavepoint).toHaveBeenCalledOnce();
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+
+    // 隔离只对这条用例专用的路径生效，不波及其它用例。
+    quarantineGitDirectory(repoRoot);
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowSavepoint).toHaveBeenCalledOnce();
+    expect(deps.createShadowMarker).toHaveBeenCalledWith(repoRoot, {
+      sessionId: 's1',
+      label: 'File rewind gap: turn-end savepoint not recorded',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+    });
+
+    // 不使用保存点链的 agent 不该因为这条新逻辑多出无意义的引用。
+    const plainRoot = '/quarantined-repo-plain';
+    const plainDeps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: plainRoot, agentKind: 'claude-code' }),
+      detectRepoRoot: vi.fn().mockResolvedValue(plainRoot),
+    });
+    const plain = new GitSnapshotCoordinator(plainDeps);
+    await plain.onTurnStart('s2');
+    quarantineGitDirectory(plainRoot);
+    await plain.onTurnEnd('s2');
+    expect(plainDeps.createShadowMarker).not.toHaveBeenCalled();
   });
 
   it('marks Codex turns as rewind-blocked when the turn-start baseline is missing', async () => {

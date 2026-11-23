@@ -43,6 +43,11 @@ interface LatestUserMessage {
 /** Optional dependency overrides used by focused main-process unit tests. */
 export interface GitSnapshotCoordinatorHostDeps {
   recordTurnAttempt?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['recordTurnAttempt'];
+  /**
+   * 一次快照操作（排队、探测、过滤、暂存、发布）的总预算。桌面宿主用默认 8 秒；
+   * 在负载重的机器上跑真实 git 的集成测试需要显式放宽，否则改后保存点会被静默跳过。
+   */
+  snapshotTimeoutMs?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['snapshotTimeoutMs'];
   readAutoSnapshotEnabled?: () => boolean;
   readAutoInitProjectGit?: () => boolean;
   detectRepoRoot?: (workingDir: string) => Promise<string | null>;
@@ -176,6 +181,7 @@ export function createGitSnapshotCoordinatorWithRouteGuard(
     getLastUserPrompt: async (sessionId) => (await getLatestUserMessageOnce(sessionId))?.text,
     createShadowSavepoint: deps.createShadowSavepoint ?? createShadowSavepoint,
     createShadowMarker: deps.createShadowMarker ?? createShadowMarker,
+    snapshotTimeoutMs: deps.snapshotTimeoutMs,
     oneShot: async (agentKind, prompt) => {
       // 停用轴:快照标签是新的付费 one-shot,该 agent 的默认路由被停用时不派发 ——
       // 抛错让 labeler 走既有的确定性兜底标签(gitSnapshotLabeler:oneShot 失败即

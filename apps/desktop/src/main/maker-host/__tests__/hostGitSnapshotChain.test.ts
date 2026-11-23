@@ -21,6 +21,11 @@ vi.mock('../model-route-guard-live.js', () => ({ isAgentOneShotRouteDisabled: as
 // Real git subprocesses for both savepoint rounds: about 2.7 s alone, and over the 5 s default
 // when the full desktop pool loads the machine. An explicit bound, wide enough for that load.
 const CHAIN_TIMEOUT_MS = 60_000;
+// 生产环境一次快照操作的预算只有 8 s。本用例在共享 runner 上跑两轮真实 git，机器一忙
+// 改后保存点就会撞上那个预算并被静默丢弃，链只剩三条(2026-11-22 的一次 CI 失败)。
+// 这里显式放宽，预算只用来拦“git 卡死”，且小于用例超时 —— 真卡住时以断言失败暴露，
+// 而不是拖到 runner 超时。
+const CHAIN_SNAPSHOT_BUDGET_MS = 45_000;
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, {
   cwd,
@@ -63,14 +68,20 @@ describe('a savepoint chain the desktop started, continued by the Host', () => {
     const meta = { workDir: repo, agentKind: 'claude-code' };
     const desktop = createGitSnapshotCoordinator(
       { getSessionMeta: async () => meta, oneShot: async () => 'unused' } as never,
-      { getLatestUserMessage: async () => ({ clientId: 'u-desktop', text: 'desktop turn' }) },
+      {
+        getLatestUserMessage: async () => ({ clientId: 'u-desktop', text: 'desktop turn' }),
+        snapshotTimeoutMs: CHAIN_SNAPSHOT_BUDGET_MS,
+      },
     );
     await desktop.onTurnStart('task-chain');
     fs.writeFileSync(path.join(repo, 'a.txt'), 'two\n');
     await desktop.onTurnEnd('task-chain');
 
     const host = createHostGitSnapshot({ getSessionMeta: async () => meta },
-      { getLatestUserMessage: async () => ({ clientId: 'u-host', text: 'host turn' }) });
+      {
+        getLatestUserMessage: async () => ({ clientId: 'u-host', text: 'host turn' }),
+        snapshotTimeoutMs: CHAIN_SNAPSHOT_BUDGET_MS,
+      });
     await host.onTurnStart('task-chain');
     fs.writeFileSync(path.join(repo, 'a.txt'), 'three\n');
     await host.onTurnEnd('task-chain');
