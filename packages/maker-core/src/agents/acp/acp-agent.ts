@@ -30,6 +30,7 @@ import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
 import {
   DEVICE_HOSTED_EXEC_MCP_SERVER,
+  deviceHostedGhostRoster,
   deviceHostedMcpUrl,
   deviceHostedPluginEngineMcpServers,
   deviceHostedPluginEngineNote,
@@ -258,15 +259,19 @@ export class AcpAgent extends BaseAgent {
       opts.botUserProfilePrompt ?? '',
     ].filter((part) => part.trim()).join('\n\n') : '';
     // The built-in engines learn the installed plugins and Skills from their system prompt and native
-    // Skill loading; a plugin engine is told in the briefing instead (user decision 2026-11-24). Only
-    // for this computer's own tasks: a hosted task's plugins and Skills are the other computer's, and an
-    // isolated companion keeps its own frozen capability set, exactly as the built-in engines leave them
-    // out (a project-context companion loads like any task). A resumed session already has the
-    // briefing, and resuming never falls back to a new session, so nothing is read for it.
-    const capabilities = hosted || isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null : {
-      pluginRoster: this.readPluginRoster(opts.workingDir, logger),
-      skills: await this.readSessionSkills(opts.workingDir, logger),
-    };
+    // Skill loading; a plugin engine is told in the briefing instead (user decision 2026-11-24). An
+    // isolated companion keeps its own frozen capability set and gets neither, as on the built-in
+    // engines (a project-context companion loads like any task). A task hosted for another computer
+    // gets that computer's roster snapshot, exactly as the built-in engines inject it
+    // (`deviceHostedGhostRoster`, only when the tunnel offers the gateway; this computer's plugins never
+    // enter it), and no Skill list: there is no cross-computer source for one. A resumed session already
+    // has the briefing, and resuming never falls back to a new session, so nothing is read for it.
+    const capabilities = isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null
+      : hosted ? { pluginRoster: deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, () => ''), skills: [] }
+      : {
+        pluginRoster: this.readPluginRoster(opts.workingDir, logger),
+        skills: await this.readSessionSkills(opts.workingDir, logger),
+      };
     // The workspace note comes first: without it the agent has no way to know where the project is.
     const briefing = (acceptedMcpServers: readonly string[]): string => [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',

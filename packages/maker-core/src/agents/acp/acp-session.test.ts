@@ -1203,6 +1203,28 @@ describe('AcpAgent (the acp engine)', () => {
     expect(prepared).not.toHaveBeenCalled();
   });
 
+  // Review (#12294, P1)：托管任务与内置引擎一致，附任务所在电脑带来的花名册快照（隧道提供 cindy 时），不读本机花名册，
+  // 也不附 Skill 清单。最小失败输入：带快照的托管启动；隧道没有 cindy 的托管启动。unit tier。
+  it.each([
+    { name: 'with the gateway', servers: ['cindy', 'cindy_memory'], expected: true },
+    { name: 'without the gateway', servers: ['cindy_memory'], expected: false },
+  ])('gives a hosted task the roster snapshot of the task computer $name, never this computer\'s', async ({ servers, expected }) => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster>{"id":"local-only"}</ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      deviceHosted: { ...hosted, mcpServers: servers },
+      ghostRosterSnapshot: '<ghost-roster>\n{"id":"task-computer-plugin"}\n</ghost-roster>',
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text.includes('task-computer-plugin')).toBe(expected);
+    expect(briefing!.text).not.toContain('local-only');
+    expect(briefing!.text).not.toContain('<cindy-skills>');
+  });
+
   it.each([
     ['the agent cannot connect to the tools of the task\'s computer', { agentCapabilities: {} }, { deviceHosted: hosted, model: '' }, 'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED'],
     ['the task is on an SSH host', { agentCapabilities: { mcpCapabilities: { http: true } } }, { remoteHostId: 'box', model: '' }, "'remoteSession' not supported"],
