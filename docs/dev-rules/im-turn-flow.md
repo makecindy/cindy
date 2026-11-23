@@ -175,7 +175,10 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 6. **群历史租约与渠道工具租约**：`beginGroupHistoryAccess` / `beginChannelToolScope` 都在 provider 真正
    开始这一轮前登记、终态释放；`sessionInstanceId` 挡住旧实例借用新权限。轮次内原生 API 的目标 chat 与
    触发者身份只来自租约，不来自模型参数，无租约时 fail closed；飞书 `send_*_to_user` 的主人通知
-   例外见上节，不扩大原生 API 的作用域。每个可绑定渠道的 `channelNoteSourceFor` 都要在 `[渠道说明]`
+   例外见上节，不扩大原生 API 的作用域。iMessage 伙伴渠道专线另有一条无租约路径（2026-11-22）：
+   当前输入是主人在 Cindy 里的输入、或本轮是 scheduler 时，`im/imessage/laneScope.ts` 由宿主把作用域
+   解析为这条专线自己的聊天（主人输入保留主人身份，scheduler 不带主人身份），会话实例或输入边界变化即作废；
+   入站租约存在时始终以租约为准。伙伴渠道专线上的 scheduler 轮次不因「静默运行」压下渠道终稿。每个可绑定渠道的 `channelNoteSourceFor` 都要在 `[渠道说明]`
    末尾给 `toolsHint` 点名本轮可用的渠道工具（Telegram：`TELEGRAM_TOOLS_HINT`；飞书：`feishuToolsHint`），
    Agent 不该靠摸瞎试工具才知道自己在哪个渠道；新增可绑定渠道时四件事一起补——渠道说明提示、
    `channelToolScopeFor` 作用域、轮次内直通工具、以及该渠道工具在**三个 Harness** 的挂载门禁

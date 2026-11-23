@@ -218,6 +218,10 @@ interface Exports {
   close(id: number): number;
   local_address_change(now: number): void;
   probe(id: number, now: number): number;
+  /** 下面三个是 2026-11-22 加的（仅测速探测、动态切换中继优先级、取路径探测往返），旧核心没有。 */
+  measure_probe?(id: number, now: number): number;
+  conn_set_prefer_relay?(id: number, prefer: number): number;
+  conn_poll_probe_rtt?(id: number): number;
   conn_state(id: number): number;
   conn_remote_static(id: number): number;
   conn_remote_payload(id: number): number;
@@ -559,6 +563,24 @@ export class Connection extends EventEmitter {
     });
     this.endpoint.schedule();
     return started === 1;
+  }
+
+  /** 仅探测到 `address` 的可达性与往返时间（不切数据路径）；结果经 `probe-rtt` 事件通知。 */
+  measure(address: PeerAddress): boolean {
+    const started = this.endpoint.call((core, _io, addr) => {
+      if (!core.measure_probe) return 0;
+      this.endpoint.encode(addr(), address);
+      return core.measure_probe(this.id, this.endpoint.now());
+    });
+    this.endpoint.schedule();
+    return started === 1;
+  }
+
+  /** 动态切换这条连接是否优先走中继（不改变当前活动路径，需再 `probe` 目标路径以切换）。 */
+  setPreferRelay(prefer: boolean): void {
+    this.endpoint.call((core) => {
+      core.conn_set_prefer_relay?.(this.id, prefer ? 1 : 0);
+    });
   }
 
   /** 发送方向的进展；核心不提供（旧版）或连接关了时是 `null`。 */
@@ -920,6 +942,18 @@ export class Endpoint extends EventEmitter {
           const stream = new RecvStream(event);
           connection.recvStreams.set(event, stream);
           connection.emit('stream', stream);
+        }
+      }
+      if (this.core?.conn_poll_probe_rtt) {
+        for (;;) {
+          if (connection.closed) return;
+          const sample = this.call((core, _io, addr) => {
+            const rttUs = core.conn_poll_probe_rtt!(connection.id);
+            return rttUs >= 0 ? { address: decodeAddress(addr()), rttUs } : null;
+          });
+          if (!sample) break;
+          progressed = true;
+          connection.emit('probe-rtt', sample.address, sample.rttUs);
         }
       }
       for (const id of [0, ...connection.recvStreams.keys()]) {

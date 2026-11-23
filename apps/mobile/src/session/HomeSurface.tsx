@@ -190,7 +190,8 @@ import {
 } from '@/device-link/remoteStatus';
 import { useLocalNetworkStatus } from '@/device-link/localNetworkStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
+import { ConnectionRecoveryProgress, ConnectionRejoinButton } from '@/components/ConnectionBanner';
+import { useMobileDeviceRejoin } from '@/device-link/deviceRejoin';
 import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
 import { resolveConnectionBannerVisibility, resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, resolveHomeDeviceDisconnected, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
@@ -2622,6 +2623,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
   const network = useLocalNetworkStatus();
   const networkUnavailable = network === 'unavailable';
+  // This phone was removed on the official network: the row offers 「重新加入」 instead of a resync.
+  const homeRejoin = useMobileDeviceRejoin(networkUnavailable ? null : activeConnectionIssue);
   // Cached rows and failed hydration are not proof that a computer is offline.
   // Use this relay generation's authoritative presence; unknown stays neutral.
   const selectedDeviceDisconnected = status === 'online'
@@ -3839,7 +3842,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           <Text ellipsizeMode="tail" numberOfLines={1} style={styles.connectionText} testID="connection.title">
             {connectionCopy ? `${connectionTitle} · ${connectionCopy}` : connectionTitle}
           </Text>
-          {showHomeSyncAction ? <Pressable
+          {homeRejoin.visible ? (
+            <ConnectionRejoinButton busy={homeRejoin.busy} onPress={homeRejoin.run} />
+          ) : showHomeSyncAction ? <Pressable
             accessibilityLabel={refreshing ? t('devices.list.a11y.syncing') : t('devices.list.a11y.sync')}
             accessibilityRole="button"
             accessibilityState={{ busy: refreshing || undefined, disabled: refreshing }}

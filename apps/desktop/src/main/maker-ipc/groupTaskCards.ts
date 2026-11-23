@@ -50,6 +50,14 @@ export interface GroupTaskCardsDeps {
 const FOLLOW_MS = 7 * 24 * 60 * 60_000;
 /** A new task counts as started for this long before a card without a turn end reads as idle. */
 const STARTING_MS = 120_000;
+/**
+ * A card no turn is running in (idle, failed) is looked at at least this often: a turn its owner starts
+ * in the task, a rename or a newly recorded PR shows within it. Cards inside a turn, or with something
+ * still to post or edit, are looked at every pass; a turn's end looks at all at once, which does not
+ * put off the next minute check (#12011). A heartbeat that comes a moment early still counts.
+ */
+const RESTING_SYNC_MS = 60_000;
+const RESTING_SLACK_MS = 1_000;
 /** A message that could not reach the group is retried with backoff, then dropped. */
 const POST_ATTEMPTS = 8;
 /** Turn ends a card remembers, so the same end seen again posts nothing again. */
@@ -216,19 +224,28 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
 
   let syncing = false;
   let syncAgain = false;
+  let restingSyncedAt = 0;
+  const followed = (card: ChatLiveTaskCardRecord) => card.state === 'running' || card.state === 'waiting'
+    || !!card.outbox?.length || card.editRetryAt !== undefined;
+  const restingDue = () => Date.now() - restingSyncedAt >= RESTING_SYNC_MS - RESTING_SLACK_MS;
   /**
    * One pass over this computer's cards: posts what is waiting and brings each card in step with
-   * its task. `soon`: a turn just ended; if a pass is under way, run another right after it.
+   * its task. `soon`: a turn just ended. A turn end or a minute check that comes while a pass is under
+   * way runs another pass right after it.
    */
   async function sync(soon = false) {
-    if (syncing) { if (soon) syncAgain = true; return; }
+    if (syncing) { if (soon || restingDue()) syncAgain = true; return; }
     if (!deps.current() || !deps.readTask) return;
     syncing = true;
+    // Only the minute check restarts the minute: a turn end's full pass comes on top of it.
+    const resting = restingDue();
+    if (resting) restingSyncedAt = Date.now();
+    const all = soon || resting;
     try {
       for (const [messageId, card] of Object.entries(deps.store().read())) {
         if (!deps.current()) return;
         if (Date.now() - card.createdAt > FOLLOW_MS) { update(messageId, () => null); continue; }
-        if (!mine(card)) continue;
+        if (!mine(card) || !all && !followed(card)) continue;
         await postOutbox(messageId);
         const task = await deps.readTask(card.taskId).catch(() => undefined);
         if (task === undefined) continue;
@@ -261,7 +278,7 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
       warn('Group task cards could not be refreshed')(error);
     } finally {
       syncing = false;
-      if (syncAgain) { syncAgain = false; void sync(); }
+      if (syncAgain) { syncAgain = false; void sync(true); }
     }
   }
 

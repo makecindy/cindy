@@ -912,6 +912,43 @@ it('does not renew an expired public-directory cache or use it for an offline bu
   expect(await denied).toMatchObject({ payload: { code: 'DEVICE_OFFLINE' } });
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：AgentNetWorkerSocket 的 `setPeerPathPreference` 与 `peerRoutes()` 双路往返（directRttMs / relayRttMs）。
+ * - Bug／规则依据：2026-11-22 用户需求——跨国直连慢于中转时需支持双路测速与无断链手动切换（自动 / 直连 / 中转），且两端同步切路。
+ * - 现有覆盖缺口：此前集成测试只验证了中转打洞升级直连，未覆盖直连切回中转、双路 RTT 采集及再切回直连。
+ * - 最小失败输入：一对已直连的真实 worker 对端，依次执行 `setPeerPathPreference('a-host', 'relay')` 和 `'direct'`。
+ * - tier：integration，真实 worker、真实 WASM 核心与 V2 中转。
+ */
+it('measures both direct and relay RTTs and symmetrically switches a live peer between direct and relay without dropping RPC', async () => {
+  const f = await network(true, undefined, true); serve(f.host);
+  await f.controller.openLink('a-host', openPayload);
+  const host = f.sockets.find((socket) => socket.deviceId === 'a-host')!;
+  const controller = f.sockets.find((socket) => socket.deviceId === 'b-controller')!;
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  // Switching to relay updates both sides symmetrically and keeps RPC alive without reconnecting.
+  controller.setPeerPathPreference!('a-host', 'relay');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('relay');
+    expect(host.pathTo('b-controller')).toBe('relay');
+  }, { timeout: 8_000 });
+  const relayed = controller.peerSnapshot('a-host');
+  expect(relayed).toMatchObject({ path: 'relay', pathPreference: 'relay' });
+  expect(typeof relayed?.directRttMs).toBe('number');
+  expect(typeof relayed?.relayRttMs).toBe('number');
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['via-relay'] })).toMatchObject({ ok: true, result: 'via-relay' });
+  // Switching back to direct restores direct on both sides.
+  controller.setPeerPathPreference!('a-host', 'direct');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['back-direct'] })).toMatchObject({ ok: true, result: 'back-direct' });
+});
+
 // Bug: cached identities could keep an existing direct path, but could not find it after both nodes restarted.
 // Integration tier: real signed loopback multicast LAN beacons + Noise UDP,
 // while the relay is stopped before either node opens. Bind both discovery and

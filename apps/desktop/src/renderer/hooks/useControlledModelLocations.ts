@@ -4,10 +4,12 @@ import { withTransientRemoteRetry } from '@cindy/maker-shared/device-link-contra
 import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, modelCatalogKey, readControlledFavoriteSource, type ControlledModelLocation } from '../../shared/controlledModelCatalog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
-import { evictControlledDeviceProviders, evictDeviceProviders, refreshControlledDeviceProviders } from './useDeviceProviders';
-import { evictControlledDeviceCapabilities, evictDeviceCapabilities, refreshControlledDeviceCapabilities } from './useAgentCapabilities';
+import { evictDeviceProviders } from './useDeviceProviders';
+import { evictDeviceCapabilities } from './useAgentCapabilities';
+import { evictControlledPluginEngines, evictRemotePluginEngines, refreshControlledPluginEngines } from './usePluginEngines';
 import { refreshControlledAvailableAgents } from './useAvailableAgents';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
+import { invalidateControlledCatalogRoutes, refreshDiscoveredCatalogRoutes } from '@/lib/remoteCatalogSnapshot';
 
 const EMPTY_LOCATIONS: ControlledModelLocation[] = [];
 
@@ -30,10 +32,10 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
     let completeLocations: ControlledModelLocation[] = [];
     let sourceIds = new Set<string>();
     const presenceStates = new Map<string, string>();
-    const invalidate = () => {
+    const invalidate = (catalogChanged: boolean) => {
       revision++;
-      evictControlledDeviceProviders(deviceId);
-      evictControlledDeviceCapabilities(deviceId);
+      invalidateControlledCatalogRoutes(deviceId, catalogChanged);
+      evictControlledPluginEngines(deviceId);
       refreshControlledAvailableAgents(deviceId);
       setSnapshot(current => current?.deviceId === deviceId && current.owner === owner
         ? { ...current, locations: [] } : null);
@@ -76,8 +78,8 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
         supported = true;
         sourceIds = new Set(locations.map(location => location.agentDeviceId));
         setSnapshot({ deviceId, owner, locations });
-        refreshControlledDeviceProviders(deviceId);
-        refreshControlledDeviceCapabilities(deviceId);
+        refreshDiscoveredCatalogRoutes(deviceId);
+        refreshControlledPluginEngines(deviceId, sourceIds);
       } catch (error) {
         if (!current()) return;
         const code = extractIpcError(error)?.code;
@@ -93,8 +95,8 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
         if (queued && active) { queued = false; void refresh(); }
       }
     };
-    const reload = () => {
-      invalidate();
+    const reload = (catalogChanged = false) => {
+      invalidate(catalogChanged);
       if (pending) queued = true;
       else void refresh();
     };
@@ -133,29 +135,31 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
           if (route) {
             evictDeviceProviders(route);
             evictDeviceCapabilities(route);
+            evictRemotePluginEngines(route);
           }
         }
         return;
       }
       if (((event.channel === 'maker:provider:changed' || event.channel === 'maker:agents:changed')
         && (event.deviceId === deviceId || sourceIds.has(event.deviceId)))
-        || (event.deviceId === deviceId && event.channel === CONTROLLED_MODEL_CATALOG_CHANGED)) reload();
+        || (event.deviceId === deviceId && event.channel === CONTROLLED_MODEL_CATALOG_CHANGED)) reload(true);
     });
     // A does not receive its own broadcasts through B. Its local notifications
     // must also refresh catalogs routed through B, without using A's local grants.
     const reloadLocalSource = () => {
       if (selfDeviceId && isDataOwnerGenerationCurrent(owner)
-        && (!supported || sourceIds.has(selfDeviceId))) reload();
+        && (!supported || sourceIds.has(selfDeviceId))) reload(true);
     };
     const offProviders = window.electronAPI?.maker?.onProvidersChanged?.(reloadLocalSource);
     const offAgents = window.electronAPI?.maker?.onAgentsChanged?.(reloadLocalSource);
-    window.addEventListener('focus', reload);
+    const reloadOnFocus = () => reload();
+    window.addEventListener('focus', reloadOnFocus);
     void refresh();
     return () => {
       active = false;
       offStatus?.(); offPresence?.(); offReset?.(); offControl?.(); offPush?.();
       offProviders?.(); offAgents?.();
-      window.removeEventListener('focus', reload);
+      window.removeEventListener('focus', reloadOnFocus);
     };
   }, [deviceId, selfDeviceId, owner]);
   if (!deviceId || isSharedTaskPeer(deviceId) || !window.electronAPI?.deviceLink) return undefined;

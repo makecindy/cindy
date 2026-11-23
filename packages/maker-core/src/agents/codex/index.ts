@@ -138,6 +138,7 @@ import {
   type AutoReviewUserIntent,
   isSystemPermissionDenialReason,
   formatPermissionDenial,
+  isPermissionConfirmationTimeoutReason,
   resolveAutoReviewDecision,
   withAutoReviewContext,
   toolAutoReviewAction,
@@ -259,7 +260,7 @@ import {
   readCodexRolloutModelProvider,
   sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
-import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
+import { hasCurrentTeammateInstructions, rememberDeliveredTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
@@ -1749,6 +1750,8 @@ const isLikelyValidThreadId = (id: string | undefined): id is string =>
 export class CodexAgent extends BaseAgent {
   readonly kind = 'codex' as const;
   readonly capabilities: Capabilities;
+  /** Teammate instruction marker this process put into each recent thread (bounded); cleared by a compaction it sees. */
+  private readonly deliveredTeammateInstructions = new Map<string, string>();
 
   /**
    * Hosts keyed by target — `'local'` 或 `remote:<remoteHostId>`。每个 target
@@ -4566,6 +4569,8 @@ assertRouteCurrent();
      * 一起失去。memory flush 侧仍保持原有的「controller 存在才通知」语义。
      */
     const handleCompactBoundary = (): void => {
+      // Compaction may drop earlier developer items; the next resume re-delivers the teammate block.
+      if (sdkSessionId) this.deliveredTeammateInstructions.delete(sdkSessionId);
       nativeRecovery?.publish('codex', 'contextCompaction', {});
       compactionStormTracker.noteCompaction();
       memoryFlushController?.onCompactBoundary();
@@ -7505,6 +7510,9 @@ assertRouteCurrent();
         codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
       } else if (developerInstructions) {
         codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
+        if (opts.botRuntimeProfile) {
+          rememberDeliveredTeammateInstructions(this.deliveredTeammateInstructions, threadId, teammateRuntimeInstructionItem(developerInstructions).marker);
+        }
       }
       sdkSessionId = threadId;
       workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
@@ -7730,13 +7738,15 @@ assertRouteCurrent();
         if (opts.botRuntimeProfile && developerInstructions && !useProxyChannel) {
           const current = teammateRuntimeInstructionItem(developerInstructions);
           if (!await hasCurrentTeammateInstructions(sessionRolloutPath, current.marker,
-            opts.remoteHostId ? this.deps.getRemoteAgentFileOps?.(opts.remoteHostId) ?? {} : undefined)) {
+            opts.remoteHostId ? this.deps.getRemoteAgentFileOps?.(opts.remoteHostId) ?? {} : undefined,
+            this.deliveredTeammateInstructions.get(threadId))) {
             assertCurrentHost('thread/inject_items');
             await host.request(Method.ThreadInjectItems, { threadId, items: [current.item] }, {
               timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
             });
             assertCurrentHost('thread/inject_items');
           }
+          rememberDeliveredTeammateInstructions(this.deliveredTeammateInstructions, threadId, current.marker);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         // Resumed app-server threads may have sticky collaborationMode='plan' from
@@ -8652,8 +8662,7 @@ assertRouteCurrent();
           policyCause?: string,
         ) => {
           if (kind !== 'mcpServerElicitation') return;
-          const timedOut = source === 'system' && isSystemPermissionDenialReason(reason) &&
-            (reason === 'timeout' || reason?.endsWith('_timeout'));
+          const timedOut = source === 'system' && isPermissionConfirmationTimeoutReason(reason);
           const code = source === 'auto-review' ? 'MCP_APPROVAL_AUTO_BLOCKED'
             : timedOut ? 'MCP_APPROVAL_CONFIRMATION_TIMEOUT' : 'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE';
           // IDs and a closed set of causes only: no arguments, credentials, or
@@ -10181,6 +10190,7 @@ assertRouteCurrent();
       // inner action。查询继续静默，高风险 action 逐次确认且不得持久化授权。
       const approvalPolicy = mcpToolApprovalPolicy(params);
       const policyPermissionInput = mcpElicitationPermissionInput(params);
+      const reviewEvidence = this.deps.getMcpToolApprovalEvidence?.(mcpToolApprovalContext(params));
       const turnPolicyForcePrompt = forceTurnConfirmation(
         `mcp:${params.serverName}`,
         policyPermissionInput,
@@ -10222,7 +10232,8 @@ assertRouteCurrent();
           // against the review budget (see mcpToolReviewAction).
           autoReviewAction: policyPermissionInput.toolParams === undefined
             ? { kind: 'other' as const, description: undefined }
-            : mcpToolReviewAction(`mcp:${params.serverName}`, policyPermissionInput),
+            : mcpToolReviewAction(`mcp:${params.serverName}`, reviewEvidence === undefined
+              ? policyPermissionInput : { ...policyPermissionInput, toolParams: reviewEvidence }),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );
@@ -15915,13 +15926,18 @@ assertRouteCurrent();
       const storage = await this.deps.resolveCodexThreadStorage?.(opts.threadId);
       const companionEnvironment = opts.sessionId
         ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
+      // Same identity as the live session's host (startSession), including the subscription account
+      // it runs on; without it a session's own host looked like another writer and every explicit
+      // route apply closed and relinked an unchanged session.
+      const subscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
       const targetKey = localSessionHostIdentity({
         sessionId: opts.sessionId ?? '', accountProviderId,
-        accountSessionHost: accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true,
+        accountSessionHost: subscriptionAccount !== undefined || accountProviderId !== undefined
+          || this.deps.isolateCodexAccountSessions === true,
         reviewMode: opts.reviewMode === true,
         customContext: typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0,
         storage, policy: selection.policy, environmentIdentity: companionEnvironment?.identity,
-      });
+      }) + (subscriptionAccount ? `:subscription:${subscriptionAccount.id}` : '');
       if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
       for (const [key, host] of hosts) {
         if (!registryCurrent()) break;

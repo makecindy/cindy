@@ -36,6 +36,16 @@
   "recheck": "Periksa ulang",
   "deviceRemovedTitle": "Perangkat dihapus",
   "deviceRemovedHint": "Keluar lalu masuk lagi untuk bergabung kembali ke daftar perangkat.",
+  "rejoin": {
+    "action": "Gabung lagi",
+    "busy": "Sedang bergabung lagi",
+    "doneTitle": "Sudah bergabung lagi",
+    "agentNetUnavailable": "Layanan Agent-Net belum mendukung bergabung lagi; ponsel ini sementara tidak memakai Agent-Net.",
+    "failedTitle": "Gagal bergabung lagi",
+    "failed": "Periksa jaringan lalu coba lagi.",
+    "unsupported": "Layanan belum mendukung bergabung lagi; keluar lalu masuk kembali.",
+    "agentNetUnsupported": "Layanan Agent-Net belum mendukung bergabung lagi. Matikan “Hanya koneksi terenkripsi” agar ponsel ini bisa kembali tanpa Agent-Net."
+  },
   "authFailedTitle": "Login tidak berlaku",
   "authFailedHint": "Status login sudah kedaluwarsa. Keluar lalu masuk lagi.",
   "replacedTitle": "Koneksi digantikan",

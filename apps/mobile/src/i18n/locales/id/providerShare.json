@@ -2,7 +2,9 @@
   "picker": {
     "shareName": "Dibagikan oleh {{owner}}",
     "numbered": "{{name}} ({{index}})",
-    "unavailable": "Berbagi yang sudah tidak tersedia"
+    "unavailable": "Berbagi yang sudah tidak tersedia",
+    "offline": "{{name}} · sedang offline",
+    "offlineNote": "Komputer tujuan sedang offline; bisa dipakai lagi setelah online."
   },
   "link": {
     "title": "Berbagi penyedia",

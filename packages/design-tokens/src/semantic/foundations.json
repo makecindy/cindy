@@ -432,6 +432,10 @@
       "z-toast-top": {
         "$type": "number",
         "$value": "{reference.foundations.z-toast-top}"
+      },
+      "z-blocking-gate": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-blocking-gate}"
       }
     }
   }

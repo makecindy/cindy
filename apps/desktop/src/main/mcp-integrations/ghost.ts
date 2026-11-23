@@ -15,10 +15,9 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 /**
  * ghost.ts — cindy-tools ghost 总机的 host 侧接线(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
- * 网关模式:agent 工具箱里的插件发现/调用入口固定为
- * ghost_list / ghost_info / ghost_manual / ghost_call。工具面(名称/schema/基线描述)版本内
- * 恒定;完整描述(含花名册快照)会话内恒定,内容现查现报——本文件就是
- * "现查"的真身:
+ * 网关模式由 ghost_list / ghost_info / ghost_manual / ghost_call 按需发现和调用。
+ * 普通本机任务可在同一网关挂载显式声明的少量具名工具。目录和花名册在会话启动时固定，
+ * 插件可用性和调用资格仍由宿主现查。
  *
  *   - listAwakeGhosts / getAwakeGhost:每次调用都重新扫 GhostManager(不缓存),
  *     装/卸/唤醒/沉睡对新老会话"下一次查询即生效";
@@ -39,7 +38,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 
-import { buildGhostRosterPrompt } from 'cindy-tools';
+import { buildGhostRosterPrompt, prepareStartupGhostToolInputSchema } from 'cindy-tools';
 
 import type {
   CindyForgeInstallResult,
@@ -93,6 +92,7 @@ import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 
 import {
+  activeOwnerScopeKey,
   getActiveAppSession,
   isAppSessionBoundaryPending,
   type ActiveAppSession,
@@ -138,6 +138,7 @@ import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarg
 import { getGhostSetupCoordinator as desktopSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 
 import { createGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { registerStartupGhostToolTarget, STARTUP_GHOST_TOOLS_OWNER_KEY, startupGhostToolName } from '../cindy-brain/startupGhostTool.js';
 
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 
@@ -205,6 +206,8 @@ export interface CindyGhostsHostDeps {
   createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;
+  /** Runtime owner for a startup tool call; the task must have finished starting. */
+  isStartupToolSessionCurrent?: (sessionId: string, instanceId: string, workdir: string) => boolean;
   /**
    * 现读活跃 Maker Session 的运行时状态。不得回退 DB:权限热切换先作用于
    * runtime、后持久化,DB 在合法窗口内会滞后;缺失/异常必须 fail closed。
@@ -778,6 +781,20 @@ function isInsideSessionWorkdir(targetAbs: string, workdirAbs: string | null): b
 
 
 /**
+ * 确认卡超时 = 没人点，不是用户拒绝。卡片目前只在运行 Cindy 的电脑上出现（手机只显示
+ * 「只能在电脑上处理」，IM 只收到文字提醒），所以模型重试只会再等一轮，必须停手转告。
+ * 超时后卡片已撤下，用户回到电脑也点不到旧卡，只能等用户就位后由 Agent 重新发起。
+ */
+const DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS =
+  'Cindy 在运行它的那台电脑上弹出了确认卡，时限内没有人确认，本次调用已取消，那张卡也已撤下。这不是用户拒绝。'
+  + '这类确认目前只能在那台电脑上处理，手机和 IM 里都无法确认。不要自动重试；请告诉用户这一步需要在那台电脑上点允许，'
+  + '等用户表示已在电脑旁后再重新调用一次（会弹出新的确认卡）';
+const GRANT_CONFIRM_TIMEOUT_MESSAGE =
+  `文件授权确认超时：${DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS}，或改用不需要这次授权的办法（例如请用户把文件放进当前工作目录，或作为附件发进对话）。`;
+const LOCAL_PATH_REVEAL_TIMEOUT_MESSAGE =
+  `本机路径确认超时：${DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS}，或改用不需要本机路径的办法（例如直接用受管地址把媒体展示给用户，并说明你没能自己检查）。`;
+
+/**
  * 弹过户确认卡并等待用户决定。message 是可直达模型的人话(拒绝/超时要能让
  * 模型停手转告用户,而不是自纠重试)。
  */
@@ -885,7 +902,7 @@ async function requestGrantConfirm(params: {
     ok: false,
     message:
       decision.reason === 'timeout'
-        ? '过户确认超时:用户未在时限内响应,本次调用已取消;如仍需要,请提醒用户后重试'
+        ? GRANT_CONFIRM_TIMEOUT_MESSAGE
         : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
           ? `Cindy 已取消本次过户请求（${decision.reason}），并非用户手动拒绝。`
           : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
@@ -977,15 +994,17 @@ async function requestMediaPathRevealConfirm(params: {
   });
   if (expired()) return denied;
   if (decision.confirmed) return { ok: true, isCurrent };
+  // Nobody answered: keep it apart from DENIED so the Agent does not read it as a refusal.
+  if (decision.reason === 'timeout') {
+    return { ok: false, errorCode: 'LOCAL_PATH_REVEAL_TIMEOUT', message: LOCAL_PATH_REVEAL_TIMEOUT_MESSAGE };
+  }
   return {
     ok: false,
     errorCode: 'LOCAL_PATH_REVEAL_DENIED',
     message:
-      decision.reason === 'timeout'
-        ? '本机路径确认超时，本次调用已取消；如仍需要，请提醒用户后重试'
-        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
-          ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
-          : '用户未允许把本机路径返回给 Agent，不要重试',
+      decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+        ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
+        : '用户未允许把本机路径返回给 Agent，不要重试',
   };
 }
 
@@ -1756,6 +1775,17 @@ function pageControlHidden(ghost: InstalledGhost): { tools: Set<string>; manual:
   return { tools: new Set(replaces.tools), manual: new Set(replaces.manual ?? []) };
 }
 
+type StartupGhostCatalog = {
+  instance: string;
+  workdir: string;
+  targets: Map<string, ReturnType<typeof registerStartupGhostToolTarget>>;
+  tools: NonNullable<CindyGhostsMcpDeps['startupTools']>[number][];
+};
+
+// The Agent owns the key for its entire runtime, including MCP reconnects.
+// Weak ownership keeps abandoned launches from retaining plugin definitions.
+const startupCatalogs = new WeakMap<object, StartupGhostCatalog>();
+
 const PAGE_CONTROL_TOOL_MESSAGE =
   '这个插件工具已由 Cindy 的 browser 工具取代:读取或操作用户自己的浏览器,请用 cindy_browser 的 browser 工具,浏览器目标选「我的浏览器」(user-browser)。';
 
@@ -1830,11 +1860,11 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
 
 
 /**
- * 构造总机 deps(每次工具调用都现查,无任何缓存层)。
+ * 构造总机 deps。具名目录使用任务快照，运行时资格仍按调用现查。
  *
  * sessionCtx:Claude in-process SDK 路径的会话语境(toClaudeSdkConfig(ctx)
  * 时按 session 闭包进来;每次 startSession 都重建 provider,语境不串号)。
- * Codex HTTP bridge 路径下建线期语境是全局空值,tool-call 期经
+ * Codex / Pi HTTP bridge 建线时可以收到仅供生成目录的任务语境，tool-call 期仍经
  * AsyncLocalStorage(getLiziMcpSessionContext)恢复。运行时取语境按
  * resolveLiziMcpSessionContext 的口径:有具体闭包语境(Claude)就用它,只有空占位
  * (Codex / Pi bridge)才读 ALS。反过来 "ALS 优先" 会被串号:任务 A 的工具调用里
@@ -1850,6 +1880,50 @@ function getCindyGhostsMcpDeps(
   const resolveSessionContext = (): LiziMcpSessionContext | undefined => {
     if (pageCall) return sessionCtx;
     return sessionCtx ? resolveLiziMcpSessionContext(sessionCtx) : getLiziMcpSessionContext();
+  };
+  const startupContext = !pageCall && sessionCtx?.sessionId && sessionCtx.sessionInstanceId &&
+    sessionCtx.workingDir && !sessionCtx.remoteHostId && !sessionCtx.hostCaller &&
+    typeof sessionCtx.vendorOptions?.[STARTUP_GHOST_TOOLS_OWNER_KEY] === 'string' &&
+    sessionCtx.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY] === activeOwnerScopeKey() &&
+    hostDeps.isStartupToolSessionCurrent && !isAppSessionBoundaryPending()
+      ? { sessionId: sessionCtx.sessionId, instance: sessionCtx.sessionInstanceId, workdir: sessionCtx.workingDir,
+          owner: sessionCtx.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY] }
+      : undefined;
+  const catalogKey = sessionCtx?.startupCatalogKey ?? sessionCtx?.vendorOptions;
+  const previousCatalog = catalogKey ? startupCatalogs.get(catalogKey) : undefined;
+  let startupCatalog = previousCatalog?.instance === startupContext?.instance &&
+    previousCatalog?.workdir === startupContext?.workdir ? previousCatalog : undefined;
+  let visibleAtStartup: InstalledGhost[] | undefined;
+  if (!startupCatalog && startupContext) {
+    const targets: StartupGhostCatalog['targets'] = new Map();
+    const tools: StartupGhostCatalog['tools'] = [];
+    startupCatalog = { instance: startupContext.instance, workdir: startupContext.workdir, targets, tools };
+    visibleAtStartup = visibleChipGhosts(startupContext.workdir);
+    for (const ghost of visibleAtStartup) {
+      const hidden = pageControlHidden(ghost);
+      let count = 0;
+      for (const tool of ghost.manifest.tools ?? []) {
+        const name = startupGhostToolName(ghost, tool);
+        if (!name || hidden?.tools.has(tool.name)) continue;
+        const inputSchema = prepareStartupGhostToolInputSchema(tool.parameters);
+        if (!inputSchema) continue;
+        targets.set(name, registerStartupGhostToolTarget(name, installedGhostStoragePart(ghost), tool.name));
+        tools.push({ name, ghostId: ghost.manifest.id,
+          namespace: installedGhostLogicalIdentity(ghost).namespace, tool: tool.name,
+          description: tool.description, inputSchema });
+        if (++count === 3 || tools.length === 8) break;
+      }
+      if (tools.length === 8) break;
+    }
+    if (catalogKey) startupCatalogs.set(catalogKey, startupCatalog);
+  }
+  const isStartupToolContextCurrent = () => {
+    const context = resolveSessionContext();
+    return !!startupContext && !isAppSessionBoundaryPending() &&
+      startupContext.owner === activeOwnerScopeKey() &&
+      context?.sessionId === startupContext.sessionId && context.sessionInstanceId === startupContext.instance &&
+      context.workingDir === startupContext.workdir && !context.remoteHostId &&
+      hostDeps.isStartupToolSessionCurrent?.(context.sessionId, startupContext.instance, startupContext.workdir) === true;
   };
   const installConsentPrompt = (publisher?: string | null, context = resolveSessionContext()): GhostInstallConsentPrompt => {
     return requireService('createTaskInstallConsentPrompt')(
@@ -2204,7 +2278,11 @@ function getCindyGhostsMcpDeps(
       const context = resolveSessionContext();
       const workdir = context?.workingDir;
       if (!workdir || readAllowedBuiltinPluginIds(context?.vendorOptions)) return [];
-      return visibleChipGhosts(workdir)
+      const visible = startupContext && context?.sessionId === startupContext.sessionId &&
+        context.sessionInstanceId === startupContext.instance && workdir === startupContext.workdir
+        ? visibleAtStartup ?? visibleChipGhosts(workdir) : visibleChipGhosts(workdir);
+      visibleAtStartup = undefined;
+      return visible
         .map((g) => {
           const recall = ghostRecall(g);
           return {
@@ -2216,6 +2294,7 @@ function getCindyGhostsMcpDeps(
           };
         });
     },
+    ...(startupCatalog?.tools.length ? { startupTools: startupCatalog.tools } : {}),
     async listAwakeGhosts(): Promise<CindyGhostInfo[]> {
       // 现查同样按会话 workdir 滤掉目录级禁用的意识(ALS 恢复的真实语境
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
@@ -2274,6 +2353,7 @@ function getCindyGhostsMcpDeps(
       namespace,
       tool,
       args,
+      startupToolName,
       attachments,
       dir,
       saveDir,
@@ -2288,10 +2368,20 @@ function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
+      const startupTarget = startupToolName ? startupCatalog?.targets.get(startupToolName) : undefined;
+      const startupDenied = { ok: false as const, errorCode: 'PERMISSION_DENIED' as const,
+        message: 'This startup plugin tool is no longer available. Use ghost_info to check the current plugin.' };
+      if (startupToolName && (!startupTarget || startupTarget.tool !== tool || !isStartupToolContextCurrent())) {
+        return startupDenied;
+      }
       // Page authority already binds a physical instance; do not rediscover
       // every installed plugin for each page interaction.
       const pageGhost = pageCall ? findInstalledGhostForToolCall(pageCall.instance) : undefined;
-      const installed = pageCall ? (pageGhost ? [pageGhost] : []) : await listInstalledGhostsAsync();
+      const startupGhost = startupTarget ? findInstalledGhostForToolCall(startupTarget.instance) : undefined;
+      if (startupToolName && (!startupGhost || !startupGhost.manifest.tools?.some(candidate =>
+        candidate.name === tool && startupGhostToolName(startupGhost, candidate) === startupToolName))) return startupDenied;
+      const pinnedGhost = startupGhost ?? pageGhost;
+      const installed = pageCall || startupTarget ? (pinnedGhost ? [pinnedGhost] : []) : await listInstalledGhostsAsync();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -2314,6 +2404,7 @@ function getCindyGhostsMcpDeps(
       const grantTarget: GhostGrantTarget = {
         approvalToken,
         isCurrent: () => {
+          if (startupTarget && !isStartupToolContextCurrent()) return false;
           const visibility = classifyInstalledGhostVisibility(target, sessionWorkdir, ghostVisibilityDeps);
           return visibility.ok && ghostInstallApprovalToken(visibility.ghost.approval) === approvalToken;
         },
@@ -2376,6 +2467,7 @@ function getCindyGhostsMcpDeps(
         ...(setupPlan ? { plan: setupPlan } : {}),
       });
       if (!setup.ok) return setup;
+      if (startupTarget && !grantTarget.isCurrent()) return startupDenied;
 
       // OAuth/settings may take minutes. Re-resolve mutable target facts after
       // the waiter completes and before beginning the existing side effects.
@@ -2741,6 +2833,7 @@ function getCindyGhostsMcpDeps(
         logicalGhostId: pluginStoragePart(installedGhostLogicalIdentity(target)),
         tool,
         toolUseId: agentToolUseId ?? null,
+        ...(startupTarget ? { startupToolName } : {}),
         // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
         // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
         sessionId: callSessionContext?.sessionId ?? null,
@@ -2770,6 +2863,7 @@ function getCindyGhostsMcpDeps(
           callId,
           signal,
           sessionId: callSessionContext?.sessionId,
+          ...(startupTarget ? { isCurrent: grantTarget.isCurrent } : {}),
           onProgress: pageCall?.onProgress,
         });
         // Still held: a source change must not move the copies before they are dropped.

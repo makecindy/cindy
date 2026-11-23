@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "Berbagi yang sudah tidak tersedia",
+      "offline": "{{name}} · sedang offline",
       "hostOutdated": "Versi Cindy di komputer pemilik terlalu lama untuk memuat model ini. Minta pemiliknya memperbarui Cindy, lalu coba lagi.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -5376,6 +5377,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Semua model pendukung tidak tersedia",
+        "configDescription": "Penamaan otomatis tugas, ringkasan tugas tersemat, Help, dan tugas plugin (misalnya terjemahan subtitle) akan terdampak. Perbaiki masalah berikut, atau tentukan model lain yang tersedia.",
+        "runtimeTitle": "Model pendukung gagal beberapa kali belakangan ini",
+        "runtimeDescription": "Mungkin jaringan atau layanan sedang bermasalah; pesan ini hilang sendiri setelah pulih. Jika terus muncul, tentukan model lain yang tersedia.",
+        "fallback": "Tugas plugin sementara dialihkan ke {{model}} dengan intensitas penalaran lebih rendah; bisa lebih lambat dan memakai lebih banyak kuota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Buka penyedia model",
+        "customize": "Sesuaikan model pendukung",
+        "issues": {
+          "signed_out": "Perlu masuk ke Cindy",
+          "provider_disabled": "Penyedia dinonaktifkan",
+          "model_disabled": "Model dinonaktifkan",
+          "payment_required": "Paket atau saldo saat ini tidak mendukung",
+          "no_credential": "Info masuk atau kunci tidak ada",
+          "unavailable": "Saat ini tidak tersedia"
+        },
+        "toast": {
+          "config": "Semua model pendukung tidak tersedia; penamaan tugas, ringkasan, dan tugas plugin seperti terjemahan subtitle akan terdampak.",
+          "runtime": "Model pendukung gagal beberapa kali belakangan ini; penamaan tugas, ringkasan, dan tugas plugin seperti terjemahan subtitle mungkin terdampak.",
+          "open": "Buka Pengaturan"
+        }
       }
     },
     "compaction": {
@@ -6809,7 +6833,15 @@
           "encrypted": "Terenkripsi end-to-end",
           "legacyConnection": "Koneksi lama",
           "encryptionUnknown": "Belum dikonfirmasi",
-          "legacyEncryptionHint": "Pada koneksi lama, jalur lewat relay tidak terenkripsi end-to-end."
+          "legacyEncryptionHint": "Pada koneksi lama, jalur lewat relay tidak terenkripsi end-to-end.",
+          "routePreference": "Pilihan jalur",
+          "routeAuto": "Otomatis",
+          "routeDirect": "Langsung",
+          "routeRelay": "Relay",
+          "routeUnavailable": "Tidak tersedia",
+          "routeMeasuring": "Mengukur kecepatan…",
+          "routeDirectUnavailableHint": "Jaringan saat ini tidak bisa terhubung langsung ke perangkat ini",
+          "routePreferenceFailed": "Gagal mengganti jalur; coba lagi"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -6982,6 +7014,15 @@
         "version-mismatch": "Versi protokol tidak cocok — perbarui aplikasi",
         "unstable": "Koneksi terus terputus dan menyambung ulang — periksa jaringan, atau mulai ulang Cindy jika terus terjadi",
         "agent-net-relay-down": "Tidak bisa terhubung ke Agent-Net relay, sedang menyambung ulang; komputer yang sudah terhubung langsung tetap bisa dipakai, perangkat lain sementara tidak dapat dihubungi"
+      },
+      "rejoin": {
+        "hint": "Perangkat ini telah dihapus dari akun; klik “Gabung lagi” untuk kembali.",
+        "action": "Gabung lagi",
+        "done": "Sudah bergabung lagi",
+        "doneWithoutAgentNet": "Sudah bergabung lagi; Agent-Net belum pulih, sementara pakai Device Link",
+        "unsupported": "Server belum mendukung bergabung lagi; keluar dari perangkat ini lalu masuk kembali",
+        "agentNetFailed": "Agent-Net belum pulih. Matikan “Hanya Agent-Net” agar bisa memakai Device Link dulu",
+        "failed": "Gagal bergabung lagi; periksa jaringan lalu coba lagi"
       },
       "refresh": "Muat ulang",
       "empty": "Belum ada perangkat lain. Masuk ke {{appName}} dengan akun yang sama di komputer lain, dan perangkat itu akan muncul di sini.",
@@ -9635,6 +9676,12 @@
       "guidance": "Tunggu dulu sebelum meminta kode lagi. Memulai ulang, memasang ulang, atau mengganti jaringan tidak menjamin batas tersebut dicabut.",
       "support": "Jika setelah menunggu masih tidak bisa masuk, kirim log secara privat ke feedback@cindy.app beserta sistem operasi, versi Cindy, waktu error, dan kode di bawah. Jangan membagikan log secara publik."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Ketentuan layanan dan kebijakan privasi diperbarui",
+    "body": "<terms>Ketentuan Layanan</terms> dan <privacy>Kebijakan Privasi</privacy> Cindy telah diperbarui. Baca dan setujui untuk melanjutkan.",
+    "agree": "Setuju",
+    "disagree": "Keluar"
   },
   "legacyMigration": {
     "title": "Migrasikan data versi lama",
@@ -13171,7 +13218,8 @@
           "subject": {
             "githubIssue": "Kartu konfirmasi “Kirim GitHub Issue”",
             "renameSessions": "Kartu konfirmasi “Ubah nama banyak tugas sekaligus”",
-            "pluginFileGrant": "Kartu konfirmasi “Izin berkas Plugin”"
+            "pluginFileGrant": "Kartu konfirmasi “Izin berkas Plugin”",
+            "mediaPathReveal": "Kartu konfirmasi “Izinkan Agent mengambil lokasi file media seperti gambar di komputer”"
           }
         },
         "replyWords": {
@@ -17614,6 +17662,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Tidak bisa membaca pengaturan model otomasi; tutup editor lalu buka lagi.",
       "promptDialog": {
         "titleEdit": "Ubah otomasi",
         "titleCreate": "Buat otomasi",
@@ -17957,11 +18006,13 @@
         "effortHeading": "Tingkat penalaran",
         "effortDefault": "Default",
         "followSession": "Ikuti tugas",
+        "followTeammate": "Ikuti model utama Rekan",
         "modelListAria": "Daftar model",
         "modelSelectorAria": "Pemilih model",
         "categoryListAria": "Model {{category}}",
         "effortListAria": "Tingkat penalaran",
-        "boundLocationLocked": "Sesi yang terikat tetap berjalan di komputer asalnya; pilih model dari komputer itu."
+        "boundLocationLocked": "Sesi yang terikat tetap berjalan di komputer asalnya; pilih model dari komputer itu.",
+        "modelGroupTitle": "Grup model “{{name}}”: sumber dipilih per mode saat membuat tugas"
       }
     },
     "toast": {
@@ -20300,6 +20351,7 @@
       "totalDetail_other": "{{count}} kartu × {{amount}}",
       "pay": "Lanjut ke Pembayaran",
       "refundNote": "Kartu hadiah tidak dapat ditukar dengan uang tunai. Kartu yang sudah diklaim atau ditukarkan tidak dapat dikembalikan. Untuk meminta pengembalian dana kartu yang belum diklaim, hubungi dukungan.",
+      "termsNote": "Dengan mengklik “Lanjut ke pembayaran”, kamu menyatakan telah membaca dan menyetujui <terms>Ketentuan Pembelian dan Penggunaan Gift Card</terms>.",
       "cancel": "Batal",
       "loadFailed": "Tidak dapat memuat batas pembelian kartu hadiah. Coba lagi nanti.",
       "checkoutSubtitle_other": "Kartu hadiah {{amount}} × {{count}} · Diterbitkan begitu pembayaran berhasil",
@@ -22075,6 +22127,11 @@
     "lineNumbers": "Nomor baris"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Cara masuk",
+      "secretHint": "Key hanya diberikan ke plugin dan disimpan di folder akun ini; Cindy tidak menyimpannya dan tidak mengirimnya ke komputer lain.",
+      "browserHint": "Plugin akan membuka browser; selesaikan masuk di sana lalu kembali ke sini."
+    },
     "placement": {
       "needsUpdate": "Komputer yang menjalankan tindakan ini perlu memperbarui Cindy dulu sebelum akun bisa dipindahkan dengan cara ini.",
       "moveTo": "Pindahkan ke…",

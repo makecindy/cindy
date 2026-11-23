@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "已不可用的分享",
+      "offline": "{{name}} · 暂时离线",
       "hostOutdated": "分享者电脑上的 Cindy 版本太旧，读不到这些模型。请让对方更新 Cindy 后再试。",
       "numbered": "{{name}} ({{index}})"
     },
@@ -5377,6 +5378,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "辅助模型都不可用",
+        "configDescription": "任务自动命名、置顶任务摘要、Help 和插件任务（如字幕翻译）等功能会受影响。修复下列问题，或自定义其他可用的模型。",
+        "runtimeTitle": "辅助模型最近多次请求失败",
+        "runtimeDescription": "可能是网络或服务暂时异常，恢复后此提示会自动消失。如果一直出现，可以自定义其他可用的模型。",
+        "fallback": "插件任务已临时改用 {{model}}，并使用较低的推理强度，可能更慢、消耗更多配额。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "打开模型供应商",
+        "customize": "自定义辅助模型",
+        "issues": {
+          "signed_out": "需要登录 Cindy",
+          "provider_disabled": "供应商已停用",
+          "model_disabled": "模型已停用",
+          "payment_required": "当前套餐或余额不支持",
+          "no_credential": "缺少登录信息或密钥",
+          "unavailable": "当前不可用"
+        },
+        "toast": {
+          "config": "辅助模型都不可用，任务命名、摘要和字幕翻译等插件任务会受影响。",
+          "runtime": "辅助模型最近多次请求失败，任务命名、摘要和字幕翻译等插件任务可能受影响。",
+          "open": "去设置"
+        }
       }
     },
     "compaction": {
@@ -6810,7 +6834,15 @@
           "encrypted": "端到端加密",
           "legacyConnection": "旧版连接",
           "encryptionUnknown": "尚未确认",
-          "legacyEncryptionHint": "旧版连接经过中转时，内容未端到端加密。"
+          "legacyEncryptionHint": "旧版连接经过中转时，内容未端到端加密。",
+          "routePreference": "线路选择",
+          "routeAuto": "自动",
+          "routeDirect": "直连",
+          "routeRelay": "中转",
+          "routeUnavailable": "不可用",
+          "routeMeasuring": "测速中…",
+          "routeDirectUnavailableHint": "当前网络无法直连此设备",
+          "routePreferenceFailed": "切换线路失败，请重试"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -6984,6 +7016,15 @@
         "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy",
         "agent-net-relay-down": "连不上 Agent-Net 中转，正在重连；已直连的电脑照常可用，其他设备暂时连不上"
       },
+      "rejoin": {
+        "hint": "这台设备已从账号中移除，点「重新加入」即可回来。",
+        "action": "重新加入",
+        "done": "已重新加入",
+        "doneWithoutAgentNet": "已重新加入，Agent-Net 暂未恢复，先用 Device Link 连接",
+        "unsupported": "服务端暂不支持重新加入，请在本设备退出后重新登录",
+        "agentNetFailed": "Agent-Net 暂未恢复。关闭「仅使用 Agent-Net」后可先用 Device Link 连接",
+        "failed": "重新加入失败，请检查网络后重试"
+      },
       "refresh": "刷新",
       "empty": "暂无其它设备。在另一台电脑上用同一账号登录 {{appName}} 后，这里会显示该设备。",
       "thisDevice": "本机",
@@ -7001,7 +7042,7 @@
       "renameCancel": "取消",
       "delete": "删除",
       "deleteTitle": "删除「{{name}}」？",
-      "deleteMessage": "将此设备从账号中移除并断开远程连接。设备上的任务和文件会保留，重新登录后可再次加入。",
+      "deleteMessage": "将此设备从账号中移除并断开远程连接。设备上的任务和文件会保留，之后在那台设备上点「重新加入」即可回来。",
       "deleteOnlineHint": "当前服务端尚不支持移除在线设备，请待服务升级后重试。",
       "error": {
         "unavailable": "设备互联服务暂不可用（服务端未启用或网络异常）",
@@ -8573,7 +8614,7 @@
           "updated": "插件已更新。",
           "empty": "暂无可安装的版本。",
           "sign-in": "请登录 GitHub 后检查更新。",
-          "forbidden": "当前 GitHub 登录无权读取此私有仓库。",
+          "forbidden": "无法读取 GitHub Release。请检查仓库链接和 GitHub 账号的访问权限。",
           "unavailable": "无法检查或安装更新，请重试。"
         },
         "customSlotTitle": "插件自定义设置区",
@@ -9636,6 +9677,12 @@
       "guidance": "请等待后再获取验证码。重启、重装或切换网络不保证解除限流。",
       "support": "等待后仍无法登录，请将日志私下发给 feedback@cindy.app，并提供操作系统、Cindy 版本、出错时间和下方错误码。请勿公开发布日志。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "服务条款和隐私协议已更新",
+    "body": "Cindy 的<terms>服务条款</terms>和<privacy>隐私协议</privacy>已更新，请阅读并同意后继续使用。",
+    "agree": "同意",
+    "disagree": "退出登录"
   },
   "legacyMigration": {
     "title": "迁移旧版本数据",
@@ -13172,7 +13219,8 @@
           "subject": {
             "githubIssue": "「提交 GitHub Issue」的确认卡",
             "renameSessions": "「批量重命名任务」的确认卡",
-            "pluginFileGrant": "「插件文件授权」的确认卡"
+            "pluginFileGrant": "「插件文件授权」的确认卡",
+            "mediaPathReveal": "「让 Agent 获取图片等媒体文件在电脑上的位置」的确认卡"
           }
         },
         "replyWords": {
@@ -14320,7 +14368,6 @@
       "regionAria": "待发送消息队列",
       "listAria": "队列消息",
       "pausedFooter": "任务已停止，队列暂停",
-
       "steerUnsupportedNotice": "当前引擎不支持插话，排队的消息会在当前这一轮结束后发送。",
       "resumeAction": "继续发送",
       "resumeAria": "继续发送队列消息",
@@ -17617,6 +17664,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "无法读取自动化的模型设置，请关闭编辑器后重新打开重试。",
       "promptDialog": {
         "titleEdit": "编辑自动化",
         "titleCreate": "创建自动化",
@@ -17960,11 +18008,13 @@
         "effortHeading": "推理强度",
         "effortDefault": "默认",
         "followSession": "跟随任务",
+        "followTeammate": "跟随伙伴主模型",
         "modelListAria": "模型列表",
         "modelSelectorAria": "模型选择器",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "推理强度",
-        "boundLocationLocked": "绑定的任务在原来的电脑上运行，请选择那台电脑上的模型。"
+        "boundLocationLocked": "绑定的任务在原来的电脑上运行，请选择那台电脑上的模型。",
+        "modelGroupTitle": "模型组「{{name}}」：新建任务时按模式选来源"
       }
     },
     "toast": {
@@ -20303,6 +20353,7 @@
       "totalDetail_other": "{{count}} 张 × {{amount}}",
       "pay": "去支付",
       "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持。",
+      "termsNote": "点击「去支付」即表示你已阅读并同意<terms>《礼品卡购买与使用条款》</terms>。",
       "cancel": "取消",
       "loadFailed": "暂时无法读取购买限制，请稍后重试。",
       "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",
@@ -22078,6 +22129,11 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登录方式",
+      "secretHint": "Key 只交给插件，保存在这个账号自己的文件夹里；Cindy 不保存，也不会发到其他电脑。",
+      "browserHint": "插件会打开浏览器，在那里完成登录后回到这里。"
+    },
     "placement": {
       "needsUpdate": "执行这项操作的电脑需要先更新 Cindy，才能这样调整账号。",
       "moveTo": "移到…",

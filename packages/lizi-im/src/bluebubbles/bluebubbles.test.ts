@@ -1016,9 +1016,10 @@ describe('BlueBubbles local ingress', () => {
       expect((await f.webhook(guid)).status).toBe(202);
     }
     await f.im.reconcile();
+    // The note says how to reach the original (2026-11-22: the model had only a file name).
     expect(f.received.map(event => [event.text, event.unsupported])).toEqual([
-      ['missing-size', [{ type: 'oversize', label: 'large.bin' }]],
-      ['zero-size', [{ type: 'oversize', label: 'large.bin' }]],
+      ['missing-size', [{ type: 'oversize', retrievable: true, label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=missing-size，attachment_guid=missing-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
+      ['zero-size', [{ type: 'oversize', retrievable: true, label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=zero-size，attachment_guid=zero-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
     ]);
     expect(f.state().inbox['missing-size'].state).toBe('accepted');
     expect(f.state().inbox['zero-size'].state).toBe('accepted');
@@ -1030,6 +1031,146 @@ describe('BlueBubbles local ingress', () => {
     expect((await f.webhook('after-oversize')).status).toBe(202);
     await f.im.reconcile();
     expect(f.received.map(event => event.messageId)).toEqual(['missing-size', 'zero-size', 'after-oversize']);
+  });
+
+  // Regression (2026-11-22): BlueBubbles answered a 894 KB photo with a 105 KB copy and the model got it as
+  // the attachment with no hint. A copy shorter than the attachment record is re-read, then labelled with the
+  // original's size and how to fetch it, and never cached as the attachment itself.
+  it('re-reads a short copy, then labels it as a preview of the original', async () => {
+    const cacheImage = vi.fn(async (input: { token: string }) => ({ absPath: `/cache/${input.token}.jpg`, url: `cindy-media://${input.token}` }));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null });
+    f.im.shortCopyRetryMs = 0;
+    const download = vi.spyOn(f.api, 'download').mockResolvedValue(new Uint8Array(104_970));
+    f.message('photo', { attachments: [{ guid: 'img-1', transferName: 'IMG_0106.jpeg', mimeType: 'image/jpeg', totalBytes: 894_420 }] });
+    expect((await f.webhook('photo')).status).toBe(202);
+    await f.im.reconcile();
+    expect(download).toHaveBeenCalledTimes(3);
+    const event = f.received.find(item => item.messageId === 'photo')!;
+    expect(event.attachments).toHaveLength(1);
+    expect(event.unsupported).toEqual([{ type: 'preview', retrievable: true, label:
+      'IMG_0106.jpeg（本轮附件只有 103 KB，原件 873 KB；message_id=photo，attachment_guid=img-1；可用 cindy_imessage.fetch_attachment 取原件）' }]);
+    expect(cacheImage.mock.calls[0][0].token).toMatch(/:img-1:preview$/);
+
+    download.mockClear();
+    download.mockResolvedValueOnce(new Uint8Array(10)).mockResolvedValueOnce(new Uint8Array(894_420));
+    f.message('photo-2', { attachments: [{ guid: 'img-2', transferName: 'IMG_0107.jpeg', mimeType: 'image/jpeg', totalBytes: 894_420 }] });
+    expect((await f.webhook('photo-2')).status).toBe(202);
+    await f.im.reconcile();
+    const complete = f.received.find(item => item.messageId === 'photo-2')!;
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(complete.unsupported).toEqual([]);
+    expect(cacheImage.mock.calls.at(-1)![0].token).toMatch(/:img-2$/);
+    await f.im.dispose();
+  });
+
+  // Originals stream to disk instead of memory; a runaway transfer stops without leaving a partial file.
+  it('streams an original to its destination and stops at the byte limit', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-stream-'));
+    try {
+      const body = () => new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new Uint8Array(3)); controller.enqueue(new Uint8Array(4)); controller.close();
+      } }));
+      const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => body()));
+      const dest = path.join(root, 'clip.mov');
+      await expect(api.downloadToFile('g', dest)).resolves.toBe(7);
+      expect((await fs.stat(dest)).size).toBe(7);
+      // Review (#12146): two concurrent downloads of one original each write their own temporary file.
+      const both = await Promise.all([api.downloadToFile('g', path.join(root, 'twice.mov')), api.downloadToFile('g', path.join(root, 'twice.mov'))]);
+      expect(both).toEqual([7, 7]);
+      expect((await fs.stat(path.join(root, 'twice.mov'))).size).toBe(7);
+      await fs.rm(path.join(root, 'twice.mov'));
+      const capped = path.join(root, 'capped.mov');
+      await expect(api.downloadToFile('g', capped, 5)).rejects.toThrow('BLUEBUBBLES_RESPONSE_TOO_LARGE');
+      expect(await fs.readdir(root)).toEqual(['clip.mov']);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  // Windows CI run 45128422069 failed at concurrent publication. Unit: exercise the real
+  // downloadToFile entry with a brief rename lock; the real-filesystem case above cannot
+  // deterministically reproduce that Windows lock on other platforms. No real backoff waits.
+  it('publishes an original after brief file locks without losing the old destination', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-rename-lock-'));
+    const dest = path.join(root, 'original.mov');
+    await fs.writeFile(dest, 'old');
+    const rename = vi.spyOn(fs, 'rename');
+    for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+      rename.mockRejectedValueOnce(Object.assign(new Error('private-path'), { code }));
+    }
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response('original')));
+      const result = api.downloadToFile('g', dest).then(value => ({ value }), error => ({ error }));
+      await vi.waitFor(() => expect(rename).toHaveBeenCalled());
+      expect(await fs.readFile(dest, 'utf8')).toBe('old');
+      await vi.runAllTimersAsync();
+      expect(await result).toEqual({ value: 8 });
+      expect(await fs.readFile(dest, 'utf8')).toBe('original');
+      expect(await fs.readdir(root)).toEqual(['original.mov']);
+    } finally { vi.useRealTimers(); rename.mockRestore(); await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['EPERM', 'EIO'])('cleans up a failed original without replacing the old file (%s)', async code => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-rename-fail-'));
+    const dest = path.join(root, 'original.mov');
+    await fs.writeFile(dest, 'old');
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('private-path'), { code }));
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response('original')));
+      const result = api.downloadToFile('g', dest).then(value => ({ value }), error => ({ error }));
+      await vi.waitFor(() => expect(rename).toHaveBeenCalled());
+      await vi.runAllTimersAsync();
+      expect(await result).toMatchObject({ error: { code: 'BLUEBUBBLES_REQUEST_FAILED', message: 'BLUEBUBBLES_REQUEST_FAILED' } });
+      expect(rename).toHaveBeenCalledTimes(code === 'EPERM' ? 6 : 1);
+      expect(await fs.readFile(dest, 'utf8')).toBe('old');
+      expect(await fs.readdir(root)).toEqual(['original.mov']);
+    } finally { vi.useRealTimers(); rename.mockRestore(); await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  // fetch_attachment backs on this: only an attachment of a message in this connected chat, streamed to disk.
+  it('fetches an original only for an attachment of a message in that chat', async () => {
+    const f = await fixture();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-original-'));
+    try {
+      f.message('clip', { attachments: [{ guid: 'mov-1', transferName: 'clip.MOV', totalBytes: 5 }] });
+      const toFile = vi.spyOn(f.api, 'downloadToFile').mockImplementation(async (_guid, dest) => { await fs.writeFile(dest, 'hello'); return 5; });
+      const chat = f.chat.guid;
+      const result = await f.im.fetchAttachment(chat, 'clip', 'mov-1', root);
+      expect(result).toMatchObject({ name: 'clip.MOV', bytes: 5, totalBytes: 5, complete: true });
+      expect(result.path.startsWith(root)).toBe(true);
+      await expect(f.im.fetchAttachment(chat, 'clip', 'other-attachment', root)).rejects.toThrow('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
+      expect(toFile).toHaveBeenCalledTimes(1);
+      // Review (#12146): a legal 255-byte name still fits with the guid prefix and the download suffix.
+      const real = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response('hello')));
+      toFile.mockImplementation((guid, dest) => real.downloadToFile(guid, dest));
+      f.message('long', { attachments: [{ guid: 'mov-2', transferName: `${'a'.repeat(251)}.mov`, totalBytes: 5 }] });
+      const long = await f.im.fetchAttachment(chat, 'long', 'mov-2', root);
+      expect(long).toMatchObject({ bytes: 5, complete: true });
+      expect(long.name.endsWith('.mov')).toBe(true);
+      expect(await fs.readFile(long.path, 'utf8')).toBe('hello');
+      // Review (#12146): GUIDs sharing a prefix with one name keep separate files; Windows-reserved characters are replaced.
+      f.message('pair', { attachments: [
+        { guid: 'AAAAAAAA-1', transferName: 'budget?.pdf', totalBytes: 5 },
+        { guid: 'AAAAAAAA-2', transferName: 'budget?.pdf', totalBytes: 5 },
+      ] });
+      const first = await f.im.fetchAttachment(chat, 'pair', 'AAAAAAAA-1', root);
+      const second = await f.im.fetchAttachment(chat, 'pair', 'AAAAAAAA-2', root);
+      expect(first.path).not.toBe(second.path);
+      expect(path.basename(first.path)).not.toMatch(/[<>:"|?*]/);
+      expect(first.name).toBe('budget_.pdf');
+      // Review (#12146): a preview that finishes after the original never replaces it.
+      const bodies = ['complete', 'pre'];
+      const racing = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response(bodies.shift())));
+      toFile.mockImplementation((guid, dest) => racing.downloadToFile(guid, dest));
+      f.message('race', { attachments: [{ guid: 'mov-3', transferName: 'clip.mov', totalBytes: 8 }] });
+      const original = await f.im.fetchAttachment(chat, 'race', 'mov-3', root);
+      const preview = await f.im.fetchAttachment(chat, 'race', 'mov-3', root);
+      expect(original).toMatchObject({ bytes: 8, complete: true });
+      expect(preview).toMatchObject({ bytes: 3, complete: false });
+      expect(preview.path).not.toBe(original.path);
+      expect(await fs.readFile(original.path, 'utf8')).toBe('complete');
+      expect((await fs.readdir(root)).some((entry) => entry.endsWith('.download') || entry.endsWith('.partial'))).toBe(false);
+    } finally { await fs.rm(root, { recursive: true, force: true }); await f.im.dispose(); }
   });
 
   // Tier 1, #9250/r4505831911: failed download/staging has not entered the

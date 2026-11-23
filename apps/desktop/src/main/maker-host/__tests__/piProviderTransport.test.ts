@@ -4,6 +4,7 @@ import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions
 import { SseTranslator } from '@cindy/anthropic-responses-bridge';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels, providerPresetModelRecord } from '@cindy/model-providers';
 import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText, sanitizePiAssistantContent } from '../pi-provider-transport.js';
+import { buildRouteDecision } from '../provider-route.js';
 import { withCopilotForwardHeaders } from '../copilot-account-url.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
@@ -206,17 +207,21 @@ describe('Pi-owned transport for Cindy harnesses', () => {
   });
   // PR server#1096 P1: route-label checks missed the SDK appending /v1/messages
   // to a versioned base. Exercise the production default and official serializer.
-  it.each(['agnes', 'openhubs'].flatMap(id => (['claude-code', 'pi', 'codex'] as const).map(agent => [id, agent] as const)))
+  it.each(['agnes', 'openhubs', 'tokenrhythm'].flatMap(id => (['claude-code', 'pi', 'codex'] as const).map(agent => [id, agent] as const)))
   ('sends %s %s defaults to a single version prefix', async (id, agent) => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
     const runtime = preset.runtimes[agent]!;
+    const host = id === 'agnes' ? 'apihub.agnes-ai.com' : id === 'openhubs' ? 'openhubs.zhidemai.com' : 'tokenrhythm.studio';
     const provider = buildUserProvider({ id: 'agnes-request', name: 'Agnes', runtimes: {
-      [agent]: { ...runtime, catalogPresetId: id },
+      [agent]: { ...runtime, catalogPresetId: id, models: id === 'tokenrhythm' ? [{ id: 'tokenrhythm-fixture', name: 'Simulated account model' }] : runtime.models },
     } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
     const model = provider.models[agent]![0];
     const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl)!;
     let destination = '';
-    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url) => {
+    const decision = buildRouteDecision(provider.routing[agent]!, null, agent, 'fixture-key')!;
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', headers: decision.headerOverride, fetchImpl: async (url, init) => {
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-key');
+      expect(JSON.parse(String(init?.body)).model).toBe(model.id);
       destination = String(url);
       const events = [
         { type: 'message_start', message: { id: 'msg-agnes', type: 'message', role: 'assistant', model: model.id, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
@@ -231,10 +236,10 @@ describe('Pi-owned transport for Cindy harnesses', () => {
     const result = await (await send('https://unused.invalid', { body: JSON.stringify({
       model: model.id, input: 'Hello', max_output_tokens: 1024, stream: true,
     }) })).text();
-    expect(destination.split('?')[0]).toBe(`https://${id === 'agnes' ? 'apihub.agnes-ai.com' : 'openhubs.zhidemai.com'}/v1/${agent === 'pi' ? 'chat/completions' : agent === 'codex' ? 'responses' : 'messages'}`);
+    expect(destination.split('?')[0]).toBe(`https://${host}/v1/${agent === 'pi' ? 'chat/completions' : agent === 'codex' ? 'responses' : 'messages'}`);
     expect(result).toContain('response.completed');
     expect(result).not.toContain('response.failed');
-    expect(runtime.modelsUrl).toBe(`https://${id === 'agnes' ? 'apihub.agnes-ai.com' : 'openhubs.zhidemai.com'}/v1/models`);
+    expect(runtime.modelsUrl).toBe(`https://${host}/v1/models`);
   });
 
   // Tier 2: exercise official serializers, not just selected API labels. Responses

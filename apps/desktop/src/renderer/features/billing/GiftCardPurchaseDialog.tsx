@@ -4,6 +4,7 @@ import { Minus, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { giftCardFaceName } from '@cindy/maker-shared/gift-card';
 
+import { parseLegalSegments } from '@/components/login/LoginControls';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Input, Textarea } from '@/components/ui/input';
@@ -27,6 +28,7 @@ import {
   type GiftCardOfferEntry,
 } from './giftCardPurchase';
 import { BILLING_CURRENCY } from './money';
+import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
 type PolicyState =
   | { kind: 'loading' }
@@ -529,9 +531,29 @@ export function GiftCardPurchaseDialog({
               )}
 
               {/* 付款前写明退款规则：已领取或兑换的卡不退，未领取的卡由客服按规则处理（服务端不限时限）。 */}
-              <p className="text-12 text-[var(--text-secondary)]">
-                {t('billing.giftCardPurchase.refundNote')}
-              </p>
+              <div className="space-y-1 text-12 text-[var(--text-secondary)]">
+                <p>{t('billing.giftCardPurchase.refundNote')}</p>
+                {/* 付款即同意礼品卡条款：链接经系统浏览器打开，地址按构建区域分流（legalLinks）。 */}
+                <p>
+                  {parseLegalSegments(t('billing.giftCardPurchase.termsNote')).map((segment, index) =>
+                    segment.kind === 'text' ? (
+                      <span key={index}>{segment.text}</span>
+                    ) : (
+                      <a
+                        key={index}
+                        href={LEGAL_LINKS.giftCardTerms}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void window.electronAPI?.openExternal?.(LEGAL_LINKS.giftCardTerms).catch(() => undefined);
+                        }}
+                        className="text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      >
+                        {segment.text}
+                      </a>
+                    ),
+                  )}
+                </p>
+              </div>
             </div>
           </div>
 

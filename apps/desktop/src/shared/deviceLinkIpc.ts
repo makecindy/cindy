@@ -18,10 +18,17 @@ export const DEVICE_LINK_INVOKE = {
   LIST_DEVICES: 'device-link:list-devices',
   /** 远程连接拓扑:本机连接路径与 RTT 快照(纯本机读,不进隧道) */
   GET_PEER_LINKS: 'device-link:get-peer-links',
+  /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好(auto / direct / relay,纯本机持久化并通知对端) */
+  SET_PEER_PATH_PREFERENCE: 'device-link:set-peer-path-preference',
   /** 重命名设备 */
   RENAME_DEVICE: 'device-link:rename-device',
   /** 删除离线设备档案 */
   DELETE_DEVICE: 'device-link:delete-device',
+  /**
+   * 本机被移除后「重新加入」(官方网络,只作用于本机)。不进 device-link 隧道 allowlist:
+   * 被移除的设备连不上别人,别的设备也不该替它决定。
+   */
+  REJOIN: 'device-link:rejoin',
   // —— 控制端:远程会话视图用 ——
   /** 与目标设备建立控制链路(进入远程设备视图时) */
   OPEN_LINK: 'device-link:open-link',
@@ -217,11 +224,19 @@ export interface DeviceLinkPeerLinkView {
   receivedAgoMs: number | null;
 }
 
+export type DeviceLinkPeerPathPreference = 'auto' | 'direct' | 'relay';
+
 /** 同账号 Agent-Net 传输路径，可在打开远程控制链路之前就绪。 */
 export interface DeviceLinkAgentNetPeerRouteView {
   deviceId: string;
   path: DeviceLinkPeerPath | 'connecting';
   rttMs: number | null;
+  /** 最近测得的直连往返(ms);未测得或不可达为 null。 */
+  directRttMs?: number | null;
+  /** 最近测得的经中转往返(ms);未测得或无中转为 null。 */
+  relayRttMs?: number | null;
+  /** 本机对该设备的选路偏好:auto(默认,自动选最快)/ direct / relay。 */
+  pathPreference?: DeviceLinkPeerPathPreference;
 }
 
 export interface LinkTrafficBytes {

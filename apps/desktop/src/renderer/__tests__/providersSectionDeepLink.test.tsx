@@ -279,25 +279,64 @@ describe('ProvidersSection — 深链定位', () => {
     expect(row.isConnected).toBe(true);
   });
 
-  // #9517 review, unit: exercise the real provider header's default-account
+  // Unit regression: the header tried to reauthenticate a missing default account in an empty pool.
+  it('starts adding an account when signing in to an empty subscription pool', async () => {
+    providersState.providers = [makeProvider('openai', { removed: false, subscriptionAccountPool: 'openai', agents: ['codex'],
+      auth: { method: 'oauth', native: 'codex' } })];
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    let pool: SubscriptionPoolView = { providerId: 'openai', configured: true, strategy: 'least', accounts: [] };
+    command.mockImplementation(async input => {
+      if (input.action === 'add') {
+        pool = { ...pool, accounts: [{ id: 'cindy-owner-member', identity: 'member@example.test', status: 'ready',
+          paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }] };
+        for (const [notify] of vi.mocked(window.electronAPI.subscriptionAccounts.onChanged).mock.calls)
+          notify({ providerId: 'openai' });
+      }
+      return pool;
+    });
+    renderAt('?tab=providers&connect=openai');
+    fireEvent.click(await screen.findByRole('button', { name: 'subscriptionAccounts.login' }));
+    expect(command).toHaveBeenCalledWith({ action: 'add', providerId: 'openai', loginKey: expect.any(String) });
+    expect(await screen.findByRole('button', { name: 'settings.providers.button.disconnect' })).toBeTruthy();
+  });
+
+  it('lets the user choose the login row when several saved accounts have no default', async () => {
+    providersState.providers = [makeProvider('openai', { removed: false, subscriptionAccountPool: 'openai' })];
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'least',
+      accounts: ['first', 'second'].map(id => ({ id, identity: id, status: 'signed-out',
+        paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/' + id })) });
+    renderAt('?tab=providers&connect=openai');
+    const rows = await screen.findAllByTestId('subscription-account');
+    expect(within(screen.getByTestId('provider-detail-actions')).queryByRole('button')).toBeNull();
+    fireEvent.click(within(rows[1]).getByRole('button', { name: 'subscriptionAccounts.loginAccountAria' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'login', providerId: 'openai', accountId: 'second', loginKey: expect.any(String),
+    }));
+  });
+
+  // #9517 review, unit: exercise the real provider header's saved-account
   // reconnect. Wizard/account-list tests do not cover this independent catch.
   it.each([
     ['SUBSCRIPTION_CODEX_PROVIDER_AUTH', 'subscriptionAccounts.providerManagedAuth'],
     ['SUBSCRIPTION_LOGIN_CANCELLED', null],
     ['SUBSCRIPTION_ACCOUNT_FAILED', 'subscriptionAccounts.failed'],
     ['SUBSCRIPTION_ACCOUNT_UNREACHABLE', 'subscriptionAccounts.unreachable'],
+    ['NOT_FOUND', 'subscriptionAccounts.boundUnavailable'],
   ] as const)('preserves pooled header reconnect feedback for %s', async (code, expectedMessage) => {
     providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: true, agents: ['codex'] })];
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
     command.mockImplementation(async (input) => {
       if (input.action === 'login') throw new Error(`[${code}] synthetic sign-in result`);
-      return { providerId: 'openai', configured: true, strategy: 'least', accounts: [] };
+      return { providerId: 'openai', configured: true, strategy: 'least',
+        accounts: [{ id: 'cindy-owner-member', identity: 'member@example.test', status: 'signed-out',
+          paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }] };
     });
     renderAt('?tab=providers&connect=openai');
     const loginButton = await screen.findByRole('button', { name: 'subscriptionAccounts.login' });
     fireEvent.click(loginButton);
     await waitFor(() => expect(command).toHaveBeenCalledWith({
-      action: 'login', providerId: 'openai', accountId: 'default', loginKey: expect.any(String),
+      action: 'login', providerId: 'openai', accountId: 'cindy-owner-member', loginKey: expect.any(String),
     }));
     await waitFor(() => expect(loginButton.textContent).toBe('subscriptionAccounts.login'));
     expect((loginButton as HTMLButtonElement).disabled).toBe(false);
