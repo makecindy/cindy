@@ -371,6 +371,7 @@ describe('MakerScheduleRunner model selection', () => {
         token,
       })),
       canRoute: vi.fn(async () => true),
+      exists: vi.fn(async () => true),
     });
 
     it('starts the new task on the model the mode picked and hands the token to task startup', async () => {
@@ -389,7 +390,7 @@ describe('MakerScheduleRunner model selection', () => {
 
     it('keeps the saved model when the mode has nothing to pick, and still hands the token over for the note', async () => {
       const h = createSessionHarness();
-      const modelGroupStart = { prepare: vi.fn(async () => ({ token: 'tok-kept' })), canRoute: vi.fn(async () => false) };
+      const modelGroupStart = { prepare: vi.fn(async () => ({ token: 'tok-kept' })), canRoute: vi.fn(async () => false), exists: vi.fn(async () => true) };
       const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
         modelGroupStart, resolveModelSelection: async (choice) => choice,
       });
@@ -400,19 +401,40 @@ describe('MakerScheduleRunner model selection', () => {
       expect(opts.modelGroupStart).toBe('tok-kept');
     });
 
-    it('does not pick when the run goes to a task that still exists', async () => {
+    // PR #11881 review r4661455493: a run sent to a task that still exists re-applied the saved fallback model
+    // as an explicit choice, switching the task off the source its mode picked (and failing if the fallback is
+    // gone). Minimal input: a mode schedule bound to a live task whose saved model differs from the task's.
+    // Failure: the run resolves or switches to the saved model; with the mode deleted it must still use it.
+    async function fireBound(exists: boolean) {
       const h = createSessionHarness();
-      const modelGroupStart = picked();
-      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
-        modelGroupStart, resolveModelSelection: async (choice) => choice,
+      const modelGroupStart = { ...picked(), exists: vi.fn(async () => exists) };
+      const selections: unknown[] = [];
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-current', workDir: '/work' }, {
+        modelGroupStart,
+        sessionAlive: true,
+        resolveModelSelection: async (choice) => choice,
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+          selections.push(selection);
+          const release = () => {};
+          return selection ? { release, selection } : release;
+        },
       });
-      const firing = harness.runner.fire(baseSchedule({
-        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily', targetSessionId: 'bound',
-      }), createFireContext()).catch((error: unknown) => error);
-      await vi.waitFor(() => expect(mocks.getSessionRowSnapshot).toHaveBeenCalled());
-      h.emit({ type: 'done', data: {} });
-      await firing;
+      await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-fallback', modelGroup: 'daily', targetSessionId: h.session.id,
+      }));
+      return { modelGroupStart, selections };
+    }
+
+    it('keeps the task on its own source when the run goes to a task that still exists', async () => {
+      const { modelGroupStart, selections } = await fireBound(true);
       expect(modelGroupStart.prepare).not.toHaveBeenCalled();
+      expect(selections).not.toContainEqual(expect.objectContaining({ model: 'gpt-fallback' }));
+    });
+
+    it('runs the saved model on an existing task once the mode is deleted', async () => {
+      const { modelGroupStart, selections } = await fireBound(false);
+      expect(modelGroupStart.prepare).not.toHaveBeenCalled();
+      expect(selections).toContainEqual(expect.objectContaining({ model: 'gpt-fallback' }));
     });
   });
 
@@ -555,7 +577,7 @@ describe('MakerScheduleRunner model selection', () => {
   // resolves. Failure: save rejected although runs would use the mode; or a mode with nothing usable admitted.
   it('admits a mode that picks a usable source even when the saved fallback model is gone', async () => {
     const resolveModelSelection = vi.fn(async () => { throw new Error('[MODEL_SELECTION_UNAVAILABLE] removed'); });
-    const modelGroupStart = { prepare: vi.fn(), canRoute: vi.fn(async () => true) };
+    const modelGroupStart = { prepare: vi.fn(), canRoute: vi.fn(async () => true), exists: vi.fn(async () => true) };
     const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection, modelGroupStart });
     const schedule = baseSchedule({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gone', providerId: 'removed', modelGroup: 'daily' });
     await expect(harness.runner.validateModelSelection(schedule)).resolves.toBeUndefined();

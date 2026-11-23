@@ -71,7 +71,7 @@ vi.mock('../notifier.desktop', () => ({ DesktopNotifier: class {} }));
 vi.mock('../../im/feishu/notificationOrigin', () => ({ sendFeishuSessionNotification: vi.fn() }));
 vi.mock('../../wecomGroupNotification', () => ({ wecomGroupNotificationService: {} }));
 // 模型组选路的装配静态导入了本机解析器(会读 Electron 路径)，这里只验排队装配。
-vi.mock('../../model-groups/sessionStart.desktop.js', () => ({ modelGroupSessionStart: { prepare: async () => null, canRoute: async () => false } }));
+vi.mock('../../model-groups/sessionStart.desktop.js', () => ({ modelGroupSessionStart: { prepare: async () => null, canRoute: async () => false, exists: async () => false } }));
 
 import { resetScheduler, startScheduler } from '../index.desktop';
 

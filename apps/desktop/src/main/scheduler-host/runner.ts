@@ -315,7 +315,7 @@ export interface MakerScheduleRunnerDeps {
    * 模型组(model-groups.md §6.3)：模式跟着任务走。这次要新建任务时按模式选来源，把凭据随建任务参数交出去，
    * 选路记账与说明由任务层在第一轮派发时做；发到已有任务时不经这里，那个任务按它自己的模式走。
    */
-  modelGroupStart?: Pick<ModelGroupSessionStart, 'prepare' | 'canRoute'>;
+  modelGroupStart?: Pick<ModelGroupSessionStart, 'prepare' | 'canRoute' | 'exists'>;
   maker: Maker;
   /** Use the ordinary task startup funnel, including provider-group allocation.
    * The funnel may update the options to the member it actually selected. */
@@ -1035,9 +1035,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 模型组：只有这次要新建任务时按模式选(续跑、发到还在的任务都按那个任务自己的模式走)；
     // 脚本与插件引擎任务不按模式选。只在本机运行的自动化只在本机的来源里选。
     const groupId = schedule.modelGroup?.trim();
-    if (groupId && !ctx.resumeSessionId && (schedule.executionMode ?? 'agent') !== 'script'
-      && schedule.agentKind !== 'acp' && this.deps.modelGroupStart && await this.startsNewTask(schedule)) {
-      const prepared = await this.deps.modelGroupStart.prepare(groupId, {
+    const groupApplies = !!groupId && !ctx.resumeSessionId && (schedule.executionMode ?? 'agent') !== 'script'
+      && schedule.agentKind !== 'acp' && !!this.deps.modelGroupStart;
+    const startsNewTask = groupApplies && await this.startsNewTask(schedule);
+    if (groupApplies && !startsNewTask && await this.deps.modelGroupStart!.exists(groupId!).catch(() => false)) {
+      // 发到还在的任务：按那个任务自己的模式走，沿用它当前的来源(与续跑同一做法)。存下的具体模型只是新建任务
+      // 选不出来时的兜底，不能当成这次的指定模型把任务换回去。模式已删除时照旧按存下的具体模型运行。
+      schedule = { ...schedule, model: undefined, providerId: undefined, effort: undefined,
+        fastMode: undefined, modelAgentKind: undefined, modelAgentDeviceId: undefined };
+    }
+    if (groupApplies && startsNewTask) {
+      const prepared = await this.deps.modelGroupStart!.prepare(groupId!, {
         keptModelName: schedule.model?.trim() || schedule.modelAgentKind || schedule.agentKind,
         localOnly: !!schedule.primaryHostKey?.trim(),
       }).catch((error: unknown) => {

@@ -83,5 +83,7 @@ describe('a mode picks the first source of a new task and is settled when its fi
     expect(calls.resolve[0]).toEqual({ selection: { type: 'route', id: 'daily' }, location: { agentDeviceId: null } });
     expect(await start.canRoute('daily')).toBe(true);
     expect(calls.resolve[1]).toEqual({ selection: { type: 'route', id: 'daily' }, dryRun: true });
+    expect(await start.exists('daily')).toBe(true);
+    expect(await createModelGroupSessionStart(ports({ outcome: 'missing', groupName: 'Gone', trace: [] }).value).exists('gone')).toBe(false);
   });
 });

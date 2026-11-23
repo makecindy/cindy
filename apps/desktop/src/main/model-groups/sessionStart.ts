@@ -94,6 +94,11 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
         ...(options.localOnly ? { location: { agentDeviceId: null } } : {}) });
       return result.outcome === 'routed';
     },
+    /** 模式还在不在(没被删)；发到已有任务时据此决定沿用任务当前来源还是按存下的具体模型。 */
+    async exists(groupId: string): Promise<boolean> {
+      const result = await ports.resolve({ selection: { type: 'route', id: groupId }, dryRun: true });
+      return result.outcome !== 'missing';
+    },
     /** 新建任务(bootstrapSession)收到凭据：这个任务第一轮派发时结算。 */
     attach(sessionId: string, token: string): void {
       const item = prepared.get(token);
